@@ -143,3 +143,60 @@ def test_295_escalation_ladder_is_bounded_and_ordered():
     assert list(p3._DPL_ESCALATION_SITES) == sorted(p3._DPL_ESCALATION_SITES)
     assert len(p3._DPL_ESCALATION_SITES) <= 5
     assert all(d > 0 for d in p3._DPL_ESCALATION_SITES)
+
+
+# ── #296: the OTHER bare detailed_placement calls in the emitted pnr.tcl ──────
+# #296 reported the post-hold call: 87 clustered clkbuf_16 (50 sites each) fail
+# the default window and DPL-0036 then kills the whole OpenROAD process. It was
+# masked until #295 landed, because the flow never reached CTS before.
+# A third bare call (post-global-placement) was found while wiring it.
+
+def _emitted_pnr_tcl() -> str:
+    import inspect
+    sig = inspect.signature(p3._build_pnr_tcl_text)
+    kw = {n: (0 if "int" in str(pm.annotation)
+              else (0.5 if "float" in str(pm.annotation) else "X"))
+          for n, pm in sig.parameters.items() if pm.default is inspect._empty}
+    return p3._build_pnr_tcl_text(**kw)
+
+
+def test_296_no_bare_detailed_placement_survives_in_pnr_tcl():
+    """A BARE `detailed_placement` has no catch and no escalation, so DPL-0036
+    kills the whole OpenROAD process. None may remain."""
+    import re
+    bare = [i for i, l in enumerate(_emitted_pnr_tcl().splitlines(), 1)
+            if re.match(r"^detailed_placement\s*$", l)]
+    assert bare == [], f"bare detailed_placement at emitted lines {bare}"
+
+
+def test_296_post_hold_and_initial_use_the_same_ladder():
+    tcl = _emitted_pnr_tcl()
+    assert "POST_HOLD_LEGALIZE_OK" in tcl and "POST_HOLD_LEGALIZE_FAILED" in tcl
+    assert "INITIAL_DPL_LEGALIZE_OK" in tcl
+    assert tcl.count("-max_displacement") >= 2
+
+
+def test_296_cts_buffer_selection_is_untouched():
+    """The fix must NOT buy placement success by narrowing the CTS root buffer:
+    that moves clock skew / insertion delay and needs multi-corner clock
+    sign-off evidence first. Placement window only."""
+    tcl = _emitted_pnr_tcl()
+    assert "-root_buf" in tcl and "clock_tree_synthesis" in tcl
+
+
+@_needs_tcl
+def test_296_emitted_post_hold_ladder_executes_and_recovers(tmp_path):
+    """Extract the ladder FROM THE EMITTED pnr.tcl (not from the builder) and
+    run it, so the test covers what actually ships."""
+    import re
+    tcl = _emitted_pnr_tcl()
+    m = re.search(r"set _dplok_ph 0\n.*?POST_HOLD_LEGALIZE_FAILED\"\s*\}\n",
+                  tcl, re.S)
+    assert m, "post-hold ladder not found in the emitted pnr.tcl"
+    f = tmp_path / "ph.tcl"
+    f.write_text(_STUB % ('$disp eq "default" || $disp < 20', "return")
+                 + m.group(0) + '\nputs "CALLS: $::calls"\n')
+    out = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
+                         timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert "POST_HOLD_LEGALIZE_OK disp=20" in out.stdout

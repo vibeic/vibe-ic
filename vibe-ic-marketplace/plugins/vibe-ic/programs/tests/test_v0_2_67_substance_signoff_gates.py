@@ -25,7 +25,7 @@ import json
 import sys
 from pathlib import Path
 
-from conftest import func_src
+from _source_pin import func_src
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import eda_report_audit as ERA       # noqa: E402

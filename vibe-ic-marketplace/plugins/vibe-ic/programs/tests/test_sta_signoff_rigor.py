@@ -11,10 +11,11 @@ Two layers:
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
-from conftest import func_src
+from _source_pin import func_src
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -174,3 +175,38 @@ def test_spef_sta_tcl_emits_ocv_and_check_types():
     assert "read_aocv" in window
     assert "AOCV_TABLE_APPLIED" in window
     assert "_discover_aocv_table" in src
+
+
+def test_source_pin_helper_is_not_shadowed_by_the_other_conftest():
+    """REGRESSION (v1.5.78): the shared source-pin helper lived in
+    programs/tests/conftest.py and was imported as `from conftest import
+    func_src`. There are TWO conftest.py on the path — this one and the
+    plugin-root one — so on some file-set collections pytest resolved
+    `conftest` to the plugin-root module, which has no func_src, and FOUR test
+    modules failed to import with:
+        ImportError: cannot import name 'func_src' from 'conftest'
+    Single-file runs passed, which is why it survived the original landing.
+
+    The helper now lives in its own uniquely-named module, which cannot be
+    shadowed. This test fails if anyone reintroduces the bare-conftest import.
+    """
+    import _source_pin
+    assert callable(_source_pin.func_src)
+
+    # Match a real IMPORT STATEMENT (start of line, allowing indentation), not
+    # any occurrence of the text — this very test mentions the bad form in its
+    # own detector string and docstring, and matched itself on the first run.
+    bad_import = re.compile(r"^[ \t]*from[ \t]+conftest[ \t]+import[ \t]+"
+                            r"[^\n]*\bfunc_src\b", re.M)
+    tests_dir = Path(__file__).resolve().parent
+    offenders = [p.name for p in tests_dir.glob("test_*.py")
+                 if bad_import.search(p.read_text())]
+    assert offenders == [], (
+        f"{offenders} import func_src from the ambiguous `conftest` name; "
+        f"use `from _source_pin import func_src`")
+
+    root_conftest = tests_dir.parents[1] / "conftest.py"
+    if root_conftest.is_file():
+        assert "def func_src" not in root_conftest.read_text(), (
+            "the plugin-root conftest must NOT also define func_src — two "
+            "definitions is how the shadowing became invisible")

@@ -32,6 +32,9 @@ Deliberately DISCLOSURE-ONLY (§4.05): it does not change the verdict tier. A
 trade is not automatically wrong — it is automatically something a human must
 be told about. Silence is the bug being fixed, not the trade itself.
 
+ENFORCEMENT: advisory — this gate DISCLOSES a trade; per 4.05 it must not
+change the verdict tier. Advisory is the intended wiring, not an accident.
+
 chip-AGNOSTIC: OpenROAD message grammar only, no design/PDK literals.
 
 Exit codes:

@@ -37,6 +37,10 @@ FAIL         (1) sign-off DRV is WORSE than the promotion claimed, or a
                  (an uncorroborated promotion is exactly the failure mode)
 IO_ERROR     (2) argument / read error
 
+ENFORCEMENT: blocking — shipping a route whose claimed improvement the
+sign-off contradicts is the exact false certificate this exists to stop.
+NOTE: currently wired AUDIT_ONLY; the contradiction is surfaced, not hidden.
+
 chip-AGNOSTIC: no design, PDK, or cell literals — pure artefact grammar.
 """
 from __future__ import annotations
