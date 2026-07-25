@@ -15755,6 +15755,20 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
                   "total_violations": vios,
                   "stdcell_library_violations": cell_vios,
                   "user_routing_violations": user_vios}
+    # DRC engine coverage disclosure: record which engines actually ran so
+    # drc_engine_coverage_check.py can gate on the required set.
+    # klayout always runs (it is the primary engine); magic runs only when
+    # dominated=True and it is available, so check drc_engine_extras directly.
+    _engines: list = ["klayout"]
+    if drc_engine_extras.get("streamout_engine") == "magic":
+        _engines.append("magic")
+    elif drc_engine_extras.get("magic_restream_attempted"):
+        # magic ran but its result was vacuous/inconclusive — still record it
+        # as attempted (not authoritative) so coverage check can distinguish
+        # "ran + vacuous" from "never ran".
+        _engines.append("magic(vacuous)")
+    drc_engine_extras["engines_run"] = _engines
+
     # Fix #3 — fold the streamout-engine / re-stream / OpenROAD-DRT
     # discrepancy bookkeeping into every verdict branch's extras so the
     # StepResult records BOTH counts and the engine that was
@@ -15831,6 +15845,24 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
             _canon.write_bytes(rpt.read_bytes())
             extras["drc_signoff_report"] = str(_canon)
     except Exception:  # nosec — canonical mirror is best-effort provenance
+        pass
+    # Write a companion drc_signoff.json sidecar with machine-readable
+    # verdict + engines_run so the final report generator (Defect 1 fix) and
+    # the engine-coverage gate (Defect 2 fix) can consume it without parsing
+    # the XML .rpt.  Best-effort: a write failure NEVER blocks the step.
+    try:
+        _json_canon = project / "reports" / "phase3" / "drc_signoff.json"
+        _json_canon.parent.mkdir(parents=True, exist_ok=True)
+        _sidecar: Dict[str, Any] = {
+            "verdict": status,
+            "status": status,
+            "violations": extras.get("total_violations", vios),
+            "engines_run": extras.get("engines_run", ["klayout"]),
+            "drc_authority": extras.get("drc_authority", "klayout-deck"),
+            "generated_by": "phase3_one_shot_runner:step_drc",
+        }
+        _json_canon.write_text(json.dumps(_sidecar, indent=2) + "\n")
+    except Exception:  # nosec — JSON sidecar is best-effort provenance
         pass
     return StepResult("drc", status, time.time() - t0,
                       detail, [str(rpt)], extras=extras)
@@ -19970,6 +20002,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             "# Sign-off DRC report (ORGANIC-20260531 Step 31 alias).\n"
             f"# Source: {src_drc.relative_to(project)}\n"
             f"# Tool: {_drc_tool}\n"
+            f"# engines_run: [{_drc_tool}]\n"
             "#\n")
         drc_signoff.write_text(header + src_drc.read_text(errors="ignore"))
         if str(drc_signoff) not in written:
