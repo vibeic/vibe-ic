@@ -308,6 +308,268 @@ def _safe_json(p: Path) -> Optional[Any]:
         return None
 
 
+def _verdict_from_json(j: Optional[Any]) -> Optional[str]:
+    """Extract a human-readable pass/fail string from a PV JSON artefact.
+    Different producers use different field names; try in priority order.
+    Returns None when j is not a dict or no recognisable field is present."""
+    if not isinstance(j, dict):
+        return None
+    # Standard status / verdict fields (phase3 producers)
+    v = j.get("verdict") or j.get("status") or j.get("result")
+    if v:
+        return str(v)
+    # eda_report_audit (lvs.json) uses summary.terminal_verdict + passed
+    summary = j.get("summary")
+    if isinstance(summary, dict):
+        tv = summary.get("terminal_verdict")
+        if tv:
+            return str(tv)
+    passed = j.get("passed")
+    if passed is True:
+        return "PASS"
+    if passed is False:
+        return "FAIL"
+    return None
+
+
+# ─── DRC sign-off verdict resolution ─────────────────────────────────────
+# `reports/phase3/drc_signoff.rpt` is NOT one format. It is a canonical
+# ALIAS that `phase3_one_shot_runner.step_canonicalize_artefacts` stages
+# from a three-way authority list, stamping the producer into a
+# `# Tool: <name>` header as it copies:
+#
+#   1. phase3/reports/drc_svrf_calibre.rpt  → `# Tool: svrfdrc`
+#      PLAIN TEXT. The foundry's own Calibre/SVRF `.rule` deck run
+#      natively — the commercial-PDK sign-off, and the HIGHEST authority
+#      (staged with force=True so it can never be masked by a stale
+#      lower-authority alias). One `FAIL <rule> …` line per firing rule.
+#   2. phase3/reports/drc.rpt               → `# Tool: klayout`
+#      KLayout RDB XML. One `<item>` element per violation.
+#   3. phase3/reports/routed.drc.rpt        → `# Tool: openroad`
+#      PLAIN TEXT. The OpenROAD detailed_route projection — the ROUTER's
+#      own in-loop DRC self-check. The runner's own report body states it
+#      is not the sign-off verdict.
+#
+# Deciding cleanliness by counting `<item>` over all three therefore reads
+# ZERO on sources 1 and 3 and signs them off as PASS — including a
+# commercial-PDK report with firing foundry rules, and including an
+# OpenROAD projection whose own body says `DRC clean: NO`. A zero-byte or
+# header-only report reads clean the same way. "(report missing)" is a
+# visible gap a reviewer chases; a fabricated "PASS" is a signed-off lie.
+#
+# So: identify WHICH producer wrote the file, parse it with THAT
+# producer's grammar, and never emit PASS from a report whose producer or
+# format could not be identified — the same §4.05 discipline
+# `signoff_ladder_run._parse_drc_violations` already applies at Tier 1
+# ("present but no count extractable → not judgeable, never a fabricated
+# pass"). Chip-AGNOSTIC and PDK-agnostic: keys on producer grammar only.
+
+# `# Tool: <name>` stamped by step_canonicalize_artefacts. The OpenROAD
+# projection body carries its own `# Tool: openroad detailed_route (drt)`
+# line, so a bare `re.search` (first match wins) identifies both the
+# staged alias and the raw source.
+_DRC_TOOL_HDR_RE = re.compile(r"^#\s*Tool:\s*([A-Za-z0-9_.+-]+)", re.M)
+# Positive per-producer format signatures, used when no `# Tool:` header
+# is present (report read straight from its producer, not via the alias).
+_DRC_SVRF_SIG_RE = re.compile(r"^#\s*SVRF-native DRC", re.M)
+_DRC_OPENROAD_SIG_RE = re.compile(r"^openroad\s*/\s*drt-pass", re.M)
+_DRC_RDB_OPEN = "<report-database"
+_DRC_RDB_CLOSE = "</report-database>"
+# `<item>` or `<item attr=…>` but NOT the `<items>` container element.
+_DRC_RDB_ITEM_RE = re.compile(r"<item[\s>]")
+_DRC_OPENROAD_VIOS_RE = re.compile(r"^violation report:\s*(\d+)\s*$", re.M)
+
+_DRC_UNKNOWN_PREFIX = "UNKNOWN"
+
+
+def _drc_unknown(reason: str) -> str:
+    """A sign-off DRC artefact that is present but not judgeable. NEVER
+    'PASS' — an unidentified or partial report is not a clean verdict."""
+    return f"{_DRC_UNKNOWN_PREFIX} ({reason})"
+
+
+def _drc_report_producer(text: str) -> str:
+    """Identify which tool produced a sign-off DRC report body.
+
+    Returns one of 'svrfdrc' | 'klayout' | 'magic' | 'openroad' |
+    'unknown'. The canonicalizer's `# Tool:` header wins; without it, fall
+    back to a POSITIVE format signature. Never guesses."""
+    m = _DRC_TOOL_HDR_RE.search(text)
+    if m:
+        tool = m.group(1).lower()
+        for known in ("svrfdrc", "svrf", "klayout", "magic", "openroad"):
+            if tool.startswith(known):
+                return "svrfdrc" if known == "svrf" else known
+        return "unknown"
+    if _DRC_SVRF_SIG_RE.search(text):
+        return "svrfdrc"
+    if _DRC_RDB_OPEN in text:
+        return "klayout"
+    if _DRC_OPENROAD_SIG_RE.search(text):
+        return "openroad"
+    return "unknown"
+
+
+def _drc_verdict_from_klayout_rdb(text: str) -> str:
+    """KLayout RDB XML — one `<item>` per violation, `<items></items>`
+    empty = clean. Requires the document to actually BE an RDB and to be
+    COMPLETE: phase3_one_shot_runner's own v1.3.47 invariant is that a
+    half-written RDB parses as 0 violations = false DRC-clean, so a
+    truncated document is UNKNOWN, never PASS."""
+    if _DRC_RDB_OPEN not in text:
+        return _drc_unknown(
+            "producer is klayout but the body is not a KLayout RDB XML "
+            "document")
+    if _DRC_RDB_CLOSE not in text:
+        return _drc_unknown(
+            "KLayout RDB XML is truncated (no closing </report-database>) "
+            "— a partial report is not a sign-off verdict")
+    n = len(_DRC_RDB_ITEM_RE.findall(text))
+    return "PASS" if n == 0 else f"FAIL ({n} violations, klayout RDB)"
+
+
+def _drc_verdict_from_svrf(text: str) -> str:
+    """svrfdrc SVRF report — per-rule `FAIL <rule> …` / `PASS …` /
+    `SKIP …` result lines, `#`-prefixed header/tally lines ignored. Same
+    grammar as phase3_one_shot_runner._parse_svrf_tally. Zero result
+    lines at all = empty/truncated = UNKNOWN, never PASS."""
+    fails = 0
+    graded = 0
+    failing: List[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        parts = s.split()
+        if parts[0] == "FAIL":
+            fails += 1
+            graded += 1
+            if len(parts) > 1:
+                failing.append(parts[1])
+        elif parts[0] in ("PASS", "SKIP"):
+            graded += 1
+    if fails:
+        shown = ", ".join(failing[:3])
+        more = "…" if len(failing) > 3 else ""
+        return (f"FAIL ({fails} foundry rules firing, svrfdrc"
+                + (f": {shown}{more}" if shown else "") + ")")
+    if graded:
+        return "PASS"
+    return _drc_unknown(
+        "svrfdrc report carries no per-rule result line — empty or "
+        "truncated")
+
+
+def _drc_verdict_from_openroad(text: str) -> str:
+    """OpenROAD detailed_route projection. The router's own in-loop DRC is
+    NOT a foundry sign-off (the report body says so itself), so a CLEAN
+    projection must never be printed as a sign-off PASS. A DIRTY one is
+    still evidence of a real defect and is surfaced."""
+    m = _DRC_OPENROAD_VIOS_RE.search(text)
+    count_absent = "(ABSENT" in text
+    if m is not None and not count_absent:
+        n = int(m.group(1))
+        if n > 0:
+            return (f"FAIL ({n} violations, openroad detailed_route "
+                    f"projection)")
+        return _drc_unknown(
+            "only an OpenROAD detailed_route projection is staged and it "
+            "is a router self-check, not a foundry sign-off verdict")
+    return _drc_unknown(
+        "OpenROAD detailed_route projection carries no violation count "
+        "— not a sign-off verdict")
+
+
+_DRC_RPT_PARSERS = {
+    "klayout": _drc_verdict_from_klayout_rdb,
+    "magic": _drc_verdict_from_klayout_rdb,
+    "svrfdrc": _drc_verdict_from_svrf,
+    "openroad": _drc_verdict_from_openroad,
+}
+
+# Producers whose staged report OUTRANKS any drc_signoff.json sidecar.
+# step_canonicalize_artefacts re-stages the svrfdrc report with force=True
+# precisely so a lower-authority artefact can never mask the
+# commercial-PDK verdict; the consumer must honour the same order.
+_DRC_RPT_OUTRANKS_JSON = ("svrfdrc",)
+
+
+def _drc_verdict_from_rpt(cand_rpt: Path) -> Tuple[str, str]:
+    """Resolve a sign-off DRC .rpt to (verdict, producer)."""
+    try:
+        text = cand_rpt.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return _drc_unknown(f"sign-off report unreadable ({exc})"), "unknown"
+    producer = _drc_report_producer(text)
+    parser = _DRC_RPT_PARSERS.get(producer)
+    if parser is None:
+        return _drc_unknown(
+            "sign-off report producer/format not identified — no "
+            "`# Tool:` header and no known report signature"), producer
+    return parser(text), producer
+
+
+def _resolve_drc_signoff_verdict(project: Path) -> str:
+    """Producer-aware DRC sign-off resolver for _gather_gds.
+
+    - drc_signoff.rpt is parsed with its OWN producer's grammar (see the
+      block comment above); an unidentified / truncated / empty report
+      resolves to UNKNOWN, never PASS.
+    - A svrfdrc (commercial-PDK) .rpt outranks any drc_signoff.json
+      sidecar, mirroring the canonicalizer's force=True authority order,
+      so a lower-authority sidecar can never mask a foundry-rule FAIL.
+    - Only a genuinely absent artefact reads "(report missing)".
+
+    Chip-AGNOSTIC."""
+    rpt_verdict: Optional[str] = None
+    rpt_producer = "unknown"
+    cand_rpt = _find_report(project, "drc_signoff.rpt")
+    if cand_rpt is not None:
+        rpt_verdict, rpt_producer = _drc_verdict_from_rpt(cand_rpt)
+
+    if rpt_verdict is not None and rpt_producer in _DRC_RPT_OUTRANKS_JSON:
+        return rpt_verdict
+
+    cand_json = _find_report(project, "drc_signoff.json")
+    if cand_json is not None:
+        v = _verdict_from_json(_safe_json(cand_json))
+        if v:
+            return v
+
+    if rpt_verdict is not None:
+        return rpt_verdict
+    if cand_json is not None:
+        # Present but no recognisable verdict field — same "?" the
+        # pre-existing _gather_gds loop emitted for that case.
+        return "?"
+    return "(report missing)"
+
+
+def _resolve_lvs_verdict(project: Path) -> str:
+    """LVS sign-off resolver for _gather_gds.
+
+    Priority:
+      1. lvs.json  — eda_report_audit output; uses summary.terminal_verdict
+         / passed as well as verdict/status.
+      2. lvs_verdict.json — _write_lvs_verdict output; uses status field.
+      3. Present but no recognisable verdict field — "?" (NOT
+         "(report missing)": a file that IS on disk must never be
+         reported as absent).
+      4. Genuinely absent — "(report missing)".
+
+    Chip-AGNOSTIC; shares field-extraction logic with _verdict_from_json."""
+    saw_report = False
+    for name in ("lvs.json", "lvs_verdict.json"):
+        cand = _find_report(project, name)
+        if cand is None:
+            continue
+        saw_report = True
+        v = _verdict_from_json(_safe_json(cand))
+        if v:
+            return v
+    return "?" if saw_report else "(report missing)"
+
+
 # Subdirs of reports/ the generator probes (in priority order) when
 # looking up a machine-readable artefact by basename. v1.6.25 added
 # phase-aligned subfolders; auto-router goes there first.
@@ -929,14 +1191,20 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
     if not gds_files:
         return None
     f = gds_files[0]
-    pv = {}
-    for kind in ("drc_signoff", "lvs", "erc"):
-        cand = _find_report(project, f"{kind}.json")
-        j = _safe_json(cand) if cand else None
-        if isinstance(j, dict):
-            pv[kind] = j.get("verdict") or j.get("status") or "?"
-        else:
-            pv[kind] = "(report missing)"
+    pv = {
+        "drc_signoff": _resolve_drc_signoff_verdict(project),
+        "lvs": _resolve_lvs_verdict(project),
+    }
+    # erc uses a single well-formed JSON; keep the generic path for it.
+    # A present-but-unrecognised erc.json stays "?" (what the pre-existing
+    # loop emitted) — a file that IS on disk must never be reported as
+    # "(report missing)".
+    cand_erc = _find_report(project, "erc.json")
+    j_erc = _safe_json(cand_erc) if cand_erc else None
+    if cand_erc is not None:
+        pv["erc"] = _verdict_from_json(j_erc) or "?"
+    else:
+        pv["erc"] = "(report missing)"
     # Auxiliary signoff reports (IR / EM / antenna / SI / power / STA)
     aux: List[str] = []
     for stem in ("ir_drop", "em", "antenna", "si_crosstalk", "power",
