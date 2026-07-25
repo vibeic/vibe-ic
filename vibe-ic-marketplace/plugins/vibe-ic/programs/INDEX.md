@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 918
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 918)
+- **Total programs (excluding helpers / shims):** 919
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 919)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 909 |
+| `any` | 910 |
 
 ## Alphabetical listing
 
@@ -436,6 +436,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ir_drop_report_check` | any | — | wrapper for eda_report_audit --mode ir_drop. |
 | `ir_drop_triage_classify` | any | v0.1.50 | IR-drop triage classifier (Pattern-B → program). |
 | `isolation_cell_required_check` | any | — | M2 gate (substance-verifying). |
+| `iterative_recurrence_timing_diagnosis` | any | — | chip-AGNOSTIC diagnosis of a |
 | `iterative_search` | any | — | iterative_search.py -- Generic bounded iterative-search primitive. |
 | `jesd204_protocol_synth` | any | v0.1.91 | JESD204B / JESD204C converter-to-logic serial-interface protocol synth. |
 | `json_schema_check` | any | — | Deterministic JSON schema key checker. |
@@ -990,7 +991,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (909 programs)
+### `any` (910 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1398,6 +1399,7 @@ _(no programs in this group)_
 - `ir_drop_report_check` — wrapper for eda_report_audit --mode ir_drop.
 - `ir_drop_triage_classify` — IR-drop triage classifier (Pattern-B → program).  _[v0.1.50]_
 - `isolation_cell_required_check` — M2 gate (substance-verifying).
+- `iterative_recurrence_timing_diagnosis` — chip-AGNOSTIC diagnosis of a
 - `iterative_search` — iterative_search.py -- Generic bounded iterative-search primitive.
 - `jesd204_protocol_synth` — JESD204B / JESD204C converter-to-logic serial-interface protocol synth.  _[v0.1.91]_
 - `json_schema_check` — Deterministic JSON schema key checker.
