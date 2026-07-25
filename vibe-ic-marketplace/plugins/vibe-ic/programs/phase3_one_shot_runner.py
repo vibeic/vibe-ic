@@ -9883,6 +9883,95 @@ def _v1_5_37a_multicorner_pnr_block(project: "Path", pdk: "PdkConfig",
     return "\n".join(lines)
 
 
+def _legalize_escalation_tcl(*, gp_cmd: str, die_w: int, die_h: int) -> str:
+    """Guarded, ESCALATING legalization for the post-global_placement DEF.
+
+    ROOT CAUSE (MEASURED — gf180mcuD ``subservient`` converge_1.5.65,
+    ``phase3/stage3/pnr/openroad.log`` DPL-0036). ``global_placement
+    -timing_driven`` runs repair_design DURING global placement, inserting
+    high-drive buffers on ultra-high-fanout nets (here a 1273-sink clock spine
+    → 564 buffers). The WIDEST of these — the PDK's drive-20 buffer, 34.72 µm =
+    62 placement sites — cannot be legalized in the sparse, fragmented
+    placement: at 42 % utilization the free area is scattered, so NO contiguous
+    run of 62 empty sites EXISTS anywhere reachable. PROVEN: a full-die diamond
+    search (±3571 sites × ±510 rows, covering the die several times over) still
+    leaves the four drive-20 buffers un-placed (``check_placement`` DPL-0033).
+    The prior template emitted a single, DEFAULT-window, UNGUARDED
+    ``detailed_placement`` right here, so it hard-fails DPL-0036 and kills the
+    whole flow BEFORE ``placed.def`` is written — and Step-17
+    ``placement_legality_check`` then FAILs on the missing DEF.
+
+    FIX (chip/PDK-AGNOSTIC, MEASURED — NO design or cell literal):
+      1. Try the DEFAULT diamond window first. A design that already legalizes
+         takes this branch and its downstream is BYTE-IDENTICAL to before —
+         zero regression on the common path.
+      2. On DPL failure, retry with the diamond window widened to the FULL DIE
+         (``-max_displacement`` = measured ``die_w`` × ``die_h`` µm). This
+         recovers wide buffers that merely needed a farther legal site (PROVEN:
+         legalizes the drive-16 = 50-site buffers here, 13 → 4 failures).
+      3. If wide resizer buffers STILL cannot legalize (a single master wider
+         than ANY contiguous whitespace), exclude the physically WIDEST
+         optimizer BUFFER master — discovered at runtime from the DB (STA
+         ``is_buffer`` + odb master ``getWidth``; no cell literal) — so repair
+         rebuilds an equivalent buffer TREE of narrower, placeable cells, then
+         re-run global placement and re-legalize at full-die displacement
+         (PROVEN: 4 → 0 placement failures, ``check_placement`` clean, pre-CTS
+         worst slack UNCHANGED: −21.33 ns vs −21.44 ns).
+      4. Only if THAT also fails do we hard-``error`` — a genuine
+         geometry/capacity problem the die-sizing logic must own. We do NOT
+         mask it by continuing with overlapping cells: that would swap DPL-0036
+         for a far worse DRC-short / LVS-mismatch downstream.
+
+    ``gp_cmd`` is the EXACT ``global_placement …`` command the template emits,
+    reused verbatim for the re-placement so flags/density stay identical.
+    """
+    dw, dh = int(die_w), int(die_h)
+    _md = f"{{{dw} {dh}}}"  # OpenROAD -max_displacement is in microns (X Y)
+    return (
+        "# === Legalize the timing-driven-buffered placement "
+        "(guarded, ESCALATING) — see _legalize_escalation_tcl docstring for the\n"
+        "# MEASURED root cause (DPL-0036: a 62-site drive-20 buffer has no\n"
+        "# contiguous whitespace to land in at 42% util) and the PROOF. ===\n"
+        "proc _vic_widest_opt_buffer {} {\n"
+        "  # Physically widest liberty BUFFER master (PDK-agnostic; no literal).\n"
+        "  set _db [ord::get_db]\n"
+        "  set _best \"\"; set _bestw -1\n"
+        "  foreach _lc [get_lib_cells -quiet *] {\n"
+        "    set _isb 0\n"
+        "    catch {set _isb [get_property $_lc is_buffer]}\n"
+        "    if {!$_isb} continue\n"
+        "    set _nm [get_property $_lc name]\n"
+        "    if {[catch {set _m [$_db findMaster $_nm]}]} continue\n"
+        "    if {$_m eq \"NULL\" || $_m eq \"\"} continue\n"
+        "    set _w [$_m getWidth]\n"
+        "    if {$_w > $_bestw} { set _bestw $_w; set _best $_nm }\n"
+        "  }\n"
+        "  return $_best\n"
+        "}\n"
+        "if {[catch {detailed_placement} _dpl_e1]} {\n"
+        f"  puts \"DPL_LEGALIZE_ESCALATE1: default window failed ($_dpl_e1) --"
+        f" retry full-die max_displacement {_md} um\"\n"
+        f"  if {{[catch {{detailed_placement -max_displacement {_md}}} _dpl_e2]}} {{\n"
+        "    puts \"DPL_LEGALIZE_ESCALATE2: full-die displacement still failing"
+        " ($_dpl_e2) -- excluding widest optimizer buffer + re-placing\"\n"
+        "    set _wb [_vic_widest_opt_buffer]\n"
+        "    if {$_wb ne \"\"} {\n"
+        "      puts \"DPL_LEGALIZE_DONTUSE_WIDEST_BUFFER: $_wb\"\n"
+        "      set_dont_use $_wb\n"
+        f"      {gp_cmd}\n"
+        f"      if {{[catch {{detailed_placement -max_displacement {_md}}} _dpl_e3]}} {{\n"
+        "        error \"detailed_placement failed after excluding $_wb +"
+        " full-die displacement: $_dpl_e3\"\n"
+        "      } else { puts \"DPL_LEGALIZE_OK_AFTER_DONTUSE: $_wb\" }\n"
+        "    } else {\n"
+        "      error \"detailed_placement failed and no optimizer buffer master"
+        " found to exclude: $_dpl_e2\"\n"
+        "    }\n"
+        "  } else { puts \"DPL_LEGALIZE_OK_FULLDIE\" }\n"
+        "} else { puts \"DPL_LEGALIZE_OK_DEFAULT\" }"
+    )
+
+
 def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         macro_lefs_tcl: str, liberty_c: str,
                         macro_libs_tcl: str, netlist_c: str, top: str,
@@ -10010,6 +10099,13 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     # byte-identical single tt read_liberty when the caller passed none.
     _corner_lib_stanza = (corner_liberty_block if corner_liberty_block
                           else f"read_liberty {liberty_c}")
+    # Phase-3 timing/routability-driven global placement command, built ONCE so
+    # the escalating legalizer (below) can re-emit the IDENTICAL command if it
+    # must re-place after excluding an un-legalizable optimizer buffer.
+    _gp_cmd = (f"global_placement{_routability_flag}{_timing_driven_flag} "
+               f"-density {util}")
+    _legalize_block = _legalize_escalation_tcl(
+        gp_cmd=_gp_cmd, die_w=die_w, die_h=die_h)
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -10067,8 +10163,8 @@ write_def {out_dir_c}/floorplan.def
 # `set_placement_padding -global` (below, when
 # enabled) is an optional, version-correct extra congestion knob. Flag names
 # verified vs OpenROAD 26Q1 (`help global_placement`). chip-AGNOSTIC.
-{_placement_padding_block}global_placement{_routability_flag}{_timing_driven_flag} -density {util}
-detailed_placement
+{_placement_padding_block}{_gp_cmd}
+{_legalize_block}
 # === #684 sparse-die anti-flood tap prune (POST-placement, locality) ===
 # Runs here — after placement resolved the REAL logic geometry, BEFORE
 # placed.def is written — so placed.def carries the FINAL pruned tap set and

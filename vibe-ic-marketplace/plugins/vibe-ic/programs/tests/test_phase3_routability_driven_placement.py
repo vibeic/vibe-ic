@@ -101,8 +101,21 @@ def _command_lines(tcl: str):
 
 
 def _gp_cmd_lines(tcl: str):
+    # PRIMARY (unconditional, top-level) global_placement command(s). The
+    # escalating legalizer's guarded fallback re-placement is INDENTED (nested
+    # inside an `if {...}` block), so filtering to column-0 lines keeps these
+    # tests pinning exactly the primary emission. See _gp_fallback_lines.
     return [ln for ln in _command_lines(tcl)
-            if ln.lstrip().startswith("global_placement")]
+            if ln.startswith("global_placement")]
+
+
+def _gp_fallback_lines(tcl: str):
+    # The guarded, INDENTED re-placement the escalating legalizer emits ONLY on
+    # the failure path (after excluding an un-legalizable widest optimizer
+    # buffer). Nested in the if-block, so it carries leading whitespace.
+    return [ln for ln in _command_lines(tcl)
+            if ln.lstrip().startswith("global_placement")
+            and not ln.startswith("global_placement")]
 
 
 # ── default: routability-driven is ON, density kept, exactly once ──────────
