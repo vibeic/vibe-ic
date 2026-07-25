@@ -11,9 +11,17 @@ The fakes (all sized to clear gds_size_check's 100 KB constant):
   2. 150 KB random bytes behind a HEADER — old: PASS              new: FAIL
   3. 150 KB zero-padded empty library    — old: PASS              new: FAIL
   4. 150 KB even-length junk, no ENDLIB  — old: PASS              new: FAIL
+  5. 166 KB valid GDSII, 2600 squares    — old: PASS              new: FAIL
+     on ONE layer                          (also passed checks A-C)
 
 Cases 2-4 are the gate's reason to exist: `gds_size_check` reports
 `pass: true, errors: 0, warnings: 0` for all three.
+
+Case 5 is the reason check D (mask-stack floor) exists. It is the hardest
+fake: structurally valid, has structures, elements and a LAYER, and carries
+MORE elements than the design places instances — so checks A, B and C all
+sign off. Its negative control runs the gate with `min_distinct_layers=0`,
+which is literally the pre-floor code path, and asserts it passes there.
 """
 from __future__ import annotations
 
@@ -134,17 +142,24 @@ def test_floor_is_derived_not_hardcoded() -> None:
 # ---------------------------------------------------------------------------
 # NEGATIVE CONTROLS — must FAIL the new gate; cases 2-4 PASS the old one
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("name,blob,expect_cat", [
-    ("stub_86", _stub_86(), "NO_GEOMETRY"),
-    ("big_random", _big_random(), "MALFORMED_RECORD"),
-    ("big_empty_library", _big_empty_library(), "TRAILING_GARBAGE"),
-    ("big_even_junk", _big_even_junk(), "NO_ENDLIB"),
+# `expect_cats` is a SET, not a single category, because `_big_random` is
+# built from os.urandom: which structural rule trips first depends on the
+# bytes. Measured over 2000 draws — MALFORMED_RECORD 96.75%,
+# TRUNCATED_RECORD 3.25% (a length field that happens to be even and in
+# range but runs past EOF). Pinning the single category made this test flake
+# ~1 run in 30. The guarantee the gate actually makes, and the one worth
+# asserting, is that arbitrary junk trips SOME hard structural rule.
+@pytest.mark.parametrize("name,blob,expect_cats", [
+    ("stub_86", _stub_86(), {"NO_GEOMETRY"}),
+    ("big_random", _big_random(), {"MALFORMED_RECORD", "TRUNCATED_RECORD"}),
+    ("big_empty_library", _big_empty_library(), {"TRAILING_GARBAGE"}),
+    ("big_even_junk", _big_even_junk(), {"NO_ENDLIB"}),
 ])
-def test_negative_control_new_gate_fails(name, blob, expect_cat) -> None:
+def test_negative_control_new_gate_fails(name, blob, expect_cats) -> None:
     findings, _, _ = audit_gds(blob, 1826, 1.0)
     assert findings, f"{name}: new gate must FAIL but returned no findings"
-    assert expect_cat in _categories(findings), (
-        f"{name}: expected {expect_cat}, got {_categories(findings)}")
+    assert _categories(findings) & expect_cats, (
+        f"{name}: expected one of {expect_cats}, got {_categories(findings)}")
     assert all(f.severity == "ERROR" for f in findings), (
         f"{name}: every finding must be a hard ERROR, not a warning")
 
@@ -233,3 +248,75 @@ def test_no_def_skips_floor_but_keeps_structure_checks() -> None:
     findings, _, floor = audit_gds(_stub_86(), None, 1.0)
     assert floor["applied"] is False
     assert "NO_GEOMETRY" in _categories(findings)
+
+
+# ---------------------------------------------------------------------------
+# NEGATIVE CONTROL — the element-inflation fake (mask-stack floor, check D)
+#
+# Fake 5 defeats every earlier check by construction: it is a structurally
+# valid GDSII, so the record walk is clean; it has a structure, elements and
+# a LAYER, so the substance checks are clean; and it carries MORE elements
+# than the design places instances, so the design-derived floor is clean.
+# It is 166 KB, so gds_size_check signs off too. The only thing it does not
+# have is a mask stack — every square is on layer 8.
+# ---------------------------------------------------------------------------
+def _inflated_single_layer(n_boundaries: int = 2600) -> bytes:
+    """Valid GDSII padded to clear the element floor with one-layer filler."""
+    out = _lib_prologue() + _rec(0x0502, _TS) + _rec(0x0606, b"spm\x00")
+    for _ in range(n_boundaries):
+        out += (_rec(0x0800)
+                + _rec(0x0D02, struct.pack(">h", 8))
+                + _rec(0x0E02, struct.pack(">h", 0))
+                + _rec(0x1003, struct.pack(">10i", 0, 0, 10, 0,
+                                           10, 10, 0, 10, 0, 0))
+                + _rec(0x1100))
+    return out + _rec(0x0700) + _rec(0x0400)
+
+
+def test_negative_control_inflated_fake_passes_everything_else() -> None:
+    """Pins the defect the mask-stack floor closes.
+
+    `min_distinct_layers=0` disables check D, which is exactly the gate's
+    behaviour before this floor existed. The fake must sign off cleanly
+    there — otherwise the test below proves nothing.
+    """
+    blob = _inflated_single_layer()
+    findings, st, floor = audit_gds(blob, 1826, 1.0, min_distinct_layers=0)
+    assert findings == [], (
+        f"pre-floor gate must PASS this fake, got {_categories(findings)}")
+    assert st.parsed_to_endlib and st.trailing_bytes == 0
+    assert floor["applied"] and st.elements >= floor["required_elements"]
+    assert st.layers == [8]
+
+
+def test_negative_control_inflated_fake_also_passed_the_size_gate(
+        tmp_path: Path) -> None:
+    blob = _inflated_single_layer()
+    p = tmp_path / "inflated.gds"
+    p.write_bytes(blob)
+    findings, stats = gsc.audit_gds(p, min_size_kb=100.0)
+    assert [f for f in findings if f.severity == "ERROR"] == []
+    assert stats["file_size_bytes"] > 100 * 1024
+
+
+def test_inflated_fake_fails_mask_stack_floor() -> None:
+    findings, _, floor = audit_gds(_inflated_single_layer(), 1826, 1.0)
+    assert "TOO_FEW_MASK_LAYERS" in _categories(findings)
+    assert all(f.severity == "ERROR" for f in findings)
+    assert floor["actual_distinct_layers"] == 1
+    assert floor["min_distinct_layers"] == 4
+
+
+def test_mask_stack_floor_does_not_fire_on_real_layouts() -> None:
+    """_real_gds() draws 5 layers; the floor must stay silent."""
+    findings, st, _ = audit_gds(_real_gds(), 300, 1.0)
+    assert findings == []
+    assert len(st.layers) >= 4
+
+
+def test_no_layers_takes_precedence_over_too_few() -> None:
+    """A geometry-without-LAYER file reports NO_LAYERS, not TOO_FEW."""
+    blob = (_lib_prologue() + _rec(0x0502, _TS) + _rec(0x0606, b"c1\x00\x00")
+            + _rec(0x0800) + _rec(0x1100) + _rec(0x0700) + _rec(0x0400))
+    cats = _categories(audit_gds(blob, None, 1.0)[0])
+    assert "NO_LAYERS" in cats and "TOO_FEW_MASK_LAYERS" not in cats

@@ -45,6 +45,17 @@ C. DESIGN-DERIVED FLOOR — the floor comes from the design's OWN artefacts,
    layout. When no DEF is available the floor is skipped and reported as such
    (the structure + substance checks still apply).
 
+D. MASK-STACK FLOOR — the element floor in C is defeated by padding with
+   degenerate geometry, because it only counts elements. 2,600 identical
+   10x10 nm squares on ONE layer is a structurally valid 166 KB GDSII that
+   clears the 100 KB size gate, the structure walk, the substance checks and
+   a 1,826-instance element floor — verified, it passed all of them. What a
+   filler file cannot cheaply fake is the mask stack: a real full-chip
+   stream-out draws device, contact, interconnect and via levels. The GDS
+   must therefore draw on at least `--min-distinct-layers` distinct layers.
+   Still chip-agnostic: the floor is a small structural constant, not a
+   per-design or per-PDK number.
+
 Calibration (why the default ratio is 1.0)
 ------------------------------------------
 Measured on the three committed converged spm cells (elements / placed
@@ -111,6 +122,20 @@ _ELEMENT_RECORDS = {
     RT_TEXT: "TEXT",
     RT_BOX: "BOX",
 }
+
+# D. MASK-STACK FLOOR — the element floor alone is defeated by padding with
+# degenerate geometry: 2,600 identical 10x10 nm squares on ONE layer is a
+# structurally valid 166 KB GDSII that clears both the 100 KB size gate and a
+# 1826-instance element floor. What it cannot fake cheaply is the mask stack.
+# Any real full-chip stream-out draws device, contact, interconnect and via
+# levels; the count is PDK-dependent but never small. Measured over 62 real
+# chip GDS on this box (4 designs x 4 PDKs, 8.7k..1.55M elements):
+#
+#     min 17 distinct layers, max 19 — no run below 17.
+#
+# The floor is 4: >4x below the tightest real point, so it polices "one layer
+# of filler" without encoding any per-design or per-PDK number.
+_MIN_DISTINCT_LAYERS = 4
 
 # The canonical chip-GDS locations, shared with
 # chip_gds_canonical_real_file_check.
@@ -299,7 +324,9 @@ def read_def_component_count(def_path: Path) -> Optional[int]:
 
 
 def audit_gds(data: bytes, instance_count: Optional[int],
-              elements_per_instance: float) -> Tuple[List[Finding], GdsStats, dict]:
+              elements_per_instance: float,
+              min_distinct_layers: int = _MIN_DISTINCT_LAYERS,
+              ) -> Tuple[List[Finding], GdsStats, dict]:
     findings, st = parse_gds(data)
     floor = {
         "instance_count": instance_count,
@@ -307,6 +334,8 @@ def audit_gds(data: bytes, instance_count: Optional[int],
         "required_elements": None,
         "actual_elements": st.elements,
         "applied": False,
+        "min_distinct_layers": min_distinct_layers,
+        "actual_distinct_layers": len(st.layers),
     }
 
     # A structural failure already means "not a GDS" — substance checks on a
@@ -330,6 +359,15 @@ def audit_gds(data: bytes, instance_count: Optional[int],
             "ERROR", "NO_LAYERS",
             "GDS contains elements but no LAYER record; no mask layer was "
             "drawn"))
+    elif st.elements and 0 < len(st.layers) < min_distinct_layers:
+        findings.append(Finding(
+            "ERROR", "TOO_FEW_MASK_LAYERS",
+            f"GDS draws on only {len(st.layers)} distinct mask layer(s); a "
+            f"full-chip stream-out draws on at least {min_distinct_layers} "
+            "(device + interconnect + via levels). A single-layer file that "
+            "clears the element floor is padding, not a layout",
+            f"layers={st.layers} required>={min_distinct_layers} "
+            f"elements={st.elements}"))
 
     if instance_count and instance_count > 0:
         required = int(instance_count * elements_per_instance)
@@ -385,6 +423,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--elements-per-instance", type=float, default=1.0,
                     help="layout elements required per placed instance "
                          "(default: 1.0)")
+    ap.add_argument("--min-distinct-layers", type=int,
+                    default=_MIN_DISTINCT_LAYERS,
+                    help="distinct mask layers a real stream-out must draw "
+                         f"(default: {_MIN_DISTINCT_LAYERS}; measured min on "
+                         "62 real chip GDS is 17)")
     ap.add_argument("--json", help="write JSON report to this path")
     args = ap.parse_args(argv)
 
@@ -434,7 +477,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         inst = read_def_component_count(def_path) if def_path else None
         findings, st, floor = audit_gds(data, inst,
-                                        args.elements_per_instance)
+                                        args.elements_per_instance,
+                                        args.min_distinct_layers)
         ok = not findings
         any_fail = any_fail or not ok
         file_reports.append({
