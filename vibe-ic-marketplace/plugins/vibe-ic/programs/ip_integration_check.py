@@ -135,6 +135,36 @@ def audit(project: Path) -> dict:
                     continue
                 break
 
+    # #309 — LEF-typed POWER/GROUND macro pins the design's power-intent layer
+    # does not account for. Raised HERE, in Phase 1, because the information is
+    # already available here (the macro's own LEF says USE POWER) and the cost
+    # of losing it is paid five steps later: a signal net on a POWER terminal
+    # makes TritonRoute abort ALL detailed routing (3278 nets, 0 routed).
+    #
+    # WARNING, not ERROR, and rc stays 0: the point is to make the requirement
+    # flow into the power-intent layer NOW. Phase 3 is where it blocks — via
+    # the SAME decision module, so this warning and that block cannot drift.
+    try:
+        import hardmacro_supply_intent as _hmsi
+        _lefs = _hmsi.load_macro_lefs(project)
+        if _lefs:
+            _rep = _hmsi.assess(_lefs, _hmsi.load_l21(project))
+            for _g in _rep["gaps"]:
+                _rule = ("IP_MACRO_SUPPLY_RAIL_UNDECLARED"
+                         if _g["status"] == "rail_undeclared"
+                         else "IP_MACRO_SUPPLY_UNDECLARED")
+                findings.append({
+                    "severity": "WARNING", "rule": _rule,
+                    "message": (
+                        f"{_g['master']}/{_g['pin']} is LEF-typed "
+                        f"{_g.get('use', 'POWER')} but {_g['detail']}. If RTL "
+                        f"ties this pin, synthesis drives it with a TIE cell "
+                        f"and detailed routing aborts (DRT-0307). Declare the "
+                        f"rail in L21.fields.hard_macro_supplies, or mark it "
+                        f"integration_gap: true.")})
+    except Exception:  # noqa: BLE001 — a Phase-1 advisory must never hard-fail
+        pass
+
     errors = [f for f in findings if f["severity"] == "ERROR"]
     reviews = [f for f in findings if f["severity"] == "WARNING"]
     return {
