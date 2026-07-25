@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 952
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 952)
+- **Total programs (excluding helpers / shims):** 953
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 953)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 943 |
+| `any` | 944 |
 
 ## Alphabetical listing
 
@@ -259,6 +259,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `displayport_protocol_synth` | any | v0.1.91 | VESA DisplayPort (DP) protocol synth helper. |
 | `doc_consistency_no_unresolved_conflicts_check` | any | Wave 37 | Wave 37 / A4 |
 | `doc_extract` | any | — | Convert vendor docs (.doc/.docx/.pdf/.pptx/.xlsx/.txt) to |
+| `drc_engine_coverage_check` | any | — | gate that FAILS when the project spec |
 | `drc_fix_planner` | any | v0.1.50 | DRC fix-planner (Pattern-B → program). |
 | `drc_report_check` | any | — | wrapper for eda_report_audit --mode drc. |
 | `drc_rule_layer_classify` | any | v0.3.16 | ORGANIC #513. Classify DRC violations by RULE-LAYER into |
@@ -1024,7 +1025,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (943 programs)
+### `any` (944 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1255,6 +1256,7 @@ _(no programs in this group)_
 - `displayport_protocol_synth` — VESA DisplayPort (DP) protocol synth helper.  _[v0.1.91]_
 - `doc_consistency_no_unresolved_conflicts_check` — Wave 37 / A4  _[Wave 37]_
 - `doc_extract` — Convert vendor docs (.doc/.docx/.pdf/.pptx/.xlsx/.txt) to
+- `drc_engine_coverage_check` — gate that FAILS when the project spec
 - `drc_fix_planner` — DRC fix-planner (Pattern-B → program).  _[v0.1.50]_
 - `drc_report_check` — wrapper for eda_report_audit --mode drc.
 - `drc_rule_layer_classify` — ORGANIC #513. Classify DRC violations by RULE-LAYER into  _[v0.3.16]_
