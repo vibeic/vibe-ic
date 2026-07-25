@@ -308,6 +308,88 @@ def _safe_json(p: Path) -> Optional[Any]:
         return None
 
 
+def _verdict_from_json(j: Optional[Any]) -> Optional[str]:
+    """Extract a human-readable pass/fail string from a PV JSON artefact.
+    Different producers use different field names; try in priority order.
+    Returns None when j is not a dict or no recognisable field is present."""
+    if not isinstance(j, dict):
+        return None
+    # Standard status / verdict fields (phase3 producers)
+    v = j.get("verdict") or j.get("status") or j.get("result")
+    if v:
+        return str(v)
+    # eda_report_audit (lvs.json) uses summary.terminal_verdict + passed
+    summary = j.get("summary")
+    if isinstance(summary, dict):
+        tv = summary.get("terminal_verdict")
+        if tv:
+            return str(tv)
+    passed = j.get("passed")
+    if passed is True:
+        return "PASS"
+    if passed is False:
+        return "FAIL"
+    return None
+
+
+def _resolve_drc_signoff_verdict(project: Path) -> str:
+    """Robust DRC sign-off resolver for _gather_gds.
+
+    Priority:
+      1. drc_signoff.json  — JSON written by newer producers (future-proof).
+      2. drc_signoff.rpt   — KLayout XML report; clean iff zero <item> elements.
+      3. Absent             — explicit "(report missing)".
+
+    Distinguishes a genuinely absent report from a present-but-clean one,
+    so a clean DRC is never misreported as missing.  Chip-AGNOSTIC."""
+    # 1. JSON sidecar (preferred, future-proof)
+    cand_json = _find_report(project, "drc_signoff.json")
+    if cand_json is not None:
+        v = _verdict_from_json(_safe_json(cand_json))
+        if v:
+            return v
+
+    # 2. .rpt file produced by KLayout (and possibly pre-pended with a
+    #    plain-text header by the runner — skip comment lines, then count
+    #    <item> XML elements to determine clean vs. violated).
+    cand_rpt = _find_report(project, "drc_signoff.rpt")
+    if cand_rpt is not None:
+        try:
+            text = cand_rpt.read_text(encoding="utf-8", errors="replace")
+            item_count = text.count("<item>")
+            return "PASS" if item_count == 0 else f"FAIL ({item_count} violations)"
+        except OSError:
+            pass
+
+    return "(report missing)"
+
+
+def _resolve_lvs_verdict(project: Path) -> str:
+    """Robust LVS sign-off resolver for _gather_gds.
+
+    Priority:
+      1. lvs.json  — eda_report_audit output; uses summary.terminal_verdict / passed.
+      2. lvs_verdict.json — _write_lvs_verdict output; uses status field.
+      3. Absent — explicit "(report missing)".
+
+    Chip-AGNOSTIC; shares field-extraction logic with _verdict_from_json."""
+    # 1. Primary: eda_report_audit output
+    cand = _find_report(project, "lvs.json")
+    if cand is not None:
+        v = _verdict_from_json(_safe_json(cand))
+        if v:
+            return v
+
+    # 2. Fallback: _write_lvs_verdict output (#477)
+    cand2 = _find_report(project, "lvs_verdict.json")
+    if cand2 is not None:
+        v = _verdict_from_json(_safe_json(cand2))
+        if v:
+            return v
+
+    return "(report missing)"
+
+
 # Subdirs of reports/ the generator probes (in priority order) when
 # looking up a machine-readable artefact by basename. v1.6.25 added
 # phase-aligned subfolders; auto-router goes there first.
@@ -929,14 +1011,14 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
     if not gds_files:
         return None
     f = gds_files[0]
-    pv = {}
-    for kind in ("drc_signoff", "lvs", "erc"):
-        cand = _find_report(project, f"{kind}.json")
-        j = _safe_json(cand) if cand else None
-        if isinstance(j, dict):
-            pv[kind] = j.get("verdict") or j.get("status") or "?"
-        else:
-            pv[kind] = "(report missing)"
+    pv = {
+        "drc_signoff": _resolve_drc_signoff_verdict(project),
+        "lvs": _resolve_lvs_verdict(project),
+    }
+    # erc uses a single well-formed JSON; keep the generic path for it.
+    cand_erc = _find_report(project, "erc.json")
+    j_erc = _safe_json(cand_erc) if cand_erc else None
+    pv["erc"] = _verdict_from_json(j_erc) or "(report missing)"
     # Auxiliary signoff reports (IR / EM / antenna / SI / power / STA)
     aux: List[str] = []
     for stem in ("ir_drop", "em", "antenna", "si_crosstalk", "power",
