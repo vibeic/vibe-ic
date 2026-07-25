@@ -907,6 +907,36 @@ def _v1_6_595_extract_clock_port_from_rtl(project: Path, top: str = ""):
     return None
 
 
+# A standard-cell clock INPUT pin, across PDK naming conventions (sky130 CLK,
+# gf180 CLK, ihp CLK, Nangate CK, some libraries CP / GCLK / ECK / CLKIN).
+# Deliberately does NOT match data pins that merely contain "cl".
+_CLOCK_SINK_PIN_RE = r"(?:G?CLK(?:IN)?|CK|CP|ECK|CLKN)"
+
+
+def _clock_port_sink_count(text: str, port: str) -> int:
+    """How many instance CLOCK PINS in this netlist are actually driven by
+    `port`. This is the CONNECTIVITY evidence that a candidate port is the
+    real clock — as opposed to merely being NAMED like one.
+
+    #300: `edge_llm_matmul_accel` declares two clock-looking ports. The
+    resolver took the first name match, `clk`, which is a DECOY with ZERO
+    sinks; the real clock is `wb_clk_i`, carrying all 14625 clock pins of all
+    8385 flops. Binding the SDC to the decoy meant CTS `found 0 clock nets`
+    (1.15 s), setup analysis produced ZERO endpoint violations, and the flow
+    reported timing MET — an EMPTY analysis and a CLEAN analysis are
+    indistinguishable at the verdict, which is what makes this the worst
+    false-certificate class: nothing was ever measured.
+
+    Chip-AGNOSTIC: pure Verilog structural grammar (`.<clock_pin>(<net>)`)
+    plus a PDK-independent clock-pin-name alternation. No design literals.
+    """
+    if not text or not port:
+        return 0
+    return len(re.findall(
+        r"\.\s*" + _CLOCK_SINK_PIN_RE + r"\s*\(\s*" + re.escape(port) + r"\s*\)",
+        text, re.IGNORECASE))
+
+
 def _v1_6_623_clock_port_in_netlist_text(text: str, top: str = ""):
     """v1.6.623 — for #623 ORGANIC. Return the first clock-matching port of
     the TOP module in a Verilog netlist `text`. When a `top` name is given
@@ -930,19 +960,36 @@ def _v1_6_623_clock_port_in_netlist_text(text: str, top: str = ""):
         search = top_headers if top_headers else [hb for (_n, hb) in headers]
     else:
         search = [hb for (_n, hb) in headers]
+    # Collect EVERY name-matching candidate (order preserved), then let
+    # CONNECTIVITY decide — #300. Taking the first name match silently bound
+    # the SDC to a 0-sink decoy port and produced a timing-MET verdict from an
+    # analysis that measured nothing.
+    candidates: List[str] = []
     count = 0
     for header_body in search:
         count += 1
         if count > 8:
             break
         for pm in _V1_6_595_RTL_PORT_DECL_RE.finditer(header_body):
-            if _V1_6_595_CLOCK_PORT_RE.match(pm.group(1)):
-                return pm.group(1)
+            nm = pm.group(1)
+            if _V1_6_595_CLOCK_PORT_RE.match(nm) and nm not in candidates:
+                candidates.append(nm)
         for sp in re.split(r"[,\s]+", header_body):
             sp = sp.strip()
-            if sp and _V1_6_595_CLOCK_PORT_RE.match(sp):
-                return sp
-    return None
+            if sp and _V1_6_595_CLOCK_PORT_RE.match(sp) and sp not in candidates:
+                candidates.append(sp)
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    # >1 candidate: pick the port that actually drives clock pins. Ties (incl.
+    # the all-zero case, e.g. a gate-level netlist we could not parse pins from)
+    # fall back to declaration order, so this can only ever IMPROVE on the old
+    # behaviour — never pick a less-connected port than the name-first rule did.
+    ranked = sorted(candidates,
+                    key=lambda p: (-_clock_port_sink_count(text, p),
+                                   candidates.index(p)))
+    return ranked[0]
 
 
 def _v1_6_623_extract_clock_port_from_netlist(project: Path, top: str = ""):
