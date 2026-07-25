@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 919
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 919)
+- **Total programs (excluding helpers / shims):** 923
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 923)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 910 |
+| `any` | 914 |
 
 ## Alphabetical listing
 
@@ -263,6 +263,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `drc_report_check` | any | — | wrapper for eda_report_audit --mode drc. |
 | `drc_rule_layer_classify` | any | v0.3.16 | ORGANIC #513. Classify DRC violations by RULE-LAYER into |
 | `drc_vacuous_pass_check` | any | — | drc_vacuous_pass_check.py -- Reject a "0 DRC violations" verdict when the |
+| `drv_promotion_corroboration_check` | any | — | a route promoted on its OWN |
 | `ds_quality_check` | any | — | Datasheet (L1) quality scorer, 0-100. |
 | `dual_track_select` | any | — | deterministic DUAL-TRACK convergence selector. |
 | `dynamic_ir_drop_check` | any | — | transient (dynamic) IR-drop budget gate for tapeout. |
@@ -315,6 +316,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_dashboard_cli` | any | — | LIVE terminal dashboard for the Vibe-IC flow. |
 | `flow_dashboard_data` | any | — | DATA PROVIDER for the live Vibe-IC flow dashboard. |
 | `flow_dashboard_web` | any | — | a localhost WEB dashboard for the Vibe-IC flow. |
+| `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and |
 | `flow_stage_check` | any | — | wrapper for signoff_audit --mode flow. |
 | `flow_step_execution_coverage_check` | any | — | enforce "every applicable step ran, in order". |
 | `flow_step_executor_coverage_check` | any | — | "every step has an executor that runs it". |
@@ -715,6 +717,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rig_topology_disclosure_check` | any | — | verify hardware rig topology is declared. |
 | `rig_topology_image_extracted_check` | any | v0.119.32 | gate (LL-35). |
 | `rom_init_lint` | any | — | Detect Quartus-unsafe ROM initialization patterns. |
+| `route_congestion_trade_disclosure` | any | — | when global routing buys routability by |
 | `rs485_protocol_synth` | any | v0.1.84 | RS-485-class protocol synth helper. |
 | `rsp_example_otp_consistency_check` | any | — | L3 response examples must match L11 OTP content. |
 | `rtl_bug_report_schema_check` | any | v0.54 | v0.54 plugin gate |
@@ -992,7 +995,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (910 programs)
+### `any` (914 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1227,6 +1230,7 @@ _(no programs in this group)_
 - `drc_report_check` — wrapper for eda_report_audit --mode drc.
 - `drc_rule_layer_classify` — ORGANIC #513. Classify DRC violations by RULE-LAYER into  _[v0.3.16]_
 - `drc_vacuous_pass_check` — drc_vacuous_pass_check.py -- Reject a "0 DRC violations" verdict when the
+- `drv_promotion_corroboration_check` — a route promoted on its OWN
 - `ds_quality_check` — Datasheet (L1) quality scorer, 0-100.
 - `dual_track_select` — deterministic DUAL-TRACK convergence selector.
 - `dynamic_ir_drop_check` — transient (dynamic) IR-drop budget gate for tapeout.
@@ -1279,6 +1283,7 @@ _(no programs in this group)_
 - `flow_dashboard_cli` — LIVE terminal dashboard for the Vibe-IC flow.
 - `flow_dashboard_data` — DATA PROVIDER for the live Vibe-IC flow dashboard.
 - `flow_dashboard_web` — a localhost WEB dashboard for the Vibe-IC flow.
+- `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and
 - `flow_stage_check` — wrapper for signoff_audit --mode flow.
 - `flow_step_execution_coverage_check` — enforce "every applicable step ran, in order".
 - `flow_step_executor_coverage_check` — "every step has an executor that runs it".
@@ -1677,6 +1682,7 @@ _(no programs in this group)_
 - `rig_topology_disclosure_check` — verify hardware rig topology is declared.
 - `rig_topology_image_extracted_check` — gate (LL-35).  _[v0.119.32]_
 - `rom_init_lint` — Detect Quartus-unsafe ROM initialization patterns.
+- `route_congestion_trade_disclosure` — when global routing buys routability by
 - `rs485_protocol_synth` — RS-485-class protocol synth helper.  _[v0.1.84]_
 - `rsp_example_otp_consistency_check` — L3 response examples must match L11 OTP content.
 - `rtl_bug_report_schema_check` — v0.54 plugin gate  _[v0.54]_
