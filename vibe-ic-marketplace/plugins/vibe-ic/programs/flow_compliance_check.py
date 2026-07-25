@@ -1239,6 +1239,42 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # "synth_wrapper_check"               — synth-stage prereq
     # "upf_syntax_check"                  — only applicable to UPF designs
     # "verilator_coverage_measure"        — needs verilator coverage
+    # ------------------------------------------------------------------
+    # LAYER-GATE BATCH 0 — L8 / L19 / L21 SEMANTIC completeness gates.
+    #
+    # Distilled from the measured defect where the global
+    # `phase1_doc_input_completeness_check` scored a hard macro's supply pin
+    # CAPTURED because it appeared in L1+L2, while L21 — the layer the BACKEND
+    # consumes — contained it 0 times: the PDN got no rail, synthesis tied the
+    # pin off with TIEHI, a SIGNAL net landed on a POWER-typed terminal and
+    # TritonRoute aborted the ENTIRE detailed route (3278 nets, 0 routed).
+    # Each gate below asserts that the requirement is present IN THE LAYER THAT
+    # CONSUMES IT, in an actionable form — never that a token appears somewhere.
+    # Each derives its expectation from the design's OWN machine-readable inputs
+    # (its macro LEF USE records, its staged config/SDC/PDK, its L-docs) and
+    # silent-SKIPs (rc=2) when that input is absent, so an incomplete project is
+    # never failed for a prerequisite it does not have.
+    # Swept over 136 real converge runs on all 5 fleet machines: every fire
+    # traces to a verified artefact (a `-period 20` SDC written from the 50 MHz
+    # hardcoded default; a staged PDK enablement with a null pdk_target; a
+    # macro LEF USE POWER pin with no declared rail). Zero false positives.
+    #
+    #   L8:  the STA clock period sdc_gen writes into the SDC that drives CTS
+    #        and STA must be DESIGN-OWNED, never sdc_gen's hardcoded default.
+    #        Honors waiver `l8_sta_clock_period_not_design_owned` (>=40 chars).
+    "l8_sta_clock_period_design_owned_check",
+    #   L19: the fixed die phase3 honors verbatim, and the PDK target the
+    #        foundry pack states / the analog substitution discloses, must be
+    #        present and traceable to the design's own inputs.
+    #        Honors waiver `l19_pdk_floorplan_contract_disclosed` (>=40 chars).
+    "l19_pdk_floorplan_contract_check",
+    #   L21: every USE POWER/USE GROUND pin of an INSTANTIATED hard macro (read
+    #        from that macro's OWN LEF) must have a same-use rail declared in
+    #        L21.power_domains[] — the exact set `_macro_supply_gc_plan` does
+    #        name-equality matching against. This is the gate for the defect
+    #        above. Honors waiver `l21_macro_supply_rail_absent_disclosed`
+    #        (>=40 chars); the waiver DISCLOSES the gap, it never hides it.
+    "l21_macro_supply_rail_declared_check",
 )
 
 # Canonical synthesis-script search order. v0.70 Item 1 runs the two
