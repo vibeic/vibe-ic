@@ -38,11 +38,28 @@ this run's own RESULT/AGENT_REPORT):
   genuine, tool-run proof of reset-safety, not a claim of full datapath
   equivalence (that remains a separate, harder proof obligation).
 
-**Waivers (2, both foundry/board-stage, not engineering gaps):** FPGA
-early-prototype + final sign-off (no DE10-class board-pin contract for this IC
-class — deferred to board bring-up, not executed-PASS) and formal full-stack
-functional proof beyond reset-safety (deferred to the AI assertion-gen /
-equivalence-miter track for a full arithmetic proof).
+**Waivers (4; see `waivers.json` for the register):** `rtl_gen` — the AI-authored
+RTL handoff for this IC class (`rtl_gen=null` → skill `spec-to-rtl`; the
+orchestrator's actual WAIVED step, correcting an earlier version of this file
+that listed only FPGA + formal); `final_audit` — analog track not run
+(`--skip-analog`, pure-digital IC); FPGA early-prototype + final sign-off (no
+DE10-class board-pin contract for this IC class — deferred to board bring-up,
+not executed-PASS; `reports/phase2/fpga/on_board_pass.json` verdict `SKIP`);
+and formal full-stack functional proof beyond reset-safety (deferred to the AI
+assertion-gen / equivalence-miter track for a full arithmetic proof — NOTE: the
+reset-safety `abc pdr` proof claimed below is not yet shipped with its `sby/`
+artifact, so treat it as claimed-not-yet-evidenced until that lands).
+
+**DFT disclosure:** the at-speed gates (DT1/DT2/DT3) are PASS with `scan_flops
+= 65` and **test_coverage 100%** — but **fault_coverage is 40.5%**
+(`transition_coverage.json`), far below any production ATPG floor, and the
+stuck-at ATPG gate is `SKIPPED-CONDITION` (OSS Fault needs a library-mapped
+netlist). "100%" here is test coverage only, not a DFT sign-off number.
+
+**Provenance note:** the RTL under test (`phase2/stage1/rtl/spm.v`) is shared
+with the sky130A and GF180MCU cells of this campaign — sha256-identical
+(`e7feff2c…`), authored once and re-verified per cell, not re-authored per
+plugin version. Phase 1 L-docs are likewise campaign-shared (PDK-independent).
 
 ## Chip-agnostic plugin fixes this cell's convergence proved
 
