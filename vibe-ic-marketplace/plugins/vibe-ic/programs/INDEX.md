@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 924
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 924)
+- **Total programs (excluding helpers / shims):** 925
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 925)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 915 |
+| `any` | 916 |
 
 ## Alphabetical listing
 
@@ -613,6 +613,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_doc_one_shot_runner` | any | Wave 49 | chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator. |
 | `phase1_doc_presence_check` | any | Wave 8 | Fail if fewer than 10 Phase-1 layer docs exist. |
 | `phase1_evidence_grounding_check` | any | — | Phase-1 ANTI-FABRICATION grounding gate. |
+| `phase1_expert_track_evidence_check` | any | — | did the Phase-1 EXPERT track actually |
 | `phase1_gate_contract_check` | any | v0.74 | Meta-checker for Phase 1 deterministic gates. |
 | `phase1_input_vs_generated_completeness_check` | any | v0.60 | Phase 1 coverage gate |
 | `phase1_json_converge` | any | — | deterministic comparator for the Phase-1 |
@@ -996,7 +997,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (915 programs)
+### `any` (916 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1580,6 +1581,7 @@ _(no programs in this group)_
 - `phase1_doc_one_shot_runner` — chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator.  _[Wave 49]_
 - `phase1_doc_presence_check` — Fail if fewer than 10 Phase-1 layer docs exist.  _[Wave 8]_
 - `phase1_evidence_grounding_check` — Phase-1 ANTI-FABRICATION grounding gate.
+- `phase1_expert_track_evidence_check` — did the Phase-1 EXPERT track actually
 - `phase1_gate_contract_check` — Meta-checker for Phase 1 deterministic gates.  _[v0.74]_
 - `phase1_input_vs_generated_completeness_check` — Phase 1 coverage gate  _[v0.60]_
 - `phase1_json_converge` — deterministic comparator for the Phase-1
