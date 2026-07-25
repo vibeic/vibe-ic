@@ -1,0 +1,38 @@
+# Compliance spec for skill 'flow-change-acceptance'.
+# Refines vibe-ic/skills/flow-change-acceptance/SKILL.md output requirements.
+#
+# This skill is the acceptance standard for FLOW-level changes (gates, checks,
+# steps, phase runners, verdict rules). A report produced under this skill must
+# make the six criteria auditable rather than asserted.
+skill: flow-change-acceptance
+
+requirements:
+  - id: R_negative_control_bidirectional
+    description: "States the negative-control result in BOTH directions (fails pre-fix, passes post-fix)"
+    pattern: '(?i)(pre-?fix|parent).{0,80}(fail|error).{0,200}(post-?fix|HEAD).{0,80}pass|negative control.{0,120}both'
+    skill_section: 'The six criteria / 1'
+
+  - id: R_corpus_sweep
+    description: "Reports a corpus sweep with an explicit false-positive count"
+    pattern: '(?i)(corpus sweep|swept).{0,160}(zero|0)\s*(false positive|FP)'
+    skill_section: 'The six criteria / 2'
+
+  - id: R_blocking_declared
+    description: "Declares whether the gate BLOCKS or is ADVISORY"
+    pattern: '(?i)\b(BLOCKING|ADVISORY|blocks the flow|non-?blocking|advisory only)\b'
+    skill_section: 'The six criteria / 5'
+
+  - id: R_prove_by_run
+    description: "If BLOCKING is claimed, cites run evidence that the flow actually stopped (not code inference)"
+    pattern: '(?i)(prove[- ]by[- ]run|actually stopped|flow stopped|stopped before|FAIL\s+\w+\s+.{0,60}before (detailed )?rout)'
+    skill_section: 'The six criteria / 3'
+
+  - id: R_no_literals
+    description: "Asserts chip-agnosticism (no design/PDK/vendor literals; fixtures synthesized)"
+    pattern: '(?i)(chip-?agnostic|no (design|PDK|vendor) literal|synthes(is|ized|ised) fixture|fixtures? .{0,40}synthes)'
+    skill_section: 'The six criteria / 4'
+
+  - id: R_failure_name_sets
+    description: "Compares failure NAME SETS rather than counts when reporting suite results"
+    pattern: '(?i)(name set|failure set|comm -13|only in (fix|baseline))'
+    skill_section: 'Before you land'
