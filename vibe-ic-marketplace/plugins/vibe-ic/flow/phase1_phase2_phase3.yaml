@@ -1011,6 +1011,17 @@ steps:
     programs:
       - yosys_hilomap_required_check
       - yosys_script_template_check
+      # A programmable non-volatile memory needs an EXTERNALLY supplied,
+      # above-core-voltage programming supply through a dedicated package pin
+      # or wafer-probe pad. A design that instantiates one AND carries
+      # programming control logic AND declares no such pin cannot perform its
+      # own programming step — and no digital check downstream notices,
+      # because the digital logic is correct. Wired here, the last pre-PnR
+      # step, because everything it reads (macro LEF USE records, top-level
+      # port list, RTL) already exists. ENFORCEMENT: blocking — also invoked
+      # inline by phase3_one_shot_runner's pre-flight, so it can stop the run
+      # rather than describe it afterwards (#306).
+      - nvm_program_supply_pin_check
     required_outputs:
       - "phase2/stage2/synth/netlist.v"
     gate:
@@ -1021,6 +1032,15 @@ steps:
         - optional_program_exit_zero:
             command: "yosys_script_template_check . --json reports/phase2/gates/yosys_script_template.json"
             condition_files_exist: ["phase2/stage2/synth"]
+        # Plain `program_exit_zero` form ON PURPOSE, not the `command:` +
+        # `condition_files_exist:` form its two siblings above use: the shipped
+        # `flow_gate_enforcement_audit` regex only recognises the plain form,
+        # so a gate written the other way is invisible to the very audit that
+        # reports whether it can block (both yosys_* gates above are currently
+        # invisible to it for this reason — see HANDOFF). This gate needs no
+        # condition guard anyway: with no macro LEF, no instantiated macro or
+        # no parsable RTL it exits 0 with an explicit SKIP reason.
+        - program_exit_zero: "nvm_program_supply_pin_check . --json reports/phase2/gates/nvm_program_supply_pin.json"
     blocks_on: [9, 13]
 
   - id: 15

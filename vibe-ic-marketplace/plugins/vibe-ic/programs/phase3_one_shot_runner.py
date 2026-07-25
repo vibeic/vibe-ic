@@ -24675,6 +24675,49 @@ def main() -> int:
                   file=sys.stderr)
             effective_top = _structural_top
 
+    # PROGRAMMING-SUPPLY PRE-FLIGHT — refuse BEFORE any backend step runs.
+    #
+    # #309's pre-route gate (`_macro_supply_preroute_decision`, inside step_pnr)
+    # blocks the SYMPTOM: a signal net tie-celled onto a macro POWER terminal,
+    # which aborts detailed routing. This blocks the CAUSE, one step earlier: a
+    # design that instantiates a PROGRAMMABLE non-volatile memory and carries
+    # programming control logic, but was never given a package pin or probe pad
+    # for the programming supply. Such a supply is externally supplied and above
+    # core voltage by physics, so no internal rail can ever answer for it — and
+    # nothing else in the digital flow notices, because the digital logic is
+    # entirely correct.
+    #
+    # Placed HERE, at the top of main(), because everything it reads (the macro
+    # LEF, the RTL, the top-level port list) already exists before the first
+    # backend step, and #306 measured that a gate which cannot stop the step it
+    # guards is only a searchable description of a run that already happened.
+    # BLOCKING: returns 5 and runs nothing. Refuses only on the full triad —
+    # a design with no macro, no programming intent, or a declared programming
+    # pin is untouched (measured: 76 corpus designs, zero refusals).
+    _ps_rails = sorted(_design_supply_nets(pdk)[0])
+    try:
+        import nvm_program_supply_pin_check
+        _ps_rep = nvm_program_supply_pin_check.check(
+            project, effective_top, _ps_rails)
+    except Exception as _exc:  # noqa: BLE001 — never break phase3 on a probe
+        _ps_rep = {"verdict": "SKIP", "findings": [],
+                   "skip_reason": f"pre-flight unavailable: {_exc}"}
+    if _ps_rep.get("findings"):
+        for _f in _ps_rep["findings"]:
+            print(f"[phase3] BLOCKING {_f['rule']}: {_f['message']}",
+                  file=sys.stderr)
+        try:
+            _rp = _pl.reports_phase3_dir(project)
+            _rp.mkdir(parents=True, exist_ok=True)
+            (_rp / "nvm_program_supply_pin.json").write_text(
+                json.dumps({**_ps_rep,
+                            "gate": "nvm_program_supply_pin_check",
+                            "enforced_by": "phase3_one_shot_runner (pre-flight)",
+                            "verdict": "REFUSED"}, indent=2) + "\n")
+        except OSError:
+            pass
+        return 5
+
     print(f"=== phase3_one_shot_runner — pdk={pdk.name} top={effective_top}"
           f"{' (override of '+args.top_name+')' if effective_top != args.top_name else ''} ===")
     plan: List[StepResult] = []

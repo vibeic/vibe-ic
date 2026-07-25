@@ -38,6 +38,42 @@ facts:
     # text or L9.power_domains catch-all. NL-ingest extraction template is
     # expected to populate this when the input carries the facts.
     - {path: tapeout_metadata,              type: dict, required: false}
+    # Programmable non-volatile memory — the programming supply.
+    #
+    # Any PROGRAMMABLE non-volatile memory (one-time-programmable, fuse-based,
+    # multiple-time-programmable, antifuse — the whole family) is WRITTEN at a
+    # voltage ABOVE the digital core supply, delivered from OUTSIDE the die
+    # through a DEDICATED terminal: a package pin for in-field programming, or
+    # a wafer-probe pad for programming before the part ships. READING it
+    # generally needs only the core supply — which is exactly why a read-only
+    # integration looks complete while a programming integration is not.
+    # Physics, not vendor preference: within one process, two INDEPENDENT
+    # programmable-memory IP families (one process-native, one third-party)
+    # both specify an externally-supplied programming voltage above that
+    # process's core supply.
+    #
+    # Why this needs a TYPED HOME rather than living in datasheet prose: the
+    # #309 failure mode was precisely that the information EXISTED in a
+    # descriptive layer and never reached the layer the back end consumes, so
+    # a completeness model scored it as captured while the back end built a
+    # supply network without it. A question whose answer has nowhere to land
+    # is not asked twice. Consumed by `nvm_program_supply_pin_check`.
+    #
+    # OPTIONAL: an IC with no programmable NVM simply omits the block, and
+    # `present: false` is a complete, honest answer for one that has none.
+    - {path: nvm_programming,               type: dict, required: false,
+       keys: [present, technology, programming_stage, program_supply_pin,
+              program_supply_external, program_supply_above_core],
+       comment: "present: bool. technology: otp | efuse | mtp | antifuse |
+                 other. programming_stage: wafer_test | post_package |
+                 in_field | preprogrammed_by_ip_vendor | none.
+                 program_supply_pin: the top-level pin or probe pad the
+                 programming voltage enters through — REQUIRED unless
+                 programming_stage is preprogrammed_by_ip_vendor or none.
+                 program_supply_external / program_supply_above_core: bool,
+                 both true for every member of this memory family; a design
+                 answering false is asserting something the IP datasheet
+                 will contradict."}
 
   L2:
     - {path: document_id,                   type: string, required: true, defaultable: true}

@@ -3,8 +3,8 @@
  "_schema": "entries[].{ic_class, lesson_count, lessons[], related?[] (optional cross-links to sibling ic_class names sharing a core craft)}",
  "_source": "distilled from proven-correct (officially-scored PASS) reference designs, plus owner-reviewed general-convention distills from fail-mode triage prose (see capture_log.md); benchmark identifiers scrubbed at build time (blindness); §4.05 ORACLE-SOURCE ban enforced by ic_expert_db_consistency_check.py.",
  "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
- "classes": 99,
- "total_lessons": 160,
+ "classes": 101,
+ "total_lessons": 162,
  "entries": [
   {
    "ic_class": "accumulator-datapath",
@@ -378,6 +378,14 @@
     "self-verification must add an interrupt-controller handshake-latency slice: multi-IRQ ack->next-IRQ re-assert latency, cpu_interrupt deassert-during-ack, and request-sync latency bounds. The draft is faithful to the fully-in-chain spec and passes compile+basic sim, but extra ack-recovery/sync cycles break the cycle-accurate handshake the oracle enforces — a slice our self-TB never exercised.",
     "interrupt-controller default-priority convention lesson: absent an explicit priority map, default to lower-index = higher-priority (IRQ0 wins) and make the starvation boost additive to the static level, not a separate high-order bit. The 10-index formula isn't in prose but 'IRQ0 highest' is standard; the draft's index-as-priority inverts arbitration. Not a floor — recoverable by encoding conventional priority polarity.",
     "Priority-interrupt-controller arbitration must present the highest-priority pending & unmasked interrupt combinationally EVERY cycle (preemptive) so a newly-pending higher-priority request takes over the one in service; do not latch the serviced index and hold until cpu_ack (non-preemptive) unless non-preemption is explicitly specified."
+   ]
+  },
+  {
+   "ic_class": "fuse-programmable-nvm-integration",
+   "lesson_count": 2,
+   "lessons": [
+    "A PROGRAMMABLE non-volatile memory (one-time-programmable, fuse-based, multiple-time-programmable, antifuse — the whole family) is WRITTEN at a voltage ABOVE the digital core supply, delivered from OUTSIDE the die through a DEDICATED terminal: a package pin for in-field programming, or a wafer-probe pad for programming before the part ships. READING it generally needs only the core supply. Treat that asymmetry as the design rule: if you instantiate such a memory AND author programming control logic for it (a program request / address / data / busy handshake), you have committed the design to a programming step, and that step needs a physical path for its programming voltage — declare the supply as a top-level port (or a documented probe pad) and carry it out of every enclosing module. This is physical necessity, not a vendor preference: in one process, two INDEPENDENT programmable-memory IP families — one process-native, one third-party — both specify the programming supply as externally supplied and both specify a window above that process's core voltage, because the cell cannot be written at core voltage. Read the macro's own LEF: a second pin typed USE POWER, beyond the core rail, IS the programming supply, whatever the vendor chose to name it.",
+    "Decide, and write down, WHEN a programmable non-volatile memory gets programmed — at wafer probe, after packaging, in the field, or by the IP vendor before delivery — before you author its control logic, because the answer decides whether the design needs a programming pin at all. Programmed before delivery is a complete design with NO programming logic and NO programming terminal; any other answer requires both. The failure mode to avoid is holding both halves at once: a full programming handshake in RTL and no terminal for the programming supply. That design passes lint, simulation, formal, synthesis and timing — every digital check is correct — and is simply unable to perform the operation it was built for. When the terminal is missing, synthesis has nothing to bind the macro's supply pin to and drives it with a constant-tie cell, so a signal net lands on a power terminal and detailed routing refuses the whole design, with an error that names neither the memory nor the missing pin."
    ]
   },
   {

@@ -21,6 +21,80 @@ qbank:
       - if_user_says: ["small", "tiny", "minimum"]
         respond_with_default: "WLCSP"
 
+  # ---------------------------------------------------------------------------
+  # Programmable non-volatile memory — the programming supply.
+  #
+  # Asked at the ROOT class, not in a memory-specific one: a processor, a
+  # crypto engine, a protocol IC and a sensor front-end can all embed a fuse
+  # array for trim, keys, calibration or a serial number. It is not a property
+  # of the design's class, it is a property of the memory.
+  #
+  # THE CONVENTION: any programmable non-volatile memory (one-time-
+  # programmable, fuse-based, multiple-time-programmable, antifuse) is WRITTEN
+  # at a voltage ABOVE the digital core supply, delivered from OUTSIDE the die
+  # through a dedicated terminal — a package pin for in-field programming, or a
+  # wafer-probe pad for programming before the part ships. READING it generally
+  # needs only the core supply. That asymmetry is the trap: a read-only
+  # integration looks complete, and a design that intends to PROGRAM but has no
+  # programming pin passes every digital check while being unable to do the one
+  # thing it was built to do.
+  #
+  # ASK IT HERE, in Phase 1, because this is where the answer is cheap. When it
+  # is not asked, the cost is paid five steps later, in a routing abort whose
+  # message names none of this. `nvm_program_supply_pin_check` enforces the
+  # same rule deterministically at the pre-PnR gate — this dialogue exists so
+  # the design arrives there already correct, not so the gate can be skipped.
+  nvm_programming.present:
+    expert:       ["Any programmable non-volatile memory on-die (OTP / eFuse / MTP / antifuse) — trim, keys, calibration, serial number?"]
+    intermediate: ["Does the chip store anything permanently on-die that gets written once — calibration values, a serial number, security keys?"]
+    beginner:     ["Does the chip need to remember something forever after it's made — like a serial number or a setting that never changes?"]
+    follow_ups:
+      - if_user_says: ["no", "none", "nothing"]
+        respond_with_default: false     # rest of the block is then skipped
+      - if_user_says: ["otp", "efuse", "fuse", "mtp", "antifuse", "trim", "serial number", "key storage"]
+        respond_with_default: true
+
+  nvm_programming.technology:
+    expert:       ["Which programmable-NVM technology — otp | efuse | mtp | antifuse | other?"]
+    intermediate: ["What kind of one-time memory is it? (fuse-based, antifuse, or a re-writable multi-time cell)"]
+    beginner:     []   # derived from the IP the design picks
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # the instantiated IP's own datasheet decides
+
+  nvm_programming.programming_stage:
+    expert:       ["At which stage is it programmed — wafer_test | post_package | in_field | preprogrammed_by_ip_vendor?"]
+    intermediate: ["When does the content get written: at wafer probe, after packaging, in the field by the customer, or does the IP vendor ship it pre-programmed?"]
+    beginner:     ["Who writes that permanent value, and when — the factory, or the customer later?"]
+    follow_ups:
+      # This branch is the one that makes a MISSING programming pin correct
+      # rather than a defect: a part programmed before delivery carries no
+      # programming logic and needs no programming terminal.
+      - if_user_says: ["vendor", "pre-programmed", "preprogrammed", "already programmed", "shipped programmed"]
+        respond_with_default: "preprogrammed_by_ip_vendor"
+      - if_user_says: ["wafer", "probe", "sort", "before packaging"]
+        respond_with_default: "wafer_test"
+      - if_user_says: ["field", "customer", "end user", "after shipping"]
+        respond_with_default: "in_field"
+
+  nvm_programming.program_supply_pin:
+    # NO default. The whole point is that this cannot be silently derived: the
+    # programming supply is above core voltage and externally supplied, so
+    # there is no internal rail an extraction could fall back to. An absent
+    # answer is a real gap and must read as one.
+    expert:       ["Which top-level pin or probe pad does the programming voltage enter through? (it is externally supplied and above core — no internal rail can provide it)"]
+    intermediate: ["Programming that memory needs a higher voltage than the chip's core, fed in from outside. Which pin or test pad carries it?"]
+    beginner:     ["Writing that permanent value needs extra voltage from outside the chip. Is there a dedicated pin (or a test pad used at the factory) for it?"]
+    follow_ups:
+      - if_user_says: ["preprogrammed_by_ip_vendor", "vendor programs it", "pre-programmed"]
+        respond_with_default: null   # legitimately absent — no on-die programming
+      - if_ambiguous: ["don't know", "not sure", "the IP handles it"]
+        # Deliberately NOT defaulted. Point at the one document that answers it.
+        respond_with: "The memory IP's own datasheet names this supply and its
+                       voltage window. It will not be the core rail — check the
+                       macro's LEF for a second USE POWER pin and carry that pin
+                       to the top level."
+
   document_id:
     expert:       []  # always defaults
     intermediate: []
