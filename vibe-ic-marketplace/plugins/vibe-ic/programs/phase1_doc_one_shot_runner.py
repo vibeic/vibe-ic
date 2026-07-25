@@ -10731,12 +10731,42 @@ def _v466_line_is_block_header(line: str) -> bool:
     return False
 
 
+# ORGANIC — SELF-CONTAMINATION guard. `phase1_dialogue_render` writes each
+# layer's heading from `tools/phase1_engine/schema.LAYER_TITLES`, e.g.
+#     ## L5 — Analog-Digital Interface (ADC/DAC, mixed-signal pads, PHY AFE)
+#            — NOT the vendor 'Analog Devices Inc.'
+# Those lines are the PLUGIN'S OWN BOILERPLATE, not design evidence. Measured
+# on cell sha256 x gf180mcuD: the L5 heading is a markdown heading, so
+# `_v466_line_is_block_header` ranked it ABOVE every prose hit; the `adc` and
+# `dac` classes anchored on it and won before the negation guard could see the
+# body sentence ("Purely digital synchronous block. No ADC, DAC, PHY AFE ...",
+# on which `_v0_1_62_analog_kw_negated` correctly returns True). The emitter's
+# `continue` advances to the next CLASS, never the next MATCH, so the negated
+# occurrence was never reached. Result: two fabricated analog blocks (adc, dac)
+# on a pure-digital SHA-256 core, whose own `evidence_paragraph` quotes this
+# heading verbatim — and the fabrication then drove a whole A1-A9 analog track
+# that wrote ngspice sizing/corner decks for hardware that does not exist.
+# chip-AGNOSTIC: keyed on the plugin's own layer-code heading grammar.
+_RE_PLUGIN_LAYER_TITLE = re.compile(r'^\s{0,3}#{1,6}\s*L\d+[A-Za-z]?\s*[—–-]')
+
+
+def _v466_line_is_plugin_layer_title(line: str) -> bool:
+    """True when `line` is a layer heading emitted by this plugin's own
+    renderer. Such a line must never count as evidence about the design."""
+    return bool(_RE_PLUGIN_LAYER_TITLE.match(line or ""))
+
+
 def _v466_best_class_match(text: str, pat: str):
     """ORGANIC #466 R2 — return the regex match for class `pat` that
     PREFERS a Block HEADER line. Iterates ALL matches; the first one
     whose source line is a Block header wins. When no match sits on a
     header line, falls back to the FIRST match (legacy single-search
     behaviour). Returns a re.Match or None.
+
+    ORGANIC — matches sitting on the plugin's OWN rendered layer-title
+    heading are skipped entirely (see _RE_PLUGIN_LAYER_TITLE). If every
+    match is on such a line the class has NO design evidence and None is
+    returned, rather than falling back to the boilerplate.
 
     Chip-AGNOSTIC: header preference is pure structural; the class
     pattern is caller-supplied analog vocabulary, no chip-class literal.
@@ -10749,11 +10779,19 @@ def _v466_best_class_match(text: str, pat: str):
         return None
     if not matches:
         return None
+    # drop self-contaminating matches BEFORE any ranking
+    real = []
     for m in matches:
+        ls, le = _v466_line_bounds(text, m.start())
+        if not _v466_line_is_plugin_layer_title(text[ls:le]):
+            real.append(m)
+    if not real:
+        return None
+    for m in real:
         ls, le = _v466_line_bounds(text, m.start())
         if _v466_line_is_block_header(text[ls:le]):
             return m
-    return matches[0]
+    return real[0]
 
 
 # ─── ORGANIC-20260606 #466 R2 — explicit-enumeration spurious guard ──
@@ -44363,7 +44401,56 @@ def _harvest_bring_up_sequence_from_paragraph(
 # verification-plan markdown table in the INPUT docs (NO RTL oracle), keyed on
 # bilingual column SEMANTICS (test/expected/input), never on chip literals.
 _L10_TC_TEST_COL = re.compile(
-    r'(?i)測試|\btest\b|vector|向量|scenario|情境|firmware|韌體|\bcase\b|案例|類別')
+    r'(?i)測試|\btests?\b|vector|向量|scenario|情境|firmware|韌體|\bcase\b|案例|類別')
+
+# ORGANIC — `- <field>:` TABLE-LABEL recovery. Measured on cell
+# sha256 x gf180mcuD (plugin 1.5.85).
+#
+# DEFECT: `phase1_dialogue_render._bullets()` renders EVERY record list as
+#     - <field_name>:
+#     <blank>
+#     | <union of the record's own keys> |
+#     | --- | --- |
+#     | ...data rows... |
+# because `_table()` builds the header row from the RECORD's keys. So the
+# field name — `test_vectors`, `negative_tests`, `opcodes`, `submodules`,
+# `behavioral_sequences`, … — the ONE token that identifies what the table
+# IS, appears ONLY in the label line and NEVER in the header row. Every
+# table harvester keyed solely on the header row, so a record list whose
+# per-record keys did not happen to carry the harvester's vocabulary was
+# silently dropped, after which the emitter wrote a FALSE
+# `no_<X>_in_input: true` — a positive claim about the INPUT that the input
+# contradicts.
+#
+# Measured instance: L10.test_vectors (4 rows, header
+# `id|name|source|command|block_hex|expected_digest_hex`) and
+# L10.negative_tests (4 rows, header `id|name|stimulus|expected`) both
+# carry NO test/vector/case token in the header, so both were dropped and
+# L10_TEST_CASES.json emitted `test_cases: []` + `no_test_cases_in_input:
+# true` — collapsing Step-4 functional verification to a connectivity-only
+# skeleton for a design whose input shipped three FIPS 180-4 golden digests.
+#
+# FIX: treat the `- <field>:` label immediately above a table as part of
+# that table's identifying semantics. chip-AGNOSTIC: pure markdown
+# structure; no chip name, field name, or value literal is hardcoded.
+_TABLE_LABEL_RE = re.compile(r'^\s*[-*]\s*([A-Za-z0-9_.]+)\s*:\s*$')
+
+
+def _preceding_table_label(lines: List[str], hdr_idx: int) -> str:
+    """Return the `- <field>:` label owning the table whose header row is at
+    ``lines[hdr_idx]`` (blank lines between label and table are allowed), or
+    '' when the table has no such label. Bounded look-back: the renderer
+    emits exactly one blank line, so anything further away is a different
+    block and must not be claimed as this table's label."""
+    j = hdr_idx - 1
+    while j >= 0 and not lines[j].strip():
+        if hdr_idx - j > 3:
+            return ""
+        j -= 1
+    if j < 0:
+        return ""
+    m = _TABLE_LABEL_RE.match(lines[j])
+    return m.group(1).replace('_', ' ').replace('.', ' ') if m else ""
 _L10_TC_EXP_COL = re.compile(
     r'(?i)預期|expect|golden|digest|\bresult\b|結果|判定|pass|必過')
 _L10_TC_IN_COL = re.compile(
@@ -44390,11 +44477,18 @@ def _harvest_test_cases_from_input_tables(
                 hdr = [c.strip() for c in line.strip().strip('|').split('|')]
                 sep = lines[i + 1].strip()
                 is_sep = bool(sep) and set(sep) <= set('|-: ') and '-' in sep
+                # ORGANIC — the `- <field>:` label above the table is part
+                # of the table's identifying semantics (see
+                # _preceding_table_label). Without it a rendered
+                # `L10.test_vectors` record list is invisible here, because
+                # `_table()` builds the header from the record's own keys
+                # and the field name never reaches the header row.
                 hjoin = ' '.join(hdr)
+                hsem = hjoin + ' ' + _preceding_table_label(lines, i)
                 if (len(hdr) >= 2 and is_sep
-                        and _L10_TC_TEST_COL.search(hjoin)
-                        and (_L10_TC_EXP_COL.search(hjoin)
-                             or _L10_TC_IN_COL.search(hjoin))):
+                        and _L10_TC_TEST_COL.search(hsem)
+                        and (_L10_TC_EXP_COL.search(hsem)
+                             or _L10_TC_IN_COL.search(hsem))):
                     j = i + 2
                     while j < n and '|' in lines[j]:
                         cells = [c.strip()
@@ -44415,7 +44509,29 @@ def _harvest_test_cases_from_input_tables(
                         if name in seen:
                             continue
                         seen.add(name)
-                        last = re.sub(r'[`*]', '', cells[-1]).strip()
+                        # ORGANIC — pick the expected cell by HEADER
+                        # SEMANTICS, not by position. Taking cells[-1]
+                        # silently drops the golden value whenever the table
+                        # carries a TRAILING COMMENTARY column: a header of
+                        # the shape `...|expected_<x>|note` with `note` left
+                        # EMPTY on most rows makes every golden value collapse
+                        # to "". A test case whose `expected` is blank is an
+                        # oracle with no answer — it cannot fail, which is the
+                        # same rubber stamp as having no test at all. See the
+                        # `_preceding_table_label` note above for the measured
+                        # instance. Positional fallback is retained for tables
+                        # whose header carries no `expected`-class column.
+                        exp_i = next(
+                            (ci for ci, h in enumerate(hdr)
+                             if ci < len(cells)
+                             and _L10_TC_EXP_COL.search(h.replace('_', ' '))),
+                            None)
+                        last = re.sub(
+                            r'[`*]', '',
+                            cells[exp_i] if exp_i is not None else cells[-1]
+                        ).strip()
+                        if not last:            # header-picked cell was blank
+                            last = re.sub(r'[`*]', '', cells[-1]).strip()
                         out.append({
                             "name": name,
                             "kind": "functional_vector",
