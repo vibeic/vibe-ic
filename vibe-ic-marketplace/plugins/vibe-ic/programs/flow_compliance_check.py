@@ -991,6 +991,17 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #       then 0x60-0x7F not writable" dependency edge gap (audit
     #       line 57, item #10).
     "l11_otp_lock_dependencies_typed_check",
+    #   B5b: L27 (memory-module SPD) applicability contract. L27 is
+    #       OPT-IN-ONLY and has no consumer today, so the only thing that
+    #       CAN be gated is whether its advertised applicability is TRUE.
+    #       Checks both directions: a not-applicable L27 must be justified
+    #       and must not be contradicted by the taxonomy or by the design's
+    #       OWN input docs (a false N/A is the token-presence defect shape —
+    #       requirement in the input, 0 times in the consuming layer); an
+    #       applicable L27 must be actionable and distinct from the on-die
+    #       register map. Chip-AGNOSTIC: the SPD vocabulary is parsed out of
+    #       l_doc_taxonomy's own L27 description at runtime. BLOCKING.
+    "l27_memory_module_spd_check",
     #   B6: L12 sequences must carry typed steps[] with action +
     #       expected_signal/latency_us/next_state, plus a trigger.
     #       Closes wake-handshake / engineer-mode-entry gap
