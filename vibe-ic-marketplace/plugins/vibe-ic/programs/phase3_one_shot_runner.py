@@ -9301,6 +9301,62 @@ def _pg_net_cleanup_tcl() -> str:
         "} _pgc]} { puts \"PG_CLEANUP_NONFATAL: $_pgc\" }\n")
 
 
+# Escalating legalization ladder (#295). Displacement is in SITES; the rungs
+# are multiplicative so a design needing a big window reaches it in few tries,
+# and the ladder is bounded so a genuinely unlegalizable placement terminates
+# instead of grinding. Structural constant, not per-design.
+_DPL_ESCALATION_SITES = (5, 20, 100)
+
+
+def _build_escalating_legalize_tcl(marker: str, var_tag: str = "") -> str:
+    """Legalize with an ESCALATING displacement window, then PROVE it worked.
+
+    #295: `repair_design` inserts timing buffers (measured: 564 buffers in 155
+    nets on subservient x gf180mcuD); `detailed_placement` then cannot find a
+    legal site for some of them and raises DPL-0036, which killed the whole PnR
+    on a step unrelated to that cell's real engineering residual. The existing
+    die-upsize retry loop does not catch a LEGALIZATION failure.
+
+    But the shipped mitigation — `catch {detailed_placement}` + a NONFATAL
+    puts — is not a fix either: it swallows the error and carries on with an
+    ILLEGAL placement, so routing and sign-off are then built on overlapping
+    cells. That is a false certificate of the same family as the others in this
+    campaign: the failure is recorded and then ignored.
+
+    This ladder instead RETRIES with a widening `-max_displacement` window and
+    then CONFIRMS legality with `check_placement`, because a
+    `detailed_placement` that merely does not throw is not evidence the
+    placement is legal. Outcomes, all explicitly marked:
+
+      <marker>_LEGALIZE_OK disp=<n>   legal, and at which rung
+      <marker>_LEGALIZE_FAILED        every rung exhausted — the honest failure,
+                                      NOT swallowed into a silent pass
+
+    Chip-AGNOSTIC: standard OpenROAD commands, no design or PDK literals.
+    """
+    v = var_tag
+    rungs = " ".join(str(d) for d in _DPL_ESCALATION_SITES)
+    return (
+        f"set _dplok{v} 0\n"
+        # rung 0: the default window, which is right for almost every design.
+        f"if {{![catch {{detailed_placement}} _dpl{v}]}} {{\n"
+        f"  if {{![catch {{check_placement}} _cpk{v}]}} {{ set _dplok{v} 1 ; "
+        f"puts \"{marker}_LEGALIZE_OK disp=default\" }}\n"
+        f"}}\n"
+        # escalate only if still not proven legal.
+        f"if {{$_dplok{v} == 0}} {{\n"
+        f"  foreach _d{v} {{{rungs}}} {{\n"
+        f"    if {{$_dplok{v} != 0}} {{ break }}\n"
+        f"    if {{[catch {{detailed_placement -max_displacement $_d{v}}} "
+        f"_dpl{v}]}} {{ continue }}\n"
+        f"    if {{![catch {{check_placement}} _cpk{v}]}} {{ set _dplok{v} 1 ; "
+        f"puts \"{marker}_LEGALIZE_OK disp=$_d{v}\" }}\n"
+        f"  }}\n"
+        f"}}\n"
+        f"if {{$_dplok{v} == 0}} {{ puts \"{marker}_LEGALIZE_FAILED\" }}\n"
+    )
+
+
 def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
                               var_tag: str = "") -> str:
     """ORGANIC #561 (b) / #581 round-2 — the ONE post-buffered repair
@@ -9321,8 +9377,7 @@ def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
         f"puts \"{p}_REPAIR_TIMING_SETUP{s}_NONFATAL: $_rts{v}\" }}\n"
         f"if {{[catch {{repair_timing -hold}} _rth{v}]}} {{ "
         f"puts \"{p}_REPAIR_TIMING_HOLD{s}_NONFATAL: $_rth{v}\" }}\n"
-        f"if {{[catch {{detailed_placement}} _dpl{v}]}} {{ "
-        f"puts \"{p}{s}_REPAIR_LEGALIZE_NONFATAL: $_dpl{v}\" }}\n"
+        + _build_escalating_legalize_tcl(f"{p}{s}_REPAIR", v)
     )
 
 
@@ -9476,9 +9531,8 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "if {[catch {repair_timing -setup} _rts_err]} {\n"
         "  puts \"ECO_REPAIR_TIMING_SETUP_NONFATAL: $_rts_err\"\n"
         "}\n"
-        "if {[catch {detailed_placement} _dp_err]} {\n"
-        "  puts \"ECO_DETAILED_PLACEMENT_NONFATAL: $_dp_err\"\n"
-        "}\n"
+        + _build_escalating_legalize_tcl("ECO_DPL", "_eco")
+        + "\n"
         "# ORGANIC #561 (d): DPL-0033 — catch around check_placement.\n"
         "# check_placement throws on inherited mis-aligned instances; catch\n"
         "# keeps the flow moving while still surfacing the WARN message.\n"
