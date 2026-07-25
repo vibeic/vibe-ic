@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 932
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 932)
+- **Total programs (excluding helpers / shims):** 935
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 935)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 923 |
+| `any` | 926 |
 
 ## Alphabetical listing
 
@@ -473,9 +473,12 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l5_analog_block_spec_actionable_check` | any | — | SEMANTIC layer gate for L5. |
 | `l6_fsm_scaffold_actionable_check` | any | — | SEMANTIC layer gate for L6. |
 | `l6_reject_rules_from_rx_event_check` | any | Wave 37 | Wave 37 (v0.119.69). |
+| `l7_debug_access_grounding_check` | any | — | L7 SEMANTIC gate (ADVISORY). |
 | `l8_clock_domains_typed_check` | any | Wave 38 | Wave 38 / B4 |
+| `l8_clock_period_actionability_check` | any | — | L8 SEMANTIC consumer-contract gate. |
 | `l8_frame_end_gap_derivation_check` | any | — | LL-3. |
 | `l9_completeness_check` | any | — | Deterministic L9 Integration Spec completeness checker. |
+| `l9_floorplan_contract_check` | any | — | L9 SEMANTIC consumer-contract gate. |
 | `l9_response_delay_schema_check` | any | — | R5 L9 spec mandate |
 | `l9_rtl_pin_consistency_check` | any | Wave 79 | Wave 79 cross-layer integrity gate. |
 | `l9_submodule_conformance_check` | any | Wave 79 | cross-check the SUBMODULE half of the |
@@ -1004,7 +1007,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (923 programs)
+### `any` (926 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1448,9 +1451,12 @@ _(no programs in this group)_
 - `l5_analog_block_spec_actionable_check` — SEMANTIC layer gate for L5.
 - `l6_fsm_scaffold_actionable_check` — SEMANTIC layer gate for L6.
 - `l6_reject_rules_from_rx_event_check` — Wave 37 (v0.119.69).  _[Wave 37]_
+- `l7_debug_access_grounding_check` — L7 SEMANTIC gate (ADVISORY).
 - `l8_clock_domains_typed_check` — Wave 38 / B4  _[Wave 38]_
+- `l8_clock_period_actionability_check` — L8 SEMANTIC consumer-contract gate.
 - `l8_frame_end_gap_derivation_check` — LL-3.
 - `l9_completeness_check` — Deterministic L9 Integration Spec completeness checker.
+- `l9_floorplan_contract_check` — L9 SEMANTIC consumer-contract gate.
 - `l9_response_delay_schema_check` — R5 L9 spec mandate
 - `l9_rtl_pin_consistency_check` — Wave 79 cross-layer integrity gate.  _[Wave 79]_
 - `l9_submodule_conformance_check` — cross-check the SUBMODULE half of the  _[Wave 79]_
