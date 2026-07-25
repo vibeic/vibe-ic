@@ -21,6 +21,16 @@ Result: two fabricated analog blocks on a pure-digital SHA-256 core, whose own
 entire A1-A9 analog track which wrote ngspice sizing/corner decks for hardware
 that does not exist.
 
+NARROWING (second pass). Recognising the boilerplate by SHAPE alone - any
+`## L<n> -` heading - fixed the false positive by creating a false NEGATIVE.
+The sole caller `gen_l5_adi_spec` runs this over the USER'S INPUT DOCS, and an
+L-numbered heading is exactly the style this plugin's own layer scheme teaches
+users to write, so a genuine mixed-signal spec whose ADC evidence sits under
+`## L5 - ADC subsystem: 12-bit SAR ADC, 1 MSPS` was silently dropped. The
+boilerplate is now recognised by its ACTUAL RENDERED TEXT - the heading counts
+as the plugin's own only when the text after the layer code EQUALS that layer's
+canonical `schema.LAYER_TITLES` entry.
+
 BIDIRECTIONAL:
   * `test_boilerplate_heading_alone_is_not_evidence` - the DEFECT case, checked
     END-TO-END: post-fix the chosen match must land on the real rationale
@@ -29,6 +39,12 @@ BIDIRECTIONAL:
     fire, so the block is EMITTED - and this test FAILS.
   * `test_genuine_analog_prose_still_detected` - a real mixed-signal doc must
     STILL be detected, so the guard cannot suppress true positives.
+  * `test_user_l_numbered_heading_is_not_plugin_boilerplate` and
+    `test_genuine_adc_heading_under_l_number_still_detected` - the FALSE
+    NEGATIVE the shape-only rule introduced. Both FAIL against it.
+  * `test_plugin_layer_titles_are_loaded` - PREMISE: the narrowed rule is
+    driven by the real title table; if that table cannot be loaded the guard
+    goes inert and the R2 defect returns unnoticed.
   * `test_negated_body_sentence_still_negated` - the pre-existing negation
     guard must be untouched.
 """
@@ -55,6 +71,16 @@ _L5_HEADING = ("## L5 — Analog-Digital Interface (ADC/DAC, mixed-signal pads, 
                "PHY AFE) — NOT the vendor 'Analog Devices Inc.'")
 _ADC_PAT = doc._ANALOG_KEYWORDS["adc"]
 _DAC_PAT = doc._ANALOG_KEYWORDS["dac"]
+
+# REAL-SPEC headings a user writes in their OWN input doc, in the very
+# L-numbered style this plugin's layer scheme teaches. None of them is the
+# plugin's boilerplate; every one of them is design evidence. The shape-only
+# rule `^#{1,6}\s*L\d+[A-Za-z]?\s*[dash]` suppressed all three.
+_REAL_SPEC_HEADINGS = (
+    "## L5 - ADC subsystem: 12-bit SAR ADC, 1 MSPS",
+    "## L5 — Analog front end (12-bit SAR ADC)",
+    "### L2 - ADC channel budget",
+)
 
 
 def test_boilerplate_heading_alone_is_not_evidence():
@@ -108,6 +134,53 @@ def test_genuine_analog_prose_still_detected():
                 doc._v466_line_bounds(text, m.start())[1]]
     assert "adc_type" in line or "bandgap" in line, (
         f"matched the wrong line: {line!r}")
+
+
+def test_plugin_layer_titles_are_loaded():
+    """PREMISE GUARD. The narrowed rule compares against the plugin's REAL
+    rendered titles (`tools/phase1_engine/schema.LAYER_TITLES`). If that table
+    cannot be loaded the comparison can never match, the suppression silently
+    goes inert and the R2 self-contamination defect returns with a green
+    suite. Assert the premise instead of trusting it."""
+    titles = doc._v466_plugin_layer_titles()
+    assert titles, ("schema.LAYER_TITLES unreachable — the self-contamination "
+                    "guard would be inert")
+    assert "L5" in titles and titles["L5"], titles.get("L5")
+    # the boilerplate constant above must still BE the rendered heading
+    assert doc._v466_norm_layer_title(
+        _L5_HEADING.split("L5", 1)[1].lstrip(" —–-")) == titles["L5"]
+
+
+def test_user_l_numbered_heading_is_not_plugin_boilerplate():
+    """FALSE-NEGATIVE GUARD, at the predicate. A user's own L-numbered heading
+    carries the user's own words and is NOT the plugin's boilerplate."""
+    for h in _REAL_SPEC_HEADINGS:
+        assert not doc._v466_line_is_plugin_layer_title(h), (
+            f"suppressed a REAL spec heading as boilerplate: {h!r}")
+    # ...while the plugin's own full L5 heading still IS boilerplate
+    assert doc._v466_line_is_plugin_layer_title(_L5_HEADING)
+
+
+def test_genuine_adc_heading_under_l_number_still_detected():
+    """FALSE-NEGATIVE GUARD, end-to-end and ON A HEADING (not in a bullet).
+
+    The evidence sits on the heading itself, exactly as it does in a real
+    mixed-signal spec, and the plugin's own boilerplate heading is present in
+    the same doc. The chosen match must land on the USER'S heading."""
+    for h in _REAL_SPEC_HEADINGS:
+        text = "\n".join([
+            _L5_HEADING,
+            "",
+            h,
+            "",
+            "Sampled at 1 MSPS from a 3.3 V single-ended source.",
+        ])
+        m = doc._v466_best_class_match(text, _ADC_PAT)
+        assert m is not None, (
+            f"suppressed a GENUINE analog heading, no evidence left: {h!r}")
+        ls, le = doc._v466_line_bounds(text, m.start())
+        assert text[ls:le] == h, (
+            f"expected the match on {h!r}, got {text[ls:le]!r}")
 
 
 def test_negated_body_sentence_still_negated():
