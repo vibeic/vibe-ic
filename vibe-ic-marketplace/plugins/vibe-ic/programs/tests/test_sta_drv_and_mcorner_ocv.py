@@ -27,6 +27,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from conftest import func_src
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
@@ -152,10 +154,9 @@ def test_emit_mcorner_ocv_sta_source_carries_full_rigor():
     the recovery/removal + min-pulse-width + max-slew check types, and reports
     the worst-path slews (so the slew explosion is visible)."""
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    i = src.index("def _emit_mcorner_ocv_sta")
     # Window covers the function prologue + the two _pass() passes; sized with
     # headroom for the optional netlist_override arg (ECO post-ECO re-measure).
-    win = src[i:i + 5600]
+    win = func_src(src, "_emit_mcorner_ocv_sta")
     assert "_flat_ocv_derate_tcl" in win        # two-command derate helper
     assert "OCV_DERATE_APPLIED" in win
     assert "_report_check_types_tcl" in win     # guarded + marked check types
@@ -163,8 +164,7 @@ def test_emit_mcorner_ocv_sta_source_carries_full_rigor():
     assert "SETUP" in win and "HOLD" in win      # setup@ss, hold@ff split
     assert "process=" in win                    # process-corner labelling
     # the shared check-types helper carries the command + authoritative marker.
-    j = src.index("def _report_check_types_tcl")
-    helper = src[j:j + 1200]
+    helper = func_src(src, "_report_check_types_tcl")
     assert "report_check_types -recovery -removal -max_slew" in helper
     assert "min_pulse_width" in helper
 
@@ -260,9 +260,12 @@ def test_spef_sta_and_mcorner_emitters_avoid_combined_derate():
     """§ regression: neither _emit_spef_sta nor _emit_mcorner_ocv_sta emits the
     combined `-early .. -late ..` form (which errors on this OpenSTA build)."""
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    for fn in ("def _emit_spef_sta", "def _emit_mcorner_ocv_sta"):
-        i = src.index(fn)
-        win = src[i:i + 6000]
+    # NOTE these are NEGATIVE assertions, where a TRUNCATED window is the
+    # false-PASS direction: the old fixed 6000-char slice left the last ~950
+    # chars of _emit_mcorner_ocv_sta (really 6951) unchecked for the forbidden
+    # combined form. func_src covers the whole function body.
+    for fn in ("_emit_spef_sta", "_emit_mcorner_ocv_sta"):
+        win = func_src(src, fn)
         assert "set_timing_derate -early" not in win or "_flat_ocv_derate_tcl" in win
         # the load-bearing check: the combined form is gone from the emitter body.
         assert f"-early {R._FLAT_OCV_DERATE_EARLY} -late" not in win

@@ -60,12 +60,27 @@ endmodule
 
 
 def _need_iic_eda():
+    """Skip unless a RUNNING container named _CONTAINER can actually be exec'd.
+
+    `docker inspect <name>` resolves IMAGES as well as containers, and
+    `vibeic-eda` is precisely our image name — so on any machine that has the
+    image pulled the old guard returned rc=0, declared the container
+    "available", and let the test proceed to fail inside `docker exec` with
+    "could not create container workdir". An environment-gated test must SKIP
+    when its environment is absent, never FAIL.
+
+    `--type=container` restricts the lookup to containers, and `.State.Running`
+    rejects a stopped one (which also inspects fine but cannot be exec'd).
+    """
     if not shutil.which("docker"):
         pytest.skip("docker not installed")
-    r = subprocess.run(["docker", "inspect", _CONTAINER],
+    r = subprocess.run(["docker", "inspect", "--type=container",
+                        "-f", "{{.State.Running}}", _CONTAINER],
                        capture_output=True, text=True)
     if r.returncode != 0:
         pytest.skip(f"{_CONTAINER} container not available")
+    if r.stdout.strip() != "true":
+        pytest.skip(f"{_CONTAINER} container is not running")
 
 
 # ---------------------------------------------------------------------------

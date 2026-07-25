@@ -122,9 +122,14 @@ def _run_step_synth(tmp_path: Path, proj: Path, monkeypatch):
     lib = tmp_path / "fake.lib"
     lib.write_text("library (fake) { cell (INV) { area : 1.0; } }\n")
     mlibs, mlefs, mgds, mv = p3._discover_local_macros(proj)
-    pdk = p3.PdkConfig(name="t", liberty=lib, tech_lef=tmp_path / "t.lef",
-                       cell_lef=tmp_path / "c.lef", cell_gds=tmp_path / "c.gds",
-                       site="unit", drc_deck=tmp_path / "d.lydrc",
+    # PdkConfig declares these as `str` (in-container paths) and every
+    # production construction site passes a str — `_registry_glob_one` returns
+    # Optional[str]. Passing Path here violated that contract and crashed
+    # `_synth_dont_use_cells` on `pdk.liberty.split("/")` with
+    # AttributeError: 'PosixPath' object has no attribute 'split'.
+    pdk = p3.PdkConfig(name="t", liberty=str(lib), tech_lef=str(tmp_path / "t.lef"),
+                       cell_lef=str(tmp_path / "c.lef"), cell_gds=str(tmp_path / "c.gds"),
+                       site="unit", drc_deck=str(tmp_path / "d.lydrc"),
                        macro_libs=mlibs, macro_lefs=mlefs, macro_gds=mgds,
                        macro_v=mv)
     res = p3.step_synth(proj, "chip_top", pdk, "no-such-container")

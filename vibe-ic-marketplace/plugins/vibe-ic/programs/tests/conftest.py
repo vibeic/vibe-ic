@@ -16,6 +16,7 @@ below.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -83,3 +84,26 @@ def load_real_fixture(name: str) -> str:
     Chip-AGNOSTIC: fixtures carry no chip-class literal.
     """
     return (_REAL_BENCHMARK_DIR / name).read_text(encoding="utf-8")
+
+
+def func_src(src: str, name: str) -> str:
+    """Source of exactly ONE top-level function: from its `def` to the next one.
+
+    Source-pin tests assert that a program's implementation still contains some
+    token. They used to scope that with a magic character count
+    (``src[i:i + 6800]``), which is wrong in BOTH directions as the file evolves:
+
+      * window too SHORT -> **false FAIL**. `_report_check_types_tcl` grew to
+        1845 chars, so a 1200-char window stopped before the marker it asserts
+        (offset 1763) and the test failed on correct code.
+      * window too LONG  -> **false PASS**. A 6800-char window over
+        `_emit_spef_sta` (really 6323) bled 477 chars into the NEXT function, so
+        an assertion could be satisfied by a neighbouring function's text —
+        precisely the regression a source-pin exists to catch.
+
+    Anchoring on the real function extent removes both failure modes and needs
+    no maintenance when the file grows.
+    """
+    i = src.index(f"def {name}")
+    m = re.search(r"\ndef ", src[i + 1:])
+    return src[i:i + 1 + m.start()] if m else src[i:]

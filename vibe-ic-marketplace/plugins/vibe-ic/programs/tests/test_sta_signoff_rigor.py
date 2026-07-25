@@ -14,6 +14,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from conftest import func_src
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
@@ -147,8 +149,7 @@ def test_read_aocv_command_echo_also_counts():
 
 def test_spef_sta_tcl_emits_ocv_and_check_types():
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    i = src.index("def _emit_spef_sta")
-    window = src[i:i + 6800]
+    window = func_src(src, "_emit_spef_sta")
     # v1.2.x — the derate is emitted via the shared _flat_ocv_derate_tcl() helper
     # (TWO separate set_timing_derate commands; this OpenSTA build rejects the
     # combined -early -late form). The emitter must CALL that helper.
@@ -159,8 +160,7 @@ def test_spef_sta_tcl_emits_ocv_and_check_types():
     assert "_report_check_types_tcl" in window
     # the shared helper itself carries the check-type command + the authoritative
     # marker (OpenSTA 3.1.0's report output omits the literal check-type words).
-    j = src.index("def _report_check_types_tcl")
-    helper = src[j:j + 1200]
+    helper = func_src(src, "_report_check_types_tcl")
     assert "report_check_types -recovery -removal" in helper
     assert "min_pulse_width" in helper
     assert "_SIGNOFF_CHECK_TYPES_MARKER" in helper   # writes the marker
