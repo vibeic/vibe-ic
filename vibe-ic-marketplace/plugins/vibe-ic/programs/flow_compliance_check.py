@@ -1119,6 +1119,17 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #     deleted by hand from v10619.
     "analog_artefact_substance_check",
     "chip_gds_canonical_real_file_check",
+    #   - gds_deliverable_plausibility_check: the CHIP-level half of the
+    #     substance doctrine. analog_artefact_substance_check covers the
+    #     per-block analog GDS; until now nothing audited the chip
+    #     deliverable's SUBSTANCE — `gds_size_check` compared it against a
+    #     hardcoded byte floor with an advisory format check, so any blob
+    #     at or above the floor passed sign-off (measured: 150 KB of 0x00
+    #     -> exit 0). This gate walks the GDSII record stream and sizes the
+    #     expectation from the instance count in the design's OWN DEF, so
+    #     it scales with the design instead of asserting a constant.
+    #     VACUOUS_PASS (rc 2) before stream-out.
+    "gds_deliverable_plausibility_check",
     # v1.6.51 wire-in — generalised symlink ban under all canonical
     #   deliverable trees (phase3/stage4, phase3/mixed_signal,
     #   phase2/stage1/fpga, phase2/stage2/synth, analog/hardmacro).

@@ -374,6 +374,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gatekeeper_stale_branch_check` | any | — | the STALE-BRANCH / phantom-revert guard. |
 | `gddr6_protocol_synth` | any | — | GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory). |
 | `gds_antenna_deck_check` | any | — | independent GDS-geometry process-antenna sign-off. |
+| `gds_deliverable_plausibility_check` | any | — | the sign-off GDS must be a PLAUSIBLE LAYOUT, not merely a file of adequate size. |
 | `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry |
 | `gds_size_check` | any | — | Deterministic GDS file existence and size checker. |
 | `gds_streamout_layermap_check` | any | — | Deterministic sign-off streamout layer |
@@ -1336,6 +1337,7 @@ _(no programs in this group)_
 - `gatekeeper_stale_branch_check` — the STALE-BRANCH / phantom-revert guard.
 - `gddr6_protocol_synth` — GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory).
 - `gds_antenna_deck_check` — independent GDS-geometry process-antenna sign-off.
+- `gds_deliverable_plausibility_check` — the sign-off GDS must be a PLAUSIBLE LAYOUT, not merely a file of adequate size.
 - `gds_ip_attribution` — Embed IP attribution metadata into the foundry
 - `gds_size_check` — Deterministic GDS file existence and size checker.
 - `gds_streamout_layermap_check` — Deterministic sign-off streamout layer

@@ -358,6 +358,7 @@ _REPORT_CATEGORY: dict = {
     "erc.rpt": "phase3",
     "foundry_handoff_audit.json": "phase3",
     "gds_size.json": "phase3",
+    "gds_plausibility.json": "phase3",
     "ir_drop.json": "phase3",
     "ir_drop.rpt": "phase3",
     "lvs.json": "phase3",

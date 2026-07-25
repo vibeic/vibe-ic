@@ -13,12 +13,28 @@ What it catches:
   3. INVALID_GDS_FORMAT — the file does not have a valid GDSII header
   4. TOO_SMALL — the GDS file is below the minimum size threshold
 
+Scope note (v1.2.0) — this program answers "is a file of adequate size
+present?" only. `--min-size-kb` is an ABSOLUTE BACKSTOP, not a
+design-aware floor: one byte count cannot be correct for two designs of
+different size. The design-derived floor plus the structural
+"is this actually a layout?" checks live in
+`gds_deliverable_plausibility_check.py`, which reads the instance count
+from the design's own DEF. Both gates run at flow Step 37.
+
+v1.2.0 severity fix — INVALID_GDS_FORMAT was a WARNING, so it could not
+fail the gate. Because the only ERROR-level structural criterion was the
+byte floor, ANY blob at or above the floor passed sign-off as a GDS.
+Measured against v1.1.0: 150 KB of 0x00 -> exit 0; a renamed error log
+-> exit 0; four valid header bytes followed by 150 KB of garbage -> exit
+0 with zero findings. A file that is not a GDSII stream is not a
+deliverable, so the finding is now an ERROR.
+
 Usage:
     python3 gds_size_check.py --gds-file gds/design.gds [--min-size-kb 100]
 
 Exit codes:
     0 = valid GDS file with sufficient size
-    1 = missing, empty, or too small
+    1 = missing, empty, malformed, or too small
     2 = parse error / invalid arguments
 
 Generality: works for ANY GDSII file.
@@ -95,8 +111,12 @@ def audit_gds(
         if len(header) >= 4:
             record_type = (header[2] << 8) | header[3]
             if record_type != 0x0002:
+                # v1.2.0: ERROR, not WARNING. A file that does not open
+                # with a GDSII HEADER record is not a GDS at all, and a
+                # non-fatal finding here is exactly what let a >=100 KB
+                # blob pass sign-off.
                 findings.append(Finding(
-                    severity="WARNING",
+                    severity="ERROR",
                     category="INVALID_GDS_FORMAT",
                     message="File does not have a valid GDSII header (expected record type 0x0002 HEADER)",
                     details=f"Bytes 2-3: 0x{header[2]:02x}{header[3]:02x} (expected 0x0002)",
@@ -126,7 +146,7 @@ def build_report(findings: List[Finding], stats: dict,
                  gds_path: str) -> dict:
     return {
         "program": "gds_size_check",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "gds_file": gds_path,
         "summary": {
             "file_exists": stats["file_exists"],

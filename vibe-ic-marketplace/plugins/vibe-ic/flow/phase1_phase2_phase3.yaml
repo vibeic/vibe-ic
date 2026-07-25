@@ -1666,6 +1666,17 @@ steps:
       all_of:
         - files_exist: ["phase3/stage4/gds/*.gds"]
         - program_exit_zero: "gds_size_check --gds-file phase3/stage4/gds/*.gds --json reports/phase3/gds_size.json"
+        # SUBSTANCE, not just size. `gds_size_check` answers "is a file of
+        # adequate size present?" against an absolute backstop; one byte
+        # count cannot be correct for two designs of different size, and
+        # its format check was advisory. This gate walks the GDSII record
+        # stream (real HEADER / no truncation / ENDLIB / >=1 structure /
+        # >=1 element / >=1 layer) and compares the placements the stream
+        # actually carries against the instance count in the design's OWN
+        # DEF. Doctrine: an empty artefact is not a passing artefact — a
+        # near-empty GDS is equally consistent with "clean" and "the tool
+        # wrote nothing", so it must never sit under a PASS verdict.
+        - program_exit_zero: "gds_deliverable_plausibility_check . --json reports/phase3/gds_plausibility.json"
         # Provenance required: GDS must be produced by a real streamer
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
