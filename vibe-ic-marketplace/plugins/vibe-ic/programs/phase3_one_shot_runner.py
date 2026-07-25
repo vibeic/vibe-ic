@@ -945,6 +945,84 @@ def _v1_6_623_clock_port_in_netlist_text(text: str, top: str = ""):
     return None
 
 
+# ORGANIC (edge-LLM GEMM convergence campaign, 2026-07-25) — resolve the
+# clock port by CONNECTIVITY, not by NAME.
+#
+# #623 correctly identified that `create_clock ... [get_ports <port>]` binds
+# against the post-synth netlist, and made the resolver read that netlist. But
+# it returns the FIRST top port whose NAME matches a clock-ish regex. A design
+# that carries a decoy clock port — an alternate/unused clock pin declared
+# before the real one — therefore gets the WRONG port, and the failure is
+# SILENT-VACUOUS rather than loud:
+#
+#   [INFO  CTS-0007] Net "<decoy>" found for clock "<decoy>".
+#   [WARNING CTS-0041] Net "<decoy>" has 0 sinks. Skipping...
+#   [INFO  CTS-0008] TritonCTS found 0 clock nets.
+#   [INFO  RSZ-0033] No hold violations found.      <-- vacuous: nothing timed
+#
+# Measured on a real 155k-cell campaign design: every one of its 8385
+# sequential cells was connected `.CLK(<real_port>)`, and ZERO were connected
+# to the decoy port the resolver picked. The result is a design that routes
+# with NO clock tree and reports hold/setup clean because no real path is
+# constrained — a sign-off that measured nothing.
+#
+# The netlist already answers the question unambiguously: the clock port is
+# the top-level input that actually reaches sequential cells' clock pins.
+# Count them and take the dominant one. chip-AGNOSTIC: keyed on standard
+# sequential clock PIN names, never on a port name, cell vendor or PDK.
+_CLOCK_PIN_TOKENS = ("CLK", "CK", "CLKN", "CLK_N", "CPN", "GCLK", "CLOCK")
+_RE_CLOCK_PIN_CONN = re.compile(
+    r"\.\s*(" + "|".join(_CLOCK_PIN_TOKENS) + r")\s*\(\s*([^)\s]+)\s*\)")
+_RE_MODULE_HEADER = re.compile(
+    r"^\s*module\s+(\\?[A-Za-z_][\w$\\]*)\s*\(([^;]*?)\)\s*;",
+    re.MULTILINE | re.DOTALL)
+_RE_INPUT_DECL = re.compile(
+    r"^\s*input\s+(?:wire\s+)?(?:\[[^\]]*\]\s*)?([A-Za-z_][\w$]*)\s*;",
+    re.MULTILINE)
+
+
+def _netlist_top_input_ports(text: str, top: str = "") -> List[str]:
+    """Top module's INPUT port names, in declaration order."""
+    body = text
+    if top:
+        for m in _RE_MODULE_HEADER.finditer(text):
+            name = m.group(1).lstrip("\\")
+            if name == top:
+                body = text[m.end():]
+                break
+    return _RE_INPUT_DECL.findall(body)
+
+
+def _clock_port_by_sequential_fanin(text: str, top: str = ""
+                                    ) -> Optional[Tuple[str, int, int]]:
+    """The top-level INPUT port that drives the most sequential clock pins.
+
+    Returns ``(port, hits_on_that_port, total_clock_pin_connections)`` or
+    None when the netlist carries no clock-pin connections at all (e.g. a
+    purely combinational design, or a netlist this parser cannot read) — the
+    caller then falls through to the existing name-based chain UNCHANGED.
+
+    Pure string analysis; no file IO, no tool invocation. chip-AGNOSTIC."""
+    if not text:
+        return None
+    counts: Dict[str, int] = {}
+    total = 0
+    for _pin, net in _RE_CLOCK_PIN_CONN.findall(text):
+        net = net.strip().lstrip("\\")
+        if not net:
+            continue
+        total += 1
+        counts[net] = counts.get(net, 0) + 1
+    if not counts:
+        return None
+    inputs = set(_netlist_top_input_ports(text, top=top))
+    port_counts = {n: c for n, c in counts.items() if n in inputs}
+    if not port_counts:
+        return None
+    best = max(port_counts.items(), key=lambda kv: kv[1])
+    return best[0], best[1], total
+
+
 def _v1_6_623_extract_clock_port_from_netlist(project: Path, top: str = ""):
     """v1.6.623 — for #623 ORGANIC. The Phase-3 auto-SDC
     `create_clock ... [get_ports <port>]` binds against the POST-SYNTH
@@ -984,6 +1062,13 @@ def _v1_6_623_extract_clock_port_from_netlist(project: Path, top: str = ""):
             text = nf.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
+        # CONNECTIVITY FIRST — the port that actually clocks the flops beats
+        # any port that merely LOOKS like a clock. Without this a decoy clock
+        # port wins by declaration order and CTS builds nothing (see the
+        # _clock_port_by_sequential_fanin docstring for the measured case).
+        by_fanin = _clock_port_by_sequential_fanin(text, top=top)
+        if by_fanin is not None:
+            return by_fanin[0]
         port = _v1_6_623_clock_port_in_netlist_text(text, top=top)
         if port:
             return port
@@ -7910,6 +7995,7 @@ _ROUTE_RECOVERY_LADDER_DONE = "none_ladder_exhausted"
 _ROUTE_RECOVERY_DIE_CAP = "none_declined_at_die_cap"
 _ROUTE_RECOVERY_ROUTER_BUDGET = "none_router_budget_knob_absent"
 _ROUTE_RECOVERY_CONVERGED = "none_route_converged"
+_ROUTE_RECOVERY_NO_SIGNAL = "none_no_route_signal"
 
 
 def _route_recovery_disclosure(
@@ -7938,6 +8024,19 @@ def _route_recovery_disclosure(
     if trajectory and trajectory[-1] <= 0:
         rec["remedy"] = _ROUTE_RECOVERY_CONVERGED
         rec["disclosure"] = "detailed route converged; no remedy needed."
+        return rec
+    if not trajectory:
+        # No DRT-0199 line at all. This is NOT a budget limit and NOT a
+        # convergence claim -- the router never reported a violation count,
+        # so nothing about congestion can honestly be asserted either way.
+        # (Without this arm the classifier fell through to ROUTER_BUDGET and
+        # printed "still FALLING when the router stopped ()" -- an empty tail
+        # and a claim the log does not support.)
+        rec["remedy"] = _ROUTE_RECOVERY_NO_SIGNAL
+        rec["disclosure"] = (
+            "the log carries no detailed-route violation count, so no "
+            "statement about route convergence or congestion can be made "
+            "from it. Nothing was inferred and no remedy was selected.")
         return rec
     if not route_completed:
         rec["remedy"] = _ROUTE_RECOVERY_INCOMPLETE

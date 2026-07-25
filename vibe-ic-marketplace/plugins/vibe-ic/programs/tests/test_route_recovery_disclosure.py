@@ -220,6 +220,28 @@ def test_no_trajectory_at_all_is_not_a_converged_claim():
     assert rec["final_violations"] is None
 
 
+@pytest.mark.parametrize("log_text", ["", "no violation lines here\n",
+                                      "[INFO DRT-0195] Start routing iter\n"])
+def test_no_route_signal_is_its_own_class_and_claims_nothing(log_text):
+    """ADVERSARIAL-REVIEW REGRESSION. The first cut of this classifier had no
+    empty-trajectory arm, so a log with NO violation count fell through to the
+    router-budget branch and printed:
+
+        "the violation count was still FALLING when the router stopped ()"
+
+    — an empty tail and an assertion the log does not support. A tool built to
+    stop unearned claims must not make one itself. An absent signal is its own
+    class and must assert nothing about convergence or congestion."""
+    rec = p3._route_recovery_disclosure(2000, 2000, log_text, 0, True, True)
+    assert rec["remedy"] == p3._ROUTE_RECOVERY_NO_SIGNAL
+    assert rec["final_violations"] is None
+    d = rec["disclosure"]
+    assert "FALLING" not in d
+    assert "()" not in d, "empty measurement interpolated into the text"
+    for claim in ("converged", "plateau", "REFUSED", "budget"):
+        assert claim not in d, f"unsupported claim {claim!r} in: {d}"
+
+
 # ---------------------------------------------------------------------------
 # chip-AGNOSTIC guard on the new code itself.
 # ---------------------------------------------------------------------------
