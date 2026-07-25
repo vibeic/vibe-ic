@@ -1,0 +1,42 @@
+--- a/programs/phase1_doc_one_shot_runner.py
++++ b/programs/phase1_doc_one_shot_runner.py
+@@ -57729,6 +57729,39 @@
+     # them. Each gate VACUOUS_PASSes when its layer is structurally
+     # inapplicable, so a non-protocol / scalar-pin design is unaffected.
+     # ------------------------------------------------------------------
++    # ------------------------------------------------------------------
++    # PARAMETRIC BUS-WIDTH BINDING (must precede the gates below)
++    #
++    # Phase 1 extracts BOTH halves of a parametric port width into its own
++    # typed output and never joins them: L1.pin_table carries
++    # `width_symbolic="<param>-1:0"` with width/msb/lsb null, while
++    # L8_RTL_CONSTANTS.parameters / L9_INTEGRATION_SPEC.parameters carry
++    # `{"name": "<param>", "default": "<int>"}`. `_parse_port_width` cannot
++    # do the join — it sees only the width CELL, not the sibling docs, and
++    # at its call site those docs do not exist yet. Here they all do.
++    #
++    # Runs BEFORE the gates so `l1_pin_bus_width_actionable_check` passes
++    # on the merit of a resolved width rather than on a waiver. It never
++    # invents a width: an unbound or ambiguously-bound parameter is left
++    # unresolved and the gate still FAILs, which is the correct outcome.
++    # ------------------------------------------------------------------
++    _pbw = Path(__file__).resolve().parent / "l1_param_bus_width_resolve.py"
++    if _pbw.is_file():
++        try:
++            _pbw_rp = _pl.report_path(project, "phase1/l1_param_bus_width_resolve.json")
++            _pbw_rp.parent.mkdir(parents=True, exist_ok=True)
++            _pbw_cp = subprocess.run(
++                [sys.executable, str(_pbw), str(project),
++                 "--json", str(_pbw_rp)],
++                capture_output=True, text=True, timeout=300,
++            )
++            for _ln in (_pbw_cp.stdout or "").strip().splitlines()[:4]:
++                print(f"      {_ln}")
++            for _ln in (_pbw_cp.stderr or "").strip().splitlines()[:6]:
++                print(f"      {_ln}", file=sys.stderr)
++        except Exception as _exc:   # never let the repair crash the runner
++            print(f"      l1_param_bus_width_resolve: SKIPPED ({_exc})")
++
+     _SEMANTIC_LAYER_GATES = (
+         ("l1_pin_bus_width_actionable_check",
+          "phase1/l1_pin_bus_width_actionable.json"),
