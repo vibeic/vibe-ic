@@ -9377,6 +9377,54 @@ def _build_escalating_legalize_tcl(marker: str, var_tag: str = "") -> str:
     )
 
 
+def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
+                                    ) -> Optional[Dict[str, Any]]:
+    """BLOCK before routing when a hard-macro supply pin has no rail to bind.
+
+    #309: a macro pin declared `USE POWER` in its own LEF, tied to a constant in
+    RTL, gets a TIEHI/TIELO driving it — a SIGNAL net on a POWER terminal.
+    TritonRoute does not skip that net; it ABORTS DETAILED ROUTING ENTIRELY.
+    Measured: 3278 signal nets, ZERO routed; LVS and STA unreachable; the GDS a
+    placed-but-unrouted shell; the same cause across six plugin versions,
+    surfacing only as a causally-opaque DRT-0307 five steps downstream.
+
+    Returns None when there is nothing to block on, else a finding dict the
+    caller turns into a step FAIL. Deliberately BLOCKING, and deliberately
+    BEFORE routing — #306 measured that 62 of 72 flow gates can only describe a
+    run after the fact, and a gate that cannot stop this one lets a 20-minute
+    run produce an empty shell.
+
+    Binds every pin it CAN bind and blocks only on the ones with no rail — it
+    must not buy a green run by wiring a pin to a rail nobody declared.
+    """
+    try:
+        import hardmacro_supply_intent as _hmsi
+    except Exception:  # noqa: BLE001 — never break PnR on an import hiccup
+        return None
+    lefs: List[str] = []
+    for lp in (getattr(pdk, "macro_lefs", None) or []):
+        try:
+            lefs.append(Path(lp).read_text(errors="replace"))
+        except OSError:
+            continue
+    if not lefs:
+        lefs = _hmsi.load_macro_lefs(project)
+    if not lefs:
+        return None
+    rep = _hmsi.assess(lefs, _hmsi.load_l21(project))
+    if not rep["pins"]:
+        return None
+    if not rep["gaps"]:
+        return {"blocking": False, "bound": rep["accounted"], "gaps": []}
+    return {"blocking": True, "bound": rep["accounted"], "gaps": rep["gaps"],
+            "message": (
+                "hard-macro supply pin(s) with no bindable rail — detailed "
+                "routing WILL abort on a signal net landing on a POWER "
+                "terminal (DRT-0307): "
+                + "; ".join(f"{g['master']}/{g['pin']} ({g.get('use','POWER')}, "
+                            f"{g['status']})" for g in rep["gaps"][:6]))}
+
+
 def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
                               var_tag: str = "") -> str:
     """ORGANIC #561 (b) / #581 round-2 — the ONE post-buffered repair
@@ -10678,6 +10726,26 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             })
     out_dir = _pl.pnr_dir(project)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # #309 — PRE-ROUTE hard-macro supply gate. A LEF-typed POWER/GROUND macro
+    # pin driven by a signal net makes TritonRoute abort ALL detailed routing
+    # (3278 nets, 0 routed, GDS a placed-but-unrouted shell). Decide it HERE,
+    # before any router time is spent, so the failure names the macro and pin
+    # instead of surfacing as DRT-0307 five steps later. Shares its judgement
+    # with the Phase-1 warning via hardmacro_supply_intent, so what Phase 1
+    # validates is exactly what this enforces.
+    _ms = _macro_supply_preroute_decision(project, pdk)
+    if _ms and _ms.get("bound"):
+        print(f"[phase3] HARD-MACRO SUPPLY: {len(_ms['bound'])} POWER/GROUND "
+              f"macro pin(s) accounted for by the design's power intent")
+    if _ms and _ms.get("blocking"):
+        for _g in _ms["gaps"]:
+            print(f"[phase3]   BLOCKING SUPPLY-ON-POWER (integration gap): "
+                  f"{_g['master']}/{_g['pin']} ({_g.get('use','POWER')}) — "
+                  f"{_g['detail']}")
+        return StepResult("pnr", "FAIL", time.time() - t0, _ms["message"],
+                          extras={"macro_supply_gaps": _ms["gaps"],
+                                  "macro_supply_bound": _ms["bound"]})
 
     # SDC: silicon top != FPGA wrapper. Project's fpga/*.sdc references
     # FPGA-only ports (CLOCK_50/KEY/GPIO_0) and may use Quartus-private
