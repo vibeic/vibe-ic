@@ -135,3 +135,96 @@ def test_runner_calls_the_helper_in_the_cache_guard():
     assert "_stale_rtl_vs_netlist" in block, (
         "the synth cache guard no longer consults the RTL-freshness helper — "
         "the PDK-only key lets a stale netlist masquerade as a fresh build")
+
+
+# ── sha256 fingerprint sidecar (#349 salvage of #336, v1.6.2) ────────────────
+# Closes the residual DISCLOSED when #289 landed in v1.5.79: the mtime test
+# trusts a cache when RTL CONTENT changed but its mtime is equal or OLDER
+# (cp -p, a timestamp-preserving restore, an older-revision checkout). Both
+# cases were reproduced then and are pinned CAUGHT now.
+
+import json as _json
+import os as _os
+
+
+def _fp_proj(tmp_path, rtl="module a; endmodule\n", write_sidecar=True):
+    rtl_dir = tmp_path / "rtl"
+    rtl_dir.mkdir()
+    (rtl_dir / "a.v").write_text(rtl)
+    nl = tmp_path / "netlist.v"
+    nl.write_text("// netlist\n")
+    if write_sidecar:
+        R._write_synth_inputs_sidecar(nl, rtl_dir)
+    return nl, rtl_dir
+
+
+def test_fingerprint_catches_content_change_with_equal_mtime(tmp_path):
+    """THE residual, direction 1: same mtime, different content."""
+    nl, rtl = _fp_proj(tmp_path)
+    (rtl / "a.v").write_text("module a; wire CHANGED; endmodule\n")
+    _os.utime(rtl / "a.v", (2_000_000, 2_000_000))
+    _os.utime(nl, (2_000_000, 2_000_000))          # equal mtimes
+    assert R._stale_rtl_vs_netlist(nl, rtl) == [], "control: mtime is blind here"
+    assert R._stale_rtl_by_fingerprint(nl, rtl) == ["a.v"], "digest must see it"
+
+
+def test_fingerprint_catches_content_change_with_older_mtime(tmp_path):
+    """THE residual, direction 2: content changed, mtime OLDER (cp -p)."""
+    nl, rtl = _fp_proj(tmp_path)
+    (rtl / "a.v").write_text("module a; wire RESTORED_OLD_REV; endmodule\n")
+    _os.utime(rtl / "a.v", (1_000_000, 1_000_000))
+    _os.utime(nl, (2_000_000, 2_000_000))          # netlist looks newer
+    assert R._stale_rtl_vs_netlist(nl, rtl) == [], "control: mtime is blind here"
+    assert R._stale_rtl_by_fingerprint(nl, rtl) == ["a.v"]
+
+
+def test_fingerprint_clean_when_content_identical(tmp_path):
+    """No false staleness: identical content stays fresh even if someone
+    touched the file (newer mtime, same bytes) — the case mtime FALSELY
+    invalidates and the digest correctly reuses."""
+    nl, rtl = _fp_proj(tmp_path)
+    _os.utime(rtl / "a.v", (3_000_000, 3_000_000))   # touched, not edited
+    _os.utime(nl, (2_000_000, 2_000_000))
+    assert R._stale_rtl_by_fingerprint(nl, rtl) == []
+
+
+def test_no_sidecar_returns_none_for_mtime_fallback(tmp_path):
+    """A pre-v1.6.2 netlist has no sidecar: the reader must say 'unverifiable'
+    (None -> mtime fallback), never treat absence as freshness."""
+    nl, rtl = _fp_proj(tmp_path, write_sidecar=False)
+    assert R._stale_rtl_by_fingerprint(nl, rtl) is None
+
+
+def test_malformed_sidecar_fails_closed(tmp_path):
+    """Unreadable evidence is not evidence: a corrupt fingerprint must force a
+    re-synth, not a reuse."""
+    nl, rtl = _fp_proj(tmp_path, write_sidecar=False)
+    (nl.parent / R._SYNTH_INPUTS_SIDECAR).write_text("{not json")
+    got = R._stale_rtl_by_fingerprint(nl, rtl)
+    assert got and got != []
+
+
+def test_fileset_change_is_stale_both_directions(tmp_path):
+    """The FILE-SET is part of the fingerprint: an added RTL file and a
+    removed one are both staleness, which mtime can never express for the
+    removed case."""
+    nl, rtl = _fp_proj(tmp_path)
+    (rtl / "b.v").write_text("module b; endmodule\n")     # added
+    assert "b.v" in R._stale_rtl_by_fingerprint(nl, rtl)
+    (rtl / "b.v").unlink()
+    (rtl / "a.v").unlink()                                 # removed
+    got = R._stale_rtl_by_fingerprint(nl, rtl)
+    assert any("a.v" in g and "removed" in g for g in got), got
+
+
+def test_one_selector_feeds_writer_and_checker():
+    """The writer and both checkers must share ONE RTL selector — two
+    selectors is how a file gets fingerprinted but not checked, the
+    producer/consumer split of #309/#312/#348."""
+    src = (Path(R.__file__)).read_text()
+    fn = src[src.index("def _stale_rtl_vs_netlist"):]
+    fn = fn[:fn.index("\ndef step_synth")]
+    assert 'rtl_dir.glob("*.sv")' in fn or "_synth_rtl_sources" in fn
+    w = src[src.index("def _write_synth_inputs_sidecar"):]
+    w = w[:w.index("\ndef ", 1)]
+    assert "_synth_rtl_sources" in w
