@@ -1,6 +1,6 @@
 # HANDOFF — ibex × sky130A convergence pass, 2026-07-25
 
-Author: core-agent session on 8HD-7. **Nothing here was pushed.** Two local
+Author: core-agent session on 8HD-7. **Nothing here was pushed.** Four local
 commits on `fix/staged-sdc-drv-injection` in this worktree.
 
 ---
@@ -40,7 +40,8 @@ Utilization: 40.9%`.
 ## 1. The two commits
 
 Worktree `/home/reyerchu/vibe-ic-wt-a857c45b-sdcdrv`, branch
-`fix/staged-sdc-drv-injection`, `[ahead 2]` of `origin/main` (`0d2c63d34`).
+`fix/staged-sdc-drv-injection`, `[ahead 4]` of `origin/main` (`0d2c63d34`) — the
+two fix commits below plus two doc-only handoff commits.
 **No version file touched** — see §4.
 
 ### `ab068229950e5cd64d81fb51fd84d5fc00882997`
