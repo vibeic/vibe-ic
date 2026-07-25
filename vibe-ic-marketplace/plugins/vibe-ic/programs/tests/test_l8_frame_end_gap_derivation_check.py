@@ -109,3 +109,75 @@ def test_ticks_field_at_50MHz(tmp_path):
     rep = json.loads((tmp_path / "rep.json").read_text())
     assert any(f["rule"] == "L8_FRAME_END_GAP_TOO_WIDE"
                for f in rep["findings"])
+
+
+# ─────────────────────────────────────────────────────────────────────
+# layergate-3 STRENGTHENING — the rate resolver used to be a hard-coded
+# 4-entry table (50/5/100/25 MHz). Any other clock made the whole gate
+# return None and SILENTLY SKIP: a gate that cannot fire proves nothing.
+# Both directions are asserted: the gutted/odd-rate layer must now FAIL,
+# and a correctly-derived value at the same odd rate must still PASS.
+# Fixtures are synthesized neutral data.
+# ─────────────────────────────────────────────────────────────────────
+
+def _setup_ticks(tmp_path, l8: dict, ibt_max: float = 22.0):
+    docs = tmp_path / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L2_TIMING_WAVEFORM.json").write_text(json.dumps({
+        "ibt_us": [20.0, ibt_max], "tSRS_min_us": 20.0,
+    }))
+    (docs / "L8_RTL_CONSTANTS.json").write_text(json.dumps(l8))
+
+
+def test_ticks_at_an_unlisted_rate_in_key_now_fires(tmp_path):
+    """12 MHz is not in the old hard-coded table. 960 ticks @12MHz = 80us
+    → must FAIL, where before the gate skipped itself."""
+    _setup_ticks(tmp_path, {"frame_end_gap_ticks_12MHz": 960})
+    r = _run(tmp_path, strict=True)
+    assert r.returncode == 1, r.stdout
+    rep = json.loads((tmp_path / "rep.json").read_text())
+    assert any(f["rule"] == "L8_FRAME_END_GAP_TOO_WIDE"
+               for f in rep["findings"])
+
+
+def test_ticks_at_an_unlisted_rate_in_key_still_passes_when_correct(tmp_path):
+    """324 ticks @12MHz = 27us, inside [25, 44] → PASS. Proves the new
+    resolver is not simply always-fail."""
+    _setup_ticks(tmp_path, {"frame_end_gap_ticks_12MHz": 324})
+    r = _run(tmp_path, strict=True)
+    assert r.returncode == 0, r.stdout
+
+
+def test_ticks_rate_resolved_from_declared_clock_domain(tmp_path):
+    """No rate in the key at all — resolved from the design's OWN
+    clock_domains[] record. 960 ticks @12MHz = 80us → FAIL."""
+    _setup_ticks(tmp_path, {
+        "frame_end_gap_ticks": 960,
+        "clock_domains": [{"name": "clk_a", "source_pin": "clk_a",
+                           "domain_kind": "primary", "freq_mhz": 12.0,
+                           "period_ns": 1000.0 / 12.0}],
+    })
+    r = _run(tmp_path, strict=True)
+    assert r.returncode == 1, r.stdout
+    rep = json.loads((tmp_path / "rep.json").read_text())
+    assert any(f["rule"] == "L8_FRAME_END_GAP_TOO_WIDE"
+               for f in rep["findings"])
+    # The report must disclose WHERE the conversion factor came from.
+    assert "clock_domains" in rep["summary"]["frame_end_key"]
+
+
+def test_ticks_rate_resolved_from_scalar_clock_mhz(tmp_path):
+    _setup_ticks(tmp_path, {"frame_end_gap_ticks": 324, "clock_mhz": 12.0})
+    r = _run(tmp_path, strict=True)
+    assert r.returncode == 0, r.stdout
+
+
+def test_ticks_with_no_resolvable_clock_still_skips(tmp_path):
+    """No rate anywhere => still a documented skip, NOT a fabricated
+    conversion. l8_clock_period_actionability_check is the gate that
+    reports the missing clock."""
+    _setup_ticks(tmp_path, {"frame_end_gap_ticks": 960})
+    r = _run(tmp_path, strict=True)
+    assert r.returncode == 0, r.stdout
+    rep = json.loads((tmp_path / "rep.json").read_text())
+    assert rep["summary"]["skipped_reason"]
