@@ -44633,16 +44633,32 @@ def _harvest_test_cases_from_input_tables(
                             r'[`*]', '',
                             cells[exp_i] if exp_i is not None else cells[-1]
                         ).strip()
-                        if not last:            # header-picked cell was blank
-                            last = re.sub(r'[`*]', '', cells[-1]).strip()
-                        out.append({
+                        # GATEKEEPER (Step-2.7 on this change): when the header
+                        # NAMED an oracle column and that cell is EMPTY on this
+                        # row, the input simply carries no golden value here.
+                        # Falling back to `cells[-1]` then lifts the trailing
+                        # COMMENTARY cell into `expected` — measured: a `note`
+                        # of "TBD" became the golden value — which is the same
+                        # defect this change exists to remove, inverted: a blank
+                        # oracle can never FAIL, a fabricated one can never
+                        # PASS, and a false FAIL is exactly what sends someone
+                        # to fix a design that is not broken. So: never
+                        # fabricate. Keep the row (dropping it silently would
+                        # re-create the false `no_test_cases_in_input`) and mark
+                        # the absence so it is visible to any consumer instead
+                        # of masquerading as a graded case.
+                        _oracle_absent = bool(exp_i is not None and not last)
+                        _case = {
                             "name": name,
                             "kind": "functional_vector",
                             "stimulus": cells[1] if len(cells) >= 3 else cells[0],
                             "expected": last,
                             "evidence": (f"input/docs/{fname} "
                                          "(verification-plan table)"),
-                        })
+                        }
+                        if _oracle_absent:
+                            _case["oracle_absent"] = True
+                        out.append(_case)
                         if len(out) >= 24:
                             return out
                     i = j

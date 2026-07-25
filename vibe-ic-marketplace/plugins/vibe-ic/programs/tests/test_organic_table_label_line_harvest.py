@@ -352,3 +352,60 @@ def test_preceding_table_label_helper_directly():
     # dotted field paths flatten too (renderer emits `- a.b:` for nested keys)
     assert doc._preceding_table_label(
         ["- L10.test_vectors:", "", "| id |"], 2) == "L10 test vectors"
+
+
+# ── GATEKEEPER Step-2.7 addition (landed with this change) ───────────────────
+# The header-semantics fix shipped a positional FALLBACK for the case where the
+# header-picked oracle cell is blank. Measured against an independent fixture at
+# review time: that fallback lifted the trailing COMMENTARY cell into `expected`
+# ("TBD-not-an-oracle" became the golden value) — the same defect this change
+# removes, inverted. A blank oracle can never FAIL; a fabricated one can never
+# PASS, and a false FAIL is what sends someone to fix a design that is not
+# broken. Never fabricate: keep the row, mark the absence.
+
+_BLANK_ORACLE_DOC = "\n".join([
+    "- test_vectors:", "",
+    "| id | name | block_hex | expected_digest_hex | note |",
+    "| --- | --- | --- | --- | --- |",
+    "| 1 | good | ab | " + "b" * 64 + " |  |",
+    "| 2 | blankexp | cd |  | TBD-not-an-oracle |",
+])
+
+
+def test_blank_oracle_cell_is_never_filled_from_the_note_column():
+    """THE regression this guards: row 2's oracle column is empty and its
+    trailing `note` carries prose. The prose must NOT become the golden
+    value."""
+    cases = doc._harvest_test_cases_from_input_tables({"d.md": _BLANK_ORACLE_DOC})
+    assert len(cases) == 2, cases
+    by_stim = {c["stimulus"]: c for c in cases}
+    assert by_stim["blankexp"]["expected"] == ""
+    assert "TBD-not-an-oracle" not in str(cases)
+
+
+def test_blank_oracle_is_marked_not_silently_dropped():
+    """Two failure modes are BOTH refused: fabricating an oracle, and dropping
+    the row (which would re-create the false `no_test_cases_in_input`). The
+    absence is disclosed on the row instead."""
+    cases = doc._harvest_test_cases_from_input_tables({"d.md": _BLANK_ORACLE_DOC})
+    by_stim = {c["stimulus"]: c for c in cases}
+    assert by_stim["blankexp"].get("oracle_absent") is True
+    # ...and a row that HAS its oracle is untouched — no spurious marker.
+    assert by_stim["good"]["expected"] == "b" * 64
+    assert "oracle_absent" not in by_stim["good"]
+
+
+def test_no_oracle_column_at_all_keeps_the_positional_read():
+    """Zero regression on the legacy shape: when the header names NO
+    oracle-class column, the positional last-cell read still applies and no
+    absence marker is emitted."""
+    d = "\n".join([
+        "- test_vectors:", "",
+        "| id | name | result |",
+        "| --- | --- | --- |",
+        "| 1 | t1 | 0xdeadbeef |",
+    ])
+    cases = doc._harvest_test_cases_from_input_tables({"d.md": d})
+    if cases:  # this shape may or may not be admitted; if it is, it must be sane
+        assert cases[0]["expected"] == "0xdeadbeef"
+        assert "oracle_absent" not in cases[0]
