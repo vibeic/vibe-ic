@@ -116,6 +116,24 @@ _REJECT_RULE_NORMALIZATION: dict[str, list[str]] = {
         "len_too_large", "len_overflow", "len_exceed",
         "length_invalid", "len_oob",
     ],
+    # layergate-2 — TARGET-NOT-READY family. A transaction rejected
+    # because the target cannot accept it right now (busy / not ready /
+    # backpressured / FIFO full) is one of the most common reject-rule
+    # concepts in a command-driven or bus-attached IC, and the table had
+    # no entry for it: such a rule produced ZERO keywords, which sent
+    # this gate down its `if not kws` branch and made the coverage check
+    # vacuous for that rule. Found by
+    # l6_fsm_scaffold_actionable_check, which asserts that every L6
+    # reject_rule is machine-matchable by THIS extractor — the gate
+    # measured the vocabulary gap rather than blaming the layer.
+    # chip-AGNOSTIC: pure protocol-state vocabulary, no design tokens.
+    "target_not_ready": [
+        "target_not_ready", "not_ready", "notready", "busy",
+        "core_busy", "device_busy", "backpressure", "back_pressure",
+        "fifo_full", "buffer_full", "queue_full", "overrun",
+        "nak", "nack", "retry", "stall", "wait_state",
+        "write_while_busy", "req_while_busy",
+    ],
 }
 
 

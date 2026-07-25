@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 929
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 929)
+- **Total programs (excluding helpers / shims):** 932
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 932)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 920 |
+| `any` | 923 |
 
 ## Alphabetical listing
 
@@ -469,6 +469,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l3_opcode_pre_wake_allowed_typed_check` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 37 | Wave 37 (v0.119.69). |
 | `l3_opcode_response_template_check` | any | Wave 37 | Wave 37 / A2 |
 | `l4_regmap_enumerated_values_typed_check` | any | Wave 38 | Wave 38 / B3 |
+| `l4_regmap_phase2_emitter_contract_check` | any | — | SEMANTIC layer gate for L4. |
+| `l5_analog_block_spec_actionable_check` | any | — | SEMANTIC layer gate for L5. |
+| `l6_fsm_scaffold_actionable_check` | any | — | SEMANTIC layer gate for L6. |
 | `l6_reject_rules_from_rx_event_check` | any | Wave 37 | Wave 37 (v0.119.69). |
 | `l8_clock_domains_typed_check` | any | Wave 38 | Wave 38 / B4 |
 | `l8_frame_end_gap_derivation_check` | any | — | LL-3. |
@@ -1001,7 +1004,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (920 programs)
+### `any` (923 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1441,6 +1444,9 @@ _(no programs in this group)_
 - `l3_opcode_name_coverage_check` — v1.6.131 (#51 Fix 6)
 - `l3_opcode_response_template_check` — Wave 37 / A2  _[Wave 37]_
 - `l4_regmap_enumerated_values_typed_check` — Wave 38 / B3  _[Wave 38]_
+- `l4_regmap_phase2_emitter_contract_check` — SEMANTIC layer gate for L4.
+- `l5_analog_block_spec_actionable_check` — SEMANTIC layer gate for L5.
+- `l6_fsm_scaffold_actionable_check` — SEMANTIC layer gate for L6.
 - `l6_reject_rules_from_rx_event_check` — Wave 37 (v0.119.69).  _[Wave 37]_
 - `l8_clock_domains_typed_check` — Wave 38 / B4  _[Wave 38]_
 - `l8_frame_end_gap_derivation_check` — LL-3.
