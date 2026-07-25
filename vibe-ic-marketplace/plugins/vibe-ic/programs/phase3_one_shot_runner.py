@@ -1534,6 +1534,8 @@ _SDC_MAX_TRANS_RE = re.compile(
     r"^(\s*set_max_transition\s+)(-?\d+(?:\.\d+)?)", re.MULTILINE)
 _SDC_MAX_CAP_RE = re.compile(
     r"^(\s*set_max_capacitance\s+)(-?\d+(?:\.\d+)?)", re.MULTILINE)
+_SDC_MAX_FANOUT_RE = re.compile(
+    r"^(\s*set_max_fanout\s+)(-?\d+(?:\.\d+)?)", re.MULTILINE)
 
 
 def _stamp_sdc_provenance(sdc_text: str, pdk_name: str) -> str:
@@ -1598,6 +1600,103 @@ def _reconcile_staged_sdc_drv(sdc_text: str, active_pdk_name: str,
             f"RE-DERIVED from the active liberty (dropped where it declares none).")
     out = note + "\n" + "\n".join(out_lines)
     return _stamp_sdc_provenance(out, active_pdk_name)
+
+
+# ── TAPEOUT-SIGNOFF (DRV) — parity for a DESIGN-SUPPLIED SDC ─────────────────
+# The DRV block above is appended by `_build_auto_silicon_sdc`, which `step_pnr`
+# calls ONLY on the else-branch — i.e. only when the project stages NO
+# `constraints/*.sdc`. A design that ships its own SDC therefore took the
+# staged branch and reached PnR with NO `set_max_transition` /
+# `set_max_capacitance` at all, so `repair_design` had no DRV target and left
+# the slews unrepaired. That asymmetry — auto-SDC gets DRV, design-SDC does not
+# — is the whole defect: the more complete the design's own inputs, the WEAKER
+# the constraint set it was implemented against.
+#
+# Observed on a reused-IP CPU core on sky130A: the shipped post-route netlist
+# carried a 7.03 ns slew against the same liberty's own 1.49 ns limit, and four
+# min-drive gates on the critical path contributed 13.3 ns of a 29.3 ns arrival
+# on a 10 ns clock. The gates were reported as VIOLATED by sign-off STA — they
+# were never repaired, because nothing ever asked the resizer to repair them.
+#
+# Contract (chip/PDK-AGNOSTIC, §4.05 no-fabricate, gate-monotonic):
+#   * a limit the DESIGN's OWN SDC declares is NEVER overridden or relaxed —
+#     only a limit that is entirely ABSENT is supplied;
+#   * every supplied value is READ from the ACTIVE PDK's liberty (via
+#     `_liberty_drv_limits`); a liberty declaring none yields an honest
+#     disclosure comment and NO constraint;
+#   * `set_max_fanout` is supplied only when the DESIGN's OWN L9 spec declares
+#     a `SYNTH_MAX_FANOUT` cap (same rule the auto-SDC path already applies);
+#   * adding a design-wide ceiling can only TIGHTEN what OpenSTA checks (it
+#     takes the tightest of SDC / liberty-pin / liberty-default), so this can
+#     never manufacture a PASS — it can only make an unrepaired design report
+#     the violation it already had, and give the resizer a target to fix it.
+def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
+                           container: str = "",
+                           project: Optional[Path] = None) -> Tuple[str, Dict[str, object]]:
+    """Append the ACTIVE PDK's DRV limits to a staged/design-supplied SDC that
+    declares none, so `repair_design` has a slew/cap target.
+
+    Returns ``(sdc_text, info)``. ``info`` records what was added / skipped for
+    the step's disclosure log. The SDC is returned BYTE-IDENTICAL when the
+    design already declares both limits (nothing to supply) or when the active
+    liberty declares neither (nothing real to supply)."""
+    info: Dict[str, object] = {
+        "added_max_transition": None, "added_max_capacitance": None,
+        "added_max_fanout": None, "design_declared": [], "note": "",
+    }
+    text = sdc_text or ""
+    have_slew = bool(_SDC_MAX_TRANS_RE.search(text))
+    have_cap = bool(_SDC_MAX_CAP_RE.search(text))
+    have_fanout = bool(_SDC_MAX_FANOUT_RE.search(text))
+    for name, present in (("set_max_transition", have_slew),
+                          ("set_max_capacitance", have_cap),
+                          ("set_max_fanout", have_fanout)):
+        if present:
+            info["design_declared"].append(name)
+    if have_slew and have_cap and have_fanout:
+        info["note"] = ("design SDC already declares every DRV limit — "
+                        "left byte-identical (a design-declared limit is never "
+                        "overridden)")
+        return text, info
+
+    drv = _liberty_drv_limits(str(active_liberty or ""), container)
+    slew = None if have_slew else drv.get("max_transition_ns")
+    cap = None if have_cap else drv.get("max_capacitance_pf")
+    fanout = None
+    if not have_fanout and project is not None:
+        try:
+            fanout = _l9_declared_max_fanout(project)
+        except Exception:
+            fanout = None
+
+    if slew is None and cap is None and fanout is None:
+        info["note"] = (
+            "no DRV limit supplied: "
+            + (", ".join(info["design_declared"]) + " already design-declared; "
+               if info["design_declared"] else "")
+            + str(drv.get("note") or "active liberty declares no DRV limit"))
+        return text, info
+
+    info["added_max_transition"] = slew
+    info["added_max_capacitance"] = cap
+    info["added_max_fanout"] = fanout
+    supplied = [n for n, v in (("set_max_transition", slew),
+                               ("set_max_capacitance", cap),
+                               ("set_max_fanout", fanout)) if v is not None]
+    note = (
+        "DRV parity for a design-supplied SDC: the staged SDC declared "
+        + (", ".join(info["design_declared"]) if info["design_declared"]
+           else "no DRV limit")
+        + f"; supplied {', '.join(supplied)} from the ACTIVE PDK liberty so "
+          "repair_design has a target (a design-declared limit is never "
+          "overridden or relaxed). " + str(drv.get("note") or ""))
+    info["note"] = note
+    _fanout_note = ""
+    if fanout is not None:
+        _fanout_note = (f"SYNTH_MAX_FANOUT={fanout} — L9-declared reference "
+                        "fanout cap (design-declared; not fabricated).")
+    return text + _drv_constraints_sdc_block(
+        slew, cap, note, max_fanout=fanout, fanout_note=_fanout_note), info
 
 
 def _build_auto_silicon_sdc(project: Path, top: str = "",
@@ -10400,6 +10499,21 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             project_sdc_silicon.read_text(), str(pdk.liberty))
         _staged_sdc = _reconcile_staged_sdc_drv(
             _staged_sdc, pdk.name, str(pdk.liberty), container)
+        # TAPEOUT-SIGNOFF (DRV) parity — a design-supplied SDC that declares NO
+        # set_max_transition / set_max_capacitance reached PnR with no DRV
+        # target at all, so repair_design never repaired the slews (the
+        # auto-SDC else-branch below has had this since TAPEOUT-SIGNOFF; the
+        # staged branch never did). Supply ONLY the absent limits, ONLY from
+        # the active liberty; a design-declared limit is never overridden.
+        _staged_sdc, _drv_parity = _ensure_staged_sdc_drv(
+            _staged_sdc, str(pdk.liberty), container, project)
+        if _drv_parity.get("note"):
+            print(f"[phase3][sdc-drv] {_drv_parity['note']}", file=sys.stderr)
+        try:
+            (out_dir / "sdc_drv_parity.json").write_text(
+                json.dumps(_drv_parity, indent=2, default=str))
+        except Exception:
+            pass
         sdc.write_text(_staged_sdc)
     else:
         # v1.6.560 sub-defect B: derive CLOCK_PERIOD from project sources
