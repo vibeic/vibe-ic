@@ -100,6 +100,7 @@ import rtl_provenance as _rtl_prov  # authored-RTL guard for phase2/stage1/rtl/
 # Phase-2 yosys-synth + reference-TB steps reuse the EXACT same rule
 # rather than carrying a divergent copy.
 import synth_frontend as _sf
+import lec_gate_netlist_select as _lec_gns  # ATPG-cut predicate + safe selector
 
 # Path inside the iic-osic-tools container where the EDA tools live (yosys
 # + the slang plugin, sv2v, verilator). Mirrors phase3_one_shot_runner.
@@ -9441,9 +9442,42 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
     # can never drift apart again. See the timeout note at the call.
     _LEC_PRODUCER_TIMEOUT_S = 3 * lec_producer_yosys_timeout_s() + 300
     t0 = time.time()
-    gate_netlist = ("phase2/stage2/synth/post_dft_netlist.v"
-                    if post_dft.is_file()
-                    else "phase2/stage2/synth/netlist.v")
+    # --- Gate-netlist selection: REJECT ATPG-cut artifacts -------------------
+    # When the OSS Fault ATPG path ran, post_dft_netlist.v is an opt_clean of
+    # the CUT netlist — 0 flip-flops, dozens of `<inst>.d` pseudo-ports absent
+    # from the RTL.  yosys equiv_make aborts:
+    #   ERROR: Can't match gate port `_508_.d_gate' to a gold port.
+    # and compared_points == 0 with no verdict.  The old code unconditionally
+    # selected post_dft_netlist.v, which sent every ATPG-enabled design to a
+    # structural abort that was misclassified as LEC_NOT_EQUIVALENT.
+    # _lec_gns.select_gate_netlist() detects the cut artifact structurally
+    # (pseudo-port pattern + FF-count drop) and falls back to the best
+    # non-cut netlist (prefer <top>_synth.v, then netlist.v).
+    _ref_ff_count: Optional[int] = None
+    _ref_ports: Optional[set] = None
+    _rtl_dir = project / "phase2" / "stage1" / "rtl"
+    for _rf in sorted(_rtl_dir.glob("*.v")) + sorted(_rtl_dir.glob("*.sv")):
+        try:
+            _rt = _rf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        from lec_gate_netlist_select import (  # noqa: PLC0415
+            _extract_ports, _count_ff_cells, _read_safe)
+        _ref_ports = (_ref_ports or set()) | _extract_ports(_rt)
+        _ref_ff_count = (_ref_ff_count or 0) + _count_ff_cells(_rt)
+    _gns_path, _gns_reason = _lec_gns.select_gate_netlist(
+        project, top_name, _ref_ports, _ref_ff_count)
+    if _gns_path is not None:
+        gate_netlist = str(_gns_path.relative_to(project))
+    else:
+        # All candidates missing or cut artifacts — fall back to old default.
+        gate_netlist = ("phase2/stage2/synth/post_dft_netlist.v"
+                        if post_dft.is_file()
+                        else "phase2/stage2/synth/netlist.v")
+        _gns_reason = (f"select_gate_netlist found no usable candidate "
+                       f"({_gns_reason}); falling back to {gate_netlist}")
+    # Record the selection rationale in the LEC step notes.
+    _lec_netlist_note = _gns_reason
     lec_run = PROGRAMS_DIR / "lec_run.py"
     if lec_run.is_file():
         cmd = [sys.executable, str(lec_run), str(project),
@@ -9475,7 +9509,9 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                 results.append(StepResult("lec_equivalence", _status,
                                time.time() - t0,
                                f"yosys equiv: verdict={_verdict or 'UNKNOWN'} "
-                               f"(RTL vs {Path(gate_netlist).name}, rc={r.returncode})",
+                               f"(RTL vs {Path(gate_netlist).name}, rc={r.returncode})"
+                               + (f"; netlist-select: {_lec_netlist_note}"
+                                  if _lec_netlist_note else ""),
                                output_files=["reports/lec.json", "reports/lec.rpt"]))
             else:
                 tail = (r.stderr or r.stdout or "")[-300:]
