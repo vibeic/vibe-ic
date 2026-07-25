@@ -63,6 +63,11 @@ AREF for gf180's 2007) — the ratio's headroom comes from BOUNDARY geometry.
 VACUOUS_PASS: no GDS at any canonical chip path → the project has not reached
 stream-out. Gate inapplicable.
 
+ENFORCEMENT: blocking — a GDS that is not a layout must not reach hand-off.
+NOTE: currently wired AUDIT_ONLY (see flow_gate_enforcement_audit.py). The
+declaration states the INTENT; the contradiction is real and deliberate to
+surface, not a claim that it already blocks.
+
 Usage:
     python3 gds_substance_check.py <project_dir> [--json <out>]
     python3 gds_substance_check.py --gds-file <f> [--def-file <f>] [--json <out>]

@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""
+flow_gate_enforcement_audit.py — which flow gates can actually STOP a run, and
+which only get to complain afterwards (#306).
+
+The defect
+----------
+`cts_quality_check` exists, is wired into `flow/phase1_phase2_phase3.yaml`, has
+tests, and FAILed correctly on the SAME cell across three consecutive plugin
+versions. The flow ran to completion every time: post_cts.def 44 MB,
+routed.def 181 MB, post_hold.def 44 MB. It is the one gate that could have
+caught #300 (the clock port bound to a 0-sink decoy) at source. It caught it
+three times and stopped nothing. Eleven gates FAILed in that same run.
+
+Root cause, measured by this program: the step runners execute the flow's
+`program_exit_zero` gates NOWHERE. The gates are evaluated only by
+`flow_compliance_check`, which the runner invokes as `final_audit` — the LAST
+step, after every artefact has already been written. So a gate cannot block the
+step it guards; it can only describe, afterwards, a run that already happened.
+
+A gate that FAILs but cannot block differs from no gate at all only in that the
+failure is searchable later.
+
+What this audits
+----------------
+For every `program_exit_zero` gate in the flow definition:
+
+  ENFORCED    a runner invokes it inline, so it can stop the step it guards
+  AUDIT_ONLY  reached only through the final compliance audit — it describes,
+              it does not block
+  DECLARED    the gate program declares its own intent in its docstring via
+              `ENFORCEMENT: blocking` or `ENFORCEMENT: advisory`
+  UNDECLARED  no declaration — the intent is unknown, which is how 66 of 72
+              gates ended up de-facto advisory without anyone deciding that
+
+This program DESCRIBES; it does not change flow behaviour. Turning audit-only
+gates into blocking ones is a deliberate product decision with real blast
+radius (11 gates FAILing in one run means those runs start failing — correctly,
+but that is an owner's call, not a side effect of an audit tool).
+
+Exit codes:
+    0  audit completed
+    1  a gate DECLARING `ENFORCEMENT: blocking` is only AUDIT_ONLY — a
+       contradiction between stated intent and wiring
+    2  I/O error
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional
+
+_HERE = Path(__file__).resolve().parent
+_RUNNERS = ("phase3_one_shot_runner.py", "design_one_shot_runner.py",
+            "vibe_ic_one_shot_runner.py", "phase23_one_shot_runner.py",
+            "phase1_one_shot_runner.py", "analog_one_shot_runner.py")
+_GATE_RE = re.compile(r"(?:optional_)?program_exit_zero:\s*[\"']?([\w./-]+)")
+_DECL_RE = re.compile(r"ENFORCEMENT:\s*(blocking|advisory)", re.IGNORECASE)
+
+
+def _flow_def(explicit: Optional[str]) -> Path:
+    if explicit:
+        return Path(explicit)
+    return _HERE.parent / "flow" / "phase1_phase2_phase3.yaml"
+
+
+def gates_in_flow(flow: Path) -> List[str]:
+    return sorted(set(_GATE_RE.findall(flow.read_text(errors="replace"))))
+
+
+def runner_source(programs: Path) -> str:
+    out = []
+    for r in _RUNNERS:
+        p = programs / r
+        if p.is_file():
+            out.append(p.read_text(errors="replace"))
+    return "\n".join(out)
+
+
+def _invoked(src: str, gate: str) -> bool:
+    """A runner INVOKES the gate — as a subprocess command string or as an
+    imported call. A bare mention in a comment does not count."""
+    stem = gate[:-3] if gate.endswith(".py") else gate
+    if re.search(r"[\"'][^\"'\n]*\b" + re.escape(stem) + r"\.py\b", src):
+        return True
+    return bool(re.search(r"\b" + re.escape(stem) + r"\s*\.\s*(?:main|check|audit)\s*\(", src))
+
+
+def declared_intent(programs: Path, gate: str) -> Optional[str]:
+    stem = gate if gate.endswith(".py") else gate + ".py"
+    p = programs / stem
+    if not p.is_file():
+        return None
+    head = p.read_text(errors="replace")[:4000]
+    m = _DECL_RE.search(head)
+    return m.group(1).lower() if m else None
+
+
+def audit(flow: Path, programs: Path) -> dict:
+    gates = gates_in_flow(flow)
+    src = runner_source(programs)
+    rows = []
+    for g in gates:
+        enforced = _invoked(src, g)
+        rows.append({
+            "gate": g,
+            "enforcement": "ENFORCED" if enforced else "AUDIT_ONLY",
+            "declared": declared_intent(programs, g),
+        })
+    # ORPHANED: a gate program that DECLARES an enforcement intent but is not
+    # referenced by the flow definition at all. Worse than AUDIT_ONLY — not
+    # even the final compliance audit reaches it, so it runs only if someone
+    # invokes it by hand. Found this way: two gates added earlier in this
+    # campaign were never wired into the flow, so they could not fire at all.
+    in_flow = {r["gate"] for r in rows}
+    orphaned = []
+    for f in sorted(programs.glob("*_check.py")) + sorted(programs.glob("*_disclosure.py")):
+        stem = f.stem
+        if stem in in_flow or f"{stem}.py" in in_flow:
+            continue
+        intent = declared_intent(programs, stem)
+        if intent:
+            orphaned.append({"gate": stem, "declared": intent,
+                             "enforcement": "ORPHANED"})
+    contradictions = [r for r in rows
+                      if r["declared"] == "blocking"
+                      and r["enforcement"] == "AUDIT_ONLY"]
+    return {
+        "total_gates": len(rows),
+        "enforced": sum(1 for r in rows if r["enforcement"] == "ENFORCED"),
+        "audit_only": sum(1 for r in rows if r["enforcement"] == "AUDIT_ONLY"),
+        "declared": sum(1 for r in rows if r["declared"]),
+        "undeclared": sum(1 for r in rows if not r["declared"]),
+        "contradictions": contradictions,
+        "orphaned": orphaned,
+        "gates": rows,
+    }
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        description="Audit which flow gates can actually stop a run.")
+    ap.add_argument("--flow", help="flow definition YAML")
+    ap.add_argument("--programs", help="programs dir (default: this one)")
+    ap.add_argument("--json", help="write the report here")
+    a = ap.parse_args(argv)
+    flow = _flow_def(a.flow)
+    programs = Path(a.programs) if a.programs else _HERE
+    if not flow.is_file():
+        print(f"IO_ERROR: no flow definition at {flow}", file=sys.stderr)
+        return 2
+    rep = audit(flow, programs)
+    if a.json:
+        Path(a.json).write_text(json.dumps(rep, indent=2, ensure_ascii=False))
+    pct = 100 * rep["audit_only"] // max(1, rep["total_gates"])
+    print("=== flow gate enforcement audit ===")
+    print(f"gates in flow definition : {rep['total_gates']}")
+    print(f"  ENFORCED (can block)   : {rep['enforced']}")
+    print(f"  AUDIT_ONLY (describes) : {rep['audit_only']}  ({pct}%)")
+    print(f"declared intent          : {rep['declared']} "
+          f"({rep['undeclared']} UNDECLARED)")
+    if rep.get("orphaned"):
+        print("\nORPHANED — declare an intent but are NOT in the flow definition,\n"
+              "so not even the final audit reaches them:")
+        for o in rep["orphaned"]:
+            print(f"  {o['gate']}  (declared {o['declared']})")
+    if rep["contradictions"]:
+        print("\nCONTRADICTIONS — declare blocking but are wired audit-only:")
+        for c in rep["contradictions"]:
+            print(f"  {c['gate']}")
+        return 1
+    if rep.get("orphaned"):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
