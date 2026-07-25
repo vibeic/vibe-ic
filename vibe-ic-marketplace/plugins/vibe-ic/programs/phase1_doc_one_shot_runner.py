@@ -10762,18 +10762,115 @@ def _v466_line_is_block_header(line: str) -> bool:
 # heading is the user's own words and is design evidence.
 # chip-AGNOSTIC: the titles come from the plugin's own schema, never from a
 # chip name or value literal.
+#
+# COMPLETENESS + ROBUSTNESS (third pass). Whole-line equality against ONE
+# table left two measured holes, and the fix for both is the same predicate
+# sitting BETWEEN the two failed rules — not shape-only (too broad, drops the
+# user's real specs) and not literal-equality (too narrow, leaks):
+#
+#   HOLE A — the plugin has TWO layer-title tables, and the guard knew one.
+#   `tools/phase1_engine/render._HUMAN_LAYER_TITLE` (used by
+#   `render_human_docs`, `title = _HUMAN_LAYER_TITLE.get(code, code)` then
+#   `f"# {title}"`) writes the FIRST LINE of every `L*_*.md` human doc, and
+#   its wording differs from `schema.LAYER_TITLES` for 10 of its 14 codes
+#   (L1 L2 L3 L5 L6 L8 L8R L9 L10 L13). Measured: the first line of
+#   `L5_ADI_SPEC.md`, `# L5 — Analog-Digital Interface`, was NOT recognised
+#   as the plugin's own. Inert today — none of those 14 short titles matches
+#   any `_ANALOG_KEYWORDS` pattern, so re-feeding a real `L5_ADI_SPEC.md`
+#   still yields `analog_blocks: []` — but a guard that knows only half of
+#   what the plugin writes is one title edit away from live fabrication.
+#   Note the human table's values already CARRY the layer code
+#   ("L5 — Analog-Digital Interface"), so the code prefix is stripped to
+#   reach the same {code: title} shape as the schema table.
+#
+#   HOLE B — trivial mangling of the rendered heading defeated equality, and
+#   each of these was measured END-TO-END on the pure-digital document as
+#   REPRODUCING the original fabrication (`analog_blocks: ['adc','dac']`):
+#   curly apostrophes for straight ones, edited trailing punctuation, the
+#   closed-ATX form (`## … ##`), a heading truncated / wrapped at a column,
+#   and a lowercased heading. Doc extraction, editors and copy-paste all
+#   produce these.
+#
+# So a heading is the PLUGIN'S OWN when, after normalisation, it matches a
+# known title from EITHER table BY PREFIX. Normalisation neutralises only
+# harmless variation — unicode punctuation folded to ASCII (curly quotes,
+# en/em dashes, NBSP), whitespace collapsed, closing ATX hashes stripped,
+# trailing punctuation ignored, case folded across the WHOLE heading
+# including the layer code — and a truncated heading still matches on
+# its leading run. The truncation arm is one-directional: the candidate may
+# be a PREFIX of a canonical title (a heading that got cut), never a canonical
+# title plus the user's own extra words, because
+# `## L2 - Functional Requirements for the ADC` is the USER'S sentence and
+# must stay evidence. It also carries a length floor, so a stub like
+# `## L5 - Analog` cannot claim a long canonical title by accident.
+# A heading that merely LOOKS L-numbered but matches no known title is still
+# the user's content — the shape-only rule is NOT restored.
+# chip-AGNOSTIC: every canonical string comes from the plugin's own two
+# tables; no chip name, field name or value literal appears here.
+# U+2010..U+2015 (hyphen, non-breaking hyphen, figure/en/em dash, horizontal
+# bar) + U+2212 minus + ASCII hyphen — every dash a renderer or an editor may
+# put between the layer code and its title.
+_V466_TITLE_DASH_CLASS = r'‐-―−\-'
+# The layer code is matched case-INSENSITIVELY for the same reason the title
+# body is casefolded: case is not what makes a line the plugin's own. Folding
+# the title but not the code would leave the guard case-blind on 95% of the
+# line and case-bound on the remaining 5%, and a pipeline that lowercases a
+# heading would walk the whole rendered boilerplate straight back in. It
+# cannot broaden the guard on its own — the title after the code must still
+# match a canonical title, so `## l5 - ADC subsystem: 12-bit SAR ADC` stays
+# the user's evidence.
 _RE_LAYER_CODE_HEADING = re.compile(
-    r'^\s{0,3}#{1,6}\s*(L\d+[A-Za-z]?)\s*[—–‒―-]\s*(\S.*?)\s*$')
-_RE_LAYER_TITLE_DASHES = re.compile(r'[—–‒―-]+')
-_V466_LAYER_TITLES_NORM: Optional[Dict[str, str]] = None
+    r'^\s{0,3}#{1,6}\s*([Ll]\d+[A-Za-z]?)\s*['
+    + _V466_TITLE_DASH_CLASS + r']\s*(\S.*?)\s*$')
+_RE_LAYER_TITLE_DASHES = re.compile('[' + _V466_TITLE_DASH_CLASS + ']+')
+# a CLOSED ATX heading ends with a whitespace-preceded run of hashes
+_RE_LAYER_TITLE_ATX_CLOSE = re.compile(r'\s+#+\s*$')
+# trailing punctuation carries no meaning for identity of a title
+_RE_LAYER_TITLE_TRAIL_PUNCT = re.compile(
+    r'[\s.,;:!?\'"`*_)\]}>' + _V466_TITLE_DASH_CLASS + r']+$')
+# unicode punctuation that doc extraction / editors substitute freely
+_V466_TITLE_UNI_FOLD = {
+    0x2018: "'", 0x2019: "'", 0x201A: "'",   # curly / low single quote
+    0x201B: "'", 0x2032: "'",                # reversed quote, prime
+    0x201C: '"', 0x201D: '"', 0x201E: '"',   # curly / low double quote
+    0x201F: '"', 0x2033: '"',                # reversed quote, dbl prime
+    0x00A0: ' ', 0x2007: ' ', 0x2009: ' ',   # NBSP, figure, thin space
+    0x200A: ' ', 0x202F: ' ', 0x3000: ' ',   # hair, narrow-NBSP, ideogr.
+    0x2026: '...', 0x2044: '/',              # ellipsis, fraction slash
+}
+# A candidate shorter than this may only match a canonical title EXACTLY.
+# Without the floor, `## L5 - Analog` would claim L5's long canonical title
+# by prefix and the user's own stub heading would stop being evidence.
+_V466_MIN_TRUNCATED_TITLE = 12
+_V466_LAYER_TITLES_NORM: Optional[Dict[str, Tuple[str, ...]]] = None
 
 
 def _v466_norm_layer_title(s: str) -> str:
-    """Normalise a heading title for comparison: unify every dash variant,
-    collapse whitespace, casefold. Doc extraction routinely rewrites an
-    em dash to a hyphen, which must not defeat the comparison."""
+    """Normalise a heading title for comparison: fold unicode punctuation to
+    ASCII, unify every dash variant, collapse whitespace, casefold. Doc
+    extraction routinely rewrites an em dash to a hyphen, a straight
+    apostrophe to a curly one and a space to NBSP; none of that changes which
+    title the line is, so none of it may defeat the comparison."""
+    folded = (s or '').translate(_V466_TITLE_UNI_FOLD)
     return re.sub(
-        r'\s+', ' ', _RE_LAYER_TITLE_DASHES.sub('-', s or '')).strip().lower()
+        r'\s+', ' ', _RE_LAYER_TITLE_DASHES.sub('-', folded)).strip().lower()
+
+
+def _v466_norm_layer_title_cmp(s: str) -> str:
+    """`_v466_norm_layer_title` plus trailing-punctuation removal — the form
+    the identity comparison uses. Applied to BOTH sides, so an edited final
+    period / quote / bracket cannot change whether two titles are the same."""
+    return _RE_LAYER_TITLE_TRAIL_PUNCT.sub('', _v466_norm_layer_title(s))
+
+
+def _v466_strip_layer_code_prefix(code: str, title: str) -> str:
+    """`_HUMAN_LAYER_TITLE` values embed the layer code ("L5 — Analog-Digital
+    Interface") while `LAYER_TITLES` values do not. Strip the embedded code so
+    both tables yield the same {code: title-body} shape."""
+    m = re.match(
+        r'^\s*' + re.escape(code) + r'\s*[' + _V466_TITLE_DASH_CLASS
+        + r']\s*(\S.*)$', title or '', re.IGNORECASE)
+    return m.group(1) if m else (title or '')
 
 
 def _v466_load_layer_titles() -> Dict[str, str]:
@@ -10807,28 +10904,109 @@ def _v466_load_layer_titles() -> Dict[str, str]:
     return {}
 
 
-def _v466_plugin_layer_titles() -> Dict[str, str]:
-    """{LAYER_CODE: normalised canonical title}, loaded once."""
+def _v466_load_human_layer_titles() -> Dict[str, str]:
+    """Load the plugin's SECOND layer-title table,
+    `tools/phase1_engine/render._HUMAN_LAYER_TITLE`.
+
+    `render_human_docs` writes the FIRST LINE of every `L*_*.md` human doc
+    from it (`title = _HUMAN_LAYER_TITLE.get(code, code)` then
+    `f"# {title}"`), so those lines are just as much the plugin's own
+    boilerplate as the `schema.LAYER_TITLES` headings — and their wording
+    differs for most codes, which is why one table was not enough.
+
+    Read STATICALLY with `ast`: `render.py` uses package-relative imports and
+    must not be executed just to read a lookup table. Returns {} when the
+    table is unreachable, in which case this half of the guard is inert
+    rather than guessing (the premise test asserts it is NOT inert)."""
+    import ast as _ast
+    here = Path(__file__).resolve()
+    for base in here.parents:
+        cand = base / "tools" / "phase1_engine" / "render.py"
+        if not cand.is_file():
+            continue
+        try:
+            tree = _ast.parse(cand.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - never hard-fail on a lookup table
+            continue
+        for node in tree.body:
+            if not isinstance(node, _ast.Assign):
+                continue
+            if not any(isinstance(t, _ast.Name)
+                       and t.id == "_HUMAN_LAYER_TITLE"
+                       for t in node.targets):
+                continue
+            try:
+                tbl = _ast.literal_eval(node.value)
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(tbl, dict) and tbl:
+                return {str(k).upper(): str(v) for k, v in tbl.items()}
+    try:  # installed-cache layout: the package may already be importable
+        from phase1_engine.render import (  # type: ignore
+            _HUMAN_LAYER_TITLE as _ht)
+        if isinstance(_ht, dict) and _ht:
+            return {str(k).upper(): str(v) for k, v in _ht.items()}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _v466_plugin_layer_titles() -> Dict[str, Tuple[str, ...]]:
+    """{LAYER_CODE: (normalised canonical title, ...)} over BOTH of the
+    plugin's title tables, loaded once. A code can carry more than one
+    canonical wording — e.g. L13 is "Lab / Hardware Calibration (contract +
+    evidence)" in `schema.LAYER_TITLES` and "Lab Calibration (Phase 1:
+    contract; Phase 2: evidence)" in `render._HUMAN_LAYER_TITLE` — and every
+    wording the plugin can emit must be recognised as its own."""
     global _V466_LAYER_TITLES_NORM
     if _V466_LAYER_TITLES_NORM is None:
-        _V466_LAYER_TITLES_NORM = {
-            code: _v466_norm_layer_title(title)
-            for code, title in _v466_load_layer_titles().items()}
+        acc: Dict[str, List[str]] = {}
+        for _loader in (_v466_load_layer_titles,
+                        _v466_load_human_layer_titles):
+            for code, title in (_loader() or {}).items():
+                body = _v466_strip_layer_code_prefix(code, title)
+                norm = _v466_norm_layer_title_cmp(body)
+                if not norm:
+                    continue
+                bucket = acc.setdefault(code, [])
+                if norm not in bucket:
+                    bucket.append(norm)
+        _V466_LAYER_TITLES_NORM = {k: tuple(v) for k, v in acc.items()}
     return _V466_LAYER_TITLES_NORM
 
 
 def _v466_line_is_plugin_layer_title(line: str) -> bool:
     """True ONLY when `line` is a layer heading this plugin's own renderer
-    wrote — i.e. `## L<n> — <that layer's canonical title>`. A user's own
-    L-numbered heading carrying their own words is NOT boilerplate and must
-    keep counting as design evidence."""
-    m = _RE_LAYER_CODE_HEADING.match(line or "")
+    wrote — `## L<n> — <that layer's canonical title>` from
+    `schema.LAYER_TITLES`, or `# L<n> — <that layer's title>` from
+    `render._HUMAN_LAYER_TITLE` — allowing for the harmless mangling that
+    doc extraction, editors and copy-paste introduce: unicode punctuation,
+    NBSP, respaced dashes, closing ATX hashes, edited trailing punctuation,
+    and truncation / wrapping (a cut heading still matches on its leading
+    run).
+
+    A user's own L-numbered heading carrying the user's own words is NOT
+    boilerplate and must keep counting as design evidence — so the
+    truncation arm only ever lets the CANDIDATE be shorter, never the
+    canonical title plus the user's own extra words, and a candidate below
+    `_V466_MIN_TRUNCATED_TITLE` must match exactly."""
+    raw = _RE_LAYER_TITLE_ATX_CLOSE.sub('', line or '')
+    m = _RE_LAYER_CODE_HEADING.match(raw)
     if not m:
         return False
-    canon = _v466_plugin_layer_titles().get(m.group(1).upper())
-    if not canon:
+    canons = _v466_plugin_layer_titles().get(m.group(1).upper())
+    if not canons:
         return False
-    return _v466_norm_layer_title(m.group(2)) == canon
+    cand = _v466_norm_layer_title_cmp(m.group(2))
+    if not cand:
+        return False
+    for canon in canons:
+        if cand == canon:
+            return True
+        if (len(cand) >= _V466_MIN_TRUNCATED_TITLE
+                and canon.startswith(cand)):
+            return True
+    return False
 
 
 def _v466_best_class_match(text: str, pat: str):
