@@ -48,8 +48,11 @@ Container: `vibeic-eda:0.2.28`._
 
 ## Honest scope
 
-**Waivers (4; register in `waivers.json`):** `rtl_gen` (AI-authored RTL handoff,
-class `rtl_gen=null`), `final_audit` (analog track not run, pure-digital IC),
+**Where the register lives (post-#278):** `waivers.json` holds the 2 MACHINERY-SANCTIONED ENV_UNAVAILABLE waivers (steps 6 + 39, the FPGA early-prototype and final sign-off), materialized by `waivers_materialize.py` with a sanctioned non-self approver. The HUMAN-JUDGMENT deferrals below sit in `waivers.json.template` and are NOT yet approved — their `approver` is a placeholder that `waivers_schema_check.py` rejects, so they cannot ship as a green sign-off until a person fills it in.
+
+**Deferred steps (3):** `rtl_gen` (AI-authored RTL handoff,
+class `rtl_gen=null`), `final_audit` (NOT a deferred step — the compliance-audit ROLL-UP verdict,
+`Overall: PASS_WITH_WAIVERS`; deliberately absent from the register),
 FPGA on-board verify (no DE10 board contract; `on_board_pass.json` verdict
 `SKIP`), and `stuck_at_atpg` (OSS Fault `SKIPPED-CONDITION` — needs a
 library-mapped netlist; see DFT disclosure).

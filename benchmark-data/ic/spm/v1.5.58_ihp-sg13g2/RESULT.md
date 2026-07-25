@@ -38,11 +38,14 @@ this run's own RESULT/AGENT_REPORT):
   genuine, tool-run proof of reset-safety, not a claim of full datapath
   equivalence (that remains a separate, harder proof obligation).
 
-**Waivers (4; see `waivers.json` for the register):** `rtl_gen` — the AI-authored
+**Where the register lives (post-#278):** `waivers.json` holds the 2 MACHINERY-SANCTIONED ENV_UNAVAILABLE waivers (steps 6 + 39, the FPGA early-prototype and final sign-off), materialized by `waivers_materialize.py` with a sanctioned non-self approver. The HUMAN-JUDGMENT deferrals below sit in `waivers.json.template` and are NOT yet approved — their `approver` is a placeholder that `waivers_schema_check.py` rejects, so they cannot ship as a green sign-off until a person fills it in.
+
+**Deferred steps (3):** `rtl_gen` — the AI-authored
 RTL handoff for this IC class (`rtl_gen=null` → skill `spec-to-rtl`; the
 orchestrator's actual WAIVED step, correcting an earlier version of this file
-that listed only FPGA + formal); `final_audit` — analog track not run
-(`--skip-analog`, pure-digital IC); FPGA early-prototype + final sign-off (no
+that listed only FPGA + formal); `final_audit` — NOT a deferred step: it is the compliance-audit ROLL-UP
+verdict (the runner returns WAIVED when the audit reports `Overall:
+PASS_WITH_WAIVERS`), so it is deliberately absent from the register; FPGA early-prototype + final sign-off (no
 DE10-class board-pin contract for this IC class — deferred to board bring-up,
 not executed-PASS; `reports/phase2/fpga/on_board_pass.json` verdict `SKIP`);
 and formal full-stack functional proof beyond reset-safety (deferred to the AI
