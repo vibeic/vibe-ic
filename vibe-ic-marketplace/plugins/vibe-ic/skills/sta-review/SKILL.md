@@ -224,3 +224,109 @@ report — so it self-skips when the report is absent. Do not read a
 NOT_APPLICABLE from it as "timing is fine".
 
 _Captured by benchmark-enhancement-capture 2026-07-21 (Bucket A, prose → program)._
+
+## Captured rule — a single-register iterative self-loop is loop-bound: retiming can't help, the fix is a multi-cycle round (never a relaxed clock)
+
+**Enforced by a program — no longer prose judgment.**
+
+```bash
+# 5. iterative-recurrence timing diagnosis (run when a setup violation
+#    persists at the sign-off corner on an ITERATIVE / FSM datapath):
+python3 plugins/vibe-ic/programs/iterative_recurrence_timing_diagnosis.py \
+    --sta-report <worst_setup_path.rpt> \
+    [--retiming-wns-delta <ns_from_a_retiming_experiment>] \
+    [--spec-microarch-free] [--spec-latency-unconstrained] \
+    [--target-period-ns <hard_period>] --json /tmp/iter_diag.json
+```
+
+**The diagnosis.** An iterative datapath computes one iteration per clock by
+feeding a state register back to itself: `X <= f(..., X, ...)`. The state→state
+cycle then contains **exactly one register**, and two facts hold for ANY such
+loop on ANY PDK:
+
+- **Loop-bound period.** Min period of a cyclic path = (Σ combinational delay on
+  the cycle) / (registers on the cycle). One register ⇒ the floor is the *whole*
+  cone delay. You cannot clock it below one full iteration.
+- **Retiming is powerless.** Retiming preserves the register count on every
+  cycle, so a one-register cycle stays one register and its bound is invariant.
+  It shows up as `abc` dretime returning a **byte-identical** netlist / ~0 ns WNS
+  improvement. Do not keep retrying it, and do not reach for pure logic
+  restructuring (`dch -f; dc2`) either — it can break the ripple but inflate
+  area/die so the routed slow-corner WNS gets **worse** from added wire delay.
+
+**The fix, when the spec authorises it.** If the design spec leaves the microarch
+as a free choice (iterative / unrolled / pipelined / multi-cycle) **and** does not
+fix the latency-cycle count, split the recurrence cone over **N≥2 clocked
+sub-stages** (a *multi-cycle round*). The loop now spans N registers; each cycle
+is a genuine single-cycle path at the **same HARD period**, with per-cycle depth
+~1/N. Latency in cycles grows ~N×; the period is what closes. The SDC stays the
+honest single-cycle SDC — a multi-cycle round is N real single-cycle stages, **not**
+a multicycle timing *exception*, so no `set_multicycle_path` masking is introduced.
+
+### FIRST rule out a synthesis-flow defect — a long carry chain is usually NOT an RTL problem
+
+**Before changing ANY RTL, check that the flow actually handed the synthesiser a
+timing target.** A ripple-looking carry chain on the worst path is far more often
+an area-mode mapping than a genuine architectural floor.
+
+yosys already techmaps `$lcu` to a **Brent-Kung parallel-prefix adder**
+(`techmap.v`, `_90_lcu_brent_kung`, log-depth ≈ 2·log2(W)) — the fast adder is
+there by default. But a technology mapper running in **area mode spends that
+structure back down** into a slow, deep carry chain. So the chain you see in the
+report is the *mapper's* choice, not what techmap built.
+
+**Measured instance (the trap).** A flow passed `abc -liberty <lib> -D <period>`
+and a source comment asserted the delay target was live. It was not: on the
+non-`-constr` path the default `&nf` mapper **ignores `-D`**. Proof — same RTL,
+same PDK, one clock: `-D <period>` produced a netlist **byte-identical** to no
+`-D` at all (identical worst-path arrival 65.507 ns, identical cell count,
+identical chip area). The lever had never done anything. Adding the flag that
+makes it effective (this fork: `-sizing`, which appends
+`buffer; upsize; dnsize` after mapping) cut arrival to 55.954 ns (−14.6%), and
+`-area_recover` (exact-area rounds at *equal* delay) reached 50.954 ns
+(**−22.2%**) for **+1.3% area**.
+
+So the checklist, in order:
+
+1. **Is a clock period resolved at all?** No period ⇒ no target ⇒ area mode.
+2. **Is the target actually binding?** Read the tool's own help. A delay flag
+   that the mapper ignores is indistinguishable from no flag — verify by
+   diffing the netlist with and without it. *Byte-identical output is proof the
+   flag is inert*, and that diff is cheap.
+3. **Does EVERY std-cell mapping call site hand over the timing?** One later
+   bare re-map (a latch fix-up, a netlist repair pass) silently re-maps the
+   whole design in area mode and discards the timing-driven result.
+4. **Prefer delay-driven mapping + sizing over restructuring passes.** `dch -f` /
+   `dc2` can break a ripple but inflate area (+26% measured), and after routing
+   the added wire delay can make the slow corner *worse*. Sizing bought −22% for
+   +1.3% area on the same design.
+
+Only after the flow is genuinely timing-driven does an architectural change earn
+its keep. If a re-measured worst path is *still* one full-width carry-propagate
+add, then the per-cycle arithmetic cost is real and the remedies are: register
+the carry across sub-cycles (split the add into half-width slices — a register in
+the middle is the one split synthesis cannot merge back), or use a
+carry-select/carry-lookahead adder. Both are pure microarch choices, in-spec
+exactly when the multi-cycle split is. **Re-measure after every change**: the
+critical path moves, and the next binding constraint is often a different one.
+If the spec instead *forbids* the microarch change, that is an **honest floor**:
+report the violated corner as violated, never dress it as a pass, and **never
+relax the target clock** (the program FAILs hard on `--relax-clock-proposed`).
+
+The program reads the worst path's start/end **register bank** (instance path
+minus the bit-index) to spot the self-loop directly; when the netlist names are
+synthesis-anonymised (`_1234_`) it returns `INCONCLUSIVE_NAMES_ANONYMIZED` and
+asks for a name-preserving netlist or a retiming-experiment WNS delta rather than
+guessing. A *measured* retiming improvement overrides the name heuristic
+(`RETIMING_EFFECTIVE_APPLY`) — ground truth beats the heuristic.
+
+Worked example (context, not detection logic): sha256 × sky130A at the HARD
+25.907 ns period — the reference iterative single-cycle round (66 cycles/block)
+is an `a_reg`→`a_reg` / `e_reg`→`e_reg` self-loop whose ~5-deep CPA add cone
+missed ss_100C_1v60 (post-route WNS ≈ −3.85 ns); `abc` dretime was byte-identical
+(loop-bound), and logic restructuring made the routed SS corner worse (+26% area).
+The in-spec fix was a **2-cycle round** (128 cycles/block; L5 authorises the round
+microarch and does not constrain the cycle count) — per-cycle add depth ~halved,
+the clock untouched. General across every timing-limited iterative/FSM datapath.
+
+_Captured by repo-gatekeeper 2026-07-25 (prose → program; diagnosis + remedy routing)._
