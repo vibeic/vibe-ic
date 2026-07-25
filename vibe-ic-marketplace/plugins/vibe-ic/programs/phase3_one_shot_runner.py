@@ -5593,6 +5593,7 @@ def _v1_6_605_remap_surviving_dlatch(
     error` and PnR fails. Returns True iff a remap was performed and the
     netlist was rewritten clean. Chip-AGNOSTIC: triggers purely on the
     presence of a generic latch token in the emitted netlist.
+
     """
     try:
         nl_text = netlist.read_text(encoding="utf-8", errors="ignore")
@@ -6355,6 +6356,46 @@ def _strip_signed_net_decls(nl_text: str) -> Tuple[str, int]:
     return _SIGNED_NET_DECL_RE.subn(r"\1", nl_text)
 
 
+def _stale_rtl_vs_netlist(netlist: Path, rtl_dir: Path) -> List[str]:
+    """RTL files NEWER than a cached synth netlist (i.e. the cache is stale).
+
+    The phase-3 synth cache used to be keyed on the PDK alone
+    (``_netlist_matches_liberty`` sniff-checks the cached netlist's cell
+    masters against the ACTIVE liberty). That validates PDK provenance but has
+    NO notion of whether the RTL changed, so "edit RTL -> re-run" silently
+    reused the previous netlist: the flow placed-and-routed the PREVIOUS design
+    and reported a clean PASS for RTL it had never synthesised.
+
+    Measured: three consecutive phase-3 runs on three different RTL revisions
+    all produced the byte-identical netlist of the ORIGINAL design (same md5),
+    so an RTL-vs-RTL timing comparison was the same netlist measured twice.
+    Any RTL-level convergence experiment run through the PDK-only cache is
+    unmeasurable, and a "changed the RTL, nothing improved" conclusion drawn
+    under it is not evidence of anything.
+
+    Returns the names of RTL files newer than ``netlist`` (empty = cache is
+    genuinely fresh and reusable). FAILS CLOSED: if any mtime cannot be read,
+    returns a sentinel so the caller re-synthesises rather than trusting an
+    unprovable cache. Chip-AGNOSTIC: pure mtime comparison.
+    """
+    try:
+        nl_mtime = netlist.stat().st_mtime
+    except OSError:
+        return ["<netlist stat failed>"]
+    stale: List[str] = []
+    try:
+        sources = sorted(rtl_dir.glob("*.sv")) + sorted(rtl_dir.glob("*.v"))
+    except OSError:
+        return ["<rtl dir unreadable>"]
+    for src in sources:
+        try:
+            if src.stat().st_mtime > nl_mtime:
+                stale.append(src.name)
+        except OSError:
+            stale.append(f"<{src.name} stat failed>")
+    return stale
+
+
 def step_synth(project: Path, top: str, pdk: PdkConfig,
                container: str) -> StepResult:
     t0 = time.time()
@@ -6500,12 +6541,45 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     #     / probe / tap-fill-decap / scan cells -- the synthesis sibling of
     #     _dont_use_tcl's PnR set_dont_use and the exact OpenLane recipe. []
     #     when the PDK ships no synth_excluded.cells (NONFATAL, unchanged flow).
-    # (2) Engage the delay-aware ABC mapper (-D <period_ps>) whenever a clock
-    #     period is known -- not only for processor_cpu. The fork's abc binds -D
-    #     on the non -constr path; area-mode-by-default left timing on the table
-    #     for EVERY clocked class (crypto_accelerator, dsp_datapath, ...). The
+    # (2) `-D <period_ps>` is passed whenever a clock period is known. The
     #     _proj_ic_class / _TIMING_CRITICAL_CLASSES read is retained for report
     #     provenance only; it no longer gates the delay target.
+    #
+    #     MEASURED, AND DELIBERATELY LEFT AS-IS -- READ BEFORE "FIXING" THIS.
+    #
+    #     (a) `-D` ALONE IS INERT on the non `-constr` path. The fork's own
+    #         `yosys -h abc` says so: `-sizing` exists "so that a -D delay
+    #         target actually takes effect ... (the default '&nf' mapper
+    #         IGNORES -D there)". Proof, same RTL / same PDK / one clock:
+    #         `-D <period>` produced a netlist BYTE-IDENTICAL to no -D at all
+    #         (identical worst-path arrival 65.507 ns, identical cell count and
+    #         chip area). A previous comment here claimed the opposite -- that
+    #         the bare delay target already bound on this path -- and it was
+    #         false; the byte-identical netlists are the disproof.
+    #
+    #     (b) MAKING IT BIND MADE THE SHIPPED DESIGN WORSE. Adding
+    #         ` -sizing -area_recover` improved the PRE-PnR worst-path arrival
+    #         from 65.507 -> 50.954 ns (-22.2%), and then LOST 1.87 ns where it
+    #         counts. Controlled A/B, same RTL, same run-dir shape, both freshly
+    #         synthesised, differing ONLY in these flags:
+    #
+    #             arm                       cells   SHIP_WNS_POSTROUTE (ss corner)
+    #             -D only                    8079        -2.519 ns
+    #             -D -sizing -area_recover    8451        -4.386 ns   <-- WORSE
+    #
+    #         +4.6% cells bought a 22% pre-PnR win and a 1.87 ns post-route
+    #         REGRESSION. The mechanism is the same one that makes restructuring
+    #         passes (dch -f / dc2, +26% area) a net loss: synth-time area
+    #         inflation lengthens wires, and OpenROAD's own repair_design /
+    #         repair_timing already resizes AFTER placement -- so synth-time
+    #         sizing is redundant with it and pays only its area cost.
+    #
+    #     Conclusion: leaving `-D` inert is the measured-better configuration
+    #     here. Do NOT "enable" it without re-running the post-route A/B on the
+    #     shipped SPEF; a pre-PnR delay improvement is NOT evidence, and in the
+    #     one design measured it inverted. n=1 -- if you measure a design where
+    #     it helps post-route, gate it on that evidence, do not switch it on
+    #     globally.
     _synth_du = _synth_dont_use_cells(pdk, container)
     _du_flags = "".join(f" -dont_use {c}" for c in _synth_du)
     _abc_timing = (f" -D {_period_ps}" if _period_ps else "") + _du_flags
@@ -24191,6 +24265,28 @@ def main() -> int:
                   "the active PDK liberty — it was mapped to a DIFFERENT "
                   "PDK; re-running synth (preserve-provenance is now "
                   "PDK-keyed, PR-A3).", file=sys.stderr)
+        # The cache must ALSO be keyed on the RTL that produced it. Keyed on
+        # the PDK alone, a netlist older than its own RTL is reused and the
+        # edit becomes a SILENT NO-OP: the flow PnRs the previous design and
+        # reports a clean PASS for RTL it never synthesised. Measured: three
+        # consecutive runs on three different RTL revisions all produced the
+        # byte-identical netlist of the ORIGINAL design (same md5), so an
+        # RTL-vs-RTL timing comparison was in fact the same netlist twice.
+        # This silently invalidates any RTL experiment, and it laundered a
+        # stale result into what looked like a real measurement.
+        # Chip-AGNOSTIC: pure mtime comparison against the same RTL selector
+        # step_synth itself reads.
+        _stale_rtl = (_stale_rtl_vs_netlist(netlist_existing,
+                                            _pl.rtl_dir(project))
+                      if _nl_pdk_ok else [])
+        if _stale_rtl:
+            _nl_pdk_ok = False
+            print(f"[synth] cached netlist is OLDER than its RTL "
+                  f"({', '.join(_stale_rtl[:5])}"
+                  f"{' +%d more' % (len(_stale_rtl) - 5) if len(_stale_rtl) > 5 else ''})"
+                  f" — re-running synth. Reusing it would PnR the PREVIOUS "
+                  f"design and report PASS for RTL that was never "
+                  f"synthesised.", file=sys.stderr)
         if _nl_pdk_ok:
             plan.append(StepResult(
                 "synth", "PASS", 0.0,
