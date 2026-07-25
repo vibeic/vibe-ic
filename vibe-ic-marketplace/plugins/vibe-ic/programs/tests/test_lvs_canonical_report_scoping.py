@@ -146,3 +146,51 @@ def test_no_canonical_path_still_catches_a_real_mismatch(tmp_path):
 
     assert result.passed is False
     assert result.summary["terminal_verdict"] == "MISMATCH"
+
+
+# ---------------------------------------------- harvest(#341 via #349) -----
+# NAME-SPECIFIC no-leak. The scoping above is keyed on the canonical PATH, so
+# the advisory report's NAME is irrelevant to it — and that is precisely why
+# this control is needed. The obvious alternative implementation, proposed
+# while this defect was being triaged, filters by name instead:
+#
+#     files = [f for f in files if "power_aware" not in f.name.lower()]
+#
+# On the shape below that filter empties the list, and a `_check_lvs` that
+# then reports "nothing to judge" as clean would turn a run whose ONLY LVS
+# evidence is a MISMATCH into a PASS — a false sign-off certificate built out
+# of an empty result set, the same family as every other defect in this
+# campaign. Behaviour on main is already correct (verified before writing
+# this: rc=1); this pins it against that specific future rewrite.
+
+def test_advisory_report_alone_is_still_judged_not_silently_passed(tmp_path):
+    """A run that produced ONLY the advisory power-aware report — at its real
+    path and under its real name — must be JUDGED on it. With no
+    authoritative sign-off report there is nothing to prefer it over, so its
+    mismatch stands and the gate FAILs."""
+    p3 = tmp_path / "reports" / "phase3"
+    p3.mkdir(parents=True)
+    (p3 / "lvs_power_aware.rpt").write_text(_ABANDONED_POWER_AWARE_MISMATCH)
+
+    result = era._check_lvs(tmp_path)
+
+    assert result.passed is False
+    assert result.summary["terminal_verdict"] == "MISMATCH"
+    assert result.summary["files_found"] >= 1, (
+        "the advisory report must not be filtered out of existence — an "
+        "empty result set is indistinguishable from a clean one")
+
+
+def test_advisory_alone_that_matches_is_not_forced_to_fail(tmp_path):
+    """Symmetric control, so the test above cannot be satisfied by simply
+    failing on the advisory file's name: the same lone advisory report
+    carrying a genuine MATCH must PASS. The verdict comes from the report's
+    own text, never from which file it is."""
+    p3 = tmp_path / "reports" / "phase3"
+    p3.mkdir(parents=True)
+    (p3 / "lvs_power_aware.rpt").write_text(_CANONICAL_MATCH)
+
+    result = era._check_lvs(tmp_path)
+
+    assert result.passed is True
+    assert result.summary["terminal_verdict"] == "MATCH"
