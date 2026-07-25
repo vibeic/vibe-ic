@@ -63,6 +63,39 @@ def _gd(project: Path) -> Path:
     return _pl.generated_docs_dir(project)
 
 
+def _read_l16(project: Path) -> dict:
+    """Load the L16 compliance-properties doc by DISCOVERY, not by one literal.
+
+    SILENT-DEAD-READ FIX. This used to open a single hardcoded
+    `L16_COMPLIANCE.json`. Phase 1 writes `L16_COMPLIANCE_PROPERTIES.json`, so
+    the read returned {} in every real run and the SVA property-stub
+    generator's L16 contribution was ALWAYS empty no matter how good L16 was —
+    a dead read that raises no error and shows up in no report. Discovering the
+    file means a future rename cannot silently re-open the hole; the
+    canonical/longest name wins so `L16_COMPLIANCE_PROPERTIES.json` is
+    preferred over any stub alias left behind. Guarded by
+    l16_compliance_properties_actionable_check.py (rail 1: CONSUMER_DEAD_READ),
+    which parses THIS function's filename literals back out of the source.
+    """
+    gd = _gd(project)
+    d = _read_json(gd / "L16_COMPLIANCE_PROPERTIES.json")
+    if d:
+        return d
+    # Any other L16_*.json, longest (most specific) name first. Discovery, not
+    # a second hardcoded alias — a stale alias literal would make the L16 gate
+    # warn on every healthy run, and a warning that always fires is noise.
+    try:
+        cands = sorted(gd.glob("L16_*.json"),
+                       key=lambda p: (-len(p.name), p.name))
+    except OSError:
+        cands = []
+    for p in cands:
+        d = _read_json(p)
+        if d:
+            return d
+    return {}
+
+
 def _detect_ic_class(project: Path) -> str:
     for cand in ("ic_class.json",):
         d = _read_json(project / "reports" / cand) or _read_json(project / cand)
@@ -409,7 +442,7 @@ def build_assertions(project: Path, shape: dict) -> Tuple[str, dict]:
                       "spec_ref": "L9.reset"})
     # L16 must/shall prose -> advisory property stubs (english kept; formalise
     # via spec-to-assertion skill — never fabricated as a passing SVA)
-    l16 = _read_json(_gd(project) / "L16_COMPLIANCE.json") or {}
+    l16 = _read_l16(project)
     for pr in (l16.get("properties") or l16.get("fields", {}).get(
             "properties") or [])[:8]:
         if isinstance(pr, dict) and pr.get("english_form"):
