@@ -166,7 +166,18 @@ steps:
       - "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"
       - "phase1/generated_docs/L13_OTP.json"
     gate:
-      program_exit_zero: "phase1_all_l_docs_present_check ."
+      all_of:
+        - program_exit_zero: "phase1_all_l_docs_present_check ."
+        # #312 — the SECOND track. Findings are advisory (a divergence between
+        # the two tracks needs converging, not an automatic stop); running is
+        # not. A missing/unparseable report exits 1 here, because a second
+        # track that can quietly not run is the same as no second track.
+        - program_exit_zero: "phase1_expert_parse_track ."
+        # The programmable-NVM programming supply. BLOCKING, and blocking HERE
+        # because there is no later gate to defer to: the whole digital flow is
+        # clean and the defect first appears on silicon. Exits 2 (VACUOUS_PASS)
+        # for every design without a programmable NVM, which is nearly all.
+        - program_exit_zero: "nvm_program_supply_check . --json reports/audit/phase1/nvm_program_supply.json"
     blocks_on: []
 
   - id: 1

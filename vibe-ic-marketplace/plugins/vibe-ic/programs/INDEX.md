@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 925
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 925)
+- **Total programs (excluding helpers / shims):** 928
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 928)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 916 |
+| `any` | 919 |
 
 ## Alphabetical listing
 
@@ -557,6 +557,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `nfc_protocol_synth` | any | v0.1.84 | NFC / ISO 14443 contactless-protocol synth helper. |
 | `no_protocol_consistency_check` | any | v0.56 | v0.56 plugin gate |
 | `nvlink_protocol_synth` | any | v0.1.89 | NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper. |
+| `nvm_program_supply_check` | any | — | Phase-1 gate: a design that intends to PROGRAM |
+| `nvm_program_supply_intent` | any | — | does a design that intends to PROGRAM an on-chip |
 | `nvme_protocol_synth` | any | v0.1.84 | NVM Express (NVMe) Base storage-protocol synth helper. |
 | `ocp_protocol_synth` | any | — | Open Core Protocol (OCP) SoC-bus protocol synth helper (protocol #70). |
 | `oe_pattern_check` | any | — | Analyze output-enable (OE) patterns for tristate bus drivers. |
@@ -613,6 +615,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_doc_one_shot_runner` | any | Wave 49 | chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator. |
 | `phase1_doc_presence_check` | any | Wave 8 | Fail if fewer than 10 Phase-1 layer docs exist. |
 | `phase1_evidence_grounding_check` | any | — | Phase-1 ANTI-FABRICATION grounding gate. |
+| `phase1_expert_parse_track` | any | — | the SECOND track of Phase 1. |
 | `phase1_expert_track_evidence_check` | any | — | did the Phase-1 EXPERT track actually |
 | `phase1_gate_contract_check` | any | v0.74 | Meta-checker for Phase 1 deterministic gates. |
 | `phase1_input_vs_generated_completeness_check` | any | v0.60 | Phase 1 coverage gate |
@@ -997,7 +1000,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (916 programs)
+### `any` (919 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1525,6 +1528,8 @@ _(no programs in this group)_
 - `nfc_protocol_synth` — NFC / ISO 14443 contactless-protocol synth helper.  _[v0.1.84]_
 - `no_protocol_consistency_check` — v0.56 plugin gate  _[v0.56]_
 - `nvlink_protocol_synth` — NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper.  _[v0.1.89]_
+- `nvm_program_supply_check` — Phase-1 gate: a design that intends to PROGRAM
+- `nvm_program_supply_intent` — does a design that intends to PROGRAM an on-chip
 - `nvme_protocol_synth` — NVM Express (NVMe) Base storage-protocol synth helper.  _[v0.1.84]_
 - `ocp_protocol_synth` — Open Core Protocol (OCP) SoC-bus protocol synth helper (protocol #70).
 - `oe_pattern_check` — Analyze output-enable (OE) patterns for tristate bus drivers.
@@ -1581,6 +1586,7 @@ _(no programs in this group)_
 - `phase1_doc_one_shot_runner` — chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator.  _[Wave 49]_
 - `phase1_doc_presence_check` — Fail if fewer than 10 Phase-1 layer docs exist.  _[Wave 8]_
 - `phase1_evidence_grounding_check` — Phase-1 ANTI-FABRICATION grounding gate.
+- `phase1_expert_parse_track` — the SECOND track of Phase 1.
 - `phase1_expert_track_evidence_check` — did the Phase-1 EXPERT track actually
 - `phase1_gate_contract_check` — Meta-checker for Phase 1 deterministic gates.  _[v0.74]_
 - `phase1_input_vs_generated_completeness_check` — Phase 1 coverage gate  _[v0.60]_
