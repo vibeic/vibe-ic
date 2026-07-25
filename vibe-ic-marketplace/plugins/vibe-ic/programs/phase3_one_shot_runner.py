@@ -58,6 +58,7 @@ import extraction_input_capability_check as _eicap  # extraction-input precondit
 import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
 import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware netlist
 import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
+import hardmacro_supply_intent as _hmsi  # shared hard-macro supply-intent (design-declared mapping)
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 
@@ -3312,24 +3313,40 @@ def _parse_macro_supply_pins(
 def _macro_supply_gc_plan(
         macro_lef_texts: Sequence[str],
         power_nets: Sequence[str],
-        ground_nets: Sequence[str]
+        ground_nets: Sequence[str],
+        declared_map: Optional[Dict[Tuple[str, str], Dict]] = None
 ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
     """Decide, for every hard-macro POWER/GROUND pin, whether it binds to a
     matching supply rail.
 
     Returns ``(connect, unconnected)``:
 
-      * ``connect``     — ``[{master, pin, use, rail}, ...]`` for each pin whose
-                          name matches a design-declared net of the SAME use.
-                          ``rail == pin`` by construction (name-equality match).
+      * ``connect``     — ``[{master, pin, use, rail}, ...]`` for each pin that
+                          binds to a real supply rail of its use. Two ways to
+                          bind: (a) the DESIGN DECLARES the binding in L21
+                          ``hard_macro_supplies`` (``declared_map``) to a rail
+                          that IS a real rail — honored even when the pin/rail
+                          names differ (the design says so, the flow does not
+                          guess); (b) the pin NAME equals a real rail
+                          (name-equality). Declaration wins over name-equality.
       * ``unconnected`` — ``[{master, pin, use}, ...]`` for each POWER/GROUND pin
-                          that matches NO declared rail of its use. These are
-                          reported honestly and never fabricated a rail.
+                          that binds to NO real rail (no declaration, no
+                          name-match, or a declared rail that is not real).
+                          Reported honestly; never fabricated a rail.
+
+    ``declared_map``: ``{(master, pin): {"rail": r} | {"gap": True}}`` from
+    `hardmacro_supply_intent.parse_declared_supply_map`. A ``gap`` entry carries
+    no rail, so the pin lands in ``unconnected`` (the design has acknowledged it
+    provides no such supply). A declared rail that is not among ``power_nets`` /
+    ``ground_nets`` cannot be physically bound → ``unconnected`` (never faked).
 
     chip-AGNOSTIC: keyed on the macro's own LEF USE records and the design's own
-    declared supply nets; deduplicated by ``(master, pin)`` across LEFs."""
+    declared supply nets / mapping; deduplicated by ``(master, pin)`` across
+    LEFs. Backward-compatible: called without ``declared_map`` it is exactly the
+    prior name-equality plan."""
     pset = {n for n in (power_nets or [])}
     gset = {n for n in (ground_nets or [])}
+    dmap = declared_map or {}
     connect: List[Dict[str, str]] = []
     unconnected: List[Dict[str, str]] = []
     seen: set = set()
@@ -3342,7 +3359,13 @@ def _macro_supply_gc_plan(
                     continue
                 seen.add(key)
                 rails = pset if use == "POWER" else gset
-                if pin in rails:
+                ent = dmap.get(key) or {}
+                decl_rail = ent.get("rail") if not ent.get("gap") else None
+                if decl_rail and decl_rail in rails:
+                    # design-declared binding to a real rail wins.
+                    connect.append({"master": master, "pin": pin,
+                                    "use": use, "rail": decl_rail})
+                elif pin in rails:
                     connect.append({"master": master, "pin": pin,
                                     "use": use, "rail": pin})
                 else:
@@ -3363,7 +3386,9 @@ def _detect_macro_supply_signal_ties(
     the matching supply rail — i.e. a constant tie (``1'b1``/``1'b0``) or any
     other signal net has landed on a POWER/GROUND terminal (the
     signal-net-on-a-power-pin defect that makes detailed routing refuse the
-    design). Returns ``[{inst, pin, use, conn}, ...]``. Pure text; chip-AGNOSTIC.
+    design). Returns ``[{master, inst, pin, use, conn}, ...]``. ``master`` lets a
+    caller reconcile a tie against the bind plan (which is keyed by master+pin).
+    Pure text; chip-AGNOSTIC.
     """
     pins_by_master: Dict[str, Dict[str, str]] = {}
     for txt in (macro_lef_texts or []):
@@ -3390,9 +3415,66 @@ def _detect_macro_supply_signal_ties(
                 conn = conns[pin].strip()
                 rails = pset if use == "POWER" else gset
                 if conn not in rails:
-                    findings.append({"inst": inst, "pin": pin,
-                                     "use": use, "conn": conn})
+                    findings.append({"master": master, "inst": inst,
+                                     "pin": pin, "use": use, "conn": conn})
     return findings
+
+
+def _macro_supply_preroute_decision(
+        netlist_text: str,
+        macro_lef_texts: Sequence[str],
+        power_nets: Sequence[str],
+        ground_nets: Sequence[str],
+        declared_map: Optional[Dict[Tuple[str, str], Dict]] = None) -> Dict:
+    """The single pre-detailed-route hard-macro supply decision, as a PURE
+    function so the silicon-critical outcome is fully unit-pinned.
+
+    Combines the bind plan (`_macro_supply_gc_plan`) with the before-state guard
+    (`_detect_macro_supply_signal_ties`) and returns::
+
+        {
+          "connect":     [{master, pin, use, rail}],   # bind before routing
+          "unconnected": [{master, pin, use}],         # no rail, NOT signal-
+                                                       #   tied → honest report
+          "blocking":    [{master, inst, pin, use, conn}],  # a SIGNAL net has
+                                                       #   landed on a
+                                                       #   POWER/GROUND pin that
+                                                       #   no rail can bind → this
+                                                       #   is the exact DRT-0307
+                                                       #   precondition; STOP here
+        }
+
+    ``blocking`` is the load-bearing set: a POWER/GROUND pin occupied by a signal
+    net (constant tie or otherwise) that neither a design declaration nor a
+    name-match can bind to a real rail. Left to run, TritonRoute would refuse the
+    WHOLE design mid-route. Surfacing it here — named, before routing — makes the
+    failure happen in the right place at the right scale. A no-rail pin that is
+    merely floating (not signal-occupied) does NOT crash routing and stays an
+    honest ``unconnected`` report, not a block.
+
+    ENV-SAFETY (never block when blind): a tie is only escalated to ``blocking``
+    when the design HAS a discovered rail set OF THE PIN'S USE. If the rail set
+    for that use is empty — e.g. the PDK cell LEF was unreadable in this
+    environment, so ``_design_supply_nets`` returned nothing — we cannot tell
+    "no rail exists" from "could not read the rails", so the pin falls back to
+    the passive ``unconnected`` report (the pre-existing behavior) instead of a
+    false block. A block therefore fires ONLY when a real rail set exists AND the
+    signal-tied pin genuinely matches none of it. chip-AGNOSTIC throughout."""
+    connect, unconnected = _macro_supply_gc_plan(
+        macro_lef_texts, power_nets, ground_nets, declared_map)
+    ties = _detect_macro_supply_signal_ties(
+        netlist_text, macro_lef_texts, power_nets, ground_nets)
+    have_rails = {"POWER": bool(power_nets), "GROUND": bool(ground_nets)}
+    bound = {(c["master"], c["pin"]) for c in connect}
+    blocking = [t for t in ties
+                if (t["master"], t["pin"]) not in bound
+                and have_rails.get(t["use"], False)]
+    # A pin that is blocking is escalated OUT of the passive unconnected report.
+    blocked_keys = {(b["master"], b["pin"]) for b in blocking}
+    unconnected = [u for u in unconnected
+                   if (u["master"], u["pin"]) not in blocked_keys]
+    return {"connect": connect, "unconnected": unconnected,
+            "blocking": blocking}
 
 
 def _design_supply_nets(pdk: "PdkConfig") -> Tuple[set, set]:
@@ -3416,6 +3498,20 @@ def _design_supply_nets(pdk: "PdkConfig") -> Tuple[set, set]:
     if pg:
         return ({pg[0]}, {pg[1]})
     return (set(), set())
+
+
+def _load_l21_power_intent(project: Path) -> dict:
+    """Read the design's own L21_POWER_INTENT.json (Phase-1 output), the layer
+    the backend reads. Returns the parsed object, or ``{}`` if absent/malformed
+    — so a design that never authored power intent simply carries no declared
+    macro-supply mapping (name-equality binding still applies). §4.05: this is a
+    design INPUT/artifact, never an oracle."""
+    p = (project / "phase1" / "generated_docs" / "L21_POWER_INTENT.json")
+    try:
+        d = json.loads(p.read_text(errors="replace"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _build_hardmacro_supply_gc_tcl(
@@ -10853,27 +10949,33 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # A hard macro types its supply pins USE POWER/GROUND in its own LEF; when the
     # RTL constant-ties them, synthesis drives them with TIEHI/TIELO SIGNAL nets
     # and TritonRoute then refuses the whole design (signal-net-on-a-power-pin),
-    # so it gets NO signal routing. Bind each such pin whose name matches a
-    # design-declared supply rail to that rail BEFORE routing; a POWER/GROUND pin
-    # with no matching rail is reported honestly, never fabricated. Reuses the
-    # already-read netlist text (nl_text_for_count) for the before-state guard.
-    # See _macro_supply_gc_plan / _build_hardmacro_supply_gc_tcl. chip-AGNOSTIC.
+    # so it gets NO signal routing. Bind each such pin — whose name matches a
+    # design-declared supply rail, OR that the DESIGN DECLARES bound to a rail in
+    # L21 hard_macro_supplies (honored even when names differ) — to that rail
+    # BEFORE routing. A POWER/GROUND pin no rail can bind that is occupied by a
+    # signal net is the EXACT DRT-0307 precondition: it is turned into a named,
+    # BLOCKING finding here (right place, right scale) instead of letting the
+    # router abort the whole design mid-route. A no-rail pin merely floating is
+    # reported honestly, never fabricated. Reuses the already-read netlist text
+    # (nl_text_for_count) for the before-state guard.
+    # See _macro_supply_preroute_decision. chip-AGNOSTIC.
     _hm_pwr_nets, _hm_gnd_nets = _design_supply_nets(pdk)
     _hm_lef_texts = [t for t in
                      (_read_pdk_text(m, container)
                       for m in (pdk.macro_lefs or [])) if t]
-    _hm_connect, _hm_unconn = _macro_supply_gc_plan(
-        _hm_lef_texts, _hm_pwr_nets, _hm_gnd_nets)
+    _hm_l21 = _load_l21_power_intent(project)
+    _hm_dmap = _hmsi.parse_declared_supply_map(_hm_l21)
+    _hm_decision = _macro_supply_preroute_decision(
+        nl_text_for_count, _hm_lef_texts, _hm_pwr_nets, _hm_gnd_nets, _hm_dmap)
+    _hm_connect = _hm_decision["connect"]
+    _hm_unconn = _hm_decision["unconnected"]
+    _hm_block = _hm_decision["blocking"]
     hardmacro_supply_gc_block = _build_hardmacro_supply_gc_tcl(
         _hm_connect, _hm_unconn)
-    if _hm_connect or _hm_unconn:
-        _hm_ties = _detect_macro_supply_signal_ties(
-            nl_text_for_count, _hm_lef_texts, _hm_pwr_nets, _hm_gnd_nets)
+    if _hm_connect or _hm_unconn or _hm_block:
         print("[phase3] HARD-MACRO SUPPLY AUTO GLOBAL-CONNECT: "
               f"{len(_hm_connect)} POWER/GROUND macro pin(s) bound to matching "
               "supply rails before detailed routing"
-              + (f" ({len(_hm_ties)} arrived constant-tied / signal-on-power "
-                 "in the netlist and are re-bound)" if _hm_ties else "")
               + f"; {len(_hm_unconn)} POWER/GROUND pin(s) have NO matching "
               "supply rail — reported, NOT fabricated.", file=sys.stderr)
         for _u in _hm_unconn:
@@ -10881,6 +10983,25 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                   f"{_u['master']}/{_u['pin']} (USE {_u['use']}) — this design "
                   "declares no matching rail; left unconnected, never faked.",
                   file=sys.stderr)
+    if _hm_block:
+        # A signal net has landed on a POWER/GROUND macro terminal that no rail
+        # (name-match or design-declared) can bind. Detailed routing WOULD abort
+        # (DRT-0307) and leave the WHOLE design unrouted. Stop here, named.
+        _lines = "; ".join(
+            f"{b['master']}/{b['pin']} (USE {b['use']}) driven by signal net "
+            f"'{b['conn']}' on inst {b['inst']}" for b in _hm_block)
+        for _b in _hm_block:
+            print("[phase3]   BLOCKING SUPPLY-ON-POWER (integration gap): "
+                  f"{_b['master']}/{_b['pin']} (USE {_b['use']}) is driven by "
+                  f"signal net '{_b['conn']}' on inst {_b['inst']} — the design "
+                  "declares no supply rail for this pin, so it cannot be bound "
+                  "and would abort detailed routing. Declare its rail binding "
+                  "or an integration gap (and fix the RTL tie) in L21 "
+                  "hard_macro_supplies.", file=sys.stderr)
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            "hard-macro supply pin(s) occupied by a signal net with no bindable "
+            f"rail — would abort detailed routing (DRT-0307): {_lines}")
     _filler_masters = _filler_masters_for_pdk(pdk)
     # #684 — sparse-die-aware fill: the full-die `filler_placement` is now
     # gated on post-place CORE utilization so a small design in a large

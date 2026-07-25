@@ -19,10 +19,20 @@ checks per macro:
      macro's Liberty names a supply (`voltage_map`/related_power_pin),
      the supply must appear among the L21 domain supplies:
      IP_POWER_DOMAIN_MISMATCH (WARNING — L21 may legitimately lag).
+  4. MACRO-SUPPLY POWER-INTENT COVERAGE — every POWER/GROUND pin a macro
+     types in its OWN LEF must be ACCOUNTED for in L21: bound to a declared
+     rail, name-matches a declared rail, or marked an acknowledged
+     integration gap (`hard_macro_supplies`). A pin accounted for by none is
+     an undeclared supply: IP_MACRO_SUPPLY_UNDECLARED (WARNING — surfaces the
+     requirement at Phase 1 so it flows into L21 instead of aborting detailed
+     routing five steps later). A mapping to a rail the design does not
+     declare is IP_MACRO_SUPPLY_RAIL_UNDECLARED (WARNING — a phantom rail is
+     not coverage). See hardmacro_supply_intent.
 
 Exit codes: 0 PASS / PASS_WITH_REVIEW, 1 FAIL (file-set incomplete),
 2 vacuous (no macros present — nothing to integrate).
-chip-AGNOSTIC: file-set structure + token rules only.
+chip-AGNOSTIC: file-set structure + token rules + the macros' own LEF USE
+records + the design's own L21 — no PDK / design / pin-name literal.
 """
 from __future__ import annotations
 
@@ -31,6 +41,8 @@ import json
 import re
 import sys
 from pathlib import Path
+
+import hardmacro_supply_intent as _hmsi  # shared LEF-driven supply-intent logic
 
 _CORNER_TOKENS = ("tt", "ss", "ff", "fs", "sf", "typ", "slow", "fast",
                   "wcl", "bc", "wc")
@@ -63,11 +75,19 @@ def _corners_of(libs):
     return corners
 
 
-def _l21_supplies(project: Path):
+def _l21_obj(project: Path) -> dict:
+    """Return the parsed L21_POWER_INTENT object, or ``{}`` if absent/malformed."""
     l21 = project / "phase1" / "generated_docs" / "L21_POWER_INTENT.json"
     try:
         d = json.loads(l21.read_text(errors="replace"))
     except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _l21_supplies(project: Path):
+    d = _l21_obj(project)
+    if not d:
         return None
     fields = d.get("fields", d)
     doms = fields.get("power_domains") or []
@@ -134,6 +154,55 @@ def audit(project: Path) -> dict:
                 else:
                     continue
                 break
+
+    # 4. MACRO-SUPPLY POWER-INTENT COVERAGE — every POWER/GROUND pin a macro
+    #    types in its OWN LEF must be ACCOUNTED for in L21: bound to a declared
+    #    rail, name-matches a declared rail, or marked an acknowledged
+    #    integration gap. A pin accounted for by none is an undeclared supply —
+    #    a NAMED review finding so the requirement flows into L21 now, instead
+    #    of surfacing five steps later when a constant-tied supply pin lands a
+    #    signal net on a POWER/GROUND terminal and aborts detailed routing.
+    #    Non-blocking (WARNING) at Phase 1: it drives L21 completion without
+    #    regressing a design whose supplies are fine; the HARD block lives in
+    #    Phase 3, where the real rails + gate netlist make the crash provable.
+    #    chip-AGNOSTIC — masters/pins from the macros' own LEFs, rails/mapping
+    #    from the design's own L21. See hardmacro_supply_intent.
+    lef_texts = []
+    for _rel, _files in macros.items():
+        for _f in _files:
+            if _f.suffix.lower() == ".lef":
+                try:
+                    lef_texts.append(_f.read_text(errors="replace"))
+                except OSError:
+                    continue
+    l21_obj = _l21_obj(project)
+    cov = _hmsi.coverage_findings(
+        lef_texts,
+        _hmsi.declared_supply_rails(l21_obj),
+        _hmsi.parse_declared_supply_map(l21_obj))
+    summary["macro_supply_coverage"] = {
+        "total_pins": cov["total_pins"],
+        "covered": cov["covered_count"],
+        "undeclared": len(cov["undeclared"]),
+    }
+    for u in cov["undeclared"]:
+        findings.append({
+            "severity": "WARNING", "rule": "IP_MACRO_SUPPLY_UNDECLARED",
+            "message": (f"{u['master']}/{u['pin']} (USE {u['use']}): macro "
+                        f"types this supply pin but L21_POWER_INTENT accounts "
+                        f"for it by no declared rail, name-match, or "
+                        f"integration gap — declare its rail binding or mark "
+                        f"it an integration gap (hard_macro_supplies), else "
+                        f"Phase-3 routing blocks on a signal-net-on-a-power-"
+                        f"pin it cannot bind)")})
+    for r in cov["rail_undeclared"]:
+        findings.append({
+            "severity": "WARNING", "rule": "IP_MACRO_SUPPLY_RAIL_UNDECLARED",
+            "message": (f"{r['master']}/{r['pin']}: hard_macro_supplies binds "
+                        f"it to rail {r['rail']!r}, which the design does not "
+                        f"declare as a supply — name a real declared rail or "
+                        f"mark an integration gap (a phantom rail is not "
+                        f"coverage)")})
 
     errors = [f for f in findings if f["severity"] == "ERROR"]
     reviews = [f for f in findings if f["severity"] == "WARNING"]
