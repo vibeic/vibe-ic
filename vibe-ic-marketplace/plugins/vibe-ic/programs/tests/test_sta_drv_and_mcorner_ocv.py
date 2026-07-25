@@ -27,7 +27,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from conftest import func_src
+from _source_pin import func_src
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
