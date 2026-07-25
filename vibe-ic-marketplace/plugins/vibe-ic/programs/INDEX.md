@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 925
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 925)
+- **Total programs (excluding helpers / shims):** 926
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 926)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 916 |
+| `any` | 917 |
 
 ## Alphabetical listing
 
@@ -794,6 +794,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signoff_ladder_run` | any | — | REAL-gate wired. |
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
+| `silent_decline_audit` | any | — | find remedy decisions whose REFUSAL is silent (#313 §6). |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
 | `single_testpath_guard` | any | v0.2.24 | pytest.ini must declare ONE test tree. |
 | `sizing_adjust_policy` | any | — | the fixed failure-mode → parameter-delta |
@@ -997,7 +998,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (916 programs)
+### `any` (917 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1760,6 +1761,7 @@ _(no programs in this group)_
 - `signoff_ladder_run` — REAL-gate wired.
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
+- `silent_decline_audit` — find remedy decisions whose REFUSAL is silent (#313 §6).
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_
 - `single_testpath_guard` — pytest.ini must declare ONE test tree.  _[v0.2.24]_
 - `sizing_adjust_policy` — the fixed failure-mode → parameter-delta

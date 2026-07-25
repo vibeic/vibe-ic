@@ -23,7 +23,7 @@ them is a style preference.
 
 ## The six criteria
 
-### 1. Bidirectional negative control — a test that cannot fail proves nothing
+### 1. Bidirectional negative control — a test that cannot fail proves nothing  <!-- measured: #298, #295 -->
 
 Every new gate ships a test that **FAILS against the pre-fix code** and **PASSES
 after**. Assert both directions explicitly; running only the post-fix direction
@@ -40,7 +40,7 @@ control.
 > vacuously pre-fix and was only valid paired with `*_fires`. That self-caught
 > caveat is the standard, not an exception.
 
-### 2. Corpus sweep — zero false positives, or the gate is a bug
+### 2. Corpus sweep — zero false positives, or the gate is a bug  <!-- measured: #298, #309, #312 -->
 
 Run the new gate over the real existing runs available to you. **A gate that fires
 on a legitimately-complete design is a bug in the gate, not a finding.** Narrow it or
@@ -49,7 +49,7 @@ drop it, and report what you swept and what you could not reach.
 The cost of a false positive is not noise — it is that people learn to ignore the
 gate, which is how a repo ends up with gates nobody acts on.
 
-### 3. Prove-by-run that a BLOCKING gate actually blocks
+### 3. Prove-by-run that a BLOCKING gate actually blocks  <!-- measured: #306 -->
 
 If you claim a gate blocks, **run it and show the flow stopped**. Do not infer it
 from reading the code.
@@ -64,7 +64,7 @@ from reading the code.
 > A gate that fails without blocking differs from no gate only in being auditable
 > after the fact.
 
-### 4. No design, PDK, or vendor literals
+### 4. No design, PDK, or vendor literals  <!-- enforced: source_chip_agnostic_check -->
 
 The flow is shared by every design. **The moment a flow-level program hardcodes a
 pin name, a cell name, a PDK name, or a vendor part number, it stops being flow and
@@ -80,7 +80,7 @@ design's files.
 > `VDD/VSS` occurrence in the new logic was inside a *comment*, and that the pin-type
 > decision came from the macro's LEF, not from a name list.
 
-### 5. Declare BLOCKING or ADVISORY — in the gate, not by default
+### 5. Declare BLOCKING or ADVISORY — in the gate, not by default  <!-- measured: #306 -->
 
 State in the gate's own docstring/output whether a failure **stops the flow** or
 **records and continues**, and why. Silence is not neutral: an unstated default of
@@ -88,7 +88,7 @@ State in the gate's own docstring/output whether a failure **stops the flow** or
 not what their authors intended — nobody writes a check for "the clock tree was never
 built" and means it as a note.
 
-### 6. Degrade loudly, never silently
+### 6. Degrade loudly, never silently  <!-- measured: #307, #312 -->
 
 A path that declines to act — a remedy refused, an optional track unavailable, a
 budget exceeded — must **emit a named record** saying so. A silent decline reads
@@ -153,3 +153,21 @@ and should become deterministic checks rather than relying on an author remember
 
 Until they exist as programs, they live here — and a reviewer is expected to check
 them by hand.
+
+---
+
+## Which of these are now PROGRAMS (this doctrine obeys program-first)
+
+Landed, so the criterion is checked rather than remembered:
+
+| criterion | program | measured in |
+|---|---|---|
+| §3, §5 | `flow_gate_enforcement_audit` — ENFORCED / AUDIT_ONLY / ORPHANED, and flags a gate declaring blocking while wired advisory | #306 |
+| §6 | `silent_decline_audit` — AST audit for remedy call sites whose refusal discloses nothing | #307, #312 |
+| §4 | `source_chip_agnostic_check` | CI |
+| "empty vs clean" | `phase1_expert_track_evidence_check` — NEVER_RAN vs RAN_EMPTY | #312 |
+
+Still prose, worth promoting:
+- every new gate's tests must contain at least one assertion that FAILS on the
+  parent revision (§1 — mechanically checkable by running them against `HEAD~1`)
+- corpus-sweep evidence should be an artefact, not a claim in a PR body (§2)
