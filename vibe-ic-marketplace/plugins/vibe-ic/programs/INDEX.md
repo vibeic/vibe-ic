@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 935
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 935)
+- **Total programs (excluding helpers / shims):** 938
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 938)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 926 |
+| `any` | 929 |
 
 ## Alphabetical listing
 
@@ -451,11 +451,14 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `kmap_sop_synth` | any | — | deterministic Karnaugh-map (K-map) -> RTL SOLVER. |
 | `kmap_truth_table_oracle_check` | any | — | prompt-disclosed combinational oracle gate. |
 | `l10_tb_conformance_check` | any | v0.53 | v0.53 plugin gate |
+| `l10_test_case_oracle_anchor_check` | any | — | L10 CONSUMER-CONTRACT gate. |
 | `l10_test_cases_cover_l3_constraints_check` | any | Wave 39 | Wave 39 / D1 |
+| `l11_otp_content_consumer_contract_check` | any | — | L11 CONSUMER-CONTRACT gate. |
 | `l11_otp_lock_dependencies_typed_check` | any | Wave 38 | Wave 38 / B5 |
 | `l11_sequence_covers_l6_reject_rules_check` | any | Wave 39 | Wave 39 / D2 |
 | `l12_behavioral_sequences_steps_typed_check` | any | Wave 38 | Wave 38 / B6 |
 | `l12_sequence_implementation_check` | any | — | Enforce that each declared L12 |
+| `l12_sequences_in_consumed_layer_check` | any | — | L12 CONSUMER-CONTRACT gate. |
 | `l12_tb_coverage_check` | any | v0.52 | v0.52 plugin gate |
 | `l1_electrical_specs_typed_depth_check` | any | Wave 38 | Wave 38 / B1 |
 | `l1_pin_bus_width_actionable_check` | any | — | L1 consumer-contract gate. |
@@ -1007,7 +1010,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (926 programs)
+### `any` (929 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1430,11 +1433,14 @@ _(no programs in this group)_
 - `kmap_sop_synth` — deterministic Karnaugh-map (K-map) -> RTL SOLVER.
 - `kmap_truth_table_oracle_check` — prompt-disclosed combinational oracle gate.
 - `l10_tb_conformance_check` — v0.53 plugin gate  _[v0.53]_
+- `l10_test_case_oracle_anchor_check` — L10 CONSUMER-CONTRACT gate.
 - `l10_test_cases_cover_l3_constraints_check` — Wave 39 / D1  _[Wave 39]_
+- `l11_otp_content_consumer_contract_check` — L11 CONSUMER-CONTRACT gate.
 - `l11_otp_lock_dependencies_typed_check` — Wave 38 / B5  _[Wave 38]_
 - `l11_sequence_covers_l6_reject_rules_check` — Wave 39 / D2  _[Wave 39]_
 - `l12_behavioral_sequences_steps_typed_check` — Wave 38 / B6  _[Wave 38]_
 - `l12_sequence_implementation_check` — Enforce that each declared L12
+- `l12_sequences_in_consumed_layer_check` — L12 CONSUMER-CONTRACT gate.
 - `l12_tb_coverage_check` — v0.52 plugin gate  _[v0.52]_
 - `l1_electrical_specs_typed_depth_check` — Wave 38 / B1  _[Wave 38]_
 - `l1_pin_bus_width_actionable_check` — L1 consumer-contract gate.
