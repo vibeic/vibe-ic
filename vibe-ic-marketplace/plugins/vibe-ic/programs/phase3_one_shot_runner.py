@@ -8012,12 +8012,20 @@ def _route_congestion_trades_payload(disc: Optional[Dict[str, Any]],
     """The `reports/route_congestion_trades.json` body: what routability was
     bought with, and whether it worked. Written on EVERY pnr outcome so the
     file's ABSENCE never has to be interpreted — `clock_ndr_disabled: false` is
-    a positive statement that the trade was not made. Pure. chip-AGNOSTIC."""
+    a positive statement that the trade was not made. Pure. chip-AGNOSTIC.
+
+    schema/2 adds `placement_congestion` — the pre-route read (GPL-0047/0089)
+    that was already available before detailed route ever started. Same
+    contract: the key is ALWAYS present, `false` meaning "placement had nothing
+    to disclose", so absence never has to be interpreted."""
+    _pl = _placement_congestion_disclosure(log_text)
     return {
-        "schema": "route_congestion_trades/1",
+        "schema": "route_congestion_trades/2",
         "clock_ndr_disabled": bool(disc),
         "global_route_congestion_error": _grt_congestion_failed(log_text),
+        "placement_congestion": bool(_pl),
         "detail": disc or {},
+        "placement_detail": _pl or {},
     }
 
 
@@ -8048,6 +8056,117 @@ def _clock_ndr_detail(disc: Optional[Dict[str, Any]]) -> str:
             f"congestion — {disc['clock_tree_net_count']} of them CTS clock "
             f"net(s), now routed at default width/spacing; clock "
             f"resistance/skew/crosstalk margin was spent for routability")
+
+
+# ── PRE-ROUTE CONGESTION DISCLOSURE (ORGANIC, edge_llm_matmul_accel 2026-07-25)
+# The 23.5h detailed-route burn that produced no DEF was not the first time the
+# flow saw the problem — global placement's own routability phase had already
+# measured it and said so, hours earlier:
+#     [INFO GPL-0047] Routability iteration weighted routing congestion: 1.1581
+#     [INFO GPL-0089] Routability finished. Reverting to minimal observed
+#                     routing congestion, could not reach target.
+# edge_llm ended that phase at 1.15-1.17 at only 36.1% global utilisation: the
+# demand/capacity ratio was over unity LOCALLY (dense 256-MAC array + memory
+# modelled as flip-flop arrays) while the die looked half empty. The flow read
+# none of it, went through CTS, and spent a day rediscovering it in TritonRoute.
+# This makes the placer's own read a first-class disclosure — the same treatment
+# CASE A gives the clock-NDR trade.
+#
+# §4.05 — DISCLOSURE ONLY, the PnR verdict TIER is untouched, and that is not
+# timidity: in the local corpus opentitan_aes CONVERGED to a clean route with
+# GPL-0089 set and a final 1.0805, while ibex failed at 1.3255/1.3445. Residual
+# congestion is a genuine RISK reading, NOT a pass/fail predicate, and the one
+# number here that is not arbitrary is 1.0 — the PHYSICAL unity point where
+# routing demand equals capacity. It is not fitted to the corpus.
+# chip-AGNOSTIC: OpenROAD GPL log grammar only.
+_RE_GPL_WEIGHTED_CONGESTION = re.compile(
+    r"\[INFO GPL-0047\]\s*Routability iteration weighted routing "
+    r"congestion:\s*([0-9]*\.?[0-9]+)")
+_RE_GPL_ROUTABILITY_GAVE_UP = re.compile(
+    r"\[\w+ GPL-0089\]\s*Routability finished\. Reverting to minimal observed "
+    r"routing congestion, could not reach target")
+# Demand == capacity. Above it, some tile wants more routing track than the
+# stack has. Physics, not a tuned threshold.
+_GPL_CONGESTION_OVER_CAPACITY = 1.0
+
+
+def _gpl_congestion_trajectory(log_text: str) -> List[float]:
+    """The weighted-routing-congestion estimate global placement reported at
+    each of its routability iterations (GPL-0047), in order. [] when the
+    routability phase never ran (a design placed comfortably enough that
+    OpenROAD never entered it). chip-AGNOSTIC."""
+    if not log_text:
+        return []
+    out: List[float] = []
+    for raw in _RE_GPL_WEIGHTED_CONGESTION.findall(log_text):
+        try:
+            out.append(float(raw))
+        except ValueError:  # nosec — a mangled line is not a measurement
+            continue
+    return out
+
+
+def _gpl_routability_gave_up(log_text: str) -> bool:
+    """True iff global placement ENDED its routability phase without reaching
+    its congestion target (GPL-0089) and fell back to the least-congested
+    snapshot it had seen. chip-AGNOSTIC."""
+    return bool(log_text) and bool(_RE_GPL_ROUTABILITY_GAVE_UP.search(log_text))
+
+
+def _placement_congestion_disclosure(log_text: str) -> Optional[Dict[str, Any]]:
+    """The `placement_congestion` disclosure record for a PnR log, or None when
+    placement had nothing to report — i.e. the routability phase either never
+    ran, or it ran, reached target, and left residual congestion UNDER unity.
+
+    Reported on EVERY pnr outcome, PASS included: a route that squeaked
+    through over-capacity placement is exactly as worth saying as one that
+    did not. `over_capacity` is the physical statement (final estimate >= 1.0);
+    `gave_up` is the placer's own admission that it could not reach target.
+    Neither is a verdict — see the module comment. chip-AGNOSTIC."""
+    traj = _gpl_congestion_trajectory(log_text)
+    gave_up = _gpl_routability_gave_up(log_text)
+    if not traj:
+        return None
+    final = traj[-1]
+    over = final >= _GPL_CONGESTION_OVER_CAPACITY
+    if not over and not gave_up:
+        return None
+    return {
+        "finding": "PLACEMENT_CONGESTION_RESIDUAL",
+        "final_weighted_congestion": final,
+        "min_weighted_congestion": min(traj),
+        "routability_iterations": len(traj),
+        "congestion_trajectory": traj,
+        "over_capacity": over,
+        "over_capacity_threshold": _GPL_CONGESTION_OVER_CAPACITY,
+        "routability_gave_up": gave_up,
+    }
+
+
+def _placement_congestion_detail(disc: Optional[Dict[str, Any]]) -> str:
+    """The one-line verdict text for a placement-congestion disclosure (empty
+    when there is nothing to disclose), appended to the pnr step detail so the
+    signal the flow ALREADY had before routing is visible in the RUN VERDICT
+    and not only in a JSON side-file."""
+    if not disc:
+        return ""
+    bits = []
+    if disc["over_capacity"]:
+        bits.append(
+            f"routing demand exceeded capacity locally "
+            f"({disc['final_weighted_congestion']:g} >= "
+            f"{disc['over_capacity_threshold']:g})")
+    if disc["routability_gave_up"]:
+        bits.append("the placer could not reach its congestion target "
+                    "(GPL-0089) and reverted to its least-congested snapshot")
+    return (f" | PRE-ROUTE CONGESTION: global placement finished "
+            f"{disc['routability_iterations']} routability iteration(s) with "
+            f"weighted routing congestion {disc['final_weighted_congestion']:g}"
+            f" (min seen {disc['min_weighted_congestion']:g}) — "
+            + "; ".join(bits) +
+            ". This was measurable BEFORE detailed route; it is a routability "
+            "RISK reading, not a verdict — routes have converged from here and "
+            "have also failed from here")
 
 
 def _compute_loosened_die(die_w: int, die_h: int,
@@ -11411,9 +11530,22 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # below (FAIL and PASS alike). The silent-green case is the whole point:
     # a route that quietly spent its clock non-default rule must say so.
     _ndr_disc = _clock_ndr_disclosure(_pnr_log_all)
+    # PRE-ROUTE CONGESTION disclosure — the placer's own routability read
+    # (GPL-0047/0089), attached to EVERY outcome alongside the NDR trade. On a
+    # route that fails hours later this is the signal that was available
+    # BEFORE the burn; on one that passes it is the margin it passed on.
+    _place_disc = _placement_congestion_disclosure(_pnr_log_all)
     _ndr_detail = _clock_ndr_detail(_ndr_disc)
-    _ndr_extras: Dict[str, Any] = (
-        {"clock_ndr_disabled": _ndr_disc} if _ndr_disc else {})
+    # Kept SEPARATE from `_ndr_detail` on purpose: the GRT-0116 branch below
+    # keys its "and it was NOT enough" clause off `_ndr_detail` being
+    # non-empty, so folding placement text into it would make the flow claim a
+    # clock NDR was dropped on runs where none ever was.
+    _place_detail = _placement_congestion_detail(_place_disc)
+    _ndr_extras: Dict[str, Any] = {}
+    if _ndr_disc:
+        _ndr_extras["clock_ndr_disabled"] = _ndr_disc
+    if _place_disc:
+        _ndr_extras["placement_congestion"] = _place_disc
     try:
         _write_route_congestion_trades(project, _ndr_disc, _pnr_log_all)
     except Exception:  # nosec — disclosure side-file is best-effort
@@ -11437,7 +11569,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
              f"says the router was going nowhere WHEN STOPPED; it does not "
              f"prove the design is unroutable — increase --die-um, lower "
              f"--util, or relieve congestion at the source, then re-run."
-             + _ndr_detail),
+             + _ndr_detail + _place_detail),
             [str(out_dir / "openroad.log")],
             extras={"finding": "ROUTE_PLATEAU",
                     "route_plateau": _pl_rec,
@@ -11462,7 +11594,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
              + (_ndr_detail +
                 " — and it was NOT enough: the rule was given up and the "
                 "route still failed, so the clock quality was spent for "
-                "nothing." if _ndr_detail else "")),
+                "nothing." if _ndr_detail else "") + _place_detail),
             [str(out_dir / "openroad.log")],
             extras={"finding": "GLOBAL_ROUTE_CONGESTION",
                     "die_um": f"{die_w}x{die_h}",
@@ -11471,7 +11603,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     **_ndr_extras})
     if rc != 0 or not def_file.is_file():
         return StepResult("pnr", "FAIL", time.time() - t0,
-                          f"rc={rc} log_tail={(out+err)[-2000:]}" + _ndr_detail,
+                          f"rc={rc} log_tail={(out+err)[-2000:]}"
+                          + _ndr_detail + _place_detail,
                           [str(out_dir / "openroad.log")],
                           extras={"resize_history": resize_history,
                                   **_ndr_extras})
@@ -11498,7 +11631,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
              f"design is congestion-limited at die {die_w}x{die_h}µm / "
              f"util {util:g}: increase --die-um, lower --util, or raise "
              f"the router's end iteration. Emitted DEF/GDS are kept for "
-             f"debugging but are NOT sign-off artifacts." + _ndr_detail),
+             f"debugging but are NOT sign-off artifacts."
+             + _ndr_detail + _place_detail),
             [str(out_dir / "openroad.log"), str(def_file)],
             extras={"finding": "ROUTE_NOT_CONVERGED",
                     "drt_violations": _drt_viol,
@@ -11715,7 +11849,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if _pdn_verdict == "BAD":
         return StepResult(
             "pnr", "BLOCKED", time.time() - t0,
-            f"power grid not connected — {_pdn_mk}. {detail}" + _ndr_detail,
+            f"power grid not connected — {_pdn_mk}. {detail}"
+            + _ndr_detail + _place_detail,
             pnr_outputs,
             extras={"pdn_status": _pdn_mk, **spare_extras, **_ndr_extras})
     detail += f" | pdn: {_pdn_mk}"
@@ -11724,7 +11859,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # the clock tree's non-default rule is still a PASS (the geometry is legal
     # and the tier is unchanged), but it is NOT the same result as a route that
     # never had to make the trade, and the verdict now says which one it is.
-    detail += _ndr_detail
+    detail += _ndr_detail + _place_detail
     if resize_history:
         return StepResult("pnr", "PASS", time.time() - t0,
                           detail,

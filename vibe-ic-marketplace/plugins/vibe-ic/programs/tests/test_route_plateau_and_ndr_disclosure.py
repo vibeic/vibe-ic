@@ -17,16 +17,50 @@ CASE A — the SILENT clock-NDR trade (ibex + opentitan_aes, sky130A).
   it, and GRT-0116 becomes the structured GLOBAL_ROUTE_CONGESTION finding.
   The verdict TIER is deliberately unchanged — disclosure, not a new failure.
 
-CASE B — the detailed-route PLATEAU (edge_llm_matmul_accel).
-  Violations fell 409,554 -> ~116,677 and then sat at ~13K per optimization
-  iteration while TritonRoute kept iterating: ~23.5 h of OpenROAD CPU, no
-  routed DEF, no GDS. The progress-stall watchdog cannot stop this and is RIGHT
-  not to (output + CPU advance every poll: the job is alive), and the 24h
-  ceiling is a pathological-loop backstop, not a convergence judgement.
-  Fix: `_drt_plateau_verdict` is the domain read ("violations stopped
-  falling"), `_DrtPlateauProbe` evaluates it LIVE on the tee'd log, and
-  `_watchdog.run_supervised(abort_probe=...)` stops the router with the new
-  rc=RC_ABORTED so step_pnr can report ROUTE_PLATEAU instead of burning a day.
+CASE B — the detailed-route burn (edge_llm_matmul_accel), ~23.5 h of OpenROAD
+CPU, no routed DEF, no GDS. TWO separate mechanisms, and the evidence supports
+each of them to a DIFFERENT depth. Keeping that distinction is the point:
+
+  B-1 the PLATEAU stop (a FLAT tail).
+    `_drt_plateau_verdict` is the domain read ("violations stopped falling"),
+    `_DrtPlateauProbe` evaluates it LIVE on the tee'd log, and
+    `_watchdog.run_supervised(abort_probe=...)` stops the router with the new
+    rc=RC_ABORTED so step_pnr reports ROUTE_PLATEAU instead of burning a day.
+    The progress-stall watchdog cannot see this and is RIGHT not to (output +
+    CPU advance every poll: the job is alive); the 24h ceiling is a
+    pathological-loop backstop, not a convergence judgement.
+    *** SCOPE OF THE CLAIM ***: the only RECORDED edge_llm trajectory is the 5
+    samples in `benchmark-data/ic/edge_llm_matmul_accel/phase3/
+    PHASE3_MILESTONE.md` (`MATMUL_RECORDED` below), and on those the predicate
+    correctly returns None — at iteration 4 that route was still improving
+    ~11%/iter and is, by any windowed-gain measure, INDISTINGUISHABLE from the
+    real converging routes in `REAL_CONVERGING`. We do NOT claim this predicate
+    would have stopped edge_llm at iteration 4, and no honest predicate could:
+    see `test_recorded_matmul_prefix_is_not_yet_a_plateau`. What it covers is
+    the FLAT tail, exercised by the clearly-labelled SYNTHETIC fixture.
+    (The doc's "plateauing ~13 K/iter" is the last IMPROVEMENT, 129,304 ->
+    116,677 = 12,627 — not a residual violation count. An earlier revision of
+    this file encoded the other reading as a fabricated flat 13K tail and
+    claimed the predicate fired on "the real wall". It did not. Fixture
+    provenance is now asserted mechanically by
+    `test_matmul_recorded_matches_the_milestone_record`.)
+
+  B-2 the PRE-ROUTE disclosure (what the flow ALREADY knew, 23.5 h earlier).
+    Global placement's routability phase reports its own congestion estimate
+    and says out loud when it cannot reach target:
+        [INFO GPL-0047] Routability iteration weighted routing congestion: 1.15
+        [INFO GPL-0089] Routability finished. Reverting to minimal observed
+                        routing congestion, could not reach target.
+    edge_llm sat at 1.15-1.17 (>1.0 = local demand over capacity) at 36.1%
+    global utilisation — the milestone doc calls this "the early congestion
+    signal" — and the flow proceeded through CTS into a 23.5 h detailed route
+    without ever surfacing it. `_placement_congestion_disclosure` makes it a
+    first-class disclosure on EVERY pnr outcome, exactly like the CASE-A clock
+    NDR trade. §4.05: disclosure ONLY, no verdict TIER change — 1.0 is the
+    PHYSICAL unity point (demand/capacity), not a threshold fitted to make the
+    corpus separate. It deliberately is not a predictor: opentitan_aes
+    CONVERGED at a final 1.0805 with GPL-0089 set, and that run must still be
+    disclosed and still PASS (`test_placement_disclosure_does_not_change_tier`).
 
 NEGATIVE CONTROL: every `test_negctl_*` below FAILS on the pre-fix tree — the
 symbol it exercises does not exist there (`AttributeError`/`TypeError`), which
@@ -89,27 +123,68 @@ REAL_CONVERGING = [
     [6572, 3820, 3248, 540, 14, 2, 2, 0],
 ]
 
-# edge_llm_matmul_accel: the wall. Big early gains, then a flat ~13K tail that
-# the router kept re-iterating for hours.
-MATMUL_PLATEAU = [409554, 220310, 150221, 116677, 13421,
-                  13208, 13150, 13102, 13094]
+# edge_llm_matmul_accel — the ONLY recorded trajectory, transcribed verbatim
+# from benchmark-data/ic/edge_llm_matmul_accel/phase3/PHASE3_MILESTONE.md
+# ("violations 409,554 -> 332,073 -> 312,639 -> 129,304 -> ~116,677 (iter
+# 1->4)"). The run then burned ~23.5 h with NO further numbers written down,
+# so the tail of this route is simply NOT IN EVIDENCE. Nothing below may
+# extrapolate it. Its own deltas are [77481, 19434, 183335, 12627] — the last
+# one is the doc's "plateauing ~13 K/iter".
+MATMUL_RECORDED = [409554, 332073, 312639, 129304, 116677]
+MILESTONE_DOC = (Path(__file__).resolve().parents[5] / "benchmark-data" / "ic"
+                 / "edge_llm_matmul_accel" / "phase3" / "PHASE3_MILESTONE.md")
+
+# SYNTHETIC — NOT from any log. A hand-written FLAT tail, the shape the
+# plateau predicate exists to stop. Labelled so it can never be mistaken for
+# campaign evidence.
+SYNTHETIC_FLAT_TAIL = [409554, 332073, 312639, 129304, 116677,
+                       13421, 13208, 13150, 13102, 13094]
 
 
 # ── CASE B: the plateau predicate ────────────────────────────────────────────
 
-def test_negctl_plateau_predicate_fires_on_the_real_matmul_wall():
-    """NEG-CTL: pre-fix `_drt_plateau_verdict` does not exist, so the flat
-    ~13K tail had no representation at all and the router ran on."""
-    rec = R._drt_plateau_verdict(MATMUL_PLATEAU)
+def test_matmul_recorded_matches_the_milestone_record():
+    """PROVENANCE GUARD. `MATMUL_RECORDED` must be transcribable from the
+    checked-in milestone doc, digit for digit. This is the test that would
+    have caught the fabricated flat-13K fixture: a plateau fixture nobody can
+    trace back to a report is not evidence, and a fix verified against it is
+    verified against itself."""
+    if not MILESTONE_DOC.is_file():          # pragma: no cover - repo layout
+        pytest.skip(f"milestone record not present: {MILESTONE_DOC}")
+    text = MILESTONE_DOC.read_text(errors="ignore")
+    for n in MATMUL_RECORDED:
+        assert f"{n:,}" in text, f"{n:,} is not in {MILESTONE_DOC.name}"
+    # ...and the doc's "~13 K/iter" is the last IMPROVEMENT, not a residue.
+    assert MATMUL_RECORDED[-2] - MATMUL_RECORDED[-1] == 12627
+    # The synthetic fixture must stay honestly labelled as NOT from the doc.
+    assert f"{SYNTHETIC_FLAT_TAIL[-1]:,}" not in text
+
+
+def test_recorded_matmul_prefix_is_not_yet_a_plateau():
+    """THE HONESTY BOUND on CASE B-1. At every prefix of the only recorded
+    edge_llm trajectory the predicate abstains — that route was still taking
+    ~11%/iter off the violation count when the record stops. We therefore do
+    NOT claim the plateau stop would have saved the 23.5 h at iteration 4;
+    the pre-route disclosure (CASE B-2) is what speaks to that window."""
+    for i in range(2, len(MATMUL_RECORDED) + 1):
+        assert R._drt_plateau_verdict(MATMUL_RECORDED[:i]) is None, i
+
+
+def test_negctl_plateau_predicate_fires_on_a_flat_tail():
+    """NEG-CTL: pre-fix `_drt_plateau_verdict` does not exist, so a flat tail
+    had no representation at all and the router ran on. Exercised on the
+    SYNTHETIC fixture — see `test_recorded_matmul_prefix_is_not_yet_a_plateau`
+    for why the recorded trajectory cannot carry this assertion."""
+    rec = R._drt_plateau_verdict(SYNTHETIC_FLAT_TAIL)
     assert rec is not None
     assert rec["finding"] == "ROUTE_PLATEAU"
     assert rec["window_to"] == 13094
     assert rec["window_rel_gain"] < R._DRT_PLATEAU_MIN_REL_GAIN
-    assert rec["iterations_seen"] == len(MATMUL_PLATEAU)
+    assert rec["iterations_seen"] == len(SYNTHETIC_FLAT_TAIL)
 
 
 def test_plateau_reason_names_the_numbers_it_acted_on():
-    reason = R._drt_plateau_reason(R._drt_plateau_verdict(MATMUL_PLATEAU))
+    reason = R._drt_plateau_reason(R._drt_plateau_verdict(SYNTHETIC_FLAT_TAIL))
     assert "ROUTE_PLATEAU" in reason
     assert "13094" in reason and "13421" in reason
     # The honesty clause: a plateau is a congestion result, not "needs more
@@ -191,9 +266,9 @@ def test_negctl_live_probe_aborts_only_once_the_wall_is_proven(tmp_path):
     log = tmp_path / "openroad.log"
     probe = R._DrtPlateauProbe(log)
     assert probe() is None                       # no log yet ⇒ no opinion
-    log.write_text(_log_with(MATMUL_PLATEAU[:4]))
+    log.write_text(_log_with(SYNTHETIC_FLAT_TAIL[:5]))
     assert probe() is None                       # still improving fast
-    log.write_text(_log_with(MATMUL_PLATEAU))
+    log.write_text(_log_with(SYNTHETIC_FLAT_TAIL))
     reason = probe()
     assert reason is not None and "ROUTE_PLATEAU" in reason
     assert probe.record["window_to"] == 13094
@@ -205,10 +280,10 @@ def test_live_probe_is_sticky_and_reports_what_it_acted_on(tmp_path):
     state that never triggered anything."""
     log = tmp_path / "openroad.log"
     probe = R._DrtPlateauProbe(log)
-    log.write_text(_log_with(MATMUL_PLATEAU))
+    log.write_text(_log_with(SYNTHETIC_FLAT_TAIL))
     first = probe()
     fired_on = dict(probe.record)
-    log.write_text(_log_with(MATMUL_PLATEAU + [1, 0]))
+    log.write_text(_log_with(SYNTHETIC_FLAT_TAIL + [1, 0]))
     assert probe() == first
     assert probe.record == fired_on
 
@@ -404,6 +479,144 @@ def test_grt_congestion_error_is_recognised():
     assert R._grt_congestion_failed("") is False
 
 
+# ── CASE B-2: the PRE-ROUTE congestion read the flow already had ─────────────
+# REAL fixtures, transcribed from the campaign OpenROAD logs named below.
+# ibex/sky130A (campaign_v1560) — placement could NOT reach target, and the
+# route then died on GRT-0116.
+IBEX_PLACE = (
+    "[INFO GPL-0047] Routability iteration weighted routing congestion: 1.4879\n"
+    "[INFO GPL-0047] Routability iteration weighted routing congestion: 1.3255\n"
+    "[INFO GPL-0089] Routability finished. Reverting to minimal observed "
+    "routing congestion, could not reach target.\n"
+)
+# opentitan_aes/sky130A (campaign_v1560) — placement ALSO could not reach
+# target and ended over unity, and the route CONVERGED anyway. This fixture is
+# the reason the disclosure is not allowed to be a verdict.
+AES_PLACE = (
+    "[INFO GPL-0047] Routability iteration weighted routing congestion: 1.4606\n"
+    "[INFO GPL-0047] Routability iteration weighted routing congestion: 1.1581\n"
+    "[INFO GPL-0047] Routability iteration weighted routing congestion: 1.0757\n"
+    "[INFO GPL-0047] Routability iteration weighted routing congestion: 1.0805\n"
+    "[INFO GPL-0089] Routability finished. Reverting to minimal observed "
+    "routing congestion, could not reach target.\n"
+)
+# sha256/sky130A (campaign_v1544) — comfortable: reached target, ended UNDER
+# unity. Nothing to disclose; a disclosure here would be pure noise.
+SHA256_PLACE = (
+    "[INFO GPL-0047] Routability iteration weighted routing congestion: 1.082\n"
+    "[INFO GPL-0047] Routability iteration weighted routing congestion: 0.9057\n"
+)
+
+
+def test_negctl_placement_congestion_is_disclosed_on_the_real_ibex_log():
+    """NEG-CTL: pre-fix `_placement_congestion_disclosure` does not exist, so
+    the placer's own "could not reach target" at 1.3255 — available BEFORE the
+    route was even attempted — reached no report and no verdict."""
+    disc = R._placement_congestion_disclosure(IBEX_PLACE)
+    assert disc is not None
+    assert disc["finding"] == "PLACEMENT_CONGESTION_RESIDUAL"
+    assert disc["final_weighted_congestion"] == 1.3255
+    assert disc["over_capacity"] is True
+    assert disc["routability_gave_up"] is True
+    assert disc["routability_iterations"] == 2
+
+
+def test_negctl_placement_disclosure_fires_on_the_converged_aes_run():
+    """NEG-CTL + the honest half: opentitan_aes went over capacity, the placer
+    gave up, and the route STILL converged. It must be disclosed anyway — the
+    margin a green run passed on is worth the same sentence as the margin a
+    red one failed on."""
+    disc = R._placement_congestion_disclosure(AES_PLACE)
+    assert disc is not None
+    assert disc["final_weighted_congestion"] == 1.0805
+    assert disc["min_weighted_congestion"] == 1.0757   # not the final one
+    assert disc["over_capacity"] is True
+    assert disc["routability_gave_up"] is True
+
+
+def test_placement_disclosure_is_silent_on_a_comfortable_placement():
+    """A design that reached target and ended UNDER unity has nothing to
+    disclose. Guarding this keeps the disclosure from degrading into noise
+    that gets filtered out and therefore stops being read."""
+    assert R._placement_congestion_disclosure(SHA256_PLACE) is None
+    assert R._placement_congestion_disclosure("") is None
+    assert R._placement_congestion_detail(None) == ""
+
+
+def test_placement_over_capacity_threshold_is_physical_unity():
+    """The one number here that must NOT be tuned. 1.0 is where routing demand
+    equals capacity; anything fitted to make the local corpus separate would
+    be a predictor dressed up as physics — and the corpus does NOT separate
+    (aes converged at 1.0805, ibex failed at 1.3255)."""
+    assert R._GPL_CONGESTION_OVER_CAPACITY == 1.0
+    just_over = "[INFO GPL-0047] Routability iteration weighted routing " \
+                "congestion: 1.0\n"
+    just_under = "[INFO GPL-0047] Routability iteration weighted routing " \
+                 "congestion: 0.9999\n"
+    assert R._placement_congestion_disclosure(just_over) is not None
+    assert R._placement_congestion_disclosure(just_under) is None
+
+
+def test_placement_disclosure_does_not_change_tier():
+    """§4.05. The disclosure is text + extras on whatever outcome the route
+    actually had. It must not introduce a new FAIL: no verdict word appears in
+    the detail, and the wording explicitly refuses to predict."""
+    detail = R._placement_congestion_detail(
+        R._placement_congestion_disclosure(AES_PLACE))
+    assert detail.startswith(" | PRE-ROUTE CONGESTION:")
+    assert "not a verdict" in detail
+    assert "converged from here and have also failed from here" in detail
+    for verdict_word in ("FAIL", "PASS", "unroutable", "cannot be routed"):
+        assert verdict_word not in detail
+
+
+def test_placement_detail_never_claims_a_clock_ndr_trade():
+    """WIRING GUARD. `_place_detail` is a SEPARATE variable from `_ndr_detail`
+    because the GRT-0116 branch appends 'and it was NOT enough: the rule was
+    given up' whenever `_ndr_detail` is non-empty. Folding the two together
+    would make a run that dropped NO clock NDR claim it had."""
+    detail = R._placement_congestion_detail(
+        R._placement_congestion_disclosure(IBEX_PLACE))
+    assert "NDR" not in detail and "non-default" not in detail
+    src = inspect.getsource(R.step_pnr)
+    assert "_place_detail = _placement_congestion_detail(" in src
+    # the two must never be summed into the flag the GRT-0116 clause tests
+    assert "_ndr_detail = _clock_ndr_detail(_ndr_disc)" in src
+    grt = src[src.index("GLOBAL_ROUTE_CONGESTION: global routing finished"):]
+    grt = grt[:grt.index("extras=")]
+    assert 'if _ndr_detail else ""' in grt
+
+
+def test_negctl_trades_report_carries_the_pre_route_read(tmp_path):
+    """NEG-CTL: pre-fix the side-file had no placement section at all, so a
+    downstream gate could not tell "placement was comfortable" from "nobody
+    looked". schema/2 states it positively in BOTH directions."""
+    hot = R._write_route_congestion_trades(
+        tmp_path / "hot", None, IBEX_PLACE)
+    body = json.loads(hot.read_text())
+    assert body["schema"] == "route_congestion_trades/2"
+    assert body["placement_congestion"] is True
+    assert body["placement_detail"]["final_weighted_congestion"] == 1.3255
+    # ...and the clock-NDR half is untouched by the new section.
+    assert body["clock_ndr_disabled"] is False
+
+    cool = R._write_route_congestion_trades(
+        tmp_path / "cool", None, SHA256_PLACE)
+    cool_body = json.loads(cool.read_text())
+    assert cool_body["placement_congestion"] is False
+    assert cool_body["placement_detail"] == {}
+
+
+def test_negctl_every_pnr_outcome_carries_the_pre_route_read():
+    """NEG-CTL + wiring: the pre-route read must reach every routing outcome,
+    exactly like the clock-NDR trade. The PASS paths matter most — that is
+    where a design routed on borrowed margin used to go out silent."""
+    src = inspect.getsource(R.step_pnr)
+    tail = src[src.index('detail += f" | pdn:'):]
+    assert "detail += _ndr_detail + _place_detail" in tail
+    assert src.count("_place_detail") >= 7   # 1 definition + >=6 outcomes
+
+
 # ── CASE A: the durable disclosure side-file ─────────────────────────────────
 
 def test_negctl_trades_report_is_written_for_both_outcomes(tmp_path):
@@ -567,7 +780,7 @@ def test_negctl_plateau_abort_still_gets_its_looser_retry():
     The saving must come from truncating each attempt, not from dropping the
     recovery."""
     out = R._route_feedback_loosen(
-        900, 900, _log_with(MATMUL_PLATEAU), loosen_idx=0,
+        900, 900, _log_with(SYNTHETIC_FLAT_TAIL), loosen_idx=0,
         auto_die_requested=True, route_completed=False,
         ladder=R._ROUTE_LOOSEN_UTIL_LADDER, plateau_aborted=True)
     assert out is not None
