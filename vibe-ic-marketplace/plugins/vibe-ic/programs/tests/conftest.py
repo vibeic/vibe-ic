@@ -16,6 +16,7 @@ below.
 """
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -87,7 +88,7 @@ def load_real_fixture(name: str) -> str:
 
 
 def func_src(src: str, name: str) -> str:
-    """Source of exactly ONE top-level function: from its `def` to the next one.
+    """Source of exactly ONE function `name`, resolved with `ast`.
 
     Source-pin tests assert that a program's implementation still contains some
     token. They used to scope that with a magic character count
@@ -100,10 +101,28 @@ def func_src(src: str, name: str) -> str:
         `_emit_spef_sta` (really 6323) bled 477 chars into the NEXT function, so
         an assertion could be satisfied by a neighbouring function's text —
         precisely the regression a source-pin exists to catch.
+      * on a NEGATIVE (`not in`) pin the SHORT direction is the dangerous one:
+        a 6000-char window over `_emit_mcorner_ocv_sta` (really 6951) left its
+        last ~950 chars unchecked for the very construct it forbids.
 
-    Anchoring on the real function extent removes both failure modes and needs
-    no maintenance when the file grows.
+    `ast` is used rather than text scanning because two text approaches both
+    break on real code here:
+      * `src.index(f"def {name}")` is a PREFIX match — asking for `_run` would
+        happily return `_run_oracle_tb`;
+      * scanning forward to the next ``\\ndef`` assumes a TOP-LEVEL definition,
+        but e.g. `_auto` in phase3_one_shot_runner is nested at col_offset=4, so
+        that scan would run to the next top-level def thousands of lines later.
+
+    A missing name raises rather than returning something plausible — a
+    source-pin that silently pins nothing is worse than one that fails.
     """
-    i = src.index(f"def {name}")
-    m = re.search(r"\ndef ", src[i + 1:])
-    return src[i:i + 1 + m.start()] if m else src[i:]
+    tree = ast.parse(src)
+    hits = [n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name]
+    if not hits:
+        raise AssertionError(f"func_src: no function named {name!r} in this source")
+    # Prefer a top-level definition when a nested helper shares the name;
+    # otherwise take the first in source order. Deterministic either way.
+    node = next((n for n in hits if n.col_offset == 0), hits[0])
+    lines = src.splitlines()
+    return "\n".join(lines[node.lineno - 1:node.end_lineno])

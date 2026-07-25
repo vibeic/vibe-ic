@@ -20,6 +20,8 @@ import json
 import sys
 from pathlib import Path
 
+from conftest import func_src
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import eda_report_audit as ERA  # noqa: E402
 
@@ -78,7 +80,6 @@ def test_runner_ir_emitter_writes_budget_verdict():
 
 
 def test_perc_auto_maps_measured_to_incomplete():
-    i = _P3_SRC.index("def _auto(name, verdict, tool, evidence):")
-    window = _P3_SRC[i:i + 1800]
+    window = func_src(_P3_SRC, "_auto")
     assert '"INCOMPLETE" if verdict == "MEASURED" else "FAIL"' in window
     assert "#444" in window
