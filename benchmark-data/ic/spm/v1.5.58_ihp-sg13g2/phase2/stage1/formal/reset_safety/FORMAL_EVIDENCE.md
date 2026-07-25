@@ -17,3 +17,24 @@ artifact with it. This directory REGENERATES that evidence for the record.
 
 This does NOT retroactively change the v1.5.58 campaign record; it supplies
 the missing evidence the claim pointed at, honestly labeled as regenerated.
+
+## Gatekeeper independent verification (2026-07-26, at land)
+
+The evidence above cited `sby_reset_safety.log` but the PR did not ship it —
+the same "claims a proof, ships no artifact" shape as F4 itself, one level
+down. Rather than take the claim on trust, the gatekeeper RE-RAN the proof
+from this directory's own `.sby` + harness against the same
+`../../rtl/spm.v` (sha256 `e7feff2c…`) and shipped both logs:
+
+- `sby_reset_safety.log` — the reproduction. `engine_0 (abc pdr) returned
+  PASS`, "Property proved.", rc=0. Container `vibeic-eda:0.2.30`.
+- `sby_reset_safety_NEGATIVE_CONTROL.log` — **the control the PR did not
+  supply.** A proof that passes in 0.01 s is worthless until it is shown it
+  CAN fail. With one mutation to the DUT — `p_reg` left un-reset in the
+  `if (rst)` branch, nothing else changed — the same harness returns
+  `engine_0 (abc pdr) returned FAIL`, rc=16. The property therefore
+  discriminates; it is not vacuously true.
+
+The mutated RTL is deliberately NOT shipped: it is a one-line deletion,
+reproducible from the description, and a broken copy of a campaign RTL
+sitting in the evidence tree is a hazard.
