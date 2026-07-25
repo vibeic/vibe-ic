@@ -21,8 +21,23 @@ v052 rtl/cc_reset_ctrl.v for CC_RESET_700MS):
     intended to be directly implemented as their own module.
 
 Edge cases:
-  * ``--l12-json`` not given, file missing, or ``sequences`` key absent
+  * ``--l12-json`` not given, file missing, or no sequence array present
     → exit 0 with a single INFO note ("no L12 sequences declared").
+
+v1.1.0 — SEQUENCE_ARRAY_KEYS
+----------------------------
+This program previously read ONLY ``data["sequences"]``. Every Phase-1
+run on the fleet emits the array under ``behavioral_sequences``
+(measured: 136/136 runs across 5 machines emit that key and none emits
+``sequences``), so the lookup returned None and the gate answered "no L12
+sequences declared — PASS" on every real design it has ever run against.
+A gate that cannot see its own input cannot block anything, which is the
+same shape as a completeness check that scores a token in the wrong
+layer.
+
+``SEQUENCE_ARRAY_KEYS`` is now the single declared alias set, exported so
+that ``l12_sequences_in_consumed_layer_check`` imports it instead of
+re-spelling it — the two cannot drift apart again.
 """
 from __future__ import annotations
 
@@ -60,6 +75,38 @@ _STRIP_SUFFIXES: Tuple[str, ...] = (
 _SKIP_CATEGORIES: Tuple[str, ...] = (
     "info_only", "documentation_only",
 )
+
+# The key(s) under which L12 may store its sequence array. Ordered by
+# preference; the first non-empty one wins. PUBLIC — imported by
+# l12_sequences_in_consumed_layer_check so the reader and the gate that
+# polices the reader share one definition. Extend here, never locally.
+SEQUENCE_ARRAY_KEYS: Tuple[str, ...] = (
+    "sequences",
+    "behavioral_sequences",
+    "behavioural_sequences",
+    "scenarios",
+    "flows",
+    "handshakes",
+    "behavioral_flows",
+    "test_sequences",
+)
+
+
+def extract_sequences(data) -> Tuple[List[dict], str]:
+    """Return (sequence_dicts, key_used) from a parsed L12 document.
+
+    Tries every alias in ``SEQUENCE_ARRAY_KEYS`` in order and returns the
+    first non-empty array. Returns ``([], "")`` when none is present.
+    """
+    if not isinstance(data, dict):
+        return [], ""
+    for key in SEQUENCE_ARRAY_KEYS:
+        v = data.get(key)
+        if isinstance(v, list) and v:
+            rows = [x for x in v if isinstance(x, dict)]
+            if rows:
+                return rows, key
+    return [], ""
 
 
 def _normalise_id(seq_id: str) -> str:
@@ -121,9 +168,11 @@ def audit(rtl_dir: Path, l12_json: Path | None) -> Tuple[List[Finding], Dict]:
     findings: List[Finding] = []
     summary: Dict = {
         "l12_json": str(l12_json) if l12_json else "",
+        "sequence_array_key": "",
         "sequences_total": 0,
         "sequences_checked": 0,
         "sequences_skipped": 0,
+        "sequences_unhandled": 0,
     }
 
     if not rtl_dir.exists() or not rtl_dir.is_dir():
@@ -154,12 +203,14 @@ def audit(rtl_dir: Path, l12_json: Path | None) -> Tuple[List[Finding], Dict]:
         ))
         return findings, summary
 
-    sequences = data.get("sequences") if isinstance(data, dict) else None
-    if not isinstance(sequences, list) or not sequences:
+    sequences, seq_key = extract_sequences(data)
+    summary["sequence_array_key"] = seq_key
+    if not sequences:
         findings.append(Finding(
             severity="INFO",
             category="NO_L12",
-            message="no L12 sequences declared — 'sequences' key is empty.",
+            message=("no L12 sequences declared — none of "
+                     f"{list(SEQUENCE_ARRAY_KEYS)} holds a non-empty array."),
             file=str(l12_json),
         ))
         return findings, summary
@@ -174,8 +225,20 @@ def audit(rtl_dir: Path, l12_json: Path | None) -> Tuple[List[Finding], Dict]:
     for entry in sequences:
         if not isinstance(entry, dict):
             continue
-        seq_id = str(entry.get("id", "")).strip()
+        # A sequence keyed only by `name` used to fall through this
+        # `continue` and exempt itself from the implementation
+        # requirement without ever being counted. Accept either handle
+        # and RECORD the ones that have neither instead of dropping them.
+        seq_id = str(entry.get("id") or entry.get("name") or "").strip()
         if not seq_id:
+            summary["sequences_unhandled"] += 1
+            findings.append(Finding(
+                severity="ERROR",
+                category="NO_SEQUENCE_HANDLE",
+                message=("L12 sequence entry has neither 'id' nor 'name' — "
+                         "it cannot be mapped to an RTL module, so it would "
+                         "silently exempt itself from this check."),
+            ))
             continue
         category = str(entry.get("category", "")).lower()
         if any(sk in category for sk in _SKIP_CATEGORIES):
@@ -273,7 +336,7 @@ def build_report(findings: List[Finding], rtl_dir: Path, summary: Dict) -> Dict:
     has_err = any(f.severity == "ERROR" for f in findings)
     return {
         "program": "l12_sequence_implementation_check",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "rtl_dir": str(rtl_dir),
         "summary": {
             **summary,
