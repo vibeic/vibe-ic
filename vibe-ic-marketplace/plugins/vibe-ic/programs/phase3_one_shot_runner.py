@@ -1534,6 +1534,8 @@ _SDC_MAX_TRANS_RE = re.compile(
     r"^(\s*set_max_transition\s+)(-?\d+(?:\.\d+)?)", re.MULTILINE)
 _SDC_MAX_CAP_RE = re.compile(
     r"^(\s*set_max_capacitance\s+)(-?\d+(?:\.\d+)?)", re.MULTILINE)
+_SDC_MAX_FANOUT_RE = re.compile(
+    r"^(\s*set_max_fanout\s+)(-?\d+(?:\.\d+)?)", re.MULTILINE)
 
 
 def _stamp_sdc_provenance(sdc_text: str, pdk_name: str) -> str:
@@ -1598,6 +1600,103 @@ def _reconcile_staged_sdc_drv(sdc_text: str, active_pdk_name: str,
             f"RE-DERIVED from the active liberty (dropped where it declares none).")
     out = note + "\n" + "\n".join(out_lines)
     return _stamp_sdc_provenance(out, active_pdk_name)
+
+
+# ── TAPEOUT-SIGNOFF (DRV) — parity for a DESIGN-SUPPLIED SDC ─────────────────
+# The DRV block above is appended by `_build_auto_silicon_sdc`, which `step_pnr`
+# calls ONLY on the else-branch — i.e. only when the project stages NO
+# `constraints/*.sdc`. A design that ships its own SDC therefore took the
+# staged branch and reached PnR with NO `set_max_transition` /
+# `set_max_capacitance` at all, so `repair_design` had no DRV target and left
+# the slews unrepaired. That asymmetry — auto-SDC gets DRV, design-SDC does not
+# — is the whole defect: the more complete the design's own inputs, the WEAKER
+# the constraint set it was implemented against.
+#
+# Observed on a reused-IP CPU core on sky130A: the shipped post-route netlist
+# carried a 7.03 ns slew against the same liberty's own 1.49 ns limit, and four
+# min-drive gates on the critical path contributed 13.3 ns of a 29.3 ns arrival
+# on a 10 ns clock. The gates were reported as VIOLATED by sign-off STA — they
+# were never repaired, because nothing ever asked the resizer to repair them.
+#
+# Contract (chip/PDK-AGNOSTIC, §4.05 no-fabricate, gate-monotonic):
+#   * a limit the DESIGN's OWN SDC declares is NEVER overridden or relaxed —
+#     only a limit that is entirely ABSENT is supplied;
+#   * every supplied value is READ from the ACTIVE PDK's liberty (via
+#     `_liberty_drv_limits`); a liberty declaring none yields an honest
+#     disclosure comment and NO constraint;
+#   * `set_max_fanout` is supplied only when the DESIGN's OWN L9 spec declares
+#     a `SYNTH_MAX_FANOUT` cap (same rule the auto-SDC path already applies);
+#   * adding a design-wide ceiling can only TIGHTEN what OpenSTA checks (it
+#     takes the tightest of SDC / liberty-pin / liberty-default), so this can
+#     never manufacture a PASS — it can only make an unrepaired design report
+#     the violation it already had, and give the resizer a target to fix it.
+def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
+                           container: str = "",
+                           project: Optional[Path] = None) -> Tuple[str, Dict[str, object]]:
+    """Append the ACTIVE PDK's DRV limits to a staged/design-supplied SDC that
+    declares none, so `repair_design` has a slew/cap target.
+
+    Returns ``(sdc_text, info)``. ``info`` records what was added / skipped for
+    the step's disclosure log. The SDC is returned BYTE-IDENTICAL when the
+    design already declares both limits (nothing to supply) or when the active
+    liberty declares neither (nothing real to supply)."""
+    info: Dict[str, object] = {
+        "added_max_transition": None, "added_max_capacitance": None,
+        "added_max_fanout": None, "design_declared": [], "note": "",
+    }
+    text = sdc_text or ""
+    have_slew = bool(_SDC_MAX_TRANS_RE.search(text))
+    have_cap = bool(_SDC_MAX_CAP_RE.search(text))
+    have_fanout = bool(_SDC_MAX_FANOUT_RE.search(text))
+    for name, present in (("set_max_transition", have_slew),
+                          ("set_max_capacitance", have_cap),
+                          ("set_max_fanout", have_fanout)):
+        if present:
+            info["design_declared"].append(name)
+    if have_slew and have_cap and have_fanout:
+        info["note"] = ("design SDC already declares every DRV limit — "
+                        "left byte-identical (a design-declared limit is never "
+                        "overridden)")
+        return text, info
+
+    drv = _liberty_drv_limits(str(active_liberty or ""), container)
+    slew = None if have_slew else drv.get("max_transition_ns")
+    cap = None if have_cap else drv.get("max_capacitance_pf")
+    fanout = None
+    if not have_fanout and project is not None:
+        try:
+            fanout = _l9_declared_max_fanout(project)
+        except Exception:
+            fanout = None
+
+    if slew is None and cap is None and fanout is None:
+        info["note"] = (
+            "no DRV limit supplied: "
+            + (", ".join(info["design_declared"]) + " already design-declared; "
+               if info["design_declared"] else "")
+            + str(drv.get("note") or "active liberty declares no DRV limit"))
+        return text, info
+
+    info["added_max_transition"] = slew
+    info["added_max_capacitance"] = cap
+    info["added_max_fanout"] = fanout
+    supplied = [n for n, v in (("set_max_transition", slew),
+                               ("set_max_capacitance", cap),
+                               ("set_max_fanout", fanout)) if v is not None]
+    note = (
+        "DRV parity for a design-supplied SDC: the staged SDC declared "
+        + (", ".join(info["design_declared"]) if info["design_declared"]
+           else "no DRV limit")
+        + f"; supplied {', '.join(supplied)} from the ACTIVE PDK liberty so "
+          "repair_design has a target (a design-declared limit is never "
+          "overridden or relaxed). " + str(drv.get("note") or ""))
+    info["note"] = note
+    _fanout_note = ""
+    if fanout is not None:
+        _fanout_note = (f"SYNTH_MAX_FANOUT={fanout} — L9-declared reference "
+                        "fanout cap (design-declared; not fabricated).")
+    return text + _drv_constraints_sdc_block(
+        slew, cap, note, max_fanout=fanout, fanout_note=_fanout_note), info
 
 
 def _build_auto_silicon_sdc(project: Path, top: str = "",
@@ -5593,6 +5692,7 @@ def _v1_6_605_remap_surviving_dlatch(
     error` and PnR fails. Returns True iff a remap was performed and the
     netlist was rewritten clean. Chip-AGNOSTIC: triggers purely on the
     presence of a generic latch token in the emitted netlist.
+
     """
     try:
         nl_text = netlist.read_text(encoding="utf-8", errors="ignore")
@@ -6355,6 +6455,46 @@ def _strip_signed_net_decls(nl_text: str) -> Tuple[str, int]:
     return _SIGNED_NET_DECL_RE.subn(r"\1", nl_text)
 
 
+def _stale_rtl_vs_netlist(netlist: Path, rtl_dir: Path) -> List[str]:
+    """RTL files NEWER than a cached synth netlist (i.e. the cache is stale).
+
+    The phase-3 synth cache used to be keyed on the PDK alone
+    (``_netlist_matches_liberty`` sniff-checks the cached netlist's cell
+    masters against the ACTIVE liberty). That validates PDK provenance but has
+    NO notion of whether the RTL changed, so "edit RTL -> re-run" silently
+    reused the previous netlist: the flow placed-and-routed the PREVIOUS design
+    and reported a clean PASS for RTL it had never synthesised.
+
+    Measured: three consecutive phase-3 runs on three different RTL revisions
+    all produced the byte-identical netlist of the ORIGINAL design (same md5),
+    so an RTL-vs-RTL timing comparison was the same netlist measured twice.
+    Any RTL-level convergence experiment run through the PDK-only cache is
+    unmeasurable, and a "changed the RTL, nothing improved" conclusion drawn
+    under it is not evidence of anything.
+
+    Returns the names of RTL files newer than ``netlist`` (empty = cache is
+    genuinely fresh and reusable). FAILS CLOSED: if any mtime cannot be read,
+    returns a sentinel so the caller re-synthesises rather than trusting an
+    unprovable cache. Chip-AGNOSTIC: pure mtime comparison.
+    """
+    try:
+        nl_mtime = netlist.stat().st_mtime
+    except OSError:
+        return ["<netlist stat failed>"]
+    stale: List[str] = []
+    try:
+        sources = sorted(rtl_dir.glob("*.sv")) + sorted(rtl_dir.glob("*.v"))
+    except OSError:
+        return ["<rtl dir unreadable>"]
+    for src in sources:
+        try:
+            if src.stat().st_mtime > nl_mtime:
+                stale.append(src.name)
+        except OSError:
+            stale.append(f"<{src.name} stat failed>")
+    return stale
+
+
 def step_synth(project: Path, top: str, pdk: PdkConfig,
                container: str) -> StepResult:
     t0 = time.time()
@@ -6500,12 +6640,45 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     #     / probe / tap-fill-decap / scan cells -- the synthesis sibling of
     #     _dont_use_tcl's PnR set_dont_use and the exact OpenLane recipe. []
     #     when the PDK ships no synth_excluded.cells (NONFATAL, unchanged flow).
-    # (2) Engage the delay-aware ABC mapper (-D <period_ps>) whenever a clock
-    #     period is known -- not only for processor_cpu. The fork's abc binds -D
-    #     on the non -constr path; area-mode-by-default left timing on the table
-    #     for EVERY clocked class (crypto_accelerator, dsp_datapath, ...). The
+    # (2) `-D <period_ps>` is passed whenever a clock period is known. The
     #     _proj_ic_class / _TIMING_CRITICAL_CLASSES read is retained for report
     #     provenance only; it no longer gates the delay target.
+    #
+    #     MEASURED, AND DELIBERATELY LEFT AS-IS -- READ BEFORE "FIXING" THIS.
+    #
+    #     (a) `-D` ALONE IS INERT on the non `-constr` path. The fork's own
+    #         `yosys -h abc` says so: `-sizing` exists "so that a -D delay
+    #         target actually takes effect ... (the default '&nf' mapper
+    #         IGNORES -D there)". Proof, same RTL / same PDK / one clock:
+    #         `-D <period>` produced a netlist BYTE-IDENTICAL to no -D at all
+    #         (identical worst-path arrival 65.507 ns, identical cell count and
+    #         chip area). A previous comment here claimed the opposite -- that
+    #         the bare delay target already bound on this path -- and it was
+    #         false; the byte-identical netlists are the disproof.
+    #
+    #     (b) MAKING IT BIND MADE THE SHIPPED DESIGN WORSE. Adding
+    #         ` -sizing -area_recover` improved the PRE-PnR worst-path arrival
+    #         from 65.507 -> 50.954 ns (-22.2%), and then LOST 1.87 ns where it
+    #         counts. Controlled A/B, same RTL, same run-dir shape, both freshly
+    #         synthesised, differing ONLY in these flags:
+    #
+    #             arm                       cells   SHIP_WNS_POSTROUTE (ss corner)
+    #             -D only                    8079        -2.519 ns
+    #             -D -sizing -area_recover    8451        -4.386 ns   <-- WORSE
+    #
+    #         +4.6% cells bought a 22% pre-PnR win and a 1.87 ns post-route
+    #         REGRESSION. The mechanism is the same one that makes restructuring
+    #         passes (dch -f / dc2, +26% area) a net loss: synth-time area
+    #         inflation lengthens wires, and OpenROAD's own repair_design /
+    #         repair_timing already resizes AFTER placement -- so synth-time
+    #         sizing is redundant with it and pays only its area cost.
+    #
+    #     Conclusion: leaving `-D` inert is the measured-better configuration
+    #     here. Do NOT "enable" it without re-running the post-route A/B on the
+    #     shipped SPEF; a pre-PnR delay improvement is NOT evidence, and in the
+    #     one design measured it inverted. n=1 -- if you measure a design where
+    #     it helps post-route, gate it on that evidence, do not switch it on
+    #     globally.
     _synth_du = _synth_dont_use_cells(pdk, container)
     _du_flags = "".join(f" -dont_use {c}" for c in _synth_du)
     _abc_timing = (f" -D {_period_ps}" if _period_ps else "") + _du_flags
@@ -10400,6 +10573,21 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             project_sdc_silicon.read_text(), str(pdk.liberty))
         _staged_sdc = _reconcile_staged_sdc_drv(
             _staged_sdc, pdk.name, str(pdk.liberty), container)
+        # TAPEOUT-SIGNOFF (DRV) parity — a design-supplied SDC that declares NO
+        # set_max_transition / set_max_capacitance reached PnR with no DRV
+        # target at all, so repair_design never repaired the slews (the
+        # auto-SDC else-branch below has had this since TAPEOUT-SIGNOFF; the
+        # staged branch never did). Supply ONLY the absent limits, ONLY from
+        # the active liberty; a design-declared limit is never overridden.
+        _staged_sdc, _drv_parity = _ensure_staged_sdc_drv(
+            _staged_sdc, str(pdk.liberty), container, project)
+        if _drv_parity.get("note"):
+            print(f"[phase3][sdc-drv] {_drv_parity['note']}", file=sys.stderr)
+        try:
+            (out_dir / "sdc_drv_parity.json").write_text(
+                json.dumps(_drv_parity, indent=2, default=str))
+        except Exception:
+            pass
         sdc.write_text(_staged_sdc)
     else:
         # v1.6.560 sub-defect B: derive CLOCK_PERIOD from project sources
@@ -17538,6 +17726,28 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
     return declared
 
 
+def _canonical_gds_is_stale(primary_gds: Path, canon_gds: Path) -> bool:
+    """Is the staged phase3/stage4 GDS older than this run's stream-out?
+
+    The canonical deliverable used to be written only when ABSENT, so a
+    resumed / warm-started tree shipped whatever stage4 GDS was already
+    there while the layout DRC and LVS actually verified went only to
+    phase3/stage3/pnr/. Staleness is decided on mtime: an unreadable
+    stat is treated as stale, because refreshing is always safe (this
+    runner is the only writer of that path) and keeping an artefact we
+    cannot even stat is not.
+
+    Returns False when the canonical copy does not exist yet — that is
+    the plain first-write case, not a staleness decision.
+    """
+    try:
+        if not canon_gds.is_file():
+            return False
+        return primary_gds.stat().st_mtime > canon_gds.stat().st_mtime
+    except OSError:
+        return True
+
+
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 container: str) -> StepResult:
     """v1.6.36 — stage runner outputs at the canonical paths the flow YAML expects.
@@ -19180,7 +19390,28 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # --- Step 37: GDS canonical alias (REAL FILE, NOT SYMLINK — rule #1)
     if primary_gds.is_file():
         canon_gds = gds_out / f"{top}.gds"
-        if not canon_gds.is_file():
+        # The guard used to be `if not canon_gds.is_file()` — existence
+        # ONLY. On any resume / re-run / warm-started tree that already
+        # carried a stage4 GDS, the copy was skipped and the SHIPPED
+        # deliverable stayed whatever was there before, while the layout
+        # that DRC and LVS had just signed off went only to
+        # phase3/stage3/pnr/. The deliverable then had no relationship to
+        # the verified artefact.
+        #
+        # Measured on the fleet: one archived run kept a 3,067,904-byte
+        # stage4 GDS (page-aligned truncation, ZERO ENDLIB record, 13 of
+        # 18 layers, ~8% of the elements) from an earlier attempt while
+        # the same run's fresh stream-out was 21,511,808 bytes. Every
+        # size-based gate passed the truncated file.
+        #
+        # Refresh whenever the stream-out this run produced is newer than
+        # the staged copy. This program is the ONLY writer of
+        # phase3/stage4/gds/<top>.gds (every other reference is a
+        # reader), so refreshing cannot clobber another producer's
+        # intentional artefact — it can only move the deliverable onto
+        # the layout this run actually verified.
+        _stale = _canonical_gds_is_stale(primary_gds, canon_gds)
+        if not canon_gds.is_file() or _stale:
             # Use binary copy so KLayout sees a real GDS, not a symlink.
             with primary_gds.open("rb") as src, canon_gds.open("wb") as dst:
                 while True:
@@ -19189,6 +19420,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                         break
                     dst.write(chunk)
             written.append(str(canon_gds))
+            if _stale:
+                notes.append(
+                    "canonical GDS refreshed: the staged "
+                    "phase3/stage4/gds copy predated this run's "
+                    "stream-out and would have shipped an artefact that "
+                    "DRC/LVS never saw")
 
     # --- Step 39: FPGA on_board_pass.json schema alignment --------------
     # The fpga_on_board_attestation_check requires:
@@ -19710,17 +19947,94 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
     return out
 
 
+def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
+                                                               Dict[str, Path],
+                                                               str, str]:
+    """Resolve the netlist + parasitics the per-corner STA must time.
+
+    The defect this closes: `_emit_multi_corner_sta`'s docstring claimed the
+    reports were run "against the routed netlist", but the code read
+    ``<synth>/<top>_synth.v`` — the PRE-PnR synthesis netlist — and read NO
+    SPEF. The emitted `phase3/stage3/sta/per_corner/sta_<CORNER>.rpt` files are
+    consumed as the EVIDENCE that a multi-corner sign-off STA was performed
+    (`eda_report_audit` treats a populated per_corner/ as the multi-corner
+    claim; `sta_corner_record_completeness_check` reads the same tree), so a
+    pre-layout, zero-parasitic number was standing in for post-route sign-off.
+
+    That mislabel is dangerous in BOTH directions. On a design PnR improves it
+    reads pessimistic; on a design PnR degrades — the normal case once real
+    interconnect RC lands — it reads OPTIMISTIC, i.e. it can present a corner
+    as MET that the routed design violates.
+
+    Precedence (chip/PDK-AGNOSTIC, purely file-existence driven):
+      1. routed netlist ``<pnr>/<top>_pnr.v`` + extracted ``<top>.spef``
+         → true post-route multi-corner timing;
+      2. routed netlist with no SPEF → post-route topology, no parasitics;
+      3. synth netlist → PRE-LAYOUT ESTIMATE, and the report SAYS SO.
+
+    Returns ``(netlist, spef, basis_id, disclosure)``. The basis is stamped
+    into every emitted report so no downstream summary can quote a pre-layout
+    number as post-route sign-off (§4.05 — the artifact carries its own
+    limitation).
+    """
+    routed = _pl.pnr_dir(project) / f"{top}_pnr.v"
+    synth = _pl.synth_dir(project) / f"{top}_synth.v"
+    # Per-RC-corner SPEFs when the extraction emitted them: a real multi-corner
+    # sign-off varies the RC corner WITH the liberty corner (slow liberty pairs
+    # with max-RC for setup, fast liberty with min-RC for hold) — that is the
+    # same pairing `sta_spef_multicorner.rpt` uses. `"*"` is the fallback used
+    # for any corner without its own extraction.
+    spef_map: Dict[str, Path] = {}
+    ext = project / "phase3/stage3/extracted"
+    for corner_key, suffix in (("SS", "max"), ("FF", "min"), ("TT", "nom")):
+        cand = ext / "spef_corners" / f"{top}.{suffix}.spef"
+        if cand.is_file():
+            spef_map[corner_key] = cand
+    for cand in (ext / f"{top}.spef",
+                 _pl.pnr_dir(project) / "post_route_repair.spef"):
+        if cand.is_file():
+            spef_map["*"] = cand
+            break
+    if routed.is_file():
+        if spef_map:
+            per_corner = ", ".join(
+                f"{k}->{spef_map[k].name}" for k in sorted(spef_map))
+            return (routed, spef_map, "POST_ROUTE_SPEF",
+                    f"routed netlist {routed.name} + extracted parasitics "
+                    f"({per_corner}) — post-route multi-corner timing; each "
+                    "liberty corner is annotated with its own RC corner where "
+                    "one was extracted, else the nominal extraction")
+        return (routed, {}, "POST_ROUTE_NO_SPEF",
+                f"routed netlist {routed.name}; NO extracted SPEF found — "
+                "post-route topology WITHOUT interconnect parasitics; "
+                "interconnect delay is UNDER-counted at every corner")
+    if synth.is_file():
+        return (synth, {}, "PRE_LAYOUT_ESTIMATE",
+                f"no routed netlist yet — timed the PRE-PnR synthesis netlist "
+                f"{synth.name} with NO parasitics. This is a PRE-LAYOUT "
+                "ESTIMATE, NOT post-route sign-off: it excludes placement, "
+                "CTS, resizing and all interconnect RC, so a corner shown as "
+                "MET here may VIOLATE on the routed design")
+    return (None, {}, "MISSING", "no routed or synth netlist found")
+
+
 def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                            container: str, libs: List[Path],
                            out_dir: Path, notes: List[str]) -> bool:
-    """For each Liberty corner, run OpenSTA against the routed netlist and
-    emit `sta_<CORNER>.rpt` plus a per-corner JSON summary. Best-effort:
-    failures log WARN but do not block the canonicalize step."""
-    netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    """For each Liberty corner run OpenSTA and emit `sta_<CORNER>.rpt`.
+
+    Times the ROUTED netlist + extracted SPEF when they exist, falling back to
+    the pre-PnR synth netlist ONLY when no routed netlist has been written yet
+    — in which case every emitted report is stamped `STA_BASIS:
+    PRE_LAYOUT_ESTIMATE` so it can never be read as post-route sign-off
+    (see :func:`_multi_corner_sta_inputs`). Best-effort: failures log WARN but
+    do not block the canonicalize step."""
+    netlist, spef_map, basis, basis_note = _multi_corner_sta_inputs(project, top)
     sdc_path = _pl.pnr_dir(project) / "constraint.sdc"
-    if not (netlist.is_file() and sdc_path.is_file()):
-        notes.append("multi-corner STA skipped: synth netlist or SDC missing")
+    if netlist is None or not sdc_path.is_file():
+        notes.append("multi-corner STA skipped: netlist or SDC missing")
         return False
+    notes.append(f"multi-corner STA basis={basis}: {basis_note}")
     any_emitted = False
     for lib in libs:
         corner = _classify_corner_from_name(lib.name)
@@ -19738,15 +20052,31 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"read_liberty {_to_container_path(str(f), container)}"
             for f in pdk.macro_libs
         )
+        # Annotate the extracted parasitics when we have them — a corner
+        # report with no SPEF under-counts interconnect delay at EVERY corner.
+        read_spef_tcl = ""
+        _corner_spef = spef_map.get(corner) or spef_map.get("*")
+        if _corner_spef is not None:
+            read_spef_tcl = (
+                f"read_spef {_to_container_path(str(_corner_spef), container)}\n")
+        # Stamp the basis INTO the report itself: `eda_report_audit` and
+        # `sta_corner_record_completeness_check` consume this tree as the
+        # multi-corner sign-off claim, so the artifact must carry its own
+        # limitation rather than rely on a caller to remember it.
         tcl = (
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
             f"link_design {top}\n"
             f"read_sdc {sdc_c}\n"
+            f"{read_spef_tcl}"
             f"report_checks > {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
             f"report_wns >> {rpt_c}\n"
+            f"set _bf [open {rpt_c} a]\n"
+            f"puts $_bf \"STA_BASIS: {basis}\"\n"
+            f"puts $_bf \"STA_BASIS_NOTE: {basis_note}\"\n"
+            f"close $_bf\n"
             f"exit\n"
         )
         tcl_path = out_dir / f"sta_{corner}.tcl"
@@ -24191,6 +24521,28 @@ def main() -> int:
                   "the active PDK liberty — it was mapped to a DIFFERENT "
                   "PDK; re-running synth (preserve-provenance is now "
                   "PDK-keyed, PR-A3).", file=sys.stderr)
+        # The cache must ALSO be keyed on the RTL that produced it. Keyed on
+        # the PDK alone, a netlist older than its own RTL is reused and the
+        # edit becomes a SILENT NO-OP: the flow PnRs the previous design and
+        # reports a clean PASS for RTL it never synthesised. Measured: three
+        # consecutive runs on three different RTL revisions all produced the
+        # byte-identical netlist of the ORIGINAL design (same md5), so an
+        # RTL-vs-RTL timing comparison was in fact the same netlist twice.
+        # This silently invalidates any RTL experiment, and it laundered a
+        # stale result into what looked like a real measurement.
+        # Chip-AGNOSTIC: pure mtime comparison against the same RTL selector
+        # step_synth itself reads.
+        _stale_rtl = (_stale_rtl_vs_netlist(netlist_existing,
+                                            _pl.rtl_dir(project))
+                      if _nl_pdk_ok else [])
+        if _stale_rtl:
+            _nl_pdk_ok = False
+            print(f"[synth] cached netlist is OLDER than its RTL "
+                  f"({', '.join(_stale_rtl[:5])}"
+                  f"{' +%d more' % (len(_stale_rtl) - 5) if len(_stale_rtl) > 5 else ''})"
+                  f" — re-running synth. Reusing it would PnR the PREVIOUS "
+                  f"design and report PASS for RTL that was never "
+                  f"synthesised.", file=sys.stderr)
         if _nl_pdk_ok:
             plan.append(StepResult(
                 "synth", "PASS", 0.0,

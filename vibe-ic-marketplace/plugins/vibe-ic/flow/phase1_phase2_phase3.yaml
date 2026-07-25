@@ -1666,6 +1666,16 @@ steps:
       all_of:
         - files_exist: ["phase3/stage4/gds/*.gds"]
         - program_exit_zero: "gds_size_check --gds-file phase3/stage4/gds/*.gds --json reports/phase3/gds_size.json"
+        # Substance, not just size. gds_size_check compares against a
+        # flow-wide 100 KB constant and demotes a bad GDSII header to a
+        # WARNING, so 150 KB of os.urandom() behind a 4-byte HEADER, and a
+        # zero-padded library with no structures at all, both signed off
+        # `pass: true, errors: 0, warnings: 0`. This gate walks the whole
+        # record stream (HEADER..ENDLIB, no trailing padding) and requires
+        # layout elements >= the design's OWN placed-instance count read
+        # from phase3/stage3/pnr/routed.def — a derived floor, never a
+        # per-design constant. Hard FAIL; VACUOUS_PASS before stream-out.
+        - program_exit_zero: "gds_substance_check . --json reports/phase3/gds_substance.json"
         # Provenance required: GDS must be produced by a real streamer
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
