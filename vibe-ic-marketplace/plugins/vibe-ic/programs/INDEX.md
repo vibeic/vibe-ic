@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 907
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 907)
+- **Total programs (excluding helpers / shims):** 911
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 911)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 898 |
+| `any` | 902 |
 
 ## Alphabetical listing
 
@@ -448,6 +448,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l1_electrical_specs_typed_depth_check` | any | Wave 38 | Wave 38 / B1 |
 | `l1_pin_table_aliases_typed_check` | any | Wave 38 | Wave 38 / B2 |
 | `l21_to_upf_emit` | any | v0.1.51 | render L21 power intent into an IEEE-1801 UPF |
+| `l24_signoff_evidence_backed_check` | any | — | batch-8 / layergate-8 (L24_SIGNOFF) |
+| `l25_reliability_envelope_actionable_check` | any | — | batch-8 / layergate-8 |
+| `l26_mechanical_applicability_derived_check` | any | — | batch-8 / layergate-8 |
 | `l2_timing_completeness_check` | any | v0.119.30 | gate (LL-32) catching frs-gen |
 | `l3_opcode_argument_constraints_check` | any | Wave 37 | Wave 37 / A3 |
 | `l3_opcode_name_coverage_check` | any | — | v1.6.131 (#51 Fix 6) |
@@ -463,6 +466,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l9_submodule_conformance_check` | any | Wave 79 | cross-check the SUBMODULE half of the |
 | `l_doc_aggregated_blob_size_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `l_doc_cross_consistency_check` | any | — | D3 program-first capture of the |
+| `l_doc_evidence_util` | any | — | the "evidence path + read-back value" primitive. |
 | `l_doc_parity_diff` | any | v0.1.51 | L-doc parity diff (program-extracted vs fresh-agent-extracted). |
 | `l_doc_structured_field_count_check` | any | Wave 31 | gate (Wave 31/32, v0.119.64). |
 | `l_doc_taxonomy` | any | v0.1.51 | L-doc taxonomy single source of truth. |
@@ -979,7 +983,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (898 programs)
+### `any` (902 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1399,6 +1403,9 @@ _(no programs in this group)_
 - `l1_electrical_specs_typed_depth_check` — Wave 38 / B1  _[Wave 38]_
 - `l1_pin_table_aliases_typed_check` — Wave 38 / B2  _[Wave 38]_
 - `l21_to_upf_emit` — render L21 power intent into an IEEE-1801 UPF  _[v0.1.51]_
+- `l24_signoff_evidence_backed_check` — batch-8 / layergate-8 (L24_SIGNOFF)
+- `l25_reliability_envelope_actionable_check` — batch-8 / layergate-8
+- `l26_mechanical_applicability_derived_check` — batch-8 / layergate-8
 - `l2_timing_completeness_check` — gate (LL-32) catching frs-gen  _[v0.119.30]_
 - `l3_opcode_argument_constraints_check` — Wave 37 / A3  _[Wave 37]_
 - `l3_opcode_name_coverage_check` — v1.6.131 (#51 Fix 6)
@@ -1413,6 +1420,7 @@ _(no programs in this group)_
 - `l9_submodule_conformance_check` — cross-check the SUBMODULE half of the  _[Wave 79]_
 - `l_doc_aggregated_blob_size_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `l_doc_cross_consistency_check` — D3 program-first capture of the
+- `l_doc_evidence_util` — the "evidence path + read-back value" primitive.
 - `l_doc_parity_diff` — L-doc parity diff (program-extracted vs fresh-agent-extracted).  _[v0.1.51]_
 - `l_doc_structured_field_count_check` — gate (Wave 31/32, v0.119.64).  _[Wave 31]_
 - `l_doc_taxonomy` — L-doc taxonomy single source of truth.  _[v0.1.51]_
