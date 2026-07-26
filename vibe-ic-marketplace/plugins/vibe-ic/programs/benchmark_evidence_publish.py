@@ -122,6 +122,8 @@ import json
 import re
 import shutil
 import subprocess
+
+import _published_tree
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -486,12 +488,22 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
     if not dest.is_dir():
         return out
     seen = set()
-    for doc in sorted(dest.rglob("*.json")):
+    # Walk the PUBLISHED tree, not this machine's disk. At publish time `dest`
+    # is a freshly staged directory and the two agree; run as an AUDIT over an
+    # already-published cell they do not, and a working checkout carries
+    # untracked `clean_run_*` leftovers a reader never receives. Measured while
+    # building this: the first version attributed citations to a directory that
+    # is not in the published tree at all. Same defect this repo fixed in four
+    # programs (#447) — reproduced here, in the fix for it.
+    docs = sorted(dest.rglob("*.json"))
+    docs = _published_tree.filter_to_published(dest, docs)
+    for doc in docs:
         try:
             text = doc.read_text(errors="replace")
         except OSError:
             continue
         rel_doc = doc.relative_to(dest).as_posix()
+        asserted = _citations_under_a_pass(text)
         for cited in sorted(set(_CITED_RE.findall(text))):
             key = (rel_doc, cited)
             if key in seen:
@@ -501,11 +513,71 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
                 decision = "RESOLVES"
             elif any(cited.startswith(f"phase{n}/stage") for n in "123"):
                 decision = "OUT_OF_PUBLISHED_SCOPE"
+            elif cited in asserted:
+                decision = "DANGLING_UNDER_PASS"
             else:
                 decision = "DANGLING"
             out.append({"doc": rel_doc, "cited": cited,
                         "decision": decision})
     return out
+
+
+def _citations_under_a_pass(text: str) -> set:
+    """Paths cited inside a record whose own status/verdict is a PASS.
+
+    THE PLAN-VERSUS-CLAIM SPLIT, and the reason the routing file is usable.
+    A step that has not run naming the report it WOULD write is a PLAN; a step
+    that says PASS while naming a report that is not there is a CLAIM whose
+    evidence is absent. Both look identical as a path.
+
+    MEASURED over the published corpus: of the dangling citations,
+    35 sit in SKIP/not-run records, 24 in FAIL records, 64 in records with no
+    status to judge, and **11 under a PASS**. Only that last group asserts
+    anything, so only it is anyone's bug — a 45x reduction in what a reader
+    has to look at.
+    """
+    found: set = set()
+    try:
+        doc = json.loads(text)
+    except Exception:
+        return found
+
+    def _has_status(o) -> bool:
+        return isinstance(o, dict) and bool(o.get("status") or o.get("verdict"))
+
+    def _own_text(o) -> str:
+        """This record's own content, EXCLUDING nested status-bearing records.
+
+        A first version serialised the whole subtree, which over-attributed
+        badly: a document with a top-level `verdict: PASS` made EVERY citation
+        in the file "asserted", including ones inside nested SKIP steps.
+        Measured: 312 across the corpus instead of the real figure. A claim is
+        made by the NEAREST enclosing record, not by every ancestor.
+        """
+        if isinstance(o, dict):
+            parts = []
+            for k, v in o.items():
+                if _has_status(v):
+                    continue
+                if isinstance(v, list):
+                    v = [x for x in v if not _has_status(x)]
+                parts.append(json.dumps({k: v}, ensure_ascii=False))
+            return " ".join(parts)
+        return json.dumps(o, ensure_ascii=False)
+
+    def walk(o):
+        if isinstance(o, dict):
+            st = str(o.get("status") or o.get("verdict") or "").upper()
+            if st.startswith("PASS"):
+                found.update(_CITED_RE.findall(_own_text(o)))
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(doc)
+    return found
 
 
 def write_citation_routing(dest: Path, records: List[Dict[str, str]],

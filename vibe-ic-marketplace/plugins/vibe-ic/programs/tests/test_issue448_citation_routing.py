@@ -134,3 +134,64 @@ def test_the_three_converged_cells_are_measured_not_assumed():
     if seen == 0:
         pytest.skip("published corpus not checked out")
     assert seen == 3, f"only {seen} of 3 converged cells present"
+
+
+# ── the PLAN-versus-CLAIM split ────────────────────────────────────────────
+def test_a_dangling_citation_under_a_PASS_is_separated_from_a_plan(tmp_path):
+    """A step that has not run naming the report it WOULD write is a PLAN. A
+    step that says PASS while naming a report that is not there is a CLAIM
+    whose evidence is absent. Both look identical as a path, and only the
+    second is anyone's bug."""
+    d = tmp_path / "cell"
+    p = d / "reports" / "orchestrator" / "run.json"
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({"steps": [
+        {"name": "planned", "status": "SKIP",
+         "detail": "would write reports/phase3/lvs.rpt"},
+        {"name": "claimed", "status": "PASS",
+         "detail": "produced reports/lec.json"},
+    ]}))
+    recs = {r["cited"]: r["decision"] for r in B.collect_citation_records(d)}
+    assert recs["reports/phase3/lvs.rpt"] == "DANGLING"
+    assert recs["reports/lec.json"] == "DANGLING_UNDER_PASS"
+
+
+def test_a_nested_SKIP_is_not_attributed_to_an_enclosing_PASS(tmp_path):
+    """The over-attribution this cost me once. A document with a top-level
+    `verdict: PASS` must not make EVERY citation in it an assertion — a claim
+    is made by the NEAREST enclosing record, not by every ancestor."""
+    d = tmp_path / "cell"
+    p = d / "reports" / "run.json"
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({
+        "verdict": "PASS",
+        "steps": [{"name": "s", "status": "SKIP",
+                   "detail": "would write reports/phase3/em.rpt"}],
+    }))
+    recs = {r["cited"]: r["decision"] for r in B.collect_citation_records(d)}
+    assert recs["reports/phase3/em.rpt"] == "DANGLING", recs
+
+
+def test_the_collector_walks_the_PUBLISHED_tree_not_the_disk(tmp_path):
+    """Reproduced in the fix for #448 itself: run as an AUDIT over a published
+    cell, `rglob` picked up untracked `clean_run_*` leftovers a reader never
+    receives. Same defect this repo fixed in four programs (#447)."""
+    import subprocess as sp
+    d = tmp_path / "cell"
+    (d / "reports").mkdir(parents=True)
+    (d / "reports" / "kept.json").write_text(
+        json.dumps({"status": "PASS", "d": "reports/gone.rpt"}))
+    leftover = d / "clean_run_local" / "reports"
+    leftover.mkdir(parents=True)
+    (leftover / "stray.json").write_text(
+        json.dumps({"status": "PASS", "d": "reports/also_gone.rpt"}))
+
+    sp.run(["git", "init", "-q", str(d)], check=True)
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        sp.run(["git", "-C", str(d), "config", k, v], check=True)
+    sp.run(["git", "-C", str(d), "add", "reports/kept.json"], check=True)
+    sp.run(["git", "-C", str(d), "commit", "-qm", "publish"], check=True)
+
+    docs = {r["doc"] for r in B.collect_citation_records(d)}
+    assert "reports/kept.json" in docs, docs
+    assert not any("clean_run_local" in x for x in docs), docs
