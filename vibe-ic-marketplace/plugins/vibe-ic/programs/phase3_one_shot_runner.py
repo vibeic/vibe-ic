@@ -3653,6 +3653,11 @@ def _detect_macro_supply_signal_ties(
     other signal net has landed on a POWER/GROUND terminal (the
     signal-net-on-a-power-pin defect that makes detailed routing refuse the
     design). Returns ``[{inst, pin, use, conn}, ...]``. Pure text; chip-AGNOSTIC.
+
+    A pin the instance leaves UNCONNECTED is not a tie — in either of Verilog's
+    two spellings (the port omitted, or named with an empty connection
+    ``.PIN()``). Nothing lands on the terminal, so routing has nothing to
+    refuse. See the `if not conn` guard below.
     """
     pins_by_master: Dict[str, Dict[str, str]] = {}
     for txt in (macro_lef_texts or []):
@@ -3677,6 +3682,20 @@ def _detect_macro_supply_signal_ties(
                 if pin not in conns:
                     continue
                 conn = conns[pin].strip()
+                if not conn:
+                    # `.VPP()` — the EXPLICITLY-UNCONNECTED port. This is
+                    # Verilog's other spelling of the OMITTED port, and it
+                    # binds the terminal to NO NET AT ALL, so it can never be
+                    # the signal-net-on-a-power-pin this detector exists to
+                    # find. Both spellings load identically (an ITerm with no
+                    # net), yet the empty string is not in `rails`, so it used
+                    # to be reported as a tie — and #329 delta 2 turns a tie
+                    # into a BLOCKING pre-route gate. The omitted spelling was
+                    # correctly non-blocking, this one falsely blocked: one
+                    # electrical fact, two verdicts, decided by punctuation.
+                    # An absent driver is still surfaced as an integration gap
+                    # by the caller (`gaps_reported`) — never silently green.
+                    continue
                 rails = pset if use == "POWER" else gset
                 if conn not in rails:
                     findings.append({"inst": inst, "master": master,
@@ -21337,7 +21356,23 @@ def _flat_ocv_derate_tcl(indent: str = "") -> str:
 # Tool-version-independent + §4.05-honest — a factual record of the checks the
 # sign-off STA performed, not a fabricated pass.
 _SIGNOFF_CHECK_TYPES_MARKER = ("SIGNOFF_CHECK_TYPES_REPORTED recovery removal "
-                               "max_slew min_pulse_width max_capacitance")
+                               "max_slew min_pulse_width max_capacitance "
+                               "max_fanout")
+
+# Salvage of #315 (114/fix/max-fanout-signoff-disclosure). An ABSENT max-fanout
+# violation table is NOT the same fact as "zero max-fanout violations".
+# `report_check_types` prints a fanout table only for a limit that EXISTS: with
+# no `set_max_fanout` in force the table is empty BY CONSTRUCTION. Emitted
+# beside the marker so the distinction is on the record instead of being
+# inferred from silence. Deliberately DIGIT-FREE: `extract_drv`
+# (sta_corner_record_completeness_check) ends an open DRV table at the first
+# line carrying no digit, so a digit-free note can never be miscounted as a
+# violator row nor keep a table open past its end. chip/PDK-AGNOSTIC.
+_SIGNOFF_MAX_FANOUT_NOTE = (
+    "SIGNOFF_MAX_FANOUT_SEMANTICS an empty max-fanout table means no net "
+    "exceeded a set_max_fanout limit; when the sign-off SDC declares NO "
+    "set_max_fanout the table is empty BY CONSTRUCTION and MUST NOT be read "
+    "as ZERO fanout violations (UNMEASURED is not ZERO)")
 
 # `-max_count` bound on `-violators`: high enough to never truncate a real
 # design's true DRV population (measured: caravel_user_project x sky130A
@@ -21348,10 +21383,24 @@ _CHECK_TYPES_VIOLATORS_MAX_COUNT = 2000
 
 def _report_check_types_tcl(rpt_c: str) -> str:
     """Emit `report_check_types -recovery -removal -max_slew -min_pulse_width
-    -max_capacitance -violators` guarded by a catch; on SUCCESS append the
-    authoritative marker (so the rigor gate can detect the checks
-    tool-version-independently), on failure record the reason (no marker →
-    the gate still FAILs, correctly).
+    -max_capacitance -max_fanout -violators` guarded by a catch; on SUCCESS
+    append the authoritative marker (so the rigor gate can detect the checks
+    tool-version-independently) plus the max-fanout semantics note, on failure
+    record the reason (no marker → the gate still FAILs, correctly).
+
+    SALVAGE OF #315 — `-max_fanout` was NEVER REQUESTED. Measured on current
+    main before this change: the emitted TCL contained `-max_slew` and
+    `-max_capacitance` but no `-max_fanout`, and the marker named only
+    `recovery removal max_slew min_pulse_width max_capacitance`, so
+    `sta_corner_record_completeness_check.extract_drv` reported
+    `kinds_queried=['max_slew', 'max_capacitance']` with `queried=True` — an
+    R5 PASS. R5's own finding text names "max_slew / max_capacitance /
+    max_fanout" as the DRV set it guards, so the gate ATTESTED a check the
+    flow structurally could not perform: an unqueried fanout limit and a met
+    one were byte-identical in every report and every gate JSON of the run.
+    Same checks-that-lie-by-omission family as the `-violators` fix below.
+    No fanout LIMIT is fabricated here — emitting `set_max_fanout` stays
+    gated on the design's own L9 `SYNTH_MAX_FANOUT` declaration.
 
     HONESTY FIX (measured on caravel_user_project x sky130A): without
     `-violators`, OpenSTA's `report_check_types` prints only the SINGLE WORST
@@ -21368,7 +21417,7 @@ def _report_check_types_tcl(rpt_c: str) -> str:
     literal."""
     return (
         f"if {{[catch {{report_check_types -recovery -removal -max_slew "
-        f"-min_pulse_width -max_capacitance -violators "
+        f"-min_pulse_width -max_capacitance -max_fanout -violators "
         f"-max_count {_CHECK_TYPES_VIOLATORS_MAX_COUNT} "
         f">> {rpt_c}}} _cterr]}} {{\n"
         f"  set _cf [open {rpt_c} a]\n"
@@ -21377,6 +21426,7 @@ def _report_check_types_tcl(rpt_c: str) -> str:
         f"}} else {{\n"
         f"  set _cf [open {rpt_c} a]\n"
         f'  puts $_cf "{_SIGNOFF_CHECK_TYPES_MARKER}"\n'
+        f'  puts $_cf "{_SIGNOFF_MAX_FANOUT_NOTE}"\n'
         f"  close $_cf\n"
         f"}}\n"
     )
