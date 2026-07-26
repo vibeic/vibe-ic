@@ -455,3 +455,66 @@ def test_the_vacuous_outcome_is_still_NON_FATAL():
     are in this state, and turning them red would make the gate unrunnable
     while telling nobody anything new."""
     assert M.NO_CITATION not in ("FAIL", "ADVISORY")
+
+
+# ── an issue ABOUT a checker is not an artefact-defect issue ───────────────
+def test_a_title_naming_a_checker_is_not_inferred_as_an_artefact_defect():
+    """FOUND BY THE GATE ITSELF, on one of my own closes.
+
+    Running `--recent 40` flagged vibe-ic#441 ADVISORY: "the body names a
+    shipped artefact the range never changed, and the range changed only
+    checker code". #441 is titled "artefact_defect_close_check is VACUOUS on
+    any issue that names its artefact in prose" — an issue about THIS CHECKER.
+    Its body quotes an artefact path only while explaining that a DIFFERENT
+    issue (#366) cites it: a citation of a citation, which no path regex can
+    tell from a defect report.
+
+    For a defect IN a checker, "the range changed only checker code" is the
+    CORRECT shape of a fix. Inferring on it inverts the gate's meaning.
+
+    Measured over the 40 most recently closed issues: 6 carry a program name
+    in the title and all 6 are genuinely checker defects.
+    """
+    import artefact_defect_close_check as A
+    res = _classify(
+        _issue(body="see %s for the shape" % ART),
+        [CHECKER],
+    )
+    # baseline: without a checker in the title this is still inferred
+    assert res["verdict"] in ("ADVISORY", "PASS", A.NO_CITATION)
+
+    titled = dict(_issue(body="see %s for the shape" % ART))
+    titled["title"] = "artefact_defect_close_check is VACUOUS on prose citations"
+    res2 = A.classify(titled, {CHECKER}, {ART}, "", A.DEFAULT_LABEL,
+                      A.DEFAULT_DATA_ROOT)
+    assert res2["verdict"] == "PASS", res2
+    assert "defect IN a checker" in res2["reason"]
+
+
+def test_a_title_naming_an_ARTEFACT_still_gets_inferred():
+    """THE NEGATIVE CONTROL, and what keeps this from being a loophole.
+
+    #366 — the close this whole gate exists because of — is titled
+    "formal_evidence.json PASS in ... references a .sby that does not exist".
+    That names an ARTEFACT, not a program, so it stays in scope and still
+    fires. Verified live at land time: the historical #366 close still exits 1.
+    """
+    import artefact_defect_close_check as A
+    titled = dict(_issue(body="the report at %s is wrong" % ART))
+    titled["title"] = ("formal_evidence.json PASS references a .sby "
+                       "that does not exist")
+    res = A.classify(titled, {CHECKER}, {ART}, "", A.DEFAULT_LABEL,
+                     A.DEFAULT_DATA_ROOT)
+    assert res["verdict"] == "ADVISORY", res
+
+
+def test_a_LABELLED_artefact_defect_is_never_inferred_away_by_its_title():
+    """Tier A is explicit and must not be weakened: a human labelled it, so a
+    title heuristic does not get to overrule that."""
+    import artefact_defect_close_check as A
+    titled = dict(_issue(labels=["artefact-defect"],
+                         body="the report at %s is wrong" % ART))
+    titled["title"] = "artefact_defect_close_check mis-handles this cell"
+    res = A.classify(titled, {CHECKER}, {ART}, "", A.DEFAULT_LABEL,
+                     A.DEFAULT_DATA_ROOT)
+    assert res["verdict"] == "FAIL", res

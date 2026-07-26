@@ -304,6 +304,30 @@ def has_unchanged_declaration(text: str) -> bool:
     return False
 
 
+def _titled_checker(issue: Dict) -> Optional[str]:
+    """The program name an issue's TITLE names, or None.
+
+    Word-bounded against the actual `programs/*.py` stems, so it recognises
+    only programs this tree really ships. Private helpers (`_`-prefixed) are
+    excluded — they are not the subject of an issue.
+    """
+    title = str(issue.get("title") or "")
+    if not title:
+        return None
+    try:
+        stems = sorted(
+            p.stem for p in (Path(__file__).resolve().parent).glob("*.py")
+            if not p.name.startswith("_"))
+    except OSError:
+        return None
+    for stem in stems:
+        if len(stem) < 8:
+            continue          # too short to be an unambiguous subject
+        if re.search(r"\b" + re.escape(stem) + r"\b", title):
+            return stem
+    return None
+
+
 def classify(issue: Dict, changed: Set[str], tracked: Set[str],
              close_text: str, label: str, data_root: str) -> Dict:
     """The whole rule. Pure: no git, no network — so a test can drive it."""
@@ -349,6 +373,31 @@ def classify(issue: Dict, changed: Set[str], tracked: Set[str],
         return out
 
     # Tier B — advisory inference.
+    #
+    # An issue whose TITLE names a checker is an issue about the CHECKER, and
+    # for those "the range changed only checker code" is the CORRECT shape of
+    # a fix, not a symptom. Inferring on them inverts the gate's meaning.
+    #
+    # MEASURED before adding this: over the 40 most recently closed issues, 6
+    # carry a program name in the title and all 6 are genuinely checker
+    # defects (#441 VACUOUS, #418/#417/#412 formal_proof_evidence_check,
+    # #416 nda_tracked_tree_scan, #399 final_report_generate). The gate was
+    # emitting ADVISORY on #441 because that issue QUOTES an artefact path
+    # while explaining that a DIFFERENT issue cites it — a citation of a
+    # citation, which no path regex can tell from a defect report.
+    #
+    # NEGATIVE CONTROL, which is what makes this narrow rather than a
+    # loophole: #366 — the artefact-defect close this whole gate exists
+    # because of — is titled "formal_evidence.json PASS in ... references a
+    # .sby that does not exist". That names an ARTEFACT, not a program, so it
+    # stays in scope and still fires. Tier A is untouched: an explicitly
+    # LABELLED artefact-defect issue is never inferred away by a title.
+    subject = _titled_checker(issue)
+    if subject is not None:
+        out["reason"] = ("the title names the checker %r, so this is a defect "
+                         "IN a checker — a checker-only change is the correct "
+                         "fix, not a symptom" % subject)
+        return out
     if not cited:
         # NOT a PASS. "I found nothing to check" and "I checked and it is
         # clean" are different statements, and this gate spent its first
