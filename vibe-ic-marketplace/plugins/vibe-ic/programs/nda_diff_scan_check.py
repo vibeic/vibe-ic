@@ -232,6 +232,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     if findings:
         _print_findings(findings)
         return 1
+    if args.rev_range and not diff.strip():
+        # An EMPTY diff is not a clean diff (vibe-ic#447/#449). Measured before
+        # wiring this into CI: `HEAD..HEAD` returned rc 0 PASS having scanned
+        # nothing, byte-indistinguishable from a real clean scan of a 33-commit
+        # range. A malformed or already-merged range would have silenced the
+        # guard this repo added after a real SKU leak.
+        #
+        # Scoped to `--rev-range` on purpose: `--diff-file` / `--stdin` with an
+        # empty input is a caller who genuinely has no diff, and refusing there
+        # would fire on legitimate use.
+        print(f"NOTHING_SCANNED: the range {args.rev_range!r} produces an "
+              f"EMPTY diff — a clean result over an empty scan is not a clean "
+              f"result; check the range.", file=sys.stderr)
+        return 2
     print("PASS: no NDA foundry / SKU / process / IP-vendor token in the "
           "diff's added content or paths")
     return 0
