@@ -193,10 +193,19 @@ def _build_token_re(extra: Optional[List[str]] = None) -> re.Pattern:
     return re.compile(pattern, re.IGNORECASE)
 
 
+# Filled by `audit` on every call: how much this gate actually looked at.
+# A PASS with no denominator cannot be told apart from a PASS that scanned
+# NOTHING, and this repo has now hit that defect in four separate programs
+# (nda_tracked_tree_scan on 21 of 20143 blobs; l4_systemrdl_export on 0 of
+# 201 documents; cross_layer_reference_check on 46 vs 23; and this one).
+SCAN_CENSUS: Dict[str, int] = {}
+
+
 def audit(plugin_root: Path,
           extra_tokens: Optional[List[str]] = None
           ) -> Tuple[str, List[TokenFinding]]:
     findings: List[TokenFinding] = []
+    SCAN_CENSUS.clear()
     if not plugin_root.is_dir():
         return "VACUOUS_PASS", []
 
@@ -210,6 +219,13 @@ def audit(plugin_root: Path,
             for ext in ("*.py", "*.md", "*.json", "*.yaml", "*.tcl"):
                 targets.extend(d.rglob(ext))
 
+    SCAN_CENSUS["files_found"] = len(targets)
+    for sub in ("programs", "skills", "commands"):
+        d = plugin_root / sub
+        SCAN_CENSUS[f"dir_{sub}"] = (
+            sum(1 for _ in d.rglob("*") if _.is_file()) if d.is_dir() else -1)
+
+    scanned = 0
     for f in targets:
         rel = f.relative_to(plugin_root)
         rel_str = str(rel)
@@ -219,6 +235,7 @@ def audit(plugin_root: Path,
             text = f.read_text(encoding="utf-8")
         except OSError:
             continue
+        scanned += 1
         for ln_no, line in enumerate(text.splitlines(), start=1):
             for m in token_re.finditer(line):
                 tok = m.group(1)
@@ -232,6 +249,8 @@ def audit(plugin_root: Path,
                     token=tok,
                     context=ctx,
                 ))
+
+    SCAN_CENSUS["files_read"] = scanned
 
     # STRICT NDA pass — commercial foundry SKU/name/process tokens, scanned over
     # the WHOLE plugin tree (every text file, tests/ included), with NO allowlist
@@ -322,6 +341,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "plugin_root": str(root),
         "forbidden_tokens": list(_FORBIDDEN_TOKENS) + extra,
         "findings_count": len(findings),
+        "scan_census": dict(SCAN_CENSUS),
         "findings": [asdict(f) for f in findings[:200]],
     }
     if args.json:
@@ -332,8 +352,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     if verdict == "VACUOUS_PASS":
         print("VACUOUS_PASS: plugin_root not a directory")
         return 0
+    _read = SCAN_CENSUS.get("files_read", 0)
+    if verdict == "PASS" and _read == 0:
+        # NOT a PASS. Scanning nothing and finding nothing is what a WRONG
+        # ROOT looks like, and the output was previously byte-identical to a
+        # real clean scan of a thousand files.
+        print("NOTHING_SCANNED: this gate read 0 files under "
+              f"{root}/{{programs,skills,commands}} — "
+              f"per-dir file counts {{{', '.join(f'{k}={v}' for k, v in sorted(SCAN_CENSUS.items()) if k.startswith('dir_'))}}}. "
+              "A clean result over an empty scan is not a clean result; check "
+              "the plugin_root argument.", file=sys.stderr)
+        return 2
     if verdict == "PASS":
-        print("PASS: no forbidden chip / vendor / SKU tokens in "
+        print(f"PASS ({_read} file(s) scanned): "
+              "no forbidden chip / vendor / SKU tokens in "
               "plugin source (programs/ skills/ commands/)")
         return 0
     print(f"FAIL: {len(findings)} forbidden-token occurrence(s):",
