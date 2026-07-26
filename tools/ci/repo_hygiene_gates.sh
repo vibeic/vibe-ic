@@ -162,6 +162,11 @@ run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_
 # test — it had never judged the tree it was written to judge. They are wired
 # here because they are repo-hygiene: they need no design, no PDK and no run
 # directory, only the plugin source itself.
+# A PASS must say how much it looked at (vibe-ic#447). Runs every gate above
+# against a scratch EMPTY tree and requires that a PASS there DISCLOSE it
+# examined nothing. Placed LAST so it probes the full list; ~40s.
+run "gates disclose their denominator" "$ROOT" python3 "$PG/gate_discloses_denominator_check.py" "$ROOT"
+
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
 run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_health_audit.py
