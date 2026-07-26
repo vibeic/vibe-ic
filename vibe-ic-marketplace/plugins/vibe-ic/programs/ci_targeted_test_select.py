@@ -79,6 +79,22 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # shipped skills is exactly the PR whose changed-file set cannot reach the
     # test that guards it. ~4 s for 15 tests — cheap enough for the floor.
     "test_tools_and_integration.py",
+    # The promised survey (see the commit that added the line above): every
+    # test that asserts a property of the WHOLE shipped tree has the same
+    # reachability problem, because the selector maps a changed SOURCE file
+    # to the test NAMED after it. MEASURED with the selector itself — for a
+    # diff adding `programs/<new>.py`, for one touching `skills/*/SKILL.md`,
+    # and for one touching the flow YAML, NONE of the four below were
+    # selected, though each is exactly what those diffs can break:
+    #   INDEX.md must list every program        (a NEW program breaks it)
+    #   SKILL.md files must stay chip-AGNOSTIC  (a SKILL edit breaks it)
+    #   ALL_STEPS must cover the flow           (a flow edit breaks it)
+    #   the retired core must not reappear      (any diff can reintroduce it)
+    # ~8 s for the four together.
+    "test_programs_index_freshness.py",
+    "test_wave76_skill_md_chip_agnostic.py",
+    "test_all_steps_covers_flow.py",
+    "test_no_vibe_ic_core_reappears.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose
