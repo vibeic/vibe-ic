@@ -68,6 +68,14 @@ jobs:
       # state and it made the evidence-citation gate's verdict differ between
       # local and CI on the same commit. Converted to relative; this blocks a
       # relapse.
+      # vibe-ic#306/#316 — the audit that measures which gates can actually
+      # stop a run was itself wired into nothing while exiting 1. Recorded
+      # debt (4 gates declaring an intent they are not wired for) does not
+      # fail; anything NEW does.
+      - name: flow-gate enforcement audit (no NEW unwired declaration)
+        run: |
+          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/flow_gate_enforcement_audit.py
+
       - name: tracked-symlink portability gate
         run: |
           python3 vibe-ic-marketplace/plugins/vibe-ic/programs/tracked_symlink_portability_check.py
