@@ -34,10 +34,24 @@ THE CANONICAL STRUCTURE it produces
         reports/…                           reports/phase3 + audit + orchestrator…
     benchmark-data/ic/<IC>/input/           shared design input (staged once)
 
-EXCLUDED BY CONSTRUCTION (gitignored / too large): *.gds, *.def, *.spef, *.oas
-— but the GDS_MANIFEST is ALWAYS emitted so the streamed GDS stays verifiable
-without being stored. Raw PnR scratch (phase3/stage3 *.def/*.spef) and the
-per-step scratch (steps/) are not committed evidence and are not staged.
+LAYOUT ARTEFACTS ARE ROUTED BY SIZE, NOT BY EXTENSION (#419). *.gds, *.def,
+*.spef and *.oas under 50 MB are STAGED; above it they are skipped and the
+GDS_MANIFEST carries the sha256 so the artefact stays verifiable without being
+stored. The manifest is emitted either way.
+
+  This paragraph used to declare these four extensions excluded as a matter
+  of construction, on the grounds that they were gitignored or too large, and
+  both halves had stopped being true. `.gitignore` negates
+  `.gds`/`.def` back for `benchmark-data/ic/**`, and `.spef`/`.oas` were never
+  ignored at all. "Too large" is a property of the FILE: this project's own
+  GDS range from 0.73 MB (spm) to 105 MB (sha256). Dropping by extension threw
+  away the small artefact a reviewer wants in order to avoid the large one
+  nobody can commit — so a cell published by this program carried LESS
+  evidence than the hand-staged cells it replaced.
+
+Raw PnR scratch under phase3/stage3 and the per-step scratch (steps/) are
+still not staged: that is a decision about what counts as evidence, which is
+separate from how big a file is.
 
 THE CONVERGENCE GUARD (anti-fabrication)
 ========================================
@@ -78,7 +92,28 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-_RAW_EXTS = (".gds", ".def", ".spef", ".oas")
+# The layout artefacts. These used to be dropped from every copied subtree by
+# EXTENSION, on the stated grounds that they were "gitignored / too large".
+# Neither half is true any more (#419):
+#
+#   * `.gds` / `.def` are ignored at the repo root AND negated back for
+#     `benchmark-data/ic/**` — git accepts them. `.spef` / `.oas` were never
+#     ignored at all, so the spm cells' .spef files needed no force-add.
+#   * "too large" is a property of the FILE, not of its extension. Measured
+#     spread across this project's own GDS: 0.73 MB (spm) to 105 MB (sha256),
+#     three orders of magnitude. The extension rule threw away the 0.8 MB
+#     artefact a reviewer wants in order to avoid the 105 MB one nobody can
+#     commit, and a cell published TODAY therefore carried less evidence than
+#     the hand-staged cells this program replaced.
+#
+# So they are ROUTED BY SIZE, and either way the manifest records the sha256,
+# which is what makes an artefact verifiable whether or not it is stored.
+_LAYOUT_EXTS = (".gds", ".def", ".spef", ".oas")
+
+# Must match `tracked_blob_size_guard._CEILING`, which is the gate that
+# actually blocks the commit. `_size_policy_drift_check` below fails if these
+# two, `.gitignore`, and this module's docstring ever stop agreeing.
+_SIZE_CEILING = 50 * 1000 * 1000
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 _SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _CONVERGED = ("PASS", "PASS_WITH_WAIVERS")
@@ -145,7 +180,21 @@ def _result_md_verdict(result_md: Path) -> Optional[str]:
 # --------------------------------------------------------------------------
 
 def _excluded(p: Path) -> bool:
-    return p.suffix.lower() in _RAW_EXTS
+    """A layout artefact is excluded only when it is TOO BIG to commit.
+
+    #419. The predicate used to be `suffix in _RAW_EXTS` — an extension test
+    standing in for a size test. Everything else is copied as before; a
+    layout artefact under the ceiling now ships, and one over it is skipped
+    for the reason that is actually true of it.
+    """
+    if p.suffix.lower() not in _LAYOUT_EXTS:
+        return False
+    try:
+        return p.stat().st_size > _SIZE_CEILING
+    except OSError:
+        # Unreadable size is not evidence of smallness. Skip and let the
+        # manifest carry what is known, rather than copying blind.
+        return True
 
 
 def _copy_tree(src: Path, dst: Path, dry: bool) -> Tuple[int, int]:

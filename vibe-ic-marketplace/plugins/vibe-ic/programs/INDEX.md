@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 965
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 965)
+- **Total programs (excluding helpers / shims):** 967
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 967)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 956 |
+| `any` | 958 |
 
 ## Alphabetical listing
 
@@ -834,6 +834,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `silent_decline_audit` | any | — | find remedy decisions whose REFUSAL is silent (#313 §6). |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
 | `single_testpath_guard` | any | v0.2.24 | pytest.ini must declare ONE test tree. |
+| `size_policy_drift_check` | any | — | one policy about layout artefacts, stated once. |
 | `sizing_adjust_policy` | any | — | the fixed failure-mode → parameter-delta |
 | `sizing_history_emit` | any | — | fixed-schema validator/emitter for the |
 | `skill_doc_section_present_check` | any | — | ORGANIC #724 / #725 |
@@ -922,6 +923,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tool_substitution_disclose` | any | — | emit the mandatory RESULT.md |
 | `top_level_outputs_in_canonical_check` | any | — | enforce that the project root |
 | `tpm_protocol_synth` | any | v0.1.84 | TPM 2.0 trusted-platform-module protocol synth helper. |
+| `tracked_blob_size_guard` | any | — | the size guard `.gitignore` already promised. |
 | `tracked_symlink_portability_check` | any | — | a tracked symlink must resolve for |
 | `trailing_delimiter_completeness_check` | any | v0.99 | Verify each cmd packet stimulus |
 | `transient_signal_latch_check` | any | — | Flag 1-cycle pulses read by multi-cycle FSMs without latching. |
@@ -1037,7 +1039,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (956 programs)
+### `any` (958 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1840,6 +1842,7 @@ _(no programs in this group)_
 - `silent_decline_audit` — find remedy decisions whose REFUSAL is silent (#313 §6).
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_
 - `single_testpath_guard` — pytest.ini must declare ONE test tree.  _[v0.2.24]_
+- `size_policy_drift_check` — one policy about layout artefacts, stated once.
 - `sizing_adjust_policy` — the fixed failure-mode → parameter-delta
 - `sizing_history_emit` — fixed-schema validator/emitter for the
 - `skill_doc_section_present_check` — ORGANIC #724 / #725
@@ -1928,6 +1931,7 @@ _(no programs in this group)_
 - `tool_substitution_disclose` — emit the mandatory RESULT.md
 - `top_level_outputs_in_canonical_check` — enforce that the project root
 - `tpm_protocol_synth` — TPM 2.0 trusted-platform-module protocol synth helper.  _[v0.1.84]_
+- `tracked_blob_size_guard` — the size guard `.gitignore` already promised.
 - `tracked_symlink_portability_check` — a tracked symlink must resolve for
 - `trailing_delimiter_completeness_check` — Verify each cmd packet stimulus  _[v0.99]_
 - `transient_signal_latch_check` — Flag 1-cycle pulses read by multi-cycle FSMs without latching.

@@ -144,7 +144,15 @@ benchmark-data/datasets/
 
 # --- benchmark-data 收斂證據的 physical 產物（2026-07-25）---
 # 小 cell 的 GDS/DEF/SPEF 只有 KB-MB（spm GDS 最大 1.2MB），該進 git 讓交付包可從
-# netlist 重建到 GDS。大 die 的大檔（>50MB）由 benchmark_evidence_structure_check 的
-# size-guard 擋、改走 git-lfs / GitHub Release（sha256 存 MANIFEST）。
+# netlist 重建到 GDS。大 die 的大檔（>50MB）改走 git-lfs / GitHub Release（sha256
+# 存 MANIFEST）。
+#
+# 2026-07-26（#419）：上面這段原本寫「由 benchmark_evidence_structure_check 的
+# size-guard 擋」——那個 guard 從來沒有被寫出來，那句話就是全部的實作。實測：
+# benchmark-data/ic 下有十個未追蹤的 *.gds 介於 74–105 MB，全部被這裡的 negation
+# 放行，其中兩個超過 GitHub 每檔 100 MB 的硬限（push 會在物件已經進入本地歷史之後
+# 才被拒絕）。真正的 guard 現在存在，叫 programs/tracked_blob_size_guard.py，接在
+# tools/ci/repo_hygiene_gates.sh 裡；publisher 與 structure-check 也改成依大小
+# 路由，四者的一致性由 programs/size_policy_drift_check.py 把關。
 !benchmark-data/ic/**/*.gds
 !benchmark-data/ic/**/*.def

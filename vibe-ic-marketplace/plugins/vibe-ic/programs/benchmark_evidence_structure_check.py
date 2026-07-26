@@ -43,12 +43,18 @@ WHAT THIS GATE ENFORCES (each is a named nonconformance on failure)
                     with >= 1 file.
   GDS_MANIFEST      phase3/stage4/gds/GDS_MANIFEST.txt present, non-empty, and
                     every content line matches `<filename> <int>B sha256:<64hex>`
-                    (>= 1 valid line). The raw GDS is deliberately NOT committed
-                    (too large / gitignored); the manifest makes it verifiable
-                    without storing it.
-  NO_RAW_GEOMETRY   no raw *.gds / *.def / *.spef / *.oas is COMMITTED under the
-                    folder (they are gitignored / too large). When run inside a
-                    git repo the scan is over git-tracked (+ optionally staged)
+                    (>= 1 valid line). ALWAYS required, whether or not the GDS
+                    itself ships: it is what keeps an artefact verifiable when
+                    it is too large to store.
+  NO_RAW_GEOMETRY   no *.gds / *.def / *.spef / *.oas ABOVE THE 50 MB COMMIT
+                    CEILING is committed under the folder (#419). It used to
+                    reject them by extension, and that rule FAILED all three
+                    reference cells — the most complete evidence this repo
+                    publishes — because `.gitignore` accepts layout artefacts
+                    under `benchmark-data/ic/**` and those cells carry them.
+                    Size is what decides whether a file can be committed at
+                    all, so size is what is checked. When run inside a git
+                    repo the scan is over git-tracked (+ optionally staged)
                     files, so a locally-gitignored scratch artifact does not
                     false-FAIL; outside a repo it is a filesystem scan.
 
@@ -103,8 +109,18 @@ _NAME_RE = re.compile(r"^v\d+\.\d+\.\d+_.+$")
 # Folder-name prefixes that are known-wrong and get a specific message.
 _BAD_PREFIXES = ("clean_run_", "pass_", "fail_", "PASS_", "FAIL_")
 
-# Raw geometry / heavy artifacts that must never be committed.
-_RAW_EXTS = (".gds", ".def", ".spef", ".oas")
+# Layout artefacts. Until #419 this rule rejected them outright by extension,
+# and it therefore FAILED all three reference cells — the most complete
+# evidence this repo publishes — because they carry exactly these files and
+# `.gitignore` accepts them. Now judged BY SIZE, which is the property that
+# actually decides whether an artefact can be committed at all.
+_LAYOUT_EXTS = (".gds", ".def", ".spef", ".oas")
+
+# Must equal `tracked_blob_size_guard._CEILING` and
+# `benchmark_evidence_publish._SIZE_CEILING`. `size_policy_drift_check.py`
+# fails when they stop agreeing — five mechanisms disagreed about this before
+# #419 and each of them looked locally reasonable.
+_SIZE_CEILING = 50 * 1000 * 1000
 
 # GDS_MANIFEST line: "<filename> <int>B sha256:<64 hex>"
 _MANIFEST_LINE_RE = re.compile(r"^\S+ \d+B sha256:[0-9a-fA-F]{64}$")
@@ -345,12 +361,24 @@ def check_folder(folder: Path, include_staged: bool = False) -> FolderResult:
 
     # ---- NO_RAW_GEOMETRY -------------------------------------------------
     scan, mode = _raw_scan_set(folder, include_staged)
-    raw = [p for p in scan if p.suffix.lower() in _RAW_EXTS]
-    if raw:
-        rels = ", ".join(sorted({str(p.relative_to(folder)) for p in raw})[:10])
+    layout = [p for p in scan if p.suffix.lower() in _LAYOUT_EXTS]
+    over = []
+    for p in layout:
+        try:
+            if p.stat().st_size > _SIZE_CEILING:
+                over.append((p, p.stat().st_size))
+        except OSError:
+            continue
+    if over:
+        rels = ", ".join(
+            f"{str(p.relative_to(folder))} ({s / 1e6:.0f} MB)"
+            for p, s in sorted(over, key=lambda t: -t[1])[:10])
         res.fail("NO_RAW_GEOMETRY",
-                 f"raw geometry committed ({mode}): {rels} — *.gds/*.def/*.spef/"
-                 f"*.oas must be gitignored; keep only GDS_MANIFEST.txt")
+                 f"layout artefact(s) over the "
+                 f"{_SIZE_CEILING / 1e6:.0f} MB commit ceiling ({mode}): "
+                 f"{rels} — route these to git-lfs or a GitHub Release and "
+                 f"keep the sha256 in GDS_MANIFEST.txt, which is what makes "
+                 f"the artefact verifiable without being stored")
     else:
         res.ok("NO_RAW_GEOMETRY")
 

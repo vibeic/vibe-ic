@@ -81,6 +81,17 @@ run "NDA scan of the TRACKED tree"      "$ROOT" python3 "$PG/nda_tracked_tree_sc
 # container is reachable, which is the normal CI state.
 run "PDK registry selectable"           "$ROOT" python3 "$PG/pdk_registry_selectable_check.py"
 
+# vibe-ic#419 — the size guard `.gitignore` promised in a comment and nobody
+# ever wrote. Ten untracked *.gds under benchmark-data/ic are 74–105 MB and
+# ACCEPTED by that file's negations; two are over GitHub's 100 MB hard limit,
+# where a push is rejected after the objects are already in local history.
+run "tracked blob size ceiling"         "$ROOT" python3 "$PG/tracked_blob_size_guard.py"
+
+# vibe-ic#419 — five mechanisms held an opinion about which layout artefacts
+# ship and no two agreed. Each was edited alone and stayed true to what its
+# author knew; nothing could notice the set had stopped being consistent.
+run "layout-artefact size policy"       "$ROOT" python3 "$PG/size_policy_drift_check.py"
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired

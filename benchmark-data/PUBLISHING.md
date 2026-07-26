@@ -109,7 +109,13 @@ The gate enforces, per folder, each as a **named** nonconformance on failure:
 - **PHASE3_REPORTS** — `phase3/reports/` or `reports/phase3/` present.
 - **GDS_MANIFEST** — `phase3/stage4/gds/GDS_MANIFEST.txt` present and every line is
   `<file> <int>B sha256:<64hex>`.
-- **NO_RAW_GEOMETRY** — no `*.gds/*.def/*.spef/*.oas` is committed under the folder.
+- **NO_RAW_GEOMETRY** — no `*.gds/*.def/*.spef/*.oas` **above the 50 MB commit
+  ceiling** is committed under the folder (#419). Under it they SHIP: a 0.8 MB
+  GDS is evidence a reviewer can open, and rejecting it by extension in order
+  to avoid a 105 MB one failed all three reference cells while `.gitignore`
+  accepted the very files they carry. Above the ceiling, route to git-lfs or a
+  GitHub Release and keep the sha256 in `GDS_MANIFEST.txt` — which is required
+  either way, and is what keeps an artefact verifiable without being stored.
 
 chip-AGNOSTIC: the IC, PDK and version are parameters/path components; no IC / PDK
 / vendor / SKU literal appears in either program's logic.
