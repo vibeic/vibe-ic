@@ -409,6 +409,36 @@ def nda_diff_scan_gate(repo: Path, base: str, head: str) -> GateResult:
 
 
 # --------------------------------------------------------------------------
+# real_artefact_test_backing_check (#400) — ADVISORY.
+#
+# A change whose tests are ALL synthetic fixtures authored alongside it cannot
+# distinguish itself from its own absence. Measured on a real withdrawn
+# branch: mutating the guard killed 10 of 31 tests — every one of them a
+# hand-typed fixture from the same commits, while all 4 real-artefact tests
+# still passed. This surfaces the split at review time instead of after a
+# third adversarial round.
+#
+# NEVER BLOCKING (rc is forced to 0): the classifier is static, and a
+# misclassification must cost one line of reading, not a rejected PR. It also
+# cannot prove a real-artefact test is non-vacuous — only a mutation run can.
+# --------------------------------------------------------------------------
+def real_artefact_backing_gate(repo: Path, base: str, head: str) -> GateResult:
+    prog = _PROGRAMS_DIR / "real_artefact_test_backing_check.py"
+    if not prog.is_file():
+        return GateResult("real_artefact_test_backing_check", -1,
+                          f"checker missing at {prog}")
+    rc, out, err = _run_program(prog, ["--repo", str(repo),
+                                       "--base", base, "--head", head])
+    if rc == 2:
+        return GateResult("real_artefact_test_backing_check", -1,
+                          "skipped — no test module added or modified")
+    body = (out.strip() or err.strip()).splitlines()
+    summary = (body[0] if body else "(no output)")[:240]
+    return GateResult("real_artefact_test_backing_check", 0,
+                      f"ADVISORY — {summary}")
+
+
+# --------------------------------------------------------------------------
 # gatekeeper_stale_branch_check — the LANDING-METHOD guard.
 #
 # A PR branch cut from an OLDER base than the current origin/main tip makes a
@@ -673,6 +703,7 @@ def review(base: str, head: str, *,
     gates.append(commit_msg_nda_gate(repo, base, head))
     gates.append(nda_diff_scan_gate(repo, base, head))
     gates.append(stale_branch_gate(repo, base, head))
+    gates.append(real_artefact_backing_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))

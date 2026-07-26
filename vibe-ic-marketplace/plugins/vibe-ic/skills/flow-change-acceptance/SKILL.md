@@ -76,6 +76,28 @@ records, the declared constraint files, the top-level port list, the design's ow
 L-docs. Test fixtures must be **synthesized neutral data**, never a copy of a real
 design's files.
 
+**What that does NOT mean (vibe-ic#400).** "No copy of a real design's files" forbids
+HARDCODING a chip into a fixture. It does not forbid a test from READING a
+checked-in artefact — and read literally it pushed authors into a suite that is
+100 % synthetic, which is a different failure:
+
+> A change whose tests are all fixtures authored alongside it **cannot distinguish
+> itself from its own absence.** Measured: mutating a guard killed 10 of 31 tests —
+> every one of them hand-typed in the same commits — while all 4 tests that read a
+> checked-in artefact still passed. No document in the repo could tell that guard
+> from its absence.
+
+So, for a BEHAVIOURAL change: at least one test must be driven by a real in-repo
+artefact, through `programs/tests/_hostpaths.require_repo` / `repo_path` (which
+hardcodes nothing — `source_chip_agnostic_check` passes on trees that use it), or
+by sweeping a repo data root. `real_artefact_test_backing_check` reports the split
+per changed test module, ADVISORY.
+
+A real-artefact test is still not automatically non-vacuous — an implication whose
+antecedent is always false passes either way. What proves a test bites is the
+MUTATION RUN criterion 1 already asks for; the split report is what makes a
+reviewer ask for it.
+
 > *Measured:* a supply-intent gate was verified chip-agnostic by confirming the only
 > `VDD/VSS` occurrence in the new logic was inside a *comment*, and that the pin-type
 > decision came from the macro's LEF, not from a name list.
