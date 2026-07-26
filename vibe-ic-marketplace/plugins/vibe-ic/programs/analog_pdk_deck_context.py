@@ -161,6 +161,12 @@ class DeckContext:
     status: str                                    # OK | NEEDS_NATIVE_TEMPLATE
     source: str                                    # known_family | project_custom_pdk | container_installed
     family: Optional[str] = None
+    # ORGANIC #410 — the template this context ACTUALLY carries. Equal to
+    # `family` for a known open PDK; for an unknown selector `family` is the
+    # name that was asked for while the device map / model lib come from the
+    # fallback named here. Without it the context claims to describe a PDK it
+    # does not carry, which is #389's misattribution in the analog track.
+    template_family: Optional[str] = None
     model_lib: Optional[str] = None
     model_lib_includes: List[str] = field(default_factory=list)
     corner_sections: List[str] = field(default_factory=list)
@@ -188,6 +194,7 @@ class DeckContext:
     def as_json(self) -> Dict[str, Any]:
         return {
             "status": self.status, "source": self.source, "family": self.family,
+            "template_family": self.template_family,
             "model_lib": self.model_lib,
             "model_lib_includes": self.model_lib_includes,
             "corner_sections": self.corner_sections,
@@ -374,8 +381,31 @@ def map_corner_sections(sections: List[str]
 
 def known_family_context(selector: str) -> DeckContext:
     """The open-PDK fast path (sky130 / gf180) — keeps the sky130 regression
-    bit-identical (device_map + sections + lib from the known table, no parse)."""
+    bit-identical (device_map + sections + lib from the known table, no parse).
+
+    ORGANIC #410 (analog half). An UNKNOWN selector falls back to sky130's
+    template while `family` records the name that was ASKED FOR, so the
+    context claims to describe a PDK whose devices and model lib it does not
+    carry — the #389 misattribution, in the analog track.
+
+    MEASURED BEFORE CHANGING ANYTHING, and the result is narrower than it
+    looks: no consumer today SIMULATES with the substituted values. The one
+    caller of `resolve_deck_context` (`analog_real_corner_sweep`) takes its
+    own `PDK_LIB` on the `source == "known_family"` fast path, gets `None`
+    for an unknown selector, and stops at "pdk lib not reachable";
+    `analog_mc_yield_run` only uses `parse_sections`. So this is a LATENT
+    trap for the next consumer that reads `ctx.device_map` / `ctx.model_lib`
+    at face value, not a wrong simulation happening now. Saying otherwise
+    would overstate it.
+
+    CONTROL FLOW IS DELIBERATELY UNCHANGED. Marking the fallback with a
+    different `source` would push unknown selectors into the caller's `else`
+    branch, where `ctx.model_lib` (sky130's) WOULD be used — strictly worse
+    than today's honest stop. What changes is only that the context now says
+    which template it actually carries.
+    """
     fam = _KNOWN_FAMILIES.get(selector, _KNOWN_FAMILIES["sky130"])
+    _template_family = selector if selector in _KNOWN_FAMILIES else "sky130"
     typ, process = map_corner_sections(list(fam["corner_sections"]))
     return DeckContext(
         status="OK", source="known_family", family=selector,
@@ -386,8 +416,15 @@ def known_family_context(selector: str) -> DeckContext:
         # the open-PDK device templates are 4-terminal (d g s b) — no extra
         # substrate/well node injection (keeps the sky130 deck byte-identical).
         device_terminals={role: 4 for role in fam["device_map"]},
-        disclosure=(f"known open PDK '{selector}' — device map + corner sections "
-                    f"from the plugin's authored template family (no lib parse)."),
+        template_family=_template_family,
+        disclosure=(
+            f"known open PDK '{selector}' — device map + corner sections "
+            f"from the plugin's authored template family (no lib parse)."
+            if _template_family == selector else
+            f"NO authored template family for '{selector}' — this context "
+            f"carries the '{_template_family}' device map, corner sections "
+            f"and model lib. It does NOT describe '{selector}'. A consumer "
+            f"must not read these as that PDK's values (vibe-ic#410)."),
     )
 
 
