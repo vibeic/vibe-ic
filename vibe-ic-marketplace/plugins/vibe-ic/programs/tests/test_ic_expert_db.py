@@ -207,3 +207,27 @@ def test_main_digest_does_NOT_contain_db_block(tmp_path):
 def test_db_digest_empty_prompt_writes_nothing(tmp_path):
     assert _lesson_digest.render_ic_expert_db_digest(tmp_path, "") == 0
     assert not (tmp_path / "ic_expert_db.md").exists()
+
+
+def test_related_graph_is_symmetric_after_the_nvm_fuse_array_entry(  # noqa: E501
+):
+    """Regression pin for a RED test on main, not a new capability.
+
+    A newly added `nvm-fuse-array` entry linked out to three classes and none
+    linked back, so `test_shipped_related_links_are_grounded_and_symmetric`
+    failed on `origin/main` itself. The graph is undirected by construction —
+    a one-way edge means one of the two entries cannot be found from the other,
+    which is the entire point of the links.
+    """
+    d = json.loads(DB.read_text())
+    by = {e["ic_class"]: e for e in d["entries"]}
+    rel = {c: set(e.get("related", [])) for c, e in by.items()}
+    one_way = [(c, r) for c, rs in rel.items() for r in rs
+               if r in by and c not in rel[r]]
+    assert one_way == [], one_way
+    # ...and the specific edges that were missing are present in BOTH directions
+    for other in ("command-driven-memory-controller-fsm",
+                  "register-file-with-bist", "secure-register-bank-fsm"):
+        if other in rel and "nvm-fuse-array" in rel:
+            assert other in rel["nvm-fuse-array"], other
+            assert "nvm-fuse-array" in rel[other], other

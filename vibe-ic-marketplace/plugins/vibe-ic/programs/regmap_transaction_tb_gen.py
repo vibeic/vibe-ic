@@ -69,6 +69,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import _watchdog
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -665,16 +667,25 @@ def generate(project: Path, top_module: str,
     work = out_dir / "_regmap_work"
     work.mkdir(parents=True, exist_ok=True)
     vvp_out = work / "regmap.vvp"
+    # Supervised by FORWARD PROGRESS rather than a wall-clock ceiling: a big
+    # register map is a legitimately long elaboration, and `timeout=300` kills
+    # it for making progress. `loop_watchdog_compliance_check` flags this call
+    # site (and only this one — `vvp` is not on the long-tool list) and it was
+    # RED on main before this change.
     try:
-        comp = subprocess.run(
-            ["iverilog", "-g2012", "-o", str(vvp_out), str(tb_path), *srcs],
-            capture_output=True, text=True, timeout=300)
+        comp = _watchdog.run_supervised(
+            ["iverilog", "-g2012", "-o", str(vvp_out), str(tb_path), *srcs])
     except (OSError, subprocess.SubprocessError) as e:
         info["reason"] = f"iverilog invocation failed: {e}"
         return info
-    if comp.returncode != 0:
+    if comp.outcome != "natural":
+        info["reason"] = (f"iverilog did not finish on its own "
+                          f"({comp.outcome}) after {comp.elapsed_s:.0f}s")
+        info["compile_log"] = (comp.err or "")[-2000:]
+        return info
+    if comp.rc != 0:
         info["reason"] = "TB did not elaborate against rtl/"
-        info["compile_log"] = (comp.stderr or "")[-2000:]
+        info["compile_log"] = (comp.err or "")[-2000:]
         return info
     try:
         sim = subprocess.run(["vvp", str(vvp_out)],
