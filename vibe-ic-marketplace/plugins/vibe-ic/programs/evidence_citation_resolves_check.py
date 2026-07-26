@@ -79,7 +79,7 @@ from typing import Dict, List, Optional, Tuple
 
 # Extensions that carry sign-off EVIDENCE. Deliberately narrow: this gate
 # judges "the proof you pointed at is missing", not "every path in prose".
-_EVIDENCE_EXT = (".log", ".rpt")
+_EVIDENCE_EXT = (".log", ".rpt", ".sby")
 
 # A backticked token that looks like a file path. Anchored so prose in
 # backticks (a command line, a sentence) is never mistaken for a citation.
@@ -164,6 +164,11 @@ def resolve_citation(md: Path, cite: str, root: Path,
     docstring. A document-directory-only resolver reports ~30% more
     findings, all of them false.
     """
+    if Path(cite).is_absolute():
+        # An absolute path is non-portable by construction: it can only
+        # resolve on the machine that wrote it, so it substantiates nothing
+        # for any other reader. Never resolvable, regardless of this host.
+        return None
     try:
         base = md.parent.resolve()
         stop = root.resolve()
@@ -182,6 +187,39 @@ def resolve_citation(md: Path, cite: str, root: Path,
         if stop not in base.parents:
             return None
         base = base.parent
+
+
+# JSON GATE REPORTS (#366). A report that declares a `verdict` AND names the
+# artifact substantiating it is making the same promise a Markdown citation
+# makes, in a different container. Measured 2026-07-26 over benchmark-data/ic:
+# 788 such reports, 118 artifact references, 75 unresolvable in the TRACKED
+# tree — including three spm PDK cells whose `formal_evidence.json` carries
+# verdict PASS with "PROOF_CHAIN_OK ... substantiated by an elaboratable .sby
+# + SymbiYosys PASS transcript" while no `.sby` and no transcript exist
+# anywhere in the repo.
+#
+# The gate that wrote those reports is NOT at fault: it verifies the paths
+# before emitting PASS, and they existed on disk when it ran. The evidence
+# then could not be SHIPPED — `*.sby.log` matches `.gitignore`'s repo-wide
+# `*.log`, so zero are tracked. A PASS that no reader can re-verify is the
+# same false certificate as a fabricated one; only the mechanism differs.
+_VERDICT_KEY = "verdict"
+
+
+def _json_artifact_refs(path: Path) -> List[Tuple[str, str]]:
+    """[(field, cited_path)] for a JSON GATE REPORT — a dict carrying a
+    `verdict`. Anything else is data, not a claim, and is not judged."""
+    try:
+        data = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict) or _VERDICT_KEY not in data:
+        return []
+    out: List[Tuple[str, str]] = []
+    for k, v in data.items():
+        if isinstance(v, str) and _is_citation(v):
+            out.append((str(k), v))
+    return out
 
 
 def scan(root: Path,
@@ -208,6 +246,19 @@ def scan(root: Path,
                 dangling.append({
                     "doc": str(md.relative_to(root)),
                     "citation": tok,
+                })
+    for js in sorted(root.rglob("*.json")):
+        if tracked is not None and js.resolve() not in tracked:
+            continue
+        refs = _json_artifact_refs(js)
+        if refs:
+            docs += 1
+        for field, tok in refs:
+            cited += 1
+            if resolve_citation(js, tok, root, tracked) is None:
+                dangling.append({
+                    "doc": str(js.relative_to(root)),
+                    "citation": f"[{field}] {tok}",
                 })
     return dangling, cited, docs
 
@@ -266,6 +317,13 @@ def main(argv=None) -> int:
     ap.add_argument("--write-baseline", action="store_true",
                     help="record the CURRENT unresolved set; it may only "
                          "ever shrink from there")
+    ap.add_argument("--scope-expanded", metavar="REASON",
+                    help="permit a GROWING baseline for this write, because "
+                         "the gate now LOOKS at more than it did (a wider "
+                         "scope finds pre-existing debt; that is not a "
+                         "regression). Requires a reason, which is recorded "
+                         "in the baseline beside the previous size — a "
+                         "deliberate, auditable act, never a bypass flag.")
     args = ap.parse_args(argv)
 
     here = Path(__file__).resolve()
@@ -292,6 +350,11 @@ def main(argv=None) -> int:
         # working tree holding untracked artifacts, so it was green locally
         # and RED in CI (12 entries "resolved", 9 new dangling). A debt
         # register describing the author's laptop is worse than none.
+        if args.scope_expanded is not None and len(
+                args.scope_expanded.strip()) < 30:
+            print("[FAIL] --scope-expanded needs a real reason (>=30 chars) "
+                  "naming what the gate now looks at that it did not before.")
+            return 1
         dirty = _working_tree_dirt(root)
         if dirty:
             print(f"[FAIL] refusing to write a baseline from a DIRTY tree — "
@@ -302,10 +365,13 @@ def main(argv=None) -> int:
                 print(f"   {d}")
             return 1
         prev = _load_baseline(baseline_path) or []
-        if prev and len(now) > len(prev):
+        if prev and len(now) > len(prev) and args.scope_expanded is None:
             print(f"[FAIL] refusing to GROW the baseline "
                   f"({len(prev)} -> {len(now)}). The baseline is a debt "
-                  f"register, not a waiver list.")
+                  f"register, not a waiver list. If the gate now LOOKS at "
+                  f"more than it did, say so with --scope-expanded '<why>' "
+                  f"— a wider scope finding pre-existing debt is not a "
+                  f"regression, but it must be recorded, not assumed.")
             return 1
         baseline_path.write_text(json.dumps(
             {"_comment": ("Known-unresolved evidence citations (#361). MAY "
@@ -314,7 +380,12 @@ def main(argv=None) -> int:
                           "NOT stored (some embed a commercial foundry "
                           "product name and a landed diff is permanent "
                           "public content). Run the gate to see them."),
-             "unresolved": sorted(_digest(k) for k in now)}, indent=2)
+             "unresolved": sorted(_digest(k) for k in now),
+             **({"scope_expansion": {
+                 "previous_size": len(prev),
+                 "reason": args.scope_expanded.strip()}}
+                if args.scope_expanded is not None and len(now) > len(prev)
+                else {})}, indent=2)
             + "\n")
         print(f"wrote {baseline_path} ({len(now)} entr(ies))")
         return 0

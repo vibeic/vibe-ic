@@ -259,3 +259,114 @@ def test_baseline_write_is_refused_from_a_dirty_tree(tmp_path):
     assert r.returncode == 1, r.stdout
     assert "DIRTY tree" in r.stdout
     assert not (tmp_path / "bl.json").exists()
+
+
+# ── JSON gate reports (#366) ─────────────────────────────────────────────────
+# A report that declares a `verdict` AND names the artifact substantiating it
+# makes the same promise a Markdown citation makes. Three spm PDK cells carry
+# formal_evidence.json with verdict PASS and "substantiated by an elaboratable
+# .sby + SymbiYosys PASS transcript" while no .sby and no transcript exist
+# anywhere in the repo — the gate that wrote them verifies the paths before
+# emitting PASS and they existed at run time; they simply could not be SHIPPED
+# (`*.sby.log` matches .gitignore's repo-wide `*.log`; zero are tracked).
+
+def test_gate_report_citing_a_missing_artifact_fails(tmp_path):
+    root = _repo(tmp_path)
+    (root / "reports").mkdir()
+    (root / "reports" / "formal_evidence.json").write_text(json.dumps(
+        {"verdict": "PASS", "sby": "formal/proof.sby",
+         "sby_log": "formal/proof.sby.log"}))
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "report")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "proof.sby" in r.stdout
+
+
+def test_gate_report_with_its_artifacts_passes(tmp_path):
+    root = _repo(tmp_path)
+    (root / "reports").mkdir()
+    (root / "formal").mkdir()
+    (root / "formal" / "proof.sby").write_text("[tasks]\n")
+    (root / "formal" / "proof.sby.log").write_text("PASS\n")
+    (root / "reports" / "formal_evidence.json").write_text(json.dumps(
+        {"verdict": "PASS", "sby": "formal/proof.sby",
+         "sby_log": "formal/proof.sby.log"}))
+    _git(root, "add", "-Af")
+    _git(root, "commit", "-q", "-m", "report+evidence")
+    assert _run(root, tmp_path / "bl.json").returncode == 0
+
+
+def test_json_without_a_verdict_is_data_not_a_claim(tmp_path):
+    """Only a report that DECLARES a verdict is making a promise. Judging
+    every JSON string that ends in .log would manufacture findings against
+    configuration and inventory files."""
+    root = _repo(tmp_path)
+    (root / "cfg.json").write_text(json.dumps({"log_path": "nowhere/x.log"}))
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "cfg")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "nowhere/x.log" not in r.stdout
+
+
+def test_absolute_path_never_substantiates_anything(tmp_path):
+    """An absolute path can only resolve on the machine that wrote it, so it
+    substantiates nothing for any other reader — and it would make the gate's
+    verdict host-dependent, the exact divergence that already bit this gate
+    once."""
+    root = _repo(tmp_path)
+    real = root / "real.log"
+    real.write_text("log\n")
+    (root / "r.json").write_text(json.dumps(
+        {"verdict": "PASS", "source": str(real.resolve())}))
+    _git(root, "add", "-Af")
+    _git(root, "commit", "-q", "-m", "abs")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+
+
+# ── scope expansion is a recorded act, not a bypass ─────────────────────────
+# Widening what the gate LOOKS AT legitimately grows the register (62 -> 141
+# when JSON gate reports were added). That is pre-existing debt becoming
+# VISIBLE, not new debt being admitted — but shrink-only cannot tell the two
+# apart, so the distinction must be declared and stored rather than assumed.
+
+def test_growth_still_refused_without_a_declared_expansion(tmp_path):
+    root = _repo(tmp_path)
+    _doc(root, "EV.md", "see `a.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "a")
+    _run(root, tmp_path / "bl.json", "--write-baseline")
+    _doc(root, "EV.md", "see `a.log`\nand `b.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "b")
+    r = _run(root, tmp_path / "bl.json", "--write-baseline")
+    assert r.returncode == 1 and "refusing to GROW" in r.stdout
+
+
+def test_expansion_requires_a_real_reason(tmp_path):
+    """A one-word reason is a bypass wearing a flag's clothes."""
+    root = _repo(tmp_path)
+    _doc(root, "EV.md", "see `a.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "a")
+    r = _run(root, tmp_path / "bl.json", "--write-baseline",
+             "--scope-expanded", "because")
+    assert r.returncode == 1, r.stdout
+    assert not (tmp_path / "bl.json").exists()
+
+
+def test_declared_expansion_is_allowed_and_recorded(tmp_path):
+    root = _repo(tmp_path)
+    _doc(root, "EV.md", "see `a.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "a")
+    _run(root, tmp_path / "bl.json", "--write-baseline")
+    _doc(root, "EV.md", "see `a.log`\nand `b.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "b")
+    reason = ("the gate now also judges JSON gate reports, so pre-existing "
+              "debt became visible")
+    r = _run(root, tmp_path / "bl.json", "--write-baseline",
+             "--scope-expanded", reason)
+    assert r.returncode == 0, r.stdout
+    d = json.loads((tmp_path / "bl.json").read_text())
+    assert len(d["unresolved"]) == 2
+    assert d["scope_expansion"]["previous_size"] == 1
+    assert reason in d["scope_expansion"]["reason"]
