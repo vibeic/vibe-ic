@@ -1,0 +1,23 @@
+{
+  "verdict": "PASS",
+  "gds": "/home/reyerchu/vibe-ic-wt-ship419/vibe-ic-marketplace/scratch_geom_signoff_tests/agree/phase3/stage4/gds/top.gds",
+  "worst_ratio": 10.0,
+  "violations": 0,
+  "per_layer": {
+    "met1": {
+      "limit": 40.0,
+      "metric": "cumulative",
+      "worst_ratio": 10.0,
+      "violations": 0,
+      "detail": []
+    },
+    "met2": {
+      "limit": 40.0,
+      "metric": "cumulative",
+      "worst_ratio": 0.0,
+      "violations": 0,
+      "detail": []
+    }
+  },
+  "diode_credit": false
+}
