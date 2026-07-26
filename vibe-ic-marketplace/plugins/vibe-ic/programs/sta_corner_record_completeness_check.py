@@ -1184,12 +1184,33 @@ def evaluate(project: Path,
     else:
         verdict = "PASS"
 
+    # DENOMINATORS (vibe-ic#447). R3 — the sign-off MET rule — only examines
+    # rows whose `role_class` is "signoff"; it SKIPS every other role. So on a
+    # run whose only corner is `primary`, R3 examines ZERO rows and the verdict
+    # line still said "every sign-off corner MET". Measured on a published
+    # cell: one `nominal` corner, role primary, and that sentence.
+    #
+    # A claim over zero is not false — vacuously every one of them is MET — but
+    # printing it identically to a real multi-corner closure is the defect this
+    # repo has now removed from five separate programs.
+    _signoff_rows = sum(1 for r in table if r.get("role_class") == "signoff")
+    _total_rows = len(table)
     reasons = findings + degraded_disclosed
     if not reasons:
-        reasons = [f"timing record complete: every corner the flow declared is "
-                   f"reported for the role it serves, every sign-off corner MET "
-                   f"(tol {slack_tol} ns), each reported corner was analysed "
-                   f"with its own corner library, and DRV was queried and clean"]
+        if _signoff_rows == 0:
+            reasons = [f"NO SIGN-OFF CORNER WAS REPORTED: {_total_rows} corner "
+                       f"row(s) present, none carrying the `signoff` role, so "
+                       f"the sign-off MET rule (R3) examined nothing. Every "
+                       f"other rule passed — the record is internally "
+                       f"consistent — but this run is NOT evidence that a "
+                       f"sign-off corner was met, because none was analysed."]
+        else:
+            reasons = [f"timing record complete: {_total_rows} corner row(s), "
+                       f"{_signoff_rows} of them sign-off; every corner the "
+                       f"flow declared is reported for the role it serves, "
+                       f"every sign-off corner MET (tol {slack_tol} ns), each "
+                       f"reported corner was analysed with its own corner "
+                       f"library, and DRV was queried and clean"]
     return {
         "verdict": verdict,
         "status": verdict,
@@ -1199,6 +1220,8 @@ def evaluate(project: Path,
         "declaration_sources": decl.get("sources"),
         "axis_evidence": axes,
         "single_corner_only": bool(degraded_disclosed),
+        "corner_rows": _total_rows,
+        "signoff_corner_rows": _signoff_rows,
         "slack_tol_ns": slack_tol,
         "rules_violated": ordered,
     }

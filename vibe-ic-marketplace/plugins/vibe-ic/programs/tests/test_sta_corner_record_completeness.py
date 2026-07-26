@@ -769,3 +769,64 @@ def test_measured_shape_with_max_slew_violations_fails(tmp_path):
     assert "R3_SIGNOFF_CORNER_VIOLATION" not in res["rules_violated"]
     rc_ax = next(a for a in res["axis_evidence"] if a["axis"] == "rc")
     assert rc_ax["drv"]["violations"] == {"max_slew": 139}
+
+
+# ── #447 convention applied here: state the denominator ────────────────────
+def test_a_run_with_no_signoff_corner_says_so_instead_of_claiming_MET():
+    """MEASURED on a published cell. R3 — the sign-off MET rule — only examines
+    rows whose `role_class` is "signoff" and SKIPS every other role. On a run
+    whose ONLY corner is `primary`, R3 examined ZERO rows and the verdict line
+    still read "every sign-off corner MET".
+
+    The claim is not false — vacuously every one of zero corners is met — but
+    it printed identically to a real multi-corner closure, which is the defect
+    this repo has now removed from five separate programs (#447).
+
+    Measured across published cells: spm carries 4-6 corner rows with 2-4
+    sign-off; `subservient` is the only one with ZERO, and it was the only one
+    receiving the vacuous sentence.
+    """
+    import pathlib
+    import pytest
+    import sta_corner_record_completeness_check as S
+
+    cell = pathlib.Path(__file__).resolve().parents[5] / \
+        "benchmark-data" / "ic" / "subservient"
+    if not cell.is_dir():
+        pytest.skip("published cell not checked out")
+    d = S.evaluate(cell)
+    assert d.get("signoff_corner_rows") == 0, d.get("signoff_corner_rows")
+    joined = " ".join(d.get("reasons") or [])
+    assert "NO SIGN-OFF CORNER WAS REPORTED" in joined, joined
+    assert "every sign-off corner MET" not in joined, joined
+
+
+def test_a_real_multi_corner_run_still_reports_its_counts():
+    """The paired half: a run WITH sign-off corners must still get the normal
+    sentence, now carrying both denominators."""
+    import pathlib
+    import pytest
+    import sta_corner_record_completeness_check as S
+
+    cell = pathlib.Path(__file__).resolve().parents[5] / \
+        "benchmark-data" / "ic" / "spm" / "v1.5.65_sky130A"
+    if not cell.is_dir():
+        pytest.skip("published cell not checked out")
+    d = S.evaluate(cell)
+    assert d.get("corner_rows", 0) > 1
+    assert d.get("signoff_corner_rows", 0) > 0
+
+
+def test_the_counts_are_exported_in_the_result():
+    """A denominator nobody can read is not a denominator — it has to be in
+    the machine-readable result, not only in the prose."""
+    import pathlib
+    import pytest
+    import sta_corner_record_completeness_check as S
+
+    cell = pathlib.Path(__file__).resolve().parents[5] / \
+        "benchmark-data" / "ic" / "subservient"
+    if not cell.is_dir():
+        pytest.skip("published cell not checked out")
+    d = S.evaluate(cell)
+    assert "corner_rows" in d and "signoff_corner_rows" in d, sorted(d)
