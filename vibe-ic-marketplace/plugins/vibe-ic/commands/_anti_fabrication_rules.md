@@ -20,6 +20,11 @@ that any fresh agent invoking those commands sees the same hard rules.
    Synthetic timestamps (every entry on `:00` second boundary, regular
    gaps) will be flagged by `provenance_output_hash_completeness_check`
    (roadmap). Empty is honest; fabricated is dishonest.
+   An output the publish step did not ship is DISCLOSED, never deleted
+   (#414): keep the row and its digest and add
+   `outputs_relocated_at_publish` / `outputs_pruned_at_publish` +
+   `outputs_pruned_reason`. Deleting the row to quiet the gate restores
+   the dangling pointer those keys exist to remove.
 
 3. **`reports/` root holds only 2 markdown files** —
    `final_summary.md` + `chip_specific_summary.md` (produced by
@@ -59,6 +64,14 @@ that any fresh agent invoking those commands sees the same hard rules.
   Every provenance.jsonl entry must declare `outputs:
   sha256:<64hex>` and the declared hash must match the on-disk
   file. Synthetic-timestamp pattern flagged as ATTEST_TIMING_SUSPICIOUS.
+  #434: an absence the row DISCLOSES is a third outcome —
+  PROVENANCE_OUTPUT_NOT_VERIFIABLE_HERE, severity DISCLOSED, counted on
+  the verdict line — but only after the gate follows a relocation to a
+  file with the SAME digest, or finds the not-shipped claim explained,
+  true, and backed by the run's own digest. Presence and hash are
+  decided before any disclosure is read, so a marker can never silence
+  a PROVENANCE_HASH_MISMATCH. `--require-outputs-present` restores the
+  ERROR for run directories, where nothing has been published yet.
 - `agent_report_sha256_attestation_check` (v1.6.33) — rule 5.
   AGENT_REPORT.md must carry a SHA256 attestation table for every
   canonical artefact.
