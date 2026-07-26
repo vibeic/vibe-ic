@@ -153,6 +153,20 @@ jobs:
           python3 "$PROGRAMS/commit_msg_nda_check.py" \
             --repo "$GITHUB_WORKSPACE" --rev-range "${BASE}..HEAD"
 
+      # The step above scans the commit TEXT only. The same token is equally
+      # permanent when it arrives as added CONTENT or as an added PATH, and
+      # the path carrier is live: local run directories on this fleet carry a
+      # commercial SKU in their NAME and no .gitignore rule covers them, so a
+      # single `git add -A` would land one. ci.yml gained this scan in
+      # v1.6.27; this workflow — the one that gates the MERGE — still had only
+      # the message half, so the stricter gate was the weaker one.
+      - name: NDA guard — added CONTENT and PATHS in this PR
+        run: |
+          set -euo pipefail
+          BASE="${{ steps.base.outputs.sha }}"
+          python3 "$PROGRAMS/nda_diff_scan_check.py" \
+            --repo "$GITHUB_WORKSPACE" --rev-range "${BASE}..HEAD"
+
       - name: git prohibition guard (scan this PR's commit messages)
         run: |
           set -euo pipefail
