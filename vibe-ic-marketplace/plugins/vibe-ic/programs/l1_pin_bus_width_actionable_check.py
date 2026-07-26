@@ -4,10 +4,18 @@
 VERDICT SEMANTICS: **BLOCKS** (exit 1 on FAIL).
 ------------------------------------------------------------------
 Why blocking and not advisory: the artefact this gate protects is the
-*top-module port list*. Phase2 (`programs/_specrtl_common.py`,
-`programs/phase2_scaffold_gen.py`) derives every port DECLARATION from
-`L1.pin_table[]`, and `l9_rtl_pin_consistency_check` later diffs that
-emitted RTL back against the same table. A pin whose width is not
+*top-module port list*. A pin recorded here reaches phase2 THROUGH L9 —
+`phase1_doc_one_shot_runner` promotes each L1 pin's
+`{width, msb, lsb, width_symbolic, optional}` into the matching L9 entry, and
+`phase2_scaffold_gen.derive_signals` reads `L17.channels[]` then
+`L9.top_ports` / `L9.ports`. It never reads `pin_table` (ORGANIC #404
+measured `grep -c pin_table` = 0 in both `phase2_scaffold_gen.py` and
+`_specrtl_common.py`). The earlier wording here said phase2 derived every
+port declaration FROM `L1.pin_table[]` directly; that sent the next author
+to the wrong file, which is how #404 cost a day. The gate itself is
+unchanged and still correct — L1 is where the width must become actionable.
+`l9_rtl_pin_consistency_check` later diffs the emitted RTL back against the
+same table. A pin whose width is not
 resolvable to an integer is emitted as a 1-bit scalar port. Nothing
 downstream errors at that moment — the failure surfaces many steps
 later as a width-mismatch, a truncated datapath, or an

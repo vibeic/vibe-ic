@@ -64,6 +64,19 @@ E3b CHANNEL_GROUP_COLLAPSED_TO_ONE_PORT
     single port and drops every member. The declared interface silently
     shrinks from N signals to 1.
 
+E3c PORT_WIDTH_COLLAPSED_TO_ONE_BIT
+    A port is emitted as a 1-bit scalar while the L9 entry it comes from
+    carries a SYMBOLIC width (`width_symbolic: "ACC_W-1:0"`) or a non-numeric
+    `width` string. `derive_signals` coerces any width that is neither an int
+    nor a digit-string to 1 with NO diagnostic, so the emitted interface is
+    narrower than the design declares. The value is not missing: L1 keeps the
+    textual form on purpose "so downstream consumers can resolve at
+    elaboration time", phase1 forwards it into L9, and the consumer discards
+    it. REPORTS ONLY — #404 measured that resolving the symbol and writing it
+    back into an L-doc turns a correct FAIL into a PASS, because
+    `parameters[]` carries no module/layer qualifier and a bare-name join let
+    an L12 scan-chain count size a data bus.
+
 E4 CHANNEL_DIRECTION_SILENTLY_INOUT
     A declared channel yields a port whose direction the consumer had to guess
     because the channel carries no key the consumer reads. `derive_signals`
@@ -509,6 +522,73 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
             f"phase2_scaffold_gen._normalize_dir(None) returns 'inout', so "
             f"these become silently bidirectional top-level ports.",
             {"signals": sorted(set(inout_guessed))[:20]}))
+
+    # -- E3c PORT_WIDTH_COLLAPSED_TO_ONE_BIT (ORGANIC #404, increment 1) ---
+    # `derive_signals` coerces any width that is neither an int nor a
+    # digit-string to 1, with NO diagnostic. So a port the design declares as
+    # `[ACC_W-1:0]` is emitted as a 1-bit scalar and the RTL is silently
+    # wrong at its interface.
+    #
+    # The value is NOT missing. L1's `_parse_port_width` deliberately keeps
+    # the textual form in `width_symbolic` "so downstream consumers can
+    # resolve at elaboration time", phase1 forwards it into the L9 entry, and
+    # the consumer then throws it away. Measured with the real function:
+    #     {'name':'acc_o','width':'ACC_W-1:0','width_symbolic':'ACC_W-1:0'}
+    #       -> {'name': 'acc_o', 'width': 1}
+    #
+    # THIS REPORTS; IT WRITES NOTHING. #404 measured that the obvious repair
+    # — resolving the symbol against the corpus' `parameters[]` and writing
+    # the result back into L1 — is WORSE than the defect: the L-doc corpus
+    # puts no module or layer qualifier on `parameters[]`, so a corpus-global
+    # join by bare name let an L12 scan-chain count `N=4` size a data bus the
+    # datasheet stated as 48, and turned `l1_pin_bus_width_actionable_check`
+    # from a correct FAIL into a PASS. A finding cannot do that: if that gate
+    # is also failing, both keep failing and each names its own layer.
+    #
+    # Increment 2 (resolve in the CONSUMER, scoped to the SAME document) is
+    # deliberately not done here — it is gated on what this finding measures
+    # on real designs.
+    collapsed_widths = []
+    _l9_by_name = {}
+    # The SAME two keys, in the SAME order, that derive_signals itself reads
+    # (phase2_scaffold_gen:238) — so this cannot describe a port list the
+    # consumer never looked at.
+    for _key in ("top_ports", "ports"):
+        for _p in _as_list(l9.get(_key)):
+            if isinstance(_p, dict) and _p.get("name"):
+                _l9_by_name.setdefault(
+                    _c_sanitize_id(str(_p["name"])), _p)
+    for _s in derived:
+        if not isinstance(_s, dict) or _s.get("width") != 1:
+            continue
+        _src = _l9_by_name.get(_c_sanitize_id(str(_s.get("name") or "")))
+        if not isinstance(_src, dict):
+            continue
+        _sym = _src.get("width_symbolic")
+        _w = _src.get("width")
+        _string_width = (isinstance(_w, str)
+                         and not str(_w).strip().isdigit())
+        if (_sym and str(_sym).strip()) or _string_width:
+            collapsed_widths.append({
+                "port": _s.get("name"),
+                "l9_width": _w,
+                "width_symbolic": _sym,
+            })
+    if collapsed_widths:
+        findings.append(Finding(
+            "ERROR", "PORT_WIDTH_COLLAPSED_TO_ONE_BIT",
+            f"{len(collapsed_widths)} port(s) are emitted as 1-bit scalars by "
+            f"the consumer's own derivation while the L9 entry they come from "
+            f"carries a SYMBOLIC or non-numeric width. "
+            f"phase2_scaffold_gen.derive_signals coerces any width that is "
+            f"neither an int nor a digit-string to 1 with no diagnostic, so "
+            f"the emitted top module's interface is narrower than the design "
+            f"declares and the error surfaces several steps downstream. "
+            f"This gate REPORTS only — resolving the symbol and writing it "
+            f"back into an L-doc was measured (#404) to turn a correct FAIL "
+            f"into a PASS, because `parameters[]` carries no module or layer "
+            f"qualifier and a bare-name join is unsound by construction.",
+            {"ports": collapsed_widths[:20]}))
 
     # -- E5 CLOCK_PORT_SYNTHESISED_BY_CONSUMER -----------------------------
     # derive_signals AUTO-ADDS a "clk"/"rst_n" stub when neither L17 nor L9
