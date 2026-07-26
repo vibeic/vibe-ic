@@ -80,6 +80,27 @@ _FS_READS = frozenset((
 ))
 
 
+# The THIRD shape, owed since PR #411 and reported there as a known gap: a
+# test can reach the real repository through GIT rather than through the
+# filesystem. `test_f10_gitignore_formal_transcript_shippable.py` drives the
+# actual `.gitignore` by asking `git rev-parse --show-toplevel` and then
+# `git check-ignore` / `git ls-files` — which is not merely "real", it is the
+# ONLY faithful way to test an ignore rule, because the rule's meaning IS
+# what git computes. This program reported that change `0 of 40` backed.
+#
+# The discriminator against a SYNTHETIC git test is `init`: a test that
+# builds a throwaway repo in `tmp_path` is a fixture no matter how much git
+# it runs. Excluding those under-claims when a test does BOTH, which is the
+# conservative direction — over-claiming "real" is what makes a
+# fixture-only change look backed, and that is the failure this program
+# exists to prevent.
+_GIT_REPO_READS = frozenset((
+    "rev-parse", "--show-toplevel", "check-ignore", "ls-files", "ls-tree",
+    "cat-file", "check-attr", "merge-base",
+))
+_GIT_SCRATCH = frozenset(("init", "init-db", "clone"))
+
+
 def _calls_in(node: ast.AST) -> Set[str]:
     """Every callable NAME referenced under `node` (bare or attribute tail)."""
     out: Set[str] = set()
@@ -114,6 +135,25 @@ def _sweeps_repo_data(node: ast.AST, funcs: Dict[str, ast.AST]) -> bool:
             names |= n2
             strs |= s2
     return bool(strs & _REPO_DATA_ROOTS) and bool(names & _FS_READS)
+
+
+def _reads_repo_via_git(node: ast.AST, funcs: Dict[str, ast.AST]) -> bool:
+    """True when the test interrogates the REAL repository through git.
+
+    Requires `git` itself, a repo-state read subcommand, and the ABSENCE of
+    any scratch-repo construction — see `_GIT_REPO_READS` above for why the
+    absence is what keeps this honest.
+    """
+    def _strs(n):
+        return {x.value for x in ast.walk(n)
+                if isinstance(x, ast.Constant) and isinstance(x.value, str)}
+    strs = _strs(node)
+    for c in _calls_in(node):
+        if c in funcs:
+            strs |= _strs(funcs[c])
+    return ("git" in strs
+            and bool(strs & _GIT_REPO_READS)
+            and not (strs & _GIT_SCRATCH))
 
 
 def classify_module(path: Path) -> dict:
@@ -165,6 +205,8 @@ def classify_module(path: Path) -> dict:
         kind = "helper" if backed else ""
         if not backed and _sweeps_repo_data(node, funcs):
             backed, kind = True, "ad-hoc path"
+        if not backed and _reads_repo_via_git(node, funcs):
+            backed, kind = True, "git repo"
         if not backed:
             # A pytest FIXTURE the test requests by parameter name is part of
             # what drives it. Missing this would misreport every test whose
