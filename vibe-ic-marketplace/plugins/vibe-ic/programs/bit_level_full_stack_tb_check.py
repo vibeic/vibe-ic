@@ -323,12 +323,24 @@ def register_map_protocol_evidence(generated_docs: Path,
     }
 
 
+# Oracle classes whose "expected" value comes from the DESIGN ITSELF rather
+# than from a document. They can still FAIL for real — a write leaking into
+# read-only address space is a genuine defect — but they are not golden-scored
+# evidence and must not be counted as such.
+_SELF_REFERENTIAL_KINDS = ("ro_write_ignore",)
+
+
 def functional_coverage_scored(sim_dir: Path) -> int | None:
     """Golden-scored vector count from sim_full_stack/results.json, or None.
 
     `functional_coverage.scored_with_golden` is the ONLY honest measure of
     functional verification here: a vector with `expected_bytes: null` is a
     bring-up placeholder, never evidence.
+
+    And neither is a vector whose "golden" is the design's own earlier read —
+    see `_SELF_REFERENTIAL_KINDS`. Both the producer and this fallback exclude
+    those, because a measure that a dead read path can satisfy is not a
+    measure of functional verification.
     """
     rj = sim_dir / "results.json"
     if not rj.is_file():
@@ -342,8 +354,16 @@ def functional_coverage_scored(sim_dir: Path) -> int | None:
         return int(fc["scored_with_golden"])
     pv = d.get("per_vector")
     if isinstance(pv, list):
+        # The same exclusion the producer applies, or this fallback silently
+        # re-inflates the number the producer was corrected to deflate: a
+        # `ro_write_ignore` vector's expected value is the DESIGN'S OWN
+        # baseline read, so it is self-consistency evidence, not a golden.
+        # Measured on a published design: forcing every `read_data` assignment
+        # to one constant left 12 of 12 such vectors PASSing.
         return sum(1 for v in pv
-                   if isinstance(v, dict) and v.get("expected_bytes") is not None)
+                   if isinstance(v, dict)
+                   and v.get("expected_bytes") is not None
+                   and v.get("kind") not in _SELF_REFERENTIAL_KINDS)
     return None
 
 

@@ -11,9 +11,21 @@ was 0 by construction no matter how correct the RTL was.
 
 WHAT IS SCORED — AND WHY IT IS NOT A WEAKENED "FUNCTIONAL VECTOR"
 -----------------------------------------------------------------
-Every scored vector here compares a REAL simulated `read_data` against a
-golden that comes from the DESIGN DOCUMENTS, and can genuinely FAIL on a
-buggy design.  Two oracle classes qualify; a third is deliberately REFUSED.
+Every scored vector here compares a REAL simulated `read_data` and can
+genuinely FAIL on a buggy design.  But the two qualifying oracle classes do
+NOT draw their expected value from the same place, and that difference is
+load-bearing enough to be counted separately (see `scored_with_golden` vs
+`scored_self_referential` below):
+
+  * `rw_storage_fixed_point` compares against a value derived from the DESIGN
+    DOCUMENTS — golden-scored evidence.
+  * `ro_write_ignore` compares against the DESIGN'S OWN baseline read. It is a
+    SELF-CONSISTENCY oracle. MEASURED on a published design: forcing all nine
+    `read_data` assignments to one constant left it at 12 of 12 PASS, i.e. a
+    completely dead read path scored exactly as a correct one. It is real
+    evidence of one specific property and it is NOT golden-scored coverage.
+
+A third class is deliberately REFUSED.
 
   (1) ``ro_write_ignore`` — the docs declare the register READ-ONLY.  Golden:
       a write must not change what the register reads back.  Sequence:
@@ -706,13 +718,45 @@ def generate(project: Path, top_module: str,
     obs = parse_transcript(transcript)
     per_vector = score_transcript(registers, obs, int(bus["data_width"]))
     scored = [v for v in per_vector if v.get("expected_bytes") is not None]
+    # `scored_with_golden` is consumed by `benchmark_verify_report` and
+    # `bit_level_full_stack_tb_check`, which document it as vectors "compared
+    # against a CONCRETE golden" and as "the ONLY honest measure" of functional
+    # coverage. `ro_write_ignore` does NOT meet that description: its expected
+    # value is the design's OWN baseline read (`exp = o["r0"]`), so it is a
+    # SELF-CONSISTENCY oracle, not a document-derived one.
+    #
+    # MEASURED, which is why this is split rather than argued: forcing all 9
+    # `read_data` assignments in a published design to one constant left the
+    # score at 12 of 12 PASS. A read path that is entirely dead scored the same
+    # as a correct one, and that 12 was flowing into the benchmark's headline
+    # honesty number.
+    #
+    # The oracle is NOT worthless and is NOT removed — "a write must not change
+    # a read-only register's read-back" is a real property and still FAILs when
+    # writes leak into read-only address space. It is counted under its own
+    # name so a reader can see how much of a coverage figure is self-referential.
+    _SELF_REF_KINDS = ("ro_write_ignore",)
+    golden = [v for v in scored if v.get("kind") not in _SELF_REF_KINDS]
+    selfref = [v for v in scored if v.get("kind") in _SELF_REF_KINDS]
+    # When every self-referential baseline is the SAME value, the class cannot
+    # discriminate a working read path from a stuck-at-constant one. That is
+    # not a FAIL — nothing observed is wrong — but it must be visible, because
+    # it is exactly the state in which a perfect score means nothing.
+    _baselines = {v.get("expected_bytes") for v in selfref}
     info.update({
         "status": "scored" if scored else "emitted",
         "per_vector": per_vector,
         "addresses_probed": len(obs),
-        "scored_with_golden": len(scored),
-        "scored_passed": sum(1 for v in scored if v["verdict"] == "PASS"),
-        "scored_failed": sum(1 for v in scored if v["verdict"] == "FAIL"),
+        "scored_with_golden": len(golden),
+        "scored_passed": sum(1 for v in golden if v["verdict"] == "PASS"),
+        "scored_failed": sum(1 for v in golden if v["verdict"] == "FAIL"),
+        "scored_self_referential": len(selfref),
+        "self_referential_passed": sum(
+            1 for v in selfref if v["verdict"] == "PASS"),
+        "self_referential_failed": sum(
+            1 for v in selfref if v["verdict"] == "FAIL"),
+        "self_referential_undiscriminating": (
+            len(selfref) > 1 and len(_baselines) == 1),
         "log": str(work / "regmap.log"),
     })
     return info
