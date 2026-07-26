@@ -5430,7 +5430,33 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 ir_budget_pct=_signoff_cfg.get("ir_budget_pct"),
                 cell_aware_feol=_signoff_cfg.get("cell_aware_feol"),
             )
-    # fallback: sky130A in container
+    # vibe-ic#389 — an explicitly NAMED pdk that reached here matched no
+    # branch and no registry entry. Falling through to sky130A makes an
+    # invented name and a real-but-unregistered one produce BYTE-IDENTICAL
+    # results, and the operator is told nothing: a whole cell was driven to a
+    # verdict, written up and discussed as `spm x ihp-sg13cmos5l` while every
+    # tool read sky130A.
+    #
+    # This defect has now been recorded THREE times in this function's own
+    # comments — asap7, then the registry-declared set, now
+    # ihp-sg13cmos5l — and each fix added ANOTHER named branch. Adding
+    # branches cannot close it: the hole is the fall-through itself, which
+    # silently converts "I could not resolve what you asked for" into "here
+    # is something else". Refusing is the only form that scales to the next
+    # PDK nobody has added a branch for yet.
+    #
+    # The fallback stays for AUTO-detection (no --pdk given): defaulting is a
+    # legitimate choice when the operator expressed none. Substituting for a
+    # name they DID give is not.
+    if override and override != "auto":
+        raise ValueError(
+            f"--pdk '{override}' resolved to nothing: it matches no named "
+            f"branch and no entry in pdk_registry.json. REFUSING to fall "
+            f"back to sky130A — a silent substitution makes an invented PDK "
+            f"name and a real one indistinguishable in every artefact "
+            f"(vibe-ic#389). Register the PDK, or pass a registered name, or "
+            f"omit --pdk to auto-detect.")
+    # fallback (AUTO-detect only): sky130A in container
     return _detect_pdk(project, override="sky130A")
 
 
