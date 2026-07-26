@@ -2184,6 +2184,76 @@ def step_reused_ip_consume(project: Path,
         extras=res)
 
 
+def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]:
+    """Stage the captured-knowledge digests for an LLM RTL author and return
+    ``(hint_text, extras)``.
+
+    WHY THIS IS A FUNCTION AND NOT AN INLINE BLOCK: ``step_rtl_gen`` hands off
+    to an LLM author from THREE different WAIVE branches — unregistered class
+    (`spec-to-rtl`), pre-staged vendor RTL (`catalog-glue-author`), and
+    registered-but-no-generator (`spec-to-rtl` / `catalog-glue-author`). Only
+    the third one used to stage the digests, because the staging lived inside
+    that branch's body rather than alongside the handoff. Measured on the MAIN
+    tree before this change, all three branches naming an author skill:
+
+        unreg   skill=spec-to-rtl         lessons=False  expert_db=False
+        vendor  skill=catalog-glue-author lessons=False  expert_db=False
+        reg     skill=spec-to-rtl         lessons=True   expert_db=True
+
+    So two of three authoring handoffs delivered ZERO captured knowledge — the
+    author was told to author and given nothing to author from. The knowledge
+    an author receives must depend on the fact that it is authoring, never on
+    which branch happened to notice.
+
+    Best-effort by contract: a render failure returns ("", {}) and never blocks
+    the WAIVE it decorates.
+    """
+    digest_path = None
+    n_lessons = 0
+    db_digest_path = None
+    n_db = 0
+    try:
+        stage1 = _pl.phase2_stage1_dir(project)
+        n_lessons = _lesson_digest.render_lesson_digest(stage1)
+        if n_lessons:
+            digest_path = str(stage1 / "lessons.md")
+        # IC Expert DB is a SEPARATE dual-track artifact — the relevant
+        # design-class knowledge for THIS design, written to its own file for
+        # an INDEPENDENT second-track author (measured: folding it into the
+        # single digest dilutes recovery 38→31; as a complementary track the
+        # union is 38→51). chip-AGNOSTIC advisory; never overrides a gate.
+        try:
+            _spec = _gather_spec_text(project)
+            n_db = _lesson_digest.render_ic_expert_db_digest(stage1, _spec)
+            if n_db:
+                db_digest_path = str(stage1 / "ic_expert_db.md")
+        except Exception:
+            pass
+    except Exception:
+        pass
+    lessons_hint = (
+        f"\nMANDATORY before authoring: open `{digest_path}` ({n_lessons} "
+        f"chip-AGNOSTIC genre-convention lessons) and APPLY every section "
+        f"whose '**When to apply**' matches this design's genre — these are "
+        f"captured general topology/convention patterns, NOT per-problem "
+        f"answers."
+        if digest_path else "")
+    db_hint = (
+        f"\nDUAL-TRACK (optional second opinion): `{db_digest_path}` holds "
+        f"{n_db} IC Expert DB design-class lesson(s) matched to THIS design "
+        f"(algorithm/interface/latency craft from proven-correct designs). "
+        f"For a hard design, author an INDEPENDENT second attempt guided by "
+        f"it and keep whichever attempt the gates PASS — measured to recover "
+        f"designs the primary digest misses (union lift)."
+        if db_digest_path else "")
+    extras: Dict[str, Any] = {"lessons_digest": digest_path,
+                              "lessons_count": n_lessons}
+    if db_digest_path:
+        extras["ic_expert_db_digest"] = db_digest_path
+        extras["ic_expert_db_count"] = n_db
+    return lessons_hint + db_hint, extras
+
+
 def step_rtl_gen(project: Path, ic_class: str,
                  force_regen: Optional[bool] = None) -> StepResult:
     """Emit RTL for ``ic_class``.
@@ -2203,15 +2273,21 @@ def step_rtl_gen(project: Path, ic_class: str,
     config = _lookup_class(ic_class)
     if config is None:
         # Class not registered — defer entirely to AI / fallback skill.
+        # This branch names an author skill, so it is an AUTHORING HANDOFF and
+        # gets the captured-knowledge digests like every other one. An
+        # unregistered class is exactly the case where the author has the LEAST
+        # scaffolding and needs them MOST.
+        _hint, _hint_extras = _stage_author_knowledge_digests(project)
         return StepResult(
             "rtl_gen", "WAIVED",
             time.time() - t0,
             f"IC class {ic_class!r} not in ic_class_registry.json. "
             f"Recommended action: AI invokes skill `spec-to-rtl` to "
             f"generate RTL by NL methodology, OR third party adds class "
-            f"entry + generator in their partner plugin.",
+            f"entry + generator in their partner plugin." + _hint,
             extras={"fallback_skill": "spec-to-rtl",
-                    "class_registry_path": "programs/ic_class_registry.json"})
+                    "class_registry_path": "programs/ic_class_registry.json",
+                    **_hint_extras})
 
     gen_name = config.get("rtl_gen")
     if not gen_name:
@@ -2252,10 +2328,14 @@ def step_rtl_gen(project: Path, ic_class: str,
                             f"(reused_ip:true) so #659/#711/#712 pin-gate "
                             f"relaxations are live."
                             if _mf_emitted else "")
+                # Authoring handoff (`catalog-glue-author` still authors the
+                # chip_top wrapper by hand) — so it gets the digests too.
+                _hint, _hint_extras = _stage_author_knowledge_digests(project)
                 _extras = {"fallback_skill": "catalog-glue-author",
                            "class_config": config,
                            "staged_vendor_rtl_count": len(_staged),
-                           "staged_vendor_rtl_sample": _sample}
+                           "staged_vendor_rtl_sample": _sample,
+                           **_hint_extras}
                 if _mf_emitted:
                     _extras["source_manifest_emitted"] = _mf_emitted
                 return StepResult(
@@ -2265,7 +2345,7 @@ def step_rtl_gen(project: Path, ic_class: str,
                     f"input/vendor_rtl/ ({len(_staged)} file(s){_more}) — "
                     f"REUSED-IP path: use skill `catalog-glue-author` to "
                     f"author the chip_top wrapper around the staged files."
-                    + _mf_note,
+                    + _mf_note + _hint,
                     extras=_extras)
         # Class registered but has no deterministic generator yet.
         # v1.6.570 — for IP catalog integration: query ip-catalog for
@@ -2368,45 +2448,7 @@ def step_rtl_gen(project: Path, ic_class: str,
         # (every active `### Skill:`, no per-genre filter -> no mis-route, no
         # leak) next to the expected RTL so the author MUST-READ it before
         # authoring. Best-effort: a render failure never blocks the WAIVE.
-        digest_path = None
-        n_lessons = 0
-        db_digest_path = None
-        n_db = 0
-        try:
-            stage1 = _pl.phase2_stage1_dir(project)
-            n_lessons = _lesson_digest.render_lesson_digest(stage1)
-            if n_lessons:
-                digest_path = str(stage1 / "lessons.md")
-            # IC Expert DB is a SEPARATE dual-track artifact — the relevant
-            # design-class knowledge for THIS design, written to its own file for
-            # an INDEPENDENT second-track author (measured: folding it into the
-            # single digest dilutes recovery 38→31; as a complementary track the
-            # union is 38→51). chip-AGNOSTIC advisory; never overrides a gate.
-            try:
-                _spec = _gather_spec_text(project)
-                n_db = _lesson_digest.render_ic_expert_db_digest(stage1, _spec)
-                if n_db:
-                    db_digest_path = str(stage1 / "ic_expert_db.md")
-            except Exception:
-                pass
-        except Exception:
-            pass
-        lessons_hint = (
-            f"\nMANDATORY before authoring: open `{digest_path}` ({n_lessons} "
-            f"chip-AGNOSTIC genre-convention lessons) and APPLY every section "
-            f"whose '**When to apply**' matches this design's genre — these are "
-            f"captured general topology/convention patterns, NOT per-problem "
-            f"answers."
-            if digest_path else "")
-        db_hint = (
-            f"\nDUAL-TRACK (optional second opinion): `{db_digest_path}` holds "
-            f"{n_db} IC Expert DB design-class lesson(s) matched to THIS design "
-            f"(algorithm/interface/latency craft from proven-correct designs). "
-            f"For a hard design, author an INDEPENDENT second attempt guided by "
-            f"it and keep whichever attempt the gates PASS — measured to recover "
-            f"designs the primary digest misses (union lift)."
-            if db_digest_path else "")
-        lessons_hint += db_hint
+        lessons_hint, _hint_extras = _stage_author_knowledge_digests(project)
         skill = config.get("fallback_skill") or "spec-to-rtl"
         if catalog_matches_summary:
             skill = "catalog-glue-author"
@@ -2419,8 +2461,7 @@ def step_rtl_gen(project: Path, ic_class: str,
             extras={"fallback_skill": skill,
                     "class_config": config,
                     "ip_catalog_matches": catalog_matches_summary,
-                    "lessons_digest": digest_path,
-                    "lessons_count": n_lessons})
+                    **_hint_extras})
 
     gen = PROGRAMS_DIR / gen_name
     if not gen.is_file():
