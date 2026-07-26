@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 973
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 973)
+- **Total programs (excluding helpers / shims):** 974
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 974)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 964 |
+| `any` | 965 |
 
 ## Alphabetical listing
 
@@ -741,6 +741,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `real_artefact_test_backing_check` | any | — | how many of a change's tests are |
 | `regmap_bit_layout_check` | any | — | gate that catches L4_REGMAP.json registers |
 | `regmap_table_extractor` | any | — | Extract register-table rows from extracted PDF/text docs. |
+| `regmap_transaction_tb_gen` | any | — | ORGANIC #186 part 2. |
 | `regression_failure_dedup` | any | — | Pattern-B extraction from |
 | `regression_failure_route` | any | — | Pattern-B extraction from |
 | `regression_flaky_quarantine` | any | — | Pattern-B extraction from |
@@ -1045,7 +1046,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (964 programs)
+### `any` (965 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1757,6 +1758,7 @@ _(no programs in this group)_
 - `real_artefact_test_backing_check` — how many of a change's tests are
 - `regmap_bit_layout_check` — gate that catches L4_REGMAP.json registers
 - `regmap_table_extractor` — Extract register-table rows from extracted PDF/text docs.
+- `regmap_transaction_tb_gen` — ORGANIC #186 part 2.
 - `regression_failure_dedup` — Pattern-B extraction from
 - `regression_failure_route` — Pattern-B extraction from
 - `regression_flaky_quarantine` — Pattern-B extraction from

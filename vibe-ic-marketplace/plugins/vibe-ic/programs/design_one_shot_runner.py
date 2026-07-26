@@ -2681,6 +2681,38 @@ def _golden_bytes_from_l3_opcode(op: Dict[str, Any]) -> Optional[str]:
     return ",".join(exp_bytes) if exp_bytes else None
 
 
+def _v186_regmap_transaction_vectors(project: Path, top_module: str
+                                     ) -> Optional[Dict[str, Any]]:
+    """ORGANIC #186 part 2 — real, golden-scored REGISTER-MAP vectors.
+
+    For an IC whose L3 declares no opcode/byte protocol but whose L4/L5 DO
+    declare a register file, the byte-stream skeleton this step emits drives
+    NOTHING (no inout pad → `drive_byte` is a no-op; no opcodes → no stimulus),
+    so `functional_coverage.scored_with_golden` was 0 by construction. The
+    register-map transaction driver emits a real bus TB, SIMULATES it against
+    rtl/, and scores each documented register against a doc-derived golden
+    (read-only-write-ignore / read/write storage fixed point).
+
+    Returns the driver's info dict when it produced at least one scored vector,
+    else None (no simulator, not a register bus, no documented register map,
+    TB did not elaborate — every one of which leaves the historical skeleton
+    behaviour byte-for-byte unchanged). chip-AGNOSTIC.
+    """
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import regmap_transaction_tb_gen as _rmt
+        info = _rmt.generate(project, top_module)
+    except Exception:  # pragma: no cover — never fail the flow on the driver
+        return None
+    if info.get("status") != "scored":
+        return None
+    if not (info.get("per_vector") and info.get("scored_with_golden")):
+        return None
+    return info
+
+
 def _full_stack_golden_vectors(project: Path,
                                opcodes_hex: List[str]
                                ) -> Tuple[List[Dict[str, Any]], str]:
@@ -3725,6 +3757,28 @@ def step_full_stack_tb_gen(project: Path,
         # so a placeholder TB can never report a green functional PASS.
         per_vector_skeleton, l3_evidence = _full_stack_golden_vectors(
             project, opcodes_hex[:5])
+        # ORGANIC #186 part 2 — when the byte-stream skeleton has NO scored
+        # golden (the register-mapped / MMIO shape: L3 declares no opcodes, so
+        # the skeleton drives nothing at all), try the register-map TRANSACTION
+        # driver: a real bus TB, really simulated against rtl/, scored against
+        # doc-derived goldens. Its vectors REPLACE the bring-up padding — they
+        # are genuine transactions, not placeholders. Any failure to produce
+        # them (no simulator, not a register bus, no documented register map)
+        # returns None and the historical skeleton path runs unchanged.
+        # NO-LEAK: restricted to the shape #186 is about — an IC whose L3
+        # HONESTLY declares no command protocol. An IC that does have opcodes
+        # keeps the byte-stream path and its vector schema verbatim, even when
+        # its L3 supplies no response templates.
+        _rm_info = None
+        if no_command_protocol and not any(
+                v.get("expected_bytes") is not None
+                for v in per_vector_skeleton):
+            _rm_info = _v186_regmap_transaction_vectors(project, top_module)
+        if _rm_info:
+            per_vector_skeleton = list(_rm_info["per_vector"])
+            l3_evidence = ("documented register map (L4_REGMAP.json + the "
+                           "authored L4/L5 register table) — "
+                           "regmap_transaction_tb_gen")
         # Pad to >=8 vectors so MIN_VECTORS_FAIL=8 passes — padding
         # vectors are honest UNVERIFIED bring-up steps, not fake PASSes.
         while len(per_vector_skeleton) < 8:
@@ -3764,6 +3818,31 @@ def step_full_stack_tb_gen(project: Path,
                        "oracle. " if no_command_protocol else "")
                     + "chip-AGNOSTIC.")},
         )
+        # ORGANIC #186 part 2 — publish the register-map coverage denominator
+        # alongside the numerator so a thin oracle can never read as a full
+        # one: how many registers the documents declare, how many are readable
+        # (the only ones a read golden can exist for), and how many were
+        # actually golden-scored in simulation.
+        if _rm_info:
+            results["register_map_coverage"] = {
+                "registers_documented": _rm_info["registers_documented"],
+                "registers_readable": _rm_info["registers_readable"],
+                "addresses_probed": _rm_info["addresses_probed"],
+                "scored_with_golden": _rm_info["scored_with_golden"],
+                "scored_passed": _rm_info["scored_passed"],
+                "scored_failed": _rm_info["scored_failed"],
+                "transaction_tb": _rm_info["tb"],
+                "result_oracle_deferred": True,
+                "result_oracle_note": (
+                    "Register ACCESS/STORAGE semantics are golden-scored from "
+                    "the documented access class. The RESULT of an algorithm-"
+                    "defined operation is NOT scored here — that oracle is "
+                    "per-IC and stays the professional-TB reference-model "
+                    "deferral."),
+            }
+            results["source"] = (
+                "step_full_stack_tb_gen + regmap_transaction_tb_gen "
+                "(ORGANIC #186 part 2)")
         results_path.write_text(json.dumps(results, indent=2) + "\n")
     else:
         # File already richer; just ensure opcodes_tested is populated.
@@ -3797,11 +3876,28 @@ def step_full_stack_tb_gen(project: Path,
     # connectivity smoke-test — surface SKIP, NOT a green functional PASS.
     fc = results.get("functional_coverage") or {}
     placeholder = fc.get("placeholder")
+    _rmc = results.get("register_map_coverage") or {}
     if results.get("functional_verified") is True:
         verdict_word = "PASS"
         note = (f"tb_{top_module}_full.v emitted + functionally verified "
                 f"({len(top_ports)} L9.top_ports → {len(inst_args)} DUT "
                 f"pins, {len(opcodes_hex)} L3 opcodes, golden-scored)")
+    elif _rmc.get("scored_with_golden"):
+        # ORGANIC #186 part 2 — real register-map transactions WERE simulated
+        # and golden-scored. Report that truthfully (with the denominator);
+        # it is neither a connectivity-only skeleton nor a full functional
+        # PASS while write-only addresses have no read golden and the
+        # algorithmic RESULT oracle stays deferred.
+        verdict_word = "FAIL" if _rmc.get("scored_failed") else "SKIP"
+        note = (f"tb_{top_module}_full.v emitted; register-map TRANSACTION "
+                f"driver simulated {_rmc.get('addresses_probed')} documented "
+                f"address(es) and golden-scored "
+                f"{_rmc.get('scored_with_golden')} of "
+                f"{_rmc.get('registers_readable')} readable register(s) "
+                f"(passed={_rmc.get('scored_passed')}, "
+                f"failed={_rmc.get('scored_failed')}). Write-only addresses "
+                f"have no read golden and the algorithmic RESULT oracle stays "
+                f"deferred, so NO blanket functional PASS is claimed.")
     else:
         verdict_word = "SKIP"
         note = (f"tb_{top_module}_full.v emitted as CONNECTIVITY-ONLY "

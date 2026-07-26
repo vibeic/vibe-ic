@@ -347,6 +347,70 @@ def functional_coverage_scored(sim_dir: Path) -> int | None:
     return None
 
 
+def register_map_transaction_coverage(sim_dir: Path) -> dict | None:
+    """ORGANIC #186 part 2 — the register-map transaction driver's coverage
+    block from sim_full_stack/results.json, or None when this run carries no
+    register-map transaction evidence."""
+    rj = sim_dir / "results.json"
+    if not rj.is_file():
+        return None
+    try:
+        d = json.loads(rj.read_text())
+    except Exception:
+        return None
+    rmc = d.get("register_map_coverage")
+    if isinstance(rmc, dict) and isinstance(rmc.get("scored_with_golden"), int):
+        return rmc
+    return None
+
+
+def _regmap_transaction_verdict(regmap: dict, rmc: dict) -> dict:
+    """The gate verdict for a run WITH real register-map transaction evidence.
+
+    A golden mismatch is a hard FAIL — it is a measured disagreement between
+    the RTL and the documented access class, not a tooling gap. Otherwise the
+    register-map ACCESS/STORAGE pillar is satisfied and reported WITH its
+    denominator (readable registers) so a thin oracle cannot read as a full
+    one; `functional_verified` stays False while the algorithmic RESULT oracle
+    is deferred."""
+    scored = int(rmc.get("scored_with_golden") or 0)
+    failed = int(rmc.get("scored_failed") or 0)
+    passed = int(rmc.get("scored_passed") or 0)
+    readable = int(rmc.get("registers_readable") or 0)
+    documented = int(rmc.get("registers_documented") or 0)
+    common = {
+        "vacuous_pass": False,
+        "scored_with_golden": scored,
+        "register_map_evidence": regmap,
+        "register_map_coverage": rmc,
+    }
+    if failed:
+        return {
+            **common, "pass": False, "functional_verified": False,
+            "rule": "register_map_transaction_oracle_fail",
+            "verdict": "FAIL",
+            "rationale": (
+                f"FAIL: the register-map transaction driver golden-scored "
+                f"{scored} documented register(s) and {failed} MISMATCHED the "
+                f"access class the documents declare (passed={passed}). This "
+                f"is a measured RTL/spec disagreement on the register file, "
+                f"not a tooling gap."),
+        }
+    return {
+        **common, "pass": True, "functional_verified": False,
+        "rule": "register_map_transaction_oracle_pass",
+        "verdict": "PASS",
+        "rationale": (
+            f"PASS: the register-map ACCESS/STORAGE pillar is verified by "
+            f"real simulated bus transactions — {scored} of {readable} "
+            f"documented READABLE register(s) golden-scored, all passing "
+            f"({documented} address(es) documented in total). Write-only "
+            f"addresses have no read golden, and the RESULT oracle of an "
+            f"algorithm-defined operation stays the per-IC reference-model "
+            f"deferral, so `functional_verified` is NOT claimed."),
+    }
+
+
 def _find_top_module(rtl_dir: Path, l9_path: Path | None,
                      explicit_top: str | None) -> str | None:
     """Best-effort top-module discovery: explicit > L9 > heuristic.
@@ -685,6 +749,35 @@ def main():
                 # None == no full-stack result at all == no functional
                 # coverage; treat it exactly like an explicit 0.
                 _scored = functional_coverage_scored(_sim)
+                # ORGANIC #186 part 2 — the register-map TRANSACTION driver
+                # can now produce REAL golden-scored vectors for this shape.
+                # When it did, neither of the two legacy outcomes below is
+                # honest: it is not a 0-vector coverage GAP, and it is
+                # certainly not the "no L4/L5 register-map protocol" N/A
+                # VACUOUS_PASS the fall-through emits. Report the measured
+                # transaction result — FAIL when a golden mismatched.
+                # NOTE the precondition is the transaction COVERAGE block, not
+                # `_regmap`: the driver only runs when the design's own
+                # documents declare a register map, and it reads the AUTHORED
+                # L4/L5 table as well as the downstream JSON extraction that
+                # `register_map_protocol_evidence` is limited to. Requiring
+                # `_regmap` would let a project whose register map lives only
+                # in the authored document fall through to the "no L4/L5
+                # register-map protocol" N/A — the exact false claim this
+                # branch exists to prevent.
+                if (_scored or 0) > 0:
+                    _rmc = register_map_transaction_coverage(_sim)
+                    if _rmc:
+                        _res = _regmap_transaction_verdict(
+                            _regmap or {"source": "register_map_coverage"},
+                            _rmc)
+                        if args.json:
+                            Path(args.json).parent.mkdir(parents=True,
+                                                         exist_ok=True)
+                            Path(args.json).write_text(
+                                json.dumps(_res, indent=2))
+                        print(json.dumps(_res, indent=2))
+                        return 0 if _res["pass"] else 1
                 if _regmap and (_scored or 0) == 0:
                     _ic_class = _resolve_ic_class(proj)
                     # (A) A REAL professional-cocotb functional PASS SUPERSEDES
