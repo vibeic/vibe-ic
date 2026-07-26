@@ -1,0 +1,8 @@
+{
+  "_comment": "L-doc fields a checker reads that NO real document populates (vibe-ic#312 family). MAY ONLY SHRINK \u2014 each entry is a consumer reading what nobody writes, so every PASS on that path is an empty result wearing a clean one's clothes.",
+  "known": [
+    "isolation_cells",
+    "level_shifters",
+    "tables"
+  ]
+}

@@ -76,6 +76,15 @@ jobs:
         run: |
           python3 vibe-ic-marketplace/plugins/vibe-ic/programs/flow_gate_enforcement_audit.py
 
+      # vibe-ic#312 family — a checker that reads a field NO document
+      # populates sees an empty value, and an empty value is
+      # indistinguishable from a clean one. Measured five times in one
+      # campaign; three were "the producer never existed". Recorded debt
+      # does not fail; a NEW reader-without-producer does.
+      - name: L-doc field producer gate (a read field must be written)
+        run: |
+          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/l_doc_field_producer_check.py
+
       - name: tracked-symlink portability gate
         run: |
           python3 vibe-ic-marketplace/plugins/vibe-ic/programs/tracked_symlink_portability_check.py
