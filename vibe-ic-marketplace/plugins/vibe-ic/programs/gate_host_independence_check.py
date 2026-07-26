@@ -103,6 +103,15 @@ def _expand(cmd: str, root: Path) -> List[str]:
     return c.split()
 
 
+def _norm(line: str, repo_root: Path, wt: Path) -> str:
+    """Replace either tree's path with a stable placeholder."""
+    for root in (str(wt.resolve()), str(wt), str(repo_root.resolve()),
+                 str(repo_root)):
+        if root:
+            line = line.replace(root, "<TREE>")
+    return line
+
+
 def _verdict_line(out: str) -> str:
     """The last non-empty line — the verdict a caller reads."""
     lines = [ln.rstrip() for ln in (out or "").splitlines() if ln.strip()]
@@ -186,8 +195,21 @@ def audit(repo_root: Path, timeout: int = 600) -> Tuple[str, List[Dict]]:
                               f"{type(exc).__name__}: {str(exc)[:160]}",
                     "checkout": "-", "worktree": "-"})
                 continue
-            va = _verdict_line(a.stdout + a.stderr)
-            vb = _verdict_line(b.stdout + b.stderr)
+            # NORMALISE THE TREE PATH OUT before comparing. A gate that echoes
+            # its own root — `marketplace_version_sync_check` prints the
+            # manifest paths it read — differs between the two trees for a
+            # reason that has nothing to do with what it EXAMINED.
+            #
+            # Caught by this probe's first genuine run: CI reported it
+            # HOST_DEPENDENT while both sides said "PASS: 2 manifest(s), 2
+            # plugin entr(ies) — all versions in sync". A comparison that
+            # reports a difference which is not one is the same defect class
+            # this probe exists to find, in the probe itself.
+            #
+            # A REAL difference — a count, a verdict word, a finding — still
+            # differs after this, so the check is not weakened.
+            va = _norm(_verdict_line(a.stdout + a.stderr), repo_root, wt)
+            vb = _norm(_verdict_line(b.stdout + b.stderr), repo_root, wt)
             if va != vb or a.returncode != b.returncode:
                 findings.append({
                     "gate": label, "kind": "HOST_DEPENDENT_VERDICT",

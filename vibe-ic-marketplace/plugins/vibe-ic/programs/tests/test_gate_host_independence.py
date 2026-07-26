@@ -157,3 +157,45 @@ def test_a_gate_that_cannot_be_driven_is_its_own_state_not_a_crash(tmp_path):
     assert verdict == "FAIL", (verdict, findings)
     assert findings[0]["kind"] == "GATE_UNRUNNABLE", findings
     assert "TimeoutExpired" in findings[0]["detail"], findings
+
+
+def test_a_gate_that_echoes_its_own_root_is_not_host_dependent(tmp_path):
+    """CAUGHT BY THIS PROBE'S FIRST GENUINE RUN, in CI, against itself.
+
+    `marketplace_version_sync_check` prints the manifest PATHS it read. Both
+    trees said "PASS: 2 manifest(s), 2 plugin entr(ies) — all versions in
+    sync"; only the embedded root differed
+    (`/home/runner/work/...` vs `/tmp/hostindep-.../wt/...`). The probe called
+    that HOST_DEPENDENT and turned CI red.
+
+    A comparison that reports a difference which is not one is the same defect
+    class this probe exists to find — in the probe itself. Locally it could
+    not show: the working tree is always dirty, so the probe never ran.
+    """
+    r = _repo_with(tmp_path, 'run "echoer" "$ROOT" python3 echoer.py\n')
+    (r / "echoer.py").write_text(
+        "import pathlib\n"
+        "print('PASS: read', pathlib.Path('.').resolve())\n")
+    subprocess.run(["git", "-C", str(r), "add", "echoer.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "e"], check=True)
+
+    verdict, findings = G.audit(r, timeout=120)
+    assert verdict == "PASS", findings
+
+
+def test_a_real_difference_still_survives_normalisation(tmp_path):
+    """The paired half. Absorbing the path must not absorb the verdict: a gate
+    whose COUNT differs between the trees is still caught."""
+    r = _repo_with(tmp_path, 'run "counter" "$ROOT" python3 counter.py\n')
+    (r / ".gitignore").write_text("*.dat\n")
+    (r / "counter.py").write_text(
+        "import pathlib\n"
+        "print('PASS', len(list(pathlib.Path('.').glob('*.dat'))))\n")
+    subprocess.run(["git", "-C", str(r), "add", "counter.py", ".gitignore"],
+                   check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "c"], check=True)
+    (r / "leftover.dat").write_text("x\n")     # ignored => tree stays clean
+
+    verdict, findings = G.audit(r, timeout=120)
+    assert verdict == "FAIL", (verdict, findings)
+    assert findings[0]["kind"] == "HOST_DEPENDENT_VERDICT"
