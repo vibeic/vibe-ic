@@ -115,6 +115,16 @@ run "declared outputs are findable"     "$ROOT" python3 "$PG/provenance_declared
 # and exits 0 — SKIPPED is not a PASS, and the log says so.
 run "artefact-defect close discipline" "$ROOT" python3 "$PG/artefact_defect_close_check.py" --recent 60
 
+# vibe-ic#376 — a value present in the layer that PRODUCES it and unreachable
+# by the layer that CONSUMES it, while both layers pass their own gates. 23
+# hand-written pairwise gates each cover one slice of that class. This is the
+# general mechanism over declared cross-layer references; the corpus mode
+# judges every published cell and compares against a recorded count, so the
+# repo cannot grow a NEW instance of the class silently. The recorded breaks
+# are real and their repair is open (layer-contract-doctrine §6); a count may
+# shrink freely, any increase is red.
+run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_reference_check.py" --corpus "$ROOT/benchmark-data/ic"
+
 # vibe-ic#410 — pdk_registry.json is not the only per-PDK table. Three others
 # are keyed independently, and registering a PDK in the registry registers it
 # in none of them. An IHP netlist was handed the SKY130A ATPG cell model while

@@ -236,6 +236,20 @@ steps:
         - advisory_program_exit_zero: "l15_encoding_tables_contract_check ."
         # L18 interconnect topology is factual (its own default mode is ADVISES)
         - advisory_program_exit_zero: "l18_interconnect_topology_factuality_check ."
+        # vibe-ic#376 — the ONE general gate over declared cross-layer
+        # references, as opposed to the 23 hand-written pairwise gates that
+        # each cover a slice. Every row above judges ONE layer's own content;
+        # this one judges whether a value a layer PRODUCES is reachable by the
+        # layer that CONSUMES it, which is invisible from either side alone.
+        # Rows are DATA (programs/cross_layer_references.json); the resolver is
+        # shared. Measured on the 15 published cells before wiring: 3 FAIL (one
+        # producer-side defect on one design family), 12 VACUOUS_PASS, 0 errors,
+        # 0 false positives. ADVISORY for the same reason as l16/l17 above —
+        # the repair for the 3 is deliberately open (layer-contract-doctrine
+        # §6) and BLOCKING would fail every run on that family. The promotion
+        # condition is stated in the program's own docstring and is a
+        # re-measurement, not a judgement call.
+        - advisory_program_exit_zero: "cross_layer_reference_check ."
     blocks_on: []
 
   - id: 1

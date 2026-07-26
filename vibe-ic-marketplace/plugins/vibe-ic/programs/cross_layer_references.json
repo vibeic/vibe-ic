@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "_comment": [
+    "Declared cross-layer REFERENCES. Data, not code — see",
+    "cross_layer_reference_check.py for the resolver and for why the shipped",
+    "set is deliberately ONE row rather than a table of everything that could",
+    "in principle be joined.",
+    "",
+    "ID SCHEME:  L<layer>:<kind>:<name>",
+    "  L9:port:<name>       an element of an L9 port collection",
+    "  L8:parameter:<name>  an element of an L8 parameters[] collection",
+    "The name half is the element's OWN identity field, never its array index,",
+    "so an id survives a re-ordered emit.",
+    "",
+    "A REFERENCE row says: elements selected by `producer` carry, in",
+    "`reference_field`, a value that NAMES other elements; those names must",
+    "resolve to ids inside `target.scope_layers`; and — when a `consumer` is",
+    "declared — the value the consumer's OWN derivation produces for the same",
+    "element must equal the value the reference resolves to.",
+    "",
+    "scope_layers is the load-bearing field. layer-contract-doctrine SKILL.md",
+    "§7 measured what a corpus-global join by bare identifier does: an L12 DFT",
+    "plan declaring N = 4 sized an L1 port whose width_symbolic was 'N-1:0' to",
+    "4 bits. Every row must name the layers whose namespace legitimately scopes",
+    "its identifiers; a hit outside that set is refused, not used."
+  ],
+  "references": [
+    {
+      "id": "port_width_symbolic_to_parameter",
+      "grammar": "symbolic_range",
+      "producer": {
+        "layers": ["L1", "L9"],
+        "collections": ["pin_table", "top_ports", "ports"],
+        "kind": "port",
+        "key_field": "name",
+        "reference_field": "width_symbolic"
+      },
+      "target": {
+        "scope_layers": ["L8", "L9"],
+        "collections": ["parameters"],
+        "kind": "parameter",
+        "key_field": "name",
+        "value_field": "default"
+      },
+      "consumer": {
+        "adapter": "phase2_scaffold_gen.derive_signals",
+        "value_name": "width"
+      },
+      "scope_rationale": [
+        "L8_RTL_CONSTANTS and L9_INTEGRATION_SPEC are the top module's own",
+        "parameter namespace: phase1 promotes one extraction into both, and",
+        "the ports this row selects are that same module's ports. A parameter",
+        "declared in any OTHER layer (a DFT chain count, a sequence length)",
+        "describes a different entity and must not size this bus."
+      ]
+    }
+  ]
+}

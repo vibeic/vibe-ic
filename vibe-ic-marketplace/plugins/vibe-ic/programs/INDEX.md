@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 980
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 980)
+- **Total programs (excluding helpers / shims):** 981
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 981)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 971 |
+| `any` | 972 |
 
 ## Alphabetical listing
 
@@ -220,6 +220,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `crc_vector_gen` | any | — | General parametric CRC RTL + reference + test-vector generator. |
 | `cross_constant_invariant_check` | any | — | Verify named timing/protocol constants |
 | `cross_design_identity_check` | any | — | cross-design byte-identity gate |
+| `cross_layer_reference_check` | any | — | ONE general gate over cross-layer ids. |
 | `cross_module_1cycle_handshake_check` | any | v0.116 | BACKLOG-v11 P0.3. |
 | `crypto_arch_extractor` | any | — | Extract crypto architecture parameters from README/text docs. |
 | `cts_quality_check` | any | — | Step 19 CTS substance gate. |
@@ -1052,7 +1053,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (971 programs)
+### `any` (972 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1245,6 +1246,7 @@ _(no programs in this group)_
 - `crc_vector_gen` — General parametric CRC RTL + reference + test-vector generator.
 - `cross_constant_invariant_check` — Verify named timing/protocol constants
 - `cross_design_identity_check` — cross-design byte-identity gate
+- `cross_layer_reference_check` — ONE general gate over cross-layer ids.
 - `cross_module_1cycle_handshake_check` — BACKLOG-v11 P0.3.  _[v0.116]_
 - `crypto_arch_extractor` — Extract crypto architecture parameters from README/text docs.
 - `cts_quality_check` — Step 19 CTS substance gate.
