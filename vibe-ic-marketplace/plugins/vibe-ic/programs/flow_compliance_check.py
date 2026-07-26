@@ -1215,6 +1215,26 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "skill_compliance_triangle_check",
     "testbench_exists_check",
     "tester_oracle_health_check",
+    # A DIGITAL run on an undeclared PDK must disclose the substitution.
+    # The existing doctrine is ANALOG-ONLY: `_pdk_substitution_disclosed()`
+    # scans the canonical analog dir for *.sp decks, so on a pure-digital run
+    # it never fires (`analog dir exists: False` on spm × ihp-sg13g2). This
+    # gate is the digital path.
+    #
+    # REGISTERED HERE, WITH THE PROGRAM. It shipped in the first cut as an
+    # ORPHAN — the program and its 17 tests existed and NOTHING invoked it, so
+    # a submission carrying this exact defect passed every automated gate
+    # untouched. A gate nobody calls is not a gate; the registration belongs on
+    # the same branch as the program so the capture is self-sufficient in any
+    # landing order. `test_registered_in_structural_gate_registry` pins it.
+    #
+    # NOTE FOR THE GATEKEEPER: the sibling branch
+    # `capture/sdc-clock-period-library-basis` ALSO adds this exact name to
+    # this tuple (it registered the orphan from outside). The dispatch loop
+    # does NOT de-duplicate, so if BOTH land the gate executes twice and any
+    # FAIL is listed twice — not a wrong verdict, but a duplicated line.
+    # Whichever branch lands second must drop its copy of this one entry.
+    "digital_pdk_substitution_disclosure_check",
     # v1.6.4 RETRACTED (introduced regression on incomplete projects;
     # gates lack chip-AGNOSTIC silent-skip on missing prerequisites):
     # "coverage_metric_check"            — needs sim coverage report

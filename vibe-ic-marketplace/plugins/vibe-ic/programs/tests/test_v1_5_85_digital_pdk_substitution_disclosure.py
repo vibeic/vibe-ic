@@ -143,3 +143,33 @@ def test_not_applicable_cases_SKIP_never_silently_pass(
 ])
 def test_family_matching_is_pdk_agnostic(a, b, match):
     assert chk._families_match(a, b) is match
+
+
+# ---------------------------------------------------------------------------
+# WIRING — the property the first cut of this capture lacked.
+#
+# The program and its 17 tests shipped with ZERO references anywhere: no
+# runner, no gate registry, no flow YAML invoked it. A capture exists so the
+# NEXT blind run recovers the defect automatically without an agent; an orphan
+# program cannot do that. These two tests fail if it ever becomes an orphan
+# again — including if a rebase drops the registry line.
+# ---------------------------------------------------------------------------
+def test_registered_in_structural_gate_registry():
+    src = (PROGRAMS / "flow_compliance_check.py").read_text()
+    tup = src.split("_STRUCTURAL_RTL_GATES: tuple[str, ...] = (", 1)[1]
+    tup = tup.split("\n)", 1)[0]
+    live = [ln.strip().strip(",").strip('"')
+            for ln in tup.splitlines()
+            if ln.strip().startswith('"')]
+    assert "digital_pdk_substitution_disclosure_check" in live, (
+        "the gate is an ORPHAN again — registered nowhere, so nothing invokes "
+        "it and a run carrying this defect passes every automated gate")
+
+
+def test_registry_entry_is_not_commented_out():
+    """A retracted/commented entry is registration in appearance only."""
+    src = (PROGRAMS / "flow_compliance_check.py").read_text()
+    for ln in src.splitlines():
+        s = ln.strip()
+        if "digital_pdk_substitution_disclosure_check" in s and s.startswith("#"):
+            raise AssertionError(f"registry entry is commented out: {s}")
