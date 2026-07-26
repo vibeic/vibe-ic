@@ -209,6 +209,7 @@ def _git(root: Path, *args):
 
 
 def _repo(tmp_path) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t")
     _git(tmp_path, "config", "user.name", "t")
@@ -259,3 +260,192 @@ def test_baseline_write_is_refused_from_a_dirty_tree(tmp_path):
     assert r.returncode == 1, r.stdout
     assert "DIRTY tree" in r.stdout
     assert not (tmp_path / "bl.json").exists()
+
+
+# ── JSON gate reports (#366) ─────────────────────────────────────────────────
+# A report that declares a `verdict` AND names the artifact substantiating it
+# makes the same promise a Markdown citation makes. Three spm PDK cells carry
+# formal_evidence.json with verdict PASS and "substantiated by an elaboratable
+# .sby + SymbiYosys PASS transcript" while no .sby and no transcript exist
+# anywhere in the repo — the gate that wrote them verifies the paths before
+# emitting PASS and they existed at run time; they simply could not be SHIPPED
+# (`*.sby.log` matches .gitignore's repo-wide `*.log`; zero are tracked).
+
+def test_gate_report_citing_a_missing_artifact_fails(tmp_path):
+    root = _repo(tmp_path)
+    (root / "reports").mkdir()
+    (root / "reports" / "formal_evidence.json").write_text(json.dumps(
+        {"verdict": "PASS", "sby": "formal/proof.sby",
+         "sby_log": "formal/proof.sby.log"}))
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "report")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "proof.sby" in r.stdout
+
+
+def test_gate_report_with_its_artifacts_passes(tmp_path):
+    root = _repo(tmp_path)
+    (root / "reports").mkdir()
+    (root / "formal").mkdir()
+    (root / "formal" / "proof.sby").write_text("[tasks]\n")
+    (root / "formal" / "proof.sby.log").write_text("PASS\n")
+    (root / "reports" / "formal_evidence.json").write_text(json.dumps(
+        {"verdict": "PASS", "sby": "formal/proof.sby",
+         "sby_log": "formal/proof.sby.log"}))
+    _git(root, "add", "-Af")
+    _git(root, "commit", "-q", "-m", "report+evidence")
+    assert _run(root, tmp_path / "bl.json").returncode == 0
+
+
+def test_json_without_a_verdict_is_data_not_a_claim(tmp_path):
+    """Only a report that DECLARES a verdict is making a promise. Judging
+    every JSON string that ends in .log would manufacture findings against
+    configuration and inventory files."""
+    root = _repo(tmp_path)
+    (root / "cfg.json").write_text(json.dumps({"log_path": "nowhere/x.log"}))
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "cfg")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "nowhere/x.log" not in r.stdout
+
+
+def test_absolute_path_never_substantiates_anything(tmp_path):
+    """An absolute path can only resolve on the machine that wrote it, so it
+    substantiates nothing for any other reader — and it would make the gate's
+    verdict host-dependent, the exact divergence that already bit this gate
+    once."""
+    root = _repo(tmp_path)
+    real = root / "real.log"
+    real.write_text("log\n")
+    (root / "r.json").write_text(json.dumps(
+        {"verdict": "PASS", "source": str(real.resolve())}))
+    _git(root, "add", "-Af")
+    _git(root, "commit", "-q", "-m", "abs")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+
+
+# ── scope expansion is a recorded act, not a bypass ─────────────────────────
+# Widening what the gate LOOKS AT legitimately grows the register (62 -> 141
+# when JSON gate reports were added). That is pre-existing debt becoming
+# VISIBLE, not new debt being admitted — but shrink-only cannot tell the two
+# apart, so the distinction must be declared and stored rather than assumed.
+
+def test_growth_still_refused_without_a_declared_expansion(tmp_path):
+    root = _repo(tmp_path)
+    _doc(root, "EV.md", "see `a.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "a")
+    _run(root, tmp_path / "bl.json", "--write-baseline")
+    _doc(root, "EV.md", "see `a.log`\nand `b.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "b")
+    r = _run(root, tmp_path / "bl.json", "--write-baseline")
+    assert r.returncode == 1 and "refusing to GROW" in r.stdout
+
+
+def test_expansion_requires_a_real_reason(tmp_path):
+    """A one-word reason is a bypass wearing a flag's clothes."""
+    root = _repo(tmp_path)
+    _doc(root, "EV.md", "see `a.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "a")
+    r = _run(root, tmp_path / "bl.json", "--write-baseline",
+             "--scope-expanded", "because")
+    assert r.returncode == 1, r.stdout
+    assert not (tmp_path / "bl.json").exists()
+
+
+def test_declared_expansion_is_allowed_and_recorded(tmp_path):
+    root = _repo(tmp_path)
+    _doc(root, "EV.md", "see `a.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "a")
+    _run(root, tmp_path / "bl.json", "--write-baseline")
+    _doc(root, "EV.md", "see `a.log`\nand `b.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "b")
+    reason = ("the gate now also judges JSON gate reports, so pre-existing "
+              "debt became visible")
+    r = _run(root, tmp_path / "bl.json", "--write-baseline",
+             "--scope-expanded", reason)
+    assert r.returncode == 0, r.stdout
+    d = json.loads((tmp_path / "bl.json").read_text())
+    assert len(d["unresolved"]) == 2
+    assert d["scope_expansion"]["previous_size"] == 1
+    assert reason in d["scope_expansion"]["reason"]
+
+
+# ── the symlink divergence that made CI and local disagree ──────────────────
+# benchmark-data/ic carries 787 symlinks. Identity built with `Path.resolve()`
+# FOLLOWS them, so a tracked file's identity became its target — which exists
+# on the author's machine and not in a fresh checkout. The gate enumerated 440
+# documents locally and 422 in CI on the SAME commit, and the baseline written
+# in one place could never match the other. Identity is now the LOGICAL path
+# from the git index, so the verdict is a pure function of the index.
+
+def test_symlinked_directory_does_not_change_the_verdict(tmp_path):
+    root = _repo(tmp_path)
+    (root / "real").mkdir()
+    _doc(root, "real/EV.md", "see `proof.log`\n")
+    (root / "real" / "proof.log").write_text("log\n")
+    (root / "link").symlink_to("real")          # tracked symlink, as in the tree
+    _git(root, "add", "-Af")
+    _git(root, "commit", "-q", "-m", "tree with a symlink")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    # the document is counted ONCE — enumeration comes from the index, not a
+    # filesystem walk that would descend through the symlink as well.
+    assert "1 citation(s) checked" in r.stdout, r.stdout
+
+
+def test_verdict_is_a_pure_function_of_the_index(tmp_path):
+    """Untracked files must not move the verdict in EITHER direction — that
+    property is what makes a baseline written on one machine valid on
+    another."""
+    root = _repo(tmp_path)
+    _doc(root, "EV.md", "see `a.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "doc")
+    before = _run(root, tmp_path / "bl.json").stdout
+    (root / "a.log").write_text("untracked artifact\n")      # would "fix" it
+    _doc(root, "extra.md", "see `b.log`\n")                  # would add debt
+    after = _run(root, tmp_path / "bl.json").stdout
+    assert before.split("unresolved now")[1] == after.split("unresolved now")[1]
+
+
+def test_tracked_symlinks_are_not_documents_and_not_evidence(tmp_path):
+    """THE divergence, root cause. 121 of the 122 tracked symlinks under
+    benchmark-data/ic point at ABSOLUTE paths outside the repository: they
+    resolve on the machine that made them and dangle for everyone else.
+    Reading through them made this gate count 440 documents locally and 422
+    in CI on the same commit. The index's file MODE decides — a symlink's
+    blob is a path string, not document content, and it ships no content."""
+    ext = tmp_path / "external"          # genuinely outside the repo
+    ext.mkdir()
+    root = _repo(tmp_path / "repo")
+    _doc(root, "real.md", "see `there.log`\n")
+    (root / "there.log").write_text("log\n")
+    outside = ext / "outside.md"
+    outside.write_text("see `ghost.log`\n")
+    (root / "linked.md").symlink_to(outside)     # absolute, outside the repo
+    _git(root, "add", "-Af")
+    _git(root, "commit", "-q", "-m", "tree with an outward symlink")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    # the symlink contributed NO citation, on this machine or any other
+    assert "ghost.log" not in r.stdout
+    assert "1 citation(s) checked" in r.stdout, r.stdout
+
+
+def test_a_citation_pointing_at_a_symlink_is_not_shipped_content(tmp_path):
+    """A tracked symlink is a pointer, not content — so it cannot
+    substantiate a claim either."""
+    ext = tmp_path / "external"
+    ext.mkdir()
+    root = _repo(tmp_path / "repo")
+    real = ext / "elsewhere.log"
+    real.write_text("log\n")
+    _doc(root, "EV.md", "see `proof.log`\n")
+    (root / "proof.log").symlink_to(real)
+    _git(root, "add", "-Af")
+    _git(root, "commit", "-q", "-m", "symlinked evidence")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "proof.log" in r.stdout

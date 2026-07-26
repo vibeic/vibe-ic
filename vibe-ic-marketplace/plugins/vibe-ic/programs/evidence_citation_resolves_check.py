@@ -79,7 +79,7 @@ from typing import Dict, List, Optional, Tuple
 
 # Extensions that carry sign-off EVIDENCE. Deliberately narrow: this gate
 # judges "the proof you pointed at is missing", not "every path in prose".
-_EVIDENCE_EXT = (".log", ".rpt")
+_EVIDENCE_EXT = (".log", ".rpt", ".sby")
 
 # A backticked token that looks like a file path. Anchored so prose in
 # backticks (a command line, a sentence) is never mistaken for a citation.
@@ -133,17 +133,39 @@ def tracked_files(root: Path) -> Optional[set]:
     have it" — so an untracked local artifact must NOT satisfy a citation.
     """
     try:
-        r = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+        r = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
                            capture_output=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
         return None
     out = r.stdout.decode("utf-8", "replace")
-    names = [n for n in out.split("\0") if n]
+    # `-s` gives "<mode> <sha> <stage>\t<path>". Keep REGULAR files only.
+    # Mode 120000 is a SYMLINK: its blob is a path string, not document
+    # content, and it ships no content at all — 121 of the 122 tracked
+    # symlinks under this tree point at ABSOLUTE paths outside the
+    # repository, so they resolve on the machine that made them and dangle
+    # for everyone else. Reading through them is exactly what made this gate
+    # count 440 documents locally and 422 in CI. Judging the index's file
+    # MODE keeps the verdict a pure function of the index and never touches
+    # the filesystem to decide what exists. Mode 160000 (submodule) is
+    # likewise not content.
+    names = []
+    for ent in out.split("\0"):
+        if not ent or "\t" not in ent:
+            continue
+        meta, path = ent.split("\t", 1)
+        if meta.split(" ", 1)[0] in ("100644", "100755"):
+            names.append(path)
     if not names:
         return None
-    return {(root / n).resolve() for n in names}
+    # LOGICAL paths, never `resolve()`. `benchmark-data/ic` carries 787
+    # symlinks; resolving follows them to targets that exist on the author's
+    # machine and not in a fresh checkout, which is precisely how this gate
+    # enumerated 440 documents locally and 422 in CI on the SAME commit. With
+    # logical relative paths the verdict is a pure function of the git index
+    # and therefore identical in every environment.
+    return {n for n in names}
 
 
 def _is_citation(tok: str) -> bool:
@@ -164,24 +186,64 @@ def resolve_citation(md: Path, cite: str, root: Path,
     docstring. A document-directory-only resolver reports ~30% more
     findings, all of them false.
     """
-    try:
-        base = md.parent.resolve()
-        stop = root.resolve()
-    except OSError:
+    _ = tracked  # membership is tested on logical paths below
+    if Path(cite).is_absolute():
+        # An absolute path is non-portable by construction: it can only
+        # resolve on the machine that wrote it, so it substantiates nothing
+        # for any other reader. Never resolvable, regardless of this host.
         return None
+    import posixpath
+    try:
+        rel_dir = md.parent.relative_to(root).as_posix()
+    except ValueError:
+        return None
+    if rel_dir == ".":
+        rel_dir = ""
     while True:
-        cand = base / cite
-        try:
-            if cand.is_file() and (tracked is None
-                                   or cand.resolve() in tracked):
-                return cand
-        except OSError:
-            pass
-        if base == stop or base == base.parent:
+        cand_rel = posixpath.normpath(
+            posixpath.join(rel_dir, cite) if rel_dir else cite)
+        if not cand_rel.startswith(".."):
+            if tracked is not None:
+                if cand_rel in tracked:
+                    return root / cand_rel
+            elif (root / cand_rel).is_file():
+                return root / cand_rel
+        if not rel_dir:
             return None
-        if stop not in base.parents:
-            return None
-        base = base.parent
+        rel_dir = posixpath.dirname(rel_dir)
+
+
+# JSON GATE REPORTS (#366). A report that declares a `verdict` AND names the
+# artifact substantiating it is making the same promise a Markdown citation
+# makes, in a different container. Measured 2026-07-26 over benchmark-data/ic:
+# 788 such reports, 118 artifact references, 75 unresolvable in the TRACKED
+# tree — including three spm PDK cells whose `formal_evidence.json` carries
+# verdict PASS with "PROOF_CHAIN_OK ... substantiated by an elaboratable .sby
+# + SymbiYosys PASS transcript" while no `.sby` and no transcript exist
+# anywhere in the repo.
+#
+# The gate that wrote those reports is NOT at fault: it verifies the paths
+# before emitting PASS, and they existed on disk when it ran. The evidence
+# then could not be SHIPPED — `*.sby.log` matches `.gitignore`'s repo-wide
+# `*.log`, so zero are tracked. A PASS that no reader can re-verify is the
+# same false certificate as a fabricated one; only the mechanism differs.
+_VERDICT_KEY = "verdict"
+
+
+def _json_artifact_refs(path: Path) -> List[Tuple[str, str]]:
+    """[(field, cited_path)] for a JSON GATE REPORT — a dict carrying a
+    `verdict`. Anything else is data, not a claim, and is not judged."""
+    try:
+        data = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict) or _VERDICT_KEY not in data:
+        return []
+    out: List[Tuple[str, str]] = []
+    for k, v in data.items():
+        if isinstance(v, str) and _is_citation(v):
+            out.append((str(k), v))
+    return out
 
 
 def scan(root: Path,
@@ -192,9 +254,16 @@ def scan(root: Path,
     dangling: List[Dict[str, str]] = []
     cited = 0
     docs = 0
-    for md in sorted(root.rglob("*.md")):
-        if tracked is not None and md.resolve() not in tracked:
-            continue
+    # ENUMERATE FROM THE TRACKED LIST, never from a filesystem walk. A
+    # walk-then-filter enumerated 440 documents locally and 422 in CI on the
+    # SAME commit — directory traversal is environment-dependent (symlinks,
+    # traversal order, name encoding) in ways `git ls-files` is not. The
+    # baseline is a set of digests, so any enumeration difference between
+    # where it is WRITTEN and where it is CHECKED shows up as phantom
+    # "resolved" entries. One source of truth for what exists.
+    _mds = (sorted(root / t for t in tracked if t.lower().endswith(".md"))
+            if tracked is not None else sorted(root.rglob("*.md")))
+    for md in _mds:
         try:
             text = md.read_text(errors="replace")
         except OSError:
@@ -208,6 +277,19 @@ def scan(root: Path,
                 dangling.append({
                     "doc": str(md.relative_to(root)),
                     "citation": tok,
+                })
+    _jsons = (sorted(root / t for t in tracked if t.lower().endswith(".json"))
+              if tracked is not None else sorted(root.rglob("*.json")))
+    for js in _jsons:
+        refs = _json_artifact_refs(js)
+        if refs:
+            docs += 1
+        for field, tok in refs:
+            cited += 1
+            if resolve_citation(js, tok, root, tracked) is None:
+                dangling.append({
+                    "doc": str(js.relative_to(root)),
+                    "citation": f"[{field}] {tok}",
                 })
     return dangling, cited, docs
 
@@ -266,6 +348,13 @@ def main(argv=None) -> int:
     ap.add_argument("--write-baseline", action="store_true",
                     help="record the CURRENT unresolved set; it may only "
                          "ever shrink from there")
+    ap.add_argument("--scope-expanded", metavar="REASON",
+                    help="permit a GROWING baseline for this write, because "
+                         "the gate now LOOKS at more than it did (a wider "
+                         "scope finds pre-existing debt; that is not a "
+                         "regression). Requires a reason, which is recorded "
+                         "in the baseline beside the previous size — a "
+                         "deliberate, auditable act, never a bypass flag.")
     args = ap.parse_args(argv)
 
     here = Path(__file__).resolve()
@@ -292,6 +381,11 @@ def main(argv=None) -> int:
         # working tree holding untracked artifacts, so it was green locally
         # and RED in CI (12 entries "resolved", 9 new dangling). A debt
         # register describing the author's laptop is worse than none.
+        if args.scope_expanded is not None and len(
+                args.scope_expanded.strip()) < 30:
+            print("[FAIL] --scope-expanded needs a real reason (>=30 chars) "
+                  "naming what the gate now looks at that it did not before.")
+            return 1
         dirty = _working_tree_dirt(root)
         if dirty:
             print(f"[FAIL] refusing to write a baseline from a DIRTY tree — "
@@ -302,10 +396,13 @@ def main(argv=None) -> int:
                 print(f"   {d}")
             return 1
         prev = _load_baseline(baseline_path) or []
-        if prev and len(now) > len(prev):
+        if prev and len(now) > len(prev) and args.scope_expanded is None:
             print(f"[FAIL] refusing to GROW the baseline "
                   f"({len(prev)} -> {len(now)}). The baseline is a debt "
-                  f"register, not a waiver list.")
+                  f"register, not a waiver list. If the gate now LOOKS at "
+                  f"more than it did, say so with --scope-expanded '<why>' "
+                  f"— a wider scope finding pre-existing debt is not a "
+                  f"regression, but it must be recorded, not assumed.")
             return 1
         baseline_path.write_text(json.dumps(
             {"_comment": ("Known-unresolved evidence citations (#361). MAY "
@@ -314,7 +411,12 @@ def main(argv=None) -> int:
                           "NOT stored (some embed a commercial foundry "
                           "product name and a landed diff is permanent "
                           "public content). Run the gate to see them."),
-             "unresolved": sorted(_digest(k) for k in now)}, indent=2)
+             "unresolved": sorted(_digest(k) for k in now),
+             **({"scope_expansion": {
+                 "previous_size": len(prev),
+                 "reason": args.scope_expanded.strip()}}
+                if args.scope_expanded is not None and len(now) > len(prev)
+                else {})}, indent=2)
             + "\n")
         print(f"wrote {baseline_path} ({len(now)} entr(ies))")
         return 0
