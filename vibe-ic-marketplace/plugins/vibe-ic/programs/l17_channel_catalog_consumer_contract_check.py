@@ -92,15 +92,28 @@ E3b CHANNEL_GROUP_COLLAPSED_TO_ONE_PORT
 E3c PORT_WIDTH_COLLAPSED_TO_ONE_BIT
     A port is emitted as a 1-bit scalar while the L9 entry it comes from
     carries a SYMBOLIC width (`width_symbolic: "ACC_W-1:0"`) or a non-numeric
-    `width` string. `derive_signals` coerces any width that is neither an int
-    nor a digit-string to 1 with NO diagnostic, so the emitted interface is
-    narrower than the design declares. The value is not missing: L1 keeps the
-    textual form on purpose "so downstream consumers can resolve at
-    elaboration time", phase1 forwards it into L9, and the consumer discards
-    it. REPORTS ONLY — #404 measured that resolving the symbol and writing it
-    back into an L-doc turns a correct FAIL into a PASS, because
-    `parameters[]` carries no module/layer qualifier and a bare-name join let
-    an L12 scan-chain count size a data bus.
+    `width` string. `derive_signals` used to coerce any width that is neither
+    an int nor a digit-string to 1 with NO diagnostic, so the emitted
+    interface was narrower than the design declares. The value is not
+    missing: L1 keeps the textual form on purpose "so downstream consumers
+    can resolve at elaboration time", phase1 forwards it into L9, and the
+    consumer discarded it. REPORTS ONLY — #404 measured that resolving the
+    symbol and writing it back into an L-doc turns a correct FAIL into a
+    PASS, because `parameters[]` carries no module/layer qualifier and a
+    bare-name join let an L12 scan-chain count size a data bus.
+    ON THE CURRENT CONSUMER THIS RAIL IS THE REVERT DETECTOR. #404 round 3
+    changed `derive_signals` to mark the case `width: None` instead of 1
+    (see E3e), so a tree where this fires instead of E3e is one where that
+    change has been backed out and the silent coercion is live again.
+
+E3e PORT_WIDTH_UNRESOLVED_BY_CONSUMER
+    The same LAYER condition as E3c — the L9 entry declares a SYMBOLIC or
+    non-numeric width — and the consumer answered honestly: `derive_signals`
+    emits `width: None` plus `width_declared`, and every scaffold emitter
+    raises `UnresolvedPortWidth` rather than rendering it, so the generator
+    writes nothing and exits 1. This finding is NOT about the consumer,
+    which is now correct; it is about the layer, which still cannot be
+    scaffolded. Remedy in L1/L9, never in the consumer.
 
 E3d PORT_WIDTH_SYMBOL_UNCORROBORATED
     The same layer condition as E3c — the L9 entry declares a SYMBOLIC or
@@ -115,6 +128,9 @@ E3d PORT_WIDTH_SYMBOL_UNCORROBORATED
     rail on `width == 1` would have handed a future resolver a green gate.
     Keying it on the layer's declaration and branching on the outcome means a
     repair can change WHICH finding is reported and can never remove it.
+    The consumer now has THREE width states, so the branch has three arms —
+    E3e (no width), E3c (1 bit), E3d (a concrete number) — and all three are
+    ERROR. There is no arm that returns clean.
 
 E4 CHANNEL_DIRECTION_SILENTLY_INOUT
     A declared channel yields a port whose direction the consumer had to guess
@@ -606,6 +622,7 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
     # which finding is reported. It cannot make this gate green.
     collapsed_widths = []
     uncorroborated_widths = []
+    refused_widths = []
     _l9_by_name = {}
     # The SAME two keys, in the SAME order, that derive_signals itself reads
     # (phase2_scaffold_gen:238) — so this cannot describe a port list the
@@ -632,11 +649,38 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
             "l9_width": _w,
             "width_symbolic": _sym,
         }
-        if _s.get("width") == 1:
+        # THREE outcomes, because the consumer now has three width states
+        # (ORGANIC #404, round 3). Every one of them is an ERROR: the LAYER
+        # condition is the same in all three — L9 states a width that is not
+        # an integer — and no change on the consumer's side can remove it.
+        # What the consumer did with that declaration only decides WHICH
+        # finding is reported.
+        if _s.get("width") is None:
+            _row["width_declared"] = _s.get("width_declared")
+            refused_widths.append(_row)
+        elif _s.get("width") == 1:
             collapsed_widths.append(_row)
         else:
             _row["consumer_width"] = _s.get("width")
             uncorroborated_widths.append(_row)
+    if refused_widths:
+        findings.append(Finding(
+            "ERROR", "PORT_WIDTH_UNRESOLVED_BY_CONSUMER",
+            f"{len(refused_widths)} port(s) whose L9 entry declares a "
+            f"SYMBOLIC or non-numeric width come out of the consumer's own "
+            f"derivation with NO width at all: "
+            f"phase2_scaffold_gen.derive_signals marks them `width: None` "
+            f"and every scaffold emitter REFUSES to render them, so the "
+            f"generator emits nothing and exits 1 rather than declaring a "
+            f"1-bit scalar for a bus. That refusal is the consumer behaving "
+            f"correctly — this finding is about the LAYER, which still "
+            f"cannot be scaffolded. The remedy is in L1/L9: state the width "
+            f"as an integer, or declare the parameter the range names in "
+            f"the same document. Resolving it inside the consumer is NOT "
+            f"the remedy — #404 measured that a wrong resolution and a "
+            f"right one are indistinguishable from outside.",
+            {"ports": refused_widths[:20]}))
+
     if collapsed_widths:
         findings.append(Finding(
             "ERROR", "PORT_WIDTH_COLLAPSED_TO_ONE_BIT",
