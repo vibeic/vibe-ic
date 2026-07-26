@@ -36,9 +36,16 @@
 # NO BLOB WAS ADDED. At 167.7 MB the GDS is past GitHub's 100 MB hard limit,
 # so it cannot be committed at all; under the #419/#425 policy it is exactly a
 # ROUTED_AWAY artefact and the sha256 is the form of evidence available. The
-# destination reads `not-retained` because nobody has claimed to keep a copy —
-# an LFS or Release destination would be a claim about storage that does not
-# exist yet (#426 step 3, owner's decision).
+# destination now names a GitHub Release (#426 step 3, authorised 2026-07-26).
+# It is a CHECKED fact rather than a claim about storage: the asset was
+# uploaded, downloaded back, and re-hashed, and the round trip returns
+# aa823f7c…6ec800 — the same digest this cell's own RESULT.md claimed. So a
+# reader can retrieve the artefact AND verify it is the one the verdict
+# describes, which the sha256 alone could not give them.
+#
+# Open provenance, checked before publishing anything: ibex is lowRISC
+# (Apache 2.0) and the layout is sky130A, read off the GDS's own
+# `sky130_fd_sc_hd` cell names. No licensed-PDK artefact was uploaded.
 #
 # The 10 NOT_PUBLISHED lines are phase3/stage3 PnR scratch, out of published
 # scope at any size. They are listed so their absence is a recorded fact
@@ -53,5 +60,5 @@ phase3/stage3/pnr/post_cts.def 5963475B sha256:e4ba5cef100d8fb863a8966c3edb92387
 phase3/stage3/pnr/post_hold.def 5963748B sha256:1d1fe68664ee6f25b04a4a7456bf3e3192a5aea7445df1cc8d1f109556e889a9 NOT_PUBLISHED source-run-only
 phase3/stage3/pnr/routed.def 21517996B sha256:b96e7e45effdb7d08e5cc826b65e03aba086223535a10dc16a8d0fbe778c2a6a NOT_PUBLISHED source-run-only
 phase3/stage3/pnr/routed_preantenna.def 18842148B sha256:3449f3c91c46dc5f627b77b77864ae3267d0a0f3138d7defd1b4f08c671d1d44 NOT_PUBLISHED source-run-only
-phase3/stage4/foundry_handoff/ibex_top.gds 167659258B sha256:aa823f7c69be4f861773a787d4314304c52c37d83a6a52bc91a6dca1696ec800 ROUTED_AWAY not-retained
-phase3/stage4/gds/ibex_top.gds 167659258B sha256:aa823f7c69be4f861773a787d4314304c52c37d83a6a52bc91a6dca1696ec800 ROUTED_AWAY not-retained
+phase3/stage4/foundry_handoff/ibex_top.gds 167659258B sha256:aa823f7c69be4f861773a787d4314304c52c37d83a6a52bc91a6dca1696ec800 ROUTED_AWAY github-release:benchmark-artefacts-2026-07-26
+phase3/stage4/gds/ibex_top.gds 167659258B sha256:aa823f7c69be4f861773a787d4314304c52c37d83a6a52bc91a6dca1696ec800 ROUTED_AWAY github-release:benchmark-artefacts-2026-07-26
