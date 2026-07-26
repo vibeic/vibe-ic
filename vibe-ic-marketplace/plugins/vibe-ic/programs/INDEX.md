@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 956
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 956)
+- **Total programs (excluding helpers / shims):** 957
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 957)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 947 |
+| `any` | 948 |
 
 ## Alphabetical listing
 
@@ -158,6 +158,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cellular_automaton_synth` | any | — | DETERMINISTIC 1-D cellular-automaton → RTL synth. |
 | `changelog_command_reproducibility_check` | any | — | anti-fabrication gate |
 | `changelog_metric_reproducibility_check` | any | — | anti-fabrication gate (v1.6.38). |
+| `checker_execution_wiring_audit` | any | — | a checker only its own TEST runs has |
 | `checkpoint_gate_check` | any | — | deterministic phase-transition checkpoint gate. |
 | `chip_clock_toggle_divider_when_master_already_target_check` | any | v0.119.30 | gate |
 | `chip_gds_canonical_real_file_check` | any | — | top-level chip GDS files at |
@@ -1028,7 +1029,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (947 programs)
+### `any` (948 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1161,6 +1162,7 @@ _(no programs in this group)_
 - `cellular_automaton_synth` — DETERMINISTIC 1-D cellular-automaton → RTL synth.
 - `changelog_command_reproducibility_check` — anti-fabrication gate
 - `changelog_metric_reproducibility_check` — anti-fabrication gate (v1.6.38).
+- `checker_execution_wiring_audit` — a checker only its own TEST runs has
 - `checkpoint_gate_check` — deterministic phase-transition checkpoint gate.
 - `chip_clock_toggle_divider_when_master_already_target_check` — gate  _[v0.119.30]_
 - `chip_gds_canonical_real_file_check` — top-level chip GDS files at

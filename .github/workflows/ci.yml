@@ -43,55 +43,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends iverilog tcl yosys verilator
 
-      - name: chip-AGNOSTIC source guard
+      # The repo-wide invariant gates live in ONE script that this workflow and
+      # gatekeeper-ci.yml both call. They used to be listed inline HERE and were
+      # absent from gatekeeper-ci, which is the only workflow that fires on
+      # `merge_group` — so the merge queue, the last thing to run before a
+      # change lands, executed a strictly weaker gate set than the PR check it
+      # supersedes. #394 hand-fixed one instance of exactly that; a second hand
+      # sync would drift again. Per-gate rationale lives in the script.
+      - name: repo-hygiene gates (shared with the merge gate)
         run: |
-          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
-            vibe-ic-marketplace/plugins/vibe-ic
-
-      # vibe-ic#354 — the image-version gate is BLOCKING. It failed loudly on
-      # main for six versions (0.2.29 pinned in 13 places, never published)
-      # while nothing enforced it. --require-remote: the pinned tag must
-      # actually RESOLVE on ghcr; an unreachable registry is a FAIL here, not
-      # an UNVERIFIED shrug (this runner always has network).
-      - name: image-version sync gate (pins must resolve on ghcr)
-        run: |
-          python3 tools/vibeic-eda/sync_image_version.py --check --require-remote
-
-      # vibe-ic#361 — an evidence document that cites `foo.log` and ships no
-      # foo.log is unverifiable, and the failure is silent. Measured over
-      # benchmark-data/ic: 110 citations, 65 unresolvable. Those are recorded
-      # in a shrink-only baseline; this step blocks any NEW one. Repo-hygiene
-      # scope, so it lives in CI rather than the per-design flow gate list
-      # (there it would SKIP on every user project — a gate that cannot fire).
-      # vibe-ic#371 — a tracked symlink recorded with an ABSOLUTE target
-      # resolves only on the machine that wrote it. 159 of 172 were in that
-      # state and it made the evidence-citation gate's verdict differ between
-      # local and CI on the same commit. Converted to relative; this blocks a
-      # relapse.
-      # vibe-ic#306/#316 — the audit that measures which gates can actually
-      # stop a run was itself wired into nothing while exiting 1. Recorded
-      # debt (4 gates declaring an intent they are not wired for) does not
-      # fail; anything NEW does.
-      - name: flow-gate enforcement audit (no NEW unwired declaration)
-        run: |
-          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/flow_gate_enforcement_audit.py
-
-      # vibe-ic#312 family — a checker that reads a field NO document
-      # populates sees an empty value, and an empty value is
-      # indistinguishable from a clean one. Measured five times in one
-      # campaign; three were "the producer never existed". Recorded debt
-      # does not fail; a NEW reader-without-producer does.
-      - name: L-doc field producer gate (a read field must be written)
-        run: |
-          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/l_doc_field_producer_check.py
-
-      - name: tracked-symlink portability gate
-        run: |
-          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/tracked_symlink_portability_check.py
-
-      - name: evidence-citation gate (a cited proof must exist)
-        run: |
-          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/evidence_citation_resolves_check.py
+          bash tools/ci/repo_hygiene_gates.sh
 
       # The guard above scans FILES only — a commit MESSAGE naming the
       # commercial foundry / SKU / process is an equally permanent public leak

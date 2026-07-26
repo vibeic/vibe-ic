@@ -136,9 +136,16 @@ jobs:
           echo "sha=$BASE" >> "$GITHUB_OUTPUT"
           echo "Base SHA = $BASE" >&2
 
-      - name: chip-AGNOSTIC source guard
+      # The repo-wide invariant gates, shared verbatim with ci.yml. This job is
+      # the ONLY one that fires on `merge_group`, so anything missing here is
+      # missing from the last check before a change lands. Four of these gates
+      # (evidence-citation, flow-gate enforcement, L-doc field producer,
+      # tracked-symlink portability) were CI-only and therefore absent from the
+      # merge-queue path — the same asymmetry #394 found in the NDA guard.
+      # Sharing the script makes the drift impossible rather than unlikely.
+      - name: repo-hygiene gates (shared with ci.yml)
         run: |
-          python3 "$PROGRAMS/source_chip_agnostic_check.py" "$PLUGIN_ROOT"
+          bash tools/ci/repo_hygiene_gates.sh
 
       # The source guard above scans FILES only. A commit whose MESSAGE names
       # the commercial foundry / SKU / process therefore passed every gate — and
