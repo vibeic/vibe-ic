@@ -313,9 +313,13 @@ def audit(project: Path) -> dict:
             continue
         missing = [t for t in refs if _resolve(formal_dir, project, t) is None]
         if not missing:
-            sby_ok = True
-            rep["sby"] = str(sby.relative_to(project))
-            break
+            # #417: record the FIRST intact chain, but do NOT break. The loop
+            # used to stop here, so every later .sby went unexamined and its
+            # dangling references could not be reported at all.
+            if not sby_ok:
+                sby_ok = True
+                rep["sby"] = str(sby.relative_to(project))
+            continue
         sby_missing_refs.append(f"{sby.name}: {', '.join(missing[:4])}")
     if not sby_ok:
         # #453 — message split: "no .sby at all" vs ".sby present but no
@@ -331,6 +335,27 @@ def audit(project: Path) -> dict:
         rep["findings"].append(
             "SBY_CHAIN_BROKEN (#448): no .sby whose referenced files all "
             "exist" + detail)
+    elif sby_missing_refs:
+        # #417. SBY_CHAIN_BROKEN quantifies over ALL .sby ("no .sby whose
+        # refs all exist"), so one intact chain made it unreachable for every
+        # other chain in the directory, however broken. Landing #415 walked
+        # straight through that hole: the gate had been naming TWO broken
+        # chains in spm/v1.5.58_ihp-sg13g2, #415 restored the DUT for one of
+        # them, and the other went silent without having changed.
+        #
+        # The VERDICT stays quantified the way it was, deliberately. What the
+        # gate answers is whether results.json's `all_proved` stands up, and
+        # it stands up on the chain results.json actually cites; a separate,
+        # later regeneration that happens to live under formal/ is not the
+        # claim being made, and failing the cell for it would fail cells for
+        # artefacts their own manifest never claimed. What was wrong was not
+        # the quantifier on the verdict — it was that a true, previously
+        # reported fact had no way to be said once some other chain was fine.
+        rep["findings"].append(
+            f"SBY_REFS_DANGLING (#417, non-verdict): the verdict rests on "
+            f"{rep.get('sby', '(an intact .sby)')}, but "
+            f"{len(sby_missing_refs)} other .sby reference file(s) that do "
+            f"not exist — {'; '.join(sby_missing_refs[:3])}")
 
     # (b) a SymbiYosys log with PASS status ---------------------------------
     log_ok = False
