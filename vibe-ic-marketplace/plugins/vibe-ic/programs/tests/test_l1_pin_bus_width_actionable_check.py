@@ -396,3 +396,57 @@ def test_an_hdl_declaration_outranks_a_doc_table_row(tmp_path):
     d = rep["symbolic_widths_resolved"][0]
     assert d["bits"] == 16, rep
     assert "hdl-declaration" in d["resolved_from"], rep
+
+
+# -------------------------------------------------- resolver PRECISION
+# A resolver that guesses is worse than no resolver: a wrong default
+# turns a correct FAIL into a clean PASS. These pin down the two
+# restrictions that make the lookup sound, and both model a measured
+# failure of the harvest-everything first draft.
+
+def test_a_pin_row_is_not_read_as_a_parameter_default(tmp_path):
+    """`| N | 4 |` in the INTERFACE table is pin N's width, not a default.
+
+    The measured failure: `| name | int |` matches any markdown table, so
+    the first draft read the pin interface table's width column as
+    parameter defaults (`clk=1`, `address=8`, `read_data=32`). Here that
+    would resolve `[N-1:0]` to 4 and hand back a confident, wrong PASS on
+    a bus the design's own inputs prove is 48 bits.
+    """
+    _write_input(tmp_path, "docs/interface.md", (
+        "| signal | width | dir |\n|---|---|---|\n"
+        "| `N` | 4 | in |\n"
+        "| `accum_bus` | N-bit (`[N-1:0]`) | out |\n"
+        "| `sample_bus` | 24-bit (`[23:0]`) | in |\n"))
+    pins = [dict(p) for p in _GOOD_PINS]
+    pins[0] = {"name": "N", "mode": "input", "width": 4, "msb": 3, "lsb": 0}
+    pins[2] = {"name": "accum_bus", "mode": "output",
+               "width": "N-bit ([N-1:0])", "width_symbolic": "N-1:0",
+               "msb": None, "lsb": None}
+    _write_l1(tmp_path, pins)
+    rc, rep = _run(tmp_path)
+    assert rc == 1, rep
+    assert rep["violations"][0]["pin"] == "accum_bus"
+    assert rep["symbolic_widths_resolved"] == [], rep
+
+
+def test_an_unrelated_parameter_elsewhere_cannot_collide(tmp_path):
+    """Only names a symbolic width actually needs are ever looked up.
+
+    A sibling document declaring its own `DEPTH` for an unrelated purpose
+    must not become the answer for a pin whose width names `WIDTH`.
+    """
+    _write_input(tmp_path, "docs/scan.md",
+                 "| name | default |\n|---|---|\n| `DEPTH` | 4 |\n")
+    pins = [dict(p) for p in _GOOD_PINS]
+    pins[2] = {"name": "accum_bus", "mode": "output",
+               "width": "N-bit ([WIDTH-1:0])", "width_symbolic": "WIDTH-1:0",
+               "msb": None, "lsb": None}
+    _write_input(tmp_path, "vendor_rtl/synth_block.v", _SYNTH_RTL)
+    _write_l1(tmp_path, pins)
+    rc, rep = _run(tmp_path)
+    assert rc == 1, rep
+    assert rep["symbolic_widths_resolved"] == [], rep
+    got = mod.derive_parameter_defaults(
+        tmp_path, wanted={"WIDTH"}, pin_names={p["name"] for p in pins})
+    assert got == {}, got

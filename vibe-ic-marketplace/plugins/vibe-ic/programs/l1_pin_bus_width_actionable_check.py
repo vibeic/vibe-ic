@@ -240,38 +240,65 @@ _SYM_TERM = re.compile(r"^\s*([A-Za-z_]\w*)\s*(?:([+-])\s*(\d+)\s*)?$")
 
 def derive_parameter_defaults(
     project: Path,
+    wanted: Optional[Set[str]] = None,
+    pin_names: Optional[Set[str]] = None,
 ) -> Dict[str, Tuple[int, str]]:
     """Parameter -> (default, dialect) from the design's OWN inputs.
 
     Two dialects, because the input corpus differs: HDL sources declare
     `parameter size = 32`; docs-only designs (no RTL staged) carry the
-    same fact as an interface-table row. Nothing about any design, PDK
-    or vendor is hardcoded — both patterns are grammar, not literals.
+    same fact as an interface-table row. Both are grammar, not literals.
 
-    HDL wins over a doc row when both name the same parameter: a
-    declaration is stronger evidence than a table cell, whose column
-    could in principle be a minimum rather than a default. The dialect
-    is returned with the value so the report can disclose which was
-    used and a reader can audit the weaker one.
+    PRECISION IS THE WHOLE PROBLEM HERE, and a harvest-everything version
+    of this function was measured to be mostly wrong. `| name | int |`
+    matches ANY markdown table row, so the first draft read the pin
+    INTERFACE table's width column as parameter defaults, and returned
+    `clk=1`, `address=8`, `read_data=32` (pins), `sky130_fd_sc_hd=10`
+    (a PDK cell library), `FP_PDN_HOFFSET=7` (a floorplan setting), and
+    847 rows on one design. On the cell it was written for, 1 of 9
+    entries was a real parameter — it got the right answer by luck.
+
+    A resolver that guesses is worse than no resolver: a wrong default
+    turns a correct FAIL into a clean PASS, which is the exact failure
+    this gate exists to prevent. Two restrictions make it sound:
+
+      `wanted`    look up ONLY the names a symbolic width actually
+                  needs. Nothing else is collected, so an unrelated
+                  parameter elsewhere in the corpus cannot collide.
+      `pin_names` a name that is also a declared PIN is the interface
+                  table's own row, not a parameter default. Excluded.
+
+    HDL declarations outrank doc rows: a declaration is stronger than a
+    table cell whose column could be a minimum rather than a default.
+    The dialect is returned with the value so the report discloses which
+    was used and a reader can audit the weaker one.
     """
     out: Dict[str, Tuple[int, str]] = {}
+    if wanted is not None and not wanted:
+        return out
+    pin_names = pin_names or set()
+
+    def _accept(name: str, val: int, dialect: str) -> None:
+        if name.lower() in _HDL_KEYWORDS:
+            return
+        if wanted is not None and name not in wanted:
+            return
+        if name in pin_names:          # the interface table's own row
+            return
+        prev = out.get(name)
+        if prev is None or (dialect == "hdl-declaration"
+                            and prev[1] != "hdl-declaration"):
+            out[name] = (val, dialect)
+
     for path in _iter_input_files(project):
         try:
             text = path.read_text(errors="replace")
         except OSError:
             continue
         for m in _DOC_PARAM_ROW.finditer(text):
-            name, val = m.group(1), int(m.group(2))
-            if name.lower() in _HDL_KEYWORDS:
-                continue
-            out.setdefault(name, (val, "doc-table"))
+            _accept(m.group(1), int(m.group(2)), "doc-table")
         for m in _HDL_PARAM_DEF.finditer(text):
-            name, val = m.group(1), int(m.group(2))
-            if name.lower() in _HDL_KEYWORDS:
-                continue
-            prev = out.get(name)
-            if prev is None or prev[1] != "hdl-declaration":
-                out[name] = (val, "hdl-declaration")
+            _accept(m.group(1), int(m.group(2)), "hdl-declaration")
     return out
 
 
@@ -296,6 +323,28 @@ def _eval_term(term: str, params: Dict[str, Tuple[int, str]]) -> Optional[int]:
         off = int(m.group(3))
         val = val + off if m.group(2) == "+" else val - off
     return val
+
+
+def _symbolic_terms(pin_table: List[Any]) -> Set[str]:
+    """Identifiers that the pin table's own `width_symbolic` values name.
+
+    This is the `wanted` set: the only parameters the gate has any
+    business looking up. Anything else in the corpus is irrelevant and
+    collecting it can only create a collision.
+    """
+    out: Set[str] = set()
+    for pin in pin_table:
+        if not isinstance(pin, dict):
+            continue
+        ws = pin.get("width_symbolic")
+        if not isinstance(ws, str) or ":" not in ws:
+            continue
+        hi_s, _, lo_s = ws.strip().strip("[]").partition(":")
+        for term in (hi_s, lo_s):
+            m = _SYM_TERM.match(term.strip().strip("`"))
+            if m:
+                out.add(m.group(1))
+    return out
 
 
 def _symbolic_width_bits(
@@ -441,7 +490,12 @@ def evaluate(project: Path) -> Dict[str, Any]:
 
     names = _pin_names(pin_table)
     numeric, symbolic, files_read = derive_bus_evidence(project, names)
-    params = derive_parameter_defaults(project)
+    # Look up ONLY the parameter names a symbolic width actually needs,
+    # and never a name that is itself a declared pin. See
+    # derive_parameter_defaults for what a harvest-everything version
+    # was measured to return.
+    params = derive_parameter_defaults(
+        project, wanted=_symbolic_terms(pin_table), pin_names=set(names))
 
     violations: List[Dict[str, Any]] = []
     resolved_symbolically: List[Dict[str, Any]] = []
