@@ -100,13 +100,26 @@ def test_split_staged_libs_are_colocated_for_the_shim(tmp_path):
 # verified without ngspice + a commercial PDK — an owner decision, not a CI fix.
 # xfail(strict=False) keeps this VISIBLE (xfailed, not a masking skip); the farm
 # CAPABILITY itself is fully restored and exercised by the other 12 tests here.
+# vibe-ic#193 UPDATE — the "unverifiable without ngspice" clause is DISCHARGED.
+# The measurement now lives in, and is executed by,
+# `test_issue193_custom_pdk_primary_selection_ngspice.py` (real ngspice-46+):
+#   * split staging (THIS fixture): spice_libs[0] names a deck ngspice cannot
+#     load — "Could not find library file"; HEAD's pick solves.
+#   * co-located + shim staged first: the two policies elect the SAME lib.
+#   * co-located + device lib staged first: they differ, and HEAD's pick solves
+#     while spice_libs[0] dies with "Undefined parameter".
+# The OWNER's decision is still open and the runtime is deliberately unchanged;
+# what is no longer open is whether the two selections are equivalent. They are
+# not, and the simulator falls on HEAD's side in every case it can separate.
 @pytest.mark.xfail(strict=False, reason=(
     "architectural divergence: afec spice_libs[0]/entry-shim-primary assumption "
-    "vs HEAD #149/v1.4.58 device-defining-lib-primary. HEAD's ranking is more "
-    "principled than 'the first staged lib' and yields a deck this fixture can "
-    "run WITHOUT a farm; flipping to first-staged-lib would change the runtime "
-    "primary-selection for every custom PDK and is unverifiable without ngspice "
-    "— pending owner decision + ngspice verification (captured-floor issue)."))
+    "vs HEAD #149/v1.4.58 device-defining-lib-primary. MEASURED (vibe-ic#193, "
+    "real ngspice-46+, see test_issue193_custom_pdk_primary_selection_ngspice"
+    ".py): on THIS split-staged fixture spice_libs[0] yields a deck ngspice "
+    "cannot load at all, while HEAD's pick solves; the two policies coincide "
+    "once the include closure is co-located. Flipping to first-staged-lib would "
+    "change the runtime primary-selection for every custom PDK — pending owner "
+    "decision (captured-floor issue). The ngspice verification is DONE."))
 def test_no_farm_dir_keeps_the_raw_path(tmp_path):
     """Opt-in: a caller that asks for no farm gets exactly the previous paths."""
     res, shim, _dev = _stage_split(tmp_path)

@@ -71,6 +71,15 @@ except Exception:  # pragma: no cover
     import fault_atpg_run as _far             # type: ignore
 
 
+# Where the phase3 producer leaves a record when no coverage artefact could be
+# produced (vibe-ic#235). An absent artefact WITH one of these is BLOCKED (the
+# step said why); an absent artefact WITHOUT one is FAIL (nothing knows whether
+# it ever ran). Mirrors transition_coverage_check's DT1 channel.
+_NOT_RUN_RECORDS = (
+    "phase2/stage2/dft/path_delay_atpg_not_run.json",
+    "reports/phase2/dft/path_delay_atpg_not_run.json",
+)
+
 _PROGRAM = "path_delay_coverage_check"
 _VERSION = "1.0.0"
 PDF_FLOOR_DEFAULT = 80.0
@@ -109,17 +118,41 @@ def _recount(records: list) -> dict:
             "false_held": false_held, "aborted": aborted}
 
 
-def evaluate(blob: Optional[dict], floor: float = PDF_FLOOR_DEFAULT) -> dict:
+def evaluate(blob: Optional[dict], floor: float = PDF_FLOOR_DEFAULT,
+             not_run_record: Optional[dict] = None) -> dict:
     """Pure evaluator. Recomputes PDF coverage from per-path SAT verdicts and
     re-derives the verdict against the floor. NEVER trusts a written boolean;
-    NEVER counts a false/held/aborted/unmappable path as covered. chip-AGNOSTIC."""
+    NEVER counts a false/held/aborted/unmappable path as covered. chip-AGNOSTIC.
+
+    `not_run_record` — the producer's own not-run sentinel, when one exists
+    (vibe-ic#235). An ABSENT coverage artefact is never a pass, but WHY it is
+    absent decides between FAIL and BLOCKED, and the two are different repairs:
+    a step that ran and could not measure is blocked on an input or a
+    capability; a step that left no trace at all did not run, and nothing knows
+    why. Without this branch the two are one indistinguishable state on disk.
+    """
     reasons: list[str] = []
 
     if blob is None:
+        if isinstance(not_run_record, dict):
+            why = str(not_run_record.get("reason")
+                      or "producer recorded a not-run sentinel with no reason")
+            stage = not_run_record.get("not_run_stage")
+            return {"verdict": "BLOCKED", "status": "BLOCKED",
+                    "not_run_stage": stage,
+                    "reasons": [
+                        "no path_delay_coverage.json was produced; the step "
+                        f"recorded why it did not run"
+                        f"{f' ({stage})' if stage else ''}: " + why
+                        + " — BLOCKED (the at-speed PDF coverage is unmeasured, "
+                          "which is not a pass)"]}
         return {"verdict": "FAIL", "status": "FAIL",
-                "reasons": ["path_delay_coverage.json absent or invalid JSON — "
-                            "the at-speed PDF step cannot pass without a real "
-                            "coverage measurement"]}
+                "reasons": ["path_delay_coverage.json absent or invalid JSON, "
+                            "and NO not-run record was left either — there is "
+                            "no evidence the at-speed PDF step ran at all. An "
+                            "absent coverage artefact is never a pass; the step "
+                            "must produce a measurement or state why it could "
+                            "not"]}
 
     if blob.get("verdict") == "BLOCKED":
         return {"verdict": "BLOCKED", "status": "BLOCKED",
@@ -223,14 +256,28 @@ def _resolve_coverage_json(project: Path, override: Optional[str]) -> Optional[P
     return next((p for p in cands if p.is_file()), None)
 
 
+def _resolve_not_run_record(project: Path) -> tuple[Optional[dict], Optional[Path]]:
+    """Find the step's own record of why it produced no coverage artefact."""
+    for rel in _NOT_RUN_RECORDS:
+        p = project / rel
+        if p.is_file():
+            d = _load_json(p)
+            if d is not None:
+                return d, p
+    return None, None
+
+
 def audit(project: Path, coverage_json: Optional[str] = None,
           floor: float = PDF_FLOOR_DEFAULT) -> dict:
     path = _resolve_coverage_json(project, coverage_json)
+    blob = _load_json(path) if path else None
+    rec, rec_path = (_resolve_not_run_record(project) if blob is None
+                     else (None, None))
     base = {"program": _PROGRAM, "version": _VERSION,
             "project_dir": str(project),
-            "coverage_json": str(path) if path else None}
-    blob = _load_json(path) if path else None
-    result = evaluate(blob, floor=floor)
+            "coverage_json": str(path) if path else None,
+            "not_run_record": str(rec_path) if rec_path else None}
+    result = evaluate(blob, floor=floor, not_run_record=rec)
     result.update(base)
     return result
 
@@ -271,8 +318,12 @@ def main(argv: Optional[list] = None) -> int:
           f"sensitised={report.get('sensitised_paths')}/"
           f"{report.get('graded_paths')} robust={report.get('robust_paths')} "
           f"floor={report.get('floor_pct')}", file=sys.stderr)
+    if v in ("FAIL", "BLOCKED"):
+        for r in report.get("reasons", [])[:3]:
+            print(f"  {v}: {r}", file=sys.stderr)
     if v == "NOT_APPLICABLE":
         return 0
+    # BLOCKED is NOT a pass. An unmeasured at-speed step must not exit 0.
     return 0 if v == "PASS" else 1
 
 

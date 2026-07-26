@@ -19036,6 +19036,223 @@ def _canonical_gds_is_stale(primary_gds: Path, canon_gds: Path) -> bool:
         return True
 
 
+# ---------------------------------------------------------------------------
+# At-speed ATPG (DT1/DT2/DT3) producers — vibe-ic#235
+#
+# THE STEP MUST ALWAYS LEAVE A RECORD. The DT1/DT2/DT3 producer blocks used to
+# self-disable behind bare `if <input>.is_file()` guards whose false branch
+# wrote nothing to disk — at best an in-memory `notes` line that dies with the
+# process. On disk, "never ran", "ran and could not measure" and "ran and
+# crashed" were then a single state: the coverage artefact is absent. Those are
+# three different repairs, and a missing disclosure is indistinguishable from a
+# step that passed — the failure class this repo removes everywhere.
+#
+# `phase3/…/clean_run_v1.4.22` is the measured instance: DT3 produced no
+# sdd_coverage.json, no sdd_coverage_gate.json and no record of any kind, and
+# nothing in the tree says whether the step was inapplicable or broken.
+#
+# Fix shape is DT1's (#219), applied to the phase3 producer: every self-disable
+# branch writes `<step>_atpg_not_run.json` naming the missing inputs and the
+# stage it stopped at, and a REAL measurement DELETES any stale record so a
+# fresh result is never read as blocked.
+#
+# GATING IS UNCHANGED. These helpers only make the existing decisions speak;
+# they must not add or remove a precondition, or a design that legitimately
+# produces coverage today would stop producing it.
+_ATPG_NOT_RUN_REL = {
+    "DT1": "phase2/stage2/dft/transition_atpg_not_run.json",
+    "DT2": "phase2/stage2/dft/path_delay_atpg_not_run.json",
+    "DT3": "phase2/stage2/dft/sdd_atpg_not_run.json",
+}
+_ATPG_COVERAGE_REL = {
+    "DT1": "reports/phase2/dft/transition_coverage.json",
+    "DT2": "reports/phase2/dft/path_delay_coverage.json",
+    "DT3": "reports/phase2/dft/sdd_coverage.json",
+}
+_ATPG_CAP_FLAG = "cap:at_speed_timing_graded_atpg"
+_ATPG_CUT_REL = "phase2/stage2/dft/cut_netlist.v"
+_ATPG_SDC_REL = "phase3/stage3/pnr/constraint.sdc"
+# Informational only. The flow YAML's DT2 condition also names the post-route
+# timing model, but the producer has never gated on it (published runs carry a
+# SPEF and no `*_pnr.v` yet still grade PDF), so these are RECORDED in the
+# disclosure and never used to decide whether to run.
+_ATPG_TIMING_MODEL_REL = ("phase3/stage3/extracted/*.spef",
+                          "phase3/stage3/pnr/*_pnr.v")
+
+
+def atpg_needs_regrade(path: Path) -> bool:
+    """Is there no usable at-speed grade at `path` yet?
+
+    A non-graded placeholder (BLOCKED / ENGINE_LIMITED / ERROR) left by an
+    earlier phase, or by a pass that ran before the tech-mapped netlist
+    existed, must be re-graded here; a genuine PASS / NOT_APPLICABLE is a real
+    measurement and is kept (idempotent).
+    """
+    if not path.is_file():
+        return True
+    try:
+        verdict = json.loads(path.read_text(errors="replace")).get("verdict")
+    except Exception:
+        return True
+    return verdict in ("BLOCKED", "ENGINE_LIMITED", "ERROR", None)
+
+
+def routed_sdc_clock(project: Path) -> Optional[str]:
+    """The clock name declared by the routed SDC, or None. Pure w.r.t. the
+    tree: reads one file, writes nothing."""
+    sdc = project / _ATPG_SDC_REL
+    if not sdc.is_file():
+        return None
+    m = re.search(
+        r"create_clock[^\n]*?(?:-name\s+(\w+)|get_ports\s*\{?\s*(\w+))",
+        sdc.read_text(errors="replace"))
+    return (m.group(1) or m.group(2)) if m else None
+
+
+def atpg_missing_inputs(project: Path, step: str) -> List[str]:
+    """Human-readable names of the inputs `step`'s producer needs and lacks.
+
+    Empty list = the producer is armed. This encodes EXACTLY the preconditions
+    the producer already enforced — DT1/DT2 need the Step-11 scan cut, DT3
+    needs both upstream coverage artefacts, and all three need a clock name in
+    the routed SDC. chip/PDK-AGNOSTIC.
+    """
+    missing: List[str] = []
+    if step in ("DT1", "DT2"):
+        if not (project / _ATPG_CUT_REL).is_file():
+            missing.append(
+                f"{_ATPG_CUT_REL} absent — the Step-11 scan cut produced no "
+                f"cut netlist to run at-speed ATPG on")
+    elif step == "DT3":
+        for rel in (_ATPG_COVERAGE_REL["DT2"], _ATPG_COVERAGE_REL["DT1"]):
+            if not (project / rel).is_file():
+                missing.append(
+                    f"{rel} absent — the SDD grade fuses both upstream "
+                    f"at-speed coverage artefacts")
+    if routed_sdc_clock(project) is None:
+        missing.append(
+            f"no create_clock name found in {_ATPG_SDC_REL} — at-speed ATPG "
+            f"has no clock to launch/capture on")
+    return missing
+
+
+def atpg_disclose_not_run(project: Path, step: str, reason: str, stage: str,
+                          extra: Optional[dict] = None) -> Path:
+    """Write `step`'s durable record of why it produced no coverage artefact.
+
+    verdict=SKIPPED-CONDITION so flow_compliance's
+    `_sibling_self_skip_for_missing` promotes the owning step to
+    SKIPPED-CONDITION instead of a silent MISSING, and so the step's own gate
+    can report BLOCKED (with the recorded reason) instead of a bare FAIL that
+    cannot say which repair is needed.
+    """
+    path = project / _ATPG_NOT_RUN_REL[step]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "verdict": "SKIPPED-CONDITION",
+        "step": step,
+        "reason": reason,
+        "not_run_stage": stage,
+        # Honest: a precondition that was never met means no tool was launched.
+        "tool_attempted": stage != "precondition_unmet",
+        "capability_flag": _ATPG_CAP_FLAG,
+        "skips_required_output": _ATPG_COVERAGE_REL[step],
+        "timing_model_inputs": {
+            rel: bool(list(project.glob(rel))) for rel in _ATPG_TIMING_MODEL_REL
+        },
+    }
+    if extra:
+        payload.update(extra)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    return path
+
+
+def atpg_clear_not_run(project: Path, step: str) -> bool:
+    """Drop a stale not-run record once a real measurement exists.
+
+    A record that outlives the condition it described is a lie on disk: the
+    gate would read a fresh, graded result as BLOCKED. Returns True if a record
+    was removed.
+    """
+    path = project / _ATPG_NOT_RUN_REL[step]
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def run_at_speed_atpg_producers(project: Path, written: List[str],
+                                notes: List[str]) -> None:
+    """Produce DT1/DT2/DT3 at-speed coverage, disclosing every non-production.
+
+    Extracted from `step_canonicalize_artefacts` so the self-disable branches
+    are reachable by a test at all — the block was previously buried a thousand
+    lines inside a step that needs a whole PnR tree to enter, which is why its
+    silence went unmeasured. Best-effort + NONFATAL, unchanged: the flow gates
+    only VALIDATE the produced reports.
+    """
+    order = (
+        # step, producer program, extra argv, timeout
+        ("DT1", "transition_fault_atpg_run.py", ["--max-faults", "400"], 2400),
+        ("DT2", "path_delay_fault_atpg_run.py", [], 2400),
+        ("DT3", "sdd_atpg_run.py", [], 1800),
+    )
+    for step, prog, extra_argv, timeout_s in order:
+        out_json = project / _ATPG_COVERAGE_REL[step]
+        if not atpg_needs_regrade(out_json):
+            # A real grade already exists; retire any record that contradicts it.
+            atpg_clear_not_run(project, step)
+            continue
+
+        missing = atpg_missing_inputs(project, step)
+        if missing:
+            atpg_disclose_not_run(
+                project, step,
+                f"{step} at-speed ATPG NEVER RAN — precondition unmet: "
+                + "; ".join(missing),
+                "precondition_unmet", {"missing_inputs": missing})
+            notes.append(f"{step} at-speed ATPG not run (precondition unmet) "
+                         f"→ {_ATPG_NOT_RUN_REL[step]}")
+            continue
+
+        cmd = [sys.executable, str(PROGRAMS_DIR / prog), str(project),
+               "--clock", str(routed_sdc_clock(project)), *extra_argv,
+               "--json", str(out_json)]
+        pdk_in = project / "input" / "pdk"
+        if pdk_in.is_dir():
+            cmd += ["--pdk-dir", str(pdk_in.resolve())]
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=timeout_s)
+        except Exception as exc:
+            atpg_disclose_not_run(
+                project, step,
+                f"{step} at-speed ATPG execution error: {exc}",
+                "producer_execution_error")
+            notes.append(f"{step} at-speed ATPG errored ({exc}) → "
+                         f"{_ATPG_NOT_RUN_REL[step]}")
+            continue
+
+        if out_json.is_file():
+            written.append(str(out_json))
+            atpg_clear_not_run(project, step)
+        else:
+            # Ran and produced nothing. The producer writes its JSON on every
+            # path it reaches, so reaching none of them is itself the finding.
+            tail = ((proc.stderr or proc.stdout or "")[-400:] or "no output")
+            atpg_disclose_not_run(
+                project, step,
+                f"{step} at-speed ATPG RAN but wrote no "
+                f"{_ATPG_COVERAGE_REL[step]} (producer exit "
+                f"{proc.returncode}): {tail}",
+                "producer_wrote_no_artifact",
+                {"producer_exit": proc.returncode})
+            notes.append(f"{step} at-speed ATPG wrote no artefact (exit "
+                         f"{proc.returncode}) → {_ATPG_NOT_RUN_REL[step]}")
+
+
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 container: str) -> StepResult:
     """v1.6.36 — stage runner outputs at the canonical paths the flow YAML expects.
@@ -20155,139 +20372,14 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         except Exception as _sdfsim_exc:
             notes.append(f"sdf_gate_sim non-fatal: {_sdfsim_exc}")
 
-    # --- Step DT1 — transition-delay-fault (LOC) coverage PRODUCER --------
+    # --- Steps DT1/DT2/DT3 — at-speed ATPG PRODUCERS ---------------------
     # #146 blocker-2 — DT1/DT2 producer PARITY. The Step-11 scan cut
-    # (cut_netlist.v) is only born by the time phase3 runs (the phase2 DT1
-    # producer's precondition is not yet met when it fires), so — exactly like
-    # the DT2 path-delay producer below — the DT1 transition producer must ALSO
-    # fire from phase3 once cut_netlist.v exists. Without this, DT1's gate
-    # (transition_coverage_check) hard-FAILs on a permanently-absent
-    # transition_coverage.json. Best-effort + NONFATAL; the flow's DT1 gate only
-    # VALIDATES the produced report (independent detected/redundant/aborted
-    # recount). Placed BEFORE DT2 so DT3 (needs BOTH coverage files) can fire.
-    # A DFT at-speed report from a PRIOR phase — the phase2 DT1 producer, or an
-    # earlier phase3 pass that ran before the tech-mapped `<top>_synth.v` / a
-    # valid scan cut existed — may be a NON-GRADED placeholder (BLOCKED /
-    # ENGINE_LIMITED / ERROR) produced on the GENERIC pre-map netlist, whose
-    # `$_DFF_*` primitives `fault cut` cannot detect (0 pseudo-PI/PO pairs).
-    # Phase3 now HAS the tech-mapped netlist (real stdcell flops), so such a
-    # placeholder must be RE-GRADED here, not preserved — otherwise DT1/DT2/DT3
-    # hard-FAIL forever on a stale can't-grade record. A genuine PASS /
-    # NOT_APPLICABLE is kept as-is (idempotent; a real measurement is never
-    # re-run). chip/PDK-AGNOSTIC.
-    def _dt_needs_regrade(_p: Path) -> bool:
-        if not _p.is_file():
-            return True
-        try:
-            _v = json.loads(_p.read_text(errors="replace")).get("verdict")
-        except Exception:
-            return True
-        return _v in ("BLOCKED", "ENGINE_LIMITED", "ERROR", None)
-
-    _dt1_json = project / "reports/phase2/dft/transition_coverage.json"
-    _dt1_cut = project / "phase2/stage2/dft/cut_netlist.v"
-    if _dt1_cut.is_file() and _dt_needs_regrade(_dt1_json):
-        _dt1_clk = None
-        _dt1_sdc = project / "phase3/stage3/pnr/constraint.sdc"
-        if _dt1_sdc.is_file():
-            _m1 = re.search(
-                r"create_clock[^\n]*?(?:-name\s+(\w+)|get_ports\s*\{?\s*(\w+))",
-                _dt1_sdc.read_text(errors="replace"))
-            if _m1:
-                _dt1_clk = _m1.group(1) or _m1.group(2)
-        if _dt1_clk:
-            try:
-                _dt1_cmd = [sys.executable,
-                            str(PROGRAMS_DIR / "transition_fault_atpg_run.py"),
-                            str(project), "--clock", _dt1_clk,
-                            "--max-faults", "400", "--json", str(_dt1_json)]
-                _dt1_pdk_in = project / "input" / "pdk"
-                if _dt1_pdk_in.is_dir():
-                    _dt1_cmd += ["--pdk-dir", str(_dt1_pdk_in.resolve())]
-                _dt1_json.parent.mkdir(parents=True, exist_ok=True)
-                subprocess.run(_dt1_cmd, capture_output=True, text=True,
-                               timeout=2400)
-                if _dt1_json.is_file():
-                    written.append(str(_dt1_json))
-            except Exception as _dt1_exc:
-                notes.append(f"transition_fault_atpg non-fatal: {_dt1_exc}")
-        else:
-            notes.append("transition_fault_atpg skipped: no create_clock "
-                         "name found in the routed SDC")
-
-    # --- Step DT2 — path-delay-fault (at-speed, timing-graded) ATPG ------
-    # The post-route timing model (routed netlist + SPEF) is born HERE, so
-    # the DT2 PRODUCER fires from phase3 (the scan cut + flat core come from
-    # phase2 DT1). Best-effort + NONFATAL: the flow's DT2 gate only VALIDATES
-    # reports/phase2/dft/path_delay_coverage.json (independent per-path
-    # recount — false/held/aborted can never count as sensitised).
-    _dt2_json = project / "reports/phase2/dft/path_delay_coverage.json"
-    _dt2_cut = project / "phase2/stage2/dft/cut_netlist.v"
-    if _dt2_cut.is_file() and _dt_needs_regrade(_dt2_json):
-        _dt2_clk = None
-        _dt2_sdc = project / "phase3/stage3/pnr/constraint.sdc"
-        if _dt2_sdc.is_file():
-            _m_clk = re.search(
-                r"create_clock[^\n]*?(?:-name\s+(\w+)|get_ports\s*\{?\s*(\w+))",
-                _dt2_sdc.read_text(errors="replace"))
-            if _m_clk:
-                _dt2_clk = _m_clk.group(1) or _m_clk.group(2)
-        if _dt2_clk:
-            try:
-                _dt2_cmd = [sys.executable,
-                            str(PROGRAMS_DIR / "path_delay_fault_atpg_run.py"),
-                            str(project), "--clock", _dt2_clk,
-                            "--json", str(_dt2_json)]
-                _dt2_pdk_in = project / "input" / "pdk"
-                if _dt2_pdk_in.is_dir():
-                    _dt2_cmd += ["--pdk-dir", str(_dt2_pdk_in.resolve())]
-                _dt2_json.parent.mkdir(parents=True, exist_ok=True)
-                subprocess.run(_dt2_cmd, capture_output=True, text=True,
-                               timeout=2400)
-                if _dt2_json.is_file():
-                    written.append(str(_dt2_json))
-            except Exception as _dt2_exc:
-                notes.append(f"path_delay_fault_atpg non-fatal: {_dt2_exc}")
-        else:
-            notes.append("path_delay_fault_atpg skipped: no create_clock "
-                         "name found in the routed SDC")
-
-    # --- Step DT3 — small-delay-defect (SDD) at-speed grade --------------
-    # Fuses DT1 transition faults + DT2 per-path slack. Best-effort +
-    # NONFATAL; the flow's DT3 gate only VALIDATES sdd_coverage.json (the
-    # gate RE-DERIVES margin + strong/weak buckets — a doctored margin or a
-    # strong-with-high-slack fabrication FAILs). DESCRIPTIVE, no floor.
-    _dt3_json = project / "reports/phase2/dft/sdd_coverage.json"
-    if (_dt_needs_regrade(_dt3_json) and _dt2_json.is_file()
-            and (project / "reports/phase2/dft/transition_coverage.json").is_file()):
-        # independent clock discovery (DT2's _dt2_clk is only bound when DT2
-        # actually produced this run — re-derive to avoid a NameError).
-        _dt3_clk = None
-        _dt3_sdc = project / "phase3/stage3/pnr/constraint.sdc"
-        if _dt3_sdc.is_file():
-            _m3 = re.search(
-                r"create_clock[^\n]*?(?:-name\s+(\w+)|get_ports\s*\{?\s*(\w+))",
-                _dt3_sdc.read_text(errors="replace"))
-            if _m3:
-                _dt3_clk = _m3.group(1) or _m3.group(2)
-        if _dt3_clk:
-            try:
-                _dt3_cmd = [sys.executable,
-                            str(PROGRAMS_DIR / "sdd_atpg_run.py"),
-                            str(project), "--clock", _dt3_clk,
-                            "--json", str(_dt3_json)]
-                _dt3_pdk_in = project / "input" / "pdk"
-                if _dt3_pdk_in.is_dir():
-                    _dt3_cmd += ["--pdk-dir", str(_dt3_pdk_in.resolve())]
-                _dt3_json.parent.mkdir(parents=True, exist_ok=True)
-                subprocess.run(_dt3_cmd, capture_output=True, text=True,
-                               timeout=1800)
-                if _dt3_json.is_file():
-                    written.append(str(_dt3_json))
-            except Exception as _dt3_exc:
-                notes.append(f"sdd_atpg non-fatal: {_dt3_exc}")
-        else:
-            notes.append("sdd_atpg skipped: no create_clock name in routed SDC")
+    # (cut_netlist.v) and the post-route timing model are only born by the
+    # time phase3 runs, so all three at-speed producers fire from here.
+    # vibe-ic#235 — and every non-production now WRITES a disclosure record
+    # instead of an in-memory note that dies with the process. Gating is
+    # unchanged; see run_at_speed_atpg_producers.
+    run_at_speed_atpg_producers(project, written, notes)
 
     # --- Step 27 (MCF axis) — SI-aware crosstalk-DELAY STA ---------------
     # After the coupling-aware SPEF + post-route STA exist, re-run OpenSTA on
