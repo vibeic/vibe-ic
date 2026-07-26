@@ -409,8 +409,60 @@ def _tool_from_command(cmd: str) -> str:
     return first or "sh"
 
 
+# ORGANIC #365 — the ledger recorded WHICH tool ran and for HOW LONG, but not
+# WHICH BUILD. The anti-fabrication rule the issue quotes asks for a version
+# per tool call, and a provenance chain that cannot name the build cannot
+# attest what it claims.
+#
+# Probing per INVOCATION would cost an extra container exec every time. A
+# tool's version does not change inside a run, so it is probed ONCE per
+# (container, tool) and cached — about five probes for a whole Phase 3.
+#
+# The probe runs through `_docker_exec_raw`, which by design does NOT log, so
+# it cannot recurse into the ledger it is filling (a test pins that).
+#
+# GENERIC, not a per-tool table: try the three flags every CLI in this
+# toolchain answers to, take the first that exits 0 with output. When none
+# does, the entry says so EXPLICITLY — `version: null` plus a stated reason —
+# because an absent key and an unknown value must not look alike (#312).
+_VERSION_CACHE: Dict[Tuple[str, str], Optional[str]] = {}
+_VERSION_FLAGS = ("--version", "-version", "-v")
+
+
+def _tool_version(container: Optional[str], tool: str) -> Optional[str]:
+    """First line of `<tool> <version-flag>`, memoised per (container, tool)."""
+    if not container or not tool or tool in ("sh", "export"):
+        return None
+    key = (container, tool)
+    if key in _VERSION_CACHE:
+        return _VERSION_CACHE[key]
+    out: Optional[str] = None
+    for flag in _VERSION_FLAGS:
+        try:
+            rc, so, se = _docker_exec_raw(
+                container, f"{shlex.quote(tool)} {flag} 2>&1 | head -3",
+                timeout=25)
+        except Exception:  # noqa: BLE001 — a probe must never break the run
+            break
+        if rc != 0:
+            continue
+        for line in (so or se or "").splitlines():
+            s = line.strip()
+            # The image prints a login banner on every shell; a banner line is
+            # not a version. This is the same `[LEVEL]` filter provenance_logger
+            # already needed.
+            if s and not s.startswith("[") and "PATH variable" not in s:
+                out = s[:200]
+                break
+        if out:
+            break
+    _VERSION_CACHE[key] = out
+    return out
+
+
 def _log_invocation(cmd: str, rc: int, duration_ms: int,
-                    marker: Optional[str] = None) -> None:
+                    marker: Optional[str] = None,
+                    container: Optional[str] = None) -> None:
     """Append ONE measured invocation record. Never raises: a ledger that can
     break the run it documents would be traded away the first time it did.
 
@@ -425,9 +477,17 @@ def _log_invocation(cmd: str, rc: int, duration_ms: int,
     sink = _PROV_SINK
     if sink is None:
         return
+    _tool = _tool_from_command(cmd)
+    _ver = _tool_version(container, _tool)
     entry = {
         "record": "invocation",
-        "tool": _tool_from_command(cmd),
+        "tool": _tool,
+        # NEVER a silent absence: an unknown build and an unrecorded one must
+        # not look alike (the #312 lesson, applied to this writer).
+        "version": _ver,
+        "version_capture": ("probed" if _ver else
+                            "NOT CAPTURED — no version flag answered, or no "
+                            "container was supplied to the logger"),
         "command": cmd[:400],
         "exit_code": int(rc),
         "duration_ms": int(duration_ms),   # MEASURED, not a placeholder
@@ -571,7 +631,8 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
         full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
         stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling)
     _log_invocation(cmd, res.rc if res.rc is not None else -1,
-                    int((time.monotonic() - _t0) * 1000), marker=marker)
+                    int((time.monotonic() - _t0) * 1000), marker=marker,
+                    container=container)
     return res.rc, res.out, res.err
 
 
