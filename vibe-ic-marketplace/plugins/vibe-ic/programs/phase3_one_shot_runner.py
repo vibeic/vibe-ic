@@ -6871,6 +6871,57 @@ def _stale_rtl_vs_netlist(netlist: Path, rtl_dir: Path) -> List[str]:
     return stale
 
 
+def _signoff_regen(artifact: Path, layout: Path) -> bool:
+    """Must this phase-3 SIGN-OFF artefact be (re)produced from ``layout``?
+
+    True when it is MISSING **or** STALE — i.e. it exists but predates the
+    layout it claims to describe, so it characterises a DIFFERENT design.
+
+    WHY: `_stale_rtl_vs_netlist` above fixed exactly this disease at the SYNTH
+    boundary ("the flow placed-and-routed the PREVIOUS design and reported a
+    clean PASS for RTL it had never synthesised") — and the fix stopped there.
+    Everything downstream of PnR (RC extraction, SPEF-based STA, multi-corner
+    SPEF STA, multi-corner OCV sign-off STA, and their stance JSONs) was guarded
+    by `not <artifact>.is_file()`: a pure existence test with no notion of which
+    layout the artefact describes. So a re-run with changed RTL re-synthesised,
+    re-placed, re-routed, re-ran DRC and LVS — and then signed the timing off
+    against the PREVIOUS design's reports.
+
+    MEASURED on `spm x sky130A` (v1.6.4, campaign_v164). One phase-3 re-run
+    after an RTL change:
+
+        phase3/stage3/pnr/spm_pnr.v          mtime 15:03:18   (this design)
+        phase3/stage3/extracted/spm.spef     mtime 10:30:04   (previous design)
+        phase3/stage3/sta/sta_mcorner_ocv.rpt mtime 10:30:08  (previous design)
+
+    119 of 223 phase-3 artefacts were older than the layout just built. Step 23
+    duly reported `setup -6.550 ns, TNS -75.02, DRV 45/70` — byte-identical to
+    the previous design's numbers — for a netlist those numbers had never seen.
+    Deleting the stale set and re-running the SAME command produced the real
+    answer for that layout: `setup +3.68 ns, TNS 0.00, DRV 5`.
+
+    The direction that matters is the other one. Here the stale cache invented a
+    FAIL over a design that had closed; identical code invents a PASS whenever
+    the previous run passed and the new design regressed. A sign-off verdict for
+    a layout that was never analysed is the exact failure this flow exists to
+    prevent, and it is silent.
+
+    FAILS CLOSED, like `_stale_rtl_vs_netlist`: if either mtime cannot be read,
+    regenerate rather than trust an unprovable cache. Chip-AGNOSTIC — pure mtime
+    comparison, no design/PDK/corner literal.
+    """
+    try:
+        if not artifact.is_file():
+            return True
+        if not layout.is_file():
+            # No layout to compare against: leave an existing artefact alone
+            # (nothing downstream can be re-derived without the layout anyway).
+            return False
+        return artifact.stat().st_mtime < layout.stat().st_mtime
+    except OSError:
+        return True
+
+
 def step_synth(project: Path, top: str, pdk: PdkConfig,
                container: str) -> StepResult:
     t0 = time.time()
@@ -19251,19 +19302,19 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # SPEF-based report CAN be the canonical one (the old code extracted
     # SPEF only after the alias was already written from the estimate).
     spef_out = extracted_out / f"{top}.spef"
-    if primary_def.is_file() and not spef_out.is_file():
+    if primary_def.is_file() and _signoff_regen(spef_out, primary_def):
         if _emit_spef(project, top, pdk, container, spef_out, notes):
             written.append(str(spef_out))
 
     # --- Step 23: SPEF-based post-route STA (#527) ----------------------
     spef_sta_rpt = sta_out / "sta_spef_based.rpt"
     if (spef_out.is_file() and spef_out.stat().st_size > 0
-            and not spef_sta_rpt.is_file()):
+            and _signoff_regen(spef_sta_rpt, primary_def)):
         if _emit_spef_sta(project, top, pdk, container, spef_out,
                           spef_sta_rpt, notes):
             written.append(str(spef_sta_rpt))
             mirror = rpt_phase3 / "sta_spef_based.rpt"
-            if not mirror.is_file():
+            if _signoff_regen(mirror, primary_def):
                 mirror.write_text(spef_sta_rpt.read_text())
                 written.append(str(mirror))
     spef_sta_ok = spef_sta_rpt.is_file() and spef_sta_rpt.stat().st_size > 0
@@ -19275,7 +19326,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # in multi_corner_spef_stance.json.
     mc_spef_dir = extracted_out / "spef_corners"
     mc_stance = rpt_phase3 / "multi_corner_spef_stance.json"
-    if primary_def.is_file() and not mc_stance.is_file():
+    if primary_def.is_file() and _signoff_regen(mc_stance, primary_def):
         corner_spefs = _emit_spef_corners(
             project, top, pdk, container, mc_spef_dir, notes)
         for p in corner_spefs.values():
@@ -19292,7 +19343,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         if len(corner_spefs) >= 2 and ("min" in corner_spefs
                                        or "max" in corner_spefs):
             mc_sta_rpt = sta_out / "sta_spef_multicorner.rpt"
-            if not mc_sta_rpt.is_file():
+            if _signoff_regen(mc_sta_rpt, primary_def):
                 _mc_res = _emit_corner_spef_sta(
                     project, top, pdk, container, corner_spefs,
                     mc_sta_rpt, notes,
@@ -19303,7 +19354,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 if mc_sta_ok:
                     written.append(str(mc_sta_rpt))
                     mc_mirror = rpt_phase3 / "sta_spef_multicorner.rpt"
-                    if not mc_mirror.is_file():
+                    if _signoff_regen(mc_mirror, primary_def):
                         mc_mirror.write_text(mc_sta_rpt.read_text())
                         written.append(str(mc_mirror))
         _corners = sorted(corner_spefs)
@@ -19347,7 +19398,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # disclosure — no fabricated ss/ff). Internalises the hand-run mcorner_ocv_sta.tcl.
     mc_ocv_rpt = sta_out / "sta_mcorner_ocv.rpt"
     mc_ocv_stance = rpt_phase3 / "mcorner_ocv_stance.json"
-    if primary_def.is_file() and not mc_ocv_stance.is_file():
+    if primary_def.is_file() and _signoff_regen(mc_ocv_stance, primary_def):
         corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
         # Rediscover any per-corner SPEFs on disk (min/nom/max) + the nom SPEF.
         ocv_corner_spefs: Dict[str, Path] = {}
@@ -19369,14 +19420,14 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                          and setup_lbl != hold_lbl)
         mc_ocv_ok = False
         setup_wns = hold_wns = None
-        if multi_process and not mc_ocv_rpt.is_file():
+        if multi_process and _signoff_regen(mc_ocv_rpt, primary_def):
             mc_ocv_ok = _emit_mcorner_ocv_sta(
                 project, top, pdk, container, corner_libs, ocv_corner_spefs,
                 _nom_spef, mc_ocv_rpt, notes)
             if mc_ocv_ok:
                 written.append(str(mc_ocv_rpt))
                 mc_ocv_mirror = rpt_phase3 / "sta_mcorner_ocv.rpt"
-                if not mc_ocv_mirror.is_file():
+                if _signoff_regen(mc_ocv_mirror, primary_def):
                     mc_ocv_mirror.write_text(mc_ocv_rpt.read_text())
                     written.append(str(mc_ocv_mirror))
                 # Parse the REAL per-corner worst slack (surface the violation).
