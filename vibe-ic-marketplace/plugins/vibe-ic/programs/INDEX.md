@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 975
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 975)
+- **Total programs (excluding helpers / shims):** 974
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 974)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 966 |
+| `any` | 965 |
 
 ## Alphabetical listing
 
@@ -474,7 +474,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l18_interconnect_topology_factuality_check` | any | — | SEMANTIC gate for L18. |
 | `l19_pdk_floorplan_contract_check` | any | — | L19 SEMANTIC completeness gate. |
 | `l1_electrical_specs_typed_depth_check` | any | Wave 38 | Wave 38 / B1 |
-| `l1_param_bus_width_resolve` | any | — | bind PARAMETRIC port widths to their |
 | `l1_pin_bus_width_actionable_check` | any | — | L1 consumer-contract gate. |
 | `l1_pin_table_aliases_typed_check` | any | Wave 38 | Wave 38 / B2 |
 | `l20_dft_scan_topology_actionable_check` | any | — | SEMANTIC gate for |
@@ -1047,7 +1046,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (966 programs)
+### `any` (965 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1493,7 +1492,6 @@ _(no programs in this group)_
 - `l18_interconnect_topology_factuality_check` — SEMANTIC gate for L18.
 - `l19_pdk_floorplan_contract_check` — L19 SEMANTIC completeness gate.
 - `l1_electrical_specs_typed_depth_check` — Wave 38 / B1  _[Wave 38]_
-- `l1_param_bus_width_resolve` — bind PARAMETRIC port widths to their
 - `l1_pin_bus_width_actionable_check` — L1 consumer-contract gate.
 - `l1_pin_table_aliases_typed_check` — Wave 38 / B2  _[Wave 38]_
 - `l20_dft_scan_topology_actionable_check` — SEMANTIC gate for
