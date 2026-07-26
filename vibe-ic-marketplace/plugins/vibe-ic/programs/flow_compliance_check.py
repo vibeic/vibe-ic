@@ -1357,6 +1357,17 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "rtl_precheck_gate",
     "scope_periodic_pulse_check",
     "skill_compliance_triangle_check",
+    # The spec said the plugin MUST declare an artifact, the plugin did not,
+    # and NO gate noticed — because a gate that nothing invokes notices
+    # nothing.  spec_required_artifact_check reads the project's OWN input
+    # docs (input/docs/*.md) and generated L-docs, and asserts that each
+    # PATH-SHAPED artifact those docs make mandatory exists non-empty.
+    # Silent-skips cleanly on incomplete projects: a project with no
+    # imperative clause returns VACUOUS_PASS / rc=0, which is why it meets
+    # the v1.6.4 wiring criterion.  Only path-shaped tokens are asserted on
+    # (a backticked `valid` / `rst_n` after a MUST-verb is a signal name, not
+    # a required artifact) — see _is_path_shaped in that program.
+    "spec_required_artifact_check",
     "testbench_exists_check",
     "tester_oracle_health_check",
     # batch-8 / layergate-8 — SEMANTIC gates for the three consumer-less
