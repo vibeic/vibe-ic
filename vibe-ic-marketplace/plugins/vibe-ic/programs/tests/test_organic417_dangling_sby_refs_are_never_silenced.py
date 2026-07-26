@@ -127,11 +127,29 @@ def test_the_verdict_is_not_downgraded_by_the_new_finding(tmp_path):
 def test_the_real_previously_silent_case_on_published_data():
     """`subservient` ships two top-level .sby; `constraints.sby` references
     `rtl/*.sv`, which resolves to nothing. Both files predate this change —
-    the gate simply had no way to say so."""
+    the gate simply had no way to say so.
+
+    THE VERDICT IS DELIBERATELY NOT ASSERTED HERE, and the first version of
+    this test asserting `PASS` is what turned main red. It passed on my
+    machine and failed in CI, because this cell's `formal_evidence.json`
+    cites `phase2/stage1/formal/sby_subservient.log` and that file is NOT
+    TRACKED — `.gitignore:31 *.log` drops it, and the #411 rescue only
+    negates `*.sby.log`, which is not how this runner names it. So the
+    verdict here is a property of how complete the checkout is, not of the
+    behaviour under test. Pinning it made a test that could only pass beside
+    a local run directory. What #417 is about is the FINDING, which is
+    present either way.
+    """
     cell = _PROGRAMS.parents[3] / "benchmark-data" / "ic" / "subservient"
     if not (cell / "phase2/stage1/formal/constraints.sby").is_file():
         pytest.skip("published cell not present")
     rep = F.audit(cell)
-    assert rep["verdict"] == "PASS", rep["findings"]
-    assert _dangling(rep), "the pre-existing dangling chain must be named"
+    assert _dangling(rep), (
+        "the pre-existing dangling chain must be named", rep["findings"])
     assert "constraints.sby" in _dangling(rep)[0]
+    # It must be reported as the non-verdict finding it is — i.e. the gate
+    # DID find an intact chain and reported the other one anyway. Without
+    # this, the assertion above would also be satisfied by the old
+    # all-chains-broken path, which is a different fact.
+    assert rep.get("sby", "").endswith("subservient.sby"), rep
+    assert not any(f.startswith("SBY_CHAIN_BROKEN") for f in rep["findings"])
