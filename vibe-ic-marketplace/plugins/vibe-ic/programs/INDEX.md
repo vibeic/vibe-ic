@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 967
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 967)
+- **Total programs (excluding helpers / shims):** 968
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 968)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 958 |
+| `any` | 959 |
 
 ## Alphabetical listing
 
@@ -715,6 +715,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `protocol_timeline_assert_gen` | any | v0.1.50 | Half-duplex protocol turnaround cocotb TB generator (Type-A). |
 | `protocol_turnaround_audit` | any | v0.1.50 | Half-duplex protocol turnaround audit (Type-A extraction). |
 | `provenance_check` | any | — | Verify a file was produced by a logged tool run. |
+| `provenance_correction_note_check` | any | — | a correction may not claim a repair |
 | `provenance_hash_audit` | any | v0.114 | v0.114 (BACKLOG-v10 P2.3). |
 | `provenance_logger` | any | — | Wrap a tool invocation, record hashed provenance. |
 | `provenance_output_hash_completeness_check` | any | v0.2.102 | verify that |
@@ -1039,7 +1040,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (958 programs)
+### `any` (959 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1725,6 +1726,7 @@ _(no programs in this group)_
 - `protocol_timeline_assert_gen` — Half-duplex protocol turnaround cocotb TB generator (Type-A).  _[v0.1.50]_
 - `protocol_turnaround_audit` — Half-duplex protocol turnaround audit (Type-A extraction).  _[v0.1.50]_
 - `provenance_check` — Verify a file was produced by a logged tool run.
+- `provenance_correction_note_check` — a correction may not claim a repair
 - `provenance_hash_audit` — v0.114 (BACKLOG-v10 P2.3).  _[v0.114]_
 - `provenance_logger` — Wrap a tool invocation, record hashed provenance.
 - `provenance_output_hash_completeness_check` — verify that  _[v0.2.102]_

@@ -92,6 +92,12 @@ run "tracked blob size ceiling"         "$ROOT" python3 "$PG/tracked_blob_size_g
 # author knew; nothing could notice the set had stopped being consistent.
 run "layout-artefact size policy"       "$ROOT" python3 "$PG/size_policy_drift_check.py"
 
+# vibe-ic#413 — a correction note that claims a repair its row never received
+# is a fabricated citation inside the artefact whose job is to prevent one.
+# 50 of 54 noted rows carried a one-size-fits-all note asserting BOTH repairs
+# when each row had received only one.
+run "provenance correction notes"       "$ROOT" python3 "$PG/provenance_correction_note_check.py"
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired
