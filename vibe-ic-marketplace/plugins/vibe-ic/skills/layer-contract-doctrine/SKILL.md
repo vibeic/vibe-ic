@@ -107,18 +107,34 @@ authoring. Five measurements of our own, not literature:
    across 13 independent runs (that count is the gate's record, cited, not
    re-run here).
 
-   **Where the 1-bit port actually comes from — check this before "fixing"
-   L1.** `phase2_scaffold_gen.derive_signals`
-   (`programs/phase2_scaffold_gen.py:170`) sources ports from `L17.channels`,
-   `L17.global_signals`, `L9.top_ports` and `L9.ports`; `grep -c pin_table`
-   over `programs/phase2_scaffold_gen.py` and `programs/_specrtl_common.py`
-   returns **0** for both, and `arith_oracle_tb_gen._load_top_ports` reads L9
-   only. So `L1.pin_table[]` is *not* the port source for the emitted RTL,
-   notwithstanding the rationale in `l1_pin_bus_width_actionable_check.py`'s
-   own docstring. The 1-bit collapse is real and lives in `derive_signals`,
-   which coerces any width that is neither an int nor a digit-string to 1 —
-   fed a `L9.top_ports` entry with `"width": "ACC_W-1:0"` it emits
-   `{'name': 'acc_o', 'width': 1}`. That is the consumer to fix.
+   **Name the consumer precisely — the obvious answer is one layer off.**
+   `l1_pin_bus_width_actionable_check.py`'s docstring says phase2 derives
+   every port declaration from `L1.pin_table[]`. Phase2 never reads it:
+   `grep -c pin_table programs/phase2_scaffold_gen.py
+   programs/_specrtl_common.py` returns **0** for both, and
+   `arith_oracle_tb_gen._load_top_ports` (`:346`) reads L9 only. The real
+   chain has three links, and only the last one can be fixed:
+
+   * **L1 produces.** `pin_table[]` carries `width` / `msb` / `lsb` /
+     `width_symbolic` off `_parse_port_width`.
+   * **Phase1 promotes.** `phase1_doc_one_shot_runner` (:42857) forwards
+     exactly `{"width", "msb", "lsb", "width_symbolic", "optional"}` from each
+     L1 pin into the L9 entry, and `top_ports` / `ports` / `top_module_pins`
+     share one list object.
+   * **Phase2 consumes.** `phase2_scaffold_gen.derive_signals` (`:170`) reads
+     `L17.channels`, `L17.global_signals`, `L9.top_ports`, `L9.ports` — and
+     coerces any width that is neither an int nor a digit-string to 1, with no
+     diagnostic. Measured, feeding it one `L9.top_ports` entry with
+     `"width": "ACC_W-1:0"`:
+
+     ```
+     {'name': 'acc_o', 'direction': 'output', 'width': 1, 'comment': ''}
+     ```
+
+   The 1-bit collapse is a silent coercion in the CONSUMER, not a missing
+   value in L1 — L1's value is present and symbolic the whole way down. A
+   repair aimed at L1 is aimed one layer too early, which is the mistake §2's
+   own rule exists to prevent, made while writing §2.
 
    *Still open.* A resolver for it was authored and then withdrawn — see §6
    and §7 for the reason, which turned out to be a doctrine result in its own
