@@ -45,6 +45,31 @@ _DIE_WIDTH_RE = re.compile(
 _DIE_HEIGHT_RE = re.compile(
     r"DIE_HEIGHT`?\s*[:=|]\s*\*{0,2}\s*(\d+(?:\.\d+)?)\s*(?:um|µm)?",
     re.IGNORECASE)
+# A LABELLED `W x H <length-unit>` row — the form real design documents use:
+#
+#     | Die size | **2400 x 2400 um (5.76 mm2)** (1.4M cells + 20 macros; L1) |
+#     | Core die (no seal ring) | 1300 x 1300 um |
+#
+# MEASURED (vibe-ic#376 instance 3): 194 of 194 tracked L19 documents carry
+# `die_area_budget_um: null`, because every recogniser above needs a
+# `DIE_AREA` / `DIE_WIDTH` keyword and none of these rows has one. The
+# extractor therefore returned "no mandated floorplan", the emitter returned
+# early, and `phase3_one_shot_runner`'s documented precedence
+# (`... > L19-mandated die_area_budget_um > 'auto'`) never reached its middle
+# rung on any design.
+#
+# TWO DISCRIMINATORS, both load-bearing and both measured:
+#   * the LABEL must name a die — without it, `1024x768` and `16x16` match;
+#   * the VALUE must carry a LENGTH unit — without it, an array shape matches.
+# Over the published input documents the labelled form hits 16 occurrences
+# across 2 ICs; dropping the label requirement takes it to 24. Those 8 extra
+# are exactly what this must not read as a die.
+_DIE_LABELLED_WXH_RE = re.compile(
+    r"([^\n|]{0,40}\bdie\b[^\n|]{0,30})[|:\s]+[^\n|]{0,20}?"
+    r"(\d{2,5}(?:\.\d+)?)\s*[x\u00d7]\s*(\d{2,5}(?:\.\d+)?)"
+    r"\s*(?:um|\u00b5m|micron)",
+    re.IGNORECASE)
+
 _FP_SIZING_PROSE_RE = re.compile(
     r"FP_SIZING\b[\s:=|`'\")(]{0,6}(absolute|relative)", re.IGNORECASE)
 
@@ -258,6 +283,9 @@ def _prose_die_area(project: Path,
         if mw and mh:
             return _rect_to_wxh(0.0, 0.0, float(mw.group(1)),
                                 float(mh.group(1)))
+        m = _DIE_LABELLED_WXH_RE.search(text)
+        if m:
+            return _rect_to_wxh(0.0, 0.0, float(m.group(2)), float(m.group(3)))
         return None
 
     prose = [(r, t) for (r, p, t) in files
