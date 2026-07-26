@@ -98,6 +98,12 @@ run "layout-artefact size policy"       "$ROOT" python3 "$PG/size_policy_drift_c
 # when each row had received only one.
 run "provenance correction notes"       "$ROOT" python3 "$PG/provenance_correction_note_check.py"
 
+# vibe-ic#414 — a ledger's job is that a reader can take a declared output
+# path, open the file, and check its hash. 102 of 156 declared outputs across
+# 21 tracked ledgers could not be followed; 12 shipped under a name the ledger
+# never mentioned and 90 shipped nowhere at all.
+run "declared outputs are findable"     "$ROOT" python3 "$PG/provenance_declared_output_check.py"
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired
