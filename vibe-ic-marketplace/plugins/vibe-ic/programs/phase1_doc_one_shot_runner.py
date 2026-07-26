@@ -41722,6 +41722,46 @@ def _v1_6_441_is_useful_memory_entry(entry) -> bool:
     return bool(name and _MEMORY_NAME_TOKEN_RE.search(str(name)))
 
 
+def _organic_405_mark_rejected(entry: dict) -> dict:
+    """ORGANIC #405 — a REJECTED bare-keyword row is provenance, not evidence.
+
+    `memory_candidates[]` is the reject bucket (#317 P3): every row in it is
+    one `_v1_6_441_is_useful_memory_entry` turned away. Those rows carried
+    `"low_confidence": true`, and `flow_compliance_check._STUB_TAG_RE` greps
+    the raw bytes of every evidence file for exactly that token and reads a
+    hit as DEFERRED work — so the step's PASS is downgraded to WAIVED.
+
+    Two different facts were sharing one token:
+        "we have evidence, and we are not confident in it"   -> deferred work
+        "we saw a bare keyword and REJECTED it"              -> provenance
+    Only the first is deferred work. The second is the walker doing its job,
+    and it was costing clean ingestions their verdict.
+
+    MEASURED over every committed L9 spec in this repo: 57 of 89
+    `memory_candidates` rows have name, depth, width AND port_count all null.
+    The opentitan_aes one is mined from a paragraph explaining why the block
+    does NOT use a FIFO ("Compared to first-in, first-out (FIFO) interfaces,
+    having separate registers has a couple of advantages...").
+
+    The row is KEPT — deleting it would throw away the provenance #317 added
+    on purpose, and "the walker found nothing" and "the walker found a phrase
+    and rejected it" are different facts a reader must be able to tell apart.
+    Only the misread flag is renamed. Chip-AGNOSTIC: no design content is
+    inspected.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    out = dict(entry)
+    out.pop("low_confidence", None)
+    out["rejected_low_information"] = True
+    out.setdefault(
+        "rejection_reason",
+        "bare-keyword prose match with no structural evidence "
+        "(depth/width/port_count absent and the name carries no memory "
+        "token) — recorded as provenance, NOT as deferred work")
+    return out
+
+
 def _v1_6_453_sync_no_memories_flag(l9: dict) -> None:
     """v1.6.453 — for #327 P3 ORGANIC. Sync the
     ``no_memories_in_input`` boolean with both the
@@ -42466,7 +42506,8 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
                     aggregated.append(entry)
                 else:
                     if len(rejected) < 32:
-                        rejected.append(entry)
+                        rejected.append(
+                            _organic_405_mark_rejected(entry))
                     continue
                 if len(aggregated) >= 32:
                     break

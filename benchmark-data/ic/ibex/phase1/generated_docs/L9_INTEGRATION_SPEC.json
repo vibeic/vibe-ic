@@ -2327,7 +2327,8 @@
       "width": null,
       "evidence_file": "ibex_cs_registers.rst",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
-      "low_confidence": true
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
     },
     {
       "name": null,
@@ -2338,7 +2339,8 @@
       "width": null,
       "evidence_file": "ibex_instruction_decode_execute.rst",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
-      "low_confidence": true
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
     },
     {
       "name": null,
@@ -2349,7 +2351,8 @@
       "width": null,
       "evidence_file": "ibex_instruction_fetch.rst",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
-      "low_confidence": true
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
     },
     {
       "name": null,
@@ -2360,7 +2363,8 @@
       "width": null,
       "evidence_file": "ibex_integration.rst",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
-      "low_confidence": true
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
     },
     {
       "name": null,
@@ -2371,7 +2375,8 @@
       "width": null,
       "evidence_file": "ibex_verification.rst",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
-      "low_confidence": true
+      "rejected_low_information": true,
+      "rejection_reason": "bare-keyword prose match with no structural evidence (depth/width/port_count absent and the name carries no memory token) — recorded as provenance, NOT as deferred work"
     }
   ],
   "no_memory_candidates_in_input": false,
