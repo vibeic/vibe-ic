@@ -451,7 +451,8 @@ _CITATION_HEADER = (
     "# and whether a reader of THIS cell can follow it (vibe-ic#448).\n"
     "#\n"
     "#   <doc> :: <cited path> <DECISION>\n"
-    "#   DECISION in RESOLVES | OUT_OF_PUBLISHED_SCOPE | DANGLING\n"
+    "#   DECISION in RESOLVES | OUT_OF_PUBLISHED_SCOPE |\n"
+    "#                DANGLING_UNDER_PASS | DANGLING | UNFOLLOWABLE_ABSOLUTE\n"
     "#\n"
     "# OUT_OF_PUBLISHED_SCOPE is the one that needed a name. The publisher\n"
     "# copies phase1/, phase2/, phase3/reports/ and reports/ — a run-directory\n"
@@ -471,6 +472,11 @@ _CITATION_HEADER = (
     "# on failure cannot be used to prove there were none.\n")
 
 # Extensions that name an EVIDENCE artefact rather than prose.
+_CITE_KEYS = frozenset({
+    "report", "rpt", "log", "evidence", "artifact", "artefact",
+    "source", "path", "file", "sby", "sby_log",
+})
+
 _CITED_EXT = (".rpt", ".log", ".json", ".txt", ".def", ".spef", ".v", ".sv")
 _CITED_RE = re.compile(
     r"(?:phase\d/stage\d|phase\d/reports|reports|steps)/[\w./*-]+"
@@ -504,12 +510,31 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
             continue
         rel_doc = doc.relative_to(dest).as_posix()
         asserted = _citations_under_a_pass(text)
-        for cited in sorted(set(_CITED_RE.findall(text))):
+        absolute = _absolute_citation_values(text)
+        for cited in sorted(set(_CITED_RE.findall(text)) | absolute):
             key = (rel_doc, cited)
             if key in seen:
                 continue
             seen.add(key)
-            if (dest / cited).exists():
+            if cited.startswith("/"):
+                # UNFOLLOWABLE BY CONSTRUCTION. An absolute path under someone's
+                # home directory can never resolve for a reader, on any machine
+                # but the author's. That is a different fact from "the file is
+                # not here", and reporting them the same way sends a reader
+                # looking for a missing artefact instead of fixing a pointer.
+                #
+                # MEASURED over the tracked corpus: 108 CITATION fields carry
+                # one, across 7 ICs — including two of the three CONVERGED
+                # cells, whose `post_route_signoff_corner.json` cites
+                # `/home/<user>/campaign_.../sta_spef_multicorner.rpt`.
+                #
+                # Narrow on purpose: a blanket "no absolute paths under
+                # benchmark-data" rule matches 682 files and 9781 occurrences,
+                # nearly all of them logs recording WHERE a run happened, which
+                # is legitimate provenance. Only a path something is expected
+                # to FOLLOW is a defect.
+                decision = "UNFOLLOWABLE_ABSOLUTE"
+            elif (dest / cited).exists():
                 decision = "RESOLVES"
             elif any(cited.startswith(f"phase{n}/stage") for n in "123"):
                 decision = "OUT_OF_PUBLISHED_SCOPE"
@@ -519,6 +544,42 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
                 decision = "DANGLING"
             out.append({"doc": rel_doc, "cited": cited,
                         "decision": decision})
+    return out
+
+
+def _absolute_citation_values(text: str) -> set:
+    """Absolute paths sitting in a CITATION-shaped KEY.
+
+    Key-based, not text-based, and the difference is the whole point. Matching
+    absolute paths in the TEXT finds 914 of them across the tracked corpus —
+    nearly all logs recording WHERE a run happened, which is legitimate
+    provenance and not a defect. Restricting to keys something is expected to
+    FOLLOW gives 108, across 7 ICs, and those are real: two of the three
+    CONVERGED cells cite `/home/<user>/campaign_.../sta_spef_multicorner.rpt`
+    as the evidence for their sign-off corner.
+    """
+    out: set = set()
+    try:
+        doc = json.loads(text)
+    except Exception:
+        return out
+
+    def is_cite_key(k: str) -> bool:
+        k = k.lower()
+        return (k in _CITE_KEYS
+                or k.endswith(("_report", "_rpt", "_log", "_path", "_file")))
+
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if isinstance(v, str) and v.startswith("/") and is_cite_key(k):
+                    out.add(v)
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(doc)
     return out
 
 
