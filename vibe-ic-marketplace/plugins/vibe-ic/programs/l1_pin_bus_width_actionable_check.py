@@ -335,6 +335,17 @@ def _pin_names(pin_table: List[Any]) -> List[str]:
 def _iter_input_files(project: Path):
     root = project / "input"
     if not root.is_dir():
+        # A PUBLISHED CELL has no `input/` of its own — the design input is
+        # shared once per IC at `ic/<IC>/input/`, one level up from
+        # `ic/<IC>/v<ver>_<PDK>/`. Without this the symbolic resolution can
+        # never find the parameter in the layout the repository actually
+        # publishes: measured on `spm/v1.5.58_ihp-sg13g2`, the resolver saw
+        # no inputs at all and the cell still FAILed, while `size = 32` sits
+        # in `ic/spm/input/docs/L3_external_interface.md` line 31. A fix that
+        # only reaches source run directories leaves the deliverable — the
+        # thing this repo points at — exactly as it was.
+        root = project.parent / "input"
+    if not root.is_dir():
         return
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames

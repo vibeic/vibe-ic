@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -396,3 +398,50 @@ def test_an_hdl_declaration_outranks_a_doc_table_row(tmp_path):
     d = rep["symbolic_widths_resolved"][0]
     assert d["bits"] == 16, rep
     assert "hdl-declaration" in d["resolved_from"], rep
+
+
+# ── gatekeeper addition at merge (#427): the published layout ───────────────
+
+def test_a_published_cell_resolves_via_the_shared_per_IC_input():
+    """#427's corpus table says the three spm cells move FAIL -> PASS. On the
+    PUBLISHED cells they did not, and that is the layout the repo points at.
+
+    A published cell is `ic/<IC>/v<ver>_<PDK>/` and has NO `input/` of its
+    own — the design input is shared once per IC at `ic/<IC>/input/`.
+    `_iter_input_files` looked only at `project/input`, so the symbolic
+    resolution found no parameters and the cell still FAILed, while
+    `size = 32` sits in `ic/spm/input/docs/L3_external_interface.md`. The fix
+    reached source run directories and not the deliverable.
+    """
+    root = Path(__file__).resolve().parents[5] / "benchmark-data" / "ic"
+    cell = root / "spm" / "v1.5.58_ihp-sg13g2"
+    if not (cell / "phase1/generated_docs/L1_DATASHEET.json").is_file():
+        import pytest
+        pytest.skip("published cell not present")
+    assert not (cell / "input").is_dir(), \
+        "fixture assumption: a published cell carries no input/ of its own"
+    assert (cell.parent / "input").is_dir()
+    r = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().parent.parent
+                             / "l1_pin_bus_width_actionable_check.py"),
+         str(cell)], capture_output=True, text=True)
+    out = (r.stdout or "") + (r.stderr or "")
+    assert out.lstrip().startswith("PASS"), out[:300]
+
+
+def test_the_shared_input_fallback_does_not_rescue_a_genuinely_missing_width():
+    """The paired half, on a real cell. `caravel_user_project` HAS its own
+    `input/` and an `irq` pin with no width at all; reaching further for
+    parameters must not turn that into a pass."""
+    root = Path(__file__).resolve().parents[5] / "benchmark-data" / "ic"
+    cell = root / "caravel_user_project"
+    if not (cell / "phase1/generated_docs/L1_DATASHEET.json").is_file():
+        import pytest
+        pytest.skip("published cell not present")
+    r = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().parent.parent
+                             / "l1_pin_bus_width_actionable_check.py"),
+         str(cell)], capture_output=True, text=True)
+    out = (r.stdout or "") + (r.stderr or "")
+    assert out.lstrip().startswith("FAIL"), out[:300]
+    assert "irq" in out
