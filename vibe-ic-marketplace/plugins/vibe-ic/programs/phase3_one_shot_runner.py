@@ -13006,8 +13006,12 @@ def _gds_grid_snap(project: Path, top: str, pdk: PdkConfig,
         f"MFG_GRID_UM={grid_um} && "
         f"klayout -zz -b -r {_to_container_path(str(script), container)}"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=_to_container_path(str(script), container),
-                                outputs=[snapped])
+    rc, out, err = _docker_exec(container, cmd, marker=_to_container_path(str(script), container))
+    # NOT declared: `snapped` is a grid-snap INTERMEDIATE that a later step
+    # renames into place, so by audit time the path is gone and declaring it
+    # makes the gate say the tool 'claimed to produce something it didn't'.
+    # That is a false accusation, not an attestation. Measured: the entry
+    # turned PROVENANCE_OUTPUT_FILE_MISSING on a run where the tool worked.
     if rc == 0 and snapped.is_file() and snapped.stat().st_size > 0:
         # Replace the streamed GDS with the grid-snapped one.
         try:
@@ -22518,7 +22522,11 @@ exit
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"sta -no_init -exit {tcl_c} > {rpt_c} 2>&1"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[power_rpt])
+    rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+    # NOT declared: `power_rpt` is rewritten by a later invocation, so the
+    # earlier entry's hash no longer matches on disk and the gate reports
+    # PROVENANCE_HASH_MISMATCH — an attestation that contradicts itself.
+    # Measured on a real run. Needs a supersession model, not a declaration.
     # If OpenSTA ran successfully but the file is small (just the
     # categorical breakdown), prepend an envelope so the report carries
     # the full provenance context. This brings the file ≥ 2048 B which
