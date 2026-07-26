@@ -679,6 +679,20 @@ def export_rdl(l4: Dict[str, Any], *, address_unit: str = "byte",
             "requested explicitly via --address-unit word; L4 itself states no "
             "unit, so this is the CALLER's assertion, not a fact read from L4")
 
+    # The ADDRESSING GRANULARITY of the whole map, decided once. Derived from
+    # the widest register the map declares, because that is the unit an index
+    # must step by for the registers to be non-overlapping; 32-bit when the
+    # map declares nothing.
+    _word_stride_bytes = 4
+    if address_unit == "word":
+        _widths = []
+        for _r in (l4.get("registers") or []):
+            _w = _r.get("size") or _r.get("width") or _r.get("regwidth")
+            _wi = _parse_int(_w)
+            if _wi and _wi > 0:
+                _widths.append(_wi)
+        _word_stride_bytes = max(1, (max(_widths) if _widths else 32) // 8)
+
     # top-level keys the exporter consumes structurally; everything else at
     # top level is an L4 sidecar that is outside SystemRDL's object model and
     # is NAMED (never silently ignored).
@@ -772,7 +786,18 @@ def export_rdl(l4: Dict[str, Any], *, address_unit: str = "byte",
                 spans.append(s)
         regwidth = _infer_regwidth(reg, spans, ledger, path)
         if address_unit == "word":
-            addr = addr * max(1, regwidth // 8)
+            # UNIFORM stride, not this register's own width. A word/index
+            # address maps to a byte address by the MAP's addressing
+            # granularity; scaling each register by its own inferred width
+            # gives a different multiplier per register and produces a map
+            # whose addresses no longer reflect the source order.
+            #
+            # MEASURED on the published ibex L4: 41 of 43 registers got x4
+            # while `cpuctrlsts` (inferred 16-bit) got x2 and `mseccfg`
+            # (inferred 8-bit) got x1 — two registers landing at addresses
+            # that are not their index times anything the map declares.
+            addr = addr * _word_stride_bytes
+        
 
         reg_access = _norm_access(reg.get("access"))
         reg_reset = _parse_int(reg.get("reset_value") or reg.get("reset_hex")

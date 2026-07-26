@@ -602,3 +602,52 @@ def test_roundtrip_runs_on_a_real_published_l4(tmp_path):
     # comparator has stopped comparing.
     assert ledger["roundtrip"]["field_differences"] or \
         ledger["roundtrip"]["registers_lost"]
+
+
+# ── gatekeeper, delivering #377's first-increment step 2 ───────────────────
+def test_the_word_stride_is_UNIFORM_across_the_map():
+    """A word/index address maps to a byte address by the MAP's addressing
+    granularity. Scaling each register by ITS OWN inferred width gives a
+    different multiplier per register.
+
+    MEASURED on the published ibex L4 before this fix: 41 of 43 registers got
+    x4 while `cpuctrlsts` (inferred 16-bit) got x2 and `mseccfg` (inferred
+    8-bit) got x1. Those two landed at addresses that are not their index
+    times anything the map declares — and they are exactly the registers
+    PeakRDL then rejected as unaligned, which is how the defect surfaced:
+    `--address-unit word` could not be compiled at all.
+    """
+    import json
+    import l4_systemrdl_export as X
+
+    l4 = {"registers": [
+        {"name": "wide", "address": "0x100", "size": 32,
+         "fields": [{"field_name": "a", "bits": "31:0"}]},
+        {"name": "narrow", "address": "0x101", "size": 32,
+         "fields": [{"field_name": "b", "bits": "2:0"}]},
+    ]}
+    rdl, _, _ = X.export_rdl(l4, address_unit="word")
+    import re
+    got = {m.group(1).rstrip("_"): int(m.group(2), 16)
+           for m in re.finditer(r"\}\s*(\w+)\s*@\s*(0x[0-9A-Fa-f]+)", rdl)}
+    assert got["wide"] == 0x100 * 4, got
+    # the narrow register must use the SAME stride, not its own field width
+    assert got["narrow"] == 0x101 * 4, got
+    assert got["narrow"] - got["wide"] == 4, got
+
+
+def test_byte_unit_still_emits_the_address_as_stated():
+    """The paired half. `--address-unit byte` is the default precisely so a map
+    whose addresses overlap under byte semantics is reported rather than
+    silently rescaled; the stride fix must not reach it."""
+    import re
+    import l4_systemrdl_export as X
+
+    l4 = {"registers": [
+        {"name": "r", "address": "0x123", "size": 32,
+         "fields": [{"field_name": "a", "bits": "2:0"}]},
+    ]}
+    rdl, _, _ = X.export_rdl(l4, address_unit="byte")
+    # the emitter may suffix a name to avoid a SystemRDL keyword
+    got = re.search(r"\}\s*r_?\s*@\s*(0x[0-9A-Fa-f]+)", rdl)
+    assert int(got.group(1), 16) == 0x123
