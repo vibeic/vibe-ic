@@ -6045,7 +6045,7 @@ def _v1_6_605_remap_surviving_dlatch(
         f"clean; "
         f"write_verilog -noattr {netlist_c}'"
     )
-    rc, out, err = _docker_exec(container, remap_cmd, marker=netlist_c)
+    rc, out, err = _docker_exec(container, remap_cmd, marker=netlist_c, outputs=[netlist])
     if rc != 0:
         return False
     try:
@@ -7165,7 +7165,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # progress-stall watchdog: marker = the output netlist path (present in the
     # `write_verilog {netlist_c}` arg of the yosys `-p` script), so a still-
     # progressing synth is never killed; only a hang dies.
-    rc, out, err = _docker_exec(container, yosys_cmd, marker=netlist_c)
+    rc, out, err = _docker_exec(container, yosys_cmd, marker=netlist_c, outputs=[netlist])
     log = out_dir / "synth.log"
     _rf_header = ("=== REFERENCE-FLOW QoR-KNOB INGEST "
                   "(input/reference_flow) ===\n"
@@ -7229,7 +7229,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
             f"clean; stat -liberty {liberty_c}; "
             f"write_verilog -noattr {netlist_c}'"
         )
-        rc, out, err = _docker_exec(container, slang_cmd, marker=netlist_c)
+        rc, out, err = _docker_exec(container, slang_cmd, marker=netlist_c, outputs=[netlist])
         log.write_text(log.read_text() +
                        f"\n\n=== SLANG FALLBACK FRONTEND ({fe_reason}) ===\n" +
                        out + "\n" + err)
@@ -7261,7 +7261,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 f"clean; stat -liberty {liberty_c}; "
                 f"write_verilog -noattr {netlist_c}'"
             )
-            rc2, out2, err2 = _docker_exec(container, sv2v_cmd, marker=netlist_c)
+            rc2, out2, err2 = _docker_exec(container, sv2v_cmd, marker=netlist_c, outputs=[netlist])
             log.write_text(
                 log.read_text() +
                 "\n\n=== SV2V PRE-PASS FALLBACK FRONTEND ===\n" +
@@ -12827,7 +12827,7 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
         f"LEFS=\"{lefs}\" CELL_GDS=\"{cell_gds_c}\" MACRO_GDS=\"{macro_gds_c}\" && "
         f"magic -dnull -noconsole -rcfile {magicrc} {tcl_c}"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+    rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[gds_out])
     transcript = out + "\n" + err
     if rc != 0 or not gds_out.is_file() or gds_out.stat().st_size == 0:
         return False, transcript
@@ -13006,7 +13006,8 @@ def _gds_grid_snap(project: Path, top: str, pdk: PdkConfig,
         f"MFG_GRID_UM={grid_um} && "
         f"klayout -zz -b -r {_to_container_path(str(script), container)}"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=_to_container_path(str(script), container))
+    rc, out, err = _docker_exec(container, cmd, marker=_to_container_path(str(script), container),
+                                outputs=[snapped])
     if rc == 0 and snapped.is_file() and snapped.stat().st_size > 0:
         # Replace the streamed GDS with the grid-snapped one.
         try:
@@ -13088,7 +13089,8 @@ def _klayout_merge_layers(project: Path, top: str, pdk: PdkConfig,
         f"GDS_OUT={_to_container_path(str(merged), container)} && "
         f"klayout -zz -b -r {_to_container_path(str(script), container)}"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=_to_container_path(str(script), container))
+    rc, out, err = _docker_exec(container, cmd, marker=_to_container_path(str(script), container),
+                                outputs=[merged])
     if rc == 0 and merged.is_file() and merged.stat().st_size > 0:
         try:
             merged.replace(gds_path)
@@ -14848,7 +14850,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         f"STDCELL_MARKER_LAYER=\"{marker_arg}\" && "
         f"klayout -zz -b -r {script_c}"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=script_c)
+    rc, out, err = _docker_exec(container, cmd, marker=script_c, outputs=[gds_out])
     # v1.3.83 — persist the streamout transcript: the resolution prints
     # (MACRO_RESOLUTION_MODE / CELL_GDS macro-resolved / STDCELL_MARKER)
     # are the only evidence of WHAT went into the sign-off GDS; swallowing
@@ -15904,7 +15906,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     # NOT a proven violation → SKIPPED-CONDITION (disclosed perf ceiling), like the
     # LEC timeout-guard, never a FAIL or a silent multi-hour hang.
     _drc_budget = _drc_wall_budget_s()
-    rc, out, err = _docker_exec(container, cmd, marker=gds_c,
+    rc, out, err = _docker_exec(container, cmd, marker=gds_c, outputs=[rpt],
                                 hard_ceiling_s=_drc_budget)
     # v1.4.62 — svrfdrc has a rare, NON-DETERMINISTIC heap-corruption abort
     # (`malloc(): unaligned tcache chunk` / SIGABRT|SIGSEGV -> rc 134/139, core
@@ -15920,7 +15922,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                  or re.search(r"malloc\(\):|free\(\):|tcache|corrupted|"
                               r"core dumped|Segmentation fault|double free",
                               (out or "") + (err or ""), re.I))):
-        rc, out, err = _docker_exec(container, cmd, marker=gds_c,
+        rc, out, err = _docker_exec(container, cmd, marker=gds_c, outputs=[rpt],
                                     hard_ceiling_s=_drc_budget)
     if rc in (_RC_STALLED, 124):
         _mins = int(_drc_budget // 60)
@@ -16086,7 +16088,7 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     # v1.3.47 — progress-stall watchdog (not a fixed 3600s kill). A large-GDS
     # DRC that is still burning CPU / emitting progress is never killed; only a
     # genuinely hung run dies. marker = the input GDS path (in klayout's argv).
-    rc, out, err = _docker_exec(container, cmd, marker=gds_c)
+    rc, out, err = _docker_exec(container, cmd, marker=gds_c, outputs=[rpt])
     # v1.3.47 — a stall/ceiling kill must NOT be scored from a partial or stale
     # report (a half-written RDB could parse as 0 violations = false DRC-clean).
     if rc in (_RC_STALLED, 124):
@@ -17776,7 +17778,7 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
             # v1.3.47 — progress-stall watchdog (not a fixed 14400s kill); a
             # still-progressing netgen extraction/compare is never killed.
             # marker = the layout netlist path (in netgen's argv).
-            _rc, out, err = _docker_exec(container, cmd, marker=nl_c)
+            _rc, out, err = _docker_exec(container, cmd, marker=nl_c, outputs=[pa_rpt])
         except Exception:  # nosec — netgen crash on the pre-attempt is non-fatal
             return None
         # ORGANIC v1462 — bounded flush retry so a lagging power-aware report
@@ -18468,7 +18470,7 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     # v1.3.47 — progress-stall watchdog (not a fixed 14400s kill; see #443
     # note): a still-progressing netgen compare is never killed, only a hang.
     # marker = the layout netlist path (in netgen's argv).
-    rc, out, err = _docker_exec(container, cmd, marker=nl_c)
+    rc, out, err = _docker_exec(container, cmd, marker=nl_c, outputs=[lvs_rpt])
     transcript = (out or "") + "\n" + (err or "")
     # ORGANIC v1462 — read the report with a bounded flush retry: netgen writes
     # its terminal `Final result:` verdict to lvs.rpt (its stdout carries only
@@ -21015,7 +21017,7 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"sta -no_init -exit {tcl_c} 2>&1"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+    rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt_out])
     if not rpt_out.is_file() or rpt_out.stat().st_size == 0:
         notes.append(f"SPEF-based STA did not produce a report (rc={rc}); "
                      f"Step-23 falls back to the estimate-based sta.rpt")
@@ -21084,7 +21086,7 @@ def _run_eco_repair(project: Path, top: str, container: str,
            f"openroad -no_init -exit {tcl_c} 2>&1 | "
            f"tee {eco_dir_c}/eco_repair.log")
     try:
-        _docker_exec(container, cmd, marker=tcl_c)
+        _docker_exec(container, cmd, marker=tcl_c, outputs=[eco_v])
     except Exception as exc:  # pragma: no cover — tool/container failure
         notes.append(f"ECO auto-trigger run failed: {exc}")
         return False
@@ -21311,7 +21313,7 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"sta -no_init -exit {tcl_c} 2>&1 | tee {out_dir}/sta_{corner}.log"
         )
-        rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+        rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt])
         if rc != 0 or not rpt.is_file():
             # #437(c): NO single-corner stand-in. The old fallback copied
             # the single-corner TT report into per_corner/ verbatim —
@@ -21479,7 +21481,7 @@ exit
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/extract.log"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+    rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[spef_out])
     if not spef_out.is_file() or spef_out.stat().st_size == 0:
         notes.append(
             f"SPEF extraction did not produce {spef_out.name} "
@@ -21801,7 +21803,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
         tcl_c = _to_container_path(str(tcl_path), container)
         cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
                f"{TOOLS_IN_CONTAINER}/bin:$PATH && sta -no_init -exit {tcl_c} 2>&1")
-        _docker_exec(container, cmd, marker=tcl_c)
+        _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt_out])
         ok_any = rpt_out.is_file() and rpt_out.stat().st_size > 0
     # hold pass (append)
     if hold_corner is not None:
@@ -21811,7 +21813,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
         tcl_c = _to_container_path(str(tcl_path), container)
         cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
                f"{TOOLS_IN_CONTAINER}/bin:$PATH && sta -no_init -exit {tcl_c} 2>&1")
-        _docker_exec(container, cmd, marker=tcl_c)
+        _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt_out])
         ok_any = ok_any or (rpt_out.is_file() and rpt_out.stat().st_size > 0)
     _collapsed = _n_distinct < len(_lib_by_corner)
     resolution: Dict[str, object] = {
@@ -22019,7 +22021,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         tcl_c = _to_container_path(str(tcl_path), container)
         cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
                f"{TOOLS_IN_CONTAINER}/bin:$PATH && sta -no_init -exit {tcl_c} 2>&1")
-        _docker_exec(container, cmd, marker=tcl_c)
+        _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt_out])
         ran = rpt_out.is_file() and rpt_out.stat().st_size > 0
     # HOLD pass (fast/ff process, min-RC) — appends.
     if hold_label is not None:
@@ -22030,7 +22032,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         tcl_c = _to_container_path(str(tcl_path), container)
         cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
                f"{TOOLS_IN_CONTAINER}/bin:$PATH && sta -no_init -exit {tcl_c} 2>&1")
-        _docker_exec(container, cmd, marker=tcl_c)
+        _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt_out])
         ran = ran or (rpt_out.is_file() and rpt_out.stat().st_size > 0)
     if ran:
         notes.append(
@@ -22282,7 +22284,7 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         cmd = (f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
                f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
                f"yosys -s {ys_c} 2>&1 | tee {log_c}")
-        rc, out, err = _docker_exec(container, cmd, marker=ys_c)
+        rc, out, err = _docker_exec(container, cmd, marker=ys_c, outputs=[log_host])
         text = (log_host.read_text(errors="replace")
                 if log_host.is_file() else (out or "") + (err or ""))
         return rc, text
@@ -22440,7 +22442,7 @@ exit
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit {tcl_c} 2>&1 | tee "
            f"{_to_container_path(str(sdf_out.parent), container)}/sdf.log")
-    rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+    rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[sdf_out])
     if not sdf_out.is_file() or sdf_out.stat().st_size == 0:
         # ORGANIC-20260606 #441: NO stub SDF. The old fallback wrote a
         # syntactically-valid empty DELAYFILE that satisfied the gate's
@@ -22516,7 +22518,7 @@ exit
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"sta -no_init -exit {tcl_c} > {rpt_c} 2>&1"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+    rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[power_rpt])
     # If OpenSTA ran successfully but the file is small (just the
     # categorical breakdown), prepend an envelope so the report carries
     # the full provenance context. This brings the file ≥ 2048 B which
@@ -23491,7 +23493,7 @@ def _emit_si_timing_json(project: Path, top: str, pdk: PdkConfig, container: str
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"sta -no_init -exit {tcl_c} 2>&1 | tee {log_c}"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+    rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[out_json])
     if not out_json.is_file() or out_json.stat().st_size == 0:
         notes.append(
             f"SI timing-aware: OpenSTA did not produce the timing JSON "
@@ -23872,7 +23874,7 @@ exit
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/metal_fill.log"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+    rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[filled_def])
     log = (out or "") + "\n" + (err or "")
     if not filled_def.is_file() or filled_def.stat().st_size == 0:
         notes.append(f"metal fill: filled.def not produced (rc={rc})")
@@ -24096,7 +24098,7 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
         f"klayout -b -r {script_c} -rd gds={gds_c} -rd map={map_c} "
         f"-rd out={out_c} 2>&1 | tee {_to_container_path(str(script.parent / 'metal_density.log'), container)}"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=script_c)
+    rc, out, err = _docker_exec(container, cmd, marker=script_c, outputs=[out_json])
     if not out_json.is_file() or out_json.stat().st_size == 0:
         notes.append(f"metal density: KLayout produced no report (rc={rc})")
         return False
@@ -24167,7 +24169,7 @@ exit
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"sta -no_init -exit {tcl_c} > {rpt_c} 2>&1"
     )
-    rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
+    rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[out_rpt])
     if not out_rpt.is_file():
         notes.append(f"aging STA: OpenSTA produced no report (rc={rc})")
         return False
