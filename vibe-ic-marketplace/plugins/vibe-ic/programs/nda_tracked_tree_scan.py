@@ -111,7 +111,30 @@ def _patterns():
     return out
 
 
-def _tracked(repo: Path, ref: str = None) -> List[str]:
+def _toplevel(repo: Path) -> Path:
+    """The repository ROOT, never the directory the caller happened to be in.
+
+    #416. `--repo` defaulted to `"."`, and git's enumeration commands honour
+    the current-directory PREFIX: run from `plugins/vibe-ic/`, `ls-files -s`
+    and `ls-tree -r` list only that subtree AND print the paths with the
+    prefix stripped. `_blobs` then asks for `{ref}:{rel}`, which resolves
+    against the ROOT, so almost every request came back `missing` and was
+    dropped. The gate reported
+
+        [PASS] ... 21 tracked blob(s) scanned
+
+    against 20143 from the repo root — the same verdict word for the
+    accidental INTERSECTION of two unrelated directories' path sets. The
+    enumeration and the lookups have to agree by CONSTRUCTION, not by the
+    caller standing in the right place.
+    """
+    r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--show-toplevel"],
+                       capture_output=True, text=True)
+    return Path(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() \
+        else repo
+
+
+def _tracked(repo: Path, ref: str = None):
     """Tracked paths, with their git index MODE.
 
     The mode is load-bearing. A tracked SYMLINK (120000) whose target is not
@@ -129,10 +152,15 @@ def _tracked(repo: Path, ref: str = None) -> List[str]:
     path scan reads the LINK's own name and never the target it points at.
     """
     cmd = (["git", "-C", str(repo), "ls-files", "-s"] if ref is None
-           else ["git", "-C", str(repo), "ls-tree", "-r", ref])
+           else ["git", "-C", str(repo), "ls-tree", "-r", "--full-tree", ref])
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        return []
+        # #416. An empty list scans clean. "git would not tell me what is
+        # tracked" is not "nothing is tracked" — raise, so the caller has to
+        # decide, instead of inheriting a PASS.
+        raise RuntimeError(
+            f"git could not enumerate the tracked tree "
+            f"({' '.join(cmd[3:])}): {r.stderr.strip()[:200]}")
     out = []
     for line in r.stdout.splitlines():
         try:
@@ -178,12 +206,25 @@ def scan(repo: Path, ref: str = None) -> dict:
     pats = _patterns()
     if not pats:
         return {"configured": False, "findings": [], "scanned": 0}
-    findings, scanned, links, wanted = [], 0, 0, []
+    repo = _toplevel(repo)
+    findings, scanned, links, wanted, gitlinks = [], 0, 0, [], []
     for mode, rel in _tracked(repo, ref):
         path_hits = [i for i, p in enumerate(pats) if p.search(rel)]
         if path_hits:
             findings.append({"file": rel, "carrier": "PATH",
                              "patterns": path_hits, "hits": len(path_hits)})
+        if mode == "160000":
+            # A GITLINK — a submodule pointer. `cat-file` cannot read it:
+            # the object is a commit in ANOTHER repository. Skipped, and
+            # COUNTED, because this is the one exclusion that is correct
+            # rather than convenient: what this repo publishes for a
+            # submodule is its PATH (scanned just above) and its URL in
+            # `.gitmodules` (a tracked blob, scanned like any other). The
+            # submodule's own files are not in this tree. Four of these were
+            # being silently dropped by the `missing` branch before #416, and
+            # they are the reason `scanned` never matched what was requested.
+            gitlinks.append(rel)
+            continue
         if mode == "120000":
             # A symlink's tracked BLOB is its TARGET PATH STRING, and that
             # string is repo content like any other. An earlier version
@@ -208,7 +249,11 @@ def scan(repo: Path, ref: str = None) -> dict:
     # tokens stay inside this process either way — passing them to `git grep`
     # would put the literal in a command line, visible in `ps` to every user
     # on the host.
+    unresolved = []
     for rel, text in _blobs(repo, wanted, ref):
+        if text is None:
+            unresolved.append(rel)
+            continue
         scanned += 1
         content_hits = {}
         for i, p in enumerate(pats):
@@ -221,6 +266,8 @@ def scan(repo: Path, ref: str = None) -> dict:
                              "hits": sum(content_hits.values())})
     return {"configured": True, "findings": findings, "ref": ref or "(index)",
             "scanned": scanned, "symlinks": links,
+            "repo": str(repo), "requested": len(wanted),
+            "unresolved": unresolved, "gitlinks": gitlinks,
             "upstream": upstream_gap(repo, ref)}
 
 
@@ -255,7 +302,11 @@ def _blobs(repo: Path, rels: List[str], ref: str = None):
                 break
             parts = header.split()
             if len(parts) < 3:
-                # "<obj> missing" — the path is not in the index after all.
+                # "<obj> missing". #416: this used to `continue`, which made
+                # a request that resolved to NOTHING indistinguishable from a
+                # file that carried no token — and that is how 3316 dropped
+                # lookups read as a clean tree. Report it; the caller fails.
+                yield rel, None
                 continue
             size = int(parts[2])
             data = proc.stdout.read(size)
@@ -280,7 +331,12 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     repo = Path(a.repo).resolve()
 
-    rep = scan(repo, a.ref)
+    try:
+        rep = scan(repo, a.ref)
+    except RuntimeError as exc:
+        print(f"[ERROR] nda_tracked_tree_scan: {exc}\n"
+              "   Nothing was scanned. This is NOT a clean result.")
+        return 2
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(rep, indent=2) + "\n")
 
@@ -295,6 +351,18 @@ def main(argv=None) -> int:
               f"verdict below describes THIS tree, not what is published. "
               f"Re-run with --ref {up[0]} to judge the published tree.")
 
+    if rep.get("unresolved"):
+        # #416. Requested N blobs, git resolved fewer. Whatever the cause,
+        # part of the tracked tree went unread, and an unread file is exactly
+        # as silent as a clean one.
+        print(f"[ERROR] nda_tracked_tree_scan: requested "
+              f"{rep['requested']} blob(s), git resolved "
+              f"{rep['scanned']} — {len(rep['unresolved'])} unreadable, "
+              f"first: {rep['unresolved'][0]}\n"
+              "   The tree was scanned INCOMPLETELY. This is NOT a clean "
+              "result.")
+        return 2
+
     if rep["findings"]:
         print(f"[FAIL] {len(rep['findings'])} tracked path(s) carry an NDA "
               f"token. The delta guards cannot see these: nothing about them "
@@ -305,9 +373,15 @@ def main(argv=None) -> int:
         print("   Output is MASKED on purpose — the literal is never printed.")
         return 1
 
+    gl = rep.get("gitlinks") or []
     print(f"[PASS] nda_tracked_tree_scan: {rep['scanned']} tracked blob(s) "
           f"scanned (incl. {rep.get('symlinks', 0)} symlink target-string(s)), no "
           f"NDA token in any tracked path or content.")
+    print(f"   repo root {rep.get('repo', '?')} — every requested blob was "
+          f"read ({rep.get('requested', rep['scanned'])} requested).")
+    if gl:
+        print(f"   {len(gl)} submodule gitlink(s) hold no blob in this repo; "
+              f"their path and their .gitmodules URL were scanned.")
     return 0
 
 
