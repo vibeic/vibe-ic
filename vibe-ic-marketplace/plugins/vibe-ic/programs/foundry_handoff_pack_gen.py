@@ -32,6 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
+import _published_tree  # noqa: E402
 
 
 def _read_text(p: Path) -> str:
@@ -224,18 +225,106 @@ def _resolve_design_top(project: Path, top_arg):
 _SIGNOFF_PDK_RE = re.compile(r"/foss/pdks/([A-Za-z0-9._-]+)/")
 
 
+# The flow's own generated artefacts live under phase2/ and phase3/. phase1 is
+# excluded ON PURPOSE and the exclusion is load-bearing: phase1 holds the SPEC,
+# and letting a spec document contribute to the sign-off signal would collapse
+# the very distinction this resolver exists to draw. MEASURED over the tracked
+# corpus: no phase1 document carries a `/foss/pdks/` path at all — the
+# aspiration is stated in prose, never as an asset path — so the exclusion
+# costs nothing today and prevents the collapse if that ever changes.
+_FLOW_DIRS = ("/phase2/", "/phase3/")
+
+
+def _signoff_flow_texts(project: Path):
+    """The flow-generated artefacts to read the PDK off, PUBLISHED ones only.
+
+    Restricted to what git tracks whenever `project` is a published tree, and
+    to what is on disk when it is not (a live run directory, or the tmp trees
+    the tests build). That distinction is `_published_tree`'s whole contract,
+    and it is the #447 class: reading the disk answers a question about THIS
+    MACHINE when the question is what a reader RECEIVES."""
+    tracked = _published_tree.published_paths(project)
+    if tracked is None:                       # not a published tree → the disk
+        for d in ("phase2", "phase3"):
+            base = project / d
+            if base.is_dir():
+                for p in sorted(base.rglob("*")):
+                    if p.is_file():
+                        yield p
+        return
+    for rel in sorted(tracked):
+        if any(("/" + rel).find(d) >= 0 for d in _FLOW_DIRS):
+            yield project / rel
+
+
 def _pdk_from_signoff_flow(project: Path):
     """The PDK that ACTUALLY produced the shipped GDS, read off the sign-off
-    PnR script's own asset paths. Returns None when the script is absent or
-    references more than one PDK tree (ambiguous → never guess).
+    flow's own asset paths. Returns None when nothing names a PDK tree, or when
+    more than one is named (ambiguous → never guess).
 
-    chip-AGNOSTIC: pure path grammar over the flow's own generated script."""
-    tcl = _pl.pnr_dir(project) / "pnr.tcl"
-    try:
-        names = set(_SIGNOFF_PDK_RE.findall(tcl.read_text(errors="replace")))
-    except OSError:
-        return None
+    WHY THIS READS THE WHOLE FLOW AND NOT `pnr.tcl` (vibe-ic#376)
+    =============================================================
+    It used to read exactly one file, `phase3/stage3/pnr/pnr.tcl`, off the
+    disk. `PUBLISHING.md` does not ship `phase3/stage3/pnr/`, so on a published
+    cell that file is simply absent: of 15 published cells carrying an L19,
+    **2** track a `pnr.tcl` while 15 have one on the author's disk. The
+    sign-off-wins mechanism — the entire point of #467 — was therefore INERT
+    exactly where a cross-PDK matrix needs it, and the pack fell back to the
+    spec target it exists to override.
+
+    MEASURED, published tree, flow artefacts only:
+
+        resolves to one PDK        10 of 15   (was 2)
+        two PDKs named → None       1         (u_hawaii_adc — correctly refused)
+        no PDK path at all          4
+
+    and the three genuine divergences it now surfaces include the two cells
+    #376 named: `spm/v1.5.58_ihp-sg13g2` and `spm/v1.5.66_gf180mcuD`, each
+    signed off on a different foundry's PDK than the `sky130` their L19 states.
+
+    chip-AGNOSTIC: pure path grammar over the flow's own generated files."""
+    names = set()
+    for p in _signoff_flow_texts(project):
+        try:
+            names.update(_SIGNOFF_PDK_RE.findall(p.read_text(errors="replace")))
+        except OSError:
+            continue
+        if len(names) > 1:                    # ambiguous — stop reading
+            return None
     return next(iter(names)) if len(names) == 1 else None
+
+
+def _pdk_statements_diverge(signoff: str, spec: str) -> bool:
+    """Do these two PDK statements describe DIFFERENT processes?
+
+    A plain `signoff != spec` was the test, and it reported a divergence for
+    three things that are not one. MEASURED over the published corpus:
+
+        case only            sky130A vs sky130a          1 cell
+        family vs variant    sky130A vs sky130           5 cells
+        no PDK stated        'N/A (protocol spec, not a tapeout)'
+                                                        12 of 194 L19 docs
+
+    Nine of twelve reports were noise, and noise in a divergence channel is
+    worse than silence: it trains a reader to skip the one line that says a
+    130 nm IHP die is about to ship described as sky130.
+
+    The three real ones survive. `sky130A` vs `sky130B` also survives — they
+    share a family but neither contains the other, so the variant rule cannot
+    swallow a genuine disagreement."""
+    a, b = (signoff or "").strip(), (spec or "").strip()
+    if not a or not b:
+        return False
+    # A spec that does not state a PDK IDENTIFIER states nothing to disagree
+    # with. Prose is a non-statement, not a conflicting statement.
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", b):
+        return False
+    la, lb = a.lower(), b.lower()
+    if la == lb:                              # case only
+        return False
+    if la.startswith(lb) or lb.startswith(la):  # family vs variant
+        return False
+    return True
 
 
 def _resolve_pdk_and_node(project: Path, pdk_from_files, node_from_files):
@@ -280,7 +369,8 @@ def _resolve_pdk_and_node(project: Path, pdk_from_files, node_from_files):
         node = (_process_nm_from_pdk_text(l19)
                 or _l1_tapeout_node_nm(project))
     # Surface a spec-vs-silicon divergence instead of resolving it silently.
-    mismatch = (spec if (signoff and spec and signoff != spec) else None)
+    mismatch = (spec if (signoff and spec
+                         and _pdk_statements_diverge(signoff, spec)) else None)
     return pdk, node, mismatch
 
 
