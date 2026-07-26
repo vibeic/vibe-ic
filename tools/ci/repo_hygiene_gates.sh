@@ -35,6 +35,23 @@ run() {                                   # run <label> <cwd> <cmd...>
   fi
 }
 
+# Same, but for a gate whose "I could not verify" answer is a THIRD state
+# rather than a failure. rc=2 must NOT read as a pass (it is printed loudly and
+# says nothing was verified) and must NOT read as a FAIL either, because "this
+# runner cannot see the EDA image" is not evidence of a defect. Any other
+# non-zero rc is a real finding and fails.
+run_may_be_indeterminate() {              # <label> <cwd> <cmd...>
+  local label="$1" wd="$2"; shift 2
+  echo "── $label"
+  local rc=0
+  ( cd "$wd" && "$@" ) || rc=$?
+  case "$rc" in
+    0) : ;;
+    2) echo "   ^^ INDETERMINATE — nothing was verified here: $label" >&2 ;;
+    *) echo "   ^^ FAILED: $label" >&2; fail=1 ;;
+  esac
+}
+
 # --- repo-root scoped ------------------------------------------------------
 run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnostic_check.py" "$PLUGIN"
 
@@ -73,6 +90,16 @@ run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_w
 # guard reports clean. SKIPs (rc=2) when no token store is configured — which
 # is the normal state for an outside contributor and is NOT a clean result.
 run "NDA scan of the TRACKED tree"      "$ROOT" python3 "$PG/nda_tracked_tree_scan.py"
+
+# vibe-ic#389 — pdk_registry.json <-> EDA-image drift, BOTH directions. A PDK
+# the image ships but the registry omits is the exact state that let a cell be
+# driven to sign-off against a DIFFERENT PDK's liberty/LEF; a registry entry
+# whose assets the image no longer carries turns `--pdk <name>` into a failure
+# at asset resolution instead of at argument validation. Neither was reported
+# by anything. INDETERMINATE (rc=2, no docker / image not pullable here) is the
+# normal state on a hosted runner and is surfaced rather than counted as clean.
+run_may_be_indeterminate "pdk registry/image drift" \
+                                        "$ROOT" python3 "$PG/pdk_registry_image_consistency_check.py"
 
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
