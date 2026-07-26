@@ -239,8 +239,12 @@ _CITING_ARTIFACTS = (
 # `worst slack max -1.71` / `worst slack min 0.54` (OpenSTA max=setup, min=hold)
 _WORST_SLACK_RE = re.compile(
     r"worst\s+slack\s+(max|min)\s+(-?\d+(?:\.\d+)?)", re.IGNORECASE)
-_WNS_RE = re.compile(r"\bwns\s+(max|min)?\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
-_TNS_RE = re.compile(r"\btns\s+(max|min)?\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
+# `WNS -0.05` and `WNS = -0.05` are both real summary-line dialects (some
+# tools/scripts insert the `=`, OpenSTA's own `report_wns`/report_tns` do
+# not) — `[:=]?` accepts the separator without requiring it, widening
+# neither the token nor the value grammar.
+_WNS_RE = re.compile(r"\bwns\s*[:=]?\s*(max|min)?\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
+_TNS_RE = re.compile(r"\btns\s*[:=]?\s*(max|min)?\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
 # `=== SETUP (max-RC corner, SPEF=max) ===`  (multicorner SPEF report)
 # `=== SETUP corner: process=SS liberty, SPEF=x.max.spef ===` (mcorner OCV)
 _SECTION_RE = re.compile(r"===\s*(SETUP|HOLD)\b", re.IGNORECASE)
