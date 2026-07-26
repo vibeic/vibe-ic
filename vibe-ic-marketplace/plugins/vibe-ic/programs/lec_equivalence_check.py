@@ -66,24 +66,28 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-# Import port-abort classifier — raises a truthful INCONCLUSIVE-STRUCTURAL
-# verdict when equiv_make aborts due to an ATPG-cut-artifact gate netlist
-# (compared_points == 0 + port-match abort in log), rather than the false
-# LEC_NOT_EQUIVALENT the old code emitted.
+# Import the structural port-abort classifier. It replaces a FALSE diagnosis
+# ("RTL and post-DFT netlist differ") with a truthful one ("equiv_make aborted
+# on the port match; nothing was compared") at the SAME hard-FAIL severity.
+# It never downgrades the tier and never names a cause it has not measured.
 try:
     from lec_gate_netlist_select import (
         classify_port_abort as _classify_port_abort,
+        port_abort_cause as _port_abort_cause,
         CANONICAL_STATUS as _GNS_STATUS,
         CANONICAL_VERDICT as _GNS_VERDICT,
     )
     _HAS_GNS = True
 except ImportError:  # graceful degradation if the module is absent
     _HAS_GNS = False
-    _GNS_STATUS = "LEC_GATE_NETLIST_UNUSABLE"
-    _GNS_VERDICT = "INCONCLUSIVE-STRUCTURAL"
+    _GNS_STATUS = "LEC_STRUCTURAL_PORT_ABORT"
+    _GNS_VERDICT = "STRUCTURAL-PORT-ABORT"
 
     def _classify_port_abort(log_text: str, compared_points: int):  # type: ignore[misc]
         return None
+
+    def _port_abort_cause(project, gate_field: str = ""):  # type: ignore[misc]
+        return False, ""
 
 
 GATE = "lec_equivalence_check"
@@ -282,6 +286,7 @@ def audit(project: Path) -> AuditResult:
 
     # 5) Corroborate / supplement from .rpt.
     rpt_info: dict = {}
+    rpt_text: str = ""
     if rpt_path.is_file():
         try:
             rpt_text = rpt_path.read_text(encoding="utf-8", errors="replace")
@@ -413,49 +418,78 @@ def audit(project: Path) -> AuditResult:
             file=LEC_JSON_REL))
         return res
 
-    # --- (d3) STRUCTURAL PORT-ABORT: ATPG-cut gate netlist -------------------
-    # When the gate netlist is an ATPG-cut artifact (every FF deleted, replaced
-    # by <inst>.d pseudo-ports absent from the RTL), yosys equiv_make aborts:
+    # --- (d3) STRUCTURAL PORT-ABORT — a TRUTHFUL name for rule (a) ----------
+    # yosys equiv_make refuses to build a miter when a gate-side top-level port
+    # has no gold counterpart:
     #   ERROR: Can't match gate port `_NNN_.d_gate' to a gold port.
-    # No miter is built → compared_points == 0.  This is a structural tool
-    # abort, NOT a semantic non-equivalence.  Classifying it as
-    # LEC_NOT_EQUIVALENT sends the next agent to fix a design that is fine.
-    # FAIL-CLOSED: we only reclassify when BOTH conditions hold simultaneously
-    # (compared == 0  AND  the abort signature is in the .rpt).  A run that
-    # had compared_points > 0 or a different log is left alone.
-    if zero_miter:
-        _rpt_text = (rpt_path.read_text(encoding="utf-8", errors="replace")
-                     if rpt_path.is_file() else "")
-        _cmp_val = compared if compared is not None else 0
-        _pa_verdict = _classify_port_abort(_rpt_text, _cmp_val)
-        if _pa_verdict is not None:
-            res.inconclusive = True
-            res.passed = False
-            res.findings.append(Finding(
-                rule=_GNS_STATUS, severity="WARNING",
-                message=(
-                    f"LEC verdict is {_GNS_VERDICT}: yosys equiv_make aborted "
-                    "with a port-match error — the gate netlist is an ATPG-cut "
-                    "artifact (flip-flops replaced by <inst>.d pseudo-ports that "
-                    "are absent from the RTL port set).  No miter was built "
-                    f"(compared_points={_cmp_val}).  This is a structural tool "
-                    "abort, NOT a semantic non-equivalence.  Re-run LEC against "
-                    "the liberty-backed synthesis netlist (e.g. <top>_synth.v or "
-                    "netlist.v) — do NOT fall back to synth/DFT, the design is "
-                    "likely correct.  lec_gate_netlist_select.py will choose the "
-                    "correct netlist automatically on the next run."),
-                file=LEC_RPT_REL))
-            return res
+    # compared_points is then 0 and NOTHING was compared. Reporting that as
+    # LEC_NOT_EQUIVALENT / "RTL and post-DFT netlist differ — fall back to step
+    # 9" is a FALSE statement: no comparison ever happened, so no difference was
+    # ever observed, and the next agent is sent to re-synthesise a design that
+    # was never examined.
+    #
+    # This changes the RULE NAME and the MESSAGE only. It is deliberately NOT a
+    # reclassification into the INCONCLUSIVE tier:
+    #   * res.inconclusive stays False, so main() still returns rc=1 (hard
+    #     FAIL) exactly as before. Routing it to rc=3 would print the
+    #     PASS_WITH_WAIVERS sentinel and flow_compliance would record step 13 as
+    #     WAIVED-DEFERRED — so a genuine top-level port-set mismatch (scan ports
+    #     present in the netlist and absent from the gold RTL — a real DFT
+    #     integration defect) would be laundered into a near-pass. Equivalence
+    #     was not proven; an unproven equivalence is never a waiver.
+    #   * the ATPG-cut cause is asserted ONLY when port_abort_cause() confirms
+    #     the fingerprint on the netlist that lec.json says was compared. The
+    #     yosys string alone proves only "the port sets do not match"; naming a
+    #     cause from it would put a fabricated finding in a sign-off report.
+    #
+    # The zero_miter guard is load-bearing and NOT redundant with the
+    # compared==0 test inside classify_port_abort: it additionally requires no
+    # counterexample and no unproven point, so a run that recorded a real
+    # mismatch keeps the mismatch verdict even if its log also carries an abort
+    # line from an earlier attempt.
+    _structural_port_abort = bool(
+        zero_miter
+        and _classify_port_abort(
+            rpt_text, compared if compared is not None else 0) is not None)
 
     # --- substance verdict ------------------------------------------------
     # (a) the boolean itself must be true.
     if equivalent is not True:
-        res.findings.append(Finding(
-            rule="LEC_NOT_EQUIVALENT", severity="ERROR",
-            message=("LEC result is not equivalent "
-                     f"(equivalent field = {equivalent!r}). RTL and post-DFT "
-                     "netlist differ — fall back to step 9 (synth/DFT)."),
-            file=LEC_JSON_REL))
+        if _structural_port_abort:
+            _cause_ok, _cause = _port_abort_cause(
+                project, str(lc.get("gate", "")))
+            res.findings.append(Finding(
+                rule=_GNS_STATUS, severity="ERROR",
+                message=(
+                    f"LEC verdict is {_GNS_VERDICT}: yosys equiv_make aborted "
+                    "with a port-match error, so NO miter was built and "
+                    f"compared_points={compared if compared is not None else 0}. "
+                    "Nothing was compared — this is NOT evidence that the RTL "
+                    "and the netlist differ, and it is NOT a pass either. "
+                    + (f"Measured cause — {_cause}. The upstream producer is "
+                       "fault_atpg_run.py, which byte-copies the ATPG "
+                       "combinational-cut netlist over scan_netlist.v; "
+                       "post_dft_opt then opt_cleans that into the netlist "
+                       "handed to LEC. Fix the artifact the DFT chain hands "
+                       "over — do NOT re-point LEC at a different netlist, "
+                       "because comparing <top>_synth.v would report the "
+                       "post-DFT equivalence step as PASS without ever reading "
+                       "the post-DFT netlist."
+                       if _cause_ok else
+                       "The gate netlist named in the report does NOT carry the "
+                       "ATPG combinational-cut fingerprint, so the cause is "
+                       "unconfirmed and is NOT guessed here. Diff the top-level "
+                       "port set of the gate netlist against the gold RTL: the "
+                       "usual cause is DFT/scan ports present in the netlist "
+                       "and absent from the RTL, which is a real defect.")),
+                file=LEC_RPT_REL))
+        else:
+            res.findings.append(Finding(
+                rule="LEC_NOT_EQUIVALENT", severity="ERROR",
+                message=("LEC result is not equivalent "
+                         f"(equivalent field = {equivalent!r}). RTL and post-DFT "
+                         "netlist differ — fall back to step 9 (synth/DFT)."),
+                file=LEC_JSON_REL))
 
     # (b) any non-equivalent point => hard fail (independent of the boolean).
     if non_equiv is not None and non_equiv > 0:
