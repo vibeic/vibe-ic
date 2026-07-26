@@ -6,6 +6,12 @@ imperative "Plugin MUST emit/produce/declare <path>" clauses (English and
 Traditional-Chinese forms).  For each clause it asserts the declared artifact
 exists in the run dir and is non-empty.
 
+Only PATH-SHAPED tokens are asserted on -- see `_is_path_shaped`.  A
+backticked token after a MUST-verb is very often a SIGNAL name, not a
+filesystem path, and asserting on those failed legitimate designs (see the
+false-positive note on `_is_path_shaped`).  Rejected tokens are reported in
+`ignored_tokens` so the narrowing is visible rather than silent.
+
 Emits: reports/phase2/gates/spec_required_artifacts.json
 
 Exit codes:
@@ -46,44 +52,112 @@ _ZH_PATTERN = re.compile(
 )
 
 
-def _extract_clauses_from_text(text: str, source: str) -> list[dict]:
-    """Return list of {clause_text, artifact_path, source} dicts."""
-    clauses = []
-    for m in _EN_PATTERN.finditer(text):
-        path = m.group(1).strip("/").rstrip(")")
-        clauses.append({
-            "clause_text": m.group(0),
+# ---------------------------------------------------------------------------
+# Path-shape filter
+# ---------------------------------------------------------------------------
+
+# CONFIRMED FALSE POSITIVE this filter closes.  Both regexes above match ANY
+# backticked token that follows a MUST-verb, so a SIGNAL name reads as a
+# filesystem path.  Prose lifted verbatim from this plugin's own knowledge
+# base -- "A streaming run-length counter must emit `valid` for exactly one
+# cycle ..." plus "MUST declare `rst_n`" -- made the gate return rc=1 /
+# verdict FAIL with FAIL_ABSENT 'valid' and FAIL_ABSENT 'rst_n' on a run that
+# DID contain every artifact its spec required.  Any legitimate valid/ready
+# design whose spec names its signals in backticks was failed by this gate.
+#
+# A declared ARTIFACT is a file, so the token must look like one: it carries a
+# directory separator, or it carries a known artifact extension.  Everything
+# else is recorded in the report's `ignored_tokens` -- narrowed, never
+# silently dropped, so a reviewer can see exactly what the gate declined to
+# assert on and why.
+_ARTIFACT_EXTENSIONS = frozenset({
+    # structured data / reports
+    "json", "yaml", "yml", "toml", "ini", "cfg", "csv", "tsv", "xml",
+    "md", "txt", "log", "rpt", "html", "pdf",
+    # HDL / EDA source and sign-off artifacts
+    "v", "sv", "vh", "svh", "vhd", "vhdl", "tcl", "sdc", "sdf", "upf",
+    "lef", "lib", "def", "gds", "gds2", "oas", "spef", "cdl", "cir",
+    "spi", "sp", "vcd", "fst", "saif", "net", "eqn", "qsf", "sof", "bit",
+    # generic build outputs
+    "py", "sh", "zip", "tar", "gz",
+})
+
+
+def _is_path_shaped(token: str) -> bool:
+    """True when `token` looks like a filesystem artifact rather than a name.
+
+    Path-shaped == carries a directory separator, or ends in a known
+    artifact extension.  `plugin_output/declaration.json` and
+    `declaration.json` qualify; `valid`, `rst_n`, `p` do not.
+    """
+    if not token:
+        return False
+    if "/" in token or "\\" in token:
+        return True
+    head, dot, ext = token.rpartition(".")
+    return bool(dot) and bool(head) and ext.lower() in _ARTIFACT_EXTENSIONS
+
+
+def _extract_clauses_from_text(text: str, source: str) -> tuple[list[dict], list[dict]]:
+    """Return (clauses, ignored) — ignored holds non-path-shaped tokens."""
+    clauses: list[dict] = []
+    ignored: list[dict] = []
+
+    def _record(raw: str, token: str, pattern: str) -> None:
+        path = token.strip("/").rstrip(")")
+        if not path:
+            return
+        entry = {
+            "clause_text": raw,
             "artifact_path": path,
             "source": source,
-            "pattern": "english_imperative",
-        })
-    for m in _ZH_PATTERN.finditer(text):
-        path = (m.group(1) or m.group(2) or "").strip("/").rstrip(")")
-        if path:
-            clauses.append({
-                "clause_text": m.group(0),
-                "artifact_path": path,
-                "source": source,
-                "pattern": "zh_tw_imperative",
+            "pattern": pattern,
+        }
+        if _is_path_shaped(path):
+            clauses.append(entry)
+        else:
+            ignored.append({
+                **entry,
+                "reason": ("token is not path-shaped (no directory separator "
+                           "and no known artifact extension) — reads as a "
+                           "signal/identifier name, not a required artifact"),
             })
-    return clauses
+
+    for m in _EN_PATTERN.finditer(text):
+        _record(m.group(0), m.group(1), "english_imperative")
+    for m in _ZH_PATTERN.finditer(text):
+        _record(m.group(0), (m.group(1) or m.group(2) or ""), "zh_tw_imperative")
+    return clauses, ignored
 
 
-def _collect_clauses(run_dir: Path) -> list[dict]:
-    """Scan input/docs/*.md and phase1/generated_docs/L*.json."""
+def _collect_clauses(run_dir: Path) -> tuple[list[dict], list[dict]]:
+    """Scan input/docs/*.md and phase1/generated_docs/L*.json.
+
+    Returns (clauses, ignored_tokens).
+    """
     clauses: list[dict] = []
+    ignored: list[dict] = []
     seen_paths: set[str] = set()
+    seen_ignored: set[str] = set()
+
+    def _absorb(found: list[dict], dropped: list[dict]) -> None:
+        for c in found:
+            key = c["artifact_path"]
+            if key not in seen_paths:
+                seen_paths.add(key)
+                clauses.append(c)
+        for c in dropped:
+            key = c["artifact_path"]
+            if key not in seen_ignored:
+                seen_ignored.add(key)
+                ignored.append(c)
 
     # Markdown input docs
     input_docs_dir = run_dir / "input" / "docs"
     if input_docs_dir.is_dir():
         for md in sorted(input_docs_dir.glob("*.md")):
             text = md.read_text(errors="replace")
-            for c in _extract_clauses_from_text(text, str(md.relative_to(run_dir))):
-                key = c["artifact_path"]
-                if key not in seen_paths:
-                    seen_paths.add(key)
-                    clauses.append(c)
+            _absorb(*_extract_clauses_from_text(text, str(md.relative_to(run_dir))))
 
     # Generated L-doc JSON (look in text values only, avoid false positives
     # from structured fields whose keys happen to match)
@@ -92,15 +166,11 @@ def _collect_clauses(run_dir: Path) -> list[dict]:
         for jf in sorted(l_doc_dir.glob("L*.json")):
             try:
                 text = jf.read_text(errors="replace")
-                for c in _extract_clauses_from_text(text, str(jf.relative_to(run_dir))):
-                    key = c["artifact_path"]
-                    if key not in seen_paths:
-                        seen_paths.add(key)
-                        clauses.append(c)
+                _absorb(*_extract_clauses_from_text(text, str(jf.relative_to(run_dir))))
             except Exception:
                 pass
 
-    return clauses
+    return clauses, ignored
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: run_dir not found: {run_dir}", file=sys.stderr)
         return 2
 
-    clauses = _collect_clauses(run_dir)
+    clauses, ignored = _collect_clauses(run_dir)
 
     results: list[dict] = []
     for c in clauses:
@@ -155,7 +225,11 @@ def main(argv: list[str] | None = None) -> int:
     fails = [r for r in results if r["status"] != "PASS"]
     if not results:
         verdict = "VACUOUS_PASS"
-        note = "No MUST-emit clauses found in input docs — nothing to assert."
+        note = ("No path-shaped MUST-emit clauses found in input docs — "
+                "nothing to assert.")
+        if ignored:
+            note += (f" ({len(ignored)} non-path-shaped token(s) ignored: "
+                     f"{', '.join(sorted(t['artifact_path'] for t in ignored)[:8])})")
     elif fails:
         verdict = "FAIL"
         note = f"{len(fails)} declared artifact(s) absent or empty."
@@ -173,6 +247,11 @@ def main(argv: list[str] | None = None) -> int:
         "clauses_found": len(results),
         "failed_count": len(fails),
         "results": results,
+        # Tokens the regexes matched but that are not path-shaped (signal
+        # names such as `valid` / `rst_n`).  Reported so the narrowing is
+        # auditable — the gate asserts on none of them.
+        "ignored_token_count": len(ignored),
+        "ignored_tokens": ignored,
     }
 
     # Write report

@@ -1,31 +1,72 @@
 """test_spec_required_artifact_check.py — bidirectional tests.
 
-Covers:
-  spec_required_artifact_check.py:
-    - DEFECT direction: input doc declares a required artifact that is ABSENT → FAIL
-    - DEFECT direction: declared artifact exists but is 0 bytes → FAIL_EMPTY
-    - FIXED direction: artifact present and non-empty → PASS
-    - VACUOUS case: no MUST-emit clause in doc → VACUOUS_PASS (no crash)
+Every control here is written to FAIL when the defect is present.  The
+mutations each control is required to kill are named next to it, because the
+first version of this file did not kill any of them:
 
-  arith_declaration_emit.py:
-    - PASS: all derivable inputs present → 6-field declaration.json emitted
-    - FAIL-CLOSED: missing RTL → non-zero exit, no file written
+  - Deleting `arith_declaration_emit.py` outright left 10 of 11 tests green.
+    All three fail-closed tests asserted only `returncode != 0` and
+    `not out.exists()`, which python's rc=2 "can't open file" satisfies — a
+    deleted program, a syntax error and an ImportError all "proved"
+    fail-closed.  Fixed by `_assert_ran_and_refused`, which demands rc EXACTLY
+    1 plus the program's own stderr banner plus the SPECIFIC field key that
+    could not be derived, and by `_require_program`, which fails every test
+    the moment a program under test is missing.
+  - The one PASS-direction test asserted only `bit_order in (LSB,MSB)` and
+    `isinstance(latency_cycles, int)`.  `_derive_bit_order -> "MSB_first"`
+    always and `_derive_latency_from_verify_scale -> 0` always both survived
+    the whole suite — the two fields that set the oracle's bit framing, i.e.
+    the exact defect this program exists to close.  Fixed by asserting the
+    WHOLE derived declaration against two fixtures that disagree on every
+    field (LSB/MSB, 2/5 cycles, 16/8 bits, active_high/active_low,
+    signed_2c/unsigned) plus a third that pins the manifest fallback.
+  - The `phase1/generated_docs/L*.json` scan is a documented capability that
+    had zero coverage; disabling it kept the suite green.  Covered by
+    TestGateLDocSource.
+  - The English clause regex covers 3 modals x 6 verbs; only `MUST emit` was
+    exercised, so narrowing the regex to `MUST emit` kept the suite green.
+    Covered by the parametrised TestGateClauseForms.
+  - The gate treated ANY backticked token after a MUST-verb as a filesystem
+    path, so "must emit `valid`" / "MUST declare `rst_n`" failed a compliant
+    run (confirmed false positive).  The fix is behavioural — a path-shape
+    filter in the program — and TestGateSignalNameFalsePositive fails if the
+    filter is removed, while its companion control proves the filter did not
+    just switch the gate off.
+  - The gate was wired into nothing, so the defect it names ("no gate
+    noticed") stayed open.  TestGateWiredIntoFlow fails if it is unwired.
 """
 
 import json
 import subprocess
 import sys
-import tempfile
 import textwrap
 from pathlib import Path
 
 import pytest
 
 PROGRAMS_DIR = Path(__file__).parent.parent
+GATE_PROGRAM = PROGRAMS_DIR / "spec_required_artifact_check.py"
+EMITTER_PROGRAM = PROGRAMS_DIR / "arith_declaration_emit.py"
+
+# The emitter prints this on its fail-closed path and nowhere else.
+FAIL_CLOSED_BANNER = "arith_declaration_emit: FAIL_CLOSED"
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _require_program(path: Path) -> None:
+    """A missing program must fail the test, never satisfy it.
+
+    Mutation control: deleting either program under test now fails EVERY test
+    in this module with a named reason instead of being mistaken for a
+    fail-closed refusal.
+    """
+    assert path.is_file(), (
+        f"program under test is missing: {path} — a deleted program cannot "
+        f"be evidence of anything"
+    )
 
 
 def _make_rundir(tmp_path: Path) -> Path:
@@ -35,25 +76,60 @@ def _make_rundir(tmp_path: Path) -> Path:
 
 
 def _run_gate(run_dir: Path) -> subprocess.CompletedProcess:
+    _require_program(GATE_PROGRAM)
     return subprocess.run(
-        [sys.executable, str(PROGRAMS_DIR / "spec_required_artifact_check.py"),
-         str(run_dir)],
+        [sys.executable, str(GATE_PROGRAM), str(run_dir)],
         capture_output=True, text=True,
     )
 
 
 def _run_emitter(run_dir: Path) -> subprocess.CompletedProcess:
+    _require_program(EMITTER_PROGRAM)
     return subprocess.run(
-        [sys.executable, str(PROGRAMS_DIR / "arith_declaration_emit.py"),
-         str(run_dir)],
+        [sys.executable, str(EMITTER_PROGRAM), str(run_dir)],
         capture_output=True, text=True,
     )
 
 
-def _write_input_doc(run_dir: Path, content: str) -> None:
+def _gate_report(run_dir: Path) -> dict:
+    return json.loads(
+        (run_dir / "reports/phase2/gates/spec_required_artifacts.json").read_text()
+    )
+
+
+def _write_input_doc(run_dir: Path, content: str, name: str = "L7_verification_plan.md") -> None:
     docs = run_dir / "input" / "docs"
     docs.mkdir(parents=True, exist_ok=True)
-    (docs / "L7_verification_plan.md").write_text(content)
+    (docs / name).write_text(content)
+
+
+def _assert_ran_and_refused(r: subprocess.CompletedProcess, run_dir: Path,
+                            *, field_keys: tuple[str, ...]) -> None:
+    """Assert the emitter RAN and REFUSED — not that it merely failed.
+
+    rc must be EXACTLY 1: python exits 2 when the script file is absent, so a
+    deleted program cannot satisfy this.  The banner must be present: an
+    ImportError or SyntaxError exits 1 but prints a traceback and no banner,
+    so a broken program cannot satisfy this either.  And the SPECIFIC field
+    keys must be named, so refusing for an unrelated reason does not count.
+    """
+    detail = f"\nrc={r.returncode}\nSTDOUT:\n{r.stdout}\nSTDERR:\n{r.stderr}"
+    assert r.returncode == 1, (
+        "fail-closed means rc EXACTLY 1 (rc=2 is python failing to open the "
+        "script, which proves nothing)" + detail
+    )
+    assert FAIL_CLOSED_BANNER in r.stderr, (
+        "the program's own fail-closed banner must be on stderr; without it "
+        "the non-zero exit could be a traceback from a program that never "
+        "reached its own logic" + detail
+    )
+    for key in field_keys:
+        assert f"  - {key}:" in r.stderr, (
+            f"expected the refusal to name field {key!r}" + detail
+        )
+    assert "No file written." in r.stderr, detail
+    out = run_dir / "plugin_output" / "declaration.json"
+    assert not out.exists(), "should NOT write declaration.json on failure"
 
 
 # ---------------------------------------------------------------------------
@@ -72,11 +148,12 @@ class TestGateDefectAbsent:
         # Artifact NOT created — defect condition
         r = _run_gate(rd)
         assert r.returncode == 1, f"expected FAIL, got {r.returncode}\n{r.stdout}\n{r.stderr}"
-        report = json.loads((rd / "reports/phase2/gates/spec_required_artifacts.json").read_text())
+        report = _gate_report(rd)
         assert report["verdict"] == "FAIL"
-        assert report["failed_count"] >= 1
+        assert report["failed_count"] == 1
         fail = report["results"][0]
         assert fail["status"] == "FAIL_ABSENT"
+        assert fail["artifact_path"] == "plugin_output/report.json"
 
     def test_zh_tw_must_emit_absent(self, tmp_path):
         rd = _make_rundir(tmp_path)
@@ -85,10 +162,118 @@ class TestGateDefectAbsent:
         """))
         r = _run_gate(rd)
         assert r.returncode == 1
-        report = json.loads((rd / "reports/phase2/gates/spec_required_artifacts.json").read_text())
+        report = _gate_report(rd)
         assert report["verdict"] == "FAIL"
-        statuses = [res["status"] for res in report["results"]]
-        assert "FAIL_ABSENT" in statuses
+        assert [res["artifact_path"] for res in report["results"]] == [
+            "plugin_output/declaration.json"]
+        assert report["results"][0]["status"] == "FAIL_ABSENT"
+
+
+# ---------------------------------------------------------------------------
+# spec_required_artifact_check — clause-form coverage
+#
+# Kills: narrowing _EN_PATTERN to any single modal/verb pair, and dropping
+# either Traditional-Chinese alternative.  Each case names an ABSENT
+# path-shaped artifact, so the gate must FAIL on every one of them; a regex
+# that stops recognising the form silently returns VACUOUS_PASS (rc=0) and the
+# case fails.
+# ---------------------------------------------------------------------------
+
+_EN_MODALS = ("MUST", "shall", "is required to")
+_EN_VERBS = ("emit", "produce", "declare", "generate", "write", "output")
+
+_ZH_CLAUSE_FORMS = [
+    "Plugin **必須**於 `plugin_output/zh_a.json` 聲明下列項目。",
+    "Plugin 必須 `plugin_output/zh_b.json` 宣告下列項目。",
+    "Plugin 必須 emit `plugin_output/zh_c.json`。",
+    "Plugin 必須 produce `plugin_output/zh_d.json`。",
+    "Plugin 必須 declare `plugin_output/zh_e.json`。",
+    "Plugin 必須 write `plugin_output/zh_f.json`。",
+    "Plugin 必須 output `plugin_output/zh_g.json`。",
+    "Plugin 必須 generate `plugin_output/zh_h.json`。",
+]
+
+
+class TestGateClauseForms:
+    """Every documented clause form must be recognised, not just `MUST emit`."""
+
+    @pytest.mark.parametrize("modal", _EN_MODALS)
+    @pytest.mark.parametrize("verb", _EN_VERBS)
+    def test_english_modal_verb_matrix(self, tmp_path, modal, verb):
+        rd = _make_rundir(tmp_path)
+        _write_input_doc(
+            rd, f"The Plugin {modal} {verb} `plugin_output/declaration.json`.\n")
+        r = _run_gate(rd)
+        report = _gate_report(rd)
+        assert r.returncode == 1, (
+            f"clause form {modal!r} + {verb!r} was not recognised — gate "
+            f"returned {r.returncode} / {report['verdict']}"
+        )
+        assert report["verdict"] == "FAIL"
+        assert [res["artifact_path"] for res in report["results"]] == [
+            "plugin_output/declaration.json"]
+
+    @pytest.mark.parametrize("clause", _ZH_CLAUSE_FORMS)
+    def test_zh_tw_clause_forms(self, tmp_path, clause):
+        rd = _make_rundir(tmp_path)
+        _write_input_doc(rd, clause + "\n")
+        r = _run_gate(rd)
+        report = _gate_report(rd)
+        assert r.returncode == 1, (
+            f"ZH clause form not recognised: {clause!r} — gate returned "
+            f"{r.returncode} / {report['verdict']}"
+        )
+        assert report["verdict"] == "FAIL"
+        assert report["results"][0]["pattern"] == "zh_tw_imperative"
+
+
+# ---------------------------------------------------------------------------
+# spec_required_artifact_check — the L*.json source
+#
+# Kills: disabling the phase1/generated_docs/L*.json scan in _collect_clauses.
+# There is deliberately NO input/docs tree here, so the clause can only be
+# found by the L-doc scan.
+# ---------------------------------------------------------------------------
+
+class TestGateLDocSource:
+    """A MUST-emit clause carried only by a generated L-doc must be honoured."""
+
+    def test_clause_only_in_generated_l_doc_absent(self, tmp_path):
+        rd = _make_rundir(tmp_path)
+        l_dir = rd / "phase1" / "generated_docs"
+        l_dir.mkdir(parents=True)
+        (l_dir / "L7_VERIFICATION.json").write_text(json.dumps({
+            "schema_version": 2,
+            "sections": [{"content":
+                          "The Plugin MUST emit `plugin_output/declaration.json` "
+                          "before RTL design begins."}],
+        }))
+        r = _run_gate(rd)
+        report = _gate_report(rd)
+        assert r.returncode == 1, (
+            "clause lives only in phase1/generated_docs/L*.json — the L-doc "
+            f"scan is not running (verdict {report['verdict']})"
+        )
+        assert report["verdict"] == "FAIL"
+        assert report["results"][0]["source"] == "phase1/generated_docs/L7_VERIFICATION.json"
+        assert report["results"][0]["status"] == "FAIL_ABSENT"
+
+    def test_clause_only_in_generated_l_doc_present(self, tmp_path):
+        """Same source, artifact present → PASS (so the FAIL above is not
+        just 'the L-doc path always fails')."""
+        rd = _make_rundir(tmp_path)
+        l_dir = rd / "phase1" / "generated_docs"
+        l_dir.mkdir(parents=True)
+        (l_dir / "L7_VERIFICATION.json").write_text(json.dumps({
+            "sections": [{"content":
+                          "The Plugin MUST emit `plugin_output/declaration.json`."}],
+        }))
+        out = rd / "plugin_output"
+        out.mkdir(parents=True)
+        (out / "declaration.json").write_text('{"bit_order": "LSB_first"}')
+        r = _run_gate(rd)
+        assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
+        assert _gate_report(rd)["verdict"] == "PASS"
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +294,7 @@ class TestGateDefectEmpty:
         (out / "summary.json").write_text("")
         r = _run_gate(rd)
         assert r.returncode == 1
-        report = json.loads((rd / "reports/phase2/gates/spec_required_artifacts.json").read_text())
+        report = _gate_report(rd)
         assert report["verdict"] == "FAIL"
         statuses = [res["status"] for res in report["results"]]
         assert "FAIL_EMPTY" in statuses
@@ -132,7 +317,7 @@ class TestGateFixed:
         (out / "declaration.json").write_text('{"bit_order": "LSB_first"}')
         r = _run_gate(rd)
         assert r.returncode == 0, f"expected PASS\n{r.stdout}\n{r.stderr}"
-        report = json.loads((rd / "reports/phase2/gates/spec_required_artifacts.json").read_text())
+        report = _gate_report(rd)
         assert report["verdict"] == "PASS"
         assert report["failed_count"] == 0
 
@@ -146,8 +331,91 @@ class TestGateFixed:
         (out / "declaration.json").write_text('{"bit_order": "LSB_first"}')
         r = _run_gate(rd)
         assert r.returncode == 0
-        report = json.loads((rd / "reports/phase2/gates/spec_required_artifacts.json").read_text())
-        assert report["verdict"] == "PASS"
+        assert _gate_report(rd)["verdict"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# spec_required_artifact_check — CONFIRMED FALSE POSITIVE (Front B)
+#
+# Prose lifted verbatim from the plugin's own knowledge base
+# (agents/ic-expert-agent.md, replicated in 7 generated lessons.md files).
+# Before the path-shape filter this doc drove the gate to rc=1 / verdict FAIL
+# with FAIL_ABSENT 'valid' and FAIL_ABSENT 'rst_n' on a run that contained
+# every artifact it actually owed.  Removing `_is_path_shaped` fails these.
+# ---------------------------------------------------------------------------
+
+_SIGNAL_NAME_PROSE = textwrap.dedent("""\
+    ## Handshake
+
+    A streaming run-length counter must emit `valid` for exactly one cycle
+    per completed run, and the consumer MUST declare `rst_n` in its port
+    list.  The design shall produce `ready` combinationally.
+    每個模組必須 emit `done` 一個 cycle。
+""")
+
+
+class TestGateSignalNameFalsePositive:
+    """Backticked SIGNAL names after a MUST-verb are not required artifacts."""
+
+    def test_signal_names_do_not_fail_the_gate(self, tmp_path):
+        rd = _make_rundir(tmp_path)
+        _write_input_doc(rd, _SIGNAL_NAME_PROSE)
+        # A compliant run: it owes nothing, and it emitted its declaration.
+        out = rd / "plugin_output"
+        out.mkdir(parents=True)
+        (out / "declaration.json").write_text('{"bit_order": "LSB_first"}')
+        r = _run_gate(rd)
+        report = _gate_report(rd)
+        assert r.returncode == 0, (
+            "signal names read as required artifacts — false positive"
+            f"\nverdict={report['verdict']} results={report['results']}"
+        )
+        assert report["verdict"] == "VACUOUS_PASS"
+        assert report["clauses_found"] == 0
+        # Narrowed, not silent: the rejected tokens are reported.
+        ignored = {t["artifact_path"] for t in report["ignored_tokens"]}
+        assert {"valid", "rst_n", "ready", "done"} <= ignored
+
+    def test_filter_does_not_disable_the_gate(self, tmp_path):
+        """Control for the test above: the SAME prose plus one genuine
+        path-shaped clause must still FAIL on the genuine one only.
+
+        Without this, deleting the clause regexes entirely would 'fix' the
+        false positive.
+        """
+        rd = _make_rundir(tmp_path)
+        _write_input_doc(
+            rd,
+            _SIGNAL_NAME_PROSE
+            + "\nThe Plugin MUST emit `plugin_output/declaration.json`.\n")
+        r = _run_gate(rd)
+        report = _gate_report(rd)
+        assert r.returncode == 1, f"{report['verdict']}: {report['results']}"
+        assert report["verdict"] == "FAIL"
+        assert [res["artifact_path"] for res in report["results"]] == [
+            "plugin_output/declaration.json"]
+        assert report["results"][0]["status"] == "FAIL_ABSENT"
+
+    def test_extensionless_signal_name_with_dot_is_not_a_path(self, tmp_path):
+        """`u_dut.valid` is a hierarchical signal reference, not a file."""
+        rd = _make_rundir(tmp_path)
+        _write_input_doc(
+            rd, "The DUT MUST declare `u_dut.valid` at the top level.\n")
+        r = _run_gate(rd)
+        report = _gate_report(rd)
+        assert r.returncode == 0, f"{report['verdict']}: {report['results']}"
+        assert report["clauses_found"] == 0
+        assert report["ignored_token_count"] == 1
+
+    def test_bare_filename_with_artifact_extension_is_a_path(self, tmp_path):
+        """A token needs a separator OR a known extension — not both."""
+        rd = _make_rundir(tmp_path)
+        _write_input_doc(rd, "The Plugin MUST emit `declaration.json`.\n")
+        r = _run_gate(rd)
+        report = _gate_report(rd)
+        assert r.returncode == 1, f"{report['verdict']}"
+        assert [res["artifact_path"] for res in report["results"]] == [
+            "declaration.json"]
 
 
 # ---------------------------------------------------------------------------
@@ -166,24 +434,54 @@ class TestGateVacuous:
         """))
         r = _run_gate(rd)
         assert r.returncode == 0, f"vacuous should exit 0\n{r.stdout}\n{r.stderr}"
-        report = json.loads((rd / "reports/phase2/gates/spec_required_artifacts.json").read_text())
+        report = _gate_report(rd)
         assert report["verdict"] == "VACUOUS_PASS"
-        assert "no MUST" in report["note"].lower() or "vacuous" in report["note"].lower() or "nothing" in report["note"].lower()
+        assert "nothing to assert" in report["note"].lower()
+        assert report["ignored_token_count"] == 0
 
     def test_no_input_docs_dir(self, tmp_path):
         """No input/docs directory at all — should VACUOUS_PASS, not crash."""
         rd = _make_rundir(tmp_path)
         r = _run_gate(rd)
         assert r.returncode == 0
-        report = json.loads((rd / "reports/phase2/gates/spec_required_artifacts.json").read_text())
-        assert report["verdict"] == "VACUOUS_PASS"
+        assert _gate_report(rd)["verdict"] == "VACUOUS_PASS"
 
 
 # ---------------------------------------------------------------------------
-# arith_declaration_emit — PASS direction (all inputs present)
+# spec_required_artifact_check — WIRING
+#
+# The capture's premise is "the spec said MUST declare, the plugin did not,
+# and NO gate noticed".  A gate that nothing invokes leaves that premise
+# intact.  This control fails if the gate is dropped from the canonical
+# structural-RTL tuple.
 # ---------------------------------------------------------------------------
 
-_MINIMAL_RTL = textwrap.dedent("""\
+class TestGateWiredIntoFlow:
+
+    def test_gate_is_in_structural_rtl_gates(self):
+        sys.path.insert(0, str(PROGRAMS_DIR))
+        import flow_compliance_check as F
+        assert "spec_required_artifact_check" in F._STRUCTURAL_RTL_GATES, (
+            "spec_required_artifact_check is not wired into "
+            "flow_compliance_check._STRUCTURAL_RTL_GATES — nothing would run "
+            "it, so the defect it names stays open"
+        )
+
+    def test_gate_program_is_discoverable_by_the_umbrella(self):
+        """The umbrella resolves `<gate_name>.py` under PROGRAMS_DIR and
+        silently `continue`s when the file is absent — so the wiring is only
+        real if the filename matches the tuple entry exactly."""
+        assert (PROGRAMS_DIR / "spec_required_artifact_check.py").is_file()
+
+
+# ---------------------------------------------------------------------------
+# arith_declaration_emit — fixtures
+#
+# Two fixtures that disagree on EVERY derived field, so an "always X" mutation
+# of any deriver is caught by one of them.
+# ---------------------------------------------------------------------------
+
+_RTL_LSB = textwrap.dedent("""\
     `default_nettype none
     //============================================================================
     // spm — serial-parallel multiplier
@@ -206,101 +504,236 @@ _MINIMAL_RTL = textwrap.dedent("""\
     `default_nettype wire
 """)
 
-_MINIMAL_L2 = json.dumps({
+_RTL_MSB = textwrap.dedent("""\
+    `default_nettype none
+    //============================================================================
+    // acc — serial accumulator
+    // y : serial operand, MSB-first
+    // Reset    : synchronous, active-low
+    // Algorithm: radix-4 booth recoded accumulate.
+    //============================================================================
+    module acc #(parameter size = 8) (
+        input wire clk, input wire rst, input wire [size-1:0] x,
+        input wire y, output wire p
+    );
+        reg yr; reg pr;
+        always @(posedge clk) begin
+            if (!rst) begin yr <= 0; pr <= 0; end
+            else begin yr <= y; pr <= yr & x[0]; end
+        end
+        assign p = pr;
+    endmodule
+    `default_nettype wire
+""")
+
+_L2_SIGNED = json.dumps({
     "schema_version": 2,
     "doc_class": "frs",
-    "frs_sections": [{"content": 'Plugin 須聲明 "signed_2c" 或 "unsigned"；預設 signed_2c'}],
+    "frs_sections": [{"content": 'Plugin 須聲明 signed_2c 或 unsigned；預設 signed_2c'}],
 })
 
-_VERIFY_REPORT = textwrap.dedent("""\
+_L2_UNSIGNED = json.dumps({
+    "schema_version": 2,
+    "doc_class": "frs",
+    "integer_encoding": "unsigned",
+})
+
+_VERIFY_REPORT_2 = textwrap.dedent("""\
     # Report
     | Latency | **2 cycle** |
     CALIBRATED_LATENCY: 2  BIT_ORDER: LSB_first  SIZE: 16
 """)
 
+_GLS_REPORT_5 = textwrap.dedent("""\
+    # GLS Report
+    | Calibrated latency | **5 cycle** |
+""")
 
-def _make_full_emitter_rundir(tmp_path: Path) -> Path:
+_DECL_LSB = {
+    "bit_order": "LSB_first",
+    "reset_polarity": "active_high",
+    "latency_cycles": 2,
+    "integer_encoding": "signed_2c",
+    "multiplier_algorithm": "textbook_carry_save_shift_add_serial_parallel_multiplier",
+    "size_param": 16,
+}
+
+_DECL_MSB = {
+    "bit_order": "MSB_first",
+    "reset_polarity": "active_low",
+    "latency_cycles": 5,
+    "integer_encoding": "unsigned",
+    "multiplier_algorithm": "radix_4_booth_recoded_accumulate",
+    "size_param": 8,
+}
+
+
+def _build_rundir(tmp_path: Path, *, rtl: str | None, l2: str | None,
+                  verify_report: str | None = None,
+                  gls_report: str | None = None,
+                  oracle_manifest: dict | None = None) -> Path:
     rd = tmp_path / "run"
-    rtl_dir = rd / "phase2" / "stage1" / "rtl"
-    rtl_dir.mkdir(parents=True)
-    (rtl_dir / "myip.v").write_text(_MINIMAL_RTL)
-
-    l_dir = rd / "phase1" / "generated_docs"
-    l_dir.mkdir(parents=True)
-    (l_dir / "L2_FRS.json").write_text(_MINIMAL_L2)
-
-    scale_dir = rd / "_verify_scale"
-    scale_dir.mkdir()
-    (scale_dir / "REPORT.md").write_text(_VERIFY_REPORT)
-
+    rd.mkdir(parents=True, exist_ok=True)
+    if rtl is not None:
+        rtl_dir = rd / "phase2" / "stage1" / "rtl"
+        rtl_dir.mkdir(parents=True)
+        (rtl_dir / "myip.v").write_text(rtl)
+    if l2 is not None:
+        l_dir = rd / "phase1" / "generated_docs"
+        l_dir.mkdir(parents=True)
+        (l_dir / "L2_FRS.json").write_text(l2)
+    if verify_report is not None:
+        scale_dir = rd / "_verify_scale"
+        scale_dir.mkdir()
+        (scale_dir / "REPORT.md").write_text(verify_report)
+    if gls_report is not None:
+        gls_dir = rd / "_verify_gls"
+        gls_dir.mkdir()
+        (gls_dir / "GLS_REPORT.md").write_text(gls_report)
+    if oracle_manifest is not None:
+        man_dir = rd / "phase2" / "stage1" / "sim_full_stack"
+        man_dir.mkdir(parents=True, exist_ok=True)
+        (man_dir / "arith_oracle_manifest.json").write_text(
+            json.dumps(oracle_manifest))
     return rd
 
 
-class TestEmitterPass:
-    """Emitter emits a complete 6-field file when all inputs present."""
+# ---------------------------------------------------------------------------
+# arith_declaration_emit — PASS direction (VALUES, not shapes)
+# ---------------------------------------------------------------------------
 
-    def test_emits_complete_declaration(self, tmp_path):
-        rd = _make_full_emitter_rundir(tmp_path)
+class TestEmitterPass:
+    """The emitted declaration must be EXACTLY the derived one.
+
+    Kills: `_derive_bit_order -> "MSB_first"` always, `_derive_latency_* -> 0`
+    always, and any other constant-return mutation of a deriver, because the
+    two fixtures disagree on every one of the six fields.
+    """
+
+    @pytest.mark.parametrize("case,expected", [
+        ("lsb", _DECL_LSB),
+        ("msb", _DECL_MSB),
+    ])
+    def test_emits_exact_declaration(self, tmp_path, case, expected):
+        if case == "lsb":
+            rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED,
+                               verify_report=_VERIFY_REPORT_2)
+        else:
+            # No _verify_scale report → exercises the GLS fallback, and pins
+            # a DIFFERENT non-zero latency.
+            rd = _build_rundir(tmp_path, rtl=_RTL_MSB, l2=_L2_UNSIGNED,
+                               gls_report=_GLS_REPORT_5)
         r = _run_emitter(rd)
         assert r.returncode == 0, f"expected PASS\n{r.stdout}\n{r.stderr}"
         out = rd / "plugin_output" / "declaration.json"
         assert out.exists(), "declaration.json not written"
         assert out.stat().st_size > 0
-        d = json.loads(out.read_text())
-        required_fields = {
-            "bit_order", "reset_polarity", "latency_cycles",
-            "integer_encoding", "multiplier_algorithm", "size_param",
-        }
-        missing = required_fields - d.keys()
-        assert not missing, f"missing fields: {missing}"
-        # Spot-check values
-        assert d["bit_order"] in ("LSB_first", "MSB_first")
-        assert isinstance(d["latency_cycles"], int) and d["latency_cycles"] >= 0
-        assert d["size_param"] == 16
-        assert d["reset_polarity"] == "active_high"
-        assert d["integer_encoding"] == "signed_2c"
+        assert json.loads(out.read_text()) == expected
+
+    def test_latency_falls_back_to_oracle_manifest(self, tmp_path):
+        """Third latency source, third distinct value — so disabling the
+        manifest fallback (or constant-folding it) is caught."""
+        rd = _build_rundir(
+            tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED,
+            oracle_manifest={"framing": "self-calibrated offset=7"})
+        r = _run_emitter(rd)
+        assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
+        d = json.loads((rd / "plugin_output" / "declaration.json").read_text())
+        assert d == {**_DECL_LSB, "latency_cycles": 7}
+
+    def test_verify_scale_wins_over_gls(self, tmp_path):
+        """Documented precedence: _verify_scale first, GLS second.  Both
+        present and disagreeing — the measured scale value must win."""
+        rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED,
+                           verify_report=_VERIFY_REPORT_2,
+                           gls_report=_GLS_REPORT_5)
+        r = _run_emitter(rd)
+        assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
+        d = json.loads((rd / "plugin_output" / "declaration.json").read_text())
+        assert d["latency_cycles"] == 2
 
 
 # ---------------------------------------------------------------------------
-# arith_declaration_emit — FAIL-CLOSED (missing RTL)
+# arith_declaration_emit — FAIL-CLOSED
+#
+# Each case asserts rc EXACTLY 1 + the fail-closed banner + the SPECIFIC
+# field key.  Kills: deleting the program (rc=2), breaking its imports or
+# syntax (rc=1 with no banner), and refusing for the wrong reason.
 # ---------------------------------------------------------------------------
 
 class TestEmitterFailClosed:
-    """Emitter exits non-zero and writes NO file when inputs are missing."""
+    """Emitter exits 1 with a named reason and writes NO file."""
 
     def test_missing_rtl_no_file_written(self, tmp_path):
-        rd = tmp_path / "run"
-        rd.mkdir()
-        # No RTL dir at all
+        rd = _build_rundir(tmp_path, rtl=None, l2=_L2_SIGNED,
+                           verify_report=_VERIFY_REPORT_2)
         r = _run_emitter(rd)
-        assert r.returncode != 0, "expected non-zero exit on missing RTL"
-        out = rd / "plugin_output" / "declaration.json"
-        assert not out.exists(), "should NOT write declaration.json on failure"
+        _assert_ran_and_refused(
+            r, rd,
+            field_keys=("rtl_source", "bit_order", "reset_polarity",
+                        "size_param", "multiplier_algorithm"))
 
     def test_missing_l2_no_file_written(self, tmp_path):
-        rd = tmp_path / "run"
-        rtl_dir = rd / "phase2" / "stage1" / "rtl"
-        rtl_dir.mkdir(parents=True)
-        (rtl_dir / "myip.v").write_text(_MINIMAL_RTL)
-        scale_dir = rd / "_verify_scale"
-        scale_dir.mkdir()
-        (scale_dir / "REPORT.md").write_text(_VERIFY_REPORT)
-        # L2_FRS.json deliberately absent → integer_encoding unknown
+        rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=None,
+                           verify_report=_VERIFY_REPORT_2)
         r = _run_emitter(rd)
-        assert r.returncode != 0
-        out = rd / "plugin_output" / "declaration.json"
-        assert not out.exists()
+        _assert_ran_and_refused(r, rd, field_keys=("integer_encoding",))
+        # Everything else WAS derivable — the refusal is specific, not blanket.
+        assert "  - bit_order:" not in r.stderr
+        assert "  - latency_cycles:" not in r.stderr
 
     def test_missing_calibration_no_file_written(self, tmp_path):
-        rd = tmp_path / "run"
-        rtl_dir = rd / "phase2" / "stage1" / "rtl"
-        rtl_dir.mkdir(parents=True)
-        (rtl_dir / "myip.v").write_text(_MINIMAL_RTL)
-        l_dir = rd / "phase1" / "generated_docs"
-        l_dir.mkdir(parents=True)
-        (l_dir / "L2_FRS.json").write_text(_MINIMAL_L2)
-        # No _verify_scale/REPORT.md and no _verify_gls or oracle manifest
+        rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED)
         r = _run_emitter(rd)
-        assert r.returncode != 0
-        out = rd / "plugin_output" / "declaration.json"
-        assert not out.exists()
+        _assert_ran_and_refused(r, rd, field_keys=("latency_cycles",))
+        assert "  - bit_order:" not in r.stderr
+        assert "  - integer_encoding:" not in r.stderr
+
+    def test_unmarked_bit_order_no_file_written(self, tmp_path):
+        """The framing field itself: RTL with no LSB/MSB marker must refuse
+        rather than guess a default."""
+        rtl = _RTL_LSB.replace("LSB-first", "bit-serial")
+        rd = _build_rundir(tmp_path, rtl=rtl, l2=_L2_SIGNED,
+                           verify_report=_VERIFY_REPORT_2)
+        r = _run_emitter(rd)
+        _assert_ran_and_refused(r, rd, field_keys=("bit_order",))
+
+    def test_fail_closed_does_not_clobber_existing_declaration(self, tmp_path):
+        """A refusal must leave a previously-emitted declaration untouched."""
+        rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED)
+        out = rd / "plugin_output"
+        out.mkdir(parents=True)
+        (out / "declaration.json").write_text('{"bit_order": "LSB_first"}')
+        r = _run_emitter(rd)
+        assert r.returncode == 1
+        assert FAIL_CLOSED_BANNER in r.stderr
+        assert json.loads((out / "declaration.json").read_text()) == {
+            "bit_order": "LSB_first"}
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: emitter closes the gate
+#
+# The two programs are one story — the gate names the missing artifact, the
+# emitter produces it, and the gate then passes on the SAME run dir.
+# ---------------------------------------------------------------------------
+
+class TestEmitterClosesTheGate:
+
+    def test_gate_fails_then_emitter_makes_it_pass(self, tmp_path):
+        rd = _build_rundir(tmp_path, rtl=_RTL_LSB, l2=_L2_SIGNED,
+                           verify_report=_VERIFY_REPORT_2)
+        _write_input_doc(rd, textwrap.dedent("""\
+            Plugin 在開始 RTL 設計前，**必須**於 `plugin_output/declaration.json` 聲明。
+        """))
+
+        before = _run_gate(rd)
+        assert before.returncode == 1
+        assert _gate_report(rd)["verdict"] == "FAIL"
+
+        emit = _run_emitter(rd)
+        assert emit.returncode == 0, f"{emit.stdout}\n{emit.stderr}"
+
+        after = _run_gate(rd)
+        assert after.returncode == 0, f"{after.stdout}\n{after.stderr}"
+        assert _gate_report(rd)["verdict"] == "PASS"
