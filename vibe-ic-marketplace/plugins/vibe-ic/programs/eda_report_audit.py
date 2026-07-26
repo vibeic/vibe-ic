@@ -31,11 +31,17 @@ import hashlib
 import json
 import re
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
+# Chip-agnostic multi-dialect timing-slack extractor, already hardened for
+# the report shapes real designs actually emit (worst-slack summary lines,
+# WNS/TNS tokens, and a SETUP/HOLD section split) — reused rather than
+# re-derived, per Bucket-A-ladder step 1 (ALREADY-PROGRAM).
+import sta_corner_record_completeness_check as _sta_slack
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +339,52 @@ def _check_tool_authenticity(files: List[Path], mode: str,
 # ---------------------------------------------------------------------------
 # Mode checkers
 # ---------------------------------------------------------------------------
+def _drc_real_violation_count(text: str) -> Optional[int]:
+    """The REAL number of DRC violations in a report body, or None if it
+    cannot be determined. Two dialects, chip-agnostic (grammar, not any
+    design/PDK/vendor literal):
+
+      klayout RDB/.lyrdb XML   count actual <item> elements under <items> —
+                               the format's own violation-instance records,
+                               not the rule-name vocabulary in <categories>.
+      plain-text summary       "total violations: N" / "N violations" /
+                               the magic-style "DRC errors found: N".
+
+    Returns None (never 0) when NEITHER dialect yields a number — an
+    unreadable or unrecognised report must not be credited as clean.
+
+    MEASURED, the reason this function exists: the prior check counted
+    which RULE-CATEGORY WORDS (spacing/width/density/antenna/via/enclosure)
+    merely appeared anywhere in the text. A real, tool-authentic
+    drc_signoff.rpt with its actual 0-item <items></items> block, hand-
+    edited to ALSO contain the sentence "9999 spacing violations found. DRC
+    FAILED", still mentions "spac" — the old check could not tell a clean
+    report bearing a fabricated failure sentence from a genuinely clean one.
+    Counting real <item> elements (or a real numeric summary) is immune to
+    that: prose injected elsewhere in the file is not a violation record.
+    """
+    stripped = text.lstrip()
+    if stripped.startswith("<?xml") or stripped.startswith("<report-database"):
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError:
+            root = None
+        if root is not None:
+            items = root.find(".//items")
+            if items is not None:
+                return len(items.findall("item"))
+    m = re.search(r"total\s+violations?\s*[:=]?\s*(\d+)", text, re.I)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"(\d+)\s+(?:total\s+)?violations?\b", text, re.I)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"DRC errors? found:\s*(\d+)", text, re.I)
+    if m:
+        return int(m.group(1))
+    return None
+
+
 def _check_drc(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:drc", passed=False)
     files = _discover(project_dir, ["*drc*.rpt", "*drc*.log", "*drc*.txt",
@@ -356,6 +408,9 @@ def _check_drc(project_dir: Path) -> AuditResult:
     cats_found: List[str] = []
     has_count = False
     best_file = ""
+    determined_files = 0
+    real_total = 0
+    worst_file = ""
 
     for fp in files:
         try:
@@ -369,14 +424,23 @@ def _check_drc(project_dir: Path) -> AuditResult:
             has_count = True
         if not best_file:
             best_file = str(fp)
+        n = _drc_real_violation_count(text)
+        if n is not None:
+            determined_files += 1
+            if n > 0:
+                real_total += n
+                if not worst_file:
+                    worst_file = str(fp)
 
+    # Category-presence stays as diagnostic CONTEXT (which rule classes this
+    # PDK deck's report format even talks about) — informational only, never
+    # gating. The prior version of this file let it gate `passed` alone.
     for cat, regex in categories_re.items():
         if cat not in cats_found:
             result.findings.append(Finding(
                 rule="DRC_CATEGORY_PRESENT", severity="WARNING",
                 message=f"DRC category '{cat}' not found in reports",
                 file=best_file))
-
     if not cats_found:
         result.findings.append(Finding(
             rule="DRC_CATEGORIES_EXIST", severity="ERROR",
@@ -388,12 +452,30 @@ def _check_drc(project_dir: Path) -> AuditResult:
             message="No violation count pattern found in DRC report",
             file=best_file))
 
+    # THE GATING CHECK — the real count, not the vocabulary.
+    if determined_files == 0:
+        result.findings.append(Finding(
+            rule="DRC_VIOLATION_COUNT_UNDETERMINED", severity="ERROR",
+            message=("no discovered DRC report yielded a determinable real "
+                     "violation count (neither klayout <items> nor a "
+                     "recognised text summary) — a sign-off gate must not "
+                     "pass on vocabulary presence alone"),
+            file=best_file))
+    elif real_total > 0:
+        result.findings.append(Finding(
+            rule="DRC_REAL_VIOLATIONS_FOUND", severity="ERROR",
+            message=f"{real_total} real DRC violation(s) found across "
+                    f"{determined_files} report(s) with a determinable count",
+            file=worst_file))
+
     # Tool-authenticity check — rejects hand-typed stubs (added 2026-04-22)
     authentic = _check_tool_authenticity(files, "drc", result)
 
-    result.passed = len(cats_found) > 0 and authentic
+    result.passed = determined_files > 0 and real_total == 0 and authentic
     result.summary = {"files_found": len(files), "categories_found": cats_found,
-                      "has_count": has_count, "tool_authentic": authentic}
+                      "has_count": has_count, "tool_authentic": authentic,
+                      "determined_files": determined_files,
+                      "real_violation_total": real_total}
     return result
 
 
@@ -789,9 +871,21 @@ def _check_sta(project_dir: Path) -> AuditResult:
     # chip-AGNOSTIC: matches universal OpenSTA report_checks structure.
     pathtable_slack_re = re.compile(r"slack\s*\((?:MET|VIOLATED)\)", re.I)
     pathtype_re = re.compile(r"Path\s*Type\s*:\s*(?:max|min)", re.I)
+    violated_re = re.compile(r"slack\s*\(\s*VIOLATED\s*\)", re.I)
     has_wns_tns = False
     has_setup_hold = False
     best_file = ""
+    # THE REAL VERDICT, not just report-shape presence. `has_wns_tns` /
+    # `has_setup_hold` above only established that a timing report of SOME
+    # recognised shape exists — they say nothing about whether the design
+    # actually met timing. MEASURED, the reason these two exist: a real,
+    # tool-authentic sta_spef_based.rpt with its one genuine path's real
+    # verdict hand-flipped from "slack (MET)" to "slack (VIOLATED)" (i.e. a
+    # report a corrupted design would produce) still contains a path table
+    # and setup/hold labelling, so the prior check still passed it.
+    any_verdict_determined = False
+    real_violation_found = False
+    violation_evidence = ""
 
     for fp in files:
         try:
@@ -806,6 +900,24 @@ def _check_sta(project_dir: Path) -> AuditResult:
         if not best_file:
             best_file = str(fp)
 
+        if has_pathtable:
+            any_verdict_determined = True
+            if violated_re.search(text):
+                real_violation_found = True
+                if not violation_evidence:
+                    violation_evidence = str(fp)
+        # Reuse the already-hardened multi-dialect slack extractor (worst-
+        # slack summary lines, WNS/TNS tokens, SETUP/HOLD section split)
+        # rather than re-deriving numeric parsing here.
+        slacks = _sta_slack.extract_slacks(text)
+        vals = [v for v in slacks.values() if v is not None]
+        if vals:
+            any_verdict_determined = True
+            if any(v < 0 for v in vals):
+                real_violation_found = True
+                if not violation_evidence:
+                    violation_evidence = str(fp)
+
     if not has_wns_tns:
         result.findings.append(Finding(
             rule="STA_WNS_TNS", severity="ERROR",
@@ -816,6 +928,21 @@ def _check_sta(project_dir: Path) -> AuditResult:
             rule="STA_SETUP_HOLD", severity="ERROR",
             message="No setup/hold analysis found in STA report",
             file=best_file))
+    if not any_verdict_determined:
+        result.findings.append(Finding(
+            rule="STA_VALUE_UNDETERMINED", severity="ERROR",
+            message=("no discovered STA report yielded a determinable real "
+                     "slack value (neither a WNS/TNS/worst-slack number nor "
+                     "a MET/VIOLATED path-table entry) — a sign-off gate "
+                     "must not pass on report-shape presence alone"),
+            file=best_file))
+    elif real_violation_found:
+        result.findings.append(Finding(
+            rule="STA_REAL_VIOLATION_FOUND", severity="ERROR",
+            message="a real timing violation (negative slack, or a "
+                    "VIOLATED path-table entry) was found in a discovered "
+                    "STA report",
+            file=violation_evidence))
 
     authentic = _check_tool_authenticity(files, "sta", result)
 
@@ -870,7 +997,8 @@ def _check_sta(project_dir: Path) -> AuditResult:
                      "analysis and must not be presented as multi-corner "
                      "sign-off (#442)")))
 
-    result.passed = has_wns_tns and has_setup_hold and authentic and corners_ok
+    result.passed = (has_wns_tns and has_setup_hold and authentic and corners_ok
+                      and any_verdict_determined and not real_violation_found)
     result.summary = {"files_found": len(files), "has_wns_tns": has_wns_tns,
                       "has_setup_hold": has_setup_hold,
                       "tool_authentic": authentic,
@@ -878,7 +1006,9 @@ def _check_sta(project_dir: Path) -> AuditResult:
                       "corner_reports": corner_reports,
                       "corner_reports_distinct": corner_distinct,
                       "multi_corner_substantiated": corners_ok,
-                      "multi_corner_executed": multi_corner_executed}
+                      "multi_corner_executed": multi_corner_executed,
+                      "any_verdict_determined": any_verdict_determined,
+                      "real_violation_found": real_violation_found}
     return result
 
 
