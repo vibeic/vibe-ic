@@ -1,9 +1,0 @@
-{
-  "gate": "analog_a2_topology_select_check",
-  "verdict": "PASS",
-  "blocks_checked": 2,
-  "blocks_pass": 2,
-  "blocks_missing": 0,
-  "blocks_fail": 0,
-  "findings": []
-}

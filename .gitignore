@@ -156,3 +156,40 @@ benchmark-data/datasets/
 # 路由，四者的一致性由 programs/size_policy_drift_check.py 把關。
 !benchmark-data/ic/**/*.gds
 !benchmark-data/ic/**/*.def
+
+# vibe-ic review, 2026-07-26. benchmark-data/ic/ is what this project points at
+# when it says a cell converged, so it now carries ONLY runs whose own machine
+# verdict is PASS or PASS_WITH_WAIVERS — the same bar
+# programs/benchmark_evidence_publish.py already enforces at publish time
+# (`_CONVERGED = ("PASS", "PASS_WITH_WAIVERS")`, it raises otherwise).
+#
+# Eight IC directories were removed because each one's OWN
+# reports/audit/phase23_completion_audit.json reads FAIL. They were published
+# before that guard existed. Their run directories survive off-repo; see
+# benchmark-data/ic/README.md for where, and for what was measured before the
+# removal. Ignored here so a local working copy cannot silently re-add them.
+# The design INPUT is deliberately KEPT for every removed IC: it is the
+# SPECIFICATION, not the result. Without it the run cannot be reproduced or
+# re-attempted, and a benchmark you cannot re-attempt is not a benchmark.
+benchmark-data/ic/caravel_user_project/*
+!benchmark-data/ic/caravel_user_project/input/
+benchmark-data/ic/edge_llm_accel/*
+!benchmark-data/ic/edge_llm_accel/input/
+benchmark-data/ic/edge_llm_matmul_accel/*
+!benchmark-data/ic/edge_llm_matmul_accel/input/
+benchmark-data/ic/ibex/*
+!benchmark-data/ic/ibex/input/
+benchmark-data/ic/opentitan_aes/*
+!benchmark-data/ic/opentitan_aes/input/
+benchmark-data/ic/sha256/*
+!benchmark-data/ic/sha256/input/
+benchmark-data/ic/subservient/*
+!benchmark-data/ic/subservient/input/
+benchmark-data/ic/u_hawaii_adc/*
+!benchmark-data/ic/u_hawaii_adc/input/
+
+# Per-run scratch that a campaign leaves beside a published cell. A run is
+# evidence only once it converges and is published through the publisher.
+benchmark-data/ic/**/clean_run_*/
+benchmark-data/ic/**/rerun_*/
+benchmark-data/ic/**/run_*/

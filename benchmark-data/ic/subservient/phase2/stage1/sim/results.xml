@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuites>
-  <testsuite name="subservient_func" tests="1" failures="0">
-    <testcase classname="subservient" name="blinky_gpio_toggle">
-    </testcase>
-  </testsuite>
-</testsuites>

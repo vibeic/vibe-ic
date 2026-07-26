@@ -1,9 +1,0 @@
-# delta_sigma — DRC CLEAN (TWO independent real DRC tools on IHP SG13G2)
-# 1) Magic DRC: magic -dnull, tech ihp-sg13g2.tech -> DRC_ERROR_COUNT=0
-# 2) KLayout SG13G2 sign-off deck: ihp-sg13g2.drc on delta_sigma.gds (topcell delta_layout/ds_layout)
-#    -> all rule tables executed (non-vacuous), 0 <item> in klayout_drc.lyrdb
-# NOTE: layout.mag/delta_sigma.gds is a representative analog cell (diff pair + mirror +
-#  pass/comparator devices + substrate guard ring) authored from the A2 topology;
-#  geometry-real, DRC-clean, but not a full library-PCell device layout.
-#  MODELED per the SG13G2 LEVEL=1 disclosure.
-result=DRC_CLEAN magic_errors=0 klayout_items=0

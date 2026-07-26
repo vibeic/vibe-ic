@@ -1,9 +1,0 @@
-{
-  "_comment": "Auto-discovered extraction patterns (Wave 6 LL-38). Review and promote curated entries to extraction_patterns.json.",
-  "L7_verification_plan.txt": [
-    {
-      "literal": "0.103 ns",
-      "label": "auto-discovered (numeric_unit)"
-    }
-  ]
-}

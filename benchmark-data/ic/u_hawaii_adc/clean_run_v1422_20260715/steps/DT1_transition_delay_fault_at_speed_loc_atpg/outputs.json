@@ -1,8 +1,0 @@
-{
-  "id": "DT1",
-  "name": "Transition-delay-fault (at-speed LOC) ATPG",
-  "status": "pending",
-  "phase": "phase2",
-  "folder": "DT1_transition_delay_fault_at_speed_loc_atpg",
-  "outputs": []
-}

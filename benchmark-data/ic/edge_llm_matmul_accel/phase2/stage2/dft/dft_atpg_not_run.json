@@ -1,6 +1,0 @@
-{
-  "verdict": "SKIPPED-CONDITION",
-  "reason": "lightweight/--skip-phase3 flow: heavy Fault ATPG gated off (no silicon target for this run)",
-  "tool_attempted": true,
-  "gate_reason": "skip_phase3"
-}

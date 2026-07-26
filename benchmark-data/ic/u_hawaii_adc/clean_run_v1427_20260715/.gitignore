@@ -1,7 +1,0 @@
-# NDA hygiene — a staged commercial 180 nm NDA PDK is consumed by the analog
-# track via symlinks under input/pdk/ (SPICE model libs + sign-off SVRF decks)
-# to an out-of-repo self-contained stage. That content, and any ngspice sim
-# scratch that embeds native model-lib paths or quotes native model text, must
-# NEVER be committed. These subtrees are excluded from git.
-input/pdk/
-phase3/analog/*/sizing_loop/

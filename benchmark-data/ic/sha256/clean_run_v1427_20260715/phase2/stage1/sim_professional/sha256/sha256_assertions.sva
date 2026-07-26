@@ -1,8 +1,0 @@
-// Auto-derived assertions for sha256 (professional_tb_gen).
-// clock=clk edge=posedge reset=reset_n active_high=False
-module sha256_asserts (input clk, input reset_n);
-  // read_data must be known (no X) when not in reset
-  A_read_data_known: assert property (@(posedge clk) disable iff (!reset_n) !$isunknown(read_data));
-  // error must be known (no X) when not in reset
-  A_error_known: assert property (@(posedge clk) disable iff (!reset_n) !$isunknown(error));
-endmodule

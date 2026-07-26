@@ -1,8 +1,0 @@
-{
-  "id": "30",
-  "name": "Post-Layout SPICE Verification (critical-path correlation + analog)",
-  "status": "skipped",
-  "phase": "phase3",
-  "folder": "30_post_layout_spice_verification_critical_path_cor",
-  "outputs": []
-}

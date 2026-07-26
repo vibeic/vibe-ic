@@ -1,9 +1,0 @@
-# OpenROAD antenna check (gate-oxide protection) — IN-SESSION
-# post-repair result captured during PnR (global_route ->
-# repair_antennas -> detailed_route -> check_antennas). This is
-# the faithful measurement of the realized, antenna-repaired
-# routing; a separate re-read cannot credit the jumpers
-# (ANT-0008). Source: phase3/stage3/pnr/openroad.log.
-antenna check: 1 net violations, 1 pin violations
-antenna clean: NO
-routing complete: YES

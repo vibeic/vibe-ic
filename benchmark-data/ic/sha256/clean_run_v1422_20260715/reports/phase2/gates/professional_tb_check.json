@@ -1,7 +1,0 @@
-{
-  "gate": "professional_tb",
-  "verdict": "FAIL",
-  "reason": "cocotb functional mismatch \u2014 real RTL bug",
-  "dut_kind": "serial_stream",
-  "cocotb_xml_failures": 1
-}

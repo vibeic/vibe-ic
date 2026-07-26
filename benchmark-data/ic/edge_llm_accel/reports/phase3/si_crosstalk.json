@@ -1,9 +1,0 @@
-{
-  "tool": "openroad-wire-rc-screen",
-  "mode": "signal_integrity_crosstalk_screen",
-  "max_crosstalk_noise": 0.0,
-  "violations_count": 0,
-  "method": "decoupled-C wire-RC screen on routed DB; full coupling-cap crosstalk needs a SPEF with coupling caps \u2014 none was produced for this run (e.g. routing-less DEF). When a SPEF IS present the runner uses the real coupling-cap screen instead (v0.2.6).",
-  "verdict": "SCREEN_PASS",
-  "note": "No SPEF coupling caps available for this run; this is a structural screen, not a full SI sign-off. The OpenRCX SPEF path (v0.2.5) produces real coupling caps when the DEF is routed."
-}

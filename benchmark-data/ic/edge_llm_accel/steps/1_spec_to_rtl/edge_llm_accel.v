@@ -1,1 +1,0 @@
-../../phase2/stage1/rtl/edge_llm_accel.v

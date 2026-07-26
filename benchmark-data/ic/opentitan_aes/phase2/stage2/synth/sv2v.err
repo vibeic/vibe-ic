@@ -1,9 +1,0 @@
-sv2v: could not find package "prim_mubi_pkg"
-CallStack (from HasCallStack):
-  error, called at src/Convert/Package.hs:685:42 in sv2v-0.0.13-3nwEagFInXuJV4wMr8VxFH-sv2v:Convert.Package
-HasCallStack backtrace:
-  collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
-  toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:204:5 in ghc-internal:GHC.Internal.Exception
-  error, called at src/Convert/Package.hs:685:42 in sv2v-0.0.13-3nwEagFInXuJV4wMr8VxFH-sv2v:Convert.Package
-
-

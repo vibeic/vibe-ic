@@ -1,9 +1,0 @@
-{
-  "_comment": "Auto-discovered extraction patterns (Wave 6 LL-38). Review and promote curated entries to extraction_patterns.json.",
-  "L9_constraints_floorplan.txt": [
-    {
-      "literal": "5.2 ns",
-      "label": "auto-discovered (numeric_unit)"
-    }
-  ]
-}
