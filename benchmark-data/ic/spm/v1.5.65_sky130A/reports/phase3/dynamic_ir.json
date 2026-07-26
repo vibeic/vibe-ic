@@ -12,7 +12,7 @@
   "current_model": "vectorless",
   "capacitance_model": "quasi-static",
   "disclosure": "REAL transient (di/dt) IR-drop: OpenROAD PSM `analyze_power_grid -transient` performs the static DC operating point + a backward-Euler RC time-stepping solve under a vectorless per-clock triangular current model (quasi-static when no on-die capacitance is supplied). This is the BASE transient tier \u2014 the per-instance VECTORED DVD with a SAIF/VCD activity trace + package/board L\u00b7di/dt (RedHawk-SC / Voltus vectored) is the accuracy refinement tracked separately. The number is a genuine dynamic droop, not a static echo (a quasi-static solve yields ~2x the static drop).",
-  "static_from_transient_mv": 0.0002,
+  "static_from_transient_mv": 0.2,
   "dynamic_static_ratio": 2.0,
   "vdd_v": 1.8,
   "vdd": 1.8,
