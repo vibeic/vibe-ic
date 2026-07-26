@@ -48,12 +48,33 @@ on ORDER — fakeram45_2048x39's own `.v` declares `WORD_DEPTH = 2048` /
 `BITS = 39` (depth x width) while sky130 sram macro names are width x depth —
 so assigning them from the name would FABRICATE NUMBERS.
 
+THE SCAN THAT READS THE ARTEFACT HAD TO BE FIXED TOO
+----------------------------------------------------
+A lever that misses the artefact is not that lever. Two ways it did:
+
+  * it skipped EVERY symlink, file symlinks included — so staging the macro
+    the normal way (symlink a PDK / IP tree into place) produced an empty
+    staged set and `memories == []`, the original defect through a different
+    door. Measured on the REAL design with the REAL documents, and it made
+    this walker disagree with `phase3_one_shot_runner._discover_local_macros`
+    and `hardmacro_supply_intent`, which read the SAME directory and both
+    follow file symlinks. Symlinks are now followed; the broken link, the
+    loop and the out-of-project target are each decided explicitly and each
+    pinned below.
+  * its caps truncated in silence, and a plain breadth-first walk drained the
+    first directory completely — so `input/pdk_local/aaa_stdcells/` could
+    spend the entire budget and the promotion vanished with nothing said.
+    Order is now fair-share across directories, and what the caps DO cut is
+    reported on stderr, in `L9.staged_macro_scan_truncated`, and on the very
+    `memory_candidates[]` row that would have been promoted.
+
 chip-AGNOSTIC: open LEF / Liberty / GDS file-and-keyword conventions, read out
 of whatever the design under analysis staged. No chip-class string literal
 participates in the rule.
 """
 import inspect
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -430,3 +451,364 @@ def test_non_dict_and_empty_unchanged():
     assert U({"name": None}) is False
     assert U({"name": None}, frozenset({"fakeram45_2048x39"})) is False
     assert U({"name": "fakeram45_2048x39"}, frozenset()) is False
+
+
+# =====================================================================
+# STAGING BY SYMLINK
+#
+# The lever is the design's own staged artefact, so the scan that looks
+# for the artefact must see it however the design put it there. Symlinking
+# a PDK / IP tree into place is the normal staging idiom, and the scan used
+# to skip EVERY symlink — file symlinks included, which cannot create a
+# traversal loop and were never the thing the guard was for.
+#
+# Measured on the REAL edge_llm_accel design with the REAL documents, the
+# per-file-symlink staging shape produced `memories == []`: the defect this
+# whole branch exists to fix, back again, through a different door.
+#
+# Each shape below is pinned separately because each is a distinct decision:
+# follow / do not follow, and what "follow" means for a target outside the
+# project, for a dangling link, and for a link that closes a loop.
+# =====================================================================
+
+
+def _real_staged_macro_dir():
+    """The REAL `input/pdk_local/fakeram45/` of the benchmark design, or
+    None. These tests stage the actual LEF / Liberty / behavioural model, not
+    a synthetic stand-in."""
+    real = _real_docs()
+    if real is None:
+        return None
+    d = real[1] / "input" / "pdk_local" / "fakeram45"
+    return d if d.is_dir() else None
+
+
+def _stage_shape(tmp_path, shape):
+    """Build `<tmp>/proj` whose `input/pdk_local/` stages the REAL macro files
+    in `shape`, and return the project root.
+
+    Every symlink TARGET is placed at `<tmp>/extern/`, i.e. OUTSIDE the
+    project — that is what staging a shared PDK actually looks like, and it
+    makes "does the scan follow a link that leaves the project?" part of every
+    symlink shape below rather than a separate hypothetical."""
+    src = _real_staged_macro_dir()
+    assert src is not None
+    base = Path(tmp_path)
+    proj = base / "proj"
+    stage = proj / "input" / "pdk_local"
+    extern = base / "extern" / "fakeram45"
+    shutil.copytree(src, extern)
+    assert extern.resolve() not in proj.resolve().parents
+    assert not str(extern.resolve()).startswith(str(proj.resolve()))
+
+    if shape == "copied":
+        stage.mkdir(parents=True)
+        shutil.copytree(src, stage / "fakeram45")
+    elif shape == "file-symlink":
+        (stage / "fakeram45").mkdir(parents=True)
+        for f in sorted(extern.iterdir()):
+            os.symlink(f, stage / "fakeram45" / f.name)
+    elif shape == "dir-symlink":
+        stage.mkdir(parents=True)
+        os.symlink(extern, stage / "fakeram45")
+    elif shape == "nested-dir-symlink":
+        (stage / "vendor").mkdir(parents=True)
+        os.symlink(extern, stage / "vendor" / "fakeram45")
+    elif shape == "root-symlink":
+        stage.parent.mkdir(parents=True)
+        os.symlink(extern.parent, stage)
+    else:  # pragma: no cover - guard against a typo in a parametrisation
+        raise AssertionError("unknown staging shape %r" % shape)
+    return proj
+
+
+@pytest.mark.parametrize("shape", ["copied", "file-symlink", "dir-symlink",
+                                   "nested-dir-symlink", "root-symlink"])
+def test_symlinked_staging_reaches_memories_end_to_end(tmp_path, shape):
+    """THE LOAD-BEARING SYMLINK TEST. Real documents, real macro files, five
+    staging shapes — the promotion must not depend on which one the operator
+    chose. `file-symlink`, `dir-symlink` and `nested-dir-symlink` all returned
+    an EMPTY staged set and `memories == []` before this change."""
+    if _real_staged_macro_dir() is None:
+        pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
+    proj = _stage_shape(tmp_path, shape)
+    staged = P._staged_macro_cell_names(proj)
+    assert "fakeram45_2048x39" in staged, (
+        "staged as %s: the design's own LEF/Liberty/.v are reachable under "
+        "input/pdk_local/, so the cell name must be in the staged set; got %r"
+        % (shape, sorted(staged)))
+
+    _docs, _design, extracted = _real_docs()
+    l9 = {"top_module": "edge_llm_accel"}
+    _emit(l9, extracted, proj)
+    names = [e.get("name") for e in (l9.get("memories") or [])]
+    assert "fakeram45_2048x39" in names, (
+        "staged as %s: macro must reach L9.memories[], got memories=%r"
+        % (shape, l9.get("memories")))
+
+
+def test_symlinked_staging_agrees_with_the_other_readers_of_this_directory(
+        tmp_path):
+    """THREE PROGRAMS, ONE DIRECTORY, ONE ANSWER.
+
+    `phase3_one_shot_runner._discover_local_macros` and
+    `hardmacro_supply_intent` already read `<project>/input/pdk_local/` and
+    already follow file symlinks (`is_file()` and `rglob("*.lef")` + open both
+    do). This walker skipped them, so the three programs disagreed about what
+    the design had staged — measured, on this exact fixture: phase3 saw
+    libs=1 lefs=1 while this walker saw nothing.
+
+    Pinned for FILE symlinks, which is the shape all three agree on. The two
+    siblings disagree with EACH OTHER about directory symlinks (phase3's
+    top-level `iterdir()`/`is_dir()` follows one, `rglob` does not descend into
+    one), so there is no single sibling behaviour to match there; see the
+    module comment on `_staged_macro_scan` for how that tie is broken."""
+    if _real_staged_macro_dir() is None:
+        pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
+    p3 = pytest.importorskip("phase3_one_shot_runner")
+    proj = _stage_shape(tmp_path, "file-symlink")
+
+    libs, lefs, _gds, vs = p3._discover_local_macros(proj)
+    hsi_lefs = sorted((proj / "input" / "pdk_local").rglob("*.lef"))
+    staged = P._staged_macro_cell_names(proj)
+
+    assert libs and lefs and vs, (
+        "fixture is wrong: phase3 must see the symlinked macro files")
+    assert hsi_lefs, "fixture is wrong: rglob must see the symlinked LEF"
+    assert "fakeram45_2048x39" in staged, (
+        "phase3 sees libs=%d lefs=%d v=%d and rglob sees %d LEF(s) through "
+        "these file symlinks; this walker must not answer 'nothing staged' "
+        "about the same directory" % (len(libs), len(lefs), len(vs),
+                                      len(hsi_lefs)))
+
+
+def test_broken_symlink_is_not_evidence_of_staging(tmp_path):
+    """A DANGLING link names a cell that is not there. `is_dir()` and
+    `is_file()` are both False for it, so it is skipped — no exception, and no
+    promotion off a stem with nothing behind it. The real sibling file in the
+    same directory is still found, so this is a skip, not an abort."""
+    _stage(tmp_path, "input/pdk_local/vendor/real_ram_1024x32.lef",
+           "MACRO real_ram_1024x32\nEND real_ram_1024x32\n")
+    os.symlink(Path(tmp_path) / "nowhere" / "ghostram_512x8.lef",
+               Path(tmp_path) / "input" / "pdk_local" / "vendor"
+               / "ghostram_512x8.lef")
+    staged = P._staged_macro_cell_names(tmp_path)
+    assert "ghostram_512x8" not in staged, (
+        "a dangling symlink is not a staged artefact")
+    assert "real_ram_1024x32" in staged, (
+        "the dangling link must not abort the scan of its own directory")
+    assert U({"name": "ghostram_512x8"}, staged) is False
+
+
+def test_directory_symlink_loop_terminates_and_still_finds_the_macro(
+        tmp_path):
+    """FOLLOWING DIRECTORY SYMLINKS MEANS OWNING THE LOOP.
+
+    Three loop shapes at once: a link onto the scan root, a link onto the
+    directory that contains it, and a link onto its own parent. Every
+    directory is keyed on the `(st_dev, st_ino)` of its FOLLOWED target, so
+    each is walked at most once. The assertion is simply that this call
+    returns — and returns the right answer."""
+    _stage(tmp_path, "input/pdk_local/fakeram45/fakeram45_2048x39.lef",
+           "MACRO fakeram45_2048x39\nEND fakeram45_2048x39\n")
+    root = Path(tmp_path) / "input" / "pdk_local"
+    os.symlink(root, root / "fakeram45" / "back_to_root")
+    os.symlink(root / "fakeram45", root / "fakeram45" / "self")
+    os.symlink(root / "fakeram45" / "..", root / "up")
+    staged = P._staged_macro_cell_names(tmp_path)
+    assert "fakeram45_2048x39" in staged
+    assert U({"name": "fakeram45_2048x39"}, staged) is True
+
+
+# =====================================================================
+# TRUNCATION IS OBSERVABLE
+#
+# The scan's caps are fail-SAFE in direction — they can only lose a
+# promotion, never invent one — but a lost promotion nobody can see is the
+# same defect with a cap on it. Two things are pinned here: that a large
+# sibling directory can no longer starve the real macro out of the budget,
+# and that whatever the caps DO cut is reported where somebody reads it.
+# =====================================================================
+
+
+def _scan(project):
+    """`(names, truncation_events)`. Fails with a readable assertion rather
+    than an AttributeError when the scan cannot report truncation at all."""
+    fn = getattr(P, "_staged_macro_scan", None)
+    assert fn is not None, (
+        "the staged-macro scan has no truncation channel: its caps can drop a "
+        "real macro and nothing in the output says so")
+    return fn(project)
+
+
+def _big_sibling(tmp_path, n_entries):
+    """A sibling directory that sorts BEFORE the macro's directory and holds
+    more entries than the whole scan budget — a staged standard-cell library,
+    which is exactly what a design puts next to its macros."""
+    d = Path(tmp_path) / "input" / "pdk_local" / "aaa_stdcells"
+    d.mkdir(parents=True)
+    for i in range(n_entries):
+        (d / ("cell_%05d.lef" % i)).write_text("", encoding="utf-8")
+    _stage(tmp_path, "input/pdk_local/fakeram45/fakeram45_2048x39.lef",
+           "MACRO fakeram45_2048x39\nEND fakeram45_2048x39\n")
+
+
+def test_large_sibling_directory_cannot_starve_the_real_macro(tmp_path):
+    """WHICH DIRECTORY GETS SCANNED MUST NOT BE DECIDED BY ITS NAME.
+
+    A plain breadth-first walk drains the first directory completely, so
+    `aaa_stdcells/` with more entries than the budget spends all of it before
+    `fakeram45/` is ever listed, and the promotion disappears — silently, and
+    only for designs whose standard-cell directory happens to sort first.
+    Each directory now yields a bounded slice before the scan moves on."""
+    _big_sibling(tmp_path, P._MEMORY_MACRO_MAX_FILES + 100)
+    # Read through the plain name lookup, which exists both before and after
+    # this change, so a regression fails on the STARVATION and not on a
+    # missing helper.
+    names = P._staged_macro_cell_names(tmp_path)
+    assert "fakeram45_2048x39" in names, (
+        "a sibling directory that sorts first spent the whole scan budget and "
+        "pushed the real macro out; got %d name(s), none of them the macro"
+        % len(names))
+    assert U({"name": "fakeram45_2048x39"}, names) is True
+    reasons = {e.get("reason") for e in _scan(tmp_path)[1]}
+    assert "entry_budget_exhausted" in reasons, reasons
+    assert "directory_listing_capped" in reasons, reasons
+
+
+def test_exhausted_budget_is_reported_in_l9_and_on_the_affected_rows(
+        tmp_path, capsys):
+    """WHERE THE TRUNCATION IS READ — ON A FIXTURE THAT REALLY LOSES THE
+    MACRO.
+
+    Fair sharing rescues one big sibling, not an unbounded number of them.
+    Here the design stages `_MEMORY_MACRO_DIR_SLICE + 1` vendor directories of
+    `_MEMORY_MACRO_DIR_SLICE` entries each — together more than the whole
+    budget — plus its real macro under a directory that sorts LAST. The budget
+    is gone before that directory is ever queued, so the macro genuinely does
+    not reach `memories[]`.
+
+    That is the case that must not look like "this design has no memory
+    macro". Three readers say otherwise, all of them places somebody already
+    looks: a `[WARN]` on stderr while the run happens,
+    `L9.staged_macro_scan_truncated` in the document this emitter owns, and a
+    note on the very `memory_candidates[]` row that would have been
+    promoted."""
+    real = _real_docs()
+    if real is None:
+        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+    if not _ACCEPTS_PROJECT:
+        pytest.skip("emitter predates the staged-artefact clause")
+    stage = Path(tmp_path) / "input" / "pdk_local"
+    slice_n = P._MEMORY_MACRO_DIR_SLICE
+    for v in range(slice_n + 1):
+        d = stage / ("vendor_%03d" % v)
+        d.mkdir(parents=True)
+        for i in range(slice_n):
+            (d / ("cell_%05d.lef" % i)).write_text("", encoding="utf-8")
+    _stage(tmp_path, "input/pdk_local/zzz_macros/fakeram45_2048x39.lef",
+           "MACRO fakeram45_2048x39\nEND fakeram45_2048x39\n")
+    assert (slice_n + 1) * slice_n > P._MEMORY_MACRO_MAX_FILES, (
+        "fixture must exceed the scan budget")
+
+    l9 = {"top_module": "edge_llm_accel"}
+    _emit(l9, real[2], tmp_path)
+
+    promoted = {e.get("name") for e in (l9.get("memories") or [])}
+    assert "fakeram45_2048x39" not in promoted, (
+        "fixture is wrong: the budget must run out before zzz_macros/ is "
+        "reached, otherwise this test is not about a lost promotion")
+
+    report = l9.get("staged_macro_scan_truncated")
+    assert isinstance(report, dict), (
+        "the scan hit its cap and L9 says nothing about it: an empty "
+        "memories[] then reads as a fact about the design")
+    assert report.get("root") == "input/pdk_local"
+    reasons = {e.get("reason") for e in report.get("events") or []}
+    assert "entry_budget_exhausted" in reasons, reasons
+
+    rows = [e for e in (l9.get("memory_candidates") or [])
+            if e.get("name") == "fakeram45_2048x39"]
+    assert rows, "the row must still be preserved as a candidate"
+    assert rows[0].get("staged_macro_scan") == "truncated:input/pdk_local", (
+        "the row that failed ONLY the staged-set test must say the staged-set "
+        "scan did not finish")
+    assert report.get("candidate_rows_affected") >= 1
+
+    err = capsys.readouterr().err
+    assert "staged-macro scan under input/pdk_local was truncated" in err, err
+
+
+def test_oversized_lef_body_is_reported_and_the_stem_still_counts(tmp_path):
+    """The per-LEF byte cap does NOT drop the file, only the extra cells its
+    `MACRO` headers would have named. Both halves are pinned: the stem is
+    still staged evidence, and the unread body is reported."""
+    d = Path(tmp_path) / "input" / "pdk_local" / "vendor"
+    d.mkdir(parents=True)
+    big = d / "hugeram_1024x32.lef"
+    with open(big, "wb") as fh:                     # sparse: no 8 MB written
+        fh.truncate(P._MEMORY_MACRO_MAX_LEF_BYTES + 1)
+    assert big.stat().st_size > P._MEMORY_MACRO_MAX_LEF_BYTES
+    names, cut = _scan(tmp_path)
+    assert "hugeram_1024x32" in names, (
+        "the file stem is evidence on its own; only the MACRO headers are lost")
+    assert {e.get("reason") for e in cut} == {"lef_macro_headers_not_read"}
+    assert cut[0].get("bytes") > P._MEMORY_MACRO_MAX_LEF_BYTES
+
+
+def test_the_truncation_report_says_when_it_is_itself_truncated(tmp_path):
+    """The report is bounded too — a pathological tree must not turn the
+    anomaly channel INTO the anomaly. When the bound bites it says so, with
+    the real total, instead of quietly dropping the tail."""
+    d = Path(tmp_path) / "input" / "pdk_local" / "vendor"
+    d.mkdir(parents=True)
+    n = P._MEMORY_MACRO_MAX_TRUNCATION_EVENTS + 3
+    for i in range(n):
+        with open(d / ("bigram_%02d.lef" % i), "wb") as fh:
+            fh.truncate(P._MEMORY_MACRO_MAX_LEF_BYTES + 1)
+    _names, cut = _scan(tmp_path)
+    assert len(cut) == P._MEMORY_MACRO_MAX_TRUNCATION_EVENTS + 1, len(cut)
+    tail = cut[-1]
+    assert tail.get("reason") == "truncation_report_capped"
+    assert tail.get("events_total") == n, tail
+
+
+def test_an_unreadable_directory_is_reported_like_a_cap(tmp_path):
+    """Not a cap, same consequence: evidence the scan was supposed to read and
+    did not. It must not look like a complete scan that found nothing."""
+    if os.geteuid() == 0:
+        pytest.skip("running as root: permission bits do not deny reads")
+    d = Path(tmp_path) / "input" / "pdk_local" / "locked"
+    d.mkdir(parents=True)
+    (d / "secretram_8x8.lef").write_text("", encoding="utf-8")
+    _stage(tmp_path, "input/pdk_local/open/openram_16x16.lef", "")
+    os.chmod(d, 0o000)
+    try:
+        names, cut = _scan(tmp_path)
+    finally:
+        os.chmod(d, 0o755)
+    assert "openram_16x16" in names, "the readable sibling must still be read"
+    assert "secretram_8x8" not in names
+    assert {e.get("reason") for e in cut} == {"directory_unreadable"}, cut
+
+
+def test_a_complete_scan_reports_nothing_and_changes_no_l9_key(tmp_path):
+    """The report exists only when there is something to report. Every design
+    in benchmark-data scans completely, so no L9 in the corpus grows a key,
+    no typed-field count moves, and the truncation channel cannot become
+    noise that readers learn to ignore."""
+    if _real_staged_macro_dir() is None:
+        pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
+    _docs, design, extracted = _real_docs()
+    assert _scan(design)[1] == [], (
+        "the real design scans completely; nothing to report")
+    l9 = {"top_module": "edge_llm_accel"}
+    _emit(l9, extracted, design)
+    assert "staged_macro_scan_truncated" not in l9
+    for e in (l9.get("memory_candidates") or []) + (l9.get("memories") or []):
+        assert "staged_macro_scan" not in e
+
+    proj = _stage_shape(tmp_path, "copied")
+    assert _scan(proj)[1] == []
+    assert _scan(None) == (frozenset(), [])
+    assert _scan(Path(tmp_path) / "nope") == (frozenset(), [])
