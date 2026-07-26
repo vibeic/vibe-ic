@@ -41699,6 +41699,54 @@ _MEMORY_NAME_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Generator-emitted memory-macro identifiers. The #612 word-boundary token
+# test above is deliberately strict and MUST stay strict: it is what keeps
+# PROGRAM / DIAGRAM / HISTOGRAM / diagram_ctrl out of `memories[]`, because
+# their `ram` is a mid-word accident.
+#
+# But memory COMPILERS emit macro cell names in which the memory morpheme is
+# legitimately interior, so the strict token test cannot see it:
+#     fakeram45_2048x39                     -> `ram` preceded by `e`
+#     sky130_sram_1kbyte_1rw1r_32x256_8     -> `sram` preceded by `_`, ok,
+#                                              but the 45-style siblings are not
+#     fakeram45_1024x32                     -> `ram` preceded by `e`
+# Such an identifier is NOT distinguishable from an English word by the
+# morpheme alone, and it is not distinguishable from a floorplan/array
+# dimension by the `<digits>x<digits>` organisation token alone. It IS
+# distinguishable by the CONJUNCTION: a memory morpheme ANYWHERE in the name
+# TOGETHER WITH an explicit depth/width organisation token in the same name.
+# Both halves are required — `DIAGRAM` has the morpheme and no organisation,
+# `FP_PDN_VOFFSET 4x8` would have organisation and no morpheme.
+#
+# Chip-AGNOSTIC: open memory-compiler naming convention (OpenRAM, fakeram,
+# sky130 sram family); no chip-class string literal participates.
+_MEMORY_NAME_TOKEN_ANYWHERE_RE = re.compile(
+    r"(ram|rom|sram|dram|cache|regfile|fifo|mem)",
+    re.IGNORECASE,
+)
+_MEMORY_MACRO_ORGANISATION_RE = re.compile(r"\d+\s*[xX]\s*\d+")
+
+
+def _is_generator_style_memory_macro_name(name) -> bool:
+    """True iff `name` looks like a memory-compiler-emitted macro cell name:
+    a memory morpheme ANYWHERE in the identifier AND an explicit
+    <digits>x<digits> organisation token in the SAME identifier.
+
+    Deliberately says NOTHING about which number is depth and which is width.
+    Generator conventions disagree on the order (fakeram45_2048x39's own
+    behavioural model declares WORD_DEPTH=2048 / BITS=39, i.e. depth x width,
+    while the sky130 sram family names are width x depth), so inferring
+    depth/width from the name would fabricate numbers. This predicate only
+    decides PROMOTION; depth/width stay None and the entry keeps its
+    `low_confidence` marker."""
+    if not name:
+        return False
+    name = str(name)
+    return bool(
+        _MEMORY_NAME_TOKEN_ANYWHERE_RE.search(name)
+        and _MEMORY_MACRO_ORGANISATION_RE.search(name)
+    )
+
 
 def _v1_6_441_is_useful_memory_entry(entry) -> bool:
     """Return True iff the memory entry carries genuine macro evidence.
@@ -41713,13 +41761,23 @@ def _v1_6_441_is_useful_memory_entry(entry) -> bool:
     I/O pin, an UPPER_SNAKE EDA config key (FP_CORE_UTIL / PL_TARGET_DENSITY /
     WITH_CSR / *_PC), or a PDK/FPGA platform token (GF180MCU / Cyclone10LP /
     sky130_fd_sc_hd). Those go to memory_candidates[], never memories[].
+
+    A SECOND, NARROWER name-only clause admits memory-compiler-emitted macro
+    cell names whose morpheme is interior and therefore invisible to the #612
+    word-boundary test (`fakeram45_2048x39`). It requires the morpheme AND an
+    explicit <digits>x<digits> organisation token together — see
+    `_is_generator_style_memory_macro_name`. Measured on benchmark-data: this
+    clause moves exactly ONE distinct name corpus-wide and re-promotes zero
+    #612 negatives.
     Chip-AGNOSTIC: pure structural / name-shape gate."""
     if not isinstance(entry, dict):
         return False
     if any(entry.get(k) for k in ("depth", "width", "port_count")):
         return True
     name = entry.get("name")
-    return bool(name and _MEMORY_NAME_TOKEN_RE.search(str(name)))
+    if name and _MEMORY_NAME_TOKEN_RE.search(str(name)):
+        return True
+    return _is_generator_style_memory_macro_name(name)
 
 
 def _organic_405_mark_rejected(entry: dict) -> dict:
