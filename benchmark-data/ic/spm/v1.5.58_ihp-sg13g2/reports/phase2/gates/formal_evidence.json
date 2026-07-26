@@ -2,9 +2,17 @@
   "program": "formal_proof_evidence_check",
   "version": "1.0.0",
   "findings": [
-    "PROOF_CHAIN_OK: all_proved substantiated by an elaboratable .sby + SymbiYosys PASS transcript"
+    "PROOF_CHAIN_UNSUBSTANTIATED: cited evidence 'phase2/stage1/formal/formal_spm_formal.sby' is absent from this deliverable"
   ],
   "sby": "phase2/stage1/formal/formal_spm_formal.sby",
   "sby_log": "phase2/stage1/formal/formal_spm_formal.sby.log",
-  "verdict": "PASS"
+  "verdict": "UNSUBSTANTIATED",
+  "superseded": {
+    "verdict": "PASS",
+    "findings": [
+      "PROOF_CHAIN_OK: all_proved substantiated by an elaboratable .sby + SymbiYosys PASS transcript"
+    ]
+  },
+  "evidence_present": false,
+  "correction": "vibe-ic#381: this report asserted verdict PASS with PROOF_CHAIN_OK while the .sby and transcript it cites are NOT in this deliverable (0 files at the cited path). The claim cannot be substantiated from what is shipped, so the verdict is corrected rather than left asserting it. No evidence was invented and the original record is preserved in `superseded`. The proof may well have run \u2014 but a reader of this deliverable cannot check it."
 }
