@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 957
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 957)
+- **Total programs (excluding helpers / shims):** 958
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 958)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 948 |
+| `any` | 949 |
 
 ## Alphabetical listing
 
@@ -515,6 +515,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
 | `leaf_typo_alias_emit` | any | v0.3.18 | v0.3.18 (ORGANIC #517). |
 | `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
+| `lec_gate_netlist_select` | any | — | Truthful diagnosis of a structural LEC abort. |
 | `lec_post_layout_check` | any | — | POST-LAYOUT logic-equivalence gate. |
 | `lec_run` | any | — | Step 13 LEC PRODUCER (RTL ≡ synthesized gate netlist). |
 | `lesson_consumption_check` | any | — | staged != CONSUMED, enforced by a program. |
@@ -1029,7 +1030,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (948 programs)
+### `any` (949 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1515,6 +1516,7 @@ _(no programs in this group)_
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
 - `leaf_typo_alias_emit` — v0.3.18 (ORGANIC #517).  _[v0.3.18]_
 - `lec_equivalence_check` — Step 13 deterministic LEC substance gate.
+- `lec_gate_netlist_select` — Truthful diagnosis of a structural LEC abort.
 - `lec_post_layout_check` — POST-LAYOUT logic-equivalence gate.
 - `lec_run` — Step 13 LEC PRODUCER (RTL ≡ synthesized gate netlist).
 - `lesson_consumption_check` — staged != CONSUMED, enforced by a program.

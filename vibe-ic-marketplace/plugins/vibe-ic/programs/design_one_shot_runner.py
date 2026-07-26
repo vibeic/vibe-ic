@@ -100,6 +100,7 @@ import rtl_provenance as _rtl_prov  # authored-RTL guard for phase2/stage1/rtl/
 # Phase-2 yosys-synth + reference-TB steps reuse the EXACT same rule
 # rather than carrying a divergent copy.
 import synth_frontend as _sf
+import lec_gate_netlist_select as _lec_gns  # ATPG-cut predicate (diagnosis only)
 
 # Path inside the iic-osic-tools container where the EDA tools live (yosys
 # + the slang plugin, sv2v, verilator). Mirrors phase3_one_shot_runner.
@@ -9382,9 +9383,24 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
     # can never drift apart again. See the timeout note at the call.
     _LEC_PRODUCER_TIMEOUT_S = 3 * lec_producer_yosys_timeout_s() + 300
     t0 = time.time()
-    gate_netlist = ("phase2/stage2/synth/post_dft_netlist.v"
-                    if post_dft.is_file()
-                    else "phase2/stage2/synth/netlist.v")
+    # --- Gate-netlist selection ---------------------------------------------
+    # The SELECTION IS UNCHANGED: post_dft_netlist.v when it exists on disk,
+    # else netlist.v. gate_netlist_for_lec() is byte-identical to that rule for
+    # every input and is exercised against it directly in
+    # programs/tests/test_lec_gate_netlist_select.py.
+    #
+    # What it adds is DIAGNOSIS, not substitution. When the OSS Fault ATPG path
+    # ran, post_dft_netlist.v is an opt_clean of the CUT netlist — 0 flip-flops,
+    # every flop replaced by a `<inst>.d` pseudo-port pair — and yosys
+    # equiv_make aborts on the port match, comparing nothing. That must stay a
+    # visible hard FAIL on the real artifact. Quietly comparing <top>_synth.v
+    # instead would make the step canonically named
+    # `13_equivalence_check_rtl_post_dft_netlist` report PASS while the post-DFT
+    # netlist was never read, and would leave the upstream byte-copy in
+    # fault_atpg_run.py unflagged. So the note goes into the step record and the
+    # netlist handed to lec_run does not change.
+    gate_netlist, _lec_netlist_note, _lec_gate_is_cut = (
+        _lec_gns.gate_netlist_for_lec(project, top_name))
     lec_run = PROGRAMS_DIR / "lec_run.py"
     if lec_run.is_file():
         cmd = [sys.executable, str(lec_run), str(project),
@@ -9416,7 +9432,11 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                 results.append(StepResult("lec_equivalence", _status,
                                time.time() - t0,
                                f"yosys equiv: verdict={_verdict or 'UNKNOWN'} "
-                               f"(RTL vs {Path(gate_netlist).name}, rc={r.returncode})",
+                               f"(RTL vs {Path(gate_netlist).name}, rc={r.returncode})"
+                               # Only annotate when the artifact is unusable —
+                               # a healthy run keeps its original message.
+                               + (f"; gate-netlist WARNING: {_lec_netlist_note}"
+                                  if _lec_gate_is_cut else ""),
                                output_files=["reports/lec.json", "reports/lec.rpt"]))
             else:
                 tail = (r.stderr or r.stdout or "")[-300:]
