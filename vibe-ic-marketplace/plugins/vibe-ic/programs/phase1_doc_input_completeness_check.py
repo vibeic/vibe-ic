@@ -1145,6 +1145,23 @@ def main(argv=None) -> int:
         "reference_docs": reference_docs_seen,
         "ai_captured_tokens_count": len(ai_tokens_global),
         "alias_captured_tokens_count": len(alias_tokens_global),
+        # ORGANIC #312 — `ai_captured_tokens_count: 0` was indistinguishable
+        # between "the AI/Expert rail RAN and found nothing" and "the rail
+        # NEVER RAN". Measured: `ai_patches` has FOUR readers in programs/ and
+        # ZERO producers — no program anywhere writes the sidecar — and the
+        # expert-track evidence check reports NOT MEASURED on all 8 benchmark
+        # ICs. So today the count is always the second case, and a reader with
+        # only the number in front of them cannot tell.
+        #
+        # This does not build the missing rail; it stops the absence being
+        # reported as a measurement. Same rule the L-doc field-producer gate
+        # encodes: an empty value and a clean value must not look alike.
+        "ai_track_ran": _resolve_sidecar_path(project) is not None,
+        "ai_captured_tokens_count_meaning": (
+            "measured" if _resolve_sidecar_path(project) is not None
+            else "NOT MEASURED — no ai_patches sidecar exists for this run, "
+                 "so 0 means the AI/Expert rail did not run, not that it ran "
+                 "and found nothing (vibe-ic#312)"),
         "per_layer": per_layer,
         "per_doc": per_doc,
     }
