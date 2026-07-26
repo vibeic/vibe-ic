@@ -372,6 +372,66 @@ def _runner_step_record(project: Path, step: str):
     return "", {}
 
 
+def _verdict_from_json(j: Optional[Any]) -> Optional[str]:
+    """The stated verdict inside a PV JSON artefact, or None when the artefact
+    is not a dict / states none. Producers use different field names, so they
+    are tried in priority order — the explicit `verdict` / `status` / `result`
+    fields FIRST, so every artefact that already resolved keeps resolving to
+    exactly the same string.
+
+    ECHO ONLY. This reads what a producer RECORDED; it never re-derives a
+    verdict by parsing raw report text. That is the ORGANIC #399 constraint
+    (see `_gather_gds`) and it applies to every key of that dict."""
+    if not isinstance(j, dict):
+        return None
+    v = j.get("verdict") or j.get("status") or j.get("result")
+    if v:
+        return str(v)
+    # eda_report_audit's schema — the shape every `lvs.json` on disk actually
+    # has: the result lives under summary.terminal_verdict + the `passed` bool.
+    summary = j.get("summary")
+    if isinstance(summary, dict):
+        tv = summary.get("terminal_verdict")
+        if tv:
+            return str(tv)
+    passed = j.get("passed")
+    if passed is True:
+        return "PASS"
+    if passed is False:
+        return "FAIL"
+    return None
+
+
+def _resolve_lvs_verdict(project: Path) -> str:
+    """The LVS sign-off verdict for `_gather_gds`.
+
+    ORGANIC-20260726 — the generic `j.get("verdict") or j.get("status") or "?"`
+    lookup could never resolve LVS: `lvs.json` is written by `eda_report_audit`,
+    whose schema carries the result under `summary.terminal_verdict` / `passed`
+    and has neither of those keys. Measured on the committed corpus: EVERY
+    `lvs.json` on disk has the key set ('findings', 'passed', 'program',
+    'summary'), so the final report printed `lvs=?` on runs whose LVS verdict
+    was sitting in two files — e.g. a run with summary.terminal_verdict
+    "MISMATCH", passed False, and a sibling `lvs_verdict.json` status "FAIL".
+
+    Priority: `lvs.json` (the auditor's own record) → `lvs_verdict.json` (the
+    runner's sidecar) → "?" when a report IS on disk but states no recognisable
+    verdict (a present file must never be reported as absent) → "(report
+    missing)" only when genuinely absent.
+
+    chip-AGNOSTIC: producer field names only."""
+    saw_report = False
+    for name in ("lvs.json", "lvs_verdict.json"):
+        cand = _find_report(project, name)
+        if cand is None:
+            continue
+        saw_report = True
+        v = _verdict_from_json(_safe_json(cand))
+        if v:
+            return v
+    return "?" if saw_report else "(report missing)"
+
+
 def _find_report(project: Path, name: str) -> Optional[Path]:
     """First try the auto-routed canonical location; if not found, scan
     the legacy/alternate subdirs in priority order."""
@@ -1106,13 +1166,21 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
         return None
     f = gds_files[0]
     pv = {}
-    for kind in ("drc_signoff", "lvs", "erc"):
+    for kind in ("drc_signoff", "erc"):
         cand = _find_report(project, f"{kind}.json")
         j = _safe_json(cand) if cand else None
         if isinstance(j, dict):
             pv[kind] = j.get("verdict") or j.get("status") or "?"
         else:
             pv[kind] = "(report missing)"
+    # ORGANIC-20260726 — LVS needs its producer's field names. `lvs.json` is
+    # written by `eda_report_audit`, whose schema states the result under
+    # `summary.terminal_verdict` / `passed` and carries neither `verdict` nor
+    # `status`, so the loop above resolved "?" for EVERY run that had an LVS
+    # verdict on disk. Still an ECHO of what the producer recorded — the #399
+    # rule below (never re-derive from raw report text) is unchanged and
+    # applies to `drc_signoff` exactly as before.
+    pv["lvs"] = _resolve_lvs_verdict(project)
     # ORGANIC #399 — nothing in this tree writes `drc_signoff.json`; the
     # producer stages a `.rpt`. So the sign-off summary a reader treats as
     # the deliverable said "(report missing)" for DRC on 16 of the 19

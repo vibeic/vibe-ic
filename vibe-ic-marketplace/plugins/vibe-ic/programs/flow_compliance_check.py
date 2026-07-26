@@ -195,10 +195,35 @@ def _step_failure_is_informational_only(result: "StepResult") -> bool:
     the verdict pass to exclude informational-only step failures from
     `failing`. Reasons emitted by `_evaluate_gate` for failing
     program_exit_zero sub-gates start with `program failed: <cmd>`;
-    we substring-scan for any informational gate name."""
+    we substring-scan for any informational gate name.
+
+    THE P0 UMBRELLA USES A DIFFERENT REASON SHAPE. `_run_structural_rtl_gates`
+    emits `FAIL: <gate> — <msg>` (and `  - <gate> — <msg>` when >=2 gates fail);
+    the string `program failed:` never appears in that composition path. So the
+    `startswith("program failed:")` scan below skipped EVERY P0 reason, left
+    `saw_informational` False, and returned False for every P0 result — which
+    silently disabled the exclusion for the three INFORMATIONAL_GATES that can
+    only ever run INSIDE the umbrella (`l22_verification_plan_measurable_check`,
+    `l25_reliability_envelope_actionable_check`,
+    `periodic_timer_vs_rx_activity_check`). A P0 umbrella failing on nothing but
+    those still reached `failing` -> `ok=False` -> `overall="FAIL"`, the exact
+    outcome INFORMATIONAL_GATES exists to prevent, and the opposite of what the
+    caller at the `informational_only_failing` deferral site already assumes
+    (it carries an `r.id == "P0"` branch that was unreachable).
+
+    The P0 half delegates to `_parse_p0_failing_subgates` — the sibling parser
+    that already knows both umbrella shapes — so the two cannot drift apart
+    again. Non-P0 steps take the original path unchanged."""
     if result.status != "FAIL" or not result.reasons:
         return False
     saw_informational = False
+    if getattr(result, "id", None) == "P0":
+        p0_failing = _parse_p0_failing_subgates(result)
+        if not p0_failing:
+            # No parseable sub-gate FAIL (only SKIP/WAIVED lines) — say
+            # nothing rather than assert informational-only.
+            return False
+        return all(g in INFORMATIONAL_GATES for g in p0_failing)
     for reason in result.reasons:
         # Skip output: lines and other diagnostic context lines —
         # only "program failed: ..." carries the gate-name signal.
@@ -1371,6 +1396,20 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "spec_required_artifact_check",
     "testbench_exists_check",
     "tester_oracle_health_check",
+    # The deliverable may not contradict the orchestrator it summarises.
+    # MEASURED escape (2026-07-26): RESULT.md written 01:39 with headline
+    # `PASS_WITH_WAIVERS`; a 09:44 invocation rewrote
+    # reports/orchestrator/vibe_ic_one_shot.json to `verdict: FAIL`
+    # (halted_at=phase3) and nothing re-read it, so the run SHIPPED a PASS over
+    # its own FAIL with every gate green. Compares the deliverable's own
+    # headline (agent-produced markdown) against the runner's JSON — two
+    # independently-produced values — and fails ONLY the escape direction
+    # (deliverable PASS over orchestrator FAIL). rc 2 = genuine SKIP when no
+    # headline is stated or no orchestrator report exists, so it stays silent
+    # on every project the defect cannot apply to: measured over 101 corpus
+    # deliverables (benchmark-data/ + benchmark_external/ + campaign_*), it
+    # fired ZERO times and compared 8.
+    "deliverable_verdict_consistency_check",
     # batch-8 / layergate-8 — SEMANTIC gates for the three consumer-less
     # completeness layers (L24 / L25 / L26). None of the three has a consumer
     # today, so none demands CONTENT. Each instead forbids the one shape that
@@ -2627,6 +2666,85 @@ def _parse_p0_failing_subgates(p0_result: Any) -> List[str]:
             seen.add(s)
             out.append(s)
     return out
+
+
+def _normalise_p0_reason_line(msg: str) -> str:
+    """Collapse the P0 umbrella's TWO reason shapes into one.
+
+    The P0 umbrella emits its failing sub-gates in one of two shapes,
+    chosen purely by HOW MANY gates failed (see the structural_result
+    composition site):
+
+      * exactly 1 failure  -> "FAIL: <gate_name> — <msg>"        (Form 1)
+      * 2 or more failures -> "Failed gates (N):" followed by
+                              "  - <gate_name> — <msg>" lines     (Form 2)
+
+    Returns the line rewritten into Form 1, or "" for lines that carry
+    no gate (the ``Failed gates (N):`` header itself).  Any other line
+    is returned unchanged so existing matchers keep their behaviour.
+
+    Why this exists: the audit-JSON builder matched Form 1 only, so
+    ``failed_gates`` came out EMPTY exactly when two or more gates
+    failed — i.e. the machine-readable list went blank precisely when
+    it had the most to report, while a single-failure run reported
+    correctly.  Measured on plugin 1.5.85 AND 1.6.4 (identical code):
+    2 failing gates -> ``failed_gates: []``; the same tree with 1
+    failing gate -> ``failed_gates: ['provenance_output_hash_
+    completeness_check']``.  The variable is the failure COUNT, not
+    the plugin version.
+    """
+    s = (msg or "").strip()
+    if not s:
+        return ""
+    if s.startswith("Failed gates"):
+        return ""
+    if s.startswith("- "):
+        return "FAIL: " + s[2:].lstrip()
+    return s
+
+
+def _per_gate_from_p0_reasons(reasons: Any) -> List[Dict[str, Any]]:
+    """Build the audit JSON's per-gate records from a P0 reasons list.
+
+    Extracted from ``main()`` so the parse is unit-testable against
+    BOTH reason shapes; ``_normalise_p0_reason_line`` guarantees the
+    matchers below only ever see Form 1.
+    """
+    per_gate: List[Dict[str, Any]] = []
+    for reason in (reasons or []):
+        msg = _normalise_p0_reason_line(str(reason))
+        if not msg:
+            continue
+        fail_match = re.match(
+            r"^FAIL:\s*([\w\.]+)\s*[—\-:]?\s*(.*)$", msg)
+        pass_match = re.match(
+            r"^PASS:\s*([\w\.]+)\s*[—\-:]?\s*(.*)$", msg)
+        if fail_match:
+            per_gate.append({
+                "name": fail_match.group(1),
+                "verdict": "FAIL",
+                "message": fail_match.group(2)[:240],
+            })
+        elif pass_match:
+            per_gate.append({
+                "name": pass_match.group(1),
+                "verdict": "PASS",
+                "message": pass_match.group(2)[:240],
+            })
+        else:
+            inline = re.match(
+                r"^([\w\.]+_check)\s*[—\-:]?\s*(.*)$", msg)
+            if inline:
+                verdict_tok = "FAIL" if (
+                    "FAIL" in inline.group(2).upper()
+                    or "ERROR" in inline.group(2).upper()
+                ) else "PASS"
+                per_gate.append({
+                    "name": inline.group(1),
+                    "verdict": verdict_tok,
+                    "message": inline.group(2)[:240],
+                })
+    return per_gate
 
 
 def _count_input_docs(project: Path) -> int:
@@ -6806,42 +6924,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Extract per-gate verdicts from the P0 (structural-RTL)
         # umbrella result so the JSON is self-contained.
         # Wave 91 / v1.6.15 — id key was renamed -1 → "P0".
+        # Handles BOTH P0 reason shapes (Form 1 "FAIL: gate — msg" and
+        # Form 2 "  - gate — msg" under a "Failed gates (N):" header).
+        # The shape is chosen by the failure COUNT, so parsing Form 1
+        # only emptied this list exactly when >=2 gates failed.
         per_gate: List[Dict[str, Any]] = []
+        p0_audit_result = next(
+            (r for r in results if r.id == "P0"), None)
         for r in results:
             if r.id != "P0":
                 continue
-            for reason in r.reasons:
-                msg = reason.strip()
-                # Matches "FAIL: gate_name — ..." or "  - gate_name ..."
-                fail_match = re.match(
-                    r"^FAIL:\s*([\w\.]+)\s*[—\-:]?\s*(.*)$", msg)
-                pass_match = re.match(
-                    r"^PASS:\s*([\w\.]+)\s*[—\-:]?\s*(.*)$", msg)
-                if fail_match:
-                    per_gate.append({
-                        "name": fail_match.group(1),
-                        "verdict": "FAIL",
-                        "message": fail_match.group(2)[:240],
-                    })
-                elif pass_match:
-                    per_gate.append({
-                        "name": pass_match.group(1),
-                        "verdict": "PASS",
-                        "message": pass_match.group(2)[:240],
-                    })
-                else:
-                    inline = re.match(
-                        r"^([\w\.]+_check)\s*[—\-:]?\s*(.*)$", msg)
-                    if inline:
-                        verdict_tok = "FAIL" if (
-                            "FAIL" in inline.group(2).upper()
-                            or "ERROR" in inline.group(2).upper()
-                        ) else "PASS"
-                        per_gate.append({
-                            "name": inline.group(1),
-                            "verdict": verdict_tok,
-                            "message": inline.group(2)[:240],
-                        })
+            per_gate.extend(_per_gate_from_p0_reasons(r.reasons))
         # Build a canonical failed-gate list combining the structural-
         # RTL gates above and the explicit `structural_fail_lines`
         # collected earlier (covers cases where reasons are formatted
@@ -6852,6 +6945,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             if g["verdict"] == "FAIL" and g["name"] not in seen:
                 failed_gate_names.append(g["name"])
                 seen.add(g["name"])
+        # Backstop: reconcile against the canonical sub-gate parser the
+        # promotion logic already trusts. It handled both reason shapes
+        # all along; this JSON writer just never called it. Reusing it
+        # here makes the two paths incapable of disagreeing again.
+        if p0_audit_result is not None and p0_audit_result.status == "FAIL":
+            for name in _parse_p0_failing_subgates(p0_audit_result):
+                if name not in seen:
+                    failed_gate_names.append(name)
+                    seen.add(name)
         for line in structural_fail_lines:
             m = re.match(r"^([\w\.]+_check)\b", line.lstrip("-•* "))
             if m and m.group(1) not in seen:

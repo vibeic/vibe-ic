@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 977
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 977)
+- **Total programs (excluding helpers / shims):** 980
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 980)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 968 |
+| `any` | 971 |
 
 ## Alphabetical listing
 
@@ -189,6 +189,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `compose_synth` | any | — | a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine. |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
+| `container_image_provenance` | any | — | record, and on request enforce, which IMAGE the run's `--container` actually executes. |
 | `conv_encoder_synth` | any | — | DETERMINISTIC solver for the CVDP convolutional |
 | `convergence_doctrine_present_check` | any | — | ORGANIC #716 |
 | `conway_2d_synth` | any | — | DETERMINISTIC 2-D cellular-automaton (Conway's Game of |
@@ -241,6 +242,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `def_stage_progression_check` | any | v0.47 | Catch fabricated PnR stage DEF files. |
 | `defect_artifact_fixture_check` | any | v0.2.98 | v0.2.98 |
 | `defect_artifact_snapshot` | any | v0.2.98 | v0.2.98 |
+| `deliverable_verdict_consistency_check` | any | — | a deliverable may not contradict |
 | `derived_clock_sdc_required_check` | any | — | Verify any register-divided clock |
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and |
 | `design_one_shot_runner` | any | Wave 45 | the DESIGN one-shot runner (Phase 1 -> Phase 2: |
@@ -479,6 +481,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l20_dft_scan_topology_actionable_check` | any | — | SEMANTIC gate for |
 | `l21_macro_supply_rail_declared_check` | any | — | L21 SEMANTIC completeness gate. |
 | `l21_to_upf_emit` | any | v0.1.51 | render L21 power intent into an IEEE-1801 UPF |
+| `l22_coverage_goal_emit` | any | — | lift measurable coverage targets out of the |
 | `l22_verification_plan_measurable_check` | any | — | SEMANTIC gate for |
 | `l23_security_requirements_typed_check` | any | — | SEMANTIC gate for |
 | `l24_signoff_evidence_backed_check` | any | — | batch-8 / layergate-8 (L24_SIGNOFF) |
@@ -1049,7 +1052,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (968 programs)
+### `any` (971 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1212,6 +1215,7 @@ _(no programs in this group)_
 - `compose_synth` — a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine.
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
+- `container_image_provenance` — record, and on request enforce, which IMAGE the run's `--container` actually executes.
 - `conv_encoder_synth` — DETERMINISTIC solver for the CVDP convolutional
 - `convergence_doctrine_present_check` — ORGANIC #716
 - `conway_2d_synth` — DETERMINISTIC 2-D cellular-automaton (Conway's Game of
@@ -1263,6 +1267,7 @@ _(no programs in this group)_
 - `def_stage_progression_check` — Catch fabricated PnR stage DEF files.  _[v0.47]_
 - `defect_artifact_fixture_check` — v0.2.98  _[v0.2.98]_
 - `defect_artifact_snapshot` — v0.2.98  _[v0.2.98]_
+- `deliverable_verdict_consistency_check` — a deliverable may not contradict
 - `derived_clock_sdc_required_check` — Verify any register-divided clock
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and
 - `design_one_shot_runner` — the DESIGN one-shot runner (Phase 1 -> Phase 2:  _[Wave 45]_
@@ -1500,6 +1505,7 @@ _(no programs in this group)_
 - `l20_dft_scan_topology_actionable_check` — SEMANTIC gate for
 - `l21_macro_supply_rail_declared_check` — L21 SEMANTIC completeness gate.
 - `l21_to_upf_emit` — render L21 power intent into an IEEE-1801 UPF  _[v0.1.51]_
+- `l22_coverage_goal_emit` — lift measurable coverage targets out of the
 - `l22_verification_plan_measurable_check` — SEMANTIC gate for
 - `l23_security_requirements_typed_check` — SEMANTIC gate for
 - `l24_signoff_evidence_backed_check` — batch-8 / layergate-8 (L24_SIGNOFF)

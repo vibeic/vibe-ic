@@ -26,3 +26,14 @@ benchmark-data/ic/caravel_user_project/clean_run_v1432int_commercial/SOURCE_MANI
 # a measurement-honesty violation. Left as the historical 0.2.24 record.
 vibe-ic-marketplace/plugins/vibe-ic/programs/pdk_registry.json
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_gf180_registry_assets_resolve.py
+
+# Unit-test FIXTURES for the container-image provenance checker. The ghcr tag
+# spelled there (0.2.26) is the OLDER image a real container was found to be
+# running while 0.2.30 was the intended pin — the measured incident this
+# checker exists for. It is not an install pointer: nothing pulls
+# (NB: this comment deliberately does NOT spell the full ghcr ref — the
+#  drift-net scans this file too, and a ref written here is itself a pointer.)
+# it, and it must DIFFER from VERSION or the MISMATCH test stops testing
+# anything. Bumping it to the current VERSION would delete the defect the test
+# reproduces, which is the opposite of what this drift-net is for.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_container_image_provenance.py

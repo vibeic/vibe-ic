@@ -5028,6 +5028,14 @@ def _stage_normalized_techlef(project: Path, container: str,
     return out
 
 
+# ORGANIC (spm x sky130A, 1.6.4) — a yosys GENERIC primitive instantiation,
+# i.e. a netlist that was never technology-mapped. Anchored to an instance
+# line (`  $_NAND_ _100_ (`) so a stray `$_` inside a comment or a net name
+# cannot trip it. chip-AGNOSTIC: yosys internal-cell vocabulary, not a PDK.
+_GENERIC_PRIM_MASTER_RE = re.compile(
+    r"^\s*\\?\$_[A-Z][A-Z0-9_]*_\s+\\?[\w$\\]+\s*\(", re.MULTILINE)
+
+
 def _netlist_matches_liberty(netlist_path: Path,
                              liberty_path: str) -> bool:
     """PR-A3 — sniff-check a cached synth netlist against the ACTIVE PDK
@@ -5036,9 +5044,27 @@ def _netlist_matches_liberty(netlist_path: Path,
     master ⇒ the netlist was mapped to a DIFFERENT PDK and must NOT be
     reused — preserve-provenance must never launder a wrong-PDK netlist
     into a PASS. Unreadable/absent inputs ⇒ True (legacy trust, no
-    behavior change). Chip-AGNOSTIC."""
+    behavior change). Chip-AGNOSTIC.
+
+    ORGANIC (spm x sky130A, 1.6.4) — the master regex below requires a
+    master name to START with ``[A-Za-z_]``, so a yosys generic primitive
+    (``$_NAND_``, ``$_DFF_P_``, …) never matches it. On a netlist mapped to
+    NO PDK at all the sample therefore came back EMPTY and fell straight
+    into the ``if not masters: return True`` legacy-trust arm — the guard
+    returned "safe to reuse" for the one netlist it most needed to reject.
+    Measured: ``_netlist_matches_liberty(phase2/stage2/synth/netlist.v,
+    sky130_fd_sc_hd__tt_025C_1v80.lib)`` -> True, on a file holding 179
+    ``$_NAND_`` / 117 ``$_NOR_`` / 90 ``$_NOT_`` / 33 ``$_DFF_P_`` and zero
+    sky130 cells. An UNMAPPED netlist is a strictly worse reuse candidate
+    than a wrong-PDK one, so it is rejected explicitly and FIRST — before
+    the empty-sample arm can launder it."""
     try:
         txt = Path(netlist_path).read_text(errors="ignore")
+        # An unmapped netlist carries yosys generic primitives and no
+        # liberty cell. Reject it outright: no amount of master sampling
+        # can see these, because they do not match the master regex.
+        if _GENERIC_PRIM_MASTER_RE.search(txt):
+            return False
         masters: List[str] = []
         for m in re.finditer(
                 r"^\s*([A-Za-z_][\w$]*)\s+[A-Za-z_\\][\w$\\]*\s*\(",
@@ -6927,6 +6953,57 @@ def _stale_rtl_vs_netlist(netlist: Path, rtl_dir: Path) -> List[str]:
         except OSError:
             stale.append(f"<{src.name} stat failed>")
     return stale
+
+
+def _signoff_regen(artifact: Path, layout: Path) -> bool:
+    """Must this phase-3 SIGN-OFF artefact be (re)produced from ``layout``?
+
+    True when it is MISSING **or** STALE — i.e. it exists but predates the
+    layout it claims to describe, so it characterises a DIFFERENT design.
+
+    WHY: `_stale_rtl_vs_netlist` above fixed exactly this disease at the SYNTH
+    boundary ("the flow placed-and-routed the PREVIOUS design and reported a
+    clean PASS for RTL it had never synthesised") — and the fix stopped there.
+    Everything downstream of PnR (RC extraction, SPEF-based STA, multi-corner
+    SPEF STA, multi-corner OCV sign-off STA, and their stance JSONs) was guarded
+    by `not <artifact>.is_file()`: a pure existence test with no notion of which
+    layout the artefact describes. So a re-run with changed RTL re-synthesised,
+    re-placed, re-routed, re-ran DRC and LVS — and then signed the timing off
+    against the PREVIOUS design's reports.
+
+    MEASURED on `spm x sky130A` (v1.6.4, campaign_v164). One phase-3 re-run
+    after an RTL change:
+
+        phase3/stage3/pnr/spm_pnr.v          mtime 15:03:18   (this design)
+        phase3/stage3/extracted/spm.spef     mtime 10:30:04   (previous design)
+        phase3/stage3/sta/sta_mcorner_ocv.rpt mtime 10:30:08  (previous design)
+
+    119 of 223 phase-3 artefacts were older than the layout just built. Step 23
+    duly reported `setup -6.550 ns, TNS -75.02, DRV 45/70` — byte-identical to
+    the previous design's numbers — for a netlist those numbers had never seen.
+    Deleting the stale set and re-running the SAME command produced the real
+    answer for that layout: `setup +3.68 ns, TNS 0.00, DRV 5`.
+
+    The direction that matters is the other one. Here the stale cache invented a
+    FAIL over a design that had closed; identical code invents a PASS whenever
+    the previous run passed and the new design regressed. A sign-off verdict for
+    a layout that was never analysed is the exact failure this flow exists to
+    prevent, and it is silent.
+
+    FAILS CLOSED, like `_stale_rtl_vs_netlist`: if either mtime cannot be read,
+    regenerate rather than trust an unprovable cache. Chip-AGNOSTIC — pure mtime
+    comparison, no design/PDK/corner literal.
+    """
+    try:
+        if not artifact.is_file():
+            return True
+        if not layout.is_file():
+            # No layout to compare against: leave an existing artefact alone
+            # (nothing downstream can be re-derived without the layout anyway).
+            return False
+        return artifact.stat().st_mtime < layout.stat().st_mtime
+    except OSError:
+        return True
 
 
 def step_synth(project: Path, top: str, pdk: PdkConfig,
@@ -17838,18 +17915,43 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
     pa_rpt.parent.mkdir(parents=True, exist_ok=True)
     pa_rpt_c = _to_container_path(str(pa_rpt), container)
 
+    # v1467 — WHY each model was rejected, so a silent fallback can never hide a
+    # genuine match. Both rejections used to be a bare `return None`, which makes
+    # "power-aware was never attempted" and "the well-tied model matched but its
+    # report was lost to the read/flush race" byte-indistinguishable after the
+    # fact. Measured on two digital ICs: re-running netgen BY HAND on the run's
+    # own artefacts, the WELL-TIED model matched uniquely (369=369 nets /
+    # 339=339 devices; 978=978 on the second), while the 4-rail reference
+    # carries exactly 2 extra nets (the well-body pins) and therefore cannot
+    # match a layout that ties the wells to the rails — yet the runner recorded
+    # a power-aware MISMATCH. Emission was never the failure either: probed
+    # directly, both models patched every module and instance. This records the
+    # per-model outcome; it does NOT change WHICH model is selected, and no
+    # verdict is upgraded. chip-AGNOSTIC: model name + classifier verdict only.
+    attempt_log: List[Dict[str, Any]] = []
+
     def _attempt(tie_wells: bool) -> Optional[Tuple[Path, Dict[str, Any], str]]:
         """Emit a power-aware netlist (well-tied or 4-rail), run netgen against
         the extracted layout, return (netlist, stats, report_text) on a genuine
-        MATCH else None. Isolated so the two models can't cross-contaminate."""
+        MATCH else None. Isolated so the two models can't cross-contaminate.
+
+        Every rejection is recorded in `attempt_log` with the reason — an
+        attempt discarded without a trace is indistinguishable from one that was
+        never made."""
+        model = "well_tied" if tie_wells else "four_rail"
         suffix = "pwraware_welltied" if tie_wells else "pwraware"
         pa_nl = ext_dir / f"{top}_{suffix}.v"
         try:
             st = _lvs_pa.emit_to_file(netlist, pdk.name, pa_nl, top=top,
                                       tie_wells_to_rails=tie_wells)
-        except Exception:  # nosec — a bad netlist must never break the plain path
+        except Exception as exc:  # nosec — a bad netlist must never break the plain path
+            attempt_log.append({"model": model, "rejected_at": "emit",
+                                "reason": f"{type(exc).__name__}: {exc}"})
             return None
         if st.get("modules_patched", 0) <= 0 or not pa_nl.is_file():
+            attempt_log.append({"model": model, "rejected_at": "emit",
+                                "reason": "no module patched / netlist not written",
+                                "modules_patched": st.get("modules_patched", 0)})
             return None
         nl_c = _to_container_path(str(pa_nl), container)
         cmd = (
@@ -17862,7 +17964,9 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
             # still-progressing netgen extraction/compare is never killed.
             # marker = the layout netlist path (in netgen's argv).
             _rc, out, err = _docker_exec(container, cmd, marker=nl_c)
-        except Exception:  # nosec — netgen crash on the pre-attempt is non-fatal
+        except Exception as exc:  # nosec — netgen crash on the pre-attempt is non-fatal
+            attempt_log.append({"model": model, "rejected_at": "netgen",
+                                "reason": f"{type(exc).__name__}: {exc}"})
             return None
         # ORGANIC v1462 — bounded flush retry so a lagging power-aware report
         # cannot make a genuine MATCH read empty (strictly monotonic: a missed
@@ -17870,12 +17974,40 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
         # netgen rc so a clean exit gets the scaled budget.
         txt = _read_lvs_report_flushed(pa_rpt, rc=_rc)
         blob = (out or "") + "\n" + (err or "") + "\n" + txt
-        if _lvt.classify(blob) != "MATCH":
+        cls = _lvt.classify(blob)
+        if cls != "MATCH":
+            _terminal = _lvt.has_terminal_verdict(txt)
+            attempt_log.append({
+                "model": model, "rejected_at": "classify", "verdict": cls,
+                "netgen_rc": _rc,
+                "report_had_terminal_verdict": _terminal,
+                "report_bytes": len(txt),
+                "netlist": str(pa_nl.relative_to(project)),
+                # rc == 0 with no terminal verdict in the report is the #184
+                # read/flush signature, NOT a power-network defect. Naming it
+                # here is what stops the next campaign attributing it to the
+                # power network.
+                "reason": ("no terminal verdict in the report — read/flush, not "
+                           "a mismatch" if not _terminal
+                           else "netgen reported a conclusive non-match")})
             return None
+        attempt_log.append({"model": model, "accepted": True,
+                            "netlist": str(pa_nl.relative_to(project))})
         return pa_nl, st, txt
 
     # Well-tied model FIRST (matches a DEF-direct extraction), 4-rail as fallback.
     _res = _attempt(tie_wells=True) or _attempt(tie_wells=False)
+
+    # Land the per-model outcome on disk BEFORE the early return, so the record
+    # exists precisely in the case it is needed: the run that fell through.
+    try:
+        (project / "reports" / "phase3"
+         / "lvs_power_aware_attempts.json").write_text(
+            json.dumps({"attempts": attempt_log,
+                        "accepted": bool(_res)}, indent=2) + "\n")
+    except OSError:
+        pass
+
     if _res is None:
         return None                         # no genuine match → fall through
     pa_netlist, stats, pa_txt = _res
@@ -17896,6 +18028,7 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
         extras={"lvs_report": "reports/phase3/lvs.rpt",
                 "power_aware_netlist": str(pa_netlist.relative_to(project)),
                 "power_aware_stats": stats,
+                "power_aware_attempts": attempt_log,
                 "ext2spice_warning": ext_warning})
     detail = (
         f"netgen LVS: circuits match uniquely under a POWER-AWARE gate netlist "
@@ -19014,6 +19147,92 @@ def step_drv_promotion_corroboration(project: Path) -> StepResult:
                       time.time() - t0, f"inconclusive (rc={cp.returncode}): {detail}")
 
 
+def _step37_restamp_canon_gds_provenance(project: Path, top: str,
+                                         canon_gds: Path) -> None:
+    """After Step 37 writes phase3/stage4/gds/<top>.gds, update provenance.jsonl
+    so the declared hash matches the freshly-written file.
+
+    ORDERING DEFECT. Both provenance writers run BEFORE the Step-37 copy: the
+    in-place refresh loop in `step_canonicalize_artefacts` re-hashes only what is
+    on disk AT THAT MOMENT, and `_v1_6_620_append_pv_signoff_provenance` appends
+    only when `rel not in existing` — so neither can describe a file Step 37 has
+    not written yet, and neither refreshes one it rewrites afterwards.
+
+    That leaves two failure shapes, both stamping the deliverable with a hash of
+    a DIFFERENT layout:
+      * re-run — the alias was declared from the PREVIOUS design, the refresh
+        loop re-stamps that same previous content, then Step 37's staleness
+        refresh (`_canonical_gds_is_stale`) overwrites the file with this run's
+        stream-out. `provenance_output_hash_completeness_check` then FAILs with
+        PROVENANCE_HASH_MISMATCH on a genuinely clean run.
+      * first run — the alias did not exist when the append helper ran, so the
+        shipped GDS carries no declaration at all.
+
+    This helper is called immediately after the copy and:
+      * patches any existing entry that declared this rel_path IN PLACE
+        (appending a second entry with a different hash would only trade
+        PROVENANCE_HASH_MISMATCH for PROVENANCE_HASH_INCONSISTENT);
+      * appends a fresh entry when no prior entry exists.
+
+    Anti-fabrication (#365): the appended entry declares the REAL sha256 of a
+    file that exists, and marks itself `reconstructed` with `duration_ms: None`
+    — the runner back-fills this record, it did not time the invocation.
+    chip-AGNOSTIC: the canonical stage4 path, no chip/PDK literal.
+    """
+    import hashlib as _hl
+    import datetime as _dt
+    prov_path = project / "provenance.jsonl"
+    if not prov_path.is_file():
+        return
+    _canon_rel = f"phase3/stage4/gds/{top}.gds"
+    try:
+        # sha256 of the freshly written canonical GDS.
+        _h = _hl.sha256()
+        with canon_gds.open("rb") as _f:
+            for _ch in iter(lambda: _f.read(65536), b""):
+                _h.update(_ch)
+        _canon_sha = "sha256:" + _h.hexdigest()
+        _lines = prov_path.read_text().splitlines()
+        _patched = False
+        _found = False
+        _new_lines: List[str] = []
+        for _ln in _lines:
+            if not _ln.strip():
+                _new_lines.append(_ln)
+                continue
+            try:
+                _rec = json.loads(_ln)
+            except Exception:
+                _new_lines.append(_ln)
+                continue
+            _outs = _rec.get("outputs", {})
+            if isinstance(_outs, dict) and _canon_rel in _outs:
+                _found = True
+                if _outs[_canon_rel] != _canon_sha:
+                    _outs[_canon_rel] = _canon_sha
+                    _patched = True
+            _new_lines.append(json.dumps(_rec))
+        if _patched:
+            prov_path.write_text("\n".join(_new_lines) + "\n")
+        if not _found:
+            # No prior entry for this path — append a fresh one.
+            _entry = {
+                "tool": "klayout",
+                "command": ("klayout streamout (canonical GDS) "
+                            "(phase3_one_shot_runner step37)"),
+                "exit_code": 0,
+                "duration_ms": None,
+                "reconstructed": True,
+                "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "outputs": {_canon_rel: _canon_sha},
+            }
+            with prov_path.open("a") as _f:
+                _f.write(json.dumps(_entry) + "\n")
+    except (OSError, ValueError):
+        pass   # non-fatal: the provenance stamp is best-effort here
+
+
 def _canonical_gds_is_stale(primary_gds: Path, canon_gds: Path) -> bool:
     """Is the staged phase3/stage4 GDS older than this run's stream-out?
 
@@ -19620,19 +19839,19 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # SPEF-based report CAN be the canonical one (the old code extracted
     # SPEF only after the alias was already written from the estimate).
     spef_out = extracted_out / f"{top}.spef"
-    if primary_def.is_file() and not spef_out.is_file():
+    if primary_def.is_file() and _signoff_regen(spef_out, primary_def):
         if _emit_spef(project, top, pdk, container, spef_out, notes):
             written.append(str(spef_out))
 
     # --- Step 23: SPEF-based post-route STA (#527) ----------------------
     spef_sta_rpt = sta_out / "sta_spef_based.rpt"
     if (spef_out.is_file() and spef_out.stat().st_size > 0
-            and not spef_sta_rpt.is_file()):
+            and _signoff_regen(spef_sta_rpt, primary_def)):
         if _emit_spef_sta(project, top, pdk, container, spef_out,
                           spef_sta_rpt, notes):
             written.append(str(spef_sta_rpt))
             mirror = rpt_phase3 / "sta_spef_based.rpt"
-            if not mirror.is_file():
+            if _signoff_regen(mirror, primary_def):
                 mirror.write_text(spef_sta_rpt.read_text())
                 written.append(str(mirror))
     spef_sta_ok = spef_sta_rpt.is_file() and spef_sta_rpt.stat().st_size > 0
@@ -19644,7 +19863,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # in multi_corner_spef_stance.json.
     mc_spef_dir = extracted_out / "spef_corners"
     mc_stance = rpt_phase3 / "multi_corner_spef_stance.json"
-    if primary_def.is_file() and not mc_stance.is_file():
+    if primary_def.is_file() and _signoff_regen(mc_stance, primary_def):
         corner_spefs = _emit_spef_corners(
             project, top, pdk, container, mc_spef_dir, notes)
         for p in corner_spefs.values():
@@ -19661,7 +19880,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         if len(corner_spefs) >= 2 and ("min" in corner_spefs
                                        or "max" in corner_spefs):
             mc_sta_rpt = sta_out / "sta_spef_multicorner.rpt"
-            if not mc_sta_rpt.is_file():
+            if _signoff_regen(mc_sta_rpt, primary_def):
                 _mc_res = _emit_corner_spef_sta(
                     project, top, pdk, container, corner_spefs,
                     mc_sta_rpt, notes,
@@ -19672,7 +19891,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 if mc_sta_ok:
                     written.append(str(mc_sta_rpt))
                     mc_mirror = rpt_phase3 / "sta_spef_multicorner.rpt"
-                    if not mc_mirror.is_file():
+                    if _signoff_regen(mc_mirror, primary_def):
                         mc_mirror.write_text(mc_sta_rpt.read_text())
                         written.append(str(mc_mirror))
         _corners = sorted(corner_spefs)
@@ -19716,7 +19935,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # disclosure — no fabricated ss/ff). Internalises the hand-run mcorner_ocv_sta.tcl.
     mc_ocv_rpt = sta_out / "sta_mcorner_ocv.rpt"
     mc_ocv_stance = rpt_phase3 / "mcorner_ocv_stance.json"
-    if primary_def.is_file() and not mc_ocv_stance.is_file():
+    if primary_def.is_file() and _signoff_regen(mc_ocv_stance, primary_def):
         corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
         # Rediscover any per-corner SPEFs on disk (min/nom/max) + the nom SPEF.
         ocv_corner_spefs: Dict[str, Path] = {}
@@ -19738,14 +19957,14 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                          and setup_lbl != hold_lbl)
         mc_ocv_ok = False
         setup_wns = hold_wns = None
-        if multi_process and not mc_ocv_rpt.is_file():
+        if multi_process and _signoff_regen(mc_ocv_rpt, primary_def):
             mc_ocv_ok = _emit_mcorner_ocv_sta(
                 project, top, pdk, container, corner_libs, ocv_corner_spefs,
                 _nom_spef, mc_ocv_rpt, notes)
             if mc_ocv_ok:
                 written.append(str(mc_ocv_rpt))
                 mc_ocv_mirror = rpt_phase3 / "sta_mcorner_ocv.rpt"
-                if not mc_ocv_mirror.is_file():
+                if _signoff_regen(mc_ocv_mirror, primary_def):
                     mc_ocv_mirror.write_text(mc_ocv_rpt.read_text())
                     written.append(str(mc_ocv_mirror))
                 # Parse the REAL per-corner worst slack (surface the violation).
@@ -20856,6 +21075,11 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                         break
                     dst.write(chunk)
             written.append(str(canon_gds))
+            # Re-stamp provenance so the declared hash matches the file that
+            # was JUST written. Both provenance writers above ran BEFORE this
+            # copy, so neither could describe (or refresh) it — see
+            # _step37_restamp_canon_gds_provenance.
+            _step37_restamp_canon_gds_provenance(project, top, canon_gds)
             if _stale:
                 notes.append(
                     "canonical GDS refreshed: the staged "
@@ -25530,7 +25754,17 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
             netlist_file=netlist_for_clamp,
             rated_tap_masters=([pdk.tapcell_master]
                                if getattr(pdk, "tapcell_master", None)
-                               else None))
+                               else None),
+            # Tell the geometry layer WHY there is no rated tap master, so a
+            # tapless-cell PDK cannot be mistaken for a skipped tapcell step.
+            # The GDS tap-diffusion measurement below is the POSITIVE
+            # confirmation and still runs (see the widened guard); this flag
+            # only stops the DEF-component count from emitting a CONCLUSIVE
+            # false FAIL when that measurement is unavailable — e.g. a tapless
+            # PDK whose `tap_geom_layers` are not declared yet, which is
+            # exactly how the false FAIL reached Step 28 on the second PDK of
+            # a family whose first PDK had already been given the geometry data.
+            tapless_pdk=(getattr(pdk, "tapcell_master", None) is None))
         geometry_residual = geo.get("foundry_data_residual")
 
         # v1.3.93 — TAPLESS-CELL PDK: the DEF-component tap-SPACING screen reports
@@ -25542,8 +25776,19 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
         # Reclassify the GAP to a non-blocking tapless sub-status ONLY when the
         # sign-off GDS is geometry-VERIFIED to carry the ties (positive evidence —
         # never a device-physics PASS; the foundry DRC screens real spacing).
+        # NOTE (tapless_pdk interaction): with the flag above, a tapless PDK's
+        # 0-tap spacing verdict is now INCOMPLETE/ZERO_TAPS_TAPLESS_PDK rather
+        # than a GAP status, so keying this upgrade on GAP_STATUSES alone would
+        # silently stop the GDS measurement from running and LOSE the richer
+        # positive evidence for every PDK that DOES declare `tap_geom_layers`.
+        # The tapless sub-status is therefore accepted here too: the measurement
+        # still runs, still upgrades to TAPLESS_CELL_INTERNAL_TIES when the ties
+        # are proven, and the program-level guard only covers the case where the
+        # measurement cannot be made.
         if (pdk.tapcell_master is None
-                and geo.get("spacing", {}).get("status") in _geo.GAP_STATUSES):
+                and (geo.get("spacing", {}).get("status") in _geo.GAP_STATUSES
+                     or geo.get("spacing", {}).get("reason")
+                     == "ZERO_TAPS_TAPLESS_PDK")):
             _sp_tg = _measure_tap_geometry(project, top, pdk, container)
             if (_sp_tg.get("ok") and _sp_tg.get("ntap_polys", 0) > 0
                     and _sp_tg.get("ptap_polys", 0) > 0):

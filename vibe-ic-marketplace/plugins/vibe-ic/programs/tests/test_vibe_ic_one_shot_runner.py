@@ -123,3 +123,109 @@ def test_edge_top_name_forwarded(tmp_path):
     # Just smoke check — flag accepted, no argparse error.
     rep = project / "reports" / "orchestrator" / "vibe_ic_one_shot.json"
     assert rep.is_file()
+
+
+# ---------------------------------------------------------------------------
+# Container IMAGE provenance wiring
+#
+# `--container` names a CONTAINER, so the IMAGE it executes was never recorded
+# and a stale long-running container could produce every sign-off number with
+# nothing naming the toolchain. These tests pin that the orchestrator (a)
+# ALWAYS records the identity and (b) blocks ONLY when the operator asked it
+# to, using a hermetic `docker` shim on PATH so the code path under test is the
+# real one and no real container or image is required.
+# ---------------------------------------------------------------------------
+
+import os                                                     # noqa: E402
+import stat                                                   # noqa: E402
+
+
+def _docker_shim(tmp_path, container_image: str, container_id: str,
+                 want_id: str = "", found: bool = True) -> dict:
+    """A fake `docker` answering exactly the two questions the checker asks.
+
+    `docker inspect --format <fmt> <name>`            -> 5 tab-separated fields
+    `docker image inspect --format {{.Id}} <ref>`     -> the resolved image id
+    """
+    bindir = tmp_path / "shimbin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    sh = bindir / "docker"
+    body = ["#!/usr/bin/env bash",
+            "if [ \"$1\" = 'image' ]; then"]
+    body += ([f"  echo '{want_id}'", "  exit 0"] if want_id else ["  exit 1"])
+    body += ["fi"]
+    if found:
+        body += [f"printf '/c\\t{container_image}\\t{container_id}"
+                 f"\\ttrue\\t2026-07-26T00:00:00Z\\n'", "exit 0"]
+    else:
+        body += ["echo 'Error: No such object' >&2", "exit 1"]
+    sh.write_text("\n".join(body) + "\n")
+    sh.chmod(sh.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}:{env.get('PATH', '')}"
+    return env
+
+
+def _run_env(args: list, env: dict, timeout: int = 300):
+    return subprocess.run([sys.executable, str(PROG)] + args,
+                          capture_output=True, text=True, timeout=timeout,
+                          env=env)
+
+
+def test_container_image_identity_is_always_recorded(tmp_path):
+    """Recording is UNCONDITIONAL — no --require-image given, and the run must
+    still say which image its container executes. That is what makes a
+    published number attributable to a toolchain afterwards."""
+    project = tmp_path / "proj"
+    project.mkdir(parents=True, exist_ok=True)
+    env = _docker_shim(tmp_path, "vibeic-eda:9.9.9", "sha256:aaaa")
+    _run_env([str(project), "--skip-phase3", "--skip-analog",
+              "--no-dashboard"], env)
+    rec = json.loads((project / "reports" / "container_image.json").read_text())
+    assert rec["image_ref"] == "vibeic-eda:9.9.9"
+    assert rec["image_id"] == "sha256:aaaa"
+    body = json.loads((project / "reports" / "orchestrator"
+                       / "vibe_ic_one_shot.json").read_text())
+    assert body["container_image"]["image_ref"] == "vibeic-eda:9.9.9"
+
+
+def test_require_image_mismatch_halts_the_run(tmp_path):
+    """DEFECT PRESENT: the container is healthy but runs a DIFFERENT image than
+    the operator pinned. With --require-image the run must STOP (rc 2) instead
+    of producing every sign-off number on an unrecorded toolchain."""
+    project = tmp_path / "proj"
+    project.mkdir(parents=True, exist_ok=True)
+    env = _docker_shim(tmp_path, "vibeic-eda:0.2.26", "sha256:stale",
+                       want_id="sha256:pinned")
+    cp = _run_env([str(project), "--skip-phase3", "--skip-analog",
+                   "--no-dashboard", "--require-image", "vibeic-eda:0.2.30"],
+                  env)
+    assert cp.returncode == 2, cp.stdout + cp.stderr
+    assert "0.2.26" in cp.stderr and "0.2.30" in cp.stderr
+
+
+def test_require_image_match_does_not_halt(tmp_path):
+    """DEFECT ABSENT: same flag, correct image -> the run proceeds (it fails
+    later for its own reasons, but NOT with the rc=2 image refusal)."""
+    project = tmp_path / "proj"
+    project.mkdir(parents=True, exist_ok=True)
+    env = _docker_shim(tmp_path, "vibeic-eda:0.2.30", "sha256:pinned",
+                       want_id="sha256:pinned")
+    cp = _run_env([str(project), "--skip-phase3", "--skip-analog",
+                   "--no-dashboard", "--require-image", "vibeic-eda:0.2.30"],
+                  env)
+    assert cp.returncode != 2, cp.stdout + cp.stderr
+
+
+def test_absent_container_never_blocks_without_require_image(tmp_path):
+    """A run legitimately without a container (Phase-1 only, --skip-phase3)
+    must NOT start failing because of this capture. It is an advisory, and the
+    absence is RECORDED rather than swallowed."""
+    project = tmp_path / "proj"
+    project.mkdir(parents=True, exist_ok=True)
+    env = _docker_shim(tmp_path, "", "", found=False)
+    cp = _run_env([str(project), "--skip-phase3", "--skip-analog",
+                   "--no-dashboard"], env)
+    assert cp.returncode != 2, cp.stdout + cp.stderr
+    rec = json.loads((project / "reports" / "container_image.json").read_text())
+    assert rec["verdict"] == "FAIL"

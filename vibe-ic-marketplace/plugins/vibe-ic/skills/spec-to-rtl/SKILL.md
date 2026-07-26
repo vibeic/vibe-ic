@@ -46,6 +46,26 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    optional. A runner-driven author that skipped this re-invented a
    genre-determined topology from the prompt's loose wording and failed; this is
    the SAME digest Shape-C blind authors already MUST read.
+
+   **— and LIST THE OTHER ARTIFACTS THE SPEC MAKES MANDATORY (MANDATORY) —**
+   The WAIVE handoff tells you two things: write the RTL here, and read
+   `lessons.md`. It says nothing about the OTHER artifacts the same spec makes
+   mandatory and that you are the only one who can produce. Those clauses are
+   already extractable from the SAME input docs you have just read, so run the
+   preflight BEFORE you author:
+
+   ```bash
+   python3 plugins/vibe-ic/programs/spec_required_artifact_check.py \
+       <project> --preflight
+   ```
+
+   It prints every still-OUTSTANDING spec-declared artifact with the input doc
+   and the clause that demands it, and **always exits 0** — at handoff those
+   files are legitimately absent, so it can never block a correct run. Author
+   each one alongside the RTL. Skipping this does not make the requirement go
+   away: the same extraction runs as a BLOCKING assertion at `final_audit`, so
+   a missing declaration costs an entire Phase 2 (hygiene, lint, synth, DFT, a
+   multi-minute LEC) to discover a file that took seconds to write.
 2. **Respect the blind rule**: read ONLY the L docs + original prompt. NEVER
    read `testbench.v`, `verified_*.v`, hidden cocotb harness, or any reference
    RTL the upstream benchmark ships. This is enforced by the open-benchmark-

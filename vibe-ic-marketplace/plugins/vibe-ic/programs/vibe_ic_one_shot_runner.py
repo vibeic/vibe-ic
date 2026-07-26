@@ -29,6 +29,7 @@ Usage:
     python3 vibe_ic_one_shot_runner.py <project>
             [--top-name chip_top]
             [--container vibeic-eda]
+            [--require-image vibeic-eda:<tag>]   # enforce WHICH image
             [--max-eco 3]
             [--skip-hardware]
             [--skip-phase1]
@@ -55,6 +56,35 @@ import _runner_lock
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
+
+
+def _capture_container_image(project: Path, container: str,
+                             require_image: Optional[str]) -> Dict[str, Any]:
+    """Record WHICH IMAGE `--container` actually executes, into
+    `reports/container_image.json`.
+
+    Delegates to `container_image_provenance`, which is the program that knows
+    how to ask docker and how to compare a tag against a content-addressed id.
+    Best-effort by construction: an import or probe error degrades to a recorded
+    note and NEVER crashes the run — the capture exists to make a run
+    attributable, so failing the run because the attribution could not be taken
+    would be worse than the gap it closes. Enforcement (a non-zero exit on
+    MISMATCH) is the caller's decision and only happens under --require-image.
+    """
+    try:
+        import container_image_provenance as _cip
+        rec = _cip.verify(container, require_image)
+    except Exception as exc:                                # noqa: BLE001
+        rec = {"verdict": "SKIP", "container": container,
+               "reason": f"image identity unverifiable: "
+                         f"{type(exc).__name__}: {exc}"}
+    try:
+        out = _pl.reports_dir(project) / "container_image.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rec, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+    return rec
 
 
 def _deliverable_self_check(project: Path) -> Dict[str, Any]:
@@ -418,6 +448,15 @@ def main() -> int:
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default=_TOP_NAME_DEFAULT)
     p.add_argument("--container", default="vibeic-eda")
+    # `--container` names a CONTAINER (every step is `docker exec <container>`),
+    # so nothing here ever asked which IMAGE that container was started from.
+    # The identity is now RECORDED unconditionally (see the capture below) and
+    # ENFORCED only when the operator asks, because a run with no container at
+    # all is legitimate (e.g. --skip-phase3) and must not start failing.
+    p.add_argument("--require-image", default=None,
+                   help="image ref or id the --container MUST be running. "
+                        "Omitted: the image identity is still RECORDED to "
+                        "reports/container_image.json, just not enforced.")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--skip-phase1", action="store_true")
@@ -484,6 +523,32 @@ def main() -> int:
     # #588 — env passed to every delegated standalone phase runner so it
     # re-enters this orchestrator's lock instead of being refused by it.
     _phase_env = _runner_lock.child_env(project, held_lock=lock)
+
+    # ---------------- Container IMAGE provenance (capture always) ----------
+    # Every containerised step downstream is dispatched as
+    # `docker exec <container> ...`, so `--container` selects a CONTAINER and
+    # nothing asked which IMAGE it was started from. Two measured consequences:
+    # a long-running container built from an OLDER image silently produces
+    # every tool version and every sign-off number with nothing in the run
+    # record naming it; and an IMAGE ref passed where a container name belongs
+    # matches no container, so each step falls through to its
+    # container-unavailable branch and the run reports a downstream TOOL
+    # failure instead of the real cause.
+    #
+    # RECORD unconditionally — that is what makes a published number
+    # attributable to a toolchain afterwards. ENFORCE only when the operator
+    # passed --require-image: a run legitimately without a container (Phase-1
+    # only, --skip-phase3) must not start failing here.
+    _img_rec = _capture_container_image(project, args.container,
+                                        args.require_image)
+    if _img_rec.get("verdict") == "MISMATCH" and args.require_image:
+        print(f"ERROR: {_img_rec.get('reason', '')}", file=sys.stderr)
+        lock.release()
+        return 2
+    if _img_rec.get("verdict") not in ("PASS", None):
+        advisory = (f"container image identity: {_img_rec.get('verdict')} — "
+                    f"{_img_rec.get('reason', '')}")
+        print(f"⚠ {advisory}")
 
     # ---------------- Live dashboard (CLI + web, DEFAULT ON) ----------------
     # Every run gets BOTH dashboard front-ends by default (opt out with
@@ -725,6 +790,11 @@ def main() -> int:
         "halted_at": halted_at or None,
         "phases": [{"name": n, "verdict": v, "rc": rc} for n, v, rc in plan],
         "advisories": advisories,   # v0.3.7 #505 — non-gating notes
+        # WHICH IMAGE the run's --container actually executed. Carried in the
+        # aggregate report as well as reports/container_image.json so a
+        # published number is attributable to a toolchain without a second
+        # file lookup.
+        "container_image": _img_rec,
         "verdict": overall,
     }
     # v1.6.32: emit canonical final_summary.md (best-effort). Note that

@@ -30054,10 +30054,18 @@ def gen_l4_regmap(project: Path,
         return (isinstance(nm, str)
                 and re.match(r"^csr_[0-9A-Fa-f_]+$", nm) is not None)
 
-    if registers:
+    def _merge_registers_by_address(
+            regs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Collapse entries that claim the SAME address into one.
+
+        Keyed on address ALONE — deliberately not on (address, name),
+        because the whole point is that one of the two entries carries a
+        synthesised `csr_<addr>` placeholder precisely BECAUSE its name
+        was unknown, so the names are expected to differ.
+        """
         by_addr: Dict[str, int] = {}
         merged: List[Dict[str, Any]] = []
-        for entry in registers:
+        for entry in regs:
             addr = entry.get("address")
             if not isinstance(addr, str) or not addr.startswith("0x"):
                 merged.append(entry)
@@ -30092,7 +30100,10 @@ def gen_l4_regmap(project: Path,
             else:
                 by_addr[key] = len(merged)
                 merged.append(entry)
-        registers = merged
+        return merged
+
+    if registers:
+        registers = _merge_registers_by_address(registers)
 
     # v1.6.488 — for #346 R2 ORGANIC. Re-run the v1.6.481 field-
     # access inheritance step AFTER the v1.6.270 address-based dedup
@@ -30289,6 +30300,20 @@ def gen_l4_regmap(project: Path,
                 break
         if len(registers) >= 512:
             break
+
+    # Re-establish the v1.6.270 one-address-one-register invariant.
+    # The walker above appends keyed on the COMPOSITE (address, name),
+    # so it cannot recognise an existing entry whose name is the
+    # synthesised `csr_<addr>` placeholder — it appends a SECOND
+    # register at an address that already has one, re-creating exactly
+    # the duplicate shape the v1.6.270 pass was written to eliminate.
+    # That pass ran before this walker and never runs again, so without
+    # this re-merge `l4_regmap_phase2_emitter_contract_check` FAILs
+    # phase 1 with "N address(es) are claimed by more than one
+    # register". Idempotent — a no-op when the walker added nothing
+    # colliding. Chip-AGNOSTIC.
+    if registers:
+        registers = _merge_registers_by_address(registers)
 
     # v1.6.295 — for #183 ORGANIC. Register-array collapse. Walk the
     # row list looking for contiguous runs of `PREFIX[N]` rows with
@@ -30941,9 +30966,25 @@ def _v1_6_563_apply_subqualifier_guard(blocks):
 # co-occurrence guard (_RE_ANALOG_CONTEXT) passed because the negated sentence
 # still carries analog vocabulary. Reject when a negation marker precedes the
 # keyword within its own sentence. Chip-AGNOSTIC negation vocabulary (zh + en).
+#
+# ORGANIC — vocabulary widened by two markers this list could not see, both
+# measured on a real Traditional-Chinese input doc (spm × ihp-sg13cmos5l):
+#   * BARE `無` — the list only carried it in fixed compounds (無需 / 無任何 /
+#     無 analog / 無 ESD), so `無 SW-visible registers` read as NOT negated.
+#     Admitted only when the next character is whitespace or ASCII, which is
+#     how `無` is written when it negates a Latin term. A `無` glued to a CJK
+#     character is a COMPOUND WORD, not a negator — 無線 (wireless), 無源
+#     (passive), 無限 (unlimited), 無論 (regardless) all carry real analog /
+#     design content and must NOT be read as denials. Failing to match those
+#     is the safe direction: evidence is kept, never invented.
+#   * `N/A` — the canonical applicability denial in a spec table cell or an
+#     inline field. (`not applicable` / `shall not` / `does not` already match
+#     through the bare `not` alternative.)
 _RE_ANALOG_NEGATION = re.compile(
     r"不需|不需要|無需|毋需|沒有|不含|不具|不支援|不採用|無任何|"
     r"純數位|纯数位|純數字|无\s*analog|無\s*analog|無\s*類比|無\s*ESD|"
+    r"無(?=[\s\x00-\x7F])|"
+    r"\bn\s*/\s*a\b|"
     r"\b(?:no|not|without|none|absent|lacks?|excludes?|"
     r"does\s+not|do\s+not|doesn['’]?t|don['’]?t|"
     r"no\s+analog|not\s+needed|not\s+required|not\s+present|"
@@ -30952,15 +30993,247 @@ _RE_ANALOG_NEGATION = re.compile(
 )
 
 
+# ─── ORGANIC — CLAUSE SCOPE. Two measured over-reaches of the guard ──────
+# The guard above only ever looks LEFT (clause start → keyword), so a marker
+# that is not in the keyword's own clause must not be visible at all. Two
+# shapes broke that, and both silently DELETED genuine hardware:
+#
+#   (1) THE COMMA WAS NOT A SEPARATOR. Hard delimiters were only
+#       `\n 。！？； ;` and `". "`, so "negate A, but specify B" written on
+#       ONE line lost B as well:
+#         "There is no external DRAM, but the tile instantiates an on-chip
+#          single-port SRAM 1024x32 in `buf_sram.v`."      → SRAM deleted
+#         "The datapath shall not stall on a write conflict, and the scratch
+#          register file 32x8 … feeds the MAC directly."   → regfile deleted
+#       Both are real memories with depth/width/name populated.
+#
+#   (2) A MARKER FIRED FROM A DIFFERENT TABLE COLUMN. Markdown tables are
+#       how specification documents are written, and a row is NOT a
+#       sentence — each cell is its own scope:
+#         | buf0 | N/A | single-port SRAM 1024x32 | `buf_sram.v` |
+#         | acc0 | No  | register file 16x24      | `acc_regfile.v` |
+#       The `N/A` is the value of an ECC column and the `No` the value of a
+#       SW-visible column; neither says anything about the memory in the
+#       NEXT column, yet both suppressed it.
+#
+# BOTH repairs are MONOTONE IN ONE DIRECTION BY CONSTRUCTION: each can only
+# move the clause START FORWARD, so the text handed to `_RE_ANALOG_NEGATION`
+# is always a SUBSET of what the old code searched. `True → False` is
+# reachable; `False → True` is not. Neither repair can therefore suppress
+# anything that is harvested today — the only risk they carry is admitting a
+# denial, which is what the over-split control below exists to bound.
+
+# A comma is a WEAK boundary. "no A, B, or C" is ONE denial with an elided
+# list, and splitting there would fabricate B and C — exactly the defect this
+# guard was written to close. A comma therefore opens a new clause only when
+# the material after it is a NEW PREDICATION rather than a list continuation:
+#   (a) an adversative / contrastive clause opener, or
+#   (b) a FINITE VERB. In specification prose a finite verb is almost always
+#       an auxiliary / modal / copula or a third-person `-s` form. BARE STEMS
+#       are deliberately absent — they collide with nouns ("support",
+#       "store", "buffer", "use", "map") — and so are PAST PARTICIPLES, which
+#       are modifiers far more often than predicates: admitting `embedded` /
+#       `integrated` / `mapped` would turn "…, or a memory-mapped interface"
+#       into a clause and fabricate the interface out of its own denial.
+#   (c) the zh predication verbs, which are not inflected.
+# UNRECOGNISED VERB → NOT A BOUNDARY → the negation keeps reaching, i.e. the
+# rule FAILS CLOSED onto the pre-repair behaviour. It can never lose a row
+# that is harvested today.
+_RE_CLAUSE_NUCLEUS = re.compile(
+    # (a) adversative / contrastive clause openers
+    r"\b(?:but|however|yet|whereas|while|although|though|instead|rather|"
+    r"nevertheless|nonetheless|conversely)\b"
+    r"|但是|但|然而|不過|不过|惟|可是|反之|相反|另一方面"
+    # (b) auxiliaries / modals / copulas — unambiguously finite verbs
+    r"|\b(?:is|are|was|were|be|been|being|has|have|had|does|do|did|"
+    r"shall|should|will|would|can|could|may|might|must)\b"
+    # (c) third-person present forms. -ed / bare stems are deliberately
+    #     ABSENT: `implemented` / `embedded` / `integrated` / `mapped` are
+    #     modifiers far more often than predicates, and bare stems collide
+    #     with nouns (`support`, `store`, `buffer`, `use`, `map`).
+    r"|\b(?:instantiates|implements|contains|includes|provides|holds|"
+    r"carries|feeds|exposes|owns|embeds|stores|drives|serves|requires|"
+    r"supports|connects|attaches|resides|uses|adds|declares|defines|"
+    r"comprises|allocates|consists|generates|produces|accepts|receives|"
+    r"sends|selects|arbitrates|integrates)\b"
+    # (d) zh predication verbs, which carry no inflection
+    r"|內含|包含|具有|提供|使用|實作|實現|例化|配置|支援|採用|連接"
+    r"|内含|实作|实现|支持|采用|连接",
+    re.IGNORECASE,
+)
+_CLAUSE_SOFT_DELIMS = (",", "，")
+_CLAUSE_HARD_DELIMS = ("\n", "。", "！", "？", "；", ";", ". ")
+# How far past the keyword the clause is allowed to run when deciding whether
+# a comma opened a NEW PREDICATION. A clause never spans this much text, and
+# the bound keeps the forward delimiter scan O(window) instead of O(document)
+# per match — an ASCII document carries none of the zh delimiters, so an
+# unbounded `find` would re-scan megabytes for every keyword occurrence.
+# Truncating can only make a nucleus HARDER to find, i.e. it fails closed onto
+# the pre-repair behaviour.
+_CLAUSE_SCOPE_LOOKAHEAD = 2000
+
+
+def _neg_md_is_alignment_row(line: str) -> bool:
+    """ORGANIC — True for a markdown table ALIGNMENT row (`|---|:--:|`).
+    Such a row delimits a table but is not a data row, and it can never
+    contain a keyword. chip-AGNOSTIC markdown grammar."""
+    s = line.strip()
+    if not s or "|" not in s or "-" not in s:
+        return False
+    return all(ch in "|-: \t" for ch in s)
+
+
+def _neg_md_row_pipe_positions(line: str):
+    """ORGANIC — indices of the pipes in `line` that delimit table CELLS.
+
+    A pipe is NOT a cell delimiter when it is backslash-escaped (`\\|`, the
+    markdown way to put a literal pipe in a cell) or when it sits inside an
+    inline-code span (`` `a|b` ``). Backtick parity is tracked left to right;
+    an unbalanced backtick makes the tail read as code, which loses cell
+    boundaries and falls back to the whole-line scope — the conservative
+    direction. chip-AGNOSTIC markdown grammar."""
+    pos = []
+    in_code = False
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "`":
+            in_code = not in_code
+            i += 1
+            continue
+        if ch == "|" and not in_code:
+            pos.append(i)
+        i += 1
+    return pos
+
+
+def _neg_md_line_is_table_row(text: str, ls: int, le: int) -> bool:
+    """ORGANIC — True iff the line `text[ls:le]` really is a markdown table
+    row, as opposed to a prose line that merely contains a pipe.
+
+    Two accepted shapes, both requiring >= 2 cell-delimiting pipes:
+      * the canonical bordered row, whose first non-space character is `|`;
+      * the borderless GFM row (`a | b | c`), accepted ONLY when the
+        contiguous run of pipe-bearing lines it belongs to also contains an
+        ALIGNMENT row — that row is what makes a pipe-bearing block a table.
+    Anything else (`sel = a | b;`, a single trailing pipe, a lone prose line)
+    is not a row. chip-AGNOSTIC markdown grammar."""
+    line = text[ls:le]
+    if line.count("|") < 2:          # cheap C-level reject before the walk
+        return False
+    if len(_neg_md_row_pipe_positions(line)) < 2:
+        return False
+    if _neg_md_is_alignment_row(line):
+        return False
+    if line.lstrip().startswith("|"):
+        return True
+    # Borderless: walk the contiguous pipe-bearing block for an alignment row.
+    for direction in (-1, 1):
+        cur_s, cur_e = ls, le
+        for _ in range(200):
+            if direction < 0:
+                if cur_s <= 0:
+                    break
+                cur_e = cur_s - 1
+                cur_s = text.rfind("\n", 0, cur_e) + 1
+            else:
+                if cur_e >= len(text):
+                    break
+                cur_s = cur_e + 1
+                nxt = text.find("\n", cur_s)
+                cur_e = len(text) if nxt < 0 else nxt
+            probe = text[cur_s:cur_e]
+            if _neg_md_is_alignment_row(probe):
+                return True
+            if len(_neg_md_row_pipe_positions(probe)) < 2:
+                break
+    return False
+
+
+def _neg_md_table_cell_span(text: str, kw_start: int):
+    """ORGANIC — (cell_start, cell_end) of the markdown table CELL that holds
+    `kw_start`, or None when that line is not a table row / the keyword is not
+    inside a delimited cell. A negation in a SIBLING cell must not be visible
+    from here — an ECC column reading `N/A` and a SW-visible column reading
+    `No` say nothing about the memory specified in the next column."""
+    ls = text.rfind("\n", 0, kw_start) + 1
+    le = text.find("\n", kw_start)
+    if le < 0:
+        le = len(text)
+    if not _neg_md_line_is_table_row(text, ls, le):
+        return None
+    line = text[ls:le]
+    k = kw_start - ls
+    left = None
+    right = None
+    for p in _neg_md_row_pipe_positions(line):
+        if p < k:
+            left = p
+        elif p > k and right is None:
+            right = p
+    if left is None:
+        # Keyword sits BEFORE the first cell delimiter (borderless row, first
+        # cell). There is no sibling cell to its left, so nothing to narrow.
+        return None
+    return (ls + left + 1, ls + (len(line) if right is None else right))
+
+
+def _neg_comma_clause_start(text: str, s_start: int, kw_start: int,
+                            scope_end: int) -> int:
+    """ORGANIC — the start of the comma-delimited clause that holds the
+    keyword, or `s_start` when no comma in [s_start, kw_start) opens a new
+    predication. Walks the commas RIGHT TO LEFT and takes the LAST one whose
+    trailing segment (comma → `scope_end`) carries a clause nucleus, so a
+    denial that governs an elided list keeps reaching every item of it."""
+    commas = []
+    for delim in _CLAUSE_SOFT_DELIMS:
+        i = text.find(delim, s_start, kw_start)
+        while i >= 0:
+            commas.append(i + len(delim))
+            i = text.find(delim, i + len(delim), kw_start)
+    for c in sorted(commas, reverse=True):
+        if _RE_CLAUSE_NUCLEUS.search(text[c:scope_end]):
+            return c
+    return s_start
+
+
 def _v0_1_62_analog_kw_negated(text: str, kw_start: int, kw_end: int) -> bool:
-    """True iff the analog keyword at [kw_start:kw_end] sits in a clause whose
-    leading text (sentence start → keyword) carries a negation marker.
-    Sentence boundaries: zh 。！？； + en .;\\n and blank-paragraph breaks."""
+    """True iff the keyword at [kw_start:kw_end] sits in a clause whose
+    leading text (clause start → keyword) carries a negation marker.
+    Clause boundaries: zh 。！？； + en .;\\n and blank-paragraph breaks,
+    plus (ORGANIC) the markdown table CELL the keyword sits in and the
+    comma that opens a new predication — see the block comment above.
+
+    ORGANIC — this is now the SINGLE definition of "negated" in this file.
+    Two callers share it deliberately: `gen_l5_adi_spec` (the analog keyword
+    harvester it was written for) and `_v1_6_426_extract_memories_from_text`
+    (the L9 memory prose walker). A second, differently-shaped negation
+    mechanism in the same module would be worse than one — the two would
+    drift and disagree about what a denial looks like."""
     s_start = 0
-    for delim in ("\n", "。", "！", "？", "；", ";", ". "):
+    scope_end = min(len(text), kw_end + _CLAUSE_SCOPE_LOOKAHEAD)
+    for delim in _CLAUSE_HARD_DELIMS:
         d = text.rfind(delim, 0, kw_start)
         if d >= 0 and d + len(delim) > s_start:
             s_start = d + len(delim)
+        d2 = text.find(delim, kw_end, scope_end)
+        if d2 >= 0:
+            scope_end = d2
+    # ORGANIC repair 2 — TABLE-CELL SCOPE. A row is not a sentence; a marker
+    # in one cell must not reach the memory specified in a sibling cell.
+    cell = _neg_md_table_cell_span(text, kw_start)
+    if cell is not None:
+        if cell[0] > s_start:
+            s_start = cell[0]
+        if cell[1] < scope_end:
+            scope_end = cell[1]
+    # ORGANIC repair 1 — COMMAS separate clauses, but only when what follows
+    # is a new predication rather than an elided list item.
+    s_start = _neg_comma_clause_start(text, s_start, kw_start, scope_end)
     clause = text[s_start:kw_end]
     return bool(_RE_ANALOG_NEGATION.search(clause))
 
@@ -41415,6 +41688,21 @@ def _v1_6_426_normalise_port_count(port_token) -> str:
 # any other status value) — a guard that guesses would delete evidence the
 # author did supply. chip-AGNOSTIC: YAML frontmatter grammar only; no chip
 # name, PDK name or design literal participates.
+#
+# ─── SIGNAL 2 (SENTENCE level) — salvage #315 ────────────────────────────
+# The frontmatter rule above is only the FILE-level half. A doc with no
+# `status:` declaration can still DENY a memory in prose, and the walker
+# was blind to that: `_V1_6_426_RE_MEMORY_PROSE` fired on `register file`
+# inside the sentence instructing the plugin not to generate one. Same
+# defect class as #358 on the analog side — a keyword matcher firing on
+# text that DENIES the thing. The analog path already carried a negation
+# guard; the memory walker had none.
+#
+# REUSE, NOT A SECOND MECHANISM: the per-match guard in
+# `_v1_6_426_extract_memories_from_text` CALLS the analog path's own
+# `_v0_1_62_analog_kw_negated`, which is the single definition of
+# "negated" in this module. `continue` advances to the next MATCH, so a
+# denial never shadows a real spec later in the same file.
 _RE_DOC_FRONTMATTER_BLOCK = re.compile(r"\A---\s*\n(.*?)\n---", re.DOTALL)
 _RE_DOC_FRONTMATTER_STATUS = re.compile(
     r"^[ \t]*status[ \t]*:[ \t]*[\"']?(.*?)[\"']?[ \t]*$",
@@ -41479,6 +41767,12 @@ def _v1_6_426_extract_memories_from_text(
     out: List[Dict[str, Any]] = []
     seen: set = set()
     for m in _V1_6_426_RE_MEMORY_PROSE.finditer(text):
+        # ORGANIC signal 2 (SENTENCE level) — reuse the analog path's own
+        # negation predicate so this file has exactly ONE definition of
+        # "negated". `continue` advances to the next MATCH (not the next
+        # doc), so a denial sentence never shadows a real spec later on.
+        if _v0_1_62_analog_kw_negated(text, m.start(), m.end()):
+            continue
         try:
             type_token = m.group("type") or ""
             port_token = m.group("port") or ""
@@ -51867,6 +52161,42 @@ def _post_emit_sdc_constraints(project: Path) -> None:
         out.write_text(json.dumps(l8, indent=2, ensure_ascii=False) + "\n")
 
 
+def _post_emit_l22_coverage_goals(project: Path) -> int:
+    """SALVAGE #315 — lift measurable coverage targets stated in the design's
+    OWN inputs into ``L22.fields.coverage_goals[]``, the layer that CONSUMES
+    them. Returns the number of goals emitted (0 when there is nothing to
+    lift, or when L22 / the consumer gate is absent).
+
+    `l22_verification_plan_measurable_check` already FINDS the target — it
+    reports `coverage_target_hits_input_docs` — and then FAILs the run with
+    TARGET_OUTSIDE_CONSUMING_LAYER because nothing ever writes it back, so no
+    downstream coverage gate has a number to compare a measurement against.
+    The detection is a solved deterministic problem; only the write-back was
+    missing.
+
+    The emitter borrows THAT GATE'S OWN ``_COVERAGE_TARGET_RE`` and
+    ``framed_hits()`` rather than reimplementing the predicate — a private
+    predicate could drift and emit goals the gate still rejects.
+
+    REFUSES rather than guesses: with no stated target it emits nothing and
+    the gate keeps FAILing, which is correct — a fabricated goal would turn a
+    real gap into a false PASS. Existing goals are never modified and
+    re-running is idempotent. Fail-open on any import/IO error, like its
+    `_post_emit_*` neighbours. chip-AGNOSTIC: document vocabulary and
+    structure only; no design, PDK or vendor literal.
+    """
+    try:
+        from l22_coverage_goal_emit import run as _l22_cov_emit
+    except Exception:
+        return 0
+    rep = _l22_cov_emit(project)
+    n = rep.get("emitted_count", 0) if isinstance(rep, dict) else 0
+    if n:
+        print(f"      L22 coverage goals: lifted {n} measurable target(s) "
+              f"from the design's own inputs")
+    return n
+
+
 def _post_emit_floorplan_contract(project: Path) -> None:
     """G-FIXED-DIE-1 — ingest a design-PROVIDED MANDATED fixed-floorplan
     contract into L19 (fields.die_area_budget_um / floorplan_hints /
@@ -56303,6 +56633,17 @@ def main() -> int:
     except Exception as _fpc_err:
         print(f"      floorplan-contract ingest FAILED (fail-open): "
               f"{_fpc_err}", file=sys.stderr)
+
+    # SALVAGE #315 — lift measurable coverage targets stated in the design's
+    # OWN inputs into L22.fields.coverage_goals[], the layer that consumes
+    # them. Runs HERE — after the 14d L19-L23 skeleton emit, alongside the SDC
+    # and floorplan ingests — because L22_VERIFICATION_PLAN.json must exist on
+    # disk first. See `_post_emit_l22_coverage_goals`.
+    try:
+        _post_emit_l22_coverage_goals(project)
+    except Exception as _l22_cov_err:
+        print(f"      L22 coverage-goal emit FAILED (fail-open): "
+              f"{_l22_cov_err}", file=sys.stderr)
 
     # v0.1.77 (R53/R54/R55): serial_peripheral_protocol class-gated synth.
     # Runs AFTER 14d L19-L23 skeleton so the L19-L23 + L4 + L11 + L13
