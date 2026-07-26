@@ -573,7 +573,12 @@ def emit(def_file: Path, tech_lef: Path, cell_lef: Path, liberty: Path,
     static_mv = read_static_ir_mv(static_json) if static_json else None
     payload = build_result(
         worst_dyn_mv=worst_v * 1000.0, vdd_v=vdd,
-        static_tr_mv=parse_worst_static_tr_v(log),
+        # V -> mV, like every other magnitude on this call. parse_worst_static_tr_v
+        # returns VOLTS; feeding it raw made static_from_transient_mv (and, whenever
+        # no external Step-24 static number was available, static_ir_mv /
+        # dynamic_vs_static_ratio / exceeds_static) wrong by 1000x.
+        static_tr_mv=(lambda s: s * 1000.0 if s is not None else None)(
+            parse_worst_static_tr_v(log)),
         ratio=parse_dynamic_static_ratio(log),
         package_droop_mv=(lambda p: p * 1000.0 if p is not None else None)(
             parse_package_droop_v(log)),
