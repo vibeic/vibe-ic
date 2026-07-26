@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 954
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 954)
+- **Total programs (excluding helpers / shims):** 955
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 955)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 945 |
+| `any` | 946 |
 
 ## Alphabetical listing
 
@@ -912,6 +912,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tool_substitution_disclose` | any | — | emit the mandatory RESULT.md |
 | `top_level_outputs_in_canonical_check` | any | — | enforce that the project root |
 | `tpm_protocol_synth` | any | v0.1.84 | TPM 2.0 trusted-platform-module protocol synth helper. |
+| `tracked_symlink_portability_check` | any | — | a tracked symlink must resolve for |
 | `trailing_delimiter_completeness_check` | any | v0.99 | Verify each cmd packet stimulus |
 | `transient_signal_latch_check` | any | — | Flag 1-cycle pulses read by multi-cycle FSMs without latching. |
 | `transition_coverage_check` | any | — | REAL transition-delay-fault (TDF) coverage |
@@ -1026,7 +1027,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (945 programs)
+### `any` (946 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1907,6 +1908,7 @@ _(no programs in this group)_
 - `tool_substitution_disclose` — emit the mandatory RESULT.md
 - `top_level_outputs_in_canonical_check` — enforce that the project root
 - `tpm_protocol_synth` — TPM 2.0 trusted-platform-module protocol synth helper.  _[v0.1.84]_
+- `tracked_symlink_portability_check` — a tracked symlink must resolve for
 - `trailing_delimiter_completeness_check` — Verify each cmd packet stimulus  _[v0.99]_
 - `transient_signal_latch_check` — Flag 1-cycle pulses read by multi-cycle FSMs without latching.
 - `transition_coverage_check` — REAL transition-delay-fault (TDF) coverage

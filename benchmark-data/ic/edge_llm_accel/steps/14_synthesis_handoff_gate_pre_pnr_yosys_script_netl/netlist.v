@@ -1,1 +1,1 @@
-/home/reyerchu/vibe-ic/benchmark-data/ic/edge_llm_accel/phase2/stage2/synth/netlist.v
+../../phase2/stage2/synth/netlist.v

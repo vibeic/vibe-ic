@@ -63,6 +63,15 @@ jobs:
       # in a shrink-only baseline; this step blocks any NEW one. Repo-hygiene
       # scope, so it lives in CI rather than the per-design flow gate list
       # (there it would SKIP on every user project — a gate that cannot fire).
+      # vibe-ic#371 — a tracked symlink recorded with an ABSOLUTE target
+      # resolves only on the machine that wrote it. 159 of 172 were in that
+      # state and it made the evidence-citation gate's verdict differ between
+      # local and CI on the same commit. Converted to relative; this blocks a
+      # relapse.
+      - name: tracked-symlink portability gate
+        run: |
+          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/tracked_symlink_portability_check.py
+
       - name: evidence-citation gate (a cited proof must exist)
         run: |
           python3 vibe-ic-marketplace/plugins/vibe-ic/programs/evidence_citation_resolves_check.py
