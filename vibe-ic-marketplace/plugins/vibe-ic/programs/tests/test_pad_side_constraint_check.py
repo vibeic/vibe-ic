@@ -338,26 +338,26 @@ import re as _re  # noqa: E402
 import phase3_one_shot_runner as _p3  # noqa: E402
 
 
-def _emit_derived_cfg(project: Path, table) -> Path:
-    """Reproduce step_pnr's L-doc -> pin_order.cfg emission."""
+def _emit_derived_cfg(project: Path) -> Path:
+    """Run the REAL emitter step_pnr calls.
+
+    (The first cut of this file re-implemented the derivation inline, so a
+    mutation of the shipped emitter changed nothing here — the classic
+    vacuous control. Everything below now exercises
+    `_p3._emit_ldoc_pin_order_cfg`.)
+    """
     out_dir = project / "phase3" / "stage3" / "pnr"
     out_dir.mkdir(parents=True, exist_ok=True)
-    lines = ["# pin_order.cfg derived from L-doc pad-side table\n"]
-    for edge, patterns in sorted(table.items()):
-        lines.append(f"#{psc._normalise_edge(edge) or edge.upper()}\n")
-        for pat in patterns:
-            lines.append(_re.sub(r"\[[\w\s\-+*/:]+\]", r"\\[.*\\]", pat) + "\n")
-    cfg = out_dir / "pin_order.cfg"
-    cfg.write_text("".join(lines), encoding="utf-8")
-    return cfg
+    _p3._emit_ldoc_pin_order_cfg(project, out_dir)
+    return out_dir / "pin_order.cfg"
 
 
 def test_derived_pin_order_cfg_is_discovered(tmp_path):
     """FIXED direction: the cfg derived into phase3/stage3/pnr/ is found."""
     _write_docs(tmp_path, _L9_MD)
-    table = psc._load_pad_side_table(tmp_path)
-    assert table, "L9 table must parse"
-    cfg = _emit_derived_cfg(tmp_path, table)
+    assert psc._load_pad_side_table(tmp_path), "L9 table must parse"
+    cfg = _emit_derived_cfg(tmp_path)
+    assert cfg.is_file()
     assert _p3._v1_0_38_find_pin_order_cfg(tmp_path) == cfg
 
 
@@ -365,8 +365,7 @@ def test_derived_pin_order_cfg_reaches_openroad(tmp_path):
     """FIXED direction: the derived cfg becomes set_io_pin_constraint TCL,
     with each L-doc edge mapped to the matching OpenROAD region."""
     _write_docs(tmp_path, _L9_MD)
-    table = psc._load_pad_side_table(tmp_path)
-    _emit_derived_cfg(tmp_path, table)
+    _emit_derived_cfg(tmp_path)
     bare = "place_pins -hor_layers M3 -ver_layers M2"
     tcl, note = _p3._v1_0_38_pin_placement_block(tmp_path, bare)
     assert "set_io_pin_constraint" in tcl
@@ -384,7 +383,9 @@ def test_derived_pin_order_cfg_reaches_openroad(tmp_path):
 def test_no_derived_cfg_keeps_bare_auto_assign(tmp_path):
     """DEFECT direction / no-op guard: a project with NO L-doc table and no
     derived cfg keeps the legacy bare place_pins, byte-for-byte."""
-    (tmp_path / "phase3" / "stage3" / "pnr").mkdir(parents=True)
+    _emit_derived_cfg(tmp_path)          # no docs -> must write nothing
+    assert not (tmp_path / "phase3" / "stage3" / "pnr" /
+                "pin_order.cfg").exists()
     bare = "place_pins -hor_layers M3 -ver_layers M2"
     tcl, note = _p3._v1_0_38_pin_placement_block(tmp_path, bare)
     assert tcl == bare
@@ -396,9 +397,257 @@ def test_project_supplied_cfg_wins_over_derived(tmp_path):
     """Precedence: a project-supplied cfg must OUTRANK the derived one, so the
     fallback can never hijack an explicit override."""
     _write_docs(tmp_path, _L9_MD)
-    table = psc._load_pad_side_table(tmp_path)
-    _emit_derived_cfg(tmp_path, table)
+    _emit_derived_cfg(tmp_path)
     supplied = tmp_path / "openlane" / "pin_order.cfg"
     supplied.parent.mkdir(parents=True, exist_ok=True)
     supplied.write_text("#N\nclk\n", encoding="utf-8")
     assert _p3._v1_0_38_find_pin_order_cfg(tmp_path) == supplied
+
+
+# ---------------------------------------------------------------------------
+# FRONT B — the pattern rewrite false-positived on a CONFORMING design.
+#
+# `_pattern_to_regex` rewrote ANY bracketed index to `\[\d+\]`, including an
+# explicit single-bit constraint. A pad table that splits a bus across two
+# edges (routine on a real pad ring) therefore made every bit match BOTH
+# edges' patterns; the later dict key overwrote expected_sides for all of
+# them and the gate FAILed a design that was placed exactly as declared.
+# The derived pin_order.cfg carried the same rewrite, so the CORRECTIVE half
+# would have pinned the whole bus to one edge.
+# ---------------------------------------------------------------------------
+
+_SPLIT_BUS_MD = """\
+### Pad ring
+
+| Edge | Signals |
+|------|---------|
+| North (N) | `data[0]`, `data[1]` |
+| South (S) | `data[2]`, `data[3]` |
+"""
+
+_SPLIT_RANGE_MD = """\
+### Pad ring
+
+| Edge | Signals |
+|------|---------|
+| North (N) | `data[7:0]` |
+| South (S) | `data[15:8]` |
+"""
+
+
+def _split_bus_def(n_north: int, n_south: int) -> str:
+    pins = {}
+    for i in range(n_north):
+        pins[f"data[{i}]"] = (20000 + i * 1000, 92600)          # North
+    for j in range(n_south):
+        pins[f"data[{n_north + j}]"] = (20000 + j * 1000, 400)  # South
+    return _make_def(pins)
+
+
+def test_split_bus_single_bit_table_passes_a_conforming_layout(tmp_path):
+    """The skeptic's exact reproduction: data[0],data[1] North /
+    data[2],data[3] South, DEF placing them EXACTLY as declared.
+
+    MUTATION THIS CATCHES: dropping the explicit-numeric-index branch of
+    `_index_regex` (i.e. restoring `\\[\\d+\\]` for every index) -> every bit
+    matches both edges and this conforming design is reported FAIL.
+    """
+    def_path = _write_def(tmp_path, _split_bus_def(2, 2))
+    _write_docs(tmp_path, _SPLIT_BUS_MD)
+
+    result = psc.check(tmp_path, def_path)
+
+    assert result["verdict"] == "PASS", (
+        f"a design that obeys the document must not FAIL: {result['note']}\n"
+        f"wrong={result['wrong_side_pins']}")
+
+
+def test_split_bus_single_bit_table_still_catches_a_real_violation(tmp_path):
+    """Control: swap two bits and the gate must FAIL, naming them."""
+    pins = {"data[0]": (20000, 92600), "data[1]": (21000, 92600),
+            "data[2]": (22000, 92600),      # declared South, placed North
+            "data[3]": (23000, 400)}
+    def_path = _write_def(tmp_path, _make_def(pins))
+    _write_docs(tmp_path, _SPLIT_BUS_MD)
+
+    result = psc.check(tmp_path, def_path)
+    assert result["verdict"] == "FAIL"
+    assert set(result["wrong_side_pins"]) == {"data[2]"}
+
+
+def test_split_bus_numeric_range_table_passes_a_conforming_layout(tmp_path):
+    """Same defect in RANGE form: data[7:0] North / data[15:8] South."""
+    def_path = _write_def(tmp_path, _split_bus_def(8, 8))
+    _write_docs(tmp_path, _SPLIT_RANGE_MD)
+
+    result = psc.check(tmp_path, def_path)
+    assert result["verdict"] == "PASS", (
+        f"{result['note']}\nwrong={result['wrong_side_pins']}")
+
+
+def test_split_bus_numeric_range_still_catches_a_real_violation(tmp_path):
+    def_path = _write_def(tmp_path, _split_bus_def(9, 7))  # data[8] on North
+    _write_docs(tmp_path, _SPLIT_RANGE_MD)
+
+    result = psc.check(tmp_path, def_path)
+    assert result["verdict"] == "FAIL"
+    assert "data[8]" in result["wrong_side_pins"]
+
+
+def test_pattern_to_regex_index_semantics():
+    """The rewrite rules, pinned."""
+    assert psc._pattern_to_regex("data[0]").match("data[0]")
+    assert not psc._pattern_to_regex("data[0]").match("data[1]")
+    assert psc._pattern_to_regex("data[7:0]").match("data[7]")
+    assert not psc._pattern_to_regex("data[7:0]").match("data[8]")
+    # symbolic width is not knowable from the document -> any index
+    assert psc._pattern_to_regex("x[size-1:0]").match("x[31]")
+    assert psc._pattern_to_regex("x[N-1:0]").match("x[0]")
+    # plain names and globs unchanged
+    assert psc._pattern_to_regex("rst").match("rst")
+    assert not psc._pattern_to_regex("rst").match("rst_n")
+    assert psc._pattern_to_regex("dat.*").match("dat_valid")
+
+
+def test_pin_order_cfg_tokens_do_not_widen_a_single_bit():
+    """The CORRECTIVE half must constrain exactly what the document says.
+
+    MUTATION THIS CATCHES: dropping the explicit-index branch of
+    `pin_order_cfg_tokens` -> `data[0]` becomes `data\\[.*\\]` and OpenROAD
+    pins the WHOLE bus to that edge.
+    """
+    assert psc.pin_order_cfg_tokens("data[0]") == [r"data\[0\]"]
+    assert psc.pin_order_cfg_tokens("data[3:0]") == [
+        r"data\[0\]", r"data\[1\]", r"data\[2\]", r"data\[3\]"]
+    assert psc.pin_order_cfg_tokens("x[size-1:0]") == [r"x\[.*\]"]
+    assert psc.pin_order_cfg_tokens("rst") == ["rst"]
+
+
+def test_derived_cfg_keeps_a_split_bus_split(tmp_path):
+    """End-to-end on the derived cfg: the two edges must NOT both claim the
+    whole bus."""
+    _write_docs(tmp_path, _SPLIT_BUS_MD)
+    cfg = _emit_derived_cfg(tmp_path)
+    text = cfg.read_text()
+    sections = _p3._v1_0_38_parse_pin_order_cfg(text)
+    by_edge = {e: p for e, p in sections}
+    assert by_edge["N"] == [r"data\[0\]", r"data\[1\]"]
+    assert by_edge["S"] == [r"data\[2\]", r"data\[3\]"]
+    assert r"data\[.*\]" not in text
+
+
+# ---------------------------------------------------------------------------
+# An AMBIGUOUS table is a document defect, not a layout violation.
+# ---------------------------------------------------------------------------
+
+_AMBIGUOUS_MD = """\
+### Pad ring
+
+| Edge | Signals |
+|------|---------|
+| North (N) | `data[size-1:0]` |
+| South (S) | `data[2]` |
+"""
+
+
+def test_ambiguous_table_is_reported_as_ambiguous(tmp_path):
+    """Two edges claim data[2]. Letting the last dict key win manufactures a
+    wrong-side verdict against a design that obeyed one of the two readings.
+
+    MUTATION THIS CATCHES: removing the ambiguity detection -> the check
+    silently picks one edge and FAILs the pins placed per the other.
+    """
+    def_path = _write_def(tmp_path, _split_bus_def(2, 2))
+    _write_docs(tmp_path, _AMBIGUOUS_MD)
+
+    result = psc.check(tmp_path, def_path)
+    assert result["verdict"] == "ERROR", result
+    assert "AMBIGUOUS" in result["note"]
+    assert "data[2]" in result["note"]
+    assert result["wrong_side_pins"] == {}
+
+
+# ---------------------------------------------------------------------------
+# DEF auto-discovery: the comment said "deepest stage", the code was
+# alphabetical.
+# ---------------------------------------------------------------------------
+
+def test_def_discovery_prefers_the_routed_pnr_def(tmp_path):
+    """MUTATION THIS CATCHES: `sorted(rglob("*.def"))[-1]`, whose comment
+    claimed "deepest stage" but is alphabetical — it picks
+    `phase3/stage4/scratch.def` over `phase3/stage3/pnr/routed.def`."""
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    routed = pnr / "routed.def"
+    routed.write_text(_make_def(_CORRECT_SIDE_PINS))
+    stray = tmp_path / "phase3" / "stage4" / "scratch.def"
+    stray.parent.mkdir(parents=True)
+    stray.write_text(_make_def(_ALL_EAST_PINS))
+
+    assert psc._discover_def(tmp_path) == routed
+    _write_docs(tmp_path, _L9_MD)
+    assert psc.check(tmp_path)["verdict"] == "PASS", (
+        "the check must grade the ROUTED DEF, not an alphabetically-later "
+        "scratch file from an earlier stage")
+
+
+def test_def_discovery_falls_back_to_newest(tmp_path):
+    """No canonical routed.def: newest DEF in the canonical PnR dir wins."""
+    import os
+    import time
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    old = pnr / "zzz_old.def"
+    old.write_text(_make_def(_ALL_EAST_PINS))
+    new = pnr / "aaa_new.def"
+    new.write_text(_make_def(_CORRECT_SIDE_PINS))
+    now = time.time()
+    os.utime(old, (now - 500, now - 500))
+    os.utime(new, (now, now))
+    assert psc._discover_def(tmp_path) == new
+
+
+# ---------------------------------------------------------------------------
+# The derived cfg must not go stale.
+# ---------------------------------------------------------------------------
+
+def test_derived_cfg_is_regenerated_when_the_table_changes(tmp_path):
+    """MUTATION THIS CATCHES: the write-once `if not cfg.exists()` guard,
+    which pins every later run to the FIRST run's L-doc table."""
+    _write_docs(tmp_path, _SPLIT_BUS_MD)
+    cfg = _emit_derived_cfg(tmp_path)
+    assert r"data\[0\]" in cfg.read_text()
+
+    _write_docs(tmp_path, _SPLIT_RANGE_MD)          # the document changed
+    cfg = _emit_derived_cfg(tmp_path)
+    text = cfg.read_text()
+    assert r"data\[8\]" in text, "the cfg is stale — it still holds the old table"
+    assert r"data\[15\]" in text
+
+
+def test_derived_cfg_is_removed_when_the_table_is_withdrawn(tmp_path):
+    _write_docs(tmp_path, _SPLIT_BUS_MD)
+    cfg = _emit_derived_cfg(tmp_path)
+    assert cfg.is_file()
+
+    (tmp_path / "input" / "docs" / "L9_constraints.md").write_text("# L9\n")
+    _emit_derived_cfg(tmp_path)
+    assert not cfg.exists(), (
+        "a derived constraint must not outlive the document it derives from")
+
+
+def test_a_human_cfg_in_the_pnr_dir_is_never_overwritten_or_deleted(tmp_path):
+    """The regenerate/remove logic is keyed on our own marker, so a file a
+    human dropped in the PnR dir is left alone in both directions."""
+    out_dir = tmp_path / "phase3" / "stage3" / "pnr"
+    out_dir.mkdir(parents=True)
+    human = out_dir / "pin_order.cfg"
+    human.write_text("#N\nclk\n", encoding="utf-8")
+
+    _write_docs(tmp_path, _SPLIT_BUS_MD)
+    _p3._emit_ldoc_pin_order_cfg(tmp_path, out_dir)
+    assert human.read_text() == "#N\nclk\n"
+
+    (tmp_path / "input" / "docs" / "L9_constraints.md").write_text("# L9\n")
+    _p3._emit_ldoc_pin_order_cfg(tmp_path, out_dir)
+    assert human.is_file() and human.read_text() == "#N\nclk\n"

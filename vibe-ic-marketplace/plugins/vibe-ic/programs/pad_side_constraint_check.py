@@ -198,22 +198,111 @@ def _load_pad_side_table(project: Path) -> Optional[Dict[str, List[str]]]:
 # Pattern matching (bus wildcards)
 # ---------------------------------------------------------------------------
 
-def _pattern_to_regex(pattern: str) -> re.Pattern:
-    """Convert an L-doc signal pattern to a compiled regex.
+# A pin name is `<base>[<index>]<tail>`; `tail` is normally empty and only
+# non-empty when the L-doc cell held trailing prose the splitter could not
+# separate (that pattern then matches nothing, which is the correct
+# behaviour for an unparseable token).
+_BRACKET_RE = re.compile(r"^(?P<base>[^\[\]]*)\[(?P<idx>[^\[\]]*)\](?P<tail>.*)$")
 
-    ``x[size-1:0]``  →  matches  x[0] … x[N]  (any bracketed index)
-    ``x.*``          →  standard glob-like: . and * are regex already
-    ``x[0]``         →  exact literal match for x[0]
+# Widest numeric bus range still expanded index-by-index. Beyond this the
+# range degrades to the unbounded `\d+` form — the bound buys nothing on a
+# 1k-wide bus and the alternation would be gratuitous.
+_MAX_ENUMERATED_BUS = 1024
+
+
+def _literal(s: str) -> str:
+    """Escape `s` for use inside a regex, keeping an explicit ``.*`` glob."""
+    return re.escape(s).replace(r"\.\*", r".*")
+
+
+def _bus_range(idx: str):
+    """Return (lo, hi) when `idx` is a NUMERIC range like ``7:0`` / ``0:7``.
+
+    Returns None for a symbolic range (``size-1:0``, ``N-1:0``) or anything
+    that is not a range at all.
+    """
+    m = re.match(r"^\s*(\d+)\s*:\s*(\d+)\s*$", idx)
+    if m is None:
+        return None
+    a, b = int(m.group(1)), int(m.group(2))
+    return (min(a, b), max(a, b))
+
+
+def _index_regex(idx: str) -> str:
+    """Regex FRAGMENT matching the bracketed index of an L-doc pattern.
+
+    ``0`` / ``12``      → that index and NO other. This is the load-bearing
+                          case: a pad table that splits a bus across two
+                          edges (``data[0],data[1]`` North, ``data[2],data[3]``
+                          South — routine on a real pad ring) declares single
+                          bits, and rewriting them all to "any index" made
+                          every bit match BOTH edges. The later edge then
+                          overwrote the expectation for all of them and a
+                          CONFORMING design was reported as FAIL.
+    ``7:0``             → exactly the indices 0..7 (bounded), so ``data[7:0]``
+                          North + ``data[15:8]`` South is likewise exact.
+    ``size-1:0`` / ``i``→ symbolic: any index (the pre-existing behaviour;
+                          the width is not knowable from the document).
+    """
+    idx = idx.strip()
+    if re.match(r"^\d+$", idx):
+        return re.escape(idx)
+    rng = _bus_range(idx)
+    if rng is not None and (rng[1] - rng[0] + 1) <= _MAX_ENUMERATED_BUS:
+        return "(?:" + "|".join(str(i) for i in range(rng[0], rng[1] + 1)) + ")"
+    return r"\d+"
+
+
+def _pattern_to_regex(pattern: str) -> re.Pattern:
+    """Convert an L-doc signal pattern to a compiled, fully-anchored regex.
+
+    ``x[size-1:0]``  →  x[0] … x[N]      (symbolic bus range: any index)
+    ``x[7:0]``       →  x[0] … x[7]      (numeric bus range: BOUNDED)
+    ``x[0]``         →  x[0] and nothing else
+    ``x.*``          →  glob
+    ``rst``          →  exactly `rst`
     Chip-AGNOSTIC: no signal names hard-coded.
     """
-    # Replace the bus-width placeholder [size-1:0] or [N-1:0] with .*
-    pat = re.sub(r"\[[\w\s\-+*/:]+\]", r"\\[\\d+\\]", pattern)
-    # Also accept x.* as a glob
-    if ".*" in pat or r"\[" not in pat:
-        # treat as partial regex; anchor to full pin name
-        pat = re.escape(pattern).replace(r"\.\*", r".*")
-    # final anchor
-    return re.compile(r"^" + pat + r"$")
+    pat = pattern.strip()
+    m = _BRACKET_RE.match(pat)
+    if m is None:
+        return re.compile(r"^" + _literal(pat) + r"$")
+    return re.compile(
+        r"^" + _literal(m.group("base"))
+        + r"\[" + _index_regex(m.group("idx")) + r"\]"
+        + _literal(m.group("tail")) + r"$")
+
+
+def pin_order_cfg_tokens(pattern: str) -> List[str]:
+    """Render an L-doc signal pattern as ``pin_order.cfg`` pin token(s).
+
+    Shared with ``phase3_one_shot_runner.step_pnr`` so the CORRECTIVE half
+    (the derived cfg fed to OpenROAD ``set_io_pin_constraint``) constrains
+    exactly the pins the DISCLOSURE half (``check``) verifies — the two
+    halves cannot drift apart into "constrain the whole bus to one edge
+    while failing the design for obeying the document".
+
+    ``x[size-1:0]`` → ``['x\\[.*\\]']``       (symbolic width: whole bus)
+    ``x[3:0]``      → ``['x\\[0\\]', … 'x\\[3\\]']``  (bounded: per bit)
+    ``x[0]``        → ``['x\\[0\\]']``        (that bit ONLY)
+    ``rst``         → ``['rst']``
+    """
+    pat = pattern.strip()
+    m = _BRACKET_RE.match(pat)
+    if m is None:
+        return [pat] if pat else []
+    base, idx, tail = m.group("base"), m.group("idx").strip(), m.group("tail")
+    esc_tail = tail.replace("[", r"\[").replace("]", r"\]")
+
+    def _tok(inner: str) -> str:
+        return f"{base}\\[{inner}\\]{esc_tail}"
+
+    if re.match(r"^\d+$", idx):
+        return [_tok(idx)]
+    rng = _bus_range(idx)
+    if rng is not None and (rng[1] - rng[0] + 1) <= _MAX_ENUMERATED_BUS:
+        return [_tok(str(i)) for i in range(rng[0], rng[1] + 1)]
+    return [_tok(".*")]
 
 
 def _match_pins_to_side(
@@ -236,6 +325,43 @@ def _match_pins_to_side(
 
 PadCheckResult = dict  # keys: verdict, wrong_side_pins, vacuous, note
 
+# Canonical routed-PnR output directory (flow path constant, chip-AGNOSTIC).
+_PNR_DIR_REL = ("phase3", "stage3", "pnr")
+
+
+def _discover_def(project: Path) -> Optional[Path]:
+    """Pick the DEF to check when the caller did not name one.
+
+    Order: the canonical routed DEF, then the NEWEST DEF in the canonical
+    PnR dir, then the newest DEF anywhere under ``phase3/``. Ties break
+    lexicographically so the choice is deterministic.
+
+    (The previous rule was ``sorted(rglob("*.def"))[-1]`` with the comment
+    "deepest stage". That is alphabetical, not staged — it picks whichever
+    path sorts LAST, e.g. ``phase3/stage4/scratch.def`` over
+    ``phase3/stage3/pnr/routed.def``. The comment described a guarantee the
+    code did not provide.)
+    """
+    pnr_dir = project.joinpath(*_PNR_DIR_REL)
+    routed = pnr_dir / "routed.def"
+    if routed.is_file():
+        return routed
+
+    def _newest(paths: List[Path]) -> Optional[Path]:
+        files = [p for p in paths if p.is_file()]
+        if not files:
+            return None
+        return sorted(files, key=lambda p: (-p.stat().st_mtime, str(p)))[0]
+
+    if pnr_dir.is_dir():
+        hit = _newest(list(pnr_dir.glob("*.def")))
+        if hit is not None:
+            return hit
+    ph3 = project / "phase3"
+    if ph3.is_dir():
+        return _newest(list(ph3.rglob("*.def")))
+    return None
+
 
 def check(project: Path, def_path: Optional[Path] = None) -> PadCheckResult:
     """Run the pad-side constraint check.
@@ -253,11 +379,10 @@ def check(project: Path, def_path: Optional[Path] = None) -> PadCheckResult:
     """
     # ---- locate the DEF -------------------------------------------------
     if def_path is None:
-        candidates = sorted((project / "phase3").rglob("*.def")) if (project / "phase3").is_dir() else []
-        if not candidates:
+        def_path = _discover_def(project)
+        if def_path is None:
             return {"verdict": "ERROR", "wrong_side_pins": {},
                     "vacuous": False, "note": "No DEF file found under phase3/"}
-        def_path = candidates[-1]   # last in sorted order (deepest stage)
 
     try:
         def_text = def_path.read_text(errors="replace")
@@ -286,13 +411,32 @@ def check(project: Path, def_path: Optional[Path] = None) -> PadCheckResult:
     }
 
     # ---- match patterns → expected side --------------------------------
+    # A pin claimed by TWO edges is a defect in the DOCUMENT, not in the
+    # layout. Silently letting the last dict key win manufactures a
+    # wrong-side verdict against a design that placed the pin exactly where
+    # the (self-contradictory) table said — so ambiguity is reported as
+    # ambiguity and NOTHING is claimed about the placement.
     all_names = set(pins.keys())
-    expected_sides: Dict[str, str] = {}
+    claims: Dict[str, Set[str]] = {}
     for edge, patterns in table.items():
         edge_norm = _normalise_edge(edge) or edge.upper()
-        matched = _match_pins_to_side(patterns, all_names)
-        for name in matched:
-            expected_sides[name] = edge_norm
+        for name in _match_pins_to_side(patterns, all_names):
+            claims.setdefault(name, set()).add(edge_norm)
+
+    ambiguous = {n: sorted(e) for n, e in claims.items() if len(e) > 1}
+    if ambiguous:
+        detail = "; ".join(f"{n} -> {'/'.join(e)}"
+                           for n, e in sorted(ambiguous.items())[:10])
+        return {"verdict": "ERROR", "wrong_side_pins": {}, "vacuous": False,
+                "note": (f"ERROR: the pad-side table is AMBIGUOUS — "
+                         f"{len(ambiguous)} pin(s) are claimed by more than "
+                         f"one edge: {detail}"
+                         f"{' ...' if len(ambiguous) > 10 else ''}. "
+                         f"Fix the L-doc table; no placement verdict is "
+                         f"claimed.")}
+
+    expected_sides: Dict[str, str] = {n: next(iter(e))
+                                      for n, e in claims.items()}
 
     if not expected_sides:
         return {"verdict": "VACUOUS_PASS", "wrong_side_pins": {},
