@@ -132,6 +132,25 @@ E3d PORT_WIDTH_SYMBOL_UNCORROBORATED
     E3e (no width), E3c (1 bit), E3d (a concrete number) — and all three are
     ERROR. There is no arm that returns clean.
 
+E3f PORT_WIDTH_CONTRADICTS_SHIPPED_NETLIST
+    The same layer condition as E3c/E3d, and the consumer emitted a concrete
+    bit count that the design's OWN SHIPPED NETLIST refutes — synthesis
+    elaborated the same port to a different width.
+    THIS IS THE INSTRUMENT E3d SAYS A RESOLVER MUST PASS. E3d's text ends "a
+    resolver may only land here once this gate can CHECK the resolved value
+    against a statement the resolver did not write"; the shipped netlist is
+    such a statement. It is NOT an oracle: the published RTL these netlists are
+    synthesised from states in its own header that it was authored from the
+    L1-L9 documents alone (clean-room, §4.05), so the netlist is downstream of
+    the very layer under test and agreement proves nothing. A DISAGREEMENT
+    still proves the resolution wrong — and #404's
+    worst measured failure (an L12 scan-chain `N = 4` sizing a bus the design
+    ships as 32) is exactly a disagreement. Indistinguishable becomes
+    distinguishable in the failing direction.
+    Dormant on the current consumer, which emits no concrete width for a
+    symbolic entry — by design: this rail exists for the resolver that has not
+    landed yet.
+
 E4 CHANNEL_DIRECTION_SILENTLY_INOUT
     A declared channel yields a port whose direction the consumer had to guess
     because the channel carries no key the consumer reads. `derive_signals`
@@ -189,6 +208,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import _published_tree  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Consumer import — the gate asserts against the CONSUMER'S OWN derivation.
@@ -347,6 +368,100 @@ def _resolves(tok: str, universe: Set[str]) -> bool:
 # ---------------------------------------------------------------------------
 # Sequential-vs-combinational, derived from the design's OWN L-docs
 # ---------------------------------------------------------------------------
+_NL_MODULE_RE = re.compile(r"^\s*module\s+([A-Za-z_]\w*)", re.M)
+_NL_ENDMODULE_RE = re.compile(r"^\s*endmodule", re.M)
+# An ELABORATED port declaration: synthesis has already collapsed every
+# parameter, so a range here is a concrete bit count and nothing else.
+_NL_PORT_RE = re.compile(
+    r"^\s*(?:input|output|inout)\s*(?:wire|reg)?\s*"
+    r"(?:\[\s*(\d+)\s*:\s*(\d+)\s*\])?\s*([A-Za-z_]\w*)\s*;", re.M)
+
+
+def shipped_netlist_port_widths(project: Path) -> Dict[str, int]:
+    """Elaborated port widths read off the design's own SHIPPED netlists.
+
+    WHY THIS IS NOT AN ORACLE, and what it is good for (vibe-ic#404)
+    ================================================================
+    E3d's text says a resolver may only land "once this gate can CHECK the
+    resolved value against a statement the resolver did not write". This is
+    that statement — with one honest limit that has to be stated or the check
+    would overclaim.
+
+    The netlist is NOT independent of the layer. The published RTL these
+    netlists are synthesised from states, in its own header, that it was
+    authored from the L1-L9 documents alone (clean-room, §4.05) — so the RTL
+    is DOWNSTREAM of the very L9 entry under test, and synthesis is downstream
+    of that. Agreement therefore proves nothing: if L9 is wrong, the netlist
+    inherits the error.
+
+        IT CAN PROVE A RESOLUTION WRONG. IT CANNOT PROVE ONE RIGHT.
+
+    That asymmetry is exactly what #404 was missing. The withdrawn resolver's
+    worst measured failure — an L12 scan-chain `N = 4` sizing a data bus the
+    design documents and ships as 32 — produced a number no artefact in the
+    tree agreed with, and nothing noticed. Against the shipped netlist it is a
+    contradiction. "Indistinguishable" becomes "distinguishable in the failing
+    direction", which is the direction that matters.
+
+    MEASURED over the published corpus (15 cells with an L9):
+
+        multiple netlists agree on every port      10
+        no published netlist                        4   -> {} , never a pass
+        one file, same port name at two widths      1   -> see below
+
+    That last one changed the design. One corpus design declares the same port
+    NAME at 32 and at 33 bits inside a single file, because a port name is
+    unique only WITHIN a module and a whole-file scan reads every module at
+    once — it would have manufactured a contradiction on a clean design. So
+    this reads only the module nothing else instantiates, and when that module
+    is not unique it returns nothing rather than guessing, the same refusal the
+    rest of this gate family makes.
+
+    chip-AGNOSTIC: Verilog port grammar over the design's own outputs."""
+    try:
+        tracked = _published_tree.published_paths(project)
+    except Exception:
+        tracked = None
+    if tracked is None:
+        cands = [p for p in sorted(project.rglob("*.v")) if p.is_file()]
+    else:
+        cands = [project / r for r in sorted(tracked) if r.endswith(".v")]
+    cands = [p for p in cands
+             if re.search(r"(?:^|/)(?:synth|netlist)", str(p).replace("\\", "/"))
+             or "netlist" in p.name]
+
+    widths: Dict[str, set] = {}
+    for p in cands:
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        bodies: Dict[str, List[str]] = {}
+        for m in _NL_MODULE_RE.finditer(text):
+            e = _NL_ENDMODULE_RE.search(text, m.end())
+            bodies.setdefault(m.group(1), []).append(
+                text[m.end():e.start() if e else len(text)])
+        if not bodies:
+            continue
+        instantiated = set()
+        for name in bodies:
+            pat = re.compile(r"\b" + re.escape(name) + r"\s+\w+\s*\(")
+            for other in bodies.values():
+                for body in other:
+                    if pat.search(body):
+                        instantiated.add(name)
+                        break
+        tops = [n for n in bodies if n not in instantiated]
+        if len(tops) != 1:            # no unique top -> this file says nothing
+            continue
+        for body in bodies[tops[0]]:
+            for msb, lsb, name in _NL_PORT_RE.findall(body):
+                w = (int(msb) - int(lsb) + 1) if msb else 1
+                widths.setdefault(name, set()).add(w)
+    # A port two netlists disagree about is not evidence of anything.
+    return {n: next(iter(v)) for n, v in widths.items() if len(v) == 1}
+
+
 def design_is_clocked(gd: Path) -> Tuple[bool, List[str]]:
     """True when the run's own L-docs declare a clock domain / clocked element.
 
@@ -622,7 +737,11 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
     # which finding is reported. It cannot make this gate green.
     collapsed_widths = []
     uncorroborated_widths = []
+    contradicted_widths = []
     refused_widths = []
+    # The design's own shipped netlists, elaborated. Read once; `{}` whenever
+    # the tree publishes none, which keeps every rail below exactly as it was.
+    _shipped = shipped_netlist_port_widths(project)
     _l9_by_name = {}
     # The SAME two keys, in the SAME order, that derive_signals itself reads
     # (phase2_scaffold_gen:238) — so this cannot describe a port list the
@@ -649,6 +768,12 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
             "l9_width": _w,
             "width_symbolic": _sym,
         }
+        # Evidence, not a verdict. Naming the width the design SHIPS turns
+        # "state the width as an integer" into an actionable sentence, and it
+        # is what the contradiction arm below compares against.
+        _shipped_w = _shipped.get(str(_s.get("name") or ""))
+        if _shipped_w is not None:
+            _row["shipped_netlist_width"] = _shipped_w
         # THREE outcomes, because the consumer now has three width states
         # (ORGANIC #404, round 3). Every one of them is an ERROR: the LAYER
         # condition is the same in all three — L9 states a width that is not
@@ -662,7 +787,14 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
             collapsed_widths.append(_row)
         else:
             _row["consumer_width"] = _s.get("width")
-            uncorroborated_widths.append(_row)
+            # THE ARM #404's E3d text asked for. When the design ships a
+            # netlist that declares this very port at a different bit count,
+            # the resolution is not merely uncorroborated — it is refuted.
+            if (_shipped_w is not None
+                    and int(_shipped_w) != int(_s.get("width"))):
+                contradicted_widths.append(_row)
+            else:
+                uncorroborated_widths.append(_row)
     if refused_widths:
         findings.append(Finding(
             "ERROR", "PORT_WIDTH_UNRESOLVED_BY_CONSUMER",
@@ -714,6 +846,25 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
             f"resolved value against a statement the resolver did not write; "
             f"until then the resolution is reported, not trusted.",
             {"ports": uncorroborated_widths[:20]}))
+
+    if contradicted_widths:
+        findings.append(Finding(
+            "ERROR", "PORT_WIDTH_CONTRADICTS_SHIPPED_NETLIST",
+            f"{len(contradicted_widths)} port(s) whose L9 entry declares a "
+            f"SYMBOLIC or non-numeric width come out of the consumer's own "
+            f"derivation as a CONCRETE bit count that the design's OWN SHIPPED "
+            f"NETLIST refutes: synthesis elaborated the same port to a "
+            f"different width. This is #404's withdrawn resolver caught in the "
+            f"act — its worst measured failure was an L12 scan-chain `N = 4` "
+            f"sizing a data bus the design documents and ships as 32, a number "
+            f"no artefact in the tree agreed with and nothing noticed. "
+            f"The netlist is NOT an independent oracle — the RTL is authored "
+            f"from the L-docs, so agreement could never prove a resolution "
+            f"RIGHT — but a disagreement proves one WRONG, and that is the "
+            f"direction #404 had no instrument for. Remedy in L1/L9: state the "
+            f"width the design actually ships, or declare the parameter the "
+            f"range names in the same document.",
+            {"ports": contradicted_widths[:20]}))
 
     # -- E5 CLOCK_PORT_SYNTHESISED_BY_CONSUMER -----------------------------
     # derive_signals AUTO-ADDS a "clk"/"rst_n" stub when neither L17 nor L9
