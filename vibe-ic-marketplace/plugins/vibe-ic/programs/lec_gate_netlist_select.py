@@ -1,53 +1,87 @@
 #!/usr/bin/env python3
-"""lec_gate_netlist_select.py — ATPG-cut-netlist predicate + safe gate selector.
+"""lec_gate_netlist_select.py — Truthful diagnosis of a structural LEC abort.
 
-When the OSS Fault ATPG path runs, fault_atpg_run.py intentionally byte-copies
-the combinational CUT netlist over the scan netlist so that downstream
-`post_dft_opt` gets the correct combinational view for timing optimisation.
-The cut netlist DELETES every flip-flop and replaces it with a pair of
-top-level pseudo-ports: `_NNN_` (the flop's Q, a primary input) and
-`\\_NNN_.d` (the flop's D, a primary output).
-
-When design_one_shot_runner selects `post_dft_netlist.v` as the LEC gate,
-it therefore presents a netlist with ZERO flip-flops and dozens of `<inst>.d`
-pseudo-ports that are absent from the 5-port RTL.  yosys `equiv_make` aborts:
+WHAT THIS FIXES (and, just as important, what it deliberately does NOT do)
+=========================================================================
+When the OSS Fault ATPG path runs and no scan netlist exists yet,
+``fault_atpg_run.py`` writes Fault's combinational CUT output verbatim to
+``scan_netlist.v`` (``scan_netlist.write_bytes(cut_out.read_bytes())``, guarded
+by ``if not scan_netlist.exists()``) — in the open flow the cut output IS what
+the DFT chain hands on.  The cut netlist DELETES every flip-flop and replaces it
+with a pair of top-level pseudo-ports: ``_NNN_`` (the flop's Q, a primary
+input) and ``\\_NNN_.d`` (the flop's D, a primary output).  ``post_dft_opt``
+``opt_clean``s that into ``post_dft_netlist.v``, which step 13 then hands to
+yosys ``equiv_make`` as the gate side.  ``equiv_make`` aborts::
 
     ERROR: Can't match gate port `_508_.d_gate' to a gold port.
 
-and the run produces compared_points == 0 with no equivalence verdict.
-lec_equivalence_check.py then misclassifies this structural abort as
-LEC_NOT_EQUIVALENT — a FALSE diagnosis that sends the next agent to fix the
-design when the design is fine.
+No miter is built, ``compared_points == 0``, and NOTHING was compared.
+``lec_equivalence_check.py`` used to report that as::
 
-This module provides:
+    LEC_NOT_EQUIVALENT — "RTL and post-DFT netlist differ — fall back to
+    step 9 (synth/DFT)."
 
-  is_atpg_cut_artifact(netlist_path, ref_ports) -> bool
-      Structural predicate — True iff the candidate netlist looks like an
-      ATPG cut artifact.  Chip-AGNOSTIC: keys on observable structural
-      properties (FF count == 0 while ref has FFs, or extra ports with the
-      `<inst>.d` naming pattern), never on a filename, module name, or PDK
-      cell literal.
+That sentence is FALSE.  Nothing differed, because nothing was compared.  It
+sends the next agent to re-synthesise a design that was never examined.  The
+defect this module exists to close is a LYING DIAGNOSIS, and the repair is a
+TRUTHFUL one — at the SAME hard-FAIL severity.
 
-  select_gate_netlist(project, top_name, ref_ports, ref_ff_count) -> (path, reason)
-      Picks the best non-cut gate netlist available for LEC, falling back
-      from post_dft_netlist.v → <top>_synth.v → netlist.v.  Returns the
-      chosen Path and a human-readable reason string recorded in the report.
+Three things this module explicitly refuses to do
+-------------------------------------------------
+1. **It never substitutes a different gate netlist.**  ``gate_netlist_for_lec``
+   returns exactly what the pre-existing two-line rule returned
+   (``post_dft_netlist.v`` when present, else ``netlist.v``).  Silently
+   comparing ``<top>_synth.v`` instead would let the step canonically named
+   ``13_equivalence_check_rtl_post_dft_netlist`` report PASS while the post-DFT
+   netlist was never compared — a fabricated pass against a different artifact,
+   and it would leave the real upstream bug (the ``fault_atpg_run.py``
+   byte-copy) unflagged.  A corrupt post-DFT netlist must stay a visible,
+   hard FAIL.
+2. **It never downgrades a non-PASS to a waiver.**  The abort is still a hard
+   FAIL (``rc=1``).  Only the rule name and the message change.  Reclassifying
+   it as INCONCLUSIVE would route it to the ``PASS_WITH_WAIVERS`` /
+   WAIVED-DEFERRED tier, so a genuine top-level port-set mismatch (e.g. scan
+   ports present in the netlist and absent from the gold RTL — a real DFT
+   integration bug) would be laundered into a near-pass.
+3. **It never asserts a cause it has not measured.**  The yosys error string
+   alone proves only "the gate port set could not be matched".  The claim
+   "this is an ATPG-cut artifact" is made ONLY when
+   ``is_atpg_cut_artifact()`` confirms it by reading the netlist that was
+   actually compared.
 
-  classify_port_abort(log_text, compared_points) -> str | None
-      Given an LEC log and a compared_points count, returns an accurate
-      verdict string when a structural port-match abort is detected.  Returns
-      None when the run looks normal (no action needed).  The caller uses this
-      to avoid reporting a tool abort as LEC_NOT_EQUIVALENT.
+Public API
+----------
+``is_atpg_cut_artifact(netlist_path) -> (bool, reason)``
+    Structural predicate.  True iff the netlist's TOP-LEVEL PORT LIST contains
+    at least one ``<inst>.d`` pseudo-port AND the netlist instantiates ZERO
+    sequential cells.  Both signals are required.  Chip- and PDK-AGNOSTIC: it
+    keys on observable structure, never on a filename, module name, or cell
+    literal.  Scanning is restricted to the port list precisely because a
+    whole-file scan flags a legitimate mapped netlist that merely carries a
+    hierarchical net such as ``\\u_reg.d``.
 
-  CANONICAL_STATUS  = "LEC_GATE_NETLIST_UNUSABLE"
-  CANONICAL_VERDICT = "INCONCLUSIVE-STRUCTURAL"
+``gate_netlist_for_lec(project, top_name) -> (rel_path, note, is_cut)``
+    The step-13 gate-side selection.  IDENTICAL to the legacy rule — no
+    reordering, no fallback, no substitution — plus a note recording whether
+    the selected netlist is a confirmed ATPG-cut artifact.
 
-FAIL-CLOSED contract
---------------------
-Every path that cannot confirm the design is equivalent still emits a
-non-PASS verdict.  The predicate only REJECTS a candidate; it never PASSES
-a design.  Genuine LEC_NOT_EQUIVALENT findings on a valid netlist are
-preserved.
+``classify_port_abort(log_text, compared_points) -> str | None``
+    ``CANONICAL_VERDICT`` when the log carries the equiv_make port-match abort
+    AND zero points were compared; ``None`` otherwise.
+
+``port_abort_cause(project, gate_field) -> (confirmed, evidence)``
+    Reads the netlist named by ``reports/lec.json:gate`` and returns measured
+    evidence, or ``(False, "")`` when the cause cannot be confirmed.
+
+``CANONICAL_STATUS  = "LEC_STRUCTURAL_PORT_ABORT"``
+``CANONICAL_VERDICT = "STRUCTURAL-PORT-ABORT"``
+
+Fail-safe direction
+-------------------
+A MISS (the predicate does not recognise a cut netlist) costs only the
+specific wording "confirmed ATPG-cut artifact" — the structural-abort FAIL
+still fires from the log.  A FALSE POSITIVE would put a fabricated cause in a
+sign-off report.  So every judgement call in here is biased towards the miss.
 
 PURE: no subprocess, no Docker, no network.  Filesystem reads only.
 Chip-AGNOSTIC: no design, module, or PDK literal is hard-coded.
@@ -56,13 +90,18 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Optional, Set, Tuple
 
 # ---------------------------------------------------------------------------
 # Exported status / verdict tokens (used by callers and the test suite)
 # ---------------------------------------------------------------------------
-CANONICAL_STATUS = "LEC_GATE_NETLIST_UNUSABLE"
-CANONICAL_VERDICT = "INCONCLUSIVE-STRUCTURAL"
+# The rule name describes the EVIDENCE (equiv_make aborted on the port match),
+# not a guessed cause.  The cause, when measurable, goes in the message.
+CANONICAL_STATUS = "LEC_STRUCTURAL_PORT_ABORT"
+CANONICAL_VERDICT = "STRUCTURAL-PORT-ABORT"
+
+# Canonical step-13 gate-side location.
+SYNTH_REL = "phase2/stage2/synth"
 
 # ---------------------------------------------------------------------------
 # Verilog port-list parser — STRUCTURAL only (no elaboration needed)
@@ -73,230 +112,262 @@ CANONICAL_VERDICT = "INCONCLUSIVE-STRUCTURAL"
 _MODULE_HDR_RE = re.compile(
     r"\bmodule\s+\w+\s*\(([^)]*)\)\s*;", re.DOTALL)
 
-# Match individual port declarations (directions + optional vector + name).
-# Handles both ANSI style (dir inside port list) and non-ANSI (separate decl).
-_PORT_DECL_RE = re.compile(
-    r"\b(input|output|inout)\s+(?:wire\s+)?(?:\[\s*\d+\s*:\s*\d+\s*\]\s+)?(\\\S+|\w+)",
+# Every port-direction keyword. A declaration statement runs from the keyword
+# to the next `;` or the next direction keyword, whichever comes first — so
+# ANSI headers (`module m(input a, output b);`), non-ANSI bodies (one
+# declaration per line) and several declarations packed onto ONE line
+# (`input _10_; output \_10_.d ;`) all parse. An earlier revision anchored the
+# body pattern at `^`, which silently dropped every declaration after the first
+# on a shared line and made the whole predicate a no-op on such a netlist.
+_PORT_DIR_RE = re.compile(r"\b(?:input|output|inout)\b", re.IGNORECASE)
+
+# Type/qualifier keywords that may sit between the direction and the names.
+_PORT_NOISE_RE = re.compile(
+    r"\b(?:wire|reg|logic|bit|signed|unsigned|integer)\b", re.IGNORECASE)
+
+# ATPG cut pseudo-port suffix, applied to an ALREADY-EXTRACTED PORT NAME.
+#
+# Anchored at the END of the name on purpose.  Fault names the pseudo-port for
+# the deleted flop's D pin `<inst>.d` and nothing else.  An unanchored `\.d`
+# would also match a legitimate escaped identifier such as `\bus.data` or
+# `\u_reg.dout`, and matching against the whole FILE (rather than the port
+# list) would additionally match a hierarchical NET like `\u_reg.d` in a
+# perfectly healthy mapped netlist.  Both of those are false positives that put
+# a fabricated cause into a sign-off report.
+_CUT_PORT_SUFFIX_RE = re.compile(r"\.d\Z")
+
+# Sequential-cell recognition — chip-AGNOSTIC, applied SEGMENT-WISE.
+#
+# A cell type is split on non-alphanumeric characters and each segment is
+# tested, so `sky130_fd_sc_hd__sdfxtp_1` is recognised through its `sdfxtp`
+# segment and `$_SDFFE_PP0P_` through its `SDFFE` segment. An earlier revision
+# used a whole-string regex whose segment boundary was `(?<![A-Za-z])`; that
+# recognised `dfxtp` but NOT `sdfxtp`/`sedfxtp` — i.e. it was blind to the SCAN
+# flops that make up a post-DFT netlist, which is the exact netlist this
+# predicate looks at.
+#
+# Covered: sky130 dfxtp/dfrtp/dfstp/dfbbn/sdfxtp/sedfxtp/edfxtp, gf180
+# dffq/dffrnq/sdffq, generic dff/sdff/adff/aldff, yosys $_DFF_*_/$_SDFF_*_/
+# $_ALDFF_*_/$_DLATCH_*_, and the dlatch/dlx/dlr/dls/dlclk latch families.
+#
+# NOT covered on purpose: `dly*` delay cells (sky130 dlygate4sd3, gf180 dlyd)
+# — they start `dl` but hold no state.
+_FF_SEGMENT_RE = re.compile(
+    r"^(?:s|e|a|se|sa|al|sal)?df[a-z0-9]*$"      # df*/sdf*/sedf*/aldf* families
+    r"|^(?:dlatch|dlx|dlr|dls|dlclk)[a-z0-9]*$",  # latch families
     re.IGNORECASE)
 
-# Match `wire <name>;` or `reg <name>;` declarations that are also ports
-# (non-ANSI style — the port name is re-declared as a net).
-_WIRE_DECL_RE = re.compile(
-    r"^\s*(?:input|output|inout)\s+(?:wire\s+)?(?:\[\s*\d+\s*:\s*\d+\s*\]\s+)?(\\\S+|\w+)\s*;",
-    re.MULTILINE | re.IGNORECASE)
-
-# ATPG cut pseudo-port pattern: `\_NNN_.d` (escaped Verilog identifier whose
-# base name ends in `.d`).  The instance pseudo-port is the DATA INPUT that
-# replaces the deleted flop's D pin.  chip-AGNOSTIC: keys only on the `.d`
-# suffix inside an escaped identifier — that suffix is Fault's canonical
-# naming convention for ALL designs.
-_CUT_PORT_RE = re.compile(r"\\(\S+)\.d\b")
-
-# Sequential-cell patterns — chip-AGNOSTIC.  We recognise:
-#   * Yosys generic primitives: $_DFF_P_, $_DFF_N_, $_DFFE_*, $_SDFF_*, $_ALDFF_*
-#   * Generic RTL: $dff, $adff, $sdff
-#   * Liberty-mapped DFF/DFX cells:
-#     - sky130:  dfxtp, dfxbp, dfrtp, dfstp, dfbbp, sdfxtp, sedfxtp, …
-#     - generic: dff*, dfb*, dlatch*
-#     Any identifier segment that starts with `df` or `dff` or `sdff` or
-#     `dlatch` — we match the SEGMENT inside the cell name after splitting on
-#     non-alphanumeric characters, so `sky130_fd_sc_hd__dfxtp_1` matches
-#     because its segment `dfxtp` starts with `df`.
-# We deliberately stay broad rather than enumerating specific PDK families:
-# a miss in one direction only means we DON'T flag a cut artifact (fail-safe),
-# and the pseudo-port check is a second, independent signal.
-_FF_CELL_RE = re.compile(
-    r"(?:"
-    r"\$_[DS]?[A-Z]*DFF[A-Z_]*_"       # Yosys generic: $_DFF_P_, $_DFFE_PP0P_, etc.
-    r"|\$(?:s?a?d?dff|aldff)\b"         # Yosys RTL: $dff, $sdff, $adff, $aldff
-    r"|(?<![A-Za-z])(?:"               # not preceded by a letter (segment boundary)
-    r"s?e?d?ff[A-Za-z0-9]*"            # dff, sdff, edff, sdfx, dfxtp, dfbbn …
-    r"|df[bfxrstpaln][A-Za-z0-9]*"     # dfx*, dfr*, dfs*, dfb*, dfp* (sky130 dfxtp)
-    r"|dlatch[A-Za-z0-9]*"             # dlatch, dlatchp, dlatchn …
-    r")"
-    r")",
-    re.IGNORECASE)
+_IDENT_RE = re.compile(r"[A-Za-z_$][\w$]*")
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _read_safe(path: Path) -> str:
-    """Read a Verilog file, stripping // and /* */ comments to avoid false
-    matches inside comment strings."""
+    """Read a Verilog file with // and /* */ comments stripped."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    # Strip block comments
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
-    # Strip line comments
     text = re.sub(r"//[^\n]*", " ", text)
     return text
 
 
+def _names_in(fragment: str) -> Set[str]:
+    """Pull identifier names out of one declaration fragment."""
+    frag = re.sub(r"\[[^\]]*\]", " ", fragment)          # drop vector ranges
+    frag = _PORT_NOISE_RE.sub(" ", frag)                 # drop type keywords
+    frag = frag.replace("(", " ").replace(")", " ")
+    out: Set[str] = set()
+    for tok in re.split(r"[\s,]+", frag):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok.startswith("\\"):
+            # Escaped identifier: everything up to the terminating whitespace.
+            out.add(tok[1:])
+        elif re.fullmatch(r"[A-Za-z_$][\w$]*", tok):
+            out.add(tok)
+    return out
+
+
 def _extract_ports(text: str) -> Set[str]:
-    """Return the set of top-level port names from a Verilog module source."""
-    # Try ANSI module header first (most synthesised netlists use ANSI style).
-    m = _MODULE_HDR_RE.search(text)
+    """Return the set of declared port names in a Verilog source.
+
+    The leading backslash of an escaped identifier is stripped, so
+    ``output \\_10_.d ;`` yields the name ``_10_.d``.
+
+    Handles ANSI headers, non-ANSI bodies, several declarations on one line,
+    comma-separated name lists, and vector ranges.
+    """
     ports: Set[str] = set()
-    if m:
-        hdr = m.group(1)
-        for dm in _PORT_DECL_RE.finditer(hdr):
-            ports.add(dm.group(2).lstrip("\\"))
-    # Also collect non-ANSI port declarations in the module body.
-    for dm in _WIRE_DECL_RE.finditer(text):
-        ports.add(dm.group(1).lstrip("\\"))
-    # Fallback: bare names in the module header port list (no direction).
-    if not ports and m:
-        hdr = m.group(1)
-        for tok in re.split(r"[\s,]+", hdr):
-            tok = tok.strip().lstrip("\\")
-            if re.match(r"^[A-Za-z_$][\w$]*$", tok):
-                ports.add(tok)
+    for dm in _PORT_DIR_RE.finditer(text):
+        start = dm.end()
+        end = len(text)
+        semi = text.find(";", start)
+        if semi != -1:
+            end = semi
+        nxt = _PORT_DIR_RE.search(text, start)
+        if nxt is not None and nxt.start() < end:
+            end = nxt.start()
+        ports |= _names_in(text[start:end])
+    # Fallback: a header port list with no directions given anywhere.
+    if not ports:
+        m = _MODULE_HDR_RE.search(text)
+        if m:
+            for tok in re.split(r"[\s,]+", m.group(1)):
+                tok = tok.strip()
+                if tok.startswith("\\"):
+                    ports.add(tok[1:])
+                elif re.fullmatch(r"[A-Za-z_$][\w$]*", tok):
+                    ports.add(tok)
     return ports
 
 
+def _is_ff_type(ident: str) -> bool:
+    """True iff any `_`/`$`-separated segment of *ident* names a state element."""
+    return any(_FF_SEGMENT_RE.match(seg)
+               for seg in re.split(r"[^A-Za-z0-9]+", ident) if seg)
+
+
 def _count_ff_cells(text: str) -> int:
-    """Count the number of sequential-cell instantiation lines in Verilog."""
+    """Count sequential-cell instantiations in a Verilog netlist.
+
+    Only the text BEFORE the instantiation's opening parenthesis is inspected —
+    that is the cell type and instance name. Port connections such as
+    ``.D(\\u_reg.d )`` are net references, not cell types, and must not be
+    counted.
+    """
     count = 0
     for line in text.splitlines():
-        # Skip port/wire declarations; look for cell instance lines.
-        # A cell instantiation looks like:   sky130_fd_sc_hd__dfxtp_1 _123_ (
-        # or: $_DFF_P_ _123_ (
-        # We count lines that contain a FF-pattern token AND an opening `(`.
-        if "(" in line and _FF_CELL_RE.search(line):
+        if "(" not in line:
+            continue
+        head = line.split("(", 1)[0]
+        if any(_is_ff_type(ident) for ident in _IDENT_RE.findall(head)):
             count += 1
     return count
 
 
-def _count_cut_pseudo_ports(text: str) -> int:
-    """Count `<inst>.d` pseudo-ports exposed as top-level ports."""
-    return len(_CUT_PORT_RE.findall(text))
+def cut_pseudo_ports(text: str) -> Set[str]:
+    """Return the ``<inst>.d`` pseudo-ports present in the TOP-LEVEL port list.
+
+    Scoped to the port list — NOT the whole file — and anchored at the end of
+    the port name.  See ``_CUT_PORT_SUFFIX_RE`` for why both restrictions are
+    load-bearing.
+    """
+    return {p for p in _extract_ports(text) if _CUT_PORT_SUFFIX_RE.search(p)}
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — structural predicate
 # ---------------------------------------------------------------------------
 
-def is_atpg_cut_artifact(
-    netlist_path: Path,
-    ref_ports: Optional[Set[str]] = None,
-    ref_ff_count: Optional[int] = None,
-) -> Tuple[bool, str]:
-    """Structural predicate: True iff *netlist_path* is an ATPG-cut artifact.
 
-    Decision rule (two independent signals — either is sufficient):
+def is_atpg_cut_artifact(netlist_path: Path) -> Tuple[bool, str]:
+    """Structural predicate: is *netlist_path* an ATPG combinational-cut view?
 
-      Signal A — pseudo-port pattern:
-        The candidate has top-level ports whose names match `<inst>.d`
-        (Fault's cut pseudo-port convention).  This is a direct structural
-        fingerprint of a cut netlist and is independent of the reference.
+    BOTH signals are required — either alone is a known false-positive source:
 
-      Signal B — FF-count drop with reference context:
-        If `ref_ff_count` is provided AND > 0, and the candidate has 0
-        sequential cells, the candidate is flagged.  This catches cut
-        netlists that happen not to use the `.d` suffix (non-standard ATPG
-        tool) or where the pattern match missed some cells.
+      1. at least one top-level port whose name ends in ``.d``
+         (Fault's cut pseudo-port convention for the deleted flop's D pin), and
+      2. ZERO sequential-cell instantiations in the netlist.
 
-    Returns (is_cut, reason_string).  PURE, chip-AGNOSTIC.
+    Requiring (2) as corroboration means a mapped netlist that happens to carry
+    an escaped hierarchical port name ending in ``.d`` is not flagged while it
+    still has its flops.  Requiring (1) means a legitimately combinational
+    design is never flagged.
+
+    Takes NO reference-design context.  An earlier revision derived a reference
+    flip-flop count by running the liberty-cell regex over the RTL; that count
+    is meaningless (RTL does not instantiate liberty cells — measured 0 for one
+    real design and 1 for a core holding 1272 flops), and feeding it into the
+    decision could REJECT a valid netlist whose PDK cell names the regex misses.
+
+    Returns ``(is_cut, reason)``.  PURE, chip-AGNOSTIC.
     """
     text = _read_safe(netlist_path)
     if not text:
         return False, ""
 
-    cut_ports = _count_cut_pseudo_ports(text)
-    if cut_ports > 0:
-        return (
-            True,
-            f"ATPG-cut artifact: {cut_ports} '<inst>.d' pseudo-port(s) in "
-            f"top-level port list (Fault cut-DFF replacement convention); "
-            f"every flip-flop has been deleted and replaced by pseudo-ports — "
-            f"equiv_make cannot match these against RTL ports.",
-        )
+    cut = cut_pseudo_ports(text)
+    if not cut:
+        return False, ""
 
-    if ref_ff_count is not None and ref_ff_count > 0:
-        cand_ff = _count_ff_cells(text)
-        if cand_ff == 0:
-            # Also check ref_ports mismatch as corroboration.
-            cand_ports = _extract_ports(text)
-            extra: Set[str] = set()
-            if ref_ports:
-                extra = cand_ports - ref_ports
-            return (
-                True,
-                f"ATPG-cut artifact: 0 sequential cells while reference has "
-                f"{ref_ff_count} flip-flop(s); "
-                + (f"candidate exposes {len(extra)} extra port(s) absent from "
-                   f"RTL ({sorted(extra)[:5]}{'...' if len(extra) > 5 else ''}). "
-                   if extra else "")
-                + "The candidate is a combinational-cut view, not a synthesis netlist.",
-            )
+    ff = _count_ff_cells(text)
+    if ff > 0:
+        # Has both `.d` ports AND flops — not a cut view.  Say nothing.
+        return False, ""
 
-    return False, ""
-
-
-def select_gate_netlist(
-    project: Path,
-    top_name: str,
-    ref_ports: Optional[Set[str]] = None,
-    ref_ff_count: Optional[int] = None,
-) -> Tuple[Optional[Path], str]:
-    """Choose the best non-cut gate netlist available for LEC.
-
-    Preference order:
-      1. phase2/stage2/synth/post_dft_netlist.v  — if NOT a cut artifact
-      2. phase2/stage2/synth/<top>_synth.v       — Liberty-backed, always preferred
-      3. phase2/stage2/synth/netlist.v            — generic yosys netlist
-
-    Returns (chosen_path, reason).  *reason* explains WHY a candidate was
-    rejected and which fallback was chosen — this is written into the LEC
-    report so a future reader knows exactly what happened.
-
-    If ALL candidates are cut artifacts or missing, returns (None, reason).
-    """
-    synth_dir = project / "phase2" / "stage2" / "synth"
-    candidates = [
-        synth_dir / "post_dft_netlist.v",
-        synth_dir / f"{top_name}_synth.v",
-        synth_dir / "netlist.v",
-    ]
-
-    rejected: List[str] = []
-    for cand in candidates:
-        if not cand.is_file():
-            continue
-        is_cut, cut_reason = is_atpg_cut_artifact(cand, ref_ports, ref_ff_count)
-        if is_cut:
-            rejected.append(
-                f"Rejected {cand.name}: {cut_reason}"
-            )
-            continue
-        # Accepted.
-        reason_parts = []
-        if rejected:
-            reason_parts.append(
-                "ATPG-cut netlist(s) rejected: "
-                + "; ".join(rejected)
-            )
-        reason_parts.append(
-            f"Selected {cand.name} as LEC gate netlist"
-            + (" (first non-cut candidate)" if rejected else "")
-        )
-        return cand, ".  ".join(reason_parts)
-
-    # All candidates rejected or absent.
-    reason = (
-        "No usable gate netlist found for LEC.  "
-        + "  ".join(rejected)
-        if rejected
-        else "No gate netlist candidates exist under phase2/stage2/synth/."
+    sample = sorted(cut)[:5]
+    return (
+        True,
+        f"ATPG combinational-cut netlist: {len(cut)} top-level '<inst>.d' "
+        f"pseudo-port(s) {sample}{'...' if len(cut) > 5 else ''} and 0 "
+        f"sequential cells — every flip-flop has been replaced by a "
+        f"primary-input/primary-output pseudo-port pair, so equiv_make has no "
+        f"gold port to match them against",
     )
-    return None, reason
 
 
 # ---------------------------------------------------------------------------
-# Port-abort classifier
+# Public API — step-13 gate-side selection (UNCHANGED from the legacy rule)
+# ---------------------------------------------------------------------------
+
+
+def legacy_gate_netlist_rel(project: Path) -> str:
+    """The pre-existing step-13 gate-side rule, verbatim.
+
+    ``post_dft_netlist.v`` when it exists on disk, otherwise ``netlist.v``.
+    Kept as a named function so the no-scope-creep property is testable
+    directly rather than asserted in a comment.
+    """
+    post_dft = project / "phase2" / "stage2" / "synth" / "post_dft_netlist.v"
+    name = "post_dft_netlist.v" if post_dft.is_file() else "netlist.v"
+    return f"{SYNTH_REL}/{name}"
+
+
+def gate_netlist_for_lec(project: Path,
+                         top_name: str = "") -> Tuple[str, str, bool]:
+    """Choose the step-13 gate netlist and report whether it is a cut artifact.
+
+    Returns ``(rel_path, note, is_cut)``.
+
+    The selection is BYTE-IDENTICAL to ``legacy_gate_netlist_rel`` for every
+    input.  ``top_name`` is accepted and ignored: it exists so a future caller
+    cannot be tempted to reintroduce a ``<top>_synth.v`` fallback, which would
+    silently change the compared artifact for the majority of designs (measured:
+    19 of 27 real synth trees on one host have no ``post_dft_netlist.v`` but do
+    have both ``<top>_synth.v`` and ``netlist.v``) and would make a PASS on the
+    post-DFT LEC step mean something it does not say.
+
+    When the selected netlist IS a confirmed cut artifact we still select it —
+    and say so — so the run fails visibly on the corrupt artifact instead of
+    passing quietly against a substitute.
+    """
+    del top_name  # intentionally unused; see docstring
+    rel = legacy_gate_netlist_rel(project)
+    chosen = project / rel
+    is_cut, cut_reason = is_atpg_cut_artifact(chosen)
+    if not is_cut:
+        return rel, f"gate netlist {Path(rel).name} (legacy step-13 rule)", False
+    note = (
+        f"gate netlist {Path(rel).name} (legacy step-13 rule) is UNUSABLE for "
+        f"LEC — {cut_reason}.  yosys equiv_make will abort on the port match "
+        f"and compare nothing.  Root cause is upstream: fault_atpg_run.py "
+        f"writes Fault's ATPG cut output verbatim to scan_netlist.v (when no "
+        f"scan netlist exists yet) and post_dft_opt opt_cleans that into "
+        f"post_dft_netlist.v.  This is reported as a hard "
+        f"FAIL on the real artifact; it is NOT worked around by comparing a "
+        f"different netlist, because that would report the post-DFT "
+        f"equivalence step as PASS without ever reading the post-DFT netlist."
+    )
+    return rel, note, True
+
+
+# ---------------------------------------------------------------------------
+# Public API — port-abort classifier and its measured cause
 # ---------------------------------------------------------------------------
 
 # yosys equiv_make error when a gate port has no matching gold port.
@@ -306,31 +377,66 @@ _EQUIV_MAKE_PORT_ABORT_RE = re.compile(
     re.IGNORECASE)
 
 
-def classify_port_abort(
-    log_text: str,
-    compared_points: int,
-) -> Optional[str]:
-    """Return CANONICAL_VERDICT when a structural port-match abort is detected.
+def classify_port_abort(log_text: str,
+                        compared_points: int) -> Optional[str]:
+    """Return ``CANONICAL_VERDICT`` for a structural equiv_make port abort.
 
-    A structural port-match abort (equiv_make cannot match gate ports to gold
-    ports) leaves compared_points == 0 because no miter was ever built.  This
-    is NOT a semantic non-equivalence — it is a structural tool abort caused by
-    selecting the wrong input netlist.  It must NOT be reported as
-    LEC_NOT_EQUIVALENT.
+    Both conditions are required:
+      * ``compared_points == 0`` — no miter was built, so nothing was compared;
+      * the log carries the yosys equiv_make port-match abort.
 
-    Returns CANONICAL_VERDICT ("INCONCLUSIVE-STRUCTURAL") when:
-      * compared_points == 0  AND
-      * the log contains the yosys equiv_make port-match abort error.
+    Returns ``None`` otherwise.  A run that compared points has real evidence
+    and must be judged on that evidence, never reclassified from a log string.
 
-    Returns None otherwise (normal run — caller decides the verdict).
-
-    FAIL-CLOSED: we only reclassify when both conditions hold simultaneously.
-    A run with compared_points > 0 or without the abort signature is left
-    alone; a genuine mismatch (non_equivalent_points > 0) will still fail at
-    the substance gate.
+    This function does NOT decide the severity tier.  The caller keeps a
+    structural abort at hard-FAIL: nothing was compared, so equivalence is
+    unproven, and an unproven equivalence is never a waiver.
     """
     if compared_points != 0:
         return None
     if _EQUIV_MAKE_PORT_ABORT_RE.search(log_text or ""):
         return CANONICAL_VERDICT
     return None
+
+
+def _gate_name_from_field(gate_field: str) -> str:
+    """Extract the bare netlist filename from a ``lec.json:gate`` value.
+
+    lec_run writes ``"<name> (synth)"``.  Anything that is not a plain
+    ``*.v`` / ``*.sv`` basename yields ``""`` — we never guess.
+    """
+    if not gate_field:
+        return ""
+    parts = str(gate_field).strip().split()
+    if not parts:
+        return ""
+    # Basename only — the netlist is always resolved inside the canonical
+    # synth dir, so a path in the field can never escape it.
+    name = Path(parts[0]).name
+    return name if name.endswith((".v", ".sv")) else ""
+
+
+def port_abort_cause(project: Path,
+                     gate_field: str = "") -> Tuple[bool, str]:
+    """Measure WHY the port match aborted, or admit the cause is unknown.
+
+    Reads the netlist named by ``reports/lec.json:gate`` (resolved inside
+    ``phase2/stage2/synth/``) and returns ``(True, evidence)`` only when
+    ``is_atpg_cut_artifact`` confirms the cut fingerprint on that exact file.
+
+    Returns ``(False, "")`` when the gate field is absent, the file is missing,
+    or the fingerprint is not there.  The caller must then report the abort
+    WITHOUT naming a cause — a port-set mismatch has other real causes (most
+    commonly DFT/scan ports present in the netlist and absent from the gold
+    RTL, which is a genuine defect and must not be described as a cut artifact).
+    """
+    name = _gate_name_from_field(gate_field)
+    if not name:
+        return False, ""
+    cand = project / SYNTH_REL / name
+    if not cand.is_file():
+        return False, ""
+    is_cut, reason = is_atpg_cut_artifact(cand)
+    if not is_cut:
+        return False, ""
+    return True, f"{name}: {reason}"

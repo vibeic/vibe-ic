@@ -1,30 +1,42 @@
-"""test_lec_gate_netlist_select.py — bidirectional test for the ATPG-cut predicate.
+"""test_lec_gate_netlist_select.py — controls for the structural LEC abort fix.
 
-Two directions (BOTH required — either alone is a rubber stamp):
+Every test here is written to FAIL against a specific defect. The mutations
+each one kills are named in its docstring, because a test that passes against
+the defect is a rubber stamp no matter how many assertions it carries.
 
-  DEFECT direction:
-    * is_atpg_cut_artifact() FLAGS a cut-style netlist (0 FFs + <inst>.d ports).
-    * select_gate_netlist() REJECTS the cut netlist and falls back to a clean one.
-    * classify_port_abort() maps (compared_points==0 + abort log) to
-      INCONCLUSIVE-STRUCTURAL, NOT to LEC_NOT_EQUIVALENT.
-    * lec_equivalence_check.audit() on a lec.json with compared_points==0 +
-      lec.rpt with the port-abort error emits rule LEC_GATE_NETLIST_UNUSABLE,
-      sets inconclusive=True, and does NOT emit LEC_NOT_EQUIVALENT.
+The defect being closed
+-----------------------
+yosys ``equiv_make`` refuses to build a miter when a gate-side top-level port
+has no gold counterpart. compared_points is then 0 and NOTHING was compared.
+``lec_equivalence_check`` reported that as ``LEC_NOT_EQUIVALENT`` / "RTL and
+post-DFT netlist differ" — a false statement about a comparison that never
+happened.
 
-  FIXED direction:
-    * is_atpg_cut_artifact() does NOT flag a normal mapped netlist with FFs.
-    * select_gate_netlist() ACCEPTS a clean netlist.
-    * classify_port_abort() returns None for a normal log with 0 compared points
-      but no port-abort signature.
-    * lec_equivalence_check.audit() on a report with non_equivalent_points > 0
-      still emits LEC_NOT_EQUIVALENT (genuine failures are NOT suppressed).
+The three ways the first attempt at this fix was wrong, each now pinned:
 
-All fixtures are hand-written synthetic Verilog fragments — hermetic, no real
-spm/sky130 files, sub-millisecond runtime.
+  1. It reclassified the abort as INCONCLUSIVE (rc=3, ``PASS_WITH_WAIVERS``),
+     so a genuine top-level port-set mismatch — scan ports in the netlist and
+     absent from the gold RTL, a real DFT defect — was downgraded from hard
+     FAIL to WAIVED-DEFERRED.  ``TestNoFailOpen`` pins rc=1.
+  2. It asserted "the gate netlist is an ATPG-cut artifact" from the yosys
+     error string alone, without ever reading the netlist.
+     ``TestCauseIsMeasuredNeverGuessed`` pins that the cause is only named when
+     the fingerprint is confirmed on the file lec.json says was compared.
+  3. It silently re-pointed the gate side at ``<top>_synth.v``, which changes
+     the compared artifact for the majority of designs (19 of 27 real synth
+     trees on one host have no ``post_dft_netlist.v`` but do have both
+     ``<top>_synth.v`` and ``netlist.v``) and would report the post-DFT
+     equivalence step as PASS having never read the post-DFT netlist.
+     ``TestSelectionIsUnchanged`` pins the selection against the legacy rule.
+
+All fixtures are hand-written synthetic Verilog — hermetic, no real design
+files, no EDA tools, sub-millisecond runtime.
 """
 from __future__ import annotations
 
+import inspect
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -37,10 +49,14 @@ _PROGRAMS_DIR = Path(__file__).resolve().parent.parent
 if str(_PROGRAMS_DIR) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS_DIR))
 
+import lec_gate_netlist_select as _gns
 from lec_gate_netlist_select import (
     is_atpg_cut_artifact,
-    select_gate_netlist,
+    gate_netlist_for_lec,
+    legacy_gate_netlist_rel,
     classify_port_abort,
+    port_abort_cause,
+    cut_pseudo_ports,
     CANONICAL_STATUS,
     CANONICAL_VERDICT,
 )
@@ -53,7 +69,7 @@ import lec_equivalence_check as _lec
 
 # A minimal ATPG-cut netlist:
 #   * 5 original ports (clk, rst, x, y, p) matching the RTL
-#   * 6 cut pseudo-ports: _10_, \_10_.d, _11_, \_11_.d, _12_, \_12_.d
+#   * 3 cut pseudo-port pairs: _10_/\_10_.d, _11_/\_11_.d, _12_/\_12_.d
 #   * 0 flip-flop instantiations
 _CUT_NETLIST_V = """\
 /* ATPG cut netlist — every DFF replaced by pseudo-port pairs */
@@ -77,9 +93,7 @@ module tiny(clk, rst, x, y, p, _10_, \\_10_.d , _11_, \\_11_.d , _12_, \\_12_.d 
 endmodule
 """
 
-# A normal liberty-backed synthesis netlist:
-#   * 5 matching ports
-#   * 3 DFF cell instantiations (sky130 dfxtp)
+# A normal liberty-backed synthesis netlist: 5 matching ports, 3 dfxtp flops.
 _MAPPED_NETLIST_V = """\
 /* Liberty-backed synthesis netlist */
 module tiny(clk, rst, x, y, p);
@@ -99,40 +113,141 @@ module tiny(clk, rst, x, y, p);
 endmodule
 """
 
-# Yosys equiv_make port-abort log (occurs when gate side has extra ports)
+# The skeptic's constructible false positive, reproduced verbatim in spirit:
+# a perfectly healthy mapped netlist with 3 flops that merely CARRIES a yosys
+# hierarchical NET named `\u_reg.d`.  A whole-file `.d` scan flags this as
+# "every flip-flop has been deleted" — about a netlist holding three flops.
+_HIER_NET_NETLIST_V = """\
+/* Healthy mapped netlist that happens to carry a hierarchical net `\\u_reg.d` */
+module tiny(clk, rst, x, y, p);
+  input clk;
+  input rst;
+  input x;
+  input y;
+  output p;
+  wire \\u_reg.d ;
+  wire \\u_reg.q ;
+  wire _1_;
+  sky130_fd_sc_hd__dfxtp_1 _3_ (.D(\\u_reg.d ), .Q(\\u_reg.q ), .CLK(clk));
+  sky130_fd_sc_hd__dfxtp_1 _4_ (.D(\\u_reg.q ), .Q(_1_),        .CLK(clk));
+  sky130_fd_sc_hd__dfxtp_1 _5_ (.D(_1_),        .Q(p),          .CLK(clk));
+  sky130_fd_sc_hd__and2_1  _6_ (.A(x), .B(y), .X(\\u_reg.d ));
+  sky130_fd_sc_hd__nor2_1  _7_ (.A(rst), .B(_1_), .Y(p));
+endmodule
+"""
+
+# A legitimately combinational block whose escaped PORT names merely BEGIN with
+# `.d` — `\bus.data` and `\ctl.dout`.  An unanchored `\.d` pattern flags these.
+_DOT_DATA_PORT_NETLIST_V = """\
+/* Flattened combinational block with escaped hierarchical port names */
+module comb(a, b, \\bus.data , \\ctl.dout );
+  input a;
+  input b;
+  output \\bus.data ;
+  output \\ctl.dout ;
+  assign \\bus.data  = a ^ b;
+  assign \\ctl.dout  = a & b;
+endmodule
+"""
+
+# A genuine top-level PORT-SET MISMATCH that is NOT a cut artifact: the netlist
+# carries scan ports the gold RTL does not have, and still holds all its flops.
+# equiv_make aborts on these exactly as it does on a cut netlist — same log,
+# entirely different (and real) defect.
+_SCAN_PORT_MISMATCH_NETLIST_V = """\
+/* Post-DFT netlist with scan ports absent from the gold RTL — REAL defect */
+module tiny(clk, rst, x, y, p, scan_en, scan_in, scan_out);
+  input clk;
+  input rst;
+  input x;
+  input y;
+  output p;
+  input scan_en;
+  input scan_in;
+  output scan_out;
+  wire _0_;
+  wire _1_;
+  sky130_fd_sc_hd__sdfxtp_1 _3_ (.D(_0_), .Q(_1_), .CLK(clk), .SCD(scan_in));
+  sky130_fd_sc_hd__sdfxtp_1 _4_ (.D(_1_), .Q(p),   .CLK(clk), .SCD(_1_));
+  sky130_fd_sc_hd__sdfxtp_1 _5_ (.D(x),   .Q(scan_out), .CLK(clk), .SCD(y));
+  sky130_fd_sc_hd__and2_1  _6_ (.A(x), .B(y), .X(_0_));
+endmodule
+"""
+
+# The SAME cut netlist with several declarations packed onto one line, and
+# comma-separated name lists. A `^`-anchored declaration pattern sees only the
+# first declaration per line and reports this netlist as clean.
+_CUT_NETLIST_PACKED_V = """\
+module tiny(clk, rst, x, y, p, _10_, \\_10_.d , _11_, \\_11_.d );
+  input clk, rst; input x, y; output p;
+  input _10_; output \\_10_.d ;
+  input _11_; output \\_11_.d ;
+  assign \\_10_.d  = x & clk;
+  assign \\_11_.d  = rst | y;
+  assign p = _10_ & _11_;
+endmodule
+"""
+
+# A post-DFT netlist built entirely from SCAN flops — the cell family a
+# post-DFT netlist actually contains. Nothing here is a cut view.
+_SCAN_FLOP_NETLIST_V = """\
+module tiny(clk, rst, x, y, p);
+  input clk; input rst; input x; input y; output p;
+  wire _0_;
+  wire _1_;
+  sky130_fd_sc_hd__sdfxtp_1  _3_ (.D(_0_), .Q(_1_), .CLK(clk));
+  sky130_fd_sc_hd__sedfxtp_1 _4_ (.D(_1_), .Q(p),   .CLK(clk));
+  gf180mcu_fd_sc_mcu7t5v0__dffq_1 _5_ (.D(x), .Q(_0_), .CLK(clk));
+  sky130_fd_sc_hd__dlygate4sd3_1 _6_ (.A(x), .X(_1_));
+  gf180mcu_fd_sc_mcu7t5v0__dlyd_1 _7_ (.A(y), .Z(_0_));
+  sky130_fd_sc_hd__and2_1 _8_ (.A(x), .B(y), .X(_0_));
+endmodule
+"""
+
+# Yosys equiv_make port-abort log.
 _PORT_ABORT_LOG = """\
 16. Executing EQUIV_MAKE pass (creating equiv checking module).
 ERROR: Can't match gate port `_10_.d_gate' to a gold port.
 """
 
-# Normal run log (0 compared, different reason — parse abort, NOT port abort)
+# Normal run log (0 compared, different reason — parse abort, NOT port abort).
 _PARSE_ABORT_LOG = """\
 ERROR: syntax error, unexpected TOK_EOF
 """
 
-# Non-equivalence counterexample log (a real mismatch)
+# A real counterexample log that ALSO carries an abort line from an earlier
+# attempt — the shape that separates the zero_miter guard from a rubber stamp.
+_NONEQUIV_WITH_STALE_ABORT_LOG = """\
+ERROR: Can't match gate port `_10_.d_gate' to a gold port.
+-- retrying with the mapped netlist --
+Found 3 $equiv cells in equiv:
+  Of those cells 0 are proven and 3 are unproven.
+Found counterexample for output 'p'.
+"""
+
 _NONEQUIV_LOG = """\
 Found 3 $equiv cells in equiv:
   Of those cells 0 are proven and 3 are unproven.
 Found counterexample for output 'p'.
 """
 
-# lec.json for a port-abort run (exactly what the real run produced):
+# lec.json exactly as lec_run writes it for a port-abort run.
 _PORT_ABORT_JSON = {
     "equivalent": False,
     "compared_points": 0,
     "non_equivalent_points": 0,
     "unproven_points": 0,
+    "gate": "post_dft_netlist.v (synth)",
     "verdict": "FAIL",
     "inconclusive": False,
 }
 
-# lec.json for a genuine non-equivalence run:
 _NONEQUIV_JSON = {
     "equivalent": False,
     "compared_points": 3,
     "non_equivalent_points": 3,
     "unproven_points": 0,
+    "gate": "netlist.v (synth)",
     "verdict": "FAIL",
     "inconclusive": False,
 }
@@ -151,7 +266,7 @@ def _write(tmp: Path, name: str, content: str) -> Path:
 
 def _make_project(tmp: Path, netlist_name: str, netlist_content: str,
                   lec_json: dict, rpt_content: str = "") -> Path:
-    """Set up a minimal project tree for lec_equivalence_check.audit()."""
+    """Minimal project tree for lec_equivalence_check.audit()."""
     proj = tmp / "proj"
     synth = proj / "phase2" / "stage2" / "synth"
     synth.mkdir(parents=True, exist_ok=True)
@@ -164,176 +279,488 @@ def _make_project(tmp: Path, netlist_name: str, netlist_content: str,
     return proj
 
 
+def _rc(proj: Path) -> int:
+    """Run the CLI the flow gate runs (`program_exit_zero`) and return rc."""
+    return _lec.main([str(proj)])
+
+
 # ---------------------------------------------------------------------------
-# DEFECT direction — cut netlist MUST be flagged and rejected
+# 1. THE TIER MUST NOT MOVE — a structural abort stays a hard FAIL
 # ---------------------------------------------------------------------------
 
-class TestDefectDirection:
-    """All assertions in the DEFECT direction: the cut netlist must be caught."""
+class TestNoFailOpen:
+    """Kills: reclassifying the abort into the INCONCLUSIVE / rc=3 tier.
 
-    def test_predicate_flags_cut_netlist_by_pseudo_port(self, tmp_path):
-        """is_atpg_cut_artifact() must flag a netlist with <inst>.d ports."""
-        nf = _write(tmp_path, "post_dft_netlist.v", _CUT_NETLIST_V)
-        is_cut, reason = is_atpg_cut_artifact(nf)
-        assert is_cut, f"Expected cut artifact to be flagged; reason={reason!r}"
-        assert "pseudo-port" in reason.lower() or ".d" in reason
+    The first version of this fix set ``res.inconclusive = True``, which makes
+    ``main()`` print the ``PASS_WITH_WAIVERS`` sentinel and return 3;
+    flow_compliance then records step 13 as WAIVED-DEFERRED. Nothing was
+    compared, so equivalence is unproven — and an unproven equivalence is never
+    a waiver.
+    """
 
-    def test_predicate_flags_cut_netlist_by_ff_count_drop(self, tmp_path):
-        """is_atpg_cut_artifact() must flag a 0-FF netlist when ref has FFs."""
-        # Build a netlist with no FFs and no .d ports (non-standard ATPG tool)
-        no_ff_v = """\
-module tiny(clk, rst, x, y, p);
-  input clk; input rst; input x; input y; output p;
-  assign p = x & y & ~rst;
-endmodule
-"""
-        nf = _write(tmp_path, "post_dft_netlist.v", no_ff_v)
-        ref_ports = {"clk", "rst", "x", "y", "p"}
-        is_cut, reason = is_atpg_cut_artifact(nf, ref_ports=ref_ports, ref_ff_count=3)
-        assert is_cut, f"Expected 0-FF netlist to be flagged when ref has FFs; reason={reason!r}"
-        assert "0 sequential" in reason or "flip-flop" in reason.lower()
-
-    def test_select_rejects_cut_and_falls_back(self, tmp_path):
-        """select_gate_netlist() must reject cut netlist and select clean one."""
-        synth = tmp_path / "phase2" / "stage2" / "synth"
-        synth.mkdir(parents=True, exist_ok=True)
-        (synth / "post_dft_netlist.v").write_text(_CUT_NETLIST_V, encoding="utf-8")
-        (synth / "tiny_synth.v").write_text(_MAPPED_NETLIST_V, encoding="utf-8")
-
-        chosen, reason = select_gate_netlist(
-            tmp_path, "tiny",
-            ref_ports={"clk", "rst", "x", "y", "p"},
-            ref_ff_count=3)
-
-        assert chosen is not None, f"Expected fallback, got None; reason={reason!r}"
-        assert chosen.name != "post_dft_netlist.v", (
-            f"Must not select the cut netlist; got {chosen.name}")
-        assert "rejected" in reason.lower() or "post_dft" in reason.lower()
-
-    def test_classify_port_abort_returns_structural_verdict(self):
-        """classify_port_abort() must return CANONICAL_VERDICT for the abort log."""
-        result = classify_port_abort(_PORT_ABORT_LOG, compared_points=0)
-        assert result == CANONICAL_VERDICT, (
-            f"Expected {CANONICAL_VERDICT!r}, got {result!r}")
-
-    def test_audit_port_abort_emits_gns_unusable_not_not_equivalent(self, tmp_path):
-        """audit() must emit LEC_GATE_NETLIST_UNUSABLE for a port-abort run.
-
-        The run has compared_points==0 and lec.rpt contains the port-abort.
-        It must NOT emit LEC_NOT_EQUIVALENT — that would be a false diagnosis.
-        It must set inconclusive=True (non-blocking, visible non-PASS).
-        """
+    def test_cut_artifact_abort_is_rc1_not_a_waiver(self, tmp_path, capsys):
         proj = _make_project(
             tmp_path / "a", "post_dft_netlist.v", _CUT_NETLIST_V,
             _PORT_ABORT_JSON, _PORT_ABORT_LOG)
 
-        result = _lec.audit(proj)
+        res = _lec.audit(proj)
+        assert res.passed is False
+        assert res.inconclusive is False, (
+            "a structural abort must NOT enter the INCONCLUSIVE tier — that "
+            "routes step 13 to rc=3 / WAIVED-DEFERRED")
+        assert {f.severity for f in res.findings} == {"ERROR"}
 
-        rules = [f.rule for f in result.findings]
-        assert CANONICAL_STATUS in rules, (
-            f"Expected {CANONICAL_STATUS!r} in findings; got rules={rules}")
+        assert _rc(proj) == 1, "must stay a hard FAIL (rc=1)"
+        out = capsys.readouterr().out
+        assert "PASS_WITH_WAIVERS" not in out, (
+            "the WAIVED-DEFERRED sentinel must never appear for an abort that "
+            "compared nothing")
+
+    def test_real_port_set_mismatch_is_rc1_not_a_waiver(self, tmp_path, capsys):
+        """The skeptic's reproduction: scan ports in the netlist, absent from
+        the RTL, all flops present. Same yosys abort, entirely different cause.
+        origin/main returned rc=1; the first fix returned rc=3. It must be 1.
+        """
+        proj = _make_project(
+            tmp_path / "b", "post_dft_netlist.v",
+            _SCAN_PORT_MISMATCH_NETLIST_V,
+            _PORT_ABORT_JSON, _PORT_ABORT_LOG)
+
+        res = _lec.audit(proj)
+        assert res.passed is False
+        assert res.inconclusive is False
+        assert _rc(proj) == 1
+        assert "PASS_WITH_WAIVERS" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# 2. THE CAUSE MUST BE MEASURED, NEVER GUESSED FROM THE LOG STRING
+# ---------------------------------------------------------------------------
+
+class TestCauseIsMeasuredNeverGuessed:
+    """Kills: naming the ATPG-cut cause from the yosys error text alone.
+
+    A mutation that makes ``port_abort_cause`` return ``(True, ...)``
+    unconditionally, or that drops the ``is_atpg_cut_artifact`` confirmation,
+    fails ``test_unconfirmed_cause_is_not_asserted``.
+    """
+
+    def test_confirmed_cut_names_the_cut_and_the_upstream_producer(self, tmp_path):
+        proj = _make_project(
+            tmp_path / "a", "post_dft_netlist.v", _CUT_NETLIST_V,
+            _PORT_ABORT_JSON, _PORT_ABORT_LOG)
+        res = _lec.audit(proj)
+        rules = [f.rule for f in res.findings]
+        assert CANONICAL_STATUS in rules, f"got rules={rules}"
         assert "LEC_NOT_EQUIVALENT" not in rules, (
-            f"Must NOT emit LEC_NOT_EQUIVALENT for a structural abort; "
-            f"rules={rules}")
-        assert result.inconclusive is True, (
-            f"Expected inconclusive=True; got {result.inconclusive}")
-        assert result.passed is False, "Must not PASS a structural-abort run"
+            "'RTL and post-DFT netlist differ' is false when nothing was "
+            f"compared; rules={rules}")
+        msg = [f.message for f in res.findings if f.rule == CANONICAL_STATUS][0]
+        assert "fault_atpg_run.py" in msg, (
+            "a confirmed cut artifact must name the upstream producer so the "
+            "next agent fixes the byte-copy, not the design")
+        assert "post_dft_netlist.v" in msg
 
-    def test_audit_vacuous_false_no_rpt_stays_not_equivalent(self, tmp_path):
-        """Without the port-abort in .rpt, equivalent=False still LEC_NOT_EQUIVALENT.
+    def test_unconfirmed_cause_is_not_asserted(self, tmp_path):
+        """Netlist has scan ports and all its flops — NOT a cut artifact.
 
-        This is the non-rpt case — no .rpt file at all.  The run should still
-        report LEC_NOT_EQUIVALENT because we can't confirm it's a port abort.
+        The finding must still fire (nothing was compared) but it must NOT
+        claim the flip-flops were deleted.
         """
         proj = _make_project(
-            tmp_path / "b", "post_dft_netlist.v", _CUT_NETLIST_V,
-            _PORT_ABORT_JSON)  # no rpt_content
+            tmp_path / "b", "post_dft_netlist.v",
+            _SCAN_PORT_MISMATCH_NETLIST_V,
+            _PORT_ABORT_JSON, _PORT_ABORT_LOG)
+        res = _lec.audit(proj)
+        rules = [f.rule for f in res.findings]
+        assert CANONICAL_STATUS in rules, f"got rules={rules}"
+        msg = [f.message for f in res.findings if f.rule == CANONICAL_STATUS][0]
+        assert "unconfirmed" in msg.lower(), (
+            "with no cut fingerprint on the compared netlist the cause must be "
+            f"declared unconfirmed, not guessed; message={msg!r}")
+        assert "fault_atpg_run.py" not in msg, (
+            "must not blame the ATPG byte-copy for a netlist that still holds "
+            f"its flip-flops; message={msg!r}")
+        assert "scan" in msg.lower(), (
+            "the message must point at the real diagnostic step (diff the "
+            "top-level port sets) instead of a fabricated cause")
 
-        result = _lec.audit(proj)
-        rules = [f.rule for f in result.findings]
-        # Without a .rpt confirming the port-abort, we cannot reclassify.
-        assert "LEC_NOT_EQUIVALENT" in rules or CANONICAL_STATUS in rules, (
-            f"Expected LEC_NOT_EQUIVALENT or {CANONICAL_STATUS}; got {rules}")
+    def test_port_abort_cause_requires_the_named_file_to_exist(self, tmp_path):
+        proj = tmp_path / "p"
+        (proj / "phase2" / "stage2" / "synth").mkdir(parents=True)
+        ok, ev = port_abort_cause(proj, "post_dft_netlist.v (synth)")
+        assert ok is False and ev == ""
+
+    def test_port_abort_cause_ignores_a_non_netlist_gate_field(self, tmp_path):
+        proj = tmp_path / "p"
+        synth = proj / "phase2" / "stage2" / "synth"
+        synth.mkdir(parents=True)
+        (synth / "post_dft_netlist.v").write_text(_CUT_NETLIST_V)
+        assert port_abort_cause(proj, "") == (False, "")
+        assert port_abort_cause(proj, "unknown") == (False, "")
 
 
 # ---------------------------------------------------------------------------
-# FIXED direction — clean netlist must NOT be flagged; real failures preserved
+# 3. THE SELECTION MUST NOT MOVE — no silent substitution, no reordering
 # ---------------------------------------------------------------------------
 
-class TestFixedDirection:
-    """All assertions in the FIXED direction: do not over-correct."""
+_PRESENCE_MATRIX = [
+    # (post_dft_netlist.v, <top>_synth.v, netlist.v)
+    (False, False, False),
+    (False, False, True),
+    (False, True, False),
+    (False, True, True),
+    (True, False, False),
+    (True, False, True),
+    (True, True, False),
+    (True, True, True),
+]
 
-    def test_predicate_does_not_flag_normal_netlist(self, tmp_path):
-        """is_atpg_cut_artifact() must NOT flag a normal mapped netlist."""
-        nf = _write(tmp_path, "netlist.v", _MAPPED_NETLIST_V)
-        is_cut, reason = is_atpg_cut_artifact(
-            nf,
-            ref_ports={"clk", "rst", "x", "y", "p"},
-            ref_ff_count=3)
-        assert not is_cut, (
-            f"Normal mapped netlist must NOT be flagged as cut; reason={reason!r}")
 
-    def test_select_accepts_clean_netlist(self, tmp_path):
-        """select_gate_netlist() must accept a clean netlist without rejection."""
+class TestSelectionIsUnchanged:
+    """Kills: any fallback, reordering, or substitution in the gate selection.
+
+    ``M3`` in the refutation (prefer ``netlist.v`` before ``<top>_synth.v``)
+    survived the original tests because NOTHING pinned the order. Here the
+    selection is pinned against the legacy rule over the full presence matrix,
+    so any candidate list at all — in any order — fails.
+    """
+
+    @pytest.mark.parametrize("have_post_dft,have_top_synth,have_netlist",
+                             _PRESENCE_MATRIX)
+    def test_matches_legacy_rule_on_every_presence_combination(
+            self, tmp_path, have_post_dft, have_top_synth, have_netlist):
         synth = tmp_path / "phase2" / "stage2" / "synth"
-        synth.mkdir(parents=True, exist_ok=True)
-        (synth / "tiny_synth.v").write_text(_MAPPED_NETLIST_V, encoding="utf-8")
+        synth.mkdir(parents=True)
+        if have_post_dft:
+            (synth / "post_dft_netlist.v").write_text(_MAPPED_NETLIST_V)
+        if have_top_synth:
+            (synth / "tiny_synth.v").write_text(_MAPPED_NETLIST_V)
+        if have_netlist:
+            (synth / "netlist.v").write_text(_MAPPED_NETLIST_V)
 
-        chosen, reason = select_gate_netlist(
-            tmp_path, "tiny",
-            ref_ports={"clk", "rst", "x", "y", "p"},
-            ref_ff_count=3)
+        # The rule the runner used before this capture existed, verbatim.
+        expected = ("phase2/stage2/synth/post_dft_netlist.v"
+                    if (synth / "post_dft_netlist.v").is_file()
+                    else "phase2/stage2/synth/netlist.v")
 
-        assert chosen is not None
-        assert chosen.name == "tiny_synth.v", (
-            f"Expected tiny_synth.v to be accepted; got {chosen.name}")
-        assert "rejected" not in reason.lower() or "post_dft" not in reason.lower()
+        rel, _note, _is_cut = gate_netlist_for_lec(tmp_path, "tiny")
+        assert rel == expected, (
+            f"gate selection drifted from the legacy rule "
+            f"(post_dft={have_post_dft}, top_synth={have_top_synth}, "
+            f"netlist={have_netlist}): expected {expected}, got {rel}")
+        assert legacy_gate_netlist_rel(tmp_path) == expected
 
-    def test_classify_port_abort_returns_none_for_normal_log(self):
-        """classify_port_abort() must return None when no port-abort is present."""
-        result = classify_port_abort(_PARSE_ABORT_LOG, compared_points=0)
-        assert result is None, (
-            f"Must return None for a non-port-abort log; got {result!r}")
+    def test_a_cut_post_dft_is_still_selected_and_flagged(self, tmp_path):
+        """The load-bearing one: a CUT post_dft_netlist.v must still be the
+        compared artifact.
 
-    def test_classify_port_abort_returns_none_when_points_nonzero(self):
-        """classify_port_abort() must return None when compared_points > 0."""
-        result = classify_port_abort(_PORT_ABORT_LOG, compared_points=5)
-        assert result is None, (
-            f"Must return None when compared_points > 0; got {result!r}")
-
-    def test_audit_genuine_nonequiv_still_reports_not_equivalent(self, tmp_path):
-        """A genuine non-equivalence run must still emit LEC_NOT_EQUIVALENT.
-
-        The fix must not suppress real failures.  A run with 3 non-equivalent
-        points and a counterexample in the log must emit LEC_NOT_EQUIVALENT,
-        never a vacuous PASS or INCONCLUSIVE.
+        Substituting ``tiny_synth.v`` here is exactly the refuted behaviour —
+        it makes the step named `13_equivalence_check_rtl_post_dft_netlist`
+        report PASS having never read the post-DFT netlist, and leaves the
+        upstream byte-copy unflagged.
         """
-        proj = _make_project(
-            tmp_path / "c", "netlist.v", _MAPPED_NETLIST_V,
-            _NONEQUIV_JSON, _NONEQUIV_LOG)
+        synth = tmp_path / "phase2" / "stage2" / "synth"
+        synth.mkdir(parents=True)
+        (synth / "post_dft_netlist.v").write_text(_CUT_NETLIST_V)
+        (synth / "tiny_synth.v").write_text(_MAPPED_NETLIST_V)
+        (synth / "netlist.v").write_text(_MAPPED_NETLIST_V)
 
-        result = _lec.audit(proj)
-        rules = [f.rule for f in result.findings]
-        assert "LEC_NOT_EQUIVALENT" in rules or "LEC_NONEQUIV_POINTS" in rules, (
-            f"Expected a non-equivalence rule; got {rules}")
-        assert result.passed is False
-        assert result.inconclusive is False
+        rel, note, is_cut = gate_netlist_for_lec(tmp_path, "tiny")
+        assert rel == "phase2/stage2/synth/post_dft_netlist.v", (
+            f"must NOT substitute a different netlist; got {rel}")
+        assert is_cut is True
+        assert "UNUSABLE" in note and "fault_atpg_run.py" in note
 
-    def test_predicate_does_not_flag_cut_without_ff_context(self, tmp_path):
-        """Without ref_ff_count, a 0-FF netlist without .d ports is NOT flagged.
+    def test_top_name_cannot_influence_the_selection(self, tmp_path):
+        synth = tmp_path / "phase2" / "stage2" / "synth"
+        synth.mkdir(parents=True)
+        (synth / "tiny_synth.v").write_text(_MAPPED_NETLIST_V)
+        (synth / "netlist.v").write_text(_MAPPED_NETLIST_V)
+        for top in ("tiny", "other", ""):
+            rel, _n, _c = gate_netlist_for_lec(tmp_path, top)
+            assert rel == "phase2/stage2/synth/netlist.v", (
+                f"top_name={top!r} changed the selection to {rel}")
 
-        The predicate is conservative: without reference context it can only
-        use Signal A (pseudo-port pattern).  A design that genuinely has no
-        FFs must not be falsely flagged.
+    def test_runner_delegates_and_keeps_no_selection_logic_of_its_own(self):
+        """The runner must not carry a second copy of this decision.
+
+        The refuted version computed a 'reference context' by running the
+        liberty-cell regex over the RTL — a number that is meaningless (0 for
+        one real design, 1 for a core holding 1272 flops) — by deep-importing
+        private helpers. Reverting the runner alone was invisible to the whole
+        original suite; this makes it visible.
         """
-        no_ff_combinational = """\
+        import design_one_shot_runner as _runner
+        src = inspect.getsource(_runner.step_dft_lec_chain)
+        # Comments explain the decision; only executable lines are pinned.
+        code = "\n".join(re.sub(r"#.*$", "", ln) for ln in src.splitlines())
+        assert "_lec_gns.gate_netlist_for_lec(" in code, (
+            "step_dft_lec_chain must delegate the gate selection")
+        assert "_count_ff_cells" not in code and "_extract_ports" not in code, (
+            "the runner must not deep-import private predicate helpers to "
+            "rebuild a reference context")
+        assert "_synth.v" not in code, (
+            "the runner must not name a <top>_synth.v fallback")
+        # The delegated call must be the ONLY source of gate_netlist: no local
+        # re-derivation, and no `gate_netlist = <path expression>` anywhere.
+        direct = [ln for ln in code.splitlines()
+                  if re.match(r"\s*gate_netlist\s*=(?!=)", ln)]
+        assert not direct, (
+            f"gate_netlist must come from the delegated tuple unpack, not a "
+            f"local re-derivation; found {direct}")
+        unpack = [ln for ln in code.splitlines()
+                  if re.match(r"\s*gate_netlist\s*,", ln)]
+        assert len(unpack) == 1, (
+            f"expected exactly one delegated selection site; found {unpack}")
+
+
+# ---------------------------------------------------------------------------
+# 4. THE PREDICATE MUST NOT FIRE ON A HEALTHY NETLIST
+# ---------------------------------------------------------------------------
+
+class TestPredicateFalsePositives:
+    """Kills: M4 (unanchored `.d`) and the whole-file `.d` scan.
+
+    Both mutations put "every flip-flop has been deleted" into a sign-off
+    report about a netlist that holds all of its flip-flops.
+    """
+
+    def test_flags_the_real_cut_netlist(self, tmp_path):
+        nf = _write(tmp_path, "post_dft_netlist.v", _CUT_NETLIST_V)
+        is_cut, reason = is_atpg_cut_artifact(nf)
+        assert is_cut, f"cut netlist must be flagged; reason={reason!r}"
+        assert "pseudo-port" in reason and "0 sequential cells" in reason
+
+    def test_hierarchical_net_named_dot_d_is_not_a_cut_artifact(self, tmp_path):
+        """The skeptic's constructible false positive.
+
+        `\\u_reg.d` here is a NET, not a port, and the netlist holds 3 flops.
+        A whole-file scan reports '3 <inst>.d pseudo-port(s) ... every
+        flip-flop has been deleted'.
+        """
+        nf = _write(tmp_path, "netlist.v", _HIER_NET_NETLIST_V)
+        is_cut, reason = is_atpg_cut_artifact(nf)
+        assert not is_cut, (
+            f"a hierarchical NET named `.d` in a netlist with flops must not "
+            f"be read as a deleted-flop pseudo-port; reason={reason!r}")
+        assert cut_pseudo_ports(_HIER_NET_NETLIST_V) == set()
+
+    def test_escaped_ports_beginning_with_dot_d_are_not_cut_ports(self, tmp_path):
+        """M4: dropping the end-anchor from the `.d` pattern.
+
+        `\\bus.data` and `\\ctl.dout` are legitimate escaped port names in a
+        genuinely combinational block — 0 flops, so the FF corroboration does
+        not save us here. Only the anchor does.
+        """
+        nf = _write(tmp_path, "netlist.v", _DOT_DATA_PORT_NETLIST_V)
+        is_cut, reason = is_atpg_cut_artifact(nf)
+        assert not is_cut, (
+            f"`.data` / `.dout` ports are not `<inst>.d` pseudo-ports; "
+            f"reason={reason!r}")
+        assert cut_pseudo_ports(_DOT_DATA_PORT_NETLIST_V) == set()
+
+    def test_normal_mapped_netlist_is_not_flagged(self, tmp_path):
+        nf = _write(tmp_path, "netlist.v", _MAPPED_NETLIST_V)
+        assert is_atpg_cut_artifact(nf)[0] is False
+
+    def test_pure_combinational_design_is_not_flagged(self, tmp_path):
+        nf = _write(tmp_path, "netlist.v", """\
 module comb(a, b, y);
   input a; input b; output y;
   assign y = a ^ b;
 endmodule
-"""
-        nf = _write(tmp_path, "netlist.v", no_ff_combinational)
-        is_cut, reason = is_atpg_cut_artifact(nf)  # no ref context
+""")
+        assert is_atpg_cut_artifact(nf)[0] is False
+
+    def test_scan_port_mismatch_netlist_is_not_flagged(self, tmp_path):
+        nf = _write(tmp_path, "post_dft_netlist.v",
+                    _SCAN_PORT_MISMATCH_NETLIST_V)
+        is_cut, reason = is_atpg_cut_artifact(nf)
         assert not is_cut, (
-            f"Pure-combinational design without .d ports must NOT be flagged; "
-            f"reason={reason!r}")
+            f"a real port-set mismatch is not a cut artifact; reason={reason!r}")
+
+    def test_cut_ports_plus_surviving_flops_is_not_a_cut_view(self, tmp_path):
+        """The FF corroboration, pinned. A netlist that has BOTH a `.d` port
+        and flops has not had its flops deleted, whatever the port is called.
+        """
+        mixed = _CUT_NETLIST_V.replace(
+            "  assign p = _10_ & _11_;",
+            "  sky130_fd_sc_hd__dfxtp_1 _9_ (.D(x), .Q(p), .CLK(clk));")
+        nf = _write(tmp_path, "netlist.v", mixed)
+        assert is_atpg_cut_artifact(nf)[0] is False
+
+    def test_missing_file_is_not_flagged(self, tmp_path):
+        assert is_atpg_cut_artifact(tmp_path / "nope.v") == (False, "")
+
+
+# ---------------------------------------------------------------------------
+# 4b. THE STRUCTURAL PARSERS MUST ACTUALLY SEE WHAT IS THERE
+# ---------------------------------------------------------------------------
+
+class TestStructuralParsers:
+    """Kills: a predicate that is silently a no-op on real netlists.
+
+    Both defects here were found by running the predicate against a
+    hand-built reproduction of the real artifact rather than against the
+    synthetic fixture it was written from. Both made the predicate return
+    "clean" — the same class of failure as the refuted "reference context",
+    which computed a flip-flop count of 1 for a core holding 1272 flops.
+    """
+
+    def test_packed_declarations_on_one_line_are_all_seen(self, tmp_path):
+        """`input _10_; output \\_10_.d ;` on ONE line.
+
+        A declaration pattern anchored at `^` sees only the first declaration
+        per line, so every `.d` pseudo-port after it is invisible and the cut
+        netlist reads as clean.
+        """
+        assert cut_pseudo_ports(_CUT_NETLIST_PACKED_V) == {"_10_.d", "_11_.d"}
+        nf = _write(tmp_path, "post_dft_netlist.v", _CUT_NETLIST_PACKED_V)
+        assert is_atpg_cut_artifact(nf)[0] is True
+
+    def test_comma_separated_names_are_all_seen(self):
+        ports = _gns._extract_ports(_CUT_NETLIST_PACKED_V)
+        assert {"clk", "rst", "x", "y", "p"} <= ports, sorted(ports)
+
+    @pytest.mark.parametrize("cell", [
+        "sky130_fd_sc_hd__dfxtp_1",
+        "sky130_fd_sc_hd__sdfxtp_1",      # SCAN flop — a post-DFT netlist is
+        "sky130_fd_sc_hd__sedfxtp_1",     # made of these
+        "sky130_fd_sc_hd__edfxtp_1",
+        "sky130_fd_sc_hd__dfrtp_2",
+        "gf180mcu_fd_sc_mcu7t5v0__dffq_1",
+        "gf180mcu_fd_sc_mcu7t5v0__sdffq_1",
+        "sky130_fd_sc_hd__dlxtp_1",
+        "$_DFF_P_", "$_SDFFE_PP0P_", "$_ALDFF_PP_", "$_DLATCH_P_",
+        "$dff", "$adff", "$aldff",
+    ])
+    def test_state_elements_are_recognised(self, cell):
+        assert _gns._is_ff_type(cell), (
+            f"{cell} holds state; missing it hollows out the corroboration "
+            "exactly on post-DFT netlists")
+
+    @pytest.mark.parametrize("cell", [
+        "sky130_fd_sc_hd__and2_1", "sky130_fd_sc_hd__nor2_1",
+        "sky130_fd_sc_hd__buf_4", "sky130_fd_sc_hd__conb_1",
+        "sky130_fd_sc_hd__decap_3", "sky130_fd_sc_hd__diode_2",
+        "sky130_fd_sc_hd__fill_1",
+        "sky130_fd_sc_hd__dlygate4sd3_1",   # `dl` prefix, holds no state
+        "gf180mcu_fd_sc_mcu7t5v0__dlyd_1",
+    ])
+    def test_combinational_and_delay_cells_are_not_state(self, cell):
+        assert not _gns._is_ff_type(cell)
+
+    def test_scan_flop_netlist_counts_its_flops(self, tmp_path):
+        nf = _write(tmp_path, "post_dft_netlist.v", _SCAN_FLOP_NETLIST_V)
+        assert _gns._count_ff_cells(_gns._read_safe(nf)) == 3
+        assert is_atpg_cut_artifact(nf)[0] is False
+
+    def test_port_connections_are_not_read_as_cell_types(self):
+        """`.D(\\u_reg.d )` is a NET reference inside a connection list.
+
+        Counting the whole line would let a net name decide the cell type.
+        """
+        line = "  sky130_fd_sc_hd__and2_1 _6_ (.A(x), .B(\\u_reg.dff ), .X(y));\n"
+        assert _gns._count_ff_cells(line) == 0
+
+
+# ---------------------------------------------------------------------------
+# 5. THE CLASSIFIER GUARDS — each one has a test that fails when it is dropped
+# ---------------------------------------------------------------------------
+
+class TestClassifierGuards:
+    """Kills: M5 (dropping the ``zero_miter`` guard) and dropping the
+    ``compared_points != 0`` guard inside ``classify_port_abort``.
+
+    Each guard is pinned at the level where it is the ONLY thing standing:
+    the compared>0 guard at the unit level, the zero_miter guard at the audit
+    level with a run that compared 0 points but recorded a counterexample.
+    """
+
+    def test_returns_the_structural_verdict_for_the_abort_log(self):
+        assert classify_port_abort(_PORT_ABORT_LOG, 0) == CANONICAL_VERDICT
+
+    def test_returns_none_for_a_non_port_abort_log(self):
+        assert classify_port_abort(_PARSE_ABORT_LOG, 0) is None
+
+    def test_returns_none_when_points_were_compared(self):
+        assert classify_port_abort(_PORT_ABORT_LOG, 5) is None
+
+    def test_counterexample_wins_over_a_stale_abort_line(self, tmp_path):
+        """M5: the ``zero_miter`` guard is not redundant.
+
+        compared_points==0 AND the abort signature is in the log — the two
+        conditions ``classify_port_abort`` checks — but the run also recorded 3
+        non-equivalent points. That is a real mismatch and must keep the
+        mismatch verdict.
+        """
+        proj = _make_project(
+            tmp_path / "a", "netlist.v", _MAPPED_NETLIST_V,
+            {"equivalent": False, "compared_points": 0,
+             "non_equivalent_points": 3, "unproven_points": 0,
+             "gate": "netlist.v (synth)", "verdict": "FAIL",
+             "inconclusive": False},
+            _NONEQUIV_WITH_STALE_ABORT_LOG)
+
+        res = _lec.audit(proj)
+        rules = {f.rule for f in res.findings}
+        assert "LEC_NOT_EQUIVALENT" in rules, (
+            f"a recorded counterexample must not be relabelled a structural "
+            f"abort; rules={sorted(rules)}")
+        assert "LEC_NONEQUIV_POINTS" in rules
+        assert CANONICAL_STATUS not in rules
+        assert _rc(proj) == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. GENUINE FAILURES AND GENUINE PASSES ARE UNTOUCHED
+# ---------------------------------------------------------------------------
+
+class TestNoOverreach:
+    """Kills: suppressing real non-equivalence, or inventing a new pass."""
+
+    def test_genuine_nonequivalence_still_fails_hard(self, tmp_path):
+        proj = _make_project(
+            tmp_path / "c", "netlist.v", _MAPPED_NETLIST_V,
+            _NONEQUIV_JSON, _NONEQUIV_LOG)
+        res = _lec.audit(proj)
+        rules = {f.rule for f in res.findings}
+        assert "LEC_NOT_EQUIVALENT" in rules
+        assert res.passed is False and res.inconclusive is False
+        assert _rc(proj) == 1
+
+    def test_equivalent_false_without_any_rpt_keeps_the_old_rule(self, tmp_path):
+        """No .rpt at all ⇒ no abort evidence ⇒ the original rule and the
+        original wording, unchanged."""
+        proj = _make_project(
+            tmp_path / "d", "post_dft_netlist.v", _CUT_NETLIST_V,
+            _PORT_ABORT_JSON)  # no rpt
+        res = _lec.audit(proj)
+        rules = {f.rule for f in res.findings}
+        assert "LEC_NOT_EQUIVALENT" in rules, f"got {sorted(rules)}"
+        assert CANONICAL_STATUS not in rules
+        assert _rc(proj) == 1
+
+    def test_a_clean_pass_is_still_a_pass(self, tmp_path):
+        proj = _make_project(
+            tmp_path / "e", "netlist.v", _MAPPED_NETLIST_V,
+            {"equivalent": True, "compared_points": 70,
+             "non_equivalent_points": 0, "unproven_points": 0,
+             "gate": "netlist.v (synth)", "verdict": "PASS",
+             "inconclusive": False},
+            "Equivalence successfully proven!\nProved 70 $equiv cells.\n")
+        res = _lec.audit(proj)
+        assert res.passed is True, [f.rule for f in res.findings]
+        assert _rc(proj) == 0
+
+    def test_module_is_pure(self):
+        """No subprocess / docker / network in the predicate module."""
+        src = Path(_gns.__file__).read_text()
+        imports = re.findall(r"^\s*(?:import|from)\s+([\w.]+)", src,
+                             re.MULTILINE)
+        banned = {"subprocess", "os", "shutil", "requests", "socket",
+                  "urllib", "http"}
+        assert not (banned & {m.split(".")[0] for m in imports}), (
+            f"{_gns.__file__} must stay a pure filesystem reader; "
+            f"imports={imports}")
