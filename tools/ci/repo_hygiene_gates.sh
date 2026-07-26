@@ -131,6 +131,18 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 # the artefact recorded `generic_unmapped`.
 run "per-PDK table coverage"            "$ROOT" python3 "$PG/pdk_table_coverage_check.py"
 
+# vibe-ic#377 (item B) — L4's register/field vocabulary is the one part of our
+# schema whose domain is semantically CLOSED, and a ratified standard already
+# enumerates it. This gate does not migrate anything: it asserts that every
+# register/field key appearing in the published L4 corpus has a RECORDED answer
+# to "what can SystemRDL 2.0 say about this" — NATIVE, UDP, LOSSY or DROPPED,
+# each with a reason. A key with no answer would be dropped from every export
+# in silence, and a .rdl that silently omits what it cannot express reads as a
+# complete description of a register map it does not describe. Remedy when it
+# fires: one row in DISPOSITION. Measured at wiring time: 201 documents, 41
+# register keys, 18 field keys, all classified.
+run "L4 -> SystemRDL disposition"       "$ROOT" python3 "$PG/l4_systemrdl_export.py" audit-corpus --root "$ROOT"
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired

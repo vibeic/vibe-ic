@@ -189,6 +189,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
+import _published_tree
+
 
 _RE_SHA256 = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
 _RE_BARE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -496,17 +498,7 @@ def _published_paths(project: Path) -> Optional[FrozenSet[str]]:
     but not committed — has published nothing yet, so the question does not
     apply and presence on disk remains the answer.
     """
-    led = "provenance.jsonl"
-    try:
-        r = subprocess.run(["git", "-C", str(project), "ls-files", "-z"],
-                           capture_output=True, text=True, timeout=120)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if r.returncode != 0:
-        return None
-    paths = frozenset(p for p in r.stdout.split("\0") if p)
-    # Not a published deliverable -> the disk is still the honest answer.
-    return paths if led in paths else None
+    return _published_tree.published_paths(project, require="provenance.jsonl")
 
 
 def audit(project: Path, strict_timing: bool = False,

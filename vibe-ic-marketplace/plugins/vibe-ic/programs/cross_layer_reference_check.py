@@ -171,6 +171,8 @@ import json
 import re
 import subprocess
 import sys
+
+import _published_tree
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -718,22 +720,22 @@ def corpus_cells(corpus: Path) -> List[Path]:
     over on its own — the disk is still the honest answer, because nothing has
     been published and tracked-ness is not a question that applies.
     """
-    disk = sorted({p.parent.parent for p in corpus.rglob("phase1/generated_docs")})
-    try:
-        r = subprocess.run(["git", "-C", str(corpus), "ls-files", "-z"],
-                           capture_output=True, text=True, timeout=180)
-    except (OSError, subprocess.SubprocessError):
-        return disk
-    if r.returncode != 0:
-        return disk
-    published = {(corpus / p).resolve()
-                 for p in r.stdout.split("\0") if p.endswith(".json")}
-    if not published:
-        return disk
-    return [c for c in disk
-            if any(str(d).startswith(str((c / "phase1" / "generated_docs")
-                                         .resolve()))
-                   for d in published)]
+    dirs = sorted({p for p in corpus.rglob("phase1/generated_docs")})
+    published = _published_tree.published_paths(corpus)
+    if published is None:
+        return sorted({d.parent.parent for d in dirs})
+    root = corpus.resolve()
+    keep = set()
+    for d in dirs:
+        try:
+            rel = d.resolve().relative_to(root).as_posix()
+        except ValueError:
+            continue
+        # A generated_docs DIRECTORY is published when the tree tracks any
+        # file inside it — git tracks files, never directories.
+        if any(t.startswith(rel + "/") for t in published):
+            keep.add(d.parent.parent)
+    return sorted(keep)
 
 
 def check_corpus(corpus: Path, rows: List[dict]) -> dict:
