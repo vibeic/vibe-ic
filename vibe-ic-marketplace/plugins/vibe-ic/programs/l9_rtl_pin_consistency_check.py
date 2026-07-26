@@ -1218,6 +1218,61 @@ def waived(project: Path) -> tuple[bool, str]:
 
 
 # ─── main ─────────────────────────────────────────────────────────
+def _exclusion_advisories(only_l9_optional, reused_prefix_matched,
+                          reused_tied_off, reused_config_gated,
+                          reused_ip_passthrough, l3_alias_reconciled):
+    """The WARN lines that explain which pins were EXCLUDED from the mismatch
+    set, and on what grounds.
+
+    #345 salvage 1. These were emitted inline under `if not findings:` — the
+    PASS path only. Every one of them is a statement about what was taken OUT
+    of the comparison, so on a FAIL the reader saw N findings with no record
+    of the exclusions that shaped them. If an exclusion rule is wrong the
+    finding list is wrong, and the evidence was being suppressed precisely
+    then. Built once here so all three verdict paths print the same set.
+    """
+    out = []
+    if only_l9_optional:
+        # v0.3.4 — #491 R4: doc-optional pins the RTL top legitimately omits.
+        out.append(f"  WARN (advisory) — L9 doc-OPTIONAL pin(s) not in "
+                   f"RTL top: {only_l9_optional}")
+    if reused_prefix_matched:
+        # ORGANIC #659: reused-IP struct-bus roots reconciled with their
+        # prefix-expanded scalar pads.
+        _pm = ", ".join(f"{root}\u2192{pads}"
+                        for root, pads in reused_prefix_matched)
+        out.append(f"  WARN (advisory) — reused-IP struct-bus flatten "
+                   f"reconciled (root \u2194 prefix-expanded pads): {_pm}")
+    if reused_tied_off:
+        # ORGANIC #659: SOURCE_MANIFEST-documented intentional tie-offs
+        # dropped from the L9-only diff.
+        out.append(f"  WARN (advisory) — reused-IP SOURCE_MANIFEST tie-off(s) "
+                   f"omitted from RTL top (intentional, internally driven): "
+                   f"{reused_tied_off}")
+    if reused_config_gated:
+        # ORGANIC #781: L9 pins the chosen reused-IP configuration
+        # parameterises away — doc described a fuller variant than was
+        # instantiated, not a dropped pin.
+        out.append(f"  WARN (advisory) — reused-IP CONFIG-GATED L9 pin(s) not "
+                   f"exposed by the instantiated IP variant "
+                   f"(doc-over-declaration, not a dropped pin): "
+                   f"{reused_config_gated}")
+    if reused_ip_passthrough:
+        # ORGANIC #781: chip_top ports that ARE real declared ports of the
+        # instantiated reused-IP module (faithful passthrough) which the L9
+        # doc named differently / did not list.
+        out.append(f"  WARN (advisory) — reused-IP passthrough port(s) present "
+                   f"in chip_top and in the instantiated IP but not enumerated "
+                   f"in L9 (legitimate IP surface): {reused_ip_passthrough}")
+    if l3_alias_reconciled:
+        # ORGANIC #778: residual pin(s) reconciled against the L3 doc's own
+        # alias grammar — a documented duplicate spelling, not a dropped or
+        # invented pin.
+        out.append(f"  WARN (advisory) — L3 doc-declared pin alias(es) "
+                   f"reconciled (not a mismatch): {l3_alias_reconciled}")
+    return out
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print("Usage: l9_rtl_pin_consistency_check.py <project_dir>")
@@ -1462,57 +1517,24 @@ def main(argv: list[str]) -> int:
             print(f"  WARN — {len(_unknown)} L9 entr"
                   f"{'y' if len(_unknown) == 1 else 'ies'} skipped for "
                   f"unknown reason: {_unknown}")
-        if only_l9_optional:
-            # v0.3.4 — #491 R4 advisory (non-gating): doc-optional
-            # pins the RTL top legitimately omits.
-            print(
-                f"  WARN (advisory) — L9 doc-OPTIONAL pin(s) not in "
-                f"RTL top: {only_l9_optional}"
-            )
-        if reused_prefix_matched:
-            # ORGANIC #659 advisory (non-gating): reused-IP struct-bus
-            # roots reconciled with their prefix-expanded scalar pads.
-            _pm = ", ".join(
-                f"{root}→{pads}" for root, pads in reused_prefix_matched)
-            print(
-                f"  WARN (advisory) — reused-IP struct-bus flatten "
-                f"reconciled (root ↔ prefix-expanded pads): {_pm}"
-            )
-        if reused_tied_off:
-            # ORGANIC #659 advisory (non-gating): SOURCE_MANIFEST-
-            # documented intentional tie-offs dropped from the L9-only diff.
-            print(
-                f"  WARN (advisory) — reused-IP SOURCE_MANIFEST tie-off(s) "
-                f"omitted from RTL top (intentional, internally driven): "
-                f"{reused_tied_off}"
-            )
-        if reused_config_gated:
-            # ORGANIC #781 advisory (non-gating): L9 pins the chosen reused-IP
-            # configuration parameterises away (not ports of the instantiated
-            # IP module). Doc described a fuller variant than was instantiated.
-            print(
-                f"  WARN (advisory) — reused-IP CONFIG-GATED L9 pin(s) not "
-                f"exposed by the instantiated IP variant (doc-over-declaration"
-                f", not a dropped pin): {reused_config_gated}"
-            )
-        if reused_ip_passthrough:
-            # ORGANIC #781 advisory (non-gating): chip_top ports that ARE real
-            # declared ports of the instantiated reused-IP module (faithful
-            # passthrough) which the L9 doc named differently / did not list.
-            print(
-                f"  WARN (advisory) — reused-IP passthrough port(s) present "
-                f"in chip_top and in the instantiated IP but not enumerated "
-                f"in L9 (legitimate IP surface): {reused_ip_passthrough}"
-            )
-        if l3_alias_reconciled:
-            # ORGANIC #778 advisory (non-gating): residual pin(s) reconciled
-            # against the L3 doc's own `<a>` (or `<b>`) alias grammar — a
-            # documented duplicate spelling, not a dropped/invented pin.
-            print(
-                f"  WARN (advisory) — L3 doc-declared pin alias(es) "
-                f"reconciled (not a mismatch): {l3_alias_reconciled}"
-            )
+        for _a in _exclusion_advisories(
+                only_l9_optional, reused_prefix_matched, reused_tied_off,
+                reused_config_gated, reused_ip_passthrough,
+                l3_alias_reconciled):
+            print(_a)
         return 0
+
+    # #345 salvage 1. EVERY advisory above says WHY a pin was EXCLUDED from
+    # the mismatch set — config-gated, passthrough, tie-off, alias-reconciled.
+    # They used to print only under `if not findings:`, i.e. only on PASS. So
+    # on a FAIL a reader saw N findings and no record of what had been taken
+    # OUT of that comparison, which is the one moment the exclusions matter:
+    # if an exclusion rule is wrong, the finding list is wrong, and the
+    # evidence that would show it was suppressed exactly then. Printed on all
+    # three paths now.
+    _advisories = _exclusion_advisories(
+        only_l9_optional, reused_prefix_matched, reused_tied_off,
+        reused_config_gated, reused_ip_passthrough, l3_alias_reconciled)
 
     is_waived, rationale = waived(project)
     if is_waived:
@@ -1522,6 +1544,8 @@ def main(argv: list[str]) -> int:
         )
         for f in findings:
             print(f"  · {f}")
+        for _a in _advisories:
+            print(_a)
         return 0
 
     print(
@@ -1530,6 +1554,8 @@ def main(argv: list[str]) -> int:
     )
     for f in findings:
         print(f"  · {f}")
+    for _a in _advisories:
+        print(_a)
     return 1
 
 

@@ -174,6 +174,45 @@ and #712 (wrapper-exposed output) are **dead code without this file**.
 > names you declare reconcile — a genuinely missing/extra functional port still
 > hard-FAILs.
 
+### Do NOT declare a port you cannot drive (HARD)
+
+`tie_offs` means "the chip-top wires this L9 interface to a constant or an
+internal net **instead of** a pad". It does **not** mean "this port does not
+exist". Vendor docs frequently describe a **newer / superset integration
+wrapper** than the revision staged in `input/vendor_rtl/` — an outer top that
+adds redundancy, integrity or scrambling interfaces the staged sources simply
+do not contain. Listing those under `tie_offs` asserts the delivered IC has a
+safety surface it does not have, and buys a PASS by lying. Never do it.
+
+You largely do not have to. `l9_rtl_pin_consistency_check` already demotes the
+honest version of that divergence to a disclosed advisory with no manifest
+entry, via the **#781 config-variant reconciliation**. Read what it keys on,
+because the boundary is the whole point:
+
+* the ground truth is the **DECLARED port list of the reused-IP module(s) the
+  glue files actually instantiate** — resolved from `SOURCE_MANIFEST.ip_list`
+  plus the SystemVerilog instantiation grammar, never the whole RTL tree;
+* an L9 pin that is **not a port of the instantiated IP** is config-gated —
+  the doc described a fuller variant than was built. Advisory.
+* a chip_top port that **is** a real port of the instantiated IP but which L9
+  named differently or omitted is faithful passthrough. Advisory.
+* an L9 pin that **IS** a declared port of the instantiated IP and is missing
+  from chip_top means the wrapper genuinely DROPPED a real port — still a hard
+  FAIL. So does a chip_top port sourced from no instantiated IP at all.
+
+A design with no manifest, or whose `ip_list` resolves to nothing, gets **no
+relaxation whatever** — the reconciliation cannot be reached by omission.
+
+**Where the relaxation does NOT reach, today.** The comparison surface is the
+instantiated `ip_list` modules, not every module in the tree. A pin provided
+only by some staged module the glue does not instantiate is outside it and
+still hard-FAILs. Whether to widen the surface to all tree ports is an OPEN
+question (vibe-ic#345, salvage 2): widening removes a class of false FAIL and
+simultaneously weakens the no-leak property this rule depends on, so it needs
+a measurement, not an opinion. Until it is settled, reserve
+`renamed_interfaces` for a signal the staged IP genuinely drives under a
+different name, and say **why** in a `rationale` field next to the pairing.
+
 ### MERGE-preserving rule (HARD)
 
 The auto-emit is **merge-preserving**: it only (re)asserts `reused_ip` / `ip_list`
