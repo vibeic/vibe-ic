@@ -37,6 +37,12 @@ this run's own RESULT/AGENT_REPORT):
   (`assert(p == '0)` one cycle after reset) — *"Property proved."* This is a
   genuine, tool-run proof of reset-safety, not a claim of full datapath
   equivalence (that remains a separate, harder proof obligation).
+  **Evidence now ships** under `phase2/stage1/formal/reset_safety/` — task,
+  PASS transcript, and a NEGATIVE CONTROL showing the property fails when
+  `p_reg`'s reset assignment is deleted, so the 0.01 s pass is not vacuous.
+  Read as a REGENERATION (2026-07-26) of the same property against the same
+  RTL: this campaign's own formal artefacts were never published, and that
+  gap is still open — see `reports/phase2/gates/formal_evidence.json`.
 
 **Where the register lives (post-#278):** `waivers.json` holds the 2 MACHINERY-SANCTIONED ENV_UNAVAILABLE waivers (steps 6 + 39, the FPGA early-prototype and final sign-off), materialized by `waivers_materialize.py` with a sanctioned non-self approver. The HUMAN-JUDGMENT deferrals below sit in `waivers.json.template` and are NOT yet approved — their `approver` is a placeholder that `waivers_schema_check.py` rejects, so they cannot ship as a green sign-off until a person fills it in.
 
@@ -49,9 +55,12 @@ PASS_WITH_WAIVERS`), so it is deliberately absent from the register; FPGA early-
 DE10-class board-pin contract for this IC class — deferred to board bring-up,
 not executed-PASS; `reports/phase2/fpga/on_board_pass.json` verdict `SKIP`);
 and formal full-stack functional proof beyond reset-safety (deferred to the AI
-assertion-gen / equivalence-miter track for a full arithmetic proof — NOTE: the
-reset-safety `abc pdr` proof claimed below is not yet shipped with its `sby/`
-artifact, so treat it as claimed-not-yet-evidenced until that lands).
+assertion-gen / equivalence-miter track for a full arithmetic proof — NOTE: an
+earlier version of this file said the reset-safety `abc pdr` proof was
+"claimed-not-yet-evidenced"; that is now stale. A negative-controlled proof of
+that property ships under `phase2/stage1/formal/reset_safety/`. What remains
+unshipped is this campaign's OWN formal artefacts, and the full arithmetic
+proof, which was never attempted).
 
 **DFT disclosure:** the at-speed gates (DT1/DT2/DT3) are PASS with `scan_flops
 = 65` and **test_coverage 100%** — but **fault_coverage is 40.5%**
