@@ -128,20 +128,45 @@ def verify(container: str, require_image: Optional[str] = None) -> Dict[str, obj
         rec["verdict"] = "FAIL"
         reason = "no container named %r" % container
         if looks_like_image_ref(container):
-            # The hint must be a command that actually WORKS. The salvaged
-            # draft suggested `docker run -d --name <name> <image> --skip sleep
-            # infinity`, whose container command is the literal `--skip`, so it
-            # exits immediately — an actionable-looking hint that leaves the
-            # operator no better off than the original error. Point at the
-            # repo's own restarter, which pins the tag and then VERIFIES the
-            # resulting container's image id, and give the plain docker form
-            # as the fallback for anyone outside this tree.
+            # The hint must be a command that actually WORKS — and which plain
+            # `docker run` form works is a property of the IMAGE, not of this
+            # program, so the hint must not commit to one of them.
+            #
+            # An earlier revision asserted that `<image> --skip sleep infinity`
+            # "exits immediately, because its container command is the literal
+            # --skip", and replaced it with a bare `<image> sleep infinity`.
+            # MEASURED on the image this repo ships
+            # (ghcr.io/vibeic/vibeic-eda:0.2.30, docker 29.6.2):
+            #
+            #   docker inspect --format '{{.Config.Entrypoint}} {{.Config.Cmd}}'
+            #     -> [/dockerstartup/scripts/ui_startup.sh] [--wait]
+            #   run ... <image> --skip sleep infinity -> Running=true  Exit=0
+            #   run ... <image> sleep infinity        -> Running=false Exit=1
+            #        docker logs: [ERROR] Unexpected option "sleep"
+            #
+            # i.e. exactly backwards: because the image declares an ENTRYPOINT
+            # launcher, trailing args are that launcher's FLAGS, and `--skip` is
+            # the documented flag meaning "skip the UI startup and exec the
+            # given command". The repo's own tooling already agrees —
+            # tools/vibeic-eda/restart-eda.sh uses `CMD=( --skip sleep infinity )`
+            # and tools/vibeic-eda/README.md documents the same form.
+            #
+            # Neither form is universally right: an image with NO entrypoint
+            # launcher needs the bare command. So name BOTH and say which
+            # applies when, instead of hardcoding a guess about one image's
+            # entrypoint into a general program. chip-, tool- and image-AGNOSTIC.
             reason += (
                 " — this looks like an IMAGE ref. --container names a CONTAINER "
                 "(docker exec <container>), not an image. Start one first: "
                 "tools/vibeic-eda/restart-eda.sh (it pins the tag and then "
                 "verifies the container's image id), or plainly: "
-                "docker run -d --name <name> %s sleep infinity" % container
+                "docker run -d --name <name> %s sleep infinity — and if the "
+                "image declares an ENTRYPOINT launcher, pass its skip flag "
+                "before the command, e.g. "
+                "docker run -d --name <name> %s --skip sleep infinity "
+                "(check `docker image inspect --format "
+                "'{{.Config.Entrypoint}}' %s`)." % (container, container,
+                                                    container)
             )
         rec["reason"] = reason
         return rec

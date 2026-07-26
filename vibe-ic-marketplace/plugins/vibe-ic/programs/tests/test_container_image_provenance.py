@@ -87,18 +87,52 @@ def test_the_actionable_hint_is_a_command_that_would_actually_run(monkeypatch):
     """A hint that does not work is worse than no hint: it looks actionable and
     leaves the operator exactly where they were.
 
-    The salvaged draft suggested `docker run -d --name <name> <image> --skip
-    sleep infinity`, whose container COMMAND is the literal `--skip` — the
-    container exits immediately. Pin that the suggestion is a runnable form and
-    that it points at the repo's own restarter, which verifies the resulting
-    container's image id rather than merely starting something."""
+    An earlier revision pinned `--skip sleep infinity` as the BROKEN form and a
+    bare `sleep infinity` as the working one. That is backwards for any image
+    that declares an ENTRYPOINT launcher — see
+    test_the_hint_covers_the_entrypoint_launcher_case for the measurement. Which
+    plain-docker form works is a property of the IMAGE, so this program must not
+    commit to one: pin that BOTH are named, that the entrypoint case is called
+    out, and that the repo's own restarter (which verifies the resulting
+    container's image id rather than merely starting something) is offered
+    first."""
+    monkeypatch.setattr(cip, "inspect_container",
+                        lambda n: {"status": "not_found", "container": n})
+    ref = "ghcr.io/vibeic/vibeic-eda:0.2.30"
+    reason = cip.verify(ref)["reason"]
+    assert "docker run -d --name <name> %s sleep infinity" % ref in reason
+    assert "docker run -d --name <name> %s --skip sleep infinity" % ref in reason
+    assert "restart-eda.sh" in reason
+
+
+def test_the_hint_covers_the_entrypoint_launcher_case(monkeypatch):
+    """REGRESSION CONTROL for the assertion this test file previously got
+    backwards.
+
+    MEASURED on the image this repo ships (ghcr.io/vibeic/vibeic-eda:0.2.30,
+    docker 29.6.2):
+
+        Config.Entrypoint = [/dockerstartup/scripts/ui_startup.sh]
+        Config.Cmd        = [--wait]
+        run <image> --skip sleep infinity -> Running=true  Exit=0
+        run <image> sleep infinity        -> Running=false Exit=1
+             docker logs: [ERROR] Unexpected option "sleep"
+
+    Because the image declares an ENTRYPOINT, trailing args are that launcher's
+    FLAGS. The repo's own tooling already encodes this:
+    tools/vibeic-eda/restart-eda.sh uses `CMD=( --skip sleep infinity )`.
+
+    An image with NO entrypoint launcher needs the bare form instead, so the
+    hint must name both and say which applies when. This test fails if the hint
+    ever again asserts that exactly one of them is the runnable one."""
     monkeypatch.setattr(cip, "inspect_container",
                         lambda n: {"status": "not_found", "container": n})
     reason = cip.verify("ghcr.io/vibeic/vibeic-eda:0.2.30")["reason"]
-    assert "--skip sleep infinity" not in reason
-    assert "docker run -d --name <name> ghcr.io/vibeic/vibeic-eda:0.2.30 " \
-           "sleep infinity" in reason
-    assert "restart-eda.sh" in reason
+    assert "ENTRYPOINT" in reason, (
+        "the hint must disclose that the correct form depends on the image's "
+        "entrypoint, not silently pick one")
+    assert "Config.Entrypoint" in reason, (
+        "the hint must tell the operator how to CHECK which case they are in")
 
 
 def test_plain_missing_container_fails_without_the_image_hint(monkeypatch):
