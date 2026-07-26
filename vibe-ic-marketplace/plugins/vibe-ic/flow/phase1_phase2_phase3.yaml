@@ -175,6 +175,37 @@ steps:
         # should. Wired advisory so the answer is MEASURED on real runs
         # instead of argued; it cannot fail a step.
         - advisory_program_exit_zero: "phase1_expert_track_evidence_check ."
+        # vibe-ic#306/#381 — TEN per-layer contract gates, ADVISORY. Until the
+        # advisory slot existed these ran NOWHERE but their own unit tests:
+        # a fixture the author wrote proved the logic, no real L-doc was ever
+        # judged. Measured on two published cells before wiring — they return
+        # real verdicts, and two of them FIND things (L10 NO_ORACLE_ANCHOR on
+        # spm/gf180mcuD, L12 UNTYPED_STEPS on sha256). Wired BLOCKING they
+        # would fail two shipped campaign cells today; wired advisory the
+        # findings become visible without changing what any run stops on.
+        # 0.37 s for all ten. l16/l17 are deliberately NOT here: they declare
+        # `verdict_mode: BLOCKS`, so an advisory slot would contradict their
+        # own declaration — that wiring stays an owner decision.
+        # L7 debug/test access points are grounded in a layer that implements them
+        - advisory_program_exit_zero: "l7_debug_access_grounding_check ."
+        # every clock period an L8 consumer resolves is unique and actionable
+        - advisory_program_exit_zero: "l8_clock_period_actionability_check ."
+        # the floorplan phase 3 pins verbatim is unambiguous and agrees across layers
+        - advisory_program_exit_zero: "l9_floorplan_contract_check ."
+        # every executable L10 case carries an oracle anchor
+        - advisory_program_exit_zero: "l10_test_case_oracle_anchor_check ."
+        # L11 OTP content resolves for the consumer that reads it
+        - advisory_program_exit_zero: "l11_otp_content_consumer_contract_check ."
+        # L12 sequences are visible in the layer their consumer actually reads
+        - advisory_program_exit_zero: "l12_sequences_in_consumed_layer_check ."
+        # the L13 bring-up contract is complete for the hardware in scope
+        - advisory_program_exit_zero: "l13_bringup_contract_check ."
+        # L14 protocol versioning is self-consistent
+        - advisory_program_exit_zero: "l14_protocol_versioning_contract_check ."
+        # L15 code-bearing tables reconcile with their consumers
+        - advisory_program_exit_zero: "l15_encoding_tables_contract_check ."
+        # L18 interconnect topology is factual (its own default mode is ADVISES)
+        - advisory_program_exit_zero: "l18_interconnect_topology_factuality_check ."
     blocks_on: []
 
   - id: 1

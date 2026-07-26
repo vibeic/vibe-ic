@@ -4369,7 +4369,14 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                 return True, reasons  # no inputs -> not applicable -> silent
         cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
         ok, out = _check_program_exit_zero(project, cmd)
-        if ok:
+        if ok and out.startswith(_VACUOUS_HINT_PREFIX):
+            # rc=2 is the disclosed-skip tier, NOT a clean result. Recording
+            # it as "ok" would make "this project has no such input" read as
+            # "this project was audited and found clean" — the exact
+            # substitution this slot exists to prevent.
+            reasons.append(f"{_ADVISORY_HINT_PREFIX}n/a (input not present): "
+                           f"{cmd}")
+        elif ok:
             reasons.append(f"{_ADVISORY_HINT_PREFIX}ok: {cmd}")
         else:
             reasons.append(f"{_ADVISORY_HINT_PREFIX}FINDING: {cmd} :: "

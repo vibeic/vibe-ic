@@ -226,6 +226,89 @@ def test_advisory_inside_any_of_is_an_authoring_error(tmp_path, monkeypatch):
                for r in reasons)
 
 
+def test_vacuous_skip_is_not_recorded_as_ok(tmp_path, monkeypatch):
+    """rc=2 is the disclosed-skip tier, not a clean result. Recording it as
+    `ok` would make "this project has no such input" read as "this project
+    was audited and found clean"."""
+    monkeypatch.setattr(
+        _flow, "_check_program_exit_zero",
+        lambda p, c: (True, f"{_flow._VACUOUS_HINT_PREFIX}{c}"))
+    _p, reasons = _flow._evaluate_gate(tmp_path, _adv())
+    adv = [r for r in reasons if r.startswith(_flow._ADVISORY_HINT_PREFIX)]
+    assert adv and "n/a (input not present)" in adv[0], adv
+
+
+# ------------------------------------------- declared-intent second channel
+
+def _audit_mod():
+    spec = importlib.util.spec_from_file_location(
+        "flow_gate_enforcement_audit",
+        _PROGRAMS / "flow_gate_enforcement_audit.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_runtime_verdict_mode_counts_as_a_declaration(tmp_path):
+    """Some gates state their intent in the JSON they EMIT, not in an
+    `ENFORCEMENT:` docstring line. Reading only the docstring reported them
+    as UNDECLARED, so a wiring decision could be taken without ever seeing
+    what the gate said about itself."""
+    m = _audit_mod()
+    (tmp_path / "a_check.py").write_text(
+        '"""doc"""\nout = {"verdict_mode": "BLOCKS"}\n')
+    (tmp_path / "b_check.py").write_text(
+        '"""doc"""\nout = {"verdict_mode": "ADVISES"}\n')
+    assert m.declared_intent(tmp_path, "a_check") == "blocking"
+    assert m.declared_intent(tmp_path, "b_check") == "advisory"
+
+
+def test_a_conditional_verdict_mode_is_not_a_declaration(tmp_path):
+    """REGRESSION. `"BLOCKS" if strict else "ADVISES"` says the intent depends
+    on a flag; claiming either invents a declaration the program never made.
+
+    The first version of this guard failed on exactly the case it was written
+    for: matching only the string VALUE after the key saw `"BLOCKS"` and
+    nothing else, so a gate whose DEFAULT mode is ADVISES was reported as
+    declaring blocking — and would then have been treated as an un-wireable
+    blocking orphan.
+    """
+    m = _audit_mod()
+    (tmp_path / "c_check.py").write_text(
+        '"""doc"""\nout = {"verdict_mode": "BLOCKS" if strict else "ADVISES"}\n')
+    assert m.declared_intent(tmp_path, "c_check") is None
+
+
+def test_docstring_declaration_still_wins(tmp_path):
+    m = _audit_mod()
+    (tmp_path / "d_check.py").write_text(
+        '"""ENFORCEMENT: advisory"""\nout = {"verdict_mode": "BLOCKS"}\n')
+    assert m.declared_intent(tmp_path, "d_check") == "advisory"
+
+
+def test_the_ten_layer_gates_are_wired_advisory_and_the_blocking_two_are_not():
+    """Wired: ten UNDECLARED per-layer contract gates that previously ran
+    nowhere but their own tests. NOT wired: l16/l17, which declare
+    `verdict_mode: BLOCKS` — an advisory slot would contradict their own
+    declaration, and that call is the flow owner's."""
+    yaml_text = (_PROGRAMS.parent / "flow"
+                 / "phase1_phase2_phase3.yaml").read_text()
+    for g in ("l7_debug_access_grounding_check",
+              "l8_clock_period_actionability_check",
+              "l9_floorplan_contract_check",
+              "l10_test_case_oracle_anchor_check",
+              "l11_otp_content_consumer_contract_check",
+              "l12_sequences_in_consumed_layer_check",
+              "l13_bringup_contract_check",
+              "l14_protocol_versioning_contract_check",
+              "l15_encoding_tables_contract_check",
+              "l18_interconnect_topology_factuality_check"):
+        assert f'advisory_program_exit_zero: "{g} .' in yaml_text, g
+    for g in ("l16_compliance_properties_actionable_check",
+              "l17_channel_catalog_consumer_contract_check"):
+        assert g not in yaml_text, f"{g} declares BLOCKS; do not wire advisory"
+
+
 def test_advisory_is_not_a_backing_checker_for_a_self_asserted_gate():
     """`gate_self_assertion_check` requires a json_field_true (which trusts an
     artifact's own PASS) to be backed by a BLOCKING program. An advisory one

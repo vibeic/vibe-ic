@@ -61,6 +61,12 @@ _GATE_RE = re.compile(
     # #306 — `advisory_` is the non-blocking slot; a gate wired there IS wired.
     r"(?:optional_|advisory_)?program_exit_zero:\s*[\"']?([\w./-]+)")
 _DECL_RE = re.compile(r"ENFORCEMENT:\s*(blocking|advisory)", re.IGNORECASE)
+# The second channel: intent stated in the JSON the gate emits. Captures the
+# WHOLE right-hand side, not just a leading string literal — see
+# `declared_intent` for why a value-only match reads a conditional expression
+# as an unconditional declaration.
+_VERDICT_MODE_RE = re.compile(r'"verdict_mode":\s*([^,\n}]+)')
+_LONE_MODE_RE = re.compile(r'^"(BLOCKS|ADVISES)"$')
 
 
 def _flow_def(explicit: Optional[str]) -> Path:
@@ -96,9 +102,37 @@ def declared_intent(programs: Path, gate: str) -> Optional[str]:
     p = programs / stem
     if not p.is_file():
         return None
-    head = p.read_text(errors="replace")[:4000]
-    m = _DECL_RE.search(head)
-    return m.group(1).lower() if m else None
+    text = p.read_text(errors="replace")
+    m = _DECL_RE.search(text[:4000])
+    if m:
+        return m.group(1).lower()
+    # SECOND DECLARATION CHANNEL, measured 2026-07-26. Some gates state their
+    # intent in the JSON they EMIT (`"verdict_mode": "BLOCKS" / "ADVISES"`)
+    # rather than in an `ENFORCEMENT:` docstring line. This audit read only
+    # the docstring, so it reported those gates as UNDECLARED and a wiring
+    # decision could be made without ever seeing what they said about
+    # themselves.
+    #
+    # A CONDITIONAL mode is deliberately NOT read as a declaration:
+    # `"BLOCKS" if strict else "ADVISES"` says the intent depends on a flag,
+    # so claiming either would be inventing a declaration the program did not
+    # make. Those stay UNDECLARED, which is the truth.
+    modes = set()
+    for rhs in _VERDICT_MODE_RE.findall(text):
+        m2 = _LONE_MODE_RE.match(rhs.strip())
+        if not m2:
+            # A conditional / computed value (`"BLOCKS" if strict else
+            # "ADVISES"`) is NOT a declaration. The first version of this
+            # guard failed on exactly the case it was written for: matching
+            # only the string VALUE after the key saw `"BLOCKS"` and nothing
+            # else, so a gate whose default mode is ADVISES was reported as
+            # declaring blocking. Capture the whole RHS and require it to be
+            # a lone literal.
+            return None
+        modes.add(m2.group(1))
+    if len(modes) == 1:
+        return {"BLOCKS": "blocking", "ADVISES": "advisory"}[modes.pop()]
+    return None
 
 
 def audit(flow: Path, programs: Path) -> dict:
@@ -152,6 +186,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "and NEW orphans fail, the recorded ones do not")
     ap.add_argument("--write-baseline", action="store_true",
                     help="record the CURRENT set; it may only ever shrink")
+    ap.add_argument("--scope-expanded", metavar="REASON",
+                    help="permit a GROWING baseline for this write, because "
+                         "the audit now LOOKS at more than it did (>=30 chars; "
+                         "recorded in the baseline beside the previous size)")
     a = ap.parse_args(argv)
     flow = _flow_def(a.flow)
     programs = Path(a.programs) if a.programs else _HERE
@@ -193,10 +231,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         except (OSError, ValueError):
             prev = None
     if a.write_baseline:
-        if prev is not None and len(now) > len(prev):
+        if a.scope_expanded is not None and len(a.scope_expanded.strip()) < 30:
+            print("\n[FAIL] --scope-expanded needs a real reason (>=30 chars) "
+                  "naming what the audit now looks at that it did not before.")
+            return 1
+        if (prev is not None and len(now) > len(prev)
+                and a.scope_expanded is None):
             print(f"\n[FAIL] refusing to GROW the baseline "
                   f"({len(prev)} -> {len(now)}): this register records debt "
-                  f"that must be paid down, never permission to add more.")
+                  f"that must be paid down, never permission to add more. If "
+                  f"the audit now LOOKS at more than it did, say so with "
+                  f"--scope-expanded '<why>' — a wider scope finding "
+                  f"pre-existing debt is not a regression, but it must be "
+                  f"recorded, not assumed.")
             return 1
         bl_path.write_text(json.dumps(
             {"_comment": ("Gates that declare an intent they are not wired "
@@ -204,7 +251,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                           "one changes what a real run blocks on — a flow-"
                           "owner decision — so they are recorded, not "
                           "silently enforced here."),
-             "known": now}, indent=2) + "\n")
+             "previous_size": None if prev is None else len(prev),
+             "scope_expanded": a.scope_expanded,
+             "known": now}, indent=2, ensure_ascii=False) + "\n")
         print(f"\nwrote {bl_path} ({len(now)} entr(ies))")
         return 0
     if prev is None:
