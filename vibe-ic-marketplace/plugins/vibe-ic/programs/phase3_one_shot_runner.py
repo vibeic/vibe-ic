@@ -460,9 +460,50 @@ def _tool_version(container: Optional[str], tool: str) -> Optional[str]:
     return out
 
 
+def _hash_declared_outputs(sink: str, declared) -> dict:
+    """SHA256 the artefacts a CALL SITE declared it was asking the tool for.
+
+    `declared` comes from the caller, never from the filesystem. That
+    distinction is the whole point and it is doctrine rule #2's: the tempting
+    shortcut is to scan for files modified during the command's window and
+    attach whatever moved, but that associates a hash with a command that may
+    not have produced it — a fabricated attestation, which is exactly what the
+    provenance gate exists to catch. A fabricated audit chain is worse than an
+    incomplete one, because it is believed.
+
+    So this hashes ONLY paths the caller named, records them project-relative
+    (`PROVENANCE_PATH_OUTSIDE_PROJECT`), and SILENTLY OMITS any that do not
+    exist — a tool that failed produced nothing, and claiming otherwise would
+    be the same fabrication one layer down. An entry with no surviving outputs
+    keeps no `outputs` key at all: empty is honest.
+    """
+    out: dict = {}
+    root = Path(sink).resolve()
+    for item in (declared or []):
+        try:
+            p = Path(item)
+            p = p if p.is_absolute() else (root / p)
+            p = p.resolve()
+            if not p.is_file():
+                continue                      # not produced — say nothing
+            try:
+                rel = p.relative_to(root).as_posix()
+            except ValueError:
+                continue                      # outside the project; not ours
+            h = __import__("hashlib").sha256()
+            with p.open("rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            out[rel] = f"sha256:{h.hexdigest()}"
+        except Exception:  # noqa: BLE001 — the ledger must never break the run
+            continue
+    return out
+
+
 def _log_invocation(cmd: str, rc: int, duration_ms: int,
                     marker: Optional[str] = None,
-                    container: Optional[str] = None) -> None:
+                    container: Optional[str] = None,
+                    outputs=None) -> None:
     """Append ONE measured invocation record. Never raises: a ledger that can
     break the run it documents would be traded away the first time it did.
 
@@ -502,6 +543,11 @@ def _log_invocation(cmd: str, rc: int, duration_ms: int,
     }
     if marker:
         entry["marker"] = marker
+    # Declared by the CALL SITE, hashed here. Absent when the caller declared
+    # nothing or nothing it declared was produced — empty is honest.
+    _outs = _hash_declared_outputs(sink, outputs)
+    if _outs:
+        entry["outputs"] = _outs
     try:
         with (Path(sink) / "provenance.jsonl").open("a") as f:
             f.write(json.dumps(entry) + "\n")
@@ -566,7 +612,8 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
                  log_path: Optional[Path] = None,
                  stall_grace_s: Optional[float] = None,
                  hard_ceiling_s: Optional[float] = None,
-                 poll_s: Optional[float] = None) -> Tuple[int, str, str]:
+                 poll_s: Optional[float] = None,
+                 outputs: Optional[List[str]] = None) -> Tuple[int, str, str]:
     """Run shell cmd inside a Docker container.
 
     DISPATCH (v1.3.47):
@@ -632,7 +679,7 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
         stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling)
     _log_invocation(cmd, res.rc if res.rc is not None else -1,
                     int((time.monotonic() - _t0) * 1000), marker=marker,
-                    container=container)
+                    container=container, outputs=outputs)
     return res.rc, res.out, res.err
 
 
