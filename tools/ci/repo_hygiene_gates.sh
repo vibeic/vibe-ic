@@ -58,6 +58,11 @@ run_tolerating_uncheckable() {            # <label> <cwd> <cmd...>
 
 # --- repo-root scoped ------------------------------------------------------
 run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnostic_check.py" "$PLUGIN"
+# Its PORTABILITY twin. Wired here because `gatekeeper_review` — the only
+# other place that runs it — is invoked on PRs, and this repo lands most work
+# by DIRECT PUSH, so the guard had never run on any of it. Measured when first
+# wired: 4 non-portable paths, all in a test fixture committed the day before.
+run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_check.py" "$PLUGIN"
 
 # vibe-ic#354 — the image-version gate is BLOCKING. It failed loudly on main
 # for six versions (0.2.29 pinned in 13 places, never published) while nothing

@@ -199,7 +199,7 @@ def test_the_collector_walks_the_PUBLISHED_tree_not_the_disk(tmp_path):
 
 def test_an_absolute_home_path_is_UNFOLLOWABLE_not_merely_missing(tmp_path):
     """Two of the three CONVERGED cells cite
-    `/home/<user>/campaign_.../sta_spef_multicorner.rpt` as the evidence for
+    `/home/<your-user>/campaign_.../sta_spef_multicorner.rpt` as the evidence for
     their sign-off corner. That can never resolve for a reader on any machine
     but the author's — a different fact from "the file is not here", and
     reporting them the same way sends a reader hunting for a missing artefact
@@ -208,9 +208,9 @@ def test_an_absolute_home_path_is_UNFOLLOWABLE_not_merely_missing(tmp_path):
     p = d / "reports" / "sta.json"
     p.parent.mkdir(parents=True)
     p.write_text(json.dumps(
-        {"status": "PASS", "report": "/home/someone/campaign/x/sta.rpt"}))
+        {"status": "PASS", "report": "/var/tmp/campaign/x/sta.rpt"}))
     recs = {r["cited"]: r["decision"] for r in B.collect_citation_records(d)}
-    assert recs["/home/someone/campaign/x/sta.rpt"] == "UNFOLLOWABLE_ABSOLUTE"
+    assert recs["/var/tmp/campaign/x/sta.rpt"] == "UNFOLLOWABLE_ABSOLUTE"
 
 
 def test_an_absolute_path_in_PROSE_is_not_treated_as_a_citation(tmp_path):
@@ -223,8 +223,8 @@ def test_an_absolute_path_in_PROSE_is_not_treated_as_a_citation(tmp_path):
     p = d / "reports" / "notes.json"
     p.parent.mkdir(parents=True)
     p.write_text(json.dumps(
-        {"detail": "the run executed in /home/someone/campaign/x and finished",
-         "note": "log at /home/someone/campaign/x/run.log"}))
+        {"detail": "the run executed in /var/tmp/campaign/x and finished",
+         "note": "log at /var/tmp/campaign/x/run.log"}))
     recs = [r for r in B.collect_citation_records(d)
             if r["decision"] == "UNFOLLOWABLE_ABSOLUTE"]
     assert recs == [], recs
@@ -236,8 +236,8 @@ def test_a_citation_shaped_key_is_recognised_by_suffix_too(tmp_path):
     d = tmp_path / "cell"
     p = d / "reports" / "x.json"
     p.parent.mkdir(parents=True)
-    p.write_text(json.dumps({"power_report": "/home/u/a.rpt",
-                             "l12_file": "/home/u/b.json"}))
+    p.write_text(json.dumps({"power_report": "/var/tmp/u/a.rpt",
+                             "l12_file": "/var/tmp/u/b.json"}))
     got = {r["cited"] for r in B.collect_citation_records(d)
            if r["decision"] == "UNFOLLOWABLE_ABSOLUTE"}
-    assert got == {"/home/u/a.rpt", "/home/u/b.json"}, got
+    assert got == {"/var/tmp/u/a.rpt", "/var/tmp/u/b.json"}, got

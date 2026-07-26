@@ -257,9 +257,20 @@ def iter_source_files(root: Path) -> Iterable[Path]:
             yield p
 
 
+# Filled by `scan_tree` on every call: how many files this guard actually read.
+# A PASS with no denominator cannot be told apart from a PASS that scanned
+# NOTHING (vibe-ic#447), and the repo's own empty-tree probe refuses to let a
+# gate be wired into CI without one — it caught this program when it was
+# wired, which is the probe working.
+SCAN_CENSUS: dict = {}
+
+
 def scan_tree(root: Path, extra_allowed: Sequence[str] = ()) -> List[Finding]:
     findings: List[Finding] = []
+    SCAN_CENSUS.clear()
+    SCAN_CENSUS["files_read"] = 0
     for p in iter_source_files(root):
+        SCAN_CENSUS["files_read"] += 1
         findings.extend(scan_file(p, p.relative_to(root), extra_allowed))
     return findings
 
@@ -293,9 +304,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"ERROR: cannot write --json: {e}", file=sys.stderr)
             return 2
 
+    _read = SCAN_CENSUS.get("files_read", 0)
+    if not findings and _read == 0:
+        # Scanning nothing and finding nothing is what a WRONG ROOT looks like.
+        print(f"shipped_path_portability_check: NOTHING_SCANNED — read 0 "
+              f"scannable file(s) under {root}. A clean result over an empty "
+              f"scan is not a clean result; check the plugin_root argument.",
+              file=sys.stderr)
+        return 2
     if not findings:
-        print("shipped_path_portability_check: PASS "
-              "(no personal absolute paths in shipped source)")
+        print(f"shipped_path_portability_check: PASS ({_read} file(s) scanned) "
+              "— no personal absolute paths in shipped source")
         return 0
 
     print(f"shipped_path_portability_check: FAIL — {len(findings)} "
