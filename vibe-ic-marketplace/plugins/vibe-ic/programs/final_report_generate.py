@@ -318,6 +318,36 @@ REPORT_SUBDIRS = (
 )
 
 
+def _runner_step_record(project: Path, step: str):
+    """(status, extras) for one step from the Phase-3 runner's own record.
+
+    ORGANIC #399. `reports/orchestrator/phase3_one_shot.json` already carries
+    every step's status plus the substance behind it (violation counts, which
+    engine was authoritative). The final report was looking for a
+    `<kind>.json` sidecar that nothing writes, so it reported
+    "(report missing)" for DRC on runs where DRC ran.
+
+    This READS; it never derives. The runner's status is not a function of the
+    raw item count — it re-tiers to WAIVED when every violation is a
+    std-cell-library layer rule, and swaps in the Magic count when a re-stream
+    is authoritative — so a summary that recomputes from the report
+    contradicts the run it is summarising.
+
+    Returns ("", {}) when there is no record, so the caller can keep saying
+    "(report missing)" rather than inventing a verdict.
+    """
+    rec = _find_report(project, "phase3_one_shot.json")
+    j = _safe_json(rec) if rec else None
+    if not isinstance(j, dict):
+        return "", {}
+    for s in (j.get("steps") or []):
+        if isinstance(s, dict) and s.get("name") == step:
+            st = str(s.get("status") or "").strip()
+            ex = s.get("extras")
+            return st, (ex if isinstance(ex, dict) else {})
+    return "", {}
+
+
 def _find_report(project: Path, name: str) -> Optional[Path]:
     """First try the auto-routed canonical location; if not found, scan
     the legacy/alternate subdirs in priority order."""
@@ -937,6 +967,30 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
             pv[kind] = j.get("verdict") or j.get("status") or "?"
         else:
             pv[kind] = "(report missing)"
+    # ORGANIC #399 — nothing in this tree writes `drc_signoff.json`; the
+    # producer stages a `.rpt`. So the sign-off summary a reader treats as
+    # the deliverable said "(report missing)" for DRC on 16 of the 19
+    # committed runs that HAVE a runner record — including runs whose
+    # `step_drc` recorded PASS, FAIL or WAIVED with real violation counts.
+    #
+    # ECHO the runner's own verdict; do NOT re-derive one from the raw
+    # report. #399 measured a prototype that parsed the RDB: it produced
+    # `FAIL (N violations)` on five runs the runner had recorded as WAIVED,
+    # because the runner deliberately re-tiers to WAIVED when every
+    # violation falls in std-cell-library layer rules, and substitutes the
+    # Magic count when a re-stream is authoritative. A report that
+    # contradicts the run it summarises is worse than one that under-reports.
+    if pv.get("drc_signoff") == "(report missing)":
+        _st, _ex = _runner_step_record(project, "drc")
+        if _st:
+            _bits = [f"{k}={_ex[k]}" for k in
+                     ("total_violations", "user_routing_violations",
+                      "stdcell_library_violations", "drc_authority",
+                      "streamout_engine") if _ex.get(k) is not None]
+            pv["drc_signoff"] = (
+                f"{_st} (runner step_drc"
+                + (f"; {', '.join(str(b) for b in _bits)}" if _bits else "")
+                + ")")
     # Auxiliary signoff reports (IR / EM / antenna / SI / power / STA)
     aux: List[str] = []
     for stem in ("ir_drop", "em", "antenna", "si_crosstalk", "power",
