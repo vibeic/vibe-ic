@@ -109,6 +109,81 @@ def test_substring_neighbour_does_not_count_as_a_reference(tmp_path):
     assert "sample_check.py" in _run(tmp_path)["test_only"]
 
 
+def test_prose_inside_a_program_is_not_a_runner(tmp_path):
+    """REGRESSION: a docstring / comment NAMES a checker, it never runs one.
+
+    Adding a docstring to the audit itself that named a recorded checker
+    while explaining why it is hard to wire made that entry look wired and
+    silently removed it from a register that may only shrink for a real
+    reason. Measured over the repo, prose accounted for 20+ entries wrongly
+    counted as wired.
+    """
+    _tree(tmp_path, test="import sample_check\n",
+          prog='"""Docs mention sample_check here."""\n'
+               "# and a comment: sample_check\n"
+               "y = 2\n")
+    assert "sample_check.py" in _run(tmp_path)["test_only"]
+
+
+def test_a_string_literal_invocation_still_counts(tmp_path):
+    """The paired half: only BARE-EXPRESSION strings are dropped.
+
+    `subprocess.run([..., "foo_check.py"])` is a real invocation and must
+    survive prose-stripping, otherwise the fix trades a false PASS for a
+    false accusation.
+    """
+    _tree(tmp_path, test="import sample_check\n",
+          prog='import subprocess\n'
+               'subprocess.run(["python3", "sample_check.py"])\n')
+    assert _run(tmp_path)["test_only"] == []
+
+
+def test_yaml_comment_is_not_a_runner(tmp_path):
+    """A commented-out gate entry is a gate that does not run."""
+    _tree(tmp_path, test="import sample_check\n",
+          flow="steps:\n  # - gate: sample_check\n")
+    assert "sample_check.py" in _run(tmp_path)["test_only"]
+
+
+def test_growth_needs_a_reason_and_records_the_previous_size(tmp_path):
+    """A wider scope finding pre-existing debt is not a regression — but it
+    must be recorded, not assumed, and a one-word excuse is not a reason."""
+    _tree(tmp_path)
+    bl = tmp_path / "bl.json"
+    bl.write_text(json.dumps({"known": []}) + "\n")
+    common = [sys.executable, str(PROG), "--repo-root", str(tmp_path),
+              "--baseline", str(bl), "--write-baseline"]
+    short = subprocess.run(common + ["--scope-expanded", "because"],
+                           capture_output=True, text=True)
+    assert short.returncode == 1
+    assert "needs a real reason" in short.stdout
+    ok = subprocess.run(common + [
+        "--scope-expanded",
+        "comments and docstrings no longer count as runners, so prose-only "
+        "references are now correctly reported"], capture_output=True, text=True)
+    assert ok.returncode == 0, ok.stdout
+    d = json.loads(bl.read_text())
+    assert d["known"] == ["sample_check.py"]
+    assert d["previous_size"] == 0
+    assert "prose-only" in (d["scope_expanded"] or "")
+
+
+def test_refresh_triage_measures_by_running(tmp_path):
+    """Triage must be REGENERABLE, not a one-off someone typed in."""
+    _tree(tmp_path)
+    (tmp_path / "vibe-ic-marketplace/plugins/vibe-ic/programs/sample_check.py"
+     ).write_text("import sys\nprint('needs an input')\nsys.exit(2)\n")
+    bl = tmp_path / "bl.json"
+    r = subprocess.run(
+        [sys.executable, str(PROG), "--repo-root", str(tmp_path),
+         "--baseline", str(bl), "--write-baseline", "--refresh-triage"],
+        capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout
+    tri = json.loads(bl.read_text())["triage"]["sample_check.py"]
+    assert tri.startswith("rc=2"), tri
+    assert "needs an input" in tri
+
+
 def test_checker_referenced_by_nothing_is_reported_separately(tmp_path):
     _tree(tmp_path)
     rep = _run(tmp_path)

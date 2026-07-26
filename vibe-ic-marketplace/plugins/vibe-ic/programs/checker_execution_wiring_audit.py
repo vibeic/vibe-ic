@@ -88,6 +88,59 @@ _BASELINE_NAME = "checker_execution_wiring_baseline.json"
 _SKIP_PARTS = frozenset((".claude", "node_modules", ".git", "worktrees"))
 
 
+def _strip_prose(path: Path, text: str) -> str:
+    """Remove COMMENTS and DOCSTRINGS — prose names a checker, it never runs one.
+
+    This is not a nicety. Adding a docstring to THIS file that named
+    `skill_doc_section_present_check` while explaining why that entry is
+    hard to wire made the entry look wired, and silently removed it from a
+    register that may only shrink for a real reason. Any program whose
+    comments discuss another checker would do the same.
+
+    String LITERALS are kept: `subprocess.run([..., "foo_check.py"])` is a
+    real invocation. Only bare-expression strings (docstrings) are dropped.
+    """
+    if path.suffix == ".py":
+        try:
+            import ast
+            import io
+            import tokenize
+            import warnings
+            with warnings.catch_warnings():
+                # Some sources carry invalid escape sequences in docstrings;
+                # that is their own (separate) defect, not this gate's news.
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(text)
+            drop = set()
+            for node in ast.walk(tree):
+                body = getattr(node, "body", None)
+                if not isinstance(body, list) or not body:
+                    continue
+                first = body[0]
+                if (isinstance(first, ast.Expr)
+                        and isinstance(first.value, ast.Constant)
+                        and isinstance(first.value.value, str)):
+                    drop.update(range(first.lineno, (first.end_lineno or first.lineno) + 1))
+            lines = text.splitlines()
+            kept = [("" if i + 1 in drop else ln) for i, ln in enumerate(lines)]
+            src = "\n".join(kept)
+            try:
+                toks = tokenize.generate_tokens(io.StringIO(src).readline)
+                return "\n".join(t.string for t in toks
+                                 if t.type != tokenize.COMMENT)
+            except (tokenize.TokenError, IndentationError, SyntaxError):
+                return src
+        except (SyntaxError, ValueError, RecursionError):
+            # Unparseable source: keep it whole. Over-counting a reference is
+            # the safe direction for an ACCUSATION, and this branch is loud
+            # in the report rather than silent.
+            return text
+    if path.suffix in (".yml", ".yaml", ".sh"):
+        return "\n".join(ln for ln in text.splitlines()
+                         if not ln.lstrip().startswith("#"))
+    return text
+
+
 def _read(paths) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for f in paths:
@@ -95,7 +148,7 @@ def _read(paths) -> Dict[str, str]:
         if _SKIP_PARTS & set(f.parts):
             continue
         try:
-            out[s] = f.read_text(errors="replace")
+            out[s] = _strip_prose(f, f.read_text(errors="replace"))
         except OSError:
             continue
     return out
@@ -169,6 +222,46 @@ def audit(plugin: Path, repo_root: Path) -> dict:
             "passed": True}
 
 
+def measure_triage(programs: Path, names: List[str], timeout: int = 200) -> Dict[str, str]:
+    """Run each recorded checker with NO arguments and record what happened.
+
+    EMPIRICAL rather than static, for a reason this repo keeps re-learning.
+    A first version of this annotation read `required=True` out of the
+    argparse calls; `skill_doc_section_present_check` enforces `--marker`
+    manually AFTER parsing (`action="append", default=[]`), so the static
+    read reported only `--doc` and made the entry look one flag away from
+    wireable when it is a parameterised helper. Running it says rc=2 and
+    prints the real reason.
+
+    A bare register invites the worst repair — deleting the test so the
+    entry disappears — so every entry has to carry what was found when it
+    was investigated, and that finding has to be REGENERABLE rather than a
+    one-off someone typed in.
+    """
+    import subprocess
+    out: Dict[str, str] = {}
+    for name in names:
+        p = programs / name
+        try:
+            r = subprocess.run([__import__("sys").executable, str(p)],
+                               capture_output=True, text=True, timeout=timeout)
+            rc, blob = r.returncode, (r.stderr or "") + "\n" + (r.stdout or "")
+        except subprocess.TimeoutExpired:
+            out[name] = f"no-arg run TIMED OUT after {timeout}s"
+            continue
+        except OSError as e:
+            out[name] = f"no-arg run could not start: {e}"
+            continue
+        why = next((ln.strip() for ln in blob.splitlines()
+                    if ln.strip() and not ln.strip().startswith(("usage:", "  ", "\t"))),
+                   "(no output)")
+        verdict = {0: "rc=0 runs green with no arguments",
+                   1: "rc=1 FAILs with no design to judge",
+                   2: "rc=2 SKIPs / refuses without its input"}.get(rc, f"rc={rc}")
+        out[name] = f"{verdict} — {why[:180]}"
+    return out
+
+
 def _load_baseline(p: Path):
     if not p.is_file():
         return None
@@ -194,6 +287,16 @@ def main(argv=None) -> int:
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--baseline", default=None)
     ap.add_argument("--write-baseline", action="store_true")
+    ap.add_argument("--scope-expanded", metavar="REASON",
+                    help="permit a GROWING baseline for this write, because "
+                         "the audit now LOOKS at more than it did (a wider "
+                         "scope finds pre-existing debt; that is not a "
+                         "regression). Requires a reason >=30 chars, recorded "
+                         "in the baseline beside the previous size")
+    ap.add_argument("--refresh-triage", action="store_true",
+                    help="with --write-baseline: re-MEASURE each entry by "
+                         "running it with no arguments (opt-in; it executes "
+                         "every recorded program, so it is off the gate path)")
     a = ap.parse_args(argv)
 
     here = Path(__file__).resolve()
@@ -212,11 +315,18 @@ def main(argv=None) -> int:
     now = sorted(rep["test_only"] + rep["no_runner_at_all"])
 
     if a.write_baseline:
+        if a.scope_expanded is not None and len(a.scope_expanded.strip()) < 30:
+            print("[FAIL] --scope-expanded needs a real reason (>=30 chars) "
+                  "naming what the audit now looks at that it did not before.")
+            return 1
         prev = _load_baseline(bl)
-        if prev is not None and len(now) > len(prev):
+        if (prev is not None and len(now) > len(prev)
+                and a.scope_expanded is None):
             print(f"[FAIL] refusing to GROW the baseline "
                   f"({len(prev)} -> {len(now)}): a checker losing its only "
-                  f"real runner is a regression, not a fact to record.")
+                  f"real runner is a regression, not a fact to record. If the "
+                  f"audit now LOOKS at more than it did, say so with "
+                  f"--scope-expanded '<why>'.")
             return 1
         prev_triage = {}
         if bl.is_file():
@@ -224,6 +334,8 @@ def main(argv=None) -> int:
                 prev_triage = json.loads(bl.read_text()).get("triage") or {}
             except (OSError, ValueError):
                 prev_triage = {}
+        if a.refresh_triage:
+            prev_triage = measure_triage(plugin / "programs", now)
         bl.write_text(json.dumps(
             {"_comment": ("Checkers that NOTHING but their own unit test ever "
                           "runs (vibe-ic#381). MAY ONLY SHRINK — each entry is "
@@ -231,9 +343,11 @@ def main(argv=None) -> int:
                           "`triage` records why an entry is still here; the "
                           "wrong repair is to delete the test so the entry "
                           "disappears."),
+             "previous_size": None if prev is None else len(prev),
+             "scope_expanded": a.scope_expanded,
              "known": now,
              "triage": {k: v for k, v in prev_triage.items() if k in now}},
-            indent=2) + "\n")
+            indent=2, ensure_ascii=False) + "\n")
         print(f"wrote {bl} ({len(now)} entr(ies))")
         return 0
 
