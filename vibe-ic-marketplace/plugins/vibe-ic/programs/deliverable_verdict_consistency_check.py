@@ -133,6 +133,11 @@ _EXIT = {
     "DELIVERABLE_STRICTER": 0,
     "DELIVERABLE_CONTRADICTS_ORCHESTRATOR": 1,
     "NOT_APPLICABLE": 2,
+    # Non-fatal and rc-IDENTICAL to the SKIP it replaces, so CI behaviour is
+    # unchanged: this makes the OUTPUT honest, it does not start failing runs.
+    # A gate that began failing here would be adjudicating a claim it has
+    # just said it cannot adjudicate.
+    "UNCHECKED_SUCCESS_CLAIM": 2,
 }
 
 
@@ -265,6 +270,26 @@ def _is_verdict_heading(line: str) -> bool:
     return bool(_LABEL_RE.match(_strip_deco(text)))
 
 
+_PROSE_SUCCESS_RE = re.compile(
+    r"\b(PRODUCTION[- ]?READY|FULLY[- ]?CONVERGED|SIGN[- ]?OFF[- ]?CLEAN"
+    r"|TAPE[- ]?OUT[- ]?READY|ALL\s+GATES\s+PASS)\b", re.IGNORECASE)
+
+
+def _prose_success_claim(text: str) -> Optional[str]:
+    """A PASS-polarity SUCCESS CLAIM stated in prose, or None.
+
+    NOT a headline and never treated as one — this exists only so that an
+    unadjudicable claim standing beside a FAILing orchestrator is DISCLOSED
+    rather than silently skipped. The vocabulary is a short closed list of
+    phrases this project's own reports actually emit, not an open-ended
+    confidence detector: `benchmark_verify_report` prints
+    "PRODUCTION-READY (all gates pass)", which is where the measured instance
+    came from.
+    """
+    m = _PROSE_SUCCESS_RE.search(text or "")
+    return m.group(0) if m else None
+
+
 def extract_headline_verdict(text: str) -> Dict[str, object]:
     """FIRST unambiguous headline-verdict declaration in the deliverable.
 
@@ -359,7 +384,7 @@ class ConsistencyReport:
     run_dir: str
     deliverable: str
     state: str
-    verdict: str                       # PASS | FAIL | SKIP
+    verdict: str                # PASS | FAIL | SKIP | DISCLOSED
     reason: str
     headline: Dict[str, object] = field(default_factory=dict)
     orchestrator: Dict[str, object] = field(default_factory=dict)
@@ -392,6 +417,36 @@ def check(run_dir: Path, *, result: Optional[Path] = None) -> ConsistencyReport:
     head = extract_headline_verdict(text)
 
     if head["token"] is None:
+        # "No canonical headline" and "no PASS-polarity claim at all" are
+        # different states, and reporting them with the same word is how a
+        # deliverable claiming success over a failing run reads as clean.
+        #
+        # MEASURED (vibe-ic#445) on a published cell: RESULT.md states
+        # "OVERALL: PRODUCTION-READY" while the same cell's own
+        # final_summary.md says "FAIL=12 — blocking; do not claim PASS", and
+        # this gate returned SKIP. Correctly, by its own contract — but
+        # SILENTLY, which is the part that was wrong.
+        #
+        # The verdict VOCABULARY stays narrow, deliberately: a prose adjective
+        # still never becomes a headline and can never produce a FAIL here.
+        # What changes is that an unchecked SUCCESS CLAIM standing next to a
+        # failing orchestrator is DISCLOSED instead of vanishing.
+        claim = _prose_success_claim(text)
+        if claim is not None and orch.get("polarity") == "FAIL":
+            return ConsistencyReport(
+                str(run_dir), str(deliverable), "UNCHECKED_SUCCESS_CLAIM",
+                "DISCLOSED",
+                f"{deliverable.name} states no CANONICAL headline verdict, so "
+                f"this gate cannot adjudicate it — but it does assert "
+                f"{claim!r} while the orchestrator "
+                f"({orch.get('report')}) reads {orch.get('verdict')!r}. That "
+                f"claim is UNCHECKED, not verified. Give the deliverable a "
+                f"scoped canonical headline (e.g. 'Verdict: PASS' for the "
+                f"scope the claim actually covers) so a machine can judge it; "
+                f"widening this gate's verdict vocabulary to admit prose "
+                f"adjectives is refused — that would let any confident "
+                f"sentence become a headline.",
+                head, orch)
         return ConsistencyReport(
             str(run_dir), str(deliverable), "NOT_APPLICABLE", "SKIP",
             f"{deliverable.name} states no unambiguous headline verdict — "
@@ -491,7 +546,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         for b in rep.blocking:
             print(f"  - {b}")
     else:
-        tag = {"PASS": "PASS", "SKIP": "SKIP"}[rep.verdict]
+        tag = {"PASS": "PASS", "SKIP": "SKIP",
+           "DISCLOSED": "DISCLOSED"}[rep.verdict]
         print(f"{tag}: deliverable_verdict_consistency_check — {rep.reason}")
     return rep.rc
 

@@ -352,3 +352,66 @@ def test_wiring_self_check_still_passes_a_consistent_run(tmp_path):
     rep = roc.check(run)
     assert rep.state == "COMPLETE"
     assert rep.rc == 0
+
+
+# ── #445: a SKIP that hides a success claim ────────────────────────────────
+def _cell(tmp_path, result_text, orch_verdict):
+    import json
+    d = tmp_path / "run"
+    (d / "reports" / "orchestrator").mkdir(parents=True)
+    (d / "RESULT.md").write_text(result_text)
+    (d / "reports" / "orchestrator" / "vibe_ic_one_shot.json").write_text(
+        json.dumps({"verdict": orch_verdict}))
+    return d
+
+
+def test_a_prose_success_claim_over_a_FAIL_is_disclosed_not_skipped(tmp_path):
+    """MEASURED on a published cell (#445): RESULT.md asserts
+    'OVERALL: PRODUCTION-READY' while the same cell's own final_summary.md says
+    'FAIL=12 — blocking; do not claim PASS', and this gate returned SKIP.
+
+    Correctly, by its own contract — it adjudicates STATED headlines and that
+    is not one. But SILENTLY, and a silent skip on a success claim standing
+    beside a failing orchestrator reads exactly like a clean result.
+    """
+    import deliverable_verdict_consistency_check as M
+    d = _cell(tmp_path, "# R\n\n## OVERALL: PRODUCTION-READY (all gates pass)\n",
+              "FAIL")
+    rep = M.check(d)
+    assert rep.state == "UNCHECKED_SUCCESS_CLAIM", rep.state
+    assert rep.verdict == "DISCLOSED"
+    assert "PRODUCTION-READY" in rep.reason
+
+
+def test_the_disclosure_is_NON_FATAL_and_rc_unchanged():
+    """It replaces a SKIP, so it must exit exactly as that SKIP did. A gate
+    that started FAILing here would be adjudicating a claim it has just said
+    it cannot adjudicate."""
+    import deliverable_verdict_consistency_check as M
+    assert M._EXIT["UNCHECKED_SUCCESS_CLAIM"] == M._EXIT["NOT_APPLICABLE"] == 2
+
+
+def test_no_disclosure_when_the_orchestrator_PASSES(tmp_path):
+    """The paired half. A confident sentence is only interesting next to a
+    FAILING run; firing on every optimistic report would make this noise."""
+    import deliverable_verdict_consistency_check as M
+    d = _cell(tmp_path, "# R\n\n## OVERALL: PRODUCTION-READY\n", "PASS")
+    rep = M.check(d)
+    assert rep.verdict != "DISCLOSED", rep.reason
+
+
+def test_no_disclosure_when_the_deliverable_makes_no_success_claim(tmp_path):
+    """The other paired half: a report with no claim is a plain SKIP."""
+    import deliverable_verdict_consistency_check as M
+    d = _cell(tmp_path, "# R\n\nWork is ongoing; several steps remain.\n",
+              "FAIL")
+    rep = M.check(d)
+    assert rep.state == "NOT_APPLICABLE", rep.state
+
+
+def test_the_verdict_vocabulary_is_NOT_widened():
+    """The property the whole design rests on: a prose adjective must never
+    become a headline TOKEN, or any confident sentence turns into a verdict."""
+    import deliverable_verdict_consistency_check as M
+    for word in ("PRODUCTION-READY", "CONVERGED", "COMPLETE", "CLEAN"):
+        assert M._TOKEN_RE.match(word) is None, word
