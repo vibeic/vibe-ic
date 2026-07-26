@@ -24,6 +24,7 @@ is reclassified.
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -132,3 +133,45 @@ def test_the_git_shape_does_not_reclassify_this_repos_own_scratch_git_tests():
         pytest.skip("module not present")
     rep = R.classify_module(m)
     assert rep["real"] == [], rep["real"]
+
+
+def test_a_test_module_that_exists_only_at_HEAD_is_still_classified(tmp_path):
+    """Found reviewing #425, which adds a 462-line test module: the checker
+    reported "no test module added or modified".
+
+    `_changed_test_modules` listed the changed paths from the DIFF and then
+    kept only those satisfying `f.is_file()` in the WORKING TREE. Reviewing a
+    PR branch from a main checkout, the added file is in the ref and not on
+    disk, so it was dropped — and the checker SKIPPED on exactly the changes
+    it exists to judge. Same defect as #416 and #414: the tree you are
+    standing in is not the change under review.
+    """
+    repo = tmp_path / "r"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(repo), "config", k, v], check=True)
+    (repo / "seed.txt").write_text("x\n")
+    subprocess.run(["git", "-C", str(repo), "add", "seed.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+    base = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+
+    d = repo / "programs" / "tests"
+    d.mkdir(parents=True)
+    (d / "test_added.py").write_text(
+        "def test_x():\n"
+        "    open('benchmark-data/x').read_text()\n")
+    subprocess.run(["git", "-C", str(repo), "add",
+                    "programs/tests/test_added.py"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "add test"],
+                   check=True)
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    # the working tree no longer holds it — exactly the PR-review situation
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", base], check=True)
+    assert not (d / "test_added.py").is_file()
+
+    mods = R._changed_test_modules(repo, base, head)
+    assert len(mods) == 1, "a module present only at HEAD was dropped"
+    rep = R.classify_module(mods[0])
+    assert rep["tests"] == ["test_x"], rep

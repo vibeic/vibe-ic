@@ -221,6 +221,28 @@ def classify_module(path: Path) -> dict:
             "synthetic": synthetic}
 
 
+class _RefFile:
+    """A test module read from a git REF rather than the working tree.
+
+    `classify_module` only needs a path to name and text to parse, so this
+    carries both. It is not a Path subclass on purpose: a partial Path
+    lookalike invites someone to call `.is_file()` on it and get a plausible
+    lie, which is the failure mode this class exists to remove.
+    """
+
+    def __init__(self, rel: str, text: str):
+        self._rel, self._text = rel, text
+
+    def read_text(self, *a, **k) -> str:
+        return self._text
+
+    def __str__(self) -> str:
+        return self._rel
+
+    def __fspath__(self) -> str:
+        return self._rel
+
+
 def _changed_test_modules(repo: Path, base: str, head: str) -> List[Path]:
     r = subprocess.run(
         ["git", "-C", str(repo), "diff", "--name-only",
@@ -231,10 +253,24 @@ def _changed_test_modules(repo: Path, base: str, head: str) -> List[Path]:
     out = []
     for rel in r.stdout.split():
         p = Path(rel)
-        if p.name.startswith("test_") and p.suffix == ".py":
-            f = repo / rel
-            if f.is_file():
-                out.append(f)
+        if not (p.name.startswith("test_") and p.suffix == ".py"):
+            continue
+        f = repo / rel
+        if f.is_file():
+            out.append(f)
+            continue
+        # The file exists at HEAD but not in this WORKING TREE — the normal
+        # state when reviewing a PR branch from a main checkout. Judging the
+        # working tree made the checker SKIP with "no test module added or
+        # modified" on exactly the changes it exists to judge; found running
+        # it against #425, which adds a 462-line test module. Same defect as
+        # #416 and #414: the tree you are standing in is not the change under
+        # review. Read the blob from the ref instead.
+        blob = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{head}:{rel}"],
+            capture_output=True, text=True)
+        if blob.returncode == 0:
+            out.append(_RefFile(rel, blob.stdout))
     return out
 
 
