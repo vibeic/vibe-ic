@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 971
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 971)
+- **Total programs (excluding helpers / shims):** 975
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 975)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 962 |
+| `any` | 966 |
 
 ## Alphabetical listing
 
@@ -254,6 +254,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dft_signoff_common` | any | — | shared helper for the DFT sign-off gates. |
 | `dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
 | `diff_verify_harness` | any | — | independent DIFFERENTIAL self-verification |
+| `digital_pdk_substitution_disclosure_check` | any | — | A DIGITAL sign-off run on a PDK the spec never declared must SAY SO. |
 | `dispatch_fetch_loop_population_check` | any | — | Stub multi-frame fetch loop detector. |
 | `dispatch_handler_completeness` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 58 | Wave 58 / BACKLOG-v12 P0.2 plugin gate. |
 | `dispatch_register_default_reset_check` | any | — | Response register reset at frame boundaries. |
@@ -473,10 +474,12 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l18_interconnect_topology_factuality_check` | any | — | SEMANTIC gate for L18. |
 | `l19_pdk_floorplan_contract_check` | any | — | L19 SEMANTIC completeness gate. |
 | `l1_electrical_specs_typed_depth_check` | any | Wave 38 | Wave 38 / B1 |
+| `l1_param_bus_width_resolve` | any | — | bind PARAMETRIC port widths to their |
 | `l1_pin_bus_width_actionable_check` | any | — | L1 consumer-contract gate. |
 | `l1_pin_table_aliases_typed_check` | any | Wave 38 | Wave 38 / B2 |
 | `l20_dft_scan_topology_actionable_check` | any | — | SEMANTIC gate for |
 | `l21_to_upf_emit` | any | v0.1.51 | render L21 power intent into an IEEE-1801 UPF |
+| `l22_coverage_goal_emit` | any | — | lift measurable coverage targets out of the |
 | `l22_verification_plan_measurable_check` | any | — | SEMANTIC gate for |
 | `l23_security_requirements_typed_check` | any | — | SEMANTIC gate for |
 | `l24_signoff_evidence_backed_check` | any | — | batch-8 / layergate-8 (L24_SIGNOFF) |
@@ -815,6 +818,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sequential_waveform_synth` | any | — | DETERMINISTIC multi-bit / sequential waveform → RTL. |
 | `serdes_decode_synth` | any | — | a DETERMINISTIC solver for two ATOMIC CVDP |
 | `serdes_width_synth` | any | — | deterministic SOLVER for the serial<->parallel / |
+| `serial_parallel_mul_synth` | any | — | deterministic SOLVER for the SERIAL-PARALLEL |
 | `serial_protocol_fsm_synth` | any | — | deterministic SOLVER for serial / protocol |
 | `sgmii_protocol_synth` | any | — | Serial-GMII (SGMII) protocol synth helper. |
 | `shape_b_sample_export` | any | — | deterministic Shape-B sample-export (ORGANIC #678). |
@@ -1043,7 +1047,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (962 programs)
+### `any` (966 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1270,6 +1274,7 @@ _(no programs in this group)_
 - `dft_signoff_common` — shared helper for the DFT sign-off gates.
 - `dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
 - `diff_verify_harness` — independent DIFFERENTIAL self-verification
+- `digital_pdk_substitution_disclosure_check` — A DIGITAL sign-off run on a PDK the spec never declared must SAY SO.
 - `dispatch_fetch_loop_population_check` — Stub multi-frame fetch loop detector.
 - `dispatch_register_default_reset_check` — Response register reset at frame boundaries.
 - `dispatcher_awake_gate_check` — v0.114 (BACKLOG-v7 P2.2).  _[v0.114]_
@@ -1488,10 +1493,12 @@ _(no programs in this group)_
 - `l18_interconnect_topology_factuality_check` — SEMANTIC gate for L18.
 - `l19_pdk_floorplan_contract_check` — L19 SEMANTIC completeness gate.
 - `l1_electrical_specs_typed_depth_check` — Wave 38 / B1  _[Wave 38]_
+- `l1_param_bus_width_resolve` — bind PARAMETRIC port widths to their
 - `l1_pin_bus_width_actionable_check` — L1 consumer-contract gate.
 - `l1_pin_table_aliases_typed_check` — Wave 38 / B2  _[Wave 38]_
 - `l20_dft_scan_topology_actionable_check` — SEMANTIC gate for
 - `l21_to_upf_emit` — render L21 power intent into an IEEE-1801 UPF  _[v0.1.51]_
+- `l22_coverage_goal_emit` — lift measurable coverage targets out of the
 - `l22_verification_plan_measurable_check` — SEMANTIC gate for
 - `l23_security_requirements_typed_check` — SEMANTIC gate for
 - `l24_signoff_evidence_backed_check` — batch-8 / layergate-8 (L24_SIGNOFF)
@@ -1827,6 +1834,7 @@ _(no programs in this group)_
 - `sequential_waveform_synth` — DETERMINISTIC multi-bit / sequential waveform → RTL.
 - `serdes_decode_synth` — a DETERMINISTIC solver for two ATOMIC CVDP
 - `serdes_width_synth` — deterministic SOLVER for the serial<->parallel /
+- `serial_parallel_mul_synth` — deterministic SOLVER for the SERIAL-PARALLEL
 - `serial_protocol_fsm_synth` — deterministic SOLVER for serial / protocol
 - `sgmii_protocol_synth` — Serial-GMII (SGMII) protocol synth helper.
 - `shape_b_sample_export` — deterministic Shape-B sample-export (ORGANIC #678).
