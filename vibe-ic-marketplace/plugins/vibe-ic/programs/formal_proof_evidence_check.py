@@ -97,30 +97,47 @@ def _sby_file_refs(txt: str):
     return out
 
 
-def _resolve(formal_dir: Path, project: Path, token: str):
-    """A referenced file may be relative to the .sby dir or the project, OR
-    (ORGANIC #550 (a)) it may only exist where SymbiYosys STAGED it: a
-    `[files]` entry is copied into the task workdir as `<task>/src/<basename>`,
-    so after a real run the original source path can be gone while the proof
-    evidence lives under src/. Resolve in that order."""
+def _resolve(sby_dir: Path, formal_dir: Path, project: Path, token: str):
+    """Resolve a `.sby` reference the way SymbiYosys would.
+
+    #418. This function's docstring already said "relative to the .sby dir",
+    and the code had never used the .sby dir — it resolved against
+    `formal_dir`. For a `.sby` at the top of `formal/` those are the same
+    directory, so the difference was unobservable until #412 made NESTED
+    `.sby` files discoverable. After that, `reset_safety/spm_reset_safety.sby`
+    naming a bare `spm.v` — which SymbiYosys reads as `reset_safety/spm.v`,
+    absent — resolved to `formal/spm.v` one level up, and a `.sby` that
+    `sby -f` could not run was reported as elaboratable. The gate's own words
+    for what it checks are "an elaboratable .sby".
+
+    The unrestricted `formal_dir.rglob(basename)` last resort is gone with
+    it: any file of the right NAME anywhere beneath `formal/` used to satisfy
+    a reference, which is not evidence the `.sby` could elaborate. Measured
+    across every `.sby` in the published corpus before removing it: 7
+    references resolve from the `.sby`'s own directory, 3 from the staging
+    fallback below, 1 only from `formal_dir` (the false clean above), 2 are
+    genuinely unresolved — and ZERO used the unrestricted rglob.
+
+    ORGANIC #550 (a) IS KEPT, and it is the reason this is not simply
+    tightened: a `[files]` entry is copied into the task workdir as
+    `<task>/src/<basename>`, so after a real run the original source path can
+    be gone while the proof evidence lives under `src/`. Three references in
+    the corpus depend on that. Removing it would false-FAIL genuinely proved
+    cells — the opposite error, in the direction that costs more.
+    """
     if any(ch in token for ch in "*?["):
-        hits = list(formal_dir.glob(token)) + list(project.glob(token))
+        hits = (list(sby_dir.glob(token)) + list(project.glob(token)))
         return hits[0] if hits else None
-    for base in (formal_dir, project):
+    for base in (sby_dir, project):
         p = base / token
         if p.is_file():
             return p
-    # sby staging fallback: the file copied to <task>/src/<basename>.
+    # #550(a) staging fallback: the file copied to <task>/src/<basename>.
     basename = Path(token).name
     if basename:
         staged = sorted(formal_dir.rglob(f"src/{basename}"))
         if staged:
             return staged[0]
-        # last resort: any file with that basename under formal/ (the
-        # staged copy under a task workdir).
-        anywhere = sorted(formal_dir.rglob(basename))
-        if anywhere:
-            return anywhere[0]
     return None
 
 
@@ -311,7 +328,8 @@ def audit(project: Path) -> dict:
         if not refs:
             sby_no_refs.append(sby.name)
             continue
-        missing = [t for t in refs if _resolve(formal_dir, project, t) is None]
+        missing = [t for t in refs
+                   if _resolve(sby.parent, formal_dir, project, t) is None]
         if not missing:
             # #417: record the FIRST intact chain, but do NOT break. The loop
             # used to stop here, so every later .sby went unexamined and its
