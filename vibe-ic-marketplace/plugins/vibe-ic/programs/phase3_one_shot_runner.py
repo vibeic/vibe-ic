@@ -22536,6 +22536,46 @@ def _discover_via_resistances(tech_lef: Optional[str]) -> Dict[str, float]:
     return out
 
 
+_OPCOND_RE = re.compile(r"^\s*operating_conditions\s*\(\s*([A-Za-z0-9_.\-]+)\s*\)")
+
+
+def _liberty_operating_condition(liberty_path, container: str) -> str:
+    """The NAME of an operating condition the liberty defines, or "".
+
+    ROOT CAUSE this exists for (#362, MEASURED). PSM aborts
+    `[ERROR PSM-0079] Cannot determine the supply voltage` on gf180mcuD.
+    Probed with OpenSTA's own API on a real gf180 standard-cell liberty:
+
+        $lib default_operating_conditions   -> NULL
+        $lib find_operating_conditions <n>  -> exists, voltage = 5.0
+
+    So the voltage IS in the library; nothing selects it. 30 of 30 gf180mcuD
+    standard-cell liberties define an `operating_conditions(<name>) { ... }`
+    block and NONE carry the `default_operating_conditions` line that names
+    one. `set_operating_conditions <name>` closes it.
+
+    WHY A NAME AND NOT A VOLTAGE. The alternative — parsing `nom_voltage` and
+    feeding it to `set_pdnsim_net_voltage` — reads a VALUE out of the liberty
+    and asserts it, which (a) overrides the 926 of 956 liberties where the
+    tool was already right, (b) puts one core voltage on EVERY power net,
+    3.3 V rails included, and (c) is only as good as the regex. Selecting the
+    OC by NAME hands the tool a pointer and lets it read its own authoritative
+    voltage, temperature and derates — and fixes STA / power / derate
+    consumers at the same time, not just PSM.
+
+    Returns "" when no block is found; the caller then emits nothing and the
+    prior behaviour is byte-identical. chip/PDK-AGNOSTIC: the name comes from
+    the library's own text, never from a table of known PDKs."""
+    txt = _read_pdk_text(liberty_path, container)
+    if not txt:
+        return ""
+    for line in txt.splitlines():
+        m = _OPCOND_RE.match(line)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
                         container: str, ir_rpt: Path, em_rpt: Path,
                         notes: List[str]) -> Tuple[bool, bool]:
@@ -22592,13 +22632,26 @@ def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
             f'-em_outfile {em_csv_c}}} _psm_err]}} {{\n'
             f'  puts "PSM_NONFATAL {net}: $_psm_err"\n'
             f'}}\n')
+    # #362 — select the liberty's own operating condition when it declares
+    # one but names no default. Without this PSM cannot determine the supply
+    # voltage and aborts PSM-0079, taking static IR and EM with it. Emitted
+    # ONLY when a block exists, and `catch`-guarded, so a liberty that
+    # already has a default is byte-identical to before.
+    _oc = _liberty_operating_condition(getattr(pdk, "liberty", None), container)
+    _oc_tcl = (f"catch {{set_operating_conditions {_oc}}}\n" if _oc else "")
+    if _oc:
+        notes.append(
+            f"IR/EM: selected the liberty's own operating condition "
+            f"'{_oc}' (it defines the block but names no default — PSM "
+            f"otherwise aborts PSM-0079); the tool reads its voltage from "
+            f"the library, none is asserted here")
     tcl_path = out_dir / f"ir_em_{top}.tcl"
     tcl_path.write_text(f"""
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
 read_liberty {liberty_c}
-read_def {def_c}
+{_oc_tcl}read_def {def_c}
 if {{[catch {{set_wire_rc -signal -layer {mp}1}} _e1]}} {{
   catch {{set_wire_rc -layer {mp}1}}
 }}
