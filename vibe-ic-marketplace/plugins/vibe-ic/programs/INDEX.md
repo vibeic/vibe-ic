@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 962
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 962)
+- **Total programs (excluding helpers / shims):** 963
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 963)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 953 |
+| `any` | 954 |
 
 ## Alphabetical listing
 
@@ -630,6 +630,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_dielectric_fit` | any | — | Fit a self-consistent dielectric stack from a PDK's OWN shipped cap numbers. |
 | `pdk_fpga_gds_reverify_runner` | any | — | v1.6.232 (merged v229+v231). |
 | `pdk_otp_altsyncram_inject` | any | — | v1.6.224 (ORGANIC-20260512-followup-3). |
+| `pdk_registry_image_consistency_check` | any | — | Report BOTH directions of pdk_registry.json <-> EDA-image drift. |
 | `pdk_udp_synth_shim_gen` | any | — | v1.6.218 (ORGANIC-20260512-followup). |
 | `pdk_yosys_flatten_for_quartus` | any | — | v1.6.222 (ORGANIC-20260512-followup-2). |
 | `per_opcode_response_latency_table_check` | any | v0.119.30 | gate (LL-33) catching |
@@ -1034,7 +1035,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (953 programs)
+### `any` (954 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1635,6 +1636,7 @@ _(no programs in this group)_
 - `pdk_dielectric_fit` — Fit a self-consistent dielectric stack from a PDK's OWN shipped cap numbers.
 - `pdk_fpga_gds_reverify_runner` — v1.6.232 (merged v229+v231).
 - `pdk_otp_altsyncram_inject` — v1.6.224 (ORGANIC-20260512-followup-3).
+- `pdk_registry_image_consistency_check` — Report BOTH directions of pdk_registry.json <-> EDA-image drift.
 - `pdk_udp_synth_shim_gen` — v1.6.218 (ORGANIC-20260512-followup).
 - `pdk_yosys_flatten_for_quartus` — v1.6.222 (ORGANIC-20260512-followup-2).
 - `per_opcode_response_latency_table_check` — gate (LL-33) catching  _[v0.119.30]_

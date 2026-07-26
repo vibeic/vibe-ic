@@ -36,14 +36,46 @@ def test_389_an_invented_pdk_name_is_refused(tmp_path):
     assert "sky130A" in msg, "the refusal must name what it declined to become"
 
 
+def _registered_names() -> set:
+    """Every name `pdk_registry.json` declares.
+
+    Read from the registry FILE rather than from any resolver helper, so this
+    test keeps working on a tree that has only the registry change.
+    """
+    import json
+    reg = json.loads((_PROGRAMS / "pdk_registry.json").read_text())
+    return {e.get("name") for e in reg.get("pdks", [])}
+
+
 def test_389_a_real_but_unregistered_pdk_is_refused(tmp_path):
-    """`ihp-sg13cmos5l` ships INSIDE the image and is a complete digital PDK —
-    it is simply not in the registry. That is exactly the case that produced a
-    whole cell written up under the wrong PDK, and it must fail loudly rather
-    than resolve to something else."""
+    """A PDK that ships INSIDE the image and is a complete digital PDK, but is
+    simply not in the registry, must fail loudly rather than resolve to
+    something else. That is exactly the case that produced a whole cell written
+    up under the wrong PDK.
+
+    HISTORY, and why the exemplar is no longer a literal. This test was written
+    with `ihp-sg13cmos5l` as the exemplar, because it was then the one PDK the
+    image shipped and the registry omitted. That PDK has since been REGISTERED,
+    so the name now resolves — correctly — and can no longer stand for this
+    class. Keeping the literal would have turned a fixed defect into a failing
+    test. So the exemplar is DERIVED: the test reads the registry, builds a
+    shipped-PDK-shaped name that is provably not in it and has no hand-written
+    branch either, and asserts on that. The test now pins the CLASS rather than
+    one name a later fix can retire.
+
+    The complementary guard — that no PDK stays shipped-but-unregistered in the
+    first place — is `pdk_registry_image_consistency_check`, which reports that
+    condition in both directions against the pinned image.
+    """
+    unregistered = "ihp-sg13cmos5l-unregistered-variant"
+    assert unregistered not in _registered_names(), (
+        "fixture name must genuinely be absent from pdk_registry.json")
+    assert f'override == "{unregistered}"' not in (
+        _PROGRAMS / "phase3_one_shot_runner.py").read_text(), (
+        "fixture name must also have no hand-written branch in the resolver")
     with pytest.raises(ValueError) as e:
-        p3._detect_pdk(tmp_path, override="ihp-sg13cmos5l")
-    assert "ihp-sg13cmos5l" in str(e.value)
+        p3._detect_pdk(tmp_path, override=unregistered)
+    assert unregistered in str(e.value)
 
 
 def test_389_the_refusal_says_how_to_proceed(tmp_path):
