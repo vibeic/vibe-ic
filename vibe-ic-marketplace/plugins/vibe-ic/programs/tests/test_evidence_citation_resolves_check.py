@@ -449,3 +449,39 @@ def test_a_citation_pointing_at_a_symlink_is_not_shipped_content(tmp_path):
     r = _run(root, tmp_path / "bl.json")
     assert r.returncode == 1, r.stdout
     assert "proof.log" in r.stdout
+
+
+def test_a_report_that_discloses_absent_evidence_is_not_penalised(tmp_path):
+    """#381 aftermath. Three reports were corrected from an unbacked PASS to
+    a disclosed UNSUBSTANTIATED with `evidence_present: false` — and this
+    gate kept flagging them for the path string they honestly still name.
+
+    The defect this gate exists for is a verdict RESTING on evidence nobody
+    can open. A report that names its evidence AND states the evidence is
+    absent is disclosing that, not claiming it. Counting it would penalise
+    the exact correction that fixes the defect, which is how a gate ends up
+    pushing authors to delete the disclosure instead."""
+    root = _repo(tmp_path)
+    (root / "r.json").write_text(json.dumps(
+        {"verdict": "UNSUBSTANTIATED", "evidence_present": False,
+         "sby": "formal/gone.sby"}))
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "disclosed")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "gone.sby" not in r.stdout
+
+
+def test_the_exemption_requires_an_EXPLICIT_false(tmp_path):
+    """NO-LEAK: only an explicit `evidence_present: false` exempts. A missing
+    field, or a truthy one, must still be judged — otherwise the exemption
+    becomes a way to opt out by saying nothing."""
+    root = _repo(tmp_path)
+    (root / "a.json").write_text(json.dumps(
+        {"verdict": "PASS", "sby": "formal/gone.sby"}))            # silent
+    (root / "b.json").write_text(json.dumps(
+        {"verdict": "PASS", "evidence_present": True,
+         "sby": "formal/also_gone.sby"}))                          # claims yes
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "not exempt")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "gone.sby" in r.stdout and "also_gone.sby" in r.stdout
