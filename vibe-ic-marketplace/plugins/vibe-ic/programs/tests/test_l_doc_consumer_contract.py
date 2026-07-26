@@ -121,3 +121,89 @@ def test_write_report_creates_the_artifact(tmp_path):
     out = C.write_report(tmp_path, "l8_demo_check", {"verdict": "PASS"})
     assert out is not None and Path(out).is_file()
     assert json.loads(Path(out).read_text())["verdict"] == "PASS"
+
+
+# ── a document that DISCLAIMS normative force is not a requirement ─────
+# Measured on spm x GF180MCU: l22 blocked Step P0 on a row the design's own
+# doc annotates 資訊性 (informational) and 非 sign-off gate (NOT a sign-off
+# gate). REQUIREMENT_FRAMING_RE matched the `>=` and had no way to see it.
+# A gate that fires on a legitimately-complete design is a bug in the gate.
+
+def _texts(text):
+    return [(Path("input/docs/L7_verification_plan.md"), text)]
+
+
+_COV = __import__("re").compile("coverage", __import__("re").I)
+
+
+def test_a_row_the_document_calls_non_signoff_is_not_a_requirement():
+    """DIRECTION 2 — the organic row that blocked a converged cell."""
+    row = ("| Toggle / branch coverage(資訊性) | >= 95% | "
+           "同 random run;非 sign-off gate |")
+    assert C.framed_hits(_texts(row), _COV) == []
+
+
+def test_a_genuine_requirement_containing_a_negation_still_counts():
+    """DIRECTION 1, and the reason this guard is deliberately narrow.
+
+    `must NOT exceed` is a real requirement that contains a negation. A
+    blanket negation guard — the plugin has one, `_FOUNDRY_NEGATION_RE`,
+    matching bare 不/否 — would silently delete it. This must not.
+    """
+    txt = "Coverage shall be at least 95% and slew must not exceed 5 ns."
+    assert len(C.framed_hits(_texts(txt), _COV)) == 1
+
+
+def test_an_undisclaimed_target_still_counts():
+    """DIRECTION 1 — the plain case must be unaffected."""
+    txt = "| Branch coverage | >= 95% | sign-off gate |"
+    assert len(C.framed_hits(_texts(txt), _COV)) == 1
+
+
+# ── gatekeeper correction at land time ─────────────────────────────────────
+def _hits(doc: str):
+    import re as _re
+    from pathlib import Path as _P
+    import l_doc_consumer_contract as _L
+    return _L.framed_hits([(_P("x.md"), doc)],
+                          _re.compile(r"coverage|slack"))
+
+
+_INFORMATIONAL_ROW = ("| Toggle coverage(informational) | >= 95% | "
+                      "not a sign-off gate |\n")
+_REAL_ROW = "| Setup slack | >= 0 ns | sign-off gate |\n"
+
+
+def test_a_disclaimer_scopes_to_its_OWN_row_not_its_neighbourhood():
+    """THE LOAD-BEARING CASE, and the reason this correction exists.
+
+    The disclaimer was checked against the ±160-char context window, so a row
+    the document calls informational silenced a REAL sign-off requirement on
+    the very next line. Measured before the fix: the real row alone yields 1
+    hit, the pair yields 0 — the requirement vanished because of its
+    neighbour.
+
+    A document disclaims the row it is written on. Proximity is not
+    membership, and this direction is the dangerous one: the whole point of
+    the gate is to find stated requirements, and a silencer that reaches into
+    adjacent rows removes them without a trace.
+    """
+    assert len(_hits(_REAL_ROW)) == 1
+    assert len(_hits(_INFORMATIONAL_ROW)) == 0
+    assert len(_hits(_INFORMATIONAL_ROW + _REAL_ROW)) == 1
+    assert len(_hits(_REAL_ROW + _INFORMATIONAL_ROW)) == 1
+
+
+def test_the_disclaimed_row_is_still_suppressed_when_it_stands_alone():
+    """The paired half: the original defect must stay fixed. `spm x GF180MCU`
+    was blocked on exactly one checker over a row its own document calls
+    informational and not a sign-off gate."""
+    assert _hits(_INFORMATIONAL_ROW) == []
+
+
+def test_a_requirement_that_merely_CONTAINS_a_negation_survives():
+    """`must not exceed` is a real requirement. A blanket negation guard —
+    the plugin has one — would delete it, which is why the disclaimer
+    vocabulary is a closed list of normative-force disclaimers rather than
+    negation in general."""
+    assert len(_hits("| Setup slack | must not exceed 5 ns | sign-off gate |\n")) == 1

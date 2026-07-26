@@ -276,6 +276,44 @@ def _normalize_ws(text: str) -> Tuple[str, List[int]]:
     return "".join(out_chars), offsets
 
 
+# ORGANIC — a hit whose own context DISCLAIMS normative force is not a
+# stated requirement. Measured on spm x GF180MCU: `l22` blocked Step P0 on
+#
+#   | Toggle / branch coverage(資訊性) | >= 95% | 同 random run;非 sign-off gate |
+#
+# The row says, in the design's own words, INFORMATIONAL and NOT a sign-off
+# gate. REQUIREMENT_FRAMING_RE matched the `>=` and had no way to see that.
+# A gate that fires on a legitimately-complete design is a bug in the gate.
+#
+# DELIBERATELY NARROW. This matches a disclaimer of normative force, NOT
+# negation in general — `must NOT exceed 5 ns` is a real requirement that
+# contains a negation, and a blanket negation guard (the plugin has one:
+# `_FOUNDRY_NEGATION_RE`, which includes bare 不/否) would silently delete it.
+_NON_NORMATIVE_RE = re.compile(
+    r"非\s*sign-?off|非簽核|非签核|不是\s*sign-?off"
+    r"|資訊性|资讯性|informational|informative"
+    r"|僅供參考|仅供参考"
+    r"|\bnot\s+a\s+(?:sign-?off\s+)?gate\b"
+    r"|\bnon-?normative\b"
+    r"|\bfor\s+reference\s+only\b"
+    r"|\badvisory\s+only\b",
+    re.IGNORECASE)
+
+
+def _hit_line(text: str, offsets: List[int], m: "re.Match") -> str:
+    """The ORIGINAL line the match sits on.
+
+    Taken from the raw text rather than the normalised copy, because
+    normalisation collapses newlines and a disclaimer must be scoped to the row
+    that carries it.
+    """
+    start = offsets[m.start()] if m.start() < len(offsets) else 0
+    end = offsets[m.end() - 1] if 0 < m.end() <= len(offsets) else start
+    lo = text.rfind("\n", 0, start) + 1
+    hi = text.find("\n", end)
+    return text[lo:] if hi == -1 else text[lo:hi]
+
+
 def framed_hits(texts: Iterable[Tuple[Path, str]],
                 vocab_re: re.Pattern,
                 window: int = 160,
@@ -303,6 +341,18 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
             ctx = norm[lo:hi]
             if not REQUIREMENT_FRAMING_RE.search(ctx):
                 continue
+            # Scope the disclaimer to the hit's OWN LINE, not to the ±window.
+            # Gatekeeper finding: with a 160-char neighbourhood, a disclaimer
+            # on one table row silences a real requirement on the NEXT one.
+            # Measured on
+            #     | Toggle coverage(informational) | >= 95% | not a sign-off gate |
+            #     | Setup slack                    | >= 0 ns | sign-off gate      |
+            # the second row alone yields 1 hit and the pair yields 0 — the
+            # sign-off requirement vanished because of its neighbour. A
+            # document disclaims the row it is written on; proximity is not
+            # membership.
+            if _NON_NORMATIVE_RE.search(_hit_line(text, offsets, m)):
+                continue          # the document itself says it is not a requirement
             key = ctx.strip()
             if key in seen_ctx:
                 continue
