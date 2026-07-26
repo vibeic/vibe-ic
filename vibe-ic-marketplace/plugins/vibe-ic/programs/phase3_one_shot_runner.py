@@ -325,6 +325,61 @@ _VERDICT_TIERS = ("PASS", "FAIL", "BLOCKED", "SKIP", "WAIVED",
                   "ENV_UNAVAILABLE")
 
 
+# --- per-invocation provenance (vibe-ic#365, third ask) --------------------
+# The ledger recorded a handful of BACK-FILLED entries per flow — written for
+# artefacts found on disk, with a duration nobody measured. This records one
+# entry per SUPERVISED tool run, with a REAL wall-clock duration.
+#
+# SCOPE is the runner's own signal, not a tool list: `_docker_exec(marker=...)`
+# is how this file already distinguishes an open-ended TOOL RUN from a bounded
+# shell probe (`command -v`, `ls`, `ps`). Logging the probes too would bury the
+# tool runs in noise and make the ledger less usable, which is the opposite of
+# what #365 asks for. chip/tool-AGNOSTIC: the tool name is the command's first
+# token, never a known-tools list.
+_PROV_SINK: Optional[Path] = None
+
+
+def set_invocation_provenance_sink(project: Optional[Path]) -> None:
+    """Point per-invocation logging at `<project>/provenance.jsonl`, or None to
+    disable. Set once per run; unset means no logging at all (a library caller
+    must not have entries appear in someone else's tree)."""
+    global _PROV_SINK
+    _PROV_SINK = project
+
+
+def _log_invocation(cmd: str, rc: int, duration_ms: int,
+                    marker: Optional[str] = None) -> None:
+    """Append ONE measured invocation record. Never raises: a ledger that can
+    break the run it documents would be traded away the first time it did."""
+    sink = _PROV_SINK
+    if sink is None:
+        return
+    try:
+        tool = (shlex.split(cmd)[0] if cmd.strip() else "") or "sh"
+    except ValueError:
+        tool = (cmd.strip().split() or ["sh"])[0]
+    entry = {
+        "tool": tool.rsplit("/", 1)[-1],
+        "command": cmd[:400],
+        "exit_code": int(rc),
+        "duration_ms": int(duration_ms),   # MEASURED, not a placeholder
+        "measured": True,
+        # module-scope import: `_dt` in this file is a FUNCTION-local alias
+        # elsewhere, so referencing it here would NameError at runtime — and
+        # the except-guard below would have swallowed it into silence.
+        "timestamp": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if marker:
+        entry["marker"] = marker
+    try:
+        with (Path(sink) / "provenance.jsonl").open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:  # noqa: BLE001 — logging must never break the run
+        pass
+
+
 def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
                      ) -> Tuple[int, str, str]:
     """Run shell cmd inside a Docker container with a SIMPLE container-side
@@ -442,9 +497,12 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
         except Exception:  # nosec — release the host docker exec client
             pass
 
+    _t0 = time.monotonic()
     res = _wd.run_supervised(
         full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
         stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling)
+    _log_invocation(cmd, res.rc if res.rc is not None else -1,
+                    int((time.monotonic() - _t0) * 1000), marker=marker)
     return res.rc, res.out, res.err
 
 
@@ -10973,6 +11031,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             })
     out_dir = _pl.pnr_dir(project)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # #365 third ask — point per-invocation provenance at THIS project, so
+    # every supervised tool run below records a MEASURED duration instead of
+    # the flow ending with a handful of back-filled zero-duration entries.
+    set_invocation_provenance_sink(project)
 
     # #309 — PRE-ROUTE hard-macro supply gate. A LEF-typed POWER/GROUND macro
     # pin driven by a signal net makes TritonRoute abort ALL detailed routing
