@@ -74,7 +74,7 @@ def _wire(monkeypatch, tmp_path, *, report_by_model, rc=0, patched=1):
         return {"modules_patched": patched, "instances_patched": 1191,
                 "rails": ["VPWR", "VGND"]}
 
-    def _exec(container, cmd, marker=None):
+    def _exec(container, cmd, marker=None, **_kw):
         model = "well_tied" if "pwraware_welltied" in cmd else "four_rail"
         seen.append(model)
         (project / "reports" / "phase3" / "lvs_power_aware.rpt").write_text(

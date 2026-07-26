@@ -111,7 +111,7 @@ def _run_step_synth(tmp_path: Path, proj: Path, monkeypatch):
     so all three define-carrying commands are captured."""
     captured: list[str] = []
 
-    def fake_exec(container, cmd, marker=None, timeout=1800):
+    def fake_exec(container, cmd, marker=None, timeout=1800, **_kw):
         captured.append(cmd)
         return 1, "", "stubbed failure"
 
