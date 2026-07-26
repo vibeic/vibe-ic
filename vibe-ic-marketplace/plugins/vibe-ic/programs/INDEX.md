@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 963
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 963)
+- **Total programs (excluding helpers / shims):** 964
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 964)
 
 ### Per-class applicability counts
 
@@ -19,13 +19,14 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 954 |
+| `any` | 955 |
 
 ## Alphabetical listing
 
 | Program | Applicable classes | Wave | Title |
 |---|---|---|---|
 | `a2b_protocol_synth` | any | — | Automotive Audio Bus (A2B) protocol synth helper. |
+| `acceptance_control_check` | any | — | the control a change is measured against must |
 | `acceptance_evidence_in_fix_comment_check` | any | v0.2.97 | v0.2.97 |
 | `accumulate_synth` | any | — | deterministic SOLVER for the CVDP sequential |
 | `ace_protocol_synth` | any | — | AMBA AXI/ACE coherency-extension protocol synth helper. |
@@ -1035,9 +1036,10 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (954 programs)
+### `any` (955 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
+- `acceptance_control_check` — the control a change is measured against must
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.

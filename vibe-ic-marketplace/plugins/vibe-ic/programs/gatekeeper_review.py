@@ -409,6 +409,36 @@ def nda_diff_scan_gate(repo: Path, base: str, head: str) -> GateResult:
 
 
 # --------------------------------------------------------------------------
+# acceptance_control_check (#401) — ADVISORY.
+#
+# A fix's evidence must be measured against the state BEFORE the feature.
+# Validating round N against round N-1 measures the branch against itself:
+# measured on a real branch, 231 lines "recovered" four cases that the
+# merge-base already had, and the same tests showed 11 of 20 failing against
+# the predecessor while the corpus was byte-identical on 795 of 795 documents.
+#
+# The wrong control PROPAGATES: two rounds of adversarial verification both
+# used the SHA the commit body named. Recomputing it from git does not inherit
+# that. NEVER BLOCKING — a stacked-PR workflow can legitimately have a control
+# not yet on the integration branch.
+# --------------------------------------------------------------------------
+def acceptance_control_gate(repo: Path, base: str, head: str) -> GateResult:
+    prog = _PROGRAMS_DIR / "acceptance_control_check.py"
+    if not prog.is_file():
+        return GateResult("acceptance_control_check", -1,
+                          f"checker missing at {prog}")
+    rc, out, err = _run_program(prog, ["--repo", str(repo),
+                                       "--base", base, "--head", head])
+    if rc == 2:
+        return GateResult("acceptance_control_check", -1,
+                          f"skipped — merge-base({base}, {head}) unresolvable")
+    body = (out.strip() or err.strip()).splitlines()
+    bad = [ln for ln in body if "NOT valid" in ln]
+    summary = (bad[0] if bad else (body[0] if body else "(no output)"))[:240]
+    return GateResult("acceptance_control_check", 0, f"ADVISORY — {summary}")
+
+
+# --------------------------------------------------------------------------
 # real_artefact_test_backing_check (#400) — ADVISORY.
 #
 # A change whose tests are ALL synthetic fixtures authored alongside it cannot
@@ -704,6 +734,7 @@ def review(base: str, head: str, *,
     gates.append(nda_diff_scan_gate(repo, base, head))
     gates.append(stale_branch_gate(repo, base, head))
     gates.append(real_artefact_backing_gate(repo, base, head))
+    gates.append(acceptance_control_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
