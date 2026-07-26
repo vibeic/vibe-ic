@@ -222,21 +222,43 @@ def select_tests(
 
 
 def _git_changed_files(base: str, repo_root: Path) -> list[str] | None:
-    """``git diff --name-only <base>..HEAD`` from the repo root.
+    """Every path that differs from ``base`` RIGHT NOW — committed or not.
+
+    The union of two questions, because either alone has a blind spot:
+
+    * ``<base>..HEAD`` — what the commits say. Blind to the index and the
+      working tree.
+    * ``<base>`` (base vs working tree) — what is actually on disk, staged and
+      unstaged. This is what a gatekeeper standing on a squash-merged-but-not-
+      yet-committed tree has.
+
+    In CI the tree is clean and HEAD is the PR tip, so the two agree and the
+    union changes nothing. The union matters LOCALLY, and it is the defect this
+    replaces: the merge queue stages a squash (so ``HEAD == base``, diff empty)
+    and then asks which tests the change needs. The old answer was the smoke
+    floor — indistinguishable from "your change needs nothing else". Two
+    landings were gated on that answer before it was caught.
 
     Returns repo-relative paths, or None if git/history is unavailable (caller
     then falls back to the smoke set only).
     """
-    try:
-        r = subprocess.run(
-            ["git", "-C", str(repo_root), "diff", "--name-only", f"{base}..HEAD"],
-            capture_output=True, text=True, timeout=60,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if r.returncode != 0:
-        return None
-    return [ln for ln in r.stdout.splitlines() if ln.strip()]
+    seen: list[str] = []
+    ok = False
+    for args in ([f"{base}..HEAD"], [base]):
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(repo_root), "diff", "--name-only", *args],
+                capture_output=True, text=True, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode != 0:
+            continue
+        ok = True
+        for ln in r.stdout.splitlines():
+            if ln.strip() and ln not in seen:
+                seen.append(ln)
+    return seen if ok else None
 
 
 def _repo_root(plugin_root: Path) -> Path | None:
@@ -283,12 +305,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[ci_targeted_test_select] git diff unavailable for base={args.base!r}; "
               f"emitting smoke set only", file=sys.stderr)
         changed = []
+    elif not changed:
+        # LOUD, because this output is otherwise identical to a real selection
+        # and reads as "your change needs no further tests".
+        print(f"[ci_targeted_test_select] NO CHANGES vs base={args.base!r} "
+              f"(neither committed nor in the working tree). What follows is the "
+              f"smoke FLOOR, not a targeted selection — if you expected your edit "
+              f"to be seen here, it is not in this repository at this base.",
+              file=sys.stderr)
 
     selected = select_tests(changed, plugin_root, plugin_prefix)
     for t in selected:
         print(t)
     print(f"[ci_targeted_test_select] selected {len(selected)} test file(s) "
-          f"(base={args.base})", file=sys.stderr)
+          f"from {len(changed)} changed path(s) (base={args.base})", file=sys.stderr)
     return 0
 
 
