@@ -175,13 +175,29 @@ def main(argv=None) -> int:
                   f"({len(prev)} -> {len(now)}): a field losing its producer "
                   f"is a regression, not a fact to record.")
             return 1
+        # Preserve any TRIAGE already recorded for entries that survive. A
+        # register of bare names invites the worst possible repair —
+        # fabricating a producer to make an entry disappear — so each entry
+        # carries what was actually found when it was investigated.
+        prev_triage = {}
+        if bl.is_file():
+            try:
+                prev_triage = (json.loads(bl.read_text()).get("triage")
+                               or {})
+            except (OSError, ValueError):
+                prev_triage = {}
         bl.write_text(json.dumps(
             {"_comment": ("L-doc fields a checker reads that NO real document "
                           "populates (vibe-ic#312 family). MAY ONLY SHRINK — "
                           "each entry is a consumer reading what nobody "
-                          "writes, so every PASS on that path is an empty "
-                          "result wearing a clean one's clothes."),
-             "known": now}, indent=2) + "\n")
+                          "writes. `triage` records what was found when an "
+                          "entry was investigated, including entries proven "
+                          "to be FALSE POSITIVES of this gate's own rule: "
+                          "removing those by inventing a producer would be "
+                          "the worst possible repair."),
+             "known": now,
+             "triage": {k: v for k, v in prev_triage.items() if k in now}},
+            indent=2) + "\n")
         print(f"wrote {bl} ({len(now)} entr(ies))")
         return 0
 

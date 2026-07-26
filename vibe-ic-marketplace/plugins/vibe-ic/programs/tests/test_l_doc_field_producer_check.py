@@ -136,3 +136,52 @@ def test_shipped_tree_passes_against_its_recorded_debt():
     if r.returncode == 2:
         return
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_triage_survives_a_baseline_rewrite(tmp_path):
+    """A register of bare names invites the worst possible repair —
+    fabricating a producer so an entry disappears. Triage recorded against an
+    entry must survive a `--write-baseline`, or the investigation is lost the
+    first time the register is regenerated."""
+    progs, corpus = tmp_path / "p", tmp_path / "c"
+    progs.mkdir(); corpus.mkdir()
+    _mk_checker(progs, "a", "gap_one")
+    _mk_doc(corpus, "L1_X.json", {"gap_one": None})
+    bl = tmp_path / "bl.json"
+    _run(corpus, progs, bl, "--write-baseline")
+    d = json.loads(bl.read_text())
+    d["triage"] = {"gap_one": "investigated: real"}
+    bl.write_text(json.dumps(d))
+    _run(corpus, progs, bl, "--write-baseline")          # regenerate
+    assert json.loads(bl.read_text())["triage"]["gap_one"] == \
+        "investigated: real"
+
+
+def test_triage_for_a_vanished_entry_is_dropped(tmp_path):
+    """Triage for an entry that no longer exists is stale annotation; keeping
+    it would make the register describe a state that is gone."""
+    progs, corpus = tmp_path / "p", tmp_path / "c"
+    progs.mkdir(); corpus.mkdir()
+    _mk_checker(progs, "a", "gap_one")
+    _mk_doc(corpus, "L1_X.json", {"gap_one": None})
+    bl = tmp_path / "bl.json"
+    _run(corpus, progs, bl, "--write-baseline")
+    d = json.loads(bl.read_text())
+    d["triage"] = {"gap_one": "real", "long_gone": "stale"}
+    bl.write_text(json.dumps(d))
+    _run(corpus, progs, bl, "--write-baseline")
+    t = json.loads(bl.read_text())["triage"]
+    assert "gap_one" in t and "long_gone" not in t
+
+
+def test_shipped_register_entries_all_carry_triage():
+    """Every recorded entry must say what was found when it was
+    investigated — including the one proven to be a FALSE POSITIVE of this
+    gate's own rule, so nobody 'repairs' it by inventing a producer."""
+    bl = _PROGRAMS / "l_doc_field_producer_baseline.json"
+    if not bl.is_file():
+        return
+    d = json.loads(bl.read_text())
+    for field in d.get("known", []):
+        assert d.get("triage", {}).get(field), \
+            f"{field} is recorded as debt with no triage"
