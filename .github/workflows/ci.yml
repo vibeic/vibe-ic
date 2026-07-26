@@ -120,6 +120,23 @@ jobs:
           echo "Scanning commit messages in: $RANGE" >&2
           python3 "$CHECK" --repo "$GITHUB_WORKSPACE" --rev-range "$RANGE"
 
+          # The message guard above scans only the commit TEXT. The same NDA
+          # token is equally permanent when it arrives as added CONTENT or as
+          # an added PATH — and the path carrier is not hypothetical: local
+          # run directories on this fleet carry a commercial SKU in their
+          # NAME, they are untracked only by luck (no .gitignore rule covers
+          # them), and one `git add -A` would commit that path into a public
+          # repo. `nda_diff_scan_check` already scans `+++ b/<path>`; it was
+          # simply never wired here, so CI could not stop it.
+          #
+          # An ignore rule is NOT the fix: writing the pattern would put the
+          # SKU itself into a tracked .gitignore — a carrier this project has
+          # already been burned by. Scanning is the form that does not
+          # publish what it protects.
+          echo "Scanning added content + paths in: $RANGE" >&2
+          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/nda_diff_scan_check.py \
+            --repo "$GITHUB_WORKSPACE" --rev-range "$RANGE"
+
       # Informational fast signal on every push/PR: run the TARGETED subset for
       # the changed modules (+ doctrine smoke), not the full 17k-test suite which
       # is ~90min on a 2-core runner and would pile up on every direct-push. The
