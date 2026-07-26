@@ -442,6 +442,82 @@ def _write_routing(records: List[dict], dest: Path, dry: bool) -> None:
         (dest / _ROUTING_FILENAME).write_text(body, encoding="utf-8")
 
 
+_CITATION_ROUTING_FILENAME = "CITATION_ROUTING.txt"
+
+_CITATION_HEADER = (
+    "# CITATION_ROUTING — every path a published JSON CITES as its evidence,\n"
+    "# and whether a reader of THIS cell can follow it (vibe-ic#448).\n"
+    "#\n"
+    "#   <doc> :: <cited path> <DECISION>\n"
+    "#   DECISION in RESOLVES | OUT_OF_PUBLISHED_SCOPE | DANGLING\n"
+    "#\n"
+    "# OUT_OF_PUBLISHED_SCOPE is the one that needed a name. The publisher\n"
+    "# copies phase1/, phase2/, phase3/reports/ and reports/ — a run-directory\n"
+    "# citation such as `phase3/stage3/sta/x.rpt` is therefore correct WHERE\n"
+    "# THE RUN PUT IT and unfollowable HERE. Measured on the three converged\n"
+    "# cells: each asserts `timing_closed_multi_corner: true` citing\n"
+    "# `phase3/stage3/sta/sta_mcorner_ocv.rpt`, which the published layout\n"
+    "# never carries. The evidence was not lost; the POINTER was published\n"
+    "# unchanged, so a reader following it finds nothing and is told nothing.\n"
+    "#\n"
+    "# This is the same repair LAYOUT_ROUTING.txt makes for blobs: an artefact\n"
+    "# that is out of scope is RECORDED as out of scope rather than vanishing.\n"
+    "# It does not decide whether the claim is TRUE — the run may well have\n"
+    "# closed timing — only whether this cell lets you check it.\n"
+    "#\n"
+    "# Emitted even when every citation resolves: a record that only appears\n"
+    "# on failure cannot be used to prove there were none.\n")
+
+# Extensions that name an EVIDENCE artefact rather than prose.
+_CITED_EXT = (".rpt", ".log", ".json", ".txt", ".def", ".spef", ".v", ".sv")
+_CITED_RE = re.compile(
+    r"(?:phase\d/stage\d|phase\d/reports|reports|steps)/[\w./*-]+"
+    r"(?:" + "|".join(re.escape(e) for e in _CITED_EXT) + r")")
+
+
+def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
+    """Every evidence path the STAGED tree's own JSONs cite, and whether it
+    resolves inside the published cell.
+
+    Read from the STAGED tree, not the run, because the question is what a
+    reader of THIS cell can follow.
+    """
+    out: List[Dict[str, str]] = []
+    if not dest.is_dir():
+        return out
+    seen = set()
+    for doc in sorted(dest.rglob("*.json")):
+        try:
+            text = doc.read_text(errors="replace")
+        except OSError:
+            continue
+        rel_doc = doc.relative_to(dest).as_posix()
+        for cited in sorted(set(_CITED_RE.findall(text))):
+            key = (rel_doc, cited)
+            if key in seen:
+                continue
+            seen.add(key)
+            if (dest / cited).exists():
+                decision = "RESOLVES"
+            elif any(cited.startswith(f"phase{n}/stage") for n in "123"):
+                decision = "OUT_OF_PUBLISHED_SCOPE"
+            else:
+                decision = "DANGLING"
+            out.append({"doc": rel_doc, "cited": cited,
+                        "decision": decision})
+    return out
+
+
+def write_citation_routing(dest: Path, records: List[Dict[str, str]],
+                           dry: bool = False) -> None:
+    body = _CITATION_HEADER + "".join(
+        f"{r['doc']} :: {r['cited']} {r['decision']}\n"
+        for r in sorted(records, key=lambda r: (r["doc"], r["cited"])))
+    if not dry:
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / _CITATION_ROUTING_FILENAME).write_text(body, encoding="utf-8")
+
+
 # --------------------------------------------------------------------------
 # Publish.
 # --------------------------------------------------------------------------
@@ -558,7 +634,14 @@ def publish(args: argparse.Namespace) -> dict:
 
     # The routing record — emitted even when nothing was routed away.
     _write_routing(layout_records, dest, dry)
+    # Same treatment for CITED artefacts as for blobs (#448): a citation the
+    # published layout cannot carry is RECORDED as out of scope rather than
+    # left to dangle. Read from the STAGED tree, so it answers the reader's
+    # question — "can I follow this from what I received?" — not the run's.
+    citation_records = collect_citation_records(dest)
+    write_citation_routing(dest, citation_records, dry)
     staged.append(_ROUTING_FILENAME)
+    staged.append(_CITATION_ROUTING_FILENAME)
     excluded_total = sum(1 for r in layout_records if r["decision"] == "ROUTED_AWAY")
 
     summary = {
