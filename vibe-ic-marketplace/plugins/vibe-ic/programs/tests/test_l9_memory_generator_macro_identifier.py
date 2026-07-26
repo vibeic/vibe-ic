@@ -17,22 +17,42 @@ macro cell name fails BOTH of the gate's clauses:
       `fakeram45` the `ram` is preceded by `e`. `sram45_2048x39` promotes,
       `fakeram45_2048x39` does not.
 
-The fix is a SECOND, NARROWER clause; `_MEMORY_NAME_TOKEN_RE` is untouched,
-because its strict left boundary is what keeps PROGRAM / DIAGRAM / HISTOGRAM /
-diagram_ctrl out of `memories[]` (pinned by
-`test_v1_0_5_issue612_memory_walker_nonmemory_tokens.py`). The new clause
-promotes a name-only row when the name carries a memory morpheme ANYWHERE AND
-also carries an explicit `<digits>x<digits>` organisation token. NEITHER HALF
-ALONE IS SAFE: the morpheme alone re-admits DIAGRAM, the organisation token
-alone admits any floorplan array dimension.
+WHAT SEPARATES THE MACRO FROM THE JUNK — AND WHAT DOES NOT
+----------------------------------------------------------
+`_MEMORY_NAME_TOKEN_RE` is untouched: its strict left boundary is what keeps
+PROGRAM / DIAGRAM / HISTOGRAM / diagram_ctrl out of `memories[]` (pinned by
+`test_v1_0_5_issue612_memory_walker_nonmemory_tokens.py`).
+
+The first attempt at a second clause paired the morpheme with a
+`<digits>x<digits>` "organisation token" in the same name. MEASURED, that does
+not work: `\\d+\\s*[xX]\\s*\\d+` matches the hex literals `0x12` / `0X7F`, and
+`fakeram45_2048x39` and `DIAGRAM_16x9` are otherwise the same string shape.
+Tightening the token (no whitespace, then no hex, then anchored at an `_`
+boundary, then requiring the morpheme itself to be followed by a digit) never
+got below three false accepts — `diagram2_16x9`, `histogram8_256x8`,
+`program0_4x4` — and the tightest form falsely REJECTED `dffram_1024x32`, a
+real OpenLane macro family. A `<digits>x<digits>` group is evidence of two
+numbers, not of a memory. That clause is gone, and
+`test_organisation_token_alone_never_promotes` keeps it gone.
+
+The evidence that does separate them comes from OUTSIDE the string: the design
+under analysis STAGED `fakeram45_2048x39.lef` (35140 B), `.lib` and `.v` under
+its own `input/pdk_local/fakeram45/`, and that LEF declares
+`MACRO fakeram45_2048x39`. An aspect ratio, a statistics unit and a hex error
+code never have a LEF.
+`test_real_doc_without_the_staged_artifact_stays_a_candidate` proves the
+artefact — not the name — is the lever.
 
 The promoted row keeps `depth`/`width` as None. Generator conventions disagree
 on ORDER — fakeram45_2048x39's own `.v` declares `WORD_DEPTH = 2048` /
 `BITS = 39` (depth x width) while sky130 sram macro names are width x depth —
 so assigning them from the name would FABRICATE NUMBERS.
 
-chip-AGNOSTIC: open memory-compiler naming convention only.
+chip-AGNOSTIC: open LEF / Liberty / GDS file-and-keyword conventions, read out
+of whatever the design under analysis staged. No chip-class string literal
+participates in the rule.
 """
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -44,6 +64,23 @@ sys.path.insert(0, str(PLUGIN / "programs"))
 import phase1_doc_one_shot_runner as P  # noqa: E402
 
 U = P._v1_6_441_is_useful_memory_entry
+_MEMORY_NAME_TOKEN_PATTERN = P._MEMORY_NAME_TOKEN_RE.pattern
+
+# The corroborated clause needs the design's staged-macro set, so production
+# passes the design root into the emitter. A MUTANT built from the parent
+# commit has the two-argument emitter; detect that by SIGNATURE rather than by
+# catching TypeError, so this shim can never swallow a real TypeError raised
+# inside the emitter — and so the real-document tests below fail on a mutant
+# with their own assertion, not with a call-shape error.
+_ACCEPTS_PROJECT = "project" in inspect.signature(
+    P._v1_6_426_emit_memories).parameters
+
+
+def _emit(l9, extracted, project):
+    if _ACCEPTS_PROJECT:
+        P._v1_6_426_emit_memories(l9, extracted, project)
+    else:
+        P._v1_6_426_emit_memories(l9, extracted)
 
 
 def _real_docs_dir():
@@ -58,28 +95,38 @@ def _real_docs_dir():
     return None
 
 
-# ---------------------------------------------------------------- real doc
-
-
-def test_real_edge_llm_accel_docs_promote_the_sram_macro():
-    """END-TO-END over the REAL on-disk benchmark documents.
-
-    This is the load-bearing test: it drives `_v1_6_426_emit_memories` with the
-    actual `benchmark-data/ic/edge_llm_accel/input/docs/*.md` bodies — no
-    synthetic document — and asserts the chip's only SRAM hard macro reaches
-    `memories[]`."""
+def _real_docs():
+    """(docs_dir, design_root, {filename: body}) or None when not on disk."""
     docs = _real_docs_dir()
     if docs is None:
-        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+        return None
     extracted = {}
     for fn in sorted(os.listdir(docs)):
         p = docs / fn
         if p.is_file():
             extracted[fn] = p.read_text(encoding="utf-8", errors="replace")
+    return docs, docs.parent.parent, extracted
+
+
+# ---------------------------------------------------------------- real doc
+
+
+def test_real_edge_llm_accel_docs_promote_the_sram_macro():
+    """END-TO-END over the REAL on-disk benchmark documents and the REAL
+    on-disk staged macro.
+
+    This is the load-bearing test: it drives `_v1_6_426_emit_memories` with the
+    actual `benchmark-data/ic/edge_llm_accel/input/docs/*.md` bodies and the
+    actual design root — no synthetic document, no synthetic artefact — and
+    asserts the chip's only SRAM hard macro reaches `memories[]`."""
+    real = _real_docs()
+    if real is None:
+        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+    _docs, design, extracted = real
     assert extracted, "no input docs read"
 
     l9 = {"top_module": "edge_llm_accel"}
-    P._v1_6_426_emit_memories(l9, extracted)
+    _emit(l9, extracted, design)
 
     names = [e.get("name") for e in (l9.get("memories") or [])]
     assert "fakeram45_2048x39" in names, (
@@ -94,16 +141,12 @@ def test_real_doc_promoted_row_does_not_fabricate_depth_width():
     """The promoted row must NOT carry invented dimensions. Generator naming
     order is not portable, so depth/width stay None and the pre-existing
     `low_confidence` marker stays on the row."""
-    docs = _real_docs_dir()
-    if docs is None:
+    real = _real_docs()
+    if real is None:
         pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
-    extracted = {}
-    for fn in sorted(os.listdir(docs)):
-        p = docs / fn
-        if p.is_file():
-            extracted[fn] = p.read_text(encoding="utf-8", errors="replace")
+    _docs, design, extracted = real
     l9 = {"top_module": "edge_llm_accel"}
-    P._v1_6_426_emit_memories(l9, extracted)
+    _emit(l9, extracted, design)
     rows = [e for e in (l9.get("memories") or [])
             if e.get("name") == "fakeram45_2048x39"]
     assert rows, "macro not promoted — see the end-to-end test"
@@ -115,67 +158,264 @@ def test_real_doc_promoted_row_does_not_fabricate_depth_width():
         assert r.get("low_confidence") is True
 
 
+def test_real_doc_without_the_staged_artifact_stays_a_candidate():
+    """THE ARTEFACT IS THE LEVER, NOT THE NAME.
+
+    Same real documents, same real macro name, but no design root — so no
+    staged-macro evidence. The row must stay in `memory_candidates[]`. If this
+    ever starts passing on name shape alone, the clause has silently grown a
+    lexical rule back and every attack in this file is live again."""
+    real = _real_docs()
+    if real is None:
+        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+    if not _ACCEPTS_PROJECT:
+        pytest.skip("emitter predates the staged-artefact clause")
+    l9 = {"top_module": "edge_llm_accel"}
+    P._v1_6_426_emit_memories(l9, real[2], None)
+    promoted = {e.get("name") for e in (l9.get("memories") or [])}
+    candidates = {e.get("name") for e in (l9.get("memory_candidates") or [])}
+    assert "fakeram45_2048x39" not in promoted
+    assert "fakeram45_2048x39" in candidates
+
+
+def test_real_doc_promoted_row_cites_the_staged_artifact():
+    """Provenance: the row records WHY it was promoted, and the artefact it
+    points at is really on disk."""
+    real = _real_docs()
+    if real is None:
+        pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
+    if not _ACCEPTS_PROJECT:
+        pytest.skip("emitter predates the staged-artefact clause")
+    _docs, design, extracted = real
+    l9 = {"top_module": "edge_llm_accel"}
+    _emit(l9, extracted, design)
+    rows = [e for e in (l9.get("memories") or [])
+            if e.get("name") == "fakeram45_2048x39"]
+    assert rows
+    assert rows[0].get("promotion_evidence") == (
+        "staged_macro_artifact:input/pdk_local")
+    staged = design / "input" / "pdk_local" / "fakeram45"
+    for suffix in (".lef", ".lib", ".v"):
+        assert (staged / ("fakeram45_2048x39" + suffix)).is_file(), (
+            "the promotion cites a staged artefact that is not on disk")
+    assert "MACRO fakeram45_2048x39" in (
+        staged / "fakeram45_2048x39.lef").read_text(
+            encoding="utf-8", errors="replace")
+
+
 def test_real_doc_non_macro_neighbour_stays_a_candidate():
     """Precision guard on the SAME real document: the PDK standard-cell
-    library name latched off the same prose (`NangateOpenCellLibrary`) carries
-    no memory morpheme and no organisation token, so it must stay in
+    library name latched off the same prose (`NangateOpenCellLibrary`) is not
+    staged as a macro and carries no memory morpheme, so it must stay in
     `memory_candidates[]`."""
-    docs = _real_docs_dir()
-    if docs is None:
+    real = _real_docs()
+    if real is None:
         pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
-    extracted = {}
-    for fn in sorted(os.listdir(docs)):
-        p = docs / fn
-        if p.is_file():
-            extracted[fn] = p.read_text(encoding="utf-8", errors="replace")
+    _docs, design, extracted = real
     l9 = {"top_module": "edge_llm_accel"}
-    P._v1_6_426_emit_memories(l9, extracted)
+    _emit(l9, extracted, design)
     promoted = {e.get("name") for e in (l9.get("memories") or [])}
     candidates = {e.get("name") for e in (l9.get("memory_candidates") or [])}
     assert "NangateOpenCellLibrary" not in promoted
     assert "NangateOpenCellLibrary" in candidates
 
 
+# ------------------------------------------------- end-to-end junk fragments
+
+
+# Realistic L1-L9 document prose in the exact Markdown / pipe-table / backtick
+# shapes the v1.6.468 back-walker was built for. Each fragment makes the walker
+# latch a NON-memory identifier that carries both a memory morpheme and a
+# `<digits>x<digits>` (or hex) group — and every one of them was promoted into
+# `memories[]` by the first version of this clause. None of these designs
+# stages a macro; every row must stay in `memory_candidates[]`.
+_JUNK_FRAGMENTS = {
+    "A_systolic_L8.md":
+        "## 8.2 PE array\n| module | note |\n|---|---|\n"
+        "| `systolic_array_16x16_param` | weights fed from on-chip SRAM |\n",
+    "B_hci_errcode_L4.md":
+        "## 4.3 error codes\n| code | constant | note |\n|---|---|---|\n"
+        "| 0x12 | `CMD_PARAM_ERR_0x1F` | illegal host FIFO command "
+        "parameter |\n",
+    "C_video_L2.md":
+        "The `chroma_intra_4x4` transform unit reads the line cache.\n",
+    "D_diagram_L2.md":
+        "See `block_diagram_16x9`; the register file sits in the middle.\n",
+    "E_filename_window_L7.md":
+        "The behavioural model uses `param_matrix_4x4.v` next to the RAM "
+        "model.\n",
+    "F_dsp_L2.md":
+        "The `histogram_256x8` statistics unit writes back to the FIFO.\n",
+    "G_pkg_L9.md":
+        "| package | `pin_grid_array_20x20_diagram` | keep clear of the SRAM "
+        "macro area |\n",
+    "I_bus_L3.md":
+        "Interface `member_bus_2x32` hangs directly off the cache.\n",
+    "J_xbar_L2.md":
+        "`crossbar_8x8_parametric` connects the four SRAM banks.\n",
+}
+
+
+@pytest.mark.parametrize("fname", sorted(_JUNK_FRAGMENTS))
+def test_junk_fragment_stays_a_candidate(fname):
+    """Nine end-to-end fragments in the real document shapes. An aspect ratio,
+    a statistics unit and a hex error code are not memories."""
+    l9 = {"top_module": "dut_top"}
+    _emit(l9, {fname: _JUNK_FRAGMENTS[fname]}, None)
+    promoted = [e.get("name") for e in (l9.get("memories") or [])]
+    assert promoted == [], (
+        "%s promoted %r into L9.memories[] — none of these is a memory"
+        % (fname, promoted))
+    assert [e.get("name") for e in (l9.get("memory_candidates") or [])], (
+        "%s should still leave a candidate row for provenance" % fname)
+
+
+# -------------------------------------------------- staged-artefact lookup
+
+
+def _stage(tmp_path, rel, body=""):
+    p = Path(tmp_path) / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body, encoding="utf-8")
+    return p
+
+
+def test_staged_lookup_reads_file_stems_and_lef_macro_headers(tmp_path):
+    _stage(tmp_path, "input/pdk_local/fakeram45/fakeram45_1024x32.lib")
+    _stage(tmp_path, "input/pdk_local/fakeram45/fakeram45_1024x32.v")
+    _stage(tmp_path, "input/pdk_local/bundle/many.lef",
+           "VERSION 5.8 ;\nMACRO dffram_1024x32\n  CLASS BLOCK ;\n"
+           "END dffram_1024x32\nMACRO sky130_sram_2kbyte_1rw1r_32x512_8\n"
+           "END sky130_sram_2kbyte_1rw1r_32x512_8\n")
+    staged = P._staged_macro_cell_names(tmp_path)
+    assert "fakeram45_1024x32" in staged        # from the file stem
+    assert "many" in staged                     # the bundle file itself
+    assert "dffram_1024x32" in staged           # from a MACRO header
+    assert "sky130_sram_2kbyte_1rw1r_32x512_8" in staged
+
+
+def test_staged_lookup_is_fail_safe(tmp_path):
+    """No project, no `input/pdk_local/`, or a nonsense argument => empty set,
+    never an exception. An empty set makes the clause inert, which is exactly
+    how every design that stages nothing keeps its pre-existing behaviour."""
+    assert P._staged_macro_cell_names(None) == frozenset()
+    assert P._staged_macro_cell_names(tmp_path) == frozenset()
+    assert P._staged_macro_cell_names(12345) == frozenset()
+    assert P._staged_macro_cell_names(Path(tmp_path) / "nope") == frozenset()
+
+
+def test_staged_macro_promotes_only_with_the_morpheme(tmp_path):
+    """The staged set is necessary but the memory morpheme is still required,
+    so a staged ANALOG hardmacro (`ldo`, `delta_sigma` — both real artefacts
+    elsewhere in benchmark-data) latched off nearby memory prose does not
+    become a memory row."""
+    _stage(tmp_path, "input/pdk_local/analog/ldo.lef", "MACRO ldo\nEND ldo\n")
+    _stage(tmp_path, "input/pdk_local/analog/delta_sigma.lef", "")
+    staged = P._staged_macro_cell_names(tmp_path)
+    assert "ldo" in staged and "delta_sigma" in staged
+    assert U({"name": "ldo"}, staged) is False
+    assert U({"name": "delta_sigma"}, staged) is False
+
+
+def test_generator_style_macro_name_is_useful_when_staged():
+    """The exact on-disk macro plus two other generator families — each one
+    promoted only once the design has staged it."""
+    for nm in ("fakeram45_2048x39", "fakeram45_1024x32", "dffram_1024x32"):
+        assert U({"name": nm}) is False, (
+            "%s must NOT promote on name shape alone" % nm)
+        assert U({"name": nm}, frozenset({nm.lower()})) is True, (
+            "%s is staged as a physical macro — it must promote" % nm)
+
+
+# ------------------------------------------- the abandoned lexical clause
+
+
+def test_organisation_token_alone_never_promotes():
+    """The `<digits>x<digits>` organisation token is GONE from the promotion
+    path — including for the macro this whole change exists to recover.
+    Nothing below may promote on name shape."""
+    for nm in ("fakeram45_2048x39", "DIAGRAM_16x9", "HISTOGRAM_256x8",
+               "diagram_ctrl_4x4", "block_diagram_16x9", "histogram_256x8",
+               "chroma_intra_4x4", "member_bus_2x32", "param_matrix_4x4",
+               "systolic_array_16x16_param", "crossbar_8x8_parametric",
+               "pin_grid_array_20x20_diagram", "diagram2_16x9",
+               "histogram8_256x8", "program0_4x4", "telegram 4 x 8",
+               "v1x2_diagram"):
+        assert U({"name": nm}) is False, (
+            "%s promoted with no staged artefact — a <digits>x<digits> group "
+            "is evidence of two numbers, not of a memory" % nm)
+
+
+def test_hex_literal_never_reaches_the_promotion_path():
+    """`0x12` / `0X7F` / `0x0` all matched the abandoned organisation regex,
+    and `0x` is the DEFINING SHAPE of the L4 command-protocol and L5
+    register-map documents this walker consumes. The last four names below are
+    verbatim identifiers harvested out of this repo's own Bluetooth-HCI error
+    tables — real inputs, not invented ones."""
+    for nm in ("CMD_PARAM_ERR_0x1F", "PROGRAM_0x40",
+               "FP_PDN_HOFFSET_PARAM_0x10", "WITH_CSR_PARAM_0x1",
+               "invalid_hci_command_parameters_0x12",
+               "memory_capacity_exceeded_0x07",
+               "qos_unacceptable_parameter_0x2c",
+               "unsupported_feature_or_parameter_value_0x11_370"):
+        assert U({"name": nm}) is False, "%s is a hex error code" % nm
+
+
+def test_staged_artifact_is_the_only_lever():
+    """THE HONEST RESIDUAL, asserted as the code's ACTUAL behaviour.
+
+    The surviving conjunct is the memory morpheme, and `DIAGRAM` contains
+    `ram`. So a design that really staged `DIAGRAM_16x9.lef` under its own
+    `input/pdk_local/` WOULD promote `DIAGRAM_16x9`. That is no longer a
+    lexical accident: it means the design shipped a physical macro under that
+    cell name. This test pins the TRUE behaviour rather than a prettier one —
+    if the rule is ever tightened further, change this test; never let the
+    comment and the code drift apart again."""
+    assert U({"name": "DIAGRAM_16x9"}) is False
+    assert U({"name": "DIAGRAM_16x9"}, frozenset({"diagram_16x9"})) is True
+    # ...and the artefact must name THAT cell, not a neighbour of it.
+    assert U({"name": "DIAGRAM_16x9"},
+             frozenset({"fakeram45_2048x39"})) is False
+
+
 # -------------------------------------------------------------- unit level
-
-
-def test_generator_style_macro_name_is_useful():
-    # the exact on-disk macro, plus two other generator families
-    assert U({"name": "fakeram45_2048x39"}) is True
-    assert U({"name": "fakeram45_1024x32"}) is True
-    assert U({"name": "sky130_sram_1kbyte_1rw1r_32x256_8"}) is True
 
 
 def test_boundary_visible_token_still_promotes_without_dimensions():
     """The original #612 clause is untouched: a left-boundary token alone is
-    still sufficient, no organisation token required."""
+    still sufficient — no staged artefact and no organisation token needed."""
     assert U({"name": "sram45_2048x39"}) is True
     assert U({"name": "data_ram"}) is True
+    assert U({"name": "sky130_sram_1kbyte_1rw1r_32x256_8"}) is True
 
 
-def test_both_halves_are_required():
-    """The conjunction is the whole point — neither half alone promotes."""
-    # morpheme, no organisation token
-    for nm in ("DIAGRAM", "HISTOGRAM", "PROGRAM", "diagram_ctrl",
-               "parameterised", "fakeram45"):
-        assert U({"name": nm}) is False, (
-            "%s has a memory morpheme but no <digits>x<digits> organisation "
-            "token — must NOT promote" % nm)
-    # organisation token, no morpheme
-    for nm in ("die_area_400x400", "PL_TARGET_DENSITY_2x2", "core_16x16",
-               "NangateOpenCellLibrary"):
-        assert U({"name": nm}) is False, (
-            "%s has no memory morpheme — must NOT promote" % nm)
+def test_issue612_token_regex_is_byte_untouched():
+    """`_MEMORY_NAME_TOKEN_RE`'s strict LEFT WORD BOUNDARY is the whole of the
+    #612 protection. Pin its bytes."""
+    assert _MEMORY_NAME_TOKEN_PATTERN == (
+        r"(?:^|[^A-Za-z])(ram|rom|sram|dram|cache|regfile|fifo|mem)"
+        r"(?:[^A-Za-z]|[0-9]|$)")
 
 
-def test_issue612_negatives_stay_rejected():
-    """Every name pinned as a NEGATIVE by
-    test_v1_0_5_issue612_memory_walker_nonmemory_tokens.py stays rejected."""
-    for nm in ("i_rst", "RESET_PC", "WITH_CSR", "FP_CORE_UTIL",
-               "PL_TARGET_DENSITY", "FP_PDN_HOFFSET", "GF180MCU",
-               "Cyclone10LP", "sky130_fd_sc_hd", "i_gpio", "o_gpio",
-               "PROGRAM", "DIAGRAM", "HISTOGRAM", "diagram_ctrl"):
+def test_issue612_negatives_stay_rejected_bare_and_suffixed():
+    """MANDATORY IN BOTH FORMS.
+    `test_v1_0_5_issue612_memory_walker_nonmemory_tokens.py` pins only the
+    BARE names; the first version of this clause re-admitted every one of them
+    the moment a dimension or hex suffix was appended, while its own comment
+    claimed both halves were required. Pin the suffixed forms here so that can
+    never silently become true again."""
+    bare = ("i_rst", "RESET_PC", "WITH_CSR", "FP_CORE_UTIL",
+            "PL_TARGET_DENSITY", "FP_PDN_HOFFSET", "GF180MCU",
+            "Cyclone10LP", "sky130_fd_sc_hd", "i_gpio", "o_gpio",
+            "PROGRAM", "DIAGRAM", "HISTOGRAM", "diagram_ctrl")
+    for nm in bare:
         assert U({"name": nm}) is False, "#612 negative %s regressed" % nm
+    for nm in bare:
+        for suffix in ("_0x40", "_16x9", "_256x8", "_4x4", "_2x2", "_0x1",
+                       "_PARAM_0x10", " 1 x 8", "_1024x32", "2_16x9"):
+            sfx = nm + suffix
+            assert U({"name": sfx}) is False, (
+                "#612 negative %s regressed once suffixed: %s" % (nm, sfx))
 
 
 def test_issue612_positives_stay_promoted():
@@ -188,3 +428,5 @@ def test_non_dict_and_empty_unchanged():
     assert U(None) is False
     assert U({}) is False
     assert U({"name": None}) is False
+    assert U({"name": None}, frozenset({"fakeram45_2048x39"})) is False
+    assert U({"name": "fakeram45_2048x39"}, frozenset()) is False
