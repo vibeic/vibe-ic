@@ -370,12 +370,23 @@ def test_derived_pin_order_cfg_reaches_openroad(tmp_path):
     tcl, note = _p3._v1_0_38_pin_placement_block(tmp_path, bare)
     assert "set_io_pin_constraint" in tcl
     assert "pin_order.cfg ingested" in note
+    # Each cfg entry is resolved against the design's own BTerm names and the
+    # matched LITERAL names reach `-pin_names`, so the entry->region binding
+    # is asserted on the emitted resolve + report pair.
     # clk genuinely belongs on East -> OpenROAD region "right".
-    assert _re.search(r"-pin_names \{clk\} -region right:", tcl)
+    assert "PIN_ORDER_CONSTRAINT_APPLIED: clk -> right:" in tcl
     # rst on South -> "bottom"; p/y on West -> "left"; x bus on North -> "top".
-    assert _re.search(r"-pin_names \{rst\} -region bottom:", tcl)
-    assert _re.search(r"-pin_names \{p\} -region left:", tcl)
-    assert _re.search(r"-pin_names \{x\\\[\.\*\\\]\} -region top:", tcl)
+    assert "PIN_ORDER_CONSTRAINT_APPLIED: rst -> bottom:" in tcl
+    assert "PIN_ORDER_CONSTRAINT_APPLIED: p -> left:" in tcl
+    assert "PIN_ORDER_CONSTRAINT_APPLIED: x\\[.*\\] -> top:" in tcl
+    # DEFECT direction: the bussed North entry must NOT be handed to
+    # `-pin_names` as a raw regex. That is what OpenROAD rejected with
+    # `[ERROR PPL-0061] Pins {x\[.*\]} ... were not found`, after which the
+    # surrounding catch demoted it to a NONFATAL note and place_pins put the
+    # whole bus on the wrong edge — while every scalar entry in the same cfg
+    # was honored. Measured on spm/sky130A: 32 x-bits on E instead of N.
+    assert not _re.search(r"-pin_names \{x\\\[\.\*\\\]\}", tcl)
+    assert "set _poc_pins [vibeic_pin_names_matching {x\\[.*\\]}]" in tcl
     # The bare auto-assign must still follow, for pins the cfg does not name.
     assert bare in tcl
 
