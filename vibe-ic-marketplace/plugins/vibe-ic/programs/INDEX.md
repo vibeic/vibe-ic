@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 958
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 958)
+- **Total programs (excluding helpers / shims):** 959
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 959)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 949 |
+| `any` | 950 |
 
 ## Alphabetical listing
 
@@ -615,6 +615,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
+| `pad_side_constraint_check` | any | — | Gate: verify IO pin placements match the |
 | `parametric_spec_extractor` | any | — | deterministic baseline extractors for the PROSE |
 | `path_delay_coverage_check` | any | — | REAL at-speed PATH-DELAY-FAULT (PDF) coverage |
 | `path_delay_fault_atpg_run` | any | — | REAL at-speed TIMING-graded PATH-DELAY-FAULT |
@@ -1030,7 +1031,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (949 programs)
+### `any` (950 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1616,6 +1617,7 @@ _(no programs in this group)_
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_
+- `pad_side_constraint_check` — Gate: verify IO pin placements match the
 - `parametric_spec_extractor` — deterministic baseline extractors for the PROSE
 - `path_delay_coverage_check` — REAL at-speed PATH-DELAY-FAULT (PDF) coverage
 - `path_delay_fault_atpg_run` — REAL at-speed TIMING-graded PATH-DELAY-FAULT

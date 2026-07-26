@@ -8642,6 +8642,67 @@ def _v1_0_38_build_pin_placement_tcl(
     return "\n".join(lines) + "\n"
 
 
+# FIX capture/pad-side-constraint-and-postlayout-lec (Defect 1b) — marker on
+# the pin_order.cfg this runner DERIVES from the L-doc pad-side table, so a
+# later run can tell its own output apart from a human-authored file.
+_LDOC_PIN_ORDER_MARKER = "# pin_order.cfg derived from L-doc pad-side table"
+
+
+def _emit_ldoc_pin_order_cfg(project: Path, out_dir: Path) -> Optional[Path]:
+    """Derive `<pnr>/pin_order.cfg` from the L-doc pad-side table.
+
+    This is the CORRECTIVE half of the pad-side work: the disclosure gate
+    only reports a wrong-side pin, this is what makes OpenROAD place it
+    right, via the existing ORGANIC #650 `set_io_pin_constraint` ingestion.
+    The file lands in the runner's OWN output dir, which
+    `_v1_0_38_find_pin_order_cfg` reaches only as a LAST RESORT, so a
+    project-supplied cfg always wins.
+
+    Tokens come from `pad_side_constraint_check.pin_order_cfg_tokens` — the
+    SAME renderer the gate's matcher is built from, so what is constrained
+    and what is verified cannot drift apart. (The first cut rewrote EVERY
+    bracketed index to `\\[.*\\]`, including an explicit `data[0]`, which
+    pins a whole bus to one edge even where the document splits it.)
+
+    REGENERATED every run rather than written-once: a stale derived cfg would
+    keep constraining PnR to a table the project no longer declares. When
+    the table is withdrawn the derived file is REMOVED — but only when it
+    carries our marker, so a human file here is never touched.
+
+    Returns the cfg path when one is on disk afterwards, else None.
+    Best-effort: never raises, never blocks PnR.
+    """
+    cfg_path = out_dir / "pin_order.cfg"
+    try:
+        import pad_side_constraint_check as _psc_mod  # noqa: PLC0415
+        table = _psc_mod._load_pad_side_table(project)
+        is_ours = (cfg_path.is_file()
+                   and cfg_path.read_text(errors="replace").startswith(
+                       _LDOC_PIN_ORDER_MARKER))
+        if table:
+            lines: List[str] = [
+                _LDOC_PIN_ORDER_MARKER + "\n"
+                "# (emitted by phase3_one_shot_runner; do not hand-edit — "
+                "re-run phase3 to refresh)\n"
+            ]
+            for edge, patterns in sorted(table.items()):
+                edge_norm = _psc_mod._normalise_edge(edge) or edge.upper()
+                lines.append(f"#{edge_norm}\n")
+                for pat in patterns:
+                    for tok in _psc_mod.pin_order_cfg_tokens(pat):
+                        lines.append(f"{tok}\n")
+            if not cfg_path.is_file() or is_ours:
+                cfg_path.write_text("".join(lines))
+                return cfg_path
+            return cfg_path          # a human file is already here; keep it
+        if is_ours:
+            cfg_path.unlink()
+            return None
+    except Exception:  # best-effort; a missing constraint is disclosed by
+        pass           # the pad-side gate, never by an aborted PnR
+    return cfg_path if cfg_path.is_file() else None
+
+
 def _v1_0_38_find_pin_order_cfg(project: Path) -> Optional[Path]:
     """ORGANIC #650 — locate a `pin_order.cfg` anywhere a project might
     ship one (openlane/ / pnr/ / constraints/, plus the project root as a
@@ -8659,7 +8720,16 @@ def _v1_0_38_find_pin_order_cfg(project: Path) -> Optional[Path]:
     if root_hit.is_file():
         hits.append(root_hit)
     if not hits:
-        return None
+        # FIX capture/pad-side-constraint-and-postlayout-lec (Defect 1b):
+        # LAST-RESORT fallback to the cfg step_pnr DERIVES from the L-doc
+        # pad-side table. It lives in the canonical PnR output dir
+        # (`phase3/stage3/pnr/`), which none of the project-supplied
+        # locations above cover — without this the derived cfg is written
+        # and never read, and the L-doc pad-side table stays unenforced.
+        # Reached ONLY when the project ships no cfg of its own, so a
+        # project-supplied override always wins.
+        derived = _pl.pnr_dir(project) / "pin_order.cfg"
+        return derived if derived.is_file() else None
     return sorted(hits, key=lambda p: str(p))[0]
 
 
@@ -11536,6 +11606,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _bare_place_pins = (
         f"place_pins -hor_layers {_hor_pin_layer} "
         f"-ver_layers {_ver_pin_layer}")
+
+    _emit_ldoc_pin_order_cfg(project, out_dir)
+
     place_pins_block, pin_order_note = _v1_0_38_pin_placement_block(
         project, _bare_place_pins)
     # v1.6.36 — emit per-stage DEF snapshots so def_stage_progression_check
@@ -18701,6 +18774,14 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     t0 = time.time()
     written: List[str] = []
     notes: List[str] = []
+    # SIGN-OFF emit failures. A sign-off proof that could not be produced is
+    # NOT a "note": it makes this step FAIL. It must not, however, abort the
+    # step — the remaining canonical artefacts (metal density, aging STA,
+    # clock plan, provenance, the phase3/stage4/gds alias, ...) are still
+    # emitted, and main() still writes the orchestrator report. Raising out
+    # of here would kill the runner mid-step and destroy the very report the
+    # failure is supposed to appear in.
+    signoff_failures: List[str] = []
     pnr_out = _pl.pnr_dir(project)
     sta_out = _pl.sta_dir(project)
     cts_out = _pl.cts_dir(project)
@@ -19380,7 +19461,22 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 if (rpt_phase3 / "lec_post_layout.rpt").is_file():
                     written.append(str(rpt_phase3 / "lec_post_layout.rpt"))
         except Exception as exc:
-            notes.append(f"post-layout LEC emit failed: {exc}")
+            # FIX capture/pad-side-constraint-and-postlayout-lec:
+            # A sign-off emit step must NOT silently degrade to a buried
+            # JSON note. It is recorded as a SIGN-OFF FAILURE, which makes
+            # this step's status row FAIL (see the return at the end).
+            # It is deliberately NOT re-raised: `step_canonicalize_artefacts`
+            # is called unguarded from main(), so raising here aborts the
+            # runner with a traceback — no orchestrator report, no
+            # waivers.json, no final_summary.md, and none of the ~50
+            # canonical artefacts emitted after this point. A crash is not a
+            # louder FAIL, it is a LOST one. (`_docker_exec` raises
+            # FileNotFoundError on a host with no docker binary, so this is
+            # a reachable path, not a theoretical one.)
+            signoff_failures.append(
+                f"post-layout LEC emit FAILED (sign-off step): {exc}")
+            notes.append(
+                f"post-layout LEC emit FAILED (sign-off step): {exc}")
 
     # --- TAPEOUT-SIGNOFF: emit the reports the new sign-off gates consume ----
     # §4.05: every emission is best-effort + disclosed; a tool that cannot run
@@ -20472,6 +20568,17 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     except Exception as _e609:  # pragma: no cover — defensive
         notes.append(f"#609 coverage re-emit skipped: {_e609}")
 
+    # A sign-off proof that could not be produced FAILS this step. Everything
+    # else was still emitted, and the failure is named in the detail so the
+    # orchestrator report carries it as a status row, not a buried note.
+    if signoff_failures:
+        return StepResult(
+            "canonicalize_artefacts", "FAIL", time.time() - t0,
+            f"sign-off emit FAILED: {'; '.join(signoff_failures)} "
+            f"(emitted {len(written)} canonical artefacts)" +
+            (f"; notes: {'; '.join(notes)}" if notes else ""),
+            written,
+        )
     return StepResult(
         "canonicalize_artefacts", "PASS", time.time() - t0,
         f"emitted {len(written)} canonical artefacts" +
@@ -22040,8 +22147,15 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         marker=_to_container_path(str(_probe_ys), container))
     # INPUT-vs-CAPABILITY: a missing/empty liberty is an input defect, and must
     # NOT buy the unsound fallback (see functional_read_liberty_supported).
+    # FIX capture/pad-side-constraint-and-postlayout-lec: the bare name
+    # `liberty` was never defined in this function scope; the correct
+    # host-side path is `pdk.liberty` (the container path is `lib_c`).
+    # Using the undefined name raised NameError which was caught by the
+    # caller's broad `except Exception` and silently buried in the JSON
+    # detail field — so LEC never ran and the violation was never surfaced.
+    _liberty_host_str = str(pdk.liberty) if getattr(pdk, "liberty", None) else ""
     try:
-        _lib_host = Path(liberty) if liberty else None
+        _lib_host = Path(_liberty_host_str) if _liberty_host_str else None
         _lib_exists = bool(_lib_host and _lib_host.is_file())
         _lib_nonempty = bool(_lib_exists and _lib_host.stat().st_size > 0)
     except OSError:
@@ -25597,7 +25711,70 @@ def main() -> int:
                 plan.append(step_pnr(project, effective_top, pdk, args.container,
                                      args.die_um, args.util,
                                      spare_density=args.spare_density))
-        if plan[-1].status == "PASS":
+        # ── PROVENANCE SNAPSHOT of the PnR outcome ─────────────────────────
+        # Everything downstream (the #527 SPEF repair, the DRV escalation and
+        # — critically — the ORGANIC #593 stale-GDS guard) used to read
+        # `plan[-1]`, i.e. "whatever row happens to be last". That is only
+        # correct while nothing else appends between PnR and the GDS block.
+        # It is NOT: `step_signoff_spef_repair` / the DRV escalation already
+        # append rows, and this capture adds a pad-side DISCLOSURE row. With
+        # any of them present the last row is no longer the PnR row,
+        # `_pnr_reran` is dead-False, and a geometry-changing re-dispatch (#593
+        # scenario: unconverged at 1233x1233 -> re-dispatch --die-um 1500x1500)
+        # re-runs PnR, produces a NEW DEF and then SHIPS THE PREVIOUS DIE'S
+        # GDS, with DRC/LVS signing off on it, under the benign-looking row
+        # "GDS already present ... (skipped re-run)".
+        #
+        # So the PnR outcome is snapshotted HERE, by NAME, before any further
+        # row exists, and the chain is carried in `_chain_ok` instead of
+        # `plan[-1]`. `_chain_ok` reproduces the pre-existing gating exactly
+        # (PnR must pass; each optional repair row that IS appended must pass)
+        # while being structurally immune to disclosure-only rows.
+        _pnr_row = next((s for s in reversed(plan) if s.name == "pnr"), None)
+        _pnr_step_passed = (_pnr_row is not None and _pnr_row.status == "PASS")
+        _pnr_reran = (_pnr_row is not None
+                      and "skipped" not in _pnr_row.detail)
+        _chain_ok = _pnr_step_passed
+
+        # FIX capture/pad-side-constraint-and-postlayout-lec (Defect 1a):
+        # Run the pad-side gate RIGHT AFTER PnR so the violation is always
+        # DISCLOSED. It is a disclosure gate, not a flow blocker, so it is
+        # appended OUTSIDE `_chain_ok` and never gates a downstream step.
+        # It runs ONLY when PnR passed and the canonical DEF exists: on a
+        # failed/absent PnR the check has nothing to measure, and emitting
+        # "No DEF file found under phase3/" as a FAIL row would be a
+        # fabricated second failure on top of the real one.
+        if _pnr_step_passed:
+            _pnr_def = _pl.pnr_dir(project) / f"{effective_top}.def"
+            if not _pnr_def.is_file():
+                plan.append(StepResult(
+                    "pad_side_constraint", "SKIP", 0.0,
+                    f"SKIP: PnR reported PASS but the canonical DEF "
+                    f"{_pnr_def.name} is absent — pad-side placement cannot "
+                    f"be measured (nothing is claimed about it)."))
+            else:
+                try:
+                    import pad_side_constraint_check as _psc  # noqa: PLC0415
+                    _psc_result = _psc.check(project, _pnr_def)
+                    _psc_verdict = _psc_result["verdict"]
+                    _psc_note = _psc_result["note"]
+                    # PASS / VACUOUS_PASS -> PASS row (VACUOUS_PASS keeps its
+                    # own note so the vacuity is visible in the report).
+                    # FAIL -> FAIL row. ERROR ("could not parse the DEF") is
+                    # "cannot verify", NOT "violated": it becomes SKIP so the
+                    # gate never invents a violation it did not measure.
+                    _psc_status = {"PASS": "PASS", "VACUOUS_PASS": "PASS",
+                                   "FAIL": "FAIL"}.get(_psc_verdict, "SKIP")
+                    plan.append(StepResult(
+                        "pad_side_constraint", _psc_status, 0.0, _psc_note))
+                except Exception as _psc_exc:
+                    plan.append(StepResult(
+                        "pad_side_constraint", "SKIP", 0.0,
+                        f"SKIP: pad_side_constraint_check could not run "
+                        f"({_psc_exc}) — nothing is claimed about pad-side "
+                        f"placement."))
+
+        if _chain_ok:
             # #527 estimate-vs-SPEF — SHIPPED post-route real-SPEF setup repair at
             # the slow sign-off corner, BEFORE gds/drc/lvs so the shipped design is
             # the repaired one. No-op (base route kept) unless it reaches setup>=0
@@ -25606,7 +25783,8 @@ def main() -> int:
                                            args.container)
             if _sr is not None:
                 plan.append(_sr)
-        if plan[-1].status == "PASS":
+                _chain_ok = (_sr.status == "PASS")
+        if _chain_ok:
             # Caravel-class DRV closure — a SEPARATE, independently-gated
             # escalation for max_slew/max_capacitance violators that survive
             # the bounded loop above (measured: caravel_user_project x
@@ -25626,15 +25804,16 @@ def main() -> int:
                 project, effective_top, pdk, args.container)
             if _esc is not None:
                 plan.append(_esc)
-        if plan[-1].status == "PASS":
+                _chain_ok = (_esc.status == "PASS")
+        if _chain_ok:
             # #593 — the GDS is derived from the DEF, so it shares the
             # PnR geometry cache verdict: a geometry change that forced a
-            # PnR re-run must also re-derive the GDS.
+            # PnR re-run must also re-derive the GDS. `_pnr_reran` is the
+            # snapshot taken by NAME above, not `plan[-1]` — see the
+            # provenance-snapshot comment there.
             _pnr_out = _pl.pnr_dir(project)
             _cache_ok, _ = _pnr_cache_valid_for(
                 _pnr_out, args.die_um, args.util)
-            _pnr_reran = (plan[-1].name == "pnr"
-                          and "skipped" not in plan[-1].detail)
             if gds_existing.is_file() and _cache_ok and not _pnr_reran:
                 plan.append(StepResult(
                     "gds", "PASS", 0.0,
