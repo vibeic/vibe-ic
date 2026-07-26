@@ -143,6 +143,20 @@ run "per-PDK table coverage"            "$ROOT" python3 "$PG/pdk_table_coverage_
 # register keys, 18 field keys, all classified.
 run "L4 -> SystemRDL disposition"       "$ROOT" python3 "$PG/l4_systemrdl_export.py" audit-corpus --root "$ROOT"
 
+# vibe-ic#440 — benchmark-data/ic/ is what this project points at when it says
+# a cell converged, and it also holds runs that did not. Measured: 28 published
+# cells, 3 with an audit verdict of PASS_WITH_WAIVERS; two assert success in
+# their RESULT.md while their own audit artefact reads FAIL, and one has an
+# orchestrator report saying PASS_WITH_WAIVERS next to an audit saying FAIL.
+# Deleting the failures (#421) was refused on measurement — that would make
+# "we never ran this" and "we ran it, it failed, and we kept the record" the
+# same state. The repair is to LABEL, and the label has to be gated: the
+# hand-maintained BENCHMARK_IC_CAMPAIGN_STATUS.md is the version without a
+# gate, and all three of its citations for the converged cells point at
+# directories that no longer exist. INDEX.md is a pure function of the tracked
+# artefacts, so a verdict that changes while its row does not is a FAIL here.
+run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_index.py" --check --root "$ROOT"
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired
