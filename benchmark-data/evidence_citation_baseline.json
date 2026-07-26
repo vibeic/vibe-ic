@@ -15,6 +15,7 @@
     "210b3ac8bc645ab63c7417e7ff4f204d",
     "22eea7188516a6d40fd286d06ab88ded",
     "2334f5fbfaf213d9d67e9c0c38285388",
+    "27145a82b7778c5a197e3f07953165a5",
     "276b3394fc8da1eb726d726c8a521396",
     "2b977355ae48f7c95cfdfed586c8cb5f",
     "2e84294763eec3712666e4d84252121f",
@@ -30,11 +31,13 @@
     "3e0f70e6961f03c98e2cc3e6cfc957f5",
     "3e1a672f76ea72c40a7937d4db5598f5",
     "437e8e1b4bb580189a72a5d62fdae829",
+    "44e68bdd003d354317bd1ba77b527a25",
     "4731f4cc7b436cb19079de46036f95f6",
     "4860fa84ce41c2891214ea213582bc13",
     "4a2efcc6c3a32325d43617b0bbb9fe71",
     "4beba5acb4eee35c7ab7bccaca42a593",
     "4c20a563d302bb7250d5a4c2b3070ce7",
+    "4f65f0f5c0c6f15ff28bf97c62d7500c",
     "512c530da43eb440c3f81d7eddc2f931",
     "521c5d803d07ebcd59ca15d73a4e776a",
     "59cd76ecb1a1ddfe4c1b51a99dd6ea02",
@@ -60,7 +63,9 @@
     "7d25ee1f674419458b501c7fa5d6e032",
     "8057d7385b4b8bb41e7177fc84d8188a",
     "80cb90964d7bcc39c14afddf90e0062c",
+    "821a42aeee5cb3120fc1746a6587759e",
     "834e48264eec2593f7a40b2e5aae8323",
+    "85f43742c1136fcacce2dff9d75fa985",
     "8636608b43c9321acc72120754fa3e3e",
     "8ba947336d4c14a094fd775737d895ca",
     "8e79880859cfca776ab270885ecbb300",
@@ -92,6 +97,7 @@
     "c72cbe10f7a5c5d523946e1478e10bc5",
     "c885a65288ea93b1377a3504a91ae9b8",
     "c8ec0cf42b6674ea3aa97b794840a20e",
+    "c8ef1584ea80f166f11248b131349e4f",
     "cd36244422f7023402db8d2142764c4a",
     "ceb3bd49b134b52d083c908b6e123267",
     "d1f02fb667bc57fd023125076ed6c303",
@@ -110,6 +116,7 @@
     "e0c16b8ed14f08b72cd39261c8a06ca6",
     "e1571d8f29d20e037aac623caed7ebac",
     "e3feec40be445e01be0eac957cc1eb1c",
+    "e4bb336bdf7d8a6179d4ab12a9f1d7fc",
     "e59fb8f8bbef0471c547833ccd79d38b",
     "e7a6017cd61ba344c68d4884cea16f57",
     "e87e142cfd50b6a6dfd123c76453858a",
@@ -128,5 +135,9 @@
     "fda72cf0a7b74bc5c66a3cabfecb502b",
     "fe13c392f388495c955ef6b9d7e6200e",
     "ff5a20006fd8e68d6c5c717a3d7c4500"
-  ]
+  ],
+  "scope_expansion": {
+    "previous_size": 127,
+    "reason": "the campaign_v1558 formal artefacts are newly SHIPPED (previously untracked, discarded by the *.log rule); their INTERNAL citations name the run-time paths those files were written at, and rewriting them would falsify the run's own output"
+  }
 }
