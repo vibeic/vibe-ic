@@ -673,6 +673,27 @@ def main() -> int:
         rc = _run_phase("PHASE 3 (synth → PnR → GDS → DRC → LVS)",
                          runner, p3_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "phase3_one_shot.json"))
+        # The PDK the back end ACTUALLY signed off on is only knowable once
+        # phase3_one_shot.json exists — which is now. If it differs from the
+        # declared L19 target, emit the disclosure from measured values.
+        # Runs regardless of verdict: a substitution is as material on a
+        # failing run as on a passing one. The emitter is a no-op when the
+        # families match, so wiring it cannot manufacture a disclosure.
+        # Wired HERE as well as in design_one_shot_runner's phase3 step
+        # because THIS orchestrator drives phase 3 itself — it calls
+        # design_one_shot_runner only for phase 2, so the other site alone
+        # never fires on a full-flow run. Measured on a real run, not assumed.
+        _emit = PROGRAMS_DIR / "pdk_substitution_disclosure_emit.py"
+        if _emit.is_file():
+            try:
+                _ep = subprocess.run(
+                    [sys.executable, str(_emit), str(project)],
+                    capture_output=True, text=True, timeout=120)
+                for _ln in (_ep.stdout or "").strip().splitlines()[:4]:
+                    print(f"[phase3] {_ln}", flush=True)
+            except Exception as _exc:
+                print(f"[phase3] pdk_substitution_disclosure_emit: "
+                      f"SKIPPED ({_exc})", flush=True)
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
         plan.append(("phase3", verdict, rc))
         reports["phase3"] = rep
