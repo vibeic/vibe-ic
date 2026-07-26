@@ -54,6 +54,21 @@ yarn-error.log*
 # filename, so SymbiYosys task-workdir noise (model/design.log, design_prep.log)
 # stays ignored and nothing is swept in by a wide add.
 !benchmark-data/**/formal/**/*.sby.log
+# The SAME hole, one runner-generation earlier, found by a test of mine that
+# went red in CI and green here. F10's rescue above matches `*.sby.log`, which
+# is how the CURRENT runner names its transcript. An older one writes
+# `sby_<top>.log`, and `benchmark-data/ic/subservient` ships a published,
+# PASS-verdict `formal_evidence.json` citing exactly that — at a path the repo
+# did not contain. A narrow rule and a naming change are all it takes for the
+# citation and its proof to end up on opposite sides again, which is why this
+# negation is by PREFIX rather than by suffix. MEASURED before widening: this
+# pattern matches three files repo-wide, two already tracked
+# (`reset_safety/sby_reset_safety*.log`, force-added by #411 as the
+# deliverables they are) and the one above. The obvious wider rule,
+# `formal/**/*.log`, would sweep in SymbiYosys workdir noise —
+# `model/design.log`, `design_prep.log`, `design_aiger.log` — so it is not
+# used. Adds here are always explicit paths; nothing is swept in by this.
+!benchmark-data/**/formal/**/sby_*.log
 .env
 .env.local
 
