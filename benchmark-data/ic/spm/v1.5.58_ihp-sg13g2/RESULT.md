@@ -37,6 +37,24 @@ this run's own RESULT/AGENT_REPORT):
   (`assert(p == '0)` one cycle after reset) — *"Property proved."* This is a
   genuine, tool-run proof of reset-safety, not a claim of full datapath
   equivalence (that remains a separate, harder proof obligation).
+  **Two independent sets of evidence now ship, and they are not the same thing:**
+  - `phase2/stage1/formal/campaign_v1558/` — **this campaign's OWN artefacts**,
+    recovered 2026-07-26 from the campaign directory this cell's
+    `reports/orchestrator/phase2_one_shot.json` names as `project`, and shipped
+    byte-for-byte. These are the files the gate report has cited since it was
+    written; until now they resolved to nothing. Read
+    `campaign_v1558/CAMPAIGN_EVIDENCE.md` before `campaign_v1558/results.json`:
+    that results.json counts **tasks as properties** (`property_count: 2` is two
+    task modes over one assertion) and claims a *"functional property proved
+    BOUNDED via BMC"* that was never asserted. It is shipped unaltered and
+    flagged rather than edited.
+  - `phase2/stage1/formal/reset_safety/` — a **REGENERATION** (2026-07-26) of the
+    same property against the same RTL, carrying the NEGATIVE CONTROL the
+    campaign never ran: delete `p_reg`'s reset assignment and the same task
+    returns FAIL, so the 0.01 s pass is not vacuous.
+
+  Neither set proves datapath correctness. See
+  `reports/phase2/gates/formal_evidence.json`.
 
 **Where the register lives (post-#278):** `waivers.json` holds the 2 MACHINERY-SANCTIONED ENV_UNAVAILABLE waivers (steps 6 + 39, the FPGA early-prototype and final sign-off), materialized by `waivers_materialize.py` with a sanctioned non-self approver. The HUMAN-JUDGMENT deferrals below sit in `waivers.json.template` and are NOT yet approved — their `approver` is a placeholder that `waivers_schema_check.py` rejects, so they cannot ship as a green sign-off until a person fills it in.
 
@@ -49,9 +67,14 @@ PASS_WITH_WAIVERS`), so it is deliberately absent from the register; FPGA early-
 DE10-class board-pin contract for this IC class — deferred to board bring-up,
 not executed-PASS; `reports/phase2/fpga/on_board_pass.json` verdict `SKIP`);
 and formal full-stack functional proof beyond reset-safety (deferred to the AI
-assertion-gen / equivalence-miter track for a full arithmetic proof — NOTE: the
-reset-safety `abc pdr` proof claimed below is not yet shipped with its `sby/`
-artifact, so treat it as claimed-not-yet-evidenced until that lands).
+assertion-gen / equivalence-miter track for a full arithmetic proof — NOTE: an
+earlier version of this file said the reset-safety `abc pdr` proof was
+"claimed-not-yet-evidenced"; that is now stale. A negative-controlled proof of
+that property ships under `phase2/stage1/formal/reset_safety/`, and this
+campaign's own formal artefacts — described in a further stale note as never
+published — ship under `phase2/stage1/formal/campaign_v1558/`. What remains
+outstanding is the full arithmetic proof, which was never attempted: no
+equivalence miter and no datapath property exists in either evidence set).
 
 **DFT disclosure:** the at-speed gates (DT1/DT2/DT3) are PASS with `scan_flops
 = 65` and **test_coverage 100%** — but **fault_coverage is 40.5%**
