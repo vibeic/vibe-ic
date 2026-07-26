@@ -220,7 +220,21 @@ _L21_OFF_KEYS = ("switchable", "power_down", "can_power_down", "off_capable",
 
 
 def parse_l21(fields):
-    """Extract (domains, iso_domains, ls_domains) from an L21 fields dict."""
+    """Extract (domains, iso_domains, ls_domains) from an L21 fields dict.
+
+    #312-family: `isolation_cells` and `level_shifters` are read here and
+    populated by NO producer — measured across 311 real L-docs, the keys are
+    present in 27 and carry a value in 0. On this fallback path both sets are
+    therefore ALWAYS empty, and `crossing_missing` reads an empty set as "no
+    strategy scopes this domain" — so every crossing that requires protection
+    is reported UNPROTECTED. That is a false FAIL, and it can only fire on
+    exactly the designs that reach this path (a populated `power_domains`,
+    itself present in only 3 of 30).
+
+    An absent field means the layer SAYS NOTHING about protection, which is
+    not the same as saying there is none. `l21_states_protection` reports
+    which of the two it was, so the caller can decline to judge instead of
+    manufacturing a finding out of a missing producer."""
     domains = {}
     iso_domains = set()
     ls_domains = set()
@@ -242,6 +256,9 @@ def parse_l21(fields):
                 elements.add(e)
         domains[name] = {"voltage": volt, "off_capable": off,
                          "elements": elements}
+    global _L21_STATED_PROTECTION
+    _L21_STATED_PROTECTION = bool(fields.get("isolation_cells")
+                                  or fields.get("level_shifters"))
     for iso in fields.get("isolation_cells") or []:
         if isinstance(iso, dict) and iso.get("domain"):
             iso_domains.add(_norm(iso["domain"]))
@@ -358,6 +375,17 @@ def required_protection(drv, recv, domains):
     return needs_iso, needs_ls
 
 
+# True once an L21 parse has seen a NON-EMPTY isolation/level-shifter list.
+# False means the power-intent layer said nothing about protection at all.
+_L21_STATED_PROTECTION = True
+
+
+def l21_states_protection() -> bool:
+    """Did the last L21 parse find ANY protection statement? False means the
+    layer is silent, not that the design is unprotected."""
+    return _L21_STATED_PROTECTION
+
+
 def crossing_missing(crossing, domains, iso_domains, ls_domains):
     """Return the list of protections a crossing REQUIRES but the UPF strategy
     does not cover.  Empty list => protected."""
@@ -393,6 +421,22 @@ def audit(domains, iso_domains, ls_domains, crossings):
                 why.append("borders a power-down-capable domain")
             if needs_ls:
                 why.append("crosses a voltage boundary")
+            if not l21_states_protection():
+                # The layer is SILENT about protection (the fields exist in
+                # the schema and no producer fills them). Reporting
+                # UNPROTECTED here states a fact the input never provided.
+                findings.append({
+                    "severity": "WARNING",
+                    "rule": "PROTECTION_UNSTATED",
+                    "message": (
+                        f"net '{c['net']}' crosses {c['driver_domain']} -> "
+                        f"{c['receiver_domain']} ({'; '.join(why)}), and the "
+                        f"power-intent layer states NO isolation or "
+                        f"level-shifter strategy at all — so whether it is "
+                        f"protected CANNOT be determined from this input. "
+                        f"Not reported as unprotected: an absent statement "
+                        f"is not a statement of absence.")})
+                continue
             findings.append({
                 "severity": "ERROR", "rule": "UNPROTECTED_SIGNAL_CROSSING",
                 "message": (
