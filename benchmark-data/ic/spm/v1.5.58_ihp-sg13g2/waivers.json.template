@@ -21,15 +21,20 @@
     {
       "id": 5,
       "_step_name": "formal_full_stack",
-      "reason": "Formal verification scoped to reset-safety only (RESULT.md claims a SymbiYosys 'abc pdr' proof of p==0 one cycle after reset — NOTE: no formal/ artifact ships in this folder, review finding F4). Full-datapath functional proof is deferred to the AI assertion-gen / equivalence-miter track.",
+      "reason": "Formal verification is scoped to ONE reset-safety property: p == 0 one cycle after rst, proved by SymbiYosys engine `abc pdr` (\"Proved output 0 in frame 2\"), with a negative control that FAILS when the reset assignment is deleted — so the property discriminates and the pass is not vacuous. The deferral is therefore NOT about the reset claim: it is that NO datapath / arithmetic property and NO equivalence miter has ever been run for this design, in any cell. That track is deferred to the AI assertion-gen / equivalence-miter work.",
       "approver": "__TODO_HUMAN_NAME__",
       "ticket": "TAPEOUT-SPM-IHP-FORMAL",
       "verdict_tier": "HUMAN_JUDGMENT",
       "review_required": true,
       "evidence": [
-        "RESULT.md"
+        "phase2/stage1/formal/reset_safety/spm_reset_safety.sby",
+        "phase2/stage1/formal/reset_safety/sby_reset_safety.log",
+        "phase2/stage1/formal/reset_safety/sby_reset_safety_NEGATIVE_CONTROL.log",
+        "phase2/stage1/formal/reset_safety/FORMAL_EVIDENCE.md",
+        "reports/phase2/gates/formal_evidence.json"
       ],
-      "reviewer_action": "Ship the SymbiYosys run directory (or its PASS log) for the reset-safety claim, and run the full arithmetic miter before claiming datapath equivalence."
+      "reviewer_action": "Run a full arithmetic equivalence miter (RTL vs gate netlist) before claiming datapath equivalence. The reset-safety evidence itself needs no further action.",
+      "_superseded_note": "This entry previously read 'no formal/ artifact ships in this folder (review finding F4)' and asked the reviewer to ship the SymbiYosys run directory. Both statements were made obsolete when the campaign artefacts were recovered and published (#411/#415): phase2/stage1/formal/ now carries 12 tracked files. Corrected here so the waiver does not ask for work that is already done, and does not assert an absence that is false. `approver` is deliberately left at its placeholder — this correction is a factual repair, NOT a sign-off."
     }
   ]
 }
