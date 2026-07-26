@@ -183,6 +183,24 @@ For each actionable issue:
      `## 驗收` / acceptance section, say so explicitly with the
      `無驗收區` disclosure wording (see Step 4) and fall back to a
      reproduce-the-`現象` end-state instead.
+   - **(5a-i) A CHECKER CHANGE IS NOT AN ARTEFACT FIX.** When the
+     issue reports a defective **artefact** (a report asserting a
+     verdict it cannot back, a ledger field that was never measured,
+     a document citing evidence it does not ship), adding or fixing
+     the gate that *detects* it does NOT satisfy 5a. The acceptance
+     re-run must be against **the named artefact**, and the artefact
+     must have CHANGED. Two closes in two days broke this
+     (vibe-ic#381): #366 was closed by landing an evidence gate and
+     #365 by fixing an emitter, while all three
+     `formal_evidence.json` still asserted PASS citing a `.sby` with
+     zero files at that path, and 71 provenance entries still carried
+     an unmeasured `duration_ms: 0`. Both were still reproducible on
+     `main` after the close. This is the repo's own core defect —
+     a check that reports a problem while the flow ships anyway —
+     turned on its issue hygiene. **A gate reading PASS because the
+     instance is in its debt register is NOT the artefact being
+     fixed**; that is precisely the state that reads as done and is
+     not.
    - **(5b)** Reproduce the original failing scenario and confirm it
      now passes.
    - **(5c)** Run the FULL plugin test suite the CI way (see Step 3 —

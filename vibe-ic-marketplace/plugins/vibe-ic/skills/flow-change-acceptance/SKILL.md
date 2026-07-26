@@ -171,3 +171,27 @@ Still prose, worth promoting:
 - every new gate's tests must contain at least one assertion that FAILS on the
   parent revision (§1 — mechanically checkable by running them against `HEAD~1`)
 - corpus-sweep evidence should be an artefact, not a claim in a PR body (§2)
+
+## Compliance gate (mandatory)
+
+This skill ships `compliance.yaml`, and its patterns are enforced by
+`tests/test_compliance.py` in this directory. Before landing a change that
+claims to follow this doctrine, run the deterministic gate:
+
+```bash
+python3 -m pytest -q \
+    plugins/vibe-ic/skills/flow-change-acceptance/tests/test_compliance.py
+```
+
+The gate is the point of the doctrine, not a formality: every criterion
+above exists because a change that skipped it shipped a false certificate.
+A criterion asserted in prose and not measured by the gate is exactly the
+kind of unenforced declaration §5 tells you to refuse.
+
+**This section was missing until 2026-07-26.** The skill was landed during
+the #306/#307/#312 campaign with its `compliance.yaml` and tests in place
+but no Compliance-gate section in `SKILL.md`, so
+`test_every_skill_md_has_compliance_gate` had been RED on `main` — unseen,
+because CI runs the cadence-correct targeted subset rather than the full
+suite. A doctrine file about unenforced declarations shipped with an
+unenforced declaration of its own.
