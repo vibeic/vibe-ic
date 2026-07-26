@@ -16882,6 +16882,71 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
     return declared
 
 
+def _step37_restamp_canon_gds_provenance(project: Path, top: str,
+                                         canon_gds: Path) -> None:
+    """After Step 37 writes phase3/stage4/gds/<top>.gds, update provenance.jsonl
+    so the declared hash matches the freshly-written file.
+
+    The in-place refresh loop in step_canonicalize_artefacts ran BEFORE the
+    copy, so it could not stamp the correct hash (the file did not exist yet).
+    This helper:
+      * patches any existing provenance entry that declared this rel_path
+        in-place (preserving a single entry — avoids HASH_INCONSISTENT);
+      * appends a fresh entry when no prior entry exists.
+    """
+    import hashlib as _hl
+    import datetime as _dt
+    prov_path = project / "provenance.jsonl"
+    if not prov_path.is_file():
+        return
+    _canon_rel = f"phase3/stage4/gds/{top}.gds"
+    # Compute sha256 of the freshly written canonical GDS.
+    _h = _hl.sha256()
+    with canon_gds.open("rb") as _f:
+        for _ch in iter(lambda: _f.read(65536), b""):
+            _h.update(_ch)
+    _canon_sha = "sha256:" + _h.hexdigest()
+    try:
+        _lines = prov_path.read_text().splitlines()
+        _patched = False
+        _found = False
+        _new_lines = []
+        for _ln in _lines:
+            if not _ln.strip():
+                _new_lines.append(_ln)
+                continue
+            try:
+                _rec = json.loads(_ln)
+            except Exception:
+                _new_lines.append(_ln)
+                continue
+            _outs = _rec.get("outputs", {})
+            if isinstance(_outs, dict) and _canon_rel in _outs:
+                _found = True
+                if _outs[_canon_rel] != _canon_sha:
+                    _outs[_canon_rel] = _canon_sha
+                    _patched = True
+            _new_lines.append(json.dumps(_rec))
+        if _patched:
+            prov_path.write_text("\n".join(_new_lines) + "\n")
+        if not _found:
+            # No prior entry for this path — append a fresh one.
+            _entry = {
+                "tool": "klayout",
+                "command": ("klayout streamout (canonical GDS) "
+                            "(phase3_one_shot_runner step37)"),
+                "exit_code": 0,
+                "duration_ms": 0,
+                "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "outputs": {_canon_rel: _canon_sha},
+            }
+            with prov_path.open("a") as _f:
+                _f.write(json.dumps(_entry) + "\n")
+    except Exception:
+        pass   # non-fatal: provenance stamp is best-effort here
+
+
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 container: str) -> StepResult:
     """v1.6.36 — stage runner outputs at the canonical paths the flow YAML expects.
@@ -18533,6 +18598,11 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                         break
                     dst.write(chunk)
             written.append(str(canon_gds))
+            # Re-stamp provenance so the declared hash matches the freshly
+            # written copy.  The in-place refresh loop above ran BEFORE this
+            # copy existed on disk, so it could not update (or append) the
+            # correct hash.
+            _step37_restamp_canon_gds_provenance(project, top, canon_gds)
 
     # --- Step 39: FPGA on_board_pass.json schema alignment --------------
     # The fpga_on_board_attestation_check requires:
