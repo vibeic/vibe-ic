@@ -69,6 +69,16 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     "test_flow_condition_reachability_check.py",
     "test_spec_conformance_check.py",
     "test_rtl_hygiene_lint.py",
+    # vibe-ic#381 aftermath — the SKILL-set schema invariants (every SKILL.md
+    # carries a Compliance gate; every compliance.yaml has a SKILL.md). Same
+    # argument as the reachability guard above, and it was not hypothetical:
+    # `flow-change-acceptance` shipped WITHOUT its Compliance-gate section and
+    # `test_every_skill_md_has_compliance_gate` sat RED on main unnoticed,
+    # because a change to `skills/*/SKILL.md` does not select a test file
+    # under `programs/tests/`. The PR that breaks a global invariant over the
+    # shipped skills is exactly the PR whose changed-file set cannot reach the
+    # test that guards it. ~4 s for 15 tests — cheap enough for the floor.
+    "test_tools_and_integration.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose
