@@ -143,7 +143,13 @@ def tracked_files(root: Path) -> Optional[set]:
     names = [n for n in out.split("\0") if n]
     if not names:
         return None
-    return {(root / n).resolve() for n in names}
+    # LOGICAL paths, never `resolve()`. `benchmark-data/ic` carries 787
+    # symlinks; resolving follows them to targets that exist on the author's
+    # machine and not in a fresh checkout, which is precisely how this gate
+    # enumerated 440 documents locally and 422 in CI on the SAME commit. With
+    # logical relative paths the verdict is a pure function of the git index
+    # and therefore identical in every environment.
+    return {n for n in names}
 
 
 def _is_citation(tok: str) -> bool:
@@ -164,29 +170,31 @@ def resolve_citation(md: Path, cite: str, root: Path,
     docstring. A document-directory-only resolver reports ~30% more
     findings, all of them false.
     """
+    _ = tracked  # membership is tested on logical paths below
     if Path(cite).is_absolute():
         # An absolute path is non-portable by construction: it can only
         # resolve on the machine that wrote it, so it substantiates nothing
         # for any other reader. Never resolvable, regardless of this host.
         return None
+    import posixpath
     try:
-        base = md.parent.resolve()
-        stop = root.resolve()
-    except OSError:
+        rel_dir = md.parent.relative_to(root).as_posix()
+    except ValueError:
         return None
+    if rel_dir == ".":
+        rel_dir = ""
     while True:
-        cand = base / cite
-        try:
-            if cand.is_file() and (tracked is None
-                                   or cand.resolve() in tracked):
-                return cand
-        except OSError:
-            pass
-        if base == stop or base == base.parent:
+        cand_rel = posixpath.normpath(
+            posixpath.join(rel_dir, cite) if rel_dir else cite)
+        if not cand_rel.startswith(".."):
+            if tracked is not None:
+                if cand_rel in tracked:
+                    return root / cand_rel
+            elif (root / cand_rel).is_file():
+                return root / cand_rel
+        if not rel_dir:
             return None
-        if stop not in base.parents:
-            return None
-        base = base.parent
+        rel_dir = posixpath.dirname(rel_dir)
 
 
 # JSON GATE REPORTS (#366). A report that declares a `verdict` AND names the
@@ -230,9 +238,16 @@ def scan(root: Path,
     dangling: List[Dict[str, str]] = []
     cited = 0
     docs = 0
-    for md in sorted(root.rglob("*.md")):
-        if tracked is not None and md.resolve() not in tracked:
-            continue
+    # ENUMERATE FROM THE TRACKED LIST, never from a filesystem walk. A
+    # walk-then-filter enumerated 440 documents locally and 422 in CI on the
+    # SAME commit — directory traversal is environment-dependent (symlinks,
+    # traversal order, name encoding) in ways `git ls-files` is not. The
+    # baseline is a set of digests, so any enumeration difference between
+    # where it is WRITTEN and where it is CHECKED shows up as phantom
+    # "resolved" entries. One source of truth for what exists.
+    _mds = (sorted(root / t for t in tracked if t.lower().endswith(".md"))
+            if tracked is not None else sorted(root.rglob("*.md")))
+    for md in _mds:
         try:
             text = md.read_text(errors="replace")
         except OSError:
@@ -247,9 +262,9 @@ def scan(root: Path,
                     "doc": str(md.relative_to(root)),
                     "citation": tok,
                 })
-    for js in sorted(root.rglob("*.json")):
-        if tracked is not None and js.resolve() not in tracked:
-            continue
+    _jsons = (sorted(root / t for t in tracked if t.lower().endswith(".json"))
+              if tracked is not None else sorted(root.rglob("*.json")))
+    for js in _jsons:
         refs = _json_artifact_refs(js)
         if refs:
             docs += 1

@@ -370,3 +370,40 @@ def test_declared_expansion_is_allowed_and_recorded(tmp_path):
     assert len(d["unresolved"]) == 2
     assert d["scope_expansion"]["previous_size"] == 1
     assert reason in d["scope_expansion"]["reason"]
+
+
+# ── the symlink divergence that made CI and local disagree ──────────────────
+# benchmark-data/ic carries 787 symlinks. Identity built with `Path.resolve()`
+# FOLLOWS them, so a tracked file's identity became its target — which exists
+# on the author's machine and not in a fresh checkout. The gate enumerated 440
+# documents locally and 422 in CI on the SAME commit, and the baseline written
+# in one place could never match the other. Identity is now the LOGICAL path
+# from the git index, so the verdict is a pure function of the index.
+
+def test_symlinked_directory_does_not_change_the_verdict(tmp_path):
+    root = _repo(tmp_path)
+    (root / "real").mkdir()
+    _doc(root, "real/EV.md", "see `proof.log`\n")
+    (root / "real" / "proof.log").write_text("log\n")
+    (root / "link").symlink_to("real")          # tracked symlink, as in the tree
+    _git(root, "add", "-Af")
+    _git(root, "commit", "-q", "-m", "tree with a symlink")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    # the document is counted ONCE — enumeration comes from the index, not a
+    # filesystem walk that would descend through the symlink as well.
+    assert "1 citation(s) checked" in r.stdout, r.stdout
+
+
+def test_verdict_is_a_pure_function_of_the_index(tmp_path):
+    """Untracked files must not move the verdict in EITHER direction — that
+    property is what makes a baseline written on one machine valid on
+    another."""
+    root = _repo(tmp_path)
+    _doc(root, "EV.md", "see `a.log`\n")
+    _git(root, "add", "-A"); _git(root, "commit", "-q", "-m", "doc")
+    before = _run(root, tmp_path / "bl.json").stdout
+    (root / "a.log").write_text("untracked artifact\n")      # would "fix" it
+    _doc(root, "extra.md", "see `b.log`\n")                  # would add debt
+    after = _run(root, tmp_path / "bl.json").stdout
+    assert before.split("unresolved now")[1] == after.split("unresolved now")[1]
