@@ -8740,6 +8740,22 @@ def step_phase3(project: Path, top_name: str,
             detail_obj = json.loads(summary_json.read_text())
         except Exception:
             pass
+    # The PDK the back end ACTUALLY signed off on is only knowable once
+    # phase3_one_shot.json exists — which is now. If it differs from the
+    # declared L19 target, emit the disclosure here, from measured values.
+    # Runs regardless of verdict: a substitution is exactly as material on
+    # a failing run as on a passing one. The emitter is a no-op when the
+    # families match, so it cannot manufacture a disclosure where no
+    # substitution occurred.
+    _emitter = PROGRAMS_DIR / "pdk_substitution_disclosure_emit.py"
+    if _emitter.is_file():
+        try:
+            _erc, _eout, _eerr = _run(
+                ["python3", str(_emitter), str(project)], timeout=120)
+            for _ln in (_eout or "").strip().splitlines()[:4]:
+                print(f"      {_ln}")
+        except Exception as _exc:
+            print(f"      pdk_substitution_disclosure_emit: SKIPPED ({_exc})")
     verdict = (detail_obj.get("verdict")
                if isinstance(detail_obj, dict) else None)
     if verdict == "PASS":
