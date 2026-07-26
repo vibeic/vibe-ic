@@ -29,7 +29,13 @@ HONEST DEGRADATION (§4.05)
 A missing KLayout, a missing engine, or a PDK that declares no fill config is a
 NAMED, DISCLOSED skip (rc 2 + the `VACUOUS_PASS:` sentinel -> VACUOUS-PASS in the
 flow report), never a silent "filled". A run that cannot reach the target on some
-layer is PARTIAL -> FAIL with the achieved worst-window density disclosed. Note
+layer is PARTIAL, with the achieved worst-window density disclosed. PARTIAL ->
+FAIL (and the filled GDS is NOT promoted) when any layer is below the FOUNDRY
+floor the config was derived from; PARTIAL -> PASS with an explicit
+`PARTIAL-ABOVE-FLOOR` disclosure when the miss is only against this plugin's own
+floor+margin target and every layer still clears the foundry rule, because
+shipping the UNFILLED GDS to sign-off in that case manufactures density
+violations a DRC-clean filled layout would not have. Note
 the exit-code remap versus the fork's reference wrapper: rc 3 is this plugin's
 PASS_WITH_WAIVERS code, so the disclosed skip is rc 2 here.
 
@@ -141,6 +147,91 @@ def verify_only(project: Path, report: Optional[str]) -> Dict[str, Any]:
     return res
 
 
+def _foundry_floor(cfg: Dict[str, Any]) -> Optional[float]:
+    """The FOUNDRY density rule threshold (fraction) the config was derived
+    from, or None when the config does not declare one.
+
+    `metal_fill_config_gen` parses the sign-off deck's own coverage rule
+    (`… * 100 < 30`) and records it as `_derivation.density_floor_pct`, then
+    sets every layer's `target` to `floor + margin`. Only the FLOOR is the
+    foundry's rule; the target is this plugin's own headroom. A config that
+    declares no floor (a hand-written PDK-bridge one) returns None and keeps
+    the strict promote-on-target behaviour — an absent floor is not evidence
+    that some lower number would pass."""
+    der = cfg.get("_derivation")
+    if not isinstance(der, dict):
+        return None
+    pct = der.get("density_floor_pct")
+    if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+        return None
+    if not (0.0 < float(pct) < 100.0):
+        return None
+    return float(pct) / 100.0
+
+
+def _clears_foundry_floor(res: Dict[str, Any],
+                          cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Disclosure dict when a PARTIAL fill nonetheless clears the FOUNDRY floor
+    on EVERY layer, else None.
+
+    Why this exists — the defect it removes
+    ---------------------------------------
+    Promotion used to require `verdict == PASS`, i.e. every layer reaching
+    `floor + margin`. MEASURED on an organic gf180mcuD run: metal3 reached
+    0.3497 against a 0.35 target — short of this plugin's own headroom by
+    0.0003, and 0.0497 ABOVE the foundry's 0.30 rule. The whole fill was
+    therefore left unpromoted, and the sign-off DRC consumed the UNFILLED GDS:
+    6 density violations (M1.4 M2.4 M3.4 M4.4 M5.4 MT.3) on a layout whose
+    filled sibling is DRC-CLEAN. Discarding the better artefact and shipping
+    the worse one to sign-off is not conservatism — it manufactures the very
+    violations the fill exists to prevent.
+
+    This does NOT widen any constraint: the foundry's own DRC deck is
+    untouched and still judges whatever is promoted. It only stops the flow
+    from throwing away a layout that satisfies that deck.
+
+    FAIL-CLOSED, so "has a density number" can never become the pass
+    condition:
+      * no `_derivation.density_floor_pct` in the config  -> None
+      * a layer missing a numeric achieved density        -> None
+      * ANY layer still below the floor                   -> None
+      * ANY layer `over_max`                              -> None
+    The achieved density used per layer is the WORST of the whole-die and
+    worst-window figures, so a layer that clears the rule on average while
+    failing it in some window does not promote."""
+    floor = _foundry_floor(cfg)
+    if floor is None:
+        return None
+    layers = res.get("layers")
+    if not isinstance(layers, list) or not layers:
+        return None
+    worst_name, worst_val = None, None
+    for lay in layers:
+        if not isinstance(lay, dict):
+            return None
+        if lay.get("over_max"):
+            return None
+        vals = [lay.get(k) for k in ("density_after", "worst_window_after")]
+        vals = [v for v in vals
+                if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        if not vals:
+            return None                      # no measured density -> refuse
+        got = min(float(v) for v in vals)
+        if got < floor:
+            return None
+        if worst_val is None or got < worst_val:
+            worst_name, worst_val = lay.get("name"), got
+    return {
+        "foundry_floor": round(floor, 6),
+        "worst_layer": worst_name,
+        "worst_layer_density": round(worst_val, 6) if worst_val is not None
+        else None,
+        "note": ("target (floor+margin) not reached on every layer, but every "
+                 "layer clears the FOUNDRY floor the config was derived from "
+                 "— promoted so the sign-off DRC judges the FILLED layout"),
+    }
+
+
 def run(project: Path, gds: Optional[str], config: Optional[str],
         out: Optional[str], in_place: bool, cell: Optional[str],
         report: Optional[str]) -> Dict[str, Any]:
@@ -216,7 +307,15 @@ def run(project: Path, gds: Optional[str], config: Optional[str],
     res["config_source"] = cfg_src
     res["runner"] = f"{runner.kind}:{runner.detail}"
     res["gds_in"] = str(gds_path)
-    if res.get("verdict") == "PASS" and staged.is_file():
+    promote = res.get("verdict") == "PASS"
+    if not promote and res.get("verdict") == "PARTIAL":
+        # Target missed somewhere — promote anyway IFF every layer still
+        # clears the foundry's own rule (see _clears_foundry_floor).
+        above = _clears_foundry_floor(res, cfg)
+        if above is not None:
+            res["promoted_on_foundry_floor"] = above
+            promote = True
+    if promote and staged.is_file():
         if in_place:
             staged.replace(dest)
         res["gds_out"] = str(dest)
@@ -275,9 +374,23 @@ def main(argv=None) -> int:
     if verdict == "PASS":
         return PASS
     if verdict == "PARTIAL":
+        above = res.get("promoted_on_foundry_floor")
+        if above:
+            # Disclosed, never silent: the target was missed, the FOUNDRY floor
+            # was not. The filled GDS is promoted and the sign-off DRC — which
+            # is not modified by any of this — judges it.
+            print("metal_fill_emit: PARTIAL-ABOVE-FLOOR — this plugin's own "
+                  "target (floor+margin) was NOT reached on every layer, but "
+                  "every layer clears the FOUNDRY floor "
+                  f"{above.get('foundry_floor')} (worst: "
+                  f"{above.get('worst_layer')} at "
+                  f"{above.get('worst_layer_density')}); the FILLED GDS is "
+                  "promoted and the sign-off DRC judges it")
+            return PASS
         print("metal_fill_emit: FAIL — density target NOT reached on every "
-              "layer (achieved densities disclosed above); the foundry CMP "
-              "floor is not met")
+              "layer (achieved densities disclosed above), and at least one "
+              "layer is BELOW the foundry floor — the filled GDS is NOT "
+              "promoted")
         return FAIL
     print(f"metal_fill_emit: FAIL — {res.get('reason') or res.get('error')}")
     return FAIL
