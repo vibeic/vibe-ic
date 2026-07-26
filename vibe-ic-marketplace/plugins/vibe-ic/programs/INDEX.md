@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 925
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 925)
+- **Total programs (excluding helpers / shims):** 926
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 926)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 916 |
+| `any` | 917 |
 
 ## Alphabetical listing
 
@@ -237,6 +237,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `def_stage_progression_check` | any | v0.47 | Catch fabricated PnR stage DEF files. |
 | `defect_artifact_fixture_check` | any | v0.2.98 | v0.2.98 |
 | `defect_artifact_snapshot` | any | v0.2.98 | v0.2.98 |
+| `deliverable_verdict_consistency_check` | any | — | a deliverable may not contradict |
 | `derived_clock_sdc_required_check` | any | — | Verify any register-divided clock |
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and |
 | `design_one_shot_runner` | any | Wave 45 | the DESIGN one-shot runner (Phase 1 -> Phase 2: |
@@ -997,7 +998,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (916 programs)
+### `any` (917 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1207,6 +1208,7 @@ _(no programs in this group)_
 - `def_stage_progression_check` — Catch fabricated PnR stage DEF files.  _[v0.47]_
 - `defect_artifact_fixture_check` — v0.2.98  _[v0.2.98]_
 - `defect_artifact_snapshot` — v0.2.98  _[v0.2.98]_
+- `deliverable_verdict_consistency_check` — a deliverable may not contradict
 - `derived_clock_sdc_required_check` — Verify any register-divided clock
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and
 - `design_one_shot_runner` — the DESIGN one-shot runner (Phase 1 -> Phase 2:  _[Wave 45]_

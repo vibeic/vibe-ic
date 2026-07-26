@@ -1229,6 +1229,20 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "skill_compliance_triangle_check",
     "testbench_exists_check",
     "tester_oracle_health_check",
+    # The deliverable may not contradict the orchestrator it summarises.
+    # MEASURED escape (spm × ihp-sg13g2, 8HD-8, 2026-07-26): RESULT.md written
+    # 01:39 with headline `PASS_WITH_WAIVERS`; a 09:44 invocation rewrote
+    # reports/orchestrator/vibe_ic_one_shot.json to `verdict: FAIL`
+    # (halted_at=phase3) and nothing re-read it, so the run SHIPPED a PASS over
+    # its own FAIL with every gate green. Compares the deliverable's own
+    # headline (agent-produced markdown) against the runner's JSON — two
+    # independently-produced values — and fails ONLY the escape direction
+    # (deliverable PASS over orchestrator FAIL). rc 2 = genuine SKIP when no
+    # headline is stated or no orchestrator report exists, so it stays silent
+    # on every project the defect cannot apply to: measured over 101 corpus
+    # deliverables (benchmark-data/ + benchmark_external/ + campaign_*), it
+    # fired ZERO times and compared 8.
+    "deliverable_verdict_consistency_check",
     # v1.6.4 RETRACTED (introduced regression on incomplete projects;
     # gates lack chip-AGNOSTIC silent-skip on missing prerequisites):
     # "coverage_metric_check"            — needs sim coverage report

@@ -72,6 +72,28 @@ exactly one state, each with the evidence it judged on:
                                     the verdict the deliverable reports is
                                     backed by nothing. FAIL (rc 1).
 
+  DELIVERABLE_CONTRADICTS_ORCHESTRATOR
+                                  — the deliverable READS as complete, but its
+                                    own HEADLINE VERDICT claims a PASS while the
+                                    orchestrator JSON it summarises records
+                                    FAIL. FAIL (rc 1).
+
+                                    Added 2026-07-26 from a MEASURED escape
+                                    (spm × ihp-sg13g2): RESULT.md written 01:39
+                                    with headline PASS_WITH_WAIVERS; a 09:44
+                                    invocation moved
+                                    ``reports/orchestrator/vibe_ic_one_shot.json``
+                                    to ``verdict: FAIL`` and nothing re-read it.
+                                    This gate returned COMPLETE / PASS — with
+                                    ``orchestrator_verdict='FAIL'`` sitting in
+                                    its OWN evidence dict. It had both numbers
+                                    and never compared them. The comparison now
+                                    lives in
+                                    ``deliverable_verdict_consistency_check``,
+                                    which sources the two values from different
+                                    producers (agent markdown vs runner JSON) so
+                                    it cannot be satisfied by re-stating either.
+
                                     Added 2026-07-21 from a MEASURED escape: a
                                     run dir holding 27 files, 100 % under
                                     ``input/``, carried a RESULT.md claiming
@@ -192,6 +214,7 @@ _EXIT = {
     "RUN_DIED_EARLY": 1,
     "DECLARED_ARTIFACT_MISSING": 1,
     "NO_OUTPUTS_ONLY_INPUTS": 1,
+    "DELIVERABLE_CONTRADICTS_ORCHESTRATOR": 1,
 }
 
 # The run-dir subtree that holds a run's INPUTS. A run whose every file lives
@@ -482,13 +505,38 @@ def check(run_dir: Path, *,
     artifacts_ok = not arts["missing"]
     deliverable_complete = bool(dl["complete"] and artifacts_ok and ao_ok)
 
+    # ── the CONTRADICTION escape (2026-07-26, measured) ─────────────────────
+    # Note what `evidence` above already holds: `orchestrator_verdict`. This
+    # gate has ALWAYS read the runner's verdict — and never compared it to what
+    # the deliverable CLAIMS. On spm × ihp-sg13g2 that produced
+    # `COMPLETE / PASS` over a RESULT.md reporting PASS_WITH_WAIVERS while
+    # `vibe_ic_one_shot.json` said FAIL, for 8 hours, with every gate green.
+    # `deliverable_verdict_consistency_check` supplies the missing half: it
+    # parses the deliverable's OWN headline (agent-produced markdown) and
+    # compares POLARITY against the runner's JSON. Best-effort import so a
+    # missing sibling degrades to the prior behaviour and never crashes a run.
+    contradiction = None
+    try:
+        import deliverable_verdict_consistency_check as _dvc
+        _c = _dvc.check(run_dir, result=deliverable)
+        evidence["deliverable_headline_verdict"] = _c.headline.get("token")
+        evidence["verdict_consistency_state"] = _c.state
+        if _c.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR":
+            contradiction = _c
+    except Exception:
+        evidence["verdict_consistency_state"] = "UNAVAILABLE"
+
     # ── classify ────────────────────────────────────────────────────────────
-    # The zero-output escape is judged FIRST, because it is the case where every
-    # other signal reads green: the deliverable is complete, no artifact was
-    # DECLARED so none can be missing, and the verdict would be PASS. Scoped to
-    # `deliverable_complete and not live` so the STUB / RUN_DIED_EARLY /
-    # IN_PROGRESS classifications below keep their exact prior semantics.
-    if deliverable_complete and census["input_only"] and not live["live"]:
+    # The contradiction and zero-output escapes are judged FIRST, because they
+    # are the cases where every other signal reads green: the deliverable is
+    # complete, no artifact was DECLARED so none can be missing, and the verdict
+    # would be PASS. Scoped to `deliverable_complete` so the STUB /
+    # RUN_DIED_EARLY / IN_PROGRESS classifications below keep their exact prior
+    # semantics.
+    if deliverable_complete and contradiction is not None:
+        state, verdict, reason = (
+            "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", "FAIL", contradiction.reason)
+    elif deliverable_complete and census["input_only"] and not live["live"]:
         state, verdict, reason = "NO_OUTPUTS_ONLY_INPUTS", "FAIL", (
             f"{deliverable.name} reads as complete ({dl['bytes']} B) but the run "
             f"produced ZERO outputs: all {census['files_total']} other file(s) in "
@@ -555,6 +603,14 @@ def check(run_dir: Path, *,
     # blocking list + claimed-verdict consistency
     if verdict == "FAIL":
         rep.blocking.append(f"{state}: {reason}")
+        if contradiction is not None:
+            # Carry the consistency gate's OWN both-sides evidence (deliverable
+            # path:line + the exact orchestrator report it compared against).
+            # `evidence['orchestrator_verdict']` above is the NEWEST-by-mtime
+            # report, which is a different selection rule from this gate's
+            # (aggregate-first), so without this the highlight can show two
+            # different orchestrator verdicts in one block.
+            rep.blocking.extend(contradiction.blocking)
         if claimed_verdict and str(claimed_verdict).upper() == "PASS":
             rep.blocking.append(
                 f"INCONSISTENCY: run CLAIMED verdict=PASS but produced no "
