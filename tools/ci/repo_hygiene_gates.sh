@@ -64,6 +64,14 @@ run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnosti
 # wired: 4 non-portable paths, all in a test fixture committed the day before.
 run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_check.py" "$PLUGIN"
 
+# Three more of `gatekeeper_review`'s gates. That program is the PR merge gate
+# and is in NO CI workflow, while this repo lands most work by DIRECT PUSH — so
+# 9 of its 11 gates had never run on a landing. These three are repo-STATE
+# checks (no base/head needed), so they belong here. Measured: 6s, 0s, 52s.
+run "watchdog compliance"           "$PLUGIN" python3 programs/loop_watchdog_compliance_check.py
+run "marketplace version sync"      "$PLUGIN" python3 programs/marketplace_version_sync_check.py
+run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit.py
+
 # vibe-ic#354 — the image-version gate is BLOCKING. It failed loudly on main
 # for six versions (0.2.29 pinned in 13 places, never published) while nothing
 # enforced it. --require-remote: the pinned tag must actually RESOLVE on ghcr;
