@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 964
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 964)
+- **Total programs (excluding helpers / shims):** 965
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 965)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 955 |
+| `any` | 956 |
 
 ## Alphabetical listing
 
@@ -631,6 +631,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_dielectric_fit` | any | — | Fit a self-consistent dielectric stack from a PDK's OWN shipped cap numbers. |
 | `pdk_fpga_gds_reverify_runner` | any | — | v1.6.232 (merged v229+v231). |
 | `pdk_otp_altsyncram_inject` | any | — | v1.6.224 (ORGANIC-20260512-followup-3). |
+| `pdk_registry_selectable_check` | any | — | a PDK the image ships must be |
 | `pdk_udp_synth_shim_gen` | any | — | v1.6.218 (ORGANIC-20260512-followup). |
 | `pdk_yosys_flatten_for_quartus` | any | — | v1.6.222 (ORGANIC-20260512-followup-2). |
 | `per_opcode_response_latency_table_check` | any | v0.119.30 | gate (LL-33) catching |
@@ -1036,7 +1037,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (955 programs)
+### `any` (956 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1638,6 +1639,7 @@ _(no programs in this group)_
 - `pdk_dielectric_fit` — Fit a self-consistent dielectric stack from a PDK's OWN shipped cap numbers.
 - `pdk_fpga_gds_reverify_runner` — v1.6.232 (merged v229+v231).
 - `pdk_otp_altsyncram_inject` — v1.6.224 (ORGANIC-20260512-followup-3).
+- `pdk_registry_selectable_check` — a PDK the image ships must be
 - `pdk_udp_synth_shim_gen` — v1.6.218 (ORGANIC-20260512-followup).
 - `pdk_yosys_flatten_for_quartus` — v1.6.222 (ORGANIC-20260512-followup-2).
 - `per_opcode_response_latency_table_check` — gate (LL-33) catching  _[v0.119.30]_

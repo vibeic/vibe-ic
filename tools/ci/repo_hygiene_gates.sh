@@ -74,6 +74,13 @@ run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_w
 # is the normal state for an outside contributor and is NOT a clean result.
 run "NDA scan of the TRACKED tree"      "$ROOT" python3 "$PG/nda_tracked_tree_scan.py"
 
+# vibe-ic#408/#389 — a PDK the image ships must be SELECTABLE by the name
+# `--pdk` matches, and every asset the registry DECLARES must resolve. The
+# name half is pure registry data and runs everywhere; the asset half needs
+# the image and reports SKIPPED (never folded into the PASS) when no
+# container is reachable, which is the normal CI state.
+run "PDK registry selectable"           "$ROOT" python3 "$PG/pdk_registry_selectable_check.py"
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired
