@@ -41717,22 +41717,25 @@ _MEMORY_NAME_TOKEN_RE = re.compile(
 # RULE separates those macro names from the English words the #612 guard
 # exists to reject. `fakeram45_2048x39` and `DIAGRAM_16x9` are the same string
 # shape — letters, an interior `ram`, an underscore, a `<digits>x<digits>`
-# group. Five successively tighter organisation-token rules, scored against a
-# 27-name set (real macro families vs aspect ratios / statistics units / hex
-# error codes / the #612 negatives in suffixed form):
+# group. Successively tighter "organisation-token" rules were scored against a
+# 27-name set (3 real generator macro families vs 24 aspect ratios /
+# statistics units / hex error codes), and the TIGHTEST one available —
+# morpheme anywhere, plus a `<digits>x<digits>` token with no whitespace, no
+# leading-zero (hex) operand, anchored at `_`/string-start, with the morpheme
+# immediately followed by a digit — is still wrong in BOTH directions:
 #
-#     organisation-token rule                       false-acc  false-rej
-#     `\d+\s*[xX]\s*\d+` anywhere                       20         0
-#     + no whitespace inside the token                  20         0
-#     + not a hex literal (no leading-zero operand)     15         0
-#     + anchored at an `_`/string-start boundary        15         0
-#     + morpheme immediately followed by a digit         3         1
+#     false ACCEPTS: diagram2_16x9, histogram8_256x8, program0_4x4
+#     false REJECTS: dffram_1024x32   (a real OpenLane macro family)
 #
-# The last row is the best lexical rule available and it is still wrong in
-# BOTH directions: it admits `diagram2_16x9` / `histogram8_256x8` /
-# `program0_4x4`, and it REJECTS `dffram_1024x32`, a real OpenLane macro
-# family. A `<digits>x<digits>` group is not evidence of a memory; it is
-# evidence of two numbers, and `0x40` is not even that.
+# A `<digits>x<digits>` group is not evidence of a memory; it is evidence of
+# two numbers, and `0x40` is not even that.
+# `test_the_tightest_lexical_rule_is_still_wrong_in_both_directions` names the
+# 27-name corpus, spells the rule as a regex and RE-DERIVES those two lists,
+# so this paragraph is checked rather than remembered. (An earlier version
+# shipped a five-row false-accept/false-reject table for the intermediate
+# rules; those four rows did not state their regexes and no re-derivation
+# reproduced their counts, so they are gone. The row that carried the
+# argument is the one above, and it reproduces exactly.)
 #
 # So the corroboration is taken from OUTSIDE the string, from the design's own
 # staged physical-macro artefacts. `fakeram45_2048x39` has
@@ -41744,8 +41747,23 @@ _MEMORY_NAME_TOKEN_RE = re.compile(
 # `input/pdk_local/` is this runner's own existing convention for
 # design-staged macro IP (the L4 OTP-IP walker reads the same directory), and
 # the benchmark documents cite it by path. STAGING BY SYMLINK COUNTS: see
-# `_staged_macro_scan`, which follows symlinks exactly as the two pre-existing
-# readers of this same directory already do.
+# `_staged_macro_scan`, which follows symlinks at least as far as either of
+# the two pre-existing readers of this same directory, and further than both
+# on one shape — MEASURED, on the real macro files, per staging shape:
+#
+#     shape                phase3 lib/lef/v   hardmacro rglob   this walker
+#     copied                    1/1/1                1             finds it
+#     file-symlink              1/1/1                1             finds it
+#     dir-symlink               1/1/1                0             finds it
+#     nested-dir-symlink        0/0/0                0             finds it
+#     root-symlink              1/1/1                1             finds it
+#
+# The siblings DISAGREE with each other on `dir-symlink`, so there is no
+# single sibling behaviour to copy; on `nested-dir-symlink` both are blind and
+# this walker is a strict superset. That is deliberate — this walker answers
+# "did the design stage this cell?", and a cell staged one directory deeper
+# was still staged — but it is a superset, not a match, and the claim that it
+# behaves "exactly as" its siblings was simply false.
 #
 # RESIDUAL, stated honestly and pinned by test: the conjunct that survives is
 # the memory morpheme, so a design that actually staged `DIAGRAM_16x9.lef`
@@ -41766,12 +41784,19 @@ _MEMORY_NAME_TOKEN_ANYWHERE_RE = re.compile(
     r"(ram|rom|sram|dram|cache|regfile|fifo|mem)",
     re.IGNORECASE,
 )
-# Tried in order, first match wins, so ORDER matters for exactly one pair:
-# `.v` is itself a suffix of `.sv`, so `.sv` must be tried first or `cell.sv`
-# yields the stem `cell.s`. No other pair here overlaps — `.gds` is NOT a
-# suffix of `.gds.gz` or of `.gdsii`, so those three are order-independent.
-# `.gds.gz` is listed for COVERAGE, not ordering: `.gz` is not in this tuple,
-# so without its own entry `chip.gds.gz` would match nothing at all.
+# Tried in order, first match wins — and MEASURED, the order does not matter:
+# no member of this tuple is a proper suffix of another, so at most one can
+# ever match a given filename. (`.v` is NOT a suffix of `.sv`: the leading dot
+# breaks it, `".sv".endswith(".v")` is False. An earlier version of this
+# comment claimed the opposite and made `.sv`-before-`.v` sound load-bearing.)
+# Reversing the tuple changes no stem this walker produces;
+# `test_artefact_suffixes_are_ordered_so_no_suffix_masks_a_longer_one`
+# re-derives that from the tuple, so a future entry that DOES overlap — `.gz`,
+# `.lib.gz` — fails there instead of silently truncating a stem.
+#
+# `.gds.gz` is listed for COVERAGE, and that part IS load-bearing: `.gz` is
+# not in this tuple, so without its own entry `chip.gds.gz` matches nothing at
+# all (verified by removing it — the stem comes back empty).
 _MEMORY_MACRO_ARTEFACT_SUFFIXES = (
     ".gds.gz", ".gdsii", ".lef", ".lib", ".gds", ".db", ".sv", ".v",
 )
@@ -41785,9 +41810,9 @@ _MEMORY_MACRO_MAX_FILES = 4096
 # Entries any ONE directory may consume before the scan moves on to the next
 # pending directory (see the fair-share note in `_staged_macro_scan`).
 _MEMORY_MACRO_DIR_SLICE = 64
-# Entries retained from any ONE directory listing. `heapq.nsmallest` keeps the
-# lexicographically smallest N, so the listing is deterministic and costs
-# O(N) memory even for a directory holding millions of entries.
+# Entries RETAINED from any ONE directory listing. `heapq.nsmallest` keeps the
+# lexicographically smallest N, which makes the listing deterministic. It does
+# NOT make the listing cheap — see `_capped_dir_listing` for what was measured.
 _MEMORY_MACRO_MAX_DIR_ENTRIES = 4096
 _MEMORY_MACRO_MAX_LEF_BYTES = 8 * 1024 * 1024
 # Cap on the reported truncation events themselves, so a pathological tree
@@ -41800,11 +41825,31 @@ def _capped_dir_listing(directory, cap):
     order, plus how many entries the listing actually had.
 
     `n_seen > len(entries)` is exactly the condition "this listing was cut",
-    which the caller reports. `heapq.nsmallest` is fed a GENERATOR, so it
-    cannot take its `sorted(...)` shortcut and really does keep only a
-    `cap`-sized heap: O(cap) memory whatever the directory holds. Propagates
-    OSError — `iterdir()` raises it lazily, inside `nsmallest` — so the caller
-    decides what an unreadable directory means."""
+    which the caller reports.
+
+    `heapq.nsmallest` is fed a GENERATOR, which has no `__len__`, so it cannot
+    take its `n >= len(iterable) -> sorted(...)` shortcut and really does keep
+    only a `cap`-sized heap of Path OBJECTS.
+
+    THAT IS NOT CONSTANT MEMORY, and an earlier version of this docstring said
+    it was ("O(cap) memory whatever the directory holds"). `Path.iterdir()` is
+    `for name in os.listdir(self)`, and `os.listdir` materialises every NAME
+    before yielding the first one, so the peak is LINEAR in the directory
+    size. Measured, tracemalloc peak bytes:
+
+        entries    os.listdir   cap=64      cap=4096    sorted(iterdir())
+         10 000     0.67 MB      0.69 MB     1.79 MB      2.59 MB
+         40 000     2.67 MB      2.69 MB     3.80 MB     10.38 MB
+        160 000    10.56 MB     10.58 MB    11.70 MB     41.29 MB
+
+    At `cap=64` this costs os.listdir plus ~20 KB; what the generator buys is
+    the ~4x against materialising a Path per entry, at every size — not a
+    bound. `_MEMORY_MACRO_MAX_FILES` is what bounds the walk;
+    `test_capped_listing_is_linear_in_the_directory_not_constant` pins the
+    shape so nobody re-derives the O(cap) claim from the heap size.
+
+    Propagates OSError — `iterdir()` raises it lazily, inside `nsmallest` — so
+    the caller decides what an unreadable directory means."""
     n_seen = 0
 
     def _counted():
@@ -41828,15 +41873,19 @@ def _staged_macro_scan(project):
       * every `MACRO <cell>` declaration inside a staged `*.lef` (one LEF may
         abstract several cells).
 
-    `truncation_events` is a list of `{"reason": ..., ...}` dicts, EMPTY on a
-    complete scan and non-empty whenever a cap or an unreadable directory cut
-    the walk short — i.e. whenever an ABSENT cell name may be an artefact of
-    the scan rather than a fact about the design.
+    `truncation_events` is a list of `{"reason": ..., ...}` dicts. It is empty
+    on a scan that read everything it reached, and carries a reason code for
+    each point at which the walk gave up on something. The abandonment points
+    are enumerated in the block comment below the entry loop, together with
+    which of them a test drives.
     `_v1_6_426_emit_memories` is what turns it into something a reader sees;
     see the `staged_macro_scan_truncated` block there.
 
-    Returns `(frozenset(), [])` — never raises — when `project` is None, is
-    not a path, has no `input/pdk_local/`, or is unreadable. Chip-AGNOSTIC."""
+    Never raises. `project` being None, not a path, or having no
+    `input/pdk_local/` yields `(frozenset(), [])` — nothing was staged and
+    nothing was lost. `input/pdk_local/` existing but not being STATABLE is a
+    different fact and yields a `staged_root_unreadable` event.
+    Chip-AGNOSTIC."""
     if project is None:
         return frozenset(), []
     try:
@@ -41846,8 +41895,21 @@ def _staged_macro_scan(project):
     try:
         if not root.is_dir():
             return frozenset(), []
-    except OSError:
-        return frozenset(), []
+    except OSError as exc:
+        # NOT the same as "no such directory". `is_dir()` re-raises anything
+        # outside pathlib's `_IGNORED_ERRNOS` (ENOENT / ENOTDIR / EBADF /
+        # ELOOP), so this branch means the entry is THERE and its status
+        # could not be read — EACCES when `input/pdk_local` is a symlink into
+        # a directory this process may not search, which is what symlinking a
+        # shared PDK into place looks like when the vault is locked down.
+        # Returning an empty set with an empty event list would make that
+        # indistinguishable from a design that stages nothing.
+        return frozenset(), [{
+            "reason": "staged_root_unreadable",
+            "path": str(_MEMORY_MACRO_STAGE_REL[0]) + "/"
+                    + str(_MEMORY_MACRO_STAGE_REL[1]),
+            "error": type(exc).__name__,
+        }]
 
     names: set = set()
     truncation: List[Dict[str, Any]] = []
@@ -41882,11 +41944,23 @@ def _staged_macro_scan(project):
         TARGET. That is what makes a directory-symlink loop terminate:
         `input/pdk_local/self -> .` and `vendor/up -> ..` both resolve onto a
         directory that has already been queued, so they are dropped instead of
-        walked again. A directory that disappears or becomes unreadable
-        between the listing and this call is dropped, not raised."""
+        walked again.
+
+        The caller has already stat'ed `directory` (that is how it knows it is
+        a directory), so a failure here needs the file to change underneath
+        the walk — a TOCTOU window, which no fixture in the test file can open
+        deterministically. It is reported anyway rather than dropped: a
+        directory the walk decided to enter and then did not is exactly the
+        shape of loss this block exists to make visible, and an unreported
+        branch is one nobody would find later."""
         try:
             st = directory.stat()
-        except OSError:
+        except OSError as exc:
+            _note({
+                "reason": "directory_unreadable",
+                "path": _rel(directory),
+                "error": type(exc).__name__,
+            })
             return
         key = (st.st_dev, st.st_ino)
         if key in seen_dirs:
@@ -41911,10 +41985,12 @@ def _staged_macro_scan(project):
     # follows). Three programs answering "what did the design stage?"
     # differently is a defect on its own.
     #
-    # Following a symlink raises three cases; each is decided here, and each
-    # is pinned by its own test:
-    #   * BROKEN symlink — `is_dir()` and `is_file()` both return False for
-    #     it, so the entry loop skips it and it never reaches `_enqueue`. A
+    # Following a symlink can land on four things. Each is decided here; the
+    # first three are pinned by their own test, the fourth by
+    # `test_symlink_into_an_unsearchable_directory_is_reported`:
+    #   * NEITHER DIRECTORY NOR REGULAR FILE — a broken symlink, but also a
+    #     FIFO, socket or device node. `is_dir()` and `is_file()` both return
+    #     False, so the entry loop skips it and it never reaches `_enqueue`. A
     #     dangling `foo.lef` is not evidence that `foo` was staged.
     #   * DIRECTORY LOOP — `_enqueue` keys every directory on the
     #     `(st_dev, st_ino)` of its followed target, so a self- or
@@ -41925,6 +42001,17 @@ def _staged_macro_scan(project):
     #     this function (file stems, and `MACRO <cell>` headers out of `*.lef`
     #     bodies), and a name is only ever tested for membership against an
     #     identifier the design's OWN documents already wrote down.
+    #   * TARGET THERE BUT NOT STATABLE — `is_dir()` RAISES, because EACCES is
+    #     not one of pathlib's `_IGNORED_ERRNOS`. Symlinking a shared PDK out
+    #     of a directory this process may not search hits exactly this, and
+    #     round 3 dropped it in silence: `staged=[] events=[]`, so the design
+    #     read as one with no such macro. It is now an `entry_unreadable`
+    #     event. MEASURED on that same shape, the two sibling readers do
+    #     something else again and neither reports a shortfall:
+    #     `_discover_local_macros` RAISES PermissionError out of its own
+    #     `is_dir()`, and `rglob("*.lef")` returns an empty list. No claim is
+    #     made that the three agree here; see the shape table above for the
+    #     other places they do not.
     #
     # ORDER IS FAIR-SHARE, NOT DIRECTORY-NAME ORDER. Each pending directory
     # yields at most `_MEMORY_MACRO_DIR_SLICE` entries and then goes to the
@@ -41934,10 +42021,51 @@ def _staged_macro_scan(project):
     # alphabet and push the real macro out of the set. Which directory wins
     # must not be decided by its name.
     #
-    # TRUNCATION IS REPORTED, NOT SILENT. Every cap that cuts the walk short —
-    # and an unreadable directory, which has the same consequence — appends a
-    # reason code to `truncation`, including a `truncation_report_capped`
-    # marker when the report's OWN bound bites.
+    # WHERE THIS SCAN GIVES UP, AND WHAT IT SAYS WHEN IT DOES. Not a
+    # guarantee — an enumeration, because round 3 shipped the guarantee
+    # ("every cap ... appends a reason code") and a symlink into an
+    # unsearchable directory walked straight through it. Every `return` or
+    # `continue` IN THIS FUNCTION that abandons a cell name is listed here
+    # with the reason code it emits and the test that drives it:
+    #
+    #   staged_root_unreadable      root `is_dir()` raised
+    #                               <- test_staged_root_symlinked_into_an_
+    #                                  unsearchable_directory_is_reported
+    #   directory_unreadable        `iterdir()` raised
+    #                               <- test_an_unreadable_directory_is_
+    #                                  reported_like_a_cap
+    #   directory_unreadable        `_enqueue` stat raised — TOCTOU ONLY,
+    #                               NOT PINNED; see `_enqueue`
+    #   directory_listing_capped    one listing exceeded the per-dir cap
+    #                               <- test_large_sibling_directory_cannot_
+    #                                  starve_the_real_macro
+    #   entry_unreadable            `is_dir()`/`is_file()` raised
+    #                               <- test_symlink_into_an_unsearchable_
+    #                                  directory_is_reported
+    #   lef_macro_headers_not_read  LEF over the byte cap
+    #                               <- test_oversized_lef_body_is_reported_
+    #                                  and_the_stem_still_counts
+    #   lef_body_unreadable         LEF read (or re-stat) raised
+    #                               <- test_an_unreadable_lef_body_loses_the_
+    #                                  cells_it_abstracts_and_says_so
+    #                                  (the re-stat half is TOCTOU, unpinned)
+    #   entry_budget_exhausted      budget gone with work still queued
+    #                               <- test_exhausted_budget_is_reported_in_
+    #                                  l9_and_on_the_affected_rows
+    #   truncation_report_capped    the report's own bound bit
+    #                               <- test_the_truncation_report_says_when_
+    #                                  it_is_itself_truncated
+    #
+    # Three places deliberately emit NOTHING, because no cell name is lost at
+    # them: an entry whose name carries none of the artefact suffixes
+    # (it names no cell under this convention), an entry that is neither
+    # directory nor regular file (broken symlink / FIFO / socket / device —
+    # nothing is staged there), and `_enqueue` declining a directory identity
+    # it has already walked.
+    #
+    # `test_every_oserror_handler_in_the_scan_reports_or_is_listed_here`
+    # re-derives this list from the source and fails when a handler is added
+    # without one.
     # ---------------------------------------------------------------------
     _enqueue(root)
     budget = _MEMORY_MACRO_MAX_FILES
@@ -41974,7 +42102,22 @@ def _staged_macro_scan(project):
                 if not path.is_file():
                     # Broken symlink, FIFO, socket, device node.
                     continue
-            except OSError:
+            except OSError as exc:
+                # The entry is THERE and the walk could not tell what it is,
+                # so whatever it might have staged is not in `names`.
+                # `is_dir()` / `is_file()` swallow pathlib's `_IGNORED_ERRNOS`
+                # (ENOENT / ENOTDIR / EBADF / ELOOP) and return False, so
+                # reaching here means something else — EACCES for
+                # `input/pdk_local/fakeram45 -> <vault>/fakeram45` when
+                # `<vault>` is not searchable, i.e. a shared PDK symlinked
+                # into place out of a locked-down directory. Same consequence
+                # as the unreadable directory above, so it gets the same
+                # treatment; before this it was dropped in silence.
+                _note({
+                    "reason": "entry_unreadable",
+                    "path": _rel(path),
+                    "error": type(exc).__name__,
+                })
                 continue
             fname = path.name
             low = fname.lower()
@@ -41988,9 +42131,20 @@ def _staged_macro_scan(project):
             names.add(stem.lower())
             if low.endswith(".lef"):
                 # A LEF can abstract several cells; read the MACRO headers.
+                # Both failures below keep the STEM (already in `names`) and
+                # lose only the extra cells this LEF may abstract — the same
+                # loss the byte cap causes, so it carries a reason code for
+                # the same reason.
                 try:
                     size = path.stat().st_size
-                except OSError:
+                except OSError as exc:
+                    # TOCTOU only: `is_file()` above stat'ed this same path.
+                    # No fixture opens this window; reported, not pinned.
+                    _note({
+                        "reason": "lef_body_unreadable",
+                        "path": _rel(path),
+                        "error": type(exc).__name__,
+                    })
                     continue
                 if size > _MEMORY_MACRO_MAX_LEF_BYTES:
                     # The stem above was still recorded; only the additional
@@ -42004,7 +42158,15 @@ def _staged_macro_scan(project):
                     continue
                 try:
                     body = path.read_text(encoding="utf-8", errors="replace")
-                except OSError:
+                except OSError as exc:
+                    # Reachable without a race: a staged `bundle.lef` whose
+                    # own mode denies read still stats fine, so every cell it
+                    # abstracts beyond its own stem is lost.
+                    _note({
+                        "reason": "lef_body_unreadable",
+                        "path": _rel(path),
+                        "error": type(exc).__name__,
+                    })
                     continue
                 for m in _MEMORY_MACRO_LEF_DECL_RE.finditer(body):
                     names.add(m.group(1).lower())
@@ -42860,14 +43022,13 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
     fail-SAFE: when omitted, or when the design stages no macros, the
     staged set is empty and the corroborated clause can never fire.
 
-    When that scan is cut short — by one of its caps or by a directory
-    it could not read — the shortfall is RECORDED rather than
-    swallowed: `L9.staged_macro_scan_truncated`
-    carries the reason codes, every candidate row the scan might have
-    promoted carries `staged_macro_scan: "truncated:input/pdk_local"`,
-    and a `[WARN]` goes to stderr. An absent promotion then reads as
-    "the evidence scan did not finish", not as "the design has no such
-    macro".
+    When that scan reports a shortfall, this emitter writes it to
+    three places: `L9.staged_macro_scan_truncated` (the reason codes),
+    a `[WARN]` on stderr, and `staged_macro_scan:
+    "truncated:input/pdk_local"` on each `memory_candidates[]` row that
+    failed ONLY the staged-set test. What the scan reports is
+    enumerated in the block comment inside `_staged_macro_scan`; that
+    enumeration, not this docstring, is the statement about coverage.
 
     v1.6.441 — for #317 P3 ORGANIC. Reject bare-keyword null rows
     (name/depth/width all None) at emit time. Rejected rows are
@@ -42978,8 +43139,10 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
     # comes back EMPTY for a chip that really does instantiate the macro, and
     # nothing in the output says why. What "observable" means here is
     # borrowed, not invented: this module already handles a silent drop
-    # (`extract_all_docs`, v1.6.93 / issue #26) with a stderr WARN plus a
-    # reason-coded record a reader can audit. Three places, each one somewhere
+    # (`extract_text_pipeline`, v1.6.93 / issue #26) with a stderr WARN plus a
+    # reason-coded record a reader can audit. (An earlier version of this
+    # comment called that function `extract_all_docs`, which does not exist in
+    # this module or anywhere in the plugin.) Three places, each one somewhere
     # somebody already looks:
     #
     #   * stderr `[WARN]`, while the run is happening;
