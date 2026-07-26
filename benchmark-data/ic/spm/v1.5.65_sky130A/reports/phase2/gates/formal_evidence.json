@@ -30,7 +30,7 @@
       "exists": false,
       "measured": "`/home/reyerchu/campaign_v1565/` exists but contains only `subservient/` — there is no `spm/` subdirectory, so the campaign directory named above is gone. A directory named `converge_1.5.65_sky130A` does survive under `campaign_v1565/subservient/`, and it is a DIFFERENT design: its formal artefacts are `formal_subservient_formal.sby` / `formal_subservient.sv` and no `spm.v` exists anywhere beneath it. It is named here so a later reader does not mistake it for this cell's run.",
       "consequence": "these artefacts are UNRECOVERABLE. They are not invented, not reconstructed, and not substituted with a re-run — a re-run today would be a different run and would not be this campaign's evidence.",
-      "contrast": "the sibling cell v1.5.58_ihp-sg13g2 was checked the same way and its campaign directory DOES survive; its campaign artefacts have been recovered and shipped under phase2/stage1/formal/campaign_v1558/. The two situations are different and are reported differently rather than being generalised from one to the other."
+      "contrast": "the sibling cell v1.5.58_ihp-sg13g2 was checked the same way and its campaign directory DOES survive; its campaign artefacts have been recovered and shipped at phase2/stage1/formal/, the exact path they were cited at. The two situations are different and are reported differently rather than being generalised from one to the other."
     }
   },
   "cross_reference": {
