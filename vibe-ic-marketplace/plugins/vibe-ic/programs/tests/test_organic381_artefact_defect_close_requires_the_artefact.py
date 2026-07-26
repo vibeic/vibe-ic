@@ -109,7 +109,9 @@ def test_an_untracked_path_is_not_a_shipped_artefact():
     assert res["verdict"] == "FAIL"        # unverifiable, per the rule above
     assert res["cited_artefacts"] == []
     unlabelled = _classify(_issue(), [CHECKER], tracked=())
-    assert unlabelled["verdict"] == "PASS"  # tier B stays quiet, by design
+    # tier B stays QUIET by design — but no longer says "PASS", because it
+    # compared nothing (#441). Quiet and verified-clean are different claims.
+    assert unlabelled["verdict"] == M.NO_CITATION
 
 
 # --------------------------------------------------------------------------
@@ -414,3 +416,42 @@ def test_real_history_the_sweep_is_quiet_on_this_repo(tmp_path):
         capture_output=True, text=True, timeout=600)
     assert out.returncode == 0, out.stdout + out.stderr
     assert "[FAIL]" not in out.stdout
+
+
+# ── #441: the vacuous outcome must not wear the word PASS ──────────────────
+def test_an_issue_citing_no_artefact_is_NOT_a_PASS():
+    """MEASURED at land time and far worse than the two-instance framing: of
+    the 56 closed issues the CI invocation sweeps, only 3 cite a tracked
+    artefact. The other 53 were reported PASS while nothing was compared.
+
+    The trigger was vibe-ic#365 — one of the TWO issues this gate exists
+    because of — whose body names its subject in prose ("the 3 spm PDK-cell
+    folders") and carries no repo-relative path, so the gate covered 1 of its
+    2 motivating instances while reading as though it covered both.
+
+    Widening the path regex to parse prose is refused separately: 33 of 35
+    false positives on the corpus. So the repair is to stop over-claiming, not
+    to guess. Non-fatal exactly as before — only the WORD changes, because the
+    word was the false part.
+    """
+    res = _classify(_issue(body="the 3 spm PDK-cell folders are wrong"),
+                    [CHECKER])
+    assert res["cited_artefacts"] == []
+    assert res["verdict"] == M.NO_CITATION
+    assert res["verdict"] != "PASS"
+    assert "NOT a verified clean close" in res["reason"]
+
+
+def test_a_cited_artefact_that_changed_is_still_a_PASS():
+    """The paired half: renaming every quiet outcome would destroy the
+    distinction this change exists to create."""
+    res = _classify(_issue(), [ART])
+    assert res["verdict"] == "PASS", res
+    assert "changed in the range" in res["reason"]
+
+
+def test_the_vacuous_outcome_is_still_NON_FATAL():
+    """It was never a failure and must not become one — 53 of 56 closed issues
+    are in this state, and turning them red would make the gate unrunnable
+    while telling nobody anything new."""
+    assert M.NO_CITATION not in ("FAIL", "ADVISORY")

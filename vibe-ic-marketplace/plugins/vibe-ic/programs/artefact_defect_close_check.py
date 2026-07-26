@@ -142,6 +142,10 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 DEFAULT_LABEL = "artefact-defect"
 DEFAULT_DATA_ROOT = "benchmark-data"
+# The vacuous outcome, named so a reader can never mistake it for a verdict.
+NO_CITATION = "NOT_APPLICABLE_NO_CITATION"
+
+
 UNCHANGED_MARKER = "ARTEFACT-UNCHANGED:"
 UNCHANGED_MIN_REASON = 30
 
@@ -345,9 +349,25 @@ def classify(issue: Dict, changed: Set[str], tracked: Set[str],
         return out
 
     # Tier B — advisory inference.
-    if not cited or hit:
-        out["reason"] = ("no tracked artefact cited" if not cited
-                         else "the cited artefact changed in the range")
+    if not cited:
+        # NOT a PASS. "I found nothing to check" and "I checked and it is
+        # clean" are different statements, and this gate spent its first
+        # landing reporting them with the same word — including on vibe-ic#365,
+        # one of the two issues it exists because of, whose body names its
+        # subject in prose and carries no repo-relative path at all. So the
+        # gate covered 1 of its 2 motivating instances while reading as if it
+        # covered both. Widening the path regex to parse prose is refused
+        # separately: measured 33 of 35 false positives on the corpus.
+        # Non-fatal, exactly as before — only the WORD changes, because the
+        # word was the false part.
+        out["verdict"] = NO_CITATION
+        out["reason"] = ("no tracked artefact cited — this issue's body names "
+                         "no repo-relative path under %s/, so there is nothing "
+                         "to compare; this is NOT a verified clean close"
+                         % data_root.rstrip("/"))
+        return out
+    if hit:
+        out["reason"] = "the cited artefact changed in the range"
         return out
     code_only, outside = is_code_only(changed, data_root)
     if not code_only:
@@ -558,9 +578,11 @@ def run_sweep(args, root: Path) -> Tuple[int, List[Dict], List[str]]:
             if res["verdict"] in ("FAIL", "ADVISORY"):
                 lines.append(render(res, rng, slug))
         results.append(res)
+    n_vac = sum(1 for r in results if r["verdict"] == NO_CITATION)
     print("swept %d closed issue(s) with an attributable range; %d cited a "
-          "tracked artefact" % (len(results),
-                                sum(1 for r in results if r["cited_artefacts"])))
+          "tracked artefact; %d cited NONE and were not checkable (%s)"
+          % (len(results), sum(1 for r in results if r["cited_artefacts"]),
+             n_vac, NO_CITATION))
     return 0, results, lines
 
 
