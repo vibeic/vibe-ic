@@ -1,11 +1,36 @@
 #!/usr/bin/env python3
 """l17_channel_catalog_consumer_contract_check.py — SEMANTIC gate for L17.
 
-VERDICT MODE: **BLOCKS** (exit 1 on any ERROR finding). `--advisory` downgrades
-to exit 0 for a soak/report-only run.
+VERDICT MODE: **ADVISES**. The process exit code is unchanged — exit 1 on an
+ERROR finding, `--advisory` downgrades it — but the mode this program DECLARES
+about itself, which `flow_gate_enforcement_audit.py` reads and which decides
+where the flow may wire it, is ADVISES.
 
-WHY IT BLOCKS
--------------
+ENFORCEMENT — WHY THE DECLARATION CHANGED (vibe-ic#316)
+--------------------------------------------------------
+It said BLOCKS, and nothing wired it anywhere. `flow_gate_enforcement_audit`
+recorded it as an ORPHAN: a gate declaring an intent it could not act on
+because it never ran at all. It was held out of the flow's advisory slot
+PRECISELY because it said BLOCKS — so the over-claim was what kept it from
+executing. #316 also warned that registering it blocking would fail 100% of
+runs.
+
+Measured before changing this, over the twelve cells published under
+`benchmark-data/ic/`: rc=1 on eleven, SKIP on the twelfth. The findings are
+TRUE — a catalog reporting `extraction_status=EXTRACTION_FOUND_NOTHING` with
+zero channels while carrying a populated narrative field whose identifier
+tokens resolve nowhere in that design is exactly the template leak described
+below. But it is ONE producer-side defect reproduced across the corpus, not
+eleven independent design errors, and a gate that fails every run gets turned
+off within a week. ADVISES is what it does; wired into the flow's advisory
+slot it now judges every real project instead of nothing.
+
+Promotion to BLOCKS is a one-line change once the producer stops stamping
+unextracted narrative into this layer — argue it from a re-measurement of the
+same corpus, not from this docstring.
+
+WHY IT MATTERS
+--------------
 L17 is not a documentation layer — it is the FIRST source of the emitted top
 module's PORT LIST. `phase2_scaffold_gen.derive_signals(l17, l9)` reads
 `L17.channels[]` and `L17.global_signals[]` ahead of L9, and the cocotb scaffold
@@ -820,7 +845,9 @@ def build_report(project: Path, findings: List[Finding],
         "program": "l17_channel_catalog_consumer_contract_check",
         "version": "1.0.0",
         "layer": "L17",
-        "verdict_mode": "BLOCKS",
+        # vibe-ic#316 — was "BLOCKS"; see "ENFORCEMENT" in the module
+        # docstring for the measurement that changed it.
+        "verdict_mode": "ADVISES",
         "project": str(project),
         "summary": {
             "pass": not errs,

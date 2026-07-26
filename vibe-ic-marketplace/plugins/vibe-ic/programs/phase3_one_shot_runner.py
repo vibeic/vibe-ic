@@ -3507,7 +3507,44 @@ def _parse_macro_supply_pins(
     for every pin the LEF types ``USE POWER`` or ``USE GROUND``. USE is
     upper-cased and normalised to ``POWER``/``GROUND``. Pure-LEF grammar (same
     MACRO/PIN/USE walk as `_discover_pg_from_lef`); no PDK literal, so any
-    vendor's hard macro parses. Masters with no PG pin are omitted."""
+    vendor's hard macro parses. Masters with no PG pin are omitted.
+
+    #316 salvage — THE WHOLE PIN ON ONE LINE. LEF 5.8 statements are
+    ``;``-terminated, not newline-terminated, so a macro LEF may write an
+    entire pin as::
+
+        PIN IOVDD  DIRECTION INOUT ; USE POWER ; PORT ... ; END END IOVDD
+
+    The line-oriented walk below consumed such a line at the ``PIN`` match and
+    `continue`d, so the same-line ``USE`` was never read and the same-line
+    ``END END IOVDD`` never closed the pin — the pin was dropped silently.
+    Measured on published data: ``benchmark-data/ic/u_hawaii_adc`` stages two
+    hard macros in exactly this form (``ldo`` IOVDD/VSS, ``delta_sigma``
+    VDD/VSS) and this function returned ``{}`` for both, so
+    `_macro_supply_gc_plan` saw ZERO supply terminals to bind or to report as
+    HARDMACRO_SUPPLY_UNCONNECTED. The shared
+    `hardmacro_supply_intent.lef_pg_pins` block parser reads the same file
+    correctly; that discrepancy IS the defect. Delegate to it and keep the
+    line walk only as the fallback, so one parser answers this question.
+    """
+    try:
+        import hardmacro_supply_intent as _hmsi_pg  # local: shared parser
+        shared: Dict[str, List[Tuple[str, str]]] = {}
+        for rec in _hmsi_pg.lef_pg_pins(lef_text or ""):
+            master = rec.get("master") or ""
+            pin = rec.get("pin") or ""
+            use = (rec.get("use") or "").upper()
+            if not master or not pin or use not in ("POWER", "GROUND"):
+                continue
+            entry = (pin, use)
+            bucket = shared.setdefault(master, [])
+            if entry not in bucket:
+                bucket.append(entry)
+        return {k: v for k, v in shared.items() if v}
+    except Exception:
+        # Fall through to the inline walk so the runner never dies on an
+        # import problem; the walk is a subset, never a superset.
+        pass
     result: Dict[str, List[Tuple[str, str]]] = {}
     cur_macro: Optional[str] = None
     cur_pin: Optional[str] = None

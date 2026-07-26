@@ -1,11 +1,31 @@
 #!/usr/bin/env python3
 """l16_compliance_properties_actionable_check.py — SEMANTIC gate for L16.
 
-VERDICT MODE: **BLOCKS** (exit 1 on any ERROR finding). `--advisory` downgrades
-to exit 0 for a soak/report-only run.
+VERDICT MODE: **ADVISES**. The process exit code is unchanged — exit 1 on an
+ERROR finding, `--advisory` downgrades it — but the mode this program DECLARES
+about itself, which `flow_gate_enforcement_audit.py` reads and which decides
+where the flow may wire it, is ADVISES.
 
-WHY IT BLOCKS
--------------
+ENFORCEMENT — WHY THE DECLARATION CHANGED (vibe-ic#316)
+--------------------------------------------------------
+It said BLOCKS, and nothing wired it anywhere: `flow_gate_enforcement_audit`
+recorded it as an ORPHAN — declaring an intent it could not act on, because it
+never ran. It was held out of the flow's advisory slot PRECISELY because it
+said BLOCKS, so the over-claim was what kept it from executing at all.
+
+That mattered more here than for its siblings, because this gate had never
+returned a finding on a real input. Measured over the twelve cells published
+under `benchmark-data/ic/`: rc=0 on eleven, SKIP on the twelfth. Its "zero
+false positives" was VACUOUS — the same empty-result-read-as-a-clean-one shape
+the gates below exist to reject, one level up. Promoting an unmeasured gate to
+blocking would have been promoting a claim, not a capability.
+
+Wired into the flow's advisory slot it now judges every real project. If it
+starts finding things, the evidence to argue a promotion will exist; if it
+never does over a real corpus, that is worth knowing too.
+
+WHY THIS LAYER IS LOAD-BEARING
+------------------------------
 L16's consumers are the SVA property-stub generator
 (`professional_tb_gen.build_assertions`) and the compliance-vector catalog
 (`phase2_scaffold_gen.emit_compliance_vectors`). Both turn an L16 property into
@@ -471,7 +491,18 @@ def build_report(project: Path, findings: List[Finding],
         "program": "l16_compliance_properties_actionable_check",
         "version": "1.0.0",
         "layer": "L16",
-        "verdict_mode": "BLOCKS",
+        # vibe-ic#316 — was "BLOCKS". Nothing wired this gate anywhere, so
+        # `flow_gate_enforcement_audit` recorded it as an ORPHAN that declares
+        # an intent it cannot act on: it could not block, it could not even
+        # run. Held out of the advisory slot precisely BECAUSE it said BLOCKS,
+        # which is how the declaration kept it from executing at all.
+        # Measured over the 12 published cells under benchmark-data/ before
+        # changing this: rc=0 on eleven, SKIP on one — it has never returned a
+        # finding on a real input, so promoting it to blocking would be
+        # promoting an unmeasured gate. ADVISES + wired into the flow's
+        # advisory slot makes it judge real data; the evidence to argue a
+        # promotion can then exist.
+        "verdict_mode": "ADVISES",
         "project": str(project),
         "summary": {
             "pass": not errs,

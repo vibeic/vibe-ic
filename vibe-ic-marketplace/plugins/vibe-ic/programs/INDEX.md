@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 971
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 971)
+- **Total programs (excluding helpers / shims):** 973
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 973)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 962 |
+| `any` | 964 |
 
 ## Alphabetical listing
 
@@ -476,6 +476,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l1_pin_bus_width_actionable_check` | any | — | L1 consumer-contract gate. |
 | `l1_pin_table_aliases_typed_check` | any | Wave 38 | Wave 38 / B2 |
 | `l20_dft_scan_topology_actionable_check` | any | — | SEMANTIC gate for |
+| `l21_macro_supply_rail_declared_check` | any | — | L21 SEMANTIC completeness gate. |
 | `l21_to_upf_emit` | any | v0.1.51 | render L21 power intent into an IEEE-1801 UPF |
 | `l22_verification_plan_measurable_check` | any | — | SEMANTIC gate for |
 | `l23_security_requirements_typed_check` | any | — | SEMANTIC gate for |
@@ -498,6 +499,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l8_clock_domains_typed_check` | any | Wave 38 | Wave 38 / B4 |
 | `l8_clock_period_actionability_check` | any | — | L8 SEMANTIC consumer-contract gate. |
 | `l8_frame_end_gap_derivation_check` | any | — | LL-3. |
+| `l8_sta_clock_period_design_owned_check` | any | — | L8 SEMANTIC completeness gate. |
 | `l9_completeness_check` | any | — | Deterministic L9 Integration Spec completeness checker. |
 | `l9_floorplan_contract_check` | any | — | L9 SEMANTIC consumer-contract gate. |
 | `l9_response_delay_schema_check` | any | — | R5 L9 spec mandate |
@@ -1043,7 +1045,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (962 programs)
+### `any` (964 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1491,6 +1493,7 @@ _(no programs in this group)_
 - `l1_pin_bus_width_actionable_check` — L1 consumer-contract gate.
 - `l1_pin_table_aliases_typed_check` — Wave 38 / B2  _[Wave 38]_
 - `l20_dft_scan_topology_actionable_check` — SEMANTIC gate for
+- `l21_macro_supply_rail_declared_check` — L21 SEMANTIC completeness gate.
 - `l21_to_upf_emit` — render L21 power intent into an IEEE-1801 UPF  _[v0.1.51]_
 - `l22_verification_plan_measurable_check` — SEMANTIC gate for
 - `l23_security_requirements_typed_check` — SEMANTIC gate for
@@ -1512,6 +1515,7 @@ _(no programs in this group)_
 - `l8_clock_domains_typed_check` — Wave 38 / B4  _[Wave 38]_
 - `l8_clock_period_actionability_check` — L8 SEMANTIC consumer-contract gate.
 - `l8_frame_end_gap_derivation_check` — LL-3.
+- `l8_sta_clock_period_design_owned_check` — L8 SEMANTIC completeness gate.
 - `l9_completeness_check` — Deterministic L9 Integration Spec completeness checker.
 - `l9_floorplan_contract_check` — L9 SEMANTIC consumer-contract gate.
 - `l9_response_delay_schema_check` — R5 L9 spec mandate

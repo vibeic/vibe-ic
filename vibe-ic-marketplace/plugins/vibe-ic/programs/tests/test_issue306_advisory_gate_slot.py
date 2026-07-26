@@ -327,26 +327,58 @@ def test_docstring_declaration_still_wins(tmp_path):
 
 
 def test_the_ten_layer_gates_are_wired_advisory_and_the_blocking_two_are_not():
-    """Wired: ten UNDECLARED per-layer contract gates that previously ran
-    nowhere but their own tests. NOT wired: l16/l17, which declare
-    `verdict_mode: BLOCKS` — an advisory slot would contradict their own
-    declaration, and that call is the flow owner's."""
+    """Every per-layer contract gate is wired to the advisory slot, and its
+    own declaration agrees with that slot.
+
+    HISTORY (#316). This test used to assert the OPPOSITE for two of them:
+    l16/l17 declared `verdict_mode: BLOCKS`, so wiring them advisory would
+    contradict their own declaration, and this test pinned them OUT of the
+    flow. What it actually pinned was a gate that ran NOWHERE — the #306
+    defect, held in place by a test. `flow_gate_enforcement_audit` recorded
+    both as ORPHANS for exactly that reason.
+
+    The resolution is not to wire a BLOCKS gate into an advisory slot; it is
+    to make the declaration true. Both were measured on the published corpus
+    (l17 fires on 11 of 12 cells — a real finding, but one producer defect
+    reproduced corpus-wide, so blocking would fail every run; l16 fires on
+    none, so its clean record was vacuous), both now declare ADVISES, and both
+    are wired. So the invariant this test defends is stronger than before and
+    has no exception list: NO per-layer gate may sit outside the flow, and
+    none may be wired to a slot its own declaration contradicts.
+    """
     yaml_text = (_PROGRAMS.parent / "flow"
                  / "phase1_phase2_phase3.yaml").read_text()
-    for g in ("l7_debug_access_grounding_check",
-              "l8_clock_period_actionability_check",
-              "l9_floorplan_contract_check",
-              "l10_test_case_oracle_anchor_check",
-              "l11_otp_content_consumer_contract_check",
-              "l12_sequences_in_consumed_layer_check",
-              "l13_bringup_contract_check",
-              "l14_protocol_versioning_contract_check",
-              "l15_encoding_tables_contract_check",
-              "l18_interconnect_topology_factuality_check"):
+    layer_gates = (
+        "l7_debug_access_grounding_check",
+        "l8_clock_period_actionability_check",
+        "l9_floorplan_contract_check",
+        "l10_test_case_oracle_anchor_check",
+        "l11_otp_content_consumer_contract_check",
+        "l12_sequences_in_consumed_layer_check",
+        "l13_bringup_contract_check",
+        "l14_protocol_versioning_contract_check",
+        "l15_encoding_tables_contract_check",
+        "l16_compliance_properties_actionable_check",
+        "l17_channel_catalog_consumer_contract_check",
+        "l18_interconnect_topology_factuality_check",
+        "l21_macro_supply_rail_declared_check",
+        "l8_sta_clock_period_design_owned_check",
+    )
+    for g in layer_gates:
         assert f'advisory_program_exit_zero: "{g} .' in yaml_text, g
-    for g in ("l16_compliance_properties_actionable_check",
-              "l17_channel_catalog_consumer_contract_check"):
-        assert g not in yaml_text, f"{g} declares BLOCKS; do not wire advisory"
+
+    # The declaration must AGREE with the slot: nothing wired advisory may
+    # claim blocking. Read it the same way the enforcement audit does.
+    spec = importlib.util.spec_from_file_location(
+        "flow_gate_enforcement_audit",
+        _PROGRAMS / "flow_gate_enforcement_audit.py")
+    fga = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fga)
+    for g in layer_gates:
+        assert fga.declared_intent(_PROGRAMS, g) != "blocking", (
+            f"{g} is wired to the ADVISORY slot while declaring blocking — "
+            "that contradiction is #306/#316 exactly. Either wire it where a "
+            "runner invokes it inline, or declare what it does.")
 
 
 def test_advisory_is_not_a_backing_checker_for_a_self_asserted_gate():

@@ -1,6 +1,6 @@
 {
   "_comment": "Checkers that NOTHING but their own unit test ever runs (vibe-ic#381). MAY ONLY SHRINK — each entry is a checker with zero coverage of real inputs. `triage` records why an entry is still here; the wrong repair is to delete the test so the entry disappears.",
-  "previous_size": 45,
+  "previous_size": 35,
   "scope_expanded": null,
   "known": [
     "analog_adc_enob_corner_check.py",
@@ -18,8 +18,6 @@
     "input_docs_coverage_check.py",
     "integration_spec_audit.py",
     "ip_catalog_upstream_audit.py",
-    "l16_compliance_properties_actionable_check.py",
-    "l17_channel_catalog_consumer_contract_check.py",
     "lesson_consumption_check.py",
     "lessons_corpus_consistency_check.py",
     "level_hysteresis_flag_oracle_check.py",
@@ -55,8 +53,6 @@
     "input_docs_coverage_check.py": "rc=2 SKIPs / refuses without its input — [--layers-dir LAYERS_DIR]",
     "integration_spec_audit.py": "rc=1 FAILs with no design to judge — [ERROR] NO_SPEC_FILE: No *L9*.json or *integration*.json files found in project directory",
     "ip_catalog_upstream_audit.py": "rc=0 runs green with no arguments — === ip-catalog upstream audit (18 IPs) ===",
-    "l16_compliance_properties_actionable_check.py": "rc=2 SKIPs / refuses without its input — [--advisory]",
-    "l17_channel_catalog_consumer_contract_check.py": "rc=2 SKIPs / refuses without its input — [--advisory]",
     "lesson_consumption_check.py": "rc=2 SKIPs / refuses without its input — [--ack ACK] [--strict]",
     "lessons_corpus_consistency_check.py": "rc=0 runs green with no arguments — PASS: lessons corpus self-consistent — no Skill section hard-codes a single pole on a spec-governed axis without deferring to the spec (ic-expert-agent.md)",
     "level_hysteresis_flag_oracle_check.py": "rc=2 SKIPs / refuses without its input — [--top TOP] [--json JSON]",

@@ -1,11 +1,9 @@
 {
   "_comment": "Gates that declare an intent they are not wired for (vibe-ic#306/#316). MAY ONLY SHRINK. Fixing one changes what a real run blocks on — a flow-owner decision — so they are recorded, not silently enforced here.",
-  "previous_size": 2,
-  "scope_expanded": "declared_intent now also reads the runtime verdict_mode channel, so two gates that always declared BLOCKS in the JSON they emit are visible as orphans for the first time",
+  "previous_size": 4,
+  "scope_expanded": null,
   "known": [
     "contradiction::gds_substance_check",
-    "orphan::drv_promotion_corroboration_check",
-    "orphan::l16_compliance_properties_actionable_check",
-    "orphan::l17_channel_catalog_consumer_contract_check"
+    "orphan::drv_promotion_corroboration_check"
   ]
 }

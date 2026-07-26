@@ -183,9 +183,34 @@ steps:
         # spm/gf180mcuD, L12 UNTYPED_STEPS on sha256). Wired BLOCKING they
         # would fail two shipped campaign cells today; wired advisory the
         # findings become visible without changing what any run stops on.
-        # 0.37 s for all ten. l16/l17 are deliberately NOT here: they declare
-        # `verdict_mode: BLOCKS`, so an advisory slot would contradict their
-        # own declaration — that wiring stays an owner decision.
+        # 0.37 s for all ten.
+        #
+        # vibe-ic#316 salvage, 2026-07-26 — the remaining FOUR. l16/l17 were
+        # held out of the list above because they declare `verdict_mode:
+        # BLOCKS`, which an advisory slot would contradict. Holding them out
+        # left them running NOWHERE, which is the #306 defect they were held
+        # out to avoid: `flow_gate_enforcement_audit` recorded both as ORPHANS
+        # (declare an intent, not in the flow at all). Measured on the 12
+        # published cells before deciding: l17 returns rc=1 on ELEVEN of them
+        # (the twelfth SKIPs) — a true positive every time (ibex's L17 says
+        # `extraction_status=EXTRACTION_FOUND_NOTHING`, declares 0 channels,
+        # and still carries an AXI ARVALID/RVALID/RLAST dependency_graph whose
+        # tokens resolve nowhere in the design) but a producer-side defect
+        # common to the whole corpus, so BLOCKS would fail 100% of runs. l16
+        # returns rc=0 on all twelve, so its "zero false positives" was
+        # vacuous — it had judged nothing. Both declarations are corrected to
+        # ADVISES at the source and both are wired here, which pays down two
+        # of the four entries in flow_gate_enforcement_baseline.json instead
+        # of leaving them as standing permission.
+        - advisory_program_exit_zero: "l16_compliance_properties_actionable_check ."
+        - advisory_program_exit_zero: "l17_channel_catalog_consumer_contract_check ."
+        # L21 macro supply rails: every USE POWER/GROUND pin of an INSTANTIATED
+        # hard macro has a same-use rail in L21 — the set `_macro_supply_gc_plan`
+        # name-matches against. FAILs edge_llm_accel + u_hawaii_adc today.
+        - advisory_program_exit_zero: "l21_macro_supply_rail_declared_check ."
+        # L8 STA period is design-owned, never sdc_gen's hardcoded default.
+        # FAILs opentitan_aes, whose published SDC carries the default verbatim.
+        - advisory_program_exit_zero: "l8_sta_clock_period_design_owned_check ."
         # L7 debug/test access points are grounded in a layer that implements them
         - advisory_program_exit_zero: "l7_debug_access_grounding_check ."
         # every clock period an L8 consumer resolves is unique and actionable
