@@ -364,6 +364,42 @@ def build_result(worst_dyn_mv: float, vdd_v: Optional[float],
     return res
 
 
+_OPCOND_RE = re.compile(r"^\s*operating_conditions\s*\(\s*([A-Za-z0-9_.\-]+)\s*\)")
+
+
+def liberty_operating_condition(liberty) -> str:
+    """NAME of an operating condition the liberty defines, or "".
+
+    Same root cause as the static path (vibe-ic#362): PSM cannot determine
+    the supply voltage and aborts PSM-0079 when the library declares an
+    `operating_conditions(<name>) { ... }` block but no
+    `default_operating_conditions`. Measured with OpenSTA's own API on a real
+    gf180 standard-cell liberty: `default_operating_conditions` is NULL while
+    the named block exists and carries `voltage = 5.0`; 30 of 30 gf180mcuD
+    standard-cell liberties are in that state.
+
+    DELIBERATE DUPLICATION, ~10 lines. This module is standalone by design
+    (its own argparse entry point, imported by nothing in the runner), and
+    importing `phase3_one_shot_runner` for one regex would pull a 25k-line
+    module — and its import-time side effects — into a program that exists to
+    be run on its own. The shared thing here is the LIBERTY GRAMMAR, which is
+    IEEE 1497 and does not drift; a shared helper module for it would be the
+    right move only once a third caller appears.
+
+    Reads the file directly: this program already receives host-visible paths
+    (it is invoked with `--liberty` by the caller), unlike the runner which
+    must also handle container-only paths."""
+    try:
+        txt = Path(liberty).read_text(errors="replace")
+    except (OSError, TypeError):
+        return ""
+    for line in txt.splitlines():
+        m = _OPCOND_RE.match(line)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def missing_required_inputs(def_file, tech_lef, cell_lef, liberty) -> List[str]:
     """CLI-flag names of the required transient-emit inputs that are absent
     (None). The LIBERTY is REQUIRED — `analyze_power_grid -transient` needs the
@@ -410,12 +446,18 @@ def _build_transient_tcl(def_file: Path, tech_lef: Path, cell_lef: Path,
     via_tcl = "".join(f"catch {{set_layer_rc -via {c} -resistance {r}}}\n"
                       for c, r in sorted(via_res.items()))
     decap_arg = f" -decap_cap {decap_cap}" if decap_cap else ""
+    _oc = liberty_operating_condition(liberty)
     return (
         f"read_lef {tech_lef}\n"
         f"read_lef {cell_lef}\n"
         f"{macro_tcl}\n"
         f"read_liberty {liberty}\n"
-        f"read_def {def_file}\n"
+        # vibe-ic#362 — select the library's own operating condition when it
+        # declares one but names no default; without it PSM aborts PSM-0079
+        # and the transient run produces nothing. Emitted only when a block
+        # exists and catch-guarded: a PDK with a default is unchanged.
+        + (f"catch {{set_operating_conditions {_oc}}}\n" if _oc else "")
+        + f"read_def {def_file}\n"
         f"{sdc_tcl}"
         f"if {{[catch {{set_wire_rc -signal -layer {metal_prefix}1}}]}} "
         f"{{ catch {{set_wire_rc -layer {metal_prefix}1}} }}\n"

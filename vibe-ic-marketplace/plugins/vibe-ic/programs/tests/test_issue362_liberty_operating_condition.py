@@ -92,3 +92,49 @@ def test_362_the_emitter_selects_the_condition_and_asserts_no_voltage():
     assert "_liberty_operating_condition(" in body
     assert "set_pdnsim_net_voltage" not in body, (
         "the rejected fix asserts a parsed voltage on every power net")
+
+
+# ── the DYNAMIC half (#362's own listed damage: ERROR_NO_PSM_IR) ────────────
+# `dynamic_ir_vectored_emit` read the liberty straight into `read_def` with no
+# operating condition, so `analyze_power_grid -transient` hit the same
+# PSM-0079 and the transient run produced nothing. Same root cause, same fix.
+
+import dynamic_ir_vectored_emit as dyn  # noqa: E402
+
+
+def _tcl(tmp_path: Path, lib_body: str) -> str:
+    lib = tmp_path / "l.lib"
+    lib.write_text(lib_body)
+    return dyn._build_transient_tcl(
+        tmp_path / "d.def", tmp_path / "t.lef", tmp_path / "c.lef", lib,
+        [], None, "VDD", 10.0, 20, None, {}, "met")
+
+
+def test_362_dynamic_selects_the_condition_when_the_library_declares_one(tmp_path):
+    tcl = _tcl(tmp_path, "library (g) {\n"
+                         "  operating_conditions(gf180_tt_5v00) "
+                         "{ voltage : 5.0 ; }\n}\n")
+    assert "set_operating_conditions gf180_tt_5v00" in tcl
+    # ORDER is load-bearing: the condition must be selected AFTER the library
+    # is read and BEFORE the design, or the solver never sees it.
+    assert (tcl.index("read_liberty") < tcl.index("set_operating_conditions")
+            < tcl.index("read_def"))
+
+
+def test_362_dynamic_emits_nothing_without_a_block(tmp_path):
+    """Zero regression on a PDK that already declares a default."""
+    tcl = _tcl(tmp_path, "library (n) { }\n")
+    assert "set_operating_conditions" not in tcl
+
+
+def test_362_dynamic_asserts_no_voltage_either(tmp_path):
+    """The same anti-fabrication boundary as the static path: select by NAME,
+    never assert a parsed value on a net."""
+    tcl = _tcl(tmp_path, "library (g) {\n  nom_voltage : 5 ;\n"
+                         "  operating_conditions(tt) { voltage : 5.0 ; }\n}\n")
+    assert "set_pdnsim_net_voltage" not in tcl
+
+
+def test_362_dynamic_helper_never_raises_on_an_unreadable_liberty(tmp_path):
+    assert dyn.liberty_operating_condition(tmp_path / "absent.lib") == ""
+    assert dyn.liberty_operating_condition(None) == ""
