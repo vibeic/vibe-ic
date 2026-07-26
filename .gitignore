@@ -38,6 +38,22 @@ yarn-error.log*
 # half — logs that live beside the reports they prove are deliverables. Adds
 # in this repo are always explicit paths, so nothing is swept in by this.
 !benchmark-data/**/reports/**/*.log
+# vibe-ic review F10, the other half of the same hole. The rescue above covers
+# `reports/**` only, and a formal proof transcript does not live there: the
+# runner writes it beside its task, at `phase2/stage1/formal/<stem>.sby.log`.
+# So `formal_evidence.json` — which DOES ship, being under `reports/` — could
+# cite `phase2/stage1/formal/formal_<top>_formal.sby.log` while the ignore rule
+# silently dropped the very file it points at. MEASURED on 135ce027a: all three
+# published spm PDK cells cite exactly that path, all three genuinely ran the
+# proof (each cell's own phase2_one_shot.json lists `formal/results.json` in
+# phase2_manifests.output_files, a path the runner appends ONLY on the
+# proved-and-all_proved branch), and ZERO of the transcripts are tracked. Not
+# an authoring slip in one campaign — the structurally guaranteed outcome for
+# every design, because the citation and its proof sat on opposite sides of
+# this rule. Deliberately narrow: `*.sby.log` is the runner's own transcript
+# filename, so SymbiYosys task-workdir noise (model/design.log, design_prep.log)
+# stays ignored and nothing is swept in by a wide add.
+!benchmark-data/**/formal/**/*.sby.log
 .env
 .env.local
 
