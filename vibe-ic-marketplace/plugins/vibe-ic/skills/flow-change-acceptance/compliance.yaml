@@ -24,8 +24,7 @@ requirements:
     block'
 - id: R_no_literals
   description: Asserts chip-agnosticism (no design/PDK/vendor literals; fixtures synthesized)
-  pattern: (?i)(chip-?agnostic|no (design|PDK|vendor) literal|synthes(is|ized|ised) fixture|fixtures?
-    .{0,40}synthes)
+  pattern: (?i)(chip-?agnostic|no (design|PDK|vendor)[- ]?(literal|name)s?\s+(appear|occur|exist|present|used))
   skill_section: The six criteria / 4
   evidence: enforced in CI by source_chip_agnostic_check
 - id: R_failure_name_sets
