@@ -243,6 +243,49 @@ def test_no_artefact_is_recorded_twice(tmp_path):
     assert len(paths) == len(set(paths)), paths
 
 
+def test_a_symlinked_alias_does_not_double_record_the_same_blob(tmp_path):
+    """REGRESSION — the shape `test_no_artefact_is_recorded_twice` misses.
+
+    That test builds two DISTINCT files, so it passes whether or not the
+    inventory dedupes. Real converged runs alias instead: the v1.5.58 source
+    run carries 63 symlinks under `steps/` pointing back into
+    `phase3/stage3/`, 8 of them layout artefacts. `rglob` yields the symlink
+    and its target separately and `_record` resolves before building the path
+    column, so each aliased blob emitted a BYTE-IDENTICAL second line.
+
+    Measured on that run before the fix: 21 record lines for 14 distinct
+    artefacts — 7 duplicates — and the summary printed "of 21 artefact(s)".
+    Across the 25 converged runs on this host, 143 of 450 lines were
+    duplicates. Nothing was lost; the record simply counted aliases as
+    evidence.
+    """
+    run = _make_run(tmp_path, gds_bytes=4096)
+    real = run / "phase3" / "stage3" / "pnr" / "routed.def"
+    real.parent.mkdir(parents=True, exist_ok=True)
+    real.write_text("DESIGN top ;\n")
+    step = run / "steps" / "21_routing_global_detailed"
+    step.mkdir(parents=True, exist_ok=True)
+    (step / "routed.def").symlink_to(real)          # the shape the runs have
+    assert (step / "routed.def").is_file()
+
+    dest_root = tmp_path / "benchmark-data"
+    r = _publish(run, dest_root)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    body = [ln for ln in (_cell(dest_root) / "LAYOUT_ROUTING.txt")
+            .read_text().splitlines() if ln and not ln.startswith("#")]
+    assert len(body) == len(set(body)), (
+        "the same blob was recorded twice through a symlink alias:\n"
+        + "\n".join(sorted(body)))
+    hits = [ln for ln in body if ln.startswith("phase3/stage3/pnr/routed.def ")]
+    assert len(hits) == 1, hits
+
+    # and the printed count agrees with the file it summarises
+    m = re.search(r"of (\d+) artefact\(s\)", r.stdout)
+    assert m, r.stdout
+    assert int(m.group(1)) == len(body), (m.group(1), len(body))
+
+
 @pytest.mark.parametrize("route", ["git-lfs", "github-release", "not-retained"])
 def test_the_destination_is_recorded_not_assumed(tmp_path, route):
     """"Where to" is an operator claim. The default is the honest one."""
@@ -346,9 +389,58 @@ def test_removing_the_named_predicate_is_caught(tmp_path):
     only thing left to check is spelling."""
     mut = _mutant(tmp_path)
     p = mut / "benchmark_evidence_structure_check.py"
-    p.write_text(p.read_text().replace("def over_ceiling(", "def _inlined("))
+    p.write_text(p.read_text().replace("def check_folder(", "def _inlined("))
     rep = D.audit(mut, _REPO / ".gitignore")
     assert any(f.startswith("NO_PREDICATE") for f in rep["findings"]), \
+        rep["findings"]
+
+
+def test_breaking_a_helper_under_the_decider_is_caught_too(tmp_path):
+    """Renaming a helper the decider CALLS is not a NO_PREDICATE — the entry
+    point is still there — but it must not be a PASS either. It surfaces as
+    PREDICATE_RAISED, which is still a finding and still rc=1."""
+    mut = _mutant(tmp_path)
+    p = mut / "benchmark_evidence_structure_check.py"
+    p.write_text(p.read_text().replace("def over_ceiling(", "def _inlined("))
+    rep = D.audit(mut, _REPO / ".gitignore")
+    assert rep["verdict"] == "FAIL", rep
+    assert any(f.startswith("PREDICATE_RAISED") for f in rep["findings"]), \
+        rep["findings"]
+
+
+def test_the_structure_checks_real_decision_is_what_gets_probed(tmp_path):
+    """REGRESSION, and the reason `_DECIDERS` names `check_folder`.
+
+    The first version of this gate probed `over_ceiling`, a three-line pure
+    size test. The structure check's actual decision lives in `check_folder`.
+    Reverting THAT to the pre-#419 extension-only rule — while leaving
+    `over_ceiling` defined and correct beside it — returned PASS with zero
+    findings, and made all three real reference cells non-conformant with a
+    message calling a 1 MB file 'over the 50 MB commit ceiling'.
+    """
+    mut = _mutant(tmp_path)
+    p = mut / "benchmark_evidence_structure_check.py"
+    src = p.read_text()
+    anchor = ("    for p in layout:\n"
+              "        try:\n"
+              "            if over_ceiling(p):\n"
+              "                over.append((p, p.stat().st_size))\n"
+              "        except OSError:\n"
+              "            continue")
+    assert anchor in src, "structure check changed shape; update this mutant"
+    p.write_text(src.replace(
+        anchor,
+        "    for p in layout:\n"
+        "        try:\n"
+        "            over.append((p, p.stat().st_size))\n"
+        "        except OSError:\n"
+        "            continue"))
+    # The helper is untouched: this mutant is invisible to a probe of it.
+    assert "def over_ceiling(" in p.read_text()
+
+    rep = D.audit(mut, _REPO / ".gitignore")
+    assert rep["verdict"] == "FAIL", rep
+    assert any(f.startswith("EXTENSION_RULE_RETURNED") for f in rep["findings"]), \
         rep["findings"]
 
 

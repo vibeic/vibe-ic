@@ -323,13 +323,25 @@ def _inventory_unpublished(run_dir: Path, seen: set, route: str) -> List[dict]:
     Recording the sha256 is what turns recovery into a verifiable file copy
     rather than a guess about which of two same-named layouts is the one the
     verdict describes.
+
+    ONE LINE PER UNDERLYING BLOB, not per path that reaches it. Converged runs
+    alias their artefacts: this run carries 63 symlinks under `steps/` pointing
+    back into `phase3/stage3/`, 8 of them layout artefacts. `rglob` yields the
+    symlink and its target as separate entries, and `_record` resolves before
+    computing the path column, so both would emit a BYTE-IDENTICAL line. That
+    is not extra evidence — it is the same evidence twice, and it inflates the
+    counts printed beside it. Dedupe on the resolved path, accumulating as we
+    go; `seen` (the caller's staged set) is read, never mutated.
     """
     out = []
+    recorded = set(seen)
     for f in sorted(run_dir.rglob("*")):
         if not f.is_file() or not is_layout_artefact(f):
             continue
-        if f.resolve() in seen:
+        real = f.resolve()
+        if real in recorded:
             continue
+        recorded.add(real)
         out.append(_record(f, run_dir, "NOT_PUBLISHED", route))
     return out
 
@@ -408,6 +420,11 @@ _ROUTING_HEADER = (
     "# for artefacts the run never wrote there, and it is a record of what\n"
     "# was decided — not a promise that a ROUTED_AWAY blob still exists\n"
     "# wherever the destination column says it went.\n"
+    "#\n"
+    "# ONE LINE PER BLOB, not per path: converged runs symlink their artefacts\n"
+    "# (steps/<step>/routed.def -> phase3/stage3/pnr/routed.def). Aliases are\n"
+    "# collapsed onto the resolved path, so a line count here is a count of\n"
+    "# distinct artefacts, not of directory entries.\n"
     "# <relpath> <bytes>B sha256:<64hex> <DECISION> <destination>\n"
 )
 
