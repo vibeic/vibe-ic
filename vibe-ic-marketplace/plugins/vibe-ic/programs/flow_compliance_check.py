@@ -4388,12 +4388,30 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         # Wave 93 — preserve VACUOUS_HINT reasons from passing sub-gates so
         # the step-level handler can promote a step whose every executed
         # sub-gate was vacuously satisfied.
-        for sub in gate["all_of"]:
+        for _i, sub in enumerate(gate["all_of"]):
             if not isinstance(sub, dict):
                 continue
             p, r = _evaluate_gate(project, sub, skip_analog=skip_analog)
             if not p:
                 reasons.extend(r)
+                # #306/#297 — the step has already failed, but the ADVISORY
+                # sub-gates still have something to say and this is the run
+                # where it matters most. Short-circuiting past them meant the
+                # routability-for-clock-quality disclosure was skipped on
+                # EVERY failing route — measured end-to-end on a real cell:
+                # Step 21 FAILed on an earlier sibling and not one advisory
+                # line appeared. They cannot change the verdict (that is what
+                # advisory means), so running them costs only their runtime.
+                # Only the ones AFTER the failure: the earlier ones already
+                # ran in this loop and appended their hints.
+                for later in gate["all_of"][_i + 1:]:
+                    if (isinstance(later, dict)
+                            and "advisory_program_exit_zero" in later):
+                        _p2, r2 = _evaluate_gate(project, later,
+                                                 skip_analog=skip_analog)
+                        reasons.extend(
+                            h for h in r2
+                            if h.startswith(_ADVISORY_HINT_PREFIX))
                 return False, reasons
             for hint in r:
                 if hint.startswith(_VACUOUS_HINT_PREFIX):

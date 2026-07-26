@@ -226,6 +226,46 @@ def test_advisory_inside_any_of_is_an_authoring_error(tmp_path, monkeypatch):
                for r in reasons)
 
 
+def test_advisory_still_runs_after_a_blocking_sibling_fails(tmp_path,
+                                                            monkeypatch):
+    """REGRESSION, found end-to-end on a real cell (#297).
+
+    `all_of` short-circuits on the first failing sub-gate. The advisory
+    disclosure sits after the blocking ones, so on EVERY failing route it was
+    skipped — and a failing route is exactly the run whose disclosure matters
+    most. An advisory gate cannot change the verdict, so running it after a
+    failure costs only its runtime.
+    """
+    def _run(project, cmd):
+        return (False, "real bug") if "blocking" in cmd else (True, "clean")
+
+    monkeypatch.setattr(_flow, "_check_program_exit_zero", _run)
+    passed, reasons = _flow._evaluate_gate(tmp_path, {"all_of": [
+        {"program_exit_zero": "blocking_check --x"},
+        {"advisory_program_exit_zero": "disclosure_check ."},
+    ]})
+    assert passed is False, "the blocking failure must still fail the gate"
+    assert any(r.startswith(_flow._ADVISORY_HINT_PREFIX) for r in reasons), \
+        "the advisory verdict must survive the short-circuit"
+
+
+def test_advisory_before_the_failure_is_not_recorded_twice(tmp_path,
+                                                           monkeypatch):
+    """The paired half. Advisory sub-gates ahead of the failing one already
+    ran in the main loop; re-running the whole list would duplicate them."""
+    monkeypatch.setattr(
+        _flow, "_check_program_exit_zero",
+        lambda p, c: (False, "real bug") if "blocking" in c else (True, "ok"))
+    _p, reasons = _flow._evaluate_gate(tmp_path, {"all_of": [
+        {"advisory_program_exit_zero": "first_check ."},
+        {"program_exit_zero": "blocking_check --x"},
+        {"advisory_program_exit_zero": "second_check ."},
+    ]})
+    adv = [r for r in reasons if r.startswith(_flow._ADVISORY_HINT_PREFIX)]
+    assert len(adv) == 2, adv
+    assert len([r for r in adv if "first_check" in r]) == 1, adv
+
+
 def test_vacuous_skip_is_not_recorded_as_ok(tmp_path, monkeypatch):
     """rc=2 is the disclosed-skip tier, not a clean result. Recording it as
     `ok` would make "this project has no such input" read as "this project
