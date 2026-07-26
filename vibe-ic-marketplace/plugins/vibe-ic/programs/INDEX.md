@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 970
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 970)
+- **Total programs (excluding helpers / shims):** 971
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 971)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 961 |
+| `any` | 962 |
 
 ## Alphabetical listing
 
@@ -103,6 +103,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `arith_ss_corner_risk_check` | any | — | slow-corner arithmetic-architecture advisor. |
 | `arith_variants_synth` | any | — | deterministic SOLVER for the CVDP integer |
 | `arithmetic_synth` | any | — | deterministic SOLVER for the integer-ARITHMETIC family |
+| `artefact_defect_close_check` | any | — | closing an ARTEFACT-defect issue requires |
 | `asap7_finfet_lvs` | any | — | device-level LVS for the ASAP7 (predictive 7nm FinFET) PDK. |
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Wave 39 / D3 |
 | `assertion_property_check` | any | — | Deterministic compliance check for assertion-gen. |
@@ -1042,7 +1043,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (961 programs)
+### `any` (962 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1121,6 +1122,7 @@ _(no programs in this group)_
 - `arith_ss_corner_risk_check` — slow-corner arithmetic-architecture advisor.
 - `arith_variants_synth` — deterministic SOLVER for the CVDP integer
 - `arithmetic_synth` — deterministic SOLVER for the integer-ARITHMETIC family
+- `artefact_defect_close_check` — closing an ARTEFACT-defect issue requires
 - `asap7_finfet_lvs` — device-level LVS for the ASAP7 (predictive 7nm FinFET) PDK.
 - `assertion_covers_l3_constraints_check` — Wave 39 / D3  _[Wave 39]_
 - `assertion_property_check` — Deterministic compliance check for assertion-gen.

@@ -104,6 +104,17 @@ run "provenance correction notes"       "$ROOT" python3 "$PG/provenance_correcti
 # never mentioned and 90 shipped nowhere at all.
 run "declared outputs are findable"     "$ROOT" python3 "$PG/provenance_declared_output_check.py"
 
+# vibe-ic#381 — an issue reporting a DEFECTIVE ARTEFACT was twice closed by a
+# change that only added or fixed the CHECKER, leaving the published data
+# byte-identical and still reproducible on main. The prose rule for this lives
+# in core-agent-loop 5a-i and did not stop the close it was written for.
+# Sweep mode needs no PR context: it derives each closed issue's range from the
+# commits whose message references it. A labelled `artefact-defect` close whose
+# artefact never changed FAILS; everything else is ADVISORY (measured: 0 of 100
+# attributable closes fire). Without a reachable issue API it prints SKIPPED
+# and exits 0 — SKIPPED is not a PASS, and the log says so.
+run "artefact-defect close discipline" "$ROOT" python3 "$PG/artefact_defect_close_check.py" --recent 60
+
 # vibe-ic#410 — pdk_registry.json is not the only per-PDK table. Three others
 # are keyed independently, and registering a PDK in the registry registers it
 # in none of them. An IHP netlist was handed the SKY130A ATPG cell model while

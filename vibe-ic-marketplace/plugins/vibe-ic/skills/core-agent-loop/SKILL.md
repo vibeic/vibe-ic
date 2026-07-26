@@ -201,6 +201,26 @@ For each actionable issue:
      instance is in its debt register is NOT the artefact being
      fixed**; that is precisely the state that reads as done and is
      not.
+
+     This paragraph is prose, and prose is what failed here — it
+     already said all of the above and the close happened anyway. The
+     deterministic half is a program; run it before closing, with the
+     range you are about to push:
+     ```bash
+     python3 plugins/vibe-ic/programs/artefact_defect_close_check.py \
+         --issue-number <num> --range origin/main..HEAD
+     ```
+     `FAIL` (exit 1) when the issue carries the `artefact-defect`
+     label and the range changed none of the artefacts its body names
+     — clear it by repairing the artefact, or by writing
+     `ARTEFACT-UNCHANGED: <reason, >=30 chars>` in the close comment
+     so the residue is recorded instead of implied. `ADVISORY`
+     (exit 0) on an unlabelled issue whose body names a shipped
+     artefact the range never touched: read it, do not skim past it.
+     A version-bump manifest and a gate's own `*_baseline.json` are
+     both counted as *not* an artefact repair, because writing the
+     defective instance into a debt register is the exact move that
+     made the measured close read green.
    - **(5b)** Reproduce the original failing scenario and confirm it
      now passes.
    - **(5c)** Run the FULL plugin test suite the CI way (see Step 3 —

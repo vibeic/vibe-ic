@@ -50,7 +50,13 @@ jobs:
       # change lands, executed a strictly weaker gate set than the PR check it
       # supersedes. #394 hand-fixed one instance of exactly that; a second hand
       # sync would drift again. Per-gate rationale lives in the script.
+      # GH_TOKEN: the artefact-defect close gate (#381) reads the issue
+      # tracker. Without a token it prints SKIPPED and passes, which is
+      # exactly the "wired to nothing" state #381 is about — so give it the
+      # corpus rather than let it be decoration.
       - name: repo-hygiene gates (shared with the merge gate)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bash tools/ci/repo_hygiene_gates.sh
 

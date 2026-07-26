@@ -141,11 +141,29 @@ def _strip_prose(path: Path, text: str) -> str:
     return text
 
 
-def _read(paths) -> Dict[str, str]:
+def _rel_parts(f: Path, root: Path):
+    """Path components BELOW `root`.
+
+    Third time this file has had the same bug. `_SKIP_PARTS` is meant to skip
+    a nested `.claude/worktrees/` copy INSIDE the checkout; matched against
+    the ABSOLUTE parts it also matches the checkout's own ancestors, so a
+    repo that happens to live under `.../.claude/worktrees/<name>/` has EVERY
+    haystack file skipped. Measured: every haystack empty -> `no runner at
+    all: 494`, i.e. a confident false accusation against every checker in the
+    repo, from a matcher's own assumption. Anchor to the scan root.
+    """
+    try:
+        return set(f.resolve().relative_to(root).parts)
+    except (ValueError, OSError):
+        return set(f.parts)
+
+
+def _read(paths, root: Path) -> Dict[str, str]:
+    root = root.resolve()
     out: Dict[str, str] = {}
     for f in paths:
         s = str(f)
-        if _SKIP_PARTS & set(f.parts):
+        if _SKIP_PARTS & _rel_parts(f, root):
             continue
         try:
             out[s] = _strip_prose(f, f.read_text(errors="replace"))
@@ -160,17 +178,17 @@ def _haystacks(plugin: Path, repo_root: Path) -> Dict[str, Dict[str, str]]:
     is_test = lambda p: "/tests/" in str(p) or p.name.startswith("test_")
     return {
         "CI": _read(list((repo_root / ".github").rglob("*.yml"))
-                    + list((repo_root / ".github").rglob("*.yaml"))),
+                    + list((repo_root / ".github").rglob("*.yaml")), repo_root),
         "FLOW": _read(list((plugin / "flow").rglob("*.yml"))
-                      + list((plugin / "flow").rglob("*.yaml"))),
+                      + list((plugin / "flow").rglob("*.yaml")), repo_root),
         "TOOLS": _read(list((repo_root / "tools").rglob("*.py"))
-                       + list((repo_root / "tools").rglob("*.sh"))),
+                       + list((repo_root / "tools").rglob("*.sh")), repo_root),
         "SKILL": _read(list((plugin / "skills").rglob("*.md"))
                        + list((plugin / "agents").rglob("*.md"))
-                       + list((plugin / "commands").rglob("*.md"))),
-        "PROG": _read([p for p in pys if not is_test(p)]),
+                       + list((plugin / "commands").rglob("*.md")), repo_root),
+        "PROG": _read([p for p in pys if not is_test(p)], repo_root),
         "TEST": _read([p for p in pys if is_test(p)]
-                      + list((plugin / "tests").rglob("*.py"))),
+                      + list((plugin / "tests").rglob("*.py")), repo_root),
     }
 
 

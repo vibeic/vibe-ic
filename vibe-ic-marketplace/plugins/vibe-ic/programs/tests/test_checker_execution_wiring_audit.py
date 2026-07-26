@@ -248,3 +248,51 @@ def test_real_repo_runs_and_is_deterministic():
     b = M.audit(PROG.parents[1], root)
     assert a == b
     assert a["checkers"] > 100
+    # And the answer must be a real measurement, not the all-empty-haystack
+    # degenerate one below. See the `.claude/worktrees` regression.
+    assert len(a["no_runner_at_all"]) < a["checkers"]
+
+
+def test_a_checkout_living_under_dot_claude_worktrees_is_not_all_skipped(tmp_path):
+    """REGRESSION: the skip set matched the CHECKOUT'S OWN ancestors.
+
+    `_SKIP_PARTS` exists to skip a nested `.claude/worktrees/` copy INSIDE
+    the repo. Matched against the ABSOLUTE parts it also matches the repo's
+    ancestors, so a checkout at `.../.claude/worktrees/<name>/` has every
+    haystack file skipped and the audit reports `no runner at all` for every
+    checker in the tree. Measured on a real agent worktree: 494 of 494 — the
+    same false-accusation-from-the-matcher's-own-assumption shape as the two
+    bugs already pinned above, and it turns this gate into pure noise on the
+    checkout shape agents actually run in.
+
+    Paired against the identical tree at a plain path: the two must agree.
+    """
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    _tree(plain, ci="run: python3 sample_check.py\n")
+    nested = tmp_path / ".claude" / "worktrees" / "agent-1"
+    nested.mkdir(parents=True)
+    _tree(nested, ci="run: python3 sample_check.py\n")
+
+    a = _run(plain)
+    b = _run(nested)
+    assert b["no_runner_at_all"] == [], (
+        "the checkout's own ancestors must not empty every haystack")
+    assert a["test_only"] == b["test_only"]
+    assert a["no_runner_at_all"] == b["no_runner_at_all"]
+
+
+def test_a_nested_worktree_copy_inside_the_repo_is_still_skipped(tmp_path):
+    """The paired half — the exclusion must still do its actual job.
+
+    A vendored copy under `.claude/worktrees/` INSIDE the checkout is not a
+    runner, and counting it would let a checker look wired by its own stale
+    duplicate.
+    """
+    _tree(tmp_path, ci="name: CI\n")
+    stale = tmp_path / ".claude" / "worktrees" / "old" / "tools"
+    stale.mkdir(parents=True)
+    (stale / "runner.sh").write_text("python3 sample_check.py\n")
+    hay = M._haystacks(tmp_path / "vibe-ic-marketplace/plugins/vibe-ic", tmp_path)
+    assert not any("worktrees" in p for p in hay["TOOLS"])
+    assert _run(tmp_path)["no_runner_at_all"] == ["sample_check.py"]

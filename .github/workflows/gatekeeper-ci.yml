@@ -143,7 +143,13 @@ jobs:
       # tracked-symlink portability) were CI-only and therefore absent from the
       # merge-queue path — the same asymmetry #394 found in the NDA guard.
       # Sharing the script makes the drift impossible rather than unlikely.
+      # GH_TOKEN: the artefact-defect close gate (#381) reads the issue
+      # tracker. Without a token it prints SKIPPED and passes, which is
+      # exactly the "wired to nothing" state #381 is about — so give it the
+      # corpus rather than let it be decoration.
       - name: repo-hygiene gates (shared with ci.yml)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bash tools/ci/repo_hygiene_gates.sh
 
