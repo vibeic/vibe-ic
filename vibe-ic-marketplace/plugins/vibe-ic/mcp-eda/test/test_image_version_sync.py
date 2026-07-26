@@ -114,13 +114,24 @@ def test_stale_anchor_flagged_loudly(monkeypatch, capsys):
 
 
 @_skip
-def test_anchor_ok_when_equal_or_ahead(monkeypatch):
-    """Equal is clean; VERSION ahead of the newest published tag is a legitimate
-    unreleased bump, not a failure. A check that can never return clean is an alarm."""
+def test_anchor_ok_when_equal_and_FAILS_when_ahead(monkeypatch):
+    """Equal is clean. AHEAD is a FAIL, and this test used to assert the
+    opposite.
+
+    It read "VERSION ahead of the newest published tag is a legitimate
+    unreleased bump, not a failure" — the behaviour #354 deliberately
+    REVERSED, because that is exactly how 0.2.29, a tag that never existed on
+    ghcr, stayed pinned in 13 places for six versions while every clean-room
+    install failed. `check_anchor_vs_reality`'s own docstring has said so
+    since: "A pin the registry cannot resolve is a FAIL, not a future." The
+    code moved and the test stayed, so it had been failing on main — a test
+    asserting a superseded doctrine is worse than no test, because it argues
+    for the defect.
+    """
     m = _load()
     monkeypatch.setenv(m.PUBLISHED_TAG_ENV, "0.2.26")
     assert m.check_anchor_vs_reality("0.2.26") == 0     # equal to published
-    assert m.check_anchor_vs_reality("0.3.0") == 0      # ahead / unreleased
+    assert m.check_anchor_vs_reality("0.3.0") == 1      # unresolvable pin
 
 
 @_skip
@@ -147,3 +158,57 @@ def test_check_end_to_end_passes_when_anchor_matches_published():
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stdout
     assert "anchor tracks reality" in r.stdout
+
+
+# ── vibe-ic#423 — `:latest` must resolve to the anchor ──────────────────────
+
+def test_latest_pointing_elsewhere_is_a_FAIL(monkeypatch, capsys):
+    """THE DEFECT. `:latest` sat on the 0.2.28 manifest for four days while
+    0.2.30 was current, and every existing check passed — they compared our
+    POINTERS against the anchor, and the anchor was right. Nobody compared the
+    tag an outside reader actually pulls."""
+    m = _load()
+    monkeypatch.delenv(m.PUBLISHED_TAG_ENV, raising=False)
+    monkeypatch.setattr(m, "_query_ghcr_digest",
+                        lambda repo, tag, timeout=6.0:
+                        "sha256:aaa" if tag == "latest" else "sha256:bbb")
+    assert m.check_latest_points_at_anchor("0.2.30") == 1
+    out = capsys.readouterr().out
+    assert "does NOT point at the anchor" in out
+    assert "imagetools create" in out, "the fix must be in the message"
+
+
+def test_latest_on_the_anchor_manifest_passes(monkeypatch, capsys):
+    """The paired half — and the state of the registry after the #423 fix."""
+    m = _load()
+    monkeypatch.delenv(m.PUBLISHED_TAG_ENV, raising=False)
+    monkeypatch.setattr(m, "_query_ghcr_digest",
+                        lambda repo, tag, timeout=6.0: "sha256:same")
+    assert m.check_latest_points_at_anchor("0.2.30") == 0
+    assert "latest-vs-anchor         : OK" in capsys.readouterr().out
+
+
+def test_an_unreachable_registry_does_not_silently_pass(monkeypatch, capsys):
+    """With --require-remote it must FAIL, not shrug: "I could not look" is
+    not "it is correct"."""
+    m = _load()
+    monkeypatch.delenv(m.PUBLISHED_TAG_ENV, raising=False)
+
+    def _boom(repo, tag, timeout=6.0):
+        raise OSError("network down")
+
+    monkeypatch.setattr(m, "_query_ghcr_digest", _boom)
+    assert m.check_latest_points_at_anchor("0.2.30", require_remote=True) == 1
+    assert m.check_latest_points_at_anchor("0.2.30") == 0      # advisory mode
+    out = capsys.readouterr().out
+    assert "UNVERIFIED" in out
+
+
+def test_the_offline_override_skips_rather_than_guesses(monkeypatch, capsys):
+    """The override exists for deterministic / offline CI. There is no
+    registry to ask, so the honest result is SKIPPED — not a fabricated PASS
+    and not a failure that would make offline CI red."""
+    m = _load()
+    monkeypatch.setenv(m.PUBLISHED_TAG_ENV, "0.2.30")
+    assert m.check_latest_points_at_anchor("0.2.30", require_remote=True) == 0
+    assert "SKIPPED" in capsys.readouterr().out

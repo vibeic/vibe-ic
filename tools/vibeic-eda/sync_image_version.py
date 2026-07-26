@@ -159,6 +159,79 @@ def _query_ghcr_tags(repo: str, timeout: float = 6.0):
         return json.load(r).get("tags", []) or []
 
 
+def _query_ghcr_digest(repo: str, tag: str, timeout: float = 6.0):
+    """The manifest DIGEST a tag resolves to, via the same anonymous v2 API.
+    Raises on any transport / parse failure — the caller degrades gracefully.
+
+    vibe-ic#423. The tag list alone cannot answer "does `latest` mean the
+    latest": tags/list returns names, not what they point AT. `latest` sat on
+    the 0.2.28 manifest for four days while 0.2.30 was current, and every
+    check here passed — they compared our POINTERS against the anchor, and
+    the anchor was right. What nobody compared was the tag an outside reader
+    actually pulls.
+    """
+    tok_url = f"https://ghcr.io/token?scope=repository:{repo}:pull"
+    with urllib.request.urlopen(tok_url, timeout=timeout) as r:  # noqa: S310
+        token = json.load(r).get("token", "")
+    req = urllib.request.Request(
+        f"https://ghcr.io/v2/{repo}/manifests/{tag}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": ", ".join((
+                "application/vnd.oci.image.index.v1+json",
+                "application/vnd.oci.image.manifest.v1+json",
+                "application/vnd.docker.distribution.manifest.list.v2+json",
+                "application/vnd.docker.distribution.manifest.v2+json",
+            )),
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+        d = r.headers.get("Docker-Content-Digest")
+        if d:
+            return d
+        import hashlib
+        return "sha256:" + hashlib.sha256(r.read()).hexdigest()
+
+
+def check_latest_points_at_anchor(version: str,
+                                  require_remote: bool = False) -> int:
+    """`:latest` must resolve to the SAME manifest as the anchor version.
+
+    #423: it did not, for four days, and nothing said so. A reader who pulls
+    the tag that means "newest" got an older toolchain than the campaign runs
+    on, and their results were not comparable to the published ones. Skipped
+    (not failed) when the override env is set, because that mode exists for
+    offline / deterministic CI and there is no registry to ask.
+    """
+    if os.environ.get(PUBLISHED_TAG_ENV):
+        print("  latest-vs-anchor         : SKIPPED "
+              f"({PUBLISHED_TAG_ENV} override set — no registry to query)")
+        return 0
+    try:
+        d_latest = _query_ghcr_digest(GHCR_REPO, "latest")
+        d_anchor = _query_ghcr_digest(GHCR_REPO, version)
+    except Exception as e:  # noqa: BLE001
+        if require_remote:
+            print(f"[FAIL] latest-vs-anchor: registry unverifiable "
+                  f"({e.__class__.__name__}) and --require-remote is set.")
+            return 1
+        print(f"  latest-vs-anchor         : UNVERIFIED "
+              f"({e.__class__.__name__})")
+        return 0
+    if d_latest != d_anchor:
+        print(f"[FAIL] `:latest` does NOT point at the anchor version.")
+        print(f"       latest  -> {d_latest}")
+        print(f"       {version:<8}-> {d_anchor}")
+        print(f"       Anyone pulling the tag that means 'newest' gets a "
+              f"different toolchain from the one this repo pins, and their "
+              f"results are not comparable (vibe-ic#423).")
+        print(f"       Fix: docker buildx imagetools create "
+              f"-t ghcr.io/{GHCR_REPO}:latest ghcr.io/{GHCR_REPO}:{version}")
+        return 1
+    print(f"  latest-vs-anchor         : OK (:latest == :{version})")
+    return 0
+
+
 def published_tags(repo: str = GHCR_REPO):
     """(tags, source) — the set of PUBLISHED semver image tags, or (None,
     reason) if it can't be determined.
@@ -303,11 +376,17 @@ def do_check(root: Path, version: str, ignore,
     # relative to the newest published image tag, or the whole tree is consistently
     # wrong. This is a SEPARATE failure axis from pointer drift; either fails --check.
     anchor_rc = check_anchor_vs_reality(version, require_remote)
+    # vibe-ic#423 — a THIRD failure axis. The two above compare our pointers
+    # against the anchor and the anchor against the registry; both passed
+    # while `:latest` sat on 0.2.28 and 0.2.30 was current. Nobody was
+    # checking the tag an outside reader actually pulls.
+    latest_rc = check_latest_points_at_anchor(version, require_remote)
     if not drift_strict and not drift_net:
-        if anchor_rc == 0:
-            print(f"[PASS] all live pointers == {version} and anchor tracks reality")
+        if anchor_rc == 0 and latest_rc == 0:
+            print(f"[PASS] all live pointers == {version}, anchor tracks "
+                  f"reality, and :latest resolves to it")
             return 0
-        return anchor_rc
+        return anchor_rc or latest_rc
     print(f"[FAIL] {len(drift_strict) + len(drift_net)} live pointer(s) != {version}:")
     for rel, ln, ver, kind in drift_strict:
         print(f"   {rel}:{ln}  {kind}={ver}  (want {version})")
