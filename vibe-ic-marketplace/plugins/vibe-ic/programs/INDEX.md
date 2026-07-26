@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 955
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 955)
+- **Total programs (excluding helpers / shims):** 956
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 956)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 946 |
+| `any` | 947 |
 
 ## Alphabetical listing
 
@@ -503,6 +503,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_consumer_contract` | any | — | shared derivation helpers for the |
 | `l_doc_cross_consistency_check` | any | — | D3 program-first capture of the |
 | `l_doc_evidence_util` | any | — | the "evidence path + read-back value" primitive. |
+| `l_doc_field_producer_check` | any | — | a field a checker READS must have a PRODUCER. |
 | `l_doc_parity_diff` | any | v0.1.51 | L-doc parity diff (program-extracted vs fresh-agent-extracted). |
 | `l_doc_structured_field_count_check` | any | Wave 31 | gate (Wave 31/32, v0.119.64). |
 | `l_doc_taxonomy` | any | v0.1.51 | L-doc taxonomy single source of truth. |
@@ -1027,7 +1028,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (946 programs)
+### `any` (947 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1501,6 +1502,7 @@ _(no programs in this group)_
 - `l_doc_consumer_contract` — shared derivation helpers for the
 - `l_doc_cross_consistency_check` — D3 program-first capture of the
 - `l_doc_evidence_util` — the "evidence path + read-back value" primitive.
+- `l_doc_field_producer_check` — a field a checker READS must have a PRODUCER.
 - `l_doc_parity_diff` — L-doc parity diff (program-extracted vs fresh-agent-extracted).  _[v0.1.51]_
 - `l_doc_structured_field_count_check` — gate (Wave 31/32, v0.119.64).  _[Wave 31]_
 - `l_doc_taxonomy` — L-doc taxonomy single source of truth.  _[v0.1.51]_
