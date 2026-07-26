@@ -35,6 +35,27 @@ run() {                                   # run <label> <cwd> <cmd...>
   fi
 }
 
+# Same as `run`, but rc 2 means "could not check" rather than "found a defect".
+# A probe that needs a CLEAN tree cannot fail the suite for a developer whose
+# tree has untracked scratch in it — that is how a check becomes permanently
+# red and then ignored. rc 1 (a real finding) still fails; rc 2 is LOUD and
+# non-fatal, and CI checks out clean so it genuinely runs there.
+run_tolerating_uncheckable() {            # <label> <cwd> <cmd...>
+  local label="$1" wd="$2"; shift 2
+  echo "── $label"
+  local rc=0
+  # `|| rc=$?` and NOT a bare `( ... ); rc=$?` — this script runs under
+  # `set -e`, where a failing subshell aborts before the next line and the
+  # disclosure below would never print.
+  ( cd "$wd" && "$@" ) || rc=$?
+  if [ "$rc" -eq 0 ]; then :
+  elif [ "$rc" -eq 2 ]; then
+    echo "   ^^ NOT CHECKED (rc 2, non-fatal): $label" >&2
+  else
+    echo "   ^^ FAILED: $label" >&2; fail=1
+  fi
+}
+
 # --- repo-root scoped ------------------------------------------------------
 run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnostic_check.py" "$PLUGIN"
 
@@ -167,6 +188,15 @@ run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_
 # examined nothing. Placed LAST so it probes the full list; ~40s.
 run "gates disclose their denominator" "$ROOT" python3 "$PG/gate_discloses_denominator_check.py" "$ROOT"
 
+
+# The other half of #447: a gate that reads the WRONG POPULATION and reports
+# confidently about it. Runs every gate above twice at the same commit —
+# working checkout vs a throwaway worktree — and requires the same verdict.
+# COST: ~3m45s, roughly tripling this script's runtime. Accepted because the
+# class has produced FIVE instances, two of them inside the fixes for the
+# previous ones. Refuses (rc 2) on a dirty checkout rather than reporting the
+# uncommitted work as findings.
+run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
 run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_health_audit.py

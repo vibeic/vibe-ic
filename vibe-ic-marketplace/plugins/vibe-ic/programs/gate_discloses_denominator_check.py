@@ -73,7 +73,11 @@ _DISCLOSURE_RE = re.compile(
     re.IGNORECASE)
 
 _RUN_RE = re.compile(
-    r'^\s*run\s+"([^"]+)"\s+"?(\$ROOT|\$PLUGIN)"?\s+(.+)$', re.M)
+    # Accepts BOTH `run` and its `run_*` variants. A wrapper added for one
+    # gate (`run_tolerating_uncheckable`) silently escaped this parser, so any
+    # gate wired through it would not be covered — a coverage hole in the very
+    # check that exists to close coverage holes.
+    r'^\s*run(?:_\w+)?\s+"([^"]+)"\s+"?(\$ROOT|\$PLUGIN)"?\s+(.+)$', re.M)
 
 
 def parse_gates(script: Path) -> List[Tuple[str, str, str]]:

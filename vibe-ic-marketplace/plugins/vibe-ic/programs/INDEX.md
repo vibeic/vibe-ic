@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 984
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 984)
+- **Total programs (excluding helpers / shims):** 985
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 985)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 975 |
+| `any` | 976 |
 
 ## Alphabetical listing
 
@@ -377,6 +377,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gap_reset_granularity_check` | any | — | deterministic compliance check derived from |
 | `gate_discloses_denominator_check` | any | — | a PASS must say how much it looked at. |
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
+| `gate_host_independence_check` | any | — | the same commit must give the same verdict. |
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
@@ -1056,7 +1057,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (975 programs)
+### `any` (976 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1405,6 +1406,7 @@ _(no programs in this group)_
 - `gap_reset_granularity_check` — deterministic compliance check derived from
 - `gate_discloses_denominator_check` — a PASS must say how much it looked at.
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_
+- `gate_host_independence_check` — the same commit must give the same verdict.
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
