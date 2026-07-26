@@ -41383,6 +41383,70 @@ def _v1_6_426_normalise_port_count(port_token) -> str:
     return ""
 
 
+# ─── ORGANIC — a doc that declares its own layer NOT APPLICABLE is not ──
+#     evidence, and the L9 memory prose walker was mining it anyway.
+#
+# MEASURED on the real `benchmark-data/ic/spm/input/docs/L5_register_map.md`.
+# That file opens with `status: not-applicable` in its OWN frontmatter and its
+# body reads:
+#       `spm` **無 SW-visible registers**。
+#       → 不需 Plugin 產生 register file / CSR decoder / memory-mapped interface。
+# `_V1_6_426_RE_MEMORY_PROSE` matched the literal phrase `register file` inside
+# the sentence instructing the plugin NOT to generate one and emitted
+#   {name: null, kind: regfile, type: "register file", port_count: null,
+#    depth: null, width: null, evidence_file: "L5_register_map.md",
+#    low_confidence: true}
+# — every field that would make it actionable is null. That single fabricated
+# row is the ONLY `low_confidence: true` entry in the spm
+# `L9_INTEGRATION_SPEC.json`, and the in-gate stub-backed rule (#434,
+# review_required) reads low_confidence evidence as DEFERRED work, so Step D1
+# (Phase 1 Doc Extraction) was downgraded to WAIVED-DEFERRED on an ingestion
+# that was otherwise clean (`extraction_skipped: []`, 9/9 extracted).
+#
+# THE DOCTRINE IS ALREADY IN THIS FILE: a doc's own frontmatter outranks any
+# heuristic read of its body — the same rule as the Tier -1 frontmatter `ic:`
+# declaration in `_ic_name_from_docs`. The author has stated that this layer's
+# subject does not exist in this design; nothing mined out of that body is
+# design evidence.
+#
+# SCOPED STRICTLY PER FILE. The walker is called once per extracted doc, so a
+# not-applicable L5 can never silence a genuine L9 in the same corpus. And the
+# rule FAILS OPEN in every ambiguous case (no frontmatter / no `status:` key /
+# any other status value) — a guard that guesses would delete evidence the
+# author did supply. chip-AGNOSTIC: YAML frontmatter grammar only; no chip
+# name, PDK name or design literal participates.
+_RE_DOC_FRONTMATTER_BLOCK = re.compile(r"\A---\s*\n(.*?)\n---", re.DOTALL)
+_RE_DOC_FRONTMATTER_STATUS = re.compile(
+    r"^[ \t]*status[ \t]*:[ \t]*[\"']?(.*?)[\"']?[ \t]*$",
+    re.MULTILINE | re.IGNORECASE)
+# Deliberately NOT `l_doc_evidence_util.NO_INFORMATION_TOKENS`. That set also
+# carries `tbd` / `todo` / `pending` / `unknown` / `draft`, which mean "not
+# written yet" — NOT "does not exist". A `status: tbd` doc that already carries
+# a real memory paragraph must still be harvested; suppressing it would lose
+# evidence the author did supply.
+_DOC_STATUS_NOT_APPLICABLE = frozenset({
+    "not-applicable", "not_applicable", "not applicable", "notapplicable",
+    "n/a", "n.a.", "na", "不適用", "不适用",
+})
+
+
+def _doc_declares_not_applicable(text) -> bool:
+    """ORGANIC — True iff `text` opens with a YAML frontmatter block whose
+    `status:` key declares the document NOT APPLICABLE to this design.
+
+    Returns False for every other status value, for a doc with no frontmatter,
+    and for a frontmatter with no `status:` key. chip-AGNOSTIC."""
+    if not text or not isinstance(text, str):
+        return False
+    fm = _RE_DOC_FRONTMATTER_BLOCK.match(text)
+    if not fm:
+        return False
+    m = _RE_DOC_FRONTMATTER_STATUS.search(fm.group(1))
+    if not m:
+        return False
+    return m.group(1).strip().lower() in _DOC_STATUS_NOT_APPLICABLE
+
+
 def _v1_6_426_extract_memories_from_text(
         text: str, source_fname: str,
         l9_top_module: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -41398,8 +41462,16 @@ def _v1_6_426_extract_memories_from_text(
     names downstream). When `l9_top_module` is None / empty the
     top-module tier is a no-op; ISA-ext / shape-gate / noun-deny
     still apply. Chip-AGNOSTIC.
+
+    ORGANIC — a doc whose own frontmatter declares `status: not-applicable`
+    yields NOTHING (see the block comment above). Per-file by construction.
     """
     if not text or not isinstance(text, str):
+        return []
+    # ORGANIC — the document declares its own subject not applicable to this
+    # design. Harvesting a memory out of it fabricates hardware the author
+    # explicitly said is absent.
+    if _doc_declares_not_applicable(text):
         return []
     if len(text) > 5_000_000:
         # Bound the cost on extreme inputs.
