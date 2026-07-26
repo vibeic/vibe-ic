@@ -1877,6 +1877,26 @@ _WAIVER_HINT_PREFIX = "__WAIVER_HINT__: "
 _WAIVER_EXIT_CODE = 3
 _WAIVER_STDOUT_SENTINEL = "PASS_WITH_WAIVERS"
 
+# vibe-ic#306 — the ADVISORY slot. Until this existed, every gate key in the
+# flow definition BLOCKED once it ran: `optional_program_exit_zero` is
+# conditional-on-inputs, not advisory, and fails its step on a non-zero exit.
+# That left gates which DECLARE themselves advisory with no way to be wired at
+# all — wiring one promoted it to blocking, contradicting its own declaration
+# (#306's complaint in reverse: not "claims to block but cannot", but "claims
+# not to block and does").
+#
+# An advisory gate RUNS, its verdict is RECORDED and PRINTED, and a non-zero
+# exit does NOT fail the step. Adding this slot cannot make anything newly
+# blocking — that is the whole point, and it is why the slot itself is a safe
+# addition even though wiring a BLOCKING-declared gate is not.
+#
+# The finding must stay VISIBLE. A gate that runs and reports nothing is worse
+# than one that never ran, because the run then looks audited. The hint is
+# excluded from `non_hint_reasons` so it cannot disturb the VACUOUS / SKIP /
+# WAIVED tier promotions, and re-appended after the status is resolved so it
+# appears on the step line and in the JSON report whatever the tier.
+_ADVISORY_HINT_PREFIX = "__ADVISORY_HINT__: "
+
 
 def _stdout_signals_waiver(snippet: str) -> bool:
     """Return True iff the program's combined stdout/stderr snippet contains
@@ -4316,6 +4336,46 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             reasons.append(f"{_VACUOUS_HINT_PREFIX}{cmd}")
         return passed, reasons
 
+    # `advisory_program_exit_zero` (#306) — RUNS the program, RECORDS the
+    # verdict, and NEVER fails the step. The slot exists so a gate that
+    # declares itself advisory can be wired at all; before it, wiring one
+    # silently promoted it to blocking.
+    if "advisory_program_exit_zero" in gate:
+        spec = gate["advisory_program_exit_zero"]
+        # Accepts the same two shapes as the blocking slots: a bare command
+        # STRING (the common case, and the form the enforcement audit reads),
+        # or a dict when `condition_files_exist` is needed.
+        if isinstance(spec, str):
+            spec = {"command": spec}
+        if not isinstance(spec, dict) or not spec.get("command"):
+            # A MALFORMED advisory spec is a real gate-authoring FAIL, not an
+            # advisory one: an unrunnable gate records nothing, and "recorded
+            # nothing" must never be indistinguishable from "found nothing".
+            reasons.append("advisory_program_exit_zero: spec must be a command "
+                           "string, or a dict with a `command`")
+            return False, reasons
+        cmd = spec.get("command")
+        cond_files = spec.get("condition_files_exist")
+        if cond_files is not None:
+            if not isinstance(cond_files, list) or not cond_files:
+                reasons.append("advisory_program_exit_zero: "
+                               "`condition_files_exist` must be a non-empty "
+                               "list of glob patterns when present")
+                return False, reasons
+            present = []
+            for pat in cond_files:
+                present.extend(project.glob(pat))
+            if not present:
+                return True, reasons  # no inputs -> not applicable -> silent
+        cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
+        ok, out = _check_program_exit_zero(project, cmd)
+        if ok:
+            reasons.append(f"{_ADVISORY_HINT_PREFIX}ok: {cmd}")
+        else:
+            reasons.append(f"{_ADVISORY_HINT_PREFIX}FINDING: {cmd} :: "
+                           f"{out[:200]}")
+        return True, reasons          # advisory: never blocks, always recorded
+
     # `all_of` - list of sub-gates, all must pass
     if "all_of" in gate and isinstance(gate["all_of"], list):
         # Wave 93 — preserve VACUOUS_HINT reasons from passing sub-gates so
@@ -4343,6 +4403,12 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     # the step-level handler resolves SKIPPED-CONDITION ahead of
                     # VACUOUS_PASS when both hints are present.
                     reasons.append(hint)
+                elif hint.startswith(_ADVISORY_HINT_PREFIX):
+                    # #306 — carry the advisory verdict up. Dropping it here
+                    # would give an advisory sub-gate that RAN and FOUND
+                    # something no way to be seen, which is the failure mode
+                    # the slot exists to avoid.
+                    reasons.append(hint)
         return True, reasons
 
     # `any_of` - list of sub-gates, any one passes
@@ -4350,6 +4416,19 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         for sub in gate["any_of"]:
             if not isinstance(sub, dict):
                 continue
+            # #306 — an advisory sub-gate ALWAYS passes, so one inside `any_of`
+            # makes the whole group pass unconditionally and silently voids
+            # every sibling. That is a gate-authoring error, not an advisory
+            # finding, so it FAILs loudly instead of quietly disabling a
+            # sign-off predicate.
+            if "advisory_program_exit_zero" in sub:
+                reasons.append(
+                    "any_of contains an `advisory_program_exit_zero`: an "
+                    "advisory gate never fails, so the whole any_of would "
+                    "pass unconditionally and its siblings would never be "
+                    "consulted. Put the advisory gate in an `all_of` "
+                    "alongside them instead (#306).")
+                return False, reasons
             p, _ = _evaluate_gate(project, sub, skip_analog=skip_analog)
             if p:
                 return True, reasons
@@ -5529,7 +5608,8 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # visible WARNING finding so the authoring slip is surfaced, not hidden.
     _GATE_PREDICATE_KEYS = (
         "all_of", "any_of", "program_exit_zero",
-        "optional_program_exit_zero", "files_exist", "json_field_true",
+        "optional_program_exit_zero", "advisory_program_exit_zero",
+        "files_exist", "json_field_true",
     )
     if not gate:
         _stray = {k: step[k] for k in _GATE_PREDICATE_KEYS if k in step}
@@ -5572,10 +5652,17 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # Overall verdict resolves to PASS_WITH_WAIVERS, never a bare PASS.
         waiver_hints = [r for r in reasons
                         if r.startswith(_WAIVER_HINT_PREFIX)]
+        # #306 — an ADVISORY finding must not disturb which tier the step
+        # resolves to (it does not block, so it cannot demote a VACUOUS_PASS
+        # to a bare PASS either). Held out here and re-appended, visibly,
+        # after the status is decided.
+        advisory_hints = [r for r in reasons
+                          if r.startswith(_ADVISORY_HINT_PREFIX)]
         non_hint_reasons = [r for r in reasons
                             if not r.startswith(_VACUOUS_HINT_PREFIX)
                             and not r.startswith(_SKIP_HINT_PREFIX)
-                            and not r.startswith(_WAIVER_HINT_PREFIX)]
+                            and not r.startswith(_WAIVER_HINT_PREFIX)
+                            and not r.startswith(_ADVISORY_HINT_PREFIX)]
         if (passed and waiver_hints and not non_hint_reasons
                 and not skip_hints and not vacuous_hints):
             # WAIVED here means "DEFERRED via waiver": it leaves the required
@@ -5618,6 +5705,15 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         else:
             result.status = "PASS" if passed else "FAIL"
             result.reasons.extend(non_hint_reasons)
+        # #306 — whatever tier was chosen, the advisory verdicts are printed
+        # on the step line and carried into the JSON report. An advisory gate
+        # that ran and said nothing would make the run LOOK audited while
+        # having reported no finding, which is the shape this repo removes
+        # everywhere else.
+        for h in advisory_hints:
+            result.reasons.append(
+                f"ADVISORY (non-blocking, #306): "
+                f"{h[len(_ADVISORY_HINT_PREFIX):]}")
     else:
         # No gate — just presence of outputs counts
         result.status = "PASS" if result.evidence else "MISSING"

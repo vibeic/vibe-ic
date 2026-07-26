@@ -166,7 +166,15 @@ steps:
       - "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"
       - "phase1/generated_docs/L13_OTP.json"
     gate:
-      program_exit_zero: "phase1_all_l_docs_present_check ."
+      all_of:
+        - program_exit_zero: "phase1_all_l_docs_present_check ."
+        # vibe-ic#306/#312 — ADVISORY. Reports whether the Phase-1 EXPERT
+        # track actually ran (the dual-track's second rail). Advisory by its
+        # own declaration and by necessity: a project may legitimately run
+        # program-only today, and #312 is the open question of whether it
+        # should. Wired advisory so the answer is MEASURED on real runs
+        # instead of argued; it cannot fail a step.
+        - advisory_program_exit_zero: "phase1_expert_track_evidence_check ."
     blocks_on: []
 
   - id: 1
@@ -1208,6 +1216,14 @@ steps:
         # Provenance required: routed.def must appear as a logged
         # openroad output (wrap OpenROAD invocation with provenance_logger).
         - program_exit_zero: "provenance_check . --output phase3/stage3/pnr/routed.def --tool openroad"
+        # vibe-ic#306/#297 — ADVISORY. This gate DISCLOSES a routability-for-
+        # clock-quality trade (GRT-0273: clock NDR quietly dropped to let
+        # routing close). It declares itself advisory, so before the advisory
+        # slot existed it could not be wired at ALL — the only slots ran it as
+        # blocking, contradicting its own declaration. It now RUNS on every
+        # route and its verdict is printed and carried into the JSON report;
+        # a finding does NOT fail the step.
+        - advisory_program_exit_zero: "route_congestion_trade_disclosure ."
     blocks_on: [20]
 
   # ── Step 22: Parasitic Extraction ──────────────────────────

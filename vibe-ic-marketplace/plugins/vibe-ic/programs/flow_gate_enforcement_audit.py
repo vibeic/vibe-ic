@@ -57,7 +57,9 @@ _HERE = Path(__file__).resolve().parent
 _RUNNERS = ("phase3_one_shot_runner.py", "design_one_shot_runner.py",
             "vibe_ic_one_shot_runner.py", "phase23_one_shot_runner.py",
             "phase1_one_shot_runner.py", "analog_one_shot_runner.py")
-_GATE_RE = re.compile(r"(?:optional_)?program_exit_zero:\s*[\"']?([\w./-]+)")
+_GATE_RE = re.compile(
+    # #306 — `advisory_` is the non-blocking slot; a gate wired there IS wired.
+    r"(?:optional_|advisory_)?program_exit_zero:\s*[\"']?([\w./-]+)")
 _DECL_RE = re.compile(r"ENFORCEMENT:\s*(blocking|advisory)", re.IGNORECASE)
 
 
