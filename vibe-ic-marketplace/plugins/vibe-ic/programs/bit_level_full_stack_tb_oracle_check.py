@@ -598,6 +598,7 @@ def check(project: Path, results_path: Path) -> dict:
     # only be claimed when EVERY scored vector has a concrete golden.
     # ------------------------------------------------------------------
     scored_with_golden = 0
+    self_referential = 0
     placeholder = 0
     placeholder_samples: list[str] = []
     if isinstance(per_vector, list):
@@ -606,7 +607,24 @@ def check(project: Path, results_path: Path) -> dict:
                 placeholder += 1
                 continue
             if classify_expected_bytes(vec.get("expected_bytes")):
-                scored_with_golden += 1
+                # A golden that is the DESIGN'S OWN earlier read looks exactly
+                # as concrete as a document-derived one — it IS a concrete
+                # number, just not an independent one. `classify_expected_bytes`
+                # cannot tell them apart and must not try: the producer knows,
+                # and says so on the vector.
+                #
+                # This counter is what `benchmark_verify_report` reads and what
+                # `bit_level_full_stack_tb_check` documents as "the ONLY honest
+                # measure of functional coverage", so a self-consistency oracle
+                # counted here inflates exactly the number that is supposed to
+                # resist inflation. v1.7.2 split the two in the register-map
+                # producer's own counters and this walker kept counting them
+                # together, leaving one results.json stating both 2 and 3 for
+                # the same name.
+                if vec.get("self_referential_golden") is True:
+                    self_referential += 1
+                else:
+                    scored_with_golden += 1
             else:
                 placeholder += 1
                 if len(placeholder_samples) < 5:
@@ -619,6 +637,9 @@ def check(project: Path, results_path: Path) -> dict:
     # glance whether the green verdict is backed by real goldens.
     info["functional_coverage"] = {
         "scored_with_golden": scored_with_golden,
+        # Always emitted, including at zero. A count that only appears when
+        # non-zero cannot be used to show there were none.
+        "self_referential": self_referential,
         "placeholder": placeholder,
     }
 

@@ -735,7 +735,25 @@ def generate(project: Path, top_module: str,
     # a read-only register's read-back" is a real property and still FAILs when
     # writes leak into read-only address space. It is counted under its own
     # name so a reader can see how much of a coverage figure is self-referential.
+    # THE SPLIT ABOVE WAS NOT ENOUGH, and the gap is this file's to close.
+    # It corrected THIS program's counters, but `functional_coverage` is
+    # produced by a DIFFERENT walker (`bit_level_full_stack_tb_oracle_check`)
+    # that classifies a vector by whether `expected_bytes` LOOKS concrete —
+    # and a self-referential golden looks exactly as concrete as a documented
+    # one, because it IS a concrete number, just the design's own. So the
+    # published results.json carried `register_map_coverage.scored_with_golden
+    # = 2` beside `functional_coverage.scored_with_golden = 3`, and the second
+    # is the one `benchmark_verify_report` reads.
+    #
+    # A private constant in this module cannot be consulted by that walker, so
+    # the VECTOR carries the fact. Any counter can now tell the two apart
+    # without knowing this program's kind names, and the flag is derived from
+    # `_SELF_REF_KINDS` in one place so the two cannot drift.
     _SELF_REF_KINDS = ("ro_write_ignore",)
+    for _v in per_vector:
+        if isinstance(_v, dict):
+            _v["self_referential_golden"] = (
+                _v.get("kind") in _SELF_REF_KINDS)
     golden = [v for v in scored if v.get("kind") not in _SELF_REF_KINDS]
     selfref = [v for v in scored if v.get("kind") in _SELF_REF_KINDS]
     # When every self-referential baseline is the SAME value, the class cannot

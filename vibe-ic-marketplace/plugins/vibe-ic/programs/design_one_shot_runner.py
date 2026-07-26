@@ -2840,6 +2840,7 @@ def _finalize_full_stack_results(per_vector: List[Dict[str, Any]],
     placeholder rule. NEVER fabricates a functional PASS.
     """
     scored_with_golden = 0
+    self_referential = 0
     functional_pass = 0
     for vec in per_vector:
         eb = vec.get("expected_bytes")
@@ -2853,11 +2854,28 @@ def _finalize_full_stack_results(per_vector: List[Dict[str, Any]],
             has_golden = False
         if not has_golden:
             continue
+        # ORDER MATTERS, and getting it wrong was measured: a vector with NO
+        # golden is a PLACEHOLDER even when its oracle class is self-
+        # referential. Testing the flag first moved a `expected_bytes: None`
+        # vector into the self-referential bucket and reported 2 where 1 was
+        # right. The flag only reclassifies a golden that EXISTS.
+        #
+        # A golden that is the DESIGN'S OWN earlier read is a concrete number
+        # and passes every has_golden test above — a self-consistency oracle
+        # wearing the shape of a document-derived one. v1.7.2 split the two in
+        # the register-map producer's counters; `functional_coverage` is
+        # computed HERE, independently, and kept counting them together, so a
+        # single published results.json stated `scored_with_golden` as both 2
+        # and 3. This is the number `benchmark_verify_report` reads as the
+        # headline honesty figure, so it is the one that must not be inflated.
+        if vec.get("self_referential_golden") is True:
+            self_referential += 1
+            continue
         scored_with_golden += 1
         ab = vec.get("actual_bytes")
         if ab is not None and ab == eb and vec.get("verdict") == "PASS":
             functional_pass += 1
-    placeholder = len(per_vector) - scored_with_golden
+    placeholder = len(per_vector) - scored_with_golden - self_referential
     functional_verified = (
         len(per_vector) > 0
         and placeholder == 0
@@ -2874,6 +2892,9 @@ def _finalize_full_stack_results(per_vector: List[Dict[str, Any]],
         "functional_verified": functional_verified,
         "functional_coverage": {
             "scored_with_golden": scored_with_golden,
+            # Always emitted, including at zero — a count that appears only
+            # when non-zero cannot be used to show there were none.
+            "self_referential": self_referential,
             "placeholder": placeholder,
         },
         "tb": tb_name,
@@ -3872,6 +3893,19 @@ def step_full_stack_tb_gen(project: Path,
                 "scored_with_golden": _rm_info["scored_with_golden"],
                 "scored_passed": _rm_info["scored_passed"],
                 "scored_failed": _rm_info["scored_failed"],
+                # v1.7.2 split the self-consistency oracle into its own
+                # counters and this dict never carried them, so the verdict
+                # below could not see them. Carried now, and always — a
+                # counter absent from the record cannot be acted on and
+                # cannot be audited.
+                "scored_self_referential": _rm_info.get(
+                    "scored_self_referential", 0),
+                "self_referential_passed": _rm_info.get(
+                    "self_referential_passed", 0),
+                "self_referential_failed": _rm_info.get(
+                    "self_referential_failed", 0),
+                "self_referential_undiscriminating": _rm_info.get(
+                    "self_referential_undiscriminating", False),
                 "transaction_tb": _rm_info["tb"],
                 "result_oracle_deferred": True,
                 "result_oracle_note": (
@@ -3929,14 +3963,28 @@ def step_full_stack_tb_gen(project: Path,
         # it is neither a connectivity-only skeleton nor a full functional
         # PASS while write-only addresses have no read golden and the
         # algorithmic RESULT oracle stays deferred.
-        verdict_word = "FAIL" if _rmc.get("scored_failed") else "SKIP"
+        # BOTH counters, and this is a REGRESSION FIX, not a widening.
+        # v1.7.2 moved the `ro_write_ignore` oracle out of `scored_failed`
+        # into `self_referential_failed` — correctly, because its golden is
+        # the design's own read. But this verdict still read only the first,
+        # so the property that commit explicitly promised to keep ("a write
+        # must not change a read-only register's read-back ... still FAILs
+        # when writes leak into read-only address space") stopped failing
+        # anything. The detection kept computing; nothing acted on it.
+        _rm_failed = (int(_rmc.get("scored_failed") or 0)
+                      + int(_rmc.get("self_referential_failed") or 0))
+        verdict_word = "FAIL" if _rm_failed else "SKIP"
         note = (f"tb_{top_module}_full.v emitted; register-map TRANSACTION "
                 f"driver simulated {_rmc.get('addresses_probed')} documented "
                 f"address(es) and golden-scored "
                 f"{_rmc.get('scored_with_golden')} of "
                 f"{_rmc.get('registers_readable')} readable register(s) "
                 f"(passed={_rmc.get('scored_passed')}, "
-                f"failed={_rmc.get('scored_failed')}). Write-only addresses "
+                f"failed={_rmc.get('scored_failed')}, "
+                f"self-referential="
+                f"{_rmc.get('scored_self_referential')} "
+                f"[failed={_rmc.get('self_referential_failed')}]). "
+                f"Write-only addresses "
                 f"have no read golden and the algorithmic RESULT oracle stays "
                 f"deferred, so NO blanket functional PASS is claimed.")
     else:

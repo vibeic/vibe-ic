@@ -456,8 +456,12 @@ def test_functional_coverage_emitted(tmp_path):
     )
     assert r.returncode == 1, r.stdout + r.stderr
     data = json.loads(out_json.read_text())
+    # `self_referential` is emitted even at zero: a golden that is the
+    # design's OWN earlier read is a concrete number and would otherwise be
+    # counted as an independent one. A count that appears only when non-zero
+    # cannot be used to show there were none.
     assert data["functional_coverage"] == {
-        "scored_with_golden": 5, "placeholder": 3}
+        "scored_with_golden": 5, "self_referential": 0, "placeholder": 3}
 
 
 def test_real_golden_pass_emits_coverage(tmp_path):
