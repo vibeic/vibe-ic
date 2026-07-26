@@ -54,6 +54,62 @@ def test_365_tool_name_is_the_commands_own_first_token(tmp_path):
                                                        "some_future_tool"]
 
 
+def test_365_tool_name_survives_the_runners_real_export_prologue(tmp_path):
+    """REGRESSION, found on a REAL run and invisible to the test above.
+
+    Every container command this runner emits is prefixed with
+    `export PATH=... &&`, so taking argv[0] recorded `tool: "export"` for
+    EVERY EDA invocation — a ledger column that looks populated while naming
+    a shell builtin, which is the very defect #365 was filed about.
+
+    The pre-existing unit test passed throughout because its fixture used a
+    bare `yosys ...` command; production never looks like that. The command
+    below is the shape the runner actually produced, copied from the ledger
+    of a real OpenROAD run.
+    """
+    real = ("export PATH=/foss/tools/openroad/bin:/foss/tools/bin:$PATH && "
+            "openroad -no_init -exit /w/reports/phase3/ir_em_spm.tcl 2>&1 "
+            "| tee /w/reports/phase3/ir_em.log")
+    p3.set_invocation_provenance_sink(tmp_path)
+    try:
+        p3._log_invocation(real, 0, 798)
+        p3._log_invocation("cd /w && yosys -s synth.ys", 0, 12)
+        p3._log_invocation("FOO=1 netgen -batch source lvs.tcl", 0, 5)
+    finally:
+        p3.set_invocation_provenance_sink(None)
+    assert [e["tool"] for e in _entries(tmp_path)] == ["openroad", "yosys",
+                                                       "netgen"]
+
+
+def test_365_a_chain_that_is_only_prologue_still_names_something(tmp_path):
+    """The paired half: never return an empty tool. If the whole chain is
+    shell prologue there IS no program, and reporting the prologue is honest
+    — inventing one would not be."""
+    p3.set_invocation_provenance_sink(tmp_path)
+    try:
+        p3._log_invocation("export A=1 && export B=2", 0, 1)
+        p3._log_invocation("   ", 0, 1)
+    finally:
+        p3.set_invocation_provenance_sink(None)
+    assert [e["tool"] for e in _entries(tmp_path)] == ["export", "sh"]
+
+
+def test_365_the_other_writers_duration_key_is_populated(tmp_path):
+    """`provenance_logger.py` writes `duration_s` into this SAME file. Emitting
+    only `duration_ms` would leave every existing consumer of `duration_s`
+    reading nothing for these rows — a new reader-without-producer split
+    (#312 family) manufactured by the fix for #365."""
+    p3.set_invocation_provenance_sink(tmp_path)
+    try:
+        p3._log_invocation("openroad x.tcl", 0, 2500)
+    finally:
+        p3.set_invocation_provenance_sink(None)
+    e = _entries(tmp_path)[0]
+    assert e["duration_ms"] == 2500
+    assert e["duration_s"] == 2.5
+    assert e["record"] == "invocation"
+
+
 def test_365_no_sink_means_no_writes_anywhere(tmp_path):
     """A library caller must not have entries appear in someone else's tree."""
     p3.set_invocation_provenance_sink(None)

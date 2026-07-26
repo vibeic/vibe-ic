@@ -356,22 +356,82 @@ def set_invocation_provenance_sink(project: Optional[Path]) -> None:
     _PROV_SINK = project
 
 
+# POSIX shell builtins / prologue commands that can PRECEDE the real tool in a
+# `... && <tool> ...` chain. This is a list of SHELL grammar, not a list of our
+# tools — no EDA binary, design or vendor name appears here, so it stays
+# correct for a tool this repo has never run.
+_SHELL_PROLOGUE = frozenset((
+    "export", "cd", "set", "unset", "source", ".", "umask", "ulimit",
+    "eval", "exec", "true", ":", "shift", "readonly", "local", "alias",
+))
+
+
+def _tool_from_command(cmd: str) -> str:
+    """The FIRST REAL PROGRAM in a shell command chain.
+
+    Measured on a real run before this existed: every entry recorded
+    `tool: "export"`, because the runner prefixes its container commands with
+    `export PATH=... && openroad ...` and the old code took `argv[0]`. A
+    ledger whose `tool` column names a shell builtin for every EDA run is the
+    same defect vibe-ic#365 was filed about — a field that LOOKS populated
+    while carrying the wrong thing — reintroduced by the fix for it.
+
+    Walks the `&&` / `;` chain and returns the first segment whose command
+    word is neither a shell builtin nor a `VAR=value` assignment. Falls back
+    to the first segment when the whole chain is prologue, so the result is
+    never empty.
+    """
+    text = (cmd or "").strip()
+    if not text:
+        return "sh"
+    try:
+        parts = re.split(r"\s*(?:&&|\|\||;)\s*", text)
+    except (TypeError, ValueError):
+        parts = [text]
+    first = ""
+    for seg in parts:
+        seg = seg.strip()
+        if not seg:
+            continue
+        try:
+            words = shlex.split(seg)
+        except ValueError:
+            words = seg.split()
+        # Skip leading `VAR=value` assignments (`FOO=1 bar` runs `bar`).
+        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+            words.pop(0)
+        if not words:
+            continue
+        head = words[0].rsplit("/", 1)[-1]
+        first = first or head
+        if head not in _SHELL_PROLOGUE:
+            return head
+    return first or "sh"
+
+
 def _log_invocation(cmd: str, rc: int, duration_ms: int,
                     marker: Optional[str] = None) -> None:
     """Append ONE measured invocation record. Never raises: a ledger that can
-    break the run it documents would be traded away the first time it did."""
+    break the run it documents would be traded away the first time it did.
+
+    `duration_s` is emitted ALONGSIDE `duration_ms` on purpose. The other
+    writer of this same file (`provenance_logger.py`) has always used
+    `duration_s`, so emitting only `duration_ms` would leave every existing
+    consumer of `duration_s` reading nothing for these rows — a new
+    reader-without-producer split (the vibe-ic#312 family) created by the fix
+    for #365. `record` lets a consumer tell the two writers apart rather than
+    inferring it from which keys happen to be present.
+    """
     sink = _PROV_SINK
     if sink is None:
         return
-    try:
-        tool = (shlex.split(cmd)[0] if cmd.strip() else "") or "sh"
-    except ValueError:
-        tool = (cmd.strip().split() or ["sh"])[0]
     entry = {
-        "tool": tool.rsplit("/", 1)[-1],
+        "record": "invocation",
+        "tool": _tool_from_command(cmd),
         "command": cmd[:400],
         "exit_code": int(rc),
         "duration_ms": int(duration_ms),   # MEASURED, not a placeholder
+        "duration_s": round(int(duration_ms) / 1000.0, 3),
         "measured": True,
         # module-scope import: `_dt` in this file is a FUNCTION-local alias
         # elsewhere, so referencing it here would NameError at runtime — and
