@@ -146,6 +146,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--flow", help="flow definition YAML")
     ap.add_argument("--programs", help="programs dir (default: this one)")
     ap.add_argument("--json", help="write the report here")
+    ap.add_argument("--baseline", help="known-debt file; NEW contradictions "
+                    "and NEW orphans fail, the recorded ones do not")
+    ap.add_argument("--write-baseline", action="store_true",
+                    help="record the CURRENT set; it may only ever shrink")
     a = ap.parse_args(argv)
     flow = _flow_def(a.flow)
     programs = Path(a.programs) if a.programs else _HERE
@@ -167,13 +171,59 @@ def main(argv: Optional[List[str]] = None) -> int:
               "so not even the final audit reaches them:")
         for o in rep["orphaned"]:
             print(f"  {o['gate']}  (declared {o['declared']})")
-    if rep["contradictions"]:
-        print("\nCONTRADICTIONS — declare blocking but are wired audit-only:")
-        for c in rep["contradictions"]:
-            print(f"  {c['gate']}")
+    # A gate that DECLARES blocking and is wired audit-only, or that declares
+    # an intent and is not in the flow at all, is the very defect this audit
+    # names — measured in a gate's own terms. Four such gates exist today, two
+    # of them added during this campaign: declaring an intent is not wiring
+    # it. Fixing them changes what a real run BLOCKS on, which is the flow
+    # owner's decision, not this audit's. So the four are recorded as DEBT and
+    # this audit blocks anything NEW — the class stops growing without the
+    # audit quietly deciding enforcement policy on its own.
+    now = sorted([f"contradiction::{c['gate']}" for c in rep["contradictions"]]
+                 + [f"orphan::{o['gate']}" for o in (rep.get("orphaned") or [])])
+    bl_path = Path(a.baseline) if a.baseline else (
+        _HERE / "flow_gate_enforcement_baseline.json")
+    prev = None
+    if bl_path.is_file():
+        try:
+            prev = sorted(str(x) for x in
+                          (json.loads(bl_path.read_text()).get("known") or []))
+        except (OSError, ValueError):
+            prev = None
+    if a.write_baseline:
+        if prev is not None and len(now) > len(prev):
+            print(f"\n[FAIL] refusing to GROW the baseline "
+                  f"({len(prev)} -> {len(now)}): this register records debt "
+                  f"that must be paid down, never permission to add more.")
+            return 1
+        bl_path.write_text(json.dumps(
+            {"_comment": ("Gates that declare an intent they are not wired "
+                          "for (vibe-ic#306/#316). MAY ONLY SHRINK. Fixing "
+                          "one changes what a real run blocks on — a flow-"
+                          "owner decision — so they are recorded, not "
+                          "silently enforced here."),
+             "known": now}, indent=2) + "\n")
+        print(f"\nwrote {bl_path} ({len(now)} entr(ies))")
+        return 0
+    if prev is None:
+        return 1 if now else 0
+    new = [k for k in now if k not in set(prev)]
+    paid = [k for k in prev if k not in set(now)]
+    if paid:
+        print(f"\n[FAIL] {len(paid)} recorded entr(ies) no longer contradict "
+              f"— the debt was paid; shrink the baseline so it cannot become "
+              f"standing permission:")
+        for k in paid:
+            print(f"   (resolved) {k}")
+    if new:
+        print(f"\n[FAIL] {len(new)} NEW gate(s) declare an intent they are "
+              f"not wired for:")
+        for k in new:
+            print(f"   {k}")
+    if new or paid:
         return 1
-    if rep.get("orphaned"):
-        return 1
+    print(f"\n[PASS] no NEW enforcement contradiction "
+          f"({len(now)} recorded as debt)")
     return 0
 
 

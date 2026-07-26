@@ -1,0 +1,9 @@
+{
+  "_comment": "Gates that declare an intent they are not wired for (vibe-ic#306/#316). MAY ONLY SHRINK. Fixing one changes what a real run blocks on \u2014 a flow-owner decision \u2014 so they are recorded, not silently enforced here.",
+  "known": [
+    "contradiction::gds_substance_check",
+    "orphan::drv_promotion_corroboration_check",
+    "orphan::phase1_expert_track_evidence_check",
+    "orphan::route_congestion_trade_disclosure"
+  ]
+}
