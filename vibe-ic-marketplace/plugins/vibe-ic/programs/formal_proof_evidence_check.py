@@ -184,9 +184,48 @@ def _sibling_env_gap(formal_dir: Path):
     return None
 
 
+def _authored_sby_files(formal_dir):
+    """Every AUTHORED `.sby` under `formal/`, recursively.
+
+    ORGANIC #412 — discovery was INCONSISTENT: transcripts were found with
+    `rglob`, `.sby` and `results.json` only at the top level. A cell whose
+    evidence is organised one level down (`formal/<campaign>/`,
+    `formal/<property>/`) therefore got "results.json absent — nothing claims
+    a proof" for evidence this same function had already located. Measured on
+    the published ihp-sg13g2 cell: `.sby`, `.sby.log` and `results.json` all
+    present under `campaign_v1558/`, verdict FAIL / NO_RESULTS.
+
+    SymbiYosys writes its OWN copy of the config into each task workdir as
+    `config.sby`, so a bare `rglob("*.sby")` would count the tool's generated
+    artefact as a second authored proof. One is tracked in this repo today.
+    Skipped STRUCTURALLY — `config.sby` beside a `status` or `logfile.txt`
+    is a workdir, not an authored task — rather than by name alone, so an
+    authored file that happens to be called `config.sby` still counts.
+    """
+    out = []
+    for f in sorted(formal_dir.rglob("*.sby")):
+        if f.name == "config.sby" and (
+                (f.parent / "status").exists()
+                or (f.parent / "logfile.txt").exists()):
+            continue
+        out.append(f)
+    return out
+
+
+def _first_results_json(formal_dir):
+    """`formal/results.json`, else the first one found recursively (#412)."""
+    top = formal_dir / "results.json"
+    if top.is_file():
+        return top
+    for f in sorted(formal_dir.rglob("results.json")):
+        if f.is_file():
+            return f
+    return top          # non-existent top-level path, for the message
+
+
 def audit(project: Path) -> dict:
     formal_dir = _pl.formal_dir(project)
-    results_path = formal_dir / "results.json"
+    results_path = _first_results_json(formal_dir)
     rep = {"program": "formal_proof_evidence_check", "version": "1.0.0",
            "findings": []}
 
@@ -264,7 +303,7 @@ def audit(project: Path) -> dict:
     # (a) an elaboratable .sby ----------------------------------------------
     sby_ok = False
     sby_missing_refs = []
-    sby_files = sorted(formal_dir.glob("*.sby"))
+    sby_files = _authored_sby_files(formal_dir)
     sby_no_refs = []
     for sby in sby_files:
         txt = sby.read_text(errors="replace")
