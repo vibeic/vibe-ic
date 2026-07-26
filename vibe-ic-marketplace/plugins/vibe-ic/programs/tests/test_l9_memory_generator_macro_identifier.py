@@ -1,18 +1,16 @@
 """The L9 memory walker threw away a REAL SRAM hard macro.
 
-`benchmark-data/ic/edge_llm_accel` instantiates twenty `fakeram45_2048x39`
-hard macros — the LEF / Liberty / behavioural model are all on disk under
-`input/pdk_local/fakeram45/` — and shipped
-`phase1/generated_docs/L9_INTEGRATION_SPEC.json` with `memories: []`.
+`benchmark-data/ic/edge_llm_accel` stages `fakeram45_2048x39` — LEF, Liberty
+and behavioural model — under `input/pdk_local/fakeram45/`, and the macro did
+not reach `L9.memories[]`.
 
 The walker RAN and FOUND the macro; the promotion gate
-`_v1_6_441_is_useful_memory_entry` threw it away, because a generator-emitted
-macro cell name fails BOTH of the gate's clauses:
+`_v1_6_441_is_useful_memory_entry` threw it away, because the macro cell name
+fails BOTH of the gate's clauses:
 
   (a) structural — depth/width were never extracted. `_V1_6_426_RE_MEMORY_PROSE`
-      captures `<depth>x<width>` only AFTER the type keyword, and the source doc
-      writes ``| SRAM 巨集 | `fakeram45_2048x39` × 20 |``: the dimensions live
-      INSIDE the identifier, to the LEFT of the keyword.
+      captures `<depth>x<width>` only AFTER the type keyword, and here the
+      dimensions live INSIDE the identifier, to the LEFT of the keyword.
   (b) name token — `_MEMORY_NAME_TOKEN_RE` requires a LEFT WORD BOUNDARY, and in
       `fakeram45` the `ram` is preceded by `e`. `sram45_2048x39` promotes,
       `fakeram45_2048x39` does not.
@@ -24,48 +22,38 @@ PROGRAM / DIAGRAM / HISTOGRAM / diagram_ctrl out of `memories[]` (pinned by
 `test_v1_0_5_issue612_memory_walker_nonmemory_tokens.py`).
 
 The first attempt at a second clause paired the morpheme with a
-`<digits>x<digits>` "organisation token" in the same name. MEASURED, that does
-not work: `\\d+\\s*[xX]\\s*\\d+` matches the hex literals `0x12` / `0X7F`, and
-`fakeram45_2048x39` and `DIAGRAM_16x9` are otherwise the same string shape.
-Tightening the token (no whitespace, then no hex, then anchored at an `_`
-boundary, then requiring the morpheme itself to be followed by a digit) never
-got below three false accepts — `diagram2_16x9`, `histogram8_256x8`,
-`program0_4x4` — and the tightest form falsely REJECTED `dffram_1024x32`, a
-real OpenLane macro family. A `<digits>x<digits>` group is evidence of two
-numbers, not of a memory. That clause is gone, and
-`test_organisation_token_alone_never_promotes` keeps it gone.
+`<digits>x<digits>` "organisation token" in the same name, tightened it, and
+was abandoned. That clause is gone;
+`test_the_tightest_lexical_rule_is_still_wrong_in_both_directions` spells the
+tightest form out as a regex and scores it, and
+`test_organisation_token_alone_never_promotes` keeps the token off the
+promotion path.
 
 The evidence that does separate them comes from OUTSIDE the string: the design
-under analysis STAGED `fakeram45_2048x39.lef` (35140 B), `.lib` and `.v` under
-its own `input/pdk_local/fakeram45/`, and that LEF declares
-`MACRO fakeram45_2048x39`. An aspect ratio, a statistics unit and a hex error
-code never have a LEF.
-`test_real_doc_without_the_staged_artifact_stays_a_candidate` proves the
-artefact — not the name — is the lever.
+under analysis staged `fakeram45_2048x39.lef`, `.lib` and `.v` under its own
+`input/pdk_local/fakeram45/`, and that LEF declares `MACRO fakeram45_2048x39`.
+`test_real_doc_without_the_staged_artifact_stays_a_candidate` shows the
+artefact — not the name — is the lever, and
+`test_staged_artifact_is_the_only_lever` states what the surviving morpheme
+conjunct still lets through.
 
-The promoted row keeps `depth`/`width` as None. Generator conventions disagree
-on ORDER — fakeram45_2048x39's own `.v` declares `WORD_DEPTH = 2048` /
-`BITS = 39` (depth x width) while sky130 sram macro names are width x depth —
-so assigning them from the name would FABRICATE NUMBERS.
+The promoted row keeps `depth`/`width` as None: assigning them from the name
+would FABRICATE NUMBERS, because the name does not say which number is which.
 
 THE SCAN THAT READS THE ARTEFACT HAD TO BE FIXED TOO
 ----------------------------------------------------
-A lever that misses the artefact is not that lever. Two ways it did:
+Two ways the scan missed the artefact:
 
-  * it skipped EVERY symlink, file symlinks included — so staging the macro
-    the normal way (symlink a PDK / IP tree into place) produced an empty
-    staged set and `memories == []`, the original defect through a different
-    door. Measured on the REAL design with the REAL documents, and it made
-    this walker disagree with `phase3_one_shot_runner._discover_local_macros`
-    and `hardmacro_supply_intent`, which read the SAME directory and both
-    follow file symlinks. Symlinks are now followed; the broken link, the
-    loop and the out-of-project target are each decided explicitly and each
-    pinned below.
+  * it skipped EVERY symlink, file symlinks included — so staging the macro by
+    symlinking a PDK / IP tree into place produced an empty staged set and
+    `memories == []`, the original defect through a different door. Symlinks
+    are now followed; the broken link, the loop and the out-of-project target
+    are each decided explicitly and each pinned below.
   * its caps truncated in silence, and a plain breadth-first walk drained the
-    first directory completely — so `input/pdk_local/aaa_stdcells/` could
-    spend the entire budget and the promotion vanished with nothing said.
-    Order is now fair-share across directories, and what the caps DO cut is
-    reported on stderr, in `L9.staged_macro_scan_truncated`, and on the very
+    first directory completely — so a large sibling directory could spend the
+    entire budget and the promotion vanished with nothing said. Order is now
+    fair-share across directories, and what the caps DO cut is reported on
+    stderr, in `L9.staged_macro_scan_truncated`, and on the very
     `memory_candidates[]` row that would have been promoted.
 
 chip-AGNOSTIC: open LEF / Liberty / GDS file-and-keyword conventions, read out
@@ -160,9 +148,9 @@ def test_real_edge_llm_accel_docs_promote_the_sram_macro():
 
 
 def test_real_doc_promoted_row_does_not_fabricate_depth_width():
-    """The promoted row must NOT carry invented dimensions. Generator naming
-    order is not portable, so depth/width stay None and the pre-existing
-    `low_confidence` marker stays on the row."""
+    """The promoted row must NOT carry invented dimensions: the name does not
+    say which number is depth and which is width, so depth/width stay None and
+    the pre-existing `low_confidence` marker stays on the row."""
     real = _real_docs()
     if real is None:
         pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
@@ -185,8 +173,8 @@ def test_real_doc_without_the_staged_artifact_stays_a_candidate():
 
     Same real documents, same real macro name, but no design root — so no
     staged-macro evidence. The row must stay in `memory_candidates[]`. If this
-    ever starts passing on name shape alone, the clause has silently grown a
-    lexical rule back and every attack in this file is live again."""
+    starts passing on name shape alone, the clause has grown a lexical rule
+    back."""
     real = _real_docs()
     if real is None:
         pytest.skip("benchmark-data/ic/edge_llm_accel/input/docs not on disk")
@@ -245,12 +233,11 @@ def test_real_doc_non_macro_neighbour_stays_a_candidate():
 # ------------------------------------------------- end-to-end junk fragments
 
 
-# Realistic L1-L9 document prose in the exact Markdown / pipe-table / backtick
-# shapes the v1.6.468 back-walker was built for. Each fragment makes the walker
-# latch a NON-memory identifier that carries both a memory morpheme and a
-# `<digits>x<digits>` (or hex) group — and every one of them was promoted into
-# `memories[]` by the first version of this clause. None of these designs
-# stages a macro; every row must stay in `memory_candidates[]`.
+# L1-L9 document prose in the Markdown / pipe-table / backtick shapes the
+# v1.6.468 back-walker was built for. Each fragment makes the walker latch a
+# NON-memory identifier that carries both a memory morpheme and a
+# `<digits>x<digits>` (or hex) group. None of these designs stages a macro, so
+# every row must stay in `memory_candidates[]`.
 _JUNK_FRAGMENTS = {
     "A_systolic_L8.md":
         "## 8.2 PE array\n| module | note |\n|---|---|\n"
@@ -280,8 +267,8 @@ _JUNK_FRAGMENTS = {
 
 @pytest.mark.parametrize("fname", sorted(_JUNK_FRAGMENTS))
 def test_junk_fragment_stays_a_candidate(fname):
-    """Nine end-to-end fragments in the real document shapes. An aspect ratio,
-    a statistics unit and a hex error code are not memories."""
+    """Nine end-to-end fragments. None of these designs stages a macro, so
+    nothing here may reach `memories[]`."""
     l9 = {"top_module": "dut_top"}
     _emit(l9, {fname: _JUNK_FRAGMENTS[fname]}, None)
     promoted = [e.get("name") for e in (l9.get("memories") or [])]
@@ -328,9 +315,8 @@ def test_staged_lookup_is_fail_safe(tmp_path):
 
 def test_staged_macro_promotes_only_with_the_morpheme(tmp_path):
     """The staged set is necessary but the memory morpheme is still required,
-    so a staged ANALOG hardmacro (`ldo`, `delta_sigma` — both real artefacts
-    elsewhere in benchmark-data) latched off nearby memory prose does not
-    become a memory row."""
+    so a staged ANALOG hardmacro (`ldo`, `delta_sigma`) latched off nearby
+    memory prose does not become a memory row."""
     _stage(tmp_path, "input/pdk_local/analog/ldo.lef", "MACRO ldo\nEND ldo\n")
     _stage(tmp_path, "input/pdk_local/analog/delta_sigma.lef", "")
     staged = P._staged_macro_cell_names(tmp_path)
@@ -370,10 +356,8 @@ def test_organisation_token_alone_never_promotes():
 
 def test_hex_literal_never_reaches_the_promotion_path():
     """`0x12` / `0X7F` / `0x0` all matched the abandoned organisation regex,
-    and `0x` is the DEFINING SHAPE of the L4 command-protocol and L5
-    register-map documents this walker consumes. The last four names below are
-    verbatim identifiers harvested out of this repo's own Bluetooth-HCI error
-    tables — real inputs, not invented ones."""
+    and `0x` is common in the L4 command-protocol and L5 register-map
+    documents this walker consumes. None of these names may promote."""
     for nm in ("CMD_PARAM_ERR_0x1F", "PROGRAM_0x40",
                "FP_PDN_HOFFSET_PARAM_0x10", "WITH_CSR_PARAM_0x1",
                "invalid_hci_command_parameters_0x12",
@@ -384,15 +368,13 @@ def test_hex_literal_never_reaches_the_promotion_path():
 
 
 def test_staged_artifact_is_the_only_lever():
-    """THE HONEST RESIDUAL, asserted as the code's ACTUAL behaviour.
+    """THE RESIDUAL, asserted as the code's ACTUAL behaviour.
 
     The surviving conjunct is the memory morpheme, and `DIAGRAM` contains
-    `ram`. So a design that really staged `DIAGRAM_16x9.lef` under its own
-    `input/pdk_local/` WOULD promote `DIAGRAM_16x9`. That is no longer a
-    lexical accident: it means the design shipped a physical macro under that
-    cell name. This test pins the TRUE behaviour rather than a prettier one —
-    if the rule is ever tightened further, change this test; never let the
-    comment and the code drift apart again."""
+    `ram`. So a design that stages `DIAGRAM_16x9.lef` under its own
+    `input/pdk_local/` WILL promote `DIAGRAM_16x9` — it shipped a physical
+    macro under that cell name. This test pins that behaviour; if the rule is
+    tightened further, change this test with it."""
     assert U({"name": "DIAGRAM_16x9"}) is False
     assert U({"name": "DIAGRAM_16x9"}, frozenset({"diagram_16x9"})) is True
     # ...and the artefact must name THAT cell, not a neighbour of it.
@@ -422,10 +404,8 @@ def test_issue612_token_regex_is_byte_untouched():
 def test_issue612_negatives_stay_rejected_bare_and_suffixed():
     """MANDATORY IN BOTH FORMS.
     `test_v1_0_5_issue612_memory_walker_nonmemory_tokens.py` pins only the
-    BARE names; the first version of this clause re-admitted every one of them
-    the moment a dimension or hex suffix was appended, while its own comment
-    claimed both halves were required. Pin the suffixed forms here so that can
-    never silently become true again."""
+    BARE names. Pin the suffixed forms here too, so appending a dimension or
+    hex suffix cannot silently re-admit one."""
     bare = ("i_rst", "RESET_PC", "WITH_CSR", "FP_CORE_UTIL",
             "PL_TARGET_DENSITY", "FP_PDN_HOFFSET", "GF180MCU",
             "Cyclone10LP", "sky130_fd_sc_hd", "i_gpio", "o_gpio",
@@ -458,14 +438,9 @@ def test_non_dict_and_empty_unchanged():
 # STAGING BY SYMLINK
 #
 # The lever is the design's own staged artefact, so the scan that looks
-# for the artefact must see it however the design put it there. Symlinking
-# a PDK / IP tree into place is the normal staging idiom, and the scan used
-# to skip EVERY symlink — file symlinks included, which cannot create a
-# traversal loop and were never the thing the guard was for.
-#
-# Measured on the REAL edge_llm_accel design with the REAL documents, the
-# per-file-symlink staging shape produced `memories == []`: the defect this
-# whole branch exists to fix, back again, through a different door.
+# for the artefact must see it however the design put it there. The scan
+# used to skip EVERY symlink — file symlinks included, which cannot create
+# a traversal loop and were not what the guard was for.
 #
 # Each shape below is pinned separately because each is a distinct decision:
 # follow / do not follow, and what "follow" means for a target outside the
@@ -528,8 +503,7 @@ def _stage_shape(tmp_path, shape):
 def test_symlinked_staging_reaches_memories_end_to_end(tmp_path, shape):
     """THE LOAD-BEARING SYMLINK TEST. Real documents, real macro files, five
     staging shapes — the promotion must not depend on which one the operator
-    chose. `file-symlink`, `dir-symlink` and `nested-dir-symlink` all returned
-    an EMPTY staged set and `memories == []` before this change."""
+    chose."""
     if _real_staged_macro_dir() is None:
         pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
     proj = _stage_shape(tmp_path, shape)
@@ -553,17 +527,11 @@ def test_symlinked_staging_agrees_with_the_other_readers_of_this_directory(
     """THREE PROGRAMS, ONE DIRECTORY, ONE ANSWER.
 
     `phase3_one_shot_runner._discover_local_macros` and
-    `hardmacro_supply_intent` already read `<project>/input/pdk_local/` and
-    already follow file symlinks (`is_file()` and `rglob("*.lef")` + open both
-    do). This walker skipped them, so the three programs disagreed about what
-    the design had staged — measured, on this exact fixture: phase3 saw
-    libs=1 lefs=1 while this walker saw nothing.
-
-    Pinned for FILE symlinks, which is the shape all three agree on. The two
-    siblings disagree with EACH OTHER about directory symlinks (phase3's
-    top-level `iterdir()`/`is_dir()` follows one, `rglob` does not descend into
-    one), so there is no single sibling behaviour to match there; see the
-    module comment on `_staged_macro_scan` for how that tie is broken."""
+    `hardmacro_supply_intent` also read `<project>/input/pdk_local/`. This test
+    asserts what all three see on the FILE-symlink shape, on one fixture.
+    `test_this_walker_is_a_superset_of_its_two_siblings` measures the other
+    shapes, including the ones where the two siblings disagree with each
+    other."""
     if _real_staged_macro_dir() is None:
         pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
     p3 = pytest.importorskip("phase3_one_shot_runner")
@@ -644,8 +612,7 @@ def _scan(project):
 
 def _big_sibling(tmp_path, n_entries):
     """A sibling directory that sorts BEFORE the macro's directory and holds
-    more entries than the whole scan budget — a staged standard-cell library,
-    which is exactly what a design puts next to its macros."""
+    more entries than the whole scan budget."""
     d = Path(tmp_path) / "input" / "pdk_local" / "aaa_stdcells"
     d.mkdir(parents=True)
     for i in range(n_entries):
@@ -794,10 +761,10 @@ def test_an_unreadable_directory_is_reported_like_a_cap(tmp_path):
 
 
 def test_a_complete_scan_reports_nothing_and_changes_no_l9_key(tmp_path):
-    """The report exists only when there is something to report. Every design
-    in benchmark-data scans completely, so no L9 in the corpus grows a key,
-    no typed-field count moves, and the truncation channel cannot become
-    noise that readers learn to ignore."""
+    """The report exists only when there is something to report: a scan that
+    read everything it reached adds no `staged_macro_scan_truncated` key and
+    stamps no row, so the truncation channel does not become noise on a design
+    that lost nothing."""
     if _real_staged_macro_dir() is None:
         pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
     _docs, design, extracted = _real_docs()
@@ -816,27 +783,17 @@ def test_a_complete_scan_reports_nothing_and_changes_no_l9_key(tmp_path):
 
 
 # =====================================================================
-# WHAT ROUND 3's TRUNCATION GUARANTEE DID NOT COVER
+# THE SHAPE THAT WAS DROPPED IN SILENCE
 #
-# Round 3's comment said "every cap that cuts the walk short — and an
-# unreadable directory, which has the same consequence — appends a reason
-# code". Measured on the shape "symlink a shared PDK into place out of a
-# directory this process may not search":
+# "Symlink a shared PDK into place out of a directory this process may not
+# search": `Path.is_dir()` stats the TARGET and RAISES on EACCES rather than
+# returning False, and the entry loop's catch-all dropped the entry with no
+# event, no L9 key and no stderr WARN — indistinguishable from a design that
+# stages nothing. Fail-safe in direction (a promotion is lost, not invented),
+# but silent.
 #
-#   plain-copy (control)          staged={fakeram45_2048x39} events=[]
-#   real-dir-unreadable (control) staged=[]  events=[directory_unreadable]
-#   symlink-into-unsearchable     staged=[]  events=[]            <- silent
-#
-# `Path.is_dir()` stats the TARGET, and EACCES is not in pathlib's
-# `_IGNORED_ERRNOS`, so it RAISES; the entry loop's catch-all dropped the
-# entry with no event, no L9 key and no stderr WARN. Fail-safe in direction
-# — a promotion is lost, never invented — and not a regression: round 2's
-# scan, driven over the same fixture, also returned an empty staged set (it
-# skipped every symlink), and had no truncation channel to be silent in. But
-# it is precisely the guarantee the round exists to add.
-#
-# Each test below drives one abandonment point listed in the enumeration
-# inside `_staged_macro_scan`, and one of them re-derives that list from the
+# Each test below drives one reason code from the enumeration inside
+# `_staged_macro_scan`, and one of them checks that enumeration against the
 # source so a handler that NAMES OSError cannot be added without a reason
 # code. Its scope is stated in its own docstring — it is a guard, not a proof.
 # =====================================================================
@@ -855,15 +812,14 @@ def _unsearchable_vault(tmp_path, name="vault"):
 
 @pytest.mark.parametrize("link", ["dir", "file"])
 def test_symlink_into_an_unsearchable_directory_is_reported(tmp_path, link):
-    """THE HOLE ROUND 3 OPENED, both link shapes.
+    """THE SILENT SHAPE, both link forms.
 
     `input/pdk_local/fakeram45 -> <vault>/fakeram45` (and the per-file
     variant) where `<vault>` is mode 0000. `is_dir()` raises EACCES on the
-    followed target; before this it was swallowed by a bare
-    `except OSError: continue`, so the scan returned an empty set and an EMPTY
-    event list — indistinguishable from a design that stages nothing. The
-    readable sibling in the same directory must still be scanned: this is a
-    skip that is REPORTED, not an abort."""
+    followed target, and that must produce an `entry_unreadable` event rather
+    than an empty set with an empty event list. The readable sibling in the
+    same directory must still be scanned: this is a skip that is REPORTED, not
+    an abort."""
     if os.geteuid() == 0:
         pytest.skip("running as root: permission bits do not deny reads")
     stage = Path(tmp_path) / "input" / "pdk_local"
@@ -903,14 +859,13 @@ def test_symlink_into_an_unsearchable_directory_is_reported(tmp_path, link):
 
 def test_on_the_unsearchable_shape_the_siblings_do_not_report_either(
         tmp_path):
-    """WHAT THE OTHER TWO READERS DO ON THE SAME SHAPE — measured, because
-    round 4's first draft of the block comment guessed and guessed wrong.
+    """WHAT THE OTHER TWO READERS DO ON THE SAME SHAPE, measured rather than
+    assumed.
 
-    It said the siblings "simply see nothing". They do not agree even on
-    that: `_discover_local_macros` RAISES PermissionError out of its own
-    `is_dir()`, and `rglob("*.lef")` returns empty. Neither reports a
-    shortfall, which is the point — but the comment must not claim a
-    behaviour they do not have."""
+    They do not agree with each other: `_discover_local_macros` RAISES
+    PermissionError out of its own `is_dir()`, and `rglob("*.lef")` returns
+    empty. Neither reports a shortfall, which is the point of the event this
+    walker emits."""
     if os.geteuid() == 0:
         pytest.skip("running as root: permission bits do not deny reads")
     p3 = pytest.importorskip("phase3_one_shot_runner")
@@ -939,9 +894,9 @@ def test_on_the_unsearchable_shape_the_siblings_do_not_report_either(
 def test_symlink_into_an_unsearchable_directory_reaches_l9_and_stderr(
         tmp_path, capsys):
     """END-TO-END on the REAL documents: the same shape must get the same
-    three readers the unreadable-DIRECTORY case already gets — the L9 key, the
-    stderr WARN, and the note on the very candidate row that would have been
-    promoted. Round 3 gave it none of the three."""
+    three readers the unreadable-DIRECTORY case gets — the L9 key, the stderr
+    WARN, and the note on the very candidate row that would have been
+    promoted."""
     if os.geteuid() == 0:
         pytest.skip("running as root: permission bits do not deny reads")
     if _real_staged_macro_dir() is None:
@@ -982,12 +937,10 @@ def test_symlink_into_an_unsearchable_directory_reaches_l9_and_stderr(
 
 def test_many_unreadable_entries_cannot_turn_the_report_into_the_anomaly(
         tmp_path):
-    """The NEW `entry_unreadable` event fires PER ENTRY, so a directory full
-    of links into a locked vault could have made the anomaly channel the
-    anomaly — the exact failure `_MEMORY_MACRO_MAX_TRUNCATION_EVENTS` exists
-    to prevent, arriving through a code path that did not exist when that cap
-    was written. Measured: bounded at the cap plus the marker, and it
-    terminates."""
+    """The `entry_unreadable` event fires PER ENTRY, so a directory full of
+    links into a locked vault could make the anomaly channel the anomaly —
+    the failure `_MEMORY_MACRO_MAX_TRUNCATION_EVENTS` exists to prevent,
+    reached through this code path. Bounded at the cap plus the marker."""
     if os.geteuid() == 0:
         pytest.skip("running as root: permission bits do not deny reads")
     stage = Path(tmp_path) / "input" / "pdk_local"
@@ -1074,11 +1027,10 @@ def test_an_unreadable_lef_body_loses_the_cells_it_abstracts_and_says_so(
 
 
 def test_every_oserror_handler_in_the_scan_reports_or_is_listed_here():
-    """THE GUARD ON THE GUARANTEE.
+    """THE GUARD ON THE ENUMERATION.
 
-    Three rounds in a row shipped a comment that claimed this scan reports
-    every loss, and three rounds in a row a handler existed that did not. A
-    prose promise cannot hold that; re-derive it from the source instead.
+    A prose promise that "every loss is reported" cannot hold itself up; check
+    it against the source instead.
 
     Every handler inside `_staged_macro_scan` (its nested `_rel` / `_note` /
     `_enqueue` included) that names `OSError` must either call `_note(...)` or
@@ -1127,18 +1079,15 @@ def test_every_oserror_handler_in_the_scan_reports_or_is_listed_here():
 
 
 def test_artefact_suffixes_are_ordered_so_no_suffix_masks_a_longer_one():
-    """ROUND 3's ORDERING COMMENT WAS FALSE, AND THIS IS WHAT REPLACES IT.
+    """WHETHER FIRST-MATCH ORDER DECIDES ANY STEM, RE-DERIVED FROM THE TUPLE.
 
-    It said "`.v` is itself a suffix of `.sv`, so `.sv` must be tried first or
-    `cell.sv` yields the stem `cell.s`". `".sv".endswith(".v")` is **False** —
-    the leading dot breaks it — and no pair in the tuple overlaps at all, so
-    first-match order is irrelevant today. Reversing the tuple changes no
-    stem.
+    `".sv".endswith(".v")` is False — the leading dot breaks it — and no pair
+    in the tuple currently overlaps, so reversing it changes no stem here.
 
-    That is worth pinning anyway, because it is a property of the CONTENTS,
-    not a law: adding `.gz` or `.lib.gz` would make order load-bearing
-    overnight, and the failure mode is a silently truncated stem, which
-    corroborates nothing and reads as "the design did not stage that cell"."""
+    That is a property of the CONTENTS, not a law: adding `.gz` or `.lib.gz`
+    would make order load-bearing, and the failure mode is a silently
+    truncated stem, which corroborates nothing and reads as "the design did
+    not stage that cell"."""
     sfx = P._MEMORY_MACRO_ARTEFACT_SUFFIXES
     assert ".sv".endswith(".v") is False, (
         "the premise of the old comment; if this ever becomes True, Python "
@@ -1161,8 +1110,8 @@ def test_artefact_suffixes_are_ordered_so_no_suffix_masks_a_longer_one():
     for p in probes:
         assert _stem(p, sfx) == _stem(p, tuple(reversed(sfx))), (
             "%s's stem depends on the tuple order" % p)
-    # The OTHER half of that comment IS load-bearing and stays: `.gz` is not a
-    # member, so `.gds.gz` earns its entry by coverage, not by ordering.
+    # `.gz` is not a member, so `.gds.gz` earns its entry by coverage rather
+    # than by ordering.
     assert _stem("chip.gds.gz", sfx) == "chip"
     assert _stem("chip.gds.gz",
                  tuple(s for s in sfx if s != ".gds.gz")) == "", (
@@ -1170,14 +1119,12 @@ def test_artefact_suffixes_are_ordered_so_no_suffix_masks_a_longer_one():
 
 
 # =====================================================================
-# THIS WALKER IS A SUPERSET OF ITS SIBLINGS, NOT A MATCH
+# THIS WALKER AGAINST ITS SIBLINGS, PER STAGING SHAPE
 #
-# Round 3 shipped "follows symlinks exactly as the two pre-existing readers
-# of this same directory already do" in the block comment, "a strict
-# SUPERSET of its two siblings" in its own commit message, and "there is no
-# single sibling behaviour to match there" in a test docstring. Three
-# statements about one behaviour, and the first is false. The test below is
-# the measurement; the comment now carries its table.
+# `_SIBLING_MATRIX` is the measurement, re-checked on every run: what the
+# two other readers of `input/pdk_local/` see for each staging shape, and
+# what this walker sees. The source comments point here rather than
+# restating it.
 # =====================================================================
 
 
@@ -1199,9 +1146,9 @@ def test_this_walker_is_a_superset_of_its_two_siblings(tmp_path, shape):
     The two siblings DISAGREE with each other on `dir-symlink` (phase3's
     top-level `iterdir()` + `is_dir()` follows one; `rglob` does not descend
     into one), so "match the siblings" is not a well-defined target. On
-    `nested-dir-symlink` BOTH are blind and this walker still finds the cell.
-    So: a superset, never a subset — which is what the block comment now says
-    instead of 'exactly as'."""
+    `nested-dir-symlink` both are blind and this walker still finds the cell.
+    The assertion below is that this walker sees no less than a sibling, on
+    each shape in the table."""
     if _real_staged_macro_dir() is None:
         pytest.skip("benchmark-data/ic/edge_llm_accel not on disk")
     p3 = pytest.importorskip("phase3_one_shot_runner")
@@ -1229,10 +1176,9 @@ def test_this_walker_is_a_superset_of_its_two_siblings(tmp_path, shape):
 # =====================================================================
 # CLAIMS THE COMMENTS MAKE ABOUT THEMSELVES
 #
-# Rounds 1-3 were each refuted on a comment, not on the code. These tests
-# exist so the remaining prose is CHECKED rather than remembered: each one
-# re-derives a statement the source makes about its own behaviour, and fails
-# when the statement stops being true.
+# These tests exist so the remaining prose is CHECKED rather than
+# remembered: each one re-derives a statement the source makes about its own
+# behaviour, and fails when the statement stops being true.
 # =====================================================================
 
 
@@ -1258,17 +1204,15 @@ _LEXICAL_NEGATIVES = [
 
 
 def test_the_tightest_lexical_rule_is_still_wrong_in_both_directions():
-    """THE NEGATIVE RESULT THE WHOLE DESIGN RESTS ON, RE-DERIVED.
+    """WHY THE LEXICAL CLAUSE WAS ABANDONED, RE-DERIVED.
 
-    The block comment above `_MEMORY_NAME_TOKEN_ANYWHERE_RE` argues that no
-    purely lexical rule separates a generator macro name from the English
-    words #612 exists to reject, and that the staged artefact is therefore the
-    only honest lever. Its evidence is the tightest organisation-token rule
-    available. Spell that rule out and score it here, so the argument is a
-    measurement and not a memory.
+    The block comment above `_MEMORY_NAME_TOKEN_ANYWHERE_RE` says an
+    organisation-token rule was tried and abandoned. Spell the tightest form
+    of that rule out as a regex and score it against 27 names here, so the
+    reason is a measurement and not a memory.
 
-    If some future rule really did score 0/0 on this corpus, this test fails —
-    and the right response is to re-open the design question, not to edit the
+    If some future rule scores 0/0 on this corpus, this test fails — and the
+    right response is to re-open the design question, not to edit the
     numbers."""
     import re as _re
     corpus = _LEXICAL_POSITIVES + _LEXICAL_NEGATIVES
@@ -1306,18 +1250,13 @@ def test_the_tightest_lexical_rule_is_still_wrong_in_both_directions():
 
 
 def test_capped_listing_is_linear_in_the_directory_not_constant(tmp_path):
-    """THE MEMORY CLAIM, WHICH WAS FALSE.
+    """WHAT THE GENERATOR IN `_capped_dir_listing` DOES AND DOES NOT BUY.
 
-    The docstring said the generator makes `_capped_dir_listing` cost
-    "O(cap) memory whatever the directory holds". It does not:
-    `Path.iterdir()` is `for name in os.listdir(self)`, and `os.listdir`
-    materialises every NAME before yielding the first one, so peak memory is
-    LINEAR in the directory size at any cap.
-
-    What the generator DOES buy is real and is what this pins: `nsmallest`
-    cannot take its `sorted()` shortcut, so only `cap` Path objects are
-    retained — measurably cheaper than `sorted(directory.iterdir())`, and no
-    cheaper than `os.listdir` itself at a small cap."""
+    Measured here, not asserted in prose: peak memory tracks the DIRECTORY
+    size rather than the cap, so the cap is not a memory bound. What the
+    generator buys is that only `cap` Path objects are retained — measurably
+    cheaper than `sorted(directory.iterdir())`, and no cheaper than
+    `os.listdir` itself at a small cap."""
     import gc
     import tracemalloc
 
@@ -1357,9 +1296,9 @@ def test_capped_listing_is_linear_in_the_directory_not_constant(tmp_path):
 
 
 def test_the_borrowed_precedent_for_reporting_a_drop_really_exists():
-    """The truncation-report comment justifies its shape by citing an
-    existing one in this module. Round 3 cited `extract_all_docs`, which does
-    not exist anywhere in the plugin. Check the citation, not the story."""
+    """The truncation-report comment justifies its shape by citing an existing
+    one in this module. Check the citation, not the story: the cited name must
+    resolve, and must really do both halves it is cited for."""
     src = Path(inspect.getfile(P)).read_text(encoding="utf-8")
     cited = re.findall(r"\(`([A-Za-z_][A-Za-z0-9_]*)`, v1\.6\.93", src)
     assert cited, "the precedent citation vanished; re-check this test"
@@ -1374,10 +1313,9 @@ def test_the_borrowed_precedent_for_reporting_a_drop_really_exists():
 
 
 def test_the_enumeration_of_abandonment_points_names_tests_that_exist():
-    """The block comment inside `_staged_macro_scan` lists each abandonment
-    point against the test that drives it. A named test that does not exist is
-    the same lie as a guarantee that is not kept, and is much easier to
-    ship."""
+    """The block comment inside `_staged_macro_scan` lists each reason code
+    against the test that drives it. Check that every test it names exists in
+    this file."""
     src = inspect.getsource(P._staged_macro_scan)
     # The enumeration wraps long test names across comment lines, always
     # breaking AFTER an underscore. Rejoin only those, so a wrapped name is
