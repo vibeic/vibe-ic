@@ -18469,7 +18469,18 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
                 "tool": tool,
                 "command": f"{cmd} (phase3_one_shot_runner)",
                 "exit_code": 0,
-                "duration_ms": 0,
+                # #365 — NOT measured. These provenance entries are
+                # BACK-FILLED: the runner writes them for artifacts it finds
+                # on disk, having never observed the invocation that made
+                # them. `0` is a VALUE and reads as "took no time", i.e. a
+                # measurement claim with no measurement behind it — the
+                # anti-fabrication rule this ledger exists to serve. `null`
+                # says "not measured", which is the truth. (`exit_code: 0`
+                # stays: the artifact exists and is hashed, which IS evidence
+                # the tool produced it, and `provenance_check` reads that
+                # field.)
+                "duration_ms": None,
+                "reconstructed": True,
                 "timestamp": _dt.datetime.now(_dt.timezone.utc)
                                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "outputs": {rel: _sha(fp)},
@@ -18808,7 +18819,18 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "command": ("yosys -p 'read_verilog; synth; abc; "
                             "write_verilog' (phase3_one_shot_runner)"),
                 "exit_code": 0,
-                "duration_ms": 0,
+                # #365 — NOT measured. These provenance entries are
+                # BACK-FILLED: the runner writes them for artifacts it finds
+                # on disk, having never observed the invocation that made
+                # them. `0` is a VALUE and reads as "took no time", i.e. a
+                # measurement claim with no measurement behind it — the
+                # anti-fabrication rule this ledger exists to serve. `null`
+                # says "not measured", which is the truth. (`exit_code: 0`
+                # stays: the artifact exists and is hashed, which IS evidence
+                # the tool produced it, and `provenance_check` reads that
+                # field.)
+                "duration_ms": None,
+                "reconstructed": True,
                 "timestamp": _dt_s.datetime.now(_dt_s.timezone.utc)
                                  .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "outputs": _synth_outputs,
@@ -19437,7 +19459,18 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "command": ("openroad -no_init -exit pnr.tcl "
                             "(phase3_one_shot_runner v1.6.36)"),
                 "exit_code": 0,
-                "duration_ms": 0,
+                # #365 — NOT measured. These provenance entries are
+                # BACK-FILLED: the runner writes them for artifacts it finds
+                # on disk, having never observed the invocation that made
+                # them. `0` is a VALUE and reads as "took no time", i.e. a
+                # measurement claim with no measurement behind it — the
+                # anti-fabrication rule this ledger exists to serve. `null`
+                # says "not measured", which is the truth. (`exit_code: 0`
+                # stays: the artifact exists and is hashed, which IS evidence
+                # the tool produced it, and `provenance_check` reads that
+                # field.)
+                "duration_ms": None,
+                "reconstructed": True,
                 "timestamp": _dt.datetime.now(_dt.timezone.utc)
                                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "outputs": outputs,
@@ -19461,7 +19494,18 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "command": ("openroad -no_init -exit (RC extraction → SPEF) "
                             "(phase3_one_shot_runner)"),
                 "exit_code": 0,
-                "duration_ms": 0,
+                # #365 — NOT measured. These provenance entries are
+                # BACK-FILLED: the runner writes them for artifacts it finds
+                # on disk, having never observed the invocation that made
+                # them. `0` is a VALUE and reads as "took no time", i.e. a
+                # measurement claim with no measurement behind it — the
+                # anti-fabrication rule this ledger exists to serve. `null`
+                # says "not measured", which is the truth. (`exit_code: 0`
+                # stays: the artifact exists and is hashed, which IS evidence
+                # the tool produced it, and `provenance_check` reads that
+                # field.)
+                "duration_ms": None,
+                "reconstructed": True,
                 "timestamp": _dt.datetime.now(_dt.timezone.utc)
                                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "outputs": {spef_rel: _sha(spef_out)},
