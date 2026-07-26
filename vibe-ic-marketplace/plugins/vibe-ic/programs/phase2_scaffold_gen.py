@@ -545,6 +545,41 @@ def emit_top_v(top: str, signals: list[dict], l1_ic_name: str) -> str:
 # Output: <top>_regs.v
 # ---------------------------------------------------------------------------
 
+# A bit designation and NOTHING else. The strictness is measured, not
+# defensive: 50 `bits` values in the published corpus are pin designations like
+# `A[15:13]` / `A8, A10, A[15:13]` harvested from an address-pin table. A
+# substring search reads `A[15:13]` as bits 15:13 of a register and would size
+# a register off a package pin.
+_REG_FIELD_BITS_RE = re.compile(r"^\s*\[?\s*(\d+)\s*(?::\s*(\d+)\s*)?\]?\s*$")
+
+_REG_WIDTH_DEFAULT = 8
+
+
+def _reg_width_from_own_fields(reg: dict) -> int:
+    """Widest bit index declared by this register's OWN fields, +1.
+
+    Returns the default when nothing in the record says anything numeric —
+    which is the honest answer, not a fallback to be minimised. 202 fields in
+    the published corpus are explicit `WHOLE_REG` placeholders meaning "this
+    document carries no field breakdown" (vibe-ic#377), and they contribute
+    NOTHING here on purpose: #377 measured that feeding those placeholders to
+    a standard register generator produced 3235 lines of SystemVerilog
+    implementing a layout nobody ever specified, indistinguishable from the
+    fields that were. A placeholder must not acquire a width by being read
+    twice."""
+    widest = 0
+    for f in _list_or_empty(reg.get("fields")):
+        if not isinstance(f, dict):
+            continue
+        m = _REG_FIELD_BITS_RE.match(str(f.get("bits") or ""))
+        if not m:
+            continue
+        hi = int(m.group(1))
+        lo = int(m.group(2)) if m.group(2) else hi
+        widest = max(widest, hi, lo)
+    return (widest + 1) if widest else _REG_WIDTH_DEFAULT
+
+
 def derive_registers(l4: dict, l8: dict) -> list[dict]:
     """Return a normalized [{name, offset, width, access, fields}, ...]."""
     out: list[dict] = []
@@ -569,10 +604,28 @@ def derive_registers(l4: dict, l8: dict) -> list[dict]:
         # rather than leaving 49 runs to be patched individually.
         off = (r.get("offset") or r.get("address")
                or r.get("addr_hex") or r.get("addr") or "")
-        width = r.get("width") or r.get("width_bits") or 8
+        width = r.get("width") or r.get("width_bits")
         if isinstance(width, str):
             m = re.search(r"\d+", width)
-            width = int(m.group(0)) if m else 8
+            width = int(m.group(0)) if m else None
+        if width is None:
+            # SAME DEFECT SHAPE AS layergate-2 ABOVE: the value is present in
+            # the record the consumer is already holding, under a key it never
+            # reads. The register's own fields state their bits; this read only
+            # `width`/`width_bits` and otherwise emitted `reg [7:0]`.
+            #
+            # MEASURED over the published corpus (strict bit-designation match):
+            #     81 registers wide enough already
+            #      8 emitted NARROWER than their own fields declare
+            # and the widest of those declares a field spanning 32 bits and was
+            # emitted `reg [7:0]` — 24 bits of a DECLARED field simply absent
+            # from the RTL, with no diagnostic. The output is byte-identical to
+            # a register the design really did specify as 8 bits.
+            #
+            # Scoped to ONE record on purpose. #404 measured that joining a
+            # width against a corpus-global `parameters[]` by bare name lets an
+            # unrelated layer size a bus; nothing here leaves the register.
+            width = _reg_width_from_own_fields(r)
         access = r.get("access") or r.get("attribute") or "rw"
         out.append({
             "name": name,
