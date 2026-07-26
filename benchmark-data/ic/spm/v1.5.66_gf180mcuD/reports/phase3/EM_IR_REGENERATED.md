@@ -68,13 +68,28 @@ separately as `ir_em_regenerated.tcl`.
 operating condition **by NAME** instead of parsing a voltage value out of
 it, so the tool reads its own authoritative supply:
 
+The operative line is in `ir_em_regenerated.tcl`, line 6:
+
 ```
-IR/EM: selected the liberty's own operating condition
-'gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00' (it defines the block but names no
-default — PSM otherwise aborts PSM-0079)
+catch {set_operating_conditions gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00}
+```
+
+and `ir_em.log` then shows the tool resolving the supply on its own:
+
+```
 [INFO PSM-0040] All shapes on net VDD are connected.
-Supply voltage : 5.00e+00 V
+Supply voltage   : 5.00e+00 V
 ```
+
+_Correction, 2026-07-26._ This block previously opened with a third line,
+`IR/EM: selected the liberty's own operating condition '...' (it defines the
+block but names no default — PSM otherwise aborts PSM-0079)`, presented inside
+the same fence as the two lines above. That string is the phase-3 runner's
+`notes` message; it is **not** in `ir_em.log` (`grep -c` = 0), because this
+regeneration ran a hand-written TCL rather than the runner. Quoting it as tool
+output was the same defect this review is about — a citation a reader cannot
+find in the shipped artefact. The mechanism it describes is real and is the TCL
+line above.
 
 ## Stated limits
 
