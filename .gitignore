@@ -30,6 +30,14 @@ yarn-error.log*
 # Project local
 *.log
 *.tmp
+
+# vibe-ic#361, producer side. The `*.log` rule above is right for build noise
+# and wrong for EVIDENCE: a sign-off report that cites `foo.log` as its proof
+# could never ship that proof, because the ignore rule silently dropped it.
+# The gate added for #361 blocks a NEW dangling citation; this is the other
+# half — logs that live beside the reports they prove are deliverables. Adds
+# in this repo are always explicit paths, so nothing is swept in by this.
+!benchmark-data/**/reports/**/*.log
 .env
 .env.local
 
