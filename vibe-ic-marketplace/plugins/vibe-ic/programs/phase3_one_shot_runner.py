@@ -8669,17 +8669,62 @@ def _v1_0_38_build_pin_placement_tcl(
     is appended so any pin NOT named in the cfg is still placed.
 
     Chip-AGNOSTIC: edge regions come from the open-standard N/S/E/W map;
-    pin patterns are passed through opaquely.
+    pin patterns are resolved against the design's OWN BTerm names.
+
+    Why the pattern is resolved here instead of handed straight to
+    OpenROAD
+    ---------------------------------------------------------------
+    `pin_order.cfg` is the OpenLane / classic-OpenROAD io-placer format,
+    whose entries are REGEX patterns — a bussed pad-side rule is written
+    once as `x.*` / `x\\[.*\\]` rather than enumerated bit by bit (a cfg
+    that OpenLane itself accepts, and the shape an L-doc pad-side table
+    naturally derives: "North: <bus>[msb:lsb], every bit").
+    `set_io_pin_constraint -pin_names`, however, takes LITERAL pin names.
+    Passing the pattern through opaquely therefore made OpenROAD answer
+    `[ERROR PPL-0061] Pins {x\\[.*\\]} ... were not found`, which the
+    surrounding `catch` demoted to a NONFATAL note — so the constraint
+    was dropped and `place_pins` auto-assigned the whole bus to whatever
+    edge it liked, while every SCALAR entry in the same cfg (`clk`,
+    `rst`, …) was honored. The result is the worst shape a constraint can
+    have: silently satisfied for scalars, silently ignored for buses.
+
+    So each cfg entry is now resolved against the block's real BTerms and
+    the matched LITERAL names are passed to OpenROAD. An entry that
+    matches NOTHING is reported as `PIN_ORDER_CONSTRAINT_UNMATCHED` and
+    still leaves its pins to `place_pins` — it must stay loud, because a
+    cfg naming a pin this design does not have is exactly the case that
+    must not read as "constraint applied". Exact name match is tried
+    before regex so a literal entry containing bus brackets is never
+    reinterpreted as a character class.
     """
     lines: List[str] = [
         "# === ORGANIC #650 — pin_order.cfg ingestion: honor the "
         "fixed-die / wrapper / hardmacro pin-order contract ===",
-        "# Each cfg pin is pinned to its required die edge via "
-        "set_io_pin_constraint;",
+        "# Each cfg entry is resolved against this design's own BTerm "
+        "names and the matched",
+        "# LITERAL names are handed to set_io_pin_constraint — the cfg "
+        "format is regex-based",
+        "# (a bus is one `x.*` entry) but -pin_names takes literal "
+        "names, so passing the",
+        "# pattern through made OpenROAD report PPL-0061 and drop the "
+        "constraint for buses.",
         "# NONFATAL-guarded so PDKs / OpenROAD builds without the "
         "command fall back to",
         "# the bare auto-assign below. Pins NOT named in the cfg are "
         "placed by place_pins.",
+        "proc vibeic_pin_names_matching {pat} {",
+        "  if {[catch {set _blk [ord::get_db_block]}]} { return {} }",
+        "  set _exact {}",
+        "  set _rx {}",
+        "  foreach _bt [$_blk getBTerms] {",
+        "    set _nm [$_bt getName]",
+        "    if {$_nm eq $pat} { lappend _exact $_nm ; continue }",
+        "    if {![catch {regexp -- \"^${pat}$\" $_nm} _m] && $_m} "
+        "{ lappend _rx $_nm }",
+        "  }",
+        "  if {[llength $_exact]} { return $_exact }",
+        "  return $_rx",
+        "}",
     ]
     for edge, pins in sections:
         region = _V1_0_38_EDGE_LETTER_TO_REGION.get(edge)
@@ -8688,15 +8733,23 @@ def _v1_0_38_build_pin_placement_tcl(
         for pat in pins:
             if not pat:
                 continue
-            # Brace-quote the pin pattern so regex metacharacters survive
-            # TCL word-splitting. set_io_pin_constraint -region <edge>:*
-            # constrains the named pin(s) to the whole named edge.
+            # Brace-quote the pattern so regex metacharacters survive
+            # TCL word-splitting, resolve it to literal BTerm names, then
+            # constrain those names to the whole named edge.
             lines.append(
-                "if {[catch {set_io_pin_constraint "
-                f"-pin_names {{{pat}}} -region {region}:*}} "
+                f"set _poc_pins [vibeic_pin_names_matching {{{pat}}}]\n"
+                "if {[llength $_poc_pins] == 0} {\n"
+                f"  puts \"PIN_ORDER_CONSTRAINT_UNMATCHED: {pat} "
+                f"-> {region}: no pin in this design matches this cfg "
+                "entry; left to place_pins\"\n"
+                "} elseif {[catch {set_io_pin_constraint "
+                f"-pin_names $_poc_pins -region {region}:*}} "
                 "_poc_err]} {\n"
                 f"  puts \"PIN_ORDER_CONSTRAINT_NONFATAL: {pat} "
                 f"-> {region}: $_poc_err\"\n"
+                "} else {\n"
+                f"  puts \"PIN_ORDER_CONSTRAINT_APPLIED: {pat} "
+                f"-> {region}: [llength $_poc_pins] pin(s)\"\n"
                 "}")
     # Auto-assign whatever the cfg did not pin.
     lines.append(bare_place_pins)
