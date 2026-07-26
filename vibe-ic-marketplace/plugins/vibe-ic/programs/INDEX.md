@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 971
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 971)
+- **Total programs (excluding helpers / shims):** 974
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 974)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 962 |
+| `any` | 965 |
 
 ## Alphabetical listing
 
@@ -632,6 +632,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_dielectric_fit` | any | — | Fit a self-consistent dielectric stack from a PDK's OWN shipped cap numbers. |
 | `pdk_fpga_gds_reverify_runner` | any | — | v1.6.232 (merged v229+v231). |
 | `pdk_otp_altsyncram_inject` | any | — | v1.6.224 (ORGANIC-20260512-followup-3). |
+| `pdk_registry_image_consistency_check` | any | — | Report BOTH directions of pdk_registry.json <-> EDA-image drift. |
 | `pdk_registry_selectable_check` | any | — | a PDK the image ships must be |
 | `pdk_table_coverage_check` | any | — | registering a PDK in one table registers it |
 | `pdk_udp_synth_shim_gen` | any | — | v1.6.218 (ORGANIC-20260512-followup). |
@@ -705,6 +706,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `professional_tb_gen` | any | — | deterministic PROFESSIONAL testbench generator. |
 | `profibus_protocol_synth` | any | — | PROFIBUS (Process Field Bus) protocol synth helper. |
 | `profinet_protocol_synth` | any | — | PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper. |
+| `program_test_coverage_check` | any | — | enforced for NEW programs, grandfathered for old. |
 | `project_outputs_in_tree_check` | any | — | project_outputs_in_tree_check.py |
 | `prompt_example_selftest` | any | — | RUN the prompt's own worked examples as a blind, |
 | `protocol_delimiter_consistency_check` | any | v0.99 | Verify the RTL FSM that validates |
@@ -815,6 +817,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sequential_waveform_synth` | any | — | DETERMINISTIC multi-bit / sequential waveform → RTL. |
 | `serdes_decode_synth` | any | — | a DETERMINISTIC solver for two ATOMIC CVDP |
 | `serdes_width_synth` | any | — | deterministic SOLVER for the serial<->parallel / |
+| `serial_parallel_mul_synth` | any | — | deterministic SOLVER for the SERIAL-PARALLEL |
 | `serial_protocol_fsm_synth` | any | — | deterministic SOLVER for serial / protocol |
 | `sgmii_protocol_synth` | any | — | Serial-GMII (SGMII) protocol synth helper. |
 | `shape_b_sample_export` | any | — | deterministic Shape-B sample-export (ORGANIC #678). |
@@ -1043,7 +1046,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (962 programs)
+### `any` (965 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1646,6 +1649,7 @@ _(no programs in this group)_
 - `pdk_dielectric_fit` — Fit a self-consistent dielectric stack from a PDK's OWN shipped cap numbers.
 - `pdk_fpga_gds_reverify_runner` — v1.6.232 (merged v229+v231).
 - `pdk_otp_altsyncram_inject` — v1.6.224 (ORGANIC-20260512-followup-3).
+- `pdk_registry_image_consistency_check` — Report BOTH directions of pdk_registry.json <-> EDA-image drift.
 - `pdk_registry_selectable_check` — a PDK the image ships must be
 - `pdk_table_coverage_check` — registering a PDK in one table registers it
 - `pdk_udp_synth_shim_gen` — v1.6.218 (ORGANIC-20260512-followup).
@@ -1719,6 +1723,7 @@ _(no programs in this group)_
 - `professional_tb_gen` — deterministic PROFESSIONAL testbench generator.
 - `profibus_protocol_synth` — PROFIBUS (Process Field Bus) protocol synth helper.
 - `profinet_protocol_synth` — PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper.
+- `program_test_coverage_check` — enforced for NEW programs, grandfathered for old.
 - `project_outputs_in_tree_check` — project_outputs_in_tree_check.py
 - `prompt_example_selftest` — RUN the prompt's own worked examples as a blind,
 - `protocol_delimiter_consistency_check` — Verify the RTL FSM that validates  _[v0.99]_
@@ -1827,6 +1832,7 @@ _(no programs in this group)_
 - `sequential_waveform_synth` — DETERMINISTIC multi-bit / sequential waveform → RTL.
 - `serdes_decode_synth` — a DETERMINISTIC solver for two ATOMIC CVDP
 - `serdes_width_synth` — deterministic SOLVER for the serial<->parallel /
+- `serial_parallel_mul_synth` — deterministic SOLVER for the SERIAL-PARALLEL
 - `serial_protocol_fsm_synth` — deterministic SOLVER for serial / protocol
 - `sgmii_protocol_synth` — Serial-GMII (SGMII) protocol synth helper.
 - `shape_b_sample_export` — deterministic Shape-B sample-export (ORGANIC #678).
