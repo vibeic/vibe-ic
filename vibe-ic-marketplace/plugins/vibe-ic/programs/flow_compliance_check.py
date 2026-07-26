@@ -1215,6 +1215,30 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "skill_compliance_triangle_check",
     "testbench_exists_check",
     "tester_oracle_health_check",
+    # PDK-substitution disclosure, DIGITAL track. The existing doctrine
+    # (`analog_netlist_pdk_check` / `_pdk_substitution_disclosed`) scans
+    # analog_dir for *.sp decks and returns None when there is no analog
+    # directory — so on a pure-digital run it never fires. Measured on
+    # spm × ihp-sg13g2 (8HD-8): `analog dir exists: False`, the check never
+    # ran, and a full DRC/LVS/STA/antenna/IR sign-off completed against
+    # ihp-sg13g2 while L19.fields.pdk_target said "sky130", with no artefact
+    # reconciling the two. Both gates below SKIP (rc 0) when the project has
+    # no declared target or never reached phase 3, so they stay silent on
+    # every project the defect cannot apply to.
+    #
+    # NOTE: `digital_pdk_substitution_disclosure_check` ships on the sibling
+    # branch capture/digital-pdk-substitution-disclosure. The dispatch loop
+    # does `if not prog.exists(): continue`, so naming it here is safe and
+    # inert until that branch lands — it is registered in canonical order now
+    # so the two captures need not land in a fixed sequence.
+    "digital_pdk_substitution_disclosure_check",
+    # ...and the same substitution a second time, in the one place where it
+    # silently converts into a timing PASS: the sign-off clock period. The
+    # spec keys <PERIOD> by standard-cell library and has no sg13g2 row, so
+    # the period in force traced to the *SKY130* row of the design's own
+    # table (input/docs/L1_product_metadata.md:35, "10 ns (100 MHz)") and
+    # STA reported "setup met, worst slack +6.11 ns" against it.
+    "sdc_clock_period_library_basis_check",
     # v1.6.4 RETRACTED (introduced regression on incomplete projects;
     # gates lack chip-AGNOSTIC silent-skip on missing prerequisites):
     # "coverage_metric_check"            — needs sim coverage report
