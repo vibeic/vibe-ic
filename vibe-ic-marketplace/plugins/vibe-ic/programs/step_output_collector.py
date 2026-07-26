@@ -2,15 +2,30 @@
 """step_output_collector.py — materialize a per-STEP output subfolder view.
 
 For ANY Vibe-IC run, this gathers every flow step's resolved output artifacts
-into `<project>/steps/<id>_<slug>/` (SYMLINKS to the canonical files — which
-stay in their inter-step-contract locations, e.g. phase2/stage1/rtl/) plus an
-`outputs.json` manifest per step, and writes `<project>/steps/index.json` (the
-ordered step list + folder + status + output count).
+into `<project>/steps/<phase>/<stage>/<id>_<slug>/` (SYMLINKS to the canonical
+files — which stay in their inter-step-contract locations, e.g.
+phase2/stage1/rtl/) plus an `outputs.json` manifest per step, and writes
+`<project>/steps/index.json` (the ordered step list + folder + status + output
+count).
+
+NESTED BY PHASE THEN STAGE (owner directive): a flat `steps/<id>_<slug>/`
+made every step look like a peer of every other, with no visual sense of
+"where in the flow" a step sits. `flow_dashboard_data.collect()` already
+carries both `phase` (its own key: phase1/phase2/phase3/analog/mixed/
+manufacturing) and `stage` (the flow yaml's stage id: stage1/stage2/.../
+stage_analog/stage_mixed_signal/stage5_manufacturing) per step, so no new
+classification is invented here — `folder` is just their existing values
+joined with `/`. `folder` is stored as a relative PATH STRING throughout
+(steps/index.json, each outputs.json, the dashboard's directory-listing
+route), and `Path(root) / folder` nests correctly on a multi-segment string
+with no caller change needed — verified against flow_dashboard_web.py's
+`_steps_root(project) / folder`.
 
 Non-invasive by design: the canonical `phaseN/…` tree remains authoritative and
 is NEVER moved (downstream steps read each other by fixed path); `steps/` is a
 convenience VIEW the dashboard links to. Idempotent — re-running refreshes the
-symlinks + manifests to the current on-disk state.
+symlinks + manifests to the current on-disk state, and prunes now-empty
+phase/stage directories left over from a prior layout.
 
 chip-AGNOSTIC: derives everything from the flow YAML + the project's own files.
 """
@@ -36,15 +51,20 @@ def _safe_id(sid: str) -> str:
 
 
 def _iter_step_records(project: Path):
-    """Yield (id, name, status, phase, [output entries]) using the SAME data
-    source as the dashboard (flow_dashboard_data.collect — never raises)."""
+    """Yield (id, name, status, phase, stage, [output entries]) using the SAME
+    data source as the dashboard (flow_dashboard_data.collect — never raises).
+    `stage` is the step's own yaml stage id; a step lacking one (should not
+    happen for a real flow node) falls back to "stage" so nesting never
+    silently collapses two unrelated steps into the same directory."""
     import flow_dashboard_data as fdd
     data = fdd.collect(project)
     for ph in data.get("phases", []):
         pkey = ph.get("key", "")
         for st in ph.get("steps", []):
             yield (str(st.get("id", "")), str(st.get("name", "")),
-                   str(st.get("status", "")), pkey, st.get("outputs", []) or [])
+                   str(st.get("status", "")), pkey,
+                   str(st.get("stage") or "stage"),
+                   st.get("outputs", []) or [])
 
 
 def _clear_old(sdir: Path) -> None:
@@ -59,14 +79,71 @@ def _clear_old(sdir: Path) -> None:
                 pass
 
 
+def _prune_stale_folders(steps_root: Path, old_folders: List[str],
+                          new_folders: set) -> None:
+    """Remove step folders (and now-empty phase/stage parents) from a PRIOR
+    run's index.json that the current run no longer produces.
+
+    Handles two real cases, not just a hypothetical one: (a) a step whose
+    name changed re-slugs to a different folder, orphaning the old one, and
+    (b) migrating an EXISTING flat `<id>_<slug>/` run to this nested
+    `<phase>/<stage>/<id>_<slug>/` layout — every old flat folder is stale
+    under the new scheme and would otherwise sit next to the new tree
+    forever, one becoming an increasingly misleading duplicate of the other.
+    """
+    for rel in old_folders:
+        if rel in new_folders:
+            continue
+        old_dir = steps_root / rel
+        if not old_dir.is_dir():
+            continue
+        for child in old_dir.iterdir():
+            if child.is_symlink() or child.name == "outputs.json":
+                try:
+                    child.unlink()
+                except OSError:
+                    pass
+        try:
+            old_dir.rmdir()
+        except OSError:
+            continue
+        # Walk back up: drop now-empty phase/stage parents this folder's
+        # removal left behind, but never above steps_root itself.
+        parent = old_dir.parent
+        while parent != steps_root and parent.is_relative_to(steps_root):
+            try:
+                parent.rmdir()   # only succeeds if truly empty
+            except OSError:
+                break
+            parent = parent.parent
+
+
 def materialize(project: Path) -> Dict[str, Any]:
     project = Path(project).expanduser().resolve()
     steps_root = project / "steps"
     steps_root.mkdir(parents=True, exist_ok=True)
-    index: List[Dict[str, Any]] = []
 
-    for sid, name, status, phase, outputs in _iter_step_records(project):
-        folder = f"{_safe_id(sid)}_{_slug(name)}"
+    prior_index_path = steps_root / "index.json"
+    prior_folders: List[str] = []
+    if prior_index_path.is_file():
+        try:
+            prior = json.loads(prior_index_path.read_text())
+            prior_folders = [s.get("folder", "") for s in prior.get("steps", [])
+                             if s.get("folder")]
+        except Exception:
+            prior_folders = []
+
+    index: List[Dict[str, Any]] = []
+    new_folders: set = set()
+
+    for sid, name, status, phase, stage, outputs in _iter_step_records(project):
+        # `phase` is drawn from flow_dashboard_data's fixed 6-entry _PHASES
+        # table and `stage` defaults to "stage" in _iter_step_records — never
+        # empty in practice — but a path built from external data must not
+        # silently collapse a segment if it ever is.
+        folder = "/".join((phase or "phase", stage or "stage",
+                          f"{_safe_id(sid)}_{_slug(name)}"))
+        new_folders.add(folder)
         sdir = steps_root / folder
         sdir.mkdir(parents=True, exist_ok=True)
         _clear_old(sdir)
@@ -90,9 +167,13 @@ def materialize(project: Path) -> Dict[str, Any]:
 
         (sdir / "outputs.json").write_text(json.dumps(
             {"id": sid, "name": name, "status": status, "phase": phase,
-             "folder": folder, "outputs": present}, indent=2) + "\n")
+             "stage": stage, "folder": folder, "outputs": present},
+            indent=2) + "\n")
         index.append({"id": sid, "name": name, "status": status, "phase": phase,
-                      "folder": folder, "n_outputs": len(present)})
+                      "stage": stage, "folder": folder,
+                      "n_outputs": len(present)})
+
+    _prune_stale_folders(steps_root, prior_folders, new_folders)
 
     (steps_root / "index.json").write_text(
         json.dumps({"steps": index}, indent=2) + "\n")
