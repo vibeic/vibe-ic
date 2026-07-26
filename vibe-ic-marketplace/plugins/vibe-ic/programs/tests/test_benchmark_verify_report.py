@@ -129,3 +129,43 @@ def test_better_than_ref_counts_as_pass(tmp_path):
     p = _make_project(tmp_path, step_verdict="BETTER-THAN-REF")
     rc, out = _run(p)
     assert "OVERALL=PRODUCTION-READY" in out and rc == 0
+
+
+# ── #445: the claim carries its own scope ──────────────────────────────────
+def test_the_pillar_verdict_line_states_its_scope():
+    """MEASURED on a published cell: `RESULT.md` asserts
+    "OVERALL: PRODUCTION-READY" — a judgement about THESE SIX PILLARS — where
+    it reads as the CELL's verdict, over a flow audit reading FAIL and that
+    cell's own final_summary.md saying in words "blocking; do not claim PASS".
+
+    The producer now states the scope, so anyone quoting the line quotes what
+    it covers.
+    """
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] /
+           "benchmark_verify_report.py").read_text()
+    assert "Benchmark-pillar verdict:" in src, "the scoped line is gone"
+    m = re.search(r"Benchmark-pillar verdict[^\n]*", src)
+    assert "NOT flow convergence" in m.group(0) or "NOT flow" in src, src[:0]
+
+
+def test_the_scoped_line_is_NOT_adoptable_as_a_deliverable_headline():
+    """The other half, and the reason the label is not a bare `Verdict:`.
+
+    `deliverable_verdict_consistency_check` recognises
+    `final|overall|headline|run|top-level verdict` and would adopt a bare one
+    as the DELIVERABLE's headline. Pillar 2 reads "39/39 applicable PASS"
+    while the flow audit counts 63 steps, so a bare PASS here would let a
+    39-step judgement impersonate a whole-flow one — the category error in the
+    other direction.
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import deliverable_verdict_consistency_check as D
+    assert D._LABEL_RE.match("Benchmark-pillar verdict") is None
+    # ...while the canonical labels the gate DOES own still match, so this is
+    # a scoping choice and not a hole in the gate.
+    assert D._LABEL_RE.match("Overall verdict") is not None
+    assert D._LABEL_RE.match("verdict") is not None

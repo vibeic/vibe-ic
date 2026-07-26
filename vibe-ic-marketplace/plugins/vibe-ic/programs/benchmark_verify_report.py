@@ -566,6 +566,27 @@ def main():
     L.append("")
     L.append(f"## OVERALL: {'✅ PRODUCTION-READY (all gates pass)' if overall else '❌ NOT COMPLETE — close the loop on failing/pending gates'}")
     L.append("")
+    # A SCOPED canonical statement (vibe-ic#445). "PRODUCTION-READY" is a
+    # judgement about THESE SIX PILLARS, and a published cell copied it into
+    # RESULT.md where it read as the CELL's verdict — over a flow audit that
+    # said FAIL, with that cell's own final_summary.md saying in words
+    # "blocking; do not claim PASS".
+    #
+    # Deliberately NOT the label `Verdict:`. `deliverable_verdict_consistency_
+    # check` recognises `final|overall|headline|run|top-level verdict` and
+    # would adopt a bare one as the DELIVERABLE's headline — which is the
+    # category error in the other direction: pillar 2 reads "39/39 applicable
+    # PASS" while the flow audit counts 63 steps, so a bare PASS here would let
+    # a 39-step judgement impersonate a whole-flow one.
+    #
+    # So the scope travels WITH the sentence. Anyone quoting this line quotes
+    # what it covers, and the flow verdict stays the flow's to state.
+    L.append(f"**Benchmark-pillar verdict: {'PASS' if overall else 'FAIL'}** "
+             f"— scope: the 6 benchmark pillars below, NOT flow convergence. "
+             f"For whether the flow itself closed, read "
+             f"`reports/audit/phase23_completion_audit.json` and "
+             f"`reports/final_summary.md`.")
+    L.append("")
     L.append("| Pillar | Gate | Status | Detail |")
     L.append("|---|---|---|---|")
     L.append(f"| 1. Functional Coverage | == 100% | {gate(g_func)} | {func_detail} ({func_pct if func_pct is not None else '—'}%) |")

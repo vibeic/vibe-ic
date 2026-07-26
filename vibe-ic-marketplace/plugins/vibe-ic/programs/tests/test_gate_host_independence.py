@@ -116,3 +116,44 @@ def test_the_cwd_token_is_preserved(tmp_path):
     assert all(len(g) == 3 for g in gates), gates[:2]
     assert {g[1] for g in gates} <= {"$ROOT", "$PLUGIN"}, {g[1] for g in gates}
     assert any(g[1] == "$PLUGIN" for g in gates), "the $PLUGIN lane is untested"
+
+
+def test_the_probe_never_probes_ITSELF(tmp_path):
+    """SHIPPED AND CAUGHT BY CI. The gate list is unfiltered by design, so it
+    contains this program — and running it inside the worktree runs it again,
+    which creates another worktree, and so on.
+
+    Locally it was MASKED: the working tree is permanently dirty, so the inner
+    invocation returned DIRTY_CHECKOUT immediately and the recursion never
+    happened. CI checks out clean, recursed, and hit the per-gate timeout.
+    "It passed on my machine" was true and worthless.
+    """
+    r = _repo_with(
+        tmp_path,
+        'run "self" "$ROOT" python3 "$PG/gate_host_independence_check.py"\n'
+        'run "other" "$ROOT" python3 counter.py\n')
+    (r / "counter.py").write_text("print('PASS 0')\n")
+    subprocess.run(["git", "-C", str(r), "add", "counter.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "c"], check=True)
+
+    # Both are parsed — the skip is at RUN time, so the list stays honest.
+    assert len(G.corpus_gates(
+        r / "tools" / "ci" / "repo_hygiene_gates.sh")) == 2
+    verdict, findings = G.audit(r, timeout=60)
+    assert verdict == "PASS", findings
+
+
+def test_a_gate_that_cannot_be_driven_is_its_own_state_not_a_crash(tmp_path):
+    """The other half of the same CI failure: the per-gate timeout was
+    UNHANDLED, so a slow gate killed the probe with a traceback instead of
+    reporting. A gate that cannot be driven is not host-dependence, and it is
+    not a clean result either."""
+    r = _repo_with(tmp_path, 'run "slow" "$ROOT" python3 sleeper.py\n')
+    (r / "sleeper.py").write_text("import time\ntime.sleep(30)\n")
+    subprocess.run(["git", "-C", str(r), "add", "sleeper.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "s"], check=True)
+
+    verdict, findings = G.audit(r, timeout=2)
+    assert verdict == "FAIL", (verdict, findings)
+    assert findings[0]["kind"] == "GATE_UNRUNNABLE", findings
+    assert "TimeoutExpired" in findings[0]["detail"], findings

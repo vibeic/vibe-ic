@@ -153,13 +153,39 @@ def audit(repo_root: Path, timeout: int = 600) -> Tuple[str, List[Dict]]:
                 "detail": (r.stderr or r.stdout or "").strip()[:300]}]
 
         plugin_rel = Path("vibe-ic-marketplace") / "plugins" / "vibe-ic"
+        me = Path(__file__).name
         for label, wd_tok, cmd in gates:
+            # NEVER probe ITSELF. The gate list is unfiltered by design, so it
+            # contains this program — and running it inside the worktree runs
+            # it again, which creates another worktree, and so on.
+            #
+            # This shipped and CI caught it. Locally it was MASKED: the working
+            # tree is permanently dirty, so the inner invocation returned
+            # DIRTY_CHECKOUT immediately and the recursion never happened. CI
+            # checks out clean, recursed, and hit the per-gate timeout — which
+            # was ALSO unhandled, so the probe died with a traceback instead of
+            # reporting. "It passed on my machine" was true and worthless.
+            if me in cmd:
+                continue
             ca = repo_root if wd_tok == "$ROOT" else repo_root / plugin_rel
             cb = wt if wd_tok == "$ROOT" else wt / plugin_rel
-            a = subprocess.run(_expand(cmd, repo_root), cwd=str(ca),
-                               capture_output=True, text=True, timeout=timeout)
-            b = subprocess.run(_expand(cmd, wt), cwd=str(cb),
-                               capture_output=True, text=True, timeout=timeout)
+            try:
+                a = subprocess.run(_expand(cmd, repo_root), cwd=str(ca),
+                                   capture_output=True, text=True,
+                                   timeout=timeout)
+                b = subprocess.run(_expand(cmd, wt), cwd=str(cb),
+                                   capture_output=True, text=True,
+                                   timeout=timeout)
+            except (OSError, subprocess.SubprocessError) as exc:
+                # A gate that cannot be driven is NOT host-dependence, and it
+                # is NOT a clean result either. It gets its own state rather
+                # than a traceback that kills the whole probe.
+                findings.append({
+                    "gate": label, "kind": "GATE_UNRUNNABLE",
+                    "detail": f"could not be driven twice: "
+                              f"{type(exc).__name__}: {str(exc)[:160]}",
+                    "checkout": "-", "worktree": "-"})
+                continue
             va = _verdict_line(a.stdout + a.stderr)
             vb = _verdict_line(b.stdout + b.stderr)
             if va != vb or a.returncode != b.returncode:
