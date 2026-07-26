@@ -4645,6 +4645,83 @@ def _pdk_registry_entry(name: str) -> Optional[Dict[str, Any]]:
 _pdk_registry_entry._cache: Dict[str, Any] = {}
 
 
+# Named `--pdk` values `_detect_pdk` resolves with a hand-written branch
+# rather than from the registry. Kept as ONE tuple so the acceptance gate
+# below and the branch chain inside `_detect_pdk` cannot drift apart.
+_PDK_NAMED_BRANCHES = ("sky130A", "nangate45", "asap7")
+
+
+def _known_pdk_names() -> List[str]:
+    """Every `--pdk` value this runner can actually resolve: the hand-written
+    named branches plus every `pdk_registry.json` entry.
+
+    Registry-sourced, so a third-party plugin that appends an entry — the
+    documented extension seam — widens this set with no code change.
+    Chip- and PDK-AGNOSTIC: the only names spelled out are the three that
+    genuinely exist as code branches."""
+    _pdk_registry_entry("")            # prime the cache
+    names = set(_PDK_NAMED_BRANCHES) | set(_pdk_registry_entry._cache)
+    return sorted(names)
+
+
+def _assert_pdk_name_resolvable(override: Optional[str]) -> None:
+    """FAIL CLOSED on an explicitly NAMED `--pdk` this runner cannot resolve.
+
+    vibe-ic#389 closed ONE of the three ways `_detect_pdk` could fall open on
+    an unknown name — its `raise` sits at the tail, so it only guards the lane
+    where the project carries no usable `input/pdk/`. Measured on 918bf1e7
+    (v1.6.30), the other two lanes still returned BYTE-IDENTICAL results for a
+    real-but-unregistered PDK and for an invented one:
+
+      project has usable input/pdk/  ->  both resolve to PdkConfig(
+                                         name='custom:pdk') on project-local
+                                         assets and the run proceeds;
+      project has empty  input/pdk/  ->  both return None, the caller prints
+                                         `[SKIP] ... no usable PDK detected`
+                                         and exits 0 (a GREEN exit code).
+
+    Both reproduce the #389 defect class exactly: the operator names a PDK,
+    something else signs off, and no artefact records the difference.
+
+    Adding a branch per lane does not close this — the hole is that resolution
+    is attempted at all for a name that is not resolvable. So the acceptance
+    check happens ONCE, here, BEFORE any lane runs; every present and future
+    return path in `_detect_pdk` is then unreachable with an unknown name.
+
+    `auto` / unset is untouched: defaulting is legitimate when the operator
+    expressed no preference. Substituting for a name they DID give is not.
+
+    The acceptance set is an ALLOW-list built from the registry, never a
+    deny-list of known-bad names: a deny-list would let the NEXT unregistered
+    PDK through, which is how this defect recurred three times.
+
+    DELIBERATE TIGHTENING, and why it costs nothing. An earlier fix left the
+    project-local lane open on the reasoning that "a project-local PDK under
+    input/pdk/ is a LEGITIMATE way to serve an unregistered name". The workflow
+    is legitimate; serving it through an UNRECOGNISED NAME is not, because that
+    lane never compares the name against the local PDK at all — it returns the
+    same `custom:pdk` for a real PDK's name and for a typo of it. Nothing is
+    lost by closing it: a project-local PDK is still reached by `--pdk auto` or
+    by omitting `--pdk`, which is the accurate way to say "use whatever this
+    project ships" (measured: `auto` on a project with input/pdk/ resolves to
+    that local PDK on this tree). So the local workflow keeps a route, and the
+    ambiguous one is removed."""
+    if override and override != "auto":
+        known = _known_pdk_names()
+        if override not in known:
+            raise ValueError(
+                f"--pdk '{override}': unknown PDK. It matches no named branch "
+                f"and no entry in pdk_registry.json, so this runner cannot "
+                f"resolve which liberty/LEF/tech data you mean. "
+                f"REFUSING to fall back to any other PDK — a silent "
+                f"substitution makes an invented PDK name and a "
+                f"real-but-unregistered one "
+                f"indistinguishable in every artefact (vibe-ic#389). "
+                f"Registered names: {', '.join(known)}. Register the PDK in "
+                f"pdk_registry.json, pass a registered name, or omit --pdk to "
+                f"auto-detect.")
+
+
 def _container_file_text(container: str, path: str) -> Optional[str]:
     """PR-A1 — read a text file from the EDA container (docker exec cat)."""
     try:
@@ -5020,7 +5097,14 @@ def _detect_pdk(project: Path, override: Optional[str] = None
     structure first, then container's /foss/pdks/sky130A as fallback.
 
     Returns None if no usable PDK found (Phase 3 must SKIP).
+
+    An explicitly NAMED `--pdk` this runner cannot resolve raises ValueError
+    BEFORE any resolution lane runs — see `_assert_pdk_name_resolvable`.
     """
+    # FAIL CLOSED FIRST. This must stay the first statement: it is what makes
+    # every resolution lane below unreachable with an unresolvable name, which
+    # is the only form of this guard that survives a new lane being added.
+    _assert_pdk_name_resolvable(override)
     if override and override != "auto":
         if override == "sky130A":
             _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(project)

@@ -37,13 +37,28 @@ def test_389_an_invented_pdk_name_is_refused(tmp_path):
 
 
 def test_389_a_real_but_unregistered_pdk_is_refused(tmp_path):
-    """`ihp-sg13cmos5l` ships INSIDE the image and is a complete digital PDK —
-    it is simply not in the registry. That is exactly the case that produced a
-    whole cell written up under the wrong PDK, and it must fail loudly rather
-    than resolve to something else."""
+    """A PDK that ships INSIDE the image and is a complete digital PDK, but is
+    simply not in the registry, must fail loudly rather than resolve to
+    something else. That is the case that produced a whole cell written up
+    under the wrong PDK.
+
+    HISTORY: this test originally used `ihp-sg13cmos5l` as the exemplar, which
+    was then the one shipped-but-unregistered PDK in the image. It has since
+    been REGISTERED, so that name now resolves (correctly) and can no longer
+    stand for this class. The exemplar is therefore derived: the test asks the
+    resolver itself for the names it accepts and picks a shipped-PDK-shaped
+    name that is NOT among them, so the test keeps testing the CLASS rather
+    than one name that a later fix can retire.
+
+    The complementary guard — that no PDK stays shipped-but-unregistered in the
+    first place — is `pdk_registry_image_consistency_check`, which reports that
+    condition in both directions against the pinned image."""
+    unregistered = "ihp-sg13cmos5l-unregistered-variant"
+    assert unregistered not in p3._known_pdk_names(), (
+        "fixture name must genuinely be absent from the registry")
     with pytest.raises(ValueError) as e:
-        p3._detect_pdk(tmp_path, override="ihp-sg13cmos5l")
-    assert "ihp-sg13cmos5l" in str(e.value)
+        p3._detect_pdk(tmp_path, override=unregistered)
+    assert unregistered in str(e.value)
 
 
 def test_389_the_refusal_says_how_to_proceed(tmp_path):
