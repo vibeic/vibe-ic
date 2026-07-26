@@ -4944,6 +4944,14 @@ def _stage_normalized_techlef(project: Path, container: str,
     return out
 
 
+# ORGANIC (spm x sky130A, 1.6.4) — a yosys GENERIC primitive instantiation,
+# i.e. a netlist that was never technology-mapped. Anchored to an instance
+# line (`  $_NAND_ _100_ (`) so a stray `$_` inside a comment or a net name
+# cannot trip it. chip-AGNOSTIC: yosys internal-cell vocabulary, not a PDK.
+_GENERIC_PRIM_MASTER_RE = re.compile(
+    r"^\s*\\?\$_[A-Z][A-Z0-9_]*_\s+\\?[\w$\\]+\s*\(", re.MULTILINE)
+
+
 def _netlist_matches_liberty(netlist_path: Path,
                              liberty_path: str) -> bool:
     """PR-A3 — sniff-check a cached synth netlist against the ACTIVE PDK
@@ -4952,9 +4960,27 @@ def _netlist_matches_liberty(netlist_path: Path,
     master ⇒ the netlist was mapped to a DIFFERENT PDK and must NOT be
     reused — preserve-provenance must never launder a wrong-PDK netlist
     into a PASS. Unreadable/absent inputs ⇒ True (legacy trust, no
-    behavior change). Chip-AGNOSTIC."""
+    behavior change). Chip-AGNOSTIC.
+
+    ORGANIC (spm x sky130A, 1.6.4) — the master regex below requires a
+    master name to START with ``[A-Za-z_]``, so a yosys generic primitive
+    (``$_NAND_``, ``$_DFF_P_``, …) never matches it. On a netlist mapped to
+    NO PDK at all the sample therefore came back EMPTY and fell straight
+    into the ``if not masters: return True`` legacy-trust arm — the guard
+    returned "safe to reuse" for the one netlist it most needed to reject.
+    Measured: ``_netlist_matches_liberty(phase2/stage2/synth/netlist.v,
+    sky130_fd_sc_hd__tt_025C_1v80.lib)`` -> True, on a file holding 179
+    ``$_NAND_`` / 117 ``$_NOR_`` / 90 ``$_NOT_`` / 33 ``$_DFF_P_`` and zero
+    sky130 cells. An UNMAPPED netlist is a strictly worse reuse candidate
+    than a wrong-PDK one, so it is rejected explicitly and FIRST — before
+    the empty-sample arm can launder it."""
     try:
         txt = Path(netlist_path).read_text(errors="ignore")
+        # An unmapped netlist carries yosys generic primitives and no
+        # liberty cell. Reject it outright: no amount of master sampling
+        # can see these, because they do not match the master regex.
+        if _GENERIC_PRIM_MASTER_RE.search(txt):
+            return False
         masters: List[str] = []
         for m in re.finditer(
                 r"^\s*([A-Za-z_][\w$]*)\s+[A-Za-z_\\][\w$\\]*\s*\(",
