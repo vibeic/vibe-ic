@@ -9207,6 +9207,17 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             pdk = "sky130"
         elif "gf180mcu" in head:
             pdk = "gf180"
+        elif re.search(r"\bsg13g2_[a-z0-9_]+\b", head):
+            # ORGANIC #410 — an IHP-mapped netlist names its cells `sg13g2_*`,
+            # which matched none of the branches above, so `pdk` stayed "" and
+            # the `--pdk` flag was OMITTED. `fault_atpg_run` then applied its
+            # OWN default and resolved a DIFFERENT PDK's Verilog cell model,
+            # while the artefact recorded `generic_unmapped` — neither the PDK
+            # the design was built on nor the one actually used appeared
+            # anywhere. That is #389's sentence reached through a second
+            # table. `fault_atpg_run.PDK_CONFIG` has carried an `ihp-sg13g2`
+            # entry all along; only this sniff could not reach it.
+            pdk = "ihp-sg13g2"
         elif re.search(r"\bDFFHQD\d|\bAOI211D1\b", head):
             # v1.3.94 — commercial 180nm PDK. Its SKU is resolved from the
             # private config (empty in public installs -> generic behaviour).
@@ -9220,6 +9231,11 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                "--clock", clk, "--json", str(cov_json)]
         if pdk:
             cmd += ["--pdk", pdk]
+        else:
+            # ORGANIC #410 — omitting the flag let the callee substitute its
+            # own default PDK. Say UNMAPPED explicitly so the engine refuses
+            # to resolve some other library's cell model rather than guessing.
+            cmd += ["--pdk", "unmapped"]
         # v1.3.94 — the commercial PDK ships only Liberty in-tree; Fault
         # needs a Verilog cell model. It is provisioned at input/pdk/verilog/
         # and reaches the container via the separate --pdk-dir

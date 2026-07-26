@@ -1084,8 +1084,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--clock", required=True, help="Clock signal name (e.g. clk_i)")
     p.add_argument("--reset", help="Reset signal name (optional)")
     p.add_argument("--reset-active-low", action="store_true", help="Reset is active low")
-    p.add_argument("--pdk", default=(_cpdk.COMMERCIAL_PDK_ID or "sky130"),
-                   help=f"PDK name. Supported: {', '.join(PDK_CONFIG.keys())}")
+    # ORGANIC #410 — the default used to be a REAL PDK
+    # (`COMMERCIAL_PDK_ID or "sky130"`). A caller that could not attribute its
+    # netlist simply omitted the flag, and this default then resolved ANOTHER
+    # library's Verilog cell model while the caller's artefact recorded
+    # `generic_unmapped`. Neither the PDK the design was built on nor the one
+    # actually used appeared anywhere — #389's sentence, reached through a
+    # second table.
+    #
+    # There is no safe default here. `unmapped` is not a PDK, so
+    # `PDK_CONFIG.get()` misses and the run REFUSES with the supported list —
+    # which is what a caller that does not know its PDK should get. Passing
+    # `--cell-model-path` still works for a library this table does not carry.
+    p.add_argument("--pdk", default="unmapped",
+                   help=f"PDK name (REQUIRED — there is no safe default; an "
+                        f"unnamed PDK refuses rather than substituting "
+                        f"another library). Supported: "
+                        f"{', '.join(PDK_CONFIG.keys())}")
     p.add_argument("--pdk-dir", help="Path to PDK dir (mounted at /pdk for custom PDKs)")
     p.add_argument("--cell-model-path", default=None,
                    help="Explicit Verilog cell-model path for the std-cell "
