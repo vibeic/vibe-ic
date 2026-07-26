@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 971
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 971)
+- **Total programs (excluding helpers / shims):** 972
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 972)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 962 |
+| `any` | 963 |
 
 ## Alphabetical listing
 
@@ -189,6 +189,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `compose_synth` | any | — | a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine. |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
+| `container_image_provenance` | any | — | resolve and (optionally) enforce WHICH IMAGE a |
 | `conv_encoder_synth` | any | — | DETERMINISTIC solver for the CVDP convolutional |
 | `convergence_doctrine_present_check` | any | — | ORGANIC #716 |
 | `conway_2d_synth` | any | — | DETERMINISTIC 2-D cellular-automaton (Conway's Game of |
@@ -1043,7 +1044,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (962 programs)
+### `any` (963 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1206,6 +1207,7 @@ _(no programs in this group)_
 - `compose_synth` — a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine.
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
+- `container_image_provenance` — resolve and (optionally) enforce WHICH IMAGE a
 - `conv_encoder_synth` — DETERMINISTIC solver for the CVDP convolutional
 - `convergence_doctrine_present_check` — ORGANIC #716
 - `conway_2d_synth` — DETERMINISTIC 2-D cellular-automaton (Conway's Game of
