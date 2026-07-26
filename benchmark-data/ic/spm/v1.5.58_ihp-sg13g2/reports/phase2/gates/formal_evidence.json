@@ -2,17 +2,91 @@
   "program": "formal_proof_evidence_check",
   "version": "1.0.0",
   "findings": [
-    "PROOF_CHAIN_UNSUBSTANTIATED: cited evidence 'phase2/stage1/formal/formal_spm_formal.sby' is absent from this deliverable"
+    "PROOF_CHAIN_SUBSTANTIATED: this deliverable ships an elaboratable SymbiYosys task, its PASS transcript, AND a negative control that makes the property discriminating. The proof is NARROW — one reset-safety property, not datapath correctness. See proof_scope.",
+    "CAMPAIGN_EVIDENCE_STILL_UNPUBLISHED: the ORIGINAL v1.5.58 campaign also ran a proof (see campaign_run_disclosure); none of its artefacts were published. The evidence cited above is a REGENERATION, not those artefacts."
   ],
-  "sby": "phase2/stage1/formal/formal_spm_formal.sby",
-  "sby_log": "phase2/stage1/formal/formal_spm_formal.sby.log",
-  "verdict": "UNSUBSTANTIATED",
-  "superseded": {
-    "verdict": "PASS",
-    "findings": [
-      "PROOF_CHAIN_OK: all_proved substantiated by an elaboratable .sby + SymbiYosys PASS transcript"
+  "verdict": "SUBSTANTIATED",
+  "evidence_present": true,
+  "sby": "phase2/stage1/formal/reset_safety/spm_reset_safety.sby",
+  "sby_log": "phase2/stage1/formal/reset_safety/sby_reset_safety.log",
+  "negative_control_log": "phase2/stage1/formal/reset_safety/sby_reset_safety_NEGATIVE_CONTROL.log",
+  "harness": "phase2/stage1/formal/reset_safety/formal_top.sv",
+  "narrative": "phase2/stage1/formal/reset_safety/FORMAL_EVIDENCE.md",
+  "proof_scope": {
+    "property": "one cycle after `rst` is asserted, `p == 0` — asserted unconditionally; every input (clk, rst, x[31:0], y) is free, the transcript records `Treating a total of 35 undriven bits in formal_top like $anyseq`",
+    "dut": "phase2/stage1/rtl/spm.v",
+    "dut_sha256": "e7feff2cbbad384aa5fa3011bf23ceecf0bd4e1f711bf1c7544f94cd2f995424",
+    "dut_sha256_measured_on": "2026-07-26",
+    "mode": "prove",
+    "engine": "abc pdr",
+    "depth": 20,
+    "properties_proved": 1,
+    "NOT_proved": "datapath / functional correctness of the multiplier. No equivalence miter, no arithmetic property. That obligation is deferred (RESULT.md, 'formal full-stack functional proof beyond reset-safety')."
+  },
+  "tool_lines_quoted": {
+    "proof": [
+      "engine_0: Proved output 0 in frame 2.",
+      "engine_0: Property proved.  Time =     0.01 sec",
+      "summary: engine_0 (abc pdr) returned PASS",
+      "DONE (PASS, rc=0)"
+    ],
+    "negative_control": [
+      "engine_0: Output 0 of miter \"model/design_aiger\" was asserted in frame 2.  Time =     0.01 sec",
+      "summary: engine_0 (abc pdr) returned FAIL",
+      "DONE (ERROR, rc=16)"
     ]
   },
-  "evidence_present": false,
-  "correction": "vibe-ic#381: this report asserted verdict PASS with PROOF_CHAIN_OK while the .sby and transcript it cites are NOT in this deliverable (0 files at the cited path). The claim cannot be substantiated from what is shipped, so the verdict is corrected rather than left asserting it. No evidence was invented and the original record is preserved in `superseded`. The proof may well have run \u2014 but a reader of this deliverable cannot check it."
+  "negative_control": {
+    "mutation": "one line deleted from the DUT — `p_reg <= 1'b0;` removed from the `if (rst)` branch of phase2/stage1/rtl/spm.v (line 98 as shipped). Nothing else changed; same harness, same .sby, same engine.",
+    "result": "the same task returns FAIL with the miter output asserted in frame 2 — the property therefore DISCRIMINATES and the 0.01 s PASS above is not vacuous.",
+    "mutated_rtl_shipped": false,
+    "mutated_rtl_not_shipped_reason": "a broken copy of a campaign RTL sitting in the evidence tree is a hazard; the mutation is a one-line deletion, reproducible from the description above.",
+    "honest_caveat": "the negative-control transcript ALSO contains `SMT Solver 'yices-smt2' not found in path.` and `ERROR: engine_0: Could not determine aigsmt status.` — that is the witness-RENDERING step failing for lack of yices, and it is NOT what produced the FAIL. The discrimination rests on the `abc pdr` line `Output 0 of miter ... was asserted in frame 2` plus `engine_0 (abc pdr) returned FAIL`, both of which precede and are independent of the missing solver. Stated explicitly so no reader mistakes a tool gap for the counterexample."
+  },
+  "campaign_run_disclosure": {
+    "claim": "a formal proof DID run in this cell's own v1.5.58 campaign, and none of its artefacts were published.",
+    "evidence_in_this_deliverable": "reports/orchestrator/phase2_one_shot.json, step `phase2_manifests`, output_files contains `formal/results.json`. The runner appends that path ONLY on the branch where its deterministic reset-safety harness ran and returned verdict PASS with all_proved true; the not-proved branch appends `formal/formal_not_run.json` instead (design_one_shot_runner.py, the formal auto-run block wired in v1.5.58).",
+    "artefacts_produced_but_not_shipped": [
+      "phase2/stage1/formal/results.json",
+      "phase2/stage1/formal/formal_spm.sv",
+      "phase2/stage1/formal/formal_spm_formal.sby",
+      "phase2/stage1/formal/formal_spm_formal.sby.log"
+    ],
+    "why_those_names": "they are a deterministic function of the design top, not a copied string: formal_harness_gen emits `formal_<top>.sv` with module `formal_<top>`, and formal_property_run writes `<module>_formal.sby` plus `<stem>.sby.log`. For top `spm` that is `formal_spm_formal.sby` in EVERY campaign of this design.",
+    "campaign_property": "the runner's harness generator emits `assert(<registered output> == <literal reset value>)` one cycle after reset — the same reset-safety property class proved above. Read from the generator SOURCE, not from the campaign artefact, because the campaign harness was not published; this is why it is stated as a class and not as an identity."
+  },
+  "provenance": {
+    "regenerated": true,
+    "regenerated_on": "2026-07-26",
+    "note": "the artefacts cited by this report are a REGENERATION (review finding F4, landed as 880d1a042), not the v1.5.58 campaign transcripts. They prove the property against the same RTL blob (sha256 above, byte-identical to the RTL shipped by all three spm PDK cells)."
+  },
+  "reproduce": "from phase2/stage1/formal/reset_safety/, copy the DUT alongside the task (`cp ../../rtl/spm.v .`) and run `sby -f spm_reset_safety.sby`. The `.sby` names `spm.v` in its `[files]` section as a bare basename, and the RTL is deliberately NOT duplicated into this directory, so the copy step is required — disclosed rather than left for the reader to discover.",
+  "gate_rerun_on_this_deliverable": {
+    "measured_on": "2026-07-26",
+    "command": "python3 formal_proof_evidence_check.py <this cell>",
+    "verdict": "FAIL",
+    "finding": "NO_RESULTS: formal/results.json absent — nothing claims a proof (step 5 reports its capability gap upstream)",
+    "why": "TWO reasons, neither of which is 'the proof did not run'. (1) The shipped artefacts were authored for the record by the F4 regeneration, not by `formal_property_run.py`, so no `formal/results.json` manifest accompanies them. (2) Even with one present, the gate's discovery is TOP-LEVEL-ONLY (`formal_dir.glob('*.sby')`, `formal_dir.glob('*.log')`), so evidence organised in a per-property subdirectory (`formal/reset_safety/`) is invisible to it — measured directly: with a results.json planted at formal/ the gate still reports `no .sby found under formal/`.",
+    "disclosed_because": "a report that claims SUBSTANTIATED while the program it is named after prints FAIL, without saying so, is the same class of unverifiable certificate this correction exists to remove."
+  },
+  "superseded": [
+    {
+      "source": "as published by the flow (commit 1bea1377d)",
+      "verdict": "PASS",
+      "findings": [
+        "PROOF_CHAIN_OK: all_proved substantiated by an elaboratable .sby + SymbiYosys PASS transcript"
+      ],
+      "sby": "phase2/stage1/formal/formal_spm_formal.sby",
+      "sby_log": "phase2/stage1/formal/formal_spm_formal.sby.log"
+    },
+    {
+      "source": "vibe-ic#381 correction (commit e025ba351)",
+      "verdict": "UNSUBSTANTIATED",
+      "findings": [
+        "PROOF_CHAIN_UNSUBSTANTIATED: cited evidence 'phase2/stage1/formal/formal_spm_formal.sby' is absent from this deliverable"
+      ],
+      "evidence_present": false
+    }
+  ],
+  "correction": "vibe-ic#381 / review finding F10. #381 correctly removed a PASS resting on `phase2/stage1/formal/formal_spm_formal.sby`, which is absent from every cell. What it could not know is that THIS cell does ship genuine, negative-controlled formal evidence under `formal/reset_safety/` (landed separately as 880d1a042), so the stale pointer was causing a real proof to be discarded. This report now cites the files that exist, quotes the tool's own lines, states exactly what is and is not proved, and separately discloses that the campaign's own proof artefacts remain unpublished. The verdict is SUBSTANTIATED and deliberately NOT the program's `PASS`: `PASS` in this program's vocabulary means Step 5 as a whole passed, and one reset-safety property is not that. No number or citation was invented; every path cited above was verified present and git-TRACKED in this deliverable on 2026-07-26."
 }
