@@ -30054,10 +30054,18 @@ def gen_l4_regmap(project: Path,
         return (isinstance(nm, str)
                 and re.match(r"^csr_[0-9A-Fa-f_]+$", nm) is not None)
 
-    if registers:
+    def _merge_registers_by_address(
+            regs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Collapse entries that claim the SAME address into one.
+
+        Keyed on address ALONE — deliberately not on (address, name),
+        because the whole point is that one of the two entries carries a
+        synthesised `csr_<addr>` placeholder precisely BECAUSE its name
+        was unknown, so the names are expected to differ.
+        """
         by_addr: Dict[str, int] = {}
         merged: List[Dict[str, Any]] = []
-        for entry in registers:
+        for entry in regs:
             addr = entry.get("address")
             if not isinstance(addr, str) or not addr.startswith("0x"):
                 merged.append(entry)
@@ -30092,7 +30100,10 @@ def gen_l4_regmap(project: Path,
             else:
                 by_addr[key] = len(merged)
                 merged.append(entry)
-        registers = merged
+        return merged
+
+    if registers:
+        registers = _merge_registers_by_address(registers)
 
     # v1.6.488 — for #346 R2 ORGANIC. Re-run the v1.6.481 field-
     # access inheritance step AFTER the v1.6.270 address-based dedup
@@ -30289,6 +30300,20 @@ def gen_l4_regmap(project: Path,
                 break
         if len(registers) >= 512:
             break
+
+    # Re-establish the v1.6.270 one-address-one-register invariant.
+    # The walker above appends keyed on the COMPOSITE (address, name),
+    # so it cannot recognise an existing entry whose name is the
+    # synthesised `csr_<addr>` placeholder — it appends a SECOND
+    # register at an address that already has one, re-creating exactly
+    # the duplicate shape the v1.6.270 pass was written to eliminate.
+    # That pass ran before this walker and never runs again, so without
+    # this re-merge `l4_regmap_phase2_emitter_contract_check` FAILs
+    # phase 1 with "N address(es) are claimed by more than one
+    # register". Idempotent — a no-op when the walker added nothing
+    # colliding. Chip-AGNOSTIC.
+    if registers:
+        registers = _merge_registers_by_address(registers)
 
     # v1.6.295 — for #183 ORGANIC. Register-array collapse. Walk the
     # row list looking for contiguous runs of `PREFIX[N]` rows with
