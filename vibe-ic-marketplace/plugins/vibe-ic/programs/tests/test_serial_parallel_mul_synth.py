@@ -20,6 +20,19 @@ half is a rubber stamp:
       adder (wrong operator), and a fully-parallel c=a*b core (no serial
       operand/result).
 
+  WIDTH (repair — the first revision hardcoded 32):
+    * the emitted parameter default equals the width the SPEC declares (16 /
+      32 / 64, symbolic or integer), not a constant. These tests FAIL against
+      the first-field-wins resolver that shipped in the capture.
+    * an unresolvable or self-contradictory declared width DEFERs.
+
+  RUNNER SEAM (repair — the capture's 59-line hook was pinned by nothing):
+    * ``design_one_shot_runner.step_rtl_gen`` itself is driven. These tests
+      FAIL when the runner hunk is reverted, and they pin the two behaviours
+      the hook must NOT break: a pre-staged ``input/vendor_rtl/`` REUSED-IP
+      WAIVE and an ip-catalog hit both still win, and the emitted tree is
+      stamped in the provenance ledger.
+
 iverilog-dependent halves self-skip when iverilog is absent so the pure-Python
 contract still runs in a bare CI.
 """
@@ -52,14 +65,23 @@ def _mk_project(tmp: Path, *, ports, l2_text, top="spm") -> Path:
     return root
 
 
+def _x_port(width_field: str = "N-bit(`[size-1:0]`,parameter `size` 預設 32)"):
+    """The parallel operand exactly as a real phase1 L9 lays it out: the
+    parameter NAME lives in ``width_symbolic`` and the declared DEFAULT lives in
+    the sibling ``width`` field. Resolving only the first field that carries the
+    name is what made every emission 32 bits wide."""
+    return {"name": "x", "direction": "input", "width": width_field,
+            "width_symbolic": "size-1:0", "lsb": "0"}
+
+
 _SPM_PORTS = [
     {"name": "clk", "direction": "input", "width": 1},
     {"name": "rst", "direction": "input", "width": 1},
-    {"name": "x", "direction": "input", "width": "size-1:0",
-     "width_symbolic": "size-1:0", "msb": "size-1", "lsb": "0"},
+    _x_port(),
     {"name": "y", "direction": "input", "width": 1},
     {"name": "p", "direction": "output", "width": 1},
 ]
+_L2_MUL = "serial-parallel multiplier: p = (x * y) mod 2^N"
 
 
 # ── POSITIVE: solver fires + spec is right ────────────────────────────────────
@@ -75,17 +97,21 @@ def test_solver_fires_on_serial_parallel_multiplier(tmp_path):
     assert spec["serial_in"] == "y"
     assert spec["serial_out"] == "p"
     assert spec["size_param"] == "size"
+    assert spec["size_default"] == 32
 
 
 def _run(cmd, cwd):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
 
 
-def _stream_matches_golden(work: Path, rtl_text: str, size: int = 8) -> bool:
+def _stream_matches_golden(work: Path, rtl_text: str, size: int = 8,
+                           parameterized: bool = True) -> bool:
     """Compile <rtl> + an independent TB, drive LSB-first, and check the
     reassembled p-stream equals (x*y) mod 2^size at ONE calibrated latency."""
     (work / "dut.v").write_text(rtl_text)
-    (work / "tb.v").write_text(_TB.replace("__SIZE__", str(size)))
+    inst = "spm #(.size(size)) dut" if parameterized else "spm dut"
+    (work / "tb.v").write_text(
+        _TB.replace("__SIZE__", str(size)).replace("__INST__", inst))
     r = _run(["iverilog", "-g2012", "-o", "tb.vvp", "tb.v", "dut.v"], work)
     if r.returncode != 0:
         return False
@@ -117,7 +143,7 @@ module tb;
   parameter size = __SIZE__;
   reg clk=0, rst=1, y=0; reg [size-1:0] x=0; wire p;
   integer t, v; reg [size-1:0] xs[0:19]; reg [size-1:0] ys[0:19];
-  spm #(.size(size)) dut(.clk(clk),.rst(rst),.x(x),.y(y),.p(p));
+  __INST__(.clk(clk),.rst(rst),.x(x),.y(y),.p(p));
   always #5 clk=~clk;
   initial begin
     xs[0]=0; ys[0]=0; xs[1]={size{1'b1}}; ys[1]={size{1'b1}};
@@ -193,3 +219,285 @@ def test_defer_on_fully_parallel_multiplier(tmp_path):
         proj, "digital_arithmetic_primitive")
     assert spec is None, \
         f"solver must DEFER when there is no 1-bit serial operand/result, got {spec}"
+
+
+# ── WIDTH: read from the spec, never defaulted ────────────────────────────────
+# The capture's resolver looped over (width_symbolic, width, msb) and RETURNED
+# on the first field carrying the parameter NAME. On the real phase1 L9 layout
+# that is width_symbolic ("size-1:0"), which carries no default — so the
+# 預設/default regex never saw the sibling `width` field and EVERY emission was
+# 32 bits regardless of the spec. Nothing downstream catches it:
+# l9_rtl_pin_consistency_check compares pin names + directions and discards
+# widths. These tests FAIL against that resolver.
+
+@pytest.mark.parametrize("declared", [8, 16, 32, 64])
+def test_declared_symbolic_default_is_honoured(tmp_path, declared):
+    ports = [p if p["name"] != "x" else
+             _x_port(f"N-bit(`[size-1:0]`,parameter `size` 預設 {declared})")
+             for p in _SPM_PORTS]
+    proj = _mk_project(tmp_path, ports=ports, l2_text=_L2_MUL)
+    spec, reason = spm.extract_serial_parallel_mul_spec(
+        proj, "digital_arithmetic_primitive")
+    assert spec is not None, reason
+    assert spec["size_default"] == declared, (
+        f"spec declares 預設 {declared} but the solver resolved "
+        f"{spec['size_default']} — the declared width is being ignored")
+    rtl = spm.emit_rtl(spec)
+    assert f"parameter size = {declared}" in rtl, rtl[:900]
+
+
+def test_declared_english_default_is_honoured(tmp_path):
+    """Same field layout, English prose."""
+    ports = [p if p["name"] != "x" else
+             _x_port("N-bit [WIDTH-1:0], parameter WIDTH default 24")
+             for p in _SPM_PORTS]
+    ports = [dict(p, width_symbolic="WIDTH-1:0") if p["name"] == "x" else p
+             for p in ports]
+    proj = _mk_project(tmp_path, ports=ports, l2_text=_L2_MUL)
+    spec, reason = spm.extract_serial_parallel_mul_spec(
+        proj, "digital_arithmetic_primitive")
+    assert spec is not None, reason
+    assert (spec["size_param"], spec["size_default"]) == ("WIDTH", 24)
+
+
+def test_integer_width_l9_emits_that_width(tmp_path):
+    """An L9 that states a plain integer width must produce THAT width — and no
+    invented parameter symbol the spec never declared."""
+    ports = [p if p["name"] != "x" else
+             {"name": "x", "direction": "input", "width": 12, "msb": 11,
+              "lsb": 0}
+             for p in _SPM_PORTS]
+    proj = _mk_project(tmp_path, ports=ports, l2_text=_L2_MUL)
+    spec, reason = spm.extract_serial_parallel_mul_spec(
+        proj, "digital_arithmetic_primitive")
+    assert spec is not None, reason
+    assert spec["size_default"] == 12
+    assert spec["size_param"] is None
+    rtl = spm.emit_rtl(spec)
+    assert "input  wire [12-1:0] x" in rtl, rtl[:900]
+    assert "parameter" not in rtl, "no parameter may be invented for a fixed width"
+
+
+def test_defer_when_parametric_width_has_no_declared_default(tmp_path):
+    """FAIL-CLOSED: a parameter with no resolvable default must DEFER to
+    spec-to-rtl, NOT silently become 32."""
+    ports = [p if p["name"] != "x" else
+             {"name": "x", "direction": "input", "width": "size-1:0",
+              "width_symbolic": "size-1:0", "msb": "size-1", "lsb": "0",
+              "description": "parallel multiplicand"}
+             for p in _SPM_PORTS]
+    proj = _mk_project(tmp_path, ports=ports, l2_text=_L2_MUL)
+    spec, reason = spm.extract_serial_parallel_mul_spec(
+        proj, "digital_arithmetic_primitive")
+    assert spec is None, f"must DEFER on an unresolvable width, got {spec}"
+    assert "width" in reason.lower()
+
+
+def test_defer_when_declared_widths_conflict(tmp_path):
+    """msb says 16 bits, the prose says 32 — the spec contradicts itself, so
+    the solver must refuse rather than pick one."""
+    ports = [p if p["name"] != "x" else
+             dict(_x_port(), msb=15)
+             for p in _SPM_PORTS]
+    proj = _mk_project(tmp_path, ports=ports, l2_text=_L2_MUL)
+    spec, reason = spm.extract_serial_parallel_mul_spec(
+        proj, "digital_arithmetic_primitive")
+    assert spec is None, f"must DEFER on conflicting widths, got {spec}"
+    assert "conflict" in reason.lower()
+
+
+def test_defer_on_bidirectional_port(tmp_path):
+    """``inout`` starts with "in"; classifying it as an input would emit a
+    module whose port list silently disagrees with L9."""
+    ports = _SPM_PORTS + [{"name": "sda", "direction": "inout", "width": 1}]
+    proj = _mk_project(tmp_path, ports=ports, l2_text=_L2_MUL)
+    spec, reason = spm.extract_serial_parallel_mul_spec(
+        proj, "digital_arithmetic_primitive")
+    assert spec is None, f"must DEFER on a bidirectional port, got {spec}"
+    assert "bidirectional" in reason
+
+
+def test_defer_on_port_with_unrecognised_direction(tmp_path):
+    """A declared top port the solver cannot classify used to be collected and
+    IGNORED — the emitted module simply omitted it."""
+    ports = _SPM_PORTS + [{"name": "vdd", "width": 1}]
+    proj = _mk_project(tmp_path, ports=ports, l2_text=_L2_MUL)
+    spec, reason = spm.extract_serial_parallel_mul_spec(
+        proj, "digital_arithmetic_primitive")
+    assert spec is None, f"must DEFER on an unclassifiable port, got {spec}"
+    assert "unrecognised direction" in reason
+
+
+@pytest.mark.skipif(not _HAVE_IVERILOG, reason="iverilog not installed")
+def test_fixed_width_rtl_matches_golden(tmp_path):
+    """The no-parameter emission is still a correct multiplier — the width
+    repair must not have broken the datapath."""
+    ports = [p if p["name"] != "x" else
+             {"name": "x", "direction": "input", "width": 8, "msb": 7, "lsb": 0}
+             for p in _SPM_PORTS]
+    proj = _mk_project(tmp_path, ports=ports, l2_text=_L2_MUL)
+    spec, reason = spm.extract_serial_parallel_mul_spec(
+        proj, "digital_arithmetic_primitive")
+    assert spec is not None, reason
+    assert spec["size_param"] is None
+    assert _stream_matches_golden(tmp_path, spm.emit_rtl(spec), size=8,
+                                  parameterized=False), \
+        "fixed-width serial-parallel multiplier RTL failed the (x*y) mod 2^N golden"
+
+
+# ── RUNNER SEAM: design_one_shot_runner.step_rtl_gen itself ───────────────────
+# The capture shipped a 59-line hook in design_one_shot_runner.py that NO test
+# imported: reverting only that hunk still left the suite green. Everything
+# below drives step_rtl_gen for real, so the hook is pinned — and so are the
+# two deliberate existing routes it must never preempt.
+
+@pytest.fixture
+def runner():
+    """design_one_shot_runner with its RTL-session globals isolated.
+
+    step_rtl_gen takes process-wide ownership of rtl/ on a successful
+    generation; leaving that set would make the next test skip the guard and
+    would leave an atexit stamp pointing at a deleted tmp_path."""
+    import design_one_shot_runner as dosr
+    dosr._RTL_SESSION_OWNED, dosr._RTL_SESSION_PROJECT = False, None
+    try:
+        yield dosr
+    finally:
+        # Left FALSE, not restored: the atexit finalizer early-returns on
+        # False, so a deleted tmp_path is never re-stamped at process exit.
+        dosr._RTL_SESSION_OWNED, dosr._RTL_SESSION_PROJECT = False, None
+
+
+def _rtl_files(proj: Path):
+    d = proj / "phase2" / "stage1" / "rtl"
+    return sorted(p.name for p in d.glob("*.v")) if d.is_dir() else []
+
+
+def test_runner_emits_serial_parallel_multiplier(tmp_path, runner):
+    """THE hook test. Reverting the design_one_shot_runner.py hunk makes this
+    FAIL (the class WAIVEs to spec-to-rtl with an empty rtl/)."""
+    ports = [p if p["name"] != "x" else
+             _x_port("N-bit(`[size-1:0]`,parameter `size` 預設 16)")
+             for p in _SPM_PORTS]
+    proj = _mk_project(tmp_path, ports=ports, l2_text=_L2_MUL)
+    res = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
+    assert res.status == "PASS", f"{res.status} | {res.detail}"
+    assert "serial-parallel multiplier" in str(res.detail)
+    assert _rtl_files(proj) == ["spm.v"]
+    # the runner must ship the width the SPEC declared, end to end
+    body = (proj / "phase2" / "stage1" / "rtl" / "spm.v").read_text()
+    assert "parameter size = 16" in body, body[:900]
+
+
+def test_runner_resolves_class_synonyms(tmp_path, runner):
+    """The registry declares digital_datapath / arithmetic_primitive /
+    pure_datapath as SYNONYMS of digital_arithmetic_primitive; the hook must
+    key off the resolved registry entry, not a hand-copied name list."""
+    proj = _mk_project(tmp_path, ports=_SPM_PORTS, l2_text=_L2_MUL)
+    res = runner.step_rtl_gen(proj, "pure_datapath")
+    assert res.status == "PASS", f"{res.status} | {res.detail}"
+
+
+def test_runner_stamps_rtl_provenance(tmp_path, runner):
+    """Without the stamp rtl_provenance.classify() calls generator output
+    'unknown → treated as authored', permanently mislabelling it and making the
+    NEXT run refuse to regenerate a tree the runner fully owns."""
+    import rtl_provenance as prov
+    proj = _mk_project(tmp_path, ports=_SPM_PORTS, l2_text=_L2_MUL)
+    res = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
+    assert res.status == "PASS", f"{res.status} | {res.detail}"
+    verdict, why, _ev = prov.classify(proj)
+    assert verdict not in prov.PRESERVE_VERDICTS, (
+        f"emitted RTL classified {verdict!r} ({why}) — the generator's own "
+        f"output is being reported as hand-authored")
+    ledger = prov.load_ledger(proj)
+    assert ledger and ledger.get("generator") == "serial_parallel_mul_synth.py"
+
+
+def test_runner_still_waives_to_catalog_glue_for_staged_vendor_rtl(
+        tmp_path, runner):
+    """ORGANIC #542. Design-provided IP pre-staged in input/vendor_rtl/ is a
+    DELIBERATE reuse route. The capture ran its hook BEFORE this branch and
+    silently discarded the staged IP in favour of generated RTL; this test
+    FAILS against that ordering."""
+    proj = _mk_project(tmp_path, ports=_SPM_PORTS, l2_text=_L2_MUL)
+    vendor = proj / "input" / "vendor_rtl"
+    vendor.mkdir(parents=True)
+    (vendor / "spmv_vendor.v").write_text("module spmv(); endmodule\n")
+    res = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
+    assert res.status == "WAIVED", f"{res.status} | {res.detail}"
+    assert "catalog-glue-author" in str(res.detail)
+    assert _rtl_files(proj) == [], (
+        "the pre-staged vendor IP was silently replaced by generated RTL")
+
+
+def test_runner_still_waives_when_ip_catalog_matches(tmp_path, runner,
+                                                     monkeypatch):
+    """Same principle for a pre-validated catalog IP: a confident match routes
+    to catalog-glue-author, and the generator must not override it."""
+    import ip_catalog_query
+
+    class _M:
+        category, ip_name, version = "arithmetic", "serial_mul", "1.0"
+        license, confidence = "Apache-2.0", 0.9
+        matched_pattern, manifest_path = "serial multiplier", "x/manifest.json"
+
+    monkeypatch.setattr(ip_catalog_query, "query_catalog",
+                        lambda *a, **k: [_M()], raising=True)
+    proj = _mk_project(tmp_path, ports=_SPM_PORTS, l2_text=_L2_MUL)
+    res = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
+    assert res.status == "WAIVED", f"{res.status} | {res.detail}"
+    assert "catalog-glue-author" in str(res.detail)
+    assert _rtl_files(proj) == []
+
+
+def test_runner_never_overwrites_existing_rtl(tmp_path, runner):
+    """Author guard: RTL already in the tree is left byte-identical."""
+    proj = _mk_project(tmp_path, ports=_SPM_PORTS, l2_text=_L2_MUL)
+    rtl_dir = proj / "phase2" / "stage1" / "rtl"
+    rtl_dir.mkdir(parents=True)
+    authored = rtl_dir / "spm.v"
+    authored.write_text("// hand authored\nmodule spm(); endmodule\n")
+    res = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
+    assert res.status == "WAIVED", f"{res.status} | {res.detail}"
+    assert authored.read_text() == "// hand authored\nmodule spm(); endmodule\n"
+
+
+def test_runner_waives_when_width_unresolvable(tmp_path, runner):
+    """The solver's FAIL-CLOSED width verdict must reach the runner as the
+    UNCHANGED spec-to-rtl WAIVE — not as a PASS holding an invented width."""
+    ports = [p if p["name"] != "x" else
+             {"name": "x", "direction": "input", "width": "size-1:0",
+              "width_symbolic": "size-1:0", "msb": "size-1"}
+             for p in _SPM_PORTS]
+    proj = _mk_project(tmp_path, ports=ports, l2_text=_L2_MUL)
+    res = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
+    assert res.status == "WAIVED", f"{res.status} | {res.detail}"
+    assert "spec-to-rtl" in str(res.detail)
+    assert _rtl_files(proj) == []
+
+
+def test_runner_unchanged_for_non_arithmetic_class(tmp_path, runner):
+    """No other class may be pulled into this generator."""
+    proj = _mk_project(tmp_path, ports=_SPM_PORTS, l2_text=_L2_MUL)
+    res = runner.step_rtl_gen(proj, "processor_cpu")
+    assert res.status == "WAIVED", f"{res.status} | {res.detail}"
+    assert _rtl_files(proj) == []
+
+
+def test_runner_waives_for_adder_shape(tmp_path, runner):
+    """Shape fail-close reaches the runner too."""
+    ports = [
+        {"name": "clk", "direction": "input", "width": 1},
+        {"name": "rst", "direction": "input", "width": 1},
+        {"name": "a", "direction": "input",
+         "width": "N-bit(`[N-1:0]`,parameter `N` 預設 16)",
+         "width_symbolic": "N-1:0"},
+        {"name": "b", "direction": "input", "width": 1},
+        {"name": "s", "direction": "output", "width": 1},
+    ]
+    proj = _mk_project(tmp_path, ports=ports, top="ser_adder",
+                       l2_text="serial adder: s = a + b, an N-bit adder core")
+    res = runner.step_rtl_gen(proj, "digital_arithmetic_primitive")
+    assert res.status == "WAIVED", f"{res.status} | {res.detail}"
+    assert _rtl_files(proj) == []

@@ -1166,26 +1166,48 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
                 "program_first": True})
 
 
-def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
+_SERIAL_PARALLEL_MUL_GEN = "serial_parallel_mul_synth.py"
+# Registry class (by canonical NAME — synonyms resolve through _lookup_class)
+# whose rtl_gen=null hole this solver fills.
+_SERIAL_PARALLEL_MUL_CLASSES = {"digital_arithmetic_primitive"}
+
+
+def _try_serial_parallel_mul_rtl(project: Path, config: Optional[dict],
                                  t0: float) -> Optional[StepResult]:
     """Capture (spm x sky130A): deterministic RTL for the SERIAL-PARALLEL
-    integer-multiplier subset of ``digital_arithmetic_primitive`` (+ synonyms).
+    integer-multiplier subset of ``digital_arithmetic_primitive``.
 
     The family ships ``rtl_gen=null`` and defers the WHOLE family to
     ``spec-to-rtl`` — but this shape (one PARALLEL N-bit operand, one 1-bit
     SERIAL operand, one 1-bit SERIAL result, computing ``p=(x*y) mod 2^N``) is
     CLOSED-FORM and its functional golden is ALREADY self-calibrated by
     ``arith_oracle_tb_gen``. A function the flow can already CHECK is Bucket A:
-    emit it with NO LLM. Returns a PASS StepResult when the solver emits; None
-    (fall through to the class/AI path) when it DEFERs, when the class is not
-    arithmetic, or when RTL already exists (author guard) — so every
-    non-matching design keeps today's behaviour byte-for-byte.
+    emit it with NO LLM.
+
+    CALL SITE MATTERS. This runs only at the very END of the ``rtl_gen=null``
+    branch, i.e. AFTER every DELIBERATE existing WAIVE has had its chance:
+    the ORGANIC #542 pre-staged ``input/vendor_rtl/`` REUSED-IP handoff, the
+    pure-analog / all-analog-interface N/A routes, and (via the caller's
+    ``catalog_matches_summary`` gate) an ip-catalog hit. An earlier revision
+    ran BEFORE all of them and silently discarded design-provided vendor IP in
+    favour of generated RTL. The ONLY WAIVE it now preempts is the generic
+    "rtl_gen=null → author it by hand with spec-to-rtl", which is exactly the
+    hole this capture exists to close.
+
+    Returns a PASS StepResult when the solver emits; None (caller falls through
+    to the unchanged WAIVE) when it DEFERs, when the class is not the arithmetic
+    family, or when RTL already exists (author guard).
+
+    The author guard here is a REFUSAL on any non-empty ``rtl/``, which is
+    strictly stronger than ``_rtl_prov.classify()``: this path never renames,
+    backs up or overwrites a tree, so there is nothing for the PRESERVE/regen
+    decision to arbitrate. What it DOES owe rtl_provenance is the stamp below —
+    without it the ledger cannot tell this generator's output from hand-authored
+    RTL.
     """
-    arith = {"digital_arithmetic_primitive", "digital_datapath",
-             "arithmetic_primitive", "pure_datapath"}
-    if ic_class not in arith:
+    if not config or config.get("name") not in _SERIAL_PARALLEL_MUL_CLASSES:
         return None
-    solver = PROGRAMS_DIR / "serial_parallel_mul_synth.py"
+    solver = PROGRAMS_DIR / _SERIAL_PARALLEL_MUL_GEN
     if not solver.is_file():
         return None
     rtl_dir = _pl.rtl_dir(project)
@@ -1207,13 +1229,28 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
     written = out.get("written")
     if not written:
         return None
+    n_fixed = _enforce_power_up_determinism(rtl_dir)
+    # PROVENANCE. Without the stamp rtl_provenance.classify() reports this tree
+    # as 'unknown → treated as authored', so generator output is permanently
+    # mislabelled as hand-authored and the NEXT run refuses to regenerate it.
+    # Stamped AFTER the hygiene --fix pass so the ledger holds the bytes that
+    # are actually on disk, exactly as the registry generator path does.
+    global _RTL_SESSION_OWNED, _RTL_SESSION_PROJECT
+    if not _RTL_SESSION_OWNED:
+        atexit.register(_finalize_rtl_provenance)
+    _RTL_SESSION_OWNED = True
+    _RTL_SESSION_PROJECT = project
+    _rtl_prov.stamp(project, generator=_SERIAL_PARALLEL_MUL_GEN)
+    fix_note = (f", power-up --fix repaired {n_fixed} reset-less reg"
+                if n_fixed else "")
     return StepResult(
         "rtl_gen", "PASS", time.time() - t0,
         f"deterministic serial-parallel multiplier RTL (program-first; no LLM) "
-        f"-> {Path(written).relative_to(project)}",
+        f"-> {Path(written).relative_to(project)}{fix_note}",
         output_files=[written],
         extras={"deterministic_generator": "serial_parallel_mul_synth",
                 "program_first": True, "topology": "serial_parallel",
+                "rtl_provenance_stamped": _SERIAL_PARALLEL_MUL_GEN,
                 "spec": out.get("spec")})
 
 
@@ -2250,14 +2287,6 @@ def step_rtl_gen(project: Path, ic_class: str,
     _det = _try_deterministic_rtl_dispatch(project, t0)
     if _det is not None:
         return _det
-    # Capture (spm x sky130A): the SERIAL-PARALLEL MULTIPLIER subset of the
-    # arithmetic family is closed-form (Bucket A) and its oracle already self-
-    # calibrates, so emit it deterministically from the L docs BEFORE WAIVE-ing
-    # to spec-to-rtl. DEFERs (returns None) on every other shape/class, so all
-    # non-matching designs keep the existing class-registry / AI-fallback path.
-    _sp = _try_serial_parallel_mul_rtl(project, ic_class, t0)
-    if _sp is not None:
-        return _sp
     # Registry lookup → deterministic generator OR fallback skill.
     config = _lookup_class(ic_class)
     if config is None:
@@ -2418,6 +2447,19 @@ def step_rtl_gen(project: Path, ic_class: str,
                             "digital_datapath_absent": True,
                             "interface_evidence": _ev,
                             "class_config": config})
+        # Capture (spm x sky130A): LAST resort before the generic
+        # "author it by hand" WAIVE. Every DELIBERATE route above has already
+        # returned — pre-staged input/vendor_rtl/ (REUSED-IP → catalog-glue),
+        # pure-analog and all-analog-interface N/A. An ip-catalog hit also wins
+        # (`not catalog_matches_summary`): a pre-validated catalog IP is a
+        # deliberate reuse path, not something a generator may silently
+        # override. Only the generic rtl_gen=null → spec-to-rtl WAIVE is
+        # preempted, and only for the closed-form serial-parallel multiplier
+        # shape, which the solver verifies FAIL-CLOSED (shape AND width).
+        if not catalog_matches_summary:
+            _sp = _try_serial_parallel_mul_rtl(project, config, t0)
+            if _sp is not None:
+                return _sp
         # ROUTING FIX — surface the captured-lesson digest to the spec-to-rtl /
         # catalog-glue author. Shape-C blind authors already get this digest
         # (benchmark_dispatch._render_lesson_digest); a runner-driven (Shape-B)
