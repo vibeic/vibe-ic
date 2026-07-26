@@ -1127,6 +1127,58 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
             break
     if spec is None:
         return None
+
+    # ── ORGANIC #403 — the design's OWN implementation outranks a generator.
+    #
+    # This dispatcher is the FIRST thing `step_rtl_gen` does, and it wrote
+    # `rtl/<module>.sv` unconditionally. `consume_reused_ip_rtl` — which stages
+    # the design's shipped RTL — runs AFTER it and stages only into an EMPTY
+    # tree, so by the time it looked, the generator already owned the
+    # directory and it skipped. The one guard that existed covered
+    # `input/vendor_rtl/` alone and sat 23 lines further down, past the write.
+    #
+    # REPRODUCED here before fixing, with the truth-table fixture from
+    # `tests/test_truth_table_rtl_gen.py`, on the vendor_rtl and
+    # design_src/impl/rtl routes:
+    #     control (no rtl_gen):  reused_ip=True   staged=['TopModule.v']
+    #     after the dispatcher:  reused_ip=False  staged=['TopModule.sv']
+    # The design's implementation was not renamed, backed up or reported —
+    # it was simply never staged, and the flow synthesised the generated
+    # module instead.
+    #
+    # The three legitimate source routes are already enumerated in ONE place
+    # (`reused_ip_rtl_consume.candidate_source_dirs`), so this asks THAT
+    # rather than re-deriving a second, drifting list. Failure to import or
+    # inspect leaves the prior behaviour: this guard must never be the reason
+    # a run cannot generate RTL, only the reason it declines to OVERWRITE.
+    try:
+        import reused_ip_rtl_consume as _consume_probe
+        _own = []
+        for _d in _consume_probe.candidate_source_dirs(project):
+            if not _d.is_dir():
+                continue
+            for _pat in ("*.v", "*.sv", "*.vhd", "*.vhdl"):
+                _own.extend(_d.rglob(_pat))
+            if _own:
+                break
+        if _own:
+            _rel = [str(f.relative_to(project)) for f in sorted(_own)[:5]]
+            return StepResult(
+                "rtl_gen", "SKIPPED-CONDITION", time.time() - t0,
+                f"deterministic RTL generation DECLINED: the design ships its "
+                f"own build RTL ({len(_own)} file(s), e.g. {_rel}). A "
+                f"generated module would silently replace the "
+                f"implementation the design provided, because "
+                f"`consume_reused_ip_rtl` stages only into an empty "
+                f"phase2/stage1/rtl/. The spec at "
+                f"{spec.relative_to(project)} is left unused; remove the "
+                f"shipped RTL if the generator is meant to own this module.",
+                extras={"organic": 403,
+                        "declined_spec": str(spec.relative_to(project)),
+                        "design_rtl_sample": _rel})
+    except Exception:  # noqa: BLE001 — never block generation on the probe
+        pass
+
     dispatcher = PROGRAMS_DIR / "deterministic_rtl_dispatcher.py"
     if not dispatcher.is_file():
         return None
