@@ -133,14 +133,30 @@ def tracked_files(root: Path) -> Optional[set]:
     have it" — so an untracked local artifact must NOT satisfy a citation.
     """
     try:
-        r = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+        r = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z"],
                            capture_output=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
         return None
     out = r.stdout.decode("utf-8", "replace")
-    names = [n for n in out.split("\0") if n]
+    # `-s` gives "<mode> <sha> <stage>\t<path>". Keep REGULAR files only.
+    # Mode 120000 is a SYMLINK: its blob is a path string, not document
+    # content, and it ships no content at all — 121 of the 122 tracked
+    # symlinks under this tree point at ABSOLUTE paths outside the
+    # repository, so they resolve on the machine that made them and dangle
+    # for everyone else. Reading through them is exactly what made this gate
+    # count 440 documents locally and 422 in CI. Judging the index's file
+    # MODE keeps the verdict a pure function of the index and never touches
+    # the filesystem to decide what exists. Mode 160000 (submodule) is
+    # likewise not content.
+    names = []
+    for ent in out.split("\0"):
+        if not ent or "\t" not in ent:
+            continue
+        meta, path = ent.split("\t", 1)
+        if meta.split(" ", 1)[0] in ("100644", "100755"):
+            names.append(path)
     if not names:
         return None
     # LOGICAL paths, never `resolve()`. `benchmark-data/ic` carries 787

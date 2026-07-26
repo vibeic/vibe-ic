@@ -209,6 +209,7 @@ def _git(root: Path, *args):
 
 
 def _repo(tmp_path) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t")
     _git(tmp_path, "config", "user.name", "t")
@@ -407,3 +408,44 @@ def test_verdict_is_a_pure_function_of_the_index(tmp_path):
     _doc(root, "extra.md", "see `b.log`\n")                  # would add debt
     after = _run(root, tmp_path / "bl.json").stdout
     assert before.split("unresolved now")[1] == after.split("unresolved now")[1]
+
+
+def test_tracked_symlinks_are_not_documents_and_not_evidence(tmp_path):
+    """THE divergence, root cause. 121 of the 122 tracked symlinks under
+    benchmark-data/ic point at ABSOLUTE paths outside the repository: they
+    resolve on the machine that made them and dangle for everyone else.
+    Reading through them made this gate count 440 documents locally and 422
+    in CI on the same commit. The index's file MODE decides — a symlink's
+    blob is a path string, not document content, and it ships no content."""
+    ext = tmp_path / "external"          # genuinely outside the repo
+    ext.mkdir()
+    root = _repo(tmp_path / "repo")
+    _doc(root, "real.md", "see `there.log`\n")
+    (root / "there.log").write_text("log\n")
+    outside = ext / "outside.md"
+    outside.write_text("see `ghost.log`\n")
+    (root / "linked.md").symlink_to(outside)     # absolute, outside the repo
+    _git(root, "add", "-Af")
+    _git(root, "commit", "-q", "-m", "tree with an outward symlink")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    # the symlink contributed NO citation, on this machine or any other
+    assert "ghost.log" not in r.stdout
+    assert "1 citation(s) checked" in r.stdout, r.stdout
+
+
+def test_a_citation_pointing_at_a_symlink_is_not_shipped_content(tmp_path):
+    """A tracked symlink is a pointer, not content — so it cannot
+    substantiate a claim either."""
+    ext = tmp_path / "external"
+    ext.mkdir()
+    root = _repo(tmp_path / "repo")
+    real = ext / "elsewhere.log"
+    real.write_text("log\n")
+    _doc(root, "EV.md", "see `proof.log`\n")
+    (root / "proof.log").symlink_to(real)
+    _git(root, "add", "-Af")
+    _git(root, "commit", "-q", "-m", "symlinked evidence")
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "proof.log" in r.stdout

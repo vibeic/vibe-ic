@@ -27,7 +27,6 @@
     "39d266ca5f89ef3b0bbb1a8bf9e7457f",
     "3aa024c15180fbc5038d05c533a50d71",
     "3b2985aeadcc20fe4663ffa869b6c5b5",
-    "3bd80d6b065516e6cacdeec46faaa871",
     "3cf2eaf778bb906d53b125ebef947dd9",
     "3d51ec351abbe6eb00b53597eb17303e",
     "3e0f70e6961f03c98e2cc3e6cfc957f5",
@@ -48,7 +47,6 @@
     "5d994566621c863a476078b2a106f7bc",
     "5ea5608c4d3561dac0f5332c20b0b98d",
     "5f7d0d252e2049719a1d739953c840c0",
-    "610737109dd2606a80b6b0df2c667841",
     "635bea93a2f0d2ff394b02b1250f885e",
     "63957afdac6ce84dbf4e54f8af77046c",
     "63d1323252835ca14b2340a2788c18c0",
@@ -67,9 +65,7 @@
     "8057d7385b4b8bb41e7177fc84d8188a",
     "80cb90964d7bcc39c14afddf90e0062c",
     "834e48264eec2593f7a40b2e5aae8323",
-    "8536ba53f02886ad268b31e080d790f1",
     "8636608b43c9321acc72120754fa3e3e",
-    "87e1169a5b6260519a25ce1899a22d85",
     "8ba947336d4c14a094fd775737d895ca",
     "8e79880859cfca776ab270885ecbb300",
     "93a03bf077d73c8adb54614c692d9953",
@@ -78,7 +74,6 @@
     "9b0b0ee7b9f28cbffaae54d8ecce9618",
     "9d4a0b99a16d70082b85699c2186edb5",
     "a16d2b64b1e987c7a0d1306caf141de0",
-    "a65491aaa8bda3b97782e5f884a86546",
     "a741ca8218c5fb05ca1d259982495414",
     "a8ab4e949a13487d41266d7785e9a643",
     "ab2b4c92364fa495b82a0eec2e8730ef",
@@ -90,7 +85,6 @@
     "b2d17129ad28dbbe4b5f27d63db617d4",
     "b7bc93f8f578b9faed353b6d93379341",
     "b7eb3d17d80907c52d56ced2a2900e43",
-    "b8b45315f69b89aaba65733fb92859fa",
     "b8c628dab873586f9ce77b10354446bf",
     "b94ce81a9842e6e30e469e5bfd840ab7",
     "ba4a029d212c7a865f9bc557a14dacfe",
@@ -105,7 +99,6 @@
     "c885a65288ea93b1377a3504a91ae9b8",
     "c8ec0cf42b6674ea3aa97b794840a20e",
     "cd36244422f7023402db8d2142764c4a",
-    "cd64133f4ed23835d5295ea13a3fafc5",
     "ceb3bd49b134b52d083c908b6e123267",
     "d1f02fb667bc57fd023125076ed6c303",
     "d45e1bd810b2aea84c4e6a7855e19bdd",
@@ -142,9 +135,5 @@
     "fda72cf0a7b74bc5c66a3cabfecb502b",
     "fe13c392f388495c955ef6b9d7e6200e",
     "ff5a20006fd8e68d6c5c717a3d7c4500"
-  ],
-  "scope_expansion": {
-    "previous_size": 62,
-    "reason": "gate now also judges JSON gate reports (a dict declaring a verdict plus the artifact substantiating it) and refuses absolute paths; the extra entries are pre-existing debt newly VISIBLE, not newly admitted (#366)"
-  }
+  ]
 }
