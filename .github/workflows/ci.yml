@@ -57,6 +57,16 @@ jobs:
         run: |
           python3 tools/vibeic-eda/sync_image_version.py --check --require-remote
 
+      # vibe-ic#361 — an evidence document that cites `foo.log` and ships no
+      # foo.log is unverifiable, and the failure is silent. Measured over
+      # benchmark-data/ic: 110 citations, 65 unresolvable. Those are recorded
+      # in a shrink-only baseline; this step blocks any NEW one. Repo-hygiene
+      # scope, so it lives in CI rather than the per-design flow gate list
+      # (there it would SKIP on every user project — a gate that cannot fire).
+      - name: evidence-citation gate (a cited proof must exist)
+        run: |
+          python3 vibe-ic-marketplace/plugins/vibe-ic/programs/evidence_citation_resolves_check.py
+
       # The guard above scans FILES only — a commit MESSAGE naming the
       # commercial foundry / SKU / process is an equally permanent public leak
       # and used to pass every gate. Scan the messages this event introduces.
