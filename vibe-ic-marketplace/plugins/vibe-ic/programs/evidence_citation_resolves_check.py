@@ -239,6 +239,16 @@ def _json_artifact_refs(path: Path) -> List[Tuple[str, str]]:
         return []
     if not isinstance(data, dict) or _VERDICT_KEY not in data:
         return []
+    # A report that names its evidence AND states the evidence is ABSENT is
+    # not making an unsubstantiated claim — it is disclosing one. The defect
+    # this gate exists for is a PASS resting on evidence nobody can open;
+    # counting an explicit `evidence_present: false` as a dangling citation
+    # would penalise exactly the correction that fixes it (vibe-ic#381: three
+    # reports were changed from an unbacked PASS to a disclosed
+    # UNSUBSTANTIATED, and this gate would have kept flagging them for the
+    # path string they honestly still name).
+    if data.get("evidence_present") is False:
+        return []
     out: List[Tuple[str, str]] = []
     for k, v in data.items():
         if isinstance(v, str) and _is_citation(v):
