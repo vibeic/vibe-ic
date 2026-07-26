@@ -41634,49 +41634,177 @@ _MEMORY_NAME_TOKEN_RE = re.compile(
 #
 # But memory COMPILERS emit macro cell names in which the memory morpheme is
 # legitimately interior, so the strict token test cannot see it:
-#     fakeram45_2048x39                     -> `ram` preceded by `e`
-#     sky130_sram_1kbyte_1rw1r_32x256_8     -> `sram` preceded by `_`, ok,
-#                                              but the 45-style siblings are not
-#     fakeram45_1024x32                     -> `ram` preceded by `e`
-# Such an identifier is NOT distinguishable from an English word by the
-# morpheme alone, and it is not distinguishable from a floorplan/array
-# dimension by the `<digits>x<digits>` organisation token alone. It IS
-# distinguishable by the CONJUNCTION: a memory morpheme ANYWHERE in the name
-# TOGETHER WITH an explicit depth/width organisation token in the same name.
-# Both halves are required — `DIAGRAM` has the morpheme and no organisation,
-# `FP_PDN_VOFFSET 4x8` would have organisation and no morpheme.
+#     fakeram45_2048x39     -> `ram` preceded by `e`
+#     fakeram45_1024x32     -> `ram` preceded by `e`
+#     dffram_1024x32        -> `ram` preceded by `f`
+# (`sky130_sram_1kbyte_1rw1r_32x256_8` is NOT in this class — its `sram` is
+# preceded by `_`, so the #612 clause above already promotes it.)
 #
-# Chip-AGNOSTIC: open memory-compiler naming convention (OpenRAM, fakeram,
-# sky130 sram family); no chip-class string literal participates.
+# MEASURED, and this is the load-bearing negative result: NO PURELY LEXICAL
+# RULE separates those macro names from the English words the #612 guard
+# exists to reject. `fakeram45_2048x39` and `DIAGRAM_16x9` are the same string
+# shape — letters, an interior `ram`, an underscore, a `<digits>x<digits>`
+# group. Five successively tighter organisation-token rules, scored against a
+# 27-name set (real macro families vs aspect ratios / statistics units / hex
+# error codes / the #612 negatives in suffixed form):
+#
+#     organisation-token rule                       false-acc  false-rej
+#     `\d+\s*[xX]\s*\d+` anywhere                       20         0
+#     + no whitespace inside the token                  20         0
+#     + not a hex literal (no leading-zero operand)     15         0
+#     + anchored at an `_`/string-start boundary        15         0
+#     + morpheme immediately followed by a digit         3         1
+#
+# The last row is the best lexical rule available and it is still wrong in
+# BOTH directions: it admits `diagram2_16x9` / `histogram8_256x8` /
+# `program0_4x4`, and it REJECTS `dffram_1024x32`, a real OpenLane macro
+# family. A `<digits>x<digits>` group is not evidence of a memory; it is
+# evidence of two numbers, and `0x40` is not even that.
+#
+# So the corroboration is taken from OUTSIDE the string, from the design's own
+# staged physical-macro artefacts. `fakeram45_2048x39` has
+# `fakeram45_2048x39.lef` (35140 B), `.lib` and `.v` under
+# `input/pdk_local/fakeram45/`, and that LEF declares `MACRO
+# fakeram45_2048x39`. An aspect ratio, a statistics unit and a hex error code
+# never have a LEF. `input/pdk_local/` is this runner's own existing
+# convention for design-staged macro IP (the L4 OTP-IP walker reads the same
+# directory), and the benchmark documents cite it by path.
+#
+# RESIDUAL, stated honestly and pinned by test: the conjunct that survives is
+# the memory morpheme, so a design that actually staged `DIAGRAM_16x9.lef`
+# under its own `input/pdk_local/` WOULD promote `DIAGRAM_16x9`. That is not a
+# lexical accident any more — it means the design shipped a physical macro
+# under that cell name — and `test_staged_artifact_is_the_only_lever` asserts
+# exactly this behaviour rather than a prettier one.
+#
+# FAIL-SAFE: with no project path, or no `input/pdk_local/`, the staged set is
+# empty and this clause can never fire — such designs behave exactly as they
+# did before the clause existed.
+#
+# Chip-AGNOSTIC: LEF / Liberty / GDS / behavioural-model file naming plus the
+# LEF `MACRO <cell>` keyword — all open standards. No chip-class string
+# literal participates; the evidence is read from whatever the design under
+# analysis staged, never from a built-in list of macro names.
 _MEMORY_NAME_TOKEN_ANYWHERE_RE = re.compile(
     r"(ram|rom|sram|dram|cache|regfile|fifo|mem)",
     re.IGNORECASE,
 )
-_MEMORY_MACRO_ORGANISATION_RE = re.compile(r"\d+\s*[xX]\s*\d+")
+# Longest-first so `.gds.gz` is stripped whole.
+_MEMORY_MACRO_ARTEFACT_SUFFIXES = (
+    ".gds.gz", ".gdsii", ".lef", ".lib", ".gds", ".db", ".sv", ".v",
+)
+_MEMORY_MACRO_LEF_DECL_RE = re.compile(
+    r"^[ \t]*MACRO[ \t]+([A-Za-z_][A-Za-z0-9_$.\[\]-]*)",
+    re.MULTILINE,
+)
+_MEMORY_MACRO_STAGE_REL = ("input", "pdk_local")
+_MEMORY_MACRO_MAX_FILES = 4096
+_MEMORY_MACRO_MAX_LEF_BYTES = 8 * 1024 * 1024
 
 
-def _is_generator_style_memory_macro_name(name) -> bool:
-    """True iff `name` looks like a memory-compiler-emitted macro cell name:
-    a memory morpheme ANYWHERE in the identifier AND an explicit
-    <digits>x<digits> organisation token in the SAME identifier.
+def _staged_macro_cell_names(project) -> frozenset:
+    """Return the lower-cased set of physical-macro CELL NAMES that the design
+    at `project` has staged under `<project>/input/pdk_local/**`.
 
-    Deliberately says NOTHING about which number is depth and which is width.
+    Two independent readings of the same open standards:
+      * the file STEM of every `*.lef / *.lib / *.gds[.gz] / *.db / *.v / *.sv`
+        artefact (memory compilers emit one file set per cell, named after the
+        cell);
+      * every `MACRO <cell>` declaration found inside a staged `*.lef` (a
+        single LEF may abstract several cells).
+
+    Bounded: at most `_MEMORY_MACRO_MAX_FILES` directory entries and at most
+    `_MEMORY_MACRO_MAX_LEF_BYTES` per LEF body. Returns an EMPTY set — never
+    raises — when `project` is None, is not a path, has no `input/pdk_local/`,
+    or is unreadable. Chip-AGNOSTIC."""
+    if project is None:
+        return frozenset()
+    try:
+        root = Path(project).joinpath(*_MEMORY_MACRO_STAGE_REL)
+    except (TypeError, ValueError, AttributeError):
+        return frozenset()
+    try:
+        if not root.is_dir():
+            return frozenset()
+    except OSError:
+        return frozenset()
+    names: set = set()
+    budget = _MEMORY_MACRO_MAX_FILES
+    # Breadth-first over `iterdir()` rather than `rglob("*")`: a design may
+    # stage an entire vendor PDK here, and this walks one directory at a time
+    # (bounded memory), in sorted order (deterministic truncation), skipping
+    # directory symlinks (no traversal loop).
+    stack = [root]
+    while stack and budget > 0:
+        current = stack.pop(0)
+        try:
+            children = sorted(current.iterdir())
+        except OSError:
+            continue
+        for path in children:
+            if budget <= 0:
+                break
+            budget -= 1
+            try:
+                if path.is_symlink():
+                    continue
+                if path.is_dir():
+                    stack.append(path)
+                    continue
+                if not path.is_file():
+                    continue
+            except OSError:
+                continue
+            fname = path.name
+            low = fname.lower()
+            stem = ""
+            for suffix in _MEMORY_MACRO_ARTEFACT_SUFFIXES:
+                if low.endswith(suffix) and len(low) > len(suffix):
+                    stem = fname[: len(fname) - len(suffix)]
+                    break
+            if not stem:
+                continue
+            names.add(stem.lower())
+            if low.endswith(".lef"):
+                # A LEF can abstract several cells; read the MACRO headers.
+                try:
+                    if path.stat().st_size > _MEMORY_MACRO_MAX_LEF_BYTES:
+                        continue
+                    body = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                for m in _MEMORY_MACRO_LEF_DECL_RE.finditer(body):
+                    names.add(m.group(1).lower())
+    return frozenset(names)
+
+
+def _is_staged_memory_macro_name(name, staged_macro_names) -> bool:
+    """True iff `name` carries a memory morpheme ANYWHERE **and** the design
+    under analysis actually staged a physical macro under that exact cell name
+    (`staged_macro_names`, as produced by `_staged_macro_cell_names`).
+
+    The staged artefact is the whole of the new evidence: it is what
+    `fakeram45_2048x39` has and what `DIAGRAM_16x9` / `histogram_256x8` /
+    `CMD_PARAM_ERR_0x1F` can never have. Nothing here inspects
+    `<digits>x<digits>`; see the block comment above for why that token was
+    measured and abandoned.
+
+    Says NOTHING about which number in the name is depth and which is width.
     Generator conventions disagree on the order (fakeram45_2048x39's own
     behavioural model declares WORD_DEPTH=2048 / BITS=39, i.e. depth x width,
     while the sky130 sram family names are width x depth), so inferring
     depth/width from the name would fabricate numbers. This predicate only
     decides PROMOTION; depth/width stay None and the entry keeps its
     `low_confidence` marker."""
-    if not name:
+    if not name or not staged_macro_names:
         return False
     name = str(name)
-    return bool(
-        _MEMORY_NAME_TOKEN_ANYWHERE_RE.search(name)
-        and _MEMORY_MACRO_ORGANISATION_RE.search(name)
-    )
+    if not _MEMORY_NAME_TOKEN_ANYWHERE_RE.search(name):
+        return False
+    return name.lower() in staged_macro_names
 
 
-def _v1_6_441_is_useful_memory_entry(entry) -> bool:
+def _v1_6_441_is_useful_memory_entry(entry, staged_macro_names=None) -> bool:
     """Return True iff the memory entry carries genuine macro evidence.
 
     Structural fields (depth / width / port_count) are the primary signal —
@@ -41692,12 +41820,18 @@ def _v1_6_441_is_useful_memory_entry(entry) -> bool:
 
     A SECOND, NARROWER name-only clause admits memory-compiler-emitted macro
     cell names whose morpheme is interior and therefore invisible to the #612
-    word-boundary test (`fakeram45_2048x39`). It requires the morpheme AND an
-    explicit <digits>x<digits> organisation token together — see
-    `_is_generator_style_memory_macro_name`. Measured on benchmark-data: this
-    clause moves exactly ONE distinct name corpus-wide and re-promotes zero
-    #612 negatives.
-    Chip-AGNOSTIC: pure structural / name-shape gate."""
+    word-boundary test (`fakeram45_2048x39`). It fires ONLY when the design
+    under analysis STAGED A PHYSICAL MACRO under that exact cell name — see
+    `_is_staged_memory_macro_name`, and the block comment above it for the
+    measurement that ruled out every lexical alternative.
+
+    `staged_macro_names` defaults to None — i.e. NO corroboration available —
+    in which case the second clause is inert and this gate behaves exactly as
+    it did before the clause existed. Every caller that cannot supply the
+    design's staged-macro set therefore gets the fail-SAFE answer.
+
+    Chip-AGNOSTIC: structural fields, name-token shape, and the design's own
+    staged LEF / Liberty / GDS artefacts."""
     if not isinstance(entry, dict):
         return False
     if any(entry.get(k) for k in ("depth", "width", "port_count")):
@@ -41705,7 +41839,7 @@ def _v1_6_441_is_useful_memory_entry(entry) -> bool:
     name = entry.get("name")
     if name and _MEMORY_NAME_TOKEN_RE.search(str(name)):
         return True
-    return _is_generator_style_memory_macro_name(name)
+    return _is_staged_memory_macro_name(name, staged_macro_names)
 
 
 def _v1_6_453_sync_no_memories_flag(l9: dict) -> None:
@@ -42386,12 +42520,20 @@ def _v1_6_511_emit_instantiation_template(
     l9["no_internal_wires_in_input"] = no_iw_flag
 
 
-def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
+def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
     """v1.6.426 — for #303 P2 ORGANIC. Walk all input_doc/*.txt
     bodies, run the memory prose walker, dedupe across files, and
     populate `l9["memories"]`. Also stamps the `no_memories_in_input`
     sentinel so downstream gates can distinguish "input has no memory
     prose" from "field missing — schema regression".
+
+    `project` is the design root. It is read ONLY to collect the cell
+    names the design staged under `input/pdk_local/**` (LEF / Liberty /
+    GDS / behavioural model), which is the corroboration the promotion
+    gate needs to tell a generator-emitted SRAM macro name apart from an
+    aspect ratio. Optional and fail-SAFE: when omitted, or when the
+    design stages no macros, the staged set is empty and the
+    corroborated clause can never fire.
 
     v1.6.441 — for #317 P3 ORGANIC. Reject bare-keyword null rows
     (name/depth/width all None) at emit time. Rejected rows are
@@ -42431,6 +42573,9 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
     # emitter has not yet stamped top_module — the cascade then
     # only applies tiers 2-4 (ISA-ext / shape-gate / noun-deny).
     l9_top_module = l9.get("top_module") if isinstance(l9, dict) else None
+    # Corroboration from OUTSIDE the document prose: the cell names this
+    # design actually staged as physical macros. Collected once per emit.
+    staged_macro_names = _staged_macro_cell_names(project)
     if isinstance(extracted, dict):
         for fname, body in extracted.items():
             if not body or not isinstance(body, str):
@@ -42448,7 +42593,18 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
                     continue
                 seen.add(key)
                 # v1.6.441 — for #317 P3. Null-row gate.
-                if _v1_6_441_is_useful_memory_entry(entry):
+                if _v1_6_441_is_useful_memory_entry(
+                        entry, staged_macro_names):
+                    # Provenance: record when the row owes its promotion to
+                    # a staged physical macro rather than to its own name
+                    # shape, so a reader can trace the evidence back to the
+                    # artefact on disk.
+                    if (not any(entry.get(k) for k in
+                                ("depth", "width", "port_count"))
+                            and not _MEMORY_NAME_TOKEN_RE.search(
+                                str(entry.get("name") or ""))):
+                        entry["promotion_evidence"] = (
+                            "staged_macro_artifact:input/pdk_local")
                     aggregated.append(entry)
                 else:
                     if len(rejected) < 32:
@@ -44264,7 +44420,10 @@ def gen_l9_integration_spec(project: Path,
     # RAM / ROM / cache / register-file blocks. Chip-AGNOSTIC: pure
     # regex over open-standard memory naming prose; no chip-class
     # string literal participates.
-    _v1_6_426_emit_memories(content, extracted)
+    # `project` is threaded in so the promotion gate can corroborate a
+    # generator-emitted macro cell name against the design's own staged
+    # LEF / Liberty / GDS under `input/pdk_local/`.
+    _v1_6_426_emit_memories(content, extracted, project)
     # v1.6.509 — for #351 P2 ORGANIC. Populate L9.memory_map[] by
     # walking Markdown / AsciiDoc / RST pipe-table address-range
     # rows (`| 0xSTART .. 0xEND | <region> |`). Pre-v1.6.509 the
