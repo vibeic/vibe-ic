@@ -276,6 +276,30 @@ def _normalize_ws(text: str) -> Tuple[str, List[int]]:
     return "".join(out_chars), offsets
 
 
+# ORGANIC — a hit whose own context DISCLAIMS normative force is not a
+# stated requirement. Measured on spm x GF180MCU: `l22` blocked Step P0 on
+#
+#   | Toggle / branch coverage(資訊性) | >= 95% | 同 random run;非 sign-off gate |
+#
+# The row says, in the design's own words, INFORMATIONAL and NOT a sign-off
+# gate. REQUIREMENT_FRAMING_RE matched the `>=` and had no way to see that.
+# A gate that fires on a legitimately-complete design is a bug in the gate.
+#
+# DELIBERATELY NARROW. This matches a disclaimer of normative force, NOT
+# negation in general — `must NOT exceed 5 ns` is a real requirement that
+# contains a negation, and a blanket negation guard (the plugin has one:
+# `_FOUNDRY_NEGATION_RE`, which includes bare 不/否) would silently delete it.
+_NON_NORMATIVE_RE = re.compile(
+    r"非\s*sign-?off|非簽核|非签核|不是\s*sign-?off"
+    r"|資訊性|资讯性|informational|informative"
+    r"|僅供參考|仅供参考"
+    r"|\bnot\s+a\s+(?:sign-?off\s+)?gate\b"
+    r"|\bnon-?normative\b"
+    r"|\bfor\s+reference\s+only\b"
+    r"|\badvisory\s+only\b",
+    re.IGNORECASE)
+
+
 def framed_hits(texts: Iterable[Tuple[Path, str]],
                 vocab_re: re.Pattern,
                 window: int = 160,
@@ -303,6 +327,8 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
             ctx = norm[lo:hi]
             if not REQUIREMENT_FRAMING_RE.search(ctx):
                 continue
+            if _NON_NORMATIVE_RE.search(ctx):
+                continue          # the document itself says it is not a requirement
             key = ctx.strip()
             if key in seen_ctx:
                 continue

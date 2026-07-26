@@ -121,3 +121,40 @@ def test_write_report_creates_the_artifact(tmp_path):
     out = C.write_report(tmp_path, "l8_demo_check", {"verdict": "PASS"})
     assert out is not None and Path(out).is_file()
     assert json.loads(Path(out).read_text())["verdict"] == "PASS"
+
+
+# ── a document that DISCLAIMS normative force is not a requirement ─────
+# Measured on spm x GF180MCU: l22 blocked Step P0 on a row the design's own
+# doc annotates 資訊性 (informational) and 非 sign-off gate (NOT a sign-off
+# gate). REQUIREMENT_FRAMING_RE matched the `>=` and had no way to see it.
+# A gate that fires on a legitimately-complete design is a bug in the gate.
+
+def _texts(text):
+    return [(Path("input/docs/L7_verification_plan.md"), text)]
+
+
+_COV = __import__("re").compile("coverage", __import__("re").I)
+
+
+def test_a_row_the_document_calls_non_signoff_is_not_a_requirement():
+    """DIRECTION 2 — the organic row that blocked a converged cell."""
+    row = ("| Toggle / branch coverage(資訊性) | >= 95% | "
+           "同 random run;非 sign-off gate |")
+    assert C.framed_hits(_texts(row), _COV) == []
+
+
+def test_a_genuine_requirement_containing_a_negation_still_counts():
+    """DIRECTION 1, and the reason this guard is deliberately narrow.
+
+    `must NOT exceed` is a real requirement that contains a negation. A
+    blanket negation guard — the plugin has one, `_FOUNDRY_NEGATION_RE`,
+    matching bare 不/否 — would silently delete it. This must not.
+    """
+    txt = "Coverage shall be at least 95% and slew must not exceed 5 ns."
+    assert len(C.framed_hits(_texts(txt), _COV)) == 1
+
+
+def test_an_undisclaimed_target_still_counts():
+    """DIRECTION 1 — the plain case must be unaffected."""
+    txt = "| Branch coverage | >= 95% | sign-off gate |"
+    assert len(C.framed_hits(_texts(txt), _COV)) == 1
