@@ -117,5 +117,40 @@ The gate enforces, per folder, each as a **named** nonconformance on failure:
   GitHub Release and keep the sha256 in `GDS_MANIFEST.txt` — which is required
   either way, and is what keeps an artefact verifiable without being stored.
 
+### `LAYOUT_ROUTING.txt` — what happened to each layout artefact
+
+`benchmark_evidence_publish` writes one line per layout artefact found under the
+source run, at the cell root:
+
+```
+<relpath> <bytes>B sha256:<64hex> <DECISION> <destination>
+DECISION ∈ STAGED | ROUTED_AWAY | NOT_PUBLISHED
+```
+
+- **STAGED** — the blob is in this cell (`in-cell`, or `shared-input` for the
+  design docs staged to `ic/<IC>/input/`).
+- **ROUTED_AWAY** — in published scope but over the ceiling. `--oversize-route`
+  names where it went; it defaults to `not-retained`, the honest answer when
+  nobody has claimed otherwise.
+- **NOT_PUBLISHED** — present in the source run, in a subtree this cell does not
+  publish (PnR scratch, per-step scratch). Not a size decision.
+
+The sha256 is recorded in all three cases, which is what lets a reader tell
+"big, stored elsewhere" from "in the run but out of scope" from "never existed",
+and what turns recovering an artefact from a source host into a checkable file
+copy rather than a guess between two same-named layouts.
+
+The file is emitted even when nothing was routed away: a record that only
+appears on omission cannot be used to prove nothing was omitted. It is NOT
+required by the structure check — existing published cells predate it and are
+not made nonconformant by its absence.
+
+> Scope note, so the record is not over-read: the publisher stages the copied
+> subtrees plus the signoff GDS. The three hand-staged reference cells also
+> carry `phase3/stage3/pnr/routed.def` and `phase3/stage3/extracted/*.spef`,
+> which the program still does not publish — those now appear as
+> `NOT_PUBLISHED` rather than vanishing silently. Widening published scope is
+> an evidence-policy decision, not a size one.
+
 chip-AGNOSTIC: the IC, PDK and version are parameters/path components; no IC / PDK
 / vendor / SKU literal appears in either program's logic.

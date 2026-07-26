@@ -122,6 +122,23 @@ _LAYOUT_EXTS = (".gds", ".def", ".spef", ".oas")
 # #419 and each of them looked locally reasonable.
 _SIZE_CEILING = 50 * 1000 * 1000
 
+
+def is_layout_artefact(p: Path) -> bool:
+    """True for the four extensions whose committability this gate judges."""
+    return p.suffix.lower() in _LAYOUT_EXTS
+
+
+def over_ceiling(p: Path, ceiling: int = _SIZE_CEILING) -> bool:
+    """True when `p` is too big to commit.
+
+    Named and exported so `size_policy_drift_check` can CALL it rather than
+    grep for the constant beside it. A grep proves the ceiling is spelled; a
+    call proves the decision follows it. The distinction is not academic — a
+    mutant that reverted the publisher to an extension-only rule while
+    leaving `_SIZE_CEILING` declared passed the grep-only form of that check.
+    """
+    return p.stat().st_size > ceiling
+
 # GDS_MANIFEST line: "<filename> <int>B sha256:<64 hex>"
 _MANIFEST_LINE_RE = re.compile(r"^\S+ \d+B sha256:[0-9a-fA-F]{64}$")
 
@@ -361,11 +378,11 @@ def check_folder(folder: Path, include_staged: bool = False) -> FolderResult:
 
     # ---- NO_RAW_GEOMETRY -------------------------------------------------
     scan, mode = _raw_scan_set(folder, include_staged)
-    layout = [p for p in scan if p.suffix.lower() in _LAYOUT_EXTS]
+    layout = [p for p in scan if is_layout_artefact(p)]
     over = []
     for p in layout:
         try:
-            if p.stat().st_size > _SIZE_CEILING:
+            if over_ceiling(p):
                 over.append((p, p.stat().st_size))
         except OSError:
             continue
