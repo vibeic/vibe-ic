@@ -77,6 +77,20 @@ E3c PORT_WIDTH_COLLAPSED_TO_ONE_BIT
     `parameters[]` carries no module/layer qualifier and a bare-name join let
     an L12 scan-chain count size a data bus.
 
+E3d PORT_WIDTH_SYMBOL_UNCORROBORATED
+    The same layer condition as E3c — the L9 entry declares a SYMBOLIC or
+    non-numeric width — but the consumer emitted a CONCRETE bit count instead
+    of collapsing to 1. Something resolved the symbol, and the only evidence
+    for the number is the step that produced it.
+    THIS RAIL IS WHY E3c KEYS ON THE LAYER AND NOT ON THE NUMBER. #404's own
+    proposed next increment (resolve in the consumer, scoped to one document)
+    was measured to make E3c go silent — and to go equally silent when the
+    parameter it joined against contradicted the port's own stated width, so
+    a wrong resolution was indistinguishable from a right one. Keying the
+    rail on `width == 1` would have handed a future resolver a green gate.
+    Keying it on the layer's declaration and branching on the outcome means a
+    repair can change WHICH finding is reported and can never remove it.
+
 E4 CHANNEL_DIRECTION_SILENTLY_INOUT
     A declared channel yields a port whose direction the consumer had to guess
     because the channel carries no key the consumer reads. `derive_signals`
@@ -545,10 +559,28 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
     # from a correct FAIL into a PASS. A finding cannot do that: if that gate
     # is also failing, both keep failing and each names its own layer.
     #
-    # Increment 2 (resolve in the CONSUMER, scoped to the SAME document) is
-    # deliberately not done here — it is gated on what this finding measures
-    # on real designs.
+    # WHY THE `width == 1` TEST IS A BRANCH AND NOT A GUARD (#404 round 2)
+    # -------------------------------------------------------------------
+    # #404 proposed, as its next increment, resolving the symbol in the
+    # CONSUMER scoped to the SAME document, on the stated ground that then
+    # "no gate's input is rewritten by its own repair". MEASURED, that ground
+    # is false: this gate's input IS the consumer's output. With an
+    # Increment-2 resolver monkeypatched over `derive_signals` and the real
+    # published cell that fires this rail as input, the rail went silent —
+    #     stock consumer      -> PORT_WIDTH_COLLAPSED_TO_ONE_BIT, rc 1
+    #     increment-2 consumer-> finding absent
+    # — and it went equally silent when the same-document parameter default
+    # was mutated to CONTRADICT the number the port's own width prose states
+    # (resolved 4 bits against a documented and shipped 32). A wrong
+    # resolution and a right one are indistinguishable from outside: exactly
+    # the failure that withdrew the L1 resolver, one layer down.
+    #
+    # So the rail keys on the LAYER's declaration — a symbolic or non-numeric
+    # width in the L9 entry, which no width repair in the consumer rewrites —
+    # and merely CLASSIFIES by what the consumer emitted. A repair can change
+    # which finding is reported. It cannot make this gate green.
     collapsed_widths = []
+    uncorroborated_widths = []
     _l9_by_name = {}
     # The SAME two keys, in the SAME order, that derive_signals itself reads
     # (phase2_scaffold_gen:238) — so this cannot describe a port list the
@@ -559,7 +591,7 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
                 _l9_by_name.setdefault(
                     _c_sanitize_id(str(_p["name"])), _p)
     for _s in derived:
-        if not isinstance(_s, dict) or _s.get("width") != 1:
+        if not isinstance(_s, dict):
             continue
         _src = _l9_by_name.get(_c_sanitize_id(str(_s.get("name") or "")))
         if not isinstance(_src, dict):
@@ -568,12 +600,18 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
         _w = _src.get("width")
         _string_width = (isinstance(_w, str)
                          and not str(_w).strip().isdigit())
-        if (_sym and str(_sym).strip()) or _string_width:
-            collapsed_widths.append({
-                "port": _s.get("name"),
-                "l9_width": _w,
-                "width_symbolic": _sym,
-            })
+        if not ((_sym and str(_sym).strip()) or _string_width):
+            continue
+        _row = {
+            "port": _s.get("name"),
+            "l9_width": _w,
+            "width_symbolic": _sym,
+        }
+        if _s.get("width") == 1:
+            collapsed_widths.append(_row)
+        else:
+            _row["consumer_width"] = _s.get("width")
+            uncorroborated_widths.append(_row)
     if collapsed_widths:
         findings.append(Finding(
             "ERROR", "PORT_WIDTH_COLLAPSED_TO_ONE_BIT",
@@ -589,6 +627,24 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
             f"into a PASS, because `parameters[]` carries no module or layer "
             f"qualifier and a bare-name join is unsound by construction.",
             {"ports": collapsed_widths[:20]}))
+
+    if uncorroborated_widths:
+        findings.append(Finding(
+            "ERROR", "PORT_WIDTH_SYMBOL_UNCORROBORATED",
+            f"{len(uncorroborated_widths)} port(s) whose L9 entry declares a "
+            f"SYMBOLIC or non-numeric width come out of the consumer's own "
+            f"derivation as a CONCRETE bit count this gate cannot corroborate "
+            f"against the layer. The layer states a symbol; something in the "
+            f"consumer turned it into a number, and the only evidence for "
+            f"that number is the step that produced it. #404 measured that a "
+            f"wrong resolution and a right one are indistinguishable from "
+            f"outside — a same-document parameter default contradicting the "
+            f"port's own stated width resolved to 4 bits on a port the design "
+            f"documents and ships as 32, with no diagnostic anywhere. A "
+            f"resolver may only land here once this gate can CHECK the "
+            f"resolved value against a statement the resolver did not write; "
+            f"until then the resolution is reported, not trusted.",
+            {"ports": uncorroborated_widths[:20]}))
 
     # -- E5 CLOCK_PORT_SYNTHESISED_BY_CONSUMER -----------------------------
     # derive_signals AUTO-ADDS a "clk"/"rst_n" stub when neither L17 nor L9
