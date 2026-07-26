@@ -185,11 +185,15 @@ def test_only_the_gf180_entry_declares_these_values():
     master in the registry at all — it is set by the hard-coded named branch
     in `_detect_pdk`. ihp-sg13g2 is a TAPLESS-cell PDK (ties are cell-internal)
     so its tapcell_master is deliberately null while it does declare an
-    antenna diode. None of that may change here.
+    antenna diode. ihp-sg13cmos5l is that PDK's CMOS-only sibling and is
+    tapless for the same reason — its own librelane config states there are no
+    endcap/welltie cells — so it carries the same (null, diode) shape. None of
+    that may change here.
     """
     baseline = {
         "sky130A": (None, None),
         "ihp-sg13g2": (None, "sg13g2_antennanp"),
+        "ihp-sg13cmos5l": (None, "sg13cmos5l_antennanp"),
         "nangate45": (None, None),
         "asap7": (None, None),
         "custom_auto_detect": (None, None),
