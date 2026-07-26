@@ -168,6 +168,11 @@ steps:
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
+        # #312 — the SECOND track. Findings are advisory (a divergence between
+        # the two tracks needs converging, not an automatic stop); running is
+        # not. A missing/unparseable report exits 1 here, because a second
+        # track that can quietly not run is the same as no second track.
+        - program_exit_zero: "phase1_expert_parse_track ."
         # vibe-ic#306/#312 — ADVISORY. Reports whether the Phase-1 EXPERT
         # track actually ran (the dual-track's second rail). Advisory by its
         # own declaration and by necessity: a project may legitimately run

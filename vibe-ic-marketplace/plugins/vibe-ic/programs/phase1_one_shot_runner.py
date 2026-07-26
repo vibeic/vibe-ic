@@ -427,6 +427,96 @@ def _run_docs_mode(project: Path, ic_name: str,
     return int(rc) if rc is not None else 0
 
 
+# ── The second track (both input modes) ────────────────────────────
+#
+# Wired HERE, not in `phase1_doc_one_shot_runner`, for two reasons:
+#
+#   * this dispatcher is the one entry point that covers BOTH input modes, and
+#     both emit L-docs — a track wired only into the docs backend would never
+#     see a design that arrived through the dialogue/prompt path;
+#   * `flow_gate_enforcement_audit` (#306) inspects THIS file and not the docs
+#     backend. A gate wired where the audit cannot see it reads as AUDIT_ONLY —
+#     which is precisely the state that audit measured for 62 of 72 gates, and
+#     precisely what this track must not become.
+
+_EXPERT_TRACK = "phase1_expert_parse_track.py"
+
+
+def _run_expert_track(project: Path) -> int:
+    """Run the Phase-1 EXPERT track — the second track of the program-first +
+    AI-backup dual-track doctrine (#312).
+
+    Its FINDINGS are advisory: a divergence between the two tracks needs a
+    human to converge it, and a design may legitimately not state a fact.
+
+    Its EXECUTION is not. The track must produce a report, and a missing or
+    unparseable one FAILs Phase 1. That asymmetry is the whole point: a second
+    track that can quietly not run is indistinguishable from no second track,
+    which is the defect #312 exists to name.
+    """
+    prog = PROGRAMS_DIR / _EXPERT_TRACK
+    if not prog.is_file():
+        print(f"ERROR: {_EXPERT_TRACK} missing — the Phase-1 expert track "
+              f"cannot run and its absence must not pass silently",
+              file=sys.stderr)
+        return 1
+    # Resolve the report through the shared path helper rather than naming a
+    # directory here: the track writes it via the same helper, and a reader
+    # looking in the wrong place sees a track that never ran.
+    report = _pl.report_path(project, "phase1/expert_parse_track.json")
+    # Remove any prior report FIRST, so "the report exists" can only mean THIS
+    # run wrote it. A stale report from an earlier run is exactly how a track
+    # that died would still look like a track that ran.
+    try:
+        report.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"      ERROR: cannot clear the previous expert-track report "
+              f"({exc}) — its freshness could not be established",
+              file=sys.stderr)
+        return 1
+    try:
+        cp = subprocess.run(
+            [sys.executable, str(prog), str(project)],
+            capture_output=True, text=True, timeout=600, check=False)
+    except subprocess.TimeoutExpired:
+        print("      ERROR: the expert track timed out — a timeout is not a "
+              "verdict, and an unevaluated track cannot pass",
+              file=sys.stderr)
+        return 1
+    for line in (cp.stdout or "").strip().splitlines():
+        print(f"      {line}")
+    # 0 = ran, 2 = ran and nothing applied. Anything else — including a crash
+    # that never reached the program's own error path — is a track that did
+    # not complete.
+    if cp.returncode not in (0, 2):
+        print(f"      expert track FAILED to complete (rc={cp.returncode}): "
+              f"{(cp.stderr or '').strip().splitlines()[-1:] or ['(no detail)']}",
+              file=sys.stderr)
+        return 1
+    if not report.is_file():
+        print("      ERROR: the expert track wrote no report — its verdict is "
+              "unknown, which is not the same as clean", file=sys.stderr)
+        return 1
+    try:
+        json.loads(report.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        print(f"      ERROR: the expert-track report does not parse ({exc}) — "
+              f"unreadable evidence is not evidence", file=sys.stderr)
+        return 1
+    return 0
+
+
+def run_phase1_second_track(project: Path, rc_in: int) -> int:
+    """The second track, run after the L-docs exist. Returns the exit code
+    Phase 1 should report: a track that did not run overrides a clean backend
+    run, and a backend failure is never masked by the track passing."""
+    print("[phase1] expert track (second track) ...")
+    rc_track = _run_expert_track(project)
+    return max(int(rc_in or 0), rc_track)
+
+
 # ── Top-level dispatcher ───────────────────────────────────────────
 
 def main() -> int:
@@ -467,6 +557,7 @@ def main() -> int:
     if mode == "docs":
         t0 = time.time()
         rc = _run_docs_mode(project, args.ic_name, extras)
+        rc = run_phase1_second_track(project, rc)
         # The dispatcher always emits reports/phase1_one_shot.json so
         # callers / tests see a unified entry point regardless of mode.
         reports = project / "reports"
@@ -491,6 +582,11 @@ def main() -> int:
     plan.append(step_ingest_render(project, args.ic_name))
     plan.append(step_human_docs(project))
 
+    # The prompt path emits the same L-docs, so it gets the same second track
+    # and the same supply gate. Wiring only the docs path would leave every
+    # dialogue-entered design unexamined by both.
+    rc_second = run_phase1_second_track(project, 0)
+
     reports = project / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     summary = {
@@ -510,7 +606,7 @@ def main() -> int:
     print(f"verdict: {summary['verdict']}")
     for s in plan:
         print(f"  {s.status:6} {s.name:24} {s.detail[:120]}")
-    return 0 if summary["verdict"] != "FAIL" else 1
+    return max(0 if summary["verdict"] != "FAIL" else 1, rc_second)
 
 
 if __name__ == "__main__":

@@ -3,8 +3,8 @@
  "_schema": "entries[].{ic_class, lesson_count, lessons[], related?[] (optional cross-links to sibling ic_class names sharing a core craft)}",
  "_source": "distilled from proven-correct (officially-scored PASS) reference designs, plus owner-reviewed general-convention distills from fail-mode triage prose (see capture_log.md); benchmark identifiers scrubbed at build time (blindness); §4.05 ORACLE-SOURCE ban enforced by ic_expert_db_consistency_check.py.",
  "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
- "classes": 99,
- "total_lessons": 160,
+ "classes": 101,
+ "total_lessons": 161,
  "entries": [
   {
    "ic_class": "accumulator-datapath",
@@ -916,6 +916,18 @@
    "related": [
     "serial-parallel-multiplier",
     "priority-interrupt-controller"
+   ]
+  },
+  {
+   "ic_class": "nvm-fuse-array",
+   "lesson_count": 1,
+   "lessons": [
+    "Any field-programmable non-volatile memory — one-time-programmable, fuse-based, multiple-time-programmable, antifuse — separates two operations with different electrical needs. READING needs only the core supply. PROGRAMMING needs a SEPARATE supply that is sourced from OUTSIDE the die, sits ABOVE the core voltage, and enters through a dedicated terminal. Nothing on-die produces a voltage above the core rail, so the programming supply can never come from the internal power grid; it has to arrive on a package pin or a wafer-probe pad. Treat this as a property of the storage mechanism rather than a vendor option: two unrelated programmable-memory IP families characterised on one process — one process-native, one third-party — specify it identically, both externally supplied and both above the core rail. So when an input instantiates such a memory AND describes programming control (a program request, an address, data, a busy/done handshake), the design is stating it intends to burn the array: ask where the programming supply enters, and capture it as a first-class terminal in the pin/pad table and as its own rail in the power-intent layer, kept distinct from the core rail. Capture the read path too — it needs the core supply alone, so a design that only reads a pre-programmed array legitimately has no such terminal, and the two cases must not be conflated. Nothing in a digital flow observes this gap: simulation, elaboration, synthesis, timing, DRC and LVS are all clean because the logic is entirely well-formed. It first appears at bring-up, on silicon, as an array that will not accept a burn."
+   ],
+   "related": [
+    "command-driven-memory-controller-fsm",
+    "secure-register-bank-fsm",
+    "register-file-with-bist"
    ]
   }
  ]
