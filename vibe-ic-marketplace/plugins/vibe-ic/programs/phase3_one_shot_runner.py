@@ -15012,8 +15012,13 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         # gating only the fall-back path would leave the primary one open.
         _sub_err = _gds_substance_gate(gds_out, def_file)
         if _sub_err:
-            return StepResult("gds", "FAIL", time.time() - t0,
-                              f"gds substance (streamout=magic): {_sub_err}")
+            return StepResult(
+                "gds", "FAIL", time.time() - t0,
+                f"gds substance (streamout=magic): {_sub_err}",
+                # The engine is a FACT of the run, and losing it exactly on
+                # failure is losing it when a reader most needs it: "which
+                # streamout produced this bad GDS" is the first question.
+                extras={"streamout_engine": "magic"})
         return StepResult(
             "gds", "PASS", time.time() - t0,
             f"gds={gds_out.name} size={gds_out.stat().st_size} "
@@ -15167,8 +15172,13 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # DRC and hand-off, not an intermediate the later passes rewrote.
     _sub_err = _gds_substance_gate(gds_out, def_file)
     if _sub_err:
-        return StepResult("gds", "FAIL", time.time() - t0,
-                          f"gds substance (streamout=klayout): {_sub_err}")
+        return StepResult(
+            "gds", "FAIL", time.time() - t0,
+            f"gds substance (streamout=klayout): {_sub_err}",
+            # The engine is a FACT of the run, and losing it exactly on
+            # failure is losing it when a reader most needs it: "which
+            # streamout produced this bad GDS" is the first question.
+            extras={"streamout_engine": "klayout"})
     return StepResult("gds", "PASS", time.time() - t0,
                       f"gds={gds_out.name} size={gds_out.stat().st_size} "
                       f"(streamout=klayout"
