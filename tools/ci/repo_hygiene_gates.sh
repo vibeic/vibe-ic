@@ -104,6 +104,12 @@ run "provenance correction notes"       "$ROOT" python3 "$PG/provenance_correcti
 # never mentioned and 90 shipped nowhere at all.
 run "declared outputs are findable"     "$ROOT" python3 "$PG/provenance_declared_output_check.py"
 
+# vibe-ic#410 — pdk_registry.json is not the only per-PDK table. Three others
+# are keyed independently, and registering a PDK in the registry registers it
+# in none of them. An IHP netlist was handed the SKY130A ATPG cell model while
+# the artefact recorded `generic_unmapped`.
+run "per-PDK table coverage"            "$ROOT" python3 "$PG/pdk_table_coverage_check.py"
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired

@@ -119,3 +119,48 @@ def test_each_named_branch_returns_before_the_refusal():
                 f"branch for {name!r} has no Return/Raise — it falls "
                 f"through to the refusal, which would then claim the name "
                 f"matches no branch")
+
+
+def _registry_lane_skip_literals():
+    """The tuple in `if override not in (...)` that decides whether the
+    registry lane is even tried — a hand-maintained restatement of the named
+    branches, and the one duplication #409 named that main still carries.
+    Read from the AST, so it cannot be satisfied by reading the same constant
+    the code reads."""
+    out = set()
+    for n in ast.walk(_FN):
+        if not (isinstance(n, ast.Compare) and len(n.ops) == 1
+                and isinstance(n.ops[0], ast.NotIn)):
+            continue
+        left, right = n.left, n.comparators[0]
+        if not (isinstance(left, ast.Name) and left.id == "override"):
+            continue
+        if isinstance(right, (ast.Tuple, ast.List, ast.Set)):
+            out |= {e.value for e in right.elts
+                    if isinstance(e, ast.Constant)
+                    and isinstance(e.value, str)}
+    return out
+
+
+def test_the_registry_lane_skip_list_equals_the_branch_chain():
+    """#409's remaining duplication, now CHECKED rather than claimed.
+
+    `_detect_pdk` skips the pdk_registry lane for names it handles with a
+    hand-written branch. That skip list is a second copy of the branch
+    literals, and the drift that bites is REMOVAL: delete a named branch and
+    leave the tuple, and that PDK loses its branch AND is refused the
+    registry lane — it falls through to project-local resolution or None,
+    silently, with no refusal naming it.
+
+    Adding a branch without updating the tuple is harmless (the branch
+    returns first), so this asserts equality in the direction that matters
+    and explains why the other direction is not a finding.
+    """
+    branches = {v for _, v in _branch_literals()}
+    skip = _registry_lane_skip_literals()
+    assert skip, "no `override not in (...)` guard found — extractor broken"
+    orphaned = skip - branches
+    assert not orphaned, (
+        f"{sorted(orphaned)} are refused the pdk_registry lane but have no "
+        f"named branch in _detect_pdk — that PDK resolves to nothing and "
+        f"nothing says so")
