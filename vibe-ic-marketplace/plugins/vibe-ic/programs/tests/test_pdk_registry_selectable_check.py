@@ -110,3 +110,105 @@ def test_an_unreadable_registry_is_a_SKIP_not_a_PASS(tmp_path):
         [sys.executable, str(_PROGRAMS / "pdk_registry_selectable_check.py"),
          "--registry", str(p)], capture_output=True, text=True)
     assert r.returncode == 2
+
+
+# ── #408 finding 3: the shipped-but-unregistered direction ──────────────────
+
+def _stub_image(monkeypatch, trees, resolved_map):
+    """Pretend an image is reachable and ships `trees`."""
+    monkeypatch.setattr(C, "_container_alive", lambda n: True)
+    monkeypatch.setattr(C, "_resolves", lambda c, p: True)
+    monkeypatch.setattr(C, "shipped_trees", lambda c: trees)
+    monkeypatch.setattr(C, "_resolved",
+                        lambda c, p: resolved_map.get(p, p.rstrip("/")))
+
+
+def test_a_shipped_pdk_the_registry_lacks_is_reported(monkeypatch):
+    """#408 finding 3, and a LIVE instance on main: `ihp-sg13cmos5l` ships in
+    vibeic-eda:0.2.30 and is not in the registry, so `--pdk` refuses it — a
+    tree present and unselectable, which is the #389 condition."""
+    _stub_image(monkeypatch,
+                {"/foss/pdks/ihp-sg13cmos5l": "ihp-sg13cmos5l",
+                 "/foss/pdks/asap7": "asap7"},
+                {})
+    rep = C.audit(REGISTRY, "stub")
+    names = [u["basename"] for u in rep["shipped_unregistered"]]
+    assert names == ["ihp-sg13cmos5l"], names
+
+
+def test_a_symlink_target_is_not_a_second_finding(monkeypatch):
+    """The paired half, and the reason a one-level scan was kept before: the
+    image's REAL sky130A/gf180mcuD live under `ciel/.../`, reached by
+    top-level symlinks. Comparing unresolved paths would report both as
+    unregistered — two false findings on a correct image."""
+    ciel = "/foss/pdks/ciel/sky130/versions/abc/sky130A"
+    _stub_image(monkeypatch,
+                {ciel: "sky130A"},
+                {"/foss/pdks/sky130A": ciel})
+    rep = C.audit(REGISTRY, "stub")
+    assert rep["shipped_unregistered"] == [], rep["shipped_unregistered"]
+
+
+def test_the_recorded_gap_does_not_fail_but_a_new_one_does(tmp_path,
+                                                           monkeypatch):
+    """Shrink-only register: failing main on a pre-existing gap makes a gate
+    people route around; anything NEW fails."""
+    _stub_image(monkeypatch,
+                {"/foss/pdks/ihp-sg13cmos5l": "ihp-sg13cmos5l",
+                 "/foss/pdks/brand_new": "brand_new"},
+                {})
+    bl = tmp_path / "bl.json"
+    bl.write_text(json.dumps({"known": ["ihp-sg13cmos5l"]}))
+    rc = C.main(["--registry", str(REGISTRY), "--container", "stub",
+                 "--baseline", str(bl)])
+    assert rc == 1, "a NEW shipped-but-unregistered PDK must fail"
+
+    _stub_image(monkeypatch,
+                {"/foss/pdks/ihp-sg13cmos5l": "ihp-sg13cmos5l"}, {})
+    assert C.main(["--registry", str(REGISTRY), "--container", "stub",
+                   "--baseline", str(bl)]) == 0, "the recorded one must not"
+
+
+def test_the_register_may_only_shrink(tmp_path, monkeypatch):
+    _stub_image(monkeypatch,
+                {"/foss/pdks/a": "a", "/foss/pdks/b": "b"}, {})
+    bl = tmp_path / "bl.json"
+    bl.write_text(json.dumps({"known": ["a"]}))
+    rc = C.main(["--registry", str(REGISTRY), "--container", "stub",
+                 "--baseline", str(bl), "--write-baseline"])
+    assert rc == 1
+
+
+def test_no_image_means_no_shipped_direction_at_all(monkeypatch):
+    """It must not report an empty shipped set as "nothing unregistered"."""
+    monkeypatch.setattr(C, "_container_alive", lambda n: False)
+    rep = C.audit(REGISTRY, "stub")
+    assert rep["shipped_unregistered"] == []
+    assert rep["asset_check"] == "SKIPPED"
+
+
+def test_no_image_cannot_declare_a_recorded_gap_PAID(tmp_path, monkeypatch):
+    """REGRESSION, caught by the shared gate script failing on a docker-less
+    host. Without a reachable container the shipped set is EMPTY; subtracting
+    it from the register reported every recorded entry as resolved — "I could
+    not look" read as "it is fixed", the same error as the asset half, in the
+    shrink direction."""
+    monkeypatch.setattr(C, "_container_alive", lambda n: False)
+    bl = tmp_path / "bl.json"
+    bl.write_text(json.dumps({"known": ["ihp-sg13cmos5l"]}))
+    rc = C.main(["--registry", str(REGISTRY), "--container", "unreachable",
+                 "--baseline", str(bl)])
+    assert rc == 0, "an unreachable image must not resolve a recorded gap"
+
+
+def test_with_an_image_a_genuinely_gone_entry_still_forces_a_shrink(
+        tmp_path, monkeypatch):
+    """The paired half: when the image WAS enumerated, a recorded entry that
+    no longer ships must still force the register to shrink, or it becomes
+    standing permission."""
+    _stub_image(monkeypatch, {"/foss/pdks/asap7": "asap7"}, {})
+    bl = tmp_path / "bl.json"
+    bl.write_text(json.dumps({"known": ["ihp-sg13cmos5l"]}))
+    rc = C.main(["--registry", str(REGISTRY), "--container", "stub",
+                 "--baseline", str(bl)])
+    assert rc == 1

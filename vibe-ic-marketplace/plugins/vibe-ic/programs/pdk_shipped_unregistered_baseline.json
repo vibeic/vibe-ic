@@ -1,0 +1,6 @@
+{
+  "_comment": "PDKs the image SHIPS that pdk_registry.json does not carry, so `--pdk <name>` refuses them (vibe-ic#408/#389). MAY ONLY SHRINK \u2014 each entry is a usable tree no operator can select. Register it, or remove it from the image.",
+  "known": [
+    "ihp-sg13cmos5l"
+  ]
+}
