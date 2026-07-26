@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import heapq
 import json
 import re
 import shutil
@@ -41738,9 +41739,13 @@ _MEMORY_NAME_TOKEN_RE = re.compile(
 # `fakeram45_2048x39.lef` (35140 B), `.lib` and `.v` under
 # `input/pdk_local/fakeram45/`, and that LEF declares `MACRO
 # fakeram45_2048x39`. An aspect ratio, a statistics unit and a hex error code
-# never have a LEF. `input/pdk_local/` is this runner's own existing
-# convention for design-staged macro IP (the L4 OTP-IP walker reads the same
-# directory), and the benchmark documents cite it by path.
+# do not get a LEF unless someone deliberately writes one — which is the
+# residual stated below, not an accident of string shape.
+# `input/pdk_local/` is this runner's own existing convention for
+# design-staged macro IP (the L4 OTP-IP walker reads the same directory), and
+# the benchmark documents cite it by path. STAGING BY SYMLINK COUNTS: see
+# `_staged_macro_scan`, which follows symlinks exactly as the two pre-existing
+# readers of this same directory already do.
 #
 # RESIDUAL, stated honestly and pinned by test: the conjunct that survives is
 # the memory morpheme, so a design that actually staged `DIAGRAM_16x9.lef`
@@ -41761,7 +41766,10 @@ _MEMORY_NAME_TOKEN_ANYWHERE_RE = re.compile(
     r"(ram|rom|sram|dram|cache|regfile|fifo|mem)",
     re.IGNORECASE,
 )
-# Longest-first so `.gds.gz` is stripped whole.
+# Tried in order, first match wins, so a suffix that ENDS WITH another suffix
+# in this tuple must come first: `.sv` before `.v` (else `cell.sv` yields the
+# stem `cell.s`), and `.gds.gz` before `.gds` / `.gdsii`. That ordering — not
+# the lengths themselves — is what this tuple's order is for.
 _MEMORY_MACRO_ARTEFACT_SUFFIXES = (
     ".gds.gz", ".gdsii", ".lef", ".lib", ".gds", ".db", ".sv", ".v",
 )
@@ -41770,60 +41778,180 @@ _MEMORY_MACRO_LEF_DECL_RE = re.compile(
     re.MULTILINE,
 )
 _MEMORY_MACRO_STAGE_REL = ("input", "pdk_local")
+# Total directory entries the scan may CONSUME, across the whole walk.
 _MEMORY_MACRO_MAX_FILES = 4096
+# Entries any ONE directory may consume before the scan moves on to the next
+# pending directory (see the fair-share note in `_staged_macro_scan`).
+_MEMORY_MACRO_DIR_SLICE = 64
+# Entries retained from any ONE directory listing. `heapq.nsmallest` keeps the
+# lexicographically smallest N, so the listing is deterministic and costs
+# O(N) memory even for a directory holding millions of entries.
+_MEMORY_MACRO_MAX_DIR_ENTRIES = 4096
 _MEMORY_MACRO_MAX_LEF_BYTES = 8 * 1024 * 1024
+# Cap on the reported truncation events themselves, so a pathological tree
+# cannot turn the anomaly report into the anomaly.
+_MEMORY_MACRO_MAX_TRUNCATION_EVENTS = 16
 
 
-def _staged_macro_cell_names(project) -> frozenset:
-    """Return the lower-cased set of physical-macro CELL NAMES that the design
-    at `project` has staged under `<project>/input/pdk_local/**`.
+def _capped_dir_listing(directory, cap):
+    """`(entries, n_seen)` — the `cap` lexicographically smallest entries of
+    `directory`, plus how many entries the listing actually had.
 
-    Two independent readings of the same open standards:
-      * the file STEM of every `*.lef / *.lib / *.gds[.gz] / *.db / *.v / *.sv`
-        artefact (memory compilers emit one file set per cell, named after the
-        cell);
-      * every `MACRO <cell>` declaration found inside a staged `*.lef` (a
-        single LEF may abstract several cells).
+    `n_seen > len(entries)` is exactly the condition "this listing was cut",
+    which the caller reports. Costs O(cap) memory regardless of directory
+    size. Propagates OSError; the caller decides what an unreadable directory
+    means."""
+    n_seen = 0
 
-    Bounded: at most `_MEMORY_MACRO_MAX_FILES` directory entries and at most
-    `_MEMORY_MACRO_MAX_LEF_BYTES` per LEF body. Returns an EMPTY set — never
-    raises — when `project` is None, is not a path, has no `input/pdk_local/`,
-    or is unreadable. Chip-AGNOSTIC."""
+    def _counted():
+        nonlocal n_seen
+        for entry in directory.iterdir():
+            n_seen += 1
+            yield entry
+
+    return heapq.nsmallest(cap, _counted()), n_seen
+
+
+def _staged_macro_scan(project):
+    """`(cell_names, truncation_events)` for the design at `project`.
+
+    `cell_names` is the lower-cased set of physical-macro CELL NAMES staged
+    under `<project>/input/pdk_local/**`, read two independent ways from the
+    same open standards:
+      * the file STEM of every `*.lef / *.lib / *.gds / *.gds.gz / *.gdsii /
+        *.db / *.v / *.sv` artefact (memory compilers emit one file set per
+        cell, named after the cell);
+      * every `MACRO <cell>` declaration inside a staged `*.lef` (one LEF may
+        abstract several cells).
+
+    `truncation_events` is a list of `{"reason": ..., ...}` dicts, EMPTY on a
+    complete scan. It is non-empty exactly when a cap stopped the walk short,
+    i.e. when an absent cell name may be a scan artefact rather than a fact
+    about the design. `_v1_6_426_emit_memories` is what turns it into
+    something a reader sees; see the `staged_macro_scan_truncated` block
+    there.
+
+    Returns `(frozenset(), [])` — never raises — when `project` is None, is
+    not a path, has no `input/pdk_local/`, or is unreadable. Chip-AGNOSTIC."""
     if project is None:
-        return frozenset()
+        return frozenset(), []
     try:
         root = Path(project).joinpath(*_MEMORY_MACRO_STAGE_REL)
     except (TypeError, ValueError, AttributeError):
-        return frozenset()
+        return frozenset(), []
     try:
         if not root.is_dir():
-            return frozenset()
+            return frozenset(), []
     except OSError:
-        return frozenset()
+        return frozenset(), []
+
     names: set = set()
-    budget = _MEMORY_MACRO_MAX_FILES
-    # Breadth-first over `iterdir()` rather than `rglob("*")`: a design may
-    # stage an entire vendor PDK here, and this walks one directory at a time
-    # (bounded memory), in sorted order (deterministic truncation), skipping
-    # directory symlinks (no traversal loop).
-    stack = [root]
-    while stack and budget > 0:
-        current = stack.pop(0)
+    truncation: List[Dict[str, Any]] = []
+    seen_dirs: set = set()
+    # Each element is a mutable cursor `[directory, entries_or_None, index]`.
+    pending: List[list] = []
+
+    def _rel(path) -> str:
+        """Path as written relative to `input/pdk_local/`, for the report. A
+        symlink target outside the tree has no relative form; show it whole."""
         try:
-            children = sorted(current.iterdir())
+            return str(Path(path).relative_to(root))
+        except (ValueError, TypeError):
+            return str(path)
+
+    def _note(event) -> None:
+        if len(truncation) < _MEMORY_MACRO_MAX_TRUNCATION_EVENTS:
+            truncation.append(event)
+
+    def _enqueue(directory) -> None:
+        """Queue `directory` unless a directory with the same RESOLVED
+        identity is already queued.
+
+        `stat()` follows symlinks, so the key is the `(st_dev, st_ino)` of the
+        TARGET. That is what makes a directory-symlink loop terminate:
+        `input/pdk_local/self -> .` and `vendor/up -> ..` both resolve onto a
+        directory that has already been queued, so they are dropped instead of
+        walked again. A directory that disappears or becomes unreadable
+        between the listing and this call is dropped, not raised."""
+        try:
+            st = directory.stat()
         except OSError:
-            continue
-        for path in children:
-            if budget <= 0:
-                break
-            budget -= 1
+            return
+        key = (st.st_dev, st.st_ino)
+        if key in seen_dirs:
+            return
+        seen_dirs.add(key)
+        pending.append([directory, None, 0])
+
+    # ---------------------------------------------------------------------
+    # SYMLINKS ARE FOLLOWED — file symlinks AND directory symlinks, and
+    # whether the target sits inside the project or outside it. Symlinking a
+    # PDK / IP tree into place is the normal staging idiom, and a design that
+    # points `input/pdk_local/fakeram45` at `/opt/ip/fakeram45` has staged
+    # exactly as much as one that copied it.
+    #
+    # This is a correction, and it was MEASURED on the real edge_llm_accel
+    # design with its real documents. The previous `if path.is_symlink():
+    # continue` skipped FILE symlinks too, so per-file staging produced an
+    # EMPTY set and the macro fell back out of `memories[]` — while the two
+    # pre-existing readers of this very directory both saw those same files:
+    # `phase3_one_shot_runner._discover_local_macros` (`is_file()`, which
+    # follows) and `hardmacro_supply_intent` (`rglob("*.lef")` + open, which
+    # follows). Three programs answering "what did the design stage?"
+    # differently is a defect on its own.
+    #
+    # The three cases that following a symlink actually raises:
+    #   * BROKEN symlink — `is_dir()` and `is_file()` both return False for
+    #     it, so the entry loop skips it and it never reaches `_enqueue`. A
+    #     dangling `foo.lef` is not evidence that `foo` was staged.
+    #   * DIRECTORY LOOP — `_enqueue` keys every directory on the
+    #     `(st_dev, st_ino)` of its followed target, so a self- or
+    #     ancestor-pointing symlink is queued at most once. The entry budget
+    #     bounds the walk even if identity were unavailable.
+    #   * TARGET OUTSIDE THE PROJECT — followed, deliberately, because that is
+    #     what staging a shared PDK looks like. Nothing but cell NAMES leaves
+    #     this function (file stems, and `MACRO <cell>` headers out of `*.lef`
+    #     bodies), and a name is only ever tested for membership against an
+    #     identifier the design's OWN documents already wrote down.
+    #
+    # ORDER IS FAIR-SHARE, NOT DIRECTORY-NAME ORDER. Each pending directory
+    # yields at most `_MEMORY_MACRO_DIR_SLICE` entries and then goes to the
+    # back of the queue. A plain breadth-first walk drained the first
+    # directory completely, so a large sibling — `input/pdk_local/
+    # aaa_stdcells/` — could spend the whole budget on its way through the
+    # alphabet and push the real macro out of the set. Which directory wins
+    # must not be decided by its name.
+    #
+    # TRUNCATION IS REPORTED, NOT SILENT: every cap that cuts the walk short
+    # appends a reason code to `truncation`.
+    # ---------------------------------------------------------------------
+    _enqueue(root)
+    budget = _MEMORY_MACRO_MAX_FILES
+    while pending and budget > 0:
+        cursor = pending.pop(0)
+        current, entries, index = cursor
+        if entries is None:
             try:
-                if path.is_symlink():
-                    continue
+                entries, n_seen = _capped_dir_listing(
+                    current, _MEMORY_MACRO_MAX_DIR_ENTRIES)
+            except OSError:
+                continue
+            if n_seen > len(entries):
+                _note({
+                    "reason": "directory_listing_capped",
+                    "path": _rel(current),
+                    "entries": n_seen,
+                    "cap": _MEMORY_MACRO_MAX_DIR_ENTRIES,
+                })
+            cursor[1] = entries
+        take = min(_MEMORY_MACRO_DIR_SLICE, len(entries) - index, budget)
+        for path in entries[index:index + take]:
+            try:
                 if path.is_dir():
-                    stack.append(path)
+                    _enqueue(path)
                     continue
                 if not path.is_file():
+                    # Broken symlink, FIFO, socket, device node.
                     continue
             except OSError:
                 continue
@@ -41840,14 +41968,69 @@ def _staged_macro_cell_names(project) -> frozenset:
             if low.endswith(".lef"):
                 # A LEF can abstract several cells; read the MACRO headers.
                 try:
-                    if path.stat().st_size > _MEMORY_MACRO_MAX_LEF_BYTES:
-                        continue
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                if size > _MEMORY_MACRO_MAX_LEF_BYTES:
+                    # The stem above was still recorded; only the additional
+                    # cells this LEF may abstract are lost.
+                    _note({
+                        "reason": "lef_macro_headers_not_read",
+                        "path": _rel(path),
+                        "bytes": size,
+                        "cap": _MEMORY_MACRO_MAX_LEF_BYTES,
+                    })
+                    continue
+                try:
                     body = path.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     continue
                 for m in _MEMORY_MACRO_LEF_DECL_RE.finditer(body):
                     names.add(m.group(1).lower())
-    return frozenset(names)
+        index += take
+        budget -= take
+        cursor[2] = index
+        if index < len(entries):
+            # Fair share: unfinished directories go to the BACK of the queue.
+            pending.append(cursor)
+    if pending:
+        # The loop can only exit with work pending when the budget ran out.
+        _note({
+            "reason": "entry_budget_exhausted",
+            "cap": _MEMORY_MACRO_MAX_FILES,
+            "unfinished_dirs": len(pending),
+            "first_unfinished": _rel(pending[0][0]),
+        })
+    return frozenset(names), truncation
+
+
+def _staged_macro_cell_names(project) -> frozenset:
+    """The staged cell-name set alone, for callers that only decide promotion
+    and have nowhere to report a truncated scan. `_staged_macro_scan` is the
+    full result; see it for the traversal and symlink policy."""
+    return _staged_macro_scan(project)[0]
+
+
+def _staged_clause_could_have_promoted(entry) -> bool:
+    """True for a REJECTED row that the staged-macro clause could have
+    promoted if the scan had been complete: no structural field, no #612
+    word-boundary token (a row with one is already promoted and never reaches
+    here), and a memory morpheme somewhere in the name — i.e. the row failed
+    on the staged-set membership test and nothing else.
+
+    Used only to decide which candidate rows carry the truncation note, so the
+    note is attached to the rows it can actually be true of."""
+    if not isinstance(entry, dict):
+        return False
+    if any(entry.get(k) for k in ("depth", "width", "port_count")):
+        return False
+    name = entry.get("name")
+    if not name:
+        return False
+    name = str(name)
+    if _MEMORY_NAME_TOKEN_RE.search(name):
+        return False
+    return bool(_MEMORY_NAME_TOKEN_ANYWHERE_RE.search(name))
 
 
 def _is_staged_memory_macro_name(name, staged_macro_names) -> bool:
@@ -42643,9 +42826,19 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
     names the design staged under `input/pdk_local/**` (LEF / Liberty /
     GDS / behavioural model), which is the corroboration the promotion
     gate needs to tell a generator-emitted SRAM macro name apart from an
-    aspect ratio. Optional and fail-SAFE: when omitted, or when the
-    design stages no macros, the staged set is empty and the
-    corroborated clause can never fire.
+    aspect ratio. Symlinks under that directory are followed, so the read
+    can reach outside the project when the design staged its IP that way
+    — see `_staged_macro_scan` for the policy and why. Optional and
+    fail-SAFE: when omitted, or when the design stages no macros, the
+    staged set is empty and the corroborated clause can never fire.
+
+    When that scan is cut short by one of its caps, the shortfall is
+    RECORDED rather than swallowed: `L9.staged_macro_scan_truncated`
+    carries the reason codes, every candidate row the scan might have
+    promoted carries `staged_macro_scan: "truncated:input/pdk_local"`,
+    and a `[WARN]` goes to stderr. An absent promotion then reads as
+    "the evidence scan did not finish", not as "the design has no such
+    macro".
 
     v1.6.441 — for #317 P3 ORGANIC. Reject bare-keyword null rows
     (name/depth/width all None) at emit time. Rejected rows are
@@ -42687,7 +42880,9 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
     l9_top_module = l9.get("top_module") if isinstance(l9, dict) else None
     # Corroboration from OUTSIDE the document prose: the cell names this
     # design actually staged as physical macros. Collected once per emit.
-    staged_macro_names = _staged_macro_cell_names(project)
+    # `staged_scan_cut` is empty on a complete scan and carries reason
+    # codes when a cap stopped it short — see the report block below.
+    staged_macro_names, staged_scan_cut = _staged_macro_scan(project)
     if isinstance(extracted, dict):
         for fname, body in extracted.items():
             if not body or not isinstance(body, str):
@@ -42720,8 +42915,20 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
                     aggregated.append(entry)
                 else:
                     if len(rejected) < 32:
-                        rejected.append(
-                            _organic_405_mark_rejected(entry))
+                        # ORGANIC #405 marks the row as provenance rather
+                        # than deferred work, and returns a COPY; stamp the
+                        # copy, which is the object that reaches L9.
+                        row = _organic_405_mark_rejected(entry)
+                        # Observable truncation, at the row where the loss
+                        # lands. This row failed ONLY the staged-set
+                        # membership test, and the scan that built that set
+                        # did not finish, so its absence from `memories[]`
+                        # is not a finding about the design.
+                        if (staged_scan_cut
+                                and _staged_clause_could_have_promoted(row)):
+                            row["staged_macro_scan"] = (
+                                "truncated:input/pdk_local")
+                        rejected.append(row)
                     continue
                 if len(aggregated) >= 32:
                     break
@@ -42734,6 +42941,47 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
     # bare-keyword mentions" from "field missing — schema regression".
     l9["memory_candidates"] = rejected
     l9["no_memory_candidates_in_input"] = len(rejected) == 0
+    # MAKE THE TRUNCATION OBSERVABLE.
+    #
+    # `_staged_macro_scan`'s caps are fail-SAFE in direction — they can only
+    # lose a promotion, never invent one — but a lost promotion that nobody
+    # can see is the original #612-adjacent defect wearing a cap: `memories`
+    # comes back empty for a chip that really does instantiate the macro, and
+    # nothing in the output says why. Two readers, matching what this module
+    # already does with a silent drop:
+    #
+    #   * a stderr `[WARN]`, as `extract_all_docs` emits for a document it
+    #     visited but could not render (v1.6.93, issue #26);
+    #   * a durable record in the artefact this emitter OWNS and downstream
+    #     Phase 2 / `l9_floorplan_contract_check` / a human reviewer all read,
+    #     carrying reason codes the way `reports/phase1/extraction_skipped
+    #     .json` does, plus the per-row note stamped above so the shortfall is
+    #     legible from the affected `memory_candidates[]` row itself.
+    #
+    # Emitted ONLY when something was actually cut. A complete scan — every
+    # design in benchmark-data today — adds no key, so no typed-field count
+    # and no L9 byte anywhere in the corpus moves.
+    if staged_scan_cut:
+        l9["staged_macro_scan_truncated"] = {
+            "_comment": (
+                "The input/pdk_local/** scan that corroborates a "
+                "generator-emitted memory-macro cell name did NOT finish. "
+                "A memory_candidates[] row marked "
+                "staged_macro_scan=truncated:input/pdk_local may be a real "
+                "staged macro this scan never reached — verify by hand."),
+            "root": "input/pdk_local",
+            "events": staged_scan_cut,
+            "candidate_rows_affected": sum(
+                1 for e in rejected
+                if isinstance(e, dict)
+                and e.get("staged_macro_scan") == "truncated:input/pdk_local"),
+        }
+        print("[WARN] staged-macro scan under input/pdk_local was truncated "
+              "(%s); a memory macro may be missing from L9.memories[] — see "
+              "L9.staged_macro_scan_truncated"
+              % ", ".join(sorted({str(e.get("reason"))
+                                  for e in staged_scan_cut})),
+              file=sys.stderr)
     # v1.6.453 — for #327 P3 ORGANIC. Recompute the
     # `no_memories_in_input` flag from BOTH `memories` and
     # `memory_candidates` so the boolean is consistent with the
