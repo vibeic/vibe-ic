@@ -283,3 +283,116 @@ def test_rc2_when_l1_absent(tmp_path):
 
 def test_rc2_when_project_dir_absent(tmp_path):
     assert mod.main([str(tmp_path / "nope")]) == 2
+
+
+# ============================================================== #
+# STRUCTURED SYMBOLIC WIDTH (`width_symbolic`)
+#
+# The gate used to report two OPPOSITE states with one sentence:
+# extraction produced NOTHING (real defect) and extraction produced a
+# structured parameterised width (legitimate). These assert the split,
+# and — the load-bearing half — that the second does NOT become a free
+# pass. Direction 1 of every pair is the state that must still FAIL.
+# ============================================================== #
+
+_PARAM_PINS = [
+    dict(_GOOD_PINS[0]),
+    dict(_GOOD_PINS[1]),
+    {"name": "accum_bus", "mode": "output",
+     "width": "N-bit ([DEPTH-1:0], parameter DEPTH default 16)",
+     "width_symbolic": "DEPTH-1:0", "msb": None, "lsb": None},
+    dict(_GOOD_PINS[3]),
+]
+
+
+def test_symbolic_width_resolves_against_an_hdl_parameter_declaration(tmp_path):
+    """Structured symbolic width + `parameter DEPTH = 16` in the inputs."""
+    _write_input(tmp_path, "vendor_rtl/synth_block.v", _SYNTH_RTL)
+    _write_l1(tmp_path, _PARAM_PINS)
+    rc, rep = _run(tmp_path)
+    assert rc == 0, rep
+    assert rep["verdict"] == "PASS"
+    got = {d["pin"]: d["bits"] for d in rep["symbolic_widths_resolved"]}
+    assert got == {"accum_bus": 16}, rep
+
+
+def test_symbolic_width_resolves_against_a_doc_interface_table(tmp_path):
+    """Docs-only design: the parameter default lives in a table row.
+
+    No RTL is staged at all, so the HDL dialect cannot fire. This is the
+    shape a doc-driven phase1 actually produces.
+    """
+    _write_input(tmp_path, "docs/interface.md", (
+        "| signal | width | dir |\n|---|---|---|\n"
+        "| `sample_bus` | 24-bit (`[23:0]`) | in |\n"
+        "| `accum_bus` | N-bit (`[DEPTH-1:0]`) | out |\n\n"
+        "### Parameters\n\n| name | default | notes |\n|---|---|---|\n"
+        "| `DEPTH` | 16 | any positive integer >= 4 |\n"))
+    _write_l1(tmp_path, _PARAM_PINS)
+    rc, rep = _run(tmp_path)
+    assert rc == 0, rep
+    assert rep["verdict"] == "PASS"
+    d = rep["symbolic_widths_resolved"][0]
+    assert d["bits"] == 16 and "doc-table" in d["resolved_from"], rep
+
+
+def test_symbolic_width_naming_an_undefined_parameter_still_fails(tmp_path):
+    """THE RUBBER-STAMP GUARD.
+
+    `width_symbolic` is present and well-formed, but nothing in the
+    design's own inputs gives `DEPTH` a value. Nobody can produce a
+    number, so this must still FAIL. Without this, "carries a
+    width_symbolic" would itself become the new vacuous pass.
+    """
+    _write_input(tmp_path, "vendor_rtl/synth_block.v",
+                 _SYNTH_RTL.replace("#(parameter DEPTH = 16) ", ""))
+    _write_l1(tmp_path, _PARAM_PINS)
+    rc, rep = _run(tmp_path)
+    assert rc == 1, rep
+    assert rep["verdict"] == "FAIL"
+    assert rep["violations"][0]["pin"] == "accum_bus"
+    assert rep["symbolic_widths_resolved"] == [], rep
+
+
+def test_symbolic_width_that_is_not_a_range_still_fails(tmp_path):
+    """A `width_symbolic` the grammar cannot parse resolves nothing."""
+    _write_input(tmp_path, "vendor_rtl/synth_block.v", _SYNTH_RTL)
+    pins = [dict(p) for p in _PARAM_PINS]
+    pins[2] = dict(pins[2], width_symbolic="see the parameter section")
+    _write_l1(tmp_path, pins)
+    rc, rep = _run(tmp_path)
+    assert rc == 1, rep
+    assert rep["violations"][0]["pin"] == "accum_bus"
+
+
+def test_symbolically_resolved_width_is_still_checked_against_the_bound(tmp_path):
+    """Resolution does not exempt a pin from the numeric lower bound.
+
+    The inputs index bit 23 of `sample_bus`, and the parameter resolves
+    it to 8 — below what the design's own inputs prove. Still FAIL, now
+    as below-bound rather than unresolvable.
+    """
+    _write_input(tmp_path, "vendor_rtl/synth_block.v",
+                 _SYNTH_RTL.replace("DEPTH = 16", "NARROW = 8"))
+    pins = [dict(p) for p in _GOOD_PINS]
+    pins[1] = {"name": "sample_bus", "mode": "input",
+               "width": "N-bit ([NARROW-1:0])",
+               "width_symbolic": "NARROW-1:0", "msb": None, "lsb": None}
+    _write_l1(tmp_path, pins)
+    rc, rep = _run(tmp_path)
+    assert rc == 1, rep
+    assert rep["violations"][0]["kind"] == "bus_width_below_input_bound"
+    assert rep["violations"][0]["required_min_bits"] == 24, rep
+
+
+def test_an_hdl_declaration_outranks_a_doc_table_row(tmp_path):
+    """Both dialects present and disagreeing -> the declaration wins."""
+    _write_input(tmp_path, "vendor_rtl/synth_block.v", _SYNTH_RTL)
+    _write_input(tmp_path, "docs/params.md",
+                 "| name | default |\n|---|---|\n| `DEPTH` | 4 |\n")
+    _write_l1(tmp_path, _PARAM_PINS)
+    rc, rep = _run(tmp_path)
+    assert rc == 0, rep
+    d = rep["symbolic_widths_resolved"][0]
+    assert d["bits"] == 16, rep
+    assert "hdl-declaration" in d["resolved_from"], rep
