@@ -42,7 +42,8 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         density_rpt = project_dir / "reports" / "density.rpt"
 
     stats = {"fill_marker": False, "filled_larger": None,
-             "density_checked": False, "layers_ok": 0, "layers_bad": 0}
+             "density_checked": False, "layers_ok": 0, "layers_bad": 0,
+             "filled_byte_identical": None}
 
     if not filled_def.exists() and not fill_done.exists():
         findings.append(Finding("ERROR", "NO_FILL",
@@ -54,6 +55,21 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         filled_sz = filled_def.stat().st_size
         routed_sz = routed_def.stat().st_size
         stats["filled_larger"] = filled_sz > routed_sz
+        # #364 — BYTE-IDENTITY is an unambiguous no-op: metal fill emitted
+        # nothing at all. Measured on spm x gf180mcuD (plugin 1.6.7):
+        # filled.def and routed.def identical at 472,921 B, zero FILLWIRES,
+        # `metal_fill.done` present, step-34 PASS, and the shipped GDS then
+        # measured 6 whole-die density violations (M1-MT under the deck's
+        # per-layer floor). It passed because the ERROR-level substance test
+        # can be satisfied by an IN-WINDOW per-layer density reading, while
+        # the rule it stands in for is per-layer over the WHOLE DIE — an
+        # escape hatch whose evidence is measured at a different scope than
+        # the thing it excuses. No window measurement can substantiate fill
+        # that produced not one byte, so this is recorded separately and
+        # (below) no hatch may bypass it.
+        stats["filled_byte_identical"] = (
+            filled_sz == routed_sz
+            and _same_bytes(filled_def, routed_def))
         if filled_sz <= routed_sz:
             findings.append(Finding("WARNING", "FILL_NOT_LARGER",
                                     f"filled.def ({filled_sz}B) is not larger than "
@@ -135,6 +151,19 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     # still FAILs FILL_NO_SUBSTANCE.
     sparse_fill_attested = _sparse_die_fill_skip_attested(project_dir)
     stats["sparse_die_fill_skip_attested"] = sparse_fill_attested
+    # #364 — checked BEFORE the substance ladder and outside it: a byte
+    # identical filled.def is not a weak signal to be weighed against others,
+    # it is proof that nothing was emitted. The one exemption is the ATTESTED
+    # sparse-die skip (#684), where producing no fill is the recorded
+    # engineering decision rather than a silent failure.
+    if stats.get("filled_byte_identical") and not sparse_fill_attested:
+        findings.append(Finding(
+            "ERROR", "FILL_NOOP",
+            "metal fill emitted NOTHING: filled.def is BYTE-IDENTICAL to "
+            "routed.def. `metal_fill.done` and an in-window per-layer "
+            "density reading cannot substantiate a fill that produced not "
+            "one byte — the deck's floor is per-layer over the whole die "
+            "(#364)"))
     if placed_fillers and stats["filled_larger"] is False:
         # contradiction: claims fillers but the DEF didn't grow
         findings.append(Finding(
@@ -155,6 +184,22 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
                 "metal_fill.done alone is not fill (#445)"))
 
     return findings, stats
+
+
+def _same_bytes(a: Path, b: Path, chunk: int = 1 << 20) -> bool:
+    """True iff two files have identical content. Streamed, so a large DEF is
+    not read into memory; any read error returns False (a check that cannot
+    read the files must not claim they are identical)."""
+    try:
+        with a.open("rb") as fa, b.open("rb") as fb:
+            while True:
+                ca, cb = fa.read(chunk), fb.read(chunk)
+                if ca != cb:
+                    return False
+                if not ca:
+                    return True
+    except OSError:
+        return False
 
 
 def _sparse_die_fill_skip_attested(project_dir: Path) -> bool:

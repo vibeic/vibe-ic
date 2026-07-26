@@ -31,8 +31,19 @@ def _proj(tmp_path, filler_n=0, row_util=None, filled_sz=100,
           routed_sz=100, layers=None):
     pnr = tmp_path / "phase3" / "stage3" / "pnr"
     pnr.mkdir(parents=True)
+    # #364 — the two files must not be BYTE-IDENTICAL unless a test is
+    # deliberately exercising the no-op case. This fixture defaulted to
+    # `"x" * 100` for BOTH, so every test that used the defaults was also,
+    # incidentally, asserting that an identical filled.def is acceptable —
+    # which is the false-PASS #364 measured on real silicon (identical DEFs,
+    # zero FILLWIRES, step-34 PASS, 6 whole-die density violations shipped).
+    # Distinct fill bytes keep each test's ACTUAL property (in-window
+    # density / rows-already-full as substance) as the deciding branch,
+    # while byte-identity gets its own explicit tests in
+    # test_metal_fill_density_check.py.
     (pnr / "routed.def").write_text("x" * routed_sz)
-    (pnr / "filled.def").write_text("x" * filled_sz)
+    (pnr / "filled.def").write_text(
+        "x" * filled_sz if filled_sz != routed_sz else "y" * filled_sz)
     (pnr / "metal_fill.done").write_text("metal_fill_done\n")
     rpt = tmp_path / "reports"
     rpt.mkdir(parents=True, exist_ok=True)
