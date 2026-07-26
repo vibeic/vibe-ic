@@ -341,8 +341,17 @@ _PROV_SINK: Optional[Path] = None
 
 def set_invocation_provenance_sink(project: Optional[Path]) -> None:
     """Point per-invocation logging at `<project>/provenance.jsonl`, or None to
-    disable. Set once per run; unset means no logging at all (a library caller
-    must not have entries appear in someone else's tree)."""
+    disable. Unset means no logging at all — a library caller (several gates
+    import this module for its DEF parsers) must not have entries appear in
+    someone else's tree.
+
+    ASSUMPTION, stated rather than left implicit: this is module-global, and
+    it is correct because the runner is ONE PROJECT PER PROCESS (`main()` +
+    argparse; the importing gates never reach `step_pnr`). An in-process
+    BATCH orchestrator would break that — project B's container work before
+    its own `step_pnr` would append to project A's ledger. No such
+    orchestrator exists today; if one is added, this must become a
+    per-call parameter rather than a module global."""
     global _PROV_SINK
     _PROV_SINK = project
 
