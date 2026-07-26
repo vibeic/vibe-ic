@@ -141,7 +141,11 @@ jobs:
       - name: Install
         run: |
           cd vibe-ic-marketplace/plugins/vibe-ic/mcp-eda
-          npm install
+          # `npm ci`, not `npm install`: ci installs EXACTLY the lockfile and
+          # fails if it drifts from package.json. With `npm install` the lock
+          # was advisory, so CI could resolve a different dependency tree from
+          # the one the security review was performed against (vibe-ic#422).
+          npm ci
 
       - name: Smoke test
         run: |
