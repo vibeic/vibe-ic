@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 959
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 959)
+- **Total programs (excluding helpers / shims):** 960
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 960)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 950 |
+| `any` | 951 |
 
 ## Alphabetical listing
 
@@ -583,6 +583,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `nba_addr_read_race_check` | any | — | FSM consuming addressed data without pipelining. |
 | `nba_shift_register_same_cycle_read_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
 | `nda_diff_scan_check` | any | — | NDA guard for a PR's DIFF CONTENT (added lines + |
+| `nda_tracked_tree_scan` | any | — | the NDA guards all scan CHANGES; nothing scanned |
 | `netlist_src_coord_canonicalize` | any | — | make a synthesised netlist reproducible |
 | `nextstate_misc_synth` | any | — | deterministic SOLVER for the remaining mechanically- |
 | `nfc_protocol_synth` | any | v0.1.84 | NFC / ISO 14443 contactless-protocol synth helper. |
@@ -1031,7 +1032,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (950 programs)
+### `any` (951 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1585,6 +1586,7 @@ _(no programs in this group)_
 - `nba_addr_read_race_check` — FSM consuming addressed data without pipelining.
 - `nba_shift_register_same_cycle_read_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
 - `nda_diff_scan_check` — NDA guard for a PR's DIFF CONTENT (added lines +
+- `nda_tracked_tree_scan` — the NDA guards all scan CHANGES; nothing scanned
 - `netlist_src_coord_canonicalize` — make a synthesised netlist reproducible
 - `nextstate_misc_synth` — deterministic SOLVER for the remaining mechanically-
 - `nfc_protocol_synth` — NFC / ISO 14443 contactless-protocol synth helper.  _[v0.1.84]_

@@ -67,6 +67,13 @@ run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_r
 # real inputs: the fixture proves the logic, never the artefacts.
 run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_wiring_audit.py"
 
+# The three NDA guards all scan a DELTA (commit messages, an added diff, the
+# plugin source). None can see a token that is ALREADY tracked, so one that
+# landed before a guard existed stays served by the repo forever while every
+# guard reports clean. SKIPs (rc=2) when no token store is configured — which
+# is the normal state for an outside contributor and is NOT a clean result.
+run "NDA scan of the TRACKED tree"      "$ROOT" python3 "$PG/nda_tracked_tree_scan.py"
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired
