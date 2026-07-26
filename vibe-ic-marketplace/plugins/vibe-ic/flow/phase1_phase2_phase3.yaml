@@ -1360,6 +1360,19 @@ steps:
         # A run that declares and records no corner at all self-reports
         # NOT_APPLICABLE (rc 0), so pre-phase3 and analog runs are unaffected.
         - program_exit_zero: "sta_corner_record_completeness_check . --json reports/phase3/sta/sta_corner_record_completeness.json"
+        # vibe-ic#306 — a route promoted on its OWN in-session re-measurement
+        # must be corroborated by the sign-off report it claims to improve
+        # (#293: the promotion read 330->178 while this step's own
+        # sta_mcorner_ocv.rpt went 4->219, and the reroute merged a spare-tie
+        # net into an unrelated signal net). The gate declares
+        # `ENFORCEMENT: blocking` and was wired NOWHERE — not here, not in a
+        # runner — so it ran only by hand. It belongs on THIS step because it
+        # reads the same sign-off report `sta_corner_record_completeness_check`
+        # reads, from the same candidate paths, so the two cannot diverge.
+        # Blocking slot: measured over the 15 published run-roots under
+        # benchmark-data/ic it blocks 0 (every one VACUOUS_PASS — no promotion
+        # happened), and rc=2/VACUOUS is the non-blocking tier by convention.
+        - program_exit_zero: "drv_promotion_corroboration_check . --json reports/phase3/sta/drv_promotion_corroboration.json"
     blocks_on: [22]
 
   - id: 24

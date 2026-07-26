@@ -14770,6 +14770,40 @@ def step_signoff_drv_wire_length_repair(
         f"DOWNSTREAM count, setup>=0 and DRC-clean).")
 
 
+def _gds_substance_gate(gds_out: Path, def_file: Path) -> Optional[str]:
+    """vibe-ic#306 — run `gds_substance_check` ON THE ARTEFACT step_gds JUST
+    WROTE, so a substance-less stream-out fails THIS step.
+
+    The gate declares `ENFORCEMENT: blocking` in its own docstring and is wired
+    into the flow's blocking slot, but nothing invoked it inline: it was reached
+    only by `flow_compliance_check`, which the runner runs as the LAST step.
+    So it could describe a stub GDS after DRC, LVS, the hand-off pack and the
+    tape-out checklist had all been built on top of it — never stop it. That is
+    the #306 defect measured in a gate's own terms.
+
+    Audited in SINGLE-FILE mode against the DEF this GDS was streamed from, so
+    the design-derived floor comes from this run's own placed-instance count and
+    no canonical-path guessing is involved.
+
+    Returns None when the stream-out carries layout substance, else the gate's
+    own message. Exit-code convention matches `flow_compliance_check`:
+    rc 0 PASS, rc 1 FAIL (blocks), rc 2 the gate could not read its input —
+    an infrastructure fault, NOT a verdict about the design, so it does not
+    block. Like the layer-map guard below, an unrunnable checker never becomes
+    a reason to fail a good design.
+    """
+    try:
+        cp = subprocess.run(
+            [sys.executable, str(PROGRAMS_DIR / "gds_substance_check.py"),
+             "--gds-file", str(gds_out), "--def-file", str(def_file)],
+            timeout=600, check=False, capture_output=True, text=True)
+    except Exception:                                     # noqa: BLE001
+        return None
+    if cp.returncode == 1:
+        return (cp.stdout or cp.stderr or "").strip()[-1500:]
+    return None
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -14812,6 +14846,13 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         # Per-layer density fill BEFORE the density checks / sign-off DRC read
         # this GDS. Config-gated + NONFATAL; the note always discloses.
         dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
+        # #306 — BOTH stream-out engines get the substance gate. A stub GDS
+        # out of Magic is the same defect as a stub GDS out of KLayout, and
+        # gating only the fall-back path would leave the primary one open.
+        _sub_err = _gds_substance_gate(gds_out, def_file)
+        if _sub_err:
+            return StepResult("gds", "FAIL", time.time() - t0,
+                              f"gds substance (streamout=magic): {_sub_err}")
         return StepResult(
             "gds", "PASS", time.time() - t0,
             f"gds={gds_out.name} size={gds_out.stat().st_size} "
@@ -14960,6 +15001,13 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
             # The check is a guard, not a dependency: if it cannot run, the
             # pre-flight gate above has already covered the missing-map case.
             pass
+    # #306 — the substance gate runs LAST on this path: after merge / heal /
+    # fill / label-restore, so it audits the exact bytes that go to sign-off
+    # DRC and hand-off, not an intermediate the later passes rewrote.
+    _sub_err = _gds_substance_gate(gds_out, def_file)
+    if _sub_err:
+        return StepResult("gds", "FAIL", time.time() - t0,
+                          f"gds substance (streamout=klayout): {_sub_err}")
     return StepResult("gds", "PASS", time.time() - t0,
                       f"gds={gds_out.name} size={gds_out.stat().st_size} "
                       f"(streamout=klayout"
@@ -18918,6 +18966,52 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
             existing += "\n" + rel  # de-dup within this loop
             declared.append(rel)
     return declared
+
+
+def step_drv_promotion_corroboration(project: Path) -> StepResult:
+    """vibe-ic#306 — a route promoted on its OWN re-measurement must be
+    corroborated by the sign-off report it claims to improve (#293).
+
+    `drv_promotion_corroboration_check` declares `ENFORCEMENT: blocking` and was
+    an ORPHAN: absent from the flow definition entirely, so not even the final
+    compliance audit reached it. A declaration is not a wiring. This step is the
+    wiring — the verdict lands in `plan`, so a FAIL is a FAIL of the run.
+
+    Exit-code convention matches `flow_compliance_check`:
+      rc 0  PASS (includes VACUOUS_PASS — no promotion happened this run)
+      rc 1  FAIL — sign-off contradicts the promotion, or a promotion happened
+            with no sign-off report to corroborate it
+      rc 2  the gate could not read its inputs — inconclusive, not a verdict
+            about the design, so it is reported as SKIP rather than failing a
+            run over a checker fault.
+    """
+    t0 = time.time()
+    prog = PROGRAMS_DIR / "drv_promotion_corroboration_check.py"
+    if not prog.is_file():
+        return StepResult("drv_promotion_corroboration", "SKIP",
+                          time.time() - t0, "gate program not present")
+    # Same folder the sign-off STA gate it corroborates writes to
+    # (`reports/phase3/sta/`), stated literally for the same reason that gate
+    # states its own: the two must never drift apart.
+    out_json = project / "reports" / "phase3" / "sta" / \
+        "drv_promotion_corroboration.json"
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        cp = subprocess.run(
+            [sys.executable, str(prog), str(project), "--json", str(out_json)],
+            timeout=600, check=False, capture_output=True, text=True)
+    except Exception as exc:                              # noqa: BLE001
+        return StepResult("drv_promotion_corroboration", "SKIP",
+                          time.time() - t0, f"gate could not run: {exc}")
+    detail = (cp.stdout or cp.stderr or "").strip()[-600:]
+    if cp.returncode == 0:
+        return StepResult("drv_promotion_corroboration", "PASS",
+                          time.time() - t0, detail, [str(out_json)])
+    if cp.returncode == 1:
+        return StepResult("drv_promotion_corroboration", "FAIL",
+                          time.time() - t0, detail, [str(out_json)])
+    return StepResult("drv_promotion_corroboration", "SKIP",
+                      time.time() - t0, f"inconclusive (rc={cp.returncode}): {detail}")
 
 
 def _canonical_gds_is_stale(primary_gds: Path, canon_gds: Path) -> bool:
@@ -26032,6 +26126,17 @@ def main() -> int:
     # Closes the runner-vs-flow drift waivers from the v10634 benchmark.
     plan.append(step_canonicalize_artefacts(
         project, effective_top, pdk, args.container))
+
+    # vibe-ic#306 — corroborate a promoted route against the sign-off report,
+    # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares
+    # `ENFORCEMENT: blocking` and was wired NOWHERE — not into the flow
+    # definition, not into a runner — so it ran only if a human invoked it by
+    # hand. It runs here because it must run AFTER sign-off STA exists
+    # (step_canonicalize_artefacts emits sta_mcorner_ocv.rpt just above) and
+    # BEFORE the derived-artefact generators build the hand-off pack and
+    # tape-out checklist on top of a route whose claimed improvement the
+    # sign-off may contradict.
+    plan.append(step_drv_promotion_corroboration(project))
 
     # v1.6.36 — invoke the derived-artefact generators (each emits its
     # own canonical path; failures are best-effort and logged in notes).

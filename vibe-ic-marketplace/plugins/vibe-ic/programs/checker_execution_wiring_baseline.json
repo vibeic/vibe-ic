@@ -1,6 +1,6 @@
 {
   "_comment": "Checkers that NOTHING but their own unit test ever runs (vibe-ic#381). MAY ONLY SHRINK — each entry is a checker with zero coverage of real inputs. `triage` records why an entry is still here; the wrong repair is to delete the test so the entry disappears.",
-  "previous_size": 35,
+  "previous_size": 33,
   "scope_expanded": null,
   "known": [
     "analog_adc_enob_corner_check.py",
@@ -9,7 +9,6 @@
     "behavioral_evidence_per_spec_item_check.py",
     "cross_design_identity_check.py",
     "dispatcher_awake_gate_check.py",
-    "drv_promotion_corroboration_check.py",
     "flow_stage_check.py",
     "flow_step_executor_coverage_check.py",
     "functional_state_transition_coverage_check.py",
@@ -44,7 +43,6 @@
     "behavioral_evidence_per_spec_item_check.py": "rc=2 SKIPs / refuses without its input — [--json JSON]",
     "cross_design_identity_check.py": "rc=2 SKIPs / refuses without its input — [--json JSON]",
     "dispatcher_awake_gate_check.py": "rc=2 SKIPs / refuses without its input — dispatcher_awake_gate_check.py: error: the following arguments are required: project_dir",
-    "drv_promotion_corroboration_check.py": "rc=2 SKIPs / refuses without its input — drv_promotion_corroboration_check.py: error: the following arguments are required: project_dir",
     "flow_stage_check.py": "rc=1 FAILs with no design to judge — {",
     "flow_step_executor_coverage_check.py": "rc=0 runs green with no arguments — === flow step-executor coverage ===",
     "functional_state_transition_coverage_check.py": "rc=2 SKIPs / refuses without its input — [--coverage COVERAGE]",
