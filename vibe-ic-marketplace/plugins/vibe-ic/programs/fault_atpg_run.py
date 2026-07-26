@@ -63,7 +63,7 @@ import argparse
 import json
 import os
 import re
-import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -640,13 +640,43 @@ def _cell_model_prep(cell_model: str) -> tuple[str, str]:
 
     `cell_model` is a CONTAINER path, so the combine happens inside the
     container. prep concatenates a co-located primitives.v (if present)
-    ahead of the model; otherwise copies the model verbatim."""
-    prim = os.path.dirname(cell_model.rstrip("/")) + "/primitives.v"
+    ahead of the model; otherwise copies the model verbatim.
+
+    A cell model may legitimately be MORE THAN ONE FILE. `PDK_CONFIG`'s
+    `ihp-sg13g2` entry is the organic case: its own comment states that
+    `sg13g2_udp.v` "holds the UDP primitives the stdcell models reference and
+    must be read alongside `sg13g2_stdcell.v`", so the configured value is two
+    space-separated paths. This function used to treat the whole string as ONE
+    path, which made `os.path.dirname` compute a nonsense primitives.v sibling
+    and, worse, emit `cp "<pathA> <pathB>" "<combined>"` — a single quoted
+    argument naming no file. Measured on spm x ihp-sg13g2 (plugin 1.6.71,
+    image sha256:4182c63b10d1) the container answered
+
+        cp: cannot stat '.../sg13g2_udp.v .../sg13g2_stdcell.v':
+            No such file or directory
+
+    so no combined model was ever written, `fault atpg` elaborated against
+    nothing, and the run reported `faults_total=0` -> `stuck-at coverage=0.00%`
+    — a TOOLING gap that reads exactly like an untestable design.
+
+    So the value is split into its component paths and ALL of them are
+    concatenated (primitives.v first when a co-located one exists, resolved
+    against the FIRST component's directory). A single-path config keeps
+    its previous behaviour VERBATIM — including the bare `cp` on the
+    no-primitives.v fallback — so nothing about the sky130 / gf180 path
+    changes; only the >1-component case is new."""
+    parts = shlex.split(cell_model) or [cell_model]
+    prim = os.path.dirname(parts[0].rstrip("/")) + "/primitives.v"
     combined = f"/work/{_COMBINED_CELL_MODEL}"
+    quoted = " ".join(f'"{p}"' for p in parts)
+    # One component -> `cp` (unchanged). Several -> `cat` them together, since
+    # `cp` cannot merge and would need a directory destination.
+    fallback = (f'cp {quoted} "{combined}"' if len(parts) == 1
+                else f'cat {quoted} > "{combined}"')
     prep = (
         f'mkdir -p "$(dirname {combined})" && '
-        f'if [ -f "{prim}" ]; then cat "{prim}" "{cell_model}" > "{combined}"; '
-        f'else cp "{cell_model}" "{combined}"; fi'
+        f'if [ -f "{prim}" ]; then cat "{prim}" {quoted} > "{combined}"; '
+        f'else {fallback}; fi'
     )
     return combined, prep
 
