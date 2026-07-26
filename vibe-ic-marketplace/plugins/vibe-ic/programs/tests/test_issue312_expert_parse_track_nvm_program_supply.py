@@ -357,13 +357,21 @@ def test_expert_track_quotes_the_expert_lesson_it_rests_on(tmp_path):
                for s in srcs)
 
 
-def test_missing_llm_is_a_named_finding_not_an_absence(tmp_path):
+def test_an_unread_ai_half_is_a_named_finding_not_an_absence(tmp_path):
     """The failure mode this whole task exists to prevent: a second track that
-    quietly does nothing and reads as 'nothing to report'."""
+    quietly does nothing and reads as 'nothing to report'.
+
+    The STATUS moved from SKIPPED-CONDITION to HANDOFF_EMITTED when the AI half
+    stopped being vetoed by the in-process-SDK probe (a backend nothing on this
+    path uses — see `test_issue312_ai_subtrack_convergence`). HANDOFF_EMITTED
+    is the accurate statement: the pack is written and the subagent has not
+    answered yet, which is actionable, where "no LLM on this host" was not.
+    The INVARIANT under test is unchanged and is the one that matters — a run
+    whose AI half did not read says so, by name, in the findings, out loud."""
     p = _project(tmp_path)
     rc, out, _ = _run_track(p)
     rep = json.loads(_track_report(p).read_text())
-    assert rep["ai_subtrack"]["status"] == "SKIPPED-CONDITION"
+    assert rep["ai_subtrack"]["status"] == "HANDOFF_EMITTED"
     assert any(f["rule"] == "EXPERT_TRACK_AI_SUBTRACK_SKIPPED"
                for f in rep["findings"])
     assert "EXPERT_TRACK_AI_SUBTRACK_SKIPPED" in out, "and it must be PRINTED"
@@ -476,7 +484,11 @@ def test_a_track_finding_and_a_design_finding_are_different_things(tmp_path):
     # found one thing" — and must still carry WHY coverage was partial.
     ev = E.assess(clean, _PROGRAMS)
     assert ev["state"] == "RAN_EMPTY" and ev["patch_count"] == 0
-    assert ev["ai_subtrack"] == "SKIPPED-CONDITION"
+    # HANDOFF_EMITTED, not SKIPPED-CONDITION: the AI half is no longer vetoed
+    # by an unrelated backend probe, so "it has not answered yet" is the true
+    # statement. What this assertion is really pinning is unchanged — the
+    # evidence check must still carry WHY coverage was partial.
+    assert ev["ai_subtrack"] == "HANDOFF_EMITTED"
 
     broken = _project(tmp_path, name="broken")
     _run_track(broken)
