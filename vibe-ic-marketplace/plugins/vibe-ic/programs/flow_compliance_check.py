@@ -195,10 +195,35 @@ def _step_failure_is_informational_only(result: "StepResult") -> bool:
     the verdict pass to exclude informational-only step failures from
     `failing`. Reasons emitted by `_evaluate_gate` for failing
     program_exit_zero sub-gates start with `program failed: <cmd>`;
-    we substring-scan for any informational gate name."""
+    we substring-scan for any informational gate name.
+
+    THE P0 UMBRELLA USES A DIFFERENT REASON SHAPE. `_run_structural_rtl_gates`
+    emits `FAIL: <gate> — <msg>` (and `  - <gate> — <msg>` when >=2 gates fail);
+    the string `program failed:` never appears in that composition path. So the
+    `startswith("program failed:")` scan below skipped EVERY P0 reason, left
+    `saw_informational` False, and returned False for every P0 result — which
+    silently disabled the exclusion for the three INFORMATIONAL_GATES that can
+    only ever run INSIDE the umbrella (`l22_verification_plan_measurable_check`,
+    `l25_reliability_envelope_actionable_check`,
+    `periodic_timer_vs_rx_activity_check`). A P0 umbrella failing on nothing but
+    those still reached `failing` -> `ok=False` -> `overall="FAIL"`, the exact
+    outcome INFORMATIONAL_GATES exists to prevent, and the opposite of what the
+    caller at the `informational_only_failing` deferral site already assumes
+    (it carries an `r.id == "P0"` branch that was unreachable).
+
+    The P0 half delegates to `_parse_p0_failing_subgates` — the sibling parser
+    that already knows both umbrella shapes — so the two cannot drift apart
+    again. Non-P0 steps take the original path unchanged."""
     if result.status != "FAIL" or not result.reasons:
         return False
     saw_informational = False
+    if getattr(result, "id", None) == "P0":
+        p0_failing = _parse_p0_failing_subgates(result)
+        if not p0_failing:
+            # No parseable sub-gate FAIL (only SKIP/WAIVED lines) — say
+            # nothing rather than assert informational-only.
+            return False
+        return all(g in INFORMATIONAL_GATES for g in p0_failing)
     for reason in result.reasons:
         # Skip output: lines and other diagnostic context lines —
         # only "program failed: ..." carries the gate-name signal.
