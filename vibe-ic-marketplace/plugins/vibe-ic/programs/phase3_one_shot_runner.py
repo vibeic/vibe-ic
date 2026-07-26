@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import difflib
 import json
 import os
 import re
@@ -5305,6 +5306,49 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                     f"REFUSING to fall back to sky130A — that would emit "
                     f"sign-off reports for a PDK you did not ask for. Fix the "
                     f"registry entry or use an image that ships this PDK.")
+            # UNDECLARED name. #211 built the resolve-or-REFUSE contract but
+            # wired it ONLY to the declared path (`_reg is not None`), so a name
+            # ABSENT from the registry fell straight through to the
+            # `return _detect_pdk(project, override="sky130A")` fallback at the
+            # bottom of this function — the exact silent substitution #211
+            # exists to prevent, and strictly worse than the declared case
+            # because nothing anywhere records what was actually asked for.
+            #
+            # MEASURED (spm x ihp-sg13cmos5l, plugin 1.6.4, image
+            # vibeic-eda:0.2.30 id sha256:4182c63b10d1): `--pdk ihp-sg13cmos5l`
+            # returned PdkConfig(name='sky130A',
+            # liberty=/foss/pdks/sky130A/.../sky130_fd_sc_hd__tt_025C_1v80.lib)
+            # with no exception and nothing on stderr — byte-identical to the
+            # result for `--pdk totally-made-up-pdk-xyz`. /foss/pdks/ihp-sg13cmos5l
+            # is a REAL, complete digital PDK in that image; it is merely absent
+            # from pdk_registry.json. The near-miss against the DECLARED
+            # `ihp-sg13g2` is what makes this substitution easy to ship.
+            #
+            # A project-local PDK under input/pdk/ is a LEGITIMATE way to serve
+            # an unregistered name (the branch just below returns
+            # `custom:<dir>`), so REFUSE ONLY when that path cannot serve it
+            # either — i.e. when the sole remaining outcome is the sky130A
+            # fallback. chip-AGNOSTIC: no chip, vendor or PDK literal.
+            _local = project / "input" / "pdk"
+            if not ((_local / "liberty").is_dir() and (_local / "lef").is_dir()):
+                try:
+                    _known = [e["name"] for e in (json.loads(
+                        (PROGRAMS_DIR / "pdk_registry.json").read_text()
+                    ).get("pdks") or []) if e.get("name")]
+                except Exception:                          # pragma: no cover
+                    _known = []
+                _near = difflib.get_close_matches(override, _known, n=3,
+                                                  cutoff=0.6)
+                raise SystemExit(
+                    f"[FAIL] --pdk {override}: NOT declared in "
+                    f"pdk_registry.json, and no project-local PDK at "
+                    f"{_local} (needs liberty/ and lef/). REFUSING to fall "
+                    f"back to sky130A — that would emit sign-off reports for "
+                    f"a PDK you did not ask for."
+                    + (f" Did you mean: {', '.join(_near)}?" if _near else "")
+                    + f" Known registry PDKs: {', '.join(_known) or '<none>'}."
+                    f" Add an entry to pdk_registry.json (the documented "
+                    f"extension seam) or supply input/pdk/.")
 
     pdk_dir = project / "input" / "pdk"
     if pdk_dir.is_dir():
