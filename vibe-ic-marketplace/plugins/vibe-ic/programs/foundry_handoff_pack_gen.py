@@ -218,15 +218,60 @@ def _resolve_design_top(project: Path, top_arg):
     return _detect_top_name(project)
 
 
+# The PnR script OpenROAD actually executed names the PDK tree every liberty /
+# tech-LEF / cell-LEF it read came from. That is GROUND TRUTH for "which PDK
+# produced this GDS" — it is the files, not a statement about the files.
+_SIGNOFF_PDK_RE = re.compile(r"/foss/pdks/([A-Za-z0-9._-]+)/")
+
+
+def _pdk_from_signoff_flow(project: Path):
+    """The PDK that ACTUALLY produced the shipped GDS, read off the sign-off
+    PnR script's own asset paths. Returns None when the script is absent or
+    references more than one PDK tree (ambiguous → never guess).
+
+    chip-AGNOSTIC: pure path grammar over the flow's own generated script."""
+    tcl = _pl.pnr_dir(project) / "pnr.tcl"
+    try:
+        names = set(_SIGNOFF_PDK_RE.findall(tcl.read_text(errors="replace")))
+    except OSError:
+        return None
+    return next(iter(names)) if len(names) == 1 else None
+
+
 def _resolve_pdk_and_node(project: Path, pdk_from_files, node_from_files):
-    """#467 — pdk / process node fallback chain. Upstream spec facts win
-    over PDK-file derivation:
-      pdk        : L19 pdk_target → L1 tapeout PDK statement → PDK files;
-      process_nm : PDK-file derivation → node parsed from the spec PDK text.
-    Honest null preserved only when ALL sources are empty."""
+    """#467 — pdk / process node fallback chain.
+
+    pdk: the PDK that PRODUCED the GDS → L19 pdk_target → L1 tapeout PDK
+         statement → PDK files.
+    process_nm : PDK-file derivation → node parsed from the spec PDK text.
+    Honest null preserved only when ALL sources are empty.
+
+    SIGN-OFF PDK WINS OVER THE SPEC TARGET. #467 put the spec facts first
+    ("Upstream spec facts win over PDK-file derivation"), which is right for a
+    requirements document and WRONG for a manufacturing hand-off: this pack
+    ships a GDS, and that GDS was made by exactly one PDK. When the design is
+    built on a PDK its spec does not name — which is the entire point of a
+    cross-PDK benchmark matrix, and routine whenever a design is ported — the
+    pack declared the ASPIRATION and the foundry would receive the wrong
+    process for the silicon in the same directory.
+
+    MEASURED (spm x ihp-sg13cmos5l, plugin 1.6.4, image vibeic-eda:0.2.30
+    id sha256:4182c63b10d1): every asset in phase3/stage3/pnr/pnr.tcl resolved
+    under /foss/pdks/ihp-sg13cmos5l and the DRC ran the IHP deck, yet L19
+    pdk_target was "sky130" (extracted from the spec's "target PDK family"
+    prose), so mask_spec.json, wat_plan.json, corner_test_vectors.json,
+    README.txt and scribe_line_layout all recorded `"pdk": "sky130"` beside an
+    IHP GDS — and foundry_handoff_package_check returned PASS, because it
+    checks that the files EXIST, never that they agree with the flow.
+
+    The spec target is not discarded: when the two disagree the caller records
+    it as `spec_pdk_target` so the divergence is visible rather than silently
+    resolved either way."""
     l19 = _l19_pdk_target(project)
     l1 = _l1_tapeout_pdk(project)
-    pdk = l19 or l1 or pdk_from_files
+    signoff = _pdk_from_signoff_flow(project)
+    spec = l19 or l1
+    pdk = signoff or spec or pdk_from_files
     # process node: trust the PDK-file derivation first (it knows the real
     # library), else parse a node out of the spec PDK text — L19 target
     # string, then the dedicated L1 tapeout process_node/foundry fields.
@@ -234,7 +279,9 @@ def _resolve_pdk_and_node(project: Path, pdk_from_files, node_from_files):
     if node is None:
         node = (_process_nm_from_pdk_text(l19)
                 or _l1_tapeout_node_nm(project))
-    return pdk, node
+    # Surface a spec-vs-silicon divergence instead of resolving it silently.
+    mismatch = (spec if (signoff and spec and signoff != spec) else None)
+    return pdk, node, mismatch
 
 
 def _l10_test_pattern_ids(project: Path):
@@ -313,7 +360,7 @@ def main(argv=None) -> int:
     # projects genuinely missing the value still get null (corpus-sweep
     # guard). PENDING_FOUNDRY_* semantics unchanged (#449).
     design_top = _resolve_design_top(project, args.top)
-    pdk_name, process_nm = _resolve_pdk_and_node(
+    pdk_name, process_nm, spec_pdk_target = _resolve_pdk_and_node(
         project, pdk_from_files, node_from_files)
     # #484: per-design identity stamp — the project NAME is always present
     # (design_top / pdk can both resolve null), so two designs never emit a
@@ -324,6 +371,12 @@ def main(argv=None) -> int:
         _ident["top"] = str(design_top)
     if pdk_name:
         _ident["pdk"] = str(pdk_name)
+    # The design was built on a PDK its own spec does not name. `pdk` above is
+    # the one that made the GDS in this pack; keep the spec target visible so
+    # the divergence is a recorded fact rather than a silent resolution.
+    if spec_pdk_target:
+        _ident["spec_pdk_target"] = str(spec_pdk_target)
+        _ident["pdk_source"] = "signoff_flow"
 
     # Step 1: mask_spec.json — deterministic starting point. The mask
     # layer table is foundry-specific so we mark it TODO.
