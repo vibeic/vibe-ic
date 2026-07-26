@@ -30941,9 +30941,25 @@ def _v1_6_563_apply_subqualifier_guard(blocks):
 # co-occurrence guard (_RE_ANALOG_CONTEXT) passed because the negated sentence
 # still carries analog vocabulary. Reject when a negation marker precedes the
 # keyword within its own sentence. Chip-AGNOSTIC negation vocabulary (zh + en).
+#
+# ORGANIC — vocabulary widened by two markers this list could not see, both
+# measured on a real Traditional-Chinese input doc (spm × ihp-sg13cmos5l):
+#   * BARE `無` — the list only carried it in fixed compounds (無需 / 無任何 /
+#     無 analog / 無 ESD), so `無 SW-visible registers` read as NOT negated.
+#     Admitted only when the next character is whitespace or ASCII, which is
+#     how `無` is written when it negates a Latin term. A `無` glued to a CJK
+#     character is a COMPOUND WORD, not a negator — 無線 (wireless), 無源
+#     (passive), 無限 (unlimited), 無論 (regardless) all carry real analog /
+#     design content and must NOT be read as denials. Failing to match those
+#     is the safe direction: evidence is kept, never invented.
+#   * `N/A` — the canonical applicability denial in a spec table cell or an
+#     inline field. (`not applicable` / `shall not` / `does not` already match
+#     through the bare `not` alternative.)
 _RE_ANALOG_NEGATION = re.compile(
     r"不需|不需要|無需|毋需|沒有|不含|不具|不支援|不採用|無任何|"
     r"純數位|纯数位|純數字|无\s*analog|無\s*analog|無\s*類比|無\s*ESD|"
+    r"無(?=[\s\x00-\x7F])|"
+    r"\bn\s*/\s*a\b|"
     r"\b(?:no|not|without|none|absent|lacks?|excludes?|"
     r"does\s+not|do\s+not|doesn['’]?t|don['’]?t|"
     r"no\s+analog|not\s+needed|not\s+required|not\s+present|"
@@ -30953,9 +30969,16 @@ _RE_ANALOG_NEGATION = re.compile(
 
 
 def _v0_1_62_analog_kw_negated(text: str, kw_start: int, kw_end: int) -> bool:
-    """True iff the analog keyword at [kw_start:kw_end] sits in a clause whose
+    """True iff the keyword at [kw_start:kw_end] sits in a clause whose
     leading text (sentence start → keyword) carries a negation marker.
-    Sentence boundaries: zh 。！？； + en .;\\n and blank-paragraph breaks."""
+    Sentence boundaries: zh 。！？； + en .;\\n and blank-paragraph breaks.
+
+    ORGANIC — this is now the SINGLE definition of "negated" in this file.
+    Two callers share it deliberately: `gen_l5_adi_spec` (the analog keyword
+    harvester it was written for) and `_v1_6_426_extract_memories_from_text`
+    (the L9 memory prose walker). A second, differently-shaped negation
+    mechanism in the same module would be worse than one — the two would
+    drift and disagree about what a denial looks like."""
     s_start = 0
     for delim in ("\n", "。", "！", "？", "；", ";", ". "):
         d = text.rfind(delim, 0, kw_start)
@@ -41383,6 +41406,79 @@ def _v1_6_426_normalise_port_count(port_token) -> str:
     return ""
 
 
+# ─── ORGANIC — the L9 memory prose walker was NEGATION-BLIND ─────────
+# Measured on spm × ihp-sg13cmos5l (plugin 1.6.1). `input/docs/
+# L5_register_map.md` declares `status: not-applicable` in its OWN
+# frontmatter and its body reads:
+#     `spm` **無 SW-visible registers**。
+#     → 不需 Plugin 產生 register file / CSR decoder / memory-mapped interface。
+# `_V1_6_426_RE_MEMORY_PROSE` matched the literal phrase `register file`
+# INSIDE THE SENTENCE INSTRUCTING THE PLUGIN NOT TO GENERATE ONE and emitted
+#   {name: null, kind: regfile, port_count: null, depth: null, width: null,
+#    evidence_file: "L5_register_map.md", low_confidence: true}
+# — every field that would make it actionable is null. That single fabricated
+# row is the ONLY `low_confidence: true` entry in L9_INTEGRATION_SPEC.json,
+# and the in-gate stub-backed rule (#434, review_required) reads
+# low_confidence evidence as DEFERRED work, so Step D1 (Phase 1 Doc
+# Extraction) was downgraded to WAIVED-DEFERRED — on an ingestion that was
+# otherwise clean (extraction_skipped: [], 9/9 extracted).
+#
+# SAME DEFECT CLASS as #358 on the analog side: a keyword matcher firing on
+# text that DENIES the thing. The analog path already carries a negation
+# guard (`_v0_1_62_analog_kw_negated`) and a self-contamination guard
+# (`_v466_line_is_plugin_layer_title`); the memory walker had neither.
+# The sentence-level half below DELIBERATELY CALLS the analog path's own
+# predicate rather than authoring a second notion of "negated" in this file.
+#
+# TWO signals, both honoured, in the order they get cheaper to be wrong about:
+#   1. FILE level — the cited evidence doc's own YAML frontmatter declares
+#      `status: not-applicable`. The author has stated that this layer's
+#      subject does not exist in this design; nothing mined out of that doc
+#      is design evidence. Same doctrine as the Tier -1 frontmatter `ic:`
+#      declaration in `_ic_name_from_docs`: a doc's own frontmatter outranks
+#      any heuristic read of its body. Scoped STRICTLY PER FILE — the walker
+#      is called once per extracted doc, so a not-applicable L5 can never
+#      silence a genuine L9 in the same corpus.
+#   2. SENTENCE level — `_v0_1_62_analog_kw_negated` over the match span, so
+#      `不需 … register file`, `無 SW-visible registers`, `no register file`
+#      and `N/A` reject THAT match while a positive clause elsewhere in the
+#      same document is still harvested.
+# chip-AGNOSTIC: YAML frontmatter grammar + the shared negation vocabulary;
+# no chip name, PDK name or design literal participates.
+_RE_DOC_FRONTMATTER_BLOCK = re.compile(r"\A---\s*\n(.*?)\n---", re.DOTALL)
+_RE_DOC_FRONTMATTER_STATUS = re.compile(
+    r"^[ \t]*status[ \t]*:[ \t]*[\"']?(.*?)[\"']?[ \t]*$",
+    re.MULTILINE | re.IGNORECASE)
+# Deliberately NOT `l_doc_evidence_util.NO_INFORMATION_TOKENS`. That set also
+# carries `tbd` / `todo` / `pending` / `unknown` / `draft`, which mean "not
+# written yet" — NOT "does not exist". A `status: tbd` doc that already
+# carries a real memory paragraph must still be harvested; suppressing it
+# would lose evidence the author did supply.
+_DOC_STATUS_NOT_APPLICABLE = frozenset({
+    "not-applicable", "not_applicable", "not applicable", "notapplicable",
+    "n/a", "n.a.", "na", "不適用", "不适用",
+})
+
+
+def _doc_declares_not_applicable(text) -> bool:
+    """ORGANIC — True iff `text` opens with a YAML frontmatter block whose
+    `status:` key declares the document NOT APPLICABLE to this design.
+
+    Returns False for every other status value, for a doc with no
+    frontmatter, and for a frontmatter with no `status:` key — a guard that
+    guesses would drop real evidence, so the fail-open direction is to keep
+    harvesting. chip-AGNOSTIC: frontmatter grammar only."""
+    if not text or not isinstance(text, str):
+        return False
+    fm = _RE_DOC_FRONTMATTER_BLOCK.match(text)
+    if not fm:
+        return False
+    m = _RE_DOC_FRONTMATTER_STATUS.search(fm.group(1))
+    if not m:
+        return False
+    return m.group(1).strip().lower() in _DOC_STATUS_NOT_APPLICABLE
+
+
 def _v1_6_426_extract_memories_from_text(
         text: str, source_fname: str,
         l9_top_module: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -41398,8 +41494,19 @@ def _v1_6_426_extract_memories_from_text(
     names downstream). When `l9_top_module` is None / empty the
     top-module tier is a no-op; ISA-ext / shape-gate / noun-deny
     still apply. Chip-AGNOSTIC.
+
+    ORGANIC — negation-blindness fix (see the block comment above).
+    Signal 1: a doc whose own frontmatter says `status: not-applicable`
+    yields NOTHING. Signal 2: a match whose own sentence carries a
+    negation marker is skipped, the rest of the doc still walked.
     """
     if not text or not isinstance(text, str):
+        return []
+    # ORGANIC signal 1 (FILE level) — the document declares its own subject
+    # not applicable to this design. Harvesting a memory out of it fabricates
+    # hardware the author explicitly said is absent. Per-file by construction:
+    # one call per extracted doc, so a sibling doc is untouched.
+    if _doc_declares_not_applicable(text):
         return []
     if len(text) > 5_000_000:
         # Bound the cost on extreme inputs.
@@ -41407,6 +41514,12 @@ def _v1_6_426_extract_memories_from_text(
     out: List[Dict[str, Any]] = []
     seen: set = set()
     for m in _V1_6_426_RE_MEMORY_PROSE.finditer(text):
+        # ORGANIC signal 2 (SENTENCE level) — reuse the analog path's own
+        # negation predicate so this file has exactly ONE definition of
+        # "negated". `continue` advances to the next MATCH (not the next
+        # doc), so a denial sentence never shadows a real spec later on.
+        if _v0_1_62_analog_kw_negated(text, m.start(), m.end()):
+            continue
         try:
             type_token = m.group("type") or ""
             port_token = m.group("port") or ""
