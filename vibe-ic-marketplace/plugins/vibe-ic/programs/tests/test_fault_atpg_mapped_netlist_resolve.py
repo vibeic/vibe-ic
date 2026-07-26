@@ -271,3 +271,49 @@ def test_unsupported_pdk_no_longer_short_circuits_before_the_self_heal(tmp_path)
         tmp_path, "phase2/stage2/synth/netlist.v", "clk", "unmapped",
         95.0, 1, run_transition=False)
     assert "unsupported pdk" not in str(rep.get("error", "")), rep
+
+
+# ══════════════════════════════════════════════════════════════════════
+# A cell model may legitimately be MORE THAN ONE FILE
+#
+# Found independently by a converge agent on spm x ihp-sg13g2 while this
+# change was being written, and merged here rather than lost: that PDK's
+# configured `cell_model` is two space-separated paths (its own config
+# comment says the UDP primitives "must be read alongside" the stdcell
+# models). Treating the string as ONE path emitted
+#
+#     cp "<pathA> <pathB>" "<combined>"
+#
+# a single quoted argument naming no file, so the container answered
+# `cp: cannot stat ...: No such file or directory`, no combined model was
+# written, `fault atpg` elaborated against nothing, and the run reported
+# faults_total=0 / 0.00% coverage — a TOOLING gap that reads exactly like
+# an untestable design. Same visible symptom as the PDK short-circuit
+# above, unrelated cause.
+# ══════════════════════════════════════════════════════════════════════
+
+def test_multi_component_cell_model_is_not_treated_as_one_path():
+    """DIRECTION 2: every configured component must reach the command."""
+    cfg = far.PDK_CONFIG["ihp-sg13g2"]
+    parts = str(cfg["cell_model"]).split()
+    assert len(parts) > 1, (
+        "premise moved: ihp-sg13g2's cell_model is no longer multi-path")
+    _combined, prep = far._cell_model_prep(cfg["cell_model"])
+    for path in parts:
+        assert f'"{path}"' in prep, (path, prep)
+    assert f'"{cfg["cell_model"]}"' not in prep, (
+        "the whole multi-path string is still quoted as one argument")
+    assert "cat " in prep, "several components cannot be merged by cp"
+
+
+def test_single_component_cell_model_command_is_unchanged():
+    """DIRECTION 1: the sky130 / gf180 path must not move.
+
+    Their configs are one path and their runs are validated on the
+    previous `cp` form, so the multi-path fix must not perturb them.
+    """
+    for pdk in ("sky130", "gf180"):
+        cfg = far.PDK_CONFIG[pdk]
+        assert len(str(cfg["cell_model"]).split()) == 1, pdk
+        _combined, prep = far._cell_model_prep(cfg["cell_model"])
+        assert f'cp "{cfg["cell_model"]}"' in prep, (pdk, prep)
