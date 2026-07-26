@@ -7719,6 +7719,61 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         except OSError:
             pass
 
+        # ORGANIC (spm x sky130A, 1.6.4) — ADDITIVELY emit a technology-MAPPED
+        # SIBLING beside the generic netlist when a PDK Liberty is resolvable.
+        #
+        # `netlist.v` / `netlist_yosys.v` above are NOT touched: every existing
+        # generic-netlist consumer keeps byte-identical input, and the #80
+        # invariant ("without depending on a PDK liberty file") is preserved
+        # because this whole block is skipped when no Liberty resolves.
+        #
+        # WHY: the Phase-2 DFT/ATPG step cannot measure stuck-at coverage on a
+        # generic netlist — iverilog rejects `$_NAND_` — and it recorded
+        # `faults_total=0, atpg_exit=1` on this cell. The recovery already
+        # exists (`fault_atpg_run.resolve_mapped_netlist` switches to a
+        # `<top>_synth.v` sibling) but nothing produced that sibling until
+        # Phase 3, which runs seven hours too late. MEASURED, same program,
+        # same generic `--netlist` argument, sibling absent vs present:
+        #     absent  -> faults_total=0    atpg_exit=1  stuck-at  0.00%
+        #     present -> faults_total=876  atpg_exit=0  stuck-at 98.12%
+        # chip-AGNOSTIC: no PDK/cell/chip literal here; the Liberty, the
+        # dont-use set and the hilomap directive are all resolved through the
+        # existing registry-driven helpers.
+        try:
+            import phase2_mapped_sibling as _pms
+            import phase3_one_shot_runner as _p3
+            _pdk = _p3._detect_pdk(project)
+            _lib = getattr(_pdk, "liberty", None) if _pdk else None
+            if _pms.should_emit_mapped_sibling(_lib):
+                _sib = _pms.mapped_sibling_path(synth_dir, synth_top)
+                _hilo = _p3._v1_6_596_build_hilomap_directive(_lib, container)
+                if _hilo:
+                    _du = _p3._synth_dont_use_cells(_pdk, container)
+                    _mcmd = _pms.build_mapped_sibling_command(
+                        rtl_files=[str(f) for f in rtl_files],
+                        top=synth_top, liberty=_lib, out_path=str(_sib),
+                        hilomap_directive=_hilo, dont_use=_du)
+                    _mrc, _mo, _me = _run(["yosys", "-p", _mcmd],
+                                          cwd=synth_dir, timeout=_synth_to)
+                    if _mrc == 127 and _path_in_container(
+                            str(synth_dir), container):
+                        _mrc, _mo, _me = _run(
+                            ["docker", "exec", "-w", str(synth_dir),
+                             container, "bash", "-lc",
+                             f"yosys -p '{_mcmd}'"], timeout=_synth_to)
+                    (synth_dir / "mapped_sibling.log").write_text(
+                        _mo + "\n" + _me)
+                    if _mrc != 0 or not _sib.is_file():
+                        # NON-FATAL by design: the generic netlist is already
+                        # written and gated; a missing sibling degrades DFT
+                        # exactly as it does today, it never fails synth.
+                        print(f"[phase2] mapped-sibling emit skipped "
+                              f"(rc={_mrc}) — DFT/ATPG will see the generic "
+                              f"netlist, as before", file=sys.stderr)
+        except Exception as _e:  # nosec — strictly additive, never masks synth
+            print(f"[phase2] mapped-sibling emit unavailable: {_e}",
+                  file=sys.stderr)
+
         # v1.6.196 (#83 P0-A) — append a provenance.jsonl entry
         # declaring yosys produced netlist_yosys.v + netlist.v.
         # provenance_check (Step 9) FAILed pre-v1.6.196 because
