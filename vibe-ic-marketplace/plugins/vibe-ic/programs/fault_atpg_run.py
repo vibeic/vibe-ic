@@ -583,6 +583,57 @@ def _first_module_name(netlist_text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _read_netlist_text(project: Path, netlist_rel: str, limit: int = 200000) -> str:
+    try:
+        return (project / netlist_rel).read_text(errors="ignore")[:limit]
+    except OSError:
+        return ""
+
+
+def pdk_cell_prefixes() -> dict:
+    """Library prefix(es) each CONFIGURED PDK's flop cells carry.
+
+    Derived from `PDK_CONFIG[*]["dff_cells"]` rather than a second hardcoded
+    table, so adding a PDK to the config teaches the sniff about it and the
+    two can never drift apart:
+
+        sky130_fd_sc_hd__dfxtp_1  ->  sky130_fd_sc_hd__
+        sg13g2_dfrbp_1            ->  sg13g2_
+
+    chip-AGNOSTIC: keyed on standard-cell naming grammar, not on any design,
+    vendor part or PDK SKU literal.
+    """
+    out: dict = {}
+    for name, cfg in PDK_CONFIG.items():
+        prefixes = set()
+        for cell in str(cfg.get("dff_cells") or "").split(","):
+            cell = cell.strip()
+            if not cell:
+                continue
+            if "__" in cell:
+                prefixes.add(cell.split("__", 1)[0] + "__")
+            elif "_" in cell:
+                prefixes.add(cell.split("_", 1)[0] + "_")
+        if prefixes:
+            out[name] = tuple(sorted(prefixes))
+    return out
+
+
+def sniff_pdk_from_netlist(netlist_text: str) -> str | None:
+    """Which configured PDK this netlist is MAPPED to, or None.
+
+    Returns None for a generic/unmapped netlist and for one mapped to a
+    library this build has no config for — in both cases the caller must
+    surface the honest error rather than pick something.
+    """
+    if not netlist_text:
+        return None
+    for name, prefixes in pdk_cell_prefixes().items():
+        if any(p in netlist_text for p in prefixes):
+            return name
+    return None
+
+
 def resolve_mapped_netlist(project: Path, netlist_rel: str) -> tuple[str, str | None]:
     """If `netlist_rel` is generic-unmapped, resolve to a tech-mapped sibling
     in the same synth dir. Returns (resolved_rel, switch_note|None). When the
@@ -911,20 +962,45 @@ def run_fault(
     dff_cells_override  : explicit `fault cut --dff` list. When None, the flop
         cells are auto-detected from the netlist and unioned with the PDK-config
         seed (detect_dff_cells + merge_dff_cells)."""
+    # ATPG needs the TECH-MAPPED netlist — self-heal a generic-unmapped one
+    # to the mapped `<top>_synth.v` sibling (fixes the DFT step handing over
+    # phase2/stage2/synth/netlist.v, which is the generic LEC netlist).
+    #
+    # THIS MUST PRECEDE THE PDK CHECK. It used to sit after it, which made the
+    # self-heal unreachable in exactly the case it exists for: the caller
+    # sniffs the PDK from the GENERIC netlist, that netlist names no library
+    # cells, so the caller passes an unsupported value, and `run_fault`
+    # returned `unsupported pdk` before ever resolving the mapped sibling that
+    # would have identified the PDK.
+    netlist_rel, netlist_switch_note = resolve_mapped_netlist(project, netlist_rel)
+
     pdk_cfg = PDK_CONFIG.get(pdk)
+    pdk_sniff_note = None
+    if pdk_cfg is None and not cell_model_override:
+        # Derive the PDK from the netlist ATPG will ACTUALLY run on. This is
+        # not the "callee substitutes its own default" behaviour ORGANIC #410
+        # removed — nothing is assumed; the library is read off the cell names
+        # in the resolved artefact, and if they name no configured library the
+        # honest error below still stands.
+        sniffed = sniff_pdk_from_netlist(_read_netlist_text(project, netlist_rel))
+        if sniffed:
+            pdk_sniff_note = (
+                f"caller passed unsupported pdk {pdk!r}; derived {sniffed!r} "
+                f"from the cell names in the resolved netlist "
+                f"{netlist_rel!r}")
+            pdk, pdk_cfg = sniffed, PDK_CONFIG[sniffed]
     if pdk_cfg is None and not cell_model_override:
         return 2, {"error": f"unsupported pdk: {pdk}. "
                             f"Supported: {list(PDK_CONFIG.keys())} "
-                            f"(or pass --cell-model-path for a custom library)"}
+                            f"(or pass --cell-model-path for a custom library)",
+                   "netlist_used": netlist_rel,
+                   "pdk_sniff": "no configured library's cells found in the "
+                                "resolved netlist"}
     cell_model = resolve_cell_model(cell_model_override, pdk_cfg)
     if not cell_model:
         return 2, {"error": "no Verilog cell model resolved: pass "
                             "--cell-model-path or use a PDK with a configured "
                             "cell_model"}
-    # ATPG needs the TECH-MAPPED netlist — self-heal a generic-unmapped one
-    # to the mapped `<top>_synth.v` sibling (fixes the DFT step handing over
-    # phase2/stage2/synth/netlist.v, which is the generic LEC netlist).
-    netlist_rel, netlist_switch_note = resolve_mapped_netlist(project, netlist_rel)
     # Flop-cell resolution: explicit override wins; else auto-detect from the
     # netlist and union with the PDK-config seed so cut never misses the real
     # flop cell (fixes seed/netlist mismatch, e.g. DFFHQD1 vs seed DFFRQD1).
@@ -1083,6 +1159,10 @@ def run_fault(
         "pdk": pdk,
         "netlist": netlist_rel,
         "netlist_switch_note": netlist_switch_note,
+        # Disclosed so a reader can see the PDK was DERIVED, and from what,
+        # rather than taken from the caller. None when the caller's PDK stood.
+        "pdk_sniff_note": pdk_sniff_note,
+        "pdk_used": pdk,
         "coverage_pct": coverage_ratio,
         "faults_covered": faults_covered,
         "faults_total": faults_total,
