@@ -278,12 +278,58 @@ def _check_artifact(run_dir: Path, artifact_path: str) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
+def _emit_preflight(results: list[dict]) -> int:
+    """Print the author-facing OUTSTANDING list. ALWAYS returns 0.
+
+    Advisory by construction: at handoff the artifacts are legitimately absent
+    (nobody has authored them yet), so a non-zero exit here would block every
+    correct run. The blocking assertion stays in the normal end-of-phase mode.
+    """
+    outstanding = [r for r in results if r["status"] != "PASS"]
+    if not results:
+        print("spec_required_artifact_preflight: NONE — the input docs declare "
+              "no path-shaped mandatory artifact.")
+        return 0
+    if not outstanding:
+        print("spec_required_artifact_preflight: ALL %d spec-declared artifact(s) "
+              "already present." % len(results))
+        return 0
+    print("spec_required_artifact_preflight: %d spec-declared artifact(s) "
+          "OUTSTANDING — author these as well as the RTL, or final_audit will "
+          "FAIL after the full Phase-2 pipeline has run:" % len(outstanding))
+    for r in outstanding:
+        print("  - %s" % r["artifact_path"])
+        print("      required by: %s" % r.get("source", "<unknown input doc>"))
+        print("      clause     : %s" % (r.get("clause_text", "") or "").strip())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Check spec-declared required artifacts exist and are non-empty."
     )
     parser.add_argument("run_dir", nargs="?", default=".",
                         help="Run directory (default: cwd)")
+    # ------------------------------------------------------------------ #
+    # PREFLIGHT (advisory) — the SAME extraction, surfaced at HANDOFF time
+    # instead of only at the end-of-Phase-2 audit.
+    #
+    # Every input this gate reads (`phase1/input_doc/`, `input/docs/`) already
+    # exists BEFORE the rtl_gen step waives to the AI author. But the gate is
+    # only invoked from the flow-compliance sweep, so an author who was told
+    # "write the RTL here" and nothing else discovers that the spec ALSO made
+    # e.g. `plugin_output/declaration.json` mandatory only after synthesis, DFT
+    # and a multi-minute LEC have run and final_audit FAILs. Measured on a real
+    # sign-off run: an entire Phase-2 pipeline was spent to report one missing
+    # file that takes seconds to write and was fully knowable at handoff.
+    #
+    # --preflight lists the artifacts still OUTSTANDING and always exits 0, so
+    # it can be printed in the handoff message without ever blocking a run.
+    # ------------------------------------------------------------------ #
+    parser.add_argument("--preflight", action="store_true",
+                        help="ADVISORY: list spec-declared artifacts still "
+                             "outstanding and exit 0 (never blocks). For the "
+                             "authoring handoff, before RTL is written.")
     args = parser.parse_args(argv)
 
     run_dir = Path(args.run_dir).resolve()
@@ -297,6 +343,9 @@ def main(argv: list[str] | None = None) -> int:
     for c in clauses:
         check = _check_artifact(run_dir, c["artifact_path"])
         results.append({**c, **check})
+
+    if args.preflight:
+        return _emit_preflight(results)
 
     # Determine overall verdict
     fails = [r for r in results if r["status"] != "PASS"]
