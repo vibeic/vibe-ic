@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+
+import pytest
 from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
@@ -146,11 +148,22 @@ def test_paid_debt_must_be_removed_from_the_baseline(tmp_path):
 def test_shipped_baseline_matches_the_shipped_tree():
     """The gate must be GREEN on main as landed — a gate that ships red is
     the failure mode it exists to remove (#306: 62 of 72 gates could describe
-    a run but not stop one)."""
+    a run but not stop one).
+
+    Only meaningful on a CLEAN checkout: the shipped baseline describes the
+    TRACKED tree, so a developer whose benchmark-data holds local run
+    artifacts would see a mismatch that is theirs, not the repo's. Skipping
+    loudly there is what keeps this test from being deleted by the first
+    person it annoys; CI runs clean and enforces it for real."""
     r = subprocess.run([sys.executable, str(_PROG)],
                        capture_output=True, text=True, timeout=300)
     if r.returncode == 2:
-        return  # no benchmark-data tree in this checkout — honest SKIP
+        pytest.skip("no benchmark-data tree in this checkout")
+    root = next((b / E._DEFAULT_ROOT_REL for b in Path(_PROG).resolve().parents
+                 if (b / E._DEFAULT_ROOT_REL).is_dir()), None)
+    if root is not None and E._working_tree_dirt(root):
+        pytest.skip("working tree under the scan root is dirty — the shipped "
+                    "baseline describes the TRACKED tree; CI runs clean")
     assert r.returncode == 0, r.stdout + r.stderr
 
 
@@ -181,3 +194,68 @@ def test_baseline_never_stores_the_paths_it_lists(tmp_path):
     assert entries and all(len(e) == 32 and e.isalnum() for e in entries)
     # ...and it still functions as a register: the known debt does not fire.
     assert _run(tmp_path, bl).returncode == 0
+
+
+# ── the CI-vs-local divergence that shipped, and its two fixes ──────────────
+# The first version judged plain filesystem existence and its baseline was
+# generated from a working tree holding UNTRACKED artifacts: green locally,
+# RED in CI (12 baseline entries "resolved", 9 new dangling). A gate whose
+# verdict depends on what is lying in the author's tree is the false
+# certificate this gate exists to remove.
+
+def _git(root: Path, *args):
+    subprocess.run(["git", "-C", str(root), *args],
+                   capture_output=True, check=True, timeout=120)
+
+
+def _repo(tmp_path) -> Path:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "t@t")
+    _git(tmp_path, "config", "user.name", "t")
+    return tmp_path
+
+
+def test_untracked_artifact_does_not_satisfy_a_citation(tmp_path):
+    """THE divergence: the proof exists on disk but the repo does not SHIP
+    it. The question is 'does the repo ship the proof', not 'does this
+    machine have it'."""
+    root = _repo(tmp_path)
+    _doc(root, "sub/EV.md", "see `proof.log`\n")
+    _git(root, "add", "sub/EV.md")
+    _git(root, "commit", "-q", "-m", "doc")
+    (root / "sub" / "proof.log").write_text("log\n")     # present, UNtracked
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "proof.log" in r.stdout
+    # ...and tracking it clears the finding.
+    _git(root, "add", "-f", "sub/proof.log")
+    _git(root, "commit", "-q", "-m", "log")
+    assert _run(root, tmp_path / "bl.json").returncode == 0
+
+
+def test_untracked_document_is_not_scanned(tmp_path):
+    """The other direction of the same drift: an untracked document's
+    citations must not enter the register, or the baseline encodes the
+    author's tree and every clean checkout disagrees with it."""
+    root = _repo(tmp_path)
+    _doc(root, "keep.md", "nothing cited here\n")
+    _git(root, "add", "keep.md")
+    _git(root, "commit", "-q", "-m", "keep")
+    _doc(root, "scratch.md", "see `ghost.log`\n")        # untracked document
+    r = _run(root, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "ghost.log" not in r.stdout
+
+
+def test_baseline_write_is_refused_from_a_dirty_tree(tmp_path):
+    """The bug that shipped, now impossible: a baseline recorded from a tree
+    with untracked/modified paths describes the author's laptop."""
+    root = _repo(tmp_path)
+    _doc(root, "EV.md", "see `a.log`\n")
+    _git(root, "add", "EV.md")
+    _git(root, "commit", "-q", "-m", "doc")
+    (root / "dirt.txt").write_text("untracked\n")
+    r = _run(root, tmp_path / "bl.json", "--write-baseline")
+    assert r.returncode == 1, r.stdout
+    assert "DIRTY tree" in r.stdout
+    assert not (tmp_path / "bl.json").exists()

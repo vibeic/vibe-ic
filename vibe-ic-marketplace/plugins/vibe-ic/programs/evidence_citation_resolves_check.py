@@ -72,6 +72,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -115,6 +116,36 @@ _DISCLOSED_OUT_OF_SCOPE = (
     "(measured 2026-07-26: 124 of 129 citations unresolved)")
 
 
+def tracked_files(root: Path) -> Optional[set]:
+    """The set of git-TRACKED paths under `root`, or None when that cannot be
+    determined (not a repo / no git).
+
+    LOAD-BEARING, and learned the hard way: the first version of this gate
+    judged plain filesystem existence, so its baseline was computed from a
+    working tree that also held UNTRACKED artifacts. It was green locally and
+    RED in CI — 12 baseline entries "resolved" (their citing documents are
+    untracked, so the citation was never produced) and 9 new dangling
+    citations appeared. A gate whose verdict depends on what happens to be
+    lying in the author's tree is a false certificate of exactly the kind
+    this gate exists to remove.
+
+    The question is "does the REPO ship the proof", not "does this machine
+    have it" — so an untracked local artifact must NOT satisfy a citation.
+    """
+    try:
+        r = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                           capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    out = r.stdout.decode("utf-8", "replace")
+    names = [n for n in out.split("\0") if n]
+    if not names:
+        return None
+    return {(root / n).resolve() for n in names}
+
+
 def _is_citation(tok: str) -> bool:
     if not tok.lower().endswith(_EVIDENCE_EXT):
         return False
@@ -123,7 +154,8 @@ def _is_citation(tok: str) -> bool:
     return True
 
 
-def resolve_citation(md: Path, cite: str, root: Path) -> Optional[Path]:
+def resolve_citation(md: Path, cite: str, root: Path,
+                     tracked: Optional[set] = None) -> Optional[Path]:
     """Resolve `cite` against the ladder: the citing document's directory,
     then each ancestor up to (and including) `root`. Returns the resolved
     path or None.
@@ -140,7 +172,8 @@ def resolve_citation(md: Path, cite: str, root: Path) -> Optional[Path]:
     while True:
         cand = base / cite
         try:
-            if cand.is_file():
+            if cand.is_file() and (tracked is None
+                                   or cand.resolve() in tracked):
                 return cand
         except OSError:
             pass
@@ -151,12 +184,17 @@ def resolve_citation(md: Path, cite: str, root: Path) -> Optional[Path]:
         base = base.parent
 
 
-def scan(root: Path) -> Tuple[List[Dict[str, str]], int, int]:
-    """Return (dangling, cited_total, docs_scanned)."""
+def scan(root: Path,
+         tracked: Optional[set] = None) -> Tuple[List[Dict[str, str]], int, int]:
+    """Return (dangling, cited_total, docs_scanned). Only TRACKED documents
+    are scanned and only TRACKED artifacts satisfy a citation when `tracked`
+    is available — see `tracked_files`."""
     dangling: List[Dict[str, str]] = []
     cited = 0
     docs = 0
     for md in sorted(root.rglob("*.md")):
+        if tracked is not None and md.resolve() not in tracked:
+            continue
         try:
             text = md.read_text(errors="replace")
         except OSError:
@@ -166,12 +204,26 @@ def scan(root: Path) -> Tuple[List[Dict[str, str]], int, int]:
             if not _is_citation(tok):
                 continue
             cited += 1
-            if resolve_citation(md, tok, root) is None:
+            if resolve_citation(md, tok, root, tracked) is None:
                 dangling.append({
                     "doc": str(md.relative_to(root)),
                     "citation": tok,
                 })
     return dangling, cited, docs
+
+
+def _working_tree_dirt(root: Path) -> List[str]:
+    """Untracked or modified paths under `root`, as git reports them. Empty
+    when the tree is clean or git is unavailable (the caller degrades)."""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "status", "--porcelain",
+                            "--", "."], capture_output=True, text=True,
+                           timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if r.returncode != 0:
+        return []
+    return [ln[3:] for ln in r.stdout.splitlines() if ln.strip()]
 
 
 def _key(d: Dict[str, str]) -> str:
@@ -230,10 +282,25 @@ def main(argv=None) -> int:
 
     baseline_path = (Path(args.baseline) if args.baseline
                      else root.parent / _BASELINE_NAME)
-    dangling, cited, docs = scan(root)
+    tracked = tracked_files(root)
+    dangling, cited, docs = scan(root, tracked)
     now = sorted({_key(d) for d in dangling})
 
     if args.write_baseline:
+        # REFUSE to record a baseline from a DIRTY tree. This is not caution,
+        # it is the bug that shipped: the first baseline was generated from a
+        # working tree holding untracked artifacts, so it was green locally
+        # and RED in CI (12 entries "resolved", 9 new dangling). A debt
+        # register describing the author's laptop is worse than none.
+        dirty = _working_tree_dirt(root)
+        if dirty:
+            print(f"[FAIL] refusing to write a baseline from a DIRTY tree — "
+                  f"{len(dirty)} untracked/modified path(s) under {root} "
+                  f"would change what resolves. Generate it from a clean "
+                  f"checkout (e.g. `git worktree add --detach <tmp> HEAD`).")
+            for d in dirty[:5]:
+                print(f"   {d}")
+            return 1
         prev = _load_baseline(baseline_path) or []
         if prev and len(now) > len(prev):
             print(f"[FAIL] refusing to GROW the baseline "
@@ -283,6 +350,11 @@ def main(argv=None) -> int:
     if not explicit_root:
         print(f"  NOT scanned    : {_DISCLOSED_OUT_OF_SCOPE[0]} — "
               f"{_DISCLOSED_OUT_OF_SCOPE[1]}")
+    if tracked is None:
+        print("  WARNING        : git-tracked file set unavailable — falling "
+              "back to plain filesystem existence. An UNTRACKED local "
+              "artifact can satisfy a citation here, so this run is weaker "
+              "than CI's and its baseline must not be committed.")
     print(f"  unresolved now : {len(now)}"
           + (f"   baseline: {len(base)}" if base is not None else
              "   (no baseline recorded)"))
