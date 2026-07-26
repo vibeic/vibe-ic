@@ -80,19 +80,62 @@ def _asset_keys(entry: Dict[str, Any]) -> List[str]:
             and (k.endswith(_ASSET_SUFFIXES) or k in _ASSET_KEYS_EXTRA)]
 
 
+_GHCR_REPO = "ghcr.io/vibeic/vibeic-eda"
+
+
+def _image_tag() -> str:
+    """The image the repo currently pins, or an env override."""
+    ov = os.environ.get("VIBEIC_EDA_IMAGE")
+    if ov:
+        return ov
+    for up in Path(__file__).resolve().parents:
+        v = up / "tools" / "vibeic-eda" / "VERSION"
+        if v.is_file():
+            return f"{_GHCR_REPO}:{v.read_text().strip()}"
+    return f"{_GHCR_REPO}:latest"
+
+
+def _resolve_target(container: str):
+    """('exec', name) | ('run', image) | None — how to reach the PDK tree.
+
+    #408 finding 1 is that the asset half never actually ran. It required a
+    LIVE container named `vibeic-eda`; this host runs `vpp_eda_030` and CI
+    runs none at all, so the half of the gate that resolves declared assets
+    reported SKIPPED everywhere and the check people relied on was the name
+    half alone. An IMAGE is enough to answer the question — `docker run --rm`
+    on the pinned tag reads the same /foss/pdks — so a missing container is no
+    longer a reason not to look.
+    """
+    if container and subprocess.run(
+            ["docker", "exec", container, "true"],
+            capture_output=True, text=True).returncode == 0:
+        return ("exec", container)
+    img = _image_tag()
+    if subprocess.run(["docker", "image", "inspect", img],
+                      capture_output=True, text=True).returncode == 0:
+        return ("run", img)
+    return None
+
+
+def _sh(target, script: str):
+    """Run `script` in the container or the image; returns CompletedProcess."""
+    if target is None:
+        return subprocess.CompletedProcess([], 1, "", "no target")
+    kind, ref = target
+    cmd = (["docker", "exec", ref, "bash", "-lc", script] if kind == "exec"
+           else ["docker", "run", "--rm", "--entrypoint", "bash", ref,
+                 "-lc", script])
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
 def _container_alive(name: str) -> bool:
-    if not name:
-        return False
-    r = subprocess.run(["docker", "exec", name, "true"],
-                       capture_output=True, text=True)
-    return r.returncode == 0
+    """True when the PDK tree is reachable AT ALL — live container OR image."""
+    return _resolve_target(name) is not None
 
 
 def _resolves(container: str, path: str) -> bool:
-    r = subprocess.run(
-        ["docker", "exec", container, "bash", "-lc",
-         f"ls -d {path} >/dev/null 2>&1 && echo OK || echo MISS"],
-        capture_output=True, text=True)
+    r = _sh(_resolve_target(container),
+            f"ls -d {path} >/dev/null 2>&1 && echo OK || echo MISS")
     tail = (r.stdout or "").strip().splitlines()
     return bool(tail) and tail[-1] == "OK"
 
@@ -113,8 +156,7 @@ def shipped_trees(container: str):
         f"find /foss/pdks -maxdepth {_ENUM_DEPTH} -type d -name libs.ref "
         f"2>/dev/null | while read d; do p=$(dirname \"$d\"); "
         f"[ -d \"$p/libs.tech\" ] && readlink -f \"$p\"; done | sort -u")
-    r = subprocess.run(["docker", "exec", container, "bash", "-lc", script],
-                       capture_output=True, text=True)
+    r = _sh(_resolve_target(container), script)
     if r.returncode != 0:
         return {}
     out = {}
@@ -126,9 +168,7 @@ def shipped_trees(container: str):
 
 
 def _resolved(container: str, path: str):
-    r = subprocess.run(
-        ["docker", "exec", container, "bash", "-lc",
-         f"readlink -f {path} 2>/dev/null"], capture_output=True, text=True)
+    r = _sh(_resolve_target(container), f"readlink -f {path} 2>/dev/null")
     for line in reversed(r.stdout.splitlines()):
         s = line.strip()
         if s.startswith("/"):

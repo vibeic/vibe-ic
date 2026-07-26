@@ -66,22 +66,36 @@ def test_the_sentinel_without_a_directory_is_not_a_finding(tmp_path):
     assert "custom_auto_detect" not in names
 
 
-def test_an_unreachable_image_skips_the_asset_half_explicitly(tmp_path):
+def test_an_unreachable_image_skips_the_asset_half_explicitly(tmp_path,
+                                                              monkeypatch):
     """It must NOT be folded into the PASS. "I could not look" and "I looked
-    and it is clean" are different claims."""
+    and it is clean" are different claims.
+
+    #408: unreachable now means NEITHER a live container NOR the pinned
+    image. A bogus container name alone no longer suffices, because the
+    check falls back to `docker run --rm` on the image — that fallback is
+    the fix for the asset half never running at all.
+    """
+    monkeypatch.setattr(C, "_resolve_target", lambda name: None)
     rep = C.audit(REGISTRY, "definitely_not_a_container")
     assert rep["asset_check"] == "SKIPPED"
     assert rep["assets_checked"] == 0
+    # The subprocess half cannot see the monkeypatch, so make the IMAGE
+    # unreachable the way a real docker-less host would: point the override
+    # at a tag that does not exist.
+    import os
+    env = dict(os.environ, VIBEIC_EDA_IMAGE="ghcr.io/vibeic/no-such-image:0")
     r = subprocess.run(
         [sys.executable, str(_PROGRAMS / "pdk_registry_selectable_check.py"),
          "--container", "definitely_not_a_container"],
-        capture_output=True, text=True)
+        capture_output=True, text=True, env=env)
     assert "SKIPPED" in r.stdout and "not a clean result" in r.stdout
 
 
-def test_the_name_half_still_runs_without_an_image(tmp_path):
+def test_the_name_half_still_runs_without_an_image(tmp_path, monkeypatch):
     """A gate that skipped entirely on a docker-less host would do nothing in
     CI. The name rule is pure registry data."""
+    monkeypatch.setattr(C, "_resolve_target", lambda name: None)
     def _typo(d):
         for e in d["pdks"]:
             if e.get("name") == "asap7":
