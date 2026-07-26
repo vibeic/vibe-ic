@@ -67,8 +67,17 @@ sky130A cells of this campaign — sha256-identical (`e7feff2c…`), authored
 once and re-verified per cell, not re-authored per plugin version. Phase 1 was
 **SKIPPED** in this run (`vibe_ic_one_shot.json`): the L-docs are the
 campaign-shared extraction (PDK-independent), not a fresh pull from the input
-docs. Also disclosed: EM / IR-drop sign-off reports are not shipped in this
-folder (see `waivers.json` / campaign backlog).
+docs.
+
+**EM / IR-drop (updated 2026-07-26):** this line previously read *"EM / IR-drop
+sign-off reports are not shipped in this folder (see `waivers.json` / campaign
+backlog)"*. That is no longer true, and the pointer was dangling in any case —
+`waivers.json` holds only the two FPGA cap-gap waivers and never carried an
+EM/IR entry. The reports are now in `reports/phase3/`, REGENERATED against this
+folder's own `phase3/stage3/pnr/routed.def` rather than re-run from RTL, and
+they are not campaign output: `EM_IR_REGENERATED.md` documents the static set
+(`em.*`, `ir_drop.*`) and `DYNAMIC_IR_REGENERATED.md` the transient set
+(`dynamic_ir.json`), each with its stated limits and its own script + log.
 
 One cell (IC × PDK) of the open-PDK matrix. This is the 3rd cell in the
 matrix to reach an independently re-derived PASS (after spm × IHP-SG13G2 and
