@@ -56,7 +56,12 @@ come from `_commercial_pdk`, which reads them from a private config.
 
 USAGE
 -----
-    python3 nda_tracked_tree_scan.py [--repo DIR] [--json OUT]
+    python3 nda_tracked_tree_scan.py [--repo DIR] [--ref REF] [--json OUT]
+
+`--ref origin/main` judges what is PUBLISHED rather than what this
+checkout happens to hold; without it the gate WARNS when the checkout
+is behind its upstream, because a clean verdict on a stale tree
+describes a tree nobody is serving.
 
 EXIT CODES
 ----------
@@ -106,7 +111,7 @@ def _patterns():
     return out
 
 
-def _tracked(repo: Path) -> List[str]:
+def _tracked(repo: Path, ref: str = None) -> List[str]:
     """Tracked paths, with their git index MODE.
 
     The mode is load-bearing. A tracked SYMLINK (120000) whose target is not
@@ -123,8 +128,9 @@ def _tracked(repo: Path) -> List[str]:
     symlinks outright, claiming the path scan already covered them, but the
     path scan reads the LINK's own name and never the target it points at.
     """
-    r = subprocess.run(["git", "-C", str(repo), "ls-files", "-s"],
-                       capture_output=True, text=True)
+    cmd = (["git", "-C", str(repo), "ls-files", "-s"] if ref is None
+           else ["git", "-C", str(repo), "ls-tree", "-r", ref])
+    r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         return []
     out = []
@@ -138,12 +144,42 @@ def _tracked(repo: Path) -> List[str]:
     return out
 
 
-def scan(repo: Path) -> dict:
+def upstream_gap(repo: Path, ref: str = None):
+    """(behind, ahead) versus the upstream this checkout tracks, or None.
+
+    WHY THE GATE REPORTS THIS. Run against a STALE checkout, a clean verdict
+    describes a tree nobody is serving, and a FINDING describes a leak that
+    may have been fixed upstream already. Both happened: scanning a fork's
+    local HEAD reported a token that its published `origin/main` does not
+    contain — the checkout was simply behind. "Clean here" and "clean in
+    what is published" are different claims and the gate must not blur them.
+    """
+    if ref is not None:
+        return None
+    up = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--abbrev-ref",
+         "--symbolic-full-name", "@{upstream}"],
+        capture_output=True, text=True)
+    if up.returncode != 0:
+        return None
+    counts = subprocess.run(
+        ["git", "-C", str(repo), "rev-list", "--left-right", "--count",
+         f"{up.stdout.strip()}...HEAD"], capture_output=True, text=True)
+    if counts.returncode != 0:
+        return None
+    try:
+        behind, ahead = (int(x) for x in counts.stdout.split())
+    except ValueError:
+        return None
+    return (up.stdout.strip(), behind, ahead)
+
+
+def scan(repo: Path, ref: str = None) -> dict:
     pats = _patterns()
     if not pats:
         return {"configured": False, "findings": [], "scanned": 0}
     findings, scanned, links, wanted = [], 0, 0, []
-    for mode, rel in _tracked(repo):
+    for mode, rel in _tracked(repo, ref):
         path_hits = [i for i, p in enumerate(pats) if p.search(rel)]
         if path_hits:
             findings.append({"file": rel, "carrier": "PATH",
@@ -172,7 +208,7 @@ def scan(repo: Path) -> dict:
     # tokens stay inside this process either way — passing them to `git grep`
     # would put the literal in a command line, visible in `ps` to every user
     # on the host.
-    for rel, text in _blobs(repo, wanted):
+    for rel, text in _blobs(repo, wanted, ref):
         scanned += 1
         content_hits = {}
         for i, p in enumerate(pats):
@@ -183,11 +219,12 @@ def scan(repo: Path) -> dict:
             findings.append({"file": rel, "carrier": "CONTENT",
                              "patterns": sorted(content_hits),
                              "hits": sum(content_hits.values())})
-    return {"configured": True, "findings": findings,
-            "scanned": scanned, "symlinks": links}
+    return {"configured": True, "findings": findings, "ref": ref or "(index)",
+            "scanned": scanned, "symlinks": links,
+            "upstream": upstream_gap(repo, ref)}
 
 
-def _blobs(repo: Path, rels: List[str]):
+def _blobs(repo: Path, rels: List[str], ref: str = None):
     """Yield (path, text) for each tracked path, via one `cat-file --batch`."""
     if not rels:
         return
@@ -202,7 +239,9 @@ def _blobs(repo: Path, rels: List[str]):
     # than a broken one.
     def _feed():
         try:
-            proc.stdin.write(("".join(f":{r}\n" for r in rels)).encode())
+            prefix = ":" if ref is None else f"{ref}:"
+            proc.stdin.write(
+                ("".join(f"{prefix}{r}\n" for r in rels)).encode())
             proc.stdin.close()
         except (BrokenPipeError, OSError):
             pass
@@ -233,11 +272,15 @@ def _blobs(repo: Path, rels: List[str]):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--repo", default=".")
+    ap.add_argument("--ref", default=None,
+                    help="scan this REF's tree instead of the index — e.g. "
+                         "`origin/main` to judge what is actually PUBLISHED "
+                         "rather than what this checkout happens to hold")
     ap.add_argument("--json", dest="json_out")
     a = ap.parse_args(argv)
     repo = Path(a.repo).resolve()
 
-    rep = scan(repo)
+    rep = scan(repo, a.ref)
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(rep, indent=2) + "\n")
 
@@ -245,6 +288,12 @@ def main(argv=None) -> int:
         print("[SKIP] nda_tracked_tree_scan: no token store configured — "
               "nothing to match. This is NOT a clean result.")
         return 2
+
+    up = rep.get("upstream")
+    if up and up[1]:
+        print(f"[WARN] this checkout is {up[1]} commit(s) BEHIND {up[0]} — the "
+              f"verdict below describes THIS tree, not what is published. "
+              f"Re-run with --ref {up[0]} to judge the published tree.")
 
     if rep["findings"]:
         print(f"[FAIL] {len(rep['findings'])} tracked path(s) carry an NDA "

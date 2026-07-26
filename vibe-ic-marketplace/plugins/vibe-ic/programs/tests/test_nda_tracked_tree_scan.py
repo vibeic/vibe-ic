@@ -145,3 +145,34 @@ def test_large_tree_does_not_hang(repo):
     rep = S.scan(repo)
     assert rep["scanned"] >= 600
     assert rep["findings"] == []
+
+
+def test_ref_scans_the_published_tree_not_the_checkout(repo):
+    """REGRESSION — measured on a real fork.
+
+    Scanning a fork's local HEAD reported a token its published `origin/main`
+    does NOT contain: the checkout was one commit behind the fix. "Clean
+    here" and "clean in what is published" are different claims, and a gate
+    that blurs them either raises a false alarm or gives false comfort
+    depending on which way the clone is stale.
+    """
+    _add(repo, "a.md", f"{TOKEN}\n")
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "dirty"],
+                   check=True)
+    dirty = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                           capture_output=True, text=True).stdout.strip()
+    _add(repo, "a.md", "cleaned upstream\n")
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "clean"],
+                   check=True)
+
+    assert S.scan(repo)["findings"] == [], "the tip is clean"
+    assert S.scan(repo, dirty)["findings"], "the older ref still carries it"
+
+
+def test_a_ref_scan_is_not_vacuous(repo):
+    """A `--ref` that silently enumerated nothing would PASS on everything.
+    The ref's file list must match the index's when they are the same tree."""
+    for i in range(5):
+        _add(repo, f"f{i}.md", "body\n")
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "x"], check=True)
+    assert S.scan(repo, "HEAD")["scanned"] == S.scan(repo)["scanned"] >= 5
