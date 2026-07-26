@@ -703,7 +703,8 @@ def audit_counted(project: Path, strict_timing: bool = False,
                 # there but is not part of what this deliverable publishes, so
                 # its bytes are not the reader's bytes. Silently skipping it
                 # would be a hidden decision.
-                if on_disk.is_file():
+                untracked_leftover = on_disk.is_file()
+                if untracked_leftover:
                     findings.append(ProvenanceFinding(
                         entry_index=i, tool=tool, severity="DISCLOSED",
                         rule="PROVENANCE_OUTPUT_PRESENT_BUT_UNTRACKED",
@@ -787,6 +788,23 @@ def audit_counted(project: Path, strict_timing: bool = False,
                                   "directory nothing has been published yet, "
                                   "so a not-shipped disclosure is itself the "
                                   "fault." if require_outputs_present else "")))
+                    continue
+                if untracked_leftover:
+                    # NOT "does not exist on disk" — it plainly does, and this
+                    # gate said so one finding earlier. Two contradictory
+                    # verdicts on one row is the defect #434 was filed about,
+                    # reproduced by the fix for it. Still a FAULT: the ledger
+                    # declares an output the deliverable does not ship and
+                    # nothing accounts for that. Only the REASON changes.
+                    findings.append(ProvenanceFinding(
+                        entry_index=i, tool=tool,
+                        rule="PROVENANCE_OUTPUT_NOT_SHIPPED_UNDISCLOSED",
+                        detail=f"declared output '{rel_path}' is on this disk "
+                               f"but the published tree does not carry it, and "
+                               f"no disclosure accounts for that; a reader who "
+                               f"clones receives nothing and is told nothing, "
+                               f"while the author sees a file and believes it "
+                               f"shipped"))
                     continue
                 findings.append(ProvenanceFinding(
                     entry_index=i, tool=tool,

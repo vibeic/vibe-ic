@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import heapq
 import json
 import re
 import shutil
@@ -10762,18 +10763,115 @@ def _v466_line_is_block_header(line: str) -> bool:
 # heading is the user's own words and is design evidence.
 # chip-AGNOSTIC: the titles come from the plugin's own schema, never from a
 # chip name or value literal.
+#
+# COMPLETENESS + ROBUSTNESS (third pass). Whole-line equality against ONE
+# table left two measured holes, and the fix for both is the same predicate
+# sitting BETWEEN the two failed rules — not shape-only (too broad, drops the
+# user's real specs) and not literal-equality (too narrow, leaks):
+#
+#   HOLE A — the plugin has TWO layer-title tables, and the guard knew one.
+#   `tools/phase1_engine/render._HUMAN_LAYER_TITLE` (used by
+#   `render_human_docs`, `title = _HUMAN_LAYER_TITLE.get(code, code)` then
+#   `f"# {title}"`) writes the FIRST LINE of every `L*_*.md` human doc, and
+#   its wording differs from `schema.LAYER_TITLES` for 10 of its 14 codes
+#   (L1 L2 L3 L5 L6 L8 L8R L9 L10 L13). Measured: the first line of
+#   `L5_ADI_SPEC.md`, `# L5 — Analog-Digital Interface`, was NOT recognised
+#   as the plugin's own. Inert today — none of those 14 short titles matches
+#   any `_ANALOG_KEYWORDS` pattern, so re-feeding a real `L5_ADI_SPEC.md`
+#   still yields `analog_blocks: []` — but a guard that knows only half of
+#   what the plugin writes is one title edit away from live fabrication.
+#   Note the human table's values already CARRY the layer code
+#   ("L5 — Analog-Digital Interface"), so the code prefix is stripped to
+#   reach the same {code: title} shape as the schema table.
+#
+#   HOLE B — trivial mangling of the rendered heading defeated equality, and
+#   each of these was measured END-TO-END on the pure-digital document as
+#   REPRODUCING the original fabrication (`analog_blocks: ['adc','dac']`):
+#   curly apostrophes for straight ones, edited trailing punctuation, the
+#   closed-ATX form (`## … ##`), a heading truncated / wrapped at a column,
+#   and a lowercased heading. Doc extraction, editors and copy-paste all
+#   produce these.
+#
+# So a heading is the PLUGIN'S OWN when, after normalisation, it matches a
+# known title from EITHER table BY PREFIX. Normalisation neutralises only
+# harmless variation — unicode punctuation folded to ASCII (curly quotes,
+# en/em dashes, NBSP), whitespace collapsed, closing ATX hashes stripped,
+# trailing punctuation ignored, case folded across the WHOLE heading
+# including the layer code — and a truncated heading still matches on
+# its leading run. The truncation arm is one-directional: the candidate may
+# be a PREFIX of a canonical title (a heading that got cut), never a canonical
+# title plus the user's own extra words, because
+# `## L2 - Functional Requirements for the ADC` is the USER'S sentence and
+# must stay evidence. It also carries a length floor, so a stub like
+# `## L5 - Analog` cannot claim a long canonical title by accident.
+# A heading that merely LOOKS L-numbered but matches no known title is still
+# the user's content — the shape-only rule is NOT restored.
+# chip-AGNOSTIC: every canonical string comes from the plugin's own two
+# tables; no chip name, field name or value literal appears here.
+# U+2010..U+2015 (hyphen, non-breaking hyphen, figure/en/em dash, horizontal
+# bar) + U+2212 minus + ASCII hyphen — every dash a renderer or an editor may
+# put between the layer code and its title.
+_V466_TITLE_DASH_CLASS = r'‐-―−\-'
+# The layer code is matched case-INSENSITIVELY for the same reason the title
+# body is casefolded: case is not what makes a line the plugin's own. Folding
+# the title but not the code would leave the guard case-blind on 95% of the
+# line and case-bound on the remaining 5%, and a pipeline that lowercases a
+# heading would walk the whole rendered boilerplate straight back in. It
+# cannot broaden the guard on its own — the title after the code must still
+# match a canonical title, so `## l5 - ADC subsystem: 12-bit SAR ADC` stays
+# the user's evidence.
 _RE_LAYER_CODE_HEADING = re.compile(
-    r'^\s{0,3}#{1,6}\s*(L\d+[A-Za-z]?)\s*[—–‒―-]\s*(\S.*?)\s*$')
-_RE_LAYER_TITLE_DASHES = re.compile(r'[—–‒―-]+')
-_V466_LAYER_TITLES_NORM: Optional[Dict[str, str]] = None
+    r'^\s{0,3}#{1,6}\s*([Ll]\d+[A-Za-z]?)\s*['
+    + _V466_TITLE_DASH_CLASS + r']\s*(\S.*?)\s*$')
+_RE_LAYER_TITLE_DASHES = re.compile('[' + _V466_TITLE_DASH_CLASS + ']+')
+# a CLOSED ATX heading ends with a whitespace-preceded run of hashes
+_RE_LAYER_TITLE_ATX_CLOSE = re.compile(r'\s+#+\s*$')
+# trailing punctuation carries no meaning for identity of a title
+_RE_LAYER_TITLE_TRAIL_PUNCT = re.compile(
+    r'[\s.,;:!?\'"`*_)\]}>' + _V466_TITLE_DASH_CLASS + r']+$')
+# unicode punctuation that doc extraction / editors substitute freely
+_V466_TITLE_UNI_FOLD = {
+    0x2018: "'", 0x2019: "'", 0x201A: "'",   # curly / low single quote
+    0x201B: "'", 0x2032: "'",                # reversed quote, prime
+    0x201C: '"', 0x201D: '"', 0x201E: '"',   # curly / low double quote
+    0x201F: '"', 0x2033: '"',                # reversed quote, dbl prime
+    0x00A0: ' ', 0x2007: ' ', 0x2009: ' ',   # NBSP, figure, thin space
+    0x200A: ' ', 0x202F: ' ', 0x3000: ' ',   # hair, narrow-NBSP, ideogr.
+    0x2026: '...', 0x2044: '/',              # ellipsis, fraction slash
+}
+# A candidate shorter than this may only match a canonical title EXACTLY.
+# Without the floor, `## L5 - Analog` would claim L5's long canonical title
+# by prefix and the user's own stub heading would stop being evidence.
+_V466_MIN_TRUNCATED_TITLE = 12
+_V466_LAYER_TITLES_NORM: Optional[Dict[str, Tuple[str, ...]]] = None
 
 
 def _v466_norm_layer_title(s: str) -> str:
-    """Normalise a heading title for comparison: unify every dash variant,
-    collapse whitespace, casefold. Doc extraction routinely rewrites an
-    em dash to a hyphen, which must not defeat the comparison."""
+    """Normalise a heading title for comparison: fold unicode punctuation to
+    ASCII, unify every dash variant, collapse whitespace, casefold. Doc
+    extraction routinely rewrites an em dash to a hyphen, a straight
+    apostrophe to a curly one and a space to NBSP; none of that changes which
+    title the line is, so none of it may defeat the comparison."""
+    folded = (s or '').translate(_V466_TITLE_UNI_FOLD)
     return re.sub(
-        r'\s+', ' ', _RE_LAYER_TITLE_DASHES.sub('-', s or '')).strip().lower()
+        r'\s+', ' ', _RE_LAYER_TITLE_DASHES.sub('-', folded)).strip().lower()
+
+
+def _v466_norm_layer_title_cmp(s: str) -> str:
+    """`_v466_norm_layer_title` plus trailing-punctuation removal — the form
+    the identity comparison uses. Applied to BOTH sides, so an edited final
+    period / quote / bracket cannot change whether two titles are the same."""
+    return _RE_LAYER_TITLE_TRAIL_PUNCT.sub('', _v466_norm_layer_title(s))
+
+
+def _v466_strip_layer_code_prefix(code: str, title: str) -> str:
+    """`_HUMAN_LAYER_TITLE` values embed the layer code ("L5 — Analog-Digital
+    Interface") while `LAYER_TITLES` values do not. Strip the embedded code so
+    both tables yield the same {code: title-body} shape."""
+    m = re.match(
+        r'^\s*' + re.escape(code) + r'\s*[' + _V466_TITLE_DASH_CLASS
+        + r']\s*(\S.*)$', title or '', re.IGNORECASE)
+    return m.group(1) if m else (title or '')
 
 
 def _v466_load_layer_titles() -> Dict[str, str]:
@@ -10807,28 +10905,109 @@ def _v466_load_layer_titles() -> Dict[str, str]:
     return {}
 
 
-def _v466_plugin_layer_titles() -> Dict[str, str]:
-    """{LAYER_CODE: normalised canonical title}, loaded once."""
+def _v466_load_human_layer_titles() -> Dict[str, str]:
+    """Load the plugin's SECOND layer-title table,
+    `tools/phase1_engine/render._HUMAN_LAYER_TITLE`.
+
+    `render_human_docs` writes the FIRST LINE of every `L*_*.md` human doc
+    from it (`title = _HUMAN_LAYER_TITLE.get(code, code)` then
+    `f"# {title}"`), so those lines are just as much the plugin's own
+    boilerplate as the `schema.LAYER_TITLES` headings — and their wording
+    differs for most codes, which is why one table was not enough.
+
+    Read STATICALLY with `ast`: `render.py` uses package-relative imports and
+    must not be executed just to read a lookup table. Returns {} when the
+    table is unreachable, in which case this half of the guard is inert
+    rather than guessing (the premise test asserts it is NOT inert)."""
+    import ast as _ast
+    here = Path(__file__).resolve()
+    for base in here.parents:
+        cand = base / "tools" / "phase1_engine" / "render.py"
+        if not cand.is_file():
+            continue
+        try:
+            tree = _ast.parse(cand.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - never hard-fail on a lookup table
+            continue
+        for node in tree.body:
+            if not isinstance(node, _ast.Assign):
+                continue
+            if not any(isinstance(t, _ast.Name)
+                       and t.id == "_HUMAN_LAYER_TITLE"
+                       for t in node.targets):
+                continue
+            try:
+                tbl = _ast.literal_eval(node.value)
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(tbl, dict) and tbl:
+                return {str(k).upper(): str(v) for k, v in tbl.items()}
+    try:  # installed-cache layout: the package may already be importable
+        from phase1_engine.render import (  # type: ignore
+            _HUMAN_LAYER_TITLE as _ht)
+        if isinstance(_ht, dict) and _ht:
+            return {str(k).upper(): str(v) for k, v in _ht.items()}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _v466_plugin_layer_titles() -> Dict[str, Tuple[str, ...]]:
+    """{LAYER_CODE: (normalised canonical title, ...)} over BOTH of the
+    plugin's title tables, loaded once. A code can carry more than one
+    canonical wording — e.g. L13 is "Lab / Hardware Calibration (contract +
+    evidence)" in `schema.LAYER_TITLES` and "Lab Calibration (Phase 1:
+    contract; Phase 2: evidence)" in `render._HUMAN_LAYER_TITLE` — and every
+    wording the plugin can emit must be recognised as its own."""
     global _V466_LAYER_TITLES_NORM
     if _V466_LAYER_TITLES_NORM is None:
-        _V466_LAYER_TITLES_NORM = {
-            code: _v466_norm_layer_title(title)
-            for code, title in _v466_load_layer_titles().items()}
+        acc: Dict[str, List[str]] = {}
+        for _loader in (_v466_load_layer_titles,
+                        _v466_load_human_layer_titles):
+            for code, title in (_loader() or {}).items():
+                body = _v466_strip_layer_code_prefix(code, title)
+                norm = _v466_norm_layer_title_cmp(body)
+                if not norm:
+                    continue
+                bucket = acc.setdefault(code, [])
+                if norm not in bucket:
+                    bucket.append(norm)
+        _V466_LAYER_TITLES_NORM = {k: tuple(v) for k, v in acc.items()}
     return _V466_LAYER_TITLES_NORM
 
 
 def _v466_line_is_plugin_layer_title(line: str) -> bool:
     """True ONLY when `line` is a layer heading this plugin's own renderer
-    wrote — i.e. `## L<n> — <that layer's canonical title>`. A user's own
-    L-numbered heading carrying their own words is NOT boilerplate and must
-    keep counting as design evidence."""
-    m = _RE_LAYER_CODE_HEADING.match(line or "")
+    wrote — `## L<n> — <that layer's canonical title>` from
+    `schema.LAYER_TITLES`, or `# L<n> — <that layer's title>` from
+    `render._HUMAN_LAYER_TITLE` — allowing for the harmless mangling that
+    doc extraction, editors and copy-paste introduce: unicode punctuation,
+    NBSP, respaced dashes, closing ATX hashes, edited trailing punctuation,
+    and truncation / wrapping (a cut heading still matches on its leading
+    run).
+
+    A user's own L-numbered heading carrying the user's own words is NOT
+    boilerplate and must keep counting as design evidence — so the
+    truncation arm only ever lets the CANDIDATE be shorter, never the
+    canonical title plus the user's own extra words, and a candidate below
+    `_V466_MIN_TRUNCATED_TITLE` must match exactly."""
+    raw = _RE_LAYER_TITLE_ATX_CLOSE.sub('', line or '')
+    m = _RE_LAYER_CODE_HEADING.match(raw)
     if not m:
         return False
-    canon = _v466_plugin_layer_titles().get(m.group(1).upper())
-    if not canon:
+    canons = _v466_plugin_layer_titles().get(m.group(1).upper())
+    if not canons:
         return False
-    return _v466_norm_layer_title(m.group(2)) == canon
+    cand = _v466_norm_layer_title_cmp(m.group(2))
+    if not cand:
+        return False
+    for canon in canons:
+        if cand == canon:
+            return True
+        if (len(cand) >= _V466_MIN_TRUNCATED_TITLE
+                and canon.startswith(cand)):
+            return True
+    return False
 
 
 def _v466_best_class_match(text: str, pat: str):
@@ -41993,8 +42172,460 @@ _MEMORY_NAME_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Generator-emitted memory-macro identifiers. The #612 word-boundary token
+# test above is deliberately strict and MUST stay strict: it is what keeps
+# PROGRAM / DIAGRAM / HISTOGRAM / diagram_ctrl out of `memories[]`, because
+# their `ram` is a mid-word accident.
+#
+# But memory COMPILERS emit macro cell names in which the memory morpheme is
+# legitimately interior, so the strict token test cannot see it:
+#     fakeram45_2048x39     -> `ram` preceded by `e`
+#     fakeram45_1024x32     -> `ram` preceded by `e`
+#     dffram_1024x32        -> `ram` preceded by `f`
+# (`sky130_sram_1kbyte_1rw1r_32x256_8` is NOT in this class — its `sram` is
+# preceded by `_`, so the #612 clause above already promotes it.)
+#
+# A lexical rule was tried first and abandoned: an "organisation token"
+# (`<digits>x<digits>`) paired with the morpheme, tightened until it was
+# anchored at `_`/string-start, rejected whitespace and leading-zero (hex)
+# operands, and required a digit right after the morpheme.
+# `test_the_tightest_lexical_rule_is_still_wrong_in_both_directions` spells
+# that rule out as a regex, scores it, and states what it gets wrong. Nothing
+# in the promotion path inspects `<digits>x<digits>` any more.
+#
+# The corroboration is taken from OUTSIDE the string instead, from the
+# design's own staged physical-macro artefacts under `input/pdk_local/` —
+# this runner's existing convention for design-staged macro IP, which the L4
+# OTP-IP walker above also reads. STAGING BY SYMLINK COUNTS: see
+# `_staged_macro_scan` for the traversal policy, and
+# `test_this_walker_is_a_superset_of_its_two_siblings` for how this walker
+# compares, per staging shape, with the two other readers of this directory.
+#
+# RESIDUAL: the conjunct that survives is the memory morpheme, so a design
+# that stages `DIAGRAM_16x9.lef` under its own `input/pdk_local/` WILL promote
+# `DIAGRAM_16x9` — it staged a physical macro under that cell name.
+# `test_staged_artifact_is_the_only_lever` asserts that behaviour.
+#
+# FAIL-SAFE: with no project path, or no `input/pdk_local/`, the staged set is
+# empty, and `_is_staged_memory_macro_name` returns False on an empty set — so
+# this clause cannot fire.
+#
+# Chip-AGNOSTIC: LEF / Liberty / GDS / behavioural-model file naming plus the
+# LEF `MACRO <cell>` keyword. No chip-class string literal participates; the
+# evidence is read from whatever the design under analysis staged, not from a
+# built-in list of macro names.
+_MEMORY_NAME_TOKEN_ANYWHERE_RE = re.compile(
+    r"(ram|rom|sram|dram|cache|regfile|fifo|mem)",
+    re.IGNORECASE,
+)
+# Tried in order, first match wins.
+# `test_artefact_suffixes_are_ordered_so_no_suffix_masks_a_longer_one`
+# re-derives from the tuple whether that order decides any stem, so an entry
+# that DOES overlap an existing one — `.gz`, `.lib.gz` — fails there instead
+# of silently truncating a stem.
+#
+# `.gds.gz` has its own entry because `.gz` is not in this tuple.
+_MEMORY_MACRO_ARTEFACT_SUFFIXES = (
+    ".gds.gz", ".gdsii", ".lef", ".lib", ".gds", ".db", ".sv", ".v",
+)
+_MEMORY_MACRO_LEF_DECL_RE = re.compile(
+    r"^[ \t]*MACRO[ \t]+([A-Za-z_][A-Za-z0-9_$.\[\]-]*)",
+    re.MULTILINE,
+)
+_MEMORY_MACRO_STAGE_REL = ("input", "pdk_local")
+# Total directory entries the scan may CONSUME, across the whole walk.
+_MEMORY_MACRO_MAX_FILES = 4096
+# Entries any ONE directory may consume before the scan moves on to the next
+# pending directory (see the fair-share note in `_staged_macro_scan`).
+_MEMORY_MACRO_DIR_SLICE = 64
+# Entries RETAINED from any ONE directory listing. `heapq.nsmallest` keeps the
+# lexicographically smallest N, which makes the listing deterministic. It does
+# NOT make the listing cheap — see `_capped_dir_listing` for what was measured.
+_MEMORY_MACRO_MAX_DIR_ENTRIES = 4096
+_MEMORY_MACRO_MAX_LEF_BYTES = 8 * 1024 * 1024
+# Cap on the reported truncation events themselves, so a pathological tree
+# cannot turn the anomaly report into the anomaly.
+_MEMORY_MACRO_MAX_TRUNCATION_EVENTS = 16
 
-def _v1_6_441_is_useful_memory_entry(entry) -> bool:
+
+def _capped_dir_listing(directory, cap):
+    """`(entries, n_seen)` — the `cap` smallest entries of `directory` in path
+    order, plus how many entries the listing actually had.
+
+    `n_seen > len(entries)` is exactly the condition "this listing was cut",
+    which the caller reports.
+
+    `heapq.nsmallest` is fed a GENERATOR deliberately, so that only `cap` Path
+    objects are retained rather than one per entry. That is NOT a memory bound
+    on the call: `_MEMORY_MACRO_MAX_FILES` is what bounds the walk.
+    `test_capped_listing_is_linear_in_the_directory_not_constant` measures
+    what the generator does and does not buy.
+
+    Propagates OSError — `iterdir()` raises it lazily, inside `nsmallest` — so
+    the caller decides what an unreadable directory means."""
+    n_seen = 0
+
+    def _counted():
+        nonlocal n_seen
+        for entry in directory.iterdir():
+            n_seen += 1
+            yield entry
+
+    return heapq.nsmallest(cap, _counted()), n_seen
+
+
+def _staged_macro_scan(project):
+    """`(cell_names, truncation_events)` for the design at `project`.
+
+    `cell_names` is the lower-cased set of physical-macro CELL NAMES staged
+    under `<project>/input/pdk_local/**`, read two independent ways from the
+    same open standards:
+      * the file STEM of every `*.lef / *.lib / *.gds / *.gds.gz / *.gdsii /
+        *.db / *.v / *.sv` artefact;
+      * every `MACRO <cell>` declaration inside a staged `*.lef` (one LEF may
+        abstract several cells).
+
+    `truncation_events` is a list of `{"reason": ..., ...}` dicts, empty on a
+    scan that read everything it reached. The reason codes this scan emits are
+    enumerated in the block comment below the entry loop, with the test that
+    drives each.
+    `_v1_6_426_emit_memories` is what turns it into something a reader sees;
+    see the `staged_macro_scan_truncated` block there.
+
+    `project` being None, not a path, or having no `input/pdk_local/` yields
+    `(frozenset(), [])` — nothing was staged and nothing was lost.
+    `input/pdk_local/` existing but not being STATABLE is a different fact and
+    yields a `staged_root_unreadable` event.
+    Chip-AGNOSTIC."""
+    if project is None:
+        return frozenset(), []
+    try:
+        root = Path(project).joinpath(*_MEMORY_MACRO_STAGE_REL)
+    except (TypeError, ValueError, AttributeError):
+        return frozenset(), []
+    try:
+        if not root.is_dir():
+            return frozenset(), []
+    except OSError as exc:
+        # NOT the same as "no such directory": `is_dir()` returns False for a
+        # missing path and RAISES here, so this branch means the entry is
+        # THERE and its status could not be read — EACCES when
+        # `input/pdk_local` is a symlink into a directory this process may not
+        # search. Returning an empty set with an empty event list would make
+        # that indistinguishable from a design that stages nothing.
+        return frozenset(), [{
+            "reason": "staged_root_unreadable",
+            "path": str(_MEMORY_MACRO_STAGE_REL[0]) + "/"
+                    + str(_MEMORY_MACRO_STAGE_REL[1]),
+            "error": type(exc).__name__,
+        }]
+
+    names: set = set()
+    truncation: List[Dict[str, Any]] = []
+    n_events = [0]
+    seen_dirs: set = set()
+    # Each element is a mutable cursor `[directory, entries_or_None, index]`.
+    pending: List[list] = []
+
+    def _rel(path) -> str:
+        """Path as written relative to `input/pdk_local/`. The walk carries
+        in-tree paths, not a symlink's resolved target, so a reported path is
+        the one the design wrote under `root`."""
+        try:
+            return str(Path(path).relative_to(root))
+        except (ValueError, TypeError):
+            return str(path)
+
+    def _note(event) -> None:
+        """Record a truncation event, itself bounded — and say so when the
+        bound bites, because a truncated truncation report is the defect this
+        whole block exists to close, one level up."""
+        n_events[0] += 1
+        if len(truncation) < _MEMORY_MACRO_MAX_TRUNCATION_EVENTS:
+            truncation.append(event)
+
+    def _enqueue(directory) -> None:
+        """Queue `directory` unless a directory with the same RESOLVED
+        identity is already queued.
+
+        `stat()` follows symlinks, so the key is the `(st_dev, st_ino)` of the
+        TARGET. That is what makes a directory-symlink loop terminate:
+        `input/pdk_local/self -> .` and `vendor/up -> ..` both resolve onto a
+        directory that has already been queued, so they are dropped instead of
+        walked again.
+
+        The caller has already stat'ed `directory` (that is how it knows it is
+        a directory), so a failure here needs the file to change underneath
+        the walk — a TOCTOU window, not pinned by a fixture. It is reported
+        rather than dropped: a directory the walk decided to enter and then
+        did not is the shape of loss this block exists to make visible."""
+        try:
+            st = directory.stat()
+        except OSError as exc:
+            _note({
+                "reason": "directory_unreadable",
+                "path": _rel(directory),
+                "error": type(exc).__name__,
+            })
+            return
+        key = (st.st_dev, st.st_ino)
+        if key in seen_dirs:
+            return
+        seen_dirs.add(key)
+        pending.append([directory, None, 0])
+
+    # ---------------------------------------------------------------------
+    # SYMLINKS ARE FOLLOWED — file symlinks AND directory symlinks, and
+    # whether the target sits inside the project or outside it. A design that
+    # points `input/pdk_local/fakeram45` at `/opt/ip/fakeram45` counts as
+    # having staged it, the same as one that copied it.
+    #
+    # Following a symlink can land on four things. Each is decided here; the
+    # first three are pinned by their own test, the fourth by
+    # `test_symlink_into_an_unsearchable_directory_is_reported`:
+    #   * NEITHER DIRECTORY NOR REGULAR FILE — a broken symlink, but also a
+    #     FIFO, socket or device node. `is_dir()` and `is_file()` both return
+    #     False, so the entry loop skips it and it never reaches `_enqueue`. A
+    #     dangling `foo.lef` is not evidence that `foo` was staged.
+    #   * DIRECTORY LOOP — `_enqueue` keys every directory on the
+    #     `(st_dev, st_ino)` of its followed target, so a self- or
+    #     ancestor-pointing symlink is queued at most once. The entry budget
+    #     bounds the walk even if identity were unavailable.
+    #   * TARGET OUTSIDE THE PROJECT — followed, deliberately. What this
+    #     function returns from a followed target is cell NAMES (file stems,
+    #     and `MACRO <cell>` headers out of `*.lef` bodies); reported event
+    #     paths go through `_rel`, which yields the in-tree path.
+    #   * TARGET THERE BUT NOT STATABLE — `is_dir()` RAISES rather than
+    #     returning False, which is what a symlink into a directory this
+    #     process may not search produces. It becomes an `entry_unreadable`
+    #     event; `test_on_the_unsearchable_shape_the_siblings_do_not_report_
+    #     either` measures what the two sibling readers do on the same shape.
+    #
+    # ORDER IS FAIR-SHARE, NOT DIRECTORY-NAME ORDER. Each pending directory
+    # yields at most `_MEMORY_MACRO_DIR_SLICE` entries and then goes to the
+    # back of the queue, so which directory gets scanned is not decided by its
+    # name. `test_large_sibling_directory_cannot_starve_the_real_macro` drives
+    # the case a plain breadth-first walk loses.
+    #
+    # WHERE THIS SCAN GIVES UP, AND WHAT IT SAYS WHEN IT DOES. An enumeration,
+    # not a guarantee — the reason codes this function emits, each against the
+    # test that drives it:
+    #
+    #   staged_root_unreadable      root `is_dir()` raised
+    #                               <- test_staged_root_symlinked_into_an_
+    #                                  unsearchable_directory_is_reported
+    #   directory_unreadable        `iterdir()` raised
+    #                               <- test_an_unreadable_directory_is_
+    #                                  reported_like_a_cap
+    #   directory_unreadable        `_enqueue` stat raised — TOCTOU ONLY,
+    #                               NOT PINNED; see `_enqueue`
+    #   directory_listing_capped    one listing exceeded the per-dir cap
+    #                               <- test_large_sibling_directory_cannot_
+    #                                  starve_the_real_macro
+    #   entry_unreadable            `is_dir()`/`is_file()` raised
+    #                               <- test_symlink_into_an_unsearchable_
+    #                                  directory_is_reported
+    #   lef_macro_headers_not_read  LEF over the byte cap
+    #                               <- test_oversized_lef_body_is_reported_
+    #                                  and_the_stem_still_counts
+    #   lef_body_unreadable         LEF read (or re-stat) raised
+    #                               <- test_an_unreadable_lef_body_loses_the_
+    #                                  cells_it_abstracts_and_says_so
+    #                                  (the re-stat half is TOCTOU, unpinned)
+    #   entry_budget_exhausted      budget gone with work still queued
+    #                               <- test_exhausted_budget_is_reported_in_
+    #                                  l9_and_on_the_affected_rows
+    #   truncation_report_capped    the report's own bound bit
+    #                               <- test_the_truncation_report_says_when_
+    #                                  it_is_itself_truncated
+    #
+    # Three places deliberately emit NOTHING, because no cell name is lost at
+    # them: an entry whose name carries none of the artefact suffixes
+    # (it names no cell under this convention), an entry that is neither
+    # directory nor regular file (broken symlink / FIFO / socket / device —
+    # nothing is staged there), and `_enqueue` declining a directory identity
+    # it has already walked.
+    #
+    # `test_every_oserror_handler_in_the_scan_reports_or_is_listed_here`
+    # checks the handlers in this function that NAME OSError against the
+    # source; see its docstring for what that check does and does not cover.
+    # ---------------------------------------------------------------------
+    _enqueue(root)
+    budget = _MEMORY_MACRO_MAX_FILES
+    while pending and budget > 0:
+        cursor = pending.pop(0)
+        current, entries, index = cursor
+        if entries is None:
+            try:
+                entries, n_seen = _capped_dir_listing(
+                    current, _MEMORY_MACRO_MAX_DIR_ENTRIES)
+            except OSError as exc:
+                # Not a cap, but the same consequence: evidence this scan
+                # was supposed to read and did not.
+                _note({
+                    "reason": "directory_unreadable",
+                    "path": _rel(current),
+                    "error": type(exc).__name__,
+                })
+                continue
+            if n_seen > len(entries):
+                _note({
+                    "reason": "directory_listing_capped",
+                    "path": _rel(current),
+                    "entries": n_seen,
+                    "cap": _MEMORY_MACRO_MAX_DIR_ENTRIES,
+                })
+            cursor[1] = entries
+        take = min(_MEMORY_MACRO_DIR_SLICE, len(entries) - index, budget)
+        for path in entries[index:index + take]:
+            try:
+                if path.is_dir():
+                    _enqueue(path)
+                    continue
+                if not path.is_file():
+                    # Broken symlink, FIFO, socket, device node.
+                    continue
+            except OSError as exc:
+                # The entry is THERE and the walk could not tell what it is,
+                # so whatever it might have staged is not in `names`.
+                # `is_dir()` / `is_file()` return False for a missing or
+                # non-traversable path rather than raising, so reaching here
+                # means something else — EACCES for
+                # `input/pdk_local/fakeram45 -> <vault>/fakeram45` when
+                # `<vault>` is not searchable. Same consequence as the
+                # unreadable directory above, so it gets the same treatment.
+                _note({
+                    "reason": "entry_unreadable",
+                    "path": _rel(path),
+                    "error": type(exc).__name__,
+                })
+                continue
+            fname = path.name
+            low = fname.lower()
+            stem = ""
+            for suffix in _MEMORY_MACRO_ARTEFACT_SUFFIXES:
+                if low.endswith(suffix) and len(low) > len(suffix):
+                    stem = fname[: len(fname) - len(suffix)]
+                    break
+            if not stem:
+                continue
+            names.add(stem.lower())
+            if low.endswith(".lef"):
+                # A LEF can abstract several cells; read the MACRO headers.
+                # Both failures below keep the STEM (already in `names`) and
+                # lose only the extra cells this LEF may abstract — the same
+                # loss the byte cap causes, so it carries a reason code for
+                # the same reason.
+                try:
+                    size = path.stat().st_size
+                except OSError as exc:
+                    # TOCTOU only: `is_file()` above stat'ed this same path.
+                    # No fixture opens this window; reported, not pinned.
+                    _note({
+                        "reason": "lef_body_unreadable",
+                        "path": _rel(path),
+                        "error": type(exc).__name__,
+                    })
+                    continue
+                if size > _MEMORY_MACRO_MAX_LEF_BYTES:
+                    # The stem above was still recorded; only the additional
+                    # cells this LEF may abstract are lost.
+                    _note({
+                        "reason": "lef_macro_headers_not_read",
+                        "path": _rel(path),
+                        "bytes": size,
+                        "cap": _MEMORY_MACRO_MAX_LEF_BYTES,
+                    })
+                    continue
+                try:
+                    body = path.read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    # Reachable without a race: a staged `bundle.lef` whose
+                    # own mode denies read still stats fine, so every cell it
+                    # abstracts beyond its own stem is lost.
+                    _note({
+                        "reason": "lef_body_unreadable",
+                        "path": _rel(path),
+                        "error": type(exc).__name__,
+                    })
+                    continue
+                for m in _MEMORY_MACRO_LEF_DECL_RE.finditer(body):
+                    names.add(m.group(1).lower())
+        index += take
+        budget -= take
+        cursor[2] = index
+        if index < len(entries):
+            # Fair share: unfinished directories go to the BACK of the queue.
+            pending.append(cursor)
+    if pending:
+        # The loop condition is `pending and budget > 0`, so work still
+        # pending here means the budget — not the tree — ended the walk.
+        _note({
+            "reason": "entry_budget_exhausted",
+            "cap": _MEMORY_MACRO_MAX_FILES,
+            "unfinished_dirs": len(pending),
+            "first_unfinished": _rel(pending[0][0]),
+        })
+    if n_events[0] > len(truncation):
+        truncation.append({
+            "reason": "truncation_report_capped",
+            "cap": _MEMORY_MACRO_MAX_TRUNCATION_EVENTS,
+            "events_total": n_events[0],
+        })
+    return frozenset(names), truncation
+
+
+def _staged_macro_cell_names(project) -> frozenset:
+    """The staged cell-name set alone, for callers that only decide promotion
+    and have nowhere to report a truncated scan. `_staged_macro_scan` is the
+    full result; see it for the traversal and symlink policy."""
+    return _staged_macro_scan(project)[0]
+
+
+def _staged_clause_could_have_promoted(entry) -> bool:
+    """True for a REJECTED row that the staged-macro clause could have
+    promoted if the scan had been complete: no structural field, no #612
+    word-boundary token (a row with one is already promoted and never reaches
+    here), and a memory morpheme somewhere in the name — i.e. the row failed
+    on the staged-set membership test and nothing else.
+
+    Used only to decide which candidate rows carry the truncation note, so the
+    note is attached to the rows it can actually be true of."""
+    if not isinstance(entry, dict):
+        return False
+    if any(entry.get(k) for k in ("depth", "width", "port_count")):
+        return False
+    name = entry.get("name")
+    if not name:
+        return False
+    name = str(name)
+    if _MEMORY_NAME_TOKEN_RE.search(name):
+        return False
+    return bool(_MEMORY_NAME_TOKEN_ANYWHERE_RE.search(name))
+
+
+def _is_staged_memory_macro_name(name, staged_macro_names) -> bool:
+    """True iff `name` carries a memory morpheme ANYWHERE **and** the design
+    under analysis actually staged a physical macro under that exact cell name
+    (`staged_macro_names`, as produced by `_staged_macro_cell_names`).
+
+    The staged artefact is the whole of the new evidence. Nothing here
+    inspects `<digits>x<digits>`; see the block comment above for why that
+    token was abandoned, and the RESIDUAL there for what the surviving
+    morpheme conjunct still lets through.
+
+    Says NOTHING about which number in the name is depth and which is width —
+    this predicate only decides PROMOTION. depth/width stay None and the entry
+    keeps its `low_confidence` marker."""
+    if not name or not staged_macro_names:
+        return False
+    name = str(name)
+    if not _MEMORY_NAME_TOKEN_ANYWHERE_RE.search(name):
+        return False
+    return name.lower() in staged_macro_names
+
+
+def _v1_6_441_is_useful_memory_entry(entry, staged_macro_names=None) -> bool:
     """Return True iff the memory entry carries genuine macro evidence.
 
     Structural fields (depth / width / port_count) are the primary signal —
@@ -42007,13 +42638,27 @@ def _v1_6_441_is_useful_memory_entry(entry) -> bool:
     I/O pin, an UPPER_SNAKE EDA config key (FP_CORE_UTIL / PL_TARGET_DENSITY /
     WITH_CSR / *_PC), or a PDK/FPGA platform token (GF180MCU / Cyclone10LP /
     sky130_fd_sc_hd). Those go to memory_candidates[], never memories[].
-    Chip-AGNOSTIC: pure structural / name-shape gate."""
+
+    A SECOND, NARROWER name-only clause admits macro cell names whose morpheme
+    is interior and therefore invisible to the #612 word-boundary test
+    (`fakeram45_2048x39`). It fires only when the design under analysis staged
+    a physical macro under that exact cell name — see
+    `_is_staged_memory_macro_name`, and the block comment above it.
+
+    `staged_macro_names` defaults to None — no corroboration available — in
+    which case the second clause is inert, which is the fail-SAFE answer for a
+    caller that cannot supply the design's staged-macro set.
+
+    Chip-AGNOSTIC: structural fields, name-token shape, and the design's own
+    staged LEF / Liberty / GDS artefacts."""
     if not isinstance(entry, dict):
         return False
     if any(entry.get(k) for k in ("depth", "width", "port_count")):
         return True
     name = entry.get("name")
-    return bool(name and _MEMORY_NAME_TOKEN_RE.search(str(name)))
+    if name and _MEMORY_NAME_TOKEN_RE.search(str(name)):
+        return True
+    return _is_staged_memory_macro_name(name, staged_macro_names)
 
 
 def _organic_405_mark_rejected(entry: dict) -> dict:
@@ -42734,12 +43379,30 @@ def _v1_6_511_emit_instantiation_template(
     l9["no_internal_wires_in_input"] = no_iw_flag
 
 
-def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
+def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
     """v1.6.426 — for #303 P2 ORGANIC. Walk all input_doc/*.txt
     bodies, run the memory prose walker, dedupe across files, and
     populate `l9["memories"]`. Also stamps the `no_memories_in_input`
     sentinel so downstream gates can distinguish "input has no memory
     prose" from "field missing — schema regression".
+
+    `project` is the design root. It is read ONLY to collect the cell
+    names the design staged under `input/pdk_local/**` (LEF / Liberty /
+    GDS / behavioural model), which is what the promotion gate uses to
+    corroborate a macro cell name. Symlinks under that directory are
+    followed, so the read can reach outside the project when the design
+    staged its IP that way — see `_staged_macro_scan` for the policy.
+    Optional and fail-SAFE: when omitted, or when the design stages no
+    macros, the staged set is empty and the corroborated clause cannot
+    fire.
+
+    When that scan reports a shortfall, this emitter writes it to
+    three places: `L9.staged_macro_scan_truncated` (the reason codes),
+    a `[WARN]` on stderr, and `staged_macro_scan:
+    "truncated:input/pdk_local"` on each `memory_candidates[]` row that
+    failed ONLY the staged-set test. What the scan reports is
+    enumerated in the block comment inside `_staged_macro_scan`; that
+    enumeration, not this docstring, is the statement about coverage.
 
     v1.6.441 — for #317 P3 ORGANIC. Reject bare-keyword null rows
     (name/depth/width all None) at emit time. Rejected rows are
@@ -42779,6 +43442,11 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
     # emitter has not yet stamped top_module — the cascade then
     # only applies tiers 2-4 (ISA-ext / shape-gate / noun-deny).
     l9_top_module = l9.get("top_module") if isinstance(l9, dict) else None
+    # Corroboration from OUTSIDE the document prose: the cell names this
+    # design actually staged as physical macros. Collected once per emit.
+    # `staged_scan_cut` is empty on a complete scan and carries reason
+    # codes when a cap stopped it short — see the report block below.
+    staged_macro_names, staged_scan_cut = _staged_macro_scan(project)
     if isinstance(extracted, dict):
         for fname, body in extracted.items():
             if not body or not isinstance(body, str):
@@ -42796,12 +43464,35 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
                     continue
                 seen.add(key)
                 # v1.6.441 — for #317 P3. Null-row gate.
-                if _v1_6_441_is_useful_memory_entry(entry):
+                if _v1_6_441_is_useful_memory_entry(
+                        entry, staged_macro_names):
+                    # Provenance: record when the row owes its promotion to
+                    # a staged physical macro rather than to its own name
+                    # shape, so a reader can trace the evidence back to the
+                    # artefact on disk.
+                    if (not any(entry.get(k) for k in
+                                ("depth", "width", "port_count"))
+                            and not _MEMORY_NAME_TOKEN_RE.search(
+                                str(entry.get("name") or ""))):
+                        entry["promotion_evidence"] = (
+                            "staged_macro_artifact:input/pdk_local")
                     aggregated.append(entry)
                 else:
                     if len(rejected) < 32:
-                        rejected.append(
-                            _organic_405_mark_rejected(entry))
+                        # ORGANIC #405 marks the row as provenance rather
+                        # than deferred work, and returns a COPY; stamp the
+                        # copy, which is the object that reaches L9.
+                        row = _organic_405_mark_rejected(entry)
+                        # Observable truncation, at the row where the loss
+                        # lands. This row failed ONLY the staged-set
+                        # membership test, and the scan that built that set
+                        # did not finish, so its absence from `memories[]`
+                        # is not a finding about the design.
+                        if (staged_scan_cut
+                                and _staged_clause_could_have_promoted(row)):
+                            row["staged_macro_scan"] = (
+                                "truncated:input/pdk_local")
+                        rejected.append(row)
                     continue
                 if len(aggregated) >= 32:
                     break
@@ -42814,6 +43505,49 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict) -> None:
     # bare-keyword mentions" from "field missing — schema regression".
     l9["memory_candidates"] = rejected
     l9["no_memory_candidates_in_input"] = len(rejected) == 0
+    # MAKE THE TRUNCATION OBSERVABLE.
+    #
+    # A truncated scan is fail-SAFE in direction — a smaller staged set can
+    # only lose a promotion, not invent one — but a lost promotion nobody can
+    # see is the defect this change exists to fix, wearing a cap: `memories`
+    # comes back EMPTY and nothing in the output says why. The shape of the
+    # report is borrowed from the one this module already uses for a silent
+    # drop (`extract_text_pipeline`, v1.6.93 / issue #26): a stderr WARN plus
+    # a reason-coded record. Three places:
+    #
+    #   * stderr `[WARN]`, while the run is happening;
+    #   * `L9.staged_macro_scan_truncated` — reason codes, in the document
+    #     this emitter OWNS and that Phase 2, `l9_floorplan_contract_check`
+    #     and a human reviewer all read;
+    #   * `staged_macro_scan` on the affected `memory_candidates[]` rows
+    #     (stamped above), so the shortfall is legible from the row where it
+    #     landed rather than only from a sibling key.
+    #
+    # Emitted ONLY when something was actually cut: a complete scan adds no
+    # key. The text emitted here carries no `low_confidence` /
+    # `deterministic_stub` tag, so it does not read as deferred work — the
+    # confusion ORGANIC #405 had just untangled.
+    if staged_scan_cut:
+        l9["staged_macro_scan_truncated"] = {
+            "_comment": (
+                "The input/pdk_local/** scan that corroborates a "
+                "generator-emitted memory-macro cell name did NOT finish. "
+                "A memory_candidates[] row marked "
+                "staged_macro_scan=truncated:input/pdk_local may be a real "
+                "staged macro this scan never reached — verify by hand."),
+            "root": "input/pdk_local",
+            "events": staged_scan_cut,
+            "candidate_rows_affected": sum(
+                1 for e in rejected
+                if isinstance(e, dict)
+                and e.get("staged_macro_scan") == "truncated:input/pdk_local"),
+        }
+        print("[WARN] staged-macro scan under input/pdk_local was truncated "
+              "(%s); a memory macro may be missing from L9.memories[] — see "
+              "L9.staged_macro_scan_truncated"
+              % ", ".join(sorted({str(e.get("reason"))
+                                  for e in staged_scan_cut})),
+              file=sys.stderr)
     # v1.6.453 — for #327 P3 ORGANIC. Recompute the
     # `no_memories_in_input` flag from BOTH `memories` and
     # `memory_candidates` so the boolean is consistent with the
@@ -44613,7 +45347,10 @@ def gen_l9_integration_spec(project: Path,
     # RAM / ROM / cache / register-file blocks. Chip-AGNOSTIC: pure
     # regex over open-standard memory naming prose; no chip-class
     # string literal participates.
-    _v1_6_426_emit_memories(content, extracted)
+    # `project` is threaded in so the promotion gate can corroborate a
+    # generator-emitted macro cell name against the design's own staged
+    # LEF / Liberty / GDS under `input/pdk_local/`.
+    _v1_6_426_emit_memories(content, extracted, project)
     # v1.6.509 — for #351 P2 ORGANIC. Populate L9.memory_map[] by
     # walking Markdown / AsciiDoc / RST pipe-table address-range
     # rows (`| 0xSTART .. 0xEND | <region> |`). Pre-v1.6.509 the

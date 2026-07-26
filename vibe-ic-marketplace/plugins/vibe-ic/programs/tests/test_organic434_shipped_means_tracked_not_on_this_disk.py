@@ -177,3 +177,51 @@ def test_the_real_tracked_corpus_is_clean_and_not_vacuously_so():
         verified += c["verified_present"] + c["verified_relocated"]
     assert failed == [], failed
     assert verified > 0, "clean but vacuous: nothing was actually verified"
+
+
+def test_a_present_but_untracked_output_is_never_called_absent(tmp_path):
+    """Found by the #438 triage, in the fix for #434 itself.
+
+    An untracked-but-present declared output with no disclosure produced BOTH
+    `PROVENANCE_OUTPUT_PRESENT_BUT_UNTRACKED` ("is on this disk") and
+    `PROVENANCE_OUTPUT_FILE_MISSING` ("does not exist on disk") — two
+    contradictory verdicts on one row, which is the exact complaint #434 was
+    filed about, reproduced by its own repair.
+
+    The VERDICT was never wrong: this is a real fault, and it stays fatal. Only
+    the REASON was false, and a false reason sends the reader to look for a
+    file that is sitting in front of them.
+    """
+    root = _cell(tmp_path, in_repo=True, track_ledger=True, track_output=False)
+    # strip the disclosure so nothing accounts for the absence
+    led = root / "provenance.jsonl"
+    rec = json.loads(led.read_text().strip())
+    rec.pop("outputs_pruned_at_publish", None)
+    rec.pop("outputs_pruned_reason", None)
+    led.write_text(json.dumps(rec) + "\n")
+
+    verdict, findings, _ = G.audit_counted(root)
+    assert verdict == "FAIL"
+    rules = _rules(findings)
+    assert "PROVENANCE_OUTPUT_NOT_SHIPPED_UNDISCLOSED" in rules, rules
+    assert "PROVENANCE_OUTPUT_FILE_MISSING" not in rules, rules
+    detail = next(f.detail for f in findings
+                  if f.rule == "PROVENANCE_OUTPUT_NOT_SHIPPED_UNDISCLOSED")
+    assert "does not exist on disk" not in detail
+
+
+def test_a_genuinely_absent_output_still_says_FILE_MISSING(tmp_path):
+    """The paired half. Renaming every absence would lose the distinction
+    between 'never written' and 'written and not shipped', which are different
+    repairs."""
+    root = _cell(tmp_path, in_repo=True, track_ledger=True, track_output=False)
+    (root / "phase2" / "netlist.v").unlink()
+    led = root / "provenance.jsonl"
+    rec = json.loads(led.read_text().strip())
+    rec.pop("outputs_pruned_at_publish", None)
+    rec.pop("outputs_pruned_reason", None)
+    led.write_text(json.dumps(rec) + "\n")
+
+    verdict, findings, _ = G.audit_counted(root)
+    assert verdict == "FAIL"
+    assert "PROVENANCE_OUTPUT_FILE_MISSING" in _rules(findings)
