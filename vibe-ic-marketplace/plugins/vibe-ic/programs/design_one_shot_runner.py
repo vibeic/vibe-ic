@@ -2237,6 +2237,68 @@ def step_reused_ip_consume(project: Path,
         extras=res)
 
 
+def _rtl_predating_digests(project: Path,
+                           digest_paths: List[str]
+                           ) -> Optional[Dict[str, Any]]:
+    """Is there RTL on disk that is OLDER than the digests just staged?
+
+    ``step_rtl_gen`` tells the author "MANDATORY **before authoring**: open
+    <digest>". On every handoff path that sentence is emitted AFTER the digests
+    are written — so whenever RTL already exists, the instruction describes an
+    order that did not happen and cannot now happen. The author (which has, by
+    then, finished) is given no signal that its work predates the knowledge.
+
+    This is not a race and not a guess: the two mtimes are on disk and this
+    function reads them. MEASURED on `spm x sky130A` (v1.6.4, campaign_v164) —
+    the run that motivated it:
+
+        03:10:51  phase2/stage1/rtl/spm.v      <- RTL authored
+        03:12:51  phase2/stage1/lessons.md     <- staged, 120 s LATER
+        03:12:51  phase2/stage1/ic_expert_db.md
+
+    and reproduced on a controlled re-run of the same project (RTL 15:00:55,
+    digests 15:00:59). The `ic_expert_db.md` staged there carried the rule that
+    names that design's exact anti-pattern — "for a serial-parallel multiplier
+    do NOT author the accumulate-then-shift form ... use the SYSTOLIC carry-save
+    array" — and the RTL on disk was that anti-pattern. Applying the rule the
+    digest already contained moved the SS sign-off corner from -6.55 ns to
+    +3.68 ns post-route. The knowledge was present, correct and matched; it
+    simply arrived after the file it was meant to shape.
+
+    Returns None when nothing predates (the normal "author from scratch" path,
+    where the existing MANDATORY wording is exactly right), else a dict of the
+    evidence. chip-AGNOSTIC: reads mtimes and a directory listing, no design,
+    class or PDK literal. Best-effort — any error returns None so a stat
+    failure can never block the WAIVE this decorates.
+    """
+    if not digest_paths:
+        return None
+    try:
+        rtl_dir = _pl.rtl_dir(project)
+        if not rtl_dir.is_dir():
+            return None
+        srcs = sorted(p for p in rtl_dir.rglob("*")
+                      if p.is_file() and p.suffix in (".v", ".sv"))
+        if not srcs:
+            return None
+        digest_mtime = min(Path(d).stat().st_mtime for d in digest_paths
+                           if Path(d).is_file())
+        older = [p for p in srcs if p.stat().st_mtime < digest_mtime]
+        if not older:
+            return None
+        rtl_mtime = min(p.stat().st_mtime for p in older)
+        _iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S",  # noqa: E731
+                                       time.localtime(t))
+        return {"count": len(older),
+                "rtl_files": [p.name for p in older],
+                "rtl_dir": str(rtl_dir),
+                "rtl_mtime_iso": _iso(rtl_mtime),
+                "digest_mtime_iso": _iso(digest_mtime),
+                "lag_s": round(digest_mtime - rtl_mtime, 3)}
+    except Exception:
+        return None
+
+
 def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]:
     """Stage the captured-knowledge digests for an LLM RTL author and return
     ``(hint_text, extras)``.
@@ -2284,13 +2346,17 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
             pass
     except Exception:
         pass
+    # Did the RTL this handoff talks about already exist when the digests
+    # landed? If so "before authoring" is counterfactual — see _rtl_predating.
+    _stale = _rtl_predating_digests(
+        project, [p for p in (digest_path, db_digest_path) if p])
     lessons_hint = (
         f"\nMANDATORY before authoring: open `{digest_path}` ({n_lessons} "
         f"chip-AGNOSTIC genre-convention lessons) and APPLY every section "
         f"whose '**When to apply**' matches this design's genre — these are "
         f"captured general topology/convention patterns, NOT per-problem "
         f"answers."
-        if digest_path else "")
+        if digest_path and not _stale else "")
     db_hint = (
         f"\nDUAL-TRACK (optional second opinion): `{db_digest_path}` holds "
         f"{n_db} IC Expert DB design-class lesson(s) matched to THIS design "
@@ -2298,13 +2364,43 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
         f"For a hard design, author an INDEPENDENT second attempt guided by "
         f"it and keep whichever attempt the gates PASS — measured to recover "
         f"designs the primary digest misses (union lift)."
-        if db_digest_path else "")
+        if db_digest_path and not _stale else "")
+    reaudit_hint = ""
+    if _stale:
+        _srcs = ", ".join(f"`{n}`" for n in _stale["rtl_files"][:6])
+        if len(_stale["rtl_files"]) > 6:
+            _srcs += f" (+{len(_stale['rtl_files']) - 6} more)"
+        _tracks = []
+        if digest_path:
+            _tracks.append(f"`{digest_path}` ({n_lessons} chip-AGNOSTIC "
+                           f"genre-convention lessons)")
+        if db_digest_path:
+            _tracks.append(f"`{db_digest_path}` ({n_db} IC Expert DB "
+                           f"design-class lesson(s) matched to THIS design)")
+        reaudit_hint = (
+            f"\nRE-AUDIT REQUIRED — this knowledge arrived AFTER the RTL, so "
+            f"it cannot have informed it. {_stale['count']} RTL file(s) "
+            f"({_srcs}) already existed when the digests were staged (oldest "
+            f"RTL mtime {_stale['rtl_mtime_iso']} vs digest "
+            f"{_stale['digest_mtime_iso']}). Open "
+            + " and ".join(_tracks) +
+            f", then RE-CHECK the EXISTING RTL against every section that "
+            f"matches this design and RE-AUTHOR whatever violates one. Do NOT "
+            f"assume the RTL already applies them — it was written before "
+            f"they were staged. Both tracks are MANDATORY on this path: the "
+            f"design-class track is the one that carries architecture/timing "
+            f"craft, and an unreviewed anti-pattern survives to sign-off.")
     extras: Dict[str, Any] = {"lessons_digest": digest_path,
                               "lessons_count": n_lessons}
     if db_digest_path:
         extras["ic_expert_db_digest"] = db_digest_path
         extras["ic_expert_db_count"] = n_db
-    return lessons_hint + db_hint, extras
+    if _stale:
+        # Machine-readable, so a gate or a later step can act on it instead of
+        # the fact living only inside a prose hint nobody parses.
+        extras["rtl_predates_authoring_knowledge"] = True
+        extras["rtl_predating_evidence"] = _stale
+    return lessons_hint + db_hint + reaudit_hint, extras
 
 
 def step_rtl_gen(project: Path, ic_class: str,
