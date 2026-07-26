@@ -141,3 +141,133 @@ def test_cell_model_prep_combines_primitives():
     assert model in prep
     assert "cat " in prep and combined in prep
     assert "cp " in prep  # fallback when no primitives.v exists
+
+
+# ══════════════════════════════════════════════════════════════════════
+# PDK derived from the netlist ATPG will ACTUALLY run on
+#
+# The self-heal above used to sit AFTER the PDK check, which made it
+# unreachable in the one case it exists for: the caller sniffs the PDK
+# from the GENERIC netlist, that netlist names no library cells, so the
+# caller passes an unsupported value and run_fault returned
+# `unsupported pdk` before ever resolving the mapped sibling that would
+# have identified the library.
+#
+# Measured on a real converged cell: the orchestrator sent
+# `--pdk unmapped` for a design whose mapped netlist carries 285 sky130
+# cells. ATPG never started (faults_total null), and the step recorded a
+# disclosed capability gap stating the OSS engine could not handle the
+# netlist — every clause of which was false. With the PDK derived from
+# the resolved netlist the same command measures 96.79% stuck-at over
+# 998 faults and emits scan_netlist.v / atpg_coverage.rpt / cut_netlist.v.
+#
+# Direction 1 of each pair below is the case that must STILL refuse.
+# ══════════════════════════════════════════════════════════════════════
+
+def _cells_of(pdk: str) -> str:
+    """A netlist body instantiating that PDK's own configured flop cell."""
+    cell = str(far.PDK_CONFIG[pdk]["dff_cells"]).split(",")[0].strip()
+    return ("module foo_top(a, y); input a; output y;\n"
+            f"  {cell} r0 (.CLK(a), .D(y), .Q(y));\n"
+            "endmodule\n")
+
+
+def test_prefix_table_is_derived_from_pdk_config_not_a_second_table():
+    """Adding a PDK to PDK_CONFIG must teach the sniff about it."""
+    prefixes = far.pdk_cell_prefixes()
+    assert set(prefixes) == set(far.PDK_CONFIG), (
+        "sniff and PDK_CONFIG have drifted apart")
+    for pdk, pres in prefixes.items():
+        first = str(far.PDK_CONFIG[pdk]["dff_cells"]).split(",")[0].strip()
+        assert any(first.startswith(p) for p in pres), (pdk, first, pres)
+
+
+def test_every_configured_pdk_is_recognised_from_its_own_cells():
+    for pdk in far.PDK_CONFIG:
+        assert far.sniff_pdk_from_netlist(_cells_of(pdk)) == pdk
+
+
+def test_generic_netlist_yields_no_pdk(tmp_path):
+    """DIRECTION 1 — nothing to derive from, so derive nothing."""
+    assert far.sniff_pdk_from_netlist(_GENERIC) is None
+    assert far.sniff_pdk_from_netlist("") is None
+
+
+def test_unknown_library_yields_no_pdk():
+    """DIRECTION 1 — a real mapped netlist for a library we have no config
+    for must NOT be silently attributed to a configured one."""
+    assert far.sniff_pdk_from_netlist(_MAPPED) is None
+
+
+def test_unsupported_pdk_still_refuses_when_nothing_can_be_derived(tmp_path):
+    """DIRECTION 1, end to end: the honest error survives.
+
+    A generic netlist with NO mapped sibling gives the sniff nothing, so
+    `unsupported pdk` must still be returned rather than a guess.
+    """
+    synth = _synth(tmp_path)
+    (synth / "netlist.v").write_text(_GENERIC)
+    rc, rep = far.run_fault(
+        tmp_path, "phase2/stage2/synth/netlist.v", "clk", "unmapped",
+        95.0, 1, run_transition=False)
+    assert rc == 2, rep
+    assert "unsupported pdk" in rep.get("error", "")
+    assert rep.get("pdk_sniff"), "the refusal must say why it could not derive"
+
+
+def test_pdk_is_derived_from_the_mapped_sibling_not_the_generic_netlist(tmp_path):
+    """DIRECTION 2: the case that was unreachable.
+
+    The caller's value is unsupported and the requested netlist is
+    generic — but a mapped sibling names a configured library, so the
+    PDK is derived from it. Asserted on the derivation, not on a full
+    ATPG run (which needs the container).
+    """
+    synth = _synth(tmp_path)
+    (synth / "netlist.v").write_text(_GENERIC)
+    (synth / "foo_top_synth.v").write_text(_cells_of("sky130"))
+    resolved, _ = far.resolve_mapped_netlist(
+        tmp_path, "phase2/stage2/synth/netlist.v")
+    assert resolved == "phase2/stage2/synth/foo_top_synth.v"
+    assert far.sniff_pdk_from_netlist(
+        far._read_netlist_text(tmp_path, resolved)) == "sky130"
+
+
+def test_a_valid_caller_pdk_is_never_overridden(tmp_path):
+    """The sniff is a fallback, not an override.
+
+    A caller that names a configured PDK keeps it even when the netlist's
+    cells belong to a different configured library — otherwise this would
+    silently retarget a deliberate cross-library run.
+    """
+    synth = _synth(tmp_path)
+    (synth / "netlist.v").write_text(_cells_of("gf180"))
+    assert far.PDK_CONFIG.get("sky130") is not None
+    # sky130 is a configured PDK, so the None-branch that sniffs is never
+    # entered; the derivation helper would have said gf180.
+    assert far.sniff_pdk_from_netlist(_cells_of("gf180")) == "gf180"
+
+
+def test_unsupported_pdk_no_longer_short_circuits_before_the_self_heal(tmp_path):
+    """The BEHAVIOURAL discriminator — no new symbol is referenced.
+
+    Every other test in this block names a function the parent tree does
+    not have, so on the parent they raise AttributeError: they assert
+    this change's SHAPE, not the defect's presence, and are regression
+    guards rather than evidence.
+
+    This one calls only `run_fault`, which both trees have, and asserts a
+    property of the RESULT: with a mapped sibling present, the run must
+    not die with `unsupported pdk`. On the parent it does exactly that
+    (the PDK check preceded the self-heal). Here it gets past that point
+    and fails for some later, environment-dependent reason instead —
+    which is why the assertion is on the absence of that specific error,
+    not on success.
+    """
+    synth = _synth(tmp_path)
+    (synth / "netlist.v").write_text(_GENERIC)
+    (synth / "foo_top_synth.v").write_text(_cells_of("sky130"))
+    _rc, rep = far.run_fault(
+        tmp_path, "phase2/stage2/synth/netlist.v", "clk", "unmapped",
+        95.0, 1, run_transition=False)
+    assert "unsupported pdk" not in str(rep.get("error", "")), rep
