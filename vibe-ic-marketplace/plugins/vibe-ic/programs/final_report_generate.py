@@ -89,6 +89,16 @@ AUDIT_TIMEOUT_VERDICT = "AUDIT_TIMEOUT"
 # or the compliance tool is missing). Kept distinct from AUDIT_TIMEOUT.
 AUDIT_NOT_RUN_VERDICT = "UNKNOWN"
 
+# ORGANIC #428 — the bucket a step lands in when the audit text carries
+# NO verdict line for it. This is NOT the compliance verdict `MISSING`
+# ("a required output is absent"): it means "this renderer could not
+# read a verdict for the step at all". Booking the two together is what
+# let a parse gap masquerade as a blocking-artefact gap and silently
+# move steps out of PASS/FAIL/SKIPPED into MISSING, so the roll-up table
+# and the checker tally quoted three lines above it disagreed on the
+# FAIL count with nothing marking either as counting a different thing.
+NO_VERDICT = "NO-VERDICT-IN-AUDIT"
+
 VERDICT_SYM = {
     "PASS": "✅",
     "WAIVED-DEFERRED": "⚠️",
@@ -96,9 +106,23 @@ VERDICT_SYM = {
     "VACUOUS-PASS": "🟦",
     "FAIL": "❌",
     "MISSING": "❓",
+    "DEFERRED-BY-UPSTREAM": "🔗",
+    "SKIPPED-SETUP-REQUIRED": "🛠️",
     "AUDIT_TIMEOUT": "⏳",
     "UNKNOWN": "❔",
+    # Deliberately the SAME glyph the per-step tables already print for an
+    # unreadable verdict, so the per-step view and the roll-up agree.
+    NO_VERDICT: "?",
 }
+
+# Canonical roll-up print order. Any bucket the audit produces that is
+# NOT listed here is still printed (appended, sorted) — the roll-up must
+# never silently drop a bucket, or its rows stop summing to its own Total.
+ROLLUP_ORDER = (
+    "PASS", "VACUOUS-PASS", "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM",
+    "SKIPPED-CONDITION", "SKIPPED-SETUP-REQUIRED", "FAIL", "MISSING",
+    NO_VERDICT,
+)
 STAGE_TITLE = [
     ("stage1", "Stage 1 — RTL generation & verification"),
     ("stage2", "Stage 2 — Synthesis + DFT"),
@@ -169,7 +193,7 @@ def _split_skipped_by_stage(
     midflow = 0
     for s in flow.get("steps", []):
         sid = str(s.get("id"))
-        if verdicts.get(sid, "MISSING") != "SKIPPED-CONDITION":
+        if verdicts.get(sid, NO_VERDICT) != "SKIPPED-CONDITION":
             continue
         if _is_manufacturing_step(s):
             mfg += 1
@@ -546,9 +570,117 @@ def _run_audit(project: Path,
     return text, overall
 
 
+# ORGANIC #428 — the step-id half of the verdict-line matcher.
+#
+# `flow_compliance_check.py` prints one line per step as
+#     "  ✓ [PASS             ] Step <id>: <name>  (<stage>)"
+# and `<id>` is whatever the flow YAML declares. The legacy alternation
+# `([0-9]+|[AM][0-9]+|P0)` enumerated only the numeric / `A#` / `M#` /
+# `P0` shapes, so every OTHER lettered id the flow grew (`D1`, `FS1`,
+# `DT1`, `DT2`, `DT3`, …) matched NOTHING — its real verdict was never
+# read, and `.get(sid, "MISSING")` then booked it as the compliance
+# verdict MISSING. That is how one run's roll-up table reported
+# FAIL=3 / MISSING=6 while the checker tally quoted verbatim a few lines
+# above it — and `phase23_completion_audit.json` — said FAIL=4 /
+# MISSING=1 over the same 63 steps.
+#
+# The id shape is now GENERIC (an optional short alpha prefix followed by
+# digits), so a step id added to the flow tomorrow is read, not silently
+# reclassified. chip-AGNOSTIC: step ids are flow structure, never chip,
+# vendor or SKU names.
+STEP_ID_RE = r"[A-Za-z]{0,4}[0-9]+"
+_VERDICT_LINE_RE = re.compile(
+    r"\[\s*([A-Z][A-Z_-]+?)\s*\]\s*Step\s+(" + STEP_ID_RE + r")\s*:"
+)
+
+
 def _parse_verdicts(audit_text: str) -> Dict[str, str]:
-    pat = re.compile(r"\[\s*([A-Z][A-Z_-]+?)\s*\]\s*Step\s+([0-9]+|[AM][0-9]+|P0)\s*:")
-    return {m.group(2): m.group(1).strip() for m in pat.finditer(audit_text)}
+    return {m.group(2): m.group(1).strip()
+            for m in _VERDICT_LINE_RE.finditer(audit_text)}
+
+
+# The checker's own tally line, e.g.
+#   "  PASS=35  FAIL=0  MISSING=0  WAIVED-DEFERRED=3  SKIPPED=22  VACUOUS-PASS=3"
+# MISSING may carry a "(N blocked-by-upstream of step X)" parenthetical.
+_TALLY_TOKEN_RE = re.compile(r"\b([A-Z][A-Z-]*[A-Z])=(\d+)")
+# The tally prints SKIPPED-CONDITION under the short label `SKIPPED`.
+_TALLY_LABEL_TO_BUCKET = {
+    "PASS": "PASS",
+    "FAIL": "FAIL",
+    "MISSING": "MISSING",
+    "WAIVED-DEFERRED": "WAIVED-DEFERRED",
+    "DEFERRED-BY-UPSTREAM": "DEFERRED-BY-UPSTREAM",
+    "SKIPPED": "SKIPPED-CONDITION",
+    "SKIPPED-CONDITION": "SKIPPED-CONDITION",
+    "SKIPPED-SETUP-REQUIRED": "SKIPPED-SETUP-REQUIRED",
+    "VACUOUS-PASS": "VACUOUS-PASS",
+}
+# The buckets `flow_compliance_check.py` prints UNCONDITIONALLY on its
+# tally line. A line missing any of them is not the tally.
+TALLY_MANDATORY_BUCKETS = frozenset(
+    {"PASS", "FAIL", "MISSING", "WAIVED-DEFERRED"})
+
+
+def _parse_audit_tally(audit_text: str) -> Optional[Dict[str, int]]:
+    """ORGANIC #428 — read `flow_compliance_check.py`'s OWN per-verdict
+    tally line out of the audit text, keyed by the same bucket names the
+    roll-up uses.
+
+    This is the line the report already quotes verbatim inside its
+    ```-fence, and it is what `phase23_completion_audit.json` serialises
+    `step_counts` from. Because it comes from the SAME `audit_text`
+    string as `_parse_verdicts`, comparing the two can never be a
+    stale-file comparison: they are two readings of one process's output.
+
+    Returns None when the audit text carries no tally line at all (audit
+    skipped / timed out / tool unavailable) — the caller must then say so
+    rather than invent agreement. chip-AGNOSTIC: pure text arithmetic.
+
+    A candidate line must carry the FULL mandatory quartet the checker
+    prints unconditionally. Without that, the report's own prose bullet
+    (`- PASS=31 (+VACUOUS-PASS=3 → executed PASS=34) …`) would match and
+    the reconciliation would end up comparing the roll-up against a
+    restatement of itself — agreement by construction, which is the one
+    outcome this must never be able to produce."""
+    for ln in audit_text.splitlines():
+        if "PASS=" not in ln:
+            continue
+        found = {}
+        for m in _TALLY_TOKEN_RE.finditer(ln):
+            bucket = _TALLY_LABEL_TO_BUCKET.get(m.group(1))
+            if bucket is not None:
+                found[bucket] = int(m.group(2))
+        if TALLY_MANDATORY_BUCKETS <= set(found):
+            return found
+    return None
+
+
+def _reconcile_rollup(rollup: Dict[str, int],
+                      tally: Optional[Dict[str, int]]) -> Dict[str, Tuple[int, int]]:
+    """ORGANIC #428 — per-bucket disagreement between the renderer's
+    recomputed per-step roll-up and the checker's own tally.
+
+    Returns ``{bucket: (rollup_n, tally_n)}`` for every bucket the two
+    disagree on; empty dict when they agree (or when there is no tally to
+    compare against — the caller distinguishes those two cases, they are
+    NOT the same thing). Only buckets the tally actually reports are
+    compared, so a bucket the tally line does not print is never scored
+    as a phantom disagreement."""
+    if not tally:
+        return {}
+    out: Dict[str, Tuple[int, int]] = {}
+    for bucket, tally_n in tally.items():
+        rollup_n = rollup.get(bucket, 0)
+        if rollup_n != tally_n:
+            out[bucket] = (rollup_n, tally_n)
+    # A bucket the roll-up populated but the tally never names is a
+    # disagreement too — it is a step the checker did not account for.
+    for bucket, rollup_n in rollup.items():
+        if bucket in tally or bucket in out or not rollup_n:
+            continue
+        if bucket in _TALLY_LABEL_TO_BUCKET.values():
+            out[bucket] = (rollup_n, 0)
+    return out
 
 
 # ─── step tables ─────────────────────────────────────────────────────────
@@ -675,11 +807,20 @@ def _render_step_tables(flow: Dict[str, Any], verdicts: Dict[str, str]) -> str:
 
 
 def _verdict_rollup(flow: Dict[str, Any], verdicts: Dict[str, str]) -> Tuple[Dict[str, int], int]:
+    """Per-verdict roll-up over every step the flow declares.
+
+    ORGANIC #428 — a step with NO verdict line in the audit text falls
+    into the NAMED `NO-VERDICT-IN-AUDIT` bucket, never into the
+    compliance verdict `MISSING`. The two answer different questions
+    ("the renderer could not read a verdict" vs "a required output is
+    absent") and merging them let a parse gap inflate the MISSING count
+    and deflate PASS / FAIL / SKIPPED by the same amount — net zero, so
+    the roll-up still totalled 63 and looked plausible on its own."""
     counts = collections.Counter()
     total = 0
     for s in flow.get("steps", []):
         sid = str(s["id"])
-        v = verdicts.get(sid, "MISSING")
+        v = verdicts.get(sid, NO_VERDICT)
         counts[v] += 1
         total += 1
     return dict(counts), total
@@ -715,6 +856,10 @@ def _counts_snapshot(
     skipped = rollup.get("SKIPPED-CONDITION", 0)
     fail = rollup.get("FAIL", 0)
     missing = rollup.get("MISSING", 0)
+    # ORGANIC #428 — surfaced separately from `missing` so a reader (and
+    # the roll-up-consistency gate) can tell an unreadable verdict apart
+    # from an absent required output.
+    no_verdict = rollup.get(NO_VERDICT, 0)
     executed_pass = pass_only + vacuous
     executed_total = total_steps - waived - skipped
     if flow is not None and verdicts is not None:
@@ -732,6 +877,7 @@ def _counts_snapshot(
         "skipped_midflow": skipped_midflow,
         "fail": fail,
         "missing": missing,
+        "no_verdict": no_verdict,
         "executed_pass": executed_pass,
         "executed_total": executed_total,
         "total_steps": total_steps,
@@ -1336,6 +1482,39 @@ def _render(project: Path, run_audit: bool = True,
         md.append(ln)
     md.append("```")
     md.append("")
+    # ORGANIC #428 — reconcile the per-step roll-up this renderer computed
+    # against the checker's OWN tally in the fence directly above (both
+    # read out of the SAME `audit_text`, so this can never be a stale-file
+    # comparison). Historically these could disagree on the BLOCKING
+    # FAIL/MISSING counts with nothing in the document marking either as
+    # counting a different thing. Disagreement is now named, per bucket,
+    # at the top of the report — it is never papered over by adjusting a
+    # count to match.
+    _tally = _parse_audit_tally(audit_text)
+    _recon = _reconcile_rollup(rollup, _tally)
+    if _tally is None:
+        md.append(f"> ℹ️ **Roll-up reconciliation: not possible** — the audit "
+                  f"text carries no `flow_compliance_check.py` tally line "
+                  f"(audit skipped, timed out, or the tool was "
+                  f"unavailable), so the per-verdict counts below could not "
+                  f"be cross-checked against the checker's own totals. "
+                  f"Treat them as unverified.")
+        md.append("")
+    elif _recon:
+        _bits = ", ".join(
+            f"`{b}` (this report {r} vs checker {t})"
+            for b, (r, t) in sorted(_recon.items()))
+        md.append(f"> ⚠️ **Roll-up reconciliation FAILED** — the per-step "
+                  f"roll-up computed by this renderer disagrees with the "
+                  f"`flow_compliance_check.py` tally quoted immediately "
+                  f"above, over the SAME {total_steps} steps of the SAME "
+                  f"audit run, in: {_bits}. The checker's tally is "
+                  f"authoritative (it is what "
+                  f"`reports/audit/phase23_completion_audit.json"
+                  f"[step_counts]` is serialised from). Do NOT read the "
+                  f"per-verdict counts below — especially the FAIL count — "
+                  f"as a converged result until this is resolved.")
+        md.append("")
     # #461 symptom (2): every count below comes from the SINGLE `snap`
     # snapshot — never a second parse, never a divergent PASS definition.
     pass_n = snap["pass_only"]
@@ -1367,6 +1546,14 @@ def _render(project: Path, run_audit: bool = True,
                   "shape; check whether it should be a real PASS for your flow.")
     if fail_n:
         md.append(f"- **FAIL={fail_n}** — blocking; do not claim PASS.")
+    if snap.get("no_verdict"):
+        # ORGANIC #428 — never fold this into MISSING: it says the verdict
+        # could not be READ, not that an output is absent.
+        md.append(f"- **{NO_VERDICT}={snap['no_verdict']}** — the audit text "
+                  f"carried no verdict line for these steps, so their status "
+                  f"is unknown to this report. They are neither counted as "
+                  f"passing nor as blocking failures; the counts above are "
+                  f"therefore incomplete.")
     md.append("")
     md.append(f"Per the SOLE ACCEPTANCE CRITERION: `executed PASS = "
               f"{executed_pass}/{executed_total}, deferred = {waived_n} pending "
@@ -1396,19 +1583,18 @@ def _render(project: Path, run_audit: bool = True,
             except ValueError:
                 return (2, sid, 0)
         ids = sorted([str(s["id"]) for s in rows], key=_id_sort)
-        per_v = collections.Counter(verdicts.get(str(s["id"]), "MISSING") for s in rows)
+        # ORGANIC #428 — same NO_VERDICT default as `_verdict_rollup`, so
+        # the stage breakdown and the roll-up cannot disagree about which
+        # bucket an unreadable step lands in.
+        per_v = collections.Counter(verdicts.get(str(s["id"]), NO_VERDICT) for s in rows)
         npass = per_v.get("PASS", 0) + per_v.get("VACUOUS-PASS", 0)
         other_bits = []
-        for k in ("WAIVED-DEFERRED", "SKIPPED-CONDITION", "VACUOUS-PASS",
-                 "FAIL", "MISSING"):
+        for k in ROLLUP_ORDER:
+            if k == "PASS":
+                continue
             if per_v.get(k):
                 # Compact: WAIVED-DEFERRED → ⚠️=1, SKIPPED-CONDITION → ⏭=N, etc.
-                short = {"WAIVED-DEFERRED": "⚠️",
-                         "SKIPPED-CONDITION": "⏭️",
-                         "VACUOUS-PASS": "🟦",
-                         "FAIL": "❌",
-                         "MISSING": "❓"}[k]
-                other_bits.append(f"{short}={per_v[k]}")
+                other_bits.append(f"{VERDICT_SYM.get(k, k)}={per_v[k]}")
         md.append(f"| {title} | {_compact_id_range(ids)} | {npass} / {len(rows)} | "
                   f"{' '.join(other_bits) if other_bits else '—'} |")
     md.append("")
@@ -1579,13 +1765,38 @@ def _render(project: Path, run_audit: bool = True,
     md.append(_render_step_tables(flow, verdicts))
     md.append("### Verdict roll-up")
     md.append("")
+    md.append(f"_Same {total_steps}-step universe, same audit run, and the "
+              f"same bucket definitions as the `flow_compliance_check.py` "
+              f"tally quoted under **Verdict** above and as "
+              f"`reports/audit/phase23_completion_audit.json[step_counts]`. "
+              f"Any disagreement is reported explicitly under **Verdict** — "
+              f"it is never reconciled by adjusting a count._")
+    md.append("")
     md.append("| Verdict | Count |")
     md.append("|---|---:|")
-    for v in ("PASS", "VACUOUS-PASS", "WAIVED-DEFERRED", "SKIPPED-CONDITION", "FAIL", "MISSING"):
+    # ORGANIC #428 — print EVERY populated bucket, in canonical order,
+    # then any bucket the flow produced that this list does not yet know
+    # about. The previous fixed 6-tuple silently dropped
+    # DEFERRED-BY-UPSTREAM / SKIPPED-SETUP-REQUIRED steps, so the rows
+    # stopped summing to the Total printed right beneath them.
+    _seen = set()
+    for v in ROLLUP_ORDER:
         if rollup.get(v):
+            md.append(f"| {VERDICT_SYM.get(v, v)} {v} | {rollup[v]} |")
+            _seen.add(v)
+    for v in sorted(rollup):
+        if v not in _seen and rollup.get(v):
             md.append(f"| {VERDICT_SYM.get(v, v)} {v} | {rollup[v]} |")
     md.append(f"| **Total** | **{total_steps}** |")
     md.append("")
+    if rollup.get(NO_VERDICT):
+        md.append(f"> `{NO_VERDICT}` counts steps for which the audit text "
+                  f"carried no verdict line at all. It is **not** the "
+                  f"compliance verdict `MISSING` (a required output is "
+                  f"absent) — these steps' real verdicts are unknown to "
+                  f"this report, so they are neither claimed as passing "
+                  f"nor counted as blocking failures.")
+        md.append("")
 
     # Waivers — full text (no truncation)
     md.append("## Waivers (must be human-reviewed before tapeout)")

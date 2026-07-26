@@ -133,6 +133,16 @@ run "verdict token propagation"         "$PLUGIN" python3 programs/verdict_token
 run "signoff gate self-skip"            "$PLUGIN" python3 programs/signoff_gate_self_skip_consistency_check.py
 run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_artifact_hygiene_check.py
 
+# vibe-ic#428 — final_summary.md printed TWO verdict roll-ups over the same 63
+# steps and they disagreed on the BLOCKING-FAILURE count, with nothing marking
+# either as counting a different thing. The cause was static and repo-shaped:
+# the renderer's verdict-line parser enumerated only some step-id shapes, so
+# the ids the flow had since grown (D1, FS1, DT1-3) were unreadable and each
+# was silently booked as the compliance verdict MISSING. Repo mode asserts
+# every id the flow declares is readable — it fires when the id shape is
+# ADDED, not after a run has already published a wrong FAIL count.
+run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary_rollup_consistency_check.py
+
 if [ "$fail" -ne 0 ]; then
   echo "repo_hygiene_gates: at least one gate FAILED" >&2
   exit 1

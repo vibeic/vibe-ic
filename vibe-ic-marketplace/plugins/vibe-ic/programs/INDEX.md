@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 976
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 976)
+- **Total programs (excluding helpers / shims):** 977
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 977)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 967 |
+| `any` | 968 |
 
 ## Alphabetical listing
 
@@ -308,6 +308,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `figure_extractor` | any | — | the VISION tier's deterministic program side. |
 | `file_extend_preserve_check` | any | — | the deterministic half of the general |
 | `final_report_generate` | any | — | generate canonical, chip-AGNOSTIC final |
+| `final_summary_rollup_consistency_check` | any | — | one document, one blocking-failure |
 | `final_test_attestation_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `firstbit_synth` | any | — | DETERMINISTIC solver for the CVDP first-bit decoder. |
 | `fix_fault_cut_names` | any | v0.63 | Rewrite Fault-cut netlist so escaped identifiers with embedded dots |
@@ -1048,7 +1049,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (967 programs)
+### `any` (968 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1328,6 +1329,7 @@ _(no programs in this group)_
 - `figure_extractor` — the VISION tier's deterministic program side.
 - `file_extend_preserve_check` — the deterministic half of the general
 - `final_report_generate` — generate canonical, chip-AGNOSTIC final
+- `final_summary_rollup_consistency_check` — one document, one blocking-failure
 - `final_test_attestation_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `firstbit_synth` — DETERMINISTIC solver for the CVDP first-bit decoder.
 - `fix_fault_cut_names` — Rewrite Fault-cut netlist so escaped identifiers with embedded dots  _[v0.63]_
