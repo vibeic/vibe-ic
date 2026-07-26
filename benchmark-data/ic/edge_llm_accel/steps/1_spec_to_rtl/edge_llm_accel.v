@@ -1,1 +1,1 @@
-/home/reyerchu/vibe-ic/benchmark-data/ic/edge_llm_accel/phase2/stage1/rtl/edge_llm_accel.v
+../../phase2/stage1/rtl/edge_llm_accel.v
