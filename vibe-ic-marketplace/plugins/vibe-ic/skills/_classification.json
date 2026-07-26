@@ -20,6 +20,7 @@
       "description": "Programs cannot determine subjective quality. AI invokes when output needs domain interpretation.",
       "skills": [
         "architecture-explore",
+        "layer-contract-doctrine",
         "ppa-predict",
         "rtl-review",
         "spec-review",
