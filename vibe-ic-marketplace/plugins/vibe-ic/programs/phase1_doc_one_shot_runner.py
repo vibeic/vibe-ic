@@ -1456,6 +1456,82 @@ def _i454_non_command_row_reason(row_line, hex_token):
     return None
 
 
+# ---------------------------------------------------------------------------
+# for #454 follow-up — Strategy-1 BIT-POSITION-RULER row refusal.
+#
+# The Strategy-1 walker reads a 4-column row as
+# `<rx_len> <tx_len> <tx_addr> <opcode_hex>`. A bus-protocol figure that
+# draws a data word as adjacent bit fields prints its axis in exactly that
+# shape — a run of DECIMAL bit indices:
+#
+#     31           24 23           16 15            8 7             0
+#
+# The walker reads column 4 as HEX, so the decimal bit index 16 becomes
+# opcode `0x16`, and the callsite then synthesises `response_opcode_hex =
+# op + 1`. The result is a command that no document ever declared.
+#
+# This was previously suppressed downstream by a HARD-CODED LIST OF EIGHT
+# HEX VALUES in `phase1_post_process.HALLUC_PATTERNS`. That list was
+# removed with this predicate because it was the wrong instrument twice
+# over: it deleted those eight values out of ANY design's command table
+# (a genuine `0x24`-class command was indistinguishable from the artefact),
+# and it caught the artefact only where the ruler happened to land on one
+# of its eight values — measured over six ruler offsets of the same shape
+# it stopped four and let two through, while the predicate below stops all
+# six.
+#
+# The predicate describes what a ruler IS, with no value and no vocabulary
+# in it: the row is NOTHING BUT a strictly-descending run of decimal
+# integers that partitions a contiguous range into equal-width fields —
+#
+#   * every token on the row is a plain decimal integer (a command row
+#     carries a mnemonic, a byte group or a description after the opcode;
+#     a ruler carries nothing else),
+#   * an EVEN count of at least four of them, strictly descending,
+#   * each consecutive `<hi> <lo>` pair spans the same width, >= 2, and
+#   * every INNER boundary is adjacent (`lo_of_field_k == hi_of_field_k+1
+#     + 1`), which is what makes the fields contiguous rather than an
+#     arbitrary descending number sequence.
+#
+# Fail-open by construction: a ruler carrying a trailing caption is NOT
+# refused. Refusals are counted into `non_command_row_refusal_count`
+# alongside the Strategy-2 ones, so the silence stays visible.
+# chip-AGNOSTIC.
+# ---------------------------------------------------------------------------
+_I454_RE_PLAIN_DECIMAL = re.compile(r"^\d+$")
+_I454_RULER_MIN_FIELDS = 2          # >= 2 fields, i.e. >= 4 columns
+_I454_RULER_MIN_FIELD_WIDTH = 2     # excludes a `3 2 1 0` degenerate run
+
+
+def _i454_bit_position_ruler_row(row_line):
+    """True when ``row_line`` is a bit-position ruler — a figure axis that
+    partitions a contiguous numeric range into equal-width adjacent fields
+    — rather than a command-table row. Pure function of the row's shape;
+    see the block comment above. chip-AGNOSTIC.
+    """
+    if not isinstance(row_line, str) or not row_line.strip():
+        return False
+    values = []
+    for tok in row_line.split():
+        if not _I454_RE_PLAIN_DECIMAL.match(tok):
+            # Anything that is not a bare decimal (a mnemonic, a hex byte,
+            # a description, a caption) means the row carries content a
+            # ruler does not have.
+            return False
+        values.append(int(tok))
+    if len(values) < 2 * _I454_RULER_MIN_FIELDS or len(values) % 2:
+        return False
+    if any(values[i] <= values[i + 1] for i in range(len(values) - 1)):
+        return False
+    widths = {values[i] - values[i + 1] for i in range(0, len(values), 2)}
+    if len(widths) != 1 or min(widths) < _I454_RULER_MIN_FIELD_WIDTH:
+        return False
+    # Inner boundaries: the low end of one field abuts the high end of the
+    # next. This is what makes the run a PARTITION of one range.
+    return all(values[i] == values[i + 1] + 1
+               for i in range(1, len(values) - 1, 2))
+
+
 # v0.1.90 — for ORGANIC-20260530-phase1-large-doc-hang. Several L-doc
 # generators (L1 datasheet, L2 FRS, L4 reset-value prose lift, L5
 # bullet-kv specs, L11 FSM-state classify, ...) run a PER-ITEM scan
@@ -22500,7 +22576,6 @@ def gen_l3_cmd_protocol(project: Path,
             key = "0x" + op_hex.upper()
             if key in seen_opcodes:
                 continue
-            seen_opcodes.add(key)
             # v1.6.136 (#51 Fix 11f) — slice the matched line out
             # of cmd_text so _infer_opcode_name sees only this row,
             # not adjacent rows' byte-data or descriptions.
@@ -22508,6 +22583,35 @@ def gen_l3_cmd_protocol(project: Path,
             line_end = cmd_text.find("\n", m.start())
             row_line = cmd_text[line_start:
                                 line_end if line_end != -1 else None]
+            # for #454 follow-up — ROW-SHAPE refusal for Strategy 1. A
+            # figure that draws a data word as adjacent bit fields prints
+            # its axis as `<hi> <lo> <hi> <lo> ...` decimal indices, which
+            # is the same 4-column shape this walker reads as
+            # `<rx_len> <tx_len> <tx_addr> <opcode_hex>` — so a decimal bit
+            # index became a hex opcode. Refuse on the row's SHAPE and
+            # COUNT the refusal, the same contract Strategy 2 uses. This
+            # replaces a hard-coded list of eight hex VALUES that used to
+            # scrub the symptom downstream in phase1_post_process, which
+            # would delete a genuine command carrying one of those values
+            # out of any design.
+            #
+            # Anchored on the FIRST CAPTURED COLUMN, not on `m.start()`:
+            # the row pattern opens with `^\s*`, and `\s` spans newlines,
+            # so a match preceded by a blank line starts on that blank line
+            # and the `row_line` slice above comes back empty.
+            _ruler_anchor = m.start(1)
+            _ruler_ls = cmd_text.rfind("\n", 0, _ruler_anchor) + 1
+            _ruler_le = cmd_text.find("\n", _ruler_anchor)
+            _ruler_row = cmd_text[_ruler_ls:
+                                  _ruler_le if _ruler_le != -1 else None]
+            if _i454_bit_position_ruler_row(_ruler_row):
+                non_command_row_refusals.append({
+                    "hex": key,
+                    "reason": "bit_position_ruler_row",
+                    "evidence": f"input/docs/{fname}",
+                })
+                continue
+            seen_opcodes.add(key)
             # Try to parse rx_len / tx_len.
             try: rx_len = int(rx_len_s, 0)
             except (ValueError, TypeError): rx_len = "var"
@@ -23267,9 +23371,10 @@ def gen_l3_cmd_protocol(project: Path,
         # gate fired (synthesis ran); a populated string explains
         # why opcodes are empty by design (NOT a parser miss).
         "opcode_synthesis_skipped_reason": opcode_synthesis_skipped_reason,
-        # for #454 — rows the free-form opcode walker matched and then
-        # refused on their SHAPE (connector pin-assignment row, rate /
-        # capacity prose, numeric-range upper bound). Counting them keeps
+        # for #454 — rows an opcode walker matched and then refused on
+        # their SHAPE (connector pin-assignment row, rate / capacity
+        # prose, numeric-range upper bound, bit-position ruler row from a
+        # figure axis). Counting them keeps
         # the refusal auditable: `no_opcodes_in_input: true` together with
         # a non-zero count means "the walker saw candidate rows and judged
         # none of them to be commands", which is a different fact from

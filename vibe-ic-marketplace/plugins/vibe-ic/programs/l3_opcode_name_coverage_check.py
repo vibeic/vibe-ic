@@ -26,6 +26,37 @@ Verdict tiers (chip-AGNOSTIC):
   VACUOUS_PASS — len(L3.opcodes) == 0 (no command protocol in input,
                  covered by `no_opcodes_in_input: true`).
 
+WHAT THIS GATE DOES NOT MEASURE (#454 follow-up)
+------------------------------------------------
+It measures whether a name is a PLACEHOLDER. It cannot measure whether
+the row the name came from was a command at all. When the L3 walker
+scrapes a table that has a command table's two-column shape but declares
+no commands — a connector pin-assignment chapter, a figure's bit-position
+axis — the scraped SIGNAL name reads as a perfectly good name, and this
+gate reported `PASS — 0/18 opcode(s) carry placeholder names` over 18
+fabricated ones. Measured over the committed corpus: 12 designs verdict
+PASS, blessing 188 opcodes, of which at least 18 are that artefact.
+
+The L3 emitter now refuses those rows at source and COUNTS the refusals
+in `non_command_row_refusal_count`. This gate READS that counter and
+DISCLOSES it, because two of its statements are otherwise false on a
+document that had rows refused:
+
+  * `VACUOUS_PASS — no command protocol in input` is not what an empty
+    `opcodes[]` means when the walker saw candidate rows and judged none
+    of them commands. That is a REFUSAL, not an absence.
+  * `PASS — 0/N carry placeholder names` reads as an endorsement of N
+    rows, when the same document is on record as having had rows refused
+    as non-commands — so name quality was measured on the survivors of a
+    filter, not on a verified command set.
+
+The disclosure does NOT change the verdict and does NOT introduce a new
+FAIL. Measured over the 62 corpus designs that ship their input document,
+ZERO have both a non-empty `opcodes[]` and a non-zero refusal count, so a
+FAIL-on-refusal rule has no measured true positive to justify it and a
+document that legitimately carries both a command table and a pinout
+chapter is an ordinary, correct design.
+
 Exit codes:
   0 PASS / PASS_WITH_WAIVERS / VACUOUS_PASS
   1 FAIL
@@ -65,6 +96,43 @@ def _is_placeholder(op: Dict[str, Any]) -> bool:
     return False
 
 
+# #454 follow-up — the L3 emitter's honest-uncertainty counter. A row the
+# opcode walker matched and then refused because the row is structurally
+# not a command-table row. Absent / non-int on documents emitted before
+# the counter existed, which is NOT the same as zero — say so.
+REFUSAL_COUNT_KEY = "non_command_row_refusal_count"
+
+
+def _refusal_count(l3: Dict[str, Any]):
+    """Return the emitter's non-command-row refusal count, or None when the
+    document does not carry the counter at all."""
+    n = l3.get(REFUSAL_COUNT_KEY)
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        return None
+    return n
+
+
+def _refusal_disclosure(refused, empty: bool) -> str:
+    """The sentence appended to the verdict reason. Pure function of the
+    counter and of whether `opcodes[]` came out empty."""
+    if refused is None:
+        return (" This L3 carries no "
+                f"`{REFUSAL_COUNT_KEY}`, so whether the walker refused any "
+                "candidate row is UNKNOWN — not zero.")
+    if refused == 0:
+        return ""
+    if empty:
+        return (f" NOT AN ABSENCE: the walker matched {refused} candidate "
+                "row(s) in this document and refused every one as "
+                "structurally not a command row, so `opcodes[]` is empty by "
+                "REFUSAL. Read `non_command_row_refusals` before concluding "
+                "the input declares no command protocol.")
+    return (f" DISCLOSURE: {refused} row(s) in the same document were "
+            "refused as structurally not command rows. Name quality is "
+            "measured on the rows that survived that filter; a non-"
+            "placeholder name is not evidence that its row is a command.")
+
+
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog=GATE, description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -91,13 +159,17 @@ def main(argv: List[str] | None = None) -> int:
         return 2
 
     opcodes = l3.get("opcodes") or []
+    # #454 follow-up — read the emitter's refusal counter so neither branch
+    # below can state an absence or an endorsement the document contradicts.
+    refused = _refusal_count(l3)
     if not isinstance(opcodes, list) or not opcodes:
         # No opcodes — this is the no_opcodes_in_input case.
         verdict = "VACUOUS_PASS"
         report = {
             "gate": GATE, "verdict": verdict,
             "reason": "L3.opcodes empty — no command protocol in input "
-                      "(structurally correct for non-protocol IPs).",
+                      "(structurally correct for non-protocol IPs)."
+                      + _refusal_disclosure(refused, empty=True),
             "total": 0, "placeholders": 0, "placeholder_ratio": 0.0,
             "threshold": PLACEHOLDER_THRESHOLD,
         }
@@ -114,7 +186,8 @@ def main(argv: List[str] | None = None) -> int:
         report = {
             "gate": GATE, "verdict": verdict,
             "reason": (f"{placeholders}/{total} opcode(s) carry placeholder "
-                       f"names (threshold {PLACEHOLDER_THRESHOLD:.0%})."),
+                       f"names (threshold {PLACEHOLDER_THRESHOLD:.0%})."
+                       + _refusal_disclosure(refused, empty=False)),
             "total": total, "placeholders": placeholders,
             "placeholder_ratio": round(ratio, 4),
             "threshold": PLACEHOLDER_THRESHOLD,
@@ -123,6 +196,13 @@ def main(argv: List[str] | None = None) -> int:
                 if isinstance(op, dict) and _is_placeholder(op)
             ][:32],
         }
+    # #454 follow-up — machine-readable form of the same disclosure, so a
+    # consumer does not have to parse `reason` prose. `null` means the L3
+    # predates the counter (UNKNOWN), which is not the same as 0.
+    report["non_command_rows_refused"] = refused
+    report["measures"] = "opcode NAME placeholder-ness only"
+    report["does_not_measure"] = (
+        "whether the source row was a command row at all")
 
     if args.json:
         out = Path(args.json)
