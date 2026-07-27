@@ -1382,7 +1382,23 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "practical_notes_specificity_check",
     "rtl_precheck_gate",
     "scope_periodic_pulse_check",
-    "skill_compliance_triangle_check",
+    # `skill_compliance_triangle_check` was registered here but the program
+    # was never authored — `programs/skill_compliance_triangle_check.py` does
+    # not exist and never has. The dispatch loop below used to `continue` past
+    # a registry entry with no backing file WITHOUT recording anything, so the
+    # umbrella advertised `len(_STRUCTURAL_RTL_GATES)` checkers while one
+    # fewer ran. MEASURED two ways: (a) the reference run spm × ihp-sg13g2
+    # (plugin 1.6.71-pr427) prints "P0 umbrella, 241 checkers" and its
+    # flow_compliance_check.log never mentions this gate — not as PASS, SKIP,
+    # FAIL or WAIVER; (b) re-running that project on this tree's parent
+    # printed "242 checkers" while exactly 241 subprocesses were spawned.
+    # Removed from the registry so the advertised count equals the dispatched
+    # count; the dispatch loop now also records a named SKIP for any future
+    # entry whose program is missing, so this cannot go silent again.
+    # Authoring the real skill-triangle checker (SKILL.md / compliance.yaml /
+    # tests) is still open work — it is NOT covered by
+    # phase1_gate_contract_check, which audits deterministic flow programs,
+    # not skills.
     # The spec said the plugin MUST declare an artifact, the plugin did not,
     # and NO gate noticed — because a gate that nothing invokes notices
     # nothing.  spec_required_artifact_check reads the project's OWN Phase-1
@@ -4092,6 +4108,21 @@ def _run_structural_rtl_gates(project: Path,
         for gate_name in _STRUCTURAL_RTL_GATES:
             prog = PROGRAMS_DIR / f"{gate_name}.py"
             if not prog.exists():
+                # A registry entry with no shipped program used to be dropped
+                # here with `continue` — no fail, no skip, no waiver, no line
+                # anywhere in the report — while the umbrella kept advertising
+                # `len(_STRUCTURAL_RTL_GATES)` checkers. That is the umbrella
+                # certifying a checker it never ran. Record a NAMED skip
+                # instead: the count still comes from the registry, but every
+                # registered gate that did not dispatch now says so by name.
+                # This does not change the umbrella verdict (skips never fail
+                # it) and on a correctly-packaged tree it never fires, because
+                # every registered gate has its program.
+                _pending.append(
+                    ("imm", ("skip",
+                             f"{gate_name} (SKIP: registered structural gate "
+                             f"has no backing program {prog.name} in "
+                             f"{PROGRAMS_DIR.name}/ — checker did not run)")))
                 continue
             if gate_name in class_skips:
                 _pending.append(
@@ -6459,53 +6490,71 @@ def main(argv: Optional[List[str]] = None) -> int:
             skip_analog=getattr(args, "skip_analog", False),
         )
         structural_waivers = s_waivers
-        if s_fails or s_skips or s_waivers:
-            # v0.119.41 Wave 9 — when ≥2 structural gates FAIL, surface
-            # a "Failed gates (N):" header so the operator sees each
-            # failing gate name + first-line message even when the
-            # composite verdict is one terse FAIL line. This addresses
-            # the v0.119.40 RESULT.md complaint that 10 distinct
-            # structural FAILs collapse into a single composite FAIL
-            # without operator-actionable detail.
-            failed_gate_lines: List[str] = []
-            if len(s_fails) >= 2:
-                failed_gate_lines.append(
-                    f"Failed gates ({len(s_fails)}):")
-                for f_line in s_fails:
-                    # Each entry is "FAIL: <gate_name> — <first_line>".
-                    failed_gate_lines.append(f"  - {f_line[len('FAIL: '):]}"
-                                              if f_line.startswith("FAIL: ")
-                                              else f"  - {f_line}")
-            else:
-                failed_gate_lines.extend(s_fails)
-            # v1.6.97 (issue #29 Bugs 1+2) — surface thin-input waivers
-            # in the structural umbrella reasons so the operator can
-            # see exactly which gates were converted from FAIL to
-            # WAIVED via --allow-thin-input. Each waiver entry remains
-            # explicit (review_required: true; ticket id) — they are
-            # DEFERRED open work, not silent passes.
-            waiver_lines = [
-                (f"WAIVED-DEFERRED: {w['gate']} — thin-input "
-                 f"(ticket={w['ticket']}, review_required=true): "
-                 f"{w['first_line']}")
-                for w in s_waivers
+        # The umbrella result is built UNCONDITIONALLY once the gates have
+        # run. It used to be built only `if s_fails or s_skips or s_waivers`,
+        # so the ONE outcome with nothing to report — every structural gate
+        # clean, no skip, no waiver — produced no StepResult at all: P0 was
+        # missing from the printed per-step listing, missing from the JSON
+        # `steps` array, and absent from `counts`, i.e. the best case was the
+        # only case with no audit record. Worse, `--phase 2
+        # --strict-structural` scopes its whole verdict to `[r for r in
+        # results if r.id == "P0"]`, so with P0 gone that scope was EMPTY and
+        # the run reported PASS over zero evidence. A clean sweep now emits an
+        # explicit PASS with a positive reason line.
+        #
+        # v0.119.41 Wave 9 — when ≥2 structural gates FAIL, surface
+        # a "Failed gates (N):" header so the operator sees each
+        # failing gate name + first-line message even when the
+        # composite verdict is one terse FAIL line. This addresses
+        # the v0.119.40 RESULT.md complaint that 10 distinct
+        # structural FAILs collapse into a single composite FAIL
+        # without operator-actionable detail.
+        failed_gate_lines: List[str] = []
+        if len(s_fails) >= 2:
+            failed_gate_lines.append(
+                f"Failed gates ({len(s_fails)}):")
+            for f_line in s_fails:
+                # Each entry is "FAIL: <gate_name> — <first_line>".
+                failed_gate_lines.append(f"  - {f_line[len('FAIL: '):]}"
+                                          if f_line.startswith("FAIL: ")
+                                          else f"  - {f_line}")
+        else:
+            failed_gate_lines.extend(s_fails)
+        # v1.6.97 (issue #29 Bugs 1+2) — surface thin-input waivers
+        # in the structural umbrella reasons so the operator can
+        # see exactly which gates were converted from FAIL to
+        # WAIVED via --allow-thin-input. Each waiver entry remains
+        # explicit (review_required: true; ticket id) — they are
+        # DEFERRED open work, not silent passes.
+        waiver_lines = [
+            (f"WAIVED-DEFERRED: {w['gate']} — thin-input "
+             f"(ticket={w['ticket']}, review_required=true): "
+             f"{w['first_line']}")
+            for w in s_waivers
+        ]
+        reasons_combined = (failed_gate_lines
+                            + [f"SKIP: {s}" for s in s_skips]
+                            + waiver_lines)
+        if not reasons_combined:
+            # Clean sweep. Say so explicitly rather than emitting a
+            # reason-less PASS that reads like a step that did nothing.
+            reasons_combined = [
+                "every registered structural-RTL gate that dispatched "
+                "PASSED (0 FAIL / 0 SKIP / 0 WAIVED)"
             ]
-            reasons_combined = (failed_gate_lines
-                                + [f"SKIP: {s}" for s in s_skips]
-                                + waiver_lines)
-            # #447 — s_passed is None when NO checker executed (no RTL):
-            # the umbrella reports SKIPPED-CONDITION, never PASS; a
-            # pure-analog project's strict verdict is decided by the
-            # A-track gates, not by 0/226 skipped digital checkers.
-            structural_result = StepResult(
-                id="P0",
-                name=f"Structural-RTL gates (P0 umbrella, {len(_STRUCTURAL_RTL_GATES)} checkers)",
-                stage="stage1",
-                status=("SKIPPED-CONDITION" if s_passed is None
-                        else "PASS" if s_passed else "FAIL"),
-                reasons=reasons_combined,
-                evidence=[],
-            )
+        # #447 — s_passed is None when NO checker executed (no RTL):
+        # the umbrella reports SKIPPED-CONDITION, never PASS; a
+        # pure-analog project's strict verdict is decided by the
+        # A-track gates, not by 0/226 skipped digital checkers.
+        structural_result = StepResult(
+            id="P0",
+            name=f"Structural-RTL gates (P0 umbrella, {len(_STRUCTURAL_RTL_GATES)} checkers)",
+            stage="stage1",
+            status=("SKIPPED-CONDITION" if s_passed is None
+                    else "PASS" if s_passed else "FAIL"),
+            reasons=reasons_combined,
+            evidence=[],
+        )
 
     results: List[StepResult] = []
     if structural_result is not None:

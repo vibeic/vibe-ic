@@ -65,7 +65,14 @@ STEP_METHOD = {
     "4":  ("equivalence", "simulation vs shared golden vectors (spec/standard golden)"),
     "5":  ("equivalence", "formal: assertions proved / k-induction vs spec golden"),
     "6":  ("metric", "FPGA early-proto report (optional)"),
-    "P0": ("clean", "77 structural-RTL chip-agnostic checkers clean"),
+    # No hardcoded checker count here: this string is printed verbatim as
+    # P0's Method in BENCHMARK_VERIFICATION_REPORT.md, and it said "77
+    # structural-RTL chip-agnostic checkers" long after the registry passed
+    # 240 — a published figure ~3x below the real one. The live count comes
+    # from flow_compliance_check's own umbrella step name (and
+    # `flow_compliance_check.py --list-structural-gates`).
+    "P0": ("clean", "structural-RTL chip-agnostic checkers clean "
+                    "(count per flow_compliance_check --list-structural-gates)"),
     "7":  ("metric", "SDC diff: clock period / IO delay (both from L9)"),
     "8":  ("clean", "SDC validation parity"),
     "9":  ("metric", "synth netlist: cell-count/area in-range + LEC OUR==REF"),

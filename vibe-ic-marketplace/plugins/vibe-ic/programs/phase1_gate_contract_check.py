@@ -19,10 +19,17 @@ plugin-level contract so that the flow orchestrator can rely on it:
   7. `<name>` is referenced in `vibe-ic/flow/phase1_phase2_phase3.yaml`
      (wired into the 33-step flow, not an orphan).
 
-This meta-check is orthogonal to `skill_compliance_triangle_check.py`
-(which audits SKILL.md/compliance.yaml/tests triangles for user-
-invocable skills). Phase 1 gates are NOT skills — they're
-deterministic flow programs. They need their OWN contract.
+This meta-check covers deterministic flow programs only. The SKILL.md /
+compliance.yaml / tests triangle of user-invocable SKILLS is NOT audited
+by it, and — despite what this docstring used to claim — not by anything
+else either: it named `skill_compliance_triangle_check.py` as if that
+were a shipped checker, but no such program has ever existed in this
+repo. Its name sat in `_STRUCTURAL_RTL_GATES` and was silently dropped by
+the dispatch loop on every run. The dead registry entry has been removed
+(see the comment at that site in flow_compliance_check.py); authoring a
+real skill-triangle checker remains open work. Phase 1 gates are NOT
+skills — they're deterministic flow programs, and they need their OWN
+contract, which is what this file enforces.
 
 Usage
 -----
