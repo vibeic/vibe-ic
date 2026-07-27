@@ -1,0 +1,40 @@
+{
+  "verdict": "PASS",
+  "gds": "/home/reyerchu/backlog_signoff_adj/vibe-ic-marketplace/scratch_geom_signoff_tests/diode_on/phase3/stage4/gds/top.gds",
+  "worst_ratio": 50.0,
+  "violations": 0,
+  "per_layer": {
+    "met1": {
+      "limit": 40.0,
+      "metric": "layer",
+      "worst_ratio": 50.0,
+      "violations": 0,
+      "detail": [],
+      "diode_relieved": 1,
+      "relieved": [
+        {
+          "metal_um2": 50.0,
+          "gate_um2": 1.0,
+          "ratio": 50.0
+        }
+      ],
+      "suggestions": []
+    },
+    "met2": {
+      "limit": 40.0,
+      "metric": "layer",
+      "worst_ratio": 0.0,
+      "violations": 0,
+      "detail": [],
+      "diode_relieved": 0,
+      "relieved": [],
+      "suggestions": []
+    }
+  },
+  "diode_credit": false,
+  "diode_recognition": {
+    "enabled": true,
+    "relieved_nets": 1,
+    "insertion_sites": 0
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "verdict": "PARTIAL",
+  "gds_in": "/home/reyerchu/backlog_signoff_adj/vibe-ic-marketplace/scratch_geom_signoff_tests/fill/phase3/stage4/gds/top.gds",
+  "gds_out": "/home/reyerchu/backlog_signoff_adj/vibe-ic-marketplace/scratch_geom_signoff_tests/fill/phase3/stage4/gds/top.filled.gds",
+  "window_um": 20.0,
+  "mfg_grid_um": null,
+  "layers": [
+    {
+      "name": "met1",
+      "target": 0.3,
+      "max": 0.7,
+      "density_before": 0.0368,
+      "density_after": 0.0368,
+      "worst_window_before": 0.02,
+      "worst_window_after": 0.02,
+      "reached": false,
+      "over_max": false,
+      "passes": 18,
+      "pitch_um": [
+        0.786,
+        0.786,
+        0.786,
+        0.786,
+        0.786,
+        0.786,
+        0.45,
+        0.45,
+        0.45,
+        0.45,
+        0.45,
+        0.45,
+        0.442,
+        0.442,
+        0.442,
+        0.442,
+        0.442,
+        0.442
+      ],
+      "fill_datatype": 0,
+      "fill_shapes": null,
+      "space_um": 0.2,
+      "space_to_metal_um": 0.2,
+      "top_width_um": 0.5,
+      "min_width_um": 0.242,
+      "fill_sizes": 3
+    }
+  ],
+  "check": "per_layer_density_metal_fill",
+  "config_source": "signoff/cmp_fill_targets.json",
+  "runner": "container:vibeic-eda:klayout",
+  "gds_out_partial": "/home/reyerchu/backlog_signoff_adj/vibe-ic-marketplace/scratch_geom_signoff_tests/fill/phase3/stage4/gds/top.filled.gds"
+}
