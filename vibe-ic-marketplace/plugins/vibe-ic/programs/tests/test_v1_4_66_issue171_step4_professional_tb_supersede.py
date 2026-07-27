@@ -140,15 +140,40 @@ def test_non_sim_files_exist_gate_never_superseded(tmp_path):
 
 # ── (6) end-to-end check_step on the canonical Step-4 all_of shape ────────────
 def _step4():
+    """The canonical Step-4 shape, mirroring the flow yaml.
+
+    `required_outputs` used to be listed here (and in the yaml) as three
+    independent entries — `sim/*.log`, `sim/results.xml OR sim/pass.flag`, and
+    the coverage json. That was only ever satisfiable because check_step pooled
+    evidence across the list; under the ALL-of-N contract the module documents,
+    no real run could satisfy it, because the supported TB paths are mutually
+    exclusive in what they emit: cocotb writes results.xml/pass.flag and no
+    *.log, a transcript run writes *.log, and the professional TB this file is
+    about writes under sim_professional/<top>/. They are one requirement — "a
+    simulation ran and left a transcript" — in three shapes, so they are now one
+    OR entry. `test_fixture_matches_the_flow_yaml` below pins this to the real
+    declaration so the two cannot drift apart again."""
     return {
         "id": 4, "name": "Simulation",
         "required_outputs": [
-            "phase2/stage1/sim/*.log",
-            "phase2/stage1/sim/results.xml OR phase2/stage1/sim/pass.flag",
+            "phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml"
+            " OR phase2/stage1/sim/pass.flag"
+            " OR phase2/stage1/sim_professional/**/results.xml",
             "reports/phase2/coverage/coverage_actual.json",
         ],
         "gate": {"all_of": [dict(_sim_gate())]},
     }
+
+
+def test_fixture_matches_the_flow_yaml():
+    """This file's Step-4 fixture must BE the flow's Step 4, not a lookalike —
+    otherwise it can keep asserting a shape the real flow no longer has."""
+    import yaml
+    flow = (Path(__file__).resolve().parents[2] / "flow"
+            / "phase1_phase2_phase3.yaml")
+    doc = yaml.safe_load(flow.read_text())
+    real = next(s for s in doc["steps"] if s.get("id") == 4)
+    assert real["required_outputs"] == _step4()["required_outputs"]
 
 
 def test_check_step_step4_passes_on_professional_tb(tmp_path):

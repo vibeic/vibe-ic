@@ -5669,7 +5669,23 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             # MISSING. Continue into the normal evidence + gate path.
 
     # First check required_outputs presence (cheap)
+    #
+    # EACH declared entry must be satisfied — the list is ALL-of-N, exactly as
+    # this module's own docstring has always said ("verifies every step has:
+    # (a) all required_outputs present"). Only the " OR " *inside* one entry is
+    # any-of, because that spelling is how the flow yaml declares one artefact
+    # that legitimately has two accepted names/locations.
+    #
+    # It used to be any-of-N: evidence was accumulated across entries and
+    # MISSING fired only when the COMBINED evidence list was empty, so a step
+    # declaring five outputs passed this check on the strength of one. Measured
+    # on the real spm x ihp-sg13g2 converge run: Step 21's declared drc.rpt did
+    # not exist and the step reported PASS because routed.def did; Step 9's
+    # area.rpt AND stats.json were both absent and it reported PASS because
+    # netlist.v was there. A declared output nobody verifies is not a
+    # requirement, and a step that never produced it has not been measured.
     outputs = step.get("required_outputs", [])
+    missing_entries: List[str] = []
     for pat in outputs:
         # split "A OR B"
         hit_any = False
@@ -5683,10 +5699,23 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 for h in _glob_first(project, sp):
                     result.evidence.append(h)
                     break
+        else:
+            missing_entries.append(pat)
 
-    if outputs and not result.evidence:
+    # PARTIAL evidence keeps the gate in play. Two different promotions live
+    # downstream of here and both must survive: the gate's own per-file
+    # disclosed-skip (#675 loose form, which turns an honestly-declared
+    # capability gap into SKIPPED-CONDITION) and its ordinary FAIL. Returning
+    # MISSING right here would pre-empt both — an honest skip would read as a
+    # silent absence, and a step whose gate detects a real defect would stop
+    # reporting that defect. So when SOME declared outputs are present, fall
+    # through, and only downgrade a PASS-tier gate verdict afterwards (see
+    # `_missing_entries` handling below the gate): a gate may explain an absent
+    # output, it may not certify the step as done without one.
+    if outputs and missing_entries and not result.evidence:
         result.status = "MISSING"
-        result.reasons.append(f"no required_outputs found (expected: {outputs})")
+        result.reasons.append(
+            f"no required_outputs found (expected: {outputs})")
         # v1.6.269 (#126) — ENV_UNAVAILABLE fallback at early MISSING.
         if sid in waivers and bool(waivers[sid].get("_env_unavailable")):
             natural_reason = result.reasons[-1] if result.reasons else "MISSING"
@@ -5722,7 +5751,10 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             # patterns), so a step-12 marker can never mask a step-9 synth FAIL
             # and no marker can mask a DRC/LVS sign-off. A marker lacking the
             # ownership claim, or naming a different output, stays MISSING.
-            missing_pats = [sp for pat in outputs
+            # Only the entries that ACTUALLY missed — under ALL-of-N some of
+            # `outputs` may be present, and a sibling marker can only excuse the
+            # artefact it names as absent.
+            missing_pats = [sp for pat in missing_entries
                             for sp in (p.strip() for p in pat.split(" OR "))]
             skip_hint = _declared_sibling_self_skip_for_missing(
                 project, missing_pats)
@@ -5865,6 +5897,28 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         result.status = "PASS" if result.evidence else "MISSING"
 
     # v1.6.269 (#126) — ENV_UNAVAILABLE fallback promotion. If the
+    # ── required_outputs is ALL-of-N: a gate may not certify a step done
+    # while one of its own declared outputs was never produced ────────────
+    # Applied only to a PASS-tier verdict, and only when SOME evidence existed
+    # (the all-absent case already returned MISSING above). Every other verdict
+    # is left exactly as the gate produced it: SKIPPED-CONDITION is the #675
+    # honest capability-gap disclosure, FAIL is a real defect the gate detected,
+    # WAIVED is an approved deferral — replacing any of those with MISSING would
+    # destroy information, not add rigour.
+    #
+    # Before this, evidence was pooled across the whole list and MISSING fired
+    # only when NOTHING matched, so one present artefact carried the rest.
+    # MEASURED on the real spm x ihp-sg13g2 run: Step 21 declared drc.rpt
+    # (absent) + routed.def (present) and reported PASS; Step 9 declared
+    # netlist.v (present) + "area.rpt OR stats.json" (both absent), PASS.
+    if result.status in ("PASS", "VACUOUS_PASS") and missing_entries:
+        result.status = "MISSING"
+        result.reasons.append(
+            f"required_outputs missing: {missing_entries} "
+            f"(satisfied: {len(outputs) - len(missing_entries)}/{len(outputs)}"
+            f" — the gate passed, but every declared output must be produced, "
+            f"not just one)")
+
     # natural verdict is FAIL or MISSING AND an ENV_UNAVAILABLE-tier
     # waiver matches this step, convert to WAIVED-DEFERRED. The
     # waiver entry carries ticket + review_required=true so foundry
