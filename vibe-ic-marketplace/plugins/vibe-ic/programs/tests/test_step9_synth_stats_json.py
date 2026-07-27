@@ -224,11 +224,32 @@ def test_design_runner_synth_emits_stats_json():
         "block it already measures as phase2/stage2/synth/stats.json")
 
 
-def test_phase3_synth_emits_stats_json():
+def test_phase3_synth_persists_the_area_figure_it_measured():
+    """Same PROPERTY as the phase-2 test above — step 9's declared artefact gets
+    written — but deliberately not the same MECHANISM.
+
+    This originally asserted `emit_stats_json`, i.e. that phase3 went through
+    the same shared emitter as design_one_shot_runner. While this branch was in
+    flight, #457 (v1.7.43) landed `synth_area_stats_emit`, which closes the
+    phase-3 half of step 9 independently: it lifts the area figure out of the
+    synthesis log into `<synth>/area.rpt`, the OTHER alternative step 9's
+    required_outputs accepts, and REFUSES to write when the log carries only
+    per-module locals rather than guessing. Keeping a second emitter here would
+    be duplicate producers for one declaration, so the rebase took #457's.
+
+    The test now asserts the property both satisfy, so neither implementation is
+    pinned: whichever emitter phase-3 synth uses, it must persist the figure it
+    already measured into one of step 9's declared paths, and must have a
+    refuse-rather-than-guess path so an unmeasurable run leaves step 9 honestly
+    MISSING instead of gaining a fabricated zero."""
     src = _synth_source("step_synth", "phase3_one_shot_runner")
-    assert "emit_stats_json" in src, (
-        "phase3_one_shot_runner.step_synth must persist the `stat -liberty` "
-        "block it already measures as phase2/stage2/synth/stats.json")
+    assert ("emit_stats_json" in src) or ("emit_for_run" in src), (
+        "phase3_one_shot_runner.step_synth must persist the synthesis area/stat "
+        "figure it already measures into one of step 9's declared artefacts "
+        "(stats.json via _yosys_stat, or area.rpt via synth_area_stats_emit)")
+    assert "_area_stats is not None" in src or "if _stats" in src, (
+        "the emitter's refusal must be handled: a run whose log carries no "
+        "usable figure must leave the artefact absent, not write a guess")
 
 
 def test_stats_json_satisfies_step9_required_outputs(tmp_path):
