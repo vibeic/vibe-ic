@@ -104,22 +104,59 @@ class AuditResult:
     summary: dict = field(default_factory=dict)
 
 
-def _analog_dir(project: Path) -> Optional[Path]:
+# See analog_netlist_connectivity_check for the measured rationale: the flow
+# YAML anchors A3 netlists at `phase2/analog/*/*.sp` while the analog runner
+# writes them under `phase3/analog/<block>/`. Returning only the FIRST existing
+# root hid the phase2 decks from this gate on every project that had reached A5
+# — a vacuous PASS. Scan every analog root; never fall back to the whole
+# project (a digital PEX netlist is not an analog deck).
+_ANALOG_ROOT_RELS = ("phase1/analog", "phase2/analog", "phase3/analog",
+                     "analog")
+
+
+def _analog_roots(project: Path) -> List[Path]:
+    """Every analog root that exists, de-duplicated, in scan order."""
+    roots: List[Path] = []
+    seen = set()
+
+    def _add(cand: Optional[Path]) -> None:
+        if cand is None or not cand.is_dir():
+            return
+        try:
+            key = cand.resolve()
+        except OSError:
+            key = cand
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(cand)
+
     if _HAVE_PL:
         try:
             d = _pl.analog_dir(project)
-            if d and Path(d).is_dir():
-                return Path(d)
+            _add(Path(d) if d else None)
         except Exception:
             pass
-    for cand in (project / "phase3" / "analog",
-                 project / "phase2" / "analog",
-                 project / "analog"):
-        if cand.is_dir():
-            return cand
-    if project.is_dir():
-        return project
-    return None
+    for rel in _ANALOG_ROOT_RELS:
+        _add(project / rel)
+    return roots
+
+
+def _sp_files(project: Path) -> List[Path]:
+    """Every `.sp` deck under every analog root, de-duplicated."""
+    out: List[Path] = []
+    seen = set()
+    for root in _analog_roots(project):
+        for sp in sorted(root.rglob("*.sp")):
+            try:
+                key = sp.resolve()
+            except OSError:
+                key = sp
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(sp)
+    return sorted(out)
 
 
 def _detect_pdk(text: str) -> Optional[str]:
@@ -214,15 +251,14 @@ def _check_file(text: str, rel: str, findings: List[Finding]) -> Optional[bool]:
 
 def run_audit(project: Path) -> AuditResult:
     result = AuditResult()
-    analog_dir = _analog_dir(project)
-    if analog_dir is None:
+    if not _analog_roots(project):
         result.findings.append(Finding(
             rule="SKIP_NO_ANALOG_DIR", severity="INFO",
             message="No analog directory; skipping tb supply check"))
         result.summary = {"skipped": True, "reason": "no_analog_dir"}
         return result
 
-    sp_files = sorted(analog_dir.rglob("*.sp"))
+    sp_files = _sp_files(project)
     if not sp_files:
         result.findings.append(Finding(
             rule="SKIP_NO_SP_FILES", severity="INFO",

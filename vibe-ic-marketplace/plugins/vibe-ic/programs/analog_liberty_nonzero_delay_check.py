@@ -157,11 +157,70 @@ def analyze_liberty(text: str) -> Tuple[bool, List[float], str]:
     return has_timing, values, cell_name
 
 
-def _discover_blocks(project: Path) -> List[str]:
-    analog = (_pl.analog_dir(project) if _pl is not None else project / "analog")
-    if not analog.is_dir():
+# Block names have TWO canonical sources and they live under DIFFERENT roots:
+# the flow YAML anchors the whole analog track on
+# `phase1/analog/analog_block_list.json` + `phase1/analog/*/spec.json`, while
+# `analog_one_shot_runner` writes both under `_pl.analog_dir()` =
+# `phase3/analog/`. Reading only ONE of them made this gate discover zero
+# blocks — and vacuously PASS — on the other layout, which is exactly the
+# layout the A8 flow step declares. Take the union.
+_BLOCK_ROOT_RELS = ("phase1/analog", "phase2/analog", "phase3/analog",
+                    "analog")
+
+
+def _block_names_from_list(bl: Path) -> List[str]:
+    try:
+        data = json.loads(bl.read_text(errors="replace"))
+    except (json.JSONDecodeError, OSError):
         return []
-    return sorted(p.parent.name for p in analog.glob("*/spec.json"))
+    entries = data.get("blocks") if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        return []
+    out: List[str] = []
+    for b in entries:
+        name = b.get("name") if isinstance(b, dict) else b
+        if name:
+            out.append(str(name))
+    return out
+
+
+def _discover_blocks(project: Path) -> List[str]:
+    """Union of every canonical analog-block-name source, over every root."""
+    names: List[str] = []
+    seen = set()
+
+    def _add(name: str) -> None:
+        name = str(name).strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+
+    roots: List[Path] = []
+    if _pl is not None:
+        try:
+            roots.append(Path(_pl.analog_dir(project)))
+        except Exception:
+            pass
+    roots.extend(project / rel for rel in _BLOCK_ROOT_RELS)
+
+    done = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            key = root.resolve()
+        except OSError:
+            key = root
+        if key in done:
+            continue
+        done.add(key)
+        bl = root / "analog_block_list.json"
+        if bl.is_file():
+            for n in _block_names_from_list(bl):
+                _add(n)
+        for spec in sorted(root.glob("*/spec.json")):
+            _add(spec.parent.name)
+    return sorted(names)
 
 
 def _hardmacro_dir(project: Path) -> Path:
