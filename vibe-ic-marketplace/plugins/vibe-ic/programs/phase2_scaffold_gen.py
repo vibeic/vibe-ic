@@ -210,6 +210,12 @@ class UnresolvedPortWidth(RuntimeError):
             % (artefact, len(ports), detail))
 
 
+# Distinguishes "the layer stated no width" from every value a layer CAN
+# state — including the `1` that `dict.get`'s default used to supply, which
+# was then indistinguishable from a layer that really said 1.
+_WIDTH_NOT_STATED = object()
+
+
 def _record_declared_width(entry: dict, name: str,
                            into: dict[str, str]) -> None:
     """Note a width this module cannot use but the layer nonetheless STATES.
@@ -291,6 +297,28 @@ def derive_signals(l17: dict, l9: dict) -> list[dict]:
       ABSENT     the layer states NO width at all (key missing, or null,
                  with no ``width_symbolic``).  ->  ``width: 1``, the
                  scaffold's documented scalar default.
+
+    BOTH ENCODINGS OF "NO WIDTH" MUST BEHAVE ALIKE (#404, round 6)
+    ---------------------------------------------------------------
+    The contract above names two encodings of ABSENT — "key missing, or
+    null" — and until this landing only the NULL one honoured
+    ``width_symbolic``. `port.get("width", 1)` turned a MISSING key into an
+    int >= 1, which registered the port as `resolved_from_layer` and made
+    the post-pass skip it, so key-absent + ``width_symbolic`` emitted a
+    silent 1-bit scalar and no emitter ever raised. Which of two equivalent
+    spellings of "I have no width" the producer happened to choose decided
+    whether the refusal fired.
+
+    That was not hypothetical. Measured on this repo's own producers:
+    `phase1_doc_one_shot_runner._parse_port_width` returns
+    ``(None, None, 0, 'size-1:0')`` for the only non-numeric width cell in
+    the tracked corpus, and BOTH L1->L9 promotion sites copy the typed
+    fields under ``if _v is not None``, so a None width is DROPPED while
+    ``width_symbolic`` is kept — precisely the divergent shape. It does not
+    appear in any tracked L9 today only because the L1 emitter separately
+    keeps the raw prose in ``width``, a retention its own comment calls
+    "backward compatibility". The enforcement axis therefore rested on a
+    legacy field in a different program. It no longer does.
 
     WHY ABSENT IS NOT UNRESOLVED, stated as a measurement rather than a
     preference: over the 106 published cells carrying
@@ -381,11 +409,24 @@ def derive_signals(l17: dict, l9: dict) -> list[dict]:
                 continue
             name = port.get("name") or ""
             direction = _normalize_dir(port.get("direction") or "input")
-            width = port.get("width", 1)
+            # What the LAYER states, or the sentinel when it states nothing.
+            # This used to be `port.get("width", 1)`, which supplied the
+            # 1-bit default HERE — and the default then satisfied the
+            # `int >= 1` test below and registered the port in
+            # `resolved_from_layer`, whose own comment above says it holds
+            # names resolved "as opposed to the 1-bit default". The post-pass
+            # skips anything in that set, so a port carrying `width_symbolic`
+            # with NO `width` key came out a silent 1-bit scalar and
+            # `require_resolved_widths` never saw it — the exact collapse the
+            # rest of this function exists to refuse, reachable through the
+            # one encoding of "no width" that bypassed the check.
+            width = port.get("width", _WIDTH_NOT_STATED)
             if isinstance(width, str) and width.isdigit():
                 width = int(width)
             if isinstance(width, int) and not isinstance(width, bool) \
                     and width >= 1:
+                # `_WIDTH_NOT_STATED` is not an int, so this arm is now
+                # reachable only from a width the layer actually stated.
                 resolved_from_layer.add(_sanitize_id(name))
             else:
                 width = 1
