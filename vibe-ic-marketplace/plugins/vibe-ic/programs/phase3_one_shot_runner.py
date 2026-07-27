@@ -6333,8 +6333,18 @@ _ORFS_PATH_SYNTH_KNOBS = ("ADDER_MAP_FILE",)
 _ORFS_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 # Make-style ``NAME = value`` (optional ``export``, and ``:=`` / ``?=`` / ``+=``).
+#
+# The RHS is ``.*?`` — an EMPTY right-hand side is a DECLARATION, not the
+# absence of one. ``ADDER_MAP_FILE :=`` is how a Make config says "this knob is
+# deliberately off"; matching only a non-empty RHS made that line invisible, so
+# a knob the design explicitly CLEARED was reported identically to a knob the
+# design never mentioned, and the empty assignment never reached the audit's
+# denominator (#503). The Tcl patterns below are deliberately NOT relaxed the
+# same way: a bare ``set NAME`` / ``set ::env(NAME)`` is a Tcl READ, not an
+# assignment-to-empty, so admitting a missing value there would invent a
+# declaration the config never made.
 _RF_MK_ASSIGN_RE = re.compile(
-    r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*[:?+]?=\s*(.+?)\s*$")
+    r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*[:?+]?=\s*(.*?)\s*$")
 # Tcl-style ``set ::env(NAME) value`` / ``setenv NAME value`` / ``set NAME value``.
 _RF_TCL_ENV_SET_RE = re.compile(
     r"^\s*set\s+(?:::)?env\(\s*([A-Z_][A-Z0-9_]*)\s*\)\s+(.+?)\s*$")
@@ -6493,8 +6503,34 @@ _ORFS_NUM_PNR_KNOBS = (
 # invisible. Kept as a union of the existing tuples so a knob added to either
 # side is counted here automatically and cannot silently fall out of the
 # coverage figure.
-_ORFS_HONOURED_KNOBS = frozenset(
-    _ORFS_NUM_PNR_KNOBS + _ORFS_BOOL_SYNTH_KNOBS + _ORFS_PATH_SYNTH_KNOBS)
+#
+# The SUBSYSTEM that honours each name, keyed on the name alone. This is what
+# makes the audit's accounting identity CLOSE (#503): the audit's `adopted` /
+# `rejected` buckets can only ever hold names this file's PnR ingest reads, so
+# any honoured name belonging to a DIFFERENT subsystem previously reached no
+# bucket at all — `declared_total` counted it, nothing listed it. Deriving the
+# split from the tuples (rather than restating it) means a knob added to either
+# side lands in a bucket automatically and cannot silently re-open the hole.
+_ORFS_KNOB_SUBSYSTEM: Dict[str, str] = {}
+for _k in _ORFS_NUM_PNR_KNOBS:
+    _ORFS_KNOB_SUBSYSTEM[_k] = "pnr"
+for _k in _ORFS_BOOL_SYNTH_KNOBS + _ORFS_PATH_SYNTH_KNOBS:
+    _ORFS_KNOB_SUBSYSTEM[_k] = "synth"
+del _k
+
+_ORFS_HONOURED_KNOBS = frozenset(_ORFS_KNOB_SUBSYSTEM)
+
+# The honoured names this file's PnR audit does NOT itself decide — honoured,
+# but by another phase-3 subsystem. Derived by set difference so it can never
+# drift from the tuples above.
+_ORFS_HONOURED_ELSEWHERE_KNOBS = frozenset(
+    k for k, sub in _ORFS_KNOB_SUBSYSTEM.items() if sub != "pnr")
+
+# Human-readable name of each honouring subsystem, for the report prose.
+_ORFS_SUBSYSTEM_LABEL = {
+    "pnr": "phase-3 floorplan / placement / CTS / setup-repair",
+    "synth": "the phase-3 synth front-end (`step_synth`, yosys)",
+}
 
 # File extensions `_rf_pnr_scan` actually parses. A staged config file with any
 # other extension is NOT examined; it is recorded so "we did not read it" can
@@ -6523,6 +6559,8 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
          "unreadable":   ["<rel path>", ...],   # staged but could not be read
          "unscanned":    ["<rel path>", ...],   # staged, extension not parsed
          "all_declared": {NAME: "<rel path>"},  # EVERY assignment seen
+         "all_declared_values":                 # winning value + its file
+                         {NAME: {"value": "<str>", "source": "<rel path>"}},
          "declared":     {KNOB: {"value": "<str>", "source": "<rel path>"}},
          "rejected":     [{"knob","value","source","reason"}, ...]}
 
@@ -6531,6 +6569,15 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
     audit can report "5 knobs adopted" while the design declared 16 and nothing
     states the other 11 were never considered — "not examined" reading exactly
     like "nothing to examine".
+
+    ``all_declared_values`` carries the SAME names with the value that actually
+    steers the run — the LAST assignment, i.e. Make/Tcl override semantics —
+    and the file that made it. ``all_declared`` deliberately keeps the FIRST
+    declaring file (unchanged), because it answers "where is this name
+    introduced"; the value question is "which assignment won", and those are
+    different questions. An assignment with an EMPTY right-hand side is
+    recorded here with ``"value": ""`` — a deliberate clear is a declaration
+    and must be reportable as one.
 
     ``declared`` carries only knobs with a valid numeric value; last-VALID-
     assignment wins (Make/Tcl override semantics) and a non-numeric / empty /
@@ -6542,7 +6589,7 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
     out: Dict[str, object] = {
         "config_dir": None, "config_files": [], "unreadable": [],
         "unscanned": [], "excluded_oracle": [], "all_declared": {},
-        "declared": {}, "rejected": [],
+        "all_declared_values": {}, "declared": {}, "rejected": [],
     }
     if not rdir.is_dir():
         return out
@@ -6554,6 +6601,8 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
         out["excluded_oracle"]                     # type: ignore[assignment]
     all_declared: Dict[str, str] = \
         out["all_declared"]                        # type: ignore[assignment]
+    all_declared_values: Dict[str, Dict[str, str]] = \
+        out["all_declared_values"]                 # type: ignore[assignment]
     declared: Dict[str, Dict[str, str]] = \
         out["declared"]                            # type: ignore[assignment]
     rejected: List[Dict[str, str]] = \
@@ -6615,6 +6664,10 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
             # DENOMINATOR: record the assignment before any recognition filter,
             # so a name phase-3 honours nowhere is still counted and disclosed.
             all_declared.setdefault(name, rel)
+            # …and the assignment that WON (last wins), so a bucket that needs
+            # the value — not just the name — can report it with provenance.
+            all_declared_values[name] = {
+                "value": _rf_strip_knob_value(val), "source": rel}
             if name not in _ORFS_NUM_PNR_KNOBS:
                 continue
             v = _rf_strip_knob_value(val)
@@ -6824,15 +6877,123 @@ def _reference_flow_declared_die_util(project: Path) -> Optional[float]:
 # generic defaults are in force (so "no reference flow" is never confused with
 # "reference flow silently ignored").
 #
-# STATUS values (the one-line verdict at the top of the report):
+# STATUS values (the one-line verdict at the top of the report). The canonical
+# list lives in `_RF_PNR_STATUSES` below; the producer picks from it and
+# `_RF_PNR_STATUS_HEADLINE` must key on exactly it, so the verdict and the
+# sentence explaining the verdict cannot drift apart:
 #   no-config       — no input/reference_flow staged → generic defaults, and the
 #                     generated pnr.tcl is byte-identical to the legacy flow.
-#   no-knobs        — a config IS staged but declares none of the knobs we
-#                     recognize → generic defaults (nothing was ignored).
-#   knobs-rejected  — knobs were declared but ALL were unusable → generic
+#   no-knobs        — a config IS staged but declares none of the knobs ANY
+#                     phase-3 ingest recognizes → generic defaults (nothing was
+#                     ignored).
+#   config-unreadable — a config is staged, part of it could not be read, and
+#                     no knob came out of the part that could.
+#   knobs-honoured-elsewhere — the config declares NO PnR knob, but it DOES
+#                     declare knobs another phase-3 subsystem honours. The PnR
+#                     defaults are generic, yet the design's declaration was
+#                     NOT ignored — which is the opposite of what `no-knobs`
+#                     says, so it must not borrow that verdict (#503).
+#   knobs-rejected  — PnR knobs were declared but ALL were unusable → generic
 #                     defaults, with the reason for each drop.
-#   knobs-adopted   — at least one knob was adopted and applied.
+#   knobs-adopted   — at least one PnR knob was adopted and applied.
 _RF_PNR_REPORT_STEM = "reference_flow_knobs"
+
+# The buckets every declared name is partitioned into, in PRECEDENCE order. A
+# name that reaches two lists (declared twice — once with an unusable value and
+# once with a usable one) is counted under the FIRST bucket here, so the
+# partition stays a partition and the identity below can close.
+_RF_PNR_BUCKETS = ("adopted", "rejected", "honoured_elsewhere",
+                   "not_recognised")
+
+
+def _rf_pnr_accounting(all_declared: Sequence[str],
+                       bucket_names: Dict[str, Sequence[str]]
+                       ) -> Dict[str, object]:
+    """Partition every DECLARED name into exactly one audit bucket and report
+    whether the accounting identity closes. Pure / deterministic.
+
+    ``declared_total`` is only auditable if it BALANCES: the report exists to
+    answer "which knob steered this run", so a declared name that reaches no
+    bucket is a name the report silently drops. Before #503 the four synth-side
+    knobs did exactly that — counted in the denominator, excluded from
+    ``not_recognised`` (they ARE honoured), and unreachable from
+    ``adopted``/``rejected`` (which only this file's PnR ingest feeds).
+
+    Returns::
+
+        {"buckets":   {bucket: [name, ...]},   # disjoint, precedence-resolved
+         "counts":    {bucket: n},
+         "total":     len(set(all_declared)),
+         "unaccounted": [name, ...],           # MUST be empty
+         "balanced":  bool}
+    """
+    remaining = set(all_declared)
+    buckets: Dict[str, List[str]] = {}
+    counts: Dict[str, int] = {}
+    for b in _RF_PNR_BUCKETS:
+        got: List[str] = []
+        for n in bucket_names.get(b, ()):
+            if n in remaining:
+                remaining.discard(n)
+                got.append(n)
+        got.sort()
+        buckets[b] = got
+        counts[b] = len(got)
+    unaccounted = sorted(remaining)
+    total = len(set(all_declared))
+    return {
+        "buckets": buckets,
+        "counts": counts,
+        "total": total,
+        "unaccounted": unaccounted,
+        "balanced": (not unaccounted
+                     and sum(counts.values()) == total),
+    }
+
+
+def _rf_honoured_elsewhere_entries(
+        all_declared_values: Dict[str, Dict[str, str]],
+        subsystem_knobs: Dict[str, object]) -> List[Dict[str, str]]:
+    """Provenance rows for the declared names honoured by a phase-3 subsystem
+    OTHER than this file's PnR ingest — knob, winning value, declaring file,
+    which subsystem honours it, and what it actually did there. Pure.
+
+    ``subsystem_knobs`` is the honouring ingest's OWN result
+    (`_reference_flow_qor_knobs`), so "was it carried" is answered by the code
+    that carries it rather than re-derived here — the report cannot claim an
+    effect the flow did not produce.
+
+    An EMPTY declared value is reported as a DELIBERATE CLEAR, never as an
+    absent declaration: a config that writes ``ADDER_MAP_FILE :=`` is stating
+    an intent, and rendering that as "not declared" loses the one fact the
+    reader came for."""
+    rows: List[Dict[str, str]] = []
+    for knob in sorted(all_declared_values):
+        if knob not in _ORFS_HONOURED_ELSEWHERE_KNOBS:
+            continue
+        d = all_declared_values[knob]
+        value = d.get("value", "")
+        sub = _ORFS_KNOB_SUBSYSTEM.get(knob, "")
+        label = _ORFS_SUBSYSTEM_LABEL.get(sub, sub)
+        carried = subsystem_knobs.get(knob)
+        if carried is not None and carried != "":
+            effect = (f"CARRIED to {label} as `{carried}` — this declaration "
+                      f"steered the run, outside the PnR parameters above")
+        elif value == "":
+            effect = (f"DECLARED EMPTY — an explicit, deliberate clear "
+                      f"(`{knob} :=`), so nothing is applied for it by "
+                      f"{label}. This is the design's stated intent, NOT a "
+                      f"missing declaration")
+        else:
+            effect = (f"DECLARED BUT NOT REQUESTED — the value was read by "
+                      f"{label} and treated as off (a falsy boolean, or a "
+                      f"later assignment overrode it); no directive was "
+                      f"emitted")
+        rows.append({
+            "knob": knob, "value": value, "source": d.get("source", ""),
+            "honoured_by": sub, "honoured_by_label": label, "effect": effect,
+        })
+    return rows
 
 
 def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
@@ -6880,6 +7041,17 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
     # names nothing honours.
     all_declared: Dict[str, str] = \
         scan["all_declared"]                       # type: ignore[assignment]
+    all_declared_values: Dict[str, Dict[str, str]] = \
+        scan["all_declared_values"]                # type: ignore[assignment]
+    # HONOURED, BUT NOT HERE (#503). A knob this file's PnR ingest does not
+    # read, yet another phase-3 subsystem does, belongs in NEITHER
+    # `adopted`/`rejected` (this ingest never saw it) NOR `not_recognised` (it
+    # IS recognised). Without its own bucket it was counted in `declared_total`
+    # and listed nowhere — the report that exists to say what steered the run
+    # could not represent a knob that steered it. The honouring ingest's own
+    # result decides the effect, so the report cannot over-claim.
+    honoured_elsewhere = _rf_honoured_elsewhere_entries(
+        all_declared_values, _reference_flow_qor_knobs(project))
     # NOTE the precise claim: the NAME is read by no knob ingest. Phase-3 may
     # still obtain the same underlying input by another route (it discovers
     # staged SDC / RTL / PDK itself rather than by honouring the variable that
@@ -6888,6 +7060,15 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
     not_recognised = [{"knob": k, "source": v}
                       for k, v in sorted(all_declared.items())
                       if k not in _ORFS_HONOURED_KNOBS]
+    # The accounting identity, computed rather than asserted: every declared
+    # name lands in exactly one bucket, and the audit CARRIES the proof so a
+    # reader (and the regression test) can check it without re-deriving it.
+    accounting = _rf_pnr_accounting(
+        list(all_declared),
+        {"adopted": [a["knob"] for a in adopted],
+         "rejected": [r["knob"] for r in rejected],
+         "honoured_elsewhere": [h["knob"] for h in honoured_elsewhere],
+         "not_recognised": [n["knob"] for n in not_recognised]})
     unreadable: List[str] = scan["unreadable"]     # type: ignore[assignment]
     unscanned: List[str] = scan["unscanned"]       # type: ignore[assignment]
     excluded_oracle: List[str] = \
@@ -6910,6 +7091,13 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         # strength of files that were never opened — the ingest-side twin of
         # reading an unanalysed STA report as a met corner.
         status = "config-unreadable"
+    elif not declared and not rejected and honoured_elsewhere:
+        # No PnR knob — but the config DID declare knobs another phase-3
+        # subsystem honours. `no-knobs` closes with "Nothing was silently
+        # ignored", which reads as "no knob steered this run"; here knobs did
+        # steer it, just not from this ingest. Borrowing that verdict would
+        # state the opposite of the truth (#503).
+        status = "knobs-honoured-elsewhere"
     elif not declared and not rejected:
         status = "no-knobs"
     elif not adopted:
@@ -6926,6 +7114,8 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         "ingest_complete": ingest_complete,
         "declared_total": len(all_declared),
         "not_recognised": not_recognised,
+        "honoured_elsewhere": honoured_elsewhere,
+        "accounting": accounting,
         "adopted": adopted,
         "rejected": rejected,
         "applied": {k: mapping[k] for k in
@@ -6956,12 +7146,42 @@ _RF_PNR_STATUS_HEADLINE = {
         "The staged `input/reference_flow` declared knobs but NONE were usable "
         "— every one is listed below with the reason it was dropped. Phase-3 "
         "used its GENERIC defaults; no value was fabricated."),
+    "knobs-honoured-elsewhere": (
+        "A `input/reference_flow` config IS staged and declares NO floorplan "
+        "/ place / CTS / timing knob — but it DOES declare knobs a DIFFERENT "
+        "phase-3 subsystem honours, and those knobs steered this run. They "
+        "are listed under **Honoured by another phase-3 subsystem** below "
+        "with the value, the declaring file, and which subsystem consumed "
+        "each one. "
+        "Phase-3 used its GENERIC defaults for floorplan / placement / CTS / "
+        "setup-repair only; the design's declaration was NOT ignored."),
     "knobs-adopted": (
         "Phase-3 ADOPTED the knobs the design's own staged "
         "`input/reference_flow` declares, in place of its generic defaults. "
         "Every adopted knob, its value, and the file that declared it are "
         "listed below."),
 }
+
+# LOCKSTEP: the statuses `_reference_flow_pnr_audit` can emit and the headline
+# map above are ONE list, derived from the map so a status added to the
+# producer without a sentence to explain it is caught by the regression test
+# rather than shipping as a blank headline (`.get(status, "")` used to render
+# an unknown status as an empty line — silent drift, exactly the shape of
+# defect this report exists to prevent).
+_RF_PNR_STATUSES = tuple(sorted(_RF_PNR_STATUS_HEADLINE))
+
+
+def _rf_pnr_status_headline(status: str) -> str:
+    """The sentence explaining a status. Never returns "" for an unregistered
+    status — a missing headline is a DEFECT and says so, loudly, in the report
+    itself rather than as an absence the reader cannot notice. Pure."""
+    try:
+        return _RF_PNR_STATUS_HEADLINE[status]
+    except KeyError:
+        return (f"**INTERNAL DEFECT — status `{status}` has no registered "
+                f"headline.** The verdict above is real but unexplained; "
+                f"`_RF_PNR_STATUS_HEADLINE` and the status producer have "
+                f"drifted apart. Treat this report as incomplete.")
 
 
 def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
@@ -6972,7 +7192,7 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
         "",
         f"**Status:** `{status}`",
         "",
-        _RF_PNR_STATUS_HEADLINE.get(status, ""),
+        _rf_pnr_status_headline(status),
         "",
     ]
     cfg_files: List[str] = audit["config_files"]  # type: ignore[assignment]
@@ -6999,6 +7219,41 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
             f"- Ingest complete: **{bool(audit.get('ingest_complete'))}**",
             "",
         ]
+        # ---- the accounting identity, shown rather than implied -------------
+        # A denominator that does not balance against its own buckets is not a
+        # denominator: before #503, two knobs on ibex's real config were
+        # counted here and listed in NO section below.
+        acct: Dict[str, object] = \
+            audit.get("accounting", {})           # type: ignore[assignment]
+        if acct:
+            counts: Dict[str, int] = \
+                acct.get("counts", {})            # type: ignore[assignment]
+            unacc: List[str] = \
+                acct.get("unaccounted", [])       # type: ignore[assignment]
+            out += [
+                "### Where every declared name went", "",
+                "| bucket | declared names |", "|---|---|",
+                f"| adopted (applied to a PnR parameter) "
+                f"| {counts.get('adopted', 0)} |",
+                f"| declared but not applied | {counts.get('rejected', 0)} |",
+                f"| honoured by another phase-3 subsystem "
+                f"| {counts.get('honoured_elsewhere', 0)} |",
+                f"| read by no phase-3 knob ingest "
+                f"| {counts.get('not_recognised', 0)} |",
+                f"| **total** | **{sum(counts.values())} "
+                f"of {declared_total}** |",
+                "",
+            ]
+            if acct.get("balanced"):
+                out += ["Every declared name is accounted for in exactly one "
+                        "bucket above.", ""]
+            else:
+                out += [
+                    "> **The accounting does NOT balance.** These declared "
+                    "names reached no bucket, so nothing below states what "
+                    "became of them: "
+                    + ", ".join(f"`{n}`" for n in unacc) + ".", "",
+                ]
         oracle_n = len(audit.get("excluded_oracle", []))  # type: ignore[arg-type]
         if oracle_n:
             out += [
@@ -7057,6 +7312,33 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
                 for a in adopted] + [""]
     else:
         out += ["_None — the generic defaults are in force._", ""]
+
+    # A SEPARATE section, deliberately not merged into "Adopted knobs": these
+    # knobs are honoured by a DIFFERENT subsystem, and a reader asking "why did
+    # the floorplan change" must be able to tell the two apart at a glance.
+    helse: List[Dict[str, str]] = \
+        audit.get("honoured_elsewhere", [])        # type: ignore[assignment]
+    if helse:
+        out += ["## Honoured by another phase-3 subsystem", "",
+                "These names ARE recognized knobs, but they are consumed "
+                "outside the floorplan / placement / CTS / setup-repair "
+                "ingest this report covers, so they appear in none of the PnR "
+                "parameters above. They are listed here — with the winning "
+                "value, the file that declared it, and what the honouring "
+                "subsystem did with it — because a knob that steered the run "
+                "must be visible in the record of what steered the run. An "
+                "EMPTY declared value is a deliberate clear, not an absent "
+                "declaration.", "",
+                "| knob | declared value | source file | honoured by "
+                "| effect |",
+                "|---|---|---|---|---|"]
+        for h in helse:
+            shown = f"`{h['value']}`" if h.get("value") else "_(empty)_"
+            out.append(
+                f"| `{h['knob']}` | {shown} | `{h.get('source', '')}` "
+                f"| {h.get('honoured_by_label', h.get('honoured_by', ''))} "
+                f"| {h.get('effect', '')} |")
+        out.append("")
 
     rejected: List[Dict[str, str]] = \
         audit["rejected"]                          # type: ignore[assignment]
