@@ -262,6 +262,18 @@ def main(argv: list[str]) -> int:
                 f"re-run `python3 tools/gen_programs_index.py`\n"
             )
             return 1
+        # A PASS must say how much it examined (vibe-ic#447). A silent `return
+        # 0` here is byte-identical to a run that walked nothing — and this
+        # tree's own `gate_discloses_denominator_check` catches exactly that,
+        # which is how this line came to exist.
+        if not rows:
+            sys.stderr.write(
+                "NOTHING_SCANNED: no programs found — this is NOT a pass; "
+                "an index generated over zero programs matches an empty "
+                "INDEX.md trivially.\n")
+            return 2
+        print(f"[PASS] programs index fresh: {len(rows)} program(s) indexed, "
+              f"INDEX.md matches what the tree would generate.")
         return 0
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

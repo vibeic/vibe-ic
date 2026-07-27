@@ -191,6 +191,16 @@ run "L4 -> SystemRDL disposition"       "$ROOT" python3 "$PG/l4_systemrdl_export
 # artefacts, so a verdict that changes while its row does not is a FAIL here.
 run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_index.py" --check --root "$ROOT"
 
+# vibe-ic#459 follow-up — the PROGRAMS index, alongside the evidence index above.
+# MAIN WENT RED TWICE (v1.7.40, v1.7.41) because a new program landed and
+# INDEX.md was never regenerated. The freshness test EXISTS and is correct; it
+# lives in the plugin pytest suite, which this lane does not run, so a green
+# hygiene run was true and carried no information about it. The generator
+# already ships `--check` (exit 1 if the index would change) — the repair was
+# never missing, only unwired. One `git ls-files` + one walk; measured
+# discriminating: injecting a throwaway program makes it rc 1, removing it rc 0.
+run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_programs_index.py" --check
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired
