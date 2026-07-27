@@ -11283,9 +11283,20 @@ def _emit_cts_report_if_complete(project: Path, top: str):
         body.append("")
     body.extend(cts_lines)
     rpt.write_text("\n".join(body) + "\n")
-    # ORGANIC #568 — durable DOUBLE: a JSON sidecar so the structured CTS
-    # evidence survives even if the human-readable rpt is later touched. The
-    # canonicalize fallback prefers whichever durable artefact is present.
+    # ORGANIC #568 — a JSON sidecar carrying the same CTS evidence in
+    # structured form.
+    #
+    # WHAT IT IS NOT: this comment used to claim "the canonicalize fallback
+    # prefers whichever durable artefact is present". It does not, and nothing
+    # else does either — `cts_quality_check` parses ONLY clock_tree.rpt
+    # (`_CTS_RPT_CANDIDATES`), step 19's required_outputs names only
+    # clock_tree.rpt, and a repo-wide search finds no reader of clock_tree.json
+    # outside tests. It is a write-only debugging sidecar, and it is
+    # deliberately NOT declared as a required_output: it is written on the
+    # metrics path only (the #568 EVIDENCE-LOST branch above writes the .rpt
+    # and returns before reaching here) and its write is wrapped in a
+    # swallow-OSError, so declaring it would manufacture a MISSING on a branch
+    # that is working as designed.
     try:
         (cts_out / "clock_tree.json").write_text(
             json.dumps({
@@ -19801,6 +19812,151 @@ def _canonical_gds_is_stale(primary_gds: Path, canon_gds: Path) -> bool:
         return True
 
 
+def _clock_plan_stale_inputs(project: Path, existing_plan,
+                             sdc_paths) -> List[str]:
+    """SDCs whose CONTENT differs from what the plan says it was derived from.
+
+    The Step-16 refresh test was CONTENT-of-the-PLAN only: once
+    clock_plan.json carried a populated `clocks` array it was never rewritten,
+    however much later the constraints were regenerated. So an SDC edited after
+    the plan was written (a re-run at a different period, a clock added) left
+    the stale plan — and every skew target keyed off it — describing the old
+    design.
+
+    NOT mtime. mtime does not survive `git clone`, copy, rsync or archive
+    extraction, which is how this plugin's corpus and every user project are
+    distributed. An mtime rule over the 17 tracked `clock_plan.json` files
+    fired on 6 of them in one checkout and 5 in another of the SAME commit —
+    identical bytes, different answer, purely from the order git wrote files.
+    The plan instead RECORDS `derived_from` = {relative SDC path: sha256}, and
+    this compares
+    that record against the SDCs present now, using the same shared helpers
+    `clock_plan_check` uses (`_pl.clock_plan_input_sdcs` /
+    `_pl.clock_plan_sdc_digests`) so producer and checker cannot disagree about
+    what the inputs are.
+
+    Returns [] when the plan records no provenance — an old plan written before
+    `derived_from` existed says nothing about its inputs, and inventing
+    staleness for it is what let a good plan be overwritten.
+    """
+    if not isinstance(existing_plan, dict):
+        return []
+    recorded = existing_plan.get("derived_from")
+    if not isinstance(recorded, dict) or not recorded:
+        return []
+    current = _pl.clock_plan_sdc_digests(project, sdc_paths)
+    changed = [rel for rel, digest in recorded.items()
+               if current.get(rel) != digest]
+    added = [rel for rel in current if rel not in recorded]
+    return sorted(set(changed) | set(added))
+
+
+def emit_clock_plan(project: Path, clock_plan: Path, primary_def: Path,
+                    pnr_out: Path, notes: List[str]) -> Optional[str]:
+    """Write the Step-16 `clock_plan.json`; return its path, or None.
+
+    Split out of `step_canonicalize_artefacts` so the decision it encodes can
+    be DRIVEN by a test instead of inspected: the destructive path below
+    (a staleness refresh that re-derives nothing) is only observable by
+    executing it. Behaviour is unchanged by the split.
+
+    Emit a SUBSTANTIVE plan that `clock_plan_check` accepts: one entry per
+    `create_clock` found across the project's SDCs, each carrying name +
+    positive period_ns + source port. That checker sweeps the SDCs and FAILs
+    (SDC_CLOCK_DROPPED) on any create_clock name absent from the plan, so ALL
+    of them are harvested — chip-AGNOSTIC, no hardcoded clock name.
+
+    REFRESH has two independent triggers:
+
+      * CONTENT (v0.2.55) — the plan carries no populated `clocks` list, i.e.
+        it is absent, unparseable, or a thin `{"primary_clock": "clk"}` stub
+        that would FAIL CLOCK_NO_PERIOD / CLOCK_NO_SOURCE.
+      * STALENESS — the SDC content the plan RECORDS as its provenance
+        (`derived_from`) no longer matches what is on disk. The content trigger
+        alone meant a plan with a populated `clocks` array was never rewritten
+        however much later the constraints were regenerated, so a re-run at a
+        different period left every skew target describing the old design.
+        Digest-keyed, never mtime (mtime does not survive a clone or a copy),
+        and sharing its input definition with `clock_plan_check` through
+        `_pl.clock_plan_*` so the two cannot disagree about what the inputs are.
+    """
+    needs_refresh = True
+    stale_refresh = False           # this refresh was triggered by staleness
+    sdc_paths = _pl.clock_plan_input_sdcs(project)
+    if clock_plan.is_file():
+        existing = None
+        try:
+            existing = json.loads(clock_plan.read_text(errors="ignore"))
+            cl = existing.get("clocks") if isinstance(existing, dict) else None
+            needs_refresh = not (isinstance(cl, list) and cl)
+        except Exception:
+            existing = None
+            needs_refresh = True
+        if not needs_refresh:
+            stale_against = _clock_plan_stale_inputs(
+                project, existing, sdc_paths)
+            if stale_against:
+                needs_refresh = True
+                stale_refresh = True
+                notes.append(
+                    f"clock_plan.json was derived from different SDC content "
+                    f"than is present now ({stale_against[:4]}) — re-derived "
+                    "rather than left stale")
+    if not (needs_refresh and primary_def.is_file()):
+        return None
+
+    sdc_texts = []
+    for sdc in sdc_paths:
+        try:
+            sdc_texts.append(sdc.read_text(errors="ignore"))
+        except OSError:
+            continue
+    clocks = _build_clock_records_from_sdcs(sdc_texts)
+
+    if not clocks and stale_refresh:
+        # DO NOT OVERWRITE A GOOD PLAN WITH A SYNTHETIC ONE.
+        #
+        # The write below is unconditional, and the fallback under it invents a
+        # single nominal 10 ns "clk" when no SDC yields a clock. That
+        # combination is harmless on the CONTENT trigger (the plan carried no
+        # clocks, so a synthetic one strictly improves it) and destructive on
+        # the STALENESS trigger: SDCs absent or moved + a primary DEF present +
+        # a provenance mismatch would replace a CORRECT multi-clock plan with
+        # one fabricated clock, and the replacement would then satisfy every
+        # downstream substance check. A staleness refresh may only proceed when
+        # re-derivation actually produced clocks from real SDCs; otherwise the
+        # existing plan — the only real measurement in play — is kept and the
+        # failure to re-derive is disclosed instead of being written over.
+        notes.append(
+            "clock_plan.json is stale (SDC content changed since it was "
+            "written) but re-derivation found no create_clock in any SDC "
+            f"({len(sdc_paths)} file(s) read) — the existing plan is KEPT "
+            "rather than replaced by the synthetic single-clock fallback")
+        return None
+
+    if not clocks:
+        # No SDC parsed — fall back to a single nominal core clock so the plan
+        # still carries a positive period + source object. Reachable only on
+        # the CONTENT trigger, where there is no real plan to destroy.
+        clocks["clk"] = {"name": "clk", "period_ns": 10.0, "source": "clk"}
+
+    clock_plan.parent.mkdir(parents=True, exist_ok=True)
+    clock_plan.write_text(json.dumps({
+        "tool": "openroad",
+        "source_log": str((pnr_out / "openroad.log").relative_to(project)),
+        "primary_clock": next(iter(clocks)),
+        "clocks": list(clocks.values()),
+        # PROVENANCE: what this plan was derived from, by CONTENT.
+        # `clock_plan_check` re-hashes exactly these paths, so the two sides
+        # cannot disagree about the inputs, and the record survives clone /
+        # copy / rsync / archive extraction the way an mtime does not.
+        "derived_from": _pl.clock_plan_sdc_digests(project, sdc_paths),
+        "buf_strategy": "clkbuf chain (heuristic; ASIC-grade CTS skill "
+                        "should refine via cts-plan)",
+    }, indent=2) + "\n")
+    return str(clock_plan)
+
+
 # ---------------------------------------------------------------------------
 # At-speed ATPG (DT1/DT2/DT3) producers — vibe-ic#235
 #
@@ -21055,7 +21211,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 f"#620: declared {len(_pv_declared)} PV sign-off output(s) "
                 f"in provenance.jsonl: {_pv_declared}")
 
-    # --- Step 16: clock plan + clock tree report -----------------------
+    # --- Step 16 artefact: clock plan ----------------------------------
+    # (Step 19's clock_tree.rpt/.json are emitted further down in this same
+    # block; the section header used to claim both were "Step 16", which is
+    # what attributed the CTS report to the wrong step. clock_tree.rpt is
+    # step 19's declared required_output, not step 16's.)
+    #
     # Emit a SUBSTANTIVE clock_plan.json that clock_plan_check.py accepts:
     # one entry per `create_clock` found across the project's SDCs, each
     # carrying name + positive period_ns + source port. clock_plan_check
@@ -21065,40 +21226,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # FAILed CLOCK_NO_PERIOD + CLOCK_NO_SOURCE + SDC_CLOCK_DROPPED for every
     # project whose SDC names a clock anything other than nothing.
     clock_plan = cts_out / "clock_plan.json"
-    # v0.2.55 — a thin earlier-written stub ({"primary_clock":"clk"} with no
-    # `clocks` array) must NOT block the substantive emit. clock_plan_check
-    # requires each clock to carry name + positive period_ns + source; a stub
-    # FAILs CLOCK_NO_PERIOD/CLOCK_NO_SOURCE and drops every SDC clock. Refresh
-    # whenever the existing plan lacks a populated `clocks` list. chip-AGNOSTIC.
-    _needs_refresh = True
-    if clock_plan.is_file():
-        try:
-            _existing = json.loads(clock_plan.read_text(errors="ignore"))
-            _cl = _existing.get("clocks") if isinstance(_existing, dict) else None
-            _needs_refresh = not (isinstance(_cl, list) and _cl)
-        except Exception:
-            _needs_refresh = True
-    if _needs_refresh and primary_def.is_file():
-        _sdc_texts = []
-        for _sdc in sorted(project.rglob("*.sdc")):
-            try:
-                _sdc_texts.append(_sdc.read_text(errors="ignore"))
-            except OSError:
-                continue
-        _clocks = _build_clock_records_from_sdcs(_sdc_texts)
-        if not _clocks:
-            # No SDC parsed — fall back to a single nominal core clock so the
-            # plan still carries a positive period + source object.
-            _clocks["clk"] = {"name": "clk", "period_ns": 10.0, "source": "clk"}
-        clock_plan.write_text(json.dumps({
-            "tool": "openroad",
-            "source_log": str((pnr_out / 'openroad.log').relative_to(project)),
-            "primary_clock": next(iter(_clocks)),
-            "clocks": list(_clocks.values()),
-            "buf_strategy": "clkbuf chain (heuristic; ASIC-grade CTS skill "
-                            "should refine via cts-plan)",
-        }, indent=2) + "\n")
-        written.append(str(clock_plan))
+    _plan_written = emit_clock_plan(project, clock_plan, primary_def,
+                                    pnr_out, notes)
+    if _plan_written:
+        written.append(_plan_written)
     # #519: CTS report is now emitted AT CTS COMPLETION inside step_pnr (so a
     # later routing FAIL cannot lose it). This canonicalize pass keeps an
     # idempotent fallback call for runs where step_pnr predates the fix or the

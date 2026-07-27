@@ -32,13 +32,17 @@ silently replaced: a declaration naming a mode that is not an
 ``eda_report_audit`` choice is a broken declaration and must be visible, not
 absorbed. (The flow yaml declared ``--mode phase3/stage3/sta``, which is a
 path, not a mode; it is corrected in the same change, and
-``test_report_wrappers.py`` now asserts every in-repo declaration names a
-real mode so it cannot drift back.)
+``test_step23_25_signoff_gates_wired.py::test_flow_declares_a_real_report_mode``
+asserts every in-repo declaration names a real mode so it cannot drift back.)
 
-Only this wrapper and ``em_report_check.py`` are changed. The identically
-shaped ``ir_drop_report_check`` / ``antenna_report_check`` /
-``drc_report_check`` / ``lvs_report_check`` wrappers have the same defect but
-are left alone deliberately — each needs its own blast-radius measurement.
+PR #473 changed only this wrapper and ``em_report_check.py`` and stated that the
+identically shaped ``ir_drop_report_check`` / ``antenna_report_check`` /
+``drc_report_check`` wrappers were "left alone deliberately". They no longer
+are: the medium/low backlog follow-up measured each one's blast radius and
+forwarded argv in all three, with their own output-path collisions (steps 24 and
+26 both declared the PRODUCER's file) fixed in the same change. See
+``test_wrapper_argv_forwarding.py``. ``lvs_report_check.py`` is a different
+shape — it does its own pre-checks and is out of that change's scope.
 
 ENFORCEMENT: blocking — `phase3_one_shot_runner.step_declared_signoff_gates`
 invokes this gate inline and a non-zero exit fails the run. The declaration is

@@ -185,6 +185,80 @@ def cts_dir(project: Path) -> Path:
     return project / "phase3/stage3/cts"
 
 
+# ─── clock-plan provenance: ONE definition of "what the plan is derived from"
+#
+# The Step-16 clock plan (`cts_dir()/clock_plan.json`) is built by
+# `phase3_one_shot_runner.step_canonicalize_artefacts` and audited by
+# `clock_plan_check`. They used to answer "which files is this plan derived
+# from?" DIFFERENTLY — the producer swept `project.rglob("*.sdc")`, the checker
+# swept a fixed directory list — so the checker could call stale a plan the
+# producer had just written from a file the checker never looked at. The two
+# helpers below are that one definition, and both sides call them.
+#
+# The SET is deliberately identical to the producer's historical `rglob` sweep
+# (every `*.sdc` under the project); only the ORDER is canonicalised, so
+# adopting it moves no clock into or out of any plan. `clock_plan_check`'s
+# SEPARATE dropped-clock view (`_find_sdc_files`, a curated directory list) is
+# a different question — "which constraints must the plan account for" — and is
+# deliberately left alone: over the tracked corpus the two views disagree on
+# the file set for 9 of the 26 SDC-bearing roots and on the harvested
+# create_clock names for 4, and the extra files the wide sweep reaches are
+# backup/held trees (`phase2/.phase2_held/...`) and un-expanded Tcl (a
+# `-name $clk_name`), which must not become rc-bearing.
+
+SDC_PRIORITY_DIRS = (
+    "phase3/stage3/constraints",
+    "phase3/stage3/cts/constraints",
+    "phase3/stage3/pnr",
+    "phase2/stage2/constraints",
+    "phase2/stage1/fpga",
+    "constraints",
+)
+
+
+def clock_plan_input_sdcs(project: Path):
+    """Every `*.sdc` under `project`, canonical-constraint directories first.
+
+    Stable, deterministic order; no file is excluded, so this is exactly the
+    set the clock-plan producer has always harvested.
+    """
+    seen = []
+    for rel in SDC_PRIORITY_DIRS:
+        d = project / rel
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.sdc")):
+            if f not in seen:
+                seen.append(f)
+    for f in sorted(project.rglob("*.sdc")):
+        if f not in seen:
+            seen.append(f)
+    return seen
+
+
+def clock_plan_sdc_digests(project: Path, sdc_files=None) -> dict:
+    """`{project-relative path: sha256-of-bytes}` for the plan's input SDCs.
+
+    CONTENT, never mtime. The corpus this plugin ships — and every user project
+    — is distributed by `git clone`, copy, rsync or archive extraction, none of
+    which preserve mtimes, so an mtime-keyed provenance finding is noise on any
+    tree that was not the one that produced the artefact. A digest survives all
+    of them and is the only thing that actually answers "was this plan derived
+    from the constraints that are here now?".
+    """
+    import hashlib  # local: only the clock-plan provenance path needs it
+    if sdc_files is None:
+        sdc_files = clock_plan_input_sdcs(project)
+    out = {}
+    for f in sdc_files:
+        try:
+            out[str(f.relative_to(project))] = hashlib.sha256(
+                f.read_bytes()).hexdigest()
+        except (OSError, ValueError):
+            continue
+    return out
+
+
 def extracted_dir(project: Path) -> Path:
     """Parasitic extraction (SPEF)."""
     return project / "phase3/stage3/extracted"

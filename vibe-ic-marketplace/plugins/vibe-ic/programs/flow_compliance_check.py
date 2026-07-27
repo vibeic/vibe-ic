@@ -76,7 +76,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import _path_layout as _pl
 import _sim_results_bridge as _srb
@@ -5986,6 +5986,38 @@ def _compliance_workers(n_steps: int) -> int:
     return max(1, min(8, cpu - 1, n_steps))
 
 
+def _gate_json_targets(step: Dict[str, Any]) -> Set[str]:
+    """Project-relative paths THIS step's own gate writes via ``--json``.
+
+    Walks the whole gate tree, so `all_of` / `any_of` nesting and both the
+    string and the mapping (`optional_program_exit_zero: {command: ...}`)
+    spellings are covered. Returned paths are compared verbatim against
+    `required_outputs` entries — an entry is only re-probed after the gate when
+    the step itself declares that exact string as a gate output, never on a
+    fuzzy match.
+    """
+    targets: Set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, val in node.items():
+                if key.endswith("program_exit_zero"):
+                    cmd = val if isinstance(val, str) else str(
+                        (val or {}).get("command", ""))
+                    toks = cmd.split()
+                    for i, tok in enumerate(toks[:-1]):
+                        if tok == "--json":
+                            targets.add(toks[i + 1])
+                else:
+                    walk(val)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(step.get("gate") or {})
+    return targets
+
+
 def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                skip_analog: bool = False, skip_hardware: bool = False) -> StepResult:
     raw_id = step["id"]
@@ -6384,6 +6416,35 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     else:
         # No gate — just presence of outputs counts
         result.status = "PASS" if result.evidence else "MISSING"
+
+    # ── GATE-PRODUCED declared outputs are probed AFTER the gate ──────────
+    # `missing_entries` above is computed BEFORE the gate runs, which is right
+    # for every artefact an upstream step produced. It is wrong for the one
+    # class of artefact the step's OWN GATE writes: the audit-trail file a gate
+    # command names with `--json`. Such an entry would report MISSING on the
+    # first evaluation of a project and PASS on the second, purely because the
+    # first evaluation created it — a verdict that changes with how many times
+    # it has been run is not a measurement.
+    #
+    # Scope is deliberately narrow: ONLY entries that appear verbatim as a
+    # `--json <path>` argument in one of THIS step's own gate commands are
+    # re-probed, and only after the gate has had its chance to write. An
+    # artefact produced by any other step is untouched, so this cannot excuse a
+    # genuinely absent upstream output. When the gate did not run at all (no
+    # gate, or an early return above), nothing was written and the re-probe
+    # simply finds nothing.
+    if missing_entries:
+        _gate_written = _gate_json_targets(step)
+        _still_missing: List[str] = []
+        for pat in missing_entries:
+            if pat in _gate_written:
+                hits = [h for sp in (p.strip() for p in pat.split(" OR "))
+                        for h in _glob_first(project, sp)]
+                if hits:
+                    result.evidence.append(hits[0])
+                    continue
+            _still_missing.append(pat)
+        missing_entries = _still_missing
 
     # v1.6.269 (#126) — ENV_UNAVAILABLE fallback promotion. If the
     # ── required_outputs is ALL-of-N: a gate may not certify a step done

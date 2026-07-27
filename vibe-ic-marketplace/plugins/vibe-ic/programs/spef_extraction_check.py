@@ -1,5 +1,40 @@
 #!/usr/bin/env python3
-"""Verify parasitic extraction (SPEF) was produced after routing."""
+"""Verify parasitic extraction (SPEF) was produced after routing.
+
+READ WINDOW. The substance checks used to run against
+``sf.read_text()[:8192]`` — the first 8 KB of the file. A SPEF's first 8 KB is
+its header, name map and port list; the ``*D_NET`` records start well past it on
+any real design. Measured on the real completed run
+``campaign_pr427/spm/converge_ihp-sg13g2``::
+
+    $ ls -l phase3/stage3/extracted/spm.spef        196741 bytes
+    $ grep -bo '*D_NET' spm.spef | head -1          50386   <- first record
+    $ grep -c '*D_NET' spm.spef                     460     <- records present
+    $ spef_extraction_check <project>
+      summary.has_nets = false
+      WARNING NO_NETS: spm.spef has no *D_NET/*R_NET entries
+
+DENOMINATOR — this is not one run's accident. Over the whole tracked corpus
+(``git ls-files benchmark-data`` -> 20 ``.spef`` files), the first ``*D_NET``
+record lies beyond byte 8192 in **20 of 20**: first-record offsets span
+12,834 - 109,782 bytes in files carrying 351 - 2,563 nets. The old window
+answered "no nets" for EVERY SPEF this plugin has ever published. Removing
+those ``NO_NETS`` findings is not a relaxation; it deletes a finding that was
+false in every measured instance. The file is now scanned in full, in one
+streaming pass.
+
+THE WINDOW ALSO MOVED THE rc-BEARING PREDICATE — stated because it is not
+covered by the ``NO_NETS`` story above. ``BAD_HEADER`` is an ERROR (rc 1) and
+``MISSING_METADATA`` is a WARNING; both were decided on the same 8 KB prefix and
+are now decided over the whole file. So a VALID SPEF whose ``*SPEF`` header
+happens to sit past byte 8192 — e.g. behind a long comment banner — was
+``ERROR BAD_HEADER`` rc 1 on the pre-change tree and is clean rc 0 here. That is
+a rc 1 -> 0 move, i.e. a RELAXATION in the strict sense, and it is the intended
+one: the file was always well-formed. The guard did NOT go blind — a genuinely
+headerless SPEF still FAILs on both trees (pinned by
+``test_spef_full_scan_and_coupling_disclosure.py``). No tracked SPEF exercises
+the late-header case; it is constructed in the test.
+"""
 from __future__ import annotations
 
 import argparse
@@ -36,11 +71,44 @@ def _waiver_reason(project_dir: Path) -> str:
     return ""
 
 
+def scan_spef(path: Path) -> dict:
+    """One streaming pass over the WHOLE SPEF; never a fixed-size window.
+
+    Returns the substance facts the gate reasons about: whether the ``*SPEF``
+    header and the ``*DESIGN``/``*DATE`` metadata are present anywhere in the
+    file, and how many ``*D_NET`` / ``*R_NET`` records it carries.
+
+    Streaming rather than ``read_text()``: a routed SPEF is routinely tens of
+    MB, and the questions asked here are all answerable line by line.
+    """
+    facts = {"has_header": False, "has_design": False,
+             "d_nets": 0, "r_nets": 0}
+    try:
+        with path.open(errors="replace") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("//"):
+                    continue
+                if not line.startswith("*"):
+                    continue
+                if "*SPEF" in line:
+                    facts["has_header"] = True
+                if line.startswith("*DESIGN") or line.startswith("*DATE"):
+                    facts["has_design"] = True
+                if line.startswith("*D_NET"):
+                    facts["d_nets"] += 1
+                elif line.startswith("*R_NET"):
+                    facts["r_nets"] += 1
+    except OSError:
+        pass
+    return facts
+
+
 def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     findings: List[Finding] = []
     extracted = _pl.extracted_dir(project_dir)
     stats = {"spef_files": 0, "total_bytes": 0, "has_nets": False,
-             "waived": False}
+             "waived": False, "d_nets": 0, "r_nets": 0}
 
     # v0.119.21: tool-unavailable-for-PDK waiver. Custom PDKs without a
     # Magic .tech file (<foundry> PDKs, etc.) cannot run
@@ -85,15 +153,15 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
                                     f"SPEF file {sf.name} is {size} bytes (<1 KB)"))
             continue
 
-        text = sf.read_text(errors="replace")[:8192]
-        has_header = "*SPEF" in text
-        has_design = "*DESIGN" in text or "*DATE" in text
-        has_nets = "*D_NET" in text or "*R_NET" in text
+        facts = scan_spef(sf)
+        for key in ("d_nets", "r_nets"):
+            stats[key] += facts[key]
+        has_nets = bool(facts["d_nets"] or facts["r_nets"])
 
-        if not has_header:
+        if not facts["has_header"]:
             findings.append(Finding("ERROR", "BAD_HEADER",
                                     f"{sf.name} missing *SPEF header"))
-        if not has_design:
+        if not facts["has_design"]:
             findings.append(Finding("WARNING", "MISSING_METADATA",
                                     f"{sf.name} missing *DESIGN or *DATE"))
         if has_nets:
@@ -115,6 +183,8 @@ def build_report(findings: List[Finding], stats: dict,
             "spef_files": stats["spef_files"],
             "total_bytes": stats["total_bytes"],
             "has_nets": stats["has_nets"],
+            "d_nets": stats.get("d_nets", 0),
+            "r_nets": stats.get("r_nets", 0),
             "waived": stats.get("waived", False),
             "findings_count": len(findings),
             "errors_count": sum(1 for f in findings if f.severity == "ERROR"),

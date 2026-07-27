@@ -133,9 +133,129 @@ def _is_backup_path(p: Path, root: Path) -> bool:
     return False
 
 
+# SELF-CONSUMPTION. Several modes glob `.json` as well as `.rpt`
+# (`*antenna*.json`, `*ir_drop*`, `*electromigration*`, `*power_grid*`), so this
+# program's OWN `--json` verdict document — which lands in the same
+# `reports/phase3/` tree it audits — is discovered on the NEXT run and parsed as
+# if it were a tool report. Measured before this guard, on a project holding one
+# real `reports/phase3/antenna.rpt`::
+#
+#     $ eda_report_audit proj --mode antenna --json reports/phase3/antenna_signoff.json
+#     files_found = 1
+#     $ eda_report_audit proj --mode antenna          # same project, second run
+#     files_found = 2      # <- its own verdict document
+#
+# WHAT THIS GUARD IS, STATED HONESTLY: it is NOT a pre-existing measured defect.
+# Its population on tracked data before this change is ZERO. The corpus holds 9
+# `eda_report_audit:*` verdict documents (`git ls-files benchmark-data`), all of
+# them `eda_report_audit:lvs` at `reports/phase3/lvs.json` — and lvs mode globs
+# `*lvs*.rpt` / `*lvs*.log` / `*LVS*.rpt` / `*LVS*.log` / `*comp*.out`, none of
+# which match a `.json`. So no verdict document this plugin has ever published
+# was re-ingested, and running the guard over the whole corpus changes nothing
+# (126 discovery measurements, base == this tree everywhere).
+#
+# The condition is CREATED by the argv-forwarding + collision fix in the same
+# change: once the wrappers honour `--json`, steps 24 and 26 write
+# `reports/phase3/ir_drop_signoff.json` and `.../antenna_signoff.json`, which
+# `*ir_drop*` and `*antenna*.json` DO match. The guard closes a hole this
+# change opens, in the same change — that is the correct order, and it is why
+# the audit output can be given a readable name at all instead of inheriting
+# `gds_antenna_deck_check`'s workaround ("nothing this gate writes may contain
+# the substring antenna").
+#
+# The verdict document is recognised by CONTENT, not by name: every document
+# this program writes carries a top-level ``"program": "eda_report_audit:<mode>"``
+# (see ``AuditResult``). Keying on the self-describing field rather than on a
+# filename keeps the guard working whatever path a caller passes to ``--json``,
+# and removes the naming landmine other gates had to work around
+# (``gds_antenna_deck_check``: "nothing this gate writes may contain the
+# substring antenna").
+_SELF_DOC_PROGRAM_PREFIX = "eda_report_audit:"
+# A verdict document is small; refuse to slurp a large file just to classify it.
+_SELF_DOC_MAX_BYTES = 512 * 1024
+
+
+def _is_own_verdict_document(p: Path) -> bool:
+    """True when `p` is a document THIS program wrote (an ``AuditResult`` dump).
+
+    Content-based on purpose: the caller chooses the ``--json`` path, so a
+    name-based rule would only move the landmine.
+    """
+    if p.suffix.lower() != ".json":
+        return False
+    try:
+        if p.stat().st_size > _SELF_DOC_MAX_BYTES:
+            return False
+        doc = json.loads(p.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(doc, dict)
+            and isinstance(doc.get("program"), str)
+            and doc["program"].startswith(_SELF_DOC_PROGRAM_PREFIX))
+
+
+# STEP SCOPING. Discovery is a project-wide `rglob`, with no relationship to
+# the step whose gate is asking. Measured on the real completed run
+# `campaign_pr427/spm/converge_ihp-sg13g2`, step 21's router-DRC gate
+# (`drc_report_check . --mode drc`)::
+#
+#     files_found = 5
+#     best_file   = steps/31_physical_verification_drc_lvs_erc_density/
+#                   drc_signoff.rpt
+#
+# Step 21 declares `phase3/stage3/pnr/routed.drc.rpt`; the file its verdict was
+# reported against belongs to STEP 31. The five hits mix the router's own DRC
+# (routed.drc.rpt, reports/phase3/drc_router.rpt) with the KLayout sign-off DRC
+# (three copies of step 31's), and `real_violation_total` is summed across all
+# of them. Both directions are wrong: step 31's report can carry step 21's gate
+# when the router's own is absent, and step 31's violations can fail step 21.
+#
+# `--under <rel>` (repeatable) restricts discovery to the given subtree(s), so a
+# step's gate can be pointed at the artefacts that step declares. It is opt-in:
+# omitted, discovery is project-wide exactly as before, so no existing caller
+# changes behaviour.
+_SCOPE_ROOTS: Optional[List[Path]] = None
+
+
+class scoped_discovery:  # noqa: N801 — a context manager, used as a verb
+    """Restrict `_discover` to `roots` for the duration of the block."""
+
+    def __init__(self, roots: Optional[List[Path]]):
+        self._roots = [Path(r).resolve() for r in roots] if roots else None
+        self._prev = None
+
+    def __enter__(self):
+        global _SCOPE_ROOTS
+        self._prev = _SCOPE_ROOTS
+        _SCOPE_ROOTS = self._roots
+        return self
+
+    def __exit__(self, *exc):
+        global _SCOPE_ROOTS
+        _SCOPE_ROOTS = self._prev
+        return False
+
+
+def _in_scope(p: Path) -> bool:
+    if not _SCOPE_ROOTS:
+        return True
+    try:
+        rp = p.resolve()
+    except OSError:
+        return False
+    for root in _SCOPE_ROOTS:
+        try:
+            rp.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def _discover(project_dir: Path, patterns: List[str]) -> List[Path]:
     """Glob for files matching any of the given patterns recursively,
-    skipping hidden / backup-flavored directories (#525)."""
+    skipping hidden / backup-flavored directories (#525), this program's own
+    verdict documents, and anything outside an active `--under` scope."""
     found: List[Path] = []
     for pat in patterns:
         found.extend(project_dir.rglob(pat))
@@ -147,6 +267,10 @@ def _discover(project_dir: Path, patterns: List[str]) -> List[Path]:
             continue
         seen.add(p)
         if _is_backup_path(p, project_dir):
+            continue
+        if _is_own_verdict_document(p):
+            continue
+        if not _in_scope(p):
             continue
         unique.append(p)
     return unique
@@ -1121,6 +1245,12 @@ def main(argv: list = None) -> int:
     parser.add_argument("--mode", required=True, choices=list(MODE_MAP.keys()),
                         help="Report type to check")
     parser.add_argument("--json", default=None, help="Output JSON report path")
+    parser.add_argument(
+        "--under", action="append", default=None, metavar="REL",
+        help="restrict report discovery to this project-relative subtree "
+             "(repeatable). Omitted, discovery is project-wide. Use it to scope "
+             "a step's gate to the artefacts that step declares, so another "
+             "step's report cannot carry — or fail — this one.")
     args = parser.parse_args(argv)
 
     project_dir = Path(args.project_dir)
@@ -1132,7 +1262,38 @@ def main(argv: list = None) -> int:
         result.summary = {"files_found": 0}
     else:
         checker = MODE_MAP[args.mode]
-        result = checker(project_dir)
+        roots = ([project_dir / rel for rel in args.under]
+                 if args.under else None)
+        with scoped_discovery(roots):
+            result = checker(project_dir)
+        if roots:
+            # The scope is part of the verdict: a reader must be able to see
+            # WHICH artefacts this verdict was reached over.
+            result.summary["scoped_under"] = list(args.under)
+            # …and WHICH of those scopes did not exist. Without this a typo'd
+            # `--under does/not/exist` produces a byte-identical finding to a
+            # genuinely absent report ("No <X> report found"), so a broken
+            # declaration reads as a real miss. Individual absent scopes are
+            # legitimate — step 21 names a canonicalised copy that a given run
+            # may not have produced — so the per-scope fact is DISCLOSURE only.
+            missing = [rel for rel in args.under
+                       if not (project_dir / rel).exists()]
+            result.summary["scoped_under_missing"] = missing
+            if missing and len(missing) == len(args.under):
+                # EVERY declared scope is absent: discovery was structurally
+                # impossible, so whatever this verdict says about reports is
+                # about the scope, not about the project. WARNING, not ERROR —
+                # the rc is already 1 from the report-not-found finding, and
+                # promoting this would flip rc on a scope that is merely
+                # partially absent were the rule ever loosened.
+                result.findings.append(Finding(
+                    rule="SCOPE_NOT_FOUND", severity="WARNING",
+                    message=(f"none of the --under scope(s) {missing} exist "
+                             f"under {project_dir} — no file could be "
+                             f"discovered regardless of what the project "
+                             f"contains. A report-not-found finding alongside "
+                             f"this one is caused by the scope, not by a "
+                             f"missing report.")))
 
     report = asdict(result)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
