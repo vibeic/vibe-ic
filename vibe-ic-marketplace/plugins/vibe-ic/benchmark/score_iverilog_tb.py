@@ -53,6 +53,88 @@ from typing import List, Optional
 _VVP_SCRATCH_CWD = tempfile.mkdtemp(prefix="score_iverilog_vvp_scratch_")
 atexit.register(lambda: shutil.rmtree(_VVP_SCRATCH_CWD, ignore_errors=True))
 
+# ── wire/benchmark_ip — § 3 cwd=design_dir pre-flight ───────────────────────
+# open-benchmark-methodology § 3 says the `cwd=design_dir` rule is "enforced by
+# programs/benchmark_score_cwd_guard.py". It was enforced by nobody: repo-wide,
+# the only two mentions of that program were the skill line itself and a docstring
+# in THIS file (line ~669). The guard's cwd half is now structurally satisfied
+# here — every vvp launch already passes `cwd=design_dir` when
+# `scorer_args.cwd_design_dir` is set — so that half has NO reachable FAIL path
+# through the scorer. Its one non-redundant job is the `--tb` scan: a relative
+# `$readmemh/$readmemb/$fopen` target the TB will try to open which does not exist
+# under the cwd. Nothing else looks for that, and it is the exact root cause of
+# the 3 false fails in the 2026-05-28 RTLLM run.
+#
+# SEVERITY — ADVISORY, and deliberately so. The guard's FAIL branch has a
+# GUARANTEED false positive: its regex matches `$fopen("x","w")` — an OUTPUT file
+# — and then requires it to already EXIST, so any TB that writes a log is failed.
+# Measured on a fixture: `$fopen("sim_output.txt","w")` -> rc 1
+# "relative TB datafile(s) do not resolve under cwd: sim_output.txt". Wiring that
+# as blocking would MANUFACTURE the very false-fail class the guard exists to
+# prevent. So this records + prints and NEVER changes a verdict. Promoting it to
+# blocking requires first teaching the guard to ignore write-mode `$fopen`.
+_CWD_GUARD = (Path(__file__).resolve().parent.parent / "programs"
+              / "benchmark_score_cwd_guard.py")
+# Cheap pre-filter: only pay for a subprocess on TBs that actually reference a
+# datafile at all (most do not).
+_TB_DATAFILE_TOKENS = ("$readmemh", "$readmemb", "$fopen")
+
+
+def _cwd_guard_preflight(designs: List[str], dataset: Path, layout: dict,
+                         args: dict) -> dict:
+    """ADVISORY § 3 pre-flight over the Shape-B designs about to be scored.
+
+    Runs `benchmark_score_cwd_guard.py --design <d> --cwd <d> --tb <tb>` for each
+    design whose testbench references a datafile. Returns a report dict; NEVER
+    raises, never changes a verdict. `enforced: False` records honestly that this
+    is a disclosure, not a gate.
+    """
+    report: dict = {"program": "benchmark_score_cwd_guard",
+                    "enforced": False,
+                    "severity": "advisory",
+                    "examined": 0, "skipped_no_datafile_ref": 0,
+                    "findings": []}
+    if not _CWD_GUARD.is_file():
+        report["reason"] = "guard_program_absent"
+        return report
+    if not args.get("cwd_design_dir", True):
+        # cwd is NOT pinned to the design dir for this benchmark, so the guard's
+        # premise does not hold — say so instead of reporting a vacuous clean.
+        report["reason"] = "cwd_design_dir_disabled_for_this_benchmark"
+        return report
+    tb_name = layout.get("tb_filename")
+    if not tb_name:
+        report["reason"] = "layout_has_no_tb_filename"
+        return report
+    for design in designs:
+        design_dir = dataset / design
+        tb = design_dir / tb_name
+        if not tb.is_file():
+            continue
+        try:
+            tb_text = tb.read_text(errors="replace")
+        except OSError:
+            continue
+        if not any(tok in tb_text for tok in _TB_DATAFILE_TOKENS):
+            report["skipped_no_datafile_ref"] += 1
+            continue
+        report["examined"] += 1
+        try:
+            r = subprocess.run(
+                [sys.executable, str(_CWD_GUARD), "--design", str(design_dir),
+                 "--cwd", str(design_dir), "--tb", str(tb)],
+                capture_output=True, text=True, timeout=60)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            report["findings"].append({"design": design, "rc": None,
+                                       "detail": f"guard_did_not_run: {exc}"})
+            continue
+        if r.returncode != 0:
+            report["findings"].append({
+                "design": design, "rc": r.returncode,
+                "detail": (r.stdout + r.stderr).strip().splitlines()[-1]
+                          if (r.stdout + r.stderr).strip() else ""})
+    return report
+
 # ORGANIC #707 round-3 — the SCORE-SIDE pure-permutation rescue reuses the
 # TB-inference helpers authored for the #707-r2 EXPORT path. They live in
 # programs/shape_b_sample_export.py; put the plugin's programs/ dir on sys.path
@@ -1740,6 +1822,25 @@ def main():
             print(f"# WARNING: PARTIALLY-AUTHORED RUN — {len(designs) - on_disk} problem(s) "
                   "have no on-disk sample; resume by diffing problems.list vs samples/ "
                   "(blind_instructions_shape_c.md § ORCHESTRATION RULES)")
+        # wire/benchmark_ip — § 3 cwd=design_dir pre-flight, ADVISORY (see the
+        # _cwd_guard_preflight banner: the guard's FAIL branch false-positives on
+        # write-mode $fopen, so it records and never flips a verdict).
+        cwd_guard = _cwd_guard_preflight(designs, dataset, layout, args)
+        if cwd_guard.get("findings"):
+            print(f"# ⓘ § 3 cwd-guard (ADVISORY, no verdict changed) — "
+                  f"{len(cwd_guard['findings'])} of {cwd_guard['examined']} "
+                  f"datafile-referencing TB(s) name a relative path that does not "
+                  f"resolve under cwd=design_dir:")
+            for f in cwd_guard["findings"][:10]:
+                print(f"#   {f['design']}: {f['detail']}")
+            print("#   (a write-mode $fopen target is a KNOWN false positive of "
+                  "this guard — read these as leads, not verdicts)")
+        elif cwd_guard.get("reason"):
+            print(f"# § 3 cwd-guard not applicable: {cwd_guard['reason']}")
+        else:
+            print(f"# § 3 cwd-guard: {cwd_guard['examined']} TB(s) with datafile "
+                  f"refs checked, 0 unresolved "
+                  f"({cwd_guard['skipped_no_datafile_ref']} TB(s) reference none)")
         results = [_score_shape_b(d, samples, dataset, layout, args) for d in designs]
         ident = "design"
     else:  # Shape C
@@ -1752,6 +1853,13 @@ def main():
             print(f"# WARNING: PARTIALLY-AUTHORED RUN — {len(missing)} problem(s) missing a "
                   "sample (first few: " + ", ".join(missing[:5]) + "); resume by diffing "
                   "problems.list vs samples/ (blind_instructions_shape_c.md § ORCHESTRATION RULES)")
+        # Shape C is a FLAT dataset and `cwd_design_dir` defaults False here, so
+        # the guard's premise (cwd == a per-design dir) does not hold. Record that
+        # honestly rather than omitting the key and letting a reader assume clean.
+        cwd_guard = {"program": "benchmark_score_cwd_guard", "enforced": False,
+                     "severity": "advisory", "examined": 0,
+                     "reason": "shape_c_flat_dataset_no_per_design_cwd",
+                     "findings": []}
         results = [_score_shape_c(p, samples, dataset, layout, args) for p in probs]
         ident = "problem"
 
@@ -1841,6 +1949,9 @@ def main():
              "evidence": r.get("canonical_evidence", "")} for r in dsus],
         "pass_at_1_excluding_suspected_defects_pct": round(
             100.0 * npass / n_eff_unsuspected, 2) if n_eff_unsuspected else 0.0,
+        # wire/benchmark_ip — the § 3 cwd-guard pre-flight report travels WITH the
+        # score so a later reader can tell "checked, clean" from "never checked".
+        "cwd_guard": cwd_guard,
         "results": results,
     }
     (run / "pass_at_1.json").write_text(json.dumps(summary, indent=2) + "\n")

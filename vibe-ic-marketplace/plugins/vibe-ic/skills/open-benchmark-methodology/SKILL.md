@@ -301,12 +301,23 @@ state the substitution explicitly.
 > (b) verifies a produced RESULT.md actually carries the disclosure for the tools it used
 > (`--verify RESULT.md --mandated <csv>`, FAILs on an undisclosed substitution or an unknown tool).
 
-> **`cwd=design_dir` rule — enforced by `programs/benchmark_score_cwd_guard.py`.** Run the host
-> scorer FROM the design directory (`cwd=<design>`) so the TB's relative-path
-> `$readmemh("reference.txt")` etc. resolves; the guard asserts `cwd==design` and that every
-> relative `$readmemh/$readmemb/$fopen` target exists under cwd before the TB runs. RTLLM's own
-> `auto_run.py` does `os.chdir(design); make vcs`; forgetting this caused 3 false fails in our
-> 2026-05-28 RTLLM run.
+> **`cwd=design_dir` rule.** Run the host scorer FROM the design directory (`cwd=<design>`) so the
+> TB's relative-path `$readmemh("reference.txt")` etc. resolves. RTLLM's own `auto_run.py` does
+> `os.chdir(design); make vcs`; forgetting this caused 3 false fails in our 2026-05-28 RTLLM run.
+>
+> **How much of this is actually enforced (wire/benchmark_ip — do not read more into it):**
+> * The `cwd==design` half is enforced STRUCTURALLY inside `benchmark/score_iverilog_tb.py`:
+>   every `vvp` launch passes `cwd=design_dir` when `scorer_args.cwd_design_dir` is set. There is
+>   no way for the scorer to violate it, so `benchmark_score_cwd_guard.py`'s `cwd_not_design_dir`
+>   FAIL branch is unreachable through the scorer.
+> * The `--tb` half (does every relative `$readmemh/$readmemb/$fopen` target exist under cwd?) now
+>   runs as an **ADVISORY pre-flight** — `score_iverilog_tb.py` invokes
+>   `programs/benchmark_score_cwd_guard.py --design <d> --cwd <d> --tb <tb>` for every Shape-B
+>   design whose TB references a datafile, prints the findings, and records them under
+>   `pass_at_1.json:cwd_guard`. It **records, it does not gate**: the guard's regex also matches a
+>   write-mode `$fopen("out.txt","w")` and then demands that OUTPUT file already exist, so
+>   promoting it to blocking would manufacture the exact false-fail class it was written to
+>   prevent. Fix that first if you want a gate. Run it by hand for a non-Shape-B scorer.
 
 ## § 3.9 — SPEC-FIRST COVERAGE ATTRIBUTION before any FLOOR label (ORGANIC #697, BINDING)
 
@@ -730,6 +741,17 @@ prompts genuinely name no module → correct `chip_top` degrade).
 > **Section-presence enforced by `programs/benchmark_result_md_lint.py <RESULT.md>`** — fails the
 > run if any of the seven mandatory sections below is missing. (It checks *presence* of each
 > concept; the *quality* of the residual-triage content is still the § 4 LLM judgment.)
+>
+> **Where that enforcement actually happens (wire/benchmark_ip — this line used to be a claim with
+> nothing behind it):**
+> * `benchmark_dispatch.py --score` runs the linter on `<RUNDIR>/RESULT.md` after the scorer and
+>   **exits non-zero** when a mandatory section is missing. An ABSENT RESULT.md is not failed there
+>   — on a first score you write it after the scorer runs — you get a NOTICE naming the command,
+>   and that run is NOT § 6-verified until you re-run `--score` or the linter yourself.
+> * `tools/ci/repo_hygiene_gates.sh` gates the PUBLISHED
+>   `benchmark-data/evaluation/<bench>/RESULT.md` (blocking; 3/3 green at wiring time) and prints
+>   the archived-run debt as an advisory count (41 of 66 tracked evaluation `RESULT*.md` are
+>   § 6-incomplete — frozen records of runs that already happened, deliberately not gated).
 
 > **Residual-triage record self-consistency enforced by
 > `programs/triage_record_check.py <triage-records.json>`** — when the residual triage is emitted

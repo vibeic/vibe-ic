@@ -201,6 +201,19 @@ run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_
 # discriminating: injecting a throwaway program makes it rc 1, removing it rc 0.
 run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_programs_index.py" --check
 
+# wire/benchmark_ip — the PUBLISHED per-benchmark RESULT.md must carry the seven
+# § 6 sections. `skills/open-benchmark-methodology/SKILL.md` § 6 states as binding
+# doctrine that `benchmark_result_md_lint.py` "fails the run if any of the seven
+# mandatory sections is missing" — and NOTHING ran it, so a § 6-incomplete
+# RESULT.md was published with no gate objecting. The linter takes ONE file; the
+# wrapper is population-enumeration only and carries no checking logic. It gates
+# the CANONICAL published benchmark-data/evaluation/<bench>/RESULT.md (measured:
+# 3 files, 3 PASS — green today, blocks the NEXT publication), prints the
+# archived-run debt as an advisory count (41 of 66 tracked evaluation RESULT*.md
+# are § 6-incomplete — frozen records, deliberately not gated), and REFUSES a
+# vacuous PASS on an empty population.
+run "benchmark RESULT.md § 6 sections"  "$ROOT" bash "$ROOT/tools/ci/benchmark_result_md_sections_gate.sh"
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired
@@ -226,6 +239,21 @@ run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_
 run "verdict token propagation"         "$PLUGIN" python3 programs/verdict_token_propagation_check.py
 run "signoff gate self-skip"            "$PLUGIN" python3 programs/signoff_gate_self_skip_consistency_check.py
 run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_artifact_hygiene_check.py
+
+# wire/benchmark_ip — the ip-catalog manifest schema + license gate. Its own
+# docstring says "Run from CI / pre-commit hook"; no CI job and none of the five
+# hooks ever did, and `ip-catalog/README.md` step 4 + CATALOG_INTEGRATION_DESIGN.md
+# already declare passing it MANDATORY for a new IP. Zero-argument, rc 1 on any
+# malformed manifest, over 18 TRACKED manifest.yaml — exactly this file's charter
+# (no design, no PDK, no run dir). Measured at wiring time: 18/18 PASS, so it costs
+# nothing today; injecting a manifest with a non-whitelisted license + a non-HTTP
+# canonical_url + a port missing `dir` makes it rc 1.
+# DISCLOSED LIMIT (do not read this line as GPL protection): a FORBIDDEN-license
+# manifest is dropped by `ip_catalog_query.load_manifests()` BEFORE
+# `validate_manifest()` sees it, so the validator prints "0 manifests / PASS: 0
+# FAIL: 0" and exits 0 on a GPL-3.0 manifest. That blind spot is a defect of the
+# checker, reported separately; it is NOT fixed by this wiring.
+run "ip-catalog manifest schema"        "$PLUGIN" python3 programs/ip_catalog_validate.py
 
 # vibe-ic#428 — final_summary.md printed TWO verdict roll-ups over the same 63
 # steps and they disagreed on the BLOCKING-FAILURE count, with nothing marking

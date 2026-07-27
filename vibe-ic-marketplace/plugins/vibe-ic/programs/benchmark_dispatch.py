@@ -498,7 +498,48 @@ def cmd_score(bench: str, run: str, dataset: str | None,
     scorer = HARNESS / e.get("scorer", "score_iverilog_tb.py")
     cmd = [sys.executable, str(scorer), "--bench", bench, "--dataset", str(ds_p), "--run", str(run_p)]
     print("$ " + " ".join(cmd))
-    sys.exit(subprocess.call(cmd))
+    rc = subprocess.call(cmd)
+    # wire/benchmark_ip — § 6 RESULT.md section gate. open-benchmark-methodology
+    # § 6 states as binding doctrine that benchmark_result_md_lint.py "fails the
+    # run if any of the seven mandatory sections is missing"; until now NOTHING
+    # invoked it from any program, so a § 6-incomplete RESULT.md was published
+    # with no gate firing. This is the front door that owns the run, so it is the
+    # front door that enforces it — BLOCKING when the deliverable is on disk.
+    # An ABSENT RESULT.md is NOT failed here: on a first score the agent writes
+    # RESULT.md AFTER the scorer, so failing on absence would fail every honest
+    # first run. Absence gets the loud NOTICE + the exact command instead, and
+    # the CI lane (tools/ci/repo_hygiene_gates.sh) gates the published file.
+    lint_rc = _lint_result_md(run_p)
+    if lint_rc:
+        rc = rc or lint_rc
+    sys.exit(rc)
+
+
+def _lint_result_md(run_p: Path) -> int:
+    """Run benchmark_result_md_lint on <RUNDIR>/RESULT.md.
+
+    Returns the linter's rc when the deliverable EXISTS (1 = a § 6 section is
+    missing → the run must not be published), or 0 when it is not written yet
+    (first-score ordering; a NOTICE naming the mandatory command is printed).
+    """
+    lint = Path(__file__).resolve().parent / "benchmark_result_md_lint.py"
+    if not lint.is_file():
+        return 0
+    result_md = run_p / "RESULT.md"
+    if not result_md.is_file():
+        print("NOTICE: no RESULT.md in the run dir yet — the § 6 section gate "
+              "could NOT run, so this run is NOT § 6-verified. Writing it is "
+              "the run's FINAL act; then verify it with:\n"
+              f"  python3 {lint} {result_md}")
+        return 0
+    print(f"$ python3 {lint.name} {result_md}")
+    rc = subprocess.call([sys.executable, str(lint), str(result_md)])
+    if rc != 0:
+        print("§ 6 RESULT.md gate FAILed — the deliverable is missing a "
+              "mandatory section (named above), so the number it reports is "
+              "not auditable and MUST NOT be published until it is complete "
+              "(open-benchmark-methodology § 6).", file=sys.stderr)
+    return rc
 
 
 def main():
