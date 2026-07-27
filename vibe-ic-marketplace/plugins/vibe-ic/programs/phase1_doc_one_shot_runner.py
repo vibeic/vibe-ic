@@ -9073,7 +9073,13 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
         if not body:
             continue
         for start, end in _port_context_heading_ranges(body):
-            for line in body[start:end].splitlines():
+            _chunk = body[start:end]
+            # ORGANIC #376 — GFM omits a table's outer pipes, so the
+            # #627 leading-name-cell restriction below has to recognise
+            # a row by its table BLOCK, not by a leading `|` it may not
+            # have. Computed once per chunk.
+            _gfm_rows = _gfm_pipe_table_row_indices(_chunk)
+            for _line_i, line in enumerate(_chunk.splitlines()):
                 direction = _v455_dir_from_line(line)
                 # ORGANIC #610 — a port cell may annotate ONE canonical port
                 # with an inline alternate-spelling: ``\`name\` (or \`alt\`)`` /
@@ -9111,8 +9117,14 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                 # serves) the original all-tokens + short-name-drop behaviour
                 # is unchanged. chip-AGNOSTIC: pure table-row structure, no
                 # IC-class / token literals. Mirrors #611's provenance pattern.
+                # ORGANIC #376 — `or _line_i in _gfm_rows` covers the
+                # outer-pipe-omitted GFM table. This site RESTRICTS
+                # (only the leading name cell promotes), so admitting a
+                # row here can only ever remove a promotion, never add
+                # one: the direction cell and the type cell of a port
+                # table stop being emitted as ports of the chip.
                 _is_port_table_row = (
-                    _is_pipe_table_row(line)
+                    (_is_pipe_table_row(line) or _line_i in _gfm_rows)
                     and direction in ("input", "output", "inout"))
                 _leading_cell_toks: set = set()
                 if _is_port_table_row:
@@ -12437,6 +12449,62 @@ def _is_pipe_table_row(line: str) -> bool:
     line-scan emission."""
     s = (line or "").lstrip()
     return s.startswith("|") and s.count("|") >= 2
+
+
+# ORGANIC #376 — GFM makes a pipe table's OUTER pipes OPTIONAL, so a
+# perfectly legal port table can be written with no leading `|` on any
+# row. `_is_pipe_table_row` anchors on that leading `|`, so for such a
+# table it answers False on EVERY row, and any caller that uses it to
+# recognise a port-table row loses the row's cell structure entirely.
+#
+# Widening `_is_pipe_table_row` itself is the wrong repair, and the
+# direction of the error is why: of its three call sites, two use it
+# PERMISSIVELY (a row shape is treated as corroboration that a token is
+# a real port) and only one uses it RESTRICTIVELY (in a port-table row,
+# only the leading name cell holds the port). Relaxing the shared
+# predicate would admit more tokens at the first two and reject more at
+# the third — one edit moving the result in both directions at once.
+#
+# So the relaxed form is a SEPARATE, block-scoped predicate, anchored on
+# the one construct GFM actually requires: the DELIMITER row. A bare
+# "line contains two pipes" test would match prose and a bitwise-or
+# expression; a delimiter row (`---|---`, `:--|--:`) has no other
+# meaning. Membership is computed over a whole chunk because that anchor
+# lives on a DIFFERENT line than the rows it qualifies, which is exactly
+# what a single-line predicate cannot see.
+#
+# chip-AGNOSTIC: pure Markdown table structure — no design, vendor, PDK
+# or IC-class literal.
+_RE_GFM_DELIM_ROW = re.compile(
+    r"^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$")
+
+
+def _gfm_pipe_table_row_indices(chunk: str) -> frozenset:
+    """0-based line indices of `chunk` that belong to a GFM pipe table.
+
+    Anchored on the table's DELIMITER row rather than on a leading `|`,
+    so it recognises the outer-pipe-omitted form that
+    `_is_pipe_table_row` cannot see. From each delimiter row, claims the
+    header line directly above and the contiguous run of pipe-carrying
+    lines below, stopping at the first blank or pipe-less line — the
+    block GFM itself terminates a table on.
+
+    Returns indices only; the caller decides what a row membership
+    means. Deliberately NOT a drop-in replacement for
+    `_is_pipe_table_row` (see the note above it)."""
+    lines = (chunk or "").splitlines()
+    rows: set = set()
+    for i, ln in enumerate(lines):
+        if not _RE_GFM_DELIM_ROW.match(ln):
+            continue
+        rows.add(i)
+        if i and lines[i - 1].strip() and "|" in lines[i - 1]:
+            rows.add(i - 1)
+        j = i + 1
+        while j < len(lines) and lines[j].strip() and "|" in lines[j]:
+            rows.add(j)
+            j += 1
+    return frozenset(rows)
 
 
 # v1.6.264 — for #122 ORGANIC. RST grid-table cell values
