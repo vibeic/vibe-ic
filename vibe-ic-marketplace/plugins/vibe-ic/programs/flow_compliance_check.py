@@ -1267,9 +1267,15 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #   `module <name>` declaration in rtl/*.sv|.v AND must be
     #   instantiated by some other module (dead-code detection). When
     #   schema_version=1, also cross-checks per-submodule .ports against
-    #   the actual RTL port list. VACUOUS_PASS when L9 is absent or
-    #   carries no submodules. Real-world signal: v0117-vendor flags 9
-    #   genuine submodule gaps (L9 declares 12 submodules, rtl/ emits 4).
+    #   the actual RTL port list. VACUOUS_PASS when L9 is absent, when it
+    #   carries no submodules, OR when every declared submodule is one the
+    #   gate cannot assert on (bare string / naming-delegated
+    #   `low_confidence`) — that last arm used to report PASS having
+    #   examined nothing; the gate now reports `submodule_census`
+    #   (declared / examined / skipped-by-reason) on every arm, so read it
+    #   before treating a PASS here as submodule coverage. Real-world
+    #   signal: v0117-vendor flags 9 genuine submodule gaps (L9 declares
+    #   12 submodules, rtl/ emits 4).
     "l9_submodule_conformance_check",
     # v1.6.29 wire-in — substance / canonical-real-file gates from
     #   v1.6.28 / v1.6.29. Both VACUOUS_PASS-friendly so they don't

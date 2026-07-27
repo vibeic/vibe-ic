@@ -8,8 +8,11 @@ CONSUMES IT, in an ACTIONABLE form.
 
 L9 has strong gates for its RTL half (``l9_rtl_pin_consistency_check``
 diffs the top port set + per-pin direction against the RTL top;
-``l9_submodule_conformance_check`` proves each declared submodule exists
-and is instantiated). Its BACKEND half has none. That half is:
+``l9_submodule_conformance_check`` proves each declared submodule IT CAN
+ASSERT ON exists and is instantiated — on the tracked corpus that is 62
+of 130 declared entries, the rest being bare strings or naming-delegated
+`low_confidence` contracts, so read its `submodule_census` before
+treating its PASS as coverage). Its BACKEND half has none. That half is:
 
     phase3_one_shot_runner._effective_die_um(die_um_flag, project)
         explicit --die-um WxH  >  _l9_declared_die_area(project)
