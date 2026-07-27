@@ -159,9 +159,14 @@ steps:
       # L13's suffix is IC-class-dependent, which is why this flow's own
       # enforcing gate (`phase1_all_l_docs_present_check`) matches L-docs by
       # `L13_` PREFIX and explicitly does not constrain the suffix. The literal
-      # `L13_OTP.json` written here matched no producer anywhere in the plugin
-      # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
-      # `L13_OTP.json`), so it was a declaration that could never be satisfied.
+      # `L13_OTP.json` written here matched no producer anywhere in the plugin,
+      # so it was a declaration that could never be satisfied. Re-derive with
+      # `grep -rn L13_OTP <plugin>` (zero hits outside this comment) and
+      # `grep -rl 'L13_LAB_CALIBRATION.json' --include='*.py' <plugin> | wc -l`
+      # (97 at v1.7.58) for the suffix that IS written. The count is quoted with
+      # its command because it drifts every release: an earlier revision of this
+      # comment asserted a bare "93 program files", which matches no tree
+      # anyone has been able to check (99 at the merge-base, 97 today).
       - "phase1/generated_docs/L13_*.json"
     gate:
       all_of:
@@ -1959,13 +1964,26 @@ steps:
       - "phase3/stage4/foundry_handoff/mask_spec.json"
       - "phase3/stage4/foundry_handoff/wat_plan.json"
       # The scribe-line PCM/alignment frame is FOUNDRY-SUPPLIED — this flow
-      # cannot generate it, `foundry_handoff_package_check` deliberately keeps
-      # it out of `_REQUIRED_FILES`, and the pack generator emits a
-      # `.PENDING_FOUNDRY.txt` note in its place saying exactly that. Demanding
-      # the .gds unconditionally required an artefact the flow never produces.
-      # Either form satisfies the requirement; NEITHER present is still a real
-      # gap, because then nothing states where the frame is coming from.
-      - "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt"
+      # cannot generate it, and `foundry_handoff_package_check` deliberately
+      # keeps it out of `_REQUIRED_FILES`. The requirement is still the REAL
+      # .gds: a run without it has not got the frame, and the audit must say so.
+      #
+      # This entry was briefly `... .gds OR ... .PENDING_FOUNDRY.txt`, which
+      # could never fail. `foundry_handoff_pack_gen` writes that note
+      # UNCONDITIONALLY whenever the .gds is absent, and it also writes the
+      # other four outputs of this step — so "neither present" only happens when
+      # the step's own generator never ran, in which case the step already
+      # MISSes on those. Measured on the real spm x ihp-sg13g2 run: step 38 =
+      # PASS with `scribe_line_layout.PENDING_FOUNDRY.txt` listed as EVIDENCE —
+      # a note whose whole content is "the artefact is not here" was counted as
+      # the artefact.
+      #
+      # The absence is now EXPLAINED instead of certified: the generator emits
+      # `scribe_line_layout_pending_foundry.json`, the #675-strict disclosed
+      # capability-gap marker that OWNS this exact output, so the step resolves
+      # to SKIPPED-CONDITION (review-flagged, excluded from executed-PASS) —
+      # never a clean PASS — until a real foundry-supplied .gds lands.
+      - "phase3/stage4/foundry_handoff/scribe_line_layout.gds"
       - "phase3/stage4/foundry_handoff/corner_test_vectors.json"
       - "reports/phase3/foundry_handoff_audit.json"
     gate:

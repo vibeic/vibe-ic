@@ -16,10 +16,38 @@ Second-order effect, which is the reason this is more than a bookkeeping fix:
 `flow_step_execution_coverage_check` enforces the declared `blocks_on` edges by
 flagging any step marked done whose ancestry has not truly passed — but its
 ancestor states are the very statuses this function produces. With any-of-N,
-upstream steps essentially never reached MISSING, so the dependency guard had
-nothing to fire on and reported 0 violations on a run that had real gaps. The
-same run reports 89 ordering violations once the artefact check is honest. The
-dependency guard was never broken; it was starved.
+upstream steps essentially never reached MISSING, so the dependency guard was
+starved of the ancestor states it fires on. It was never broken.
+
+HOW BIG that effect is depends on the ENGINE VERSION, not only on this branch,
+because every other gate also feeds the same ancestor states. Stating one bare
+number without its tree is what made the first version of this docstring wrong:
+it claimed "89 ordering violations", a figure that reproduces in no
+configuration anyone has been able to run — the PR body said 62, a re-derivation
+at v1.7.53 measured 68, and the count below is 84. Only the DELTA, measured on
+one tree, means anything.
+
+RE-MEASURED at plugin v1.7.58, same run, same command:
+
+    flow_compliance_check.py <run> --flow phase1_phase2_phase3 \\
+        --skip-analog --skip-hardware
+
+                       any-of-N     ALL-of-N (this branch)
+    PASS                     31     27
+    MISSING                   0      4   (steps 9, 10, 23, 38)
+    ordering violations      36     84
+
+The 36 already present under any-of-N come from gates that landed AFTER the run
+was produced (steps 8, 27, 37 FAIL on today's engine). The net +48 is
++54 -6: steps 9/10/23 turning MISSING adds 54 lines against their dependants
+(24 + 24 + 6), and steps 9/10/23/38 losing their own PASS removes the 6 lines
+where THEY were the step "marked done". At the merge-base the same measurement
+was 0 -> 62, which is why the PR body says 62.
+
+Step 38 is MISSING rather than SKIPPED-CONDITION in that column because this
+completed run predates the disclosure marker its generator now writes; a re-run
+resolves it to a disclosed SKIPPED-CONDITION. See
+`test_step38_scribe_frame_absence_is_disclosed_not_certified.py`.
 
 The " OR " INSIDE one entry stays any-of — that spelling is how the flow yaml
 declares a single artefact with two accepted names/locations.
@@ -167,15 +195,38 @@ _FLOW = _PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 def test_flow_declares_no_gate_at_end():
     """Every stage used to carry `gate_at_end: <name>` — and no program in the
-    tree ever read the key, while one of the eight names (`phase1_compliance`)
-    did not correspond to any file at all. A stage-end gate that exists only in
-    the declaration is a claim of enforcement that never runs.
+    tree ever read the key. FOUR of the eight names did not correspond to any
+    file at all (`phase1_compliance`, `analog_compliance`,
+    `mixed_signal_compliance`, `manufacturing_compliance`); the other four exist
+    as `programs/stage[1-4]_compliance.py` and are catalogued in
+    `programs/INDEX.md`, but nothing dispatched them either. An earlier version
+    of this docstring said "one of the eight", which understated it — verify
+    with `find <tree> -name '<name>.py'` for all eight before editing this line.
+    A stage-end gate that exists only in the declaration is a claim of
+    enforcement that never runs.
 
     If stage-end gating is wanted, WIRE it and delete this test in the same
     change. Re-adding the key alone must fail here."""
     assert "gate_at_end" not in _FLOW.read_text(), (
         "flow yaml re-declares `gate_at_end`, which no program reads — "
         "wire it or drop it, do not declare it")
+
+
+def test_every_program_the_flow_names_exists():
+    """The general form of the `gate_at_end` lesson: four of those eight names
+    pointed at no file at all, and nothing noticed because nothing checked that
+    a name the flow DECLARES resolves to something. `steps[].programs` is the
+    live surface of that same class — 84 names today — so check it as a whole
+    rather than pinning the four dead strings that were deleted."""
+    import yaml
+    doc = yaml.safe_load(_FLOW.read_text())
+    named = {str(p) for st in doc.get("steps", [])
+             for p in (st.get("programs") or [])}
+    assert named, "flow declares no programs — the scan found nothing to check"
+    dangling = sorted(n for n in named if not (_PROGRAMS / f"{n}.py").is_file())
+    assert not dangling, (
+        f"flow yaml names {len(dangling)} program(s) with no "
+        f"programs/<name>.py: {dangling}")
 
 
 def test_every_required_output_entry_is_a_plain_relative_glob():

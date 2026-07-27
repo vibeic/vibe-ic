@@ -1632,6 +1632,14 @@ def _sibling_self_skip_for_missing(project: Path,
     (the gate already passed), and a sibling that does NOT self-report a skip
     (e.g. a real FAIL verdict, or no sibling at all) returns None → the gate
     stays FAILed. A real formal FAIL still FAILs.
+
+    TIGHTENING: a sibling that DECLARES what it skips (`skips_required_output`)
+    is honoured only for the output it names. Without that, a runner that drops
+    an honest, narrowly-scoped marker into a SHARED artefact directory would
+    silently start excusing every other absent file in the same directory —
+    a masking vector that grows with each new marker. Markers WITHOUT the field
+    keep the original dir-level behaviour, so this only ever refuses a
+    promotion, never grants one.
     """
     seen_dirs: set = set()
     for pat in missing_patterns:
@@ -1667,6 +1675,17 @@ def _sibling_self_skip_for_missing(project: Path,
                     continue
                 vd = str(data.get("verdict", "")).upper().replace("_", "-")
                 if vd in _SELF_SKIP_VERDICTS:
+                    # A marker that names WHAT it skips is honoured only for
+                    # that output — see TIGHTENING in the docstring.
+                    _declared = data.get("skips_required_output")
+                    _declared_list = (
+                        [_declared] if isinstance(_declared, str)
+                        else list(_declared)
+                        if isinstance(_declared, (list, tuple)) else [])
+                    if _declared_list and not any(
+                            _output_claim_matches(do, missing_patterns)
+                            for do in _declared_list if isinstance(do, str)):
+                        continue
                     try:
                         sib_rel = str(sib.relative_to(project))
                     except ValueError:
@@ -5760,7 +5779,15 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # through, and only downgrade a PASS-tier gate verdict afterwards (see
     # `_missing_entries` handling below the gate): a gate may explain an absent
     # output, it may not certify the step as done without one.
-    if outputs and missing_entries and not result.evidence:
+    #
+    # The condition is "EVERY entry missed", stated directly. It used to read
+    # `missing_entries and not result.evidence`, whose middle conjunct could
+    # never change the branch (a satisfied entry always appends evidence just
+    # above, and nothing else populates `result.evidence` before this point, so
+    # empty evidence already implied every entry missed) — a clause that reads
+    # like a guard while guarding nothing. Stating the real condition also
+    # keeps this correct if a future change ever pre-seeds evidence.
+    if outputs and len(missing_entries) == len(outputs):
         result.status = "MISSING"
         result.reasons.append(
             f"no required_outputs found (expected: {outputs})")
@@ -5946,7 +5973,6 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # No gate — just presence of outputs counts
         result.status = "PASS" if result.evidence else "MISSING"
 
-    # v1.6.269 (#126) — ENV_UNAVAILABLE fallback promotion. If the
     # ── required_outputs is ALL-of-N: a gate may not certify a step done
     # while one of its own declared outputs was never produced ────────────
     # Applied only to a PASS-tier verdict, and only when SOME evidence existed
@@ -5961,14 +5987,55 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # MEASURED on the real spm x ihp-sg13g2 run: Step 21 declared drc.rpt
     # (absent) + routed.def (present) and reported PASS; Step 9 declared
     # netlist.v (present) + "area.rpt OR stats.json" (both absent), PASS.
+    #
+    # DISCLOSURE PARITY: the all-absent path above promotes MISSING →
+    # SKIPPED-CONDITION when a co-located sibling UNAMBIGUOUSLY OWNS the absent
+    # output and discloses a named capability gap (#675 strict:
+    # self-skip verdict + non-empty `capability_flag` +
+    # `skips_required_output` naming this step's own missing spec). Without the
+    # same consultation here, the identical disclosure was honoured when ALL
+    # outputs were absent and ignored when only ONE was — a discontinuity that
+    # left a runner no honest way to declare a gap it cannot close. A gate may
+    # EXPLAIN an absent artefact through a disclosed, named capability-gap
+    # skip; it may not CERTIFY the step done without one, and SKIPPED-CONDITION
+    # is not a certification (it is excluded from executed-PASS and carries
+    # `self_skip_disclosed`).
     if result.status in ("PASS", "VACUOUS_PASS") and missing_entries:
-        result.status = "MISSING"
-        result.reasons.append(
-            f"required_outputs missing: {missing_entries} "
-            f"(satisfied: {len(outputs) - len(missing_entries)}/{len(outputs)}"
-            f" — the gate passed, but every declared output must be produced, "
-            f"not just one)")
+        # PER-ENTRY disclosure. `_declared_sibling_self_skip_for_missing`
+        # returns on the FIRST pattern it finds an owner for, so handing it the
+        # whole missing set would let a marker owning ONE absent output excuse
+        # all the others — under ALL-of-N that is precisely the masking this
+        # function exists to stop (step 38's scribe-frame marker would have
+        # covered a deleted mask_spec.json). Every unsatisfied requirement needs
+        # its own disclosure, or the step is MISSING.
+        _hints = []
+        for _entry in missing_entries:
+            _alts = [p.strip() for p in _entry.split(" OR ")]
+            _h = _declared_sibling_self_skip_for_missing(project, _alts)
+            if not _h:
+                _hints = []
+                break
+            _hints.append(_h)
+        _skip_hint = "; ".join(_hints) if _hints else None
+        if _skip_hint:
+            result.status = "SKIPPED-CONDITION"
+            result.self_skip_disclosed = True
+            result.reasons.append(
+                f"SKIPPED-CONDITION: declared output(s) {missing_entries} "
+                f"absent (satisfied: "
+                f"{len(outputs) - len(missing_entries)}/{len(outputs)}), but a "
+                f"co-located sibling that OWNS them honestly self-reports a "
+                f"disclosed capability-gap skip (#675 strict): {_skip_hint}")
+        else:
+            result.status = "MISSING"
+            result.reasons.append(
+                f"required_outputs missing: {missing_entries} "
+                f"(satisfied: {len(outputs) - len(missing_entries)}"
+                f"/{len(outputs)}"
+                f" — the gate passed, but every declared output must be "
+                f"produced, not just one)")
 
+    # v1.6.269 (#126) — ENV_UNAVAILABLE fallback promotion. If the
     # natural verdict is FAIL or MISSING AND an ENV_UNAVAILABLE-tier
     # waiver matches this step, convert to WAIVED-DEFERRED. The
     # waiver entry carries ticket + review_required=true so foundry
@@ -6843,6 +6910,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # invariant here as a NON-promotable hard fail (set before the verdict and
     # the open-source-constraints promotion so it cannot be softened away).
     ordering_fail_lines: List[str] = []
+    ordering_guard_error: Optional[str] = None
     try:
         import flow_step_execution_coverage_check as _cov
         _cov_graph = {
@@ -6859,8 +6927,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"[{v['signoff_id']}] {v['signoff']} = {v['signoff_status']}")
         if ordering_fail_lines:
             forced_fail = True
-    except Exception:  # nosec — additive enforcement must never crash the audit
+    except Exception as _cov_exc:  # noqa: BLE001 — must never crash the audit
+        # …but "must not crash" is NOT "may report clean". Swallowing the
+        # exception into an empty list made an unavailable guard
+        # indistinguishable from a guard that ran and found nothing: delete the
+        # module, or make anything inside `analyze` raise, and the audit printed
+        # no ordering finding and left the verdict unforced, with every test
+        # still green. A guard that did not run has certified nothing, so say so
+        # and block on it — the audit stays alive, but it cannot report an
+        # invariant as satisfied that it never evaluated.
+        #
+        # Kept OUT of `ordering_fail_lines` (and therefore out of the JSON
+        # `ordering_violations` list): "the guard could not run" is not a
+        # violation, and a consumer counting that list must not be told a
+        # violation was found. It gets its own line and its own JSON key.
         ordering_fail_lines = []
+        ordering_guard_error = (
+            f"{type(_cov_exc).__name__}: {_cov_exc}")
+        forced_fail = True
 
     if not ok or forced_fail:
         overall = "FAIL"
@@ -7041,6 +7125,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         for line in ordering_fail_lines:
             print(f"  ✗ {line}")
 
+    if ordering_guard_error:
+        print("\nStep-execution ordering guard DID NOT RUN "
+              f"({ordering_guard_error}) — the declared `blocks_on` invariant "
+              "is UNVERIFIED for this audit and is NOT reported clean; "
+              "fix flow_step_execution_coverage_check.")
+
     if advisories:
         print("\nAdvisories:")
         for adv in advisories:
@@ -7074,6 +7164,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             "allow_thin_input": bool(getattr(args, "allow_thin_input", False)),
             "input_doc_count": _count_input_docs(project),
             "ordering_violations": ordering_fail_lines,
+            # null when the guard ran. A string here means the guard could NOT
+            # run, so `ordering_violations: []` above says nothing about the
+            # `blocks_on` invariant — the run is forced FAIL rather than
+            # reported clean.
+            "ordering_guard_error": ordering_guard_error,
             "steps": [asdict(r) for r in results],
         }
         Path(args.json).write_text(json.dumps(out, indent=2))
