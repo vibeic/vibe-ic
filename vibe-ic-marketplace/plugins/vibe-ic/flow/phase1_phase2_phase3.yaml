@@ -271,7 +271,20 @@ steps:
     gate:
       files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
       any_of: true
-    blocks_on: []
+    # The dependency was always REAL and never DECLARED. D1 is the sole member
+    # of stage_phase1 and its L1-L27 output is, in this file's own words, "the
+    # universal handoff to Phase 2" — spec-to-RTL literally reads
+    # phase1/generated_docs/. With `blocks_on: []` NO edge in this flow named
+    # D1 (62 blocks_on lines, zero D1 references), so the ordering guard in
+    # flow_step_execution_coverage_check.analyze() — which forces Overall FAIL
+    # when a PASS step's transitive blocks_on ancestry reaches a non-PASS
+    # applicable step — was structurally blind to a FAILED Phase 1: Step 1
+    # self-certified on the presence of RTL files alone. Declaring the edge
+    # arms the guard that already exists; both consumers stringify ids
+    # (flow_compliance_check.py `str(e)`, _load_blocks_on `str(e)`), so a "D1"
+    # edge needs no code change. The edge is transitive, so a FAIL/MISSING D1
+    # now correctly reds every descendant of Step 1.
+    blocks_on: [D1]
 
   - id: 2
     name: "🔁 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)"
@@ -707,8 +720,20 @@ steps:
             command: "sdc_exception_correlation_check . --json reports/phase2/gates/sdc_exceptions.json"
             condition_files_exist: ["phase2/stage2/constraints"]
         # sdc_validator_check fires only when L8 timing exists.
+        # The positional is the PROJECT ROOT — the program resolves
+        # `_path_layout.constraints_dir()` (= phase2/stage2/constraints) and
+        # `fpga_early_dir()` itself, exactly as its own unit tests call it.
+        # This gate used to pass `phase2/stage2/constraints`, so the effective
+        # search root became phase2/stage2/constraints/phase2/stage2/constraints
+        # — a directory that never exists. The program then reported
+        # `[SKIP] no .sdc files` and exit 0 on EVERY project since v1.6.18, and
+        # per flow_compliance_check the optional gate is only optional on its
+        # TRIGGER: once triggered a non-zero exit fails step 8's all_of. So this
+        # was a BLOCKING gate that had been silently disarmed, not an advisory
+        # one. Measured on the real spm x ihp-sg13g2 run: the yaml-literal form
+        # SKIPped at rc=0 while the project-root form FAILed the same SDC.
         - optional_program_exit_zero:
-            command: "sdc_validator_check phase2/stage2/constraints --l8 phase1/generated_docs/L8_TIMING_WAVEFORM.json --json reports/sdc_validator.json"
+            command: "sdc_validator_check . --l8 phase1/generated_docs/L8_TIMING_WAVEFORM.json --json reports/sdc_validator.json"
             condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
         # flow v2.3.2 (review B-1) — manual ICG / register-divided clocks
         # need a create_generated_clock in the SDC; otherwise STA
@@ -1106,7 +1131,25 @@ steps:
       - "phase3/analog/hardmacro/*/*.gds"
       - "phase3/analog/hardmacro/*/*.v"
     gate:
-      program_exit_zero: "analog_hardmacro_check . --json reports/phase2/gates/hardmacro.json"
+      all_of:
+        - program_exit_zero: "analog_hardmacro_check . --json reports/phase2/gates/hardmacro.json"
+        # `analog_lef_gds_outline_check` was WRITTEN, TESTED and never WIRED:
+        # it appeared only in skills/analog-output-verify/SKILL.md, in
+        # programs/INDEX.md and in its own unit test — in NO flow gate. It is
+        # the numeric half of A8 (does the LEF `SIZE w BY h ;` the digital
+        # floorplan reserves actually match the GDS bounding box?), and it
+        # already FAILs `A8_GDS_NO_GEOMETRY` on the exact artefact
+        # analog_hardmacro_check used to accept. Measured: 500 bytes of
+        # non-GDS noise + a valid LEF/LIB/V -> analog_hardmacro_check
+        # `[PASS]`, analog_lef_gds_outline_check rc=1. Wiring it costs a
+        # SECOND, separate class of newly-red: a REAL GDS paired with a
+        # hand-written LEF outline can now FAIL on a numeric mismatch that
+        # was never measured before. That is the intended cost.
+        # VACUOUS_PASS on projects with no analog_block_list.json, so the
+        # pure-digital track is untouched; a deterministic-stub hardmacro
+        # with no .gds is a disclosed STUB_NOT_PACKAGED skip, so the
+        # PASS_WITH_STUB tier survives.
+        - program_exit_zero: "analog_lef_gds_outline_check . --json reports/phase2/gates/a8_lef_gds_outline.json"
     blocks_on: [A7]
 
   - id: A9
@@ -1882,7 +1925,28 @@ steps:
         # Provenance required: GDS must be produced by a real streamer
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
-        - program_exit_zero: "provenance_check . --require-entries 1"
+        #
+        # It did not. `--require-entries 1` is the COARSE mode: it counts
+        # exit-0 entries anywhere in provenance.jsonl with NO output-path and
+        # NO tool filtering, so it passes on any run that logged a single
+        # yosys/openroad/sta/netgen invocation — the GDS itself is never
+        # looked at. Of the six provenance gates in this flow, this was the
+        # ONLY coarse one; lines 701/1302/1330/1611/1612 all use the strict
+        # `--output ... --tool ...` form. Measured on the real
+        # spm x ihp-sg13g2 run: coarse -> `44 / 1 exit-0 entries OK`, rc=0;
+        # strict -> rc=1, `hash mismatch: log=sha256:a5f4537a59e...
+        # disk=sha256:b8cb431c24d...` — the shipped GDS post-dates the only
+        # log entry that claims to describe it.
+        #
+        # `--output=`/`--tool=` (the `=` form) is deliberate: an argument
+        # starting with `-` is NOT touched by flow_compliance_check's
+        # `_expand_globs`, so the pattern reaches provenance_check intact and
+        # is expanded by ITS glob branch, which FAILs "no file on disk matches
+        # pattern" when nothing matches and checks EVERY match when several
+        # do. The space-separated form would be pre-expanded with nullglob
+        # semantics: zero matches drops the argument entirely and argparse
+        # then exits 2, which this runner reads as VACUOUS_PASS.
+        - program_exit_zero: "provenance_check . --output=phase3/stage4/gds/*.gds --tool=klayout,magic,openroad"
     blocks_on: [34, 36]
 
   - id: 38
