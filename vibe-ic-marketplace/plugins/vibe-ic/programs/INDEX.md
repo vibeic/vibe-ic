@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 987
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 987)
+- **Total programs (excluding helpers / shims):** 988
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 988)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 978 |
+| `any` | 979 |
 
 ## Alphabetical listing
 
@@ -169,6 +169,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ci_targeted_test_select` | any | — | pick a FAST targeted pytest subset for the |
 | `clause_smoke_tb` | any | — | ORGANIC #740 (G2) [chip-AGNOSTIC] |
 | `clock_cascade_synthesis_check` | any | — | refuse a top-level RTL that ties |
+| `clock_contract` | any | — | one clock name declares exactly one period. |
 | `clock_divider_period_check` | any | v0.116 | BACKLOG-v11 P0.2. |
 | `clock_divider_phase_form_check` | any | — | deterministic emit gate for the odd / |
 | `clock_plan_check` | any | — | Step 16 (Clock planning) substance gate. |
@@ -1059,7 +1060,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (978 programs)
+### `any` (979 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1203,6 +1204,7 @@ _(no programs in this group)_
 - `ci_targeted_test_select` — pick a FAST targeted pytest subset for the
 - `clause_smoke_tb` — ORGANIC #740 (G2) [chip-AGNOSTIC]
 - `clock_cascade_synthesis_check` — refuse a top-level RTL that ties
+- `clock_contract` — one clock name declares exactly one period.
 - `clock_divider_period_check` — BACKLOG-v11 P0.2.  _[v0.116]_
 - `clock_divider_phase_form_check` — deterministic emit gate for the odd /
 - `clock_plan_check` — Step 16 (Clock planning) substance gate.
