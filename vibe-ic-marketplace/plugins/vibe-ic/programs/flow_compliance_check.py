@@ -2953,167 +2953,21 @@ _OS_CONSTRAINTS_PREREQ_STEPS: tuple[Any, ...] = (
 )
 
 
-def _parse_p0_failing_subgates(p0_result: Any) -> List[str]:
-    """v1.6.211 (#92) — extract failing structural-RTL sub-gate names
-    from a P0 StepResult's reasons list.
-
-    The P0 umbrella emits reason lines of the form
-        "FAIL: <gate_name> — <first message line>"
-    or, when ≥2 gates fail, a header `Failed gates (N):` followed by
-    indented `- <gate_name> — <msg>` lines (see the structural_result
-    composition site).  Both shapes are handled.
-
-    Returns the de-duplicated list of failing gate names (stripped of
-    the FAIL prefix and dashes).  Empty list if the result is None or
-    not a P0 step.
-
-    NOT EVERY REASON LINE IS A VERDICT.  Since #492 the umbrella also
-    DISCLOSES the gates that argument parsing rejected — a heading plus
-    one ``  - <gate> (NOT INVOKED: …)`` bullet each.  Those gates
-    returned NO verdict at all, so they are neither a pass nor a
-    failure, and the disclosure was deliberately not made a FAIL in the
-    umbrella's own status.  This scraper had no notion of the shape, so
-    it read the heading and every bullet as a failing gate NAME and
-    handed 38 phantom names to three consumers, two of which are
-    ``all(...)`` predicates that go False the moment an unrecognised
-    name appears (``_step_failure_is_informational_only`` and the
-    PASS_WITH_OPEN_SOURCE_CONSTRAINTS deferral).  Both convert a
-    TOLERATED outcome into a FAIL — the exact false-FAIL class the
-    disclosure was careful to avoid, arriving through the back door.
-    The predicate that recognises a disclosure line lives next to the
-    formatter that writes it, so the two cannot drift again.
-    """
-    if p0_result is None:
-        return []
-    out: List[str] = []
-    seen: set = set()
-    for line in (p0_result.reasons or []):
-        s = str(line).strip()
-        if not s:
-            continue
-        # Disclosure, not verdict — see the docstring. Tested BEFORE the
-        # prefix stripping below, because the per-gate bullets share the
-        # `  - ` prefix with Form 2 and would otherwise be indistinguishable
-        # from a real failure by the time we got here.
-        if _gate_invocation.is_not_invocable_disclosure(s):
-            continue
-        # Form 1: "FAIL: gate_name — msg"
-        if s.startswith("FAIL: "):
-            s = s[len("FAIL: "):]
-        # Form 2: "- gate_name — msg" (indented under "Failed gates (N):")
-        elif s.startswith("- "):
-            s = s[2:]
-        elif s.startswith("Failed gates"):
-            continue
-        elif s.startswith("SKIP:") or s.startswith("WAIVED"):
-            continue
-        # Pull the gate name up to the first " — " or whitespace
-        for sep in (" — ", " - ", ":"):
-            if sep in s:
-                s = s.split(sep, 1)[0].strip()
-                break
-        else:
-            s = s.split()[0] if s.split() else s
-        if s and s not in seen:
-            seen.add(s)
-            out.append(s)
-    return out
-
-
-def _normalise_p0_reason_line(msg: str) -> str:
-    """Collapse the P0 umbrella's TWO reason shapes into one.
-
-    The P0 umbrella emits its failing sub-gates in one of two shapes,
-    chosen purely by HOW MANY gates failed (see the structural_result
-    composition site):
-
-      * exactly 1 failure  -> "FAIL: <gate_name> — <msg>"        (Form 1)
-      * 2 or more failures -> "Failed gates (N):" followed by
-                              "  - <gate_name> — <msg>" lines     (Form 2)
-
-    Returns the line rewritten into Form 1, or "" for lines that carry
-    no gate (the ``Failed gates (N):`` header itself).  Any other line
-    is returned unchanged so existing matchers keep their behaviour.
-
-    Why this exists: the audit-JSON builder matched Form 1 only, so
-    ``failed_gates`` came out EMPTY exactly when two or more gates
-    failed — i.e. the machine-readable list went blank precisely when
-    it had the most to report, while a single-failure run reported
-    correctly.  Measured on plugin 1.5.85 AND 1.6.4 (identical code):
-    2 failing gates -> ``failed_gates: []``; the same tree with 1
-    failing gate -> ``failed_gates: ['provenance_output_hash_
-    completeness_check']``.  The variable is the failure COUNT, not
-    the plugin version.
-
-    THE ``- `` PREFIX IS NOT PROOF OF FAILURE.  Since #492 the
-    umbrella's disclosure block uses the SAME indented-bullet shape for
-    gates that argument parsing rejected, and this function's
-    unconditional ``"- " -> "FAIL: "`` rewrite promoted every one of
-    them into a per-gate FAIL record carrying the gate's REAL name —
-    which is worse than the mangled prose the sibling parser produced,
-    because it reads as a genuine verdict.  That channel fires whatever
-    the umbrella's own status is, so an umbrella that PASSED still
-    published dozens of failed gates into
-    ``phase23_completion_audit.json`` — the artifact whose own write
-    site calls it "the contract the mcp-eda pre-burn guard consumes".
-    """
-    s = (msg or "").strip()
-    if not s:
-        return ""
-    if s.startswith("Failed gates"):
-        return ""
-    # A never-invoked gate produced no verdict; it must not become a
-    # per-gate record of any verdict. Checked before the bullet rewrite
-    # below, whose prefix it shares.
-    if _gate_invocation.is_not_invocable_disclosure(s):
-        return ""
-    if s.startswith("- "):
-        return "FAIL: " + s[2:].lstrip()
-    return s
-
-
-def _per_gate_from_p0_reasons(reasons: Any) -> List[Dict[str, Any]]:
-    """Build the audit JSON's per-gate records from a P0 reasons list.
-
-    Extracted from ``main()`` so the parse is unit-testable against
-    BOTH reason shapes; ``_normalise_p0_reason_line`` guarantees the
-    matchers below only ever see Form 1.
-    """
-    per_gate: List[Dict[str, Any]] = []
-    for reason in (reasons or []):
-        msg = _normalise_p0_reason_line(str(reason))
-        if not msg:
-            continue
-        fail_match = re.match(
-            r"^FAIL:\s*([\w\.]+)\s*[—\-:]?\s*(.*)$", msg)
-        pass_match = re.match(
-            r"^PASS:\s*([\w\.]+)\s*[—\-:]?\s*(.*)$", msg)
-        if fail_match:
-            per_gate.append({
-                "name": fail_match.group(1),
-                "verdict": "FAIL",
-                "message": fail_match.group(2)[:240],
-            })
-        elif pass_match:
-            per_gate.append({
-                "name": pass_match.group(1),
-                "verdict": "PASS",
-                "message": pass_match.group(2)[:240],
-            })
-        else:
-            inline = re.match(
-                r"^([\w\.]+_check)\s*[—\-:]?\s*(.*)$", msg)
-            if inline:
-                verdict_tok = "FAIL" if (
-                    "FAIL" in inline.group(2).upper()
-                    or "ERROR" in inline.group(2).upper()
-                ) else "PASS"
-                per_gate.append({
-                    "name": inline.group(1),
-                    "verdict": verdict_tok,
-                    "message": inline.group(2)[:240],
-                })
-    return per_gate
+# ── #497 step 4 — the four prose scrapers are GONE ───────────────────────────
+#
+# `_parse_p0_failing_subgates`, `_normalise_p0_reason_line`,
+# `_per_gate_from_p0_reasons` and `_p0_passed_gate_count` stood here. Each
+# recovered a name, a record or a number by re-deriving the P0 umbrella's
+# English from line prefixes, and between them they produced three shipped
+# defects and two latent ones. Every one of their answers now comes from the
+# umbrella's typed records (`_p0_failing_gate_names`, `_p0_audit_gate_records`,
+# `_p0_structural_fail_lines`, `_p0_passed_count`), and `reasons` is rendered
+# from those same records rather than parsed back out of them.
+#
+# They are deleted rather than deprecated. A scraper left in the tree is a
+# second grammar waiting for a caller: the next person to need a failing-gate
+# name finds two ways to get one, and the one that reads prose looks like the
+# cheaper option right up until a seventh line shape appears.
 
 
 def _compose_p0_reasons_from_records(
@@ -3251,43 +3105,6 @@ def _compose_p0_reasons(s_fails: List[str],
             "PASSED (0 FAIL / 0 SKIP / 0 WAIVED)"
         ]
     return reasons_combined
-
-
-def _p0_passed_gate_count(executed: Optional[bool],
-                          s_fails: List[str],
-                          s_skips: List[str],
-                          s_waivers: List[Dict[str, Any]],
-                          n_registered: Optional[int] = None) -> int:
-    """How many registered structural gates ran and PASSED.
-
-    ``_run_structural_rtl_gates`` dispatches every entry of
-    ``_STRUCTURAL_RTL_GATES`` exactly once and files each into exactly one
-    of fail / skip / waiver / pass, appending nothing for a pass.  So the
-    passing population is the registry minus the other three — an exact
-    partition, not an estimate.
-
-    WHY THIS EXISTS.  ``passed_gate_count`` in
-    ``phase23_completion_audit.json`` was derived by scanning the P0
-    reasons list for ``PASS: <gate>`` lines.  The umbrella has never
-    emitted such a line — a passing gate contributes NO reason at all —
-    so the field was structurally pinned at 0 on every run in the
-    artifact's history, including runs where 150+ gates passed.  That is
-    a SEPARATE and OLDER defect from the disclosure mis-parse: measured
-    at ``7b7eebff3~1``, i.e. before the disclosure existed, the same
-    project reported ``passed_gate_count: 0`` with ``gates: []``.  It is
-    fixed here because it is the same field, the same artifact and the
-    same class of error — an audit number derived by scraping prose
-    instead of by asking the code that knows.
-
-    ``executed`` is the umbrella's ``all_passed`` tri-state: ``None``
-    means no gate ran at all (no RTL), so nothing passed.
-    """
-    if executed is None:
-        return 0
-    if n_registered is None:
-        n_registered = len(_STRUCTURAL_RTL_GATES)
-    return max(0, n_registered
-               - len(s_fails) - len(s_skips) - len(s_waivers))
 
 
 def _count_input_docs(project: Path) -> int:
@@ -8485,32 +8302,30 @@ def main(argv: Optional[List[str]] = None) -> int:
             (r for r in results if r.id == "P0"), None)
         per_gate: List[Dict[str, Any]] = _p0_audit_gate_records(
             _p0_gate_records(p0_audit_result))
-        # Build a canonical failed-gate list combining the structural-
-        # RTL gates above and the explicit `structural_fail_lines`
-        # collected earlier (covers cases where reasons are formatted
-        # differently between gate implementations).
-        failed_gate_names: List[str] = []
-        seen: set[str] = set()
-        for g in per_gate:
-            if g["verdict"] == "FAIL" and g["name"] not in seen:
-                failed_gate_names.append(g["name"])
-                seen.add(g["name"])
-        # Backstop, kept: the promotion logic's own view of which sub-gates
-        # failed. Both sides are now the SAME projection of the SAME records,
-        # which is a stronger guarantee than the reconciliation it replaces —
-        # that one existed because two independent parsers of one prose list
-        # had already disagreed once.
-        if p0_audit_result is not None and p0_audit_result.status == "FAIL":
-            for name in _p0_failing_gate_names(
-                    _p0_gate_records(p0_audit_result)):
-                if name not in seen:
-                    failed_gate_names.append(name)
-                    seen.add(name)
-        for line in structural_fail_lines:
-            m = re.match(r"^([\w\.]+_check)\b", line.lstrip("-•* "))
-            if m and m.group(1) not in seen:
-                failed_gate_names.append(m.group(1))
-                seen.add(m.group(1))
+        # The canonical failed-gate list: one projection, no reconciliation.
+        # It used to be assembled from three sources and de-duplicated, which
+        # is what an assembly of three sources requires.
+        failed_gate_names: List[str] = _p0_failing_gate_names(
+            _p0_gate_records(p0_audit_result))
+        # #497 step 4 — a BACKSTOP stood here too, reconciling the list above
+        # against the promotion logic's own view of which sub-gates failed. It
+        # existed because two independent parsers of one prose list had already
+        # disagreed once. Both sides are now the same projection of the same
+        # records, so it could add nothing — kept through step 2 while the
+        # scrapers were still in the tree, removed with them. A reconciliation
+        # between a thing and itself is not a safety net; it is a second place
+        # to have to keep correct.
+        #
+        # A fifth scrape stood here as well: a `^([\w.]+_check)\b` match
+        # over each `structural_fail_lines` entry, added as a third source of
+        # failing-gate names "for cases where reasons are formatted differently
+        # between gate implementations". It could never contribute. Whenever
+        # `structural_fail_lines` is non-empty the P0 umbrella FAILed, and the
+        # pass above it has already added every failing gate the umbrella
+        # recorded — and had it ever been the only source, it would have
+        # silently dropped the 15 registered gates whose names do not end in
+        # `_check`. Measured on 27 real runs before removal: it added nothing on
+        # every one.
 
         # #497 step 2 — the count of PASS records. `structural_passed_count`
         # is None only when the umbrella did not run at all (stage 3/4), where

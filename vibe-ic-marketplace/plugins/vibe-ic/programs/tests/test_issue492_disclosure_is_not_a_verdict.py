@@ -46,8 +46,18 @@ WHY THE UNIT SUITE WAS GREEN WHILE THIS SHIPPED
 No test ever fed real producer output to a real parser. The composition of
 ``reasons`` lived inline in ``main()``, so every parser test had to hand-write
 a fixture of what it BELIEVED the producer emitted — and none of them believed
-in the disclosure block, because it did not exist when they were written. The
-producer is now ``_compose_p0_reasons`` and the round trip is tested here.
+in the disclosure block, because it did not exist when they were written.
+
+#497 CLOSED THE CLASS, AND THIS FILE MOVED WITH IT
+--------------------------------------------------
+All four scrapers are gone. Every consumer reads the umbrella's typed
+``gate_records``, where a never-invoked gate's verdict is ``NOT_INVOCABLE``
+rather than a phrase inside a skip line, and ``reasons`` is RENDERED from those
+same records instead of being parsed back out of them. The assertions below are
+unchanged in substance and the disclosure is still present in every fixture's
+prose — what changed is that the population they check is the one the shipped
+code reads. The one thing that must NOT change is that the disclosure keeps
+reaching the operator: section 7 drives ``main()`` and reads the artifact.
 
 BOTH REASON SHAPES ARE COVERED, deliberately. The umbrella emits the
 ``Failed gates (N):`` + indented-bullet shape only when >=2 gates fail, and the
@@ -110,62 +120,68 @@ def umbrella(tmp_path_factory):
     the callee's own error text as produced by a real subprocess dispatch —
     nothing about the disclosure's wording is invented by this test."""
     proj = _project_with_rtl(tmp_path_factory.mktemp("p0_umbrella"))
-    passed, fails, skips, waivers = F._run_structural_rtl_gates(proj)
-    not_invoked = [s for s in skips
-                   if GI.NOT_INVOCABLE_SENTINEL in s]
+    records: list = []
+    passed, fails, skips, waivers = F._run_structural_rtl_gates(
+        proj, records_out=records)
+    not_invoked = [r for r in records if r["verdict"] == "NOT_INVOCABLE"]
     if not not_invoked:
         pytest.skip("no gate is currently un-invocable — nothing to disclose")
     return {
         "passed": passed, "fails": fails, "skips": skips, "waivers": waivers,
+        "records": records,
         "not_invoked": not_invoked,
-        "not_invoked_names": {s.split(" ", 1)[0] for s in not_invoked},
-        "fail_names": [f[len("FAIL: "):].split(" — ")[0] for f in fails],
+        "not_invoked_names": {r["name"] for r in not_invoked},
+        "fail_names": F._p0_failing_gate_names(records),
     }
 
 
-def _p0(reasons, status="FAIL", fail_gates=()):
-    """A P0 StepResult.
+def _p0(records, status="FAIL", extra_reasons=()):
+    """A P0 StepResult built the way `main()` builds it.
 
-    #497 step 2 — `fail_gates` publishes the structured per-gate records beside
-    the prose. The consumers that decide a VERDICT
-    (`_step_failure_is_informational_only`, `p0_is_deferrable`) read the
-    records now, so a fixture that wants those consumers to see a failing gate
-    has to say so in the typed channel. Fixtures that exercise the PROSE
-    scrapers still pass reasons alone — that is the point of them.
+    #497 — `reasons` is RENDERED from the records, so a fixture states its
+    outcomes once, in the typed channel, and the prose follows. `extra_reasons`
+    exists only for the tests that need a reason line with no record behind it,
+    which is the situation the whole issue is about.
     """
+    reasons = F._compose_p0_reasons_from_records(
+        records, not any(r["verdict"] == "FAIL" for r in records))
     return F.StepResult(
         id="P0", name="P0 umbrella", stage="stage1", status=status,
-        reasons=list(reasons), evidence=[],
-        gate_records=[F._p0_gate_record(g, "FAIL", "m", {"exit_code": 1})
-                      for g in fail_gates] or None)
+        reasons=list(reasons) + list(extra_reasons), evidence=[],
+        gate_records=list(records))
+
+
+def _fail_rec(name, msg="first line of gate output"):
+    return F._p0_gate_record(name, "FAIL", msg, {"exit_code": 1})
 
 
 def _disclosure_block(umbrella):
     """The disclosure exactly as the umbrella composes it into `reasons`."""
-    return F._compose_p0_reasons([], umbrella["skips"], [])
+    return F._compose_p0_reasons_from_records(umbrella["not_invoked"], True)
 
 
-# ══════════════════════ 1. the producer ↔ parser round trip ══════════════════
-# The contract that had no test: whatever the producer writes, the parser must
-# read back as EXACTLY the failing gates and nothing else.
+# ══════════════════════ 1. the producer ↔ consumer round trip ════════════════
+# The contract that had no test. Since #497 step 4 there is no parser left to
+# round-trip against: `reasons` is rendered from the records and every consumer
+# reads the records, so the invariant is stated directly — the failing-gate
+# NAMES and the operator PROSE must both come out of the same population, with
+# the disclosure in it and contributing nothing.
 
 @pytest.mark.parametrize("n_fails", [0, 1, 2, 4])
-def test_roundtrip_parser_recovers_exactly_the_failing_gates(umbrella, n_fails):
-    fails = [f"FAIL: gate_{i}_check — first line of gate output"
-             for i in range(n_fails)]
-    reasons = F._compose_p0_reasons(fails, umbrella["skips"],
-                                    umbrella["waivers"])
-    recovered = F._parse_p0_failing_subgates(
-        _p0(reasons, "FAIL" if fails else "PASS"))
-    assert recovered == [f"gate_{i}_check" for i in range(n_fails)]
+def test_roundtrip_recovers_exactly_the_failing_gates(umbrella, n_fails):
+    records = ([_fail_rec(f"gate_{i}_check") for i in range(n_fails)]
+               + umbrella["not_invoked"] + list(umbrella["waivers"] and []))
+    res = _p0(records, "FAIL" if n_fails else "PASS")
+    assert F._p0_failing_gate_names(F._p0_gate_records(res)) == \
+        [f"gate_{i}_check" for i in range(n_fails)]
 
 
 def test_roundtrip_uses_both_shapes(umbrella):
     """Premise check: the two shapes really are different, so the
     parametrised round trip above is not testing one shape twice."""
-    one = F._compose_p0_reasons(["FAIL: a_check — m"], umbrella["skips"], [])
-    two = F._compose_p0_reasons(["FAIL: a_check — m", "FAIL: b_check — m"],
-                                umbrella["skips"], [])
+    one = _p0([_fail_rec("a_check", "m")] + umbrella["not_invoked"]).reasons
+    two = _p0([_fail_rec("a_check", "m"), _fail_rec("b_check", "m")]
+              + umbrella["not_invoked"]).reasons
     assert not any(r.startswith("Failed gates") for r in one)
     assert any(r.startswith("Failed gates") for r in two)
     assert any(r.lstrip().startswith("- b_check") for r in two)
@@ -185,44 +201,46 @@ def test_the_disclosure_is_still_disclosed(umbrella):
     assert named == umbrella["not_invoked_names"]
 
 
-# ══════════════════ 2. consumer 1 — _parse_p0_failing_subgates ═══════════════
+# ═══════════ 2. consumer 1 — the failing-gate name list ══════════════════════
 
 @pytest.mark.parametrize("status", ["PASS", "FAIL"])
 def test_no_disclosure_line_is_read_as_a_failing_gate(umbrella, status):
-    reasons = _disclosure_block(umbrella)
-    assert F._parse_p0_failing_subgates(_p0(reasons, status)) == []
+    res = _p0(umbrella["not_invoked"], status)
+    assert any(GI.NOT_INVOCABLE_SENTINEL in r for r in res.reasons), (
+        "premise: the disclosure really is in the operator's prose")
+    assert F._p0_failing_gate_names(F._p0_gate_records(res)) == []
 
 
 def test_heading_is_never_a_gate_name(umbrella):
-    reasons = F._compose_p0_reasons(["FAIL: real_check — boom"],
-                                    umbrella["skips"], [])
-    names = F._parse_p0_failing_subgates(_p0(reasons))
+    res = _p0([_fail_rec("real_check", "boom")] + umbrella["not_invoked"])
+    names = F._p0_failing_gate_names(F._p0_gate_records(res))
     assert names == ["real_check"]
     assert not any(GI.NOT_INVOCABLE_HEADING_SENTINEL in n for n in names)
     assert not any(GI.NOT_INVOCABLE_SENTINEL in n for n in names)
 
 
-# ══════════════ 3. consumer 2 — _normalise / _per_gate_from_p0_reasons ═══════
+# ═══════════ 3. consumer 2 — the audit artifact's per-gate array ═════════════
 # This channel is the nastier one: it recovers the gate's REAL name, so its
 # output is indistinguishable from a genuine verdict by inspection.
 
 @pytest.mark.parametrize("n_fails", [0, 1, 2])
 def test_no_never_invoked_gate_gets_a_per_gate_record(umbrella, n_fails):
-    fails = [f"FAIL: gate_{i}_check — msg" for i in range(n_fails)]
-    reasons = F._compose_p0_reasons(fails, umbrella["skips"], [])
-    per_gate = F._per_gate_from_p0_reasons(reasons)
+    records = ([_fail_rec(f"gate_{i}_check", "msg") for i in range(n_fails)]
+               + umbrella["not_invoked"])
+    per_gate = F._p0_audit_gate_records(records)
     assert [g["name"] for g in per_gate] == \
         [f"gate_{i}_check" for i in range(n_fails)]
     assert not (
         {g["name"] for g in per_gate} & umbrella["not_invoked_names"])
 
 
-def test_normalise_drops_disclosure_lines_not_just_the_failed_gates_header(
-        umbrella):
-    for line in _disclosure_block(umbrella):
-        if (GI.NOT_INVOCABLE_SENTINEL in line
-                or line.startswith(GI.NOT_INVOCABLE_HEADING_SENTINEL)):
-            assert F._normalise_p0_reason_line(line) == "", line[:80]
+def test_the_disclosure_reaches_no_machine_output_at_all(umbrella):
+    """One assertion per consumer, over the same disclosure population."""
+    records = umbrella["not_invoked"]
+    assert F._p0_failing_gate_names(records) == []
+    assert F._p0_audit_gate_records(records) == []
+    assert F._p0_structural_fail_lines(records) == []
+    assert F._p0_passed_count(records) == 0
 
 
 # ═════════════════ 4. the two all(...) predicates that flip ══════════════════
@@ -232,32 +250,31 @@ def test_informational_only_survives_the_disclosure(umbrella):
     sub-gate names; 38 phantom names made it False and the step reached
     `failing`.
 
-    #497 step 2 — the names now come from the records, so the disclosure cannot
-    reach this predicate at all: a never-invoked gate's record says
-    NOT_INVOCABLE, and only FAIL records are counted. The assertion is
-    unchanged, and the reasons list still carries the whole disclosure so the
-    fixture is not quietly weakened into one that could not fail.
+    The names now come from the records, so the disclosure cannot reach this
+    predicate at all: a never-invoked gate's record says NOT_INVOCABLE, and
+    only FAIL records are counted. The assertion is unchanged, and the reasons
+    list still carries the whole disclosure so the fixture is not quietly
+    weakened into one that could not fail.
     """
     gates = sorted(F.INFORMATIONAL_GATES)[:2]
-    fails = [f"FAIL: {g} — coverage signal, not a blocker" for g in gates]
-    with_disclosure = F._compose_p0_reasons(fails, umbrella["skips"], [])
-    without = F._compose_p0_reasons(fails, [], [])
-    assert any(GI.NOT_INVOCABLE_SENTINEL in r for r in with_disclosure)
-    assert F._step_failure_is_informational_only(
-        _p0(without, fail_gates=gates)) is True
-    assert F._step_failure_is_informational_only(
-        _p0(with_disclosure, fail_gates=gates)) is True
+    fails = [_fail_rec(g, "coverage signal, not a blocker") for g in gates]
+    with_disclosure = _p0(fails + umbrella["not_invoked"])
+    without = _p0(fails)
+    assert any(GI.NOT_INVOCABLE_SENTINEL in r
+               for r in with_disclosure.reasons)
+    assert F._step_failure_is_informational_only(without) is True
+    assert F._step_failure_is_informational_only(with_disclosure) is True
 
 
 def test_thin_input_deferral_survives_the_disclosure(umbrella):
     """The PASS_WITH_OPEN_SOURCE_CONSTRAINTS promotion computes
-    `all(g in _P0_THIN_INPUT_DEFERRABLE_SUBGATES for g in
-    _parse_p0_failing_subgates(p0))`. Phantom names made it False, so a
-    deferrable run FAILed instead of being deferred."""
+    `all(g in _P0_THIN_INPUT_DEFERRABLE_SUBGATES for g in <failing gates>)`.
+    Phantom names made it False, so a deferrable run FAILed instead of being
+    deferred."""
     gates = sorted(F._P0_THIN_INPUT_DEFERRABLE_SUBGATES)[:2]
-    fails = [f"FAIL: {g} — needs a commercial tool" for g in gates]
-    reasons = F._compose_p0_reasons(fails, umbrella["skips"], [])
-    subgates = F._parse_p0_failing_subgates(_p0(reasons))
+    res = _p0([_fail_rec(g, "needs a commercial tool") for g in gates]
+              + umbrella["not_invoked"])
+    subgates = F._p0_failing_gate_names(F._p0_gate_records(res))
     assert subgates == gates
     assert all(g in F._P0_THIN_INPUT_DEFERRABLE_SUBGATES for g in subgates)
 
@@ -265,13 +282,11 @@ def test_thin_input_deferral_survives_the_disclosure(umbrella):
 def test_a_real_failure_still_blocks_both_predicates(umbrella):
     """Guard: the fix must not make everything tolerable. A genuine
     non-informational, non-deferrable failure still defeats both `all(...)`."""
-    fails = [f"FAIL: {sorted(F.INFORMATIONAL_GATES)[0]} — soft",
-             "FAIL: some_real_check — hard"]
-    reasons = F._compose_p0_reasons(fails, umbrella["skips"], [])
-    res = _p0(reasons)
+    res = _p0([_fail_rec(sorted(F.INFORMATIONAL_GATES)[0], "soft"),
+               _fail_rec("some_real_check", "hard")] + umbrella["not_invoked"])
     assert F._step_failure_is_informational_only(res) is False
     assert not all(g in F._P0_THIN_INPUT_DEFERRABLE_SUBGATES
-                   for g in F._parse_p0_failing_subgates(res))
+                   for g in F._p0_failing_gate_names(F._p0_gate_records(res)))
 
 
 # ═════════ 5. the recogniser is anchored — a real failure is never lost ══════
@@ -279,22 +294,31 @@ def test_a_real_failure_still_blocks_both_predicates(umbrella):
 def test_a_genuine_failure_mentioning_the_sentinel_is_still_a_failure(
         umbrella):
     """A substring test for "NOT INVOKED" would drop this real failure — the
-    same false-clean bug in the opposite direction. The recogniser is anchored
-    on the shape the formatter emits, so a gate whose own output happens to
-    contain the phrase is unaffected."""
-    fails = [f"FAIL: chatty_check — the DUT reports {GI.NOT_INVOCABLE_SENTINEL}"
-             f" for 3 handlers",
-             "FAIL: other_check — plain"]
-    reasons = F._compose_p0_reasons(fails, umbrella["skips"], [])
-    assert F._parse_p0_failing_subgates(_p0(reasons)) == \
-        ["chatty_check", "other_check"]
-    assert {g["name"] for g in F._per_gate_from_p0_reasons(reasons)} == \
+    same false-clean bug in the opposite direction.
+
+    The composer still partitions the skip bucket with the anchored recogniser
+    (that is how the disclosure gets its own heading), so a gate whose own
+    output happens to contain the phrase must not be swept into it. And the
+    machine consumers are now immune by construction: the phrase lives in a
+    FAIL record's `message`, and nothing reads a message to decide a verdict.
+    """
+    records = [_fail_rec("chatty_check",
+                         f"the DUT reports {GI.NOT_INVOCABLE_SENTINEL} for 3 "
+                         "handlers"),
+               _fail_rec("other_check", "plain")] + umbrella["not_invoked"]
+    assert F._p0_failing_gate_names(records) == ["chatty_check", "other_check"]
+    assert {g["name"] for g in F._p0_audit_gate_records(records)} == \
         {"chatty_check", "other_check"}
+    # ...and the operator still sees it as a FAIL, not inside the disclosure
+    reasons = _p0(records).reasons
+    assert any(line.lstrip().startswith("- chatty_check")
+               and not GI.is_not_invocable_disclosure(line.strip())
+               for line in reasons)
 
 
 def test_recogniser_covers_the_bullet_and_the_bare_payload():
-    """The same predicate must work on the raw skip payload (how the umbrella
-    filters) AND on the composed `  - ` bullet (how a consumer sees it)."""
+    """The same predicate must work on the raw skip payload (how the composer
+    partitions) AND on the composed `  - ` bullet (how a reader sees it)."""
     entry = GI.format_not_invocable_entry("some_check", "argparse said no")
     assert GI.is_not_invocable_entry(entry)
     assert GI.is_not_invocable_disclosure(f"  - {entry}")
@@ -309,15 +333,19 @@ def test_recogniser_covers_the_bullet_and_the_bare_payload():
 def test_passed_gate_count_is_the_registry_partition(umbrella):
     """Every registered gate lands in exactly one of fail/skip/waiver/pass, so
     the four populations must sum to the registry size."""
-    n = F._p0_passed_gate_count(umbrella["passed"], umbrella["fails"],
-                                umbrella["skips"], umbrella["waivers"])
+    n = F._p0_passed_count(umbrella["records"])
     assert n > 0
     assert (n + len(umbrella["fails"]) + len(umbrella["skips"])
             + len(umbrella["waivers"])) == len(F._STRUCTURAL_RTL_GATES)
+    assert len(umbrella["records"]) == len(F._STRUCTURAL_RTL_GATES)
 
 
 def test_passed_gate_count_is_zero_when_no_gate_ran():
-    assert F._p0_passed_gate_count(None, [], ["no RTL directory found"], []) == 0
+    """No RTL: the umbrella considered nothing, so nothing passed — and the
+    line it emits about itself is not a gate that could have."""
+    assert F._p0_passed_count([]) == 0
+    assert F._compose_p0_reasons_from_records([], None) == [
+        f"SKIP: {F._P0_NO_RTL_NOTE}"]
 
 
 # ════════════════ 7. END-TO-END through the real CLI entry point ═════════════

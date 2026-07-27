@@ -151,14 +151,19 @@ def test_not_invocable_is_a_verdict_not_a_marker_inside_a_message(real_run):
 
 def test_the_pass_population_is_the_registry_minus_the_other_outcomes(
         real_run):
-    """The record partition and the umbrella's own count must agree.
+    """The record partition and the registry subtraction must agree.
 
     Two independent derivations of the same number; if they ever disagree the
-    partition has a hole.
+    partition has a hole. The subtraction used to be a shipped function
+    (`_p0_passed_gate_count`) — the closest a bucket-only world could get to
+    asking the gates. It is gone since step 4, and the arithmetic is kept here
+    because it is still an honest second opinion on the count.
     """
     n_pass = sum(1 for r in real_run.records if r["verdict"] == "PASS")
-    assert n_pass == F._p0_passed_gate_count(
-        real_run.passed, real_run.fails, real_run.skips, real_run.waivers)
+    assert n_pass == (len(F._STRUCTURAL_RTL_GATES)
+                      - len(real_run.fails) - len(real_run.skips)
+                      - len(real_run.waivers))
+    assert n_pass == F._p0_passed_count(real_run.records)
     assert n_pass > 0, "fixture must reach the passing population"
 
 
