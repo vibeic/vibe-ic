@@ -2261,13 +2261,20 @@ steps:
 
   # ── P0 (Wave 91 / v1.6.15): structural-RTL umbrella ─────────────
   # Renamed from synthetic Step -1. Aggregates all _STRUCTURAL_RTL_GATES
-  # registered in `flow_compliance_check.py` (77 gates as of v1.6.15)
-  # and emits a single PASS/FAIL umbrella verdict that flow-orchestrate
-  # consumes before stage1 begins. Stage-class marker (P*-prefix), like
-  # A*/M*. Skipped automatically when --stage 3/4 is requested or when
-  # no RTL is present in the project.
+  # registered in `flow_compliance_check.py` and emits a single
+  # PASS/FAIL umbrella verdict that flow-orchestrate consumes before
+  # stage1 begins. Stage-class marker (P*-prefix), like A*/M*. Skipped
+  # automatically when --stage 3/4 is requested or when no RTL is
+  # present in the project.
+  # DO NOT hardcode the gate count here. Both this comment and the step
+  # name below carried the v1.6.15-era count long after the registry had
+  # grown past 240, so the flow's own documentation understated P0's
+  # scope by roughly 3x for anyone reading the yaml. The count is
+  # emitted live at runtime from len(_STRUCTURAL_RTL_GATES) — see the
+  # umbrella's own step name in the report, or
+  # `flow_compliance_check.py --list-structural-gates`.
   - id: P0
-    name: "Structural-RTL pre-flight (77 chip-AGNOSTIC structural gates)"
+    name: "Structural-RTL pre-flight (chip-AGNOSTIC structural gates)"
     stage: stage1
     notes: |
       Synthetic preflight stage; the verdict is emitted directly by
