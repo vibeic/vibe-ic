@@ -1773,8 +1773,26 @@ steps:
       - "reports/phase3/dfm_screen.json"
     gate:
       all_of:
+        # BLOCKING half: the screen must have produced its artefact. A step
+        # that never ran cannot be certified done.
         - files_exist: ["reports/phase3/dfm_screen.json"]
-        - program_exit_zero: "dfm_screen_check . --json reports/phase2/gates/dfm_screen.json"
+        # ADVISORY half (#306). `dfm_screen_check` DECLARES itself advisory
+        # (ENFORCEMENT: advisory) — Step 31 owns the litho/min-width RULES and
+        # Step 34 owns the density EXECUTION gate, and OpenROAD has no
+        # via-doubling repair pass, so failing Step 35 on a DFM optimisation
+        # finding would fabricate a FAIL nobody is allowed to fix.
+        #
+        # This sat in the BLOCKING `program_exit_zero` slot while the program
+        # returned a hard-coded rc 0 for BOTH of its verdict tiers. rc 0 and
+        # rc 2 both pass, so the sub-gate was structurally tautological — no
+        # project could ever move it — and every PASS_WITH_ADVISORIES finding
+        # was indistinguishable from a clean screen at the step line. The
+        # program now returns rc 1 on an advisory; wiring it here makes that
+        # finding RUN, RECORDED and PRINTED (`ADVISORY ... FINDING:`) without
+        # blocking. Blocking coverage is unchanged: the only outcome the old
+        # slot could have failed on was a crash, and a crash leaves the
+        # artefact above unwritten.
+        - advisory_program_exit_zero: "dfm_screen_check . --json reports/phase2/gates/dfm_screen.json"
     blocks_on: [34]
 
   - id: 36
