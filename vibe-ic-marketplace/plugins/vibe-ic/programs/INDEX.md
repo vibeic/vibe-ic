@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 986
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 986)
+- **Total programs (excluding helpers / shims):** 987
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 987)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 977 |
+| `any` | 978 |
 
 ## Alphabetical listing
 
@@ -655,6 +655,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `perc_signoff_check` | any | — | Step 28 PERC / reliability sign-off gate |
 | `periodic_signal_required_check` | any | — | Verify that for every protocol-mandated |
 | `periodic_timer_vs_rx_activity_check` | any | — | Periodic TX-triggering timer |
+| `pg_rail_geometry_check` | any | — | 每一條宣告的電源/地軌，在 DEF 裡都必須至少帶一段佈線幾何，否則它只是一個名字。 |
 | `phase1_all_l_docs_present_check` | any | Wave 23 | gate (Wave 23, v0.119.55). |
 | `phase1_consistency_check` | any | — | Cross-layer consistency gate (K4). |
 | `phase1_coverage_report_gen` | any | Wave 4 | Phase 1 (doc-extraction) extraction-coverage REPORT. |
@@ -1058,7 +1059,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (977 programs)
+### `any` (978 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1684,6 +1685,7 @@ _(no programs in this group)_
 - `perc_signoff_check` — Step 28 PERC / reliability sign-off gate
 - `periodic_signal_required_check` — Verify that for every protocol-mandated
 - `periodic_timer_vs_rx_activity_check` — Periodic TX-triggering timer
+- `pg_rail_geometry_check` — 每一條宣告的電源/地軌，在 DEF 裡都必須至少帶一段佈線幾何，否則它只是一個名字。
 - `phase1_all_l_docs_present_check` — gate (Wave 23, v0.119.55).  _[Wave 23]_
 - `phase1_consistency_check` — Cross-layer consistency gate (K4).
 - `phase1_coverage_report_gen` — Phase 1 (doc-extraction) extraction-coverage REPORT.  _[Wave 4]_
