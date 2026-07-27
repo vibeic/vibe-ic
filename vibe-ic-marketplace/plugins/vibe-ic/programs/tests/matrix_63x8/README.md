@@ -264,11 +264,18 @@ the cells it owns. **504 / 504 cells present, exactly once.**
 | 2   | runnable / falsifiable  | 62       | 0      | 1  |
 | 3   | outputs produced        | 52       | 4      | 7  |
 | 4   | criteria match          | 53       | 10     | 0  |
-| 5   | deps correct            | 57       | 5      | 1  |
+| 5   | deps correct            | 62       | 0      | 1  |
 | 6   | skip discipline         | 60       | 3      | 0  |
 | 7   | outputs list complete   | 53       | 9      | 1  |
 | 8   | missing mechanism       | 61       | 0      | 2  |
-| **total** |                   | **461**  | **31** | **12** |
+| **total** |                   | **466**  | **26** | **12** |
+
+> The dimension-5 row moved 5 -> 0 WAIVED on 2026-07-28: all five of that
+> dimension's waivers said "LIVE DEFECT, reproduced" and all five were
+> closed by fixing the defect (two declared edges, one broken A5/A6 cycle,
+> one gate moved off a step that could not declare what it read, one yaml
+> block moved to kill the flow's only forward edge). The total row is the
+> arithmetic of the eight rows above it — recompute it, do not carry it.
 
 `ENFORCED` means the cell's live predicate runs and passes. It does **not** mean
 the predicate is strong enough to catch every defect of that kind — read the

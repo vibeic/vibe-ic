@@ -1131,9 +1131,14 @@ def test_d8_cell_census_is_complete():
 #: fixture, measured 2026-07-27. See
 #: ``test_d8_downgrade_is_reachable_through_each_steps_own_real_gate``.
 REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
-    "1", "2", "12", "A1", "A2", "A4", "A5", "A8", "14", "30", "32", "35",
-    "38", "A6",
+    "1", "2", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "30", "32",
+    "35", "38",
 )
+# 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
+# compared in flow DECLARATION order, and the dimension-5 fix moved A6's yaml
+# block from after step 39 to between A5 and A7 to remove the flow's only
+# forward edge (A7 declares `blocks_on: [A6]`). Only A6's position in this
+# tuple moved with it.
 
 _PASS_TIER_LABELS = frozenset({"PASS", "VACUOUS_PASS", "VACUOUS-PASS"})
 

@@ -19,6 +19,25 @@ artefact format carries one.
       `dont_touch` marker on it when at least one final artefact records
       such markers).
 
+  FAIL (STALE_ARTEFACT) if any artefact it would audit PREDATES
+  `spare_cells.json`. The artefacts are resolved by NAME, so on a RESUMED
+  project a previous run's `filled.def` / `routed.def` is still on disk and
+  would silently carry this run's verdict. An artefact older than the
+  insertion record cannot contain the spares that record describes; the gate
+  says so instead of certifying a survival this run never established. See
+  `_stale_artefacts`.
+
+  WHERE THIS GATE BELONGS. Preservation is a property of the artefacts
+  produced AFTER the optimisation passes that could strip a spare (CTS,
+  hold fixing, routing, ECO, metal fill). It is therefore wired at step 34
+  (metal fill), whose `blocks_on` closure contains all of them. It is NOT
+  wired at step 18 (spare INSERTION): at step 18 none of those passes has
+  run, so the only artefacts this gate could find are downstream ones —
+  which is exactly the stale read above, and a dependency step 18 cannot
+  declare (21 and 34 are its descendants, so the edge would be a cycle).
+  Step 18's own question — were enough spares inserted, distributed and
+  tied off — is `spare_cell_coverage_check`'s, and that gate stays there.
+
 Emits reports/spare_preservation.json:
   {inserted, survived, removed:[...], untagged:[...],
    all_keep_attr_intact:bool, verdict}
@@ -336,6 +355,44 @@ def _collect_final_artefacts(project: Path) -> Dict[str, Path]:
     return out
 
 
+def _stale_artefacts(project: Path, spare_json: Path,
+                     artefact_paths: Dict[str, Path]) -> List[tuple]:
+    """Artefacts that PREDATE the spare-cell record, as
+    ``[(label, rel_path, artefact_mtime_ns, spare_json_mtime_ns), ...]``.
+
+    THE STALE-READ HAZARD. This gate resolves "the final artefact" by NAME
+    (`filled.def` > `routed.def` > `<top>.def`, `*_pnr.v`, `*.gds`) with no
+    check that the file it found belongs to THIS run. On a resumed project the
+    previous run's `filled.def` / `routed.def` survive on disk, so the gate
+    would happily certify "every spare survived" against last run's layout —
+    a spare set this run never established, and the loudest possible way to
+    report a survival that did not happen.
+
+    Comparing mtimes against `spare_cells.json` — the record of the insertion
+    whose survival is being claimed — settles it without any tool or PDK
+    knowledge: an artefact written BEFORE the spares were recorded cannot
+    contain them by construction. Equality passes (a same-second rewrite is
+    not evidence of staleness); only strictly older fails. chip-AGNOSTIC.
+    """
+    try:
+        spare_mtime = spare_json.stat().st_mtime_ns
+    except OSError:  # pragma: no cover - caller already proved it is a file
+        return []
+    stale: List[tuple] = []
+    for label, path in sorted(artefact_paths.items()):
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:  # pragma: no cover - collected via is_file()
+            continue
+        if mtime < spare_mtime:
+            try:
+                rel = str(path.relative_to(project))
+            except ValueError:  # pragma: no cover - absolute fallback
+                rel = str(path)
+            stale.append((label, rel, mtime, spare_mtime))
+    return stale
+
+
 def audit(project: Path) -> dict:
     if _pl is not None:
         spare_json = _pl.pnr_dir(project) / "spare_cells.json"
@@ -360,6 +417,19 @@ def audit(project: Path) -> dict:
                     _spare_names_and_types(plan)),
                 "reasons": ["no final netlist/DEF/GDS artefact found to "
                             "verify spare survival against"]}
+    stale = _stale_artefacts(project, spare_json, artefact_paths)
+    if stale:
+        return {**base, "verdict": "FAIL",
+                "inserted": len(_spare_names_and_types(plan)),
+                "stale_artefacts": stale,
+                "reasons": [
+                    f"STALE_ARTEFACT: {lbl} ({rel}) predates the spare-cell "
+                    f"record it would be audited against "
+                    f"(artefact mtime {a_mtime} < spare_cells.json mtime "
+                    f"{s_mtime}). It cannot evidence the survival of spares "
+                    f"inserted after it was written — most often it is a "
+                    f"PREVIOUS run's artefact left in the project tree."
+                    for lbl, rel, a_mtime, s_mtime in stale]}
     final_texts = {label: _read_text(p)
                    for label, p in artefact_paths.items()}
     result = evaluate_preservation(plan, final_texts)

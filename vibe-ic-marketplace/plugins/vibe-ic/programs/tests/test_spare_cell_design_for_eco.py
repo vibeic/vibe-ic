@@ -337,3 +337,106 @@ def test_preservation_cli_no_artefacts(tmp_path):
         capture_output=True, text=True)
     assert cp.returncode == 1
     assert "no final" in cp.stdout
+
+
+# ──────────────────────────────────────────────────────────────────
+# 6) d5 — STALE ARTEFACT: a preservation verdict must belong to THIS run
+#
+# `_collect_final_artefacts` resolves "the final artefact" by NAME
+# (filled.def > routed.def > <top>.def, *_pnr.v, *.gds). On a RESUMED project
+# a previous run's artefacts are still on disk, and the runner's spare names
+# are deterministic — so they MATCH. Measured on the base tree: a project
+# whose `filled.def` predates `spare_cells.json` by design returned
+# `verdict: PASS, survived: 2`, rc=0 — a survival certificate for a spare set
+# THIS run never established.
+# ──────────────────────────────────────────────────────────────────
+def _def_body(names):
+    return ("DESIGN top ;\nCOMPONENTS ;\n"
+            + "".join(f"  - {nm} inv + FIXED ( 0 0 ) N ;\n" for nm in names)
+            + "END COMPONENTS\nEND DESIGN\n")
+
+
+def test_d5_stale_final_def_is_refused_not_certified(tmp_path):
+    """THE d5 DISCRIMINATOR. filled.def older than spare_cells.json => FAIL
+    with STALE_ARTEFACT, naming the artefact and both mtimes."""
+    import os
+    plan = _good_plan(n=2)
+    proj = _write_project(tmp_path, plan)
+    pnr = proj / "phase3/stage3/pnr"
+    names = [i["name"] for i in plan["instances"]]
+    filled = pnr / "filled.def"
+    filled.write_text(_def_body(names))
+    spare_mtime = (pnr / "spare_cells.json").stat().st_mtime
+    os.utime(filled, (spare_mtime - 3600, spare_mtime - 3600))
+    cp = subprocess.run([sys.executable, str(PRES_SCRIPT), str(proj)],
+                        capture_output=True, text=True)
+    assert cp.returncode == 1, cp.stdout
+    rpt = json.loads(cp.stdout)
+    assert rpt["verdict"] == "FAIL", rpt
+    assert rpt["stale_artefacts"], rpt
+    assert "phase3/stage3/pnr/filled.def" in json.dumps(rpt), rpt
+    assert "STALE_ARTEFACT" in " ".join(rpt["reasons"]), rpt
+
+
+def test_d5_stale_guard_direction1_fresh_run_still_passes(tmp_path):
+    """DIRECTION-1 GUARD. The same project with the DEF written AFTER the
+    spare record is a legitimate run and must still PASS — the guard must not
+    trade a false clean for a false alarm."""
+    import os
+    plan = _good_plan(n=2)
+    proj = _write_project(tmp_path, plan)
+    pnr = proj / "phase3/stage3/pnr"
+    names = [i["name"] for i in plan["instances"]]
+    filled = pnr / "filled.def"
+    filled.write_text(_def_body(names))
+    spare_mtime = (pnr / "spare_cells.json").stat().st_mtime
+    os.utime(filled, (spare_mtime + 60, spare_mtime + 60))
+    cp = subprocess.run([sys.executable, str(PRES_SCRIPT), str(proj)],
+                        capture_output=True, text=True)
+    assert cp.returncode == 0, cp.stdout
+    rpt = json.loads(cp.stdout)
+    assert rpt["verdict"] == "PASS" and rpt["survived"] == 2, rpt
+
+
+def test_d5_stale_guard_direction1_same_mtime_passes(tmp_path):
+    """DIRECTION-1 GUARD. Equality is NOT staleness — a same-timestamp write
+    (coarse filesystem granularity, or a runner that emits both in one step)
+    must not be condemned. Only strictly-older fails."""
+    import os
+    plan = _good_plan(n=2)
+    proj = _write_project(tmp_path, plan)
+    pnr = proj / "phase3/stage3/pnr"
+    names = [i["name"] for i in plan["instances"]]
+    filled = pnr / "filled.def"
+    filled.write_text(_def_body(names))
+    st = (pnr / "spare_cells.json").stat()
+    os.utime(filled, ns=(st.st_mtime_ns, st.st_mtime_ns))
+    cp = subprocess.run([sys.executable, str(PRES_SCRIPT), str(proj)],
+                        capture_output=True, text=True)
+    assert cp.returncode == 0, cp.stdout
+    assert json.loads(cp.stdout)["verdict"] == "PASS"
+
+
+def test_d5_step18_no_longer_wires_the_preservation_gate(tmp_path):
+    """The flow-side half of the same defect. Step 18 (spare INSERTION) must
+    not name `spare_cell_preservation_check` in its gate or its `programs:`
+    array: at insertion time the only artefacts that gate can resolve are
+    steps 21/34's, which are step 18's DESCENDANTS — an unsatisfiable
+    dependency and, on a resumed project, a stale read. Step 34 (metal fill)
+    must still wire it, since its closure contains every pass a spare has to
+    survive."""
+    import yaml
+    flow = (PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml")
+    steps = {str(s["id"]): s
+             for s in yaml.safe_load(flow.read_text())["steps"]}
+
+    def gate_blob(sid):
+        return json.dumps(steps[sid].get("gate") or {})
+
+    assert "spare_cell_preservation_check" not in gate_blob("18")
+    assert "spare_cell_preservation_check" not in (
+        steps["18"].get("programs") or [])
+    assert "spare_cell_coverage_check" in gate_blob("18")
+    assert "spare_cell_preservation_check" in gate_blob("34")
+    assert "spare_cell_preservation_check" in (
+        steps["34"].get("programs") or [])

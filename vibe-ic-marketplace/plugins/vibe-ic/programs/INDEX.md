@@ -45,7 +45,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_a2_topology_select_check` | any | — | A2 deterministic gate (v1.6.35). |
 | `analog_a3_netlist_gen_check` | any | — | A3 deterministic gate (v1.6.35). |
 | `analog_a4_corner_sweep_check` | any | — | A4 deterministic gate (v1.6.35). |
-| `analog_a5_layout_check` | any | — | A5 deterministic gate (v1.6.35). |
+| `analog_a5_layout_check` | any | — | A5 deterministic gate. |
 | `analog_a6_block_pv_check` | any | — | A6 deterministic gate |
 | `analog_a6_native_pv` | any | — | A6 per-block PHYSICAL-VERIFICATION producer |
 | `analog_a7_post_layout_resim_check` | any | — | A7 deterministic gate. |
@@ -1080,7 +1080,7 @@ _(no programs in this group)_
 - `analog_a2_topology_select_check` — A2 deterministic gate (v1.6.35).
 - `analog_a3_netlist_gen_check` — A3 deterministic gate (v1.6.35).
 - `analog_a4_corner_sweep_check` — A4 deterministic gate (v1.6.35).
-- `analog_a5_layout_check` — A5 deterministic gate (v1.6.35).
+- `analog_a5_layout_check` — A5 deterministic gate.
 - `analog_a6_block_pv_check` — A6 deterministic gate
 - `analog_a6_native_pv` — A6 per-block PHYSICAL-VERIFICATION producer
 - `analog_a7_post_layout_resim_check` — A7 deterministic gate.

@@ -817,7 +817,17 @@ steps:
         - optional_program_exit_zero:
             command: "derived_clock_sdc_required_check phase2/stage1/rtl --sdc phase2/stage2/constraints --json reports/phase2/gates/derived_clock_sdc.json"
             condition_files_exist: ["phase2/stage1/rtl", "phase2/stage2/constraints"]
-    blocks_on: [7]
+    # `3` is a DATA dependency, not a stylistic one. `sdc_exception_correlation_check`
+    # reads `reports/phase2/cdc/crossing.json` — step 3's declared required_output —
+    # to build the known-async clock-pair set every `set_false_path` is justified
+    # against. With `blocks_on: [7]` alone the closure was {7, 1, D1}: step 8 could
+    # be marked done before step 3 ever ran, and on a RESUMED project the read then
+    # picked up the PREVIOUS run's crossing.json and justified this run's exceptions
+    # against last run's CDC evidence. Declaring the edge is what lets
+    # `flow_step_execution_coverage_check` see the violation (a step-8 PASS whose
+    # ancestor 3 is MISSING/FAIL is now an ordering violation, rc=1) instead of it
+    # being invisible.
+    blocks_on: [7, 3]
 
   - id: 9
     name: "Synthesis (Yosys → mapped netlist)"
@@ -1125,75 +1135,6 @@ steps:
       test coverage = detected/(sampled - redundant); fault coverage also
       reported. At-speed timing grading -> step DT2.
 
-  - id: DT2
-    name: "Path-delay-fault (at-speed, timing-graded) ATPG"
-    stage: stage2
-    condition:
-      # Needs the DT1 scan cut PLUS the post-route timing model (routed
-      # netlist + SPEF) — self-skips (NOT_APPLICABLE) before Phase 3 runs.
-      files_exist: ["phase2/stage2/dft/cut_netlist.v",
-                    "phase3/stage3/extracted/*.spef",
-                    "phase3/stage3/pnr/*_pnr.v"]
-    programs:
-      - path_delay_fault_atpg_run
-      - path_delay_coverage_check
-    # See the DT1 note: the measurement alone, single-branch, so its absence is
-    # loud and can back DT3's condition.
-    required_outputs:
-      - "reports/phase2/dft/path_delay_coverage.json"
-    gate:
-      # produce/validate split (mirrors Step 11 / DT1): the RUNNER produces
-      # path_delay_coverage.json (phase3_one_shot_runner, once the routed
-      # netlist + SPEF exist); the flow GATE only VALIDATES it (independent
-      # per-path recount — a false/held/aborted path can never count as
-      # sensitised; the RECOMPUTED coverage governs).
-      program_exit_zero: "path_delay_coverage_check . --json reports/phase2/dft/path_delay_coverage_gate.json"
-    blocks_on: [DT1]
-    notes: |
-      At-speed timing-graded PDF ATPG: OpenSTA reports the K longest
-      LOC-launchable max-delay paths on the ROUTED netlist + SPEF + SDC (real
-      post-layout timing), then per path a 2-frame LOC miter on the DT1
-      flat core asserts start-flop-launch AND endpoint-capture via yosys
-      `sat -prove` (the 2-pattern = DET; proven-none = false/held, excluded).
-      Robust grade = single-input-change miter (only the start flop toggles).
-      DISCLOSED residuals: top-K only (exhaustive PDF is exponential);
-      PI-launched paths are not LOC-testable (held PIs) and are excluded,
-      never counted; SIC reconvergent-fanout is the known robustness residual.
-
-  - id: DT3
-    name: "Small-delay-defect (SDD) at-speed grade"
-    stage: stage2
-    condition:
-      # Fuses DT1 transition faults + DT2 per-path slack — self-skips
-      # (NOT_APPLICABLE) whenever DT2 has not produced its coverage.
-      files_exist: ["reports/phase2/dft/path_delay_coverage.json",
-                    "reports/phase2/dft/transition_coverage.json"]
-    programs:
-      - sdd_atpg_run
-      - sdd_coverage_check
-    # See the DT1 note: the measurement alone, single-branch.
-    required_outputs:
-      - "reports/phase2/dft/sdd_coverage.json"
-    gate:
-      # produce/validate split (mirrors DT1/DT2): the RUNNER produces
-      # sdd_coverage.json (phase3_one_shot_runner, after DT2); the flow GATE
-      # only VALIDATES it. DESCRIPTIVE grade with NO floor — a slack-rich
-      # design honestly scores low (small delays masked by margin); the gate
-      # independently RE-DERIVES margin=period*fraction and the strong/weak
-      # buckets so a doctored margin or a strong-with-high-slack fabrication
-      # FAILs. It never fails on a low coverage number.
-      program_exit_zero: "sdd_coverage_check . --json reports/phase2/dft/sdd_coverage_gate.json"
-    blocks_on: [DT2]
-    notes: |
-      Small-delay-defect grade: each DT2 top-K sensitisable path is one
-      at-speed transition fault graded by its REAL OpenSTA post-layout SLACK
-      (strong = detected through a path whose slack <= a DISCLOSED margin =
-      margin_fraction*clock_period, default 0.10; weak = detected but
-      slack > margin; undetected-at-speed = not sensitisable). Slack-weighted
-      coverage = mean sdd_weight. Anchored at the scan-flop endpoint (the only
-      namespace common to the routed-STA and gate-SAT worlds). DISCLOSED
-      residual: STA-slack-graded, NOT a per-defect-size SPICE credit like a
-      full commercial SDD flow.
 
   - id: 12
     name: "Post-DFT optimization (resynth / buffering)"
@@ -1336,31 +1277,93 @@ steps:
         - program_exit_zero: "analog_a5_layout_check . --json reports/analog/a5_layout.json"
     blocks_on: [A4]
     notes: |
-      KNOWN UNRESOLVED COUPLING — declared here so it stops being silent.
-      This is a DISCLOSURE, not a design intent, and not a resolution.
+      RESOLVED (was: KNOWN UNRESOLVED COUPLING). Resolution (a) of the two
+      options previously recorded here was taken; the record is kept so the
+      decision is auditable rather than silent.
 
-      `analog_a5_layout_check` does not only judge the layout: it also
-      requires `phase3/analog/<block>/drc_clean.flag` and `lvs_match.flag`
+      THE CYCLE. `analog_a5_layout_check` used to ALSO require
+      `phase3/analog/<block>/drc_clean.flag` and `lvs_match.flag`
       (A5_DRC_FLAG_MISSING / A5_LVS_FLAG_MISSING). Those two files are A6's
-      OWN declared required_outputs, and A6 declares `blocks_on: [A5]`. So the
-      declared graph says A6 cannot run until A5 passes, while A5's gate
-      cannot pass until A6 has run. `analog_one_shot_runner` executes
-      A5_layout before A6_block_pv within each block's loop, so on a
-      single-pass run A5 reports FAIL for a reason that is not A5's to fix; it
-      only clears on a later pass.
+      OWN declared required_outputs and A6 declares `blocks_on: [A5]`, so the
+      declared ordering ran A6 -> A5 while the real read ran A5 -> A6. No
+      `blocks_on` value can express that: `blocks_on: [A4, A6]` is a literal
+      cycle.
 
-      This cannot be fixed by adding an edge — `blocks_on: [A4, A6]` would be
-      a literal cycle. The two candidate resolutions both change ownership and
-      need an owner decision:
-        (a) move the DRC/LVS-flag half of the A5 gate into A6, where a
-            STRICTER version of the same check already lives
-            (`analog_a6_block_pv_check` accepts richer evidence, rejects a
-            bare flag, and FAILs on no evidence) — no defect class becomes
-            invisible, but A5's documented contract shrinks; or
-        (b) keep A5's contract and re-scope the two steps so per-block PV is
-            not a separate declared step.
-      Until one is chosen, do NOT "fix" a first-pass A5 FAIL by relaxing the
-      flag rules — that would trade a false red for a false green.
+      WHICH SIDE WAS WRONG, AND HOW IT WAS DECIDED — not by preference:
+        * A6 cannot run without A5's artefact. `analog_a6_block_pv_check`
+          emits `A6_PV_BLOCK_DIR_MISSING` ("A5 layout did not run for this
+          block"); DRC and LVS are run ON the layout. A5 -> A6 is the DATA
+          dependency.
+        * A5 does not need PV evidence to PRODUCE a layout. The flag reads
+          were a verification-SCOPE choice, not a data need.
+        * The flags are physically written by the A6 STEP:
+          `analog_one_shot_runner._emit_deterministic_stub` writes
+          `layout.mag` under `step_name == "A5_layout"` and both flags under
+          `"A6_block_pv"`, and the runner executes A5 before A6. With the flag
+          rules in place A5 reported FAIL on every correct single-pass run,
+          for a condition A5 itself cannot satisfy — a false red.
+
+      WHAT MOVED, AND WHY NO DEFECT CLASS WAS LOST. The PV verdict is now
+      A6's alone, over A6's own richer evidence (drc.report / *.lyrdb /
+      drc.rpt / comp.json / lvs.report before the flags), which rejects a
+      bare or verdict-less flag and FAILs — never SKIPs — on a block dir with
+      no evidence. Every input A5 used to reject is re-run through the A6
+      gate and asserted rc=1 in
+      `programs/tests/test_analog_a5_layout_check.py`, section
+      "A5 -> A6 PV OWNERSHIP".
+
+      ONE PRECONDITION HAD TO BE FIXED FIRST. `analog_a6_block_pv_check`
+      probed only `phase3/analog/` and the legacy `analog/` for the block
+      list, NOT `phase1/analog/` — the root THIS STEP'S OWN `condition`
+      names. On a project carrying the block list only there, A6 returned
+      `SKIP (no analog blocks)` with rc=2, which `flow_compliance_check`
+      credits as VACUOUS_PASS, while A5's flag rules were still catching the
+      gap. That reader now probes the same roots as the shared
+      `_analog_a_check_common.block_list_path`, so the move does not open a
+      hole. Do NOT re-add the flag rules to A5.
+
+  # ── A6 DECLARATION ORDER (d5) ──────────────────────────────────
+  # A6 is declared HERE, between A5 and A7, because A7 declares
+  # `blocks_on: [A6]`. A6's block used to sit after step 39 (declaration
+  # index 52 against A7's 23), which made it the flow's ONLY forward edge:
+  # `flow_compliance_check` evaluates steps in canonical declaration order
+  # (:7046-7055) and its #503 cascade attribution walks each TRACK in that
+  # same order taking the first FAIL as the cut point (:6672-6690), so an A6
+  # FAIL was positioned AFTER A7 and could never be attributed as A7's root
+  # cause — A7 reported an independent gap instead of a downstream
+  # consequence. Nothing about A6 changed; only where it is declared. Keep
+  # any new A-track step in dependency order for the same reason.
+  - id: A6
+    name: "Analog Physical Verification (per-block DRC + LVS before merge)"
+    stage: stage_analog
+    condition:
+      files_exist: ["phase1/analog/analog_block_list.json"]
+    skills: [drc-fix, lvs-triage]
+    programs:
+      - analog_a6_block_pv_check
+    # EVIDENCE: these entries must name every artefact the A6 gate accepts,
+    # because `flow_compliance_check.check_step` treats required_outputs as a
+    # CHEAP PRE-CHECK and returns MISSING **without ever running the gate**
+    # when no entry resolves. `analog_a6_block_pv_check` treats the DRC/LVS
+    # REPORTS as its primary evidence (drc.report / *.lyrdb / drc.rpt;
+    # comp.json / lvs.report / lvs.rpt) and the .flag files as a lesser
+    # fallback that must itself carry a count/verdict line. Measured on a
+    # synthetic block carrying only drc.report ("Total DRC violations: 0") and
+    # lvs.report ("LVS match: true"): the gate ran standalone and returned
+    # PASS (rc=0, "1/1 block(s) DRC-0 + LVS-match") while check_step returned
+    # MISSING and never invoked it. Each entry below is one artefact with
+    # several accepted names, so this widens what SATISFIES A6, never what
+    # the gate accepts — the substantive verdict is still the program's.
+    required_outputs:
+      - "phase3/analog/*/drc_clean.flag OR phase3/analog/*/drc.report OR phase3/analog/*/*.lyrdb OR phase3/analog/*/drc.rpt"
+      - "phase3/analog/*/lvs_match.flag OR phase3/analog/*/lvs.report OR phase3/analog/*/comp.json OR phase3/analog/*/lvs.rpt"
+    gate:
+      program_exit_zero: "analog_a6_block_pv_check . --json reports/phase2/gates/analog_block_pv.json"
+    blocks_on: [A5]
+    notes: |
+      Each analog block must have DRC-clean + LVS-match BEFORE A7
+      post-layout resim runs. Catches per-block layout errors that
+      top-level PV (Step 31) would otherwise mask via merge.
 
   - id: A7
     name: "🔁 Post-Layout Resimulation"
@@ -1585,7 +1588,6 @@ steps:
     mcp_tools: [eda_pnr]
     programs:
       - spare_cell_coverage_check
-      - spare_cell_preservation_check
     required_outputs:
       - "phase3/stage3/pnr/spare_cells.json"
       - "reports/spare_cell_coverage.json"
@@ -1597,13 +1599,31 @@ steps:
         - optional_program_exit_zero:
             command: "spare_cell_coverage_check . --json reports/phase2/gates/spare_cell_coverage.json"
             condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
-        # Preservation: every inserted spare/ECO cell/gate/pad must
-        # still be present with its dont_touch/keep attribute intact in
-        # the FINAL netlist/DEF/GDS — fires only when a final artefact
-        # exists so the gate is a no-op mid-flow.
-        - optional_program_exit_zero:
-            command: "spare_cell_preservation_check . --json reports/phase2/gates/spare_cell_preservation.json"
-            condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
+        # d5 — `spare_cell_preservation_check` USED TO BE WIRED HERE, with the
+        # comment "fires only when a final artefact exists so the gate is a
+        # no-op mid-flow". It did not: its trigger was `spare_cells.json`, THIS
+        # STEP'S OWN output, so it fired at insertion time and then resolved
+        # "the final artefact" by name — preferring `phase3/stage3/pnr/filled.def`
+        # (step 34's declared output) and falling back to
+        # `phase3/stage3/pnr/routed.def` (step 21's). Neither is in step 18's
+        # closure and neither CAN be: 21 and 34 are step 18's descendants, so the
+        # edge would close a cycle. On a fresh run there was no such artefact at
+        # all; on a RESUMED run both survive from the previous run, so step 18 —
+        # spare INSERTION, which runs before CTS, routing and fill — reported
+        # spare-cell survival that this run had never established.
+        #
+        # Preservation is a property of the artefacts produced AFTER the passes
+        # that can strip a spare, so the check now runs ONLY at step 34, where it
+        # was already wired with the same trigger and where the closure contains
+        # 19/20/21/32/34 — every pass whose optimisation the spares must survive.
+        # Nothing was dropped: at step 18 this clause could only ever have read
+        # steps 21/34's artefacts, which is precisely what step 34 reads, from a
+        # position where the ordering is declared and enforced. The program also
+        # now FAILs (STALE_ARTEFACT) on an artefact older than
+        # `spare_cells.json`, so the resumed-project stale read is refused
+        # wherever the gate runs. Step 18 keeps its own question —
+        # `spare_cell_coverage_check` (were enough spares inserted, distributed,
+        # tied off) — which reads only step 18's own artefacts.
     blocks_on: [17]
     notes: |
       Spare-cell-array insertion is the cornerstone of Design-for-ECO:
@@ -1752,6 +1772,97 @@ steps:
           (eda_extraction field_solve); self-reports NOT_APPLICABLE if the
           solver is absent — never a fabricated matrix. Foundry field-solve
           (`rules.C`/`.nxtgrd`) + crosstalk-SI sign-off remain a foundry-data gap.
+  # ── DT2 / DT3 DECLARATION ORDER (d5) ───────────────────────────
+  # DT2 and DT3 are declared HERE, after Step 22 (Parasitic Extraction), and
+  # not next to DT1 in the stage-2 block where they used to sit. They are
+  # PHASE-3-TIME steps wearing a stage-2 label: DT2's own condition names
+  # `phase3/stage3/extracted/*.spef` — Step 22's declared required_output —
+  # plus the routed netlist, its notes describe OpenSTA on "the ROUTED netlist
+  # + SPEF", and its producer is `phase3_one_shot_runner`. Declared at index
+  # 14 against Step 22's 34, the true upstream could not be written down:
+  # `blocks_on: [DT1, 22]` would have been a FORWARD edge. The condition made
+  # DT2 self-skip when the SPEF was absent, which prevented a crash but NOT a
+  # stale read — on a RESUMED project a SPEF left by the previous run made DT2
+  # grade at-speed path delays against last run's parasitics, silently.
+  # `stage:` is left at stage2 deliberately: the artefacts stay under
+  # reports/phase2/dft/ and every consumer keyed on the stage label is
+  # unaffected. Declaration ORDER is what carries the dependency.
+  - id: DT2
+    name: "Path-delay-fault (at-speed, timing-graded) ATPG"
+    stage: stage2
+    condition:
+      # Needs the DT1 scan cut PLUS the post-route timing model (routed
+      # netlist + SPEF) — self-skips (NOT_APPLICABLE) before Phase 3 runs.
+      files_exist: ["phase2/stage2/dft/cut_netlist.v",
+                    "phase3/stage3/extracted/*.spef",
+                    "phase3/stage3/pnr/*_pnr.v"]
+    programs:
+      - path_delay_fault_atpg_run
+      - path_delay_coverage_check
+    # See the DT1 note: the measurement alone, single-branch, so its absence is
+    # loud and can back DT3's condition.
+    required_outputs:
+      - "reports/phase2/dft/path_delay_coverage.json"
+    gate:
+      # produce/validate split (mirrors Step 11 / DT1): the RUNNER produces
+      # path_delay_coverage.json (phase3_one_shot_runner, once the routed
+      # netlist + SPEF exist); the flow GATE only VALIDATES it (independent
+      # per-path recount — a false/held/aborted path can never count as
+      # sensitised; the RECOMPUTED coverage governs).
+      program_exit_zero: "path_delay_coverage_check . --json reports/phase2/dft/path_delay_coverage_gate.json"
+    # `22` is a DATA dependency: the condition above names Step 22's declared
+    # `phase3/stage3/extracted/*.spef`, and the whole point of DT2 is grading
+    # path delays against REAL post-layout parasitics. Declaring it is what
+    # lets `flow_step_execution_coverage_check` refuse a DT2 PASS whose
+    # ancestor 22 never passed (rc=1) — previously the only protection was
+    # DT2's self-skip condition, which a PREVIOUS run's SPEF satisfies.
+    blocks_on: [DT1, 22]
+    notes: |
+      At-speed timing-graded PDF ATPG: OpenSTA reports the K longest
+      LOC-launchable max-delay paths on the ROUTED netlist + SPEF + SDC (real
+      post-layout timing), then per path a 2-frame LOC miter on the DT1
+      flat core asserts start-flop-launch AND endpoint-capture via yosys
+      `sat -prove` (the 2-pattern = DET; proven-none = false/held, excluded).
+      Robust grade = single-input-change miter (only the start flop toggles).
+      DISCLOSED residuals: top-K only (exhaustive PDF is exponential);
+      PI-launched paths are not LOC-testable (held PIs) and are excluded,
+      never counted; SIC reconvergent-fanout is the known robustness residual.
+
+  - id: DT3
+    name: "Small-delay-defect (SDD) at-speed grade"
+    stage: stage2
+    condition:
+      # Fuses DT1 transition faults + DT2 per-path slack — self-skips
+      # (NOT_APPLICABLE) whenever DT2 has not produced its coverage.
+      files_exist: ["reports/phase2/dft/path_delay_coverage.json",
+                    "reports/phase2/dft/transition_coverage.json"]
+    programs:
+      - sdd_atpg_run
+      - sdd_coverage_check
+    # See the DT1 note: the measurement alone, single-branch.
+    required_outputs:
+      - "reports/phase2/dft/sdd_coverage.json"
+    gate:
+      # produce/validate split (mirrors DT1/DT2): the RUNNER produces
+      # sdd_coverage.json (phase3_one_shot_runner, after DT2); the flow GATE
+      # only VALIDATES it. DESCRIPTIVE grade with NO floor — a slack-rich
+      # design honestly scores low (small delays masked by margin); the gate
+      # independently RE-DERIVES margin=period*fraction and the strong/weak
+      # buckets so a doctored margin or a strong-with-high-slack fabrication
+      # FAILs. It never fails on a low coverage number.
+      program_exit_zero: "sdd_coverage_check . --json reports/phase2/dft/sdd_coverage_gate.json"
+    blocks_on: [DT2]
+    notes: |
+      Small-delay-defect grade: each DT2 top-K sensitisable path is one
+      at-speed transition fault graded by its REAL OpenSTA post-layout SLACK
+      (strong = detected through a path whose slack <= a DISCLOSED margin =
+      margin_fraction*clock_period, default 0.10; weak = detected but
+      slack > margin; undetected-at-speed = not sensitisable). Slack-weighted
+      coverage = mean sdd_weight. Anchored at the scan-flop endpoint (the only
+      namespace common to the routed-STA and gate-SAT worlds). DISCLOSED
+      residual: STA-slack-graded, NOT a per-defect-size SPICE credit like a
+      full commercial SDD flow.
+
 
   - id: 23
     name: "🔁 Post-route STA (multi-corner multi-mode sign-off)"
@@ -2523,37 +2634,6 @@ steps:
 # All chip-AGNOSTIC.
 # ─────────────────────────────────────────────────────────────────
 
-  - id: A6
-    name: "Analog Physical Verification (per-block DRC + LVS before merge)"
-    stage: stage_analog
-    condition:
-      files_exist: ["phase1/analog/analog_block_list.json"]
-    skills: [drc-fix, lvs-triage]
-    programs:
-      - analog_a6_block_pv_check
-    # EVIDENCE: these entries must name every artefact the A6 gate accepts,
-    # because `flow_compliance_check.check_step` treats required_outputs as a
-    # CHEAP PRE-CHECK and returns MISSING **without ever running the gate**
-    # when no entry resolves. `analog_a6_block_pv_check` treats the DRC/LVS
-    # REPORTS as its primary evidence (drc.report / *.lyrdb / drc.rpt;
-    # comp.json / lvs.report / lvs.rpt) and the .flag files as a lesser
-    # fallback that must itself carry a count/verdict line. Measured on a
-    # synthetic block carrying only drc.report ("Total DRC violations: 0") and
-    # lvs.report ("LVS match: true"): the gate ran standalone and returned
-    # PASS (rc=0, "1/1 block(s) DRC-0 + LVS-match") while check_step returned
-    # MISSING and never invoked it. Each entry below is one artefact with
-    # several accepted names, so this widens what SATISFIES A6, never what
-    # the gate accepts — the substantive verdict is still the program's.
-    required_outputs:
-      - "phase3/analog/*/drc_clean.flag OR phase3/analog/*/drc.report OR phase3/analog/*/*.lyrdb OR phase3/analog/*/drc.rpt"
-      - "phase3/analog/*/lvs_match.flag OR phase3/analog/*/lvs.report OR phase3/analog/*/comp.json OR phase3/analog/*/lvs.rpt"
-    gate:
-      program_exit_zero: "analog_a6_block_pv_check . --json reports/phase2/gates/analog_block_pv.json"
-    blocks_on: [A5]
-    notes: |
-      Each analog block must have DRC-clean + LVS-match BEFORE A7
-      post-layout resim runs. Catches per-block layout errors that
-      top-level PV (Step 31) would otherwise mask via merge.
 
   - id: M1
     name: "Mixed-Signal Top-Level Integration (A+D GDS merge + macro placement)"

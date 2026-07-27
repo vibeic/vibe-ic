@@ -21,8 +21,6 @@ def _layout_full(project: Path, block: str) -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / "layout.mag").write_text(
         "magic\ntech sky130A\n" + "rect 0 0 100 100\n" * 20)
-    (d / "drc_clean.flag").write_text("DRC clean: 0 errors\n")
-    (d / "lvs_match.flag").write_text("LVS match: 0 mismatches\n")
 
 
 def _run(project: Path, *args: str) -> subprocess.CompletedProcess:
@@ -55,19 +53,15 @@ def test_happy_path_gds_alternative(tmp_path: Path) -> None:
     """Either layout.mag OR <block>.gds satisfies A5 — when the GDS carries
     real placed geometry (ORGANIC #144: at least one geometry record).
 
-    d5 FIX: this test used to write `drc_clean.flag`='clean' /
-    `lvs_match.flag`='match', i.e. flags carrying NO parseable verdict, and
-    assert PASS — so it encoded the very hole d5 reports (A5 accepting a
-    contentless sign-off flag) as the expected behaviour of the happy path.
-    The assertion it actually claims to make is about the LAYOUT
-    representation (GDS instead of .mag), so the flags are corrected to real
-    sign-off evidence; the `returncode == 0` assertion is unchanged."""
+    The claim under test is the LAYOUT representation (GDS instead of .mag).
+    The DRC/LVS sign-off flags this fixture used to write are gone: they are
+    A6's artefacts and A6's verdict (see "A5 -> A6 PV OWNERSHIP" below), so
+    writing them here would re-assert a contract A5 no longer has. The
+    `returncode == 0` assertion is unchanged."""
     _block_list(tmp_path, ["ldo"])
     d = tmp_path / "phase3" / "analog" / "ldo"
     d.mkdir(parents=True, exist_ok=True)
     (d / "ldo.gds").write_bytes(_GDS_WITH_GEOMETRY)
-    (d / "drc_clean.flag").write_text("violations: 0\n")
-    (d / "lvs_match.flag").write_text("lvs: match\n")
     r = _run(tmp_path)
     assert r.returncode == 0, r.stderr
 
@@ -79,8 +73,6 @@ def test_empty_geometry_gds_fails(tmp_path: Path) -> None:
     d = tmp_path / "phase3" / "analog" / "ldo"
     d.mkdir(parents=True, exist_ok=True)
     (d / "ldo.gds").write_bytes(_GDS_EMPTY_GEOMETRY)
-    (d / "drc_clean.flag").write_text("violations: 0\n")
-    (d / "lvs_match.flag").write_text("lvs: match\n")
     r = _run(tmp_path)
     assert r.returncode == 1, r.stdout
     rpt = json.loads((tmp_path / "report.json").read_text())
@@ -98,8 +90,6 @@ def test_padded_mag_stub_fails(tmp_path: Path) -> None:
     (d / "layout.mag").write_text(
         "magic\ntech sky130A\n# deterministic-stub padding "
         + "x" * 400 + "\n")
-    (d / "drc_clean.flag").write_text("violations: 0\n")
-    (d / "lvs_match.flag").write_text("lvs: match\n")
     r = _run(tmp_path)
     assert r.returncode == 1, r.stdout
     rpt = json.loads((tmp_path / "report.json").read_text())
@@ -117,8 +107,6 @@ def test_empty_geometry_mag_no_marker_fails(tmp_path: Path) -> None:
     (d / "layout.mag").write_text(
         "magic\ntech sky130A\ntimestamp 0\n"
         + "# placeholder header only, no paint\n" * 20)
-    (d / "drc_clean.flag").write_text("violations: 0\n")
-    (d / "lvs_match.flag").write_text("lvs: match\n")
     r = _run(tmp_path)
     assert r.returncode == 1, r.stdout
 
@@ -127,11 +115,8 @@ def test_real_mag_with_instances_passes(tmp_path: Path) -> None:
     """A .mag whose geometry is cell instances (`use` lines) — no paint
     rects — still passes (instance-based placement is real geometry).
 
-    d5 FIX: same correction as `test_happy_path_gds_alternative` — the
-    verdict-less 'clean'/'match' flags this test used to write made it an
-    accidental guarantee that a contentless sign-off flag PASSes A5. The
-    claim under test is the .mag geometry parse, so the flags now carry real
-    evidence; the `returncode == 0` assertion is unchanged."""
+    Same scope correction as `test_happy_path_gds_alternative`: the claim
+    under test is the .mag geometry parse, and the PV flags are A6's."""
     _block_list(tmp_path, ["ldo"])
     d = tmp_path / "phase3" / "analog" / "ldo"
     d.mkdir(parents=True, exist_ok=True)
@@ -140,8 +125,6 @@ def test_real_mag_with_instances_passes(tmp_path: Path) -> None:
         body += (f"use sky130_fd_pr__nfet_01v8 m{i}\n"
                  f"transform 1 0 0 0 1 {i*10}\nbox 0 0 100 100\n")
     (d / "layout.mag").write_text(body)
-    (d / "drc_clean.flag").write_text("violations: 0\n")
-    (d / "lvs_match.flag").write_text("lvs: match\n")
     r = _run(tmp_path)
     assert r.returncode == 0, r.stderr
 
@@ -154,26 +137,20 @@ def test_missing_per_block_waived(tmp_path: Path) -> None:
     assert rpt["suggested_skill"] == "analog-layout"
 
 
-def test_drc_flag_missing_fails(tmp_path: Path) -> None:
+def test_pv_flags_absent_do_not_fail_a5(tmp_path: Path) -> None:
+    """DIRECTION-2 GUARD for the A5/A6 cycle break. Straight after A5 runs,
+    `drc_clean.flag` / `lvs_match.flag` DO NOT EXIST — they are written by the
+    A6 step. A5 must PASS on a real layout alone; requiring them made A5 red
+    on every correct single-pass run for a condition A5 cannot satisfy."""
     _block_list(tmp_path, ["ldo"])
     _layout_full(tmp_path, "ldo")
-    (tmp_path / "phase3" / "analog" / "ldo" / "drc_clean.flag").unlink()
+    d = tmp_path / "phase3" / "analog" / "ldo"
+    assert not (d / "drc_clean.flag").exists()
+    assert not (d / "lvs_match.flag").exists()
     r = _run(tmp_path)
-    assert r.returncode == 1
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
     rpt = json.loads((tmp_path / "report.json").read_text())
-    assert any("A5_DRC_FLAG_MISSING" in f["rule"]
-               for f in rpt["findings"])
-
-
-def test_lvs_flag_missing_fails(tmp_path: Path) -> None:
-    _block_list(tmp_path, ["ldo"])
-    _layout_full(tmp_path, "ldo")
-    (tmp_path / "phase3" / "analog" / "ldo" / "lvs_match.flag").unlink()
-    r = _run(tmp_path)
-    assert r.returncode == 1
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert any("A5_LVS_FLAG_MISSING" in f["rule"]
-               for f in rpt["findings"])
+    assert rpt["verdict"] == "PASS", rpt
 
 
 def test_layout_too_small_fails(tmp_path: Path) -> None:
@@ -181,8 +158,6 @@ def test_layout_too_small_fails(tmp_path: Path) -> None:
     d = tmp_path / "phase3" / "analog" / "ldo"
     d.mkdir(parents=True, exist_ok=True)
     (d / "layout.mag").write_text("magic\n")  # < 200B
-    (d / "drc_clean.flag").write_text("violations: 0\n")
-    (d / "lvs_match.flag").write_text("lvs: match\n")
     r = _run(tmp_path)
     assert r.returncode == 1
     rpt = json.loads((tmp_path / "report.json").read_text())
@@ -210,13 +185,11 @@ def test_no_block_list_vacuous(tmp_path: Path) -> None:
 
 
 def _layout_and_flags(project: Path, block: str) -> Path:
-    """A per-block dir with a REAL-geometry layout and REAL sign-off flags."""
+    """A per-block dir with a REAL-geometry layout (A5's whole contract)."""
     d = project / "phase3" / "analog" / block
     d.mkdir(parents=True, exist_ok=True)
     (d / "layout.mag").write_text(
         "magic\ntech sky130A\ntimestamp 0\n" + "rect 0 0 100 100\n" * 20)
-    (d / "drc_clean.flag").write_text("violations: 0\n")
-    (d / "lvs_match.flag").write_text("lvs: match\n")
     return d
 
 
@@ -314,16 +287,36 @@ def test_d2_guard_block_mode_missing_stays_waived_exit_2(
 
 
 # ===========================================================================
-# A5/d5 — the DRC / LVS sign-off flags must carry a real verdict
+# A5 -> A6 PV OWNERSHIP — the dependency cycle, and the proof nothing was lost
 #
-# Reproduced on main @ v1.7.36: a block with a real 255-byte layout.mag and
-# `: > drc_clean.flag` / `: > lvs_match.flag` (both 0 bytes, verified with
-# `find -printf '%s'`) returned `PASS — 1/1 block(s) clean`, rc=0, with and
-# without `--block`. The module docstring already claimed "any NON-EMPTY
-# file"; the code only did `is_file()`. One step later,
-# analog_a6_block_pv_check rejects exactly these flags
-# ("Bare flag with no count line -> NOT acceptable evidence").
+# A5's gate used to require `<block>/drc_clean.flag` and `<block>/lvs_match.flag`
+# to carry clean verdicts. Both are step A6's DECLARED required_outputs and A6
+# declares `blocks_on: [A5]`, so the declared ordering ran A6 -> A5 while the
+# real read ran A5 -> A6 — a cycle no `blocks_on` value can express.
+#
+# It was broken on the A5 side. The direction was DECIDED, not guessed:
+#   * A6 cannot run without A5's layout (`A6_PV_BLOCK_DIR_MISSING` says so in
+#     as many words); A5 -> A6 is the DATA dependency.
+#   * `analog_one_shot_runner._emit_deterministic_stub` writes `layout.mag`
+#     under `step_name == "A5_layout"` and BOTH flags under `"A6_block_pv"`,
+#     and the runner runs A5 before A6 — so A5 was FAILing every correct
+#     single-pass run for a condition A5 itself cannot satisfy.
+#
+# The tests below are the "nothing was lost" half. Each one feeds the A6 gate
+# the SAME per-block input the deleted A5 test fed the A5 gate, and asserts
+# rc=1. If a future change relaxes A6, these go red — the defect classes are
+# still under test, they just belong to the step that owns the evidence.
+#
+# ONE deleted test has NO counterpart here, deliberately:
+# `test_d5_parser_import_failure_degrades_but_never_fails_open` exercised A5's
+# `_load_pv_parsers()` degraded mode — the fallback for when A5's cross-program
+# import of A6's parsers failed. A5 no longer imports A6, so there is no import
+# to fail and no degraded mode to guard; A6 calls its own parsers directly.
+# That is a deleted CODE PATH, not a deleted defect class.
 # ===========================================================================
+
+A6_PROG = (Path(__file__).resolve().parent.parent
+           / "analog_a6_block_pv_check.py")
 
 
 def _layout_only(project: Path, block: str) -> Path:
@@ -334,128 +327,128 @@ def _layout_only(project: Path, block: str) -> Path:
     return d
 
 
-def test_d5_zero_byte_drc_flag_fails(tmp_path: Path) -> None:
-    """THE d5 DISCRIMINATOR (DRC). A `touch`-created 0-byte drc_clean.flag
-    is not DRC sign-off. Before the fix this was rc=0 / PASS."""
+def _run_a6(project: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(A6_PROG), str(project),
+         "--json", str(project / "a6.json"), *args],
+        capture_output=True, text=True,
+    )
+
+
+def _a6_report(project: Path) -> dict:
+    return json.loads((project / "a6.json").read_text())
+
+
+def _a6_rejects(tmp_path: Path, drc, lvs, *args: str) -> dict:
+    """Write the given flag bodies (bytes/str, or None to omit the file) and
+    assert the A6 gate rejects the block with rc=1. Returns its report."""
     _block_list(tmp_path, ["ldo"])
     d = _layout_only(tmp_path, "ldo")
-    (d / "drc_clean.flag").write_bytes(b"")
-    (d / "lvs_match.flag").write_text("lvs: match\n")
-    r = _run(tmp_path)
+    for name, body in (("drc_clean.flag", drc), ("lvs_match.flag", lvs)):
+        if body is None:
+            continue
+        if isinstance(body, bytes):
+            (d / name).write_bytes(body)
+        else:
+            (d / name).write_text(body)
+    r = _run_a6(tmp_path, *args)
     assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert rpt["verdict"] == "FAIL", rpt
-    assert {f["rule"] for f in rpt["findings"]} == {"A5_DRC_FLAG_EMPTY"}, rpt
+    return _a6_report(tmp_path)
 
 
-def test_d5_zero_byte_lvs_flag_fails(tmp_path: Path) -> None:
-    """THE d5 DISCRIMINATOR (LVS). Same for lvs_match.flag."""
-    _block_list(tmp_path, ["ldo"])
-    d = _layout_only(tmp_path, "ldo")
-    (d / "drc_clean.flag").write_text("violations: 0\n")
-    (d / "lvs_match.flag").write_bytes(b"")
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert {f["rule"] for f in rpt["findings"]} == {"A5_LVS_FLAG_EMPTY"}, rpt
+def test_ownership_zero_byte_drc_flag_rejected_by_a6(tmp_path: Path) -> None:
+    """Was `test_d5_zero_byte_drc_flag_fails` on A5."""
+    rpt = _a6_rejects(tmp_path, b"", "lvs: match\n")
+    assert "A6_PV_DRC_NO_EVIDENCE" in {f["rule"] for f in rpt["findings"]}, rpt
+    # The ABSENT / EMPTY / VERDICT-LESS distinction A5's rule ids carried is
+    # preserved in the detail, so the finding still tells an operator whether
+    # to run the tool or to fix its output.
+    assert "empty/whitespace" in " ".join(
+        f["detail"] for f in rpt["findings"]), rpt
 
 
-def test_d5_whitespace_only_flags_fail(tmp_path: Path) -> None:
-    """A flag holding only whitespace is the same non-evidence as a 0-byte
-    flag — a byte-count test alone would let this through."""
-    _block_list(tmp_path, ["ldo"])
-    d = _layout_only(tmp_path, "ldo")
-    (d / "drc_clean.flag").write_text("   \n\n\t\n")
-    (d / "lvs_match.flag").write_text("\n")
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.returncode, r.stdout)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert {f["rule"] for f in rpt["findings"]} == {
-        "A5_DRC_FLAG_EMPTY", "A5_LVS_FLAG_EMPTY"}, rpt
+def test_ownership_zero_byte_lvs_flag_rejected_by_a6(tmp_path: Path) -> None:
+    """Was `test_d5_zero_byte_lvs_flag_fails` on A5."""
+    rpt = _a6_rejects(tmp_path, "violations: 0\n", b"")
+    assert "A6_PV_LVS_NO_EVIDENCE" in {f["rule"] for f in rpt["findings"]}, rpt
 
 
-def test_d5_verdictless_flags_fail(tmp_path: Path) -> None:
-    """Non-empty but verdict-free flags ('clean' / 'match' with no count or
-    LVS verdict) are the shape A6 already refuses; A5 now refuses them too."""
-    _block_list(tmp_path, ["ldo"])
-    d = _layout_only(tmp_path, "ldo")
-    (d / "drc_clean.flag").write_text("clean\n")
-    (d / "lvs_match.flag").write_text("ok\n")
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.returncode, r.stdout)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert {f["rule"] for f in rpt["findings"]} == {
-        "A5_DRC_FLAG_NO_EVIDENCE", "A5_LVS_FLAG_NO_EVIDENCE"}, rpt
-
-
-def test_d5_drc_flag_declaring_violations_fails(tmp_path: Path) -> None:
-    """A `drc_clean.flag` whose own content says the block is NOT clean must
-    never be read as sign-off."""
-    _block_list(tmp_path, ["ldo"])
-    d = _layout_only(tmp_path, "ldo")
-    (d / "drc_clean.flag").write_text("violations: 7\n")
-    (d / "lvs_match.flag").write_text("lvs: match\n")
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.returncode, r.stdout)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert {f["rule"] for f in rpt["findings"]} == {"A5_DRC_NOT_CLEAN"}, rpt
-
-
-def test_d5_lvs_flag_declaring_mismatch_fails(tmp_path: Path) -> None:
-    """Likewise for an `lvs_match.flag` that reports a mismatch."""
-    _block_list(tmp_path, ["ldo"])
-    d = _layout_only(tmp_path, "ldo")
-    (d / "drc_clean.flag").write_text("violations: 0\n")
-    (d / "lvs_match.flag").write_text("lvs: mismatch\n")
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.returncode, r.stdout)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert {f["rule"] for f in rpt["findings"]} == {"A5_LVS_NOT_MATCH"}, rpt
-
-
-def test_d5_netgen_shaped_flag_without_terminal_verdict_fails(
+def test_ownership_whitespace_only_flags_rejected_by_a6(
         tmp_path: Path) -> None:
-    """Because the content check REUSES A6's parser rather than inventing a
-    second dialect, A5 also inherits the shared netgen fail-safe: a
-    netgen-shaped transcript with no terminal `Final result:` line is an
-    unfinished compare and must not be read as a match."""
-    _block_list(tmp_path, ["ldo"])
-    d = _layout_only(tmp_path, "ldo")
-    (d / "drc_clean.flag").write_text("violations: 0\n")
-    (d / "lvs_match.flag").write_text(
-        "Subcircuit summary:\nCircuits match uniquely.\n")
-    r = _run(tmp_path)
-    assert r.returncode == 1, (r.returncode, r.stdout)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert {f["rule"] for f in rpt["findings"]} == {
-        "A5_LVS_FLAG_NO_EVIDENCE"}, rpt
+    """Was `test_d5_whitespace_only_flags_fail` on A5."""
+    rpt = _a6_rejects(tmp_path, "   \n\n\t\n", "\n")
+    assert {"A6_PV_DRC_NO_EVIDENCE", "A6_PV_LVS_NO_EVIDENCE"} <= {
+        f["rule"] for f in rpt["findings"]}, rpt
 
 
-def test_d5_block_mode_empty_flags_are_fail_not_waived(
+def test_ownership_verdictless_flags_rejected_by_a6(tmp_path: Path) -> None:
+    """Was `test_d5_verdictless_flags_fail` on A5 — non-empty but carrying no
+    count / no LVS verdict."""
+    rpt = _a6_rejects(tmp_path, "clean\n", "ok\n")
+    assert {"A6_PV_DRC_NO_EVIDENCE", "A6_PV_LVS_NO_EVIDENCE"} <= {
+        f["rule"] for f in rpt["findings"]}, rpt
+    assert "carries no verdict line" in " ".join(
+        f["detail"] for f in rpt["findings"]), rpt
+
+
+def test_ownership_drc_flag_declaring_violations_rejected_by_a6(
         tmp_path: Path) -> None:
-    """The MISSING-vs-FAIL split must hold: a block WITH a layout but with
-    contentless flags is a substance FAIL (rc=1), not a deferral (rc=2).
-    Returning 2 here would let the runner mark the step WAIVED."""
-    _block_list(tmp_path, ["ldo"])
-    d = _layout_only(tmp_path, "ldo")
-    (d / "drc_clean.flag").write_bytes(b"")
-    (d / "lvs_match.flag").write_bytes(b"")
-    r = _run(tmp_path, "--block", "ldo")
-    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
-    rpt = json.loads((tmp_path / "report.json").read_text())
+    """Was `test_d5_drc_flag_declaring_violations_fails` on A5."""
+    rpt = _a6_rejects(tmp_path, "violations: 7\n", "lvs: match\n")
+    assert "A6_PV_DRC_VIOLATIONS" in {f["rule"] for f in rpt["findings"]}, rpt
+
+
+def test_ownership_lvs_flag_declaring_mismatch_rejected_by_a6(
+        tmp_path: Path) -> None:
+    """Was `test_d5_lvs_flag_declaring_mismatch_fails` on A5."""
+    rpt = _a6_rejects(tmp_path, "violations: 0\n", "lvs: mismatch\n")
+    assert "A6_PV_LVS_MISMATCH" in {f["rule"] for f in rpt["findings"]}, rpt
+
+
+def test_ownership_netgen_shaped_flag_without_terminal_verdict_rejected(
+        tmp_path: Path) -> None:
+    """Was `test_d5_netgen_shaped_flag_without_terminal_verdict_fails` on A5.
+    A5 only ever had this behaviour because it BORROWED A6's parser; the
+    fail-safe lives in `analog_a6_block_pv_check._parse_lvs_match` and is
+    unaffected by the ownership move."""
+    rpt = _a6_rejects(tmp_path, "violations: 0\n",
+                      "Subcircuit summary:\nCircuits match uniquely.\n")
+    assert "A6_PV_LVS_NO_EVIDENCE" in {f["rule"] for f in rpt["findings"]}, rpt
+
+
+def test_ownership_absent_drc_flag_rejected_by_a6(tmp_path: Path) -> None:
+    """Was `test_d5_guard_missing_flag_file_still_reports_missing_rule` and
+    `test_drc_flag_missing_fails` on A5 — the ABSENT case, whose distinct
+    diagnosis must survive the move."""
+    rpt = _a6_rejects(tmp_path, None, "lvs: match\n")
+    assert "A6_PV_DRC_NO_EVIDENCE" in {f["rule"] for f in rpt["findings"]}, rpt
+    assert "the tool has not run" in " ".join(
+        f["detail"] for f in rpt["findings"]), rpt
+
+
+def test_ownership_absent_lvs_flag_rejected_by_a6(tmp_path: Path) -> None:
+    """Was `test_lvs_flag_missing_fails` on A5."""
+    rpt = _a6_rejects(tmp_path, "violations: 0\n", None)
+    assert "A6_PV_LVS_NO_EVIDENCE" in {f["rule"] for f in rpt["findings"]}, rpt
+
+
+def test_ownership_block_mode_empty_flags_are_fail_not_waived(
+        tmp_path: Path) -> None:
+    """Was `test_d5_block_mode_empty_flags_are_fail_not_waived` on A5. Under
+    `--block` the contentless-flag case must stay a substance FAIL (rc=1), not
+    a deferral (rc=2) that the runner would record as WAIVED."""
+    rpt = _a6_rejects(tmp_path, b"", b"", "--block", "ldo")
     assert rpt["verdict"] == "FAIL", rpt
 
 
-# ---- d5 direction-1 guards: behaviour that must NOT change ----------------
+# ---- ownership direction-1 guards: A6 must not turn a clean block red ------
 
 
-def test_d5_guard_runner_deterministic_stub_flags_still_pass(
+def test_ownership_guard_runner_deterministic_stub_flags_still_pass(
         tmp_path: Path) -> None:
     """DIRECTION-1 GUARD. `analog_one_shot_runner._emit_deterministic_stub`
-    writes these exact flag bodies for A6_block_pv (it was already hardened
-    to A6's standard). A5 must accept them, or every stub dry-run turns red
-    for the wrong reason. Byte-for-byte copy of the runner's output shape,
-    including the `_wt` provenance header line."""
+    writes these exact flag bodies for A6_block_pv. A6 must accept them, or
+    every stub dry-run turns red for the wrong reason."""
     _block_list(tmp_path, ["ldo"])
     d = _layout_only(tmp_path, "ldo")
     (d / "drc_clean.flag").write_text(
@@ -470,17 +463,15 @@ def test_d5_guard_runner_deterministic_stub_flags_still_pass(
         "# ldo — LVS match (deterministic stub)\n"
         "deterministic_stub\n"
         "lvs: match\n")
-    r = _run(tmp_path)
+    r = _run_a6(tmp_path)
     assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert rpt["verdict"] == "PASS", rpt
+    assert _a6_report(tmp_path)["verdict"] == "PASS"
 
 
-def test_d5_guard_tool_generic_report_phrasings_still_pass(
+def test_ownership_guard_tool_generic_report_phrasings_still_pass(
         tmp_path: Path) -> None:
     """DIRECTION-1 GUARD. The accepted phrasings stay TOOL-generic (Magic /
-    KLayout / Calibre / Netgen wording), never a vendor or chip literal —
-    the check must not become a hard-coded string match on one flow."""
+    KLayout / Calibre / Netgen wording), never a vendor or chip literal."""
     for i, (drc, lvs) in enumerate([
             ("DRC clean: 0 errors\n", "LVS match: 0 mismatches\n"),
             ("no drc violations\n", "Final result: Circuits match "
@@ -493,52 +484,37 @@ def test_d5_guard_tool_generic_report_phrasings_still_pass(
         d = _layout_only(proj, "ldo")
         (d / "drc_clean.flag").write_text(drc)
         (d / "lvs_match.flag").write_text(lvs)
-        r = _run(proj)
+        r = _run_a6(proj)
         assert r.returncode == 0, (drc, lvs, r.returncode, r.stderr)
 
 
-def test_d5_guard_missing_flag_file_still_reports_missing_rule(
+# ---- the precondition the ownership move depended on ----------------------
+
+
+def test_ownership_a6_reads_the_block_list_root_its_own_condition_names(
         tmp_path: Path) -> None:
-    """DIRECTION-1 GUARD. An ABSENT flag must keep its own distinct rule
-    (A5_*_FLAG_MISSING) — the new content rules must not swallow it, or the
-    finding stops telling an operator whether to run the tool or to fix its
-    output."""
-    _block_list(tmp_path, ["ldo"])
-    d = _layout_only(tmp_path, "ldo")
-    (d / "lvs_match.flag").write_text("lvs: match\n")
-    r = _run(tmp_path)
-    assert r.returncode == 1
-    rpt = json.loads((tmp_path / "report.json").read_text())
-    assert {f["rule"] for f in rpt["findings"]} == {"A5_DRC_FLAG_MISSING"}, rpt
+    """THE PRECONDITION. A6's flow `condition` names
+    `phase1/analog/analog_block_list.json`, but its block-list reader probed
+    only `phase3/analog/` and the legacy `analog/`. On a project carrying the
+    list ONLY at the flow-declared root, A6 returned `SKIP (no analog blocks)`
+    with rc=2 — which `flow_compliance_check` credits as VACUOUS_PASS — while
+    A5's flag rules were still catching the gap. Moving the PV verdict to A6
+    without this fix would have opened a hole, so it is asserted here rather
+    than assumed."""
+    (tmp_path / "phase1" / "analog").mkdir(parents=True)
+    (tmp_path / "phase1" / "analog" / "analog_block_list.json").write_text(
+        json.dumps({"blocks": ["ldo"]}))
+    _layout_only(tmp_path, "ldo")   # layout done, PV evidence absent
+    r = _run_a6(tmp_path)
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+    rules = {f["rule"] for f in _a6_report(tmp_path)["findings"]}
+    assert {"A6_PV_DRC_NO_EVIDENCE", "A6_PV_LVS_NO_EVIDENCE"} <= rules
 
 
-def test_d5_parser_import_failure_degrades_but_never_fails_open(
+def test_ownership_a6_still_skips_a_project_with_no_block_list(
         tmp_path: Path) -> None:
-    """Degraded-mode contract (a NEW behaviour, so it fails on the base tree
-    like the other d5 discriminators). The content check borrows A6's parsers
-    via a cross-program import. If that import ever fails the gate must
-    DEGRADE to the docstring's stated minimum (a non-empty flag) — never fail
-    open on a 0-byte flag, and never fail EVERY block on an ImportError."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("_a5_under_test", PROG)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_a5_under_test"] = mod
-    sys.path.insert(0, str(PROG.parent))
-    try:
-        spec.loader.exec_module(mod)
-    finally:
-        sys.path.remove(str(PROG.parent))
-    mod._PARSE_DRC_COUNT = None
-    mod._PARSE_LVS_MATCH = None
-
-    d = tmp_path / "blk"
-    d.mkdir()
-    empty = d / "drc_clean.flag"
-    empty.write_bytes(b"")
-    # Degraded mode still catches the 0-byte flag (never fails open) …
-    assert mod._drc_flag_defect(empty)[0] == "A5_DRC_FLAG_EMPTY"
-    # … but does not condemn a verdict-free flag it can no longer parse.
-    verdictless = d / "lvs_match.flag"
-    verdictless.write_text("clean\n")
-    assert mod._lvs_flag_defect(verdictless) is None
+    """DIRECTION-1 GUARD for the root fix: a project declaring analog blocks
+    NOWHERE is still a genuine non-applicability (rc=2), not a new red."""
+    r = _run_a6(tmp_path)
+    assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
+    assert _a6_report(tmp_path)["verdict"] == "SKIP"

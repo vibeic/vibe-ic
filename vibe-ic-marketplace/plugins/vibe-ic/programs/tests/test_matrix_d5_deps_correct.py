@@ -43,8 +43,8 @@ prefixing. (Containment was tried and rejected: step 21 scans the directory
 depends on 34", and counting it as one would be exactly the adjacent
 measurement this campaign exists to stamp out.)
 
-The value of a ``--json`` flag is excluded: across all 137 gate commands every
-one of the 107 distinct ``--json`` values is the checker's own report under
+The value of a ``--json`` flag is excluded: across all 136 gate commands every
+one of the distinct ``--json`` values is the checker's own report under
 ``reports/``, and each of the 11 that collides with a declared artefact
 collides with the *same* step's — i.e. it is an OUTPUT, never a read.
 ``provenance_check``'s ``--output`` is deliberately NOT excluded: there
@@ -60,8 +60,10 @@ the exact basename of ``A`` occurs as a **standalone string constant** and:
     wildcard — so ``netlist.v`` (steps 9 and 14), ``results.xml``, ``pass.flag``
     and ``*.sp`` are all out of scope by construction rather than by guesswork;
   * the constant is not a bare-expression **docstring** (``ast.Expr`` whose
-    value is a string) — ``analog_a5_layout_check``'s module docstring names
-    ``drc_clean.flag`` nine times before line 237 constructs the real path;
+    value is a string) — ``analog_a5_layout_check``'s module docstring still
+    names ``drc_clean.flag`` and ``lvs_match.flag`` several times, in the
+    section EXPLAINING why it no longer reads them, and that prose must not be
+    counted as a read;
   * the constant does not occur *only* inside a ``not in`` container — in
     ``spare_cell_preservation_check`` the names ``post_cts.def`` and
     ``post_hold.def`` appear solely in an EXCLUSION list
@@ -75,14 +77,31 @@ Both layers then drop two classes of non-dependency:
     ``phase3/mixed_signal/cosim/mixed_signal_results.json``). A co-producer of X
     does not depend on the *other* producer of X.
 
-Measured on the current tree: **14 of 63 steps have at least one derived
-cross-step data dependency**, carrying 19 distinct (consumer, producer) pairs
-backed by 35 evidence rows.
+Measured on the current tree: **12 of 63 steps have at least one derived
+cross-step data dependency**, carrying 16 distinct (consumer, producer) pairs
+backed by 31 evidence rows.
 That is the honest denominator of the layer-1+2 half of this dimension, and it
 is stated in :func:`test_d5_derived_dependency_denominator_is_disclosed` so it
 can never quietly drift to zero and leave a suite of vacuous passes behind — the
 exact shape of the failure this campaign was convened over (a runtime ordering
 guard that saw 0 violations because it had been starved of its input).
+
+WHY IT FELL FROM 14/19/35 (v1.7.68) TO 12/16/31, stated because a SHRINKING
+denominator is the shape this guard exists to catch. The five dimension-5
+waivers were closed by fixing the defects, and three of the removed pairs were
+themselves the defects — a consumer reading an artefact it must not read:
+
+  * A5 -> A6 (1 pair, 2 artefacts): ``analog_a5_layout_check`` no longer names
+    ``drc_clean.flag`` / ``lvs_match.flag``. That read WAS the cycle; the PV
+    verdict is A6's, over A6's own richer evidence.
+  * 18 -> 21 and 18 -> 34 (2 pairs): ``spare_cell_preservation_check`` is no
+    longer a step-18 gate program, so step 18 no longer reaches forward to
+    ``routed.def`` / ``filled.def``. The gate still runs at step 34.
+
+Steps 8 and DT2 kept their derived dependencies — they were closed by
+DECLARING the edge, not by removing the read, so they still contribute. No
+other pair moved: 14 - 2 = 12 steps, 19 - 3 = 16 pairs, 35 - 4 = 31 rows, and
+the removed rows are exactly the four artefacts named above.
 
 ====================================================================
 WHY THAT DENOMINATOR IS NOT THE WHOLE TEST
@@ -131,7 +150,7 @@ It is nonetheless cross-checked, per step, in ``D5-GRAPH-DISAGREE``. One
 plus (``name`` or ``blocks_on``), so it admits 71 nodes where the flow declares
 63 steps — the 8 extra are the stage grouping objects (``stage1`` … ``stage_phase1``).
 They contribute 0 edges today and no stage id collides with a step id, so the
-per-step graphs are identical (91 edges both sides). If a stage object ever took
+per-step graphs are identical (93 edges both sides). If a stage object ever took
 a step's id, the runtime graph's entry for that step would be silently
 overwritten; ``D5-GRAPH-DISAGREE`` is what would notice.
 
@@ -153,9 +172,13 @@ KNOWN GAPS (stated so nobody mistakes a pass here for a proof)
    ``phase3_one_shot_runner`` and friends are not gate programs) is not seen.
 3. "Reads" is not "hard-depends": layer 2 cannot tell a mandatory read from a
    best-effort one inside ``try/except`` — deliberately, because the stale-read
-   hazard is identical either way, and ``sdc_exception_correlation_check``'s
-   swallowed ``except (OSError, ValueError): pass`` is precisely how a missing
-   upstream turns into a silently wrong advisory instead of a loud failure.
+   hazard is identical either way. ``sdc_exception_correlation_check`` was the
+   worked example: its swallowed ``except (OSError, ValueError): pass`` turned a
+   missing upstream into a silently wrong advisory instead of a loud failure.
+   Its step-8 cell has since been closed — the edge is declared and the program
+   reports the per-source read STATUS — but the GAP is unchanged: a best-effort
+   read is still indistinguishable from a mandatory one here, so this dimension
+   goes on treating both as dependencies.
 4. Phantom-edge detection is limited to unresolved / self / duplicate /
    forward-pointing edges. A *semantically* useless but harmless edge (step 11's
    ``blocks_on: [10]`` where the real need is step 9's netlist, or step 24's
@@ -617,136 +640,37 @@ def d5_problems(step_id) -> List[str]:
 # ══════════════════════════════════════════════════════════════════════
 # Accepted gaps
 # ══════════════════════════════════════════════════════════════════════
-#: Waivers this module needs. They live here, not in ``matrix_63x8.waivers``,
-#: because eight dimension modules share one worktree and concurrent edits to a
-#: shared registry lose entries; they are reported to the orchestrator for
-#: central application. :func:`_waiver_for` prefers the central registry the
-#: moment an entry lands there, so this table degrades to dead weight rather
-#: than to a second source of truth. ``test_d5_local_waivers_are_valid``
-#: re-validates every one against ``waivers.validate`` and
-#: ``test_d5_local_waivers_do_not_shadow_the_registry`` fails if a landed
-#: central waiver and a local one ever disagree.
+#: EMPTY. Dimension 5 shipped with five waivers, every one of them labelled
+#: "LIVE DEFECT, reproduced". All five have been CLOSED by fixing the defect,
+#: not by relaxing anything here — the predicate below is byte-for-byte the one
+#: that failed them:
 #:
-#: Every one of these is a LIVE, REPRODUCED defect, not an un-mechanisable
-#: cell: the predicate genuinely fails on the current tree. ``strict=True`` is
-#: therefore load-bearing in the strongest way — the day the dependency is
-#: fixed, the cell XPASSes, the suite goes red, and the waiver must be deleted.
-_LOCAL_WAIVERS: Tuple[W.Waiver, ...] = (
-    W.Waiver(
-        step_id=8,
-        dim=DIM,
-        reason=(
-            "LIVE DEFECT, reproduced: step 8's gate program "
-            "sdc_exception_correlation_check reads reports/phase2/cdc/crossing.json "
-            "— step 3's declared required_output — to decide whether each "
-            "set_false_path is justified, but step 8 declares blocks_on:[7] whose "
-            "closure is {7, 1, D1} and does not reach step 3. The read is wrapped "
-            "in `except (OSError, ValueError): pass`, so a missing or STALE "
-            "crossing.json does not fail the step; it silently empties the "
-            "known-async-pair set and every legitimate CDC false_path is then "
-            "reported SDC_EXCEPTION_UNJUSTIFIED. Step 3 is declared EARLIER in the "
-            "yaml, so this is a plainly addable edge, not a structural conflict."
-        ),
-        evidence=(
-            "programs/sdc_exception_correlation_check.py:46 "
-            "`cdc = project / \"reports\" / \"phase2\" / \"cdc\" / \"crossing.json\"`; "
-            "producer flow/phase1_phase2_phase3.yaml:401 (step 3 required_outputs); "
-            "consumer flow/phase1_phase2_phase3.yaml:766 (step 8, blocks_on:[7])"
-        ),
-    ),
-    W.Waiver(
-        step_id="DT2",
-        dim=DIM,
-        reason=(
-            "LIVE DEFECT, reproduced: DT2's own condition.files_exist names "
-            "phase3/stage3/extracted/*.spef, which is step 22's declared "
-            "required_output, but DT2 declares blocks_on:[DT1] and step 22 is not "
-            "in its closure. The condition makes DT2 self-skip when the SPEF is "
-            "absent, which prevents a crash but NOT a stale read: on a resumed "
-            "project a SPEF from a previous run makes DT2 run at-speed path-delay "
-            "ATPG against last run's parasitics. The edge cannot simply be added "
-            "— step 22 is declared at yaml index 34 and DT2 at index 14, so "
-            "DT2 -> 22 would be a forward edge; the real fix is a flow-ordering "
-            "decision (DT2 belongs after Phase-3 extraction), not a one-line "
-            "blocks_on edit."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml:1128-1152 (DT2: condition line 1135 "
-            "lists phase3/stage3/extracted/*.spef; blocks_on:[DT1]); producer "
-            "flow/phase1_phase2_phase3.yaml:1728,1735 (step 22 required_outputs)"
-        ),
-    ),
-    W.Waiver(
-        step_id="A5",
-        dim=DIM,
-        reason=(
-            "LIVE DEFECT, reproduced, and CIRCULAR: A5's wired gate program "
-            "analog_a5_layout_check builds and reads <block>/drc_clean.flag and "
-            "<block>/lvs_match.flag and requires both to carry a clean verdict "
-            "before A5 can PASS — but those two are A6's declared "
-            "required_outputs, and A6 declares blocks_on:[A5]. So the true data "
-            "dependency runs A5 -> A6 while the declared ordering runs A6 -> A5. "
-            "No blocks_on edit fixes this: adding A5 -> A6 closes a cycle. One of "
-            "the two sides is wrong and a program cannot decide which without the "
-            "design intent (either A5 must stop requiring PV evidence, or the "
-            "A5/A6 split is misdrawn)."
-        ),
-        evidence=(
-            "programs/analog_a5_layout_check.py:237-238 "
-            "`drc_flag = bdir / \"drc_clean.flag\"` / "
-            "`lvs_flag = bdir / \"lvs_match.flag\"` (gate at "
-            "flow/phase1_phase2_phase3.yaml:1323, blocks_on:[A4]); producer A6 at "
-            "flow/phase1_phase2_phase3.yaml:2526, blocks_on:[A5]"
-        ),
-    ),
-    W.Waiver(
-        step_id=18,
-        dim=DIM,
-        reason=(
-            "LIVE DEFECT, reproduced, and UNSATISFIABLE BY EDGE: step 18's gate "
-            "program spare_cell_preservation_check resolves the DEF it audits by "
-            "preferring phase3/stage3/pnr/filled.def (step 34's declared output) "
-            "and falling back to routed.def (step 21's), neither of which is in "
-            "step 18's closure (blocks_on:[17]). On a resumed project both files "
-            "survive from the previous run, so step 18 — spare-cell insertion, "
-            "which runs BEFORE routing and metal fill — audits last run's final "
-            "DEF and reports spare-cell survival that this run never established. "
-            "The dependency cannot be declared: 21 and 34 are both downstream of "
-            "18, so the edge would close a cycle. The fix belongs in the program "
-            "(the caller must name the stage-appropriate DEF), which is why no "
-            "blocks_on value can make this cell green."
-        ),
-        evidence=(
-            "programs/spare_cell_preservation_check.py:314-320 "
-            "`for fname in (\"filled.def\", \"routed.def\")`; producers "
-            "flow/phase1_phase2_phase3.yaml:1673 (step 21 routed.def) and :2295 "
-            "(step 34 filled.def); consumer flow/phase1_phase2_phase3.yaml:1582 "
-            "(step 18, blocks_on:[17])"
-        ),
-    ),
-    W.Waiver(
-        step_id="A7",
-        dim=DIM,
-        reason=(
-            "LIVE DEFECT, reproduced: A7 declares blocks_on:[A6] but A6 is "
-            "declared at yaml index 52 — after step 39 — while A7 sits at index "
-            "23, so this is the flow's only FORWARD edge. flow_compliance_check "
-            "evaluates steps in canonical declaration order and its #503 cascade "
-            "attribution walks each track in that same order taking the first "
-            "FAIL as the cut point, so an A6 FAIL is positioned after A7 and can "
-            "never be attributed as A7's root cause; A7 reports an independent "
-            "gap instead of a downstream consequence. Fixing it means MOVING A6's "
-            "yaml block between A5 and A7, an edit to the shared flow document "
-            "that this module must not make."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml:1365 (A7, blocks_on:[A6]) vs :2526 "
-            "(A6) — A6's declaration index is 52, A7's is 23, measured by "
-            "`[str(s['id']) for s in yaml.safe_load(open(flow))['steps']]`; "
-            "consumer flow_compliance_check.py:6672-6690 (`for sid in order:`)"
-        ),
-    ),
-)
+#:   step 8  — `sdc_exception_correlation_check` reads step 3's
+#:             `reports/phase2/cdc/crossing.json`; step 8 now declares
+#:             `blocks_on: [7, 3]`, and the program reports the per-source read
+#:             STATUS so an unread file can no longer masquerade as "no async
+#:             pair found".
+#:   DT2     — its condition names step 22's SPEF while it was declared at yaml
+#:             index 14 (step 22 at 34), so the edge would have been FORWARD.
+#:             DT2 and DT3 are now declared after step 22 and DT2 declares
+#:             `blocks_on: [DT1, 22]`.
+#:   A5      — CIRCULAR: A5's gate required A6's `drc_clean.flag` /
+#:             `lvs_match.flag` while A6 declares `blocks_on: [A5]`. Broken on
+#:             the A5 side (A6 consumes A5's layout, and the A6 STEP is what
+#:             writes those flags), with A6's block-list roots fixed first so
+#:             nothing went unmeasured.
+#:   18      — UNSATISFIABLE BY EDGE: `spare_cell_preservation_check` at the
+#:             spare-INSERTION step resolved forward to steps 21/34's DEFs. The
+#:             gate now runs only at step 34, whose closure contains them, and
+#:             the program FAILs on an artefact older than `spare_cells.json`.
+#:   A7      — the flow's only FORWARD edge: A6 was declared at index 52 and A7
+#:             at 23. A6's block was MOVED between A5 and A7; nothing about A6
+#:             itself changed.
+#:
+#: The table stays (empty) rather than being deleted so a future dimension-5
+#: waiver has an obvious, reviewed home and still passes
+#: ``test_d5_local_waivers_are_valid``.
+_LOCAL_WAIVERS: Tuple[W.Waiver, ...] = ()
 
 _LOCAL_BY_KEY: Dict[Tuple[str, int], W.Waiver] = {w.key: w for w in _LOCAL_WAIVERS}
 

@@ -91,7 +91,7 @@
 | 15 | Floorplan + PDN | 規劃晶片平面配置與電源網路；插入 tapcell（latch-up well-tie，SKY130 14µm 規則）。 | 網表・hardmacro LEF（`pdk_local/` 自動納入，經 IP 整合檢查：LEF/GDS/Liberty 對齊＋corner 覆蓋＋L21 電源域一致；macro LEF 建議含 obstruction 層） | `floorplan.def`・PDN | OpenROAD (init_floorplan+pdngen+tapcell)<br>`eda_pnr` | `phase3_backend_step`・`floorplan_pdn_check`・`ip_integration_check` |
 | 16 | Clock planning | 規劃時脈樹的分佈策略。 | floorplan | `clock_plan.json` | OpenROAD CTS 規劃 | `clock_plan_check`<br>skills：`cts-plan` |
 | 17 | Placement | 擺放標準元件（全域 + 細部）。 | floorplan・網表 | `placed.def` | OpenROAD (global+detailed place)<br>`eda_pnr` | `placement_legality_check`<br>skills：`placement-optimize` |
-| 18 | Spare-cell + ECO-prep insertion | 預置備用元件與 ECO 預備，讓日後修 bug 只需改金屬層（與 Step 32 ECO 互為前後手：此處預置、Step 32 取用）。 | placed.def | `spare_cells.json`・覆蓋率報告 | OpenROAD<br>`eda_pnr` | `spare_cell_coverage_check`・`spare_cell_preservation_check` |
+| 18 | Spare-cell + ECO-prep insertion | 預置備用元件與 ECO 預備，讓日後修 bug 只需改金屬層（與 Step 32 ECO 互為前後手：此處預置、Step 32 取用）。 | placed.def | `spare_cells.json`・覆蓋率報告 | OpenROAD<br>`eda_pnr` | `spare_cell_coverage_check`（preservation 改在 Step 34 審核：備用元件必須存活的優化步驟都跑完之後） |
 | 19 | CTS | 建構時脈樹、平衡時脈偏移。 | placed.def・clock plan | `post_cts.def`・時脈樹報告 | OpenROAD CTS<br>`eda_pnr` | `cts_quality_check` |
 | 20 | 🔁 Post-CTS hold fixing | 修復時脈樹建好後出現的 hold 違規（繞線後 runner 會再跑一次 hold 修復）。 | post_cts.def | `post_hold.def` | OpenROAD repair_timing -hold | `hold_closure_check`<br>skills：`hold-fix` |
 | 21 | Routing | 完成所有訊號繞線（全域 + 細部）。 | post_hold.def | `routed.def`・router DRC 報告 | OpenROAD TritonRoute<br>`eda_pnr` | `drc_report_check`・`def_stage_progression_check`・`provenance_check` |

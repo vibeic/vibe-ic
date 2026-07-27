@@ -63,9 +63,25 @@ _SKILL = "drc-fix + lvs-triage"
 
 def _load_block_list(project: Path) -> Optional[List[str]]:
     """Return declared analog block names, or None when no block-list
-    file exists at all (digital-only / non-applicable)."""
+    file exists at all (digital-only / non-applicable).
+
+    ROOTS. `phase1/analog/` is the root A6's OWN flow condition names
+    (`condition.files_exist: ["phase1/analog/analog_block_list.json"]`) and the
+    one `_analog_a_check_common.block_list_path` — which every A1-A5 gate uses
+    — has probed since the A-gates were brought in line. This local reader
+    probed only `phase3/analog/` and the legacy `analog/`, so on a project whose
+    block list lives ONLY at the flow-declared root the step's condition fired,
+    the gate ran, and it returned `SKIP (no analog blocks)` with rc=2 —
+    which `flow_compliance_check._run_program` credits as VACUOUS_PASS. A6
+    therefore reported "per-block PV non-applicable" for a project that
+    declares analog blocks: UNMEASURED PRESENTED AS ZERO. Probing the same
+    roots as the shared helper, in the same precedence order (canonical runner
+    root first), closes it; a project carrying neither root still returns None
+    and still SKIPs, so a genuinely digital IC is unaffected.
+    """
     candidates = [
         project / "phase3" / "analog" / "analog_block_list.json",
+        project / "phase1" / "analog" / "analog_block_list.json",
         project / "analog" / "analog_block_list.json",
     ]
     for path in candidates:
@@ -280,6 +296,36 @@ def _lvs_match(bdir: Path) -> Tuple[Optional[bool], str]:
 # ---------------------------------------------------------------------------
 
 
+def _evidence_gap(bdir: Path, flag_name: str, report_globs: List[str]) -> str:
+    """Say WHY there is no parseable evidence, not merely that there is none.
+
+    A6 owns the per-block PV verdict outright since the A5/A6 cycle was broken
+    (see `analog_a5_layout_check`'s SCOPE section). A5's rules distinguished
+    ABSENT / EMPTY / VERDICT-LESS so an operator could tell "run the tool" from
+    "fix the tool's output"; that granularity is preserved here in the finding
+    DETAIL rather than by splitting the rule id, so no existing consumer of
+    `A6_PV_*_NO_EVIDENCE` changes shape. chip-AGNOSTIC: file states only.
+    """
+    reports = [p.name for g in report_globs for p in sorted(bdir.glob(g))]
+    flag = bdir / flag_name
+    if reports:
+        state = (f"report(s) {reports} present but carry no parseable "
+                 f"verdict")
+    elif not flag.is_file():
+        state = f"no report and no {flag_name} (the tool has not run)"
+    else:
+        try:
+            text = flag.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            state = f"{flag_name} unreadable ({exc.__class__.__name__})"
+        else:
+            state = (f"{flag_name} is empty/whitespace — created, not "
+                     f"signed off"
+                     if not text.strip() else
+                     f"{flag_name} carries no verdict line")
+    return state
+
+
 def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
     """Return (status, findings) where status is PASS or FAIL.
     A block whose directory exists but lacks real DRC/LVS evidence is
@@ -304,7 +350,10 @@ def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
             "rel_path": f"{rel}/drc.report|drc_clean.flag",
             "detail": ("no parseable DRC result (need drc.report with a "
                        "violation count, or drc_clean.flag carrying an "
-                       "explicit `violations: 0` line)"),
+                       "explicit `violations: 0` line): "
+                       + _evidence_gap(bdir, "drc_clean.flag",
+                                       ["drc.report", "*.drc.report",
+                                        "*.lyrdb", "drc.rpt", "*.drc"])),
         })
     elif drc_count > 0:
         findings.append({
@@ -320,7 +369,11 @@ def _check_block(project: Path, block: str) -> Tuple[str, List[dict]]:
             "rel_path": f"{rel}/lvs.report|comp.json|lvs_match.flag",
             "detail": ("no parseable LVS result (need lvs.report / "
                        "comp.json with a match verdict, or lvs_match.flag "
-                       "carrying an explicit `match` line)"),
+                       "carrying an explicit `match` line): "
+                       + _evidence_gap(bdir, "lvs_match.flag",
+                                       ["lvs.report", "*.lvs.report",
+                                        "lvs.rpt", "comp.out", "*.lvs",
+                                        "comp.json"])),
         })
     elif lvs_ok is False:
         findings.append({

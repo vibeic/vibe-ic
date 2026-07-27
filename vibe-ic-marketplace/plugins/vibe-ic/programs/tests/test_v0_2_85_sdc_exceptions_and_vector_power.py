@@ -103,3 +103,88 @@ def test_power_json_discloses_analysis_mode():
     window = _P3_SRC[i - 800:i + 400]
     assert "POWER_ANALYSIS_MODE: vector_vcd" in window
     assert "vectorless_sdc" in window
+
+
+# ===========================================================================
+# d5 — the CDC evidence step 8 correlates against belongs to STEP 3, and step 8
+# must both DEPEND on it and SAY when it could not read it.
+#
+# `_known_async_pairs` read reports/phase2/cdc/crossing.json under a bare
+# `except (OSError, ValueError): pass`, so an ABSENT or corrupt report produced
+# an EMPTY known-async set and every legitimate CDC false_path was then reported
+# SDC_EXCEPTION_UNJUSTIFIED — a verdict about the SDC attributed to a file the
+# checker never opened. And step 8 declared `blocks_on: [7]`, whose closure
+# {7, 1, D1} does not reach step 3, so on a resumed project the report it did
+# read could be the PREVIOUS run's.
+# ===========================================================================
+
+
+def test_d5_absent_cdc_evidence_is_disclosed_not_silently_empty(tmp_path):
+    """THE d5 DISCRIMINATOR. No crossing.json, no L8: the report must say so
+    per source, and the per-exception finding must be UNVERIFIABLE, not
+    UNJUSTIFIED."""
+    p = _proj(tmp_path,
+              "set_false_path -from [get_clocks clkA] -to [get_clocks clkB]\n")
+    rep = SEC.audit(p)
+    assert rep["correlation_evidence_read"] == [], rep
+    assert rep["correlation_evidence"][
+        "reports/phase2/cdc/crossing.json"] == "ABSENT", rep
+    cats = {f["category"] for f in rep["findings"]}
+    assert "SDC_EXCEPTION_EVIDENCE_UNREAD" in cats, rep
+    assert "SDC_EXCEPTION_UNVERIFIABLE" in cats, rep
+    assert "SDC_EXCEPTION_UNJUSTIFIED" not in cats, rep
+
+
+def test_d5_corrupt_cdc_evidence_is_disclosed_as_unreadable(tmp_path):
+    """A corrupt crossing.json is not "no crossings" either."""
+    p = _proj(tmp_path,
+              "set_false_path -from [get_clocks clkA] -to [get_clocks clkB]\n",
+              crossings=[])
+    (p / "reports" / "phase2" / "cdc" / "crossing.json").write_text("{not json")
+    rep = SEC.audit(p)
+    assert rep["correlation_evidence"][
+        "reports/phase2/cdc/crossing.json"].startswith("UNREADABLE"), rep
+    assert "SDC_EXCEPTION_EVIDENCE_UNREAD" in {
+        f["category"] for f in rep["findings"]}, rep
+
+
+def test_d5_direction1_present_evidence_still_says_unjustified(tmp_path):
+    """DIRECTION-1 GUARD. When the CDC report IS readable and genuinely
+    declares no matching crossing, the finding must stay UNJUSTIFIED — the
+    disclosure must not soften a real one."""
+    p = _proj(tmp_path,
+              "set_false_path -from [get_clocks clkA] -to [get_clocks clkB]\n",
+              crossings=[{"from_clock": "clkX", "to_clock": "clkY"}])
+    rep = SEC.audit(p)
+    assert rep["correlation_evidence_read"] == [
+        "reports/phase2/cdc/crossing.json"], rep
+    cats = {f["category"] for f in rep["findings"]}
+    assert "SDC_EXCEPTION_UNJUSTIFIED" in cats, rep
+    assert "SDC_EXCEPTION_EVIDENCE_UNREAD" not in cats, rep
+
+
+def test_d5_step8_declares_the_edge_to_the_producer_of_crossing_json():
+    """The flow-side half. Step 8's gate reads step 3's declared
+    `reports/phase2/cdc/crossing.json`, so 3 must be in step 8's blocks_on
+    closure — otherwise step 8 can be marked done before step 3 ever ran and
+    the read silently picks up a PREVIOUS run's report."""
+    import yaml
+    steps = {str(s["id"]): s
+             for s in yaml.safe_load(_YAML)["steps"]}
+    assert "reports/phase2/cdc/crossing.json" in (
+        steps["3"]["required_outputs"])
+
+    graph = {sid: [str(e) for e in (s.get("blocks_on") or [])]
+             for sid, s in steps.items()}
+    closure, queue = set(), list(graph["8"])
+    while queue:
+        n = queue.pop()
+        if n in closure:
+            continue
+        closure.add(n)
+        queue.extend(graph.get(n, []))
+    assert "3" in closure, (graph["8"], sorted(closure))
+    # and the edge must be BACKWARD (declaration order is the evaluation
+    # order), so it can actually cut step 8's cascade.
+    order = [str(s["id"]) for s in yaml.safe_load(_YAML)["steps"]]
+    assert order.index("3") < order.index("8")
