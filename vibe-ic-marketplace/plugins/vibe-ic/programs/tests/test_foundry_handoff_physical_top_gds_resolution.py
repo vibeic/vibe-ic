@@ -45,13 +45,25 @@ def _proj(tmp_path, ic_name="gadget_project", physical_top="gadget_core",
     gen = p / "phase1" / "generated_docs"
     gen.mkdir(parents=True)
     (gen / "L1_DATASHEET.json").write_text(json.dumps({"ic_name": ic_name}))
-    # Required foundry-handoff members (non-empty, no TODO, real pdk).
+    # Required foundry-handoff members (non-empty, no TODO, real pdk). All
+    # FOUR kit members the pack generator emits are written here so these
+    # tests isolate the CHIP-GDS resolution they are about: a kit that is
+    # incomplete on some other member exits SKIP before the chip-GDS verdict
+    # is ever reached. (The gate's `_REQUIRED_FILES` used to name only
+    # mask_spec + wat_plan, which is a separate defect fixed alongside this;
+    # the scribe-line frame is satisfied by the generator's own
+    # `.PENDING_FOUNDRY.txt` note when the foundry has not supplied a .gds.)
     hd = p / "phase3" / "stage4" / "foundry_handoff"
     hd.mkdir(parents=True)
     (hd / "mask_spec.json").write_text(json.dumps(
         {"pdk": "examplepdk_sc_hd", "cell_count": 7}))
     (hd / "wat_plan.json").write_text(json.dumps(
         {"pdk": "examplepdk_sc_hd", "structures": ["gadget"]}))
+    (hd / "corner_test_vectors.json").write_text(json.dumps(
+        {"pdk": "examplepdk_sc_hd", "cell_count": 7}))
+    (hd / "scribe_line_layout.PENDING_FOUNDRY.txt").write_text(
+        "scribe_line_layout.gds is FOUNDRY-SUPPLIED and is NOT generated "
+        f"here.\n# design: {ic_name}\n")
     # Physical top evidence.
     pnr = p / "phase3" / "stage3" / "pnr"
     pnr.mkdir(parents=True)
