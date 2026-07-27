@@ -26,7 +26,18 @@ Failure rules:
                                   `behavioral stub`, `placeholder
                                   hardmacro`, `do not tape out`, ...)
 
-VACUOUS_PASS when `analog/analog_block_list.json` is missing or empty.
+Project-level verdicts (no `--block`):
+  VACUOUS_PASS — no `analog_block_list.json` under `phase3/analog/` or
+                 `phase1/analog/`, or it declares no blocks; or EVERY
+                 declared block is still missing the whole hardmacro triple
+                 (the step has not run at all → defer to
+                 `analog-hardmacro-gen`).
+  INCOMPLETE   — SOME declared blocks were packaged and others produced no
+                 hardmacro at all (exit 1). Step 14 (floorplan) consumes
+                 these LEF abstracts, so an unpackaged declared block is a
+                 macro the digital floorplan cannot reserve area for; the
+                 gate names it instead of certifying the step.
+  PASS         — every declared block cleared every check.
 chip-AGNOSTIC.
 """
 from __future__ import annotations
@@ -36,8 +47,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from _analog_a_check_common import (
+    BLOCK_LIST_ABSENT_REASON,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail,
+    emit_incomplete,
 )
 
 GATE = "analog_a8_hardmacro_gen_check"
@@ -125,8 +138,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):
         return vacuous_pass(GATE, args,
-                            "phase3/analog/analog_block_list.json missing or "
-                            "empty; gate inapplicable.")
+                            BLOCK_LIST_ABSENT_REASON)
 
     blocks = select_blocks(blocks_all or [], args.block)
     if not blocks:
@@ -166,6 +178,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         return vacuous_pass(GATE, args,
                             f"all blocks missing hardmacro triple; "
                             f"defer to skill `{SKILL}`.")
+    if missing_seen:
+        # PARTIAL block coverage — see the A7 note. A8's declared outputs are
+        # the globs `phase3/analog/hardmacro/*/*.lef|lib|gds|v`, each satisfied
+        # by its FIRST match, so one packaged block used to certify the step
+        # for every declared block. That matters more at A8 than anywhere
+        # else on this track: Step 14 (floorplan) consumes the LEF abstracts,
+        # and a declared block with no LEF is a macro the digital floorplan
+        # cannot reserve area for.
+        return emit_incomplete(GATE, args, missing_seen, summary, SKILL)
     return emit_pass(GATE, args, summary)
 
 

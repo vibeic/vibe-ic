@@ -26,7 +26,16 @@ Failure rules:
   A7_POSTSIM_DELTA_TOO_BIG  — abs(delta_pct) > --max-delta-pct
   A7_POSTSIM_NO_A4_SIM      — A4 says SPICE never ran (escape link)
 
-VACUOUS_PASS when `analog/analog_block_list.json` is missing or empty.
+Project-level verdicts (no `--block`):
+  VACUOUS_PASS — no `analog_block_list.json` under `phase3/analog/` or
+                 `phase1/analog/`, or it declares no blocks; or EVERY
+                 declared block is still missing `pre_vs_post.json` (the
+                 step has not run at all → defer to `analog-extraction-resim`).
+  INCOMPLETE   — SOME declared blocks produced a pre-vs-post comparison and
+                 others produced none (exit 1). A7's requirement was never
+                 met for the uncovered blocks, so the gate names them
+                 instead of certifying the step.
+  PASS         — every declared block cleared every check.
 chip-AGNOSTIC.
 """
 from __future__ import annotations
@@ -37,8 +46,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from _analog_a_check_common import (
+    BLOCK_LIST_ABSENT_REASON,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail,
+    emit_incomplete,
 )
 
 GATE = "analog_a7_post_layout_resim_check"
@@ -196,8 +207,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):
         return vacuous_pass(GATE, args,
-                            "phase3/analog/analog_block_list.json missing or "
-                            "empty; gate inapplicable.")
+                            BLOCK_LIST_ABSENT_REASON)
 
     blocks = select_blocks(blocks_all or [], args.block)
     if not blocks:
@@ -238,6 +248,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         return vacuous_pass(GATE, args,
                             f"all {len(missing_seen)} block(s) missing "
                             f"pre_vs_post.json; defer to skill `{SKILL}`.")
+    if missing_seen:
+        # PARTIAL block coverage. Until this change it fell through to
+        # emit_pass, so a run in which `analog-extraction-resim` produced a
+        # pre-vs-post comparison for 1 of N declared blocks certified A7 done
+        # while N-1 declared blocks had been measured on nothing. The flow
+        # declaration cannot catch it: A7's `required_outputs` is the single
+        # glob `phase3/analog/*/pre_vs_post.json`, which is satisfied by its
+        # FIRST match. Per-block coverage is knowable only here.
+        # A1-A5 already emit INCOMPLETE for exactly this shape; A7 did not,
+        # so the same partially-covered project read red at A1-A5 and green
+        # at A7. Same shared emitter, same verdict, same exit code.
+        return emit_incomplete(GATE, args, missing_seen, summary, SKILL)
     return emit_pass(GATE, args, summary)
 
 

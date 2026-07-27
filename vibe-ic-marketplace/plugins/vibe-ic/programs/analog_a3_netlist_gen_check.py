@@ -28,7 +28,9 @@ Note: this is a thin wrapper aligned with
 `analog_artefact_substance_check`'s .sp size rule, plus the additional
 `.subckt` + device-instantiation semantic checks.
 
-VACUOUS_PASS when `analog/analog_block_list.json` is missing or empty.
+VACUOUS_PASS when no `analog_block_list.json` exists under
+`phase3/analog/` (the analog runner's root) or `phase1/analog/` (the
+root every A-step's flow `condition:` names), or it declares no blocks.
 
 INCOMPLETE (rc=1) in project mode when SOME declared blocks have a
 netlist and others have none.
@@ -47,6 +49,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from _analog_a_check_common import (
+    BLOCK_LIST_ABSENT_REASON,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
     resolve_block_artefact,
@@ -148,8 +151,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):
         return vacuous_pass(GATE, args,
-                            "phase3/analog/analog_block_list.json missing or "
-                            "empty; gate inapplicable.")
+                            BLOCK_LIST_ABSENT_REASON)
 
     blocks = select_blocks(blocks_all or [], args.block)
     if not blocks:
