@@ -124,14 +124,39 @@ def test_missing_backing_program_is_disclosed_not_silently_dropped(
 # dim 3 / dim 8 — P0 is present in the report in EVERY outcome, including the
 # all-clean one
 # ---------------------------------------------------------------------------
-def _run_main(tmp_path, monkeypatch, umbrella_return, extra_args=()):
-    """Drive main() with the gate runner replaced by a fixed outcome."""
+def _run_main(tmp_path, monkeypatch, records, extra_args=(),
+              dispatched=True):
+    """Drive main() with the gate runner replaced by a fixed set of RECORDS.
+
+    #497 step 3 — `reasons` is rendered FROM the records, so a stub that states
+    an outcome only in prose states it to nobody. This stub publishes the
+    records and derives its own 4-tuple from them exactly as the real umbrella
+    does, which is what makes the assertions below assertions about the shipped
+    renderer rather than about a fixture's idea of it.
+
+    `dispatched=False` is the no-RTL case: the umbrella considered no gate at
+    all and returns `None` as its tri-state.
+    """
     proj = _project_with_rtl(tmp_path)
-    monkeypatch.setattr(_flow, "_run_structural_rtl_gates",
-                        lambda *a, **k: umbrella_return)
+    fails, skips, waivers = _flow._p0_buckets_from_records(records)
+    executed = (len(fails) == 0) if dispatched else None
+    if not dispatched:
+        skips = [_flow._P0_NO_RTL_NOTE]
+
+    def _stub(_project, **kw):
+        out = kw.get("records_out")
+        if out is not None:
+            out.extend(records)
+        return (executed, fails, skips, waivers)
+
+    monkeypatch.setattr(_flow, "_run_structural_rtl_gates", _stub)
     out = tmp_path / "report.json"
     rc = _flow.main([str(proj), "--json", str(out), *extra_args])
     return rc, json.loads(out.read_text())
+
+
+def _fail(name, msg):
+    return _flow._p0_gate_record(name, "FAIL", msg, {"exit_code": 1})
 
 
 def _p0(report):
@@ -141,8 +166,7 @@ def _p0(report):
 
 def test_all_gates_clean_still_emits_a_P0_step(tmp_path, monkeypatch, capsys):
     """Clean sweep: P0 must appear as an explicit PASS, not disappear."""
-    rc, report = _run_main(tmp_path, monkeypatch, (True, [], [], []),
-                           ("--lenient",))
+    rc, report = _run_main(tmp_path, monkeypatch, [], ("--lenient",))
     p0 = _p0(report)
     assert p0 is not None, (
         "P0 missing from the JSON steps array on an all-clean structural run")
@@ -161,7 +185,7 @@ def test_strict_structural_verdict_is_not_decided_over_an_empty_scope(
     examined nothing. The umbrella result must be in the report for the
     verdict to mean anything.
     """
-    rc, report = _run_main(tmp_path, monkeypatch, (True, [], [], []),
+    rc, report = _run_main(tmp_path, monkeypatch, [],
                            ("--phase", "2", "--strict-structural"))
     assert _p0(report) is not None, (
         "strict-structural verdict computed with no P0 result in scope")
@@ -169,22 +193,27 @@ def test_strict_structural_verdict_is_not_decided_over_an_empty_scope(
 
 
 # --- direction 1: the outcomes that already worked must not change ---------
+# #497 step 3 — these are now GOLDEN-TEXT assertions on the operator-facing
+# rendering, driven from records. Every reason line is stated in full, so a
+# change to the wording, the ordering or the shape selection is a test failure
+# rather than something a reader has to notice.
 def test_failing_umbrella_still_reports_FAIL_with_its_gate_lines(
         tmp_path, monkeypatch):
+    """Form 2: >= 2 failures -> a `Failed gates (N):` header + indented dashes."""
     rc, report = _run_main(
         tmp_path, monkeypatch,
-        (False, ["FAIL: gate_a — boom", "FAIL: gate_b — bang"], [], []),
-        ("--strict",))
+        [_fail("gate_a", "boom"), _fail("gate_b", "bang")], ("--strict",))
     p0 = _p0(report)
     assert p0 is not None and p0["status"] == "FAIL"
-    assert p0["reasons"][0] == "Failed gates (2):"
-    assert p0["reasons"][1:] == ["  - gate_a — boom", "  - gate_b — bang"]
+    assert p0["reasons"] == ["Failed gates (2):",
+                             "  - gate_a — boom",
+                             "  - gate_b — bang"]
     assert rc != 0
 
 
 def test_single_fail_reason_shape_unchanged(tmp_path, monkeypatch):
-    rc, report = _run_main(tmp_path, monkeypatch,
-                           (False, ["FAIL: gate_a — boom"], [], []),
+    """Form 1: exactly one failure -> a single `FAIL: <gate> — <msg>` line."""
+    rc, report = _run_main(tmp_path, monkeypatch, [_fail("gate_a", "boom")],
                            ("--strict",))
     p0 = _p0(report)
     assert p0 is not None and p0["status"] == "FAIL"
@@ -193,23 +222,33 @@ def test_single_fail_reason_shape_unchanged(tmp_path, monkeypatch):
 
 def test_no_rtl_umbrella_still_reports_SKIPPED_CONDITION(
         tmp_path, monkeypatch):
-    """#447: 0/N checkers executed is not a PASS — must stay a skip."""
-    rc, report = _run_main(
-        tmp_path, monkeypatch,
-        (None, [], ["no RTL directory found — structural gates skipped"], []),
-        ("--lenient",))
+    """#447: 0/N checkers executed is not a PASS — must stay a skip.
+
+    #497 step 3 — this line is the umbrella's note about ITSELF: it names no
+    gate, and it is now emitted from the umbrella's tri-state rather than out
+    of the per-gate skip bucket. Its rendering, prefix included, is unchanged.
+    """
+    rc, report = _run_main(tmp_path, monkeypatch, [], ("--lenient",),
+                           dispatched=False)
     p0 = _p0(report)
     assert p0 is not None and p0["status"] == "SKIPPED-CONDITION"
-    assert p0["reasons"] == [
-        "SKIP: no RTL directory found — structural gates skipped"]
+    assert p0["reasons"] == [f"SKIP: {_flow._P0_NO_RTL_NOTE}"]
+    assert p0["gate_records"] == [], (
+        "no gate was considered, so there is no gate record — and the line "
+        "above is not one")
+    assert not any(g in p0["reasons"][0] for g in _flow._STRUCTURAL_RTL_GATES)
 
 
 def test_skips_and_waivers_are_still_listed_verbatim(tmp_path, monkeypatch):
+    """The SKIP and WAIVED-DEFERRED shapes, rendered from their records."""
     waiver = {"gate": "gate_w", "ticket": "T-1", "first_line": "why",
               "review_required": True}
-    rc, report = _run_main(tmp_path, monkeypatch,
-                           (True, [], ["gate_s (SKIP: class N/A)"], [waiver]),
-                           ("--lenient",))
+    rc, report = _run_main(
+        tmp_path, monkeypatch,
+        [_flow._p0_gate_record("gate_s", "SKIP", "class N/A",
+                               {"skip_kind": "class-not-applicable"}),
+         _flow._p0_waiver_record(waiver)],
+        ("--lenient",))
     p0 = _p0(report)
     assert p0 is not None and p0["status"] == "PASS"
     assert p0["reasons"] == [

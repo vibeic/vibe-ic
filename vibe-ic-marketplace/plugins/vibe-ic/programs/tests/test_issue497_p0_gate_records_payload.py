@@ -63,10 +63,16 @@ def _project_with_rtl(tmp_path: Path) -> Path:
 def _buckets_from_records(records):
     """Rebuild (fails, skips, waiver_gates) from the structured records ONLY.
 
-    This is the inverse of the umbrella's per-branch payload construction,
-    written from the record fields alone. It is the projection step 2 will move
-    into ``flow_compliance_check``; here it exists so a drift between the two
-    sides is a test failure rather than a production one.
+    WHAT THIS MEANT AT STEP 1, AND WHAT IT MEANS NOW. When it was written the
+    umbrella AUTHORED its prose buckets in the branch that decided each
+    outcome, and this derivation existed to prove the records could reproduce
+    them — the seam where a drift would have been a production defect. Step 3
+    inverted the umbrella: the buckets are now themselves projected from the
+    records, by ``_p0_buckets_from_records``. So the comparison below is no
+    longer producer-versus-derivation; it is a SECOND, independently written
+    implementation of the same projection, kept deliberately as a cross-check
+    on the shipped one. The line shapes themselves are pinned as golden text in
+    ``test_issue497_step3_reasons_is_a_derived_view``.
     """
     fails, skips, waived = [], [], []
     for r in records:
@@ -165,6 +171,10 @@ def test_prose_is_fully_regenerable_from_the_records(real_run):
     Element for element, in order. This is the seam #497 exists to protect: it
     fails if a new line shape is added without a record, if a record's message
     stops matching the line it stands for, or if the two orders drift.
+
+    Since step 3 the shipped umbrella derives its buckets the same way, so this
+    now cross-checks the shipped projection against a second implementation
+    written from the record fields alone (see ``_buckets_from_records``).
     """
     d_fails, d_skips, d_waived = _buckets_from_records(real_run.records)
     assert d_fails == real_run.fails
