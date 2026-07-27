@@ -381,20 +381,121 @@ def test_the_flow_declares_drc_report_check_with_a_json_audit():
         assert "--json" in c, c
 
 
+#: Suffixes `eda_report_audit` discovers drc reports by (`*drc*.rpt/log/txt`),
+#: used to tell an `--under` scope that names a FILE from one that names a
+#: DIRECTORY. `_in_scope` accepts both: it keeps a path whose resolved form is
+#: relative to the scope root, and a file is relative to itself.
+_REPORT_SUFFIXES = (".rpt", ".log", ".txt")
+
+
+def _under_scopes(cmd: str):
+    """The `--under` scopes a flow-declared command restricts discovery to."""
+    toks = cmd.split()
+    return [toks[i + 1] for i, t in enumerate(toks)
+            if t == "--under" and i + 1 < len(toks)]
+
+
+def _plant_in_scope(proj: Path, cmd: str, body: str = _CLEAN_DRC):
+    """Put an authentic router-DRC report inside each `--under` scope of `cmd`.
+
+    An invocation that SCOPES its discovery can only be exercised by a fixture
+    that puts the evidence where that scope looks. Step 21 declares
+    `--under phase3/stage3/pnr --under reports/phase3/drc_router.rpt`
+    precisely so that Step 31's `reports/phase3/drc_signoff.rpt` — the only
+    report `_project` builds — CANNOT carry it, so on that fixture the audit
+    correctly reported `files_found: 0`, `SCOPE_NOT_FOUND` and `passed: false`.
+    That is the scoping working, not a defect.
+
+    The evidence is derived from the command's own `--under` tokens rather
+    than hardcoded, so a new scoped declaration in the flow is exercised the
+    same way instead of silently reddening. Returns the scopes it planted, so
+    a caller can assert it was not a no-op.
+    """
+    for rel in _under_scopes(cmd):
+        target = proj / rel
+        if target.suffix in _REPORT_SUFFIXES:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body)
+        else:
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "routed.drc.rpt").write_text(body)
+    return _under_scopes(cmd)
+
+
 @pytest.mark.parametrize("cmd", _flow_declared_drc_commands())
 def test_every_flow_declared_invocation_produces_the_file_it_names(tmp_path,
                                                                    cmd):
     """Driven through the REAL gate runner, with the flow's own command string.
     THE regression guard for #490: on v1.7.66 both of these exited 0 and left
-    the path they name empty."""
+    the path they name empty.
+
+    The fixture plants clean evidence inside whatever `--under` scope the
+    command declares (none, for the project-wide Step-31 form). Without that,
+    the SCOPED Step-21 declaration could only ever produce `passed: false` —
+    not because `--json` was dropped, but because its scope deliberately
+    excludes the Step-31 report `_project` writes. Relaxing this assertion to
+    accept `passed: false` was the alternative, and it would have cost the
+    test its ability to tell "the audit landed with a clean verdict" from "a
+    file of some kind appeared".
+    """
     import flow_compliance_check as fcc
     proj = _project(tmp_path)
+    _plant_in_scope(proj, cmd)
     declared = cmd.split("--json", 1)[1].strip()
     passed, _snippet = fcc._check_program_exit_zero(proj, cmd)
     assert (proj / declared).is_file(), (
         f"the flow declares `--json {declared}` and no file appeared there")
-    assert json.loads((proj / declared).read_text())["passed"] is True
+    doc = json.loads((proj / declared).read_text())
+    # Disclose the denominator: a PASS reached over zero discovered reports
+    # would be the vacuous verdict this whole family exists to prevent.
+    assert doc["summary"]["files_found"] >= 1, doc
+    assert doc["passed"] is True
     assert passed is True
+
+
+@pytest.mark.parametrize("cmd", [c for c in _flow_declared_drc_commands()
+                                 if _under_scopes(c)])
+def test_a_scoped_invocation_is_not_carried_by_an_out_of_scope_report(tmp_path,
+                                                                      cmd):
+    """The other direction, and the reason the fixture above had to change: a
+    scoped declaration must NOT go green off a report outside its scope.
+
+    `_project` writes `reports/phase3/drc_signoff.rpt` — STEP 31's KLayout
+    sign-off DRC. Step 21's gate asks about the ROUTER's DRC. Before `--under`
+    existed, step 31's report carried step 21's gate (measured on the real run
+    cited at flow yaml:1683: files_found=5, verdict reached over step 31's
+    report). With nothing planted in scope, the gate must FAIL.
+
+    This is what keeps the fixture change above honest: it proves the planted
+    evidence is what produces the PASS, not the pre-existing report.
+    """
+    import flow_compliance_check as fcc
+    proj = _project(tmp_path)          # step 31's report only; nothing planted
+    passed, _snippet = fcc._check_program_exit_zero(proj, cmd)
+    declared = cmd.split("--json", 1)[1].strip()
+    doc = json.loads((proj / declared).read_text())
+    assert doc["summary"]["files_found"] == 0, (
+        f"an out-of-scope report was discovered by {cmd}: {doc['summary']}")
+    assert doc["passed"] is False
+    assert passed is False
+
+
+@pytest.mark.parametrize("cmd", [c for c in _flow_declared_drc_commands()
+                                 if _under_scopes(c)])
+def test_a_scoped_invocation_still_fails_on_dirty_in_scope_evidence(tmp_path,
+                                                                    cmd):
+    """And the fixture is not a rubber stamp: the same planting with a DIRTY
+    report must FAIL. Otherwise `_plant_in_scope` would be manufacturing a
+    PASS rather than supplying the evidence the scope asks for."""
+    import flow_compliance_check as fcc
+    proj = _project(tmp_path)
+    _plant_in_scope(proj, cmd, body=_DIRTY_DRC)
+    declared = cmd.split("--json", 1)[1].strip()
+    passed, _snippet = fcc._check_program_exit_zero(proj, cmd)
+    doc = json.loads((proj / declared).read_text())
+    assert doc["summary"]["files_found"] >= 1, doc
+    assert doc["passed"] is False
+    assert passed is False
 
 
 @pytest.mark.parametrize("suffix", [

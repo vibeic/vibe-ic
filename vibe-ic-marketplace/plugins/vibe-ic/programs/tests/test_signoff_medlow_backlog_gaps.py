@@ -54,11 +54,21 @@ FLOW_YAML = PLUGIN_ROOT / "flow" / "phase1_phase2_phase3.yaml"
 sys.path.insert(0, str(PROGRAMS))
 
 
-def _run(prog: str, *args: str):
-    """Run a program the way the flow gate does; return (rc, stdout)."""
-    proc = subprocess.run(
+def _run_proc(prog: str, *args: str):
+    """Run a program the way the flow gate does; return the CompletedProcess.
+
+    The mode-pin tests need STDERR as well as stdout: after #489/#490 a REFUSAL
+    and a genuine audit FAIL both exit 1, and only the stream contents tell
+    them apart (a refusal writes nothing to stdout and says why on stderr).
+    """
+    return subprocess.run(
         [sys.executable, str(PROGRAMS / prog), *args],
         capture_output=True, text=True)
+
+
+def _run(prog: str, *args: str):
+    """Run a program the way the flow gate does; return (rc, stdout)."""
+    proc = _run_proc(prog, *args)
     return proc.returncode, proc.stdout
 
 
@@ -377,13 +387,47 @@ def test_power_report_check_never_writes_the_runner_summary(tmp_path):
     assert runner_summary.read_bytes() == before
 
 
+def _assert_refused_not_redirected(proc, foreign_mode: str):
+    """The pinning requirement, asserted against the mechanism that now serves
+    it: the run was REFUSED, and in particular the caller's audit was NOT run.
+
+    Both halves matter. rc alone cannot carry this — a refusal and a genuine
+    audit FAIL both exit 1 — so "refused" must also mean "certified nothing",
+    which is what the empty stdout asserts. `_run_proc` captures both streams.
+
+    Exit 1 and never 2: `flow_compliance_check._check_program_exit_zero`
+    credits rc 2 as a VACUOUS_PASS and returns True UNCONDITIONALLY, so a
+    refusal exiting 2 would turn Step 33 GREEN — a cheaper false certificate
+    than the one being closed.
+    """
+    assert proc.returncode == 1, (
+        f"expected a refusal (rc 1); got rc={proc.returncode}\n"
+        f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}")
+    assert "REFUSED" in proc.stderr, proc.stderr
+    assert proc.stdout.strip() == "", (
+        f"a refusal must certify nothing, but stdout carried an audit: "
+        f"{proc.stdout!r}")
+    assert f"eda_report_audit:{foreign_mode}" not in (proc.stdout + proc.stderr), (
+        f"the caller's `{foreign_mode}` reached the mode dispatcher")
+
+
 def test_power_report_check_pins_power_mode(tmp_path):
     """DIRECTION-1 guard: the wrapper still pins power mode — a caller passing
-    a different --mode cannot turn this into some other audit. Read off stdout
-    so this holds on both trees."""
+    a different --mode cannot turn this into some other audit.
+
+    THE REQUIREMENT IS UNCHANGED; ONLY THE MECHANISM MOVED. #487 satisfied it
+    by silently DROPPING the caller's flag and running the power audit anyway,
+    which is why this could read the pinned mode back off stdout. #489/#490
+    replaced that with an explicit REFUSAL: silently substituting the
+    wrapper's own domain answers a question nobody asked and tells the caller
+    nothing, so the caller believes the audit they named was the audit that
+    ran. Measured on this fixture at the accumulation tip:
+    `--mode drc` -> rc 1, stdout empty, stderr "REFUSED: this wrapper pins
+    `--mode power`".
+    """
     proj = _power_project(tmp_path)
-    _, stdout = _run("power_report_check.py", str(proj), "--mode", "drc")
-    assert json.loads(stdout)["program"] == "eda_report_audit:power"
+    proc = _run_proc("power_report_check.py", str(proj), "--mode", "drc")
+    _assert_refused_not_redirected(proc, "drc")
 
 
 def test_power_report_check_pins_power_mode_in_the_equals_spelling(tmp_path):
@@ -393,10 +437,16 @@ def test_power_report_check_pins_power_mode_in_the_equals_spelling(tmp_path):
     starts with "-", so it was forwarded, arrived AFTER the pinned pair, and
     argparse's last-wins turned Step 33's power gate into an LVS audit.
     Measured before the fix: program == "eda_report_audit:lvs".
+
+    UPDATED with #489/#490, same reasoning as the sibling above: the
+    requirement this test exists for — `--mode=lvs` must not produce an LVS
+    audit under the power gate's name — is unchanged and still asserted. What
+    moved is that the wrapper now refuses rather than quietly auditing power.
+    Measured: rc 1, stdout empty, stderr REFUSED.
     """
     proj = _power_project(tmp_path)
-    _, stdout = _run("power_report_check.py", str(proj), "--mode=lvs")
-    assert json.loads(stdout)["program"] == "eda_report_audit:power"
+    proc = _run_proc("power_report_check.py", str(proj), "--mode=lvs")
+    _assert_refused_not_redirected(proc, "lvs")
 
 
 def test_power_report_check_finds_the_project_after_a_flag_value(tmp_path):
@@ -420,11 +470,28 @@ def test_power_report_check_finds_the_project_after_a_flag_value(tmp_path):
 
 def test_power_report_check_splits_argv_without_stealing_the_flag_value():
     """The splitter itself, on the shape above: the project dir is `.`, and the
-    flag keeps its own argument."""
+    flag keeps its own argument.
+
+    RE-POINTED by #489/#490, not weakened. This called
+    `power_report_check.split_argv` — a LOCAL copy of the splitter that this
+    wrapper carried and that had ALREADY DRIFTED (it knew `("--mode",
+    "--json")` while the shared helper had gained `"--under"`), which is
+    precisely why the family was factored into `_report_check_argv`. So the
+    old symbol pinned an IMPLEMENTATION that was replaced; the REQUIREMENT
+    under it — `--json out.json .` must not resolve the project to `out.json`
+    — is unchanged and is still asserted here.
+
+    It is reached through `split_and_pin` (what this wrapper's `__main__`
+    actually calls) via the WRAPPER's own namespace rather than importing the
+    helper directly, so that re-introducing a private splitter, or dropping
+    the adoption, reddens this test instead of quietly bypassing it.
+    """
     mod = importlib.import_module("power_report_check")
-    proj, passthrough = mod.split_argv(["--json", "out.json", "."])
+    proj, passthrough, refusal = mod.split_and_pin(
+        ["--json", "out.json", "."], mode="power")
     assert proj == "."
     assert passthrough == ["--json", "out.json"]
+    assert refusal is None
 
 
 def test_power_report_check_defaults_project_dir(tmp_path, monkeypatch):
