@@ -150,7 +150,22 @@ def test_flagless_marker_is_refused_by_the_strict_promoter(tmp_path):
 # ── direction-1 guards: must PASS on BOTH trees ───────────────────────────
 
 def guard_strict_promoter_still_requires_flag_and_ownership(tmp_path):
-    """#675-strict ownership rules are only ADDED to, never relaxed."""
+    """#675-strict ownership rules are only ADDED to, never relaxed.
+
+    2026-07-27 (deferred item 8): the positive leg used to hand the promoter a
+    made-up `cap:x`. That made the guard assert, as expected behaviour, the
+    very hole the promoter had — that ANY non-empty string is a believable
+    capability disclosure. Both legs now use a flag
+    `flow_compliance_check._DECLARED_CAPABILITY_GAP_FLAGS` actually declares
+    open, so each leg isolates exactly one refusal cause and the guard tests
+    ownership rather than credulity. The rules it protects are unchanged; a
+    third one (the flag must be declared) was added, never a relaxation.
+
+    Deliberately references no new symbol, so this guard still passes against
+    the pre-registry tree — the registry's own contents are asserted in
+    `test_capability_gap_flag_registry.py`.
+    """
+    declared = "cap:sdf_gatelevel_tb_port_contract"
     d = tmp_path / "phase3/stage3/sim_postlayout"
     d.mkdir(parents=True)
     # no capability_flag -> refused
@@ -162,14 +177,14 @@ def guard_strict_promoter_still_requires_flag_and_ownership(tmp_path):
     # flag but owns a DIFFERENT output -> refused
     (d / "a.json").write_text(json.dumps({
         "verdict": "SKIPPED-CONDITION",
-        "capability_flag": "cap:x",
+        "capability_flag": declared,
         "skips_required_output": ["phase3/stage2/synth/netlist.v"]}))
     assert fcc._declared_sibling_self_skip_for_missing(
         tmp_path, list(_STEP29_OUTPUTS)) is None
     # both present -> promoted
     (d / "a.json").write_text(json.dumps({
         "verdict": "SKIPPED-CONDITION",
-        "capability_flag": "cap:x",
+        "capability_flag": declared,
         "skips_required_output": _STEP29_OUTPUTS}))
     assert fcc._declared_sibling_self_skip_for_missing(
         tmp_path, list(_STEP29_OUTPUTS)) is not None
