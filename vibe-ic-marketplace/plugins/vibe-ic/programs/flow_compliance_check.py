@@ -57,6 +57,7 @@ Waivers (<project>/waivers.json):
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import functools
 import glob
 import json
@@ -66,7 +67,8 @@ import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from types import MappingProxyType
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import _path_layout as _pl
 import _sim_results_bridge as _srb
@@ -1756,36 +1758,149 @@ def _output_claim_matches(declared: str, missing_patterns: List[str]) -> bool:
 #
 # `test_capability_gap_flag_registry.py` keeps this in sync with the producers
 # and explains what its source scan can and cannot see.
-_DECLARED_CAPABILITY_GAP_FLAGS: frozenset = frozenset({
+# 2026-07-27 REVIEW FOLLOW-UP — the flag list alone narrowed only the
+# ENTRANCE. A bare allowlist of NAMES says which claims exist; it says nothing
+# about WHAT each claim covers, so all eleven registered flags were accepted
+# for ANY output. MEASURED against step 31 (Physical Verification — DRC + LVS
+# + ERC), the single most safety-critical gate in the flow: `cap:cdc`,
+# `cap:verilator_coverage_toolchain`, `cap:atpg_signoff_coverage` and
+# `cap:post_layout_spice_correlation` EACH deferred it to SKIPPED-CONDITION.
+# The forgery space went from infinite to eleven; forging a DRC/LVS/ERC
+# deferral with a LEGITIMATE token stayed reachable. The docstring below
+# already asserted this could not happen ("A hard sign-off (DRC/LVS/ERC/STA)
+# has NO disclosed capability gap, so no legitimate runner marker ever defers
+# it") — nothing executed that sentence.
+#
+# So the registry is a MAPPING, flag -> the required-output patterns that flag
+# is entitled to defer, and there is a hard-sign-off DENYLIST that no flag may
+# cross whatever it is bound to. The two are independent on purpose: the
+# binding is the positive statement (this gap explains exactly these absent
+# artefacts) and the denylist is the executable form of the sentence above, so
+# a future registry edit cannot re-open the hole by accident.
+#
+# WHERE EACH BINDING COMES FROM — the producer that mints the flag, not a
+# guess. `skips_required_output` is emitted by exactly two modules, and each
+# emission site pairs one flag with one fixed output set:
+#   design_one_shot_runner._POST_DFT_SKIP_OWN / ._TDF_CAP
+#   phase3_one_shot_runner.atpg_disclose_not_run / step-29 / step-30 markers
+# A flag that no producer ever pairs with `skips_required_output` defers
+# NOTHING here — it is registered because a producer emits the literal in some
+# OTHER contract (a gate's stdout waiver, a `capability_gap` JSON field), and
+# an empty binding states exactly that. Minting a NEW deferral is then the
+# deliberate, reviewed edit the whole design is for: add the output.
+#
+# Patterns are fnmatch globs over the normalized declared output. A glob is
+# safe HERE, unlike in `_output_claim_matches`, because it is an extra AND:
+# the marker must ALSO exactly own one of this step's own missing canonical
+# outputs. The glob can only ever SHRINK what an already-owned claim covers.
+_DECLARED_CAPABILITY_GAP_FLAGS: Mapping[str, Tuple[str, ...]] = MappingProxyType({
     # --- phase2 / design_one_shot_runner ---------------------------------
     # No OSS scan-insertion path produced a library-mapped scan netlist, so
-    # sign-off stuck-at coverage could not be measured.
-    "cap:atpg_signoff_coverage",
+    # sign-off stuck-at coverage could not be measured. Step 11's coverage
+    # artefacts only — scan insertion itself DID run, so the scan netlist is
+    # not covered by this gap.
+    "cap:atpg_signoff_coverage": (
+        "phase2/stage2/dft/coverage.json",
+        "phase2/stage2/dft/atpg_coverage.rpt",
+        "reports/phase2/dft/coverage.json",
+    ),
     # No scan netlist exists to re-optimise (downstream of the above).
-    "cap:post_dft_scan_optimization",
+    # `design_one_shot_runner._POST_DFT_SKIP_OWN`.
+    "cap:post_dft_scan_optimization": (
+        "phase2/stage2/synth/post_dft_netlist.v",
+    ),
     # Transition/at-speed ATPG needs a timing-graded fault model the OSS
-    # ATPG chain does not provide.
-    "cap:at_speed_timing_graded_atpg",
+    # ATPG chain does not provide. `design_one_shot_runner._TDF_CAP` and
+    # `phase3_one_shot_runner._ATPG_COVERAGE_REL` (DT1/DT2/DT3).
+    "cap:at_speed_timing_graded_atpg": (
+        "reports/phase2/dft/transition_coverage.json",
+        "reports/phase2/dft/path_delay_coverage.json",
+        "reports/phase2/dft/sdd_coverage.json",
+    ),
     # A CPU-class design has no reference ISA model to check results against.
-    "cap:cpu_functional_oracle",
+    # Carried as a `capability_gap` FIELD on TB-conformance evidence
+    # (l10_tb_conformance_check, arith_oracle_tb_gen, bit_level_full_stack_tb_
+    # check); no producer ever pairs it with `skips_required_output`.
+    "cap:cpu_functional_oracle": (),
     # An analog verification intent has no digital oracle to check against.
-    "cap:analog_verification_intent_oracle",
+    # Same shape as above (l10_tb_conformance_check).
+    "cap:analog_verification_intent_oracle": (),
     # The spec declares a feature conditionally, with no declared trigger.
-    "cap:conditional_feature_undeclared",
+    # Same shape as above (l10_tb_conformance_check).
+    "cap:conditional_feature_undeclared": (),
     # No CDC engine is wired for this design's clock-domain topology.
-    "cap:cdc",
+    # `cdc_crossing_check` reports it as its own WAIVED-DEFERRED verdict; it
+    # never stands in for another step's absent required output.
+    "cap:cdc": (),
     # The coverage toolchain (verilator --coverage) is unavailable.
-    "cap:verilator_coverage_toolchain",
+    # `verilator_coverage_measure` prints it on its own waiver exit.
+    "cap:verilator_coverage_toolchain": (),
     # --- phase3 / phase3_one_shot_runner ---------------------------------
     # The built-in gate-sim testbench generator binds exactly one port
-    # contract and this design's top ports do not match it.
-    "cap:sdf_gatelevel_tb_port_contract",
+    # contract and this design's top ports do not match it. Step 29 only.
+    "cap:sdf_gatelevel_tb_port_contract": (
+        "phase3/stage3/sim_postlayout/results.log",
+        "phase3/stage3/sim_postlayout/pass.flag",
+    ),
     # No stdcell Verilog simulation model resolves for this cell library.
-    "cap:sdf_gatelevel_pdk_cell_model",
+    # Step 29 only.
+    "cap:sdf_gatelevel_pdk_cell_model": (
+        "phase3/stage3/sim_postlayout/results.log",
+        "phase3/stage3/sim_postlayout/pass.flag",
+    ),
     # Critical-path SPICE correlation needs an extracted transistor netlist +
     # analog stimulus + device models (an analog/mixed-signal capability).
-    "cap:post_layout_spice_correlation",
+    # Step 30 only.
+    "cap:post_layout_spice_correlation": (
+        "phase3/stage3/spice/correlation.json",
+        "reports/phase3/spice_correlation.json",
+    ),
 })
+
+
+# The executable form of "a hard sign-off has NO disclosed capability gap".
+#
+# DRC, LVS, ERC and STA sign-off are the artefacts a tape-out is DEFINED by.
+# The platform declares no capability gap for any of them — it ships and drives
+# the deck for each — so no runner marker can honestly stand in for one, and a
+# marker that claims to is either a bug or a forgery. Either way the step keeps
+# its real status.
+#
+# Matched against the BASENAME of the declared / missing output, case-folded,
+# never against the whole path: every phase3 path contains "sta" inside
+# "stage", and a whole-path test would refuse half the flow.
+# chip-AGNOSTIC — artefact KINDS, never a design / PDK / vendor name.
+#
+# Two lists, because the risk is not symmetric. These names occur in no other
+# word, so a SUBSTRING test is both safe and robust to `drcreport.rpt`-style
+# run-together naming:
+_HARD_SIGNOFF_SUBSTRINGS: Tuple[str, ...] = (
+    "drc",          # reports/phase3/drc_signoff.rpt   (step 31)
+    "lvs",          # reports/phase3/lvs.rpt           (step 31)
+    "netgen",       # the LVS engine's own report name
+    "timing",       # post-route / multi-corner STA    (step 23+)
+    "slack",
+)
+# These DO occur inside ordinary words ("commercial" and "percent" both contain
+# "erc"; "stage" and "instances" both contain "sta"), so they are matched as
+# whole NAME TOKENS only — the basename split on non-alphanumerics:
+_HARD_SIGNOFF_TOKENS: Tuple[str, ...] = (
+    "erc",          # reports/phase3/erc.rpt           (step 31)
+    "sta",          # reports/phase3/sta.rpt           (step 23+)
+    "checklist",    # reports/audit/tapeout_checklist.json (step 36)
+)
+_NAME_TOKEN_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _is_hard_signoff_output(output: str) -> bool:
+    """True when `output` names a DRC / LVS / ERC / STA sign-off artefact —
+    the class of evidence no disclosed capability gap may ever stand in for.
+    Pure."""
+    name = Path(str(output).strip()).name.lower()
+    if any(s in name for s in _HARD_SIGNOFF_SUBSTRINGS):
+        return True
+    tokens = set(_NAME_TOKEN_RE.split(name))
+    return any(t in tokens for t in _HARD_SIGNOFF_TOKENS)
 
 
 def _is_declared_capability_gap(flag: str) -> bool:
@@ -1793,8 +1908,30 @@ def _is_declared_capability_gap(flag: str) -> bool:
 
     Pure. An unregistered flag — a retired one, a typo, or a forged one — is
     not a disclosure the gate can act on: the step keeps its real status.
+
+    Being NAMED is necessary and no longer sufficient: what the flag is
+    entitled to defer is `_capability_flag_may_defer`.
     """
     return flag.strip() in _DECLARED_CAPABILITY_GAP_FLAGS
+
+
+def _capability_flag_may_defer(flag: str, output: str) -> bool:
+    """True when `flag` is registered AND entitled to defer `output`. Pure.
+
+    Three independent refusals, in order:
+      1. the flag is not registered at all;
+      2. `output` is a hard sign-off artefact — no flag defers one, ever;
+      3. `output` is outside the flag's declared binding (a registered flag
+         standing in for an artefact its own gap does not explain).
+    """
+    f = flag.strip()
+    allowed = _DECLARED_CAPABILITY_GAP_FLAGS.get(f)
+    if allowed is None:
+        return False
+    if _is_hard_signoff_output(output):
+        return False
+    o = _norm_out_path(output)
+    return any(fnmatch.fnmatchcase(o, _norm_out_path(pat)) for pat in allowed)
 
 
 def _declared_sibling_self_skip_for_missing(project: Path,
@@ -1823,11 +1960,19 @@ def _declared_sibling_self_skip_for_missing(project: Path,
           legitimate runner marker ever defers it; and an unregistered flag —
           retired, mistyped or forged — is a claim the platform does not make,
           so it defers nothing; and
+      (2b) that flag must be ENTITLED to defer the output it claims —
+          `_capability_flag_may_defer`. Registering a NAME never granted a
+          scope, so until 2026-07-27 all eleven registered flags were accepted
+          for ANY output and `cap:cdc` measurably deferred step 31's DRC/LVS/
+          ERC. The registry now BINDS each flag to the outputs its producer
+          actually stands in for, and `_is_hard_signoff_output` refuses a
+          sign-off artefact for every flag — which is the sentence in (2)
+          finally executing instead of merely being asserted; and
       (3) a `skips_required_output` (str or list) matching one of THIS step's
           missing canonical outputs (EXACT normalized match, see
           `_output_claim_matches`).
-    A marker that omits (2) or (3), or whose `skips_required_output` names a
-    DIFFERENT output, is IGNORED → the step stays MISSING. So a step-12 marker
+    A marker that omits (2), (2b) or (3), or whose `skips_required_output` names
+    a DIFFERENT output, is IGNORED → the step stays MISSING. So a step-12 marker
     (owns `post_dft_netlist.v`) can never mask step-9's `netlist.v`, and a stray
     skip-json in reports/phase3/ can never mask a DRC/LVS sign-off. chip-AGNOSTIC;
     the trust model is the same runner-emitted-evidence one the §4.05 blindness /
@@ -1835,6 +1980,15 @@ def _declared_sibling_self_skip_for_missing(project: Path,
     review-flagged SKIPPED-CONDITION (excluded from executed-PASS), never a clean
     PASS.
     """
+    # A step whose missing evidence INCLUDES a hard sign-off artefact is not
+    # deferrable at all, whatever any marker owns. Checked over the whole
+    # missing set, not just the owned entry: under an ALL-of required_outputs
+    # (step 31 = drc_signoff.rpt + lvs.rpt + erc.rpt) a promotion carries the
+    # WHOLE step to SKIPPED-CONDITION, so owning one non-sign-off member would
+    # otherwise excuse the sign-off members alongside it.
+    if any(_is_hard_signoff_output(p) for p in missing_patterns):
+        return None
+
     seen_dirs: set = set()
     for pat in missing_patterns:
         parent_rel = str(Path(pat).parent)
@@ -1873,9 +2027,17 @@ def _declared_sibling_self_skip_for_missing(project: Path,
                 declared_list = ([declared] if isinstance(declared, str)
                                  else list(declared)
                                  if isinstance(declared, (list, tuple)) else [])
-                if not any(_output_claim_matches(do, missing_patterns)
-                           for do in declared_list if isinstance(do, str)):
+                owned = [do for do in declared_list if isinstance(do, str)
+                         and _output_claim_matches(do, missing_patterns)]
+                if not owned:
                     continue  # marker does not OWN this step's absent output
+                flag_claim = str(data.get("capability_flag", ""))
+                if not any(_capability_flag_may_defer(flag_claim, do)
+                           for do in owned):
+                    # The flag is registered but is not ENTITLED to this
+                    # output: a real gap standing in for an artefact it does
+                    # not explain. The step keeps its real status.
+                    continue
                 try:
                     sib_rel = str(sib.relative_to(project))
                 except ValueError:

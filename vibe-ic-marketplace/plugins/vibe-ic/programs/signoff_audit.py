@@ -228,6 +228,19 @@ def _has_files(project_dir: Path, patterns: List[str],
 #       one.
 # Ranking only ever REORDERS; the pre-sign-off refusal is a separate,
 # separately-named substance rule so the two cannot be confused.
+#
+# 2026-07-27 REVIEW FOLLOW-UP — (1)+(2) narrowed only the ENTRANCE. Because
+# `_gds_rank` returns 0/1/2/3 for every non-draft candidate and the credit
+# condition was `rank != _PRESIGNOFF_RANK`, the GDS slot's EXIT stayed at
+# CREDITED for ANY `.gds` ANYWHERE: a lone `steps/` mirror, a lone stale
+# `foundry_handoff` copy, a stray root-level copy, a 0-byte file at the
+# declared path, and the FOUNDRY-SUPPLIED `scribe_line_layout.gds` frame all
+# still certified Step 36 — identically to the unfixed tree. So a third change
+# applies to the GDS slot only (the netlist/timing slots have no equivalent
+# single declared path):
+#   (3) only `_CREDITABLE_GDS_RANK` (the declared stream-out) may credit, and
+#       only when the file carries GDSII substance (`_gds_stream_substance`).
+#       Every other outcome gets its OWN non-crediting rule name.
 _PRESIGNOFF_MARKERS = (
     "prelim",          # covers "preliminary"
     "draft",
@@ -351,6 +364,85 @@ def _gds_rank(path: Path, project_dir: Path) -> int:
     return 2
 
 
+#: The ONLY rank the tape-out GDS slot may be CREDITED by: the flow's own
+#: declared stream-out artefact, `phase3/stage4/gds/*.gds`.
+#:
+#: 2026-07-27 review of the ranking change above: ranking alone only decided
+#: WHICH file the checklist cites, never WHETHER the slot is credited. The
+#: credit condition was `rank != _PRESIGNOFF_RANK`, so ranks 0/1/2/3 all
+#: credited and ANY `.gds` ANYWHERE certified Step 36. Measured: a lone
+#: `steps/` mirror (rank 2), a lone stale `foundry_handoff` copy (rank 1), a
+#: stray `.gds` at the project root (rank 2) and — worst — the FOUNDRY-SUPPLIED
+#: `scribe_line_layout.gds` (rank 3, an INPUT this file's own comment says
+#: "must never outrank a design GDS") each credited the slot on their own.
+#:
+#: A tape-out GDS slot certifies "the layout that is being taped out exists".
+#: Only the artefact the flow DECLARES as the stream-out — the exact path
+#: step 37's `gds_size_check` / `gds_substance_check` / `provenance_check` are
+#: pointed at — is that layout. Every other candidate is a copy, a mirror, a
+#: work-in-progress hand-off or somebody else's file, so each of them now
+#: produces a NAMED, NON-crediting finding instead of a certificate.
+_CREDITABLE_GDS_RANK = 0
+
+#: A GDSII stream's FIRST record is HEADER: a 4-byte record prologue whose
+#: length is 0x0006 and whose record type is 0x0002 (2-byte-integer data).
+#: Every GDSII writer emits it and nothing else does, so it is the cheapest
+#: fact that separates "a stream-out" from "a file at the stream-out path".
+#: This is the same record `gds_size_check` inspects (it warns; the tape-out
+#: checklist, being the last gate before mask order, refuses to CERTIFY).
+#: chip-AGNOSTIC: a stream-FORMAT fact, never a vendor / PDK / design fact.
+_GDSII_HEADER_RECORD_TYPE = 0x0002
+
+
+def _gds_stream_substance(path: Path) -> str:
+    """Classify a GDS candidate BY ITS OWN BYTES. Pure; stats the file and
+    reads at most 4 bytes.
+
+    Returns:
+      "ok"        — non-empty AND its first record is a GDSII HEADER
+      "empty"     — zero bytes, or unreadable / a dangling symlink
+      "not_gdsii" — carries bytes but does not begin with a GDSII HEADER
+
+    Why the slot needs this at all: `phase3/stage4/gds/<top>.gds` existing is
+    a statement about the FILESYSTEM. Measured, a 0-byte file at exactly that
+    path credited the tape-out GDS slot — the checklist certified a layout
+    that contains nothing. "Non-empty" is the floor; "is actually a GDSII
+    stream" is the same question asked one byte further in, and a 4-byte
+    placeholder is the same defect as a 0-byte one.
+    """
+    try:
+        size = path.stat().st_size          # follows symlinks by design
+    except OSError:
+        return "empty"                      # dangling mirror → no substance
+    if size == 0:
+        return "empty"
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(4)
+    except OSError:
+        return "empty"
+    if len(head) < 4:
+        return "not_gdsii"
+    if ((head[2] << 8) | head[3]) != _GDSII_HEADER_RECORD_TYPE:
+        return "not_gdsii"
+    return "ok"
+
+
+def _gds_rank_note(path: Path, project_dir: Path) -> str:
+    """Plain-language name for WHY a candidate is not the declared stream-out.
+    Used only to make the non-crediting findings self-explanatory."""
+    rank = _gds_rank(path, project_dir)
+    if rank == 3:
+        return ("a FOUNDRY-SUPPLIED frame (scribe line / PCM), which is an "
+                "input, not the design")
+    if rank == 1:
+        return ("an in-phase3 copy / hand-off duplicate, not the declared "
+                "stream-out")
+    if rank == 2:
+        return "a steps/ mirror or an ad-hoc copy"
+    return "not the declared stream-out"
+
+
 def _rank_signoff_first(paths: List[Path], project_dir: Path, ranker) -> List[Path]:
     """Order candidates sign-off-first. Never drops a candidate.
 
@@ -470,26 +562,90 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
     # netgen waiver rather than a genuine match — same demotion contract.
     lvs_power_pin_waived = False
 
-    # (a) GDS — RANKED, and never a pre-sign-off draft.
-    # 2026-07-27: this slot kept the unranked `_has_files(...)[0]` pick after
-    # the netlist and timing slots were fixed, so on the real completed run it
-    # cited a `steps/` mirror symlink instead of the declared stream-out
-    # artefact the step-37 substance gates actually verified. Same two changes
-    # as the two slots below: rank sign-off-first, and refuse to credit the
-    # slot when every candidate declares itself a pre-sign-off intermediate.
+    # (a) GDS — the DECLARED stream-out, with substance. Not "a .gds exists".
+    #
+    # Two separate questions, and the 2026-07-27 ranking change only answered
+    # the first: (i) WHICH candidate does the checklist cite, and (ii) MAY the
+    # slot be credited at all. Ranking alone left (ii) as `rank !=
+    # _PRESIGNOFF_RANK`, i.e. any `.gds` anywhere still certified Step 36 —
+    # a lone `steps/` mirror, a lone stale `foundry_handoff` copy, a stray
+    # root-level copy, a 0-byte file at the declared path, and even the
+    # FOUNDRY-SUPPLIED `scribe_line_layout.gds` frame each did so on its own.
+    #
+    # The slot is credited by ONE thing: the flow's declared stream-out
+    # artefact (`_CREDITABLE_GDS_RANK`, i.e. `phase3/stage4/gds/*.gds` — the
+    # exact path step 37's substance gates verify) carrying actual GDSII
+    # substance (`_gds_stream_substance`). Everything else is DISCLOSED by a
+    # named, NON-crediting finding, mirroring TAPEOUT_GDS_PRESIGNOFF_ONLY:
+    #   TAPEOUT_GDS_EMPTY                  declared path present, 0 bytes
+    #   TAPEOUT_GDS_NOT_A_STREAM           declared path present, not GDSII
+    #   TAPEOUT_GDS_NOT_DECLARED_STREAMOUT only mirrors/copies/foundry frames
+    #   TAPEOUT_GDS_PRESIGNOFF_ONLY        only self-declared drafts
+    #   TAPEOUT_GDS_EXISTS (ERROR)         nothing at all
+    # Ranking still decides which file each finding CITES.
     gds_files = _has_files(project_dir, ["*.gds", "*.gds2", "*.gdsii",
                                           "*.GDS", "*.GDSII"])
     gds_files = _rank_signoff_first(gds_files, project_dir, _gds_rank)
-    gds_signoff = [p for p in gds_files
-                   if _gds_rank(p, project_dir) != _PRESIGNOFF_RANK]
-    if gds_signoff:
-        chosen_gds = gds_signoff[0]
+    gds_declared = [p for p in gds_files
+                    if _gds_rank(p, project_dir) == _CREDITABLE_GDS_RANK]
+    gds_creditable = [p for p in gds_declared
+                      if _gds_stream_substance(p) == "ok"]
+    gds_fallback = [p for p in gds_files
+                    if _gds_rank(p, project_dir) not in (_CREDITABLE_GDS_RANK,
+                                                         _PRESIGNOFF_RANK)]
+    if gds_creditable:
+        chosen_gds = gds_creditable[0]
         evidence["gds"] = True
         evidence_count += 1
         result.findings.append(Finding(
             rule="TAPEOUT_GDS_EXISTS", severity="INFO",
-            message=f"GDS file found: {chosen_gds.name}",
+            message=(f"Declared stream-out GDS found: {chosen_gds.name} "
+                     f"({chosen_gds.stat().st_size} bytes, GDSII HEADER "
+                     f"record present)"),
             file=str(chosen_gds)))
+    elif gds_declared:
+        # The declared path IS populated — and the file there is not a layout.
+        # Naming it is the disclosure; the slot is not credited.
+        evidence["gds"] = False
+        _worst = gds_declared[0]
+        _substance = {p: _gds_stream_substance(p) for p in gds_declared}
+        _byted = [p for p in gds_declared if _substance[p] == "not_gdsii"]
+        if _byted:
+            _cite = _byted[0]
+            result.findings.append(Finding(
+                rule="TAPEOUT_GDS_NOT_A_STREAM", severity="ERROR",
+                message=(f"Declared stream-out '{_cite.name}' "
+                         f"({_cite.stat().st_size} bytes) does not begin with "
+                         f"a GDSII HEADER record — it is a file at the "
+                         f"stream-out path, not a stream-out. The tape-out "
+                         f"checklist certifies a LAYOUT, not a filename "
+                         f"(#437a). Re-run Step 37 stream-out."),
+                file=str(_cite)))
+        else:
+            result.findings.append(Finding(
+                rule="TAPEOUT_GDS_EMPTY", severity="ERROR",
+                message=(f"Declared stream-out '{_worst.name}' is present but "
+                         f"carries no bytes (or is unreadable / a dangling "
+                         f"mirror) — an empty file is not the GDS a tape-out "
+                         f"is signed off on. Re-run Step 37 stream-out."),
+                file=str(_worst)))
+    elif gds_fallback:
+        # Candidates exist, none of them is the declared stream-out. This is
+        # the exact shape the ranking change alone still certified.
+        evidence["gds"] = False
+        _cite = gds_fallback[0]
+        _names = ", ".join(sorted({p.name for p in gds_fallback})[:5])
+        result.findings.append(Finding(
+            rule="TAPEOUT_GDS_NOT_DECLARED_STREAMOUT", severity="ERROR",
+            message=(f"No declared stream-out GDS "
+                     f"(phase3/stage4/gds/<top>.gds). The only GDS(es) found "
+                     f"({_names}) rank below it — best candidate "
+                     f"'{_cite.name}' is "
+                     f"{_gds_rank_note(_cite, project_dir)}. A mirror, a "
+                     f"copy or a foundry-supplied frame is not the layout a "
+                     f"tape-out is signed off on; stream out Step 37 before "
+                     f"claiming Step 36."),
+            file=str(_cite)))
     elif gds_files:
         # Candidates exist but every one of them DECLARES itself a
         # pre-sign-off intermediate. Naming the files is the disclosure; the

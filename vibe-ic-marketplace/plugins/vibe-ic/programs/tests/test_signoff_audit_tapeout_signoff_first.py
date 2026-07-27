@@ -48,7 +48,10 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import signoff_audit as sa  # noqa: E402
+import _gdsii  # noqa: E402
 
 
 # --- netgen transcripts (shared shape with test_lvs_tapeout_signoff.py) ----
@@ -96,7 +99,7 @@ def _lvs(proj: Path, blob: str = _LVS_MATCH) -> Path:
 def _four_slots(proj: Path) -> Path:
     """gds + a sign-off-grade netlist + a sign-off-grade STA + clean DRC.
     Deliberately NO LVS report — the D2 fixture."""
-    _write(proj / "phase3" / "stage4" / "gds" / "top.gds", "GDS")
+    _gdsii.write_declared_streamout(proj, "top.gds")
     _write(proj / "phase3" / "stage3" / "pnr" / "top_pnr.v",
            "module top(); endmodule\n")
     _write(proj / "phase3" / "stage3" / "sta" / "post_route_timing.rpt",
@@ -154,7 +157,7 @@ def test_prelim_dft_netlist_never_outranks_the_postroute_netlist(tmp_path):
 def test_only_prelim_netlist_does_not_certify_the_netlist_slot(tmp_path):
     """A preliminary netlist is not the netlist a tape-out is signed off on.
     The gate DISCLOSES what it found and still refuses to credit the slot."""
-    _write(tmp_path / "phase3" / "stage4" / "gds" / "top.gds", "GDS")
+    _gdsii.write_declared_streamout(tmp_path, "top.gds")
     _write(tmp_path / "phase2" / "stage2" / "dft" / "scan_netlist_prelim.v",
            "module top(); endmodule\n")
     _write(tmp_path / "phase3" / "stage3" / "sta" / "post_route_timing.rpt",
@@ -202,7 +205,7 @@ def test_steps_mirror_symlink_loses_the_tie_to_the_real_file(tmp_path):
 def test_only_pre_layout_sta_does_not_certify_the_timing_slot(tmp_path):
     """The measured citation was `pre_pnr_timing.rpt`. When that is ALL a
     project has, the timing slot must not be credited at all."""
-    _write(tmp_path / "phase3" / "stage4" / "gds" / "top.gds", "GDS")
+    _gdsii.write_declared_streamout(tmp_path, "top.gds")
     _write(tmp_path / "phase3" / "stage3" / "pnr" / "top_pnr.v",
            "module top(); endmodule\n")
     _write(tmp_path / "phase3" / "stage3" / "sta" / "pre_pnr_timing.rpt",

@@ -11,7 +11,17 @@ SCRIPT = Path(__file__).parent.parent / 'signoff_audit.py'
 assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 
 sys.path.insert(0, str(SCRIPT.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 import signoff_audit as sa  # noqa: E402
+import _gdsii  # noqa: E402
+
+# 2026-07-27 (review follow-up): the tape-out GDS slot is credited ONLY by the
+# flow's declared stream-out artefact (`phase3/stage4/gds/*.gds`) carrying real
+# GDSII substance. These fixtures used to drop `"binary gds data"` into a
+# root-level `chip.gds` and expect a certificate — which is exactly the
+# "existence-only" shape the slot was tightened to refuse. They now write a
+# real minimal stream at the declared path; nothing about what each test is
+# ABOUT changes, only that its tape-out artefact is now a tape-out artefact.
 
 # 2026-07-27: tapeout mode gained a FIFTH evidence pillar (LVS). These
 # fixtures predate it and asserted a tape-out could be signed off with no
@@ -35,7 +45,7 @@ def _lvs_signoff(proj):
 # Tapeout mode
 # ---------------------------------------------------------------------------
 def test_tapeout_all_evidence_pass(tmp_path):
-    (tmp_path / "chip.gds").write_text("binary gds data")
+    _gdsii.write_declared_streamout(tmp_path, "chip.gds")
     (tmp_path / "netlist_mapped.v").write_text("module top(); endmodule")
     (tmp_path / "timing_final.rpt").write_text("timing report")
     (tmp_path / "drc_clean.rpt").write_text("Total violations: 0\n")  # parseable count (#437a)
@@ -53,7 +63,7 @@ def test_tapeout_3_of_4_strict_fails(tmp_path):
     2026-07-27: the denominator is 5 (LVS pillar added); this fixture has
     gds + netlist + timing = 3, so it is now 3-of-5 and still FAILs.
     """
-    (tmp_path / "chip.gds").write_text("binary gds data")
+    _gdsii.write_declared_streamout(tmp_path, "chip.gds")
     (tmp_path / "synth_netlist.v").write_text("module top(); endmodule")
     (tmp_path / "sta_report.rpt").write_text("timing report")
     # No DRC report, no LVS report — 3 evidence slots
@@ -69,7 +79,7 @@ def test_tapeout_3_of_4_strict_fails(tmp_path):
 def test_tapeout_3_of_4_strict_fail(tmp_path):
     """v1.6.21: lenient mode removed — partial evidence must FAIL strictly.
     2026-07-27: denominator 4 → 5 (LVS pillar)."""
-    (tmp_path / "chip.gds").write_text("binary gds data")
+    _gdsii.write_declared_streamout(tmp_path, "chip.gds")
     (tmp_path / "synth_netlist.v").write_text("module top(); endmodule")
     (tmp_path / "sta_report.rpt").write_text("timing report")
 
@@ -82,7 +92,7 @@ def test_tapeout_3_of_4_strict_fail(tmp_path):
 def test_tapeout_4_of_5_without_lvs_fails(tmp_path):
     """2026-07-27: the four legacy slots complete, LVS absent → still FAIL.
     A tape-out is DEFINED by a genuine layout-vs-schematic match."""
-    (tmp_path / "chip.gds").write_text("binary gds data")
+    _gdsii.write_declared_streamout(tmp_path, "chip.gds")
     (tmp_path / "netlist_mapped.v").write_text("module top(); endmodule")
     (tmp_path / "timing_final.rpt").write_text("timing report")
     (tmp_path / "drc_clean.rpt").write_text("Total violations: 0\n")
@@ -95,7 +105,7 @@ def test_tapeout_4_of_5_without_lvs_fails(tmp_path):
 
 
 def test_tapeout_1_of_4_fail(tmp_path):
-    (tmp_path / "chip.gds").write_text("binary gds data")
+    _gdsii.write_declared_streamout(tmp_path, "chip.gds")
     # Only 1 evidence file
 
     result = sa._check_tapeout(tmp_path)
@@ -158,15 +168,15 @@ def test_tapeout_pdk_gds_does_not_count_as_design_gds(tmp_path):
 
 
 def test_tapeout_design_gds_outside_input_passes(tmp_path):
-    """Mirror test: same project layout but the design GDS sits at
-    gds/<top>.gds at the project root — that one must count."""
+    """Mirror test: same project layout but the design GDS sits at the flow's
+    declared stream-out path, phase3/stage4/gds/<top>.gds — that one counts."""
     pdk_gds_dir = tmp_path / "input" / "pdk" / "gds"
     pdk_gds_dir.mkdir(parents=True)
     (pdk_gds_dir / "stdcell.gds").write_text("pdk stdcell binary")
     # Design output at the proper location
     design_gds_dir = tmp_path / "phase3" / "stage4" / "gds"
     design_gds_dir.mkdir(parents=True, exist_ok=True)
-    (design_gds_dir / "chip_top.gds").write_text("design gds binary")
+    _gdsii.write_gdsii(design_gds_dir / "chip_top.gds")
     (tmp_path / "synth_netlist.v").write_text("module chip_top(); endmodule")
     (tmp_path / "timing_final.rpt").write_text("timing report")
     (tmp_path / "drc_clean.rpt").write_text("Total violations: 0\n")  # parseable count (#437a)

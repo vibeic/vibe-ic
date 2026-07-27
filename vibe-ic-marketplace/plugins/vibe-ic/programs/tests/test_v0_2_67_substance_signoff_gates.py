@@ -25,6 +25,15 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gdsii  # noqa: E402
+
+# 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
+# declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
+# carries real GDSII substance. This file's subject is not the GDS slot; it
+# just needs that slot satisfied, so its tape-out artefact is now a real
+# minimal GDSII stream at the declared path rather than a text placeholder.
+
 from _source_pin import func_src
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -41,7 +50,7 @@ _P3_SRC = (PLUGIN / "programs" / "phase3_one_shot_runner.py").read_text()
 
 def _tapeout_base(tmp_path):
     (tmp_path / "phase3" / "stage4" / "gds").mkdir(parents=True)
-    (tmp_path / "phase3/stage4/gds/chip_top.gds").write_text("gds binary")
+    _gdsii.write_gdsii(tmp_path / "phase3/stage4/gds/chip_top.gds")
     (tmp_path / "synth_netlist.v").write_text("module chip_top(); endmodule")
     (tmp_path / "timing_final.rpt").write_text("timing report")
     # 2026-07-27: tapeout mode gained a fifth LVS pillar. This fixture is

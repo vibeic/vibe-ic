@@ -31,6 +31,39 @@ DIRECTION OF THE GUARD: it asserts the claimed flag IS ON the declared list.
 The tempting alternative — a denylist of known-retired flags — passes for every
 name nobody has thought of yet, which is the hole itself.
 
+--------------------------------------------------------------------------
+REVIEW FOLLOW-UP (2026-07-27) — a NAME is not a SCOPE
+--------------------------------------------------------------------------
+The allowlist of names narrowed only the ENTRANCE. Nothing bound a flag to the
+outputs it is entitled to explain, so all eleven registered flags were accepted
+for ANY output. RE-MEASURED against step 31 (Physical Verification — DRC + LVS
++ ERC), the most safety-critical gate in the flow, on the pre-review tree:
+
+    cap:cdc                          -> step 31 deferred to SKIPPED-CONDITION
+    cap:verilator_coverage_toolchain -> step 31 deferred
+    cap:atpg_signoff_coverage        -> step 31 deferred
+    cap:post_layout_spice_correlation-> step 31 deferred
+
+`_declared_sibling_self_skip_for_missing`'s own docstring already asserted this
+was impossible — "A hard sign-off (DRC/LVS/ERC/STA) has NO disclosed capability
+gap, so no legitimate runner marker ever defers it" — and nothing executed that
+sentence. The forgery space had gone from infinite to eleven; forging a DRC
+deferral with a LEGITIMATE token was still reachable.
+
+FIX, two independent mechanisms:
+  * `_DECLARED_CAPABILITY_GAP_FLAGS` is a MAPPING, flag -> the required-output
+    patterns that flag may defer, taken from the producer that mints it. A flag
+    no producer ever pairs with `skips_required_output` maps to () and defers
+    nothing.
+  * `_is_hard_signoff_output` refuses DRC / LVS / ERC / STA artefacts for EVERY
+    flag, and `_declared_sibling_self_skip_for_missing` bails before looking at
+    any marker when the step's missing set contains one — so under an ALL-of
+    required_outputs a marker owning a non-sign-off member cannot carry the
+    sign-off members along with it.
+
+The tests below drive both through the promoter and through `check_step`; none
+asserts on source text.
+
 COST, stated plainly: this turns things RED, not green. Any project whose only
 excuse for an absent sign-off artefact is an unregistered capability flag now
 reports MISSING (strict rc 1) where it used to report SKIPPED-CONDITION. On the
@@ -74,6 +107,16 @@ _REGISTERED = "cap:post_dft_scan_optimization"
 _STEP12_OUT = "phase2/stage2/synth/post_dft_netlist.v"
 _STEP29_OUTS = ["phase3/stage3/sim_postlayout/results.log",
                 "phase3/stage3/sim_postlayout/pass.flag"]
+#: Step 31 — Physical Verification (DRC + LVS + ERC), an ALL-of required_outputs
+#: set, straight out of `flow/phase1_phase2_phase3.yaml`.
+_STEP31_OUTS = ["reports/phase3/drc_signoff.rpt",
+                "reports/phase3/lvs.rpt",
+                "reports/phase3/erc.rpt"]
+#: Step 30 — the one registered flag whose own binding is a real deferral, used
+#: to show the flag is refused OUTSIDE its binding and accepted inside it.
+_STEP30_OUTS = ["phase3/stage3/spice/correlation.json",
+                "reports/phase3/spice_correlation.json"]
+_SPICE_CAP = "cap:post_layout_spice_correlation"
 
 
 def _marker(proj: Path, rel_dir: str, flag, outs, name="x_not_run.json") -> Path:
@@ -149,6 +192,162 @@ def test_a_registered_flag_is_matched_exactly_not_by_prefix(tmp_path):
                 name="post_dft_not_run.json")
         assert fcc._declared_sibling_self_skip_for_missing(
             tmp_path, [_STEP12_OUT]) is None, near_miss
+
+
+# ===========================================================================
+# a REGISTERED flag is not a skeleton key — flag -> output binding
+# ===========================================================================
+@pytest.mark.parametrize("flag", ["cap:cdc",
+                                  "cap:verilator_coverage_toolchain",
+                                  "cap:atpg_signoff_coverage",
+                                  _SPICE_CAP])
+def test_a_registered_flag_cannot_defer_a_hard_signoff(tmp_path, flag):
+    """THE MEASURED DEFECT. Each of these four deferred step 31's DRC/LVS/ERC
+    on the pre-review tree. A hard sign-off has no disclosed capability gap, so
+    none of them — nor any flag invented later — may defer one."""
+    _marker(tmp_path, "reports/phase3", flag, _STEP31_OUTS,
+            name="pv_not_run.json")
+    assert fcc._declared_sibling_self_skip_for_missing(
+        tmp_path, list(_STEP31_OUTS)) is None
+
+
+def test_step_31_stays_missing_end_to_end_under_a_registered_flag(tmp_path):
+    """The OBSERVABLE property through `check_step`, on the real step-31
+    required_outputs. A neutral step id keeps the #430 step-id table out of it.
+    """
+    _marker(tmp_path, "reports/phase3", "cap:cdc", _STEP31_OUTS,
+            name="pv_not_run.json")
+    step = {"id": 998, "name": "Physical Verification",
+            "required_outputs": list(_STEP31_OUTS)}
+    res = fcc.check_step(tmp_path, step, waivers={})
+    assert res.status == "MISSING", (res.status, res.reasons)
+    assert res.self_skip_disclosed is False
+
+
+def test_owning_one_member_cannot_carry_the_signoff_members_along(tmp_path):
+    """The ALL-of masking vector, isolated. A promotion moves the WHOLE step to
+    SKIPPED-CONDITION, so a marker owning a step's ONE non-sign-off missing
+    output would otherwise excuse its DRC/LVS/ERC outputs beside it.
+
+    The marker here is FULLY legitimate — the right flag, inside its binding,
+    owning an output it really does explain (`test_the_same_flag_inside_its_
+    binding_still_defers` shows the very same marker promoting). The ONLY
+    difference is that a sign-off artefact has joined the missing set, so
+    nothing but the whole-set sign-off check can produce this refusal.
+    """
+    outs = list(_STEP30_OUTS) + ["reports/phase3/drc_signoff.rpt"]
+    _marker(tmp_path, "phase3/stage3/spice", _SPICE_CAP, _STEP30_OUTS,
+            name="spice_correlation_not_run.json")
+    assert fcc._declared_sibling_self_skip_for_missing(tmp_path, outs) is None
+
+
+def test_a_registered_flag_outside_its_binding_defers_nothing(tmp_path):
+    """`cap:post_layout_spice_correlation` is a REAL open gap with a REAL
+    deferral — of step 30's correlation artefacts. It does not explain a
+    missing post-DFT netlist, and a marker claiming it does is refused."""
+    _marker(tmp_path, "phase2/stage2/synth", _SPICE_CAP, _STEP12_OUT,
+            name="post_dft_not_run.json")
+    assert fcc._declared_sibling_self_skip_for_missing(
+        tmp_path, [_STEP12_OUT]) is None
+
+
+def test_the_same_flag_inside_its_binding_still_defers(tmp_path):
+    """Direction check on the test above — the ONLY difference between the two
+    is which output the marker claims."""
+    _marker(tmp_path, "phase3/stage3/spice", _SPICE_CAP, _STEP30_OUTS,
+            name="spice_correlation_not_run.json")
+    hint = fcc._declared_sibling_self_skip_for_missing(
+        tmp_path, list(_STEP30_OUTS))
+    assert hint and _SPICE_CAP in hint
+
+
+@pytest.mark.parametrize("flag", ["cap:cdc",
+                                  "cap:verilator_coverage_toolchain",
+                                  "cap:cpu_functional_oracle",
+                                  "cap:analog_verification_intent_oracle",
+                                  "cap:conditional_feature_undeclared"])
+def test_flags_no_producer_pairs_with_an_output_defer_nothing(tmp_path, flag):
+    """These five are registered because a producer emits the literal in ANOTHER
+    contract (a gate's own waiver verdict, a `capability_gap` evidence field).
+    None is ever paired with `skips_required_output`, so none stands in for an
+    absent required output here. Driven on step 12's real output."""
+    _marker(tmp_path, "phase2/stage2/synth", flag, _STEP12_OUT,
+            name="post_dft_not_run.json")
+    assert fcc._declared_sibling_self_skip_for_missing(
+        tmp_path, [_STEP12_OUT]) is None
+
+
+def test_the_hard_signoff_denylist_and_the_bindings_cannot_overlap():
+    """A STRUCTURAL invariant, so a future registry edit cannot re-open the
+    hole by binding a flag to a sign-off artefact: no pattern any flag is bound
+    to may name one."""
+    bound = [pat
+             for pats in fcc._DECLARED_CAPABILITY_GAP_FLAGS.values()
+             for pat in pats]
+    assert bound, "every binding empty would make this vacuous"
+    offenders = [p for p in bound if fcc._is_hard_signoff_output(p)]
+    assert not offenders, offenders
+
+
+def test_the_denylist_recognises_signoff_artefacts_and_not_ordinary_ones():
+    """Unit pin on `_is_hard_signoff_output`. The negative half matters as much
+    as the positive one: it is matched on the BASENAME (every phase3 path
+    contains "sta" inside "stage"), and the ambiguous names are matched as
+    whole tokens ("commercial" and "percent" both contain "erc")."""
+    for out in ("reports/phase3/drc_signoff.rpt",
+                "reports/phase3/drcreport.rpt",     # run-together naming
+                "reports/phase3/lvs.rpt",
+                "reports/phase3/erc.rpt",
+                "reports/phase3/erc_summary.json",
+                "reports/phase3/netgen_lvs.log",
+                "phase3/stage3/sta/post_route_timing.rpt",
+                "reports/phase3/sta.rpt",
+                "reports/phase3/setup_slack.json",
+                "reports/audit/tapeout_checklist.json"):
+        assert fcc._is_hard_signoff_output(out), out
+    for out in ("phase2/stage2/synth/post_dft_netlist.v",
+                "phase3/stage3/sim_postlayout/results.log",
+                "phase3/stage3/sim_postlayout/pass.flag",
+                "phase3/stage3/spice/correlation.json",
+                "reports/phase3/spice_correlation.json",
+                "reports/phase2/dft/coverage.json",
+                "reports/phase2/dft/transition_coverage.json",
+                "reports/phase2/dft/path_delay_coverage.json",
+                "reports/phase2/dft/sdd_coverage.json",
+                "phase3/stage4/gds/chip_top.gds",
+                "phase3/stage3/pnr/instances.rpt",   # "sta" inside "instances"
+                "reports/phase3/percentage.json",    # "erc" inside "percent"
+                "reports/phase3/commercial_pdk.json"):  # "erc" in "commercial"
+        assert not fcc._is_hard_signoff_output(out), out
+
+
+def test_every_producer_binding_is_honoured(tmp_path):
+    """Completeness in the OTHER direction: each flag a producer actually pairs
+    with `skips_required_output` still defers the outputs that producer names.
+    Sourced from `design_one_shot_runner` / `phase3_one_shot_runner`, so a
+    binding that drifts away from its producer turns this red."""
+    cases = [
+        ("cap:post_dft_scan_optimization", "phase2/stage2/synth",
+         [_STEP12_OUT]),
+        ("cap:at_speed_timing_graded_atpg", "reports/phase2/dft",
+         ["reports/phase2/dft/transition_coverage.json"]),
+        ("cap:at_speed_timing_graded_atpg", "reports/phase2/dft",
+         ["reports/phase2/dft/path_delay_coverage.json"]),
+        ("cap:at_speed_timing_graded_atpg", "reports/phase2/dft",
+         ["reports/phase2/dft/sdd_coverage.json"]),
+        ("cap:atpg_signoff_coverage", "phase2/stage2/dft",
+         ["phase2/stage2/dft/coverage.json"]),
+        ("cap:sdf_gatelevel_tb_port_contract", "phase3/stage3/sim_postlayout",
+         list(_STEP29_OUTS)),
+        ("cap:sdf_gatelevel_pdk_cell_model", "phase3/stage3/sim_postlayout",
+         list(_STEP29_OUTS)),
+        (_SPICE_CAP, "phase3/stage3/spice", list(_STEP30_OUTS)),
+    ]
+    for i, (flag, rel_dir, outs) in enumerate(cases):
+        proj = tmp_path / f"case{i}"
+        _marker(proj, rel_dir, flag, outs, name="producer_not_run.json")
+        hint = fcc._declared_sibling_self_skip_for_missing(proj, list(outs))
+        assert hint and flag in hint, (flag, outs)
 
 
 # ===========================================================================

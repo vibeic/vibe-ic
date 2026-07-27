@@ -8,6 +8,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gdsii  # noqa: E402
+
+# 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
+# declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
+# carries real GDSII substance. This file's subject is not the GDS slot; it
+# just needs that slot satisfied, so its tape-out artefact is now a real
+# minimal GDSII stream at the declared path rather than a text placeholder.
+
 PROGRAMS_DIR = Path(__file__).resolve().parent.parent
 
 # Padding to clear MIN_REPORT_BYTES thresholds (1-2 KB per mode).
@@ -160,7 +169,7 @@ class TestTapeoutSignoffCheck:
         assert _run_wrapper("tapeout_signoff_check.py", str(tmp_path)) == 1
 
     def test_with_evidence_passes(self, tmp_path):
-        (tmp_path / "design.gds").write_text("GDS")
+        _gdsii.write_declared_streamout(tmp_path, "design.gds")
         (tmp_path / "netlist.v").write_text("module top; endmodule")
         (tmp_path / "timing.rpt").write_text("WNS=0")
         # #437(a): the tapeout DRC slot now gates on a PARSED violation

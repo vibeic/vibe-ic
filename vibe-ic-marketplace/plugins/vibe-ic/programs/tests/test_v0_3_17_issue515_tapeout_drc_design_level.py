@@ -24,6 +24,15 @@ literal; the rule names are foundry rule-layer tokens, not a chip identity.
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gdsii  # noqa: E402
+
+# 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
+# declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
+# carries real GDSII substance. This file's subject is not the GDS slot; it
+# just needs that slot satisfied, so its tape-out artefact is now a real
+# minimal GDSII stream at the declared path rather than a text placeholder.
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import signoff_audit as audit  # noqa: E402
 
@@ -62,7 +71,7 @@ def _proj(tmp_path, drc_text=None, drc_name="drc_signoff.rpt"):
     every case here would FAIL on the missing LVS evidence and stop
     discriminating the DRC tiers it exists to pin. Evidence denominators
     below moved 4 → 5 accordingly."""
-    (tmp_path / "chip_top.gds").write_text("HEADER")
+    _gdsii.write_declared_streamout(tmp_path, "chip_top.gds")
     (tmp_path / "chip_top_synth.v").write_text("module chip_top();endmodule\n")
     (tmp_path / "sta_timing.rpt").write_text("slack 0.1\n")
     (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
