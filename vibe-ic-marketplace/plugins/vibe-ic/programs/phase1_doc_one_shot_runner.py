@@ -1335,6 +1335,127 @@ def _v1_6_558_is_image_derived_source(fname):
     return bool(_V1_6_558_IMAGE_SOURCE_RE.search(fname))
 
 
+# ---------------------------------------------------------------------------
+# for #454 — Strategy-2 ROW-SHAPE refusal.
+#
+# The Strategy-2 walkers (`_V1_6_558_OPCODE_PAT` / `_V1_6_245_BARE_OPCODE_PAT`)
+# match a `<hex> <MNEMONIC>` pair on any single line of any extracted doc.
+# The opcode-synthesis precondition is a DOCUMENT-level gate, so once it
+# opens the walkers scrape the WHOLE document — including chapters that
+# have the same two-column shape but carry no commands at all:
+#
+#   * a connector / pin-assignment table  -> `<pin index> <signal name>`
+#   * a rate or capacity prose line       -> `<number> <unit>`
+#   * a numeric-range declaration         -> `<lo>-<hi>` (the HI is matched)
+#
+# Each scraped row then receives a synthetic `response_opcode_hex = op + 1`
+# and a single-byte echo `response_payload_template`, i.e. a fabricated
+# command that no document ever declared.
+#
+# The predicates below refuse a row on its SHAPE alone. They are
+# vocabulary-free on purpose — they key on notation and column layout, never
+# on signal / rail / protocol names, so no design or vendor literal enters
+# the logic:
+#
+#   `signal_name_notation`      the SIGNAL column (the token right after the
+#                               matched hex, NOT the human-readable
+#                               description column) is an active-low name
+#                               `NAME#`, or a differential-pair / lane
+#                               designator `NAMEp(3)` / `NAMEn3` /
+#                               `NAMEp1 ("TX1+")`. Command mnemonics are
+#                               never written in either notation.
+#   `repeated_index_signal_column`
+#                               the row carries a SECOND `<index> <signal>`
+#                               column group — the two-up layout a connector
+#                               pinout is printed in. A command table has one
+#                               opcode per row.
+#   `physical_unit_after_value` the value is DECIMAL and is followed by a
+#                               physical unit of rate / capacity / frequency.
+#                               An opcode encoding never carries a unit.
+#   `hex_range_upper_bound`     the matched hex is the UPPER bound of an
+#                               `0xAA-0xBB` range, so it is half of a
+#                               declaration, not an encoding.
+#
+# Measured over the whole benchmark corpus that ships its input document
+# (204 candidate rows / 17 designs): 64 rows refused, 0 of them from a real
+# command-code table (0 false refusals against 63 genuine command rows).
+# Refusals are COUNTED into the emitted L3 doc rather than dropped silently,
+# so an empty `opcodes[]` can be told apart from a parser miss.
+#
+# Deliberately NOT refused: object-dictionary index tables, data-type /
+# encoding tables, EtherType tables and register maps. Those rows are
+# syntactically IDENTICAL to command rows (`0x1000  VAR  Device type` has
+# the same shape as `0x00  PUT_PC  Put a posted transaction`); no row-level
+# signal separates them, so filtering them would be guesswork.
+# chip-AGNOSTIC.
+# ---------------------------------------------------------------------------
+_I454_RE_PHYSICAL_UNIT_AFTER_VALUE = re.compile(
+    r"^[ \t]*\d{1,4}[ \t]+"
+    r"(?:[GMKkTm]?[Bb][ \t]*/[ \t]*s"      # 10 GB/s, 26 MB/s, 25 Gb/s
+    r"|[GMKkTm][Bb]\b(?![A-Za-z])"          # 16 GB, 512 MB
+    r"|[GMk]?Hz"                            # 33 MHz
+    r"|[GMk]?T[ \t]*/[ \t]*s)\b"            # 20 GT/s
+)
+_I454_RE_ACTIVE_LOW_SIGNAL = re.compile(r"^[A-Za-z][A-Za-z0-9_]*#")
+_I454_RE_DIFF_PAIR_SIGNAL = re.compile(
+    r"^[A-Za-z]{2,}[pn]\(\d+\)"             # HSOp(0) / HSIn(11)
+    r"|^[A-Za-z]{3,}[pn]\d+\b"              # SSTXp1 / SSRXn2
+    r"|^[A-Za-z]+[pn]\d?[ \t]*\(\"?[TR]X\d*[+\-−]\"?\)"
+)
+_I454_RE_SECOND_INDEX_SIGNAL_COLUMN = re.compile(
+    r"\S[ \t]{2,}(?:[A-Z]?\d{1,3}|[A-Z]\d{1,2})[ \t]{2,}"
+    r"[A-Za-z][A-Za-z0-9_()+\-]*"
+)
+_I454_RE_HEX_RANGE_UPPER_BOUND = re.compile(
+    r"0x[0-9A-Fa-f]{1,4}[ \t]*[-–—][ \t]*$"
+)
+
+
+def _i454_signal_column(row_line, hex_token):
+    """Return the row's SIGNAL / MNEMONIC column — the text starting at the
+    token right after the matched hex. Explicitly NOT the trailing
+    human-readable description column: a description may legitimately quote
+    a rail or pin name while the row is still a command row.
+    """
+    if not isinstance(row_line, str) or not isinstance(hex_token, str):
+        return ""
+    for tok in ("0x" + hex_token, hex_token):
+        idx = row_line.find(tok)
+        if idx >= 0:
+            return row_line[idx + len(tok):].lstrip(" \t|,")
+    return ""
+
+
+def _i454_non_command_row_reason(row_line, hex_token):
+    """Return a short reason string when ``row_line`` is structurally NOT a
+    command-table row, else None.
+
+    ``row_line`` is the full source line the Strategy-2 walker matched and
+    ``hex_token`` the hex it captured (without any ``0x`` prefix). Pure
+    function of the row's shape — see the block comment above for the
+    predicate set and its measured behaviour. chip-AGNOSTIC.
+    """
+    if not isinstance(row_line, str) or not row_line.strip():
+        return None
+    if _I454_RE_PHYSICAL_UNIT_AFTER_VALUE.match(row_line.lstrip("\r\n")):
+        return "physical_unit_after_value"
+    signal = _i454_signal_column(row_line, hex_token or "")
+    if _I454_RE_ACTIVE_LOW_SIGNAL.match(signal) or \
+            _I454_RE_DIFF_PAIR_SIGNAL.match(signal):
+        return "signal_name_notation"
+    if _I454_RE_SECOND_INDEX_SIGNAL_COLUMN.search(row_line):
+        return "repeated_index_signal_column"
+    head = row_line
+    for tok in ("0x" + (hex_token or ""), hex_token or ""):
+        idx = row_line.find(tok)
+        if idx > 0:
+            head = row_line[:idx]
+            break
+    if _I454_RE_HEX_RANGE_UPPER_BOUND.search(head):
+        return "hex_range_upper_bound"
+    return None
+
+
 # v0.1.90 — for ORGANIC-20260530-phase1-large-doc-hang. Several L-doc
 # generators (L1 datasheet, L2 FRS, L4 reset-value prose lift, L5
 # bullet-kv specs, L11 FSM-state classify, ...) run a PER-ITEM scan
@@ -22245,6 +22366,12 @@ def gen_l3_cmd_protocol(project: Path,
     ic_name = _ic_name_from_docs(extracted, project)
     opcodes: List[Dict[str, Any]] = []
     evidence: Dict[str, List[Dict[str, str]]] = {}
+    # for #454 — rows the Strategy-2 walker matched but refused because the
+    # source row is structurally not a command-table row. Surfaced in the
+    # emitted doc so an empty `opcodes[]` can be told apart from a parser
+    # miss. This is an HONEST-UNCERTAINTY marker: it must be read, never
+    # silently resolved.
+    non_command_row_refusals: List[Dict[str, str]] = []
     # v1.6.245 — for #106. Precondition gate. The v1.6.243 picker
     # ran every opcode-synthesis strategy on every input, including
     # processor-core ICs whose docs have stray hex tokens (RISC-V
@@ -22479,6 +22606,28 @@ def gen_l3_cmd_protocol(project: Path,
                     continue
                 key = f"0x{hex_b.zfill(2)}"
                 if key in seen_opcodes:
+                    continue
+                # for #454 — ROW-SHAPE refusal. The opcode-synthesis
+                # precondition is a DOCUMENT-level gate, so this walker
+                # scrapes every line of a doc it opened for — including
+                # connector pin-assignment tables, rate/capacity prose and
+                # numeric-range declarations, none of which declare a
+                # command. Each such row previously became an opcode with a
+                # synthetic `op + 1` response and an echo payload template.
+                # Refuse on the row's SHAPE and COUNT the refusal, so the
+                # resulting silence is visible rather than looking like a
+                # document with no command protocol.
+                _row_start = text.rfind("\n", 0, m.start()) + 1
+                _row_end = text.find("\n", m.start())
+                _row_line = text[_row_start:
+                                 _row_end if _row_end != -1 else None]
+                _refuse = _i454_non_command_row_reason(_row_line, hex_b)
+                if _refuse:
+                    non_command_row_refusals.append({
+                        "hex": key,
+                        "reason": _refuse,
+                        "evidence": f"input/docs/{fname}",
+                    })
                     continue
                 seen_opcodes.add(key)
                 opcodes.append({
@@ -23118,6 +23267,16 @@ def gen_l3_cmd_protocol(project: Path,
         # gate fired (synthesis ran); a populated string explains
         # why opcodes are empty by design (NOT a parser miss).
         "opcode_synthesis_skipped_reason": opcode_synthesis_skipped_reason,
+        # for #454 — rows the free-form opcode walker matched and then
+        # refused on their SHAPE (connector pin-assignment row, rate /
+        # capacity prose, numeric-range upper bound). Counting them keeps
+        # the refusal auditable: `no_opcodes_in_input: true` together with
+        # a non-zero count means "the walker saw candidate rows and judged
+        # none of them to be commands", which is a different fact from
+        # "the document contains no `<hex> <MNEMONIC>` rows at all".
+        # HONEST-UNCERTAINTY marker — read it, do not silently resolve it.
+        "non_command_row_refusal_count": len(non_command_row_refusals),
+        "non_command_row_refusals": non_command_row_refusals[:32],
     }
     return _write_l_doc(project, "L3_CMD_PROTOCOL", content, evidence)
 

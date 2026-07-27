@@ -132,6 +132,15 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                 # of the input, not a chip-class scaffold leak.
                 "vsuite_per_kw_cap_skipped_v1_6_373",
                 "peripheral_only_emit_skipped_v1_6_376",
+                # for #454 — same structural-skip-counter family. Counts the
+                # `<hex> <MNEMONIC>` rows the L3 free-form opcode walker
+                # matched and then refused on their SHAPE (connector
+                # pin-assignment row, rate/capacity prose, numeric-range
+                # upper bound). Both fixtures are thin-input projects with
+                # no such rows, so both legitimately report 0; the counter
+                # is non-zero only on a project whose docs actually carry
+                # that shape. A shared 0 is a property of the input.
+                "non_command_row_refusal_count",
                 # Empty/null sentinel structurally-shared values are fine.
                 # They're not "identical hardcodes" — they're "neither
                 # had evidence, both null".
