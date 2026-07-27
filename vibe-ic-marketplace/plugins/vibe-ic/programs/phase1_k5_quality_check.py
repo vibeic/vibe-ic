@@ -331,23 +331,26 @@ def _l9_top_container(l9):
 # exist; neither is on the shipping path, which is why the corpus shows
 # 0 / 201 tracked L6_CONTROL_LOGIC.json:
 #
-#   1. `tools/phase1_engine/gap_detect.py::_apply_typical_scaffolds` DOES
-#      inject it (verified by driving auto_fill + render_layers: all 5 classes
-#      emit the key). But its only entry point is the `auto-fill` CLI verb,
-#      which has ZERO callers — the shipping entry `phase1_one_shot_runner`
-#      invokes `run-all`, and `_cmd_run_all` calls detect_gaps + render_layers
-#      WITHOUT auto_fill. The whole typical-scaffolds default set is orphaned.
+#   1. WAS `tools/phase1_engine/gap_detect.py::_apply_typical_scaffolds`, which
+#      injected it for all 5 scaffolded classes. REMOVED in #493 — it was
+#      reachable only from the `auto-fill` CLI verb (the shipping entry
+#      `phase1_one_shot_runner` invokes `run-all`, whose `_cmd_run_all` calls
+#      detect_gaps + render_layers WITHOUT auto_fill), it landed on 0/201
+#      doc-sets, and the L6 map it injected was class-typical only in name:
+#      the crypto-engine variant hung AES submodules (sbox / mixcol / encipher
+#      / decipher) on the parent of hash-function, stream-cipher and rng. See
+#      `gap_detect._RETIRED_MECHANISMS['typical_scaffolds']`.
 #   2. `agents/lessons/ic_expert_L6.md` and `qbank/any-ic_L6.yaml` instruct the
-#      ic-expert-agent to emit it, so hand-authored L6 docs carry it.
+#      ic-expert-agent to emit it, so hand-authored L6 docs carry it. This is
+#      now the ONLY producer, and it is still off the shipping path.
 #
 # So this is a genuine PRODUCER GAP with a named cause, not a dead check —
 # deleting it would be wrong. It is KEPT and now says it examined nothing.
 _L6_SUBMODULE_MAP_ABSENT = (
     "L6.submodule_control_logic absent — the shipping Phase-1 runner does not "
     "emit it (measured 0/201 tracked L6_CONTROL_LOGIC.json at v1.7.68), though "
-    "phase1_engine's typical-scaffolds injector and the ic-expert-agent L6 "
-    "contract both produce it off the shipping path. PRODUCER GAP, not a clean "
-    "result")
+    "the ic-expert-agent L6 contract produces it off the shipping path. "
+    "PRODUCER GAP, not a clean result")
 
 
 def _l6_submodule_map(l6):
