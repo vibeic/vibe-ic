@@ -112,6 +112,14 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
 import sdc_constraints as _sdc
 import floorplan_contract as _fpc
+# One clock name declares exactly one period. Several independent extraction
+# strategies write into L8.clocks[] / L8.clock_domains[] and nothing used to
+# compare what they wrote, so a converged run shipped `clk` at both 100 MHz
+# and 125 MHz and every consumer quietly picked one by list order. This
+# module is the producer-side contract: it folds a borrowed-name record into
+# the record that owns the name (stated rule, no guessing) and REFUSES —
+# recording an explicit conflict on the document — for anything else.
+import clock_contract as _cc
 # v1.6.95 — Capability 1 of GitHub issue #27. Deeper README parser
 # extracts key sizes / block width / S-box parallelism / supported
 # cipher modes / cited public-standard URLs from README prose and
@@ -8177,6 +8185,15 @@ def _write_l_doc(project: Path, name: str, content: dict,
     # thin-input and rich-input runs; this defensive pass guarantees the
     # flag is always True/False regardless of which code path produced it.
     _ensure_bool_flags(content)
+    # CLOCK CONTRACT — one clock name, one period. Applied at the same write
+    # chokepoint as the sanitisers above so no L emitter, present or future,
+    # can put a self-contradictory clock contract into a document. Borrowed-
+    # name records are folded onto the record that owns the name (their
+    # numbers survive under `alternate_frequency_mentions[]`); a genuine
+    # two-owner disagreement is NOT resolved here — it is stamped on the
+    # document as `clock_contract_conflicts[]` and blocks the run in
+    # `_post_emit_enforce_clock_contract`. Fail-closed beats guessing.
+    _cc.enforce(content)
     # v0.1.60 capture (R11): wire phase1_post_process.scrub_l_doc into the
     # write chokepoint so every L doc emission gets the HALLUC_PATTERNS scan
     # (ic_name lifted from "SUCH ARM TECHNOLOGY" license clause, opcode_hex
@@ -38734,6 +38751,31 @@ def gen_l8_timing_waveform(project: Path,
                         if freq_mhz.is_integer()
                         else f"clk_{freq_mhz:.3f}mhz".replace(".", "p")
                     )
+                # A bare frequency literal harvested from prose has NO name
+                # of its own — `_canonical_clk` above staples the project's
+                # clock-port name onto it. When that name is already OWNED by
+                # a record with a pinned period (the prose-fmax walker's
+                # `role=primary` entry, which read a frequency for that
+                # literal clock), emitting here produced a SECOND record for
+                # the same clock at a different period: the `clk` 100 MHz /
+                # 125 MHz contradiction that `sdc_validator_check` refuses to
+                # validate an SDC against. This mention is not a competing
+                # period declaration for that clock, so it must not be shaped
+                # like one. Keep the number as evidence on the owning record
+                # and emit nothing. Chip-AGNOSTIC: provenance markers only.
+                _owner_cc = _cc.owning_entry_with_period(
+                    clock_domains, _entry_name)
+                if _owner_cc is not None:
+                    _cc.record_alternate_mention(_owner_cc, {
+                        "freq_mhz": freq_mhz,
+                        "freq_hz": int(freq_hz),
+                        "source": f"input/docs/{fname}",
+                        "role": "extracted_from_doc_freq_mention",
+                        "extraction_strategy":
+                            "doc_freq_mention_keyword_window",
+                    })
+                    existing_freqs.add(freq_mhz)
+                    continue
                 # v1.6.370 — for #265 P2. Track evidence-doc-class
                 # rank so chip-top evidence (rank=0) can overwrite a
                 # peripheral re-mention (rank=10) rather than letting
@@ -53741,6 +53783,51 @@ def _post_emit_typed_clock_domains(project: Path) -> None:
                 + "\n")
 
 
+#: L docs that carry the clock contract. Both are checked because a name at
+#: 10 ns in one and 8 ns in the other is contradictory wherever it sits.
+_CLOCK_CONTRACT_DOCS = ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM")
+
+
+def _post_emit_enforce_clock_contract(project: Path) -> List[str]:
+    """Final producer-side clock-contract enforcement — runs LAST.
+
+    `_write_l_doc` already applies `clock_contract.enforce` to every L doc it
+    writes, but a dozen post-emit hooks re-open the L8 docs and rewrite them
+    with `write_text` directly (the typed-clock-domains mirror, the staged-SDC
+    ingest, the `clocks[]` seeder, the AID-scaffold purge). Any of them can
+    reintroduce a second period for a clock AFTER the chokepoint has run, so
+    the contract is re-enforced here, after every hook, on what is actually on
+    disk.
+
+    Returns the conflicts that SURVIVED reconciliation — records that each own
+    the clock name and pin different periods. There is no principled winner
+    between them, so nothing is picked: the conflict is written into the
+    document as `clock_contract_conflicts[]` and returned, and the runner
+    fails on it. Chip-AGNOSTIC.
+    """
+    messages: List[str] = []
+    for doc_name in _CLOCK_CONTRACT_DOCS:
+        try:
+            doc = _try_load_l_doc(project, doc_name)
+        except Exception:
+            continue
+        if not isinstance(doc, dict):
+            continue
+        before = json.dumps(doc, sort_keys=True, ensure_ascii=False)
+        _cc.enforce(doc)
+        after = json.dumps(doc, sort_keys=True, ensure_ascii=False)
+        if after != before:
+            try:
+                out = _pl.generated_docs_dir(project) / f"{doc_name}.json"
+                out.write_text(
+                    json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8")
+            except OSError:
+                pass
+        messages.extend(_cc.conflict_messages(doc, where=doc_name))
+    return messages
+
+
 def _post_emit_sdc_constraints(project: Path) -> None:
     """ORGANIC #554 (a) — ingest staged ``input/constraints/*.sdc`` and
     ``input/reference_flow/**/*.sdc`` into L8 (clock_domains[].freq_mhz
@@ -54381,13 +54468,23 @@ def _post_emit_derive_l9_clocks_v1_6_323(project: Path) -> None:
         # matching deep clock_domains[] entry so this derived clock view is not
         # a shallow stub that fails l8_clock_domains_typed_check (which scans
         # clock entries across ALL L docs). Chip-AGNOSTIC.
-        for _cd in (l9.get("clock_domains") or []):
-            if isinstance(_cd, dict) and _cd.get("name") == name_raw:
-                for _k in ("freq_hz", "freq_mhz", "period_ns",
-                           "role", "source", "domain_kind"):
-                    if _cd.get(_k) is not None and _entry.get(_k) is None:
-                        _entry[_k] = _cd[_k]
-                break
+        # Take the period from the record that OWNS the name, not from
+        # whichever record happens to sit first in the list — a borrowed-name
+        # record first in `clock_domains[]` used to hand this view a period
+        # the owning record contradicts, which is how one clock ended up with
+        # two periods across the two containers.
+        _cd_src = _cc.owning_entry_with_period(
+            l9.get("clock_domains") or [], name_raw)
+        if _cd_src is None:
+            _cd_src = next(
+                (_cd for _cd in (l9.get("clock_domains") or [])
+                 if isinstance(_cd, dict) and _cd.get("name") == name_raw),
+                None)
+        if isinstance(_cd_src, dict):
+            for _k in ("freq_hz", "freq_mhz", "period_ns",
+                       "role", "source", "domain_kind"):
+                if _cd_src.get(_k) is not None and _entry.get(_k) is None:
+                    _entry[_k] = _cd_src[_k]
         clocks.append(_entry)
     if not clocks:
         return
@@ -54520,13 +54617,21 @@ def _post_emit_seed_l8b_clocks_from_l1_v1_6_571(project: Path) -> None:
         # that fails l8_clock_domains_typed_check. The clock_domains walker
         # already resolved period_ns/freq from the input; share it with the
         # clocks[] view of the same physical clock. Chip-AGNOSTIC.
-        for _cd in (l8b.get("clock_domains") or []):
-            if isinstance(_cd, dict) and _cd.get("name") == name:
-                for _k in ("freq_hz", "freq_mhz", "period_ns",
-                           "role", "source", "domain_kind"):
-                    if _cd.get(_k) is not None and entry.get(_k) is None:
-                        entry[_k] = _cd[_k]
-                break
+        # Same rule as the L9 seeder above: inherit from the record that OWNS
+        # the name, not from list position, so `clocks[]` cannot be seeded
+        # with a period that `clock_domains[]` contradicts.
+        _cd_src = _cc.owning_entry_with_period(
+            l8b.get("clock_domains") or [], name)
+        if _cd_src is None:
+            _cd_src = next(
+                (_cd for _cd in (l8b.get("clock_domains") or [])
+                 if isinstance(_cd, dict) and _cd.get("name") == name),
+                None)
+        if isinstance(_cd_src, dict):
+            for _k in ("freq_hz", "freq_mhz", "period_ns",
+                       "role", "source", "domain_kind"):
+                if _cd_src.get(_k) is not None and entry.get(_k) is None:
+                    entry[_k] = _cd_src[_k]
         seeded.append(entry)
     if not seeded:
         return
@@ -60076,6 +60181,28 @@ def main() -> int:
           "Deterministic gate: phase1_doc_input_completeness_check.py.")
 
     # ------------------------------------------------------------------
+    # CLOCK CONTRACT — one clock name declares exactly one period.
+    #
+    # Runs after every post-emit hook that can touch L8.clocks[] /
+    # L8.clock_domains[] (the typed-clock-domains mirror, the staged-SDC
+    # ingest, the `clocks[]` seeder, the AID-scaffold purge), on what those
+    # hooks actually left on disk. It folds a record that BORROWED a clock
+    # name onto the record that OWNS it — a stated rule, not a guess — and
+    # REFUSES anything else: two records that each own the name and pin
+    # different periods are left standing, stamped on the document as
+    # `clock_contract_conflicts[]`, and BLOCK the run. A timing contract
+    # that quietly picks one of two periods is the defect this prevents.
+    # ------------------------------------------------------------------
+    clock_contract_conflicts: List[str] = []
+    try:
+        clock_contract_conflicts = _post_emit_enforce_clock_contract(project)
+    except Exception as _cc_err:      # never let the guard crash the runner
+        print(f"      clock-contract enforcement ERRORED: {_cc_err}",
+              file=sys.stderr)
+    for _msg in clock_contract_conflicts:
+        print(f"      {_msg}", file=sys.stderr)
+
+    # ------------------------------------------------------------------
     # SEMANTIC LAYER GATES (batch layergate-1)
     #
     # These assert that each layer carries what its CONSUMER needs in an
@@ -60150,6 +60277,18 @@ def main() -> int:
     except OSError:
         pass
 
+    if clock_contract_conflicts:
+        # BLOCKING, by design and BEFORE every other verdict. The document
+        # says two things about one clock, so there is no timing contract to
+        # hand phase 2/3 — every consumer downstream would pick one period by
+        # list order and no artifact would record which. The conflict is on
+        # the document (`clock_contract_conflicts[]`) with both records and
+        # their provenance; fix the extraction that produced the second
+        # period, do not delete one record to make this green.
+        print("FAIL: L8 declares a clock with conflicting periods — "
+              f"{len(clock_contract_conflicts)} conflict(s); see "
+              "clock_contract_conflicts[] in generated_docs/L8_*.json")
+        return 1
     if cov_gate_failed:
         # layergate-2: this flag is now raised by the l3 opcode-name
         # coverage gate OR by any of the L4/L5/L6 semantic layer gates
