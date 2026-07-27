@@ -24781,6 +24781,29 @@ def _v1_6_512_lift_encoding_for_registers(
                             total += (
                                 _v1_6_512_lift_field_encoding(
                                     fld, _sig_window))
+            # v1.7.72 — for #499. The field's OWN documentation is
+            # available whether or not its name (or its register's
+            # name) occurs anywhere in the joined corpus text. Every
+            # sweep above is a WINDOW sweep: it invokes the per-field
+            # lifter only from inside a mention-anchored window, so a
+            # field with no anchor was never offered to any tier at
+            # all — including the code-literal tier, which needs no
+            # window because it reads the field's own description.
+            #
+            # Measured before adding this call: across 106 corpus
+            # doc-sets the code-literal tier produced ONE binding
+            # through the window loops and twenty when handed the
+            # fields' own text. A tier reachable only by accident of
+            # naming is a tier that shipped inert.
+            #
+            # Placed last so every decision above — in particular the
+            # `_v1_6_516_field_post` baseline that gates the Tier-3
+            # fallback — is taken on exactly the inputs it was taken
+            # on before. This call only ADDS.
+            _v1_7_72_own_text = _cl_field_text(fld)
+            if _v1_7_72_own_text:
+                total += _v1_6_512_lift_field_encoding(
+                    fld, _v1_7_72_own_text)
     return total
 
 

@@ -240,6 +240,34 @@ def test_lifter_declines_a_multi_code_sentence() -> None:
     assert n == 0
 
 
+def test_lifter_reaches_a_field_with_no_mention_anchor() -> None:
+    """Through the entry point the RUNNER calls, not the helper.
+
+    Every pre-existing sweep invokes the per-field lifter only from
+    inside a window anchored on a field-name or register-name mention.
+    A field whose names appear nowhere in the corpus text was therefore
+    offered to NO tier — including the code-literal tier, which needs no
+    window because it reads the field's own description. Measured before
+    this was wired: ONE binding across 106 corpus doc-sets through the
+    window loops, twenty when the fields' own text was handed over."""
+    registers = [{
+        "name": "ZZZ_UNMENTIONED_REG",
+        "fields": [{
+            "field_name": "QQQ_UNMENTIONED_FIELD",
+            "bits": "1:0",
+            "description": "Always set to 2'b01 to indicate vectored "
+                           "interrupt handling.",
+        }],
+    }]
+    # The corpus text mentions neither name.
+    extracted = {"other.txt": "Unrelated prose about something else.\n"}
+    n = RUNNER._v1_6_512_lift_encoding_for_registers(registers, extracted)
+    assert n >= 1
+    fld = registers[0]["fields"][0]
+    assert L4GATE._binding_entries(fld) >= 1
+    assert fld["encoding"][0]["code"] == "2'b01"
+
+
 def test_lifter_is_idempotent() -> None:
     field = {"field_name": "MODE", "bits": "1:0",
              "description": "Always set to 2'b01 to indicate vectored "
