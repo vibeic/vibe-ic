@@ -441,7 +441,20 @@ class TestDontUseTcl:
         # moves with it: right after read_sdc, before the wire-RC / opt
         # sequence.
         tmpl = inspect.getsource(runner._build_pnr_tcl_text)
-        assert "{dont_use_block}# === v0.1.26 wire-RC model ===" in tmpl
+        # The guarded property is ORDER, not ADJACENCY: the exclusion must
+        # land after the design is linked and constrained, and before the
+        # wire-RC / optimization sequence. Pinning it to be textually GLUED to
+        # the wire-RC comment made every other legitimate pre-optimization
+        # declaration a false failure while catching nothing extra — a
+        # reordering that actually broke the flow moves the index, which is
+        # what is asserted here.
+        i_sdc = tmpl.index("read_sdc {sdc_c}")
+        i_dont_use = tmpl.index("{dont_use_block}")
+        i_wire_rc = tmpl.index("# === v0.1.26 wire-RC model ===")
+        i_floorplan = tmpl.index("initialize_floorplan")
+        assert i_sdc < i_dont_use < i_wire_rc < i_floorplan, (
+            f"read_sdc={i_sdc} dont_use={i_dont_use} "
+            f"wire_rc={i_wire_rc} initialize_floorplan={i_floorplan}")
 
 
 class TestDontUseFamilyFallback:
