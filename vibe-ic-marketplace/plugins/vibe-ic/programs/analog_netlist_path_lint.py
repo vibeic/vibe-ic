@@ -15,8 +15,15 @@ This lints `.include` / `.lib` directive paths only (those are the lines
 that consume a filesystem path). A path is flagged FAIL when it is absolute
 (starts with '/') AND does not begin with one of the whitelisted PDK roots.
 
-Whitelist (canonical PDK include roots):
-    /foss/pdks/
+Whitelist:
+    * /foss/pdks/            — the canonical open-PDK container root.
+    * anything INSIDE the project directory — rung-1 of the analog PDK ladder
+      (`analog_pdk_availability._resolve_project_custom_pdk`) stages a native /
+      NDA-node PDK under `<project>/input/pdk/`, and `analog_netlist_pdk_check`
+      accepts a deck that loads it (#151). Such a path travels with the
+      project, so it is portable and MUST NOT be flagged — flagging it would
+      hard-FAIL the whole native custom-PDK track this flow deliberately
+      supports.
 
 Honest-FAIL guarantees:
   * absent / non-directory project -> exit 2
@@ -40,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field, asdict
@@ -78,39 +86,85 @@ class AuditResult:
     summary: dict = field(default_factory=dict)
 
 
-def _analog_dir(project: Path) -> Optional[Path]:
+# See analog_netlist_connectivity_check for the measured rationale: the flow
+# YAML anchors A3 netlists at `phase2/analog/*/*.sp` while the analog runner
+# writes them under `phase3/analog/<block>/`. Returning only the FIRST existing
+# root hid the phase2 decks from this gate on every project that had reached A5
+# — a vacuous PASS. Scan every analog root; never fall back to the whole
+# project (a digital PEX netlist is not an analog deck).
+_ANALOG_ROOT_RELS = ("phase1/analog", "phase2/analog", "phase3/analog",
+                     "analog")
+
+
+def _analog_roots(project: Path) -> List[Path]:
+    """Every analog root that exists, de-duplicated, in scan order."""
+    roots: List[Path] = []
+    seen = set()
+
+    def _add(cand: Optional[Path]) -> None:
+        if cand is None or not cand.is_dir():
+            return
+        try:
+            key = cand.resolve()
+        except OSError:
+            key = cand
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(cand)
+
     if _HAVE_PL:
         try:
             d = _pl.analog_dir(project)
-            if d and Path(d).is_dir():
-                return Path(d)
+            _add(Path(d) if d else None)
         except Exception:
             pass
-    for cand in (project / "phase3" / "analog",
-                 project / "phase2" / "analog",
-                 project / "analog"):
-        if cand.is_dir():
-            return cand
-    if project.is_dir():
-        return project
-    return None
+    for rel in _ANALOG_ROOT_RELS:
+        _add(project / rel)
+    return roots
 
 
-def _is_whitelisted(path_tok: str) -> bool:
-    return any(path_tok.startswith(p) for p in WHITELIST_PREFIXES)
+def _sp_files(project: Path) -> List[Path]:
+    """Every `.sp` deck under every analog root, de-duplicated."""
+    out: List[Path] = []
+    seen = set()
+    for root in _analog_roots(project):
+        for sp in sorted(root.rglob("*.sp")):
+            try:
+                key = sp.resolve()
+            except OSError:
+                key = sp
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(sp)
+    return sorted(out)
+
+
+def _is_whitelisted(path_tok: str, project: Path) -> bool:
+    if any(path_tok.startswith(p) for p in WHITELIST_PREFIXES):
+        return True
+    # A staged in-project PDK (rung 1 of the analog PDK ladder — see the module
+    # docstring) travels WITH the project, so an absolute path pointing inside
+    # it is portable, not a hardcoded environment path.
+    try:
+        root = os.path.abspath(str(project))
+        cand = os.path.abspath(path_tok)
+    except (OSError, ValueError):
+        return False
+    return cand == root or cand.startswith(root.rstrip(os.sep) + os.sep)
 
 
 def run_audit(project: Path) -> AuditResult:
     result = AuditResult()
-    analog_dir = _analog_dir(project)
-    if analog_dir is None:
+    if not _analog_roots(project):
         result.findings.append(Finding(
             rule="SKIP_NO_ANALOG_DIR", severity="INFO",
             message="No analog directory; skipping path lint"))
         result.summary = {"skipped": True, "reason": "no_analog_dir"}
         return result
 
-    sp_files = sorted(analog_dir.rglob("*.sp"))
+    sp_files = _sp_files(project)
     if not sp_files:
         result.findings.append(Finding(
             rule="SKIP_NO_SP_FILES", severity="INFO",
@@ -138,7 +192,8 @@ def run_audit(project: Path) -> AuditResult:
                 continue
             had_include = True
             path_tok = m.group(2)
-            if path_tok.startswith("/") and not _is_whitelisted(path_tok):
+            if path_tok.startswith("/") and not _is_whitelisted(path_tok,
+                                                                project):
                 bad_paths += 1
                 result.findings.append(Finding(
                     rule="NON_WHITELISTED_ABSOLUTE_PATH",
@@ -156,8 +211,8 @@ def run_audit(project: Path) -> AuditResult:
     if result.passed and files_with_includes:
         result.findings.append(Finding(
             rule="PATH_LINT_OK", severity="INFO",
-            message=(f"all include/lib paths absolute-only under "
-                     f"{WHITELIST_PREFIXES[0]} or relative")))
+            message=(f"all include/lib paths are relative, under "
+                     f"{WHITELIST_PREFIXES[0]}, or inside the project")))
     result.summary = {
         "skipped": False,
         "files_checked": checked,
