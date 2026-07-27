@@ -745,10 +745,14 @@ steps:
         # — a directory that never exists. The program then reported
         # `[SKIP] no .sdc files` and exit 0 on EVERY project since v1.6.18, and
         # per flow_compliance_check the optional gate is only optional on its
-        # TRIGGER: once triggered a non-zero exit fails step 8's all_of. So this
-        # was a BLOCKING gate that had been silently disarmed, not an advisory
-        # one. Measured on the real spm x ihp-sg13g2 run: the yaml-literal form
+        # TRIGGER: once triggered, rc 1 fails step 8's all_of. So this was a
+        # BLOCKING gate that had been silently disarmed, not an advisory one.
+        # Measured on the real spm x ihp-sg13g2 run: the yaml-literal form
         # SKIPped at rc=0 while the project-root form FAILed the same SDC.
+        # The program now speaks the three-value contract — rc 2 (NOT CHECKED)
+        # for every path that reads no file, which reaches this step as
+        # VACUOUS-PASS rather than as a bare PASS indistinguishable from a
+        # real read. Only rc 1 blocks.
         - optional_program_exit_zero:
             command: "sdc_validator_check . --l8 phase1/generated_docs/L8_TIMING_WAVEFORM.json --json reports/sdc_validator.json"
             condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]

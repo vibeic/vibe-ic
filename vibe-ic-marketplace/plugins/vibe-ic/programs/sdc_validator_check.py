@@ -14,11 +14,44 @@ Three independent checks:
      positional (the 8/d2 defect) or a project whose SDC producer wrote
      outside `phase2/stage2/constraints` certified step 8 from files it
      never read. When the searched roots are empty but the project carries
-     .sdc files elsewhere, the program now exits 1 with
+     .sdc files elsewhere, the program exits 1 with
      `SDC_SEARCH_ROOT_MISDIRECTED` and names both the roots it searched and
-     the files it found. A project with no .sdc anywhere still SKIPs at
-     exit 0 — that case is blocked by `sdc_syntax_check`, step 8's first
-     all_of member.
+     the files it found.
+
+EXIT CODES — this program speaks the repo's three-value gate contract
+(`flow_compliance_check._check_program_exit_zero`), not two-value:
+
+    0  PASS         at least one .sdc was READ and is clean
+    1  FAIL         something the program looked at is wrong
+    2  NOT CHECKED  nothing was read; the step is VACUOUS, not satisfied
+
+Everything that reads NOTHING now exits 2, never 0:
+
+  * no .sdc anywhere under the project — the honest empty case, still not a
+    failure (step 8's first all_of member, `sdc_syntax_check`, is what
+    blocks a design that needs constraints and ships none);
+  * a positional that does not exist or is not a directory — a caller
+    defect, which at exit 0 was recorded as an ordinary PASS of a program
+    that never opened a file.
+
+Exit 0 previously covered all three, so ABSENT and READ-AND-CLEAN were
+indistinguishable at the exit-code layer and no `__VACUOUS_HINT__` was
+raised. At exit 2 the compliance report labels the step VACUOUS-PASS, which
+is what "I did not read anything" is supposed to look like. Both exit-2
+paths DISCLOSE THEIR DENOMINATOR the way the PASS path does ("N SDC file(s)
+OK"): how many search roots were declared, the state of each, how many .sdc
+the project-wide scan found outside them, and how many directories that
+scan walked.
+
+§4.05 — the project-wide scan PRUNES the staged reference/oracle vocabulary
+(`_reference_flow_boundary.OFF_LIMITS_TREE_SEGMENTS`). A design whose only
+constraint file is a staged upstream `.../reference_flow/pre_syn/golden.sdc`
+used to be reported as SDC_SEARCH_ROOT_MISDIRECTED with the golden file
+NAMED in the diagnostic — a message that points the author straight at the
+oracle. Those directories are now never walked, and are disclosed by COUNT
+only. That is also the correct verdict on the merits: a staged upstream
+reference flow is not this run's constraint output, so a project carrying
+only one has produced no SDC and belongs in the exit-2 not-checked tier.
 
   3. L8 CROSS-CHECK (`--l8`, L8 CROSS-CHECK) — the cross-check the flow has
      declared since Wave 82 ("`sdc_validator_check` cross-checks the SDC
@@ -44,8 +77,18 @@ search-root glob has already come back empty.
 """
 import argparse, json, os, re, sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 import _path_layout as _pl
+import _reference_flow_boundary as _rfb
+
+# ----- exit-code contract -------------------------------------------
+
+#: `flow_compliance_check._check_program_exit_zero`: 0 PASS, 1 FAIL,
+#: 2 VACUOUS_PASS (the "I ran but read nothing" tier, rendered VACUOUS-PASS
+#: in the compliance report via the `__VACUOUS_HINT__` sentinel).
+RC_PASS = 0
+RC_FAIL = 1
+RC_NOT_CHECKED = 2
 
 # ----- search roots and the misdirection diagnostic ------------------
 
@@ -58,12 +101,30 @@ _SEARCH_ROOTS = (
     ("phase2/stage2/constraints", _pl.constraints_dir),
 )
 
-#: Pruned from the stray scan: VCS/tool metadata that cannot hold a
-#: project's constraints. NOTHING else is pruned — a vendor .sdc under
-#: `input/` is still evidence that the project carries constraint files the
-#: declared search roots do not see, which is what the diagnostic reports.
-_SCAN_PRUNE_DIRS = frozenset({".git", ".hg", ".svn", "__pycache__",
-                              ".venv", "node_modules"})
+#: VCS/tool metadata that cannot hold a project's constraints.
+_METADATA_PRUNE_DIRS = frozenset({".git", ".hg", ".svn", "__pycache__",
+                                  ".venv", "node_modules"})
+
+#: Pruned from the stray scan. Two disjoint reasons:
+#:
+#:   * metadata — cannot hold a project's constraints;
+#:   * §4.05 — a staged reference / golden / expected-solution tree. The scan
+#:     exists to build a MESSAGE, and naming `.../reference_flow/pre_syn/
+#:     golden.sdc` in that message points the design author at the oracle just
+#:     as effectively as reading it would. The vocabulary is imported, never
+#:     re-spelled, so it cannot drift from `floorplan_contract`'s copy.
+#:
+#: It is also the right verdict on the merits: a staged upstream reference
+#: flow is not this run's constraint output, so a project whose only .sdc
+#: lives there has produced none and belongs in the NOT-CHECKED tier — not in
+#: a MISDIRECTED failure that tells the author to go read it.
+#:
+#: Nothing ELSE is pruned: a `.sdc` under `input/` that is not in an
+#: off-limits tree is still evidence that the project carries constraint
+#: files the declared search roots do not see, which is what the diagnostic
+#: reports.
+_SCAN_PRUNE_DIRS = frozenset(
+    _METADATA_PRUNE_DIRS | _rfb.OFF_LIMITS_TREE_SEGMENTS)
 
 #: The scan runs only when the search roots came back empty, i.e. only on an
 #: already-broken project, and stops once it has enough evidence to name the
@@ -85,51 +146,106 @@ def find_sdc_files(project: Path) -> List[Path]:
     return out
 
 
-def stray_sdc_files(project: Path,
-                    limit: int = _STRAY_SCAN_LIMIT) -> List[Path]:
-    """`.sdc` files under `project` that no search root covers.
+class StrayScan(NamedTuple):
+    """The project-wide `.sdc` scan, WITH the denominators it consumed.
+
+    `dirs_walked` and `dirs_pruned_off_limits` are what let the exit-2 SKIP
+    disclose its own scope instead of asserting "no .sdc" with no evidence
+    of how hard it looked."""
+    strays: List[Path]
+    dirs_walked: int
+    dirs_pruned_off_limits: int
+    dirs_pruned_metadata: int
+    truncated: bool
+
+
+def scan_for_stray_sdc(project: Path,
+                       limit: int = _STRAY_SCAN_LIMIT) -> StrayScan:
+    """`.sdc` files under `project` that no search root covers, plus scope.
 
     Only called when the search roots yielded nothing, so an empty result
-    means "this project genuinely ships no SDC" and a non-empty one means
-    "the SDC exists, the searched roots just do not see it".
+    means "this project genuinely ships no SDC the flow could have produced"
+    and a non-empty one means "the SDC exists, the searched roots just do not
+    see it".
 
     A search root is skipped but NOT pruned: `find_sdc_files` globs `*.sdc`
     directly under it, so `phase2/stage2/constraints/sub/top.sdc` is an SDC
-    the roots cannot see and is correctly reported as one."""
+    the roots cannot see and is correctly reported as one.
+
+    §4.05 trees ARE pruned, and counted rather than named — see
+    `_SCAN_PRUNE_DIRS`."""
     root = Path(project)
     covered = {r.resolve() for r in search_roots(root)}
     found: List[Path] = []
+    walked = off_limits = metadata = 0
+    truncated = False
     for dirpath, dirnames, filenames in os.walk(root, onerror=None):
-        dirnames[:] = sorted(d for d in dirnames if d not in _SCAN_PRUNE_DIRS)
+        walked += 1
+        keep = []
+        for d in sorted(dirnames):
+            low = d.lower()
+            if low in _rfb.OFF_LIMITS_TREE_SEGMENTS:
+                off_limits += 1
+            elif low in _METADATA_PRUNE_DIRS or d in _METADATA_PRUNE_DIRS:
+                metadata += 1
+            else:
+                keep.append(d)
+        dirnames[:] = keep
         here = Path(dirpath)
         try:
             if here.resolve() in covered:
                 continue
         except OSError:
             pass
+        if truncated:
+            continue
         for fn in sorted(filenames):
             if fn.endswith(".sdc"):
                 found.append(here / fn)
                 if len(found) >= limit:
-                    return found
-    return found
+                    # Stop COLLECTING, but keep walking: the pruned-directory
+                    # denominator this scan reports must describe the whole
+                    # project, not the prefix that happened to fill the list.
+                    truncated = True
+                    break
+    return StrayScan(found, walked, off_limits, metadata, truncated)
+
+
+def stray_sdc_files(project: Path,
+                    limit: int = _STRAY_SCAN_LIMIT) -> List[Path]:
+    """`.sdc` files under `project` that no search root covers."""
+    return scan_for_stray_sdc(project, limit).strays
+
+
+def _off_limits_note(scan: StrayScan) -> str:
+    """§4.05: disclose the pruned trees by COUNT, never by path. Naming them
+    is the leak — the message would tell the author exactly which staged
+    golden file to go and copy."""
+    if not scan.dirs_pruned_off_limits:
+        return ""
+    return (f"; {scan.dirs_pruned_off_limits} staged reference/oracle "
+            f"director(y/ies) were NOT scanned (§4.05 — a staged upstream "
+            f"reference flow is not this run's constraint output)")
 
 
 def misdirected_search_root_issue(project: Path) -> Optional[str]:
     """The `SDC_SEARCH_ROOT_MISDIRECTED` diagnostic, or None when the
     project truly carries no SDC at all."""
-    strays = stray_sdc_files(project)
-    if not strays:
+    return misdirection_diagnostic(scan_for_stray_sdc(project), Path(project))
+
+
+def misdirection_diagnostic(scan: StrayScan, root: Path) -> Optional[str]:
+    """`SDC_SEARCH_ROOT_MISDIRECTED` for an already-performed scan."""
+    if not scan.strays:
         return None
-    root = Path(project)
     shown = []
-    for s in strays:
+    for s in scan.strays:
         try:
             shown.append(str(s.relative_to(root)))
         except ValueError:
             shown.append(str(s))
-    count = (f"at least {len(strays)}" if len(strays) >= _STRAY_SCAN_LIMIT
-             else str(len(strays)))
+    count = (f"at least {len(scan.strays)}" if scan.truncated
+             else str(len(scan.strays)))
     return (
         "SDC_SEARCH_ROOT_MISDIRECTED: the searched roots ("
         + ", ".join(d for d, _ in _SEARCH_ROOTS)
@@ -139,7 +255,96 @@ def misdirected_search_root_issue(project: Path) -> Optional[str]:
         + " — step 8 cannot be certified from files it did not read. Either "
           "the positional handed to sdc_validator_check is not the project "
           "root, or the SDC producer wrote outside the declared constraints "
-          "directory")
+          "directory"
+        + _off_limits_note(scan))
+
+
+# ----- the exit-2 (NOT CHECKED) disclosures --------------------------
+
+def search_root_states(project: Path) -> List[Tuple[str, str]]:
+    """``(display_name, state)`` per declared search root, where state is
+    ``absent`` (not a directory) or ``empty`` (a directory holding no
+    ``*.sdc``). Only ever called when the glob came back empty, so no root
+    can be in any other state."""
+    out: List[Tuple[str, str]] = []
+    for display, fn in _SEARCH_ROOTS:
+        root = fn(Path(project))
+        out.append((display, "empty" if root.is_dir() else "absent"))
+    return out
+
+
+def no_sdc_anywhere_message(project: Path, scan: StrayScan) -> str:
+    """The exit-2 SKIP line, WITH its denominator.
+
+    The PASS line discloses how many files it read ("N SDC file(s) OK"); a
+    skip that discloses nothing is indistinguishable from a skip that never
+    looked. So this states how many roots were declared and what state each
+    is in, how many directories the project-wide scan walked, and how many
+    it declined to walk."""
+    states = search_root_states(project)
+    pruned = []
+    if scan.dirs_pruned_metadata:
+        pruned.append(f"{scan.dirs_pruned_metadata} metadata")
+    if scan.dirs_pruned_off_limits:
+        pruned.append(
+            f"{scan.dirs_pruned_off_limits} staged reference/oracle")
+    scope = f"{scan.dirs_walked} director(y/ies) scanned"
+    if pruned:
+        scope += ", " + " + ".join(pruned) + " pruned"
+    return (
+        "[SKIP] sdc_validator_check: NOT CHECKED — no .sdc file(s) under "
+        f"{len(states)} declared search root(s) ("
+        + ", ".join(f"{d} [{s}]" for d, s in states)
+        + f"), and 0 elsewhere in the project ({scope})")
+
+
+def positional_inside_off_limits(project: Path) -> Optional[str]:
+    """The off-limits segment in the positional AS THE CALLER WROTE IT, or
+    None.
+
+    Pruning descendants alone leaves the leak reachable one level deeper:
+    handed `<design>/input/reference_flow/pre_syn` directly, the scan starts
+    INSIDE the oracle tree, so nothing prunes it and the diagnostic
+    enumerates the staged golden files by name again. Measured on the
+    tracked corpus, 2 of the 6 positionals from which the scan can reach a
+    staged `.sdc` are of exactly this shape.
+
+    Checked on the path as given — the shipped step-8 gate passes `.` (cwd =
+    the project), whose only part is `.`, so it can never trip this."""
+    hits = [p for p in Path(project).parts
+            if p.lower() in _rfb.OFF_LIMITS_TREE_SEGMENTS]
+    return hits[-1] if hits else None
+
+
+def off_limits_positional_message(project: Path, segment: str) -> str:
+    """The exit-2 line for a positional pointing INTO a staged tree.
+
+    Echoes only the segment the caller themselves typed; it enumerates
+    nothing, because enumerating is the leak."""
+    return (
+        f"[SKIP] sdc_validator_check: NOT CHECKED — the positional "
+        f"{project} sits inside a staged reference/oracle tree "
+        f"({segment!r}) and its {len(_SEARCH_ROOTS)} declared search root(s) "
+        f"("
+        + ", ".join(d for d, _ in _SEARCH_ROOTS)
+        + ") hold no .sdc. §4.05: a staged upstream tree is not this run's "
+          "constraint output, so its contents are neither read nor listed. "
+          "Point this at the PROJECT ROOT")
+
+
+def unusable_positional_message(project: Path) -> str:
+    """The exit-2 line for a positional that is not a directory.
+
+    At exit 0 this was recorded as an ordinary PASS of a program that never
+    opened a file — a certificate issued for a path that does not exist."""
+    kind = "does not exist" if not Path(project).exists() else "is not a directory"
+    return (
+        f"[SKIP] sdc_validator_check: NOT CHECKED — the positional "
+        f"{project} {kind}, so 0 of {len(_SEARCH_ROOTS)} declared search "
+        f"root(s) ("
+        + ", ".join(d for d, _ in _SEARCH_ROOTS)
+        + ") could be resolved and 0 .sdc file(s) were read. The positional "
+          "is the PROJECT ROOT")
 
 
 # ----- L8 <-> SDC cross-check ---------------------------------------
@@ -375,25 +580,99 @@ def l8_sdc_issues(doc: Optional[Dict[str, Any]],
     return issues
 
 
-def _emit(args, sdc_files, issues) -> None:
-    """Print the verdict and — always, so a FAIL leaves its evidence file
-    behind too — write the JSON report when one was requested."""
+# ----- the whole decision, as one pure function ---------------------
+
+_VERDICT_FOR_RC = {RC_PASS: "PASS", RC_FAIL: "FAIL",
+                   RC_NOT_CHECKED: "SKIP"}
+
+
+class Verdict(NamedTuple):
+    """Everything the CLI needs, decided WITHOUT writing anything.
+
+    Factored out so the behaviour can be exercised — and measured across a
+    corpus — by DRIVING it, not by asserting on this file's source text. A
+    source-text assertion passes while the code it names raises at runtime;
+    only a call proves an exit code."""
+    rc: int
+    lines: List[str]
+    report: Dict[str, Any]
+
+
+def evaluate(project: Path, l8: Optional[Path] = None) -> Verdict:
+    """Decide the verdict for `project`. READ-ONLY: never writes, never
+    creates a directory, so it is safe to run over a tracked corpus."""
+    project = Path(project)
+    roots = [str(r) for r in search_roots(project)]
+
+    def _verdict(rc: int, lines: List[str], issues: List[str],
+                 sdc_files: List[Path]) -> Verdict:
+        return Verdict(rc, lines, {
+            "verdict": _VERDICT_FOR_RC[rc],
+            "exit_code": rc,
+            "search_roots": roots,
+            "sdc_files_checked": [str(p) for p in sdc_files],
+            "l8": str(l8) if l8 else None,
+            "issues": issues,
+        })
+
+    # A positional that is not a directory resolved two search roots that
+    # cannot exist and read zero files. At exit 0 that was an ordinary PASS.
+    if not project.is_dir():
+        return _verdict(RC_NOT_CHECKED,
+                        [unusable_positional_message(project)], [], [])
+
+    sdc_files = find_sdc_files(project)
+    # L8 self-consistency is a property of L8 alone, so it is evaluated
+    # BEFORE the no-SDC skip: a contradictory constraint document must not
+    # be able to hide behind an empty SDC glob.
+    l8_doc, l8_err = load_l8(l8)
+    l8_self = l8_self_issues(l8_doc, l8_err)
+
+    if not sdc_files:
+        # An empty glob has several very different causes and used to print
+        # the same line at the same exit code for all of them.
+        #
+        # Tested only once the declared roots have come back empty, so a real
+        # project that merely happens to live under a path segment named
+        # `reference` is still validated normally.
+        off_limits = positional_inside_off_limits(project)
+        if off_limits:
+            return _verdict(
+                RC_NOT_CHECKED,
+                [off_limits_positional_message(project, off_limits)], [], [])
+        scan = scan_for_stray_sdc(project)
+        misdirected = misdirection_diagnostic(scan, project)
+        pre = ([misdirected] if misdirected else []) + l8_self
+        if pre:
+            return _verdict(RC_FAIL, _fail_lines(pre), pre, [])
+        # Nothing was READ. NOT CHECKED — with the scope that was searched.
+        return _verdict(RC_NOT_CHECKED,
+                        [no_sdc_anywhere_message(project, scan)], [], [])
+
+    issues: List[str] = []
+    for sdc in sdc_files:
+        text = sdc.read_text(errors="ignore")
+        if "create_clock" not in text:
+            issues.append(f"{sdc.name}: missing create_clock")
+        if "set_input_delay" not in text:
+            issues.append(f"{sdc.name}: missing set_input_delay")
+        if "set_output_delay" not in text:
+            issues.append(f"{sdc.name}: missing set_output_delay")
+    issues += l8_self
+    issues += l8_sdc_issues(
+        l8_doc, [(s.name, s.read_text(errors="ignore")) for s in sdc_files])
     if issues:
-        print(f"[FAIL] sdc_validator_check: {len(issues)} issue(s)")
-        for i in issues[:5]:
-            print(f"  - {i}")
-    if args.json:
-        try:
-            args.json.parent.mkdir(parents=True, exist_ok=True)
-            args.json.write_text(json.dumps({
-                "verdict": "FAIL" if issues else "PASS",
-                "search_roots": [str(r) for r in search_roots(args.project)],
-                "sdc_files_checked": [str(p) for p in sdc_files],
-                "l8": str(args.l8) if args.l8 else None,
-                "issues": issues,
-            }, indent=2))
-        except OSError:
-            pass
+        return _verdict(RC_FAIL, _fail_lines(issues), issues, sdc_files)
+    n_clocks = len(l8_clock_periods(l8_doc))
+    return _verdict(RC_PASS, [
+        f"[PASS] sdc_validator_check: {len(sdc_files)} SDC file(s) OK"
+        + (f", {n_clocks} L8 clock(s) cross-checked" if n_clocks else "")
+    ], [], sdc_files)
+
+
+def _fail_lines(issues: List[str]) -> List[str]:
+    return ([f"[FAIL] sdc_validator_check: {len(issues)} issue(s)"]
+            + [f"  - {i}" for i in issues[:5]])
 
 
 # ----- CLI ----------------------------------------------------------
@@ -406,43 +685,19 @@ def main():
                         "clock periods against")
     p.add_argument("--json", type=Path, help="optional JSON output path")
     args = p.parse_args()
-    sdc_files = find_sdc_files(args.project)
-    # L8 self-consistency is a property of L8 alone, so it is evaluated
-    # BEFORE the no-SDC skip: a contradictory constraint document must not
-    # be able to hide behind an empty SDC glob.
-    l8_doc, l8_err = load_l8(args.l8)
-    l8_self = l8_self_issues(l8_doc, l8_err)
-    if not sdc_files:
-        # An empty glob has two very different causes and used to print the
-        # same line at the same exit code for both. Separate them before
-        # skipping: a project that carries .sdc the search roots cannot see
-        # has NOT been validated, and must not exit 0.
-        misdirected = misdirected_search_root_issue(args.project)
-        pre = ([misdirected] if misdirected else []) + l8_self
-        if pre:
-            _emit(args, [], pre)
-            return 1
-        print("[SKIP] sdc_validator_check: no .sdc files")
-        return 0
-    issues = []
-    for sdc in sdc_files:
-        text = sdc.read_text(errors="ignore")
-        if "create_clock" not in text:
-            issues.append(f"{sdc.name}: missing create_clock")
-        if "set_input_delay" not in text:
-            issues.append(f"{sdc.name}: missing set_input_delay")
-        if "set_output_delay" not in text:
-            issues.append(f"{sdc.name}: missing set_output_delay")
-    issues += l8_self
-    issues += l8_sdc_issues(
-        l8_doc, [(s.name, s.read_text(errors="ignore")) for s in sdc_files])
-    _emit(args, sdc_files, issues)
-    if issues:
-        return 1
-    n_clocks = len(l8_clock_periods(l8_doc))
-    print(f"[PASS] sdc_validator_check: {len(sdc_files)} SDC file(s) OK"
-          + (f", {n_clocks} L8 clock(s) cross-checked" if n_clocks else ""))
-    return 0
+    v = evaluate(args.project, args.l8)
+    for line in v.lines:
+        print(line)
+    if args.json:
+        # Written on EVERY verdict, so a FAIL and a NOT-CHECKED both leave
+        # their evidence file behind — a missing report used to be the only
+        # external signal that the program never ran.
+        try:
+            args.json.parent.mkdir(parents=True, exist_ok=True)
+            args.json.write_text(json.dumps(v.report, indent=2))
+        except OSError:
+            pass
+    return v.rc
 
 
 if __name__ == "__main__":

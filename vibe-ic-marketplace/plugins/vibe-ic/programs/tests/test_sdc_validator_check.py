@@ -6,8 +6,12 @@ Wave 83 — coverage for previously untested wired program.
 Cases:
   1. POSITIVE_PASS — fpga/*.sdc with all three required clauses → exit 0.
   2. POSITIVE_FAIL — missing set_input_delay → exit 1 with the issue listed.
-  3. SKIP_NO_SDC — fpga/ exists but no .sdc files → exit 0 SKIP.
-  4. SKIP_NO_FPGA_DIR — no fpga/ at all → exit 0 SKIP.
+  3. SKIP_NO_SDC — fpga/ exists but no .sdc files → exit 2 (NOT CHECKED).
+  4. SKIP_NO_FPGA_DIR — no fpga/ at all → exit 2 (NOT CHECKED).
+
+Cases 3 and 4 asserted exit 0 until the exit-code contract was applied: a
+run that reads no file has not PASSED anything, and at exit 0 the compliance
+report recorded it as an ordinary PASS with no `__VACUOUS_HINT__`.
   5. EDGE_MULTIPLE_FILES_ALL_PASS — two .sdc files all valid → PASS with count.
   6. EDGE_MULTIPLE_FILES_ONE_BROKEN — one OK, one broken → FAIL.
 """
@@ -67,7 +71,7 @@ def test_skip_no_sdc_files(tmp_path):
     project = tmp_path / "proj"
     (project / "phase2" / "stage1" / "fpga").mkdir(parents=True)
     cp = _run([str(project)])
-    assert cp.returncode == 0
+    assert cp.returncode == 2, cp.stdout
     assert "[SKIP]" in cp.stdout
 
 
@@ -75,7 +79,7 @@ def test_skip_no_fpga_dir(tmp_path):
     project = tmp_path / "proj"
     project.mkdir(parents=True, exist_ok=True)
     cp = _run([str(project)])
-    assert cp.returncode == 0
+    assert cp.returncode == 2, cp.stdout
     assert "[SKIP]" in cp.stdout
 
 

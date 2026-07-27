@@ -46,10 +46,15 @@ to tell a misdirected search root from an unconstrained design without reading
 the source.
 
 Direction-1 guards pin what must NOT change: a project with no SDC anywhere
-still skips at exit 0; an SDC in either declared root is still validated and
+still does not FAIL; an SDC in either declared root is still validated and
 still fails for its own reason; a stray copy alongside a properly-placed SDC
 changes nothing (this is the reference run's shape); and the pre-existing
 L8-self-contradiction exit still fires on a project with no SDC at all.
+
+EXIT CODES (see `sdc_validator_check`'s module docstring): 0 PASS, 1 FAIL,
+2 NOT CHECKED. Every path that reads nothing exits 2. The skip cases here
+therefore assert rc 2, not rc 0 — at rc 0 they were recorded as ordinary
+PASSes of a program that never opened a file.
 """
 from __future__ import annotations
 
@@ -133,7 +138,7 @@ def test_a_misdirected_root_is_distinguishable_from_an_empty_project(tmp_path):
     real = _project(tmp_path, "real", constraints=_GOOD_SDC)
     misdirected = _run([str(real / "phase2" / "stage2" / "constraints")])
     empty = _run([str(_project(tmp_path, "empty"))])
-    assert empty.returncode == 0 and "[SKIP]" in empty.stdout, empty.stdout
+    assert empty.returncode == 2 and "[SKIP]" in empty.stdout, empty.stdout
     assert misdirected.returncode != empty.returncode, (
         "misdirected and genuinely-empty must not share an exit code: "
         f"{misdirected.returncode} vs {empty.returncode}")
@@ -207,9 +212,12 @@ def test_the_shipped_step8_gate_fails_a_misplaced_sdc(tmp_path):
 
 # ── direction-1 guards: behaviour that must NOT change ──────────────────────
 
-def test_guard_no_sdc_anywhere_still_skips_at_exit_zero(tmp_path):
+def test_guard_no_sdc_anywhere_still_skips_without_failing(tmp_path):
+    """Still not a FAIL — but it is NOT CHECKED (rc 2), not a bare PASS.
+    `sdc_syntax_check`, step 8's first all_of member, is what blocks a design
+    that needs constraints and ships none."""
     cp = _run([str(_project(tmp_path))])
-    assert cp.returncode == 0, cp.stdout
+    assert cp.returncode == 2, cp.stdout
     assert "[SKIP]" in cp.stdout, cp.stdout
 
 
@@ -274,12 +282,33 @@ def test_guard_tool_metadata_directories_are_not_scanned(tmp_path):
     project = _project(tmp_path, stray={Path(".git") / "x.sdc": _GOOD_SDC,
                                         Path("__pycache__") / "y.sdc": _GOOD_SDC})
     cp = _run([str(project)])
-    assert cp.returncode == 0, cp.stdout
+    assert cp.returncode == 2, cp.stdout
     assert "[SKIP]" in cp.stdout, cp.stdout
 
 
-@pytest.mark.parametrize("positional", ["does/not/exist"])
-def test_guard_a_nonexistent_positional_still_skips(tmp_path, positional):
+# INVERTED — this used to assert rc 0.
+#
+# `test_guard_a_nonexistent_positional_still_skips` asserted that a positional
+# which does not exist exits 0. That is the false certificate itself, written
+# down as a guard: the program resolved two search roots under a path that is
+# not there, opened nothing, and the compliance report recorded an ordinary
+# PASS with no `__VACUOUS_HINT__`. A guard that pins a defect prevents the fix
+# rather than protecting anything, so it is inverted here rather than kept.
+@pytest.mark.parametrize("positional", ["does/not/exist", "not/a/dir/parent"])
+def test_a_nonexistent_positional_is_not_checked_not_passed(tmp_path,
+                                                            positional):
     cp = _run([str(tmp_path / positional)])
-    assert cp.returncode == 0, cp.stdout
-    assert "[SKIP]" in cp.stdout, cp.stdout
+    assert cp.returncode == 2, (
+        "a positional that does not exist read ZERO files; exit 0 records "
+        f"that as an ordinary PASS. {cp.stdout!r}")
+    assert "NOT CHECKED" in cp.stdout, cp.stdout
+
+
+def test_a_positional_that_is_a_file_is_not_checked(tmp_path):
+    f = tmp_path / "top.sdc"
+    f.write_text(_GOOD_SDC)
+    cp = _run([str(f)])
+    assert cp.returncode == 2, (
+        "a positional that is a file is not a project root; nothing was "
+        f"validated. {cp.stdout!r}")
+    assert "NOT CHECKED" in cp.stdout, cp.stdout

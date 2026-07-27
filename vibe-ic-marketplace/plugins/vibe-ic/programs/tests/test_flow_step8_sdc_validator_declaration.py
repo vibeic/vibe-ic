@@ -209,7 +209,7 @@ def test_the_prefix_positional_still_reaches_no_sdc_but_no_longer_hides_it(
         f"certification this program was hardened against. {cp.stdout!r}")
     empty = _project(tmp_path / "empty")
     cp2 = _run_prog([str(empty)])
-    assert cp2.returncode == 0 and "[SKIP]" in cp2.stdout, cp2.stdout
+    assert cp2.returncode == 2 and "[SKIP]" in cp2.stdout, cp2.stdout
     assert cp.stdout.strip() != cp2.stdout.strip(), (
         "a misdirected invocation must no longer be indistinguishable from an "
         f"empty project. misdirected={cp.stdout!r} empty={cp2.stdout!r}")
@@ -225,12 +225,14 @@ def test_guard_project_root_call_shape_still_passes(tmp_path):
     assert "[PASS]" in cp.stdout and "1 SDC" in cp.stdout
 
 
-def test_guard_no_sdc_anywhere_is_still_a_zero_exit_skip(tmp_path):
-    """A project that genuinely ships no SDC still SKIPs — `sdc_syntax_check`,
-    the FIRST member of step 8's all_of, is what blocks that case."""
+def test_guard_no_sdc_anywhere_is_still_a_non_failing_skip(tmp_path):
+    """A project that genuinely ships no SDC still SKIPs rather than FAILing —
+    `sdc_syntax_check`, the FIRST member of step 8's all_of, is what blocks
+    that case. It exits 2 (NOT CHECKED), not 0: nothing was read, so the
+    compliance report must render VACUOUS-PASS, not PASS."""
     project = _project(tmp_path)
     cp = _run_prog([str(project)])
-    assert cp.returncode == 0, cp.stdout
+    assert cp.returncode == 2, cp.stdout
     assert "[SKIP]" in cp.stdout
 
 
@@ -239,8 +241,11 @@ def test_guard_empty_search_root_directories_still_skip(tmp_path):
     (project / "phase2" / "stage2" / "constraints").mkdir(parents=True)
     (project / "phase2" / "stage1" / "fpga").mkdir(parents=True)
     cp = _run_prog([str(project)])
-    assert cp.returncode == 0, cp.stdout
+    assert cp.returncode == 2, cp.stdout
     assert "[SKIP]" in cp.stdout
+    # The roots EXIST here and are empty, which the disclosure distinguishes
+    # from the absent-directory case above.
+    assert "[empty]" in cp.stdout, cp.stdout
 
 
 def test_guard_both_search_roots_are_still_searched(tmp_path):

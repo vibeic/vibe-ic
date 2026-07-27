@@ -101,9 +101,7 @@ _MAX_BYTES_PER_FILE = 400_000
 #
 # Any input file whose relative path carries one of these directory segments is
 # skipped. chip-AGNOSTIC (pure directory-name vocabulary).
-_OFF_LIMITS_SEGMENTS = set(_rfb.ORACLE_TREE_SEGMENTS) | {
-    "reference_flow", "ref_flow", "reference",
-}
+_OFF_LIMITS_SEGMENTS = set(_rfb.OFF_LIMITS_TREE_SEGMENTS)
 
 
 def _rel(project: Path, p: Path) -> str:

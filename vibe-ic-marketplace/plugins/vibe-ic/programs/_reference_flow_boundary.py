@@ -49,6 +49,29 @@ ORACLE_TREE_SEGMENTS: FrozenSet[str] = frozenset({
     "solution", "solutions", "answer", "answers", "ground_truth",
 })
 
+# Directory-name vocabulary for the STAGED REFERENCE FLOW tree itself. This is
+# NOT a claim that the tree is oracle end to end — measured over the tracked
+# corpus it is MIXED (recipe config + one QoR-rules oracle artifact), which is
+# exactly why `is_oracle_qor_rules` exists. It is the vocabulary a program uses
+# when it wants the STRICTER rule: skip the whole tree because it has an
+# independent source for what it needs, so reading in there buys nothing and
+# costs a §4.05 exposure.
+REFERENCE_FLOW_TREE_SEGMENTS: FrozenSet[str] = frozenset({
+    "reference_flow", "ref_flow", "reference",
+})
+
+# The strict union: every directory-name segment a program must not read from,
+# NAME in a diagnostic, or point a design author at. Defined ONCE here so a
+# third copy of this vocabulary can never drift from the first two.
+#
+# NAMING matters as much as reading: a diagnostic that cites
+# `.../reference_flow/pre_syn/golden.sdc` as "the file you should have used"
+# hands the author the oracle's location just as effectively as parsing it
+# would. A program that walks a project tree to build a message therefore
+# prunes on this set, and reports the pruned directories only by COUNT.
+OFF_LIMITS_TREE_SEGMENTS: FrozenSet[str] = frozenset(
+    ORACLE_TREE_SEGMENTS | REFERENCE_FLOW_TREE_SEGMENTS)
+
 # File extensions that carry RECIPE (flow configuration) and are therefore
 # legitimate to parse for declared knobs.
 RECIPE_SUFFIXES: Tuple[str, ...] = (".mk", ".tcl")
