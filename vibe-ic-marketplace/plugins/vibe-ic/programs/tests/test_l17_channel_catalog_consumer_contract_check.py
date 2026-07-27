@@ -190,6 +190,160 @@ def test_POSITIVE_every_channel_derives_a_directed_port(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# RAIL E3g: the members are named INSIDE the entry's own `name` string, so the
+# two rails that exist for this loss (E3b counts `signals[]`, E3 tests that
+# SOME port comes out) are both structurally blind to it.
+# ---------------------------------------------------------------------------
+def _fused(name: str, **kw) -> dict:
+    gutted = json.loads(json.dumps(_WELL_FORMED))
+    ch = {"name": name, "direction_master": "Master",
+          "purpose": "several terminals named in one string"}
+    ch.update(kw)
+    gutted["fields"]["channels"].append(ch)
+    return gutted
+
+
+def _fusion_finding(cp):
+    return [f for f in json.loads(cp.stdout)["findings"]
+            if f["category"] == "CHANNEL_NAME_FUSES_DECLARED_SIGNALS"][0]
+
+
+def test_NEGATIVE_name_enumerating_several_signals_fuses_to_one_port(tmp_path):
+    """GUTTED: one `name` enumerates three terminals; the consumer emits ONE
+    port and two declared signals never reach the interface."""
+    r = _run(_mk(tmp_path, _fused("alpha_sig, beta_sig, gamma_sig")))
+    assert r.returncode == 1, r.stdout
+    assert "CHANNEL_NAME_FUSES_DECLARED_SIGNALS" in _cats(r)
+    # Assert on the EVIDENCE KEYS, not on the category string: a future branch
+    # emitting the same category must stay distinguishable from this one.
+    ev = _fusion_finding(r)["evidence"]["entries"][0]
+    assert ev["container"] == "channels"
+    assert ev["members_named"] == ["alpha_sig", "beta_sig", "gamma_sig"]
+    assert ev["emitted_port"] == "alpha_sig_beta_sig_gamma_sig"
+    assert ev["members_also_emitted_separately"] == []
+    assert ev["members_lost"] == ["alpha_sig", "beta_sig", "gamma_sig"]
+
+
+def test_NEGATIVE_slash_delimiter_fuses_too(tmp_path):
+    """The other delimiter a spec writer uses to enumerate terminals."""
+    r = _run(_mk(tmp_path, _fused("alpha_sig / beta_sig")))
+    assert r.returncode == 1, r.stdout
+    assert _fusion_finding(r)["evidence"]["entries"][0]["members_named"] == [
+        "alpha_sig", "beta_sig"]
+
+
+def test_NEGATIVE_a_global_signal_can_fuse_as_well(tmp_path):
+    """The rail reads BOTH port-bearing containers, not just `channels`."""
+    gutted = json.loads(json.dumps(_WELL_FORMED))
+    gutted["fields"]["global_signals"].append(
+        {"name": "supply_hi / supply_lo", "direction": "input",
+         "purpose": "two rails named in one string"})
+    r = _run(_mk(tmp_path, gutted))
+    assert r.returncode == 1, r.stdout
+    assert _fusion_finding(r)["evidence"]["entries"][0]["container"] == \
+        "global_signals"
+
+
+def test_NEGATIVE_the_rail_is_width_agnostic(tmp_path):
+    """The consumer resolves a `[N:0]` hint out of the name, so a fusion of
+    two BUSES emits one correctly-WIDE port. Keying this rail on `width == 1`
+    would hand exactly that case a green gate."""
+    r = _run(_mk(tmp_path, _fused("alpha_bus[7:0] / beta_bus[7:0]")))
+    assert r.returncode == 1, r.stdout
+    ev = _fusion_finding(r)["evidence"]["entries"][0]
+    assert ev["emitted_width"] == 8, ev
+    assert len(ev["members_named"]) == 2
+
+
+def test_POSITIVE_single_identifier_names_never_fuse(tmp_path):
+    """WELL-FORMED: one entry per terminal => the rail is silent."""
+    r = _run(_mk(tmp_path, _WELL_FORMED))
+    assert "CHANNEL_NAME_FUSES_DECLARED_SIGNALS" not in _cats(r), r.stdout
+
+
+def test_POSITIVE_one_character_member_is_refused_not_split(tmp_path):
+    """REFUSAL 1. A single terminal whose own NAME contains a delimiter must
+    not be reported as two terminals. The rail refuses the whole string rather
+    than emit a member list it had to guess at."""
+    r = _run(_mk(tmp_path, _fused("R/B_n")))
+    assert "CHANNEL_NAME_FUSES_DECLARED_SIGNALS" not in _cats(r), r.stdout
+
+
+def test_POSITIVE_members_also_emitted_separately_lose_nothing(tmp_path):
+    """REFUSAL 2. When the catalog declares the group AND each member, the
+    group name is redundant, not lossy => no finding."""
+    gutted = json.loads(json.dumps(_WELL_FORMED))
+    gutted["fields"]["channels"] += [
+        {"name": "alpha_sig / beta_sig", "direction_master": "Master",
+         "purpose": "the group"},
+        {"name": "alpha_sig", "direction_master": "Master", "purpose": "a"},
+        {"name": "beta_sig", "direction_master": "Master", "purpose": "b"}]
+    r = _run(_mk(tmp_path, gutted))
+    assert "CHANNEL_NAME_FUSES_DECLARED_SIGNALS" not in _cats(r), r.stdout
+
+
+def test_POSITIVE_e3b_keeps_its_own_case_and_e3g_does_not_double_report(
+        tmp_path):
+    """A group whose members are `signals[]` ROWS is E3b's case. E3g must not
+    also fire on it, or one loss would be counted twice under two categories."""
+    gutted = json.loads(json.dumps(_WELL_FORMED))
+    gutted["fields"]["channels"] = [{
+        "name": "alpha_sig / beta_sig", "direction_majority": "Master",
+        "purpose": "a group that ALSO enumerates in its name",
+        "signals": [{"name": "alpha_sig", "direction": "Master",
+                     "semantics": "a"},
+                    {"name": "beta_sig", "direction": "Master",
+                     "semantics": "b"}]}]
+    gutted["fields"]["handshake_pairs"] = {}
+    cats = _cats(r := _run(_mk(tmp_path, gutted)))
+    assert "CHANNEL_GROUP_COLLAPSED_TO_ONE_PORT" in cats, r.stdout
+    assert "CHANNEL_NAME_FUSES_DECLARED_SIGNALS" not in cats, r.stdout
+
+
+def test_POSITIVE_an_entry_that_derives_no_port_is_e3s_case(tmp_path):
+    """When the consumer emits NO port for the entry, nothing was fused into
+    anything; E3 owns that case and E3g must stay silent."""
+    gutted = json.loads(json.dumps(_WELL_FORMED))
+    gutted["fields"]["channels"].append(
+        {"name": " / ", "direction_master": "Master", "purpose": "ghost"})
+    cats = _cats(r := _run(_mk(tmp_path, gutted)))
+    assert "CHANNEL_NOT_PORT_DERIVABLE" in cats, r.stdout
+    assert "CHANNEL_NAME_FUSES_DECLARED_SIGNALS" not in cats, r.stdout
+
+
+# ---------------------------------------------------------------------------
+# The splitter itself — pure syntax, asserted directly so a loosened or
+# tightened regex reddens here and not only through a whole-project fixture.
+# ---------------------------------------------------------------------------
+def _splitter():
+    sys.path.insert(0, str(PROG.parent))
+    import l17_channel_catalog_consumer_contract_check as g
+    return g.fused_member_names
+
+
+def test_splitter_accepts_only_enumerations_of_readable_terminals():
+    f = _splitter()
+    assert f("alpha_sig, beta_sig") == ["alpha_sig", "beta_sig"]
+    assert f("alpha_sig / beta_sig / gamma_sig") == [
+        "alpha_sig", "beta_sig", "gamma_sig"]
+    assert f("alpha_n / beta_n#") == ["alpha_n", "beta_n#"]
+    assert f("alpha_bus[7:0], beta_bus[7:0]") == [
+        "alpha_bus[7:0]", "beta_bus[7:0]"]
+
+
+def test_splitter_refuses_anything_it_would_have_to_guess_at():
+    f = _splitter()
+    assert f("alpha_sig") is None            # not an enumeration at all
+    assert f("R/B_n") is None                # one-character member
+    assert f("A/B") is None                  # both members one character
+    assert f("alpha_sig / a running sentence about it") is None
+    assert f("alpha_sig / (parenthesised)") is None
+    assert f("") is None
+    assert f(None) is None
+    assert f(42) is None
+
+
+# ---------------------------------------------------------------------------
 # RAIL: clock reachability. NEGATIVE CONTROL PAIR.
 #
 # derive_signals AUTO-ADDS a "clk" stub, so "did a clock come out?" can never

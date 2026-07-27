@@ -89,6 +89,31 @@ E3b CHANNEL_GROUP_COLLAPSED_TO_ONE_PORT
     single port and drops every member. The declared interface silently
     shrinks from N signals to 1.
 
+E3g CHANNEL_NAME_FUSES_DECLARED_SIGNALS
+    A catalog entry's `name` is a DELIMITER-SEPARATED LIST of two or more
+    identifier-shaped tokens (`"AA / BB"`, `"AA, BB, CC"`), and the consumer's
+    own derivation turns that whole string into ONE port. `_sanitize_id`
+    rewrites the delimiter to an underscore, so N declared signals fuse into a
+    single terminal and N-1 of them never reach the emitted top module.
+    THIS IS E3b'S HARM THROUGH A DOOR E3b CANNOT SEE. E3b detects the same
+    collapse only when the members are rows in `channels[].signals[]`; when the
+    catalog names its members INSIDE the entry's own `name` string there is no
+    `signals[]` to count, so E3b passes the entry and E3 passes it too — the
+    fused string sanitizes to a non-empty identifier and does contribute a
+    port, which is exactly what those two rails test for.
+    TWO REFUSALS, BOTH MEASURED, BOTH DELIBERATE:
+      * every member's identifier part must be at least two characters. A
+        one-character member is how a single signal whose own NAME contains a
+        delimiter gets mistaken for two signals. It also drops a real fusion
+        whose list happens to contain a one-character member — a conservative
+        miss, which is the direction this gate family errs in.
+      * an entry whose members are ALSO each emitted as their own port loses
+        nothing, so it is not reported. The catalog is then declaring a group
+        AND its members, and the group name is redundant, not lossy.
+    Width-agnostic on purpose: the consumer resolves a `[N:0]` hint out of the
+    name, so a fusion of two buses emits one CORRECTLY-WIDE port that is still
+    one port where the layer declared two.
+
 E3c PORT_WIDTH_COLLAPSED_TO_ONE_BIT
     A port is emitted as a 1-bit scalar while the L9 entry it comes from
     carries a SYMBOLIC width (`width_symbolic: "ACC_W-1:0"`) or a non-numeric
@@ -272,6 +297,15 @@ _ENTITY_LIST_KEYS = {
 }
 
 _TOKEN_SHAPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.\-]{1,63}$")
+
+# E3g — a catalog entry naming SEVERAL signals inside one `name` string.
+# The delimiters a spec writer uses to enumerate terminals in running text.
+_FUSION_DELIM = re.compile(r"\s*[,/]\s*")
+# One member as a spec writes a terminal: an identifier, optionally carrying a
+# bus range and/or a trailing active-low marker. Group 1 is the identifier part
+# whose LENGTH is what the two-character refusal below tests.
+_FUSION_MEMBER = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?#?$")
+_FUSION_MIN_MEMBER_CHARS = 2
 
 
 @dataclass
@@ -693,6 +727,79 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
             f"these become silently bidirectional top-level ports.",
             {"signals": sorted(set(inout_guessed))[:20]}))
 
+    # -- E3g CHANNEL_NAME_FUSES_DECLARED_SIGNALS ---------------------------
+    # E3b sees a group collapse only when the members are rows in
+    # `channels[].signals[]`. When the catalog names its members INSIDE the
+    # entry's own `name` string there is no `signals[]` to count, so E3b
+    # cannot fire — and neither can E3, because the fused string sanitizes to
+    # a non-empty identifier and does contribute a port. Same harm, and the
+    # two rails that exist for it are both structurally blind to it.
+    #
+    # Reported only when the fusion actually LOSES something: an entry whose
+    # members are each also emitted as their own port declares a group AND its
+    # members, which is redundant rather than lossy. And a member list is only
+    # believed when every part is readable as a terminal, so a single signal
+    # whose own name contains a delimiter is refused rather than split.
+    _collapsed_by_e3b = {c.get("channel") for c in collapsed}
+    fused: List[Dict[str, Any]] = []
+    _derived_by_name = {d.get("name"): d for d in derived
+                        if isinstance(d, dict)}
+    for _kind, _entries in (("channels", channels),
+                            ("global_signals", globals_)):
+        for _e in _as_list(_entries):
+            if not isinstance(_e, dict):
+                continue
+            _members = fused_member_names(_e.get("name"))
+            if not _members:
+                continue
+            if _e.get("name") in _collapsed_by_e3b:
+                continue          # already reported, with its own member list
+            _port = _c_sanitize_id(re.sub(r"\[\d+:0\]", "", str(_e["name"])))
+            if _port not in _derived_by_name:
+                continue          # the consumer emitted no port for it at all
+            _separate = [m for m in _members
+                         if _c_sanitize_id(m) in _derived_by_name]
+            if len(_separate) >= len(_members):
+                continue          # nothing is lost; the group name is spare
+            fused.append({
+                "container": _kind,
+                "declared_name": _e.get("name"),
+                "members_named": _members,
+                "emitted_port": _port,
+                "emitted_width": _derived_by_name[_port].get("width"),
+                "members_also_emitted_separately": _separate,
+                "members_lost": [m for m in _members
+                                 if _c_sanitize_id(m) not in _derived_by_name],
+            })
+    if fused:
+        # The honest count is `members_lost` itself, NOT `members_lost - 1`.
+        # The fused port is not any member's port — a terminal named
+        # "AA_BB" is neither AA nor BB — so no member is "covered" by it and
+        # there is no one to subtract. (E3b's own N-1 arithmetic charges the
+        # group port to a member for the same reason it should not; that is
+        # E3b's to correct, and this rail does not copy it.)
+        _lost = sum(len(f["members_lost"]) for f in fused)
+        findings.append(Finding(
+            "ERROR", "CHANNEL_NAME_FUSES_DECLARED_SIGNALS",
+            f"{len(fused)} catalog entr(y/ies) name TWO OR MORE signals inside "
+            f"a single `name` string, and the consumer's own derivation fuses "
+            f"each whole string into ONE port — "
+            f"phase2_scaffold_gen._sanitize_id rewrites the delimiter to an "
+            f"underscore, so {_lost} declared signal(s) never reach the "
+            f"emitted top module. This is the same loss E3b reports, arriving "
+            f"through a door E3b cannot see: E3b counts "
+            f"`channels[].signals[]`, and an entry that enumerates its members "
+            f"in its own name has no such list, while E3 passes it because the "
+            f"fused string is a valid identifier that does contribute a port. "
+            f"Remedy in the producer: one catalog entry per terminal, or the "
+            f"members as `signals[]` rows.",
+            # The total is carried as EVIDENCE and not only in the prose, so
+            # the number a reader acts on is the number a test can pin.
+            # `entries` is capped for readability; this count is not.
+            {"declared_signals_without_a_port": _lost,
+             "entries_reported": len(fused),
+             "entries": fused[:20]}))
+
     # -- E3c PORT_WIDTH_COLLAPSED_TO_ONE_BIT (ORGANIC #404, increment 1) ---
     # `derive_signals` coerces any width that is neither an int nor a
     # digit-string to 1, with NO diagnostic. So a port the design declares as
@@ -1012,6 +1119,30 @@ def _any_identifier_content(ch: dict) -> bool:
         if _has_identifier_content(cand):
             return True
     return False
+
+
+def fused_member_names(name: Any) -> Optional[List[str]]:
+    """The signal names a single catalog `name` string enumerates, or None.
+
+    Returns None — meaning "this is not an enumeration" — unless EVERY
+    delimiter-separated part is a terminal-shaped token whose identifier part
+    is at least `_FUSION_MIN_MEMBER_CHARS` long. One unreadable part refuses
+    the whole string rather than reporting a member list this function had to
+    guess at, the same refusal `shipped_netlist_port_widths` makes when a file
+    has no unique top.
+
+    Pure syntax over the delimiter characters a spec writer uses to enumerate
+    terminals in running text; no vocabulary of names is involved."""
+    if not isinstance(name, str) or not name.strip():
+        return None
+    parts = [p.strip() for p in _FUSION_DELIM.split(name.strip()) if p.strip()]
+    if len(parts) < 2:
+        return None
+    for p in parts:
+        m = _FUSION_MEMBER.match(p)
+        if not m or len(m.group(1)) < _FUSION_MIN_MEMBER_CHARS:
+            return None
+    return parts
 
 
 def _channel_contribution(ch: dict, derived: List[dict]) -> List[str]:
