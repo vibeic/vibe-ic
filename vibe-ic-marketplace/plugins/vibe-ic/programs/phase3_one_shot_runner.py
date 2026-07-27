@@ -14237,6 +14237,50 @@ def _max_captable_c(pdk: "PdkConfig", container: str) -> str:
     return ""
 
 
+# Tcl helper emitted once per repair script: measure the CURRENT DRV violator
+# population (max_slew / max_capacitance / max_fanout) on whatever parasitics are
+# annotated right now, using the SAME `report_check_types -violators` emitter the
+# sign-off STA uses — so the number the repair loop closes on is the number the
+# sign-off will judge, not a second opinion.
+#
+# Returns -1 when the query itself failed (tool without the flag / redirect).
+# -1 means UNMEASURED, and UNMEASURED IS NOT ZERO: every caller must treat it as
+# "cannot claim closure", never as "clean". chip/PDK-AGNOSTIC (stock OpenSTA
+# flags, no design/vendor/cell literal).
+_SHIP_DRV_COUNT_PROC_TCL = r"""
+proc _ship_drv_count {rpt} {
+  catch {file delete -- $rpt}
+  if {[catch {report_check_types -max_slew -max_capacitance -max_fanout \
+              -violators -max_count __VIOLMAX__ >> $rpt} _e]} {
+    puts "SHIP_DRV_QUERY_FAILED: $_e"
+    return -1
+  }
+  # The query "succeeded" but produced no report: the redirect did nothing, so
+  # there is no measurement. That is UNMEASURED (-1), never a clean zero.
+  if {![file exists $rpt]} { puts "SHIP_DRV_QUERY_NOFILE"; return -1 }
+  set _fh [open $rpt r]
+  set _txt [read $_fh]
+  close $_fh
+  set _n 0
+  foreach _ln [split $_txt "\n"] {
+    if {[string first "(VIOLATED)" $_ln] >= 0} { incr _n }
+  }
+  return $_n
+}
+proc _ship_drv_disclose {rpt tag} {
+  if {![file exists $rpt]} { return }
+  set _fh [open $rpt r]
+  set _txt [read $_fh]
+  close $_fh
+  foreach _ln [split $_txt "\n"] {
+    if {[string first "(VIOLATED)" $_ln] >= 0} {
+      puts "${tag}_PIN [string trim $_ln]"
+    }
+  }
+}
+"""
+
+
 _SHIP_POSTROUTE_CVG_TCL = r"""
 # === POST-REROUTE real-SPEF convergence (#603 — SS setup closure) ===
 # SHIP_WNS_AFTER_REPAIR above is measured with the set_wire_rc wire-load model on
@@ -14256,7 +14300,27 @@ _SHIP_POSTROUTE_CVG_TCL = r"""
 # APIs + the active PDK's max captable (no chip/vendor/SKU literal).
 # MEASURED (sha256 x sky130A, ss_100C_1v60 max-RC SPEF): SS setup
 # -6.66 ns -> -2.32 ns after one pass, converging over the bounded loop.
+#
+# === DRV IS A CLOSURE AXIS, NOT A SIDE EFFECT (measured, this loop's own bug) ===
+# This loop used to break on `SHIP_CVG_CLOSED` the moment SETUP worst slack was
+# non-negative, and its final block reported ONLY setup worst slack. A design
+# whose setup is comfortably positive but whose POST-REROUTE real parasitics
+# carry max_slew / max_capacitance violations therefore exited at pass 0 having
+# executed ZERO post-reroute `repair_design` calls, shipped the unrepaired DRV as
+# the sign-off route, and disclosed nothing — the step's transcript contained no
+# DRV number at all, so the residual was first seen by the Step-23 multi-corner
+# STA that (correctly) FAILed on it.
+# MEASURED end-to-end on the run that exposed this: setup +4.72 ns (loop broke at
+# pass 0, `SHIP_CVG_CLOSED`), while the SAME session's own
+# `report_check_types -violators` on the SAME real max-RC SPEF listed 4 max_slew
+# + 1 max_capacitance VIOLATED pins — the exact five Step-23 reported. Replaying
+# one post-reroute `repair_design` on those parasitics found the slew violation,
+# resized ONE instance, and after the reroute + fresh extraction the violator
+# table was EMPTY with setup unchanged (4.716 -> 4.713 ns) and the route
+# DRC-clean (0 violations). The repair was always able to do it; the loop simply
+# never asked. Closure now requires BOTH axes, and both are on the record.
 set _ship_prev_wns -1.0e30
+set _ship_prev_drv 1073741824
 for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
   catch {define_process_corner -ext_model_index 0 X}
   if {[catch {extract_parasitics -ext_model_file __CAP__ -corner_cnt 1 -max_res 50 -coupling_threshold 0.1} e]} { puts "SHIP_CVG_EXT_NONFATAL: $e" }
@@ -14265,10 +14329,26 @@ for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
   if {[catch {estimate_parasitics -detailed_routing} e]} { puts "SHIP_CVG_EST_NONFATAL: $e" }
   set _cvg_wns [sta::worst_slack -max]
   puts "SHIP_WNS_CVG_PASS${_cvg}: $_cvg_wns"
+  set _cvg_drv [_ship_drv_count __PNR__/signoff_repair_drv.rpt]
+  puts "SHIP_DRV_CVG_PASS${_cvg}: $_cvg_drv"
   if {![string is double -strict $_cvg_wns]} { puts "SHIP_CVG_NONNUMERIC"; break }
-  if {$_cvg_wns >= -0.001} { puts "SHIP_CVG_CLOSED"; break }
-  if {$_cvg > 0 && [string is double -strict $_ship_prev_wns] && $_cvg_wns <= [expr {$_ship_prev_wns + 0.10}]} { puts "SHIP_CVG_PLATEAU"; break }
+  # UNMEASURED IS NOT ZERO: a failed DRV query (-1) can never satisfy the DRV
+  # half of closure, but it must not spin the loop either — it degrades to the
+  # historical setup-only closure and says so, so the omission is on the record
+  # instead of being read as a clean bill of health.
+  set _drv_closed [expr {$_cvg_drv == 0}]
+  if {$_cvg_drv < 0} {
+    puts "SHIP_CVG_DRV_UNMEASURED (setup-only closure this pass; UNMEASURED is not ZERO)"
+    set _drv_closed 1
+  }
+  if {$_cvg_wns >= -0.001 && $_drv_closed} { puts "SHIP_CVG_CLOSED"; break }
+  # PLATEAU: only when NEITHER axis improved. Setup alone stalling while the DRV
+  # population is still coming down is progress, and vice versa.
+  if {$_cvg > 0 && [string is double -strict $_ship_prev_wns]
+      && $_cvg_wns <= [expr {$_ship_prev_wns + 0.10}]
+      && $_cvg_drv >= $_ship_prev_drv} { puts "SHIP_CVG_PLATEAU"; break }
   set _ship_prev_wns $_cvg_wns
+  set _ship_prev_drv $_cvg_drv
   for {set _ci 0} {$_ci < 5} {incr _ci} {
     if {[catch {repair_design} e]} { puts "SHIP_CVG_RD_NONFATAL: $e"; break }
     if {[catch {repair_timing -setup} e]} { puts "SHIP_CVG_RT_NONFATAL: $e" }
@@ -14287,13 +14367,28 @@ catch {write_spef __PNR__/signoff_repair_max.spef}
 catch {read_spef __PNR__/signoff_repair_max.spef}
 catch {estimate_parasitics -detailed_routing}
 catch {puts "SHIP_WNS_POSTROUTE: [sta::worst_slack -max]"}
+# The HONEST post-reroute DRV population of the route this step is about to
+# write. Emitted unconditionally (0 is a measurement, -1 is UNMEASURED) and the
+# residual violating pins are listed, so a run that ships a DRV residual says so
+# in its own transcript instead of leaving Step-23 to discover it.
+set _ship_drv_post [_ship_drv_count __PNR__/signoff_repair_drv.rpt]
+puts "SHIP_DRV_POSTROUTE: $_ship_drv_post"
+_ship_drv_disclose __PNR__/signoff_repair_drv.rpt SHIP_DRV_RESIDUAL
 """
+
+
+def _ship_drv_count_proc_tcl() -> str:
+    """The `_ship_drv_count` / `_ship_drv_disclose` Tcl helpers (see
+    _SHIP_DRV_COUNT_PROC_TCL). Emitted once, before any caller.
+    chip/PDK-AGNOSTIC."""
+    return _SHIP_DRV_COUNT_PROC_TCL.replace(
+        "__VIOLMAX__", str(_CHECK_TYPES_VIOLATORS_MAX_COUNT))
 
 
 def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
                                     bound: int = 3) -> str:
-    """POST-REROUTE real-SPEF setup-closure loop appended to the shipped signoff
-    repair (see _SHIP_POSTROUTE_CVG_TCL). Sentinel-token replacement (not
+    """POST-REROUTE real-SPEF setup+DRV closure loop appended to the shipped
+    signoff repair (see _SHIP_POSTROUTE_CVG_TCL). Sentinel-token replacement (not
     f-string/format) so the TCL's own braces need no escaping. chip/PDK-AGNOSTIC."""
     # __SPARE_SAFE_CLEAR__ -> the shared spare-net-safe clear (#349 salvage;
     # a third inline copy of the filter is how a drift starts).
@@ -14336,6 +14431,9 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     # exposes no fill masters (then the base route already had none).
     refill_block = _build_sparse_die_aware_filler_tcl(filler_masters or [])
     return (
+        # DRV measurement helpers, defined before any caller (the pre-repair
+        # baseline, every convergence pass, and the final honest measurement).
+        f"{_ship_drv_count_proc_tcl()}"
         f"set_thread_count {thread_count}\n"
         f"read_lef {tech_lef_c}\n"
         f"read_lef {cell_lef_c}\n"
@@ -14383,6 +14481,13 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "if {[catch {estimate_parasitics -detailed_routing} e]} { "
         "puts \"SHIP_EST_DR_NONFATAL: $e\" }\n"
         "catch {puts \"SHIP_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
+        # BASE-ROUTE DRV baseline, measured with the SAME emitter as the final
+        # post-reroute number so the promotion gate can compare like with like
+        # and refuse a route that ships MORE DRV than the base it replaces.
+        # (`repair_design`'s own `Found N ... violations.` lines are an entry
+        # count from a different measurement and cannot serve as that baseline.)
+        f"catch {{puts \"SHIP_DRV_BEFORE: "
+        f"[_ship_drv_count {pnr_dir_c}/signoff_repair_drv.rpt]\"}}\n"
         # DRV-CLOSURE-LOOP — `repair_design` is a GREEDY SINGLE-PASS resizer:
         # its own log line ("Found N slew violations." / "Found N
         # capacitance violations.") reports what it found AT ENTRY, not what
@@ -14436,10 +14541,28 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # DPL-0038 re-fill (restore decap/fill tiling cleared above), AFTER the
         # reroute exactly like the base flow places fill after detailed_route.
         + f"{refill_block}"
-        f"if {{[catch {{write_def {pnr_dir_c}/routed_repaired.def}} e]}} {{ "
-        f"puts \"SHIP_WD_NONFATAL: $e\" }}\n"
-        f"if {{[catch {{write_verilog {pnr_dir_c}/{top}_pnr_repaired.v}} e]}} {{ "
-        f"puts \"SHIP_WV_NONFATAL: $e\" }}\n"
+        # A WRITE THAT CANNOT FAIL IS A STEP THAT CANNOT FAIL. These two writes
+        # produce the ONLY artefacts the Python step promotes as the sign-off
+        # route; a bare `catch` around them let a failed write pass silently, and
+        # the step's `is_file() and size > 0` check would then happily promote the
+        # PREVIOUS run's stale artefact (this pnr dir is reused across converge
+        # re-runs). Both outcomes are now stated explicitly — SHIP_WD_OK/SHIP_WV_OK
+        # with the byte count on success, SHIP_WD_FAILED/SHIP_WV_FAILED with the
+        # reason on failure — and the promotion gate refuses on the failure marker.
+        f"if {{[catch {{write_def {pnr_dir_c}/routed_repaired.def}} e]}} {{\n"
+        f"  puts \"SHIP_WD_FAILED: $e\"\n"
+        f"}} else {{\n"
+        f"  if {{[catch {{file size {pnr_dir_c}/routed_repaired.def}} _sz]}} {{\n"
+        f"    puts \"SHIP_WD_FAILED: wrote no file: $_sz\"\n"
+        f"  }} else {{ puts \"SHIP_WD_OK: $_sz\" }}\n"
+        f"}}\n"
+        f"if {{[catch {{write_verilog {pnr_dir_c}/{top}_pnr_repaired.v}} e]}} {{\n"
+        f"  puts \"SHIP_WV_FAILED: $e\"\n"
+        f"}} else {{\n"
+        f"  if {{[catch {{file size {pnr_dir_c}/{top}_pnr_repaired.v}} _sz]}} {{\n"
+        f"    puts \"SHIP_WV_FAILED: wrote no file: $_sz\"\n"
+        f"  }} else {{ puts \"SHIP_WV_OK: $_sz\" }}\n"
+        f"}}\n"
         "puts \"SHIP_SIGNOFF_REPAIR_DONE\"\n"
     )
 
@@ -14464,6 +14587,10 @@ def _parse_ship_repair_log(log: str) -> dict:
     def _f(tag):
         m = _re.search(tag + r":\s*(-?[0-9.]+)", log or "")
         return float(m.group(1)) if m else None
+
+    def _i(tag):
+        m = _re.search(tag + r":\s*(-?\d+)", log or "")
+        return int(m.group(1)) if m else None
     viols = _re.findall(r"[Nn]umber of violations\s*=\s*(\d+)", log or "")
     slew_found = [int(m) for m in
                   _re.findall(r"Found (\d+) slew violations\.", log or "")]
@@ -14476,6 +14603,17 @@ def _parse_ship_repair_log(log: str) -> dict:
         # #603 — the HONEST post-reroute real-SPEF worst slack (the number
         # the sign-off independently re-derives); None on older/stubbed logs.
         "wns_postroute": _f("SHIP_WNS_POSTROUTE"),
+        # DRV closure axis: the violator population measured with the SAME
+        # `report_check_types -violators` emitter the sign-off uses, on the base
+        # route (BEFORE) and on the route this step is about to ship
+        # (POSTROUTE). -1 means the query failed — UNMEASURED, NOT ZERO.
+        # None on older/stubbed logs (guards below are then skipped).
+        "drv_before": _i("SHIP_DRV_BEFORE"),
+        "drv_postroute": _i("SHIP_DRV_POSTROUTE"),
+        # Explicit write outcomes. A write that reported FAILED can never be
+        # promoted, no matter what stale artefact is sitting in the pnr dir.
+        "def_write_failed": "SHIP_WD_FAILED:" in (log or ""),
+        "v_write_failed": "SHIP_WV_FAILED:" in (log or ""),
         "route_violations": (int(viols[-1]) if viols else None),
         "drv_slew_before": (slew_found[0] if slew_found else None),
         "drv_slew_after": (slew_found[-1] if slew_found else None),
@@ -14485,18 +14623,44 @@ def _parse_ship_repair_log(log: str) -> dict:
     }
 
 
+def _ship_drv_phrase(n: "Optional[int]") -> str:
+    """Render a DRV violator count for a human-readable step message WITHOUT
+    letting an absent or failed measurement read as zero. `None` (no marker in
+    the transcript) and `-1` (the query itself failed) both render as
+    UNMEASURED — never as a number, never as clean."""
+    if n is None or n < 0:
+        return "UNMEASURED"
+    return str(n)
+
+
 def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
                                 repaired_v_ok: bool) -> bool:
     """Promotion policy (FAIL-SAFE, no DRC regression, no DRV regression):
     promote the repaired route as the shipped sign-off ONLY when (a) a
     complete repaired routed.def + netlist were written, (b) the repair
     reached non-negative setup at the slow corner (estimate), (c) the reroute
-    converged to 0 DRC violations, AND (d) the slew/capacitance DRV population
+    converged to 0 DRC violations, (d) the slew/capacitance DRV population
     did not get WORSE across the session (first-seen vs last-seen `Found N ...
-    violations.` counts from repair_design's own transcript). Otherwise keep
-    the base route (the honest FAIL stays a timing FAIL, never becomes a DRC
-    FAIL, and never becomes a WORSE DRV FAIL than what was already shipped)."""
+    violations.` counts from repair_design's own transcript), (e) neither write
+    DISCLOSED a failure, and (f) the sign-off's OWN DRV violator count
+    (`report_check_types -violators`, measured the same way on the base route
+    and on the candidate) did not go UP. Otherwise keep the base route (the
+    honest FAIL stays a timing FAIL, never becomes a DRC FAIL, and never
+    becomes a WORSE DRV FAIL than what was already shipped)."""
     if not (repaired_def_ok and repaired_v_ok):
+        return False
+    # A write that DISCLOSED failure is never promoted. Without this the only
+    # evidence was `is_file() and size > 0`, which a stale artefact from a
+    # previous run in the same pnr dir satisfies just as well as a fresh write.
+    if parsed.get("def_write_failed") or parsed.get("v_write_failed"):
+        return False
+    # DRV NON-REGRESSION on the sign-off's OWN measurement (like-for-like: the
+    # same `report_check_types -violators` emitter on the base route and on the
+    # candidate). Strictly additive — skipped when either endpoint is absent
+    # (older/stubbed log) or negative (UNMEASURED, which is never evidence).
+    db, dp = parsed.get("drv_before"), parsed.get("drv_postroute")
+    if (db is not None and dp is not None and db >= 0 and dp >= 0
+            and dp > db):
         return False
     # #603 — no-regression SAFETY guard (strictly additive): never promote
     # a repaired route whose HONEST post-reroute real-SPEF worst slack
@@ -14557,6 +14721,19 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
     tcl_path = pnr_out / "signoff_spef_repair.tcl"
     tcl_path.write_text(tcl)
     tcl_c = _to_container_path(str(tcl_path), container)
+    # Remove any PREVIOUS run's repaired artefacts before the tool runs. The pnr
+    # dir is reused across converge re-runs, and the promotion evidence below is
+    # `is_file() and size > 0` — which a stale file satisfies exactly as well as
+    # a fresh write. Without this, a repair whose write_def failed would promote
+    # the last run's DEF as this run's sign-off route and nothing would say so.
+    for _stale in (pnr_out / "routed_repaired.def",
+                   pnr_out / f"{top}_pnr_repaired.v"):
+        try:
+            _stale.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
     try:
         # Long, open-ended PnR/reroute run — route it through the progress-stall
         # WATCHDOG (marker=tcl_c, already in the argv) exactly like the base
@@ -14590,16 +14767,21 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
             _gds.unlink()   # force step_gds to re-derive from the repaired route
         return StepResult(
             "signoff_spef_repair", "PASS", time.time() - t0,
-            f"SHIPPED real-SPEF setup repair @slow sign-off corner: setup "
+            f"SHIPPED real-SPEF setup+DRV repair @slow sign-off corner: setup "
             f"{parsed['wns_before']}->{parsed.get('wns_postroute', parsed['wns_after_repair'])} "
-            f"ns (honest post-reroute real-SPEF), reroute "
+            f"ns (honest post-reroute real-SPEF), DRV violators "
+            f"{_ship_drv_phrase(parsed.get('drv_before'))}->"
+            f"{_ship_drv_phrase(parsed.get('drv_postroute'))}, reroute "
             f"DRC-clean (0 violations); promoted as sign-off route.",
             [str(routed), str(_pnr_v)])
     return StepResult(
         "signoff_spef_repair", "PASS", time.time() - t0,
         f"no-op (base route kept): repair estimate {parsed['wns_before']}->"
         f"{parsed['wns_after_repair']} ns, reroute violations="
-        f"{parsed['route_violations']}; not promoted (needs setup>=0 and DRC-clean).")
+        f"{parsed['route_violations']}, DRV violators "
+        f"{_ship_drv_phrase(parsed.get('drv_before'))}->"
+        f"{_ship_drv_phrase(parsed.get('drv_postroute'))}; not promoted "
+        f"(needs setup>=0, DRC-clean and no DRV regression).")
 
 
 # --- DRV wire-length escalation (a SEPARATE, independently-gated attempt) --
