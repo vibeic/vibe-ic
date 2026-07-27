@@ -15,15 +15,31 @@ Rolls the three DFT-depth checks into ONE tapeout-facing verdict:
   3. BSDL       : a padded design has a BSDL + boundary-scan-cell-per-pad
                   plan present (from bsdl_emit). A bare core is N/A (SKIP).
                   A padded design with a missing BSDL FAILs. Missing
-                  bsdl_plan evidence FAILs (never a vacuous pass).
+                  bsdl_plan evidence FAILs, unless the whole step was
+                  disclosed-skipped (see the §4.05 block below, which this
+                  program short-circuits on before it reaches BSDL at all).
 
-§4.05 (never a vacuous pass on absence):
-  * absent stuck-at evidence  → FAIL
+§4.05 (never an UNDISCLOSED pass on absence):
+  * absent stuck-at evidence, no disclosed sentinel → FAIL
   * absent transition record  → FAIL
   * absent BSDL plan          → FAIL (cannot prove boundary-scan status)
   * bare-core BSDL            → SKIP (honest N/A, not a pass-for-nothing)
   * engine-limited transition → ENGINE_LIMITED (accepted only when
                                 documented; otherwise FAIL)
+  * absent stuck-at evidence AND a sibling sentinel in phase2/stage2/dft/
+    self-reporting verdict ∈ {SKIP, SKIPPED, SKIPPED-CONDITION}
+                              → SKIPPED-CONDITION (rc=2), NOT a FAIL
+
+The first bullet used to read "absent stuck-at evidence → FAIL" with no
+qualifier. That has not matched the shipped code since the disclosed-skip
+branch landed (see `main()`, guarded by
+`dft_signoff_common.disclosed_atpg_skip`): this program short-circuits to
+rc=2 / "SKIPPED-CONDITION" before any aggregation when the stuck-at evidence
+is absent and the runner left a `dft_atpg_not_run.json` sentinel, and
+flow_compliance_check scores rc=2 as passed=True in its VACUOUS_PASS tier.
+Reproduced on the real spm x ihp-sg13g2 run: rc=2, not rc=1. The rule the
+code enforces is that absence alone never suffices — the skip must be
+explicitly disclosed by the producer.
 
 Overall PASS iff:
   stuck_at == PASS
@@ -38,7 +54,9 @@ Usage:
         [--coverage-json PATH] [--bsdl-plan PATH]
         [--strict-transition]
 
-main(argv) -> int : 0 PASS / 1 FAIL / 2 IO-or-arg error.
+main(argv) -> int : 0 PASS / 1 FAIL / 2 IO-or-arg error OR disclosed
+                    SKIPPED-CONDITION (rc=2 is overloaded; the stdout line and
+                    the --json `verdict` field distinguish them).
 
 chip-AGNOSTIC: reads only the generic coverage.json / bsdl_plan.json schemas.
 """

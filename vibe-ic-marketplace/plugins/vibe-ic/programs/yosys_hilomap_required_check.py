@@ -18,11 +18,23 @@ Ordering checked:
     3. `write_verilog` appears at least once, on a line AFTER every
        `hilomap`.
 
+Two input shapes, both audited:
+    * a `.ys` script (`--ys-file`, or auto-discovered under a project dir) —
+      the ordering checks below run on the script text.
+    * NO `.ys` script, because the runner synthesised with an inline
+      `yosys -p '<commands>'` — the command is recovered from the runner's
+      own synth log (the "-- Running command" echo line) and the same
+      hilomap/flatten requirement is checked on it. Only when no inline
+      command was echoed anywhere does the gate fall back to reporting
+      VACUOUS_PASS.
+
 Usage:
     python3 yosys_hilomap_required_check.py --ys-file scripts/synth.ys
+    python3 yosys_hilomap_required_check.py <project_dir> [--json <out>]
 
 Exit codes:
-    0 — all three conditions satisfied.
+    0 — all three conditions satisfied, or the inline command verified, or
+        no auditable input exists at all (VACUOUS_PASS).
     1 — one or more conditions violated; stderr lists which.
     2 — argument or I/O error.
 """
