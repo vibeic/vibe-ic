@@ -35,6 +35,8 @@ not by skill (see docs/architecture/RFC_v2.0_PHASE_REDESIGN.md):
   │   │   ├── formal/
   │   │   ├── tb/
   │   │   └── fpga/           Step 6 early prototype
+  │   │       ├── output_files/   Step 6 prototype .sof + .map.rpt
+  │   │       └── final/          Step 39 final sign-off bitstream
   │   ├── stage2/             Steps 7-13: synth + DFT + LEC
   │   │   ├── constraints/
   │   │   ├── synth/
@@ -52,8 +54,7 @@ not by skill (see docs/architecture/RFC_v2.0_PHASE_REDESIGN.md):
       │   └── sim_postlayout/
       ├── stage4/             Steps 31-36: tapeout
       │   ├── gds/            final GDS
-      │   ├── foundry_handoff/
-      │   └── fpga/           Step 36 final on-board re-test
+      │   └── foundry_handoff/
       ├── stage5_manufacturing/  Steps 37-40: fab / sort / packaging / final test
       ├── analog/             A5-A9 (layout / PV / resim / hardmacro / cosim)
       │   ├── <block>/        layout.mag / drc_clean.flag / lvs_match.flag / pre_vs_post.json
@@ -223,8 +224,25 @@ def foundry_handoff_dir(project: Path) -> Path:
 
 
 def fpga_final_dir(project: Path) -> Path:
-    """Step 36: final FPGA recompile + on-board re-test (Phase 3 sign-off)."""
-    return project / "phase3/stage4/fpga"
+    """Step 39: final FPGA sign-off bitstream (recompile + on-board re-test).
+
+    THREE paths used to compete for this one concept and none of them agreed:
+
+      * flow/phase1_phase2_phase3.yaml:1839 declares step 39's required output
+        as ``phase2/stage1/fpga/final/*.sof``;
+      * ``fpga_on_board_attestation_check`` documents ``bitstream_path:
+        "phase2/stage1/fpga/final/<name>.sof"`` in its own docstring;
+      * this accessor pointed at ``phase3/stage4/fpga``, whose ONLY consumer
+        was a bare ``mkdir`` in phase3_one_shot_runner — nothing ever wrote a
+        file into it, on any run.
+
+    So the declared artefact was UNPRODUCIBLE: post-#455 (required_outputs is
+    ALL-of-N) a genuinely-successful on-board sign-off is reported MISSING.
+    Unified onto the path the flow and the attestation checker already name;
+    `design_one_shot_runner.step_emit_phase2_manifests` now stages the burned
+    bitstream here when — and only when — `fpga_burn` really PASSed.
+    """
+    return project / "phase2/stage1/fpga/final"
 
 
 # ─── analog (distributed across phase1/2/3 per Layout P) ────────────────
