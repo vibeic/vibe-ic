@@ -1,0 +1,40 @@
+{
+  "check": "gds_geometry_antenna_deck",
+  "runner": "container:vibeic-eda:klayout",
+  "config_source": "signoff/gate_oxide_deck.json",
+  "gds": "/home/reyerchu/vibe-ic-wt-rm4/vibe-ic-marketplace/scratch_geom_signoff_tests/agree/phase3/stage4/gds/top.gds",
+  "worst_ratio": 10.0,
+  "violations": 0,
+  "deck": {
+    "verdict": "PASS",
+    "gds": "/home/reyerchu/vibe-ic-wt-rm4/vibe-ic-marketplace/scratch_geom_signoff_tests/agree/phase3/stage4/gds/top.gds",
+    "worst_ratio": 10.0,
+    "violations": 0,
+    "per_layer": {
+      "met1": {
+        "limit": 40.0,
+        "metric": "cumulative",
+        "worst_ratio": 10.0,
+        "violations": 0,
+        "detail": []
+      },
+      "met2": {
+        "limit": 40.0,
+        "metric": "cumulative",
+        "worst_ratio": 0.0,
+        "violations": 0,
+        "detail": []
+      }
+    },
+    "diode_credit": false
+  },
+  "verdict": "PASS",
+  "cross_check": {
+    "verdict": "AGREE",
+    "deck_violations": 0,
+    "router_violations": 0,
+    "deck_verdict": "PASS",
+    "clean_agreement": true,
+    "router_report": "/home/reyerchu/vibe-ic-wt-rm4/vibe-ic-marketplace/scratch_geom_signoff_tests/agree/reports/phase3/antenna.rpt"
+  }
+}

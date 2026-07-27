@@ -1,0 +1,8 @@
+OpenROAD v2.0 check_antennas
+[INFO ANT-0002] Checking antenna rules on the routed database.
+[INFO ANT-0003] Extracted antenna model from the final routed netlist
+                (all metal layers present; upper-metal relief credited).
+[INFO ANT] Found 0 net violations.
+[INFO ANT] Found 0 pin violations.
+antenna clean: YES
+[INFO ANT-0009] antenna check completed.

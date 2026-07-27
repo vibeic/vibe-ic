@@ -1,0 +1,54 @@
+{
+  "check": "gds_geometry_antenna_deck",
+  "runner": "container:vibeic-eda:klayout",
+  "config_source": "signoff/gate_oxide_deck.json",
+  "gds": "/home/reyerchu/vibe-ic-wt-rm4/vibe-ic-marketplace/scratch_geom_signoff_tests/staged/phase3/stage4/gds/top.gds",
+  "worst_ratio": 150.0,
+  "violations": 2,
+  "deck": {
+    "verdict": "FAIL",
+    "gds": "/home/reyerchu/vibe-ic-wt-rm4/vibe-ic-marketplace/scratch_geom_signoff_tests/staged/phase3/stage4/gds/top.gds",
+    "worst_ratio": 150.0,
+    "violations": 2,
+    "per_layer": {
+      "met1": {
+        "limit": 40.0,
+        "metric": "cumulative",
+        "worst_ratio": 50.0,
+        "violations": 1,
+        "detail": [
+          {
+            "metal_um2": 50.0,
+            "gate_um2": 1.0,
+            "ratio": 50.0
+          }
+        ]
+      },
+      "met2": {
+        "limit": 40.0,
+        "metric": "cumulative",
+        "worst_ratio": 150.0,
+        "violations": 1,
+        "detail": [
+          {
+            "metal_um2": 150.0,
+            "gate_um2": 1.0,
+            "ratio": 150.0
+          }
+        ]
+      }
+    },
+    "diode_credit": false
+  },
+  "verdict": "FAIL",
+  "reason": "router-vs-geometry antenna DISAGREEMENT \u2014 one of the two is wrong: clean/dirty MISMATCH: geometry deck says DIRTY (2), router says CLEAN (0)",
+  "cross_check": {
+    "verdict": "DISAGREE",
+    "deck_violations": 2,
+    "router_violations": 0,
+    "deck_verdict": "FAIL",
+    "clean_agreement": false,
+    "detail": "clean/dirty MISMATCH: geometry deck says DIRTY (2), router says CLEAN (0)",
+    "router_report": "/home/reyerchu/vibe-ic-wt-rm4/vibe-ic-marketplace/scratch_geom_signoff_tests/staged/reports/phase3/antenna.rpt"
+  }
+}
