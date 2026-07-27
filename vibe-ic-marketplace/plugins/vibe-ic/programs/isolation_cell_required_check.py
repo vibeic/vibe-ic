@@ -11,8 +11,19 @@ floats / samples an X while the other side is off.  This checker INDEPENDENTLY
 derives the set of power-gate-bordered crossings from
 ``power_domain.json#crossings`` and asserts that for *each* one an inserted
 isolation-cell entry exists in ``isolation.json``.  It does NOT trust the
-producer's ``all_required_inserted`` boolean — it recomputes it and rejects a
-self-asserted PASS that contradicts the substance.
+``all_required_inserted`` boolean written into that file — it recomputes it
+and rejects a self-asserted PASS that contradicts the substance.
+
+WHERE power_domain.json / isolation.json COME FROM (M2-d4, corrected
+2026-07): NOT from this plugin.  Both are INPUTS; no program shipped here
+writes either.  They record the power intent and the cells the UPF-driven
+implementation flow actually inserted, so that flow (or a hand-authored file)
+supplies them.  This docstring used to say "the producer", implying a shipped
+producing step — there is none.  Absent input is the honest rc=2 SKIP below.
+The sibling gate ``power_domain_signal_crossing_check`` derives the crossings
+from the UPF itself and needs no sidecar — but on the flow-audit path M2's
+all-absent ``required_outputs`` returns MISSING before any gate runs, so it is
+reached only by invoking it directly.
 
 A crossing requires isolation when EITHER endpoint domain is declared
 power-gate-able (``from_power_down`` / ``to_power_down`` /

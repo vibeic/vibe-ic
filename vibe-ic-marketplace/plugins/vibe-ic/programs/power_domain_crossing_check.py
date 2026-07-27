@@ -5,14 +5,35 @@ power_domain_crossing_check.py — M2 gate (substance-verifying).
 M2 — power-domain crossing audit
 =================================
 
-For every net that crosses a power-domain boundary (as enumerated by the
-producing step in ``power_domain.json#crossings``), this checker INDEPENDENTLY
-verifies that the crossing is protected — i.e. that a matching level-shifter
-entry exists for every voltage-mismatched crossing and a matching isolation
-entry exists for every crossing into / out of a domain that can be powered
-down.  It does NOT trust the producer's ``all_crossings_protected`` boolean;
-it recomputes that fact from the crossing list + the level_shifter.json /
+For every net that crosses a power-domain boundary (as enumerated in
+``power_domain.json#crossings``), this checker INDEPENDENTLY verifies that the
+crossing is protected — i.e. that a matching level-shifter entry exists for
+every voltage-mismatched crossing and a matching isolation entry exists for
+every crossing into / out of a domain that can be powered down.  It does NOT
+trust the ``all_crossings_protected`` boolean written into that file; it
+recomputes that fact from the crossing list + the level_shifter.json /
 isolation.json sidecar artefacts and FAILs on any unprotected crossing.
+
+WHERE THE THREE SIDECARS COME FROM (M2-d4, corrected 2026-07)
+-------------------------------------------------------------
+NOT from this plugin.  power_domain.json / level_shifter.json /
+isolation.json are INPUTS to this checker, and no program shipped here writes
+any of them — they record the power intent and the cells the UPF-driven
+implementation flow actually inserted, so they are supplied by that flow (or
+hand-authored).  Earlier revisions of this docstring said "the producing step"
+as though such a step existed; it does not, and a checker that names a
+producer nobody ships sends the reader looking for a file that will not be
+there.  Absent input is the honest rc=2 SKIP below, never a vacuous PASS.
+
+The sibling gate ``power_domain_signal_crossing_check`` needs no sidecar at
+all: it DERIVES the crossings from the UPF power-domain definitions + power
+states and audits the UPF strategy.  Note what that does NOT currently buy on
+the flow-audit path: all three sidecars are M2's ``required_outputs``, and
+``flow_compliance_check.check_step`` returns MISSING on an all-absent
+``required_outputs`` list BEFORE it evaluates the gate — so on a project with
+UPF but no sidecars the derivation gate is never reached by the audit.  Run it
+directly to get that coverage.  Closing the gap properly needs the emitter
+nobody has written yet (see the M2 block in the flow yaml).
 
 Domain model (chip-AGNOSTIC, matches the phase3 PERC cross-voltage-domain
 model in phase3_one_shot_runner._xdomain_levelshifter_check):
@@ -40,9 +61,10 @@ Behaviour
 * FAIL (rc=1) — file present but malformed, OR one or more enumerated
   crossings is unprotected (the exact silicon hazard this gate guards).
 
-The producer's own boolean is NEVER the basis of the verdict; if present it
-is cross-checked and a mismatch (producer says protected, substance says not)
-is itself reported as a CONTRADICTS finding.
+The ``all_crossings_protected`` boolean carried in the artefact is NEVER the
+basis of the verdict; if present it is cross-checked and a mismatch (the file
+claims protected, the substance says not) is itself reported as a CONTRADICTS
+finding.
 
 chip-AGNOSTIC. No vendor / IC / tool-specific data hard-coded.
 

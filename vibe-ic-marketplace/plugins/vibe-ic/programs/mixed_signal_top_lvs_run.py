@@ -22,6 +22,21 @@ Honesty rules: missing tool/tech → SKIP rc 2 with the named gap (the
 M1 gate then reports the merge as NOT LVS-verified — it never PASSes
 on presence again); a real netgen mismatch → FAIL rc 1.
 
+ENFORCEMENT: advisory
+  This is a PRODUCER, not a verdict. It is invoked in M1's
+  `advisory_program_exit_zero` slot and dispatched non-blocking from
+  `vibe_ic_one_shot_runner` (M1-d4, 2026-07 — before that nothing
+  invoked it at all, so M1's declared `top_merged.gds` and the
+  `top_lvs.json` its gate demands were never written on any automated
+  run and M1 could only come back MISSING). The BLOCKING verdict on
+  the merge belongs to `mixed_signal_merge_check`, which reads the
+  `top_lvs.json` written here — so nothing is certified without a real
+  netgen compare, and an environment failure here does not become a
+  second, duplicate blocking FAIL. NOTE: `flow_gate_enforcement_audit`
+  reports this as ENFORCED because a runner does invoke it inline; that
+  classification is about WIRING, and for a producer inline invocation
+  means "it runs", not "it can block".
+
 Usage:
     python3 mixed_signal_top_lvs_run.py <project> --top chip_top
         [--container vibeic-eda] [--pdk sky130A]
