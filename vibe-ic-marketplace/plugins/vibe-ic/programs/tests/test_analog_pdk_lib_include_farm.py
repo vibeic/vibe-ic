@@ -98,8 +98,19 @@ def test_split_staged_libs_are_colocated_for_the_shim(tmp_path):
 # this fixture. Making it green would require flipping HEAD to shim-first, which
 # changes the runtime primary-selection for EVERY custom PDK and CANNOT be
 # verified without ngspice + a commercial PDK — an owner decision, not a CI fix.
-# xfail(strict=False) keeps this VISIBLE (xfailed, not a masking skip); the farm
-# CAPABILITY itself is fully restored and exercised by the other 12 tests here.
+# xfail keeps this VISIBLE (xfailed, not a masking skip); the farm CAPABILITY
+# itself is fully restored and exercised by the other 12 tests here.
+#
+# STRICT, and that is the point of this marker now. `strict=False` reports the
+# same result in two contradictory worlds: HEAD picks the device-defining lib
+# (today), or HEAD has silently become shim-first (an XPASS nobody is told
+# about). A marker that cannot distinguish "the divergence still stands" from
+# "the divergence was resolved behind my back" is not recording anything.
+# Measured deterministic over 5 consecutive runs, and there is no global
+# `xfail_strict`, so this is an explicit per-marker choice.
+# With strict=True, adopting the afec ordering turns the suite RED until
+# whoever adopts it comes back here and says so — which is exactly the
+# ceremony an owner decision deserves.
 # vibe-ic#193 UPDATE — the "unverifiable without ngspice" clause is DISCHARGED.
 # The measurement now lives in, and is executed by,
 # `test_issue193_custom_pdk_primary_selection_ngspice.py` (real ngspice-46+):
@@ -111,7 +122,7 @@ def test_split_staged_libs_are_colocated_for_the_shim(tmp_path):
 # The OWNER's decision is still open and the runtime is deliberately unchanged;
 # what is no longer open is whether the two selections are equivalent. They are
 # not, and the simulator falls on HEAD's side in every case it can separate.
-@pytest.mark.xfail(strict=False, reason=(
+@pytest.mark.xfail(strict=True, reason=(
     "architectural divergence: afec spice_libs[0]/entry-shim-primary assumption "
     "vs HEAD #149/v1.4.58 device-defining-lib-primary. MEASURED (vibe-ic#193, "
     "real ngspice-46+, see test_issue193_custom_pdk_primary_selection_ngspice"
@@ -119,7 +130,9 @@ def test_split_staged_libs_are_colocated_for_the_shim(tmp_path):
     "cannot load at all, while HEAD's pick solves; the two policies coincide "
     "once the include closure is co-located. Flipping to first-staged-lib would "
     "change the runtime primary-selection for every custom PDK — pending owner "
-    "decision (captured-floor issue). The ngspice verification is DONE."))
+    "decision (captured-floor issue). The ngspice verification is DONE. "
+    "STRICT: if this ever XPASSes the runtime policy changed without the "
+    "decision being made, and that must be loud, not silent."))
 def test_no_farm_dir_keeps_the_raw_path(tmp_path):
     """Opt-in: a caller that asks for no farm gets exactly the previous paths."""
     res, shim, _dev = _stage_split(tmp_path)
