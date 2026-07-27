@@ -11412,6 +11412,231 @@ def _corner_qualify_extra_libs(macro_libs_tcl: str,
     return "\n".join(out)
 
 
+# ── RSZ-0090 attribution — the tool's own message names the wrong producer ────
+_RSZ0090_RE = re.compile(
+    r"\[ERROR\s+RSZ-0090\]\s*Max transition time from SDC is\s*"
+    r"([0-9.eE+-]+)\s*([a-zA-Z]?)s\.\s*"
+    r"Best achievable transition time is\s*([0-9.eE+-]+)\s*([a-zA-Z]?)s\s*"
+    r"with a load of\s*([0-9.eE+-]+)\s*([a-zA-Z]?)F")
+_SI_SCALE = {"": 1.0, "m": 1e-3, "u": 1e-6, "n": 1e-9, "p": 1e-12, "f": 1e-15,
+             "k": 1e3, "M": 1e6}
+_LIB_TIME_UNIT_RE = re.compile(
+    r"time_unit\s*:\s*[\x22]?\s*([0-9.]*)\s*([a-zA-Z]*)s[\x22]?")
+_LIB_DEFAULT_MT_RE = re.compile(r"default_max_transition\s*:\s*([0-9.eE+-]+)")
+_LIB_PIN_MT_RE = re.compile(r"[^_a-zA-Z]max_transition\s*:\s*([0-9.eE+-]+)")
+_SDC_MAX_TRAN_RE = re.compile(r"^\s*set_max_transition\s+([0-9.eE+-]+)",
+                              re.MULTILINE)
+_DRV_POOL_RE = re.compile(r"DRV_SIZING_POOL:\s*(.+)")
+
+
+def _liberty_time_unit_ns(text: str) -> float:
+    """Seconds-per-liberty-time-unit expressed in ns. Liberty `time_unit`
+    is e.g. "1ns" / "10ps"; absent ⇒ the format default of 1 ns."""
+    m = _LIB_TIME_UNIT_RE.search(text)
+    if not m:
+        return 1.0
+    mult = float(m.group(1)) if m.group(1) else 1.0
+    return mult * _SI_SCALE.get(m.group(2), 1e-9) / 1e-9
+
+
+def _attribute_max_transition_abort(log_text: str,
+                                    liberty_paths: Sequence[str],
+                                    sdc_text: str = ""
+                                    ) -> Optional[Dict[str, Any]]:
+    """Name the declaration that actually produced an `[ERROR RSZ-0090]`.
+
+    Two things in that message are misleading and have to be corrected before
+    an operator can act on it:
+
+    1. "Max transition time **from SDC**" is wrong whenever a liberty pin
+       declares a tighter `max_transition` than the design SDC. OpenSTA merges
+       a library/pin limit into the same constraint the SDC feeds, and the
+       resizer prints the merged value under the SDC's label. This function
+       reports every loaded liberty that declares a limit at or below the
+       reported one, so the real producer is named.
+    2. "Best achievable transition time" is NOT a process capability. It is the
+       minimum output slew over the resizer's SIZING POOL —
+       `getSwappableCells(weakest buffer)` filtered by `sizing_area_limit` /
+       `sizing_leakage_limit`. A library whose buffer family spans more than
+       those ratios has strong buffers the check never sees. The declared pool
+       is echoed here from the run's own `DRV_SIZING_POOL:` line.
+
+    Returns ``None`` when the log carries no RSZ-0090 (no false fire).
+    chip-AGNOSTIC: it reports only paths and numbers it was handed."""
+    m = _RSZ0090_RE.search(log_text or "")
+    if not m:
+        return None
+    limit_ns = float(m.group(1)) * _SI_SCALE.get(m.group(2), 1.0) / 1e-9
+    achiev_ns = float(m.group(3)) * _SI_SCALE.get(m.group(4), 1.0) / 1e-9
+    load_pf = float(m.group(5)) * _SI_SCALE.get(m.group(6), 1.0) / 1e-12
+
+    sdc_ns: Optional[float] = None
+    for sm in _SDC_MAX_TRAN_RE.finditer(sdc_text or ""):
+        v = float(sm.group(1))
+        sdc_ns = v if sdc_ns is None else min(sdc_ns, v)
+
+    tol = max(1e-9, abs(limit_ns) * 1e-6)
+    declaring: List[Dict[str, Any]] = []
+    unreadable: List[str] = []
+    for p in liberty_paths or []:
+        try:
+            txt = Path(p).read_text(errors="ignore")
+        except Exception:  # noqa: BLE001 — a missing liberty is evidence too
+            unreadable.append(str(p))
+            continue
+        unit = _liberty_time_unit_ns(txt)
+        vals = [float(x) * unit for x in _LIB_DEFAULT_MT_RE.findall(txt)]
+        pin_vals = [float(x) * unit for x in _LIB_PIN_MT_RE.findall(txt)]
+        cand = [v for v in (vals + pin_vals) if v <= limit_ns + tol]
+        if cand:
+            entry: Dict[str, Any] = {"path": str(p), "min_max_transition_ns":
+                                     min(cand), "declarations": len(cand)}
+            if vals:
+                entry["default_max_transition_ns"] = min(vals)
+            if pin_vals:
+                entry["pin_max_transition_ns"] = min(pin_vals)
+            declaring.append(entry)
+
+    tightest_lib = min((d["min_max_transition_ns"] for d in declaring),
+                       default=None)
+    if tightest_lib is not None and (sdc_ns is None
+                                     or tightest_lib < sdc_ns - tol):
+        # A liberty declares strictly tighter than the design SDC: the number
+        # the tool credited to the SDC is not in the SDC at all.
+        source = "liberty"
+    elif sdc_ns is not None and abs(sdc_ns - limit_ns) <= tol:
+        source = "sdc"
+    elif tightest_lib is not None:
+        source = "liberty"
+    else:
+        source = "unknown"
+
+    pool = _DRV_POOL_RE.search(log_text or "")
+    return {
+        "error": "RSZ-0090",
+        "limit_ns": limit_ns,
+        "best_achievable_ns": achiev_ns,
+        "load_pf": load_pf,
+        "sdc_max_transition_ns": sdc_ns,
+        "source": source,
+        "tightest_liberty_max_transition_ns": tightest_lib,
+        "declaring_liberties": declaring,
+        "unreadable_liberties": unreadable,
+        "declared_sizing_pool": pool.group(1).strip() if pool else None,
+        "note": ("the tool's message credits the SDC; the limit is the TIGHTEST "
+                 "of the SDC and the loaded liberty pin/library limits. "
+                 "'best achievable' is the minimum slew over the resizer's "
+                 "sizing pool, not a process limit."),
+    }
+
+
+def _read_liberty_paths_from_tcl(tcl_text: str) -> List[str]:
+    """Every path handed to `read_liberty` in an emitted pnr.tcl, de-duplicated
+    in first-seen order. Pure text; no tool call."""
+    seen: List[str] = []
+    for m in re.finditer(r"^\s*read_liberty\s+(?:-corner\s+\S+\s+)?(\S+)",
+                         tcl_text or "", re.MULTILINE):
+        p = m.group(1)
+        if p not in seen:
+            seen.append(p)
+    return seen
+
+
+def _read_sdc_path_from_tcl(tcl_text: str) -> Optional[str]:
+    m = re.search(r"^\s*read_sdc\s+(\S+)", tcl_text or "", re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def _pnr_drv_sizing_pool_tcl() -> str:
+    """Emit the Tcl that DECLARES the resizer's sizing pool from the loaded
+    library instead of inheriting OpenROAD's default.
+
+    Root cause this exists for (measured, chip-AGNOSTIC statement of it):
+    OpenROAD decides whether a `max_transition` is achievable AT ALL in
+    `rsz::PreChecks::checkSlewLimit` -> `[ERROR RSZ-0090]`. The "best
+    achievable transition time" it prints is the minimum output slew over
+    `getSwappableCells(buffer_lowest_drive_)` — the equivalence class of the
+    WEAKEST buffer, filtered by `sizing_area_limit_` and `sizing_leakage_limit_`,
+    both defaulting to 4.0X *relative to that weakest buffer*. The weakest
+    buffer is by construction also the library's lowest-leakage buffer, so in
+    ANY library whose buffer family spans more than 4X in leakage the tool
+    cannot see its own strong buffers. A pin `max_transition` the library can
+    comfortably meet is then reported as unachievable and `repair_design`
+    HARD-ERRORS — inside `global_placement -timing_driven`, long before the
+    router. The message says "from SDC", which is wrong whenever the tightest
+    limit came from a hard-macro liberty pin: OpenSTA merges the liberty pin
+    limit into the same constraint the SDC feeds and the resizer reports the
+    merged value with the SDC's label.
+
+    The honest fix is to the DECLARATION, never to the constraint: ask the tool
+    for its own equivalence class of every buffer master and declare a pool
+    that spans it. Floored at the tool default (4.0X), so this can only ADD
+    reachable cells, never remove them; the constraint itself is untouched, so
+    a genuinely unmeetable limit still errors. The derived numbers are printed
+    as `DRV_SIZING_POOL:` so the widened pool — and the area/leakage it buys —
+    is disclosed in the log rather than applied silently.
+
+    Pure builder (v0.1.49 doctrine): no design, PDK or vendor literal; every
+    number is read out of whatever liberty was actually loaded."""
+    return (
+        "# === DRV SIZING-POOL DECLARATION — measured from THIS library ===\n"
+        "# OpenROAD's feasibility pre-check for max_transition (RSZ-0090)\n"
+        "# searches getSwappableCells(weakest buffer), filtered by\n"
+        "# sizing_area_limit / sizing_leakage_limit — both default 4.0X\n"
+        "# RELATIVE TO THAT WEAKEST BUFFER, which is also the library's\n"
+        "# lowest-leakage buffer. Any library whose buffer family spans more\n"
+        "# than 4X in leakage therefore hides its own strong buffers from the\n"
+        "# check, and a meetable pin max_transition aborts the run.\n"
+        "# Declare the pool from the library's own equivalence classes; never\n"
+        "# narrower than the tool default, so this can only ADD cells.\n"
+        "set _sp_note \"not-derived\"\n"
+        "if {[catch {\n"
+        "  set _sp_bufs {}\n"
+        "  foreach _sp_c [get_lib_cells -quiet *] {\n"
+        "    if {[catch {set _sp_isb [get_property $_sp_c is_buffer]}]} { continue }\n"
+        "    if {$_sp_isb != 1} { continue }\n"
+        "    set _sp_du 0\n"
+        "    catch {set _sp_du [get_property $_sp_c dont_use]}\n"
+        "    if {$_sp_du == 1} { continue }\n"
+        "    set _sp_nm [get_property $_sp_c name]\n"
+        "    if {[lsearch -exact $_sp_bufs $_sp_nm] < 0} { lappend _sp_bufs $_sp_nm }\n"
+        "  }\n"
+        "  set _sp_amax 1.0 ; set _sp_lmax 1.0 ; set _sp_rows 0\n"
+        "  foreach _sp_nm $_sp_bufs {\n"
+        "    set _sp_obj [lindex [get_lib_cells -quiet $_sp_nm] 0]\n"
+        "    if {$_sp_obj eq \"\"} { continue }\n"
+        "    sta::redirect_string_begin\n"
+        "    catch {report_equiv_cells -all $_sp_obj}\n"
+        "    set _sp_txt [sta::redirect_string_end]\n"
+        "    foreach _sp_ln [split $_sp_txt \"\\n\"] {\n"
+        "      set _sp_f [regexp -all -inline {\\S+} $_sp_ln]\n"
+        "      if {[llength $_sp_f] < 5} { continue }\n"
+        "      set _sp_ar [lindex $_sp_f 2] ; set _sp_lr [lindex $_sp_f 4]\n"
+        "      if {![string is double -strict $_sp_ar]} { continue }\n"
+        "      if {![string is double -strict $_sp_lr]} { continue }\n"
+        "      incr _sp_rows\n"
+        "      if {$_sp_ar > $_sp_amax} { set _sp_amax $_sp_ar }\n"
+        "      if {$_sp_lr > $_sp_lmax} { set _sp_lmax $_sp_lr }\n"
+        "    }\n"
+        "  }\n"
+        "  if {$_sp_rows < 2} { error \"no equivalence-class ratios readable"
+        " (rows=$_sp_rows buffers=[llength $_sp_bufs])\" }\n"
+        "  set _sp_alim [expr {ceil($_sp_amax * 1.25)}]\n"
+        "  set _sp_llim [expr {ceil($_sp_lmax * 1.25)}]\n"
+        "  if {$_sp_alim < 4.0} { set _sp_alim 4.0 }\n"
+        "  if {$_sp_llim < 4.0} { set _sp_llim 4.0 }\n"
+        "  set_opt_config -sizing_area_limit $_sp_alim"
+        " -sizing_leakage_limit $_sp_llim\n"
+        "  set _sp_note [format \"buffers=%d rows=%d area_span=%.2f"
+        " leak_span=%.2f area_limit=%.0f leak_limit=%.0f\" \\\n"
+        "                 [llength $_sp_bufs] $_sp_rows $_sp_amax $_sp_lmax"
+        " $_sp_alim $_sp_llim]\n"
+        "} _sp_err]} {\n"
+        "  set _sp_note \"NONFATAL: $_sp_err\"\n"
+        "}\n"
+        "puts \"DRV_SIZING_POOL: $_sp_note\"\n")
+
+
 def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         macro_lefs_tcl: str, liberty_c: str,
                         macro_libs_tcl: str, netlist_c: str, top: str,
@@ -11557,6 +11782,10 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     # Third bare call, found while wiring #296: the post-global-placement
     # legalization. Same shape, same DPL-0036 kill. Same ladder.
     _initial_legalize = _build_escalating_legalize_tcl("INITIAL_DPL", "_ip")
+    # The sizing pool must be declared BEFORE any optimization:
+    # `global_placement -timing_driven` runs repair_design (and
+    # therefore the RSZ-0090 pre-check) internally.
+    _drv_sizing_pool_block = _pnr_drv_sizing_pool_tcl()
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -11570,7 +11799,7 @@ read_sdc {sdc_c}
 # before any optimization). Prevents OpenROAD from inserting PnR-forbidden cells
 # (probe / lpflow / DRC-failed) that TritonRoute then cannot route (DRT-0085).
 # See _dont_use_tcl. ===
-{dont_use_block}# === v0.1.26 wire-RC model ===
+{dont_use_block}{_drv_sizing_pool_block}# === v0.1.26 wire-RC model ===
 # Without set_wire_rc, OpenROAD has no per-layer R/C, so (a) STA ignores
 # interconnect delay (optimistic) and (b) repair_timing -setup aborts with
 # RSZ-0089 "Could not find a resistance value for any corner" because it
@@ -12522,11 +12751,40 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     except Exception:  # nosec — attestation is best-effort, never fatal
         pass
     if rc != 0 or not def_file.is_file():
+        # #SN-DRV — an RSZ-0090 abort reaches the operator as a truncated
+        # placement progress table, and the tool's own text blames the SDC for
+        # a limit a macro liberty declared. Attribute it in the verdict itself.
+        _mt_attr: Optional[Dict[str, Any]] = None
+        try:
+            _tcl_txt = pnr_tcl.read_text(errors="ignore")
+            _sdc_p = _read_sdc_path_from_tcl(_tcl_txt)
+            _sdc_txt = ""
+            if _sdc_p:
+                try:
+                    _sdc_txt = Path(_sdc_p).read_text(errors="ignore")
+                except Exception:  # noqa: BLE001 — best-effort evidence
+                    _sdc_txt = ""
+            _mt_attr = _attribute_max_transition_abort(
+                _log_txt or (out + err),
+                _read_liberty_paths_from_tcl(_tcl_txt), _sdc_txt)
+        except Exception:  # noqa: BLE001 — attribution never masks the verdict
+            _mt_attr = None
+        _detail = f"rc={rc} log_tail={(out+err)[-2000:]}"
+        _extras: Dict[str, Any] = {"resize_history": resize_history,
+                                   "loosen_declines": loosen_declines}
+        if _mt_attr:
+            _detail = ("MAX_TRANSITION_ABORT "
+                       + json.dumps(_mt_attr, sort_keys=True) + " | " + _detail)
+            _extras["max_transition_abort"] = _mt_attr
+            try:
+                (out_dir / "max_transition_abort.json").write_text(
+                    json.dumps(_mt_attr, indent=2, sort_keys=True))
+            except Exception:  # noqa: BLE001 — artefact is best-effort
+                pass
         return StepResult("pnr", "FAIL", time.time() - t0,
-                          f"rc={rc} log_tail={(out+err)[-2000:]}",
+                          _detail,
                           [str(out_dir / "openroad.log")],
-                          extras={"resize_history": resize_history,
-                                 "loosen_declines": loosen_declines})
+                          extras=_extras)
     # ORGANIC #585 — route-convergence gate. TritonRoute can run out of
     # iterations and COMPLETE with violations remaining (rc=0,
     # `Completing 100% with N violations`). A nonzero final DRT-0199
