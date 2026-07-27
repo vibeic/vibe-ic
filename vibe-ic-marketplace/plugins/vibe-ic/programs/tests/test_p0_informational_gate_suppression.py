@@ -131,10 +131,22 @@ def test_GUARD_p0_with_no_parseable_fail_is_not_suppressed():
 
 
 def test_GUARD_non_p0_step_behaviour_is_unchanged():
-    """The step-level `program failed:` path must be untouched."""
+    """The step-level `program failed:` path must be untouched.
+
+    The example gate is taken from the LIVE `INFORMATIONAL_GATES` set rather
+    than hardcoded. It used to name `bit_level_full_stack_tb_check`, which
+    meant this guard — whose subject is the `program failed:` PARSING path —
+    also silently asserted membership policy, and so failed when that gate was
+    correctly removed from the set (it is wired as a MANDATORY
+    `program_exit_zero` in Step 5, which the exemption contradicted). What the
+    guard is actually for is that a `program failed:` reason naming an
+    informational gate is suppressed and one naming any other gate is not.
+    """
+    assert fcc.INFORMATIONAL_GATES, (
+        "INFORMATIONAL_GATES is empty — this guard would assert nothing")
+    gate = sorted(fcc.INFORMATIONAL_GATES)[0]
     ok = fcc.StepResult(id=14, name="Synthesis", stage="stage2", status="FAIL",
-                        reasons=["program failed: "
-                                 "bit_level_full_stack_tb_check . --json x.json"])
+                        reasons=[f"program failed: {gate} . --json x.json"])
     bad = fcc.StepResult(id=14, name="Synthesis", stage="stage2", status="FAIL",
                          reasons=["program failed: some_real_gate . --json x.json"])
     assert fcc._step_failure_is_informational_only(ok) is True

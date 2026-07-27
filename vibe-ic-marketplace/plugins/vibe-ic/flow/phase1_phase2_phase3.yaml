@@ -446,6 +446,11 @@ steps:
       # scenario (case_3.v, corner_operand.v, rv32i_40.v), so `tb_*.v`/`*_tb.v`
       # patterns match none of them and a filename-driven audit sees 0 hits.
       - vacuous_testbench_check      # gate: a TB must actually drive the DUT
+      # `coverage_closure` reports which measured coverage categories miss the
+      # closure GOAL. It is wired ADVISORY in the `gate:` block below — being
+      # named in this list executes nothing (nothing in the plugin reads
+      # `programs:` to run it; flow_dashboard_data and
+      # flow_step_executor_coverage_check only read the tokens).
       - coverage_closure              # gap analysis from coverage_actual.json
       # v0.53/v0.54 byte-level coverage gates (replace agent self-reports
       # of "≥ 95 % covered" with machine-measured numbers).
@@ -568,6 +573,26 @@ steps:
         # pass). exit 1 = a recorded functional_mismatch (real RTL bug ->
         # close-loop).
         - program_exit_zero: "professional_tb_check . --json reports/phase2/gates/professional_tb_check.json"
+        # vibe-ic#306 slot — ADVISORY coverage GAP ANALYSIS.
+        #
+        # `coverage_closure` has been declared in this step's `programs:` list
+        # since v0.53 and NOTHING ever executed it: not a gate entry, not a
+        # runner, not `_STRUCTURAL_RTL_GATES`. Being unreachable, its reader
+        # also drifted off the artefact's real schema — it read
+        # `coverage_pct`/`pct`, which the only producer of a MEASUREMENT at
+        # that path (`verilator_coverage_measure measure`, totals.<cat>.pct)
+        # never writes — so it FAILED a genuine 95/92/91 % artefact at "0%"
+        # and PASSED a bare `{"coverage_pct": 95}` claim. Both directions are
+        # fixed in the program.
+        #
+        # ADVISORY, not blocking, for a stated reason: the coverage FLOOR for
+        # this step is `verilator_coverage_measure check` above, wired
+        # unconditionally with its own thresholds and its own
+        # capability-gap/defect split. A second, HIGHER threshold on the same
+        # artefact wired blocking would fail the step twice for one root cause.
+        # Wired advisory, the per-category gap is recorded and printed on every
+        # run without changing what any run stops on.
+        - advisory_program_exit_zero: "coverage_closure ."
     blocks_on: [2]
 
   - id: 5
@@ -647,9 +672,31 @@ steps:
     skills: [fpga-test-harness]
     mcp_tools: [eda_synth]
     programs:
-      # Wave 82 — emit the FPGA test-harness wrapper before Quartus
-      # picks it up. `fpga_test_harness_gen` reads chip_top + L9 ports
-      # and writes fpga/*.sv (top wrapper + pin map glue).
+      # DECLARATION CORRECTION (2026-07-27). This entry used to read: "emit
+      # the FPGA test-harness wrapper before Quartus picks it up.
+      # `fpga_test_harness_gen` reads chip_top + L9 ports and writes fpga/*.sv
+      # (top wrapper + pin map glue)." Every clause of that was false:
+      #   * NOTHING runs it — not design_one_shot_runner's Step 6 (which only
+      #     reads the fpga_compile status and writes quartus_map_audit.json),
+      #     not phase3_one_shot_runner, not a gate entry, not an MCP tool.
+      #     Being named in this `programs:` list executes nothing: the only
+      #     readers of the list (flow_dashboard_data,
+      #     flow_step_executor_coverage_check) inspect tokens, they do not
+      #     invoke. So "before Quartus picks it up" describes an ordering that
+      #     never happens.
+      #   * it reads NEITHER chip_top NOR L9 — it takes a project path and
+      #     writes a FIXED DE10-Lite template with a hardcoded `chip_top`
+      #     instance (.clk/.reset_n/.id_bus/.state_reg_dbg) and a hardcoded
+      #     GPIO_0[0]/KEY/LEDR pin assignment.
+      #   * it writes ONE file, <rtl_dir>/fpga_test_harness.sv — not `fpga/*.sv`
+      #     — and emits no pin-map glue.
+      # It is an AGENT-INVOKED board bring-up helper (skill `fpga-test-harness`
+      # above), registered here for discoverability, in the same shape as
+      # `debug_first_pass` below. It is NOT wired, and must not be auto-wired
+      # as-is: on a design whose top is not a `chip_top` with exactly those
+      # four ports the emitted wrapper does not elaborate. (Measured on the
+      # reference spm x ihp-sg13g2 run: phase2/stage1/rtl/ contains only
+      # spm.v — there is no chip_top in the project at all.)
       - fpga_test_harness_gen
       # Wave 82 — `debug_first_pass` runs the deterministic first-pass
       # debug dispatcher when sim/HW disagree (called interactively by

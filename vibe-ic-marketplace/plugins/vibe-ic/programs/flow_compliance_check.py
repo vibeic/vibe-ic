@@ -127,22 +127,43 @@ PROGRAMS_DIR = Path(__file__).parent
 # v1.6.99 (issue #31 Bug 2) — informational-only gates. Gates listed
 # here are still EXECUTED and their per-step result is REPORTED in the
 # normal listing (so the agent sees the status), but they are
-# EXCLUDED from FAIL-counting toward the Phase 2 verdict. Rationale:
-# bit_level_full_stack_tb_check is a TB skeleton check that needs
-# real scenarios to pass; until those land it is a coverage gap, not
-# a deployment blocker. Real gate fails (self_rx_mask_check, etc.)
-# still drive FAIL — informational suppression is keyed on gate name,
-# never on step id, so it remains chip-AGNOSTIC.
+# EXCLUDED from FAIL-counting toward the Phase 2 verdict. Real gate
+# fails (self_rx_mask_check, etc.) still drive FAIL — informational
+# suppression is keyed on gate name, never on step id, so it remains
+# chip-AGNOSTIC.
+#
+# EVERY ENTRY MUST CARRY (a) a measured deployment cost and (b) a promotion
+# criterion. Without both, "informational" is just a gate that stopped
+# counting for reasons nobody can re-check.
+#
+# REMOVED 2026-07-27: `bit_level_full_stack_tb_check`. It was the one entry
+# that contradicted its own flow declaration — Step 5 wires it as a plain
+# `program_exit_zero` in an `all_of`, with the inline comment "Bit-level
+# full-stack tb is mandatory before FPGA compile", while this set quietly
+# excluded a genuine FAIL of it from the aggregate verdict outside
+# --strict-structural. Its stated rationale ("a TB skeleton check that needs
+# real scenarios to pass"; "a non-protocol IC hard-failed on a single-wire
+# bit-level TB gate that does not apply to it") has since been answered
+# INSIDE the gate: bit_level_full_stack_tb_check now self-reports
+# `VACUOUS_PASS` + rc=2 for an IC with no command protocol / opcodes, which
+# is the honest disclosed skip that case needs.
+# MEASURED before removing, over all 38 real runs carrying a
+# reports/phase2/gates/bit_level_full_stack.json on the reference machine:
+# 5 x PASS(rc=0), 33 x VACUOUS_PASS(rc=2), 0 x FAIL(rc=1). The exemption was
+# protecting nothing on any real run; deleting it changes no verdict there
+# and makes the flow's "mandatory" declaration true.
 INFORMATIONAL_GATES: frozenset[str] = frozenset({
-    "bit_level_full_stack_tb_check",
     # v0.1.89 — periodic_timer_vs_rx_activity_check emits WARN-severity
     # findings only (`[WARN] periodic_timer_no_rx_reset`); it's a heuristic
     # ("is this counter a protocol rx-timer that should reset on activity?")
     # that false-positives on legitimate free-running counters — e.g. a reused
     # CPU core's program-counter / cycle-timer (SERV `o_cnt`). A WARN heuristic
-    # is a coverage signal, not a deployment blocker, so (like
-    # bit_level_full_stack_tb_check) it is reported per-step but EXCLUDED from
-    # the strict-structural FAIL count. Keyed on gate name; chip-AGNOSTIC.
+    # is a coverage signal, not a deployment blocker, so it is reported
+    # per-step but EXCLUDED from the strict-structural FAIL count. Keyed on
+    # gate name; chip-AGNOSTIC.
+    # PROMOTION CRITERION: delete this entry once the heuristic distinguishes
+    # a protocol rx-timer from a free-running counter, at which point its
+    # findings stop being WARN-severity.
     "periodic_timer_vs_rx_activity_check",
     # layergate-7 — l22_verification_plan_measurable_check FAILs (rc=1)
     # by its own contract: a measurable verification target stated in the
@@ -6794,15 +6815,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                         line = reason.lstrip()[2:]
                     if line is None:
                         continue
-                    # v0.1.62 — INFORMATIONAL_GATES (e.g.
-                    # bit_level_full_stack_tb_check) are coverage gaps, not
-                    # deployment blockers, and are already excluded from the
-                    # step-level verdict. Exclude them from the strict-
-                    # structural P0 count too so the treatment is consistent
-                    # (they still appear in the per-step listing). Without
-                    # this, a non-protocol IC (spm multiplier, sha256 hash)
-                    # hard-failed on a single-wire bit-level TB gate that
-                    # does not apply to it.
+                    # v0.1.62 — INFORMATIONAL_GATES emit coverage-gap /
+                    # WARN-severity findings, not deployment blockers, and are
+                    # already excluded from the step-level verdict. Exclude
+                    # them from the strict-structural P0 count too so the
+                    # treatment is consistent (they still appear in the
+                    # per-step listing).
+                    # The original example here was
+                    # bit_level_full_stack_tb_check ("a non-protocol IC
+                    # hard-failed on a single-wire bit-level TB gate that does
+                    # not apply to it"). That gate now self-reports rc=2
+                    # VACUOUS_PASS for exactly that case, so it was removed
+                    # from the set — see the INFORMATIONAL_GATES comment.
                     if any(g in line for g in INFORMATIONAL_GATES):
                         continue
                     structural_fail_lines.append(line)
@@ -6936,11 +6960,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         # the deferral source. The informational filter (#31 Bug 2)
         # excludes them from `failing` for verdict computation, but
         # they remain real engineering deferrals that the tapeout
-        # vendor's must-close list cannot omit. Step 5 (Formal) is the
-        # canonical case: its only FAIL reason cites
-        # `bit_level_full_stack_tb_check` (informational), so pre-fix
-        # the deferral count under-counted by 1. The informational
-        # filter still keeps these items out of `non_blocked_failing`
+        # vendor's must-close list cannot omit. The case this was written
+        # for was Step 5 (Formal), whose only FAIL reason cited
+        # `bit_level_full_stack_tb_check` while that gate was in the
+        # informational set, so pre-fix the deferral count under-counted
+        # by 1. That gate is no longer informational (see
+        # INFORMATIONAL_GATES) — a Step-5 FAIL now counts in `failing`
+        # directly — but the under-count is generic to the filter and this
+        # path still carries whichever gates remain in the set. The
+        # informational filter still keeps these items out of `non_blocked_failing`
         # (so they don't gate promotion) but the print/audit emission
         # now sees the full list. chip-AGNOSTIC.
         # DFT_FCC / 11-d7 — a self-skipped sign-off step is a deferral the
