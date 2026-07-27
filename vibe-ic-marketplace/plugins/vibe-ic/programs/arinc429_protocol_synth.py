@@ -34,6 +34,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
+# Generic auto-dispatch opt-in (read by phase1_doc_one_shot_runner [14e2b/15]).
+AUTO_DISPATCH = True
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
