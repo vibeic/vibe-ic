@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 985
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 985)
+- **Total programs (excluding helpers / shims):** 986
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 986)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 976 |
+| `any` | 977 |
 
 ## Alphabetical listing
 
@@ -340,6 +340,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `foundry_handoff_package_check` | any | Wave 88 | gate (v1.6.13 Wave 88, integerised |
 | `foundry_signoff_plan_check` | any | v0.113 | v0.113 (BACKLOG-v10 P1.2). |
 | `fpga_async_input_synchronizer_check` | any | — | Verify every external input/inout |
+| `fpga_board_capability` | any | — | the shared FPGA-board-absence disclosure signal. |
 | `fpga_clock_divider_antipattern_check` | any | v0.119.22 | gate that catches the FPGA |
 | `fpga_gate_level_attestation_check` | any | — | v1.6.232 (merged v229+v231). |
 | `fpga_hps_bridge_gen` | any | — | deterministic HPS-to-FPGA bridge generator. |
@@ -1057,7 +1058,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (976 programs)
+### `any` (977 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1369,6 +1370,7 @@ _(no programs in this group)_
 - `foundry_handoff_package_check` — gate (v1.6.13 Wave 88, integerised  _[Wave 88]_
 - `foundry_signoff_plan_check` — v0.113 (BACKLOG-v10 P1.2).  _[v0.113]_
 - `fpga_async_input_synchronizer_check` — Verify every external input/inout
+- `fpga_board_capability` — the shared FPGA-board-absence disclosure signal.
 - `fpga_clock_divider_antipattern_check` — gate that catches the FPGA  _[v0.119.22]_
 - `fpga_gate_level_attestation_check` — v1.6.232 (merged v229+v231).
 - `fpga_hps_bridge_gen` — deterministic HPS-to-FPGA bridge generator.

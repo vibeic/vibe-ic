@@ -10169,9 +10169,21 @@ def step_emit_phase2_manifests(project: Path,
         and fpga_compile_step.status == "PASS"
         and fpga_compile_step.detail
     )
+    # WHY the .sof is absent, as a FIELD. `verdict: SKIP` alone cannot say —
+    # it is emitted for every non-PASS cause alike: the step never ran, the
+    # step ran and was blocked by a missing prerequisite, the tool was absent,
+    # the compile failed. Consumers that waive a requirement on the strength of
+    # a "disclosed skip" need the CAUSE, or they waive on a defect.
+    # MEASURED over the 32 published audits: 20 carry evidence "fpga_compile
+    # not run" (never attempted) and 12 carry "qsf missing — caller must
+    # produce it" (attempted and blocked, which is somebody's bug). Both said
+    # SKIP, and nothing downstream could tell them apart.
     w("reports/phase2/fpga/quartus_map_audit.json", {
         "verdict": "PASS" if sof_present else "SKIP",
         "sof_present": sof_present,
+        "skip_reason": (None if sof_present
+                        else "not_attempted" if fpga_compile_step is None
+                        else "attempted_incomplete"),
         "compile_log": "fpga/compile.log",
         "evidence": (fpga_compile_step.detail if fpga_compile_step
                      else "fpga_compile not run"),
