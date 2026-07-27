@@ -549,12 +549,27 @@ def _compliance_detail(comp_step: dict) -> str:
 def _lane_applicability(project: Path) -> Tuple[bool, bool]:
     """(analog_applicable, silicon_received) — cheap project-level signals that
     MIRROR the flow's own step conditions, so lightweight agrees with --full.
-    Analog A1-A9 + mixed M1-M4 apply only when the design declared analog blocks
-    (`phase1/analog/analog_block_list.json` — the exact file the --full gate
-    conditions on); manufacturing 40-44 only once silicon is physically back
+    Analog A1-A9 + mixed M1-M4 apply when the design declared analog blocks;
+    manufacturing 40-44 only once silicon is physically back
     (`phase3/stage5_manufacturing/silicon_received.json`). When neither holds
-    those lanes are honestly `na` / `external`, not a misleading `pending`."""
-    analog = (project / "phase1" / "analog" / "analog_block_list.json").exists()
+    those lanes are honestly `na` / `external`, not a misleading `pending`.
+
+    The analog block list is probed at BOTH canonical locations. The flow yaml
+    conditions on `phase1/analog/analog_block_list.json`, but the only two
+    producers — `phase1_doc_one_shot_runner` (L5_ADI_SPEC emit) and
+    `analog_one_shot_runner` — write it through `_path_layout.analog_dir()`,
+    i.e. `phase3/analog/analog_block_list.json`; the phase1 spelling is
+    reachable only via `migrate_to_layout_p` on a legacy project-root tree.
+    `flow_compliance_check._glob_first` hides this with a phase{1,2,3}/analog →
+    canonical remap, but this module does raw `Path.exists()`, so on a REAL
+    analog run it read `False` and marked the whole Analog + Mixed-Signal
+    lanes "na — design declares no analog blocks". That is a false
+    not-applicable on the load-bearing lane, and it made lightweight DISAGREE
+    with --full, which is exactly what this helper exists to prevent."""
+    analog = (
+        (project / "phase3" / "analog" / "analog_block_list.json").exists()
+        or (project / "phase1" / "analog" / "analog_block_list.json").exists()
+    )
     silicon = (project / "phase3" / "stage5_manufacturing"
                / "silicon_received.json").exists()
     return analog, silicon

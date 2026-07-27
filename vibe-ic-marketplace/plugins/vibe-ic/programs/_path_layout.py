@@ -248,12 +248,24 @@ def fpga_final_dir(project: Path) -> Path:
 # ─── analog (distributed across phase1/2/3 per Layout P) ────────────────
 
 def phase1_analog_block_dir(project: Path, block: str) -> Path:
-    """A1 analog spec extraction outputs."""
+    """LEGACY phase-distributed location for A1 spec extraction.
+
+    NOT where A1 writes. `analog_one_shot_runner` and
+    `phase1_doc_one_shot_runner` both emit through `analog_dir()` below
+    (phase3/analog/), and `analog_a1_spec_extract_check` reads there. This
+    helper has ZERO callers in the tree — it is retained only because
+    `migrate_to_layout_p` can leave a legacy project-root `analog/` tree at
+    this path, which the A-gates accept as a SECOND candidate
+    (`_analog_a_check_common.block_artefact_candidates`). Do not route new
+    producers here."""
     return project / "phase1/analog" / block
 
 
 def phase2_analog_block_dir(project: Path, block: str) -> Path:
-    """A2-A4 analog frontend (topology / netlist / corner sweep)."""
+    """LEGACY phase-distributed location for the A2-A4 analog frontend
+    (topology / netlist / corner sweep). NOT where A2-A4 write — see
+    `phase1_analog_block_dir` above; same zero-caller status and same
+    legacy-tolerance rationale."""
     return project / "phase2/analog" / block
 
 
@@ -271,18 +283,21 @@ def phase3_hardmacro_block_dir(project: Path, block: str) -> Path:
     return project / "phase3/analog/hardmacro" / block
 
 
-# Convenience aliases — most analog gates operate on backend artefacts
-# (layout / DRC / LVS / hardmacro) which live under phase3/analog/.
-# Callers that need A1 spec (phase1/analog/) or A2-A4 frontend
-# (phase2/analog/) must use the phase-specific helpers above.
+# CANONICAL analog root. Every analog producer in the tree writes here and
+# every A-gate reads here — A1..A9 alike, not just the A5-A9 backend. The
+# phase-distributed helpers above are legacy read-side tolerances with no
+# callers; the comment that used to sit here told callers to use them for
+# A1 / A2-A4, which no producer has ever done.
 def analog_dir(project: Path) -> Path:
-    """Default analog root — phase3 (where layout / PV / hardmacro live)."""
+    """Canonical analog root — phase3/analog (spec, topology, netlist, corner
+    sweep, layout, PV, resim, hardmacro, and the block list itself)."""
     return project / "phase3/analog"
 
 
 def analog_block_dir(project: Path, block: str) -> Path:
-    """Default per-block analog dir — phase3 (A5-A9 outputs).
-    For A1 spec use phase1_analog_block_dir; for A2-A4 use phase2_analog_block_dir."""
+    """Canonical per-block analog dir — phase3/analog/<block>, for A1..A9
+    outputs. `phase{1,2}_analog_block_dir` are legacy read-side locations
+    only; do not send new producers there."""
     return project / "phase3/analog" / block
 
 
