@@ -494,6 +494,57 @@ def test_power_report_check_splits_argv_without_stealing_the_flag_value():
     assert refusal is None
 
 
+def test_power_report_check_never_spends_a_credit_on_a_broken_argv(tmp_path):
+    """Malformed argv must exit 1 — never 2, never 0.
+
+    `power_report_check` adopted the shared splitter in this batch but not the
+    rc contract that goes with it, and it is ABSENT from
+    `test_wrapper_argv_forwarding._WRAPPERS`, so nothing exercised it.
+    Measured against the two wrappers that already had the contract:
+
+        power  --json=2  --under=2  --nonsuch=2  <proj> <proj>=2  --help=0
+        drc    --json=1  --under=1  --nonsuch=1  <proj> <proj>=1  --help=1
+        lvs    --json=1  --under=1  --nonsuch=1  <proj> <proj>=1  --help=1
+
+    rc 2 is credited as a VACUOUS_PASS by
+    `flow_compliance_check._check_program_exit_zero` (`return True`), and rc 0
+    spends a sign-off credit outright — so every one of those five was a false
+    certificate on Step 33.
+
+    It is here rather than in the `_WRAPPERS` matrix because that matrix's
+    fixture builds a DRC project; a power wrapper cannot pass its direction-1
+    guards on it. The domain differs; the rc contract does not.
+
+    Both halves are asserted, and the second is the one that matters: rc 1 is
+    the mechanism, "the gate runner does not credit it" is the property. Every
+    shape is measured before anything is asserted, so a failure names ALL the
+    offending shapes rather than only the first.
+    """
+    import flow_compliance_check as fcc
+
+    proj = _power_project(tmp_path)
+    shapes = (["--json"], ["--under"], ["--nonsuch"], [str(proj)], ["--help"])
+
+    bad_rc, credited = [], []
+    for args in shapes:
+        r = _run_proc("power_report_check.py", str(proj), *args)
+        if r.returncode != 1:
+            bad_rc.append((args, r.returncode))
+        # The property behind the rc: drive the REAL gate runner and confirm
+        # Step 33 does not go green off an invocation that audited nothing.
+        passed, _snippet = fcc._check_program_exit_zero(
+            proj, "power_report_check . " + " ".join(args))
+        if passed:
+            credited.append(args)
+
+    assert not bad_rc, (
+        f"rc 2 is credited as a vacuous PASS and rc 0 spends a sign-off "
+        f"credit; these did not exit 1: {bad_rc}")
+    assert not credited, (
+        f"the gate runner CREDITED an invocation that audited nothing: "
+        f"{credited}")
+
+
 def test_power_report_check_defaults_project_dir(tmp_path, monkeypatch):
     """DIRECTION-1 guard: bare invocation still defaults the project dir to
     '.' and still exits without a usage error."""
