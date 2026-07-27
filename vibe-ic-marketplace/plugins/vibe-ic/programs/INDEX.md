@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 985
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 985)
+- **Total programs (excluding helpers / shims):** 986
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 986)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 976 |
+| `any` | 977 |
 
 ## Alphabetical listing
 
@@ -639,6 +639,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pcie_gen5_protocol_synth` | any | v0.1.89 | PCI Express 5.0 (Gen5) protocol synth helper. |
 | `pcie_protocol_synth` | any | v0.1.84 | PCI Express-class protocol synth helper. |
 | `pdk_analog_completeness_check` | any | — | pdk_analog_completeness_check.py |
+| `pdk_cell_models` | any | — | single source of truth for per-PDK stdcell Verilog |
 | `pdk_consistency_check` | any | — | Deterministic PDK-netlist consistency checker. |
 | `pdk_device_map` | any | — | PDK-AGNOSTIC generic->foundry device-map accessor (R13). |
 | `pdk_dielectric_fit` | any | — | Fit a self-consistent dielectric stack from a PDK's OWN shipped cap numbers. |
@@ -1057,7 +1058,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (976 programs)
+### `any` (977 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1667,6 +1668,7 @@ _(no programs in this group)_
 - `pcie_gen5_protocol_synth` — PCI Express 5.0 (Gen5) protocol synth helper.  _[v0.1.89]_
 - `pcie_protocol_synth` — PCI Express-class protocol synth helper.  _[v0.1.84]_
 - `pdk_analog_completeness_check` — pdk_analog_completeness_check.py
+- `pdk_cell_models` — single source of truth for per-PDK stdcell Verilog
 - `pdk_consistency_check` — Deterministic PDK-netlist consistency checker.
 - `pdk_device_map` — PDK-AGNOSTIC generic->foundry device-map accessor (R13).
 - `pdk_dielectric_fit` — Fit a self-consistent dielectric stack from a PDK's OWN shipped cap numbers.

@@ -53,6 +53,12 @@ except Exception:                       # pragma: no cover - direct-script path
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import _path_layout as _pl
 
+try:
+    import pdk_cell_models as _pcm
+except Exception:                       # pragma: no cover - direct-script path
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import pdk_cell_models as _pcm
+
 DEFAULT_CONTAINER = os.environ.get("VIBEIC_EDA_CONTAINER", "vibeic-eda")
 _TOOL_PATH = "export PATH=/foss/tools/bin:$PATH; "
 
@@ -327,11 +333,38 @@ endmodule
 # ---------------------------------------------------------------------------
 
 _MODULE_RE = re.compile(r"^\s*module\s+([A-Za-z_][\w$]*)\s*[(;]", re.MULTILINE)
-_INST_RE = re.compile(r"^\s*([A-Z][A-Za-z0-9_$]*)\s+([A-Za-z_][\w$]*)\s*\(",
+# An instance line: `<CellType> <inst_name> (`.
+#
+# The cell type is deliberately NOT anchored to an uppercase first letter.  The
+# uppercase anchor encoded ONE library's naming convention (the commercial
+# `DFFHQD1` / `INVD1` style) and silently returned ZERO used cells on every
+# open PDK, whose cells are lowercase: `sg13g2_nand2_1`, `sky130_fd_sc_hd__inv_1`,
+# `gf180mcu_fd_sc_mcu7t5v0__nand2_1`.  With an empty used-cell set the PDK model
+# lookup scored 0 for every candidate and the physical-cell stub emitter emitted
+# nothing, so the whole gate-level sim was unreachable on the OSS path.
+# Structure (identifier + identifier + `(`) already excludes declarations
+# (`wire [3:0] n;`), continuous assigns and `always @(...)`; the language
+# keywords that CAN still match structurally are subtracted below.
+_INST_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_$]*)\s+([A-Za-z_][\w$]*)\s*\(",
                       re.MULTILINE)
 # an instance line with an EMPTY port list, e.g. `FILL1 FILLER_0 ();`
-_EMPTY_INST_RE = re.compile(r"^\s*([A-Z][A-Za-z0-9_$]*)\s+[A-Za-z_][\w$]*\s*\(\s*\)\s*;",
-                           re.MULTILINE)
+_EMPTY_INST_RE = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_$]*)\s+[A-Za-z_][\w$]*\s*\(\s*\)\s*;",
+    re.MULTILINE)
+
+# Verilog keywords that can appear in the `<word> <word> (` shape and are NOT
+# cell instantiations. Subtracted from the used-cell set so relaxing the
+# uppercase anchor cannot introduce phantom "cells". chip-AGNOSTIC.
+_VERILOG_NON_CELL_WORDS = frozenset({
+    "module", "endmodule", "macromodule", "primitive", "endprimitive",
+    "function", "endfunction", "task", "endtask", "generate", "endgenerate",
+    "specify", "endspecify", "table", "endtable", "case", "casex", "casez",
+    "endcase", "if", "else", "for", "while", "repeat", "forever", "initial",
+    "always", "assign", "defparam", "parameter", "localparam",
+    "input", "output", "inout", "wire", "reg", "tri", "supply0", "supply1",
+    "integer", "real", "signed", "unsigned", "begin", "end", "posedge",
+    "negedge", "or", "and", "not", "buf",
+})
 
 
 def find_netlist(project: Path, top: str) -> Optional[Path]:
@@ -370,6 +403,94 @@ def find_pdk_verilog(project: Path, used_cells: set) -> Optional[Path]:
     return best if best_score > 0 else None
 
 
+class CellModels:
+    """Resolved stdcell Verilog simulation model(s) for the gate-level sim.
+
+    `paths` are the paths as the SIMULATOR sees them (identical on the host
+    when the project staged the model itself; in-container absolute paths when
+    the model only exists inside the EDA image).  `text` is the concatenated
+    model source, needed by `missing_empty_cell_stubs`.
+    """
+
+    __slots__ = ("paths", "text", "source", "pdk_id")
+
+    def __init__(self, paths: List[str], text: str, source: str,
+                 pdk_id: Optional[str] = None):
+        self.paths = list(paths)
+        self.text = text
+        self.source = source
+        self.pdk_id = pdk_id
+
+    @property
+    def arg(self) -> str:
+        """Space-joined path list for the iverilog command line."""
+        return " ".join(self.paths)
+
+    def __repr__(self) -> str:                       # pragma: no cover
+        return (f"CellModels(source={self.source!r}, pdk_id={self.pdk_id!r}, "
+                f"paths={self.paths!r})")
+
+
+def _read_container_files(container: str, paths: List[str]) -> str:
+    """`cat` the given in-container files; '' when any of them is unreadable.
+
+    Deliberately all-or-nothing: a partially-read model would silently produce
+    WRONG physical-cell stubs (a cell the real model defines would be stubbed
+    out as an empty module, which simulates as a functional hole).
+    """
+    if not paths:
+        return ""
+    chunks: List[str] = []
+    for p in paths:
+        try:
+            r = _docker(container, f"cat {p}", timeout=120)
+        except Exception:
+            return ""
+        if r.returncode != 0 or not r.stdout:
+            return ""
+        chunks.append(r.stdout)
+    return "\n".join(chunks)
+
+
+def resolve_cell_models(project: Path, used_cells: set,
+                        container: str) -> Optional[CellModels]:
+    """Resolve the PDK cell Verilog model, host staging FIRST.
+
+    1. `<project>/input/pdk/verilog/` — the commercial-PDK path, where the
+       runner copies an NDA model into the run dir.  Unchanged and still wins,
+       so a project that stages its own model keeps using exactly that file.
+    2. The EDA container's own PDK tree, via the shared `pdk_cell_models`
+       table, when the PDK can be identified from the netlist's cell names.
+       This is the open-PDK path (sky130 / gf180 / ihp-sg13g2): the model has
+       always been present in the image — `fault_atpg_run` (Step 11 ATPG) uses
+       the very same files — it was simply never reachable from here, so Step
+       29 reported "no PDK cell Verilog model found" and produced no
+       results.log at all.
+
+    Returns None when neither resolves — a REAL capability gap (unknown
+    library), which the caller must disclose as such rather than as "the
+    runner does not drive a back-annotated sim".
+    """
+    host = find_pdk_verilog(project, used_cells)
+    if host is not None:
+        return CellModels([str(host)], host.read_text(errors="replace"),
+                          "host_staged")
+
+    pdk_id = _pcm.detect_pdk_id(used_cells)
+    paths = _pcm.container_model_paths(pdk_id)
+    if not paths:
+        return None
+    text = _read_container_files(container, paths)
+    if not text:
+        return None
+    # Same substantive bar the host path applies: the model must actually
+    # define at least one cell the netlist instantiates. Prevents a stale
+    # table entry from handing iverilog a model for a different library.
+    if not (set(_MODULE_RE.findall(text)) & set(used_cells)):
+        return None
+    return CellModels(paths, text, "container_pdk", pdk_id)
+
+
 def find_sdf(project: Path, top: str) -> Optional[Path]:
     """Locate a REAL (non-stub) SDF in sim_postlayout/ or extracted/."""
     sim_dir = _pl.sim_postlayout_dir(project)
@@ -391,7 +512,8 @@ def find_sdf(project: Path, top: str) -> Optional[Path]:
 def netlist_cells_and_ports(text: str, top: str) -> Tuple[set, Dict[str, object]]:
     """Return (used-cell-types, top-port-info)."""
     defined = set(_MODULE_RE.findall(text))
-    used = set(m.group(1) for m in _INST_RE.finditer(text)) - defined - {"module"}
+    used = (set(m.group(1) for m in _INST_RE.finditer(text))
+            - defined - _VERILOG_NON_CELL_WORDS)
     # top port declarations: input/output/inout with optional [msb:lsb]
     ports: Dict[str, object] = {}
     mtop = re.search(r"module\s+" + re.escape(top) + r"\s*\(", text)
@@ -480,16 +602,19 @@ def run(project, top: str = "spm", container: str = DEFAULT_CONTAINER,
         notes.append("sdf_gate_sim: no real SDF found")
         return {"verdict": "NOT_APPLICABLE", "reason": "no sdf"}
 
-    pdk_lib = find_pdk_verilog(project, used)
-    if not pdk_lib:
-        notes.append("sdf_gate_sim: no PDK cell Verilog model found")
+    models = resolve_cell_models(project, used, container)
+    if not models:
+        notes.append("sdf_gate_sim: no PDK cell Verilog model found "
+                     f"(host input/pdk/verilog absent and no in-container "
+                     f"model for the netlist's library; "
+                     f"{len(used)} distinct cells instantiated)")
         return {"verdict": "NOT_APPLICABLE", "reason": "no pdk lib"}
 
     width = int(portmap["width"])
     sim_dir.mkdir(parents=True, exist_ok=True)
 
     # emit physical-cell stubs (fillers with no PDK model, empty port list)
-    stubs = missing_empty_cell_stubs(ntext, used, pdk_lib.read_text(errors="replace"))
+    stubs = missing_empty_cell_stubs(ntext, used, models.text)
     stub_path = sim_dir / "phys_cell_stubs.v"
     stub_body = ["// Auto-generated empty stubs for physical-only cells with no",
                  "// PDK Verilog model (instantiated with empty port lists).",
@@ -537,7 +662,7 @@ def run(project, top: str = "spm", container: str = DEFAULT_CONTAINER,
     cc = (f"cd {sim_dir} && "
           f"iverilog {compile_flags} -DSDF_FILE='\"{sdf}\"' -DHALF={half_period} "
           f"-s {tb_name} -o {vvp.name} {tb_path.name} {netlist} "
-          f"{stub_path.name} {pdk_lib} > compile.log 2>&1; echo RC=$?")
+          f"{stub_path.name} {models.arg} > compile.log 2>&1; echo RC=$?")
     try:
         cr = _docker(container, cc, timeout=600)
     except Exception as e:                              # pragma: no cover
@@ -561,7 +686,8 @@ def run(project, top: str = "spm", container: str = DEFAULT_CONTAINER,
 
     meta: Dict[str, object] = {
         "top": top, "width": width,
-        "netlist": str(netlist), "pdk_lib": str(pdk_lib), "sdf": str(sdf),
+        "netlist": str(netlist), "pdk_lib": models.arg, "sdf": str(sdf),
+        "pdk_lib_source": models.source, "pdk_id": models.pdk_id,
         "simulator": "Icarus Verilog (iverilog/vvp) 14",
         "compile_flags": compile_flags, "runtime_flags": runtime_flags,
         **parsed,
@@ -574,20 +700,22 @@ def run(project, top: str = "spm", container: str = DEFAULT_CONTAINER,
         "annotated_interconnect_delays": parsed["annotated_interconnect_delays"],
         "functional": {"passed": parsed["passed"], "total": parsed["total"],
                        "bit_order": parsed["bit_order"], "latency": parsed["latency"]},
-        "artifacts": {"netlist": str(netlist), "pdk_lib": str(pdk_lib),
+        "artifacts": {"netlist": str(netlist), "pdk_lib": models.arg,
+                      "pdk_lib_source": models.source, "pdk_id": models.pdk_id,
                       "sdf": str(sdf), "testbench": str(tb_path),
                       "phys_stubs": str(stub_path)},
     }, indent=2, ensure_ascii=False) + "\n")
-    # a real results.log supersedes any prior honest SKIPPED-CONDITION note —
-    # remove the stale sentinel so flow-compliance sees a single, consistent
-    # signal (a real PASS, not "skipped").
-    if parsed["verdict"] == "PASS":
-        stale = sim_dir / "sdf_sim_skipped.json"
-        if stale.is_file():
-            try:
-                stale.unlink()
-            except OSError:
-                pass
+    # A real results.log supersedes any prior "skipped" note — the simulation
+    # RAN, whatever its verdict. Removing the sentinel only on PASS left a run
+    # whose sim executed and FAILED still carrying a marker saying it never ran,
+    # which is the exact laundering this program exists to prevent: the marker
+    # would defer step 29 to SKIPPED-CONDITION instead of letting the FAIL show.
+    stale = sim_dir / "sdf_sim_skipped.json"
+    if stale.is_file():
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     notes.append(f"sdf_gate_sim: {parsed['verdict']} "
                  f"({parsed['passed']}/{parsed['total']} vectors, "
                  f"{parsed['annotated_interconnect_delays']} SDF net delays)")
