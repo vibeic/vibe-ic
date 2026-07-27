@@ -141,6 +141,15 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                 # is non-zero only on a project whose docs actually carry
                 # that shape. A shared 0 is a property of the input.
                 "non_command_row_refusal_count",
+                # for #505 — same structural-skip-counter family. Number
+                # of DISTINCT state machines L6/L9 attribute their states
+                # to, grouped from extractor provenance. Both fixtures
+                # are thin-input projects with no FSM evidence at all, so
+                # both legitimately report 0 alongside an empty
+                # `fsm_machines[]`. The count is non-zero only when a
+                # project's own documents declare or describe a machine;
+                # a shared 0 is a property of the input.
+                "fsm_machine_count",
                 # Empty/null sentinel structurally-shared values are fine.
                 # They're not "identical hardcodes" — they're "neither
                 # had evidence, both null".

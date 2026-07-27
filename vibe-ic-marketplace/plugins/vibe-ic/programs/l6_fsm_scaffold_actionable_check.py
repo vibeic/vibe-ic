@@ -278,6 +278,78 @@ def _state_entries(l6: dict) -> List[Any]:
     return out
 
 
+# v1.7.74 — for #505. Per-machine view of the derived state set.
+#
+# `derive_fsm_states()` returns a FLAT union of every state entry in L6,
+# which is what phase 2 scaffolds from. But L6 may describe MORE THAN
+# ONE machine: a `typedef enum` declares a named, closed set while a
+# prose walker infers a state name out of a chapter about a different
+# block. Reporting that union as one machine asserts a machine the input
+# never declared, and blames the closed enum for a state that is not its
+# member. This grouping consumes L6's own attribution — it derives no
+# grouping of its own and matches no names.
+def _fsm_machines(l6: dict, derived: List[str]) -> List[Dict[str, Any]]:
+    """One record per state machine L6 attributes its states to.
+
+    Prefers L6's own `fsm_machines[]`; falls back to the per-state
+    `fsm_machine` / `declared_type` attribution; falls back again to a
+    single unattributed machine so pre-v1.7.74 layers keep working."""
+    machines = l6.get("fsm_machines")
+    if isinstance(machines, list) and machines:
+        out: List[Dict[str, Any]] = []
+        for m in machines:
+            if not isinstance(m, dict):
+                continue
+            out.append({
+                "machine_id": str(m.get("machine_id") or "?"),
+                "closed": bool(m.get("closed")),
+                "declared_type": m.get("declared_type"),
+                "source": m.get("source") or "",
+                "states": [str(s) for s in (m.get("states") or [])],
+            })
+        if out:
+            return out
+    order: List[str] = []
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for st in _state_entries(l6):
+        if not isinstance(st, dict):
+            continue
+        name = str(st.get("name") or st.get("state") or "")
+        if not name:
+            continue
+        declared = st.get("declared_type")
+        mid = str(st.get("fsm_machine")
+                  or (declared if isinstance(declared, str) and declared
+                      else "")
+                  or str(st.get("evidence") or "").split(" (")[0]
+                  or "?")
+        rec = by_id.get(mid)
+        if rec is None:
+            order.append(mid)
+            rec = by_id[mid] = {
+                "machine_id": mid,
+                "closed": bool(isinstance(declared, str) and declared),
+                "declared_type": declared if isinstance(declared, str) else None,
+                "source": str(st.get("evidence") or "").split(" (")[0],
+                "states": [],
+            }
+        if name not in rec["states"]:
+            rec["states"].append(name)
+    if order:
+        return [by_id[m] for m in order]
+    if derived:
+        return [{"machine_id": "?", "closed": False, "declared_type": None,
+                 "source": "", "states": list(derived)}]
+    return []
+
+
+def _machine_label(m: Dict[str, Any]) -> str:
+    kind = ("closed typedef enum" if m.get("closed")
+            else "inferred from documents")
+    return (f"{m.get('machine_id')} [{kind}, "
+            f"{len(m.get('states') or [])} state(s)]")
+
+
 def _declared_transitions(l6: dict) -> List[dict]:
     """Every transition L6 declares — per-state or top-level."""
     out: List[dict] = []
@@ -410,6 +482,10 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "reason": "",
         "fsm_checked": False,
         "derived_states": [],
+        # v1.7.74 — for #505. The derived set broken out per machine, so
+        # a reader can tell "these ten are the machine" from "these
+        # eleven names were seen somewhere".
+        "machines": [],
         "transitions_declared": 0,
         "reject_rules_checked": 0,
         "failures": [],
@@ -463,6 +539,10 @@ def evaluate(project: Path) -> Dict[str, Any]:
             warnings.append(
                 f"derive_fsm_states() raised {type(exc).__name__}: {exc}")
         out["derived_states"] = derived
+        # v1.7.74 — for #505. Group before reasoning: the flat list is a
+        # union over every machine L6 describes.
+        machines = _fsm_machines(l6, derived)
+        out["machines"] = machines
 
         raw_states = _state_entries(l6)
         fsm_asserted = (not _l6_declares_no_fsm(l6)) or bool(raw_states)
@@ -474,6 +554,28 @@ def evaluate(project: Path) -> Dict[str, Any]:
             parts_run.append("fsm")
             transitions = _declared_transitions(l6)
             out["transitions_declared"] = len(transitions)
+
+            # v1.7.74 — for #505. Report what the grouping found before
+            # any verdict, so a multi-machine layer is never described
+            # as one machine.
+            if len(machines) > 1:
+                warnings.append(
+                    f"L6 attributes its states to {len(machines)} "
+                    "DISTINCT state machines — "
+                    + "; ".join(_machine_label(m) for m in machines[:4])
+                    + ". The state list phase 2 receives is their union, "
+                    "not one machine")
+            for m in machines:
+                if m.get("closed") or len(m.get("states") or []) != 1:
+                    continue
+                if len(machines) < 2:
+                    continue
+                warnings.append(
+                    f"machine {m.get('machine_id')} contributes a single "
+                    f"state ({(m.get('states') or ['?'])[0]}) inferred "
+                    f"from {m.get('source') or 'a document'} — retained "
+                    "as attributed evidence about that machine, NOT "
+                    "counted as an incomplete machine of its own")
 
             # A1 — at least 2 states.
             if len(derived) == 0:
@@ -488,22 +590,33 @@ def evaluate(project: Path) -> Dict[str, Any]:
                     "under a key the emitter reads (fsm_states / "
                     "fsm_hints*), not merely under 'states'")
             elif len(derived) == 1:
+                _only = machines[0] if len(machines) == 1 else None
                 fsm_failures.append(
-                    f"only 1 FSM state derived ({derived[0]!r}) — "
-                    "emit_fsm_v() gives it a 1-bit state register that "
-                    "can never change value, so <top>_fsm.v is a module "
-                    "that cannot leave reset. A control layer that "
-                    "declares an FSM must enumerate >= 2 states")
+                    f"only 1 FSM state derived ({derived[0]!r}"
+                    + (f", machine {_only.get('machine_id')}"
+                       if _only else "")
+                    + ") — emit_fsm_v() gives it a 1-bit state register "
+                    "that can never change value, so <top>_fsm.v is a "
+                    "module that cannot leave reset. A control layer "
+                    "that declares an FSM must enumerate >= 2 states")
 
             # A2 — at least one transition to scaffold from.
+            # v1.7.74 — for #505. Same trigger, but the finding is
+            # stated PER MACHINE: an eleven-state machine must not be
+            # asserted where the input declares a ten-state one and
+            # mentions a state of a second.
             if derived and not transitions:
+                _per_machine = "; ".join(
+                    _machine_label(m) for m in machines[:4]) or "?"
                 fsm_failures.append(
-                    f"{len(derived)} state(s) derived but L6 declares 0 "
-                    "transitions (no per-state transitions[] and no "
-                    "top-level fsm_transitions[]). emit_fsm_v()'s body "
-                    "is literally '// TODO — transition logic per "
-                    "L6.fsm_transitions', so phase 2 receives a state "
-                    "enum with no transition information at all")
+                    "L6 declares 0 transitions (no per-state "
+                    "transitions[] and no top-level fsm_transitions[]) "
+                    f"for any of the {len(machines) or 1} state "
+                    f"machine(s) it describes — {_per_machine}. "
+                    "emit_fsm_v()'s body is literally '// TODO — "
+                    "transition logic per L6.fsm_transitions', so phase "
+                    "2 receives a state enum with no transition "
+                    "information at all")
 
             # A3 — no dangling transition targets.
             if derived and transitions:

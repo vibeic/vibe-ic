@@ -33659,6 +33659,136 @@ def _v1_6_496_state_match_acceptable(
         text_arg, m.start())
 
 
+# ---------------------------------------------------------------------------
+# v1.7.74 — for #505. Per-machine attribution of L6 FSM states.
+#
+# `L6.fsm_states[]` is written by SEVERAL independent extractors: the
+# prose walkers (which harvest a state name from narrative text anywhere
+# in the corpus), the Verilog-`parameter` / arrow / token tiers, and the
+# `typedef enum` harvester (v1.7.72), which reads a NAMED, CLOSED member
+# set out of a staged HDL package. Before this change every one of them
+# appended into ONE flat list with no record of WHICH machine the state
+# belongs to, so a passing sentence about block A's state machine became
+# an eleventh member of block B's ten-member declared enum.
+#
+# The grouping key is derived from what the extractor ACTUALLY KNEW, and
+# from nothing else:
+#   * a state carrying `declared_type` was read out of a `typedef enum`
+#     whose type name IS the machine's identity -> that type name;
+#   * every other state was inferred from a document, so its identity is
+#     the SOURCE DOCUMENT it was inferred from.
+# There is no name matching across the two sources, no state-name
+# allow-list and no document-name pattern: purely the provenance each
+# state already carries. Chip-AGNOSTIC.
+_L6_EVIDENCE_LABEL_SUFFIX_RE = re.compile(r"\s*\([^()]*\)\s*$")
+
+# Grouping granularity for states with no declared type. The extractors
+# record provenance at document level (`input/docs/<file> (<label>)`),
+# so document level is the finest grouping their own evidence supports.
+_L6_FSM_MACHINE_DOC_PREFIX = "doc:"
+_L6_FSM_MACHINE_UNATTRIBUTED = "doc:<unattributed>"
+
+
+def _l6_state_evidence_source(state: Dict[str, Any]) -> str:
+    """The source document an L6 state entry was extracted from.
+
+    Evidence is written either as ``input/docs/<file>`` (bare) or as
+    ``input/docs/<file> (<walker label>)``. Strip the trailing
+    parenthesised label — filenames may contain spaces, so trimming the
+    suffix is safer than splitting on whitespace."""
+    ev = str(state.get("evidence") or "").strip()
+    if not ev:
+        return ""
+    return _L6_EVIDENCE_LABEL_SUFFIX_RE.sub("", ev).strip()
+
+
+def _l6_fsm_machine_id(state: Dict[str, Any]) -> str:
+    """Identity of the state machine ONE extracted L6 state belongs to.
+
+    Derived only from that state's own extractor provenance:
+    `declared_type` when an HDL `typedef enum` declared it, otherwise the
+    document the state was inferred from. Never from the state's name."""
+    if not isinstance(state, dict):
+        return _L6_FSM_MACHINE_UNATTRIBUTED
+    declared = state.get("declared_type")
+    if isinstance(declared, str) and declared.strip():
+        return declared.strip()
+    src = _l6_state_evidence_source(state)
+    if src:
+        return f"{_L6_FSM_MACHINE_DOC_PREFIX}{src}"
+    return _L6_FSM_MACHINE_UNATTRIBUTED
+
+
+def _l6_attribute_fsm_states(states: List[Dict[str, Any]]) -> None:
+    """Stamp `fsm_machine` on every state entry, in place."""
+    for st in states:
+        if isinstance(st, dict) and not st.get("fsm_machine"):
+            st["fsm_machine"] = _l6_fsm_machine_id(st)
+
+
+def _l6_build_fsm_machines(
+        states: List[Dict[str, Any]],
+        declared_machines: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Group attributed L6 states into one record per state machine.
+
+    `declared_machines` maps an HDL `typedef enum` type name to the
+    CLOSED member list that enum declares. A closed machine's member
+    list is taken from the DECLARATION, never from the flat state list,
+    so no inferred state can ever add a member to it — that is the whole
+    point of a closed enum as completeness evidence.
+
+    States inferred from documents group by source document and are
+    reported as OPEN (`closed: false`): the corpus may mention more of
+    that machine's states elsewhere, so its member list is a lower bound.
+
+    Every state is attributed; none is dropped."""
+    order: List[str] = []
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for st in states:
+        if not isinstance(st, dict):
+            continue
+        mid = st.get("fsm_machine") or _l6_fsm_machine_id(st)
+        rec = grouped.get(mid)
+        if rec is None:
+            order.append(mid)
+            rec = grouped[mid] = {
+                "machine_id": mid,
+                "declared_type": (st.get("declared_type")
+                                  if isinstance(st.get("declared_type"), str)
+                                  else None),
+                "closed": mid in declared_machines,
+                "source": (declared_machines.get(mid, {}).get("source")
+                           or _l6_state_evidence_source(st)),
+                "extraction_strategies": [],
+                "states": [],
+            }
+        strat = st.get("extraction_strategy")
+        if (isinstance(strat, str) and strat
+                and strat not in rec["extraction_strategies"]):
+            rec["extraction_strategies"].append(strat)
+        nm = str(st.get("name") or "")
+        if nm and nm not in rec["states"]:
+            rec["states"].append(nm)
+    # A declared machine's member list comes from its declaration.
+    out: List[Dict[str, Any]] = []
+    for mid in order:
+        rec = grouped[mid]
+        emitted = len(rec["states"])
+        decl = declared_machines.get(mid)
+        if decl:
+            rec["closed"] = True
+            rec["declared_type"] = mid
+            rec["states"] = list(decl.get("members") or [])
+            rec["source"] = decl.get("source") or rec["source"]
+        rec["state_count"] = len(rec["states"])
+        # How many of this machine's states survived the emit-time cap
+        # on `fsm_states[]`. Equal to `state_count` unless the cap bit.
+        rec["emitted_state_count"] = emitted
+        out.append(rec)
+    return out
+
+
 def gen_l6_control_logic(project: Path,
                          extracted: Dict[str, str]) -> LDocResult:
     """L6: reject rules from RX/event docs + dispatcher FSM scaffold."""
@@ -34390,17 +34520,77 @@ def gen_l6_control_logic(project: Path,
     # values, so no `encoding` is emitted for them — SystemVerilog's
     # implicit numbering is a language default, not something the
     # document said.
+    #
+    # v1.7.74 — for #505. The dedupe below used to SKIP an enum member
+    # whose name had already been harvested by an inference tier, which
+    # left the declared member represented by an entry attributed to a
+    # document that merely mentioned the name — a closed enum silently
+    # losing one of its own members to a prose scrape. A declaration
+    # outranks an inference: on a name collision the existing entry is
+    # RE-ATTRIBUTED to the declaring enum and the inferred evidence is
+    # kept alongside it as corroboration. Nothing is dropped.
     _v1_7_72_seen_states = {
         str(s.get("name") or "") for s in extracted_states
         if isinstance(s, dict)
     }
+    _v1_7_72_state_by_name: Dict[str, Dict[str, Any]] = {}
+    for _s in extracted_states:
+        if isinstance(_s, dict):
+            _v1_7_72_state_by_name.setdefault(str(_s.get("name") or ""), _s)
+    # v1.7.74 — for #505. type_name -> the CLOSED member set the
+    # declaration carries, used to group `fsm_machines[]` at emit time.
+    _v1_7_74_declared_machines: Dict[str, Dict[str, Any]] = {}
     for _enum in _hdlenum.harvest_enums(extracted):
         if _enum.get("enum_role") != _hdlenum.ROLE_FSM_STATE:
             continue
         _src = _enum.get("source_file") or ""
+        _type_name = str(_enum.get("type_name") or "").strip()
+        if _type_name:
+            _decl = _v1_7_74_declared_machines.setdefault(
+                _type_name,
+                {"source": f"input/docs/{_src}", "members": []})
+            for _mem in _enum.get("members") or []:
+                _mname = str(_mem.get("name") or "").strip()
+                if _mname and _mname not in _decl["members"]:
+                    _decl["members"].append(_mname)
         for _mem in _enum.get("members") or []:
             _name = str(_mem.get("name") or "").strip()
-            if not _name or _name in _v1_7_72_seen_states:
+            if not _name:
+                continue
+            _prior = _v1_7_72_state_by_name.get(_name)
+            # v1.7.74 — for #505. A PIPELINE STAGE that happens to share
+            # the member's name is a different object living in a
+            # different list (`pipeline_stages[]`), so it must neither
+            # absorb the declaration nor suppress it: fall through and
+            # emit the declared member as its own FSM state.
+            _prior_is_stage = (isinstance(_prior, dict)
+                               and _prior.get("source_kind")
+                               == "cpu_pipeline_stage")
+            if _name in _v1_7_72_seen_states and not _prior_is_stage:
+                # v1.7.74 — for #505. An inference tier already emitted
+                # this name. The `typedef enum` DECLARES it, so move the
+                # entry onto the declared machine (unless another
+                # declaration already owns it) and retain the inferred
+                # evidence as corroboration.
+                if (isinstance(_prior, dict)
+                        and not _prior.get("declared_type")
+                        and _type_name):
+                    _prior_ev = _prior.get("evidence")
+                    if isinstance(_prior_ev, str) and _prior_ev:
+                        _corr = _prior.setdefault(
+                            "corroborating_evidence", [])
+                        if isinstance(_corr, list) and _prior_ev not in _corr:
+                            _corr.append(_prior_ev)
+                    _prior["evidence"] = (
+                        f"input/docs/{_src} (typedef enum {_type_name})")
+                    _prior["extraction_strategy"] = (
+                        "hdl_typedef_enum_state_v1_7_72")
+                    _prior["declared_type"] = _type_name
+                    _prior["fsm_machine"] = _type_name
+                    if isinstance(_mem.get("value"), int) and not isinstance(
+                            _mem.get("value"), bool):
+                        _prior["encoding"] = _mem.get("literal")
+                        _prior["encoding_value"] = _mem.get("value")
                 continue
             _v1_7_72_seen_states.add(_name)
             _state: Dict[str, Any] = {
@@ -34418,6 +34608,10 @@ def gen_l6_control_logic(project: Path,
                 _state["encoding"] = _mem.get("literal")
                 _state["encoding_value"] = _mem.get("value")
             extracted_states.append(_state)
+            # A declaration outranks whatever was mapped here before, so
+            # a later enum collides with the DECLARED entry, not with a
+            # same-named pipeline stage.
+            _v1_7_72_state_by_name[_name] = _state
             _ev = evidence.setdefault(f"input/docs/{_src}", [])
             if len(_ev) < 28:
                 _ev.append({
@@ -34478,12 +34672,29 @@ def gen_l6_control_logic(project: Path,
         pipeline_stages = []
         no_fsm_states_in_input = _flag_no_X_in_input(
             extracted_states, evidence, "fsm")
+    # v1.7.74 — for #505. Attribute every emitted state to the machine
+    # its OWN extractor knew about, then group. Both steps read only the
+    # provenance already on each state (`declared_type` / evidence
+    # source document); no state is dropped, reordered or renamed.
+    _l6_attribute_fsm_states(fsm_states)
+    fsm_machines = _l6_build_fsm_machines(
+        fsm_states, _v1_7_74_declared_machines)
     content = {
         "schema_version": 2,
         "doc_class": "control_logic",
         "ic_name": ic_name,
         "reject_rules": rules[:32],
         "fsm_states": fsm_states,
+        # v1.7.74 — for #505. One record per state machine, grouped from
+        # extractor provenance. A record with `closed: true` was DECLARED
+        # by an HDL `typedef enum` and its member list is exactly what
+        # that declaration says — an inferred state can never add to it.
+        # A record with `closed: false` was inferred from a document and
+        # its member list is a lower bound. Always emitted (empty list
+        # when there are no states) so consumers can distinguish "one
+        # machine" from "several" instead of reading a flat union.
+        "fsm_machines": fsm_machines,
+        "fsm_machine_count": len(fsm_machines),
         # v1.6.436 — for #312 P2 ORGANIC. Pipeline stages routed to a
         # typed sibling key so downstream UVM/SVA/state-cover generators
         # never see them as FSM states. Always emitted as a list (empty
@@ -45372,6 +45583,13 @@ def gen_l9_integration_spec(project: Path,
                  if isinstance(l6_doc, dict) else None) or []
     l6_pipeline_stages = ((l6_doc or {}).get("pipeline_stages")
                           if isinstance(l6_doc, dict) else None) or []
+    # v1.7.74 — for #505. Per-machine grouping mirrored verbatim from L6;
+    # L9 derives no grouping of its own.
+    _l6_fsm_machines_mirror = [
+        m for m in (((l6_doc or {}).get("fsm_machines")
+                     if isinstance(l6_doc, dict) else None) or [])
+        if isinstance(m, dict)
+    ]
     # Legacy-fallback split — if L6 was written before v1.6.436 it may
     # still concatenate pipeline stages into fsm_states. Re-partition
     # by source_kind tag here so L9 stays clean.
@@ -45399,13 +45617,27 @@ def gen_l9_integration_spec(project: Path,
         _l6_pipeline_union.append(s)
     if _l6_fsm_clean:
         # v1.6.84 (#16 audit-sweep): transitions may be present-but-null.
-        fsm_states_summary = [
-            {"name": s.get("name"),
-             "transitions": s.get("transitions") or [],
-             "evidence": (s.get("evidence")
-                          or "promoted from L6.fsm_states")}
-            for s in _l6_fsm_clean[:32] if isinstance(s, dict) and s.get("name")
-        ]
+        # v1.7.74 — for #505. Carry the state's machine attribution
+        # across the mirror. Without it L9 re-flattens states belonging
+        # to different machines into one set, and every state-coverage /
+        # transition-completeness consumer downstream inherits the wrong
+        # denominator again. Additive keys, emitted only when L6 has
+        # them, so pre-v1.7.74 L6 inputs mirror byte-identically.
+        fsm_states_summary = []
+        for s in _l6_fsm_clean[:32]:
+            if not isinstance(s, dict) or not s.get("name"):
+                continue
+            _row: Dict[str, Any] = {
+                "name": s.get("name"),
+                "transitions": s.get("transitions") or [],
+                "evidence": (s.get("evidence")
+                             or "promoted from L6.fsm_states"),
+            }
+            if s.get("fsm_machine"):
+                _row["fsm_machine"] = s.get("fsm_machine")
+            if s.get("declared_type"):
+                _row["declared_type"] = s.get("declared_type")
+            fsm_states_summary.append(_row)
     else:
         # v1.6.79 — closes issue #12 cross-IC fingerprint follow-up.
         # The previous fallback emitted an 8-state AID-class FSM
@@ -46093,6 +46325,13 @@ def gen_l9_integration_spec(project: Path,
         "sim_only_modules": sim_only_modules,
         "fsm_states": fsm_states_summary,
         "no_fsm_states_in_input": no_fsm_states_in_input,
+        # v1.7.74 — for #505. Mirror of L6.fsm_machines[]: which machine
+        # each mirrored state belongs to and whether that machine was
+        # DECLARED by an HDL `typedef enum` (closed member set) or
+        # inferred from a document (lower bound). A state-coverage
+        # consumer needs this to pick the right denominator.
+        "fsm_machines": _l6_fsm_machines_mirror,
+        "fsm_machine_count": len(_l6_fsm_machines_mirror),
         # v1.6.436 — for #312 P2 ORGANIC. Pipeline stages mirrored from
         # L6.pipeline_stages so downstream UVM/SVA/state-cover does NOT
         # see IF/ID/EX/MEM/WB as state-encoded enum entries.
