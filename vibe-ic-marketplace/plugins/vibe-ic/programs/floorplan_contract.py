@@ -32,6 +32,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import _reference_flow_boundary as _rfb
+
 # Canonical DEF/OpenLane DIE_AREA rect: "llx lly urx ury" (4 numbers, any of
 # the JSON-array / prose / TCL separators). W = urx-llx, H = ury-lly.
 _DIE_AREA_RECT_RE = re.compile(
@@ -83,13 +85,24 @@ _MAX_BYTES_PER_FILE = 400_000
 
 # §4.05 (TIGHT / no-oracle-read): a fixed-floorplan contract is a DESIGN
 # statement (design_src config + spec docs). NEVER derive it from a golden /
-# oracle / reference-flow / expected-solution tree — those are off-limits.
-# Any input file whose relative path carries one of these directory segments
-# is skipped. chip-AGNOSTIC (pure directory-name vocabulary).
-_OFF_LIMITS_SEGMENTS = {
-    "reference_flow", "ref_flow", "reference", "golden", "oracle",
-    "expected", "expected_output", "solution", "solutions", "answer",
-    "answers", "ground_truth",
+# oracle / expected-solution tree — those are off-limits end to end, and their
+# vocabulary is defined ONCE in `_reference_flow_boundary` so no two programs
+# can disagree about what "oracle" means.
+#
+# The reference-flow segments below are an ADDITIONAL, DELIBERATELY STRICTER
+# rule that belongs to THIS program only, and it is not a claim that the whole
+# tree is oracle — measured over the tracked corpus a reference flow is MIXED
+# (recipe config + one QoR-rules oracle artifact; see the module docstring of
+# `_reference_flow_boundary`). This program stays stricter than that boundary
+# because a floorplan contract has an independent source in `design_src`, so
+# skipping the tree wholesale costs it nothing and keeps the read trivially
+# provable. A program that genuinely needs the recipe (phase-3 knob ingest)
+# sits exactly on the boundary instead.
+#
+# Any input file whose relative path carries one of these directory segments is
+# skipped. chip-AGNOSTIC (pure directory-name vocabulary).
+_OFF_LIMITS_SEGMENTS = set(_rfb.ORACLE_TREE_SEGMENTS) | {
+    "reference_flow", "ref_flow", "reference",
 }
 
 

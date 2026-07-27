@@ -50,6 +50,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import _path_layout as _pl
+import _reference_flow_boundary as _rfb
 from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
@@ -6483,6 +6484,29 @@ _ORFS_NUM_PNR_KNOBS = (
     "CTS_CLUSTER_SIZE", "CTS_CLUSTER_DIAMETER",
 )
 
+# EVERY knob name any phase-3 ingest honours — the PnR knobs above PLUS the
+# synth-side knobs consumed by `step_synth` (`_reference_flow_qor_knobs`). This
+# is the DENOMINATOR's numerator set: a declared name outside it is honoured by
+# nothing, anywhere in phase-3, and must be disclosed as such rather than left
+# invisible. Kept as a union of the existing tuples so a knob added to either
+# side is counted here automatically and cannot silently fall out of the
+# coverage figure.
+_ORFS_HONOURED_KNOBS = frozenset(
+    _ORFS_NUM_PNR_KNOBS + _ORFS_BOOL_SYNTH_KNOBS + _ORFS_PATH_SYNTH_KNOBS)
+
+# File extensions `_rf_pnr_scan` actually parses. A staged config file with any
+# other extension is NOT examined; it is recorded so "we did not read it" can
+# never render as "there was nothing to read".
+#
+# §4.05 BOUNDARY: a staged reference flow is MIXED — recipe config (design
+# INPUT, legitimate to parse) alongside a QoR-rules ORACLE artifact recording
+# what the known-good run ACHIEVED. The split is defined once, on content
+# shape, in `_reference_flow_boundary`. Declining to read the oracle is
+# COMPLIANCE, so it is reported separately from files we merely did not parse
+# and it must NOT count against ingest completeness — reporting it as an
+# unexamined file would invite someone to "fix" the gap by reading the answer.
+_RF_SCANNED_SUFFIXES = _rfb.RECIPE_SUFFIXES
+
 
 def _rf_pnr_scan(project: Path) -> Dict[str, object]:
     """Scan the design's OWN staged ``input/reference_flow/*.mk`` / ``*.tcl``
@@ -6495,8 +6519,16 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
         {"config_dir":   "input/reference_flow" | None,   # None = none staged
          "config_files": ["<rel path>", ...],   # every *.mk/*.tcl scanned
          "unreadable":   ["<rel path>", ...],   # staged but could not be read
+         "unscanned":    ["<rel path>", ...],   # staged, extension not parsed
+         "all_declared": {NAME: "<rel path>"},  # EVERY assignment seen
          "declared":     {KNOB: {"value": "<str>", "source": "<rel path>"}},
          "rejected":     [{"knob","value","source","reason"}, ...]}
+
+    ``all_declared`` is the DENOMINATOR: every ``NAME = value`` the staged
+    config declares, whether or not phase-3 honours that name. Without it the
+    audit can report "5 knobs adopted" while the design declared 16 and nothing
+    states the other 11 were never considered — "not examined" reading exactly
+    like "nothing to examine".
 
     ``declared`` carries only knobs with a valid numeric value; last-VALID-
     assignment wins (Make/Tcl override semantics) and a non-numeric / empty /
@@ -6507,6 +6539,7 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
     rdir = project / "input" / "reference_flow"
     out: Dict[str, object] = {
         "config_dir": None, "config_files": [], "unreadable": [],
+        "unscanned": [], "excluded_oracle": [], "all_declared": {},
         "declared": {}, "rejected": [],
     }
     if not rdir.is_dir():
@@ -6514,6 +6547,11 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
     out["config_dir"] = "input/reference_flow"
     config_files: List[str] = out["config_files"]  # type: ignore[assignment]
     unreadable: List[str] = out["unreadable"]      # type: ignore[assignment]
+    unscanned: List[str] = out["unscanned"]        # type: ignore[assignment]
+    excluded_oracle: List[str] = \
+        out["excluded_oracle"]                     # type: ignore[assignment]
+    all_declared: Dict[str, str] = \
+        out["all_declared"]                        # type: ignore[assignment]
     declared: Dict[str, Dict[str, str]] = \
         out["declared"]                            # type: ignore[assignment]
     rejected: List[Dict[str, str]] = \
@@ -6524,6 +6562,25 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
             return str(p.relative_to(project))
         except ValueError:
             return str(p)
+
+    # Every staged entry that is not a directory and whose extension we do not
+    # parse. A dangling symlink is neither a directory nor a readable file, so
+    # it is still counted as STAGED rather than vanishing from the walk.
+    #
+    # §4.05: an ORACLE artifact in here is split out. It is classified by shape
+    # and the parsed content is discarded on the spot — a classifier, never an
+    # extractor; no value from it reaches the flow or the report.
+    for entry in sorted(rdir.rglob("*")):
+        if entry.is_dir() or entry.suffix in _RF_SCANNED_SUFFIXES:
+            continue
+        rel_entry = _rel(entry)
+        try:
+            if _rfb.is_oracle_qor_rules(entry.read_text(errors="ignore")):
+                excluded_oracle.append(rel_entry)
+                continue
+        except Exception:
+            pass
+        unscanned.append(rel_entry)
 
     files = sorted(rdir.rglob("*.mk")) + sorted(rdir.rglob("*.tcl"))
     for f in files:
@@ -6551,7 +6608,12 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
                 m = _RF_MK_ASSIGN_RE.match(line)
                 if m:
                     name, val = m.group(1), m.group(2)
-            if not name or name not in _ORFS_NUM_PNR_KNOBS:
+            if not name:
+                continue
+            # DENOMINATOR: record the assignment before any recognition filter,
+            # so a name phase-3 honours nowhere is still counted and disclosed.
+            all_declared.setdefault(name, rel)
+            if name not in _ORFS_NUM_PNR_KNOBS:
                 continue
             v = _rf_strip_knob_value(val)
             try:
@@ -6808,8 +6870,44 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
     rejected = list(scan["rejected"]) + list(   # type: ignore[arg-type]
         mapping["rejected"]) + inert             # type: ignore[arg-type]
 
+    # ---- COVERAGE (the denominator) ---------------------------------------
+    # `adopted` alone is a numerator with no denominator: it cannot distinguish
+    # "the design declared exactly these" from "the design declared many more
+    # and phase-3 honours none of the rest". Record every assignment the config
+    # declares and split it into the names some phase-3 ingest honours and the
+    # names nothing honours.
+    all_declared: Dict[str, str] = \
+        scan["all_declared"]                       # type: ignore[assignment]
+    # NOTE the precise claim: the NAME is read by no knob ingest. Phase-3 may
+    # still obtain the same underlying input by another route (it discovers
+    # staged SDC / RTL / PDK itself rather than by honouring the variable that
+    # points at them), so this list must never be presented as "the design's
+    # input was ignored" — only as "this declaration did not steer the run".
+    not_recognised = [{"knob": k, "source": v}
+                      for k, v in sorted(all_declared.items())
+                      if k not in _ORFS_HONOURED_KNOBS]
+    unreadable: List[str] = scan["unreadable"]     # type: ignore[assignment]
+    unscanned: List[str] = scan["unscanned"]       # type: ignore[assignment]
+    excluded_oracle: List[str] = \
+        scan["excluded_oracle"]                    # type: ignore[assignment]
+    # The ingest saw the whole READABLE RECIPE only when nothing was unreadable
+    # and nothing was left unparsed. Anything else means the verdict below
+    # rests on a partial read and must not be presented as exhaustive.
+    #
+    # §4.05: `excluded_oracle` is deliberately NOT a term here. Declining to
+    # read the known-good result is the rule working, not a shortfall; letting
+    # it drag completeness to False would report compliance as a deficiency and
+    # push the next reader toward closing it by reading the answer.
+    ingest_complete = not unreadable and not unscanned
+
     if scan["config_dir"] is None:
         status = "no-config"
+    elif not declared and not rejected and unreadable:
+        # A config IS staged and we could not read part of it. Reporting
+        # `no-knobs` here would assert "nothing was silently ignored" on the
+        # strength of files that were never opened — the ingest-side twin of
+        # reading an unanalysed STA report as a met corner.
+        status = "config-unreadable"
     elif not declared and not rejected:
         status = "no-knobs"
     elif not adopted:
@@ -6820,7 +6918,12 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         "status": status,
         "config_dir": scan["config_dir"],
         "config_files": scan["config_files"],
-        "unreadable": scan["unreadable"],
+        "unreadable": unreadable,
+        "unscanned": unscanned,
+        "excluded_oracle": excluded_oracle,
+        "ingest_complete": ingest_complete,
+        "declared_total": len(all_declared),
+        "not_recognised": not_recognised,
         "adopted": adopted,
         "rejected": rejected,
         "applied": {k: mapping[k] for k in
@@ -6840,6 +6943,13 @@ _RF_PNR_STATUS_HEADLINE = {
         "A `input/reference_flow` config IS staged but declares none of the "
         "recognized ORFS floorplan/place/CTS/timing knobs — phase-3 used its "
         "GENERIC defaults. Nothing was silently ignored."),
+    "config-unreadable": (
+        "A `input/reference_flow` config IS staged but part of it could NOT be "
+        "read, and no knob was ingested from the part that could. Phase-3 used "
+        "its GENERIC defaults. This is NOT a statement that the design declared "
+        "no knobs — the unread files are listed below and may declare some; "
+        "the ingest is INCOMPLETE and says so rather than reporting a clean "
+        "result it did not earn."),
     "knobs-rejected": (
         "The staged `input/reference_flow` declared knobs but NONE were usable "
         "— every one is listed below with the reason it was dropped. Phase-3 "
@@ -6864,6 +6974,43 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
         "",
     ]
     cfg_files: List[str] = audit["config_files"]  # type: ignore[assignment]
+
+    # ---- COVERAGE, with the denominator, before any verdict detail ---------
+    # An adopted-knob list with no denominator cannot be audited: the reader
+    # cannot tell how much of the design's declaration this run acted on.
+    if audit.get("config_dir") is not None:
+        declared_total = int(audit.get("declared_total", 0))
+        not_recognised: List[Dict[str, str]] = \
+            audit.get("not_recognised", [])       # type: ignore[assignment]
+        unreadable_n = len(audit.get("unreadable", []))   # type: ignore[arg-type]
+        unscanned_n = len(audit.get("unscanned", []))     # type: ignore[arg-type]
+        honoured = declared_total - len(not_recognised)
+        out += [
+            "## Ingest coverage", "",
+            f"- Assignments declared by the staged config: **{declared_total}**",
+            f"- Declared names read by a phase-3 knob ingest: "
+            f"**{honoured} of {declared_total}**",
+            f"- Declared names no phase-3 knob ingest reads: "
+            f"**{len(not_recognised)} of {declared_total}**",
+            f"- Config files parsed: **{len(cfg_files)}** "
+            f"(unreadable: {unreadable_n}, not examined: {unscanned_n})",
+            f"- Ingest complete: **{bool(audit.get('ingest_complete'))}**",
+            "",
+        ]
+        oracle_n = len(audit.get("excluded_oracle", []))  # type: ignore[arg-type]
+        if oracle_n:
+            out += [
+                f"- Off-limits (§4.05) and deliberately not read: "
+                f"**{oracle_n}** — see below. This is COMPLIANCE, not a gap, "
+                f"and it does not count against completeness.", "",
+            ]
+        if not audit.get("ingest_complete"):
+            out += [
+                "> The ingest did NOT see the whole staged config. The figures "
+                "above are a floor, not a total — an unread or unexamined file "
+                "may declare knobs that are absent from every list below.", "",
+            ]
+
     if cfg_files:
         out += ["## Config files read", ""]
         out += [f"- `{f}`" for f in cfg_files] + [""]
@@ -6874,6 +7021,31 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
                 "skipped and the generic defaults kept — they are listed here "
                 "so the skip is visible rather than silent.", ""]
         out += [f"- `{f}`" for f in unreadable] + [""]
+    excluded_oracle: List[str] = \
+        audit.get("excluded_oracle", [])          # type: ignore[assignment]
+    if excluded_oracle:
+        out += ["## OFF-LIMITS — deliberately NOT read (§4.05)", "",
+                "These files were staged under the reference flow but record "
+                "what the KNOWN-GOOD run ACHIEVED — expected metric values "
+                "with comparison operators, and hashes of the golden netlist "
+                "— rather than how to configure a run. Reading them would "
+                "hand this run the timing, area and wirelength it is supposed "
+                "to reach independently. They were classified by shape and "
+                "their contents discarded unread; NOTHING from them reached "
+                "the flow. Their exclusion is the rule working and is NOT a "
+                "coverage gap to be closed.", ""]
+        out += [f"- `{f}`" for f in excluded_oracle] + [""]
+
+    unscanned: List[str] = \
+        audit.get("unscanned", [])                # type: ignore[assignment]
+    if unscanned:
+        out += ["## Staged but NOT EXAMINED", "",
+                "These files were staged under the reference flow but their "
+                "extension is outside the parsed set, so phase-3 never looked "
+                "inside them. Whatever they declare was neither adopted nor "
+                "rejected — it was never seen. Listed so that is visible "
+                "rather than silent.", ""]
+        out += [f"- `{f}`" for f in unscanned] + [""]
 
     adopted: List[Dict[str, str]] = audit["adopted"]  # type: ignore[assignment]
     out += ["## Adopted knobs", ""]
@@ -6895,6 +7067,22 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
         out += [f"| `{r['knob']}` | `{r.get('value', '')}` | "
                 f"`{r.get('source', '')}` | {r.get('reason', '')} |"
                 for r in rejected] + [""]
+
+    nrec: List[Dict[str, str]] = \
+        audit.get("not_recognised", [])            # type: ignore[assignment]
+    if nrec:
+        out += ["## Declared but not read AS A KNOB", "",
+                "No phase-3 knob ingest reads these names, so nothing they "
+                "declare steered this run BY NAME. That is not proof the "
+                "underlying input was ignored — phase-3 discovers some inputs "
+                "(staged constraint files, RTL sources, the PDK) by its own "
+                "route rather than by honouring the variable that points at "
+                "them. They are listed so the difference between what the "
+                "design declares and what the flow was told is visible, "
+                "instead of absent from the record.", "",
+                "| name | source file |", "|---|---|"]
+        out += [f"| `{r['knob']}` | `{r.get('source', '')}` |" for r in nrec]
+        out += [""]
 
     applied: Dict[str, object] = audit["applied"]  # type: ignore[assignment]
     if any(v is not None for v in applied.values()):
