@@ -27,9 +27,12 @@ when the caller states no mode, preserving the bare
 ``em_report_check <project>`` call shape used by
 ``programs/tests/test_report_wrappers.py`` and ``test_em_report_check.py``.
 
-Only this wrapper and ``sta_report_check.py`` are changed — the identically
-shaped ir_drop / antenna / drc / lvs wrappers are left alone deliberately,
-each needing its own blast-radius measurement.
+PR #473 changed only this wrapper and ``sta_report_check.py`` and stated that
+the identically shaped ir_drop / antenna / drc wrappers were "left alone
+deliberately". They no longer are — the medium/low backlog follow-up forwarded
+argv in all three and fixed the same output-path collision in steps 24 and 26.
+See ``test_wrapper_argv_forwarding.py``. ``lvs_report_check.py`` is a different
+shape and stays out of scope.
 
 ENFORCEMENT: blocking — `phase3_one_shot_runner.step_declared_signoff_gates`
 invokes this gate inline and a non-zero exit fails the run. The declaration is
