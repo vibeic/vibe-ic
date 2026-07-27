@@ -198,7 +198,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `corner_yield_vs_spec_check` | any | — | independent yield-vs-spec.json gate |
 | `counter_advanced_synth` | any | — | deterministic SOLVER for the SUBTLE counter / |
 | `counter_popcount_synth` | any | — | deterministic SOLVER for the counter / popcount / |
-| `coverage_closure` | any | — | read coverage report; identify gaps. |
+| `coverage_closure` | any | — | coverage GAP ANALYSIS over the MEASURED artefact. |
 | `coverage_metric_check` | any | — | coverage_metric_check.py -- Deterministic coverage report metric checker. |
 | `cpu_boot_latency_oracle_tb_gen` | any | — | deterministic golden oracle TB |
 | `cpu_functional_oracle_waiver_check` | any | — | Step 4 connectivity-PASS / |
@@ -1230,7 +1230,7 @@ _(no programs in this group)_
 - `corner_yield_vs_spec_check` — independent yield-vs-spec.json gate
 - `counter_advanced_synth` — deterministic SOLVER for the SUBTLE counter /
 - `counter_popcount_synth` — deterministic SOLVER for the counter / popcount /
-- `coverage_closure` — read coverage report; identify gaps.
+- `coverage_closure` — coverage GAP ANALYSIS over the MEASURED artefact.
 - `coverage_metric_check` — coverage_metric_check.py -- Deterministic coverage report metric checker.
 - `cpu_boot_latency_oracle_tb_gen` — deterministic golden oracle TB
 - `cpu_functional_oracle_waiver_check` — Step 4 connectivity-PASS /
