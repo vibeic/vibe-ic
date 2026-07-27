@@ -4391,6 +4391,16 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # promotes the step's status to WAIVED-DEFERRED instead of a bare
             # PASS, carrying the WITH_WAIVERS distinction to the Overall verdict.
             reasons.append(out)
+        elif _stdout_signals_vacuous(out):
+            # A gate program may disclose the vacuous tier by PRINTING
+            # `VACUOUS_PASS:` while still exiting 0 — which is exactly what the
+            # shared analog helper `_analog_a_check_common.vacuous_pass()` does
+            # for every A-track gate. The OPTIONAL branch below has always had
+            # this stdout fallback; the REQUIRED branch did not, so the same
+            # program disclosed its skip through an optional slot and was read
+            # as a bare PASS through a required one. A disclosure only counts if
+            # the consumer reads it in both.
+            reasons.append(f"{_VACUOUS_HINT_PREFIX}{_cmd}")
         return passed, reasons
 
     # `json_field_true`
@@ -4681,6 +4691,13 @@ _FPGA_BOARD_STEP_NAMES = (
 _FPGA_BOARD_STEP_IDS = frozenset(
     _ENV_UNAVAILABLE_STEP_NAME_TO_ID[_n] for _n in _FPGA_BOARD_STEP_NAMES
 )  # = {6, 39}
+
+# The ANALOG counterpart of _FPGA_BOARD_STEP_IDS: steps whose evidence can only
+# come off a lab bench. Kept as STRING ids because the analog track is lettered
+# — which is exactly why the --skip-hardware routing missed A9 for so long: that
+# routing is guarded by `isinstance(sid, int)`, so a lettered id could never
+# match it however the run was launched.
+_ANALOG_BENCH_STEP_IDS = frozenset({"A9"})
 
 
 # ── v0.2.103 (#496): analog PDK-substitution waiver path ───────────────────
@@ -5592,6 +5609,22 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             "FPGA-board step waived via --skip-hardware: no physical FPGA "
             "attached for a headless doc→GDS run (review_required at "
             "board-bringup; GDS/STA/DRC/LVS sign-off unaffected)")
+        return result
+
+    # A9 is the ANALOG bench-hardware step, and the allowlist entry that exempts
+    # its hw-correlation sub-gate calls it "the analog analogue of
+    # --skip-hardware" in as many words. That analogy was never implemented: the
+    # routing above is guarded by `isinstance(sid, int)`, and A9's id is the
+    # STRING "A9", so --skip-hardware silently did nothing for it. Step 6 landed
+    # in the report as WAIVED with review_required while A9 — the step that
+    # needs a lab bench — disclosed nothing at all. Same run mode, same absent
+    # hardware, two different stories. This states A9's, using the same tier.
+    if skip_hardware and str(sid) in _ANALOG_BENCH_STEP_IDS:
+        result.status = "WAIVED"
+        result.reasons.append(
+            "analog bench-hardware step waived via --skip-hardware: no lab "
+            "measurement for a headless doc→GDS run (review_required before "
+            "silicon sign-off; cosim/SPICE, GDS/DRC/LVS unaffected)")
         return result
 
     # v0.2.55 — pure-analog flow profile. For a pure-analog IC (no digital

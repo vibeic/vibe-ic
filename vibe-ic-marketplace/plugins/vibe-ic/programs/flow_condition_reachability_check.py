@@ -171,7 +171,18 @@ ALLOWLIST: dict[tuple, str] = {
         "with no lab measurement there are no two things to correlate. A9's "
         "required_outputs already accepts the cosim result as the alternative "
         "evidence path, so a run that simulated but never measured is judged on "
-        "the cosim, not silently exempted.",
+        "the cosim, not silently exempted. "
+        "STATED-VS-IMPLEMENTED CORRECTION: for a long time the sentence above "
+        "was true only of this sub-gate. The `--skip-hardware` analogy it "
+        "invokes was NOT implemented — that routing is guarded by "
+        "`isinstance(sid, int)` and A9's id is the string \"A9\", so the flag "
+        "silently did nothing here — and the STEP as a whole reported a bare "
+        "PASS on a run with no hardware evidence at all, indistinguishable from "
+        "a bench-verified close. Both halves are now real: A9 is in "
+        "`_ANALOG_BENCH_STEP_IDS` so `--skip-hardware` waives it the way it "
+        "waives step 6, and A9's gate runs `analog_a9_hw_verify_check`, whose "
+        "rc=2 surfaces a simulation-only close as VACUOUS_PASS rather than "
+        "PASS. Simulation-only closure stays legal; it is no longer silent.",
     ("27", "si_mcf_sta_check",
      "reports/phase3/si_mcf_sta.json"):
         "Documented ADVISORY axis. The MCF crosstalk-delay check is a "
