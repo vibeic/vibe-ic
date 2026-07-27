@@ -182,19 +182,41 @@ def _make_phase2_project(tmp_path,
 
 
 def _patch_run(monkeypatch, mod, stub_results: dict[str, tuple[int, str]]):
-    """Monkey-patch _run_structural_rtl_gates to return the chosen
-    fails/skips list directly, bypassing subprocess invocation."""
+    """Monkey-patch _run_structural_rtl_gates to report the chosen per-gate
+    exit codes directly, bypassing subprocess invocation.
+
+    #497 step 2 — the stub now publishes the STRUCTURED per-gate records as
+    well as the prose buckets, because that is what the umbrella publishes and
+    what the strict-structural consumer reads. Before the cut-over a stub could
+    state a gate's outcome ONLY in prose and every consumer believed it; that
+    is the same coupling this issue removes from production, and a stub that
+    kept it would be testing a contract the shipped code no longer has.
+    """
     fails = []
     skips = []
+    records = []
     for name, (code, msg) in stub_results.items():
         if code == 1:
             fails.append(f"FAIL: {name} — {msg}")
+            records.append(mod._p0_gate_record(name, "FAIL", msg,
+                                               {"exit_code": 1}))
         elif code == 2:
             skips.append(name)
+            records.append(mod._p0_gate_record(
+                name, "SKIP", "", {"exit_code": 2,
+                                   "skip_kind": "input-missing"}))
+        else:
+            records.append(mod._p0_gate_record(name, "PASS", "",
+                                               {"exit_code": 0}))
+
     def _stub(_project, **_kwargs):
         # v1.6.32: signature accepts strict_timing kwarg from umbrella
         # v1.6.97: now also accepts allow_thin_input kwarg + returns
         # 4-tuple (waivers list appended).
+        # #497: records_out is the umbrella's structured channel.
+        out = _kwargs.get("records_out")
+        if out is not None:
+            out.extend(records)
         return (len(fails) == 0, fails, skips, [])
     monkeypatch.setattr(mod, "_run_structural_rtl_gates", _stub)
 

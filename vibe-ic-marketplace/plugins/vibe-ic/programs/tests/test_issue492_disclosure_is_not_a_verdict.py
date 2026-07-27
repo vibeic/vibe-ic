@@ -123,9 +123,21 @@ def umbrella(tmp_path_factory):
     }
 
 
-def _p0(reasons, status="FAIL"):
-    return F.StepResult(id="P0", name="P0 umbrella", stage="stage1",
-                        status=status, reasons=list(reasons), evidence=[])
+def _p0(reasons, status="FAIL", fail_gates=()):
+    """A P0 StepResult.
+
+    #497 step 2 — `fail_gates` publishes the structured per-gate records beside
+    the prose. The consumers that decide a VERDICT
+    (`_step_failure_is_informational_only`, `p0_is_deferrable`) read the
+    records now, so a fixture that wants those consumers to see a failing gate
+    has to say so in the typed channel. Fixtures that exercise the PROSE
+    scrapers still pass reasons alone — that is the point of them.
+    """
+    return F.StepResult(
+        id="P0", name="P0 umbrella", stage="stage1", status=status,
+        reasons=list(reasons), evidence=[],
+        gate_records=[F._p0_gate_record(g, "FAIL", "m", {"exit_code": 1})
+                      for g in fail_gates] or None)
 
 
 def _disclosure_block(umbrella):
@@ -216,14 +228,25 @@ def test_normalise_drops_disclosure_lines_not_just_the_failed_gates_header(
 # ═════════════════ 4. the two all(...) predicates that flip ══════════════════
 
 def test_informational_only_survives_the_disclosure(umbrella):
-    """`_step_failure_is_informational_only` is an `all(...)` over the parser's
-    output; 38 phantom names made it False and the step reached `failing`."""
+    """`_step_failure_is_informational_only` is an `all(...)` over the failing
+    sub-gate names; 38 phantom names made it False and the step reached
+    `failing`.
+
+    #497 step 2 — the names now come from the records, so the disclosure cannot
+    reach this predicate at all: a never-invoked gate's record says
+    NOT_INVOCABLE, and only FAIL records are counted. The assertion is
+    unchanged, and the reasons list still carries the whole disclosure so the
+    fixture is not quietly weakened into one that could not fail.
+    """
     gates = sorted(F.INFORMATIONAL_GATES)[:2]
     fails = [f"FAIL: {g} — coverage signal, not a blocker" for g in gates]
     with_disclosure = F._compose_p0_reasons(fails, umbrella["skips"], [])
     without = F._compose_p0_reasons(fails, [], [])
-    assert F._step_failure_is_informational_only(_p0(without)) is True
-    assert F._step_failure_is_informational_only(_p0(with_disclosure)) is True
+    assert any(GI.NOT_INVOCABLE_SENTINEL in r for r in with_disclosure)
+    assert F._step_failure_is_informational_only(
+        _p0(without, fail_gates=gates)) is True
+    assert F._step_failure_is_informational_only(
+        _p0(with_disclosure, fail_gates=gates)) is True
 
 
 def test_thin_input_deferral_survives_the_disclosure(umbrella):

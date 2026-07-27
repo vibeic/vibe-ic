@@ -21,9 +21,20 @@ on the live StepResult rather than a hand-typed string::
     _step_failure_is_informational_only(real P0 result) -> False
     same gate name with the 'program failed:' prefix    -> True
 
-These tests drive the REAL `INFORMATIONAL_GATES` / `_STRUCTURAL_RTL_GATES` sets
-and the REAL sibling parser `_parse_p0_failing_subgates`, not local fixtures, so
-they stay coupled to the shipped policy rather than restating the fix.
+These tests drive the REAL `INFORMATIONAL_GATES` / `_STRUCTURAL_RTL_GATES` sets,
+not local fixtures, so they stay coupled to the shipped policy rather than
+restating the fix.
+
+#497 STEP 2 — THE PREDICATE NO LONGER PARSES PROSE
+==================================================
+`_step_failure_is_informational_only` used to recover the failing sub-gate
+names by scraping `reasons`, via `_parse_p0_failing_subgates`. It now reads
+them out of the umbrella's structured `gate_records`. The defect these tests
+pin is unchanged and so are the assertions; what changed is that a P0 fixture
+must now state its outcomes the way the umbrella states them — as records —
+because that is what the shipped consumer reads. The prose is still built, by
+the REAL producer, from the same records, so a fixture cannot say one thing in
+its records and another in its reasons.
 
 BIDIRECTIONALITY
 ================
@@ -44,10 +55,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 fcc = importlib.import_module("flow_compliance_check")
 
 
-def _p0(*reasons: str):
-    """A StepResult shaped exactly like the P0 umbrella's."""
+def _p0(fails=(), skips=(), status="FAIL"):
+    """A StepResult shaped exactly like the P0 umbrella's.
+
+    `fails` / `skips` are (gate, message) pairs. Both the records AND the
+    prose come from them, the prose through the umbrella's REAL producer, so
+    the two sides of the fixture cannot disagree.
+    """
+    records = [fcc._p0_gate_record(g, "FAIL", m, {"exit_code": 1})
+               for g, m in fails]
+    records += [fcc._p0_gate_record(g, "SKIP", "",
+                                    {"exit_code": 2,
+                                     "skip_kind": "input-missing"})
+                for g, _m in skips]
+    reasons = fcc._compose_p0_reasons(
+        [f"FAIL: {fcc._p0_fail_line_body(r)}"
+         for r in records if r["verdict"] == "FAIL"],
+        [r["name"] for r in records if r["verdict"] == "SKIP"], [])
     return fcc.StepResult(id="P0", name="Structural-RTL gates (P0 umbrella)",
-                          stage="stage1", status="FAIL", reasons=list(reasons))
+                          stage="stage1", status=status, reasons=reasons,
+                          gate_records=records)
 
 
 # ── the gates that can only ever run inside the P0 umbrella ──────────────────
@@ -68,20 +95,22 @@ def test_premise_p0_only_informational_gates_exist():
 
 
 def test_premise_p0_reasons_never_use_the_program_failed_prefix():
-    """The root cause, asserted directly: the two shapes do not overlap."""
-    reason = ("FAIL: l22_verification_plan_measurable_check — [FAIL] "
-              "l22_verification_plan_measurable_check: "
-              "TARGET_OUTSIDE_CONSUMING_LAYER — ...")
-    assert not reason.startswith("program failed:")
-    # ...and the sibling parser DOES understand it.
-    assert fcc._parse_p0_failing_subgates(_p0(reason)) == [
-        "l22_verification_plan_measurable_check"]
+    """The root cause, asserted directly: the two shapes do not overlap.
+
+    The P0 branch exists because the `program failed:` scan matched NOTHING the
+    umbrella writes. That is still true of the prose the umbrella produces, and
+    it is now beside the point: the P0 branch reads records.
+    """
+    gate = "l22_verification_plan_measurable_check"
+    r = _p0(fails=[(gate, "[FAIL] TARGET_OUTSIDE_CONSUMING_LAYER — ...")])
+    assert not any(x.startswith("program failed:") for x in r.reasons)
+    assert fcc._p0_failing_gate_names(fcc._p0_gate_records(r)) == [gate]
 
 
 # ── DEFECT direction: these FAIL when the P0 branch is removed ───────────────
 @pytest.mark.parametrize("gate", P0_ONLY_INFORMATIONAL)
 def test_DEFECT_single_informational_subgate_is_suppressed(gate):
-    r = _p0(f"FAIL: {gate} — [FAIL] {gate}: SOME_FINDING — detail text")
+    r = _p0(fails=[(gate, f"[FAIL] {gate}: SOME_FINDING — detail text")])
     assert fcc._step_failure_is_informational_only(r) is True, (
         f"P0 failing only on informational gate {gate!r} must be excluded from "
         f"the verdict; INFORMATIONAL_GATES says so in its own comment block")
@@ -90,10 +119,10 @@ def test_DEFECT_single_informational_subgate_is_suppressed(gate):
 def test_DEFECT_informational_subgate_amid_skip_lines_is_suppressed():
     """The real shape measured on spm: one FAIL line, then ~80 SKIP lines."""
     gate = P0_ONLY_INFORMATIONAL[0]
-    reasons = [f"FAIL: {gate} — [FAIL] {gate}: "
-               "TARGET_OUTSIDE_CONSUMING_LAYER — The design's own inputs ..."]
-    reasons += [f"SKIP: some_other_check_{i}" for i in range(80)]
-    assert fcc._step_failure_is_informational_only(_p0(*reasons)) is True
+    r = _p0(fails=[(gate, "[FAIL] TARGET_OUTSIDE_CONSUMING_LAYER — ...")],
+            skips=[(f"some_other_check_{i}", "") for i in range(80)])
+    assert len(r.reasons) == 81, "premise: 1 FAIL line + 80 SKIP lines"
+    assert fcc._step_failure_is_informational_only(r) is True
 
 
 def test_DEFECT_multi_gate_dash_form_is_suppressed():
@@ -101,9 +130,10 @@ def test_DEFECT_multi_gate_dash_form_is_suppressed():
     gates = P0_ONLY_INFORMATIONAL[:2]
     if len(gates) < 2:
         pytest.skip("needs >=2 P0-only informational gates")
-    reasons = [f"Failed gates ({len(gates)}):"]
-    reasons += [f"  - {g} — detail" for g in gates]
-    assert fcc._step_failure_is_informational_only(_p0(*reasons)) is True
+    r = _p0(fails=[(g, "detail") for g in gates])
+    assert r.reasons[0].startswith("Failed gates ("), (
+        "premise: >=2 failures must reach the Form-2 shape")
+    assert fcc._step_failure_is_informational_only(r) is True
 
 
 # ── GUARD direction: these FAIL if the fix over-suppresses ───────────────────
@@ -111,8 +141,8 @@ def test_GUARD_real_gate_failure_still_blocks():
     """A non-informational sub-gate in the mix must keep P0 in `failing`."""
     real = next(g for g in fcc._STRUCTURAL_RTL_GATES
                 if g not in fcc.INFORMATIONAL_GATES)
-    r = _p0("FAIL: l22_verification_plan_measurable_check — detail",
-            f"FAIL: {real} — a genuine structural defect")
+    r = _p0(fails=[("l22_verification_plan_measurable_check", "detail"),
+                   (real, "a genuine structural defect")])
     assert fcc._step_failure_is_informational_only(r) is False, (
         "informational suppression must never mask a real gate's FAIL")
 
@@ -121,12 +151,27 @@ def test_GUARD_only_real_gate_failure_blocks():
     real = next(g for g in fcc._STRUCTURAL_RTL_GATES
                 if g not in fcc.INFORMATIONAL_GATES)
     assert fcc._step_failure_is_informational_only(
-        _p0(f"FAIL: {real} — a genuine structural defect")) is False
+        _p0(fails=[(real, "a genuine structural defect")])) is False
 
 
-def test_GUARD_p0_with_no_parseable_fail_is_not_suppressed():
-    """Only SKIP/WAIVED lines: assert nothing rather than claim informational."""
-    r = _p0("SKIP: some_check", "WAIVED-DEFERRED: another_check")
+def test_GUARD_p0_with_no_failing_subgate_is_not_suppressed():
+    """Only SKIP records: assert nothing rather than claim informational."""
+    r = _p0(skips=[("some_check", "")])
+    assert fcc._step_failure_is_informational_only(r) is False
+
+
+def test_GUARD_a_p0_that_published_no_records_is_not_suppressed():
+    """#497 fail-safe: no structured payload -> no claim.
+
+    A P0 StepResult that carries reasons but no records (a stale artefact, a
+    stub that was not updated) must not be silently treated as
+    informational-only. The predicate says nothing, exactly as it did for an
+    unparseable reasons list before the cut-over.
+    """
+    r = fcc.StepResult(id="P0", name="P0", stage="stage1", status="FAIL",
+                       reasons=["FAIL: l22_verification_plan_measurable_check "
+                                "— detail"])
+    assert r.gate_records is None
     assert fcc._step_failure_is_informational_only(r) is False
 
 
@@ -143,6 +188,6 @@ def test_GUARD_non_p0_step_behaviour_is_unchanged():
 
 def test_GUARD_non_fail_status_is_never_suppressed():
     for status in ("PASS", "MISSING", "SKIPPED-CONDITION"):
-        r = fcc.StepResult(id="P0", name="P0", stage="stage1", status=status,
-                           reasons=["FAIL: l22_verification_plan_measurable_check — d"])
+        r = _p0(fails=[("l22_verification_plan_measurable_check", "d")],
+                status=status)
         assert fcc._step_failure_is_informational_only(r) is False
