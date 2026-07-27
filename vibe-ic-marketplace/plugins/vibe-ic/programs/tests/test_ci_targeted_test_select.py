@@ -169,3 +169,142 @@ def test_cli_help_exits_zero():
     )
     assert r.returncode == 0
     assert "--base" in r.stdout
+
+
+# ---- opt-in --mode (vibe-ic#452) -------------------------------------------
+#
+# The reference modes exist so the owner can evaluate the measured cost/coverage
+# frontier without re-deriving it. They are OPT-IN: CI passes no --mode, so the
+# default path must stay byte-identical to what shipped before the flag.
+
+def _ref_index():
+    return sel._build_reference_index(PLUGIN_ROOT, sel._source_stems(PLUGIN_ROOT))
+
+
+def test_default_mode_never_builds_the_reference_index(monkeypatch):
+    """MUTATION CONTROL, as a test.
+
+    The whole safety argument for landing an unused mode is that the default
+    path does not execute any of it. Poison the reference-index builder: if the
+    default ever starts consulting it, this raises instead of silently paying
+    the cost (and the coverage change) in the lane CI actually runs.
+    """
+    def _poisoned(*a, **k):
+        raise AssertionError(
+            "default (ownership) mode consulted the reference index")
+
+    monkeypatch.setattr(sel, "_build_reference_index", _poisoned)
+    out = sel.select_tests(["programs/flow_compliance_check.py"],
+                           PLUGIN_ROOT, plugin_prefix="")
+    assert f"{TESTS_REL}/test_flow_compliance_check.py" in out
+    _smoke_present(out)
+
+    # ...and the poison is real: the opt-in mode DOES consult it.
+    with pytest.raises(AssertionError, match="consulted the reference index"):
+        sel.select_tests(["programs/flow_compliance_check.py"], PLUGIN_ROOT,
+                         plugin_prefix="", mode=sel.MODE_REFERENCE)
+
+
+def test_default_mode_equals_explicit_ownership_mode():
+    changed = ["programs/flow_compliance_check.py",
+               "programs/source_chip_agnostic_check.py",
+               f"{TESTS_REL}/test_rtl_hygiene_lint.py"]
+    assert (sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix="")
+            == sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix="",
+                                mode=sel.MODE_OWNERSHIP))
+
+
+def test_reference_mode_reaches_tests_the_ownership_rule_cannot():
+    """The gap #452 is about: 54.5% of test files have no owning stem at all."""
+    changed = ["programs/source_chip_agnostic_check.py"]
+    own = set(sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix=""))
+    ref = set(sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix="",
+                               mode=sel.MODE_REFERENCE))
+    assert own < ref, "reference mode must be a strict superset of ownership"
+
+    stems = sel._source_stems(PLUGIN_ROOT)
+    owner = sel._owning_stem
+    extra = ref - own
+    orphans = [t for t in extra
+               if owner(Path(t).name[len("test_"):-len(".py")], stems) is None]
+    assert orphans, (
+        "reference mode added nothing that the filename rule could not already "
+        "reach — the measured 45.5%-vs-98.9% gap would not exist")
+
+
+def test_reference_capped_bounds_the_giant_stems_but_keeps_the_small_ones():
+    """The cost knob: a stem named by more test files than the cap contributes
+    nothing extra; a stem under the cap contributes its full reference set."""
+    idx = _ref_index()
+    cap = sel.DEFAULT_REF_MAX_TESTS
+    big = [s for s, v in idx.items() if len(v) > cap]
+    small = [s for s, v in idx.items() if 1 < len(v) <= cap]
+    assert big and small, "tree no longer exercises both sides of the cap"
+
+    for stem in (max(big, key=lambda s: len(idx[s])),):
+        changed = [f"programs/{stem}.py"]
+        own = sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix="")
+        capped = sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix="",
+                                  mode=sel.MODE_REFERENCE_CAPPED)
+        assert capped == own, f"{stem}: over-cap stem must add nothing"
+
+    for stem in (max(small, key=lambda s: len(idx[s])),):
+        changed = [f"programs/{stem}.py"]
+        capped = set(sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix="",
+                                      mode=sel.MODE_REFERENCE_CAPPED))
+        full = set(sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix="",
+                                    mode=sel.MODE_REFERENCE))
+        assert capped == full, f"{stem}: under-cap stem must add its full set"
+
+
+def test_reference_matches_whole_identifiers_not_substrings(tmp_path):
+    """A mention of `alpha_beta` must NOT count as a reference to `alpha`.
+
+    Substring matching would silently inflate every short stem's reference set —
+    the exact thing the cap exists to control — so this is asserted on a
+    synthetic tree where the answer is known, not on the shipped tree (where
+    the index is built by the rule under test and any check would be circular).
+    """
+    (tmp_path / "programs" / "tests").mkdir(parents=True)
+    (tmp_path / "programs" / "alpha.py").write_text("x = 1\n")
+    (tmp_path / "programs" / "alpha_beta.py").write_text("y = 2\n")
+    (tmp_path / "programs" / "tests" / "test_only_long.py").write_text(
+        "import alpha_beta\n")
+    (tmp_path / "programs" / "tests" / "test_short.py").write_text(
+        "from alpha import x\n")
+
+    stems = sel._source_stems(tmp_path)
+    assert stems == {"alpha", "alpha_beta"}
+    idx = sel._build_reference_index(tmp_path, stems)
+
+    assert idx.get("alpha_beta") == {f"{TESTS_REL}/test_only_long.py"}
+    assert idx.get("alpha") == {f"{TESTS_REL}/test_short.py"}, (
+        "`alpha` was matched inside `alpha_beta` — the rule is substring, "
+        "not whole-identifier")
+
+
+def test_every_mode_keeps_the_smoke_floor():
+    for mode in sel.MODES:
+        out = sel.select_tests([], PLUGIN_ROOT, plugin_prefix="", mode=mode)
+        _smoke_present(out)
+        assert out, f"{mode}: must never emit an empty subset"
+
+
+def test_unknown_mode_is_rejected():
+    with pytest.raises(ValueError, match="unknown mode"):
+        sel.select_tests([], PLUGIN_ROOT, plugin_prefix="", mode="whatever")
+
+
+def test_cli_mode_flag_plumbs_through(monkeypatch, capsys):
+    monkeypatch.setattr(sel, "_repo_root", lambda pr: PLUGIN_ROOT.parent.parent.parent)
+    monkeypatch.setattr(
+        sel, "_git_changed_files",
+        lambda base, repo_root: [
+            "vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py",
+        ],
+    )
+    assert sel.main(["--base", "deadbeef"]) == 0
+    default = {l for l in capsys.readouterr().out.splitlines() if l.strip()}
+    assert sel.main(["--base", "deadbeef", "--mode", "reference"]) == 0
+    ref = {l for l in capsys.readouterr().out.splitlines() if l.strip()}
+    assert default < ref, "--mode reference must widen the CLI selection"

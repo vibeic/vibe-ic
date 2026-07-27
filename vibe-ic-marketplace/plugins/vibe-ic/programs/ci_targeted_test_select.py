@@ -37,13 +37,94 @@ unavailable (no history / not a repo), only the smoke set is emitted.
 This is deliberately a PROGRAM, not workflow YAML: the mapping is testable and
 lives next to the tests it selects. See
 ``programs/tests/test_ci_targeted_test_select.py``.
+
+WHAT THE OWNERSHIP RULE CANNOT REACH  (vibe-ic#452, measured 2026-07-27)
+=======================================================================
+Rule 1 keys on the test FILENAME. This repo names a large share of its tests
+after the ISSUE or the VERSION that motivated them (``test_organic409_…``,
+``test_v1_0_67_issue708_…``), which is orthogonal to the module they exercise.
+Measured over the shipped tree (1870 test files, 1023 source stems):
+
+    ownership-reachable test files      851 / 1870  (45.5%)
+    orphaned (rule 1 can NEVER pick)   1019 / 1870  (54.5%)
+
+Three tests that went red on real landings were each missed 0/3 by rule 1,
+because the owning stem of all three is ``None``. They stayed red for 41, 26 and
+23 landings respectively.
+
+``--mode`` exposes the two alternatives that were MEASURED against that gap.
+They are OPT-IN and nothing in CI passes ``--mode``; ``ownership`` is the
+default and is byte-identical to the behaviour that shipped before this flag
+existed. The cost is real and the choice is the owner's:
+
+  mode                reachable      catch on the 3    files/landing     worst
+                                     known regressions  (mean of 40)
+  ownership (default)  851 (45.5%)   0 / 3              16.8             20
+  reference-capped    1652 (88.3%)   2 / 3              19.8             48
+  reference           1849 (98.9%)   3 / 3              48.5            213
+
+Wall-clock, measured with the real CI command (``pytest -q --maxfail=10
+--timeout=180``):
+
+    ownership,  17 files    315 tests     58s
+    ownership,  18 files    324 tests     31s
+    reference,  48 files    850 tests    183s
+    reference,  67 files    859 tests     81s
+    reference, 213 files   2756 tests    345s / 349s  (two runs, WORST case)
+
+Two things fall out of that table. First, the worst case is ~6-11x the
+ownership lane depending on which landing you compare against — it is not
+unbounded; both runs of the 213-file set finished, agreeing to 1.4%. Second,
+NEITHER file count NOR test count predicts cost: 67 files/859 tests ran in less
+than half the time of 48 files/850 tests, and two ~equal ownership selections
+differ by 1.9x. So a budget expressed in files (or in tests) is NOT a time
+budget; a real one would need persisted per-file timings, which nothing in this
+repo records.
+
+Measured on a 32-thread workstation, single-process; the lane they would run in
+is a 2-core hosted runner. Treat them as ratios, not as CI wall-clock.
+
+``reference-capped`` is order-free on purpose. An ordered "take the N most
+focused first" budget was also measured and REJECTED: over the 1984 (orphaned
+test, named stem) pairs it scored 86.5% against 85.8% for an arbitrary
+alphabetical order — a 0.7pp edge, i.e. the ordering heuristic was noise, and
+its apparent 3/3 on the three known regressions was a 3-sample artifact.
+
+Note what NONE of these modes can do. The cost is not prose noise that a
+smarter matcher could strip: of the 198 test files that name
+``phase3_one_shot_runner``, 95 name that module and NOTHING else, and 186 of the
+198 bind to it by a real import or path literal. Any rule that reliably catches
+a regression in that module's tests pays ~95 files.
+
+So no mode here delivers bounded STALENESS — "every test file is seen within K
+landings" — because a changed-file selector only ever looks at what changed.
+That is a rotation / full-suite property. For scale, a 1/20 rotation shard of
+this tree (94 files + the smoke floor) measured 1317 tests in 146s, i.e. ~2.5x
+the ownership baseline for a FIXED, predictable cost and a hard <=20-landing
+bound. The three known regressions stayed red for 41, 26 and 23 landings, so a
+bound of that size would have caught all three — including the one that survived
+an x.y.0 MILESTONE, whose full-suite job lives in a workflow that fires only on
+`pull_request` / `merge_group` and is currently `disabled_manually`.
 """
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
+
+# Selection modes. `ownership` is the DEFAULT and the shipped behaviour; the
+# other two are opt-in and measured in the module docstring (vibe-ic#452).
+MODE_OWNERSHIP = "ownership"
+MODE_REFERENCE = "reference"
+MODE_REFERENCE_CAPPED = "reference-capped"
+MODES = (MODE_OWNERSHIP, MODE_REFERENCE, MODE_REFERENCE_CAPPED)
+
+# `reference-capped` default: a source stem NAMED BY more than this many test
+# files contributes nothing through the reference rule (its own owned tests
+# still apply). 50 was the measured knee — see the module docstring.
+DEFAULT_REF_MAX_TESTS = 50
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +257,39 @@ def _build_test_index(plugin_root: Path, source_stems: set[str]) -> dict[str, se
     return index
 
 
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _build_reference_index(
+    plugin_root: Path, source_stems: set[str],
+) -> dict[str, set[str]]:
+    """Map each source stem -> set of plugin-rel test paths that NAME it.
+
+    A test file references stem ``S`` if ``S`` occurs in its text as a whole
+    identifier. This is the rule that reaches the 54.5% of test files the
+    filename-ownership rule cannot (see the module docstring); it is only built
+    when a non-default ``--mode`` asks for it, so the default path pays nothing.
+
+    Whole-identifier, not substring: ``_path_layout`` must not be matched by a
+    mention of ``_path_layout_helper``. Unreadable files are skipped rather than
+    failing the selection — a selector that cannot read one file must still
+    emit a list.
+    """
+    index: dict[str, set[str]] = {}
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return index
+    for tf in tests_dir.glob("test_*.py"):
+        try:
+            text = tf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f"{_TESTS_REL}/{tf.name}"
+        for name in set(_IDENT.findall(text)) & source_stems:
+            index.setdefault(name, set()).add(rel)
+    return index
+
+
 def _smoke_set(plugin_root: Path) -> set[str]:
     """The curated smoke set, filtered to basenames that actually exist."""
     out: set[str] = set()
@@ -190,16 +304,37 @@ def select_tests(
     changed_paths: list[str],
     plugin_root: Path,
     plugin_prefix: str = "",
+    mode: str = MODE_OWNERSHIP,
+    ref_max_tests: int = DEFAULT_REF_MAX_TESTS,
 ) -> list[str]:
     """Pure selector: changed files -> sorted plugin-rel test paths.
 
     Always includes the smoke set (the floor); adds owned tests for changed
     source modules and directly-changed test files. Never returns an empty list
     (smoke floor), assuming at least one smoke basename exists on disk.
+
+    ``mode`` is OPT-IN and defaults to the shipped behaviour:
+
+      * ``ownership``       — rules 1-3 only. The default; nothing in CI passes
+                              anything else, and this path never builds the
+                              reference index.
+      * ``reference``       — additionally, every test file that NAMES a changed
+                              source stem.
+      * ``reference-capped``— the same, except a stem named by more than
+                              ``ref_max_tests`` test files contributes nothing
+                              through the reference rule (its owned tests still
+                              apply). Bounds the cost the giant modules impose.
+
+    See the module docstring for the measured coverage/cost of each.
     """
+    if mode not in MODES:
+        raise ValueError(f"unknown mode {mode!r}; expected one of {MODES}")
+
     source_stems = _source_stems(plugin_root)
     index = _build_test_index(plugin_root, source_stems)
-    tests_dir = plugin_root / _TESTS_REL
+    ref_index: dict[str, set[str]] = {}
+    if mode != MODE_OWNERSHIP:
+        ref_index = _build_reference_index(plugin_root, source_stems)
 
     selected: set[str] = set(_smoke_set(plugin_root))
 
@@ -216,6 +351,11 @@ def select_tests(
         # (1) a changed top-level source module -> its owned tests.
         if rp.parent.as_posix() in _SOURCE_DIRS and not rp.name.startswith("test_"):
             selected |= index.get(rp.stem, set())
+            # (4, opt-in) every test file that NAMES the changed module.
+            if mode != MODE_OWNERSHIP:
+                refs = ref_index.get(rp.stem, set())
+                if mode == MODE_REFERENCE or len(refs) <= ref_max_tests:
+                    selected |= refs
 
     # Only emit tests that exist on disk (robust against a stale index entry).
     return sorted(t for t in selected if (plugin_root / t).is_file())
@@ -285,6 +425,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="base SHA/ref; diff is <base>..HEAD")
     ap.add_argument("--plugin-root", default=None,
                     help="plugin root (default: this file's grandparent)")
+    ap.add_argument("--mode", choices=MODES, default=MODE_OWNERSHIP,
+                    help="selection rule (default: %(default)s — the shipped "
+                         "behaviour). 'reference'/'reference-capped' are OPT-IN "
+                         "and cost more; see the module docstring for the "
+                         "measured coverage/cost frontier.")
+    ap.add_argument("--ref-max-tests", type=int, default=DEFAULT_REF_MAX_TESTS,
+                    help="reference-capped only: a stem named by more than this "
+                         "many test files contributes nothing through the "
+                         "reference rule (default: %(default)s)")
     args = ap.parse_args(argv)
 
     plugin_root = Path(args.plugin_root).resolve() if args.plugin_root \
@@ -314,11 +463,13 @@ def main(argv: list[str] | None = None) -> int:
               f"to be seen here, it is not in this repository at this base.",
               file=sys.stderr)
 
-    selected = select_tests(changed, plugin_root, plugin_prefix)
+    selected = select_tests(changed, plugin_root, plugin_prefix,
+                            mode=args.mode, ref_max_tests=args.ref_max_tests)
     for t in selected:
         print(t)
     print(f"[ci_targeted_test_select] selected {len(selected)} test file(s) "
-          f"from {len(changed)} changed path(s) (base={args.base})", file=sys.stderr)
+          f"from {len(changed)} changed path(s) (base={args.base}, "
+          f"mode={args.mode})", file=sys.stderr)
     return 0
 
 
