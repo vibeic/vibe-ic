@@ -715,7 +715,15 @@ steps:
     gate:
       all_of:
         - files_exist: ["phase3/stage3/sta/pre_pnr_timing.rpt"]
-        - program_exit_zero: "sta_report_check . --mode phase3/stage3/sta --json reports/phase3/sta/pre_pnr_summary.json"
+        # `--mode` names an eda_report_audit report CLASS, not a directory.
+        # This declared `--mode phase3/stage3/sta`, which is not one of the
+        # seven choices (drc/lvs/power/em/ir_drop/sta/antenna) and would have
+        # been an argparse error — it only ever "worked" because
+        # `sta_report_check` rebuilt argv and threw the caller's flags away.
+        # That same discard is why `reports/phase3/sta/pre_pnr_summary.json`
+        # above — a required_output whose ONLY declared producer is this line
+        # — was never written by anything, on any run.
+        - program_exit_zero: "sta_report_check . --mode sta --json reports/phase3/sta/pre_pnr_summary.json"
     blocks_on: [9]
 
   - id: 11
@@ -1375,7 +1383,12 @@ steps:
     gate:
       all_of:
         - files_exist: ["phase3/stage3/sta/post_route_timing.rpt"]
-        - program_exit_zero: "sta_report_check . --mode phase3/stage3/sta --json reports/phase3/sta/post_route_summary.json"
+        # `--mode` is a report CLASS, not a directory — see step 10. The
+        # declared `phase3/stage3/sta` is not an eda_report_audit choice and
+        # survived only because the wrapper discarded the caller's argv, which
+        # is also why the `reports/phase3/sta/post_route_summary.json`
+        # required_output above had no producer anywhere in the plugin.
+        - program_exit_zero: "sta_report_check . --mode sta --json reports/phase3/sta/post_route_summary.json"
         # #147 — the nominal-corner gate above never consumes the ABSOLUTE
         # worst-setup / worst-hold slack across ALL sign-off corners, so a slow
         # (max-RC) corner setup violation could ship as a PASS while the flow's
@@ -1448,7 +1461,15 @@ steps:
     required_outputs:
       - "reports/phase3/em.rpt"
     gate:
-      program_exit_zero: "em_report_check . --mode em --json reports/phase3/em.json"
+      # OUTPUT-PATH COLLISION. This declared `--json reports/phase3/em.json`,
+      # which is the PRODUCER's file: `step_canonicalize_artefacts` →
+      # `_emit_ir_em_reports` writes the measurement there
+      # (`verdict: MEASURED`, max_segment_current_A, segments_analysed) and
+      # `phase3_one_shot_runner` reads it back as this step's sign-off
+      # evidence. The audit verdict therefore goes to a SEPARATE file; had the
+      # dropped `--json` ever been honoured, the checker would have destroyed
+      # the measurement it was auditing.
+      program_exit_zero: "em_report_check . --mode em --json reports/phase3/em_signoff.json"
     blocks_on: [22]
 
   - id: 26
