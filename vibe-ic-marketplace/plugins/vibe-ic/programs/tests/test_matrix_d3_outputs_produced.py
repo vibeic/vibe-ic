@@ -15,6 +15,30 @@ tool never wrote anything". Presence alone therefore does not answer this
 dimension's question, and every resolver in this module rejects an empty file
 before it counts as evidence.
 
+SO IS THE SYMLINK RULE
+======================
+``Path.is_file()`` and ``Path.stat()`` FOLLOW a symlink and report the
+target's bits, so a canonical output path that is only an ALIAS for a file
+produced somewhere else — most damagingly for one of the project's own INPUTS
+— reads as produced. Two shipped gates already ban exactly this
+(``chip_gds_canonical_real_file_check.py``: "gds_size_check follows symlinks
+transparently and reports the target's size, so a symlink masking a missing
+tape-out artefact passes audit"; ``canonical_path_symlink_forbid_check.py``,
+whose forbidden trees include ``analog/hardmacro/**`` and
+``phase3/stage4/**``), and this module was reproducing the disease it was
+written to catch: step A8's ``phase3/analog/hardmacro/*/*.gds`` resolved to a
+37 MB hit that is a symlink into ``design_data/gds/`` — the design's INPUT
+layout, aliased under the hardmacro output tree.
+
+A symlink is therefore never evidence of production, anywhere in this module,
+and is reported as its own category rather than folded into "missing".
+Measured across all 63 steps and every admissible run root on the campaign
+host (2026-07-28): 107 entries resolve to real files and 6 candidate matches
+are rejected as aliases, all of them under three steps — A5, A8 and 37 — and
+all pointing at the same two files in that project's ``design_data/gds/``.
+Only A8's ``.gds`` changes verdict: A5 and 37 record an in-repo run root that
+carries the real artefact, so they resolve there instead.
+
 WHAT COUNTS AS PROOF OF PRODUCTION
 ==================================
 Exactly two kinds, both recomputed live:
@@ -224,14 +248,15 @@ class Hit:
     size_bytes: int
 
 
-def resolve(root: Path, entry: str) -> Tuple[Optional[Hit], List[str]]:
-    """Largest NON-EMPTY match for *entry* under *root*, plus the 0-byte ones.
+def resolve(root: Path, entry: str) -> Tuple[Optional[Hit], List[str], List[str]]:
+    """Largest NON-EMPTY, NON-SYMLINK match for *entry* under *root*.
 
     ``" OR "`` inside an entry is any-of (``F.split_any_of`` reproduces the
     consumer's split exactly); the ALL-of-ness across entries is the caller's
-    job. The second return value exists so a message can say "the only
-    matching artefact is 0 bytes" rather than "missing" — those are different
-    defects and conflating them is how a never-ran tool reads as a clean run.
+    job. The second and third return values exist so a message can say "the
+    only matching artefact is 0 bytes" or "...is a symlink to X" rather than
+    "missing" — those are different defects and conflating them is how a
+    never-ran tool reads as a clean run.
     """
     assert _GLOB_FIRST is not None, (
         "flow_compliance_check._glob_first is gone; this module resolves "
@@ -240,9 +265,16 @@ def resolve(root: Path, entry: str) -> Tuple[Optional[Hit], List[str]]:
     )
     best: Optional[Hit] = None
     empties: List[str] = []
+    symlinked: List[str] = []
     for alt in F.split_any_of(entry):
         for rel in _GLOB_FIRST(root, alt):
             p = root / rel
+            if p.is_symlink():
+                # `is_file()` and `stat()` FOLLOW the link, so an aliased
+                # artefact would be credited with its target's bits. See the
+                # module docstring: a symlink is not evidence of production.
+                symlinked.append(f"{rel} -> {os.readlink(p)}")
+                continue
             if not p.is_file():
                 continue
             size = p.stat().st_size
@@ -251,18 +283,34 @@ def resolve(root: Path, entry: str) -> Tuple[Optional[Hit], List[str]]:
                 continue
             if best is None or size > best.size_bytes:
                 best = Hit(root="", alternative=alt, path=rel, size_bytes=size)
-    return best, empties
+    return best, empties, symlinked
 
 
-def resolve_anywhere(entry: str) -> Tuple[Optional[Hit], Dict[str, List[str]]]:
+def resolve_anywhere(
+    entry: str,
+) -> Tuple[Optional[Hit], Dict[str, List[str]], Dict[str, List[str]]]:
     empties: Dict[str, List[str]] = {}
+    symlinked: Dict[str, List[str]] = {}
     for label, rr in run_roots().items():
-        hit, empty = resolve(rr.path, entry)
+        hit, empty, links = resolve(rr.path, entry)
         if empty:
             empties[label] = empty
+        if links:
+            symlinked[label] = links
         if hit is not None:
-            return Hit(label, hit.alternative, hit.path, hit.size_bytes), empties
-    return None, empties
+            return (Hit(label, hit.alternative, hit.path, hit.size_bytes),
+                    empties, symlinked)
+    return None, empties, symlinked
+
+
+def _rejected_note(empties, symlinked) -> str:
+    """The two near-miss categories, named rather than folded into "missing"."""
+    bits = []
+    if empties:
+        bits.append(f"0-byte matches: {empties}")
+    if symlinked:
+        bits.append(f"symlinked (not produced here): {symlinked}")
+    return ("; " + "; ".join(bits)) if bits else ""
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -368,17 +416,17 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
     status = rec.get("status")
 
     if status == "UNPROVEN":
-        hit, empties = resolve_anywhere(entry)
+        hit, empties, symlinked = resolve_anywhere(entry)
         if hit is not None:
             return EntryVerdict(True, LIVE, (
                 f"recorded UNPROVEN but NOW resolves: {hit.path} "
                 f"({hit.size_bytes} B) in {hit.root!r} — the gap has closed and "
                 f"the waiver must be removed"
             ))
-        zero = f"; 0-byte matches: {empties}" if empties else ""
         return EntryVerdict(False, LIVE, (
             f"no non-empty artefact matches {entry!r} in any of the "
-            f"{len(run_roots())} admissible run roots{zero}"
+            f"{len(run_roots())} admissible run roots"
+            f"{_rejected_note(empties, symlinked)}"
         ))
 
     if status == "PRODUCED_LIVE":
@@ -402,17 +450,17 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
             ))
         rr = run_roots().get(rec["run"])
         if rr is not None:
-            hit, empties = resolve(rr.path, entry)
+            hit, empties, symlinked = resolve(rr.path, entry)
             if hit is None:
-                zero = f"; 0-byte matches: {empties}" if empties else ""
                 return EntryVerdict(False, LIVE, (
                     f"the recorded run root {rec['run']!r} resolves at {rr.path} "
                     f"but no longer yields a non-empty artefact for {entry!r} "
-                    f"(recorded: {rec['path']} at {rec['size_bytes']} B){zero}"
+                    f"(recorded: {rec['path']} at {rec['size_bytes']} B)"
+                    f"{_rejected_note(empties, symlinked)}"
                 ))
             return EntryVerdict(True, LIVE,
                                 f"{hit.path} ({hit.size_bytes} B) in {rec['run']!r}")
-        hit, empties = resolve_anywhere(entry)
+        hit, empties, symlinked = resolve_anywhere(entry)
         if hit is not None:
             return EntryVerdict(True, LIVE, (
                 f"{hit.path} ({hit.size_bytes} B) in {hit.root!r} "
@@ -499,17 +547,24 @@ _LOCAL_WAIVERS: Tuple[waivers.Waiver, ...] = (
         reason=(
             "Three of A8's four entries (.lef/.lib/.v) are produced by a real "
             "analog run, so the step demonstrably executes; the .gds entry "
-            "alone is produced by nothing. Every matching file on the host is "
-            "a stub written by a throwaway seeding script into an agent "
-            "scratch tree, and admitting a seeded INPUT as a produced OUTPUT "
-            "is the false pass this campaign removes."
+            "alone is produced by nothing. The only matching files inside an "
+            "admissible run root are SYMLINKS pointing back at the design's "
+            "own input layout, and admitting an aliased INPUT as a produced "
+            "OUTPUT is the false pass this campaign removes — the same "
+            "aliasing that canonical_path_symlink_forbid_check.py bans under "
+            "analog/hardmacro/** in production."
         ),
         evidence=(
             "`find ~ -maxdepth 10 -path '*analog/hardmacro/*' -name '*.gds'` "
-            "-> only backlog_medlow_mixed_scratch/{ba_mixed,ba_pristine,"
-            "m1proj}, all written by backlog_medlow_mixed_scratch/mkgds.py "
-            "(a 12-line pya script), none carrying provenance.jsonl or "
-            "reports/orchestrator; measured 2026-07-27"
+            "-> 42 hits, of which exactly 2 lie inside an admissible run root: "
+            "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e/"
+            "phase3/analog/hardmacro/{ldo,delta_sigma}/*.gds, and BOTH are "
+            "symlinks to ../../../../design_data/gds/UHEE628_S2024.gds (the "
+            "input layout the run consumed, per that tree's provenance.jsonl "
+            "which records it as an INPUT sha256 to the DRC/LVS steps). The "
+            "other 40 sit in trees carrying neither provenance.jsonl nor "
+            "reports/orchestrator. The sibling .lef/.lib/.v resolve as real "
+            "files in benchmark-data/ic/u_hawaii_adc; re-measured 2026-07-28"
         ),
     ),
     waivers.Waiver(
@@ -903,13 +958,63 @@ def test_d3_zero_byte_artefacts_are_not_counted_as_produced():
         (probe / "reports").mkdir()
         empty = probe / "reports" / "drc.rpt"
         empty.touch()
-        hit, empties = resolve(probe, "reports/drc.rpt")
+        hit, empties, symlinked = resolve(probe, "reports/drc.rpt")
         assert hit is None, f"a 0-byte file was accepted as produced: {hit}"
         assert empties == ["reports/drc.rpt"], empties
+        assert symlinked == [], symlinked
         empty.write_text("x")
-        hit, empties = resolve(probe, "reports/drc.rpt")
+        hit, empties, symlinked = resolve(probe, "reports/drc.rpt")
         assert hit is not None and hit.size_bytes == 1, (hit, empties)
     assert root.is_dir()
+
+
+def test_d3_symlinked_artefacts_are_not_counted_as_produced():
+    """The companion rule, exercised the same way.
+
+    ``Path.is_file()`` and ``Path.stat()`` both FOLLOW a symlink, so a
+    canonical output path that is merely an alias for a file produced
+    elsewhere — most damagingly for one of the project's own INPUTS — is
+    credited with the target's size and reads as produced. That is the exact
+    anti-pattern two shipped gates already ban
+    (``chip_gds_canonical_real_file_check.py``: "gds_size_check follows
+    symlinks transparently and reports the target's size, so a symlink masking
+    a missing tape-out artefact passes audit";
+    ``canonical_path_symlink_forbid_check.py``, whose forbidden trees include
+    ``analog/hardmacro/**`` and ``phase3/stage4/**``), and this module was
+    reproducing it: step A8's ``.gds`` resolved to a 37 MB hit that is a
+    symlink into ``design_data/gds/``, the design's input layout.
+
+    A symlink is never evidence that THIS step wrote those bits, so it is
+    rejected wherever it appears — and reported as its own category, because
+    "aliased to an input" and "absent" are different findings.
+    """
+    with tempfile.TemporaryDirectory(prefix="d3_symlink_") as td:
+        probe = Path(td) / "probe"
+        (probe / "reports").mkdir(parents=True)
+        (probe / "elsewhere").mkdir()
+        real = probe / "elsewhere" / "source.rpt"
+        real.write_text("x" * 4096)
+        alias = probe / "reports" / "drc.rpt"
+        alias.symlink_to(Path("..") / "elsewhere" / "source.rpt")
+
+        # Precondition: the alias resolves and would be credited 4096 B by any
+        # link-following presence check, so the rejection below is load-bearing.
+        assert alias.is_file() and alias.stat().st_size == 4096
+
+        hit, empties, symlinked = resolve(probe, "reports/drc.rpt")
+        assert hit is None, (
+            f"a symlink was accepted as a produced artefact: {hit} — it would "
+            f"have been credited its target's {alias.stat().st_size} bytes")
+        assert empties == [], empties
+        assert symlinked == ["reports/drc.rpt -> ../elsewhere/source.rpt"], \
+            symlinked
+
+        # ...and a real file at the same path is still accepted, so the rule
+        # rejects the aliasing rather than the path.
+        alias.unlink()
+        alias.write_text("x" * 4096)
+        hit, empties, symlinked = resolve(probe, "reports/drc.rpt")
+        assert hit is not None and hit.size_bytes == 4096, (hit, symlinked)
 
 
 # ══════════════════════════════════════════════════════════════════════

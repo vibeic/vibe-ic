@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 988
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 988)
+- **Total programs (excluding helpers / shims):** 989
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 989)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 979 |
+| `any` | 980 |
 
 ## Alphabetical listing
 
@@ -30,8 +30,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `acceptance_evidence_in_fix_comment_check` | any | v0.2.97 | v0.2.97 |
 | `accumulate_synth` | any | — | deterministic SOLVER for the CVDP sequential |
 | `ace_protocol_synth` | any | — | AMBA AXI/ACE coherency-extension protocol synth helper. |
+| `adder_map_techmap` | any | — | make a DECLARED adder techmap actually bind, and |
 | `afdx_protocol_synth` | any | — | AFDX / ARINC 664 Part 7 protocol synth helper. |
-| `adder_map_techmap` | any | — | staged adder-techmap recipe + applied-verification. |
 | `agent_checkin_scope_guard` | any | — | role-based check-in (commit) path-scope gate. |
 | `agent_report_presence_check` | any | — | verify the project ships a structured |
 | `agent_report_sha256_attestation_check` | any | — | verify the project's |
@@ -1061,15 +1061,15 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (979 programs)
+### `any` (980 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
+- `adder_map_techmap` — make a DECLARED adder techmap actually bind, and
 - `afdx_protocol_synth` — AFDX / ARINC 664 Part 7 protocol synth helper.
-- `adder_map_techmap` — staged adder-techmap recipe + applied-verification.
 - `agent_checkin_scope_guard` — role-based check-in (commit) path-scope gate.
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's

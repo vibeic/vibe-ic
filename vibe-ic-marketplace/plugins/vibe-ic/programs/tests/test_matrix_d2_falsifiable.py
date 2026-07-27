@@ -116,6 +116,7 @@ import os
 import re
 import shlex
 import shutil
+import sys
 import traceback
 from pathlib import Path
 from typing import Callable, Dict, Tuple
@@ -160,6 +161,29 @@ NA_STEPS: Tuple[str, ...] = ("P0",)
 #: Every fixture here is a handful of stub files, so 120s is generous — and it
 #: bounds the whole suite instead of letting one wedged gate hang it.
 GATE_TIMEOUT_S = "120"
+
+#: ``verilator_coverage_measure``'s capability probe, PINNED.
+#:
+#: 2026-07-28. That gate answers "missing coverage artefact: defect, or
+#: capability gap?" with ``shutil.which(args.verilator_bin)`` — present -> rc 1
+#: (a real FAIL), absent -> rc 3 + ``PASS_WITH_WAIVERS``. Left to the ambient
+#: PATH, the SAME clause of step 4's gate therefore grades FAIL on a host that
+#: has Verilator and PASS_WITH_WAIVERS on one that does not, so whether this
+#: module counts the clause as reddened is a property of the machine rather
+#: than of the gate. It was registered in :data:`UNREDDENED` from a host
+#: without Verilator and reddened on the next host that had it.
+#:
+#: Pinning removes the lottery in the direction that can only make this module
+#: STRICTER: it selects the branch where the capability exists, which is the
+#: one that has to reach a real FAIL. The program itself exposes the variable
+#: for exactly this ("Made overridable so a test harness ... can PIN the
+#: decision rather than inherit whatever the host happens to have",
+#: programs/verilator_coverage_measure.py:422-427), and its ``check``
+#: subcommand only asks whether the path RESOLVES — it never executes it — so
+#: any always-present executable states the precondition without pretending a
+#: measurement was taken. ``sys.executable`` is used because it is the one
+#: absolute path guaranteed to exist wherever this suite can run at all.
+VERILATOR_BIN_ENV = "VIBE_IC_VERILATOR_BIN"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -520,10 +544,14 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
           "reports/phase2/gates/l12_tb_coverage.json"):
         "PASS/VACUOUS: needs a populated L12 sequence list uncovered by the "
         "TB tree; a hollow L12 declares no sequences",
-    ("4", "verilator_coverage_measure check --coverage-json "
-          "reports/phase2/coverage/coverage_actual.json"):
-        "rc=3 PASS_WITH_WAIVERS under every fixture: the measure subcommand "
-        "self-waives when verilator coverage was never produced",
+    # 2026-07-28: the step-4 `verilator_coverage_measure check` clause was
+    # registered here as "rc=3 PASS_WITH_WAIVERS under every fixture". That was
+    # never a property of the gate — it was the host. The gate FAILs (rc 1) on
+    # any machine where the coverage toolchain is installed and self-waives
+    # (rc 3) only where it is not, so the entry reddened the moment the suite
+    # ran on a host with Verilator. :data:`VERILATOR_BIN_ENV` now pins the
+    # capability probe, the clause reaches its real FAIL deterministically, and
+    # the excuse is deleted rather than re-worded.
     ("5", "assertion_property_check . --json "
           "reports/phase2/gates/assertion_property.json"):
         "VACUOUS: needs SVA properties present but non-substantive; the "
@@ -672,6 +700,37 @@ def _materialise_conditions(project: Path, clause) -> None:
 _TRACEBACK_FRAME_RE = re.compile(
     r'^\s*File "[^"\n]+", line \d+, in \S', re.MULTILINE)
 
+#: The SAME frame line, after the truncation landed INSIDE it.
+#:
+#: 2026-07-28: :data:`_TRACEBACK_FRAME_RE` is anchored at ``^\s*File "``, so it
+#: only survives a cut that happens to fall on a line boundary. The consumer
+#: cuts at a fixed 300-character offset, which falls wherever it falls — and
+#: the frame line begins with the file's ABSOLUTE path, so on a checkout whose
+#: path is long the cut lands mid-path and takes the ``File "`` prefix with it.
+#: The classifier then saw no frame at all and graded the crash ``FAIL``: the
+#: exact false certificate this tier exists to prevent, and one whose verdict
+#: was a function of how deep the checkout directory happened to be — CRASH on
+#: a short path, "demonstrated FAIL" on a long one. Measured on this tree: a
+#: KeyError raised through three frames arrives as
+#: ``…d2_falsifiable.py", line 1012, in _d2_selfcheck_raise_deep`` and was
+#: graded ``FAIL``.
+#:
+#: What survives that cut is the frame line's TAIL — the path's closing quote,
+#: then ``, line <n>, in <name>``, then end of line. Ending the pattern at the
+#: line end is what keeps it specific: CPython emits nothing after the function
+#: name, so a tool diagnostic that happens to read
+#: ``… "top.v", line 12, in module top`` carries trailing text and is not
+#: matched.
+_TRACEBACK_FRAME_TRUNCATED_RE = re.compile(
+    r'", line \d+, in (?:<[A-Za-z_]\w*>|[A-Za-z_]\w*)[ \t]*$', re.MULTILINE)
+
+#: CPython 3.11+ fine-grained error location, e.g. ``    ~~~~~^^^^^``. It sits
+#: immediately above the exception line, so it is the last frame-ish evidence
+#: left when a very long exception message pushes even the frame tail out of
+#: the 300-character window. Used ONLY to corroborate an exception tail, never
+#: on its own — a bare row of carets is not by itself a crash.
+_TRACEBACK_CARET_RE = re.compile(r"^[ \t]*[~^][~^ \t]*$", re.MULTILINE)
+
 #: The terminal ``SomeError: message`` line of a traceback, at line start.
 #: Also survives truncation, and catches a frameless ``raise`` re-render.
 _TRACEBACK_TAIL_RE = re.compile(
@@ -680,18 +739,27 @@ _TRACEBACK_TAIL_RE = re.compile(
 
 
 def _looks_like_a_traceback(out: str) -> bool:
-    """True when *out* carries a Python traceback, header or not."""
+    """True when *out* carries a Python traceback, header or not.
+
+    Every branch below must hold under the consumer's 300-character tail
+    truncation, because that is the only form this module ever sees. A
+    signal that survives only an untruncated traceback grades real crashes
+    ``FAIL`` and certifies a blown-up gate as falsifiable.
+    """
     if not out:
         return False
     if "Traceback (most recent call last)" in out:
         return True
     if _TRACEBACK_FRAME_RE.search(out):
         return True
-    # A bare exception tail alone is accepted only alongside a frame-ish line,
-    # so a gate that legitimately PRINTS "ValueError: bad corner name" as its
-    # finding is not mis-graded as a crash.
+    if _TRACEBACK_FRAME_TRUNCATED_RE.search(out):
+        return True
+    # A bare exception tail alone is accepted only alongside frame-ish
+    # evidence, so a gate that legitimately PRINTS "ValueError: bad corner
+    # name" at column 0 as its finding is not mis-graded as a crash.
     return bool(_TRACEBACK_TAIL_RE.search(out)
-                and re.search(r'^\s*File "', out, re.MULTILINE))
+                and (re.search(r'^\s*File "', out, re.MULTILINE)
+                     or _TRACEBACK_CARET_RE.search(out)))
 
 
 def _classify(passed: bool, out: str) -> str:
@@ -762,16 +830,33 @@ def _evaluate_clause(clause, project: Path) -> Tuple[str, str]:
     return PASS, f"unhandled clause kind {clause.kind}"
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def _gate_timeout():
-    """Pin ``VIBE_IC_GATE_TIMEOUT_S`` for the whole module and restore it."""
-    prev = os.environ.get("VIBE_IC_GATE_TIMEOUT_S")
-    os.environ["VIBE_IC_GATE_TIMEOUT_S"] = GATE_TIMEOUT_S
+    """Pin the environment this module measures in, and restore it.
+
+    Two variables, both pinned for the same reason: a tier that is decided by
+    the host rather than by the gate is not a measurement of the gate. See
+    :data:`GATE_TIMEOUT_S` and :data:`VERILATOR_BIN_ENV`.
+
+    MODULE scope, not session: these are process-wide environment variables
+    and six other test modules exercise ``verilator_coverage_measure``'s
+    capability probe. A session-scoped pin stays set until the whole run ends,
+    so it would reach into whichever of those pytest happened to schedule
+    after this module and silently decide their capability branch too. Module
+    scope releases it the moment this module is done.
+    """
+    pinned = {
+        "VIBE_IC_GATE_TIMEOUT_S": GATE_TIMEOUT_S,
+        VERILATOR_BIN_ENV: sys.executable,
+    }
+    prev = {k: os.environ.get(k) for k in pinned}
+    os.environ.update(pinned)
     yield
-    if prev is None:
-        os.environ.pop("VIBE_IC_GATE_TIMEOUT_S", None)
-    else:
-        os.environ["VIBE_IC_GATE_TIMEOUT_S"] = prev
+    for k, old in prev.items():
+        if old is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = old
 
 
 def _build_project(tmp_root: Path, name: str, fixture: str) -> Path:
@@ -987,15 +1072,50 @@ def test_d2_harness_reports_crash_and_timeout_as_non_demonstrations():
     except KeyError:
         full = traceback.format_exc()
     truncated = (full[-300:] + "\n").strip()
-    assert "Traceback (most recent call last)" not in truncated, (
-        "the self-check's synthetic traceback is short enough to keep its "
-        "header, so it does not exercise the truncation this guards"
-    )
     assert _classify(False, truncated) == CRASH, (
         f"a header-less (truncated) traceback was graded "
         f"{_classify(False, truncated)!r}, not {CRASH!r}; a crashing gate "
         f"would be certified as falsifiable. Snippet:\n{truncated}"
     )
+
+    # ── The same cut, made DETERMINISTIC. ────────────────────────────
+    # `full[-300:]` keeps or drops the header depending on how long this
+    # checkout's absolute path is, so on its own it exercises the truncation
+    # on some hosts and not others — the same host lottery that let this
+    # grader read CRASH on a short path and FAIL on a long one (2026-07-28).
+    # This cut starts INSIDE the last frame line's path, so on every host the
+    # header AND the `File "` prefix are provably gone and only the frame
+    # TAIL is left to recognise the crash by.
+    # Built from a traceback with NO caret row (an explicit `raise` statement
+    # emits none), so the frame TAIL is the only signal left and this case
+    # cannot be carried by the caret corroboration below. Deleting the
+    # truncated-frame branch reddens exactly here.
+    try:
+        _d2_selfcheck_raise_plain(3)
+    except KeyError:
+        full_plain = traceback.format_exc()
+    mid_path = full_plain.rindex('File "') + 12
+    headerless = full_plain[mid_path:].strip()
+    assert "Traceback (most recent call last)" not in headerless
+    assert not re.search(r'^\s*File "', headerless, re.MULTILINE), headerless
+    assert not _TRACEBACK_CARET_RE.search(headerless), (
+        "this sample carries a caret row, so it no longer isolates the "
+        f"truncated-frame branch it exists to prove:\n{headerless}")
+    assert _classify(False, headerless) == CRASH, (
+        f"a traceback cut mid-path — the shape a long checkout path actually "
+        f"produces — was graded {_classify(False, headerless)!r}, not "
+        f"{CRASH!r}. Snippet:\n{headerless}"
+    )
+
+    # ── And a cut deep enough to take the frame tail too. ─────────────
+    # A several-hundred-character exception message pushes even the frame
+    # line out of the 300-char window; what is left is the caret row and the
+    # exception line, and that pair is still a crash.
+    deepest = "\n".join(full.splitlines()[-2:])
+    assert not _TRACEBACK_FRAME_TRUNCATED_RE.search(deepest), deepest
+    assert _classify(False, deepest) == CRASH, (
+        f"a traceback cut below its last frame was graded "
+        f"{_classify(False, deepest)!r}, not {CRASH!r}. Snippet:\n{deepest}")
 
     # ── And the converse: a gate legitimately PRINTING an exception name as
     # its finding must still be a real FAIL, not a crash. ────────────────
@@ -1004,13 +1124,34 @@ def test_d2_harness_reports_crash_and_timeout_as_non_demonstrations():
                "PVT matrix") == RED
     assert _classify(
         False, 'File "top.v", line 12: syntax error near `endmodule`') == RED
+    # A frame-shaped line with trailing text is a tool diagnostic, not CPython.
+    assert _classify(
+        False, 'Error: in file "top.v", line 12, in module top') == RED
+    # The caret row corroborates an exception tail; alone it decides nothing.
+    assert _classify(False, "    ~~~~~^^^^^") == RED
 
 
 def _d2_selfcheck_raise_deep(depth: int):
-    """Raise a KeyError through *depth* frames, for the truncation self-check."""
+    """Raise a KeyError through *depth* frames, for the truncation self-check.
+
+    The subscript form is deliberate: CPython 3.11+ renders a ``~~~^^^`` anchor
+    row under it, which is the shape the caret corroboration is proved against.
+    """
     if depth <= 0:
         return {"only": 1}["missing_key_that_is_deliberately_absent"]
     return _d2_selfcheck_raise_deep(depth - 1)
+
+
+def _d2_selfcheck_raise_plain(depth: int):
+    """The same crash with NO anchor row, for the truncated-frame self-check.
+
+    An explicit ``raise`` statement gets no ``~~~^^^`` row, so a snippet built
+    from this traceback isolates the frame-tail branch: nothing else in
+    :func:`_looks_like_a_traceback` can decide it.
+    """
+    if depth <= 0:
+        raise KeyError("missing_key_that_is_deliberately_absent")
+    return _d2_selfcheck_raise_plain(depth - 1)
 
 
 def test_d2_flow_yaml_override_is_unset():
