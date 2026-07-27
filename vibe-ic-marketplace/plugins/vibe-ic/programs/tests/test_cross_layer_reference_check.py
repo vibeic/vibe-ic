@@ -393,6 +393,176 @@ def test_corpus_regression_passes_when_a_break_is_repaired(tmp_path):
     assert mod.main(["--corpus", str(corpus), "--baseline", str(base)]) == 0
 
 
+# ───────────── the denominator: "no findings" vs "examined nothing"
+#
+# Every test below exists because the sweep could not tell those two apart.
+# MEASURED on the shipped corpus before this arm existed: renaming the
+# producer's reference field, renaming its collection, or moving its layer
+# each took the sweep from 9 producer records to 0, printed
+# `~ improved: <row>/CONSUMER_CANNOT_REACH: 3 -> 0`, and exited 0. The one
+# BLOCKING wiring of this mechanism reported SUCCESS at the moment the
+# mechanism stopped working — the defect class this program exists for,
+# turned on the program itself.
+#
+# Both directions throughout: each loss FAILs, and the repair-at-constant-
+# reach that looks identical in the findings count still PASSes.
+
+def _mutated_manifest(tmp_path, mutate) -> Path:
+    """The shipped manifest with ONE producer field changed."""
+    import copy
+    data = json.loads(
+        (_PROG.parent / "cross_layer_references.json").read_text())
+    mutate(data["references"][0])
+    out = tmp_path / "manifest_mutated.json"
+    out.write_text(json.dumps(data), encoding="utf-8")
+    return out
+
+
+def test_baseline_records_the_denominator_not_only_the_findings(tmp_path):
+    corpus = _corpus(tmp_path, 1)
+    base = tmp_path / "baseline.json"
+    assert mod.main(["--corpus", str(corpus), "--baseline", str(base),
+                     "--write-baseline"]) == 0
+    written = json.loads(base.read_text())
+    assert written["examined"]["port_width_symbolic_to_parameter"] > 0, (
+        "a findings count with no denominator cannot be compared against")
+
+
+@pytest.mark.parametrize("label,mutate", [
+    ("reference_field renamed",
+     lambda r: r["producer"].__setitem__("reference_field", "width_sym")),
+    ("collections renamed",
+     lambda r: r["producer"].__setitem__("collections", ["renamed_coll"])),
+    ("producer layer moved",
+     lambda r: r["producer"].__setitem__("layers", ["L21"])),
+])
+def test_losing_reach_fails_and_is_not_called_an_improvement(
+        tmp_path, capsys, label, mutate):
+    """The three ways an emitter kills a row underneath the manifest."""
+    corpus = _corpus(tmp_path, 1)
+    base = tmp_path / "baseline.json"
+    assert mod.main(["--corpus", str(corpus), "--baseline", str(base),
+                     "--write-baseline"]) == 0
+    capsys.readouterr()
+    manifest = _mutated_manifest(tmp_path, mutate)
+    rc = mod.main(["--corpus", str(corpus), "--baseline", str(base),
+                   "--manifest", str(manifest)])
+    assert rc == 1, f"{label}: the mechanism died and the sweep passed"
+    out = capsys.readouterr()
+    assert "LOST REACH" in out.err
+    assert "improved" not in out.out, (
+        "a findings drop across a reach loss is the symptom, not a win")
+
+
+def test_partial_loss_of_reach_fails_even_with_the_findings_unchanged(
+        tmp_path):
+    """The sharpest direction: ONE of several producer collections stops
+    carrying the reference. The findings count does not move — the element is
+    still judged through its other carriers — so a findings-only baseline
+    sees nothing at all."""
+    corpus = _corpus(tmp_path, 1)
+    base = tmp_path / "baseline.json"
+    mod.main(["--corpus", str(corpus), "--baseline", str(base),
+              "--write-baseline"])
+    before = json.loads(base.read_text())
+    manifest = _mutated_manifest(
+        tmp_path, lambda r: r["producer"]["collections"].remove("ports"))
+    rc = mod.main(["--corpus", str(corpus), "--baseline", str(base),
+                   "--manifest", str(manifest), "--json",
+                   str(tmp_path / "r.json")])
+    after = json.loads((tmp_path / "r.json").read_text())
+    assert after["counts"] == before["recorded"], (
+        "precondition: the findings are unchanged, so only the denominator "
+        "can carry this signal")
+    assert (after["examined"]["port_width_symbolic_to_parameter"]
+            < before["examined"]["port_width_symbolic_to_parameter"])
+    assert rc == 1
+
+
+def test_a_repair_at_constant_reach_is_still_a_pass(tmp_path):
+    """The other direction, and the one that decides whether this arm is
+    usable: a genuine fix drops the findings while the denominator holds."""
+    corpus = _corpus(tmp_path, 2)
+    base = tmp_path / "baseline.json"
+    mod.main(["--corpus", str(corpus), "--baseline", str(base),
+              "--write-baseline"])
+    before = json.loads(base.read_text())["examined"]
+    _build(corpus / "cell_0", width=24)          # repaired, still symbolic
+    rc = mod.main(["--corpus", str(corpus), "--baseline", str(base),
+                   "--json", str(tmp_path / "r.json")])
+    after = json.loads((tmp_path / "r.json").read_text())
+    assert after["examined"] == before, "precondition: reach is unchanged"
+    assert after["counts"] != before, "precondition: the findings dropped"
+    assert rc == 0
+
+
+def test_a_sweep_that_finds_no_cell_is_not_checked_not_a_pass(tmp_path):
+    empty = tmp_path / "empty_corpus"
+    empty.mkdir()
+    base = tmp_path / "baseline.json"
+    base.write_text(json.dumps({
+        "recorded": {"port_width_symbolic_to_parameter": {mod.CONSUMER_BLIND: 3}},
+        "examined": {"port_width_symbolic_to_parameter": 9}}), encoding="utf-8")
+    assert mod.main(["--corpus", str(empty), "--baseline", str(base)]) == 2
+    # ...and the same sweep over a corpus that DOES carry cells still judges.
+    corpus = _corpus(tmp_path, 1)
+    assert mod.main(["--corpus", str(corpus), "--baseline", str(base)]) in (0, 1)
+
+
+def test_a_baseline_without_a_denominator_is_not_checked(tmp_path):
+    """Refusing to compare is the honest answer: a findings count alone
+    cannot say whether the sweep still reaches what it reached."""
+    corpus = _corpus(tmp_path, 1)
+    base = tmp_path / "baseline.json"
+    base.write_text(json.dumps({
+        "recorded": {"port_width_symbolic_to_parameter":
+                     {mod.CONSUMER_BLIND: 1}}}), encoding="utf-8")
+    assert mod.main(["--corpus", str(corpus), "--baseline", str(base)]) == 2
+    # Re-recording it restores a comparable baseline.
+    assert mod.main(["--corpus", str(corpus), "--baseline", str(base),
+                     "--write-baseline"]) == 0
+    assert mod.main(["--corpus", str(corpus), "--baseline", str(base)]) == 0
+
+
+def test_no_baseline_at_all_still_judges(tmp_path):
+    """A first run has nothing to compare against, and must keep judging the
+    cells rather than being turned into NOT CHECKED by the rule above."""
+    absent = str(tmp_path / "absent.json")
+    clean = tmp_path / "clean"
+    _build(clean / "cell_clean", width=24)
+    assert mod.main(["--corpus", str(clean), "--baseline", absent]) == 0
+    broken = tmp_path / "broken"
+    _build(broken / "cell_0")
+    assert mod.main(["--corpus", str(broken), "--baseline", absent]) == 1
+
+
+def test_the_pass_line_does_not_overstate_its_own_reach(tmp_path, capsys):
+    """One port carried by L1.pin_table, L9.top_ports and L9.ports is THREE
+    producer records and ONE reference. The PASS line must not call that
+    three declared references."""
+    _build(tmp_path, width=24)
+    capsys.readouterr()
+    rc = mod.main([str(tmp_path), "--json", str(tmp_path / "r.json")])
+    assert rc == 0
+    rep = json.loads((tmp_path / "r.json").read_text())
+    assert rep["elements_judged"] == 1
+    assert rep["elements_examined"] == 3
+    out = capsys.readouterr().out
+    assert "1 declared reference(s)" in out
+    assert "3 producer record(s)" in out
+
+
+def test_the_shipped_baseline_carries_a_denominator():
+    """The in-repo baseline, not a fixture: a shipped baseline with no
+    denominator disables the arm above for the one corpus CI sweeps."""
+    shipped = json.loads(
+        (_PROG.parent / "cross_layer_reference_baseline.json").read_text())
+    assert shipped.get("examined"), shipped
+    for row, n in shipped["examined"].items():
+        assert isinstance(n, int) and n > 0, (row, n)
+        assert row in shipped["recorded"] or n > 0
+
+
 def test_corpus_reports_an_unparseable_cell_as_error(tmp_path):
     corpus = _corpus(tmp_path, 1)
     (_docs(corpus / "cell_clean") / "L1_DATASHEET.json").write_text(

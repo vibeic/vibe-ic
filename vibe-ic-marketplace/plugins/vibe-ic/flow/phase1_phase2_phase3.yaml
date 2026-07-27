@@ -235,8 +235,13 @@ steps:
         # L18 interconnect topology is factual (its own default mode is ADVISES)
         - advisory_program_exit_zero: "l18_interconnect_topology_factuality_check ."
         # vibe-ic#376 — the ONE general gate over declared cross-layer
-        # references, as opposed to the 23 hand-written pairwise gates that
-        # each cover a slice. Every row above judges ONE layer's own content;
+        # references, as opposed to the hand-written pairwise gates that each
+        # cover a slice. It SUBSUMES NONE of them and retires none: measured,
+        # 9 of the 25 `*consistency_check.py` files relate two or more layers,
+        # 4 of those 9 read the RTL as one side, and every relation the
+        # remaining 5 assert is a membership, an equality or a derivation —
+        # not a reference. The count is in the program's docstring.
+        # Every row above judges ONE layer's own content;
         # this one judges whether a value a layer PRODUCES is reachable by the
         # layer that CONSUMES it, which is invisible from either side alone.
         # Rows are DATA (programs/cross_layer_references.json); the resolver is

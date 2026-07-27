@@ -10,11 +10,51 @@ THE DEFECT CLASS (vibe-ic#376)
     A value is present in the layer that PRODUCES it, and unreachable by
     the layer that CONSUMES it — while both layers individually pass.
 
-23 hand-written ``*_consistency_check.py`` gates each cover one slice of
-this, and each was written after someone was bitten once. This program is
-the first general mechanism: a *reference* is declared as DATA in
+Hand-written ``*_consistency_check.py`` gates each cover one slice of this,
+and each was written after someone was bitten once. This program is the
+first general mechanism: a *reference* is declared as DATA in
 ``cross_layer_references.json``, and one resolver judges every declared
 reference the same way.
+
+HOW MANY OF THOSE GATES THIS SUBSUMES — MEASURED, AND THE ANSWER IS ZERO
+------------------------------------------------------------------------
+The issue's headline calls 23 pairwise gates the symptom of this missing
+mechanism. Re-counted on the tree: **25** files match
+``*consistency_check.py``. Counting the layer documents each one addresses
+— string constants under AST, so a layer code inside a prose comment is not
+counted — gives
+
+    addresses 0 layers : 13     addresses 2 : 5     addresses  5 : 2
+    addresses 1 layer  :  3     addresses 4 : 1     addresses 11 : 1
+
+so **9 of 25** relate two or more layers at all. Of those 9, four read the
+RTL as one of their two sides (they walk ``*.v``/``*.sv``), which is a
+layer-to-ARTEFACT relation no resolver over layer documents can express.
+The remaining **5** have both sides in the L-doc corpus, and the relations
+they assert are set MEMBERSHIP (names on one side must appear on the
+other), scalar EQUALITY (two layers each state the same value), and
+DERIVATION (one value is a function of others). **None is a REFERENCE**,
+so this mechanism subsumes 0 of the 25 and none is retired. That is not a
+scoping decision to be revisited with more effort; it is what the relations
+are.
+
+The distinction that makes a general mechanism possible for references is
+the same one that stops it absorbing the others. An equality needs a
+per-pair canonicaliser (a polynomial written three ways, a frequency in MHz
+vs Hz); a membership needs the pair's own alias and escape-valve rules —
+the shipped pin-to-port membership relation carries 4 alias fields
+(``name``/``rtl_name``/``board_name``/``aliases[]``) and 5
+``no_<field>_in_input`` escape flags, none of which generalise to any other
+pair. Both are code. A reference needs a GRAMMAR for the address and a
+SCOPE for the namespace, and both are data.
+
+And the mechanism cannot grow by data alone on this corpus. Every string in
+every collection of every L-doc across the 106 tracked cells was tested
+against the one shipped grammar: outside ``width_symbolic`` itself, every
+symbolic-range-shaped hit is prose — a standards citation, an FSM state
+name, a package-qualified type. There is no second reference to declare.
+A second row therefore waits on a second grammar, which is code, and that
+cost is the mechanism's honest boundary rather than a gap in the manifest.
 
 WHAT A REFERENCE IS, AND WHY IT IS NOT AN EQUALITY
 --------------------------------------------------
@@ -147,6 +187,14 @@ TWO MODES
            and does not fire; the cell identity is in the ``--json`` report
            on every run, which is where a reader who needs it should look.
 
+           It also records ``examined`` — the DENOMINATOR those counts were
+           measured over. A findings count on its own cannot say whether the
+           sweep still reaches what it reached, and for a while this one did
+           not: renaming the producer's reference field, renaming its
+           collection, or moving its layer each took the sweep from 9
+           records to 0 and printed ``~ improved: ... 3 -> 0`` before exiting
+           0. See ``compare_denominator``.
+
 DEGRADE LOUDLY
 --------------
 A layer file that EXISTS and does not parse is exit 2, never a quiet pass.
@@ -161,7 +209,10 @@ appears in either.
 
 EXIT CODES
 ----------
-    0 = PASS / VACUOUS_PASS      1 = FAIL      2 = SKIP or I/O error
+    0 = PASS / VACUOUS_PASS
+    1 = FAIL — a finding, or a corpus sweep that LOST REACH
+    2 = NOT CHECKED — SKIP, an I/O error, a corpus sweep that found no cell
+        at all, or a baseline carrying no denominator to compare against
 """
 from __future__ import annotations
 
@@ -460,8 +511,24 @@ CONSUMER_ADAPTERS = {
 def evaluate_row(row: dict,
                  project: Path,
                  layers: Dict[str, List[Tuple[Path, dict]]]
-                 ) -> Tuple[List[dict], int]:
-    """Return (findings, producer elements examined) for one manifest row."""
+                 ) -> Tuple[List[dict], int, int]:
+    """Return (findings, records examined, elements judged) for one row.
+
+    TWO denominators, deliberately, because they answer different questions
+    and one of them was being reported as if it were the other. RECORDS is
+    how many producer entries carried the reference field — the same element
+    is counted once per collection that carries it, and on the shipped corpus
+    that is 3 records for 1 port. ELEMENTS is how many distinct
+    (identity, reference value) pairs were actually judged. A PASS line that
+    says "3 declared reference(s)" over one port overstates its own reach by
+    3x, and the reader who trusts it concludes the mechanism covers more than
+    it does.
+
+    RECORDS is what the corpus baseline regresses on, because it is the
+    strictly more sensitive of the two: elements can only shrink by records
+    shrinking, while records can shrink on their own when a producer
+    collection stops carrying the field. See `compare_denominator`.
+    """
     prod = row["producer"]
     tgt = row["target"]
     findings: List[dict] = []
@@ -470,7 +537,7 @@ def evaluate_row(row: dict,
         layers, prod["layers"], prod["collections"],
         prod.get("kind", "element"), prod.get("key_field", "name"))
     if not producers:
-        return [], 0
+        return [], 0, 0
 
     scope_idx = index_elements(
         layers, tgt["scope_layers"], tgt["collections"],
@@ -532,7 +599,7 @@ def evaluate_row(row: dict,
             finding["producer_ids"] = producer_ids
             finding["producer_files"] = producer_files
             findings.append(finding)
-    return findings, examined
+    return findings, examined, len(order)
 
 
 def _judge_element(row, eid, rec, raw, scope_by_name, all_by_name,
@@ -666,6 +733,7 @@ def check_project(project: Path, rows: List[dict]) -> dict:
         "rows_evaluated": [],
         "findings": [],
         "elements_examined": 0,
+        "elements_judged": 0,
         "verdict": "VACUOUS_PASS",
     }
     if not _ldc.generated_docs_dir(project).is_dir():
@@ -680,11 +748,12 @@ def check_project(project: Path, rows: List[dict]) -> dict:
         return report
     report["layers_present"] = sorted(layers)
     for row in rows:
-        findings, examined = evaluate_row(row, project, layers)
+        findings, examined, judged = evaluate_row(row, project, layers)
         report["rows_evaluated"].append(
             {"id": row["id"], "elements_with_reference": examined,
-             "findings": len(findings)})
+             "elements_judged": judged, "findings": len(findings)})
         report["elements_examined"] += examined
+        report["elements_judged"] += judged
         report["findings"].extend(findings)
     if report["findings"]:
         report["verdict"] = "FAIL"
@@ -745,6 +814,12 @@ def check_corpus(corpus: Path, rows: List[dict]) -> dict:
         "corpus": str(corpus),
         "cells": [],
         "counts": {},
+        # The DENOMINATOR, per row, alongside the findings. Without it the
+        # sweep cannot tell "no findings because nothing is broken" from
+        # "no findings because the mechanism examined nothing" — see
+        # compare_denominator.
+        "examined": {},
+        "judged": {},
         "errors": [],
     }
     for cell in corpus_cells(corpus):
@@ -762,6 +837,13 @@ def check_corpus(corpus: Path, rows: List[dict]) -> dict:
         for f in rep["findings"]:
             bucket = out["counts"].setdefault(f["row"], {})
             bucket[f["code"]] = bucket.get(f["code"], 0) + 1
+        for rowrep in rep["rows_evaluated"]:
+            rid = rowrep["id"]
+            out["examined"][rid] = (out["examined"].get(rid, 0)
+                                    + rowrep["elements_with_reference"])
+            out["judged"][rid] = (out["judged"].get(rid, 0)
+                                  + rowrep.get("elements_judged", 0))
+    out["cells_swept"] = len(out["cells"])
     return out
 
 
@@ -775,6 +857,68 @@ def load_baseline(path: Path) -> Dict[str, Dict[str, int]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     recorded = data.get("recorded")
     return recorded if isinstance(recorded, dict) else {}
+
+
+def load_baseline_examined(path: Path) -> Optional[Dict[str, int]]:
+    """The recorded DENOMINATOR per row, or None when the file records none.
+
+    None and {} are different answers and are kept apart: {} means the sweep
+    that wrote this baseline examined nothing, None means the baseline
+    predates the denominator record and cannot be compared against. The
+    second is NOT CHECKED, never a quiet pass.
+    """
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    ex = data.get("examined")
+    if not isinstance(ex, dict):
+        return None
+    return {k: int(v) for k, v in ex.items() if isinstance(v, int)}
+
+
+def compare_denominator(examined: Dict[str, int],
+                        recorded: Optional[Dict[str, int]]) -> List[str]:
+    """Rows whose REACH shrank since the baseline was recorded.
+
+    MEASURED, and the reason this exists (vibe-ic#376). Rename the producer's
+    reference field, rename its collection, or move its layer — three ways an
+    emitter changes underneath a manifest row — and the sweep goes from 9
+    records examined to 0. Before this arm, every one of the three printed
+
+        ~ improved: <row>/CONSUMER_CANNOT_REACH: 3 -> 0
+        [PASS] no NEW cross-layer reference break
+
+    and exited 0. The one BLOCKING wiring of this whole mechanism reported
+    SUCCESS, and called it an improvement, at the moment the mechanism
+    stopped working. That is the defect class this program exists for,
+    turned on the program itself: the value is still in the layer that
+    produces it, and the layer that consumes it can no longer reach it,
+    while both individually pass.
+
+    A findings count may still SHRINK freely while the denominator holds —
+    that is a repair, and it stays rc 0. What may not happen silently is the
+    denominator shrinking, because that means the sweep is measuring LESS
+    than it was, and no verdict computed over a smaller denominator is
+    comparable to the one recorded. Removing a cell from the corpus lands
+    here too, and should: it is a deliberate act, and `--write-baseline`
+    is how it is declared.
+    """
+    if recorded is None:
+        return []
+    out: List[str] = []
+    for row in sorted(set(examined) | set(recorded)):
+        now, was = examined.get(row, 0), recorded.get(row, 0)
+        if now < was:
+            out.append(
+                f"{row}: examined {was} -> {now} producer record(s). The "
+                f"sweep is reaching LESS than when the baseline was "
+                f"recorded — an emitter renamed the field or the "
+                f"collection, moved the layer, or the corpus shrank. Any "
+                f"drop in findings across this change is not a repair.")
+    return out
 
 
 def compare_baseline(counts: Dict[str, Dict[str, int]],
@@ -841,9 +985,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "Measured cross-layer reference breaks on the published "
                     "corpus. Counts only, never cell identity — cell paths "
                     "carry design/PDK names and this file is scanned by "
-                    "source_chip_agnostic_check. A count may SHRINK freely; "
-                    "any increase, or a new row/code pair, FAILs CI."),
+                    "source_chip_agnostic_check. A findings count may SHRINK "
+                    "freely; any increase, or a new row/code pair, FAILs CI. "
+                    "`examined` is the DENOMINATOR those counts were measured "
+                    "over: it may not shrink silently, because a sweep that "
+                    "reaches less than the recorded one produces a smaller "
+                    "findings count for a reason that is not a repair."),
                 "recorded": report["counts"],
+                "examined": report["examined"],
             }, indent=2) + "\n", encoding="utf-8")
             print(f"[WROTE] {bpath}")
         if args.json:
@@ -851,26 +1000,63 @@ def main(argv: Optional[List[str]] = None) -> int:
                 json.dumps(report, indent=2, ensure_ascii=False),
                 encoding="utf-8")
         recorded = load_baseline(bpath)
+        recorded_examined = load_baseline_examined(bpath)
         regressions, improvements = compare_baseline(report["counts"], recorded)
+        shrunk = compare_denominator(report["examined"], recorded_examined)
         n_cells = len(report["cells"])
         n_find = sum(len(c["findings"]) for c in report["cells"])
-        print(f"{GATE} --corpus: {n_cells} cell(s), {n_find} finding(s)")
+        n_exam = sum(report["examined"].values())
+        n_judged = sum(report["judged"].values())
+        print(f"{GATE} --corpus: {n_cells} cell(s), {n_exam} producer "
+              f"record(s) carrying a declared reference ({n_judged} distinct "
+              f"element(s)), {n_find} finding(s)")
         for cell in report["cells"]:
             if cell["findings"]:
                 print(f"── {cell['cell']}: {cell['verdict']}")
                 _print_findings(cell["findings"])
-        for line in improvements:
-            print(f"  ~ improved: {line}")
+        # An improvement is only an improvement at constant reach. When the
+        # denominator shrank, the SAME findings drop is the symptom, and
+        # printing it as a win directly above the failure is how a reader
+        # ends up believing the wrong half of the output.
+        if not shrunk:
+            for line in improvements:
+                print(f"  ~ improved: {line}")
         if report["errors"]:
             for e in report["errors"]:
                 print(f"[ERROR] {e['cell']}: {e['detail']}", file=sys.stderr)
             return 2
+        # A sweep that found no cells has not judged this corpus clean; it has
+        # not judged it at all. Reported as NOT CHECKED (2) so it can never be
+        # read as, or counted as, a PASS.
+        if not report["cells"]:
+            print(f"[NOT CHECKED] {GATE} --corpus: no published cell under "
+                  f"{corpus} carries phase1/generated_docs — 0 cell(s) swept, "
+                  f"so nothing about this corpus has been judged.",
+                  file=sys.stderr)
+            return 2
+        # A baseline that records findings but no denominator cannot be
+        # compared against: the whole point of the denominator is that a
+        # findings count alone does not say whether the sweep still reaches
+        # what it reached. Say so instead of assuming it does.
+        if recorded and recorded_examined is None:
+            print(f"[NOT CHECKED] {GATE} --corpus: the baseline at {bpath} "
+                  f"records findings but no `examined` denominator, so a "
+                  f"drop in findings cannot be told apart from the sweep "
+                  f"losing its reach. Re-record it with --write-baseline.",
+                  file=sys.stderr)
+            return 2
+        if shrunk:
+            for line in shrunk:
+                print(f"[FAIL] cross-layer reference sweep LOST REACH: {line}",
+                      file=sys.stderr)
+            return 1
         if regressions:
             for line in regressions:
                 print(f"[FAIL] NEW cross-layer break: {line}", file=sys.stderr)
             return 1
         recorded_total = sum(sum(v.values()) for v in recorded.values())
-        print(f"[PASS] no NEW cross-layer reference break "
+        print(f"[PASS] no NEW cross-layer reference break over {n_exam} "
+              f"producer record(s) in {n_cells} cell(s) "
               f"({recorded_total} recorded, unchanged or shrunk).")
         return 0
 
@@ -898,8 +1084,14 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"is carried by this design's layers.")
         return 0
     if verdict == "PASS":
-        print(f"[PASS] {GATE}: {report['elements_examined']} declared "
-              f"reference(s) resolve in scope and reach their consumer.")
+        # BOTH denominators. The record count alone reads as reach this
+        # mechanism does not have: on the shipped corpus one port carried by
+        # L1.pin_table, L9.top_ports and L9.ports is 3 records and 1 element,
+        # and the old line called that "3 declared reference(s)".
+        print(f"[PASS] {GATE}: {report['elements_judged']} declared "
+              f"reference(s) — carried by {report['elements_examined']} "
+              f"producer record(s) — resolve in scope and reach their "
+              f"consumer.")
         return 0
     if verdict == "PASS_WITH_WAIVER":
         print(f"[PASS_WITH_WAIVER] {GATE}: {len(report['findings'])} "
