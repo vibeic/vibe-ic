@@ -1057,7 +1057,15 @@ steps:
     blocks_on: [A7]
 
   - id: A9
-    name: "🔁 Co-Simulation / HW Verification"
+    # Renamed. The old name was "Co-Simulation / HW Verification", but the gate
+    # never required a hardware measurement of any kind: a run with cosim
+    # results and ZERO hw_measurements.json reported a bare PASS, byte-identical
+    # in the report to a bench-verified close. Not mandating hardware is the
+    # deliberate documented decision (see the A9 entry in
+    # flow_condition_reachability_check's allowlist) — claiming to VERIFY it was
+    # not. The name now states what the step enforces; the HW half is real when
+    # bench data exists and DISCLOSED when it does not.
+    name: "🔁 Co-Simulation (+ HW correlation when bench data exists)"
     stage: stage_analog
     closed_loop:
       fallback_to: A3
@@ -1074,6 +1082,17 @@ steps:
         - optional_program_exit_zero:
             command: "analog_hw_spice_correlation_check . --json reports/phase2/gates/hw_spice_corr.json"
             condition_files_exist: ["phase3/analog/*/hw_measurements.json"]
+        # The DISCLOSURE half. analog_a9_hw_verify_check already existed and
+        # already judges hw_measurements.json substance correctly — it was just
+        # wired only into analog_one_shot_runner, never into this gate, so the
+        # flow verdict could not see it. Its three outcomes are exactly the
+        # tiers this step needs: every block measured and sane -> rc 0 PASS; a
+        # block measured but with no evidence keys / no numeric measurement ->
+        # rc 1 FAIL; no block measured at all -> rc 2, which check_step surfaces
+        # as VACUOUS_PASS. That last tier is the point: a simulation-only close
+        # stays legal (headless and CI analog runs must remain possible) but
+        # stops being reported as an undifferentiated PASS.
+        - program_exit_zero: "analog_a9_hw_verify_check . --json reports/phase2/gates/a9_hw_verify.json"
     blocks_on: [A8]
 
   # ── Step 14 (Wave 91 / v1.6.15): pre-PnR Yosys gate ──────────────
