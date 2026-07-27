@@ -2928,6 +2928,22 @@ def _parse_p0_failing_subgates(p0_result: Any) -> List[str]:
     Returns the de-duplicated list of failing gate names (stripped of
     the FAIL prefix and dashes).  Empty list if the result is None or
     not a P0 step.
+
+    NOT EVERY REASON LINE IS A VERDICT.  Since #492 the umbrella also
+    DISCLOSES the gates that argument parsing rejected — a heading plus
+    one ``  - <gate> (NOT INVOKED: …)`` bullet each.  Those gates
+    returned NO verdict at all, so they are neither a pass nor a
+    failure, and the disclosure was deliberately not made a FAIL in the
+    umbrella's own status.  This scraper had no notion of the shape, so
+    it read the heading and every bullet as a failing gate NAME and
+    handed 38 phantom names to three consumers, two of which are
+    ``all(...)`` predicates that go False the moment an unrecognised
+    name appears (``_step_failure_is_informational_only`` and the
+    PASS_WITH_OPEN_SOURCE_CONSTRAINTS deferral).  Both convert a
+    TOLERATED outcome into a FAIL — the exact false-FAIL class the
+    disclosure was careful to avoid, arriving through the back door.
+    The predicate that recognises a disclosure line lives next to the
+    formatter that writes it, so the two cannot drift again.
     """
     if p0_result is None:
         return []
@@ -2936,6 +2952,12 @@ def _parse_p0_failing_subgates(p0_result: Any) -> List[str]:
     for line in (p0_result.reasons or []):
         s = str(line).strip()
         if not s:
+            continue
+        # Disclosure, not verdict — see the docstring. Tested BEFORE the
+        # prefix stripping below, because the per-gate bullets share the
+        # `  - ` prefix with Form 2 and would otherwise be indistinguishable
+        # from a real failure by the time we got here.
+        if _gate_invocation.is_not_invocable_disclosure(s):
             continue
         # Form 1: "FAIL: gate_name — msg"
         if s.startswith("FAIL: "):
@@ -2984,11 +3006,28 @@ def _normalise_p0_reason_line(msg: str) -> str:
     failing gate -> ``failed_gates: ['provenance_output_hash_
     completeness_check']``.  The variable is the failure COUNT, not
     the plugin version.
+
+    THE ``- `` PREFIX IS NOT PROOF OF FAILURE.  Since #492 the
+    umbrella's disclosure block uses the SAME indented-bullet shape for
+    gates that argument parsing rejected, and this function's
+    unconditional ``"- " -> "FAIL: "`` rewrite promoted every one of
+    them into a per-gate FAIL record carrying the gate's REAL name —
+    which is worse than the mangled prose the sibling parser produced,
+    because it reads as a genuine verdict.  That channel fires whatever
+    the umbrella's own status is, so an umbrella that PASSED still
+    published dozens of failed gates into
+    ``phase23_completion_audit.json`` — the artifact whose own write
+    site calls it "the contract the mcp-eda pre-burn guard consumes".
     """
     s = (msg or "").strip()
     if not s:
         return ""
     if s.startswith("Failed gates"):
+        return ""
+    # A never-invoked gate produced no verdict; it must not become a
+    # per-gate record of any verdict. Checked before the bullet rewrite
+    # below, whose prefix it shares.
+    if _gate_invocation.is_not_invocable_disclosure(s):
         return ""
     if s.startswith("- "):
         return "FAIL: " + s[2:].lstrip()
@@ -3037,6 +3076,138 @@ def _per_gate_from_p0_reasons(reasons: Any) -> List[Dict[str, Any]]:
                     "message": inline.group(2)[:240],
                 })
     return per_gate
+
+
+def _compose_p0_reasons(s_fails: List[str],
+                        s_skips: List[str],
+                        s_waivers: List[Dict[str, Any]],
+                        n_registered: Optional[int] = None) -> List[str]:
+    """Build the P0 umbrella's ``StepResult.reasons`` from the umbrella's
+    four outcome buckets.
+
+    EXTRACTED FROM ``main()`` DELIBERATELY.  Everything that reads a P0
+    reasons list — ``_parse_p0_failing_subgates``,
+    ``_normalise_p0_reason_line`` / ``_per_gate_from_p0_reasons``, and the
+    ``structural_fail_lines`` scrape — is a parser of what this function
+    writes, and the producer/parser contract between them had no test
+    because the producer was unreachable from one: it lived inline in
+    ``main()``, so every test of the parsers had to hand-write a fixture
+    of what it BELIEVED the producer emitted.  That is precisely how the
+    #492 disclosure block shipped with 1921 green unit tests and was
+    found only by a real flow run — no test ever fed real producer output
+    to a real parser.  Keep the round trip testable.
+
+    THE SHAPES, all of which a parser must survive:
+
+      * 1 failure   -> ``FAIL: <gate> — <msg>``                  (Form 1)
+      * >=2         -> ``Failed gates (N):`` + ``  - <gate> — <msg>``
+                                                                 (Form 2)
+      * disclosure  -> a heading + ``  - <gate> (NOT INVOKED: …)`` each
+      * skips       -> ``SKIP: <gate>``
+      * waivers     -> ``WAIVED-DEFERRED: <gate> — …``
+      * nothing     -> one explicit clean-sweep line
+
+    Form 2 and the disclosure bullets share the ``  - `` prefix; that
+    collision is why the disclosure must be recognised by the predicate
+    that ships with its formatter, not by prefix.
+    """
+    if n_registered is None:
+        n_registered = len(_STRUCTURAL_RTL_GATES)
+    # v0.119.41 Wave 9 — when ≥2 structural gates FAIL, surface
+    # a "Failed gates (N):" header so the operator sees each
+    # failing gate name + first-line message even when the
+    # composite verdict is one terse FAIL line. This addresses
+    # the v0.119.40 RESULT.md complaint that 10 distinct
+    # structural FAILs collapse into a single composite FAIL
+    # without operator-actionable detail.
+    failed_gate_lines: List[str] = []
+    if len(s_fails) >= 2:
+        failed_gate_lines.append(
+            f"Failed gates ({len(s_fails)}):")
+        for f_line in s_fails:
+            # Each entry is "FAIL: <gate_name> — <first_line>".
+            failed_gate_lines.append(f"  - {f_line[len('FAIL: '):]}"
+                                     if f_line.startswith("FAIL: ")
+                                     else f"  - {f_line}")
+    else:
+        failed_gate_lines.extend(s_fails)
+    # v1.6.97 (issue #29 Bugs 1+2) — surface thin-input waivers
+    # in the structural umbrella reasons so the operator can
+    # see exactly which gates were converted from FAIL to
+    # WAIVED via --allow-thin-input. Each waiver entry remains
+    # explicit (review_required: true; ticket id) — they are
+    # DEFERRED open work, not silent passes.
+    waiver_lines = [
+        (f"WAIVED-DEFERRED: {w['gate']} — thin-input "
+         f"(ticket={w['ticket']}, review_required=true): "
+         f"{w['first_line']}")
+        for w in s_waivers
+    ]
+    # #492 — separate the two populations that rc 2 used to merge. A gate
+    # that argument parsing rejected produced NO verdict; listing it under
+    # the same "SKIP:" heading as a gate that looked and found no input is
+    # what made 39 registered gates read as benign. They are counted and
+    # headed separately, so the umbrella can no longer imply it checked
+    # what those gates audit.
+    not_invoked = [s for s in s_skips
+                   if _gate_invocation.is_not_invocable_entry(s)]
+    plain_skips = [s for s in s_skips
+                   if not _gate_invocation.is_not_invocable_entry(s)]
+    not_invoked_lines: List[str] = []
+    if not_invoked:
+        not_invoked_lines.append(
+            _gate_invocation.format_not_invocable_heading(
+                len(not_invoked), n_registered))
+        not_invoked_lines += [f"  - {s}" for s in not_invoked]
+    reasons_combined = (failed_gate_lines
+                        + not_invoked_lines
+                        + [f"SKIP: {s}" for s in plain_skips]
+                        + waiver_lines)
+    if not reasons_combined:
+        # Clean sweep. Say so explicitly rather than emitting a
+        # reason-less PASS that reads like a step that did nothing.
+        reasons_combined = [
+            "every registered structural-RTL gate that dispatched "
+            "PASSED (0 FAIL / 0 SKIP / 0 WAIVED)"
+        ]
+    return reasons_combined
+
+
+def _p0_passed_gate_count(executed: Optional[bool],
+                          s_fails: List[str],
+                          s_skips: List[str],
+                          s_waivers: List[Dict[str, Any]],
+                          n_registered: Optional[int] = None) -> int:
+    """How many registered structural gates ran and PASSED.
+
+    ``_run_structural_rtl_gates`` dispatches every entry of
+    ``_STRUCTURAL_RTL_GATES`` exactly once and files each into exactly one
+    of fail / skip / waiver / pass, appending nothing for a pass.  So the
+    passing population is the registry minus the other three — an exact
+    partition, not an estimate.
+
+    WHY THIS EXISTS.  ``passed_gate_count`` in
+    ``phase23_completion_audit.json`` was derived by scanning the P0
+    reasons list for ``PASS: <gate>`` lines.  The umbrella has never
+    emitted such a line — a passing gate contributes NO reason at all —
+    so the field was structurally pinned at 0 on every run in the
+    artifact's history, including runs where 150+ gates passed.  That is
+    a SEPARATE and OLDER defect from the disclosure mis-parse: measured
+    at ``7b7eebff3~1``, i.e. before the disclosure existed, the same
+    project reported ``passed_gate_count: 0`` with ``gates: []``.  It is
+    fixed here because it is the same field, the same artifact and the
+    same class of error — an audit number derived by scraping prose
+    instead of by asking the code that knows.
+
+    ``executed`` is the umbrella's ``all_passed`` tri-state: ``None``
+    means no gate ran at all (no RTL), so nothing passed.
+    """
+    if executed is None:
+        return 0
+    if n_registered is None:
+        n_registered = len(_STRUCTURAL_RTL_GATES)
+    return max(0, n_registered
+               - len(s_fails) - len(s_skips) - len(s_waivers))
 
 
 def _count_input_docs(project: Path) -> int:
@@ -4357,11 +4528,14 @@ def _run_structural_rtl_gates(project: Path,
                 r.stdout, r.stderr,
                 supplied_flags=[a for a in argv if a.startswith("--")])
             if _why:
+                # The line's TEXT comes from _gate_invocation, which also owns
+                # every predicate that recognises it downstream. Inlining the
+                # f-string here is what let the reasons-list consumers drift
+                # from the producer and scrape this disclosure as a failing
+                # gate name (#492 follow-up).
                 return ("skip",
-                        f"{gate_name} "
-                        f"({_gate_invocation.NOT_INVOCABLE_SENTINEL}: "
-                        f"{_why} — this gate returned NO verdict; the umbrella "
-                        f"has not checked what it audits)")
+                        _gate_invocation.format_not_invocable_entry(
+                            gate_name, _why))
             return ("skip", gate_name)
         elif r.returncode == 1:
             _full_out = (r.stdout.strip() or r.stderr.strip())
@@ -7036,6 +7210,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ------------------------------------------------------------------
     structural_result: Optional[StepResult] = None
     structural_waivers: List[Dict[str, Any]] = []
+    # None = the P0 umbrella did not run in this invocation (stage 3/4), as
+    # distinct from "it ran and nothing passed". The audit JSON's
+    # passed_gate_count reads this rather than scraping reasons prose.
+    structural_passed_count: Optional[int] = None
     if args.stage not in (3, 4):
         s_passed, s_fails, s_skips, s_waivers = _run_structural_rtl_gates(
             project,
@@ -7060,65 +7238,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         # the run reported PASS over zero evidence. A clean sweep now emits an
         # explicit PASS with a positive reason line.
         #
-        # v0.119.41 Wave 9 — when ≥2 structural gates FAIL, surface
-        # a "Failed gates (N):" header so the operator sees each
-        # failing gate name + first-line message even when the
-        # composite verdict is one terse FAIL line. This addresses
-        # the v0.119.40 RESULT.md complaint that 10 distinct
-        # structural FAILs collapse into a single composite FAIL
-        # without operator-actionable detail.
-        failed_gate_lines: List[str] = []
-        if len(s_fails) >= 2:
-            failed_gate_lines.append(
-                f"Failed gates ({len(s_fails)}):")
-            for f_line in s_fails:
-                # Each entry is "FAIL: <gate_name> — <first_line>".
-                failed_gate_lines.append(f"  - {f_line[len('FAIL: '):]}"
-                                          if f_line.startswith("FAIL: ")
-                                          else f"  - {f_line}")
-        else:
-            failed_gate_lines.extend(s_fails)
-        # v1.6.97 (issue #29 Bugs 1+2) — surface thin-input waivers
-        # in the structural umbrella reasons so the operator can
-        # see exactly which gates were converted from FAIL to
-        # WAIVED via --allow-thin-input. Each waiver entry remains
-        # explicit (review_required: true; ticket id) — they are
-        # DEFERRED open work, not silent passes.
-        waiver_lines = [
-            (f"WAIVED-DEFERRED: {w['gate']} — thin-input "
-             f"(ticket={w['ticket']}, review_required=true): "
-             f"{w['first_line']}")
-            for w in s_waivers
-        ]
-        # #492 — separate the two populations that rc 2 used to merge. A gate
-        # that argument parsing rejected produced NO verdict; listing it under
-        # the same "SKIP:" heading as a gate that looked and found no input is
-        # what made 39 registered gates read as benign. They are counted and
-        # headed separately, so the umbrella can no longer imply it checked
-        # what those gates audit.
-        not_invoked = [s for s in s_skips
-                       if _gate_invocation.is_not_invocable_entry(s)]
-        plain_skips = [s for s in s_skips
-                       if not _gate_invocation.is_not_invocable_entry(s)]
-        not_invoked_lines: List[str] = []
-        if not_invoked:
-            not_invoked_lines.append(
-                f"NEVER VALIDLY INVOKED ({len(not_invoked)} of "
-                f"{len(_STRUCTURAL_RTL_GATES)} registered gates) — argument "
-                f"parsing rejected the umbrella's argv, so these gates "
-                f"returned no verdict and what they audit is UNCHECKED:")
-            not_invoked_lines += [f"  - {s}" for s in not_invoked]
-        reasons_combined = (failed_gate_lines
-                            + not_invoked_lines
-                            + [f"SKIP: {s}" for s in plain_skips]
-                            + waiver_lines)
-        if not reasons_combined:
-            # Clean sweep. Say so explicitly rather than emitting a
-            # reason-less PASS that reads like a step that did nothing.
-            reasons_combined = [
-                "every registered structural-RTL gate that dispatched "
-                "PASSED (0 FAIL / 0 SKIP / 0 WAIVED)"
-            ]
+        reasons_combined = _compose_p0_reasons(s_fails, s_skips, s_waivers)
+        structural_passed_count = _p0_passed_gate_count(
+            s_passed, s_fails, s_skips, s_waivers)
         # #447 — s_passed is None when NO checker executed (no RTL):
         # the umbrella reports SKIPPED-CONDITION, never PASS; a
         # pure-analog project's strict verdict is decided by the
@@ -7413,6 +7535,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         for r in results:
             if r.id == "P0" and r.status == "FAIL":
                 for reason in r.reasons:
+                    # #492 follow-up — the disclosure block's per-gate
+                    # bullets share the `- ` prefix with Form 2. Scraping
+                    # them here made every never-invoked gate a structural
+                    # FAIL line, and `structural_fail_lines` is what sets
+                    # `forced_fail` under the flags the one-shot runner
+                    # actually ships (`--phase 2 --strict-structural`) —
+                    # i.e. gates that never ran could force the verdict.
+                    if _gate_invocation.is_not_invocable_disclosure(
+                            reason.strip()):
+                        continue
                     line = None
                     if reason.startswith("FAIL: "):
                         line = reason[len("FAIL: "):]
@@ -7752,8 +7884,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 failed_gate_names.append(m.group(1))
                 seen.add(m.group(1))
 
-        passed_gate_count = sum(
-            1 for g in per_gate if g["verdict"] == "PASS")
+        # The umbrella's own accounting, not a scrape of its prose: a gate
+        # that PASSES contributes no reason line, so the old
+        # `sum(1 for g in per_gate if verdict == "PASS")` could only ever
+        # report 0. See _p0_passed_gate_count. Falls back to the scan when
+        # the umbrella did not run (stage 3/4), where 0 is the truth.
+        passed_gate_count = (
+            structural_passed_count if structural_passed_count is not None
+            else sum(1 for g in per_gate if g["verdict"] == "PASS"))
 
         # Detect missing required artifacts that drove FAILs (best-
         # effort, chip-AGNOSTIC). Mostly a hint for humans; the

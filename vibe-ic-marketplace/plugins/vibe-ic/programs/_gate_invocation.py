@@ -69,8 +69,13 @@ from typing import Iterable, Optional
 
 __all__ = [
     "NOT_INVOCABLE_SENTINEL",
+    "NOT_INVOCABLE_HEADING_SENTINEL",
     "classify_not_invocable",
+    "format_not_invocable_entry",
+    "format_not_invocable_heading",
     "is_not_invocable_entry",
+    "is_not_invocable_heading",
+    "is_not_invocable_disclosure",
 ]
 
 #: Prefix stamped onto the umbrella's report line for a gate that argument
@@ -78,6 +83,9 @@ __all__ = [
 #: "this gate found no input" from "this gate was never validly invoked"
 #: without re-deriving the classification.
 NOT_INVOCABLE_SENTINEL = "NOT INVOKED"
+
+#: Opening token of the heading the umbrella puts above the disclosure block.
+NOT_INVOCABLE_HEADING_SENTINEL = "NEVER VALIDLY INVOKED"
 
 # argparse's rejection protocol: a `usage:` block AND a `<prog>: error: ...`
 # line, both on stderr. Requiring BOTH is what keeps a gate that merely prints
@@ -129,11 +137,84 @@ def classify_not_invocable(
     return None
 
 
+# ── the disclosure block's vocabulary: written and read in ONE place ─────────
+#
+# WHY THE FORMATTERS LIVE HERE. The #492 disclosure is written by the P0
+# umbrella into ``StepResult.reasons`` and read back by four separate consumers
+# in ``flow_compliance_check`` that scrape that list line by line. When the
+# writer owned the format string and the readers owned their own idea of what a
+# disclosure looks like, the two drifted on day one: the readers had never been
+# told the shape existed, so every disclosure line was scraped as a FAILING
+# GATE NAME. Keeping ``format_*`` and ``is_*`` adjacent — and making the
+# umbrella call the formatters rather than inline an f-string — is what makes
+# that class of drift impossible: change the wording here and every recogniser
+# follows, because they are derived from the same tokens.
+#
+# The recognisers are ANCHORED rather than substring tests. A gate's own first
+# output line can contain any words at all, including these; anchoring on the
+# shape the formatter emits (`<gate_name> (NOT INVOKED:` at the start of the
+# line, after an optional report bullet) is what stops a GENUINE failure whose
+# message happens to mention the phrase from being silently dropped from the
+# failing-gate list. Dropping a real failure would be the same false-clean bug
+# in the opposite direction.
+
+#: Tail of a per-gate disclosure line. Shared by the formatter and by the
+#: end-to-end test that asserts the umbrella still explains itself.
+_ENTRY_TAIL = ("this gate returned NO verdict; the umbrella has not checked "
+               "what it audits")
+
+_ENTRY_RE = re.compile(
+    r"^\s*(?:[-*•]\s+)?[\w.]+\s+\("
+    + re.escape(NOT_INVOCABLE_SENTINEL) + r":")
+
+_HEADING_RE = re.compile(
+    r"^\s*(?:[-*•]\s+)?" + re.escape(NOT_INVOCABLE_HEADING_SENTINEL)
+    + r"\b")
+
+
+def format_not_invocable_entry(gate_name: str, why: str) -> str:
+    """The umbrella's report line for one never-validly-invoked gate.
+
+    ``why`` is the string ``classify_not_invocable`` returned — the callee's
+    own error text, which is the evidence for the claim.
+    """
+    return (f"{gate_name} ({NOT_INVOCABLE_SENTINEL}: {why} — "
+            f"{_ENTRY_TAIL})")
+
+
+def format_not_invocable_heading(n_not_invocable: int,
+                                 n_registered: int) -> str:
+    """The heading the umbrella puts above the disclosure block."""
+    return (f"{NOT_INVOCABLE_HEADING_SENTINEL} ({n_not_invocable} of "
+            f"{n_registered} registered gates) — argument parsing rejected "
+            f"the umbrella's argv, so these gates returned no verdict and "
+            f"what they audit is UNCHECKED:")
+
+
 def is_not_invocable_entry(entry: str) -> bool:
-    """True when a P0 umbrella skip line records a never-validly-invoked gate.
+    """True when a P0 umbrella report line records a never-validly-invoked gate.
 
     The umbrella keeps not-invocable gates in the same list as skips so the
     report shape and every existing consumer stay intact; this predicate is how
     a consumer separates the two populations without re-parsing prose.
+
+    Tolerates the leading ``  - `` bullet the reasons-list composition adds, so
+    the same predicate works on the raw skip payload AND on the composed reason
+    line — the two places this has to be recognised.
     """
-    return NOT_INVOCABLE_SENTINEL in (entry or "")
+    return bool(_ENTRY_RE.match(entry or ""))
+
+
+def is_not_invocable_heading(entry: str) -> bool:
+    """True for the heading line that introduces the disclosure block."""
+    return bool(_HEADING_RE.match(entry or ""))
+
+
+def is_not_invocable_disclosure(entry: str) -> bool:
+    """True for ANY line of the disclosure block — heading or per-gate entry.
+
+    This is the predicate a reasons-list consumer wants. A disclosure line is
+    not a verdict: the gate it names produced none. Treating it as one is what
+    turned 37 unrun gates into 37 reported failures.
+    """
+    return is_not_invocable_entry(entry) or is_not_invocable_heading(entry)
