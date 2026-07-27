@@ -248,6 +248,34 @@ steps:
         # condition is stated in the program's own docstring and is a
         # re-measurement, not a judgement call.
         - advisory_program_exit_zero: "cross_layer_reference_check ."
+        # ── wire/misc, 2026-07-27 — the two L-doc gates the phase1-output-verify
+        # SKILL declares as its own checklist items 1 and 3, and which ran
+        # NOWHERE but their own unit test: they are absent from
+        # `phase1_verify_aggregate.BACKING_CHECKS` and from this flow, so the
+        # only thing that could run them was an agent choosing to read a skill.
+        #
+        # BLOCKING. `l_doc_todo_stub_count_check` counts `__TODO__` across every
+        # emitted L doc and FAILs on count>0 (rc=1); rc=2 VACUOUS_PASSes when
+        # generated_docs is absent. A phase-1 output carrying `__TODO__` stubs is
+        # a HALF-EXTRACTED spec that every downstream layer then consumes as if
+        # it were complete, and nothing else in the plugin counts them. Measured
+        # before wiring on all 9 real projects with generated_docs (the 8
+        # published cells + the completed converge_ihp-sg13g2 run): rc=0 on 9/9,
+        # 24-28 docs scanned each, total___TODO__=0 — a real judgement, zero
+        # false positives, so it can carry a blocking severity honestly.
+        - program_exit_zero: "l_doc_todo_stub_count_check ."
+        # ADVISORY, for exactly the l17 / cross_layer_reference_check reason
+        # stated above. `l_doc_cross_consistency_check` enforces two structural
+        # set-membership relations (L1.pin_table ⊆ L9.ports, L11.otp_bytes ⊆
+        # L4.otp_layout) that no other program checks, and it has a real rc=1.
+        # But measured on the same 9 projects it returns rc=1 on 7 of 8 published
+        # cells — and the violations are PRODUCER-side extraction noise common to
+        # the corpus (`set_input_delay` / `set_output_delay` / `sky130_fd_sc_hd`
+        # arrive in L1.pin_table as if they were pins). BLOCKING would fail
+        # ~90% of runs on a defect in the L1 extractor, not in the design, so it
+        # is wired advisory: the finding becomes visible on every run and the
+        # promotion condition is a re-measurement after the extractor is fixed.
+        - advisory_program_exit_zero: "l_doc_cross_consistency_check ."
     blocks_on: []
 
   - id: 1
@@ -1186,6 +1214,7 @@ steps:
     skills: [placement-optimize]
     programs:
       - placement_legality_check
+      - pnr_timing_repair_completeness_check
     mcp_tools: [eda_pnr]
     required_outputs:
       - "phase3/stage3/pnr/placed.def"
@@ -1193,6 +1222,29 @@ steps:
       all_of:
         - files_exist: ["phase3/stage3/pnr/placed.def"]
         - program_exit_zero: "placement_legality_check . --json reports/phase3/placement_legality.json"
+        # ── wire/misc, 2026-07-27 — the setup-timing-repair chain audit.
+        # `pnr_timing_repair_completeness_check` FAILs any OpenROAD PnR Tcl that
+        # runs `repair_timing -hold` WITHOUT `set_wire_rc` + `repair_design` +
+        # `repair_timing -setup`. That is the sha256 silicon-DOA shape: STA is
+        # optimistic without per-layer R/C, setup is never repaired, and the
+        # design ships with a negative WNS nobody measured (benchmark_clean/sha256
+        # v0.1.25 post-route WNS = -102.76 ns; +10.95 ns MET on the same RTL once
+        # the chain was added). Nothing else in the plugin audits it — its skill
+        # (sta-review) named it as "the static gate" but no machine ran it.
+        # Step 17 owns it because `repair_design` + `repair_timing -setup` are
+        # the placement-phase work in the runner's own pnr.tcl (lines 307/310,
+        # immediately before clock_tree_synthesis); Step 20 owns only the
+        # post-CTS `repair_timing -hold`.
+        # BLOCKING, conditioned on the script existing — the runner writes
+        # phase3/stage3/pnr/pnr.tcl at a fixed path and a project that never
+        # reached PnR is silently N/A. Verified against the real completed run
+        # converge_ihp-sg13g2: rc=0, "setup_chain=yes; hold=yes;
+        # missing_required=none" — the runner's emitted chain already passes,
+        # so this costs a healthy run nothing and only catches a hand-authored
+        # or regressed template.
+        - optional_program_exit_zero:
+            command: "pnr_timing_repair_completeness_check phase3/stage3/pnr/pnr.tcl --json reports/phase3/pnr/timing_repair_completeness.json"
+            condition_files_exist: ["phase3/stage3/pnr/pnr.tcl"]
     blocks_on: [16]
 
   # ── Step 18: Spare-cell + ECO-prep insertion (Design-for-ECO) ──
@@ -1774,6 +1826,7 @@ steps:
     skills: [tapeout-checklist]
     programs:
       - tapeout_signoff_check
+      - agent_report_presence_check
     required_outputs:
       - "reports/audit/tapeout_checklist.json"
     # #651 — `tapeout_signoff_check` (= signoff_audit --mode tapeout) carries
@@ -1785,7 +1838,33 @@ steps:
     # Overall: PASS_WITH_WAIVERS and never collapses onto a bare PASS
     # (CLAUDE.md rule 11).
     gate:
-      program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
+      # all_of (was a bare program_exit_zero) so the advisory report-card slot
+      # below can be wired at all. The rc-3 PASS_WITH_WAIVERS promotion is
+      # unaffected: `_evaluate_gate`'s all_of branch forwards a sub-gate's
+      # `__WAIVER_HINT__` upward exactly as the bare slot did.
+      all_of:
+        - program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
+        # ── wire/misc, 2026-07-27 — ADVISORY report-card presence.
+        # `agent_report_presence_check` is the declared OWNER of a failure mode
+        # the WIRED `agent_report_sha256_attestation_check` deliberately
+        # VACUOUS_PASSes on ("AGENT_REPORT.md missing — agent_report_presence_
+        # check owns that failure mode", that program's :58 and :257). Nothing
+        # invoked the owner, so "no report card at all" was the one report defect
+        # the sign-off could not see.
+        # ADVISORY, and the severity is the honest one rather than the flattering
+        # one: this gate accepts ONLY `AGENT_REPORT.md`, while the flow's own
+        # canonical auto-generated report is `reports/final_summary.md` (see
+        # `agent_report_sha256_attestation_check._REPORT_CANDIDATE_REL_PATHS`,
+        # which lists AGENT_REPORT.md as the *back-compat hand-authored*
+        # alternative). Measured before wiring: rc=1 on 9/9 real projects — the 8
+        # published cells AND the completed converge_ihp-sg13g2 run, which ships
+        # a 12 KB reports/final_summary.md. Wired BLOCKING it would fail 100% of
+        # runs on a filename the flow never writes; that is a defect in the
+        # gate's candidate list, not in any run, and weakening the gate to hide
+        # it would be worse. Advisory records it on every run instead. Promotion
+        # condition: teach this gate the canonical `reports/final_summary.md`
+        # path (or have the runner emit AGENT_REPORT.md), then re-measure.
+        - advisory_program_exit_zero: "agent_report_presence_check ."
     blocks_on: [31, 32, 33, 34]
 
   - id: 37
@@ -1820,6 +1899,7 @@ steps:
     skills: [tapeout-checklist]
     programs:
       - foundry_handoff_package_check
+      - foundry_signoff_plan_check
     required_outputs:
       - "phase3/stage4/foundry_handoff/mask_spec.json"
       - "phase3/stage4/foundry_handoff/wat_plan.json"
@@ -1834,7 +1914,30 @@ steps:
       - "phase3/stage4/foundry_handoff/corner_test_vectors.json"
       - "reports/phase3/foundry_handoff_audit.json"
     gate:
-      program_exit_zero: "foundry_handoff_package_check . --json reports/phase3/foundry_handoff_audit.json"
+      all_of:
+        - program_exit_zero: "foundry_handoff_package_check . --json reports/phase3/foundry_handoff_audit.json"
+        # ── wire/misc, 2026-07-27 — per-waiver foundry closure plan.
+        # `foundry_signoff_plan_check` requires that a project carrying root
+        # waivers also ships `foundry_signoff_plan.{yaml,yml,json}` naming, for
+        # EACH waiver, who closes it, with what tool, on what input, producing
+        # what proof, against what acceptance criterion. Three sibling waiver
+        # gates are already wired (waiver_staleness_check, waiver_legitimacy_
+        # check, waivers_schema_check) and `klayout_deck_mode_check` even points
+        # its remediation text at this program (:165) — but nothing ran it, so
+        # "deferred to foundry tapeout review" was an incantation with no named
+        # owner. Step 38 owns it: the closure plan is a FOUNDRY deliverable
+        # (Step 36 is the internal checklist).
+        # BLOCKING, conditioned on waivers.json existing; the program itself
+        # returns rc=0 "(skip — no waivers)" for a project with none. Measured
+        # before wiring on 9 real projects: it fires ONLY where waivers actually
+        # exist — 8/9 published cells rc=0, edge_llm_accel rc=1 (3 root waivers,
+        # no plan), and the completed converge_ihp-sg13g2 run rc=1 (2 root
+        # waivers, no plan). Wiring it turns that run's Step 38 PASS -> FAIL;
+        # that FAIL is correct — the two waivers are review_required=true
+        # deferred work with no documented closure owner.
+        - optional_program_exit_zero:
+            command: "foundry_signoff_plan_check . --json reports/phase3/foundry_signoff_plan.json"
+            condition_files_exist: ["waivers.json"]
     blocks_on: [37]
     notes: |
       Final foundry-deliverable kit: mask reticle spec, WAT

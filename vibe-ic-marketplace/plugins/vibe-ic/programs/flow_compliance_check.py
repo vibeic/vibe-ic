@@ -385,6 +385,58 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # older than 180 days ERROR. Forces stale waivers to be closed
     # or re-justified.
     "waiver_staleness_check",
+    # ── wire/misc, 2026-07-27 ────────────────────────────────────────
+    # The FOURTH waiver checker. `waiver_staleness_check` (above),
+    # `waiver_legitimacy_check` and `waivers_schema_check` were all
+    # already wired into this file; `waiver_growth_check` — the one
+    # that answers "did deferred work GROW this release, and was that
+    # growth stated?" — was the only one nothing but its own unit test
+    # ever ran. It reads waivers.json + the frozen
+    # `.vibe-ic-state/waivers_baseline.json`, ERRORs when the root
+    # waiver count grew past --tolerance (default 0) with no top-level
+    # `growth_rationale`, and also ERRORs on waivers older than 180
+    # days. Read-only (it only writes under --json, which this
+    # umbrella never passes). Measured before wiring on 9 real
+    # projects: it fires ONLY where waivers exist — 8/9 published
+    # cells rc=0 ("0 root waivers"), edge_llm_accel rc=1 (3), and the
+    # completed converge_ihp-sg13g2 run rc=1 (2 new, tolerance 0,
+    # no rationale). The failure is satisfiable by disclosure, which
+    # is the whole point: growth must be a stated decision.
+    "waiver_growth_check",
+    # ── wire/misc, 2026-07-27 ────────────────────────────────────────
+    # Anti-fabrication, figure level. `run_output_completeness_check`
+    # (wired, named in 4 skills) answers "is there a deliverable at
+    # all?"; NOTHING answered "does each number the deliverable
+    # PUBLISHES resolve to an artifact in this run dir?" — the exact
+    # 2026-07-21 defect where a ledger published a GDS byte count that
+    # matched no file and figures silently imported from a sibling run
+    # dir. This gate re-derives every recognised figure (exact byte
+    # sizes, DRC/violation counts, DRC/LVS/LEC/STA verdict tokens) from
+    # disk, and names an IMPORTED figure by BOTH paths. rc=0 with 0
+    # reports found, so a pre-report project is silently N/A.
+    # Measured before wiring: rc=0 on the completed converge_ihp-sg13g2
+    # run (14/14 figures backed, 1.0 s including the sibling scan);
+    # rc=1 on a fixture whose RESULT.md claims a fabricated
+    # `4,242,424 bytes`; rc=1 on 3 of 9 published cells, each a REAL
+    # unbacked figure (caravel_user_project publishes GDS
+    # `92,967,798 B` for phase3/stage4/gds/user_project_wrapper.gds,
+    # a path that does not exist in the published tree).
+    "reported_figure_artifact_backing_check",
+    # ── wire/misc, 2026-07-27 ────────────────────────────────────────
+    # FPGA LED-probe anti-patterns. Sibling of the already-registered
+    # `fpga_async_input_synchronizer_check` (both come from
+    # skills/fpga-led-probe-allocation), but this one ran nowhere. It
+    # flags four DETERMINISTIC structural mistakes in an emitted FPGA
+    # top — instantaneous LED on a 1-cycle pulse, a sticky latch with
+    # no reset clear, an LED bit with no matching QSF pin assignment,
+    # and >=2 probe modes with no LED PROBE TABLE — each of which makes
+    # a board photo LIE about whether a test stage ran. Recurses the
+    # project for .v/.sv and is a no-op (modes=[]) on a design with no
+    # LED probes. Measured before wiring on 9 published cells + the
+    # completed converge_ihp-sg13g2 run: rc=0 on 8 (4-59 files scanned
+    # each, zero findings), rc=2 (=SKIP here) on 2 whose published tree
+    # has a dangling netlist.v symlink. No false FAIL anywhere.
+    "fpga_led_probe_lint",
     # v0.118 / BACKLOG-v10 P2.3: per-step provenance hash audit.
     # Program shipped in v0.114 but was never wired into the audit
     # runner. Verifies PASS-verdict gate reports' output_files exist
@@ -2103,6 +2155,65 @@ def _run_yosys_gates(project: Path) -> tuple[bool, List[str]]:
     else:
         reasons.append(
             "FAIL: yosys_script_template_check.py not found in "
+            "programs/ — plugin install may be incomplete."
+        )
+
+    # --- yosys_tiecell_recipe_order_check: v0.1.98 ordering rules ---------
+    # wire/misc, 2026-07-27. skills/synth-doctor/SKILL.md:157 says the two
+    # tie-cell ORDERING rules are "enforced deterministically by
+    # programs/yosys_tiecell_recipe_order_check.py" and SKILL.md:170 says to
+    # run it alongside yosys_hilomap_required_check — but only the latter had
+    # a machine caller (right above). So the plugin enforced that `hilomap` is
+    # PRESENT and never that the recipe around it is ORDERED, which is the
+    # difference between a netlist that routes and one that does not:
+    #   RULE 1  `setundef -zero` must precede `hilomap` (else don't-care 1'hx
+    #           bits survive as bare zero_/x nets -> TritonRoute DRT-0305);
+    #   RULE 2  no `opt_clean` / `clean -purge` after `hilomap` (they DELETE
+    #           the just-inserted tie cells; measured on the HDLC pilot:
+    #           `hilomap; opt_clean` left 0 surviving tie cells and DRT-0305
+    #           fired, `setundef -zero; hilomap; splitnets; clean` kept all
+    #           1780 conb_1 cells and PnR ran clean).
+    # Verified no overlap: `grep -n 'setundef|opt_clean|clean -purge'
+    # yosys_hilomap_required_check.py` -> 0 hits.
+    # BLOCKING, same severity and same `--ys-file` invocation shape as its
+    # declared complement above. Self-limiting: the program returns rc=0 with
+    # "SKIP — not a real-PDK synth script" when the file issues no
+    # dfflibmap/abc/synth command, and rc=0 "SKIP_NO_HILOMAP" when there is no
+    # hilomap to order (that absence is the sibling gate's business, not this
+    # one's). Verified read-only against 4 real .ys files from the completed
+    # converge_ihp-sg13g2 run — all rc=0 SKIP, no false fire.
+    tiecell_prog = PROGRAMS_DIR / "yosys_tiecell_recipe_order_check.py"
+    if tiecell_prog.exists():
+        try:
+            r3 = subprocess.run(
+                [sys.executable, str(tiecell_prog),
+                 "--ys-file", str(ys_path)],
+                capture_output=True, text=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            reasons.append(
+                f"FAIL: yosys_tiecell_recipe_order_check timed out on "
+                f"{ys_rel} — cannot verify the setundef/hilomap/opt_clean "
+                f"ordering, so PnR is unsafe. Re-run the check manually."
+            )
+        else:
+            if r3.returncode != 0:
+                reasons.append(
+                    f"FAIL: yosys_tiecell_recipe_order_check failed — the "
+                    f"tie-cell recipe in {ys_rel} is MIS-ORDERED. `setundef "
+                    f"-zero` must run BEFORE `hilomap`, and `opt_clean` / "
+                    f"`clean -purge` must NOT run after it (they strip the "
+                    f"tie cells). Either way OpenROAD detailed_route hits "
+                    f"DRT-0305 on a bare constant net."
+                )
+                snippet = (r3.stdout.strip() + "\n"
+                           + r3.stderr.strip()).strip()
+                if snippet:
+                    reasons.append(f"    auditor output: "
+                                   f"{snippet.splitlines()[0][:200]}")
+    else:
+        reasons.append(
+            "FAIL: yosys_tiecell_recipe_order_check.py not found in "
             "programs/ — plugin install may be incomplete."
         )
 

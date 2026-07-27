@@ -130,6 +130,35 @@ DISCLOSURE_SUFFIXES = ("_not_run.json", "_skipped.json", "_not_run.flag")
 # (step_id, program_or_None, frozenset(condition paths)) -> justification.
 # `program` is None for a step-level condition.
 ALLOWLIST: dict[tuple, str] = {
+    ("17", "pnr_timing_repair_completeness_check",
+     "phase3/stage3/pnr/pnr.tcl"):
+        "The trigger IS the subject whose CONTENT is judged, not a result "
+        "whose absence is the defect — the same shape as the rtl_bugs.json "
+        "entry below. The failure mode this gate exists for is a PnR script "
+        "that repairs hold and never setup (missing set_wire_rc / "
+        "repair_design / repair_timing -setup); a script in that state still "
+        "EXISTS, so the condition is true in exactly the scenario the gate was "
+        "written for. Absence means the flow drove placement through something "
+        "other than an OpenROAD Tcl (Cadence Innovus, a vendor placer), and "
+        "there is then no script to audit — while Step 17's own hard "
+        "`files_exist: [phase3/stage3/pnr/placed.def]` still requires the "
+        "placement result itself, so nothing about the step goes unjudged. "
+        "The alternative — running unconditionally — is strictly WORSE: a "
+        "missing script makes the program exit 2, which promotes a real "
+        "placement PASS to VACUOUS-PASS and mislabels the step's verdict.",
+    ("38", "foundry_signoff_plan_check",
+     "waivers.json"):
+        "Absence of `waivers.json` cannot hide this gate's defect, because it "
+        "is the SAME file the flow reads to apply waivers at all "
+        "(flow_compliance_check.py:5088). No waivers.json means nothing was "
+        "waived, every step was judged on its natural verdict, and there is no "
+        "deferred work for a closure plan to cover — which is why the program "
+        "itself reports `[PASS] foundry_signoff_plan_check (skip — no "
+        "waivers)`. The failure mode is `N root waivers and no documented "
+        "closure owner/tool/proof`, and that requires the waivers to exist. "
+        "The condition is retained rather than dropped so a pre-tapeout "
+        "project that has legitimately not yet authored a plan is not FAILed "
+        "at Step 38 before it has any handoff package to plan for.",
     ("2", "rtl_bug_report_schema_check",
      "reports/phase2/rtl_bugs.json"):
         "The subject is a CLAIM file, not a result. This gate validates the "

@@ -144,12 +144,24 @@ def test_optional_predicate_missing_condition_fails(tmp_path):
 # ---------------------------------------------------------------------------
 # v0.70 Item 1: Pre-PnR Yosys auditor gate.
 # ---------------------------------------------------------------------------
+# wire/misc, 2026-07-27 — `setundef -zero` added.
+# This fixture is what the Step-14 gate calls WELL-FORMED, and it was not.
+# It carries a `synth` command and a `hilomap` with no `setundef -zero` in
+# front of it, which the v0.1.98 tie-cell doctrine (skills/synth-doctor
+# SKILL.md:157) says ships an UNROUTABLE netlist: don't-care `1'hx` bits
+# survive hilomap as bare `zero_` nets and TritonRoute rejects them with
+# DRT-0305. `yosys_tiecell_recipe_order_check` has enforced exactly that since
+# v0.1.98 — it just had no machine caller, so this fixture could assert a
+# clean bill for a script the plugin's own doctrine calls broken. Wiring the
+# checker into `_run_yosys_gates` made the fixture's claim testable, and it
+# failed. The repair is the fixture, not the checker.
 _GOOD_YS = """\
 read_verilog -sv rtl/top.sv
 hierarchy -check -top top
 proc; opt; fsm; opt
 memory; opt
 techmap
+setundef -zero
 hilomap -hicell TIEHI Y -locell TIELO Y
 synth -flatten
 write_verilog synth/netlist.v

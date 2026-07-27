@@ -1,6 +1,6 @@
 {
   "_comment": "Checkers that NOTHING but their own unit test ever runs (vibe-ic#381). MAY ONLY SHRINK \u2014 each entry is a checker with zero coverage of real inputs. `triage` records why an entry is still here; the wrong repair is to delete the test so the entry disappears.",
-  "previous_size": 32,
+  "previous_size": 31,
   "scope_expanded": null,
   "known": [
     "analog_adc_enob_corner_check.py",
@@ -26,14 +26,12 @@
     "phase23_completion_self_audit_check.py",
     "pnr_via_stack_completeness_check.py",
     "protocol_turnaround_audit.py",
-    "reported_figure_artifact_backing_check.py",
     "rtl_signal_name_semantic_check.py",
     "rtl_unit_test_coverage_check.py",
     "skill_doc_section_present_check.py",
     "spec_rtl_port_fidelity_check.py",
     "synth_wrapper_check.py",
-    "verilator_timing_fallback_check.py",
-    "waiver_growth_check.py"
+    "verilator_timing_fallback_check.py"
   ],
   "triage": {
     "analog_adc_enob_corner_check.py": "rc=2 SKIPs / refuses without its input \u2014 analog_adc_enob_corner_check.py: error: the following arguments are required: project_dir",
@@ -59,13 +57,11 @@
     "phase23_completion_self_audit_check.py": "rc=2 SKIPs / refuses without its input \u2014 phase23_completion_self_audit_check.py: error: the following arguments are required: project_dir",
     "pnr_via_stack_completeness_check.py": "rc=2 SKIPs / refuses without its input \u2014 project_dir",
     "protocol_turnaround_audit.py": "rc=2 SKIPs / refuses without its input \u2014 --clock-period-ns CLOCK_PERIOD_NS",
-    "reported_figure_artifact_backing_check.py": "rc=2 SKIPs / refuses without its input \u2014 [--section SECTION]",
     "rtl_signal_name_semantic_check.py": "rc=2 SKIPs / refuses without its input \u2014 rtl",
     "rtl_unit_test_coverage_check.py": "rc=2 SKIPs / refuses without its input \u2014 [--sim-dir SIM_DIR] [--json JSON]",
     "skill_doc_section_present_check.py": "rc=2 SKIPs / refuses without its input \u2014 [--json JSON]",
     "spec_rtl_port_fidelity_check.py": "rc=2 SKIPs / refuses without its input \u2014 spec_rtl_port_fidelity_check: FAIL \u2014 no RTL files found",
     "synth_wrapper_check.py": "rc=1 FAILs with no design to judge \u2014 [ERROR] NO_WRAPPER: No *wrapper*.v or *wrapper*.sv files found, but design has inout ports",
-    "verilator_timing_fallback_check.py": "rc=2 SKIPs / refuses without its input \u2014 --tb-top TB_TOP --dut-name DUT_NAME",
-    "waiver_growth_check.py": "rc=2 SKIPs / refuses without its input \u2014 [--tolerance TOLERANCE]"
+    "verilator_timing_fallback_check.py": "rc=2 SKIPs / refuses without its input \u2014 --tb-top TB_TOP --dut-name DUT_NAME"
   }
 }
