@@ -396,11 +396,39 @@ def _native_model_include_ok(text: str, rel_path: str, native_libset: Set[str],
     return False
 
 
+def _analog_roots(project: Path) -> list:
+    """Every analog root this audit must read.
+
+    `_pl.analog_dir` is the CANONICAL root (`phase3/analog/`) — where the
+    analog runner writes every block artefact. But `_path_layout` also splits
+    the layout by phase (`phase2_analog_block_dir` == `phase2/analog/`, "A2-A4
+    analog frontend") and `flow/phase1_phase2_phase3.yaml` declares A3's
+    required_output as `phase2/analog/*/*.sp` — the very files this gate is
+    wired to judge. Reading only `phase3/analog/` meant a project laid out
+    exactly as its own flow declares (or migrated by `migrate_to_layout_p.py`)
+    returned SKIP_NO_ANALOG_DIR / SKIP_NO_SP_FILES with `passed=True`: the A3
+    gate of record certified the step having opened no file at all.
+    chip-AGNOSTIC: pure path resolution, no chip / vendor literal."""
+    roots = [_pl.analog_dir(project),
+             project / "phase2/analog",
+             project / "phase1/analog"]
+    seen: set = set()
+    out = []
+    for r in roots:
+        key = str(r)
+        if key in seen:
+            continue
+        seen.add(key)
+        if r.is_dir():
+            out.append(r)
+    return out
+
+
 def run_audit(project: Path) -> AuditResult:
     result = AuditResult()
 
-    analog_dir = _pl.analog_dir(project)
-    if not analog_dir.is_dir():
+    analog_roots = _analog_roots(project)
+    if not analog_roots:
         result.findings.append(Finding(
             rule="SKIP_NO_ANALOG_DIR",
             severity="INFO",
@@ -409,7 +437,15 @@ def run_audit(project: Path) -> AuditResult:
         result.summary = {"skipped": True, "reason": "no_analog_dir"}
         return result
 
-    sp_files = sorted(analog_dir.rglob("*.sp"))
+    sp_seen: set = set()
+    sp_files = []
+    for root in analog_roots:
+        for sp in sorted(root.rglob("*.sp")):
+            key = str(sp.resolve())
+            if key in sp_seen:
+                continue
+            sp_seen.add(key)
+            sp_files.append(sp)
 
     if not sp_files:
         result.findings.append(Finding(

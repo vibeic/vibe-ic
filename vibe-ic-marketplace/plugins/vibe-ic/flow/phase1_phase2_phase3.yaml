@@ -983,6 +983,15 @@ steps:
       all_of:
         - files_exist: ["phase2/analog/*/*.sp"]
         - program_exit_zero: "analog_netlist_pdk_check . --json reports/phase2/gates/analog_netlist_pdk.json"
+        # `analog_netlist_pdk_check` judges MODEL INCLUDES + BODY CONNECTIONS
+        # by iterating device cards, so a `.subckt` shell with ZERO devices
+        # gives it nothing to find and it emits NETLIST_PDK_OK. The A3
+        # substance gate owns the complementary question — does the deck
+        # instantiate a circuit at all, and does every DECLARED block have a
+        # netlist — and it was never invoked by any step. Wire it here,
+        # unconditionally: A3 must not be certifiable by a program that
+        # measured nothing.
+        - program_exit_zero: "analog_a3_netlist_gen_check . --json reports/analog/a3_netlist.json"
     blocks_on: [A2]
 
   - id: A4

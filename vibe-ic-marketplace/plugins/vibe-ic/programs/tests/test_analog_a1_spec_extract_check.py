@@ -6,7 +6,7 @@ Five cases for the A1 deterministic gate:
   3. spec.json missing for a block                        VACUOUS_PASS (project) /
                                                            rc=2 WAIVED (--block)
   4. spec.json present but empty {}                       FAIL
-  5. multi-block, one block has no spec.json              PASS (mixed)
+  5. multi-block, one block has no spec.json              INCOMPLETE (rc=1)
   6. no analog_block_list.json                            VACUOUS_PASS
   7. spec.json invalid JSON                               FAIL
 """
@@ -88,18 +88,32 @@ def test_empty_spec_fails(tmp_path: Path) -> None:
     assert any("A1_SPEC_EMPTY" in f["rule"] for f in rpt["findings"])
 
 
-def test_multiblock_one_missing_still_passes(tmp_path: Path) -> None:
-    """Project mode: one block has spec, one doesn't → still PASS
-    (the missing block is deferred via the --block runner path)."""
+def test_multiblock_one_missing_is_incomplete(tmp_path: Path) -> None:
+    """Project mode: one block has spec, one doesn't → INCOMPLETE (rc=1).
+
+    CORRECTED TEST. This case used to be named
+    `test_multiblock_one_missing_still_passes` and asserted
+    `returncode == 0` / `verdict == "PASS"` — it encoded the very defect
+    the gate was written to prevent. Its docstring justified the PASS by
+    saying "the missing block is deferred via the --block runner path",
+    but nothing in project mode defers anything: `flow_compliance_check`
+    invokes this gate WITHOUT `--block` and reads only its exit code, so
+    the rc=0 certified A1 done while `bandgap` had produced no spec at
+    all. The assertion is not relaxed here — it is inverted to the
+    behaviour the gate must have.
+    """
     _block_list(tmp_path, ["ldo", "bandgap"])
     _spec(tmp_path, "ldo", {"specs": [
         {"name": "vout", "typ": 1.8}]})
     r = _run(tmp_path)
-    assert r.returncode == 0, r.stderr
+    assert r.returncode == 1, (r.stdout, r.stderr)
     rpt = json.loads((tmp_path / "report.json").read_text())
-    assert rpt["verdict"] == "PASS"
+    assert rpt["verdict"] == "INCOMPLETE"
     assert rpt["blocks_pass"] == 1
     assert rpt["blocks_missing"] == 1
+    assert rpt["incomplete_blocks"] == ["bandgap"]
+    # The uncovered block must be NAMED, not merely counted.
+    assert "bandgap" in r.stderr
 
 
 def test_no_block_list_is_vacuous(tmp_path: Path) -> None:

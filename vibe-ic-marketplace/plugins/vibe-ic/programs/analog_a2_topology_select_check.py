@@ -25,6 +25,15 @@ Failure rules:
 
 VACUOUS_PASS when `analog/analog_block_list.json` is missing or empty.
 
+INCOMPLETE (rc=1) in project mode when SOME declared blocks have a
+topology.md and others have none: A2 cannot be certified done while a
+declared block has produced nothing. All blocks missing stays
+VACUOUS_PASS (defer to the skill).
+
+Artefact resolution: `phase3/analog/<block>/topology.md` (what the analog
+runner writes) OR `phase2/analog/<block>/topology.md` (what the flow
+declares as A2's required_output).
+
 Exit codes / CLI: see `analog_a1_spec_extract_check.py`.
 chip-AGNOSTIC — keyword panel is generic analog vocabulary.
 """
@@ -36,12 +45,14 @@ from typing import List, Optional
 
 from _analog_a_check_common import (
     load_block_list, select_blocks, make_argparser, vacuous_pass,
-    artefact_missing_for_block, emit_pass, emit_fail,
+    artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
+    resolve_block_artefact,
 )
 
 GATE = "analog_a2_topology_select_check"
 SKILL = "analog-topology-select"
 MIN_BYTES = 200
+DECLARED_PHASE = 2
 
 _PRIMITIVE_KEYWORDS_LC: tuple[str, ...] = (
     "pmos", "nmos", "transistor", "mirror", "cascode", "differential",
@@ -57,8 +68,9 @@ _PRIMITIVE_KEYWORDS_LC: tuple[str, ...] = (
 
 def _check_block(project: Path, block: str
                  ) -> tuple[Optional[str], List[dict]]:
-    path = project / "phase3" / "analog" / block / "topology.md"
-    if not path.is_file():
+    path, found = resolve_block_artefact(
+        project, block, "topology.md", DECLARED_PHASE)
+    if not found:
         return "MISSING", [{
             "block": block, "rule": "A2_TOPOLOGY_MISSING",
             "rel_path": str(path.relative_to(project)),
@@ -142,6 +154,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return vacuous_pass(GATE, args,
                             f"all {len(missing_seen)} block(s) missing "
                             f"topology.md; defer to skill `{SKILL}`.")
+    if missing_seen:
+        # Mixed PASS + missing. Until v1.7.36 this fell through to
+        # emit_pass, certifying A2 done on partial block coverage.
+        return emit_incomplete(GATE, args, missing_seen, summary, SKILL)
     return emit_pass(GATE, args, summary)
 
 
