@@ -1093,6 +1093,39 @@ steps:
         # stays legal (headless and CI analog runs must remain possible) but
         # stops being reported as an undifferentiated PASS.
         - program_exit_zero: "analog_a9_hw_verify_check . --json reports/phase2/gates/a9_hw_verify.json"
+        # ── The HIL half (hardware-in-the-loop tuning discipline) ──────────
+        # `analog-hw-tuning-loop` is one of A9's two declared skills, and its
+        # SKILL.md names four programs as the enforcers of its loop: the
+        # three-way verdict table, the report schema, the 3-iteration cap and
+        # the one-knob-per-iteration rule. All four exist, all four work, and
+        # until now the skill markdown was the ONLY file in the repo that
+        # mentioned any of them — nothing executed them, so every rule the loop
+        # documents was enforced by prose alone.
+        #
+        # All four are wired UNCONDITIONALLY (plain `program_exit_zero`, no
+        # `condition_files_exist`) on purpose: each one already SKIPs at rc=0
+        # when its input file is absent, so a condition would add nothing but a
+        # self-disabling predicate of exactly the shape
+        # flow_condition_reachability_check exists to make extinct. On a run
+        # with no bench data the cost is four rc=0 SKIPs.
+        #
+        # Order matters. The schema check runs FIRST so that a malformed
+        # hw_tuning_report.json is reported as the schema FAIL it is, rather
+        # than as the iteration-cap check's rc=2 (which this harness reads as
+        # the disclosed-skip/VACUOUS tier, not as a failure).
+        - program_exit_zero: "analog_hil_report_schema_check . --json reports/phase2/gates/hil_report_schema.json"
+        - program_exit_zero: "analog_hil_iteration_cap_check . --json reports/phase2/gates/hil_iteration_cap.json"
+        - program_exit_zero: "analog_hil_single_knob_check . --json reports/phase2/gates/hil_single_knob.json"
+        # The decision table itself. The wired `analog_hw_spice_correlation_check`
+        # above only bands the HW-vs-SPICE delta; it never computes SPICE-vs-Spec
+        # or HW-vs-Spec, so the CONVERGED / MODEL_INACCURACY / BACK_TO_PHASE1
+        # action the skill documents was decided by nothing deterministic.
+        # KNOWN LIMIT (disclosed, not weakened): when a metric declares no
+        # explicit spec_min/spec_max/tol_pct the program applies a symmetric
+        # ±5% band around `spec`, which mis-judges one-sided specs (a
+        # better-than-limit value reads as out of band). Report authors express
+        # one-sided specs with spec_min/spec_max.
+        - program_exit_zero: "analog_hil_three_way_verdict . --json reports/phase2/gates/hil_three_way.json"
     blocks_on: [A8]
 
   # ── Step 14 (Wave 91 / v1.6.15): pre-PnR Yosys gate ──────────────
