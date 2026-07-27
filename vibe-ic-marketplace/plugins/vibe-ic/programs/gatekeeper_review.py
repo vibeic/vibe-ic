@@ -491,13 +491,29 @@ def real_artefact_backing_gate(repo: Path, base: str, head: str) -> GateResult:
 # rc 0 one commit / rc 1 two or more, or zero (nothing landed). rc 2 means the
 # range could not be counted, which is reported as a skip rather than a pass —
 # an uncountable range has told us nothing.
+#
+# v1.7.64 — BATCH mode. The owner's standing directive is to land several PRs
+# under ONE version bump and ONE CI run, and this review had no way to say so:
+# every batch was blocked by a rule that does not apply to it, on a line whose
+# own remedy text named a `--batch` flag the review could not forward. A
+# reviewer who learns to read past one blocking line learns to read past
+# blocking lines, so the flag is plumbed through instead.
+#
+# `--batch` does NOT relax the check. The underlying program's batch mode
+# asserts a strictly stronger property than the single-landing rule: no
+# manifest-only commit anywhere in the range, exactly one version bump, and it
+# must be the tip — because CI runs on the pushed tip, so a version buried
+# mid-batch would mean green CI referring to a tree nobody released. It stays
+# OPT-IN: without the flag the single-landing rule is unchanged, so a real
+# `commit --amend` slip still fails exactly as before.
 # --------------------------------------------------------------------------
-def one_commit_gate(repo: Path, base: str) -> GateResult:
+def one_commit_gate(repo: Path, base: str, batch: bool = False) -> GateResult:
     prog = _PROGRAMS_DIR / "landing_is_one_commit_check.py"
     if not prog.is_file():
         return GateResult("landing_is_one_commit_check", 2,
                           f"checker missing at {prog}")
-    rc, out, err = _run_program(prog, [str(repo), "--base", base])
+    argv = [str(repo), "--base", base] + (["--batch"] if batch else [])
+    rc, out, err = _run_program(prog, argv)
     detail = (err or out).strip().splitlines()
     reason = detail[-1] if detail else "no output"
     if rc == 2:
@@ -707,7 +723,8 @@ def review(base: str, head: str, *,
            version_by_gatekeeper: bool = False,
            override_files: Optional[List[str]] = None,
            override_cur: Optional[str] = None,
-           override_prev: Optional[str] = None) -> Verdict:
+           override_prev: Optional[str] = None,
+           batch: bool = False) -> Verdict:
     """Run the deterministic gatekeeper and return a Verdict.
 
     `version_by_gatekeeper=True` is the AUTHORING-side review of a version-less
@@ -764,7 +781,7 @@ def review(base: str, head: str, *,
     # meaningful when head is the working HEAD (the gatekeeper's own pre-push
     # check); a synthetic head ref makes the range uncountable and the gate
     # reports a skip rather than a pass.
-    gates.append(one_commit_gate(repo, base))
+    gates.append(one_commit_gate(repo, base, batch=batch))
     gates.append(real_artefact_backing_gate(repo, base, head))
     gates.append(acceptance_control_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))
@@ -841,6 +858,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--changed-file", default=None,
                     help="override the diff with a file of changed paths "
                          "(one per line; for CI/test without a real range)")
+    ap.add_argument("--batch", action="store_true",
+                    help="this push lands SEVERAL PRs under one version bump "
+                         "and one CI run; check the batch's shape (no "
+                         "manifest-only commit, exactly one version bump, "
+                         "carried by the tip) instead of demanding one commit")
     ap.add_argument("--version-by-gatekeeper", action="store_true",
                     help="AUTHORING-side review of a version-less PR: DEFER the "
                          "version-bump gate when cur==prev (the gatekeeper "
@@ -878,7 +900,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                    commit_cmds=commit_cmds,
                    transcripts=args.transcripts, dataset=args.dataset,
                    version_by_gatekeeper=args.version_by_gatekeeper,
-                   override_files=override_files)
+                   override_files=override_files,
+                   batch=args.batch)
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
