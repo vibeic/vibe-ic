@@ -15,6 +15,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import l_doc_consumer_contract as C  # noqa: E402
@@ -207,3 +209,90 @@ def test_a_requirement_that_merely_CONTAINS_a_negation_survives():
     vocabulary is a closed list of normative-force disclaimers rather than
     negation in general."""
     assert len(_hits("| Setup slack | must not exceed 5 ns | sign-off gate |\n")) == 1
+
+
+# ── two consumers, two policies, one predicate ────────────────────────────
+# DISCARD is the right policy for a GATE ("is my layer missing a stated
+# requirement?") and the wrong one for an EMITTER ("what did the design
+# DECLARE?"). An emitter that inherits the discard loses a declared goal
+# and its layer reads as having none — this repo's false-certificate class.
+# `include_non_normative` splits the POLICY while keeping the PREDICATE
+# shared, which is what stops the two from drifting apart.
+
+def _hits_opt(doc: str):
+    import re as _re
+    from pathlib import Path as _P
+    import l_doc_consumer_contract as _L
+    return _L.framed_hits([(_P("x.md"), doc)],
+                          _re.compile(r"coverage|slack"),
+                          include_non_normative=True)
+
+
+def test_opt_in_retains_the_disclaimed_row_and_flags_it():
+    hits = _hits_opt(_INFORMATIONAL_ROW)
+    assert len(hits) == 1, (
+        "a row the design DECLARED was unavailable to an emitter: %r" % hits)
+    assert hits[0]["non_normative"] is True, hits
+    assert "informational" in hits[0]["line_text"].lower(), hits
+
+
+def test_opt_in_still_marks_an_undisclaimed_row_normative():
+    hits = _hits_opt(_REAL_ROW)
+    assert len(hits) == 1 and hits[0]["non_normative"] is False, hits
+
+
+def test_the_flag_is_scoped_to_the_row_not_the_neighbourhood():
+    """Same rule as the discard: a document disclaims the row it is on.
+
+    The rows are padded so their +/-160-char windows differ. `framed_hits`
+    deduplicates by context, so two SHORT adjacent rows share one window
+    and collapse to a single hit — a real and SEPARATE limitation of the
+    dedup key, deliberately not exercised here so this test measures the
+    flag's scope and nothing else.
+    """
+    pad = " | " + "note " * 40
+    hits = _hits_opt(_INFORMATIONAL_ROW.rstrip("\n") + pad + "\n"
+                     + _REAL_ROW.rstrip("\n") + pad + "\n")
+    assert len(hits) == 2, hits
+    by_flag = sorted(h["non_normative"] for h in hits)
+    assert by_flag == [False, True], (
+        "the disclaimer bled across rows: %r" % hits)
+
+
+def test_the_default_record_shape_is_unchanged_for_gates():
+    """Every gate embeds these records verbatim in its report JSON, so the
+    opt-in must not add keys on the default path."""
+    plain = _hits(_REAL_ROW)
+    assert len(plain) == 1
+    assert set(plain[0]) == {"source", "line", "match", "context"}, plain[0]
+    assert "non_normative" not in plain[0]
+
+
+@pytest.mark.parametrize("line,want", [
+    ("| Toggle coverage | >= 95% | informational |", "informational"),
+    ("| Toggle coverage | >= 95% | not a sign-off gate |", "not a sign-off gate"),
+    ("| Toggle coverage | >= 95% | advisory |", "advisory"),
+    ("| Toggle coverage | >= 95% | 資訊性 |", "資訊性"),
+    ("| Toggle coverage | >= 95% | 非簽核 |", "非簽核"),
+    ("| Toggle coverage | >= 95% | sign-off gate |", None),
+    ("| Setup slack | must not exceed 5 ns | sign-off |", None),
+    ("", None),
+])
+def test_signoff_qualifier_names_the_phrase_or_returns_none(line, want):
+    """It returns the PHRASE, not a bool: a consumer records WHY a target is
+    non-blocking so a human can audit the call instead of trusting a flag."""
+    got = C.signoff_qualifier(line)
+    if want is None:
+        assert got is None, got
+    else:
+        assert got is not None and got.lower() == want.lower(), got
+
+
+def test_the_soft_vocabulary_never_widens_what_a_gate_discards():
+    """`advisory` alone marks a target non-blocking but must NOT delete the
+    row from a gate's evidence — it is an ordinary noun often enough that
+    discarding on it would silence real requirements."""
+    row = "| Branch coverage | must be >= 95% | see advisory notes |\n"
+    assert C.signoff_qualifier(row) is not None
+    assert len(_hits(row)) == 1, (
+        "the soft half of the vocabulary leaked into the discard filter")

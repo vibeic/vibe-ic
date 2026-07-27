@@ -66,6 +66,7 @@ __all__ = [
     "input_doc_texts",
     "sibling_l_doc_texts",
     "framed_hits",
+    "signoff_qualifier",
     "waiver_rationale",
     "numeric_target",
     "nonempty_str",
@@ -327,6 +328,49 @@ _NON_NORMATIVE_RE = re.compile(
     r"|\badvisory\s+only\b",
     re.IGNORECASE)
 
+# The SOFTER half of the same vocabulary. These phrases mark a target as
+# not-a-sign-off-condition, but they are too weak to justify DROPPING the
+# row from a gate's requirement evidence: `advisory` alone can be an
+# ordinary noun ("see the advisory notes"), and `not a sign-off` without
+# the word `gate` is a fragment. Kept SEPARATE from `_NON_NORMATIVE_RE`
+# so widening the non-blocking vocabulary can never widen what a gate
+# silently discards.
+#
+# WHY THIS LIVES HERE. It used to be a PRIVATE tuple inside the L22
+# coverage-goal emitter, and the two lists DRIFTED in both directions:
+# the emitter marked `advisory` non-blocking while the gate did not, and
+# the gate discarded `非簽核` / `for reference only` / `non-normative`
+# while the emitter did not recognise them at all. One vocabulary, one
+# home.
+_SOFT_NON_SIGNOFF_RE = re.compile(
+    r"\bnon-?\s?sign-?off\b"
+    r"|\bnot\s+a\s+sign-?off\b"
+    r"|\badvisory\b"
+    r"|\bfor\s+information\b",
+    re.IGNORECASE)
+
+
+def signoff_qualifier(line: str) -> Optional[str]:
+    """The phrase by which this LINE disclaims sign-off force, or None.
+
+    LINE-SCOPED BY CONTRACT — the caller passes one line, never a
+    neighbourhood. A document disclaims the row it is written on;
+    proximity is not membership. Scanning a +/-window here re-introduces
+    exactly the bug `framed_hits` was corrected for: MEASURED, a table
+    whose first row said `advisory` marked the NEXT row's explicit
+    `sign-off` requirement non-blocking.
+
+    Returns the matched phrase (not just a bool) so a consumer can record
+    it as evidence and a human can audit the call.
+    """
+    if not line:
+        return None
+    for rx in (_NON_NORMATIVE_RE, _SOFT_NON_SIGNOFF_RE):
+        m = rx.search(line)
+        if m:
+            return m.group(0).strip()
+    return None
+
 
 def _hit_line(text: str, offsets: List[int], m: "re.Match") -> str:
     """The ORIGINAL line the match sits on.
@@ -345,7 +389,8 @@ def _hit_line(text: str, offsets: List[int], m: "re.Match") -> str:
 def framed_hits(texts: Iterable[Tuple[Path, str]],
                 vocab_re: re.Pattern,
                 window: int = 160,
-                limit: int = 12) -> List[Dict[str, Any]]:
+                limit: int = 12,
+                include_non_normative: bool = False) -> List[Dict[str, Any]]:
     """Vocabulary matches that carry requirement framing nearby.
 
     Mirrors ``l8_clock_domains_typed_check._is_real_clock_freq``: a raw
@@ -358,6 +403,24 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
     ``input/docs/x.rst`` is counted once — an honest evidence count, not
     a copy count. Returns at most ``limit`` records so gate stdout stays
     reviewable.
+
+    ``include_non_normative`` — TWO CONSUMERS, TWO POLICIES, ONE PREDICATE.
+    A GATE asks "did the design state a requirement my layer is missing?",
+    so a row the document itself disclaims is not evidence and is dropped:
+    that is the default, and with the default OFF the returned records are
+    byte-identical to what every gate already embeds in its report.
+    An EMITTER asks "what did the design DECLARE?", and a declared-but-
+    informational target is still declared — dropping it makes a consumer
+    read the layer as having no goal at all, which is this repo's
+    false-certificate class. Such a consumer passes True: the disclaimed
+    hit is RETAINED and every record additionally carries
+
+        non_normative  bool — the hit's OWN LINE disclaims normative force
+        line_text      str  — that line, so the consumer can apply its own
+                              policy without re-deriving the scope
+
+    The predicate stays shared either way; only the policy differs. An
+    emitter with a private predicate emits goals the gate does not accept.
     """
     out: List[Dict[str, Any]] = []
     seen_ctx: set = set()
@@ -379,7 +442,9 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
             # sign-off requirement vanished because of its neighbour. A
             # document disclaims the row it is written on; proximity is not
             # membership.
-            if _NON_NORMATIVE_RE.search(_hit_line(text, offsets, m)):
+            hit_line = _hit_line(text, offsets, m)
+            non_normative = bool(_NON_NORMATIVE_RE.search(hit_line))
+            if non_normative and not include_non_normative:
                 continue          # the document itself says it is not a requirement
             key = ctx.strip()
             if key in seen_ctx:
@@ -387,12 +452,18 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
             seen_ctx.add(key)
             orig_start = offsets[m.start()] if m.start() < len(offsets) else 0
             line_no = text.count("\n", 0, orig_start) + 1
-            out.append({
+            rec = {
                 "source": str(path),
                 "line": line_no,
                 "match": m.group(0).strip()[:120],
                 "context": ctx.strip()[:220],
-            })
+            }
+            if include_non_normative:
+                # Added ONLY on the opt-in path so a gate's report JSON
+                # keeps exactly the shape it ships today.
+                rec["non_normative"] = non_normative
+                rec["line_text"] = hit_line.strip()[:220]
+            out.append(rec)
             if len(out) >= limit:
                 return out
     return out

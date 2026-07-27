@@ -160,6 +160,144 @@ def test_unqualified_target_defaults_to_signoff(tmp_path):
     assert g["signoff_gate"] is True, g
 
 
+# ══════════════════════════════════════════════ NON-BLOCKING IS NOT DROPPED
+# The regression this section guards. The emitter borrows the consumer
+# GATE's detection, and the gate DISCARDS a hit whose own line the
+# document disclaims — correct for a gate ("is my layer missing a stated
+# requirement?"), wrong for an emitter ("what did the design declare?").
+# Inheriting the discard silently dropped the goal instead of emitting it
+# non-blocking, so a consumer read the layer as having NO coverage goal at
+# all: this repo's false-certificate class.
+#
+# MEASURED before the fix: 16 of 21 qualifier values emitted NOTHING. It
+# was a CLASS, not one value — and the 5 survivors were the WEAKEST
+# disclaimers, so the more explicitly a design said "informational", the
+# more completely its goal vanished. Hence a parametrised guard over the
+# whole vocabulary rather than one example.
+
+_QUALIFIERS = [
+    # discarded by the gate's narrow non-normative filter
+    "informational only; this is not a sign-off gate",
+    "informational", "informative", "advisory only", "non-normative",
+    "for reference only", "not a sign-off gate", "not a gate",
+    "資訊性", "资讯性", "非 sign-off", "非簽核", "非签核",
+    "不是 sign-off", "僅供參考", "仅供参考",
+    # the softer half — non-blocking, but not strong enough to discard
+    "advisory", "for information", "not a sign-off",
+    "non-signoff", "non sign-off",
+]
+
+
+@pytest.mark.parametrize("qualifier", _QUALIFIERS)
+def test_every_non_blocking_qualifier_is_emitted_not_dropped(
+        tmp_path, qualifier):
+    """WHOLE CLASS, both halves. Emitted, non-blocking, never dropped."""
+    _mk(tmp_path, "# Verification\nThe block must reach at least 95% branch "
+                  f"coverage on the random run ({qualifier}).\n")
+    rep = mod.run(tmp_path)
+    assert rep["emitted_count"] == 1, (
+        f"a goal the design DECLARED was dropped for qualifier "
+        f"{qualifier!r}: {rep}")
+    g = rep["emitted"][0]
+    assert g["target_pct"] == 95.0, g
+    assert g["signoff_gate"] is False, (
+        f"{qualifier!r} must not read as a sign-off condition: {g}")
+
+
+@pytest.mark.parametrize("qualifier", _QUALIFIERS)
+def test_the_disclaiming_phrase_is_recorded_for_audit(tmp_path, qualifier):
+    """A bare False is unauditable — name the phrase the design used."""
+    _mk(tmp_path, "# Verification\nThe block must reach at least 95% branch "
+                  f"coverage on the random run ({qualifier}).\n")
+    g = mod.run(tmp_path)["emitted"][0]
+    assert g["signoff_qualifier"], g
+    assert g["signoff_qualifier"].lower() in qualifier.lower(), g
+
+
+def test_a_blocking_goal_records_no_qualifier(tmp_path):
+    """DIRECTION 2 — the field must not be populated out of nothing."""
+    _mk(tmp_path, _DOC_WITH_TARGET)
+    g = mod.run(tmp_path)["emitted"][0]
+    assert g["signoff_gate"] is True and g["signoff_qualifier"] is None, g
+
+
+# ════════════════════════════════════ A DISCLAIMER SCOPES TO ITS OWN ROW
+_TWO_ROW_TABLE = (
+    "# Verification targets\n"
+    "| Toggle coverage | must be >= 80% | advisory | " + "note " * 12 + "|\n"
+    "| Branch coverage | must be >= 95% | sign-off | " + "note " * 12 + "|\n"
+)
+
+
+def test_a_neighbours_disclaimer_does_not_downgrade_a_signoff_row(tmp_path):
+    """The OPPOSITE false certificate, and why the qualifier is line-scoped.
+
+    `framed_hits` was corrected to scope a disclaimer to the hit's OWN
+    LINE — "proximity is not membership". The emitter re-derived it from
+    the +/-160-char CONTEXT, so MEASURED on this fixture the row the
+    design explicitly marks `sign-off` came out `signoff_gate: False`
+    because its NEIGHBOUR said `advisory`: a real sign-off condition
+    silently downgraded to informational.
+    """
+    _mk(tmp_path, _TWO_ROW_TABLE)
+    by_pct = {g["target_pct"]: g for g in mod.run(tmp_path)["emitted"]}
+    assert set(by_pct) == {80.0, 95.0}, by_pct
+    assert by_pct[80.0]["signoff_gate"] is False, by_pct[80.0]
+    assert by_pct[95.0]["signoff_gate"] is True, (
+        "a neighbouring row's disclaimer downgraded a stated sign-off "
+        "requirement: %r" % by_pct[95.0])
+
+
+# ═══════════════════════════════ THE GATE'S OWN POLICY IS NOT COLLATERAL
+@_needs_gate
+def test_the_gate_still_discards_a_disclaimed_row(tmp_path):
+    """The emitter opts IN to retention; the gate must not be dragged along.
+
+    The gate asks a different question, and a row the document disclaims
+    is genuinely not a requirement it is missing. Its default must stay
+    DISCARD, or a design that legitimately states only an informational
+    number starts FAILing TARGET_OUTSIDE_CONSUMING_LAYER again.
+    """
+    import l_doc_consumer_contract as C
+    _mk(tmp_path, _DOC_WITH_TARGET_INFORMATIONAL)
+    kept = C.framed_hits(C.input_doc_texts(tmp_path),
+                         _gate._COVERAGE_TARGET_RE)
+    assert kept == [], (
+        "the gate's default discard policy changed as a side effect: %r"
+        % kept)
+    v = _gate.inspect(tmp_path)
+    assert v["evidence"]["coverage_target_hits_input_docs"] == 0, v
+    assert "TARGET_OUTSIDE_CONSUMING_LAYER" not in [
+        f["id"] for f in v["blocking_findings"]], v
+
+
+@_needs_gate
+def test_lifting_an_informational_target_leaves_the_layer_falsifiable(
+        tmp_path):
+    """What the emitted goal buys the layer, stated as a verdict.
+
+    Before: nothing was lifted, L22 carried zero comparable numbers and
+    the gate ADVISED UNFALSIFIABLE_PLAN_ASSERTION. After: L22 carries the
+    design's own 95%, so a downstream coverage check has a number to
+    compare a measurement against — it simply must not BLOCK on it, which
+    is what `signoff_gate: False` on the goal records.
+    """
+    _mk(tmp_path, _DOC_WITH_TARGET_INFORMATIONAL)
+    before = _gate.inspect(tmp_path)
+    assert before["verdict"] == "PASS_WITH_ADVISORY", before
+    assert "UNFALSIFIABLE_PLAN_ASSERTION" in [
+        f["id"] for f in before["advisory_findings"]], before
+
+    mod.run(tmp_path)
+
+    after = _gate.inspect(tmp_path)
+    assert after["verdict"] == "PASS", after
+    assert after["evidence"]["measurable_goal_count"] == 1, after
+    assert _effective_goals(tmp_path)[0]["signoff_gate"] is False, (
+        "PASS must not be reached by promoting an informational target "
+        "into a sign-off condition")
+
+
 # ================================================================ REFUSALS
 def test_refuses_when_design_states_no_target(tmp_path):
     """No stated target => emit nothing. A fabricated goal would turn a

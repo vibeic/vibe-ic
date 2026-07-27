@@ -40,12 +40,39 @@ uses) one goal is emitted carrying:
     signoff_gate  whether the design says this target BLOCKS sign-off
 
 `signoff_gate` is load-bearing and defaults to True. A design may state
-a measurable target and explicitly mark it informational — the spm
-input does exactly that ("資訊性", "非 sign-off gate"). Emitting such a
-target as a blocking one would invent a sign-off condition the design
-never asked for; dropping it would lose a stated requirement. So it is
-emitted WITH the qualifier recorded, and the qualifier phrase is kept
-in the evidence so a human can audit the call.
+a measurable target and explicitly mark it informational ("資訊性",
+"非 sign-off gate"). Emitting such a target as a blocking one would
+invent a sign-off condition the design never asked for; dropping it
+would lose a stated requirement. So it is emitted WITH the qualifier
+recorded, and the qualifier phrase is kept in `signoff_qualifier` so a
+human can audit the call.
+
+How that contract was violated, and by what
+------------------------------------------------------------------
+This module borrows the consumer gate's detection, and the gate's own
+policy is to DISCARD a hit whose line the document disclaims — right
+for a gate ("is my layer missing a requirement?"), wrong for an emitter
+("what did the design declare?"). Inheriting it silently dropped the
+informational goal instead of emitting it non-blocking. MEASURED:
+16 of 21 probed qualifier values emitted NOTHING at all, and the 5 that
+survived were the WEAKEST disclaimers — the ones this module's private
+list knew and the shared one did not. The strongest, most explicit
+disclaimers ("informational", "not a sign-off gate", "資訊性") were the
+ones that vanished. A consumer reading `coverage_goals[]` saw a design
+with no coverage goal whatsoever.
+
+Two corrections, both keeping the predicate shared:
+  * detection opts in via `framed_hits(..., include_non_normative=True)`,
+    so the disclaimed hit is RETAINED and carries the line-scoped verdict;
+  * the qualifier vocabulary moved OUT of this file into
+    `l_doc_consumer_contract.signoff_qualifier()`. The private copy had
+    drifted from the shared one in both directions.
+
+The qualifier is scoped to the hit's OWN LINE, never to the ±160-char
+context. MEASURED with the context scope: a table row explicitly marked
+`sign-off` was emitted `signoff_gate: False` because its NEIGHBOUR said
+`advisory` — silently downgrading a real sign-off condition. A document
+disclaims the row it is written on; proximity is not membership.
 
 Refusals (never invent a target)
 ------------------------------------------------------------------
@@ -79,6 +106,7 @@ sys.path.insert(0, str(_HERE))
 from l_doc_consumer_contract import (  # noqa: E402
     framed_hits,
     input_doc_texts,
+    signoff_qualifier,
 )
 
 TOOL = "l22_coverage_goal_emit"
@@ -113,14 +141,10 @@ _VOCAB = (
 )
 _RE_PCT = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
 
-# Phrases by which a design marks a stated target as NOT a sign-off gate.
-# Document vocabulary, not a chip literal; both scripts appear in real
-# vendor docs shipped to this flow.
-_NON_SIGNOFF = (
-    "non-signoff", "non sign-off", "not a sign-off", "not a signoff",
-    "informational", "informative", "advisory", "for information",
-    "非 sign-off", "非sign-off", "資訊性", "非签核", "仅供参考",
-)
+# The phrases by which a design marks a stated target as NOT a sign-off
+# gate live in `l_doc_consumer_contract.signoff_qualifier()`, NOT here.
+# A private copy lived in this file and drifted from the shared one in
+# both directions — see the module docstring.
 
 _L22_NAME = "L22_VERIFICATION_PLAN.json"
 _GOAL_KEY = "coverage_goals"
@@ -143,11 +167,6 @@ def _pct(match_text: str) -> Optional[float]:
     except ValueError:
         return None
     return v if 0.0 <= v <= 100.0 else None
-
-
-def _is_signoff(context: str) -> bool:
-    low = context.lower()
-    return not any(q in low for q in _NON_SIGNOFF)
 
 
 def _generated_docs(project: Path) -> Path:
@@ -178,7 +197,12 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
                 "reason": f"{_L22_NAME} is not an object",
                 "emitted_count": 0, "emitted": [], "skipped": []}
 
-    hits = framed_hits(input_doc_texts(project), gate._COVERAGE_TARGET_RE)
+    # include_non_normative=True — an EMITTER must not inherit a GATE's
+    # discard policy. A target the design declares and marks informational
+    # is still declared; dropping it makes this layer read as having no
+    # coverage goal at all.
+    hits = framed_hits(input_doc_texts(project), gate._COVERAGE_TARGET_RE,
+                       include_non_normative=True)
 
     # WHERE the goals must land. `l_doc_consumer_contract.l_doc_fields()`
     # merges the nested `fields` payload OVER the top level
@@ -213,10 +237,15 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
         if key in have:
             continue
         have.add(key)
+        # OWN LINE, never the ±160-char context: a document disclaims the
+        # row it is written on. `line_text` is present because this call
+        # opted into include_non_normative.
+        qualifier = signoff_qualifier(h.get("line_text") or "")
         goal = {
             "name": name,
             "target_pct": pct,
-            "signoff_gate": _is_signoff(ctx),
+            "signoff_gate": qualifier is None,
+            "signoff_qualifier": qualifier,
             "source": str(h.get("source") or ""),
             "line": h.get("line"),
             "evidence": text[:200],
@@ -251,6 +280,19 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
     }
 
 
+def _describe(goal: Dict[str, Any]) -> str:
+    """One reviewable line per emitted goal.
+
+    A non-blocking goal NAMES the phrase the design used, so a reader can
+    see WHY it is non-blocking rather than trusting the flag.
+    """
+    head = f"{goal['name']}>={goal['target_pct']}%"
+    if goal.get("signoff_gate"):
+        return head
+    qual = goal.get("signoff_qualifier")
+    return f"{head} (NOT a sign-off gate — the design says {qual!r})"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog=TOOL, description=__doc__,
@@ -276,10 +318,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if rep.get("status") != "OK":
         print(f"{TOOL}: {rep.get('status')} — {rep.get('reason')}")
     elif n:
-        detail = ", ".join(
-            f"{g['name']}>={g['target_pct']}%"
-            f"{'' if g['signoff_gate'] else ' (informational)'}"
-            for g in rep["emitted"])
+        detail = ", ".join(_describe(g) for g in rep["emitted"])
         print(f"{TOOL}: lifted {n} measurable coverage target(s) from the "
               f"design's own inputs into L22 — {detail}")
     else:
