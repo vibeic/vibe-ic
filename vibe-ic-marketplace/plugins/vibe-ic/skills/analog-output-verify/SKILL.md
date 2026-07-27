@@ -25,7 +25,7 @@ track is enforced by a program — do not re-assert them by eye:
 |------|------|----------|
 | A3 | `programs/analog_a3_netlist_gen_check.py` + `programs/analog_netlist_pdk_check.py` | `.sp` substance (`.subckt`, size), PDK model/body/device-name compliance |
 | A4 | `programs/analog_corner_margin_check.py` | ≥27-corner PVT cube + ≥10% margin/corner (stricter than the 9-corner `analog_corner_sweep_check.py`); accepts `A4_corners.json` or `corner_results.json`, self-skips on stub |
-| A5 | `programs/analog_a5_layout_check.py` | `layout.mag`/`<block>.gds` reference exists + DRC/LVS flags present |
+| A5 | `programs/analog_a5_layout_check.py` | `layout.mag`/`<block>.gds` exists with real placed geometry, for **EVERY** declared block (partial coverage → `INCOMPLETE`, never PASS) + DRC/LVS flags carrying an explicit `violations: 0` / `match` verdict (a bare or 0-byte flag is not sign-off) |
 | A6 | `programs/analog_per_block_pv_completeness_check.py` + `programs/analog_a6_block_pv_check.py` | full per-block deliverable set + DRC=0 / LVS=match evidence |
 | A7 | `programs/analog_pre_vs_post_layout_check.py` (+ `analog_a7_post_layout_resim_check.py`) | post-vs-pre degradation bands (≤20% INFO / >20% WARN / >30% FAIL) |
 | A8 | `programs/analog_a8_hardmacro_gen_check.py` + `programs/analog_hardmacro_check.py` | LEF+lib+GDS+Verilog present & non-stub |
