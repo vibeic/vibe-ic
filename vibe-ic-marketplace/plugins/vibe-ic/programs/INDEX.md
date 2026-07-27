@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 989
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 989)
+- **Total programs (excluding helpers / shims):** 985
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 985)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 980 |
+| `any` | 976 |
 
 ## Alphabetical listing
 
@@ -37,9 +37,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `agentic_jsonl_to_shape_d` | any | v0.1.59 | generic agentic-JSONL → Shape-D project-dir extractor. |
 | `aging_derate_sta_check` | any | — | aging-corner STA sign-off gate for tapeout. |
 | `ahb_apb_protocol_synth` | any | v0.1.84 | AHB + APB-class protocol synth helper. |
-| `aid_class_qsf_gen` | any | Wave 73 | to be removed in v0.130. |
 | `aid_class_rtl_gen` | aid_class_half_duplex, aid_class_half_duplex_single_wire, mixed_signal_otp, digital_cmd_driven | Wave 56 | Vibe-IC plugin Phase 2 RTL generator for AID-class half-duplex protocol. |
-| `aid_class_sdc_gen` | any | Wave 73 | to be removed in v0.130. |
 | `ams_analysis_select` | any | — | deterministic spec -> SPICE-analysis selector. |
 | `an_validator` | any | — | Application-Note (AN) validator / quality scorer, 0-80. |
 | `analog_a0_skip_forbidden_check` | any | Wave 47 | forbidden-artefact gate (Wave 47). |
@@ -711,7 +709,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `power_domain_crossing_check` | any | — | M2 gate (substance-verifying). |
 | `power_domain_signal_crossing_check` | any | — | M2 gate (DERIVATION engine). |
 | `power_report_check` | any | — | wrapper for eda_report_audit --mode power. |
-| `power_report_gen` | any | — | emit Step 31 reports/phase3/power.rpt skeleton. |
 | `ppa_area_threshold_check` | any | — | v1.0 plugin gate (ORGANIC #729). |
 | `ppa_predict_aggregate` | any | v0.1.50 | PPA predict aggregator (Pattern-B → program). |
 | `practical_notes_specificity_check` | any | — | meta-gate for plugin docs. |
@@ -743,7 +740,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pulse_decoder_edge_check` | any | — | Enforce rising-edge-driven classification in |
 | `pvt_matrix_check` | any | — | PVT-matrix substance gate (ORGANIC-20260606 #442). |
 | `qsf_gen` | any | Wave 72 | auto-generate Quartus QSF (FPGA pin assignments). |
-| `qsf_open_drain_assignment_check` | any | v0.119.29 | DEPRECATED in v0.119.29. |
 | `qspi_ospi_protocol_synth` | any | v0.1.91 | JEDEC Expanded SPI (xSPI, JESD251) protocol |
 | `quartus_map_audit` | any | — | Scan Quartus .map.rpt for silent-failure indicators. |
 | `readme_class_detector` | any | — | README-token IC class detector (v1.6.522). |
@@ -1061,7 +1057,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (980 programs)
+### `any` (976 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1075,8 +1071,6 @@ _(no programs in this group)_
 - `agentic_jsonl_to_shape_d` — generic agentic-JSONL → Shape-D project-dir extractor.  _[v0.1.59]_
 - `aging_derate_sta_check` — aging-corner STA sign-off gate for tapeout.
 - `ahb_apb_protocol_synth` — AHB + APB-class protocol synth helper.  _[v0.1.84]_
-- `aid_class_qsf_gen` — to be removed in v0.130.  _[Wave 73]_
-- `aid_class_sdc_gen` — to be removed in v0.130.  _[Wave 73]_
 - `ams_analysis_select` — deterministic spec -> SPICE-analysis selector.
 - `an_validator` — Application-Note (AN) validator / quality scorer, 0-80.
 - `analog_a0_skip_forbidden_check` — forbidden-artefact gate (Wave 47).  _[Wave 47]_
@@ -1743,7 +1737,6 @@ _(no programs in this group)_
 - `power_domain_crossing_check` — M2 gate (substance-verifying).
 - `power_domain_signal_crossing_check` — M2 gate (DERIVATION engine).
 - `power_report_check` — wrapper for eda_report_audit --mode power.
-- `power_report_gen` — emit Step 31 reports/phase3/power.rpt skeleton.
 - `ppa_area_threshold_check` — v1.0 plugin gate (ORGANIC #729).
 - `ppa_predict_aggregate` — PPA predict aggregator (Pattern-B → program).  _[v0.1.50]_
 - `practical_notes_specificity_check` — meta-gate for plugin docs.
@@ -1775,7 +1768,6 @@ _(no programs in this group)_
 - `pulse_decoder_edge_check` — Enforce rising-edge-driven classification in
 - `pvt_matrix_check` — PVT-matrix substance gate (ORGANIC-20260606 #442).
 - `qsf_gen` — auto-generate Quartus QSF (FPGA pin assignments).  _[Wave 72]_
-- `qsf_open_drain_assignment_check` — DEPRECATED in v0.119.29.  _[v0.119.29]_
 - `qspi_ospi_protocol_synth` — JEDEC Expanded SPI (xSPI, JESD251) protocol  _[v0.1.91]_
 - `quartus_map_audit` — Scan Quartus .map.rpt for silent-failure indicators.
 - `readme_class_detector` — README-token IC class detector (v1.6.522).

@@ -16,7 +16,7 @@ or had its direction mismatched (e.g., `id_bus_tx_en` declared `output`
 in L9 but `inout` in RTL because the agent chose to merge tristate).
 
 Mid-flow consequences:
-  - QSF/SDC generators (`aid_class_qsf_gen` / `aid_class_sdc_gen`) read
+  - QSF/SDC generators (`qsf_gen` / `sdc_gen`) read
     L9 and emit pin assignments for pins that don't exist in synth →
     Quartus warns, agent ignores, hardware silently floats.
   - Reverse case: an RTL port not in L9 means no pin assignment → the
