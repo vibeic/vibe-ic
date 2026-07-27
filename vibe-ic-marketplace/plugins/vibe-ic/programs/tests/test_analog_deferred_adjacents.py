@@ -221,19 +221,30 @@ def _phantom_digital_soc(tmp_path: Path) -> Path:
 def test_d1_digital_soc_with_phantom_block_at_phase1_root_never_goes_red(
         tmp_path):
     """THE guard on this whole change: widening the block-list resolution
-    must not turn a pure-digital SoC red. Holds on both trees."""
+    must not turn a pure-digital SoC red. Holds on both trees.
+
+    RED means rc 1 / verdict FAIL — the tier that blocks. #511 moved the
+    ORGANIC #676 class-N/A skip off the rc-0 PASS tier and onto rc 2, the
+    NOT-CHECKED tier the P0 umbrella records as a benign SKIP, because a gate
+    that held ZERO A-step obligations to the rule had signed nothing off. The
+    guard is unchanged in substance and is asserted in the terms it was always
+    about: this project must never FAIL.
+    """
     _phantom_digital_soc(tmp_path)
     r = subprocess.run(
         [sys.executable, str(FCC), str(tmp_path),
          "--json", str(tmp_path / "fcc.json")], capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert json.loads((tmp_path / "fcc.json").read_text())["passed"] is True
+    assert r.returncode != 1, r.stdout + r.stderr
+    assert r.returncode == 2, r.stdout + r.stderr
+    rpt = json.loads((tmp_path / "fcc.json").read_text())
+    assert rpt["verdict"] == "VACUOUS_PASS"
+    assert not [f for f in rpt["findings"] if f["severity"] == "ERROR"]
 
 
 def test_organic676_na_skip_is_disclosed_for_a_phase1_root_list(tmp_path):
-    """...and the rc=0 must be the DISCLOSED, named ORGANIC #676 N/A skip,
-    not the undifferentiated "no analog blocks" skip a gate that cannot see
-    the list emits. Both exit 0; only one of them says why."""
+    """...and the skip must be the DISCLOSED, named ORGANIC #676 N/A skip, not
+    the undifferentiated "no analog blocks" skip a gate that cannot see the
+    list emits. Both are non-failures; only one of them says why."""
     _phantom_digital_soc(tmp_path)
     assert c.analog_class_is_na(tmp_path) is True
     subprocess.run(

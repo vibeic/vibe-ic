@@ -24,12 +24,21 @@ def _load_report(tmp_path: Path) -> dict:
 
 
 def test_skip_no_block_list(tmp_path):
+    """#511 — a project with no block list holds ZERO A-step obligations, so
+    this is the DISCLOSED skip tier (rc 2 = NOT CHECKED), not a PASS. `passed`
+    keeps its literal meaning: nothing was applied, so nothing was signed off.
+    """
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2, r.stdout + r.stderr
     rpt = _load_report(tmp_path)
-    assert rpt["passed"] is True
+    assert rpt["verdict"] == "VACUOUS_PASS"
+    assert rpt["passed"] is False
     assert rpt["summary"]["skipped"] is True
     assert rpt["summary"]["reason"] == "no_analog_blocks"
+    assert rpt["summary"]["denominator"]["examined"] == 0
+    assert rpt["summary"]["denominator"]["not_applicable_reason"].strip()
+    # It is NOT a FAIL: no ERROR finding, and the rc is the skip tier.
+    assert not [f for f in rpt["findings"] if f["severity"] == "ERROR"]
 
 
 def test_pass_all_steps(tmp_path):

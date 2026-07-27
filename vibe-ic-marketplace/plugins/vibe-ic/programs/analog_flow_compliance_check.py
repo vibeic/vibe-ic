@@ -22,18 +22,40 @@ resolution the A1-A9 per-step gates use.
 
 Steps may be waived via analog/waivers.json.
 
-Self-skips (exit 0 + INFO) when:
-  - No analog_block_list.json under `phase3/analog/` or `phase1/analog/`,
-    or an empty block list
+NO PASS WITHOUT A DENOMINATOR (#511)
+------------------------------------
+MEASURED on a structurally empty project (only `input/docs/` and `reports/`,
+nothing in them): this gate's ENTIRE output was
+
+    [PASS] analog_flow_compliance_check
+
+one line, rc 0, and no report file written at all. That is byte-identical in
+shape to what it prints for a project whose nine A-steps are genuinely
+complete, so neither the exit code nor the text could tell "the analog flow
+is compliant" from "there was no analog flow". It is the P0 umbrella's most
+widely propagated analog verdict, which is what makes the silence expensive.
+
+The two self-skip conditions — no/empty block list, and the ORGANIC #676
+class-N/A skip — now state what they examined, in `_gate_denominator`'s fixed
+shape, on stdout AND in `summary.denominator`, and render as a DISCLOSED SKIP
+(verdict `VACUOUS_PASS`, rc 2 = NOT CHECKED, plus a `VACUOUS_PASS:` token on
+stderr) rather than as a PASS. The class-N/A skip is specifically the
+`considered > 0, examined == 0` shape #496 exists to make visible: blocks WERE
+declared, and none of them was held to an A-step.
+
+The A1-A9 rule itself is untouched. A project with a declared block and a
+missing step is still rc 1 with the same ANALOG_<step>_MISSING findings, and
+the `--fpga-stub` waiver still promotes exactly what it promoted before.
 
 Usage:
     python3 analog_flow_compliance_check.py <project_dir>
     python3 analog_flow_compliance_check.py <project_dir> --json reports/gates/analog_compliance.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS / PASS_WITH_WAIVERS (blocks examined, every A-step accounted for)
     1 = FAIL (missing steps)
-    2 = IO / parse error
+    2 = VACUOUS_PASS (no A-step obligation existed to check — disclosed,
+        NOT a sign-off) or IO / parse error
 """
 from __future__ import annotations
 
@@ -44,6 +66,19 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
+import _gate_denominator as _gd
+
+GATE = "analog_flow_compliance_check"
+
+#: What ONE unit is, in this gate's own terms. The gate's subject is not the
+#: block and not the step but the PAIR: one declared block owes nine A-step
+#: obligations, and it is those obligations the rule is applied to.
+DENOMINATOR_UNIT = ("A1-A9 step obligation(s) evaluated (one per declared "
+                    "analog block per A-step)")
+
+#: rc 2 is this repo's NOT-CHECKED tier: `flow_compliance_check` promotes it
+#: to the VACUOUS_PASS verdict tier rather than a bare PASS.
+RC_PASS, RC_FAIL, RC_VACUOUS = 0, 1, 2
 
 
 @dataclass
@@ -57,9 +92,13 @@ class Finding:
 
 @dataclass
 class AuditResult:
-    program: str = "analog_flow_compliance_check"
+    program: str = GATE
     version: str = "1.0.0"
     passed: bool = True
+    #: PASS / PASS_WITH_WAIVERS / VACUOUS_PASS / FAIL. `passed` keeps its
+    #: literal meaning for every existing consumer; `verdict` is where the
+    #: four-way answer lives.
+    verdict: str = "PASS"
     findings: List[Finding] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
 
@@ -247,19 +286,47 @@ def _check_step(project: Path, block: str, step_id: str) -> bool:
     return False
 
 
+def _vacuous(result: AuditResult, rule: str, reason: str,
+             summary_reason: str, considered: int = 0,
+             details: Optional[dict] = None) -> AuditResult:
+    """Record a run that held ZERO A-step obligations to the rule.
+
+    Constructing the denominator with ``examined == 0`` and no reason raises,
+    so this gate cannot regress into a silent zero by omission — only by
+    writing a reason down, which is reviewable.
+    """
+    result.findings.append(Finding(rule=rule, severity="INFO", message=reason))
+    result.verdict = "VACUOUS_PASS"
+    # `passed` keeps its LITERAL meaning — the A1-A9 rule was applied and found
+    # nothing wrong — so a consumer reading only that field can no longer be
+    # handed a vacuous run as a clean one. It is not a FAIL either: no ERROR
+    # finding is emitted and rc is the skip tier. The four-way answer is in
+    # `verdict`, the same split `si_mcf_sta_check` makes.
+    result.passed = False
+    result.summary = {"skipped": True, "reason": summary_reason,
+                      "total_blocks": 0, "total_steps": len(ANALOG_STEPS),
+                      "total_missing": 0, "total_waived": 0, "pass": False}
+    _gd.attach(result.summary, _gd.Denominator(
+        unit=DENOMINATOR_UNIT, examined=0, considered=considered,
+        not_applicable_reason=reason, details=details or {}))
+    return result
+
+
 def run_audit(project: Path) -> AuditResult:
     result = AuditResult()
 
     blocks = _load_block_list(project)
 
     if not blocks:
-        result.findings.append(Finding(
-            rule="SKIP_NO_ANALOG",
-            severity="INFO",
-            message="No analog_block_list.json or empty; skipping analog flow compliance",
-        ))
-        result.summary = {"skipped": True, "reason": "no_analog_blocks"}
-        return result
+        return _vacuous(
+            result, "SKIP_NO_ANALOG",
+            ("no analog_block_list.json under phase3/analog/ or "
+             "phase1/analog/, or it declares no blocks, so no A1-A9 "
+             "obligation exists to hold anything to. NOT a sign-off: the "
+             "analog track of this project has NOT been checked — see "
+             "analog_block_list_emit_check for whether a list SHOULD "
+             "have been emitted."),
+            "no_analog_blocks")
 
     # ORGANIC #676 — class-N/A skip. When the IC is positively classified
     # NON-analog (has_analog:false / analog_applicable:false +
@@ -271,17 +338,19 @@ def run_audit(project: Path) -> AuditResult:
     try:
         import _analog_a_check_common as _aac
         if _aac.analog_class_is_na(project):
-            result.findings.append(Finding(
-                rule="SKIP_DIGITAL_CLASS_NA",
-                severity="INFO",
-                message=("IC classified non-analog (analog_applicable=false / "
-                         "generic_full_stack) and all declared blocks are "
-                         "low_confidence phantom keyword hits — analog A1-A9 "
-                         "N/A (ORGANIC #676)"),
-            ))
-            result.summary = {"skipped": True,
-                              "reason": "digital_class_na_low_confidence"}
-            return result
+            # `considered > 0, examined == 0` — blocks WERE declared and none
+            # of them was held to an A-step. #496's shape, stated rather than
+            # inferable only by reading this branch.
+            return _vacuous(
+                result, "SKIP_DIGITAL_CLASS_NA",
+                (f"IC classified non-analog (analog_applicable=false / "
+                 f"generic_full_stack) and all {len(blocks)} declared "
+                 f"block(s) are low_confidence phantom keyword hits — analog "
+                 f"A1-A9 N/A (ORGANIC #676). NOT a sign-off: no A-step "
+                 f"artefact of this project was examined."),
+                "digital_class_na_low_confidence",
+                considered=len(blocks) * len(ANALOG_STEPS),
+                details={"declared_blocks": [str(b) for b in blocks]})
     except Exception:
         pass
 
@@ -321,17 +390,32 @@ def run_audit(project: Path) -> AuditResult:
 
     if total_missing > 0:
         result.passed = False
+    result.verdict = "PASS" if result.passed else "FAIL"
 
+    total_waived = sum(1 for b in matrix.values()
+                       for s in b.values() if s == "WAIVED")
     result.summary = {
         "skipped": False,
         "total_blocks": len(blocks),
         "total_steps": len(ANALOG_STEPS),
         "matrix": matrix,
         "total_missing": total_missing,
-        "total_waived": sum(1 for b in matrix.values()
-                           for s in b.values() if s == "WAIVED"),
+        "total_waived": total_waived,
         "pass": result.passed,
     }
+    # Every obligation in the matrix reached the rule body — each one is a
+    # `_check_step` call whose answer is recorded — so examined == considered
+    # here. The two fields stay distinct anyway: a future precondition that
+    # filters obligations out must show up as the gap, not vanish into a
+    # single number (#496).
+    _gd.attach(result.summary, _gd.Denominator(
+        unit=DENOMINATOR_UNIT,
+        examined=len(blocks) * len(ANALOG_STEPS),
+        considered=len(blocks) * len(ANALOG_STEPS),
+        details={"blocks": [str(b) for b in blocks],
+                 "steps": [s for s, _ in ANALOG_STEPS],
+                 "missing": total_missing,
+                 "waived": total_waived}))
     return result
 
 
@@ -349,14 +433,17 @@ def main(argv: list = None) -> int:
 
     if not args.project_dir.is_dir():
         print(f"ERROR: {args.project_dir} is not a directory", file=sys.stderr)
-        return 2
+        return RC_VACUOUS
 
     result = run_audit(args.project_dir)
 
-    waiver_status: str = "PASS"
-    if not result.passed and _stub.fpga_stub_waiver_active(args):
+    # The waiver promotes a FAIL, and ONLY a FAIL. A vacuous run has nothing to
+    # waive — `result.passed` is False there too, which is why the verdict, not
+    # `passed`, guards this branch: promoting a VACUOUS_PASS to
+    # PASS_WITH_WAIVERS would dress an unexamined project as a waived one.
+    if result.verdict == "FAIL" and _stub.fpga_stub_waiver_active(args):
         result.passed = True
-        waiver_status = "PASS_WITH_WAIVERS"
+        result.verdict = "PASS_WITH_WAIVERS"
         result.summary["fpga_stub_waiver_applied"] = True
         result.summary["waiver_reason"] = _stub.fpga_stub_reason()
         for f in result.findings:
@@ -370,13 +457,25 @@ def main(argv: list = None) -> int:
         Path(args.json).write_text(out)
 
     if not args.json:
-        status = waiver_status if result.passed else "FAIL"
-        print(f"[{status}] analog_flow_compliance_check")
+        # The verdict line carries the denominator ON ITSELF: a reader of the
+        # one line this gate prints must be able to see how many A-step
+        # obligations stood behind it (#511).
+        print(f"[{result.verdict}] {GATE}: {_gd.line_of(result.summary)}")
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.verdict == "VACUOUS_PASS":
+        denom = result.summary.get(_gd.DENOMINATOR_KEY) or {}
+        # Second, rc-independent channel — emitted even under --json, where
+        # stdout is deliberately empty, so a text consumer is never handed
+        # silence. `flow_compliance_check._stdout_signals_vacuous` matches this
+        # token at line start.
+        print(f"VACUOUS_PASS: {denom.get('not_applicable_reason', '')}",
+              file=sys.stderr)
+        return RC_VACUOUS
+
+    return RC_PASS if result.passed else RC_FAIL
 
 
 if __name__ == "__main__":

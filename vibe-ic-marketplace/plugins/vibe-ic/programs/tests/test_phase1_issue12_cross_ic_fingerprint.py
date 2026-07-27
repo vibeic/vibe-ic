@@ -225,7 +225,7 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                            # list coincides. A real-input filename echo,
                            # not a scaffold leak.
                            "source_documents",
-                           # v1.7.75 — for #507. L4's two MEASUREMENT
+                           # v1.7.74 — for #507. L4's two MEASUREMENT
                            # records: what the input declared against
                            # what the layer carries, and whether the
                            # register cap cut anything. Both are
@@ -239,7 +239,7 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                            # registers[]. Same family as the strategy /
                            # applicability markers above.
                            "input_declared_registers",
-                           "register_cap_v1_7_75"):
+                           "register_cap_v1_7_74"):
                     continue
                 suspect_fields.append(f"{layer}.{key} = {aes_val!r}")
 

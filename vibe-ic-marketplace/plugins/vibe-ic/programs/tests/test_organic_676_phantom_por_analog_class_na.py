@@ -137,7 +137,14 @@ def test_three_p0_gates_skip_on_digital_soc(tmp_path):
                  [{"name": "por", "low_confidence": True}])
     afc = AFC.run_audit(tmp_path)
     assert afc.summary.get("skipped") is True, afc.summary
-    assert afc.passed is True
+    # #511 — the class-N/A skip is a DISCLOSED skip, not a PASS: zero A-step
+    # obligations were held to the rule, so `passed` (which means "the rule was
+    # applied and found nothing wrong") is False and `verdict` carries the
+    # tier. It is emphatically not a FAIL — no ERROR finding is emitted, and
+    # the CLI exits on the skip tier, which the sibling assertions below pin.
+    assert afc.verdict == "VACUOUS_PASS", afc.summary
+    assert not [f for f in afc.findings if f.severity == "ERROR"]
+    assert AFC.main([str(tmp_path), "--json", str(tmp_path / "afc.json")]) == 2
     adi = ADI.run_audit(tmp_path)
     assert adi.summary.get("skipped") is True, adi.summary
     assert adi.passed is True

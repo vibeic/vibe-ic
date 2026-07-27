@@ -81,11 +81,17 @@ def test_sky130_single_lib_inapplicable_passes(tmp_path):
 
 
 def test_edge_no_sp_files_skips(tmp_path):
+    """#511 — an analog dir with no deck in it put ZERO files through the
+    ordering rule, so this is the DISCLOSED skip tier (rc 2 = NOT CHECKED),
+    not a PASS that reads the same as a real clean run."""
     (tmp_path / "analog").mkdir()
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2, r.stdout + r.stderr
     rep = json.loads((tmp_path / "r.json").read_text())
+    assert rep["verdict"] == "VACUOUS_PASS"
     assert rep["summary"].get("skipped") is True
+    assert rep["summary"]["denominator"]["examined"] == 0
+    assert rep["summary"]["denominator"]["not_applicable_reason"].strip()
 
 
 def test_edge_missing_project_dir_exit2(tmp_path):

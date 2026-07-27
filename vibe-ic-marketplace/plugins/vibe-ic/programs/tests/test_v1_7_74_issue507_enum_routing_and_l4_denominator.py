@@ -283,7 +283,7 @@ def test_declared_address_bindings_land_in_l4_registers():
     assert alpha["address_int"] == 0x300
     assert alpha["address"] == "0x300"
     assert alpha["declared_type"] == "map_e"
-    assert alpha["extraction_strategy"] == "hdl_typedef_enum_address_v1_7_75"
+    assert alpha["extraction_strategy"] == "hdl_typedef_enum_address_v1_7_74"
     assert "block_pkg.sv" in alpha["evidence"]
     # The shapes that are NOT address maps must not become registers.
     for name in ("MODE_OFF", "SEL_A", "ST_IDLE", "CMD_READ"):
@@ -309,7 +309,7 @@ def test_a_prose_captured_address_is_corroborated_not_duplicated():
     registers = [{"name": "alpha", "address": "0x300", "address_int": 0x300,
                   "evidence": "input/docs/block.rst"}]
     evidence = {}
-    rec = P._v1_7_75_merge_declared_register_bindings(
+    rec = P._v1_7_74_merge_declared_register_bindings(
         registers, {"block_pkg.sv": PKG_SV}, evidence)
     assert rec["bindings"] == 10
     assert rec["already_carried"] == 1
@@ -331,7 +331,7 @@ def test_the_register_cap_never_drops_a_declared_binding():
     declared = [{"name": f"D{i}", "address_int": 0x1000 + i,
                  "extraction_strategy": P._V1_7_75_DECLARED_STRATEGY}
                 for i in range(20)]
-    kept, record = P._v1_7_75_cap_registers(prose + declared)
+    kept, record = P._v1_7_74_cap_registers(prose + declared)
     kept_names = {r["name"] for r in kept}
     for d in declared:
         assert d["name"] in kept_names, (
@@ -348,7 +348,7 @@ def test_the_register_cap_never_drops_a_declared_binding():
 
 
 def test_the_cap_record_is_emitted_even_when_nothing_is_cut():
-    _kept, record = P._v1_7_75_cap_registers(
+    _kept, record = P._v1_7_74_cap_registers(
         [{"name": f"p{i}"} for i in range(3)])
     assert record["dropped"] == 0
     assert record["reason"], "the absence of a cut must be a stated fact"
@@ -367,7 +367,7 @@ def test_a_deduped_register_table_row_hands_over_what_it_knew():
            "description": "cycle counter",
            "evidence": {"source": "perf.txt", "line": 83,
                         "matched_token": "| ``counter_a`` | 0x340 |"}}
-    assert P._v1_7_75_absorb_deduped_regmap_row(existing, row) is True
+    assert P._v1_7_74_absorb_deduped_regmap_row(existing, row) is True
     assert existing["name"] == "REG_ECHO", (
         "the surviving record keeps its own name")
     assert existing["also_named"] == ["counter_a"]
@@ -378,7 +378,7 @@ def test_a_deduped_register_table_row_hands_over_what_it_knew():
     # the input-completeness denominator reads.
     assert "0x340" in json.dumps(existing)
     # Idempotent: absorbing the same row twice adds nothing.
-    assert P._v1_7_75_absorb_deduped_regmap_row(existing, row) is False
+    assert P._v1_7_74_absorb_deduped_regmap_row(existing, row) is False
     assert existing["also_named"] == ["counter_a"]
 
 
@@ -387,7 +387,7 @@ def test_absorbing_never_overwrites_a_value_the_survivor_already_has():
                 "description": "declared", "address": "0x340"}
     row = {"addr_hex": "0x340", "name": "REG_ECHO", "access": "RO",
            "description": "documented"}
-    P._v1_7_75_absorb_deduped_regmap_row(existing, row)
+    P._v1_7_74_absorb_deduped_regmap_row(existing, row)
     assert existing["access"] == "RW"
     assert existing["description"] == "declared"
     assert "also_named" not in existing, (

@@ -105,7 +105,7 @@ from _code_literal import (  # noqa: E402
     declared_codes as _shared_declared_codes,
     field_text as _shared_field_text,
 )
-# v1.7.75 — for #507. This gate's PASS used to state a numerator with no
+# v1.7.74 — for #507. This gate's PASS used to state a numerator with no
 # denominator: "2 multi-bit enum-eligible fields all carry typed
 # code->meaning enumerated_values", on an L4 that held 61 of the 145
 # register address bindings its own input declares. The gate is right
@@ -323,7 +323,7 @@ def _has_enum(field: dict, required: int = 2) -> bool:
     return _binding_entries(field) >= max(1, required)
 
 
-# v1.7.75 — for #507. The unit this gate is denominated in, spelled once.
+# v1.7.74 — for #507. The unit this gate is denominated in, spelled once.
 DENOMINATOR_UNIT = "multi-bit enum-eligible register fields"
 
 

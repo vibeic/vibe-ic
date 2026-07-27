@@ -130,6 +130,44 @@ def attach(summary: Dict[str, Any], denom: Denominator) -> Dict[str, Any]:
     return summary
 
 
+def line_of(summary: Dict[str, Any]) -> str:
+    """``Denominator.line()`` for the denominator already inside ``summary``.
+
+    A gate that has ATTACHED its denominator and now wants to put the same
+    sentence on stdout would otherwise have to either keep the object alive
+    beside the dict or rebuild one from the dict — and rebuilding re-runs
+    ``__post_init__``, so a report loaded back from disk with a zero and an
+    empty reason would RAISE inside a printer rather than being displayed as
+    the defect it is. Formats straight from the dict for that reason; the
+    sentence itself is ``Denominator.line``'s, not a second dialect of it.
+
+    Returns the disclosure that a summary carrying NO denominator owes, rather
+    than an empty string: a printer must not be able to render silence.
+    """
+    d = summary.get(DENOMINATOR_KEY)
+    if not isinstance(d, dict):
+        return "denominator NOT STATED — this verdict does not say what it examined"
+    unit = str(d.get("unit", "")).strip() or "unit NOT STATED"
+    try:
+        examined = int(d.get("examined"))
+    except (TypeError, ValueError):
+        return f"denominator NOT STATED (examined={d.get('examined')!r}) for {unit}"
+    try:
+        considered = int(d.get("considered", 0))
+    except (TypeError, ValueError):
+        considered = 0
+    reason = str(d.get("not_applicable_reason", "")).strip()
+    if examined == 0:
+        base = f"examined 0 {unit}"
+        if considered:
+            base += f" (of {considered} considered)"
+        return f"{base} — {reason or 'NO REASON GIVEN'}"
+    base = f"examined {examined} {unit}"
+    if considered and considered != examined:
+        base += f" (of {considered} considered)"
+    return base
+
+
 def disclosure_violations(summary: Dict[str, Any]) -> List[str]:
     """Return the ways ``summary`` breaks the disclosure contract.
 

@@ -30,7 +30,7 @@ HDL/architecture convention, shared across every RISC / bus / peripheral
 design; no chip, vendor or SKU literal participates.  A type whose name
 declares nothing gets ``enum_role = None``.
 
-ROUTING IS TOTAL (v1.7.75, #507) — name vocabulary alone decided only
+ROUTING IS TOTAL (v1.7.74, #507) — name vocabulary alone decided only
 two of the twenty-five types one measured package declares, and the
 other twenty-three had NO destination and NO record saying so.  Members
 of an unrouted type reached the L docs only when prose elsewhere
@@ -108,7 +108,7 @@ _SEGMENT_SPLIT_RE = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
 ROLE_FSM_STATE = "fsm_state"
 ROLE_OPCODE = "opcode"
 
-# v1.7.75 — for #507. The SHAPE tier's one role. Not a name vocabulary:
+# v1.7.74 — for #507. The SHAPE tier's one role. Not a name vocabulary:
 # nothing about the type's spelling participates in deciding it.
 ROLE_ADDRESS_MAP = "address_map"
 
@@ -306,7 +306,7 @@ def harvest_enums(extracted: Dict[str, str]) -> List[Dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------
-# v1.7.75 — for #507. Total routing.
+# v1.7.74 — for #507. Total routing.
 # --------------------------------------------------------------------------
 
 def value_bindings(enum: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -451,7 +451,7 @@ class EnumRouting:
 
 
 RULE_TYPE_NAME_VOCABULARY = "type_name_vocabulary"
-RULE_ADDRESS_MAP_SHAPE = "address_map_shape_v1_7_75"
+RULE_ADDRESS_MAP_SHAPE = "address_map_shape_v1_7_74"
 RULE_NO_DESTINATION = "no_destination"
 
 
