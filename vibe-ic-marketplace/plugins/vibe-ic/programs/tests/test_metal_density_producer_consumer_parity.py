@@ -54,8 +54,12 @@ def _producer_re() -> "re.Pattern[str]":
 
 def test_producer_selects_every_name_the_consumer_accepts():
     """The defect, stated as a property: any layer name the gate would JUDGE must
-    be a name the measurement would COLLECT. The reverse (producer selects more,
-    e.g. li1) is safe — the consumer drops what it does not recognise."""
+    be a name the measurement would COLLECT.
+
+    The reverse direction used to be waved off as "safe — the consumer drops what
+    it does not recognise". It was not safe, it was the mirror defect: a layer
+    the producer measured and the consumer dropped reached the report as a number
+    with no verdict attached. Both directions are now pinned, below."""
     prod = _producer_re()
     for name in ("met1", "met5", "metal1", "metal5", "Metal1", "Metal5",
                  "TopMetal1", "TopMetal2", "topmetal1", "m1", "capmetal1"):
@@ -84,22 +88,47 @@ def test_ihp_and_gf180_layer_names_are_now_selected():
 
 
 def test_sky130_names_including_li1_still_selected():
-    """DIRECTION 1: the PDK the old regex DID work for must not regress. li1 is
-    kept deliberately — sky130 measures it today and the consumer filters it out,
-    so it stays as disclosed measurement context."""
+    """DIRECTION 1: the PDK the old regex DID work for must not regress. The
+    local-interconnect layer is measured today and is now also JUDGED — see
+    `test_producer_needs_no_local_exception_for_the_interconnect_layer`."""
     prod = _producer_re()
     for name in ("met1", "met2", "met3", "met4", "met5", "li1"):
         assert prod.match(name), f"sky130 layer {name!r} regressed"
 
 
+def test_producer_needs_no_local_exception_for_the_interconnect_layer():
+    """The mirror of the drift this file was written for, closed.
+
+    The producer used to append its OWN `|(?:^li1$)` clause because the consumer
+    did not recognise the local-interconnect layer. That clause was a SECOND
+    authority living next to the derived one, and the whole point of deriving is
+    that there is only one. It is gone, and the only reason it can be gone is
+    that the consumer now accepts the name — so assert the consumer does, rather
+    than merely asserting the clause is absent (which a re-added, differently
+    spelled exception would still satisfy)."""
+    assert MLD._METAL_RE.match("li1"), (
+        "the consumer must judge the local-interconnect layer — if it does not, "
+        "removing the producer's exception silently stops it being measured")
+    assert R._METAL_DENSITY_LAYER_RE == MLD._METAL_RE.pattern, (
+        "the producer selector must be the consumer's pattern and nothing else; "
+        "a local addition is a second authority and drifts")
+
+
 def test_non_metal_layermap_rows_are_still_rejected():
     """DIRECTION 1: widening the producer must not start counting vias, wells,
     contacts or the layermap's own NAME/DIEAREA bookkeeping rows as metal — every
-    one of these is a real first-column token in the three PDKs' .map files."""
+    one of these is a real first-column token in the three PDKs' .map files.
+
+    `licon1` is the pointed one: it shares its first two characters with the
+    local-interconnect layer the selector now accepts, and it is a CUT, which has
+    no area-density rule. It is the near-miss that a lazily written `li.*` would
+    swallow."""
     prod = _producer_re()
     for name in ("Via1", "Via5", "TopVia1", "TopVia2", "via", "via2", "mcon",
-                 "nwell", "pwell", "GatPoly", "Cont", "NAME", "DIEAREA"):
+                 "licon1", "licon", "li", "nwell", "pwell", "GatPoly", "Cont",
+                 "NAME", "DIEAREA"):
         assert not prod.match(name), f"{name!r} must not be measured as metal"
+        assert not MLD._METAL_RE.match(name), f"{name!r} must not be judged"
 
 
 # ── the template must not silently fail to render ────────────────────────────

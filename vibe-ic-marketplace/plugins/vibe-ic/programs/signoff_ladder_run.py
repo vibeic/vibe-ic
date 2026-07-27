@@ -1009,16 +1009,53 @@ def _find_metal_density_report(project_dir: Path) -> Optional[Path]:
     return None
 
 
+def _resolve_metal_density_pdk(report: Optional[Path],
+                               pdk: Optional[str]) -> Optional[str]:
+    """Which PDK's density rules should judge this measurement.
+
+    Order: the caller's explicit answer, then the REPORT'S OWN declaration, then
+    the environment. The report is preferred over the environment because it
+    records the PDK the measurement was actually taken under, whereas the
+    environment records whatever this shell happens to be pointed at — reading a
+    stored report from a differently-configured shell must not silently rejudge
+    it against another foundry's numbers.
+
+    None is a real answer and the honest one for a report that predates the
+    declaration and is read outside its run: no foundry window is supplied and
+    the DISCLOSED generic default stands, exactly as before."""
+    if pdk:
+        return pdk
+    if report is not None and report.is_file():
+        try:
+            doc = json.loads(report.read_text(errors="replace"))
+        except (OSError, ValueError):
+            doc = None
+        if isinstance(doc, dict):
+            declared = doc.get("pdk")
+            if isinstance(declared, str) and declared.strip():
+                return declared.strip()
+    for var in ("PDK_VARIANT", "PDK"):
+        v = os.environ.get(var)
+        if v and v.strip():
+            return v.strip()
+    return None
+
+
 def check_tier_metal_density(project_dir: Path,
                              default_min: float = _METAL_DENSITY_MIN,
-                             default_max: float = _METAL_DENSITY_MAX
+                             default_max: float = _METAL_DENSITY_MAX,
+                             pdk: Optional[str] = None
                              ) -> TierResult:
-    """Per-layer metal density (foundry CMP / Efabless met_min_ca_density).
+    """Per-layer metal density (foundry CMP / min-clear-area pattern density).
 
-    Delegates to `metal_layer_density_check.check`. When the report ships its
-    own per-layer windows those win; else the DISCLOSED generic default window
-    [_METAL_DENSITY_MIN.._METAL_DENSITY_MAX] is applied so a real per-layer
-    density can still be judged (the report carries the generic-default note):
+    Delegates to `metal_layer_density_check.check`, supplying THAT PDK'S OWN
+    stated per-layer windows. Before this was wired the call passed `{}` and so
+    every run on every process was judged by the gate's generic default, which
+    is wider on both sides than at least one open PDK's own sign-off script —
+    a design its foundry would reject could clear our gate. Precedence per
+    layer: a window the report itself ships > the PDK's stated window > the
+    DISCLOSED generic default, resolved BOUND BY BOUND so a foundry minimum
+    beside a generic ceiling is reported as exactly that.
       PASS     -> PASS
       FAIL     -> FAIL     (a layer outside its window, or a report with no
                   per-layer metal-density data)
@@ -1031,7 +1068,12 @@ def check_tier_metal_density(project_dir: Path,
             "T_METAL_DENSITY", "Per-layer metal density (CMP)", "NOT_RUN",
             notes="no per-layer metal-density report — §4.05: absent → SKIP, "
                   "never the row-util density.json")
-    res = mld.check(rpt, {}, default_min, default_max)
+    resolved = _resolve_metal_density_pdk(rpt, pdk)
+    windows: Dict[str, "mld.Window"] = {}
+    provenance: Optional[Dict[str, object]] = None
+    if resolved:
+        windows, provenance = mld.pdk_windows_for(resolved)
+    res = mld.check(rpt, windows, default_min, default_max, provenance)
     v = res.get("verdict")
     ladder = {"PASS": "PASS", "FAIL": "FAIL",
               "IO_ERROR": "NOT_RUN"}.get(v, "FAIL")
@@ -1040,9 +1082,34 @@ def check_tier_metal_density(project_dir: Path,
         notes = "; ".join(res.get("failures", [])) or res.get("detail", "")
         if not notes and res.get("unchecked_layers"):
             notes = f"unchecked layers (no window): {res['unchecked_layers']}"
+    # Say WHOSE numbers produced this verdict, on a PASS as much as on a FAIL —
+    # "density within window" means something different when the window is the
+    # foundry's than when it is our generic stand-in, and a reader who cannot
+    # tell them apart cannot weigh the tier.
+    attribution = _metal_density_attribution(resolved, provenance)
+    notes = f"{notes}; {attribution}" if notes else attribution
     return TierResult(
         "T_METAL_DENSITY", "Per-layer metal density (CMP)", ladder,
         details=res, artifact_path=str(rpt), notes=notes)
+
+
+def _metal_density_attribution(resolved: Optional[str],
+                               provenance: Optional[Dict[str, object]]) -> str:
+    """One line naming which windows judged the run — never left implicit."""
+    if not resolved:
+        return ("windows: DISCLOSED generic default (the run declares no PDK "
+                "and none was given, so no foundry window could be looked up)")
+    status = (provenance or {}).get("status")
+    if status == "stated":
+        unstated = (provenance or {}).get("bounds_unstated") or []
+        tail = (f"; that PDK states no bound for {', '.join(unstated)}, where "
+                f"the generic default stands") if unstated else ""
+        return f"windows: {resolved}'s own stated per-layer rules{tail}"
+    if status == "states-none":
+        return (f"windows: DISCLOSED generic default — {resolved} was read and "
+                f"states no per-layer density rule")
+    return (f"windows: DISCLOSED generic default — no stated density rules on "
+            f"record for {resolved}")
 
 
 def check_tier_aging_sta(project_dir: Path,
@@ -1260,7 +1327,8 @@ def run_ladder(project_dir: Path,
                jmax: Optional[Path] = None,
                tech_lef: Optional[Path] = None,
                sources: Optional[List[Tuple[str, str]]] = None,
-               xor_allow_macros: Optional[List[str]] = None) -> LadderReport:
+               xor_allow_macros: Optional[List[str]] = None,
+               pdk: Optional[str] = None) -> LadderReport:
     """Run the sign-off ladder.
 
     mode='triage'  (default) — the diagnostic ladder; the LVS-net tier may SHOW
@@ -1297,7 +1365,7 @@ def run_ladder(project_dir: Path,
         # This session's sign-off gates — each blocks a tapeout on a real FAIL
         # and honestly NOT_RUNs (SKIP) on an absent artifact (§4.05).
         tiers.append(check_tier_dynamic_ir(project_dir))
-        tiers.append(check_tier_metal_density(project_dir))
+        tiers.append(check_tier_metal_density(project_dir, pdk=pdk))
         tiers.append(check_tier_aging_sta(project_dir))
         tiers.append(check_tier_thermal(project_dir))
         tiers.append(check_tier_dft_signoff(project_dir))
@@ -1363,6 +1431,11 @@ def _cli() -> int:
                    dest="xor_allow_macros",
                    help="EXPLICIT blackbox-macro cell name waivable in the XOR "
                         "tier (repeatable). Never a count/floor.")
+    p.add_argument("--pdk", default=None,
+                   help="PDK name — judge per-layer metal density against THAT "
+                        "PDK's own stated windows. Default: the density "
+                        "report's own declaration, else $PDK_VARIANT / $PDK, "
+                        "else the DISCLOSED generic window.")
     p.add_argument("--out-md", type=Path)
     p.add_argument("--out-json", type=Path)
     p.add_argument("--strict", action="store_true",
@@ -1371,7 +1444,7 @@ def _cli() -> int:
     args = p.parse_args()
     rep = run_ladder(args.project_dir, mode=args.mode, caravel=args.caravel,
                      jmax=args.jmax, tech_lef=args.tech_lef,
-                     xor_allow_macros=args.xor_allow_macros)
+                     xor_allow_macros=args.xor_allow_macros, pdk=args.pdk)
     md = report_to_markdown(rep)
     if args.out_md:
         args.out_md.write_text(md, encoding="utf-8")

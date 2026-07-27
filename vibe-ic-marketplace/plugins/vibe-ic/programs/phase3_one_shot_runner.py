@@ -24596,15 +24596,20 @@ exit
 # an EMPTY measurement that no one can distinguish from "this PDK has no metal".
 #
 # MEASURED, which is why this is derived and not hand-written: the producer's
-# own literal was `^(met\d+|li1)$` — the sky130 spelling only. sky130A's
-# layermap does use `met1..met5`+`li1`, but gf180mcuD's uses `Metal1..Metal5`
-# and ihp-sg13g2's uses `Metal1..Metal5`+`TopMetal1/2` (read from each PDK's own
-# klayout tech .map inside the container). Neither matched, so for BOTH of those
-# PDKs the real KLayout per-layer CMP-density measurement selected zero layers
-# and shipped `"layers": {}` — a well-formed report carrying no measurement.
-# `li1` is kept because sky130 measures it today; the consumer filters it out,
-# so it stays as disclosed measurement context and nothing regresses.
-_METAL_DENSITY_LAYER_RE = r"(?:%s)|(?:^li1$)" % _mld._METAL_RE.pattern
+# own literal was `^(met\d+|li1)$` — one PDK's spelling only. That PDK's layermap
+# does use `met1..met5`+`li1`, but two other open PDKs spell their routing layers
+# `Metal1..Metal5` (+`TopMetal1/2`) (read from each PDK's own klayout tech .map
+# inside the container). Neither matched, so for BOTH of those PDKs the real
+# KLayout per-layer CMP-density measurement selected zero layers and shipped
+# `"layers": {}` — a well-formed report carrying no measurement.
+#
+# The selector is now EXACTLY the consumer's, with no local addition. It used to
+# carry a trailing `|(?:^li1$)` because the consumer did not recognise the
+# local-interconnect layer and would have dropped it: the producer measured it,
+# the gate discarded it, and the number reached the report with no verdict on
+# it. The consumer now judges that layer, so the special case is gone rather
+# than kept as a second authority that can drift again.
+_METAL_DENSITY_LAYER_RE = _mld._METAL_RE.pattern
 
 _METAL_DENSITY_KLAYOUT_RECIPE = r'''
 import json, re, sys
@@ -24612,6 +24617,11 @@ import pya
 gds_path = globals().get("gds", "")
 map_path = globals().get("map", "")
 out_path = globals().get("out", "")
+# The PDK this measurement was taken under, recorded IN the artifact. The gate
+# needs it to judge against the right foundry window, and an artifact that has
+# to be told from outside which process produced it can be rejudged against the
+# wrong one the moment it is read from a differently-configured shell.
+pdk_name = globals().get("pdk", "")
 # Parse the LEF/DEF layermap: "<lefname> <purpose> <gdslayer> <gdsdatatype>".
 # Keep the routing purpose (NET/SPNET) row per metal layer. The layer-name
 # pattern is injected from the CONSUMER gate's own regex so the two cannot drift.
@@ -24653,6 +24663,7 @@ for name, (gl, gd) in sorted(metal_layers.items()):
 open(out_path, "w").write(json.dumps({
     "tool": "klayout",
     "measurement": "per_layer_drawn_area_over_die_bbox_area",
+    "pdk": pdk_name,
     "gds": gds_path,
     "die_area_um2": round(die_um2, 3),
     "layers": layers,
@@ -24726,7 +24737,8 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     cmd = (
         f"export PATH=/foss/tools/klayout:{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"klayout -b -r {script_c} -rd gds={gds_c} -rd map={map_c} "
-        f"-rd out={out_c} 2>&1 | tee {_to_container_path(str(script.parent / 'metal_density.log'), container)}"
+        f"-rd pdk={pdk.name} -rd out={out_c} 2>&1 | tee "
+        f"{_to_container_path(str(script.parent / 'metal_density.log'), container)}"
     )
     rc, out, err = _docker_exec(container, cmd, marker=script_c, outputs=[out_json])
     if not out_json.is_file() or out_json.stat().st_size == 0:
