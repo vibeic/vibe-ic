@@ -154,16 +154,86 @@ def assert_lvs_trustworthy(spice_text: str,
     return ports
 
 
+# ── --project resolution ────────────────────────────────────────────────────
+# WHY THIS EXISTS (wire/signoff): `--top` defaults to the FIRST `.subckt` in
+# the file. In a Magic-extracted hierarchical netlist the first subckt is a
+# STANDARD CELL — measured on a real ihp-sg13g2 sign-off run, the guard
+# reported "top .subckt has 2 port(s)" for a design whose actual top has 38.
+# A guard that judges an arbitrary leaf cell would PASS a portless real top,
+# which is the exact false-clean it was written to refuse. The flow gate slot
+# cannot interpolate a design name, so the program resolves it: the top comes
+# from the DEF the layout was extracted from (`DESIGN <name> ;`).
+_SPICE_GLOBS = ("phase3/stage3/extracted/*_extracted.sp",
+                "phase3/stage3/extracted/*.spice")
+_DEF_GLOBS = ("phase3/stage3/pnr/routed.def", "phase3/stage3/pnr/filled.def",
+              "phase3/stage3/pnr/*.def")
+_VERDICT_GLOBS = ("reports/phase3/lvs.rpt",)
+
+
+def _first_match(project: Path, globs) -> Optional[Path]:
+    for pat in globs:
+        hits = sorted(q for q in project.glob(pat) if q.is_file())
+        if hits:
+            return hits[0]
+    return None
+
+
+def _def_design_name(def_path: Path) -> Optional[str]:
+    try:
+        with def_path.open("r", errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if i > 200:
+                    break
+                s = line.strip()
+                if s.startswith("DESIGN "):
+                    tok = s.split()
+                    if len(tok) >= 2:
+                        return tok[1].strip(";").strip()
+    except OSError:
+        return None
+    return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--spice", required=True, type=Path,
+    p.add_argument("--spice", default=None, type=Path,
                    help="Extracted layout SPICE netlist to guard.")
     p.add_argument("--top", default=None, help="Top subckt name (default: first subckt).")
+    p.add_argument("--project", default=None, type=Path,
+                   help=("Project directory: resolve --spice, --top (from the "
+                         "DEF's `DESIGN <name> ;`) and --verdict-file from the "
+                         "project's own artefacts. Without a resolved --top "
+                         "this guard judges the FIRST subckt, which in a "
+                         "hierarchical extraction is a standard cell, not the "
+                         "design top. Unresolvable inputs are a DISCLOSED "
+                         "skip (rc 2)."))
     p.add_argument("--verdict-file", type=Path, default=None,
                    help="Optional netgen verdict log; guard only trips if it claims a match.")
     p.add_argument("--strict", action="store_true",
                    help="Exit 1 on a portless extraction even without a verdict file.")
     args = p.parse_args(argv)
+
+    if args.project is not None:
+        if not args.project.is_dir():
+            print(f"ERROR: --project is not a directory: {args.project}",
+                  file=sys.stderr)
+            return 2
+        if args.spice is None:
+            args.spice = _first_match(args.project, _SPICE_GLOBS)
+        if args.top is None:
+            d = _first_match(args.project, _DEF_GLOBS)
+            args.top = _def_design_name(d) if d is not None else None
+        if args.verdict_file is None:
+            args.verdict_file = _first_match(args.project, _VERDICT_GLOBS)
+        if args.spice is None or args.top is None:
+            print("LVS-GUARD SKIP: nothing to judge yet — "
+                  f"extracted netlist={args.spice!s}, "
+                  f"top from DEF={args.top!s} "
+                  f"(searched {', '.join(_SPICE_GLOBS)} and "
+                  f"{', '.join(_DEF_GLOBS)}). NOT a pass.")
+            return 2
+    if args.spice is None:
+        p.error("--spice is required unless --project is given")
 
     if not args.spice.is_file():
         print(f"ERROR: not a file: {args.spice}", file=sys.stderr)
@@ -177,7 +247,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     except PortlessExtractionError as e:
         print(f"LVS-GUARD FAIL: {e}", file=sys.stderr)
         return 1
-    print(f"LVS-GUARD PASS: top .subckt has {len(ports)} port(s) — verdict is anchorable.")
+    print(f"LVS-GUARD PASS: top .subckt "
+          f"{('`' + args.top + '` ') if args.top else '(first in file) '}"
+          f"has {len(ports)} port(s) — verdict is anchorable.")
     return 0
 
 

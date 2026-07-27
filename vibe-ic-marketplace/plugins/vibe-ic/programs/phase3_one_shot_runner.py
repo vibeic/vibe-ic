@@ -19785,6 +19785,46 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         except Exception as exc:  # best-effort, never block the step
             notes.append(f"#694 single-corner stance emit failed: {exc}")
 
+    # --- Step 7: <top>.upf — the L21 power-intent handoff artefact ------
+    # WIRING (wire/signoff). `l21_to_upf_emit` is the ONLY producer of the
+    # third deliverable the architecture declares for Step 7
+    # (docs/architecture/ALL_STEPS_v1.4.14.md row 7: `<top>.upf`), and the only
+    # possible input to `upf_syntax_check`. It shipped with NO caller anywhere
+    # in the tree, so L21_POWER_INTENT.json has modelled power domains since
+    # v0.1.51 and none of it ever left the JSON — the UPF checker never had an
+    # input to check. Wired HERE (a runner subprocess) rather than as a gate
+    # slot because it PRODUCES an artefact rather than returning a verdict, and
+    # this is the function that already stages the sibling Step-7 deliverables
+    # (<top>.sdc, pvt_matrix.json) at their canonical paths.
+    # rc 0 emitted + self-check PASS / 1 self-check FAIL (a render its own
+    # upf_syntax_check rejects) / 2 vacuous — no L21 power_domains, which is
+    # every single-domain digital design and by far the common case.
+    upf_path = constraints_out / f"{top}.upf"
+    if not upf_path.is_file():
+        upf_json = project / "reports/phase2/gates/l21_to_upf_emit.json"
+        try:
+            r = subprocess.run(
+                [sys.executable,
+                 str(PROGRAMS_DIR / "l21_to_upf_emit.py"),
+                 str(project), "--top", top, "--json", str(upf_json)],
+                capture_output=True, text=True, timeout=120,
+            )
+            if upf_path.is_file():
+                written.append(str(upf_path))
+            if r.returncode == 1:
+                # NOT a note: a power-intent render that fails its OWN
+                # upf_syntax_check is a broken handoff artefact, and the M2
+                # gates downstream read the intent, not the JSON.
+                signoff_failures.append(
+                    f"l21_to_upf_emit: emitted {upf_path.name} but its own "
+                    f"upf_syntax_check REJECTED it — "
+                    f"{(r.stdout or r.stderr or '').strip()[-200:]}")
+            elif r.returncode == 2:
+                notes.append("l21_to_upf_emit: no L21 power_domains declared "
+                             "— no UPF rendered (single-domain design)")
+        except Exception as exc:  # noqa: BLE001 - best-effort, like its siblings
+            notes.append(f"l21_to_upf_emit invocation failed: {exc}")
+
     # --- Step 8: pre-emit SDC syntax check report ----------------------
     # The gate runs sdc_syntax_check and writes to reports/phase2/sdc_check.json
     # via --json; emitting here makes the required_outputs gate (file

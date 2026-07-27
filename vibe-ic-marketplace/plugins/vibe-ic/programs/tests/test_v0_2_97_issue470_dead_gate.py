@@ -146,10 +146,30 @@ def test_issue470_live_yaml_step31_gate_is_nested():
         f"{GATE_PREDICATE_KEYS & set(step31.keys())}"
     )
     # The promoted gate still has all five original sub-gates intact.
-    assert len(step31["gate"]["all_of"]) == 5, (
-        "Step 31 gate must keep all 5 sub-gates (drc, lvs, 2x provenance, "
-        "erc_density)"
-    )
+    #
+    # ASSERTED BY IDENTITY, NOT BY COUNT (wire/signoff). This was
+    # `len(...) == 5`, which reads as "keep all 5" but actually pins "have
+    # exactly 5" — so ADDING a sign-off gate to Step 31 failed a test whose
+    # whole subject is #470, the gate block sitting at the wrong level and
+    # going DEAD. A count cannot tell "someone deleted the LVS gate and added
+    # two others" from "someone added two others", which is the very
+    # substitution this test exists to catch; naming the five does.
+    present = []
+    for sub in step31["gate"]["all_of"]:
+        if isinstance(sub, dict):
+            for key in ("program_exit_zero", "optional_program_exit_zero",
+                        "advisory_program_exit_zero"):
+                val = sub.get(key)
+                if val is None:
+                    continue
+                present.append(val["command"] if isinstance(val, dict) else val)
+    for original in ("drc_report_check", "lvs_report_check", "erc_density_check"):
+        assert any(c.startswith(original) for c in present), (
+            f"Step 31 lost its {original} sub-gate")
+    provenance = [c for c in present if c.startswith("provenance_check")]
+    assert len(provenance) >= 2, (
+        "Step 31 must keep BOTH provenance sub-gates (drc_signoff.rpt and "
+        f"lvs.rpt), found: {provenance}")
 
 
 # ── (2) DEFENSE regression — promotion + visible warning ───────────────────

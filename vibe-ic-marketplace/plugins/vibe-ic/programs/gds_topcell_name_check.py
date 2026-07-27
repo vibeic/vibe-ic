@@ -34,10 +34,23 @@ the named top cell is/ is-not present as a STRNAME in the file. No size,
 PDK, IC, or tool-specific threshold is invented. Missing file / empty
 file / no structures / name-absent all FAIL honestly (never vacuous PASS).
 
+Project mode (`--project`), added when this check was wired into the flow
+------------------------------------------------------------------------
+The flow gate slot (`program_exit_zero`) has no variable substitution — it
+can expand shell globs against the project directory and nothing else — so
+a gate cannot say "--top-name <this design's top>". `--project <dir>`
+resolves BOTH arguments from the project's own artefacts, which is also the
+stronger question to ask: the expected name is read from the DEF the layout
+was streamed from (`DESIGN <name> ;`), so the gate asserts GDS-vs-DEF top
+identity rather than GDS-vs-a-string-someone-typed. Falls back to the L1
+`ic_name` when no DEF carries a DESIGN line. Resolution failures are
+DISCLOSED skips (rc 2), never a silent pass.
+
 Usage
 -----
     python3 gds_topcell_name_check.py --gds-file final.gds --top-name chip_top
     python3 gds_topcell_name_check.py --gds-file final.gds --top-name chip_top --json out.json
+    python3 gds_topcell_name_check.py --project . --json out.json
 
 Exit codes
 ----------
@@ -45,7 +58,9 @@ Exit codes
         referenced sub-cell rather than a hierarchy root)
     1 = file missing/empty/unparseable, no structures, or the named cell
         is absent (FAIL)
-    2 = bad arguments
+    2 = bad arguments, or (--project mode) the GDS / expected top name
+        could not be resolved from the project — a DISCLOSED skip that
+        prints what was searched, not a pass
 
 Generality: works for ANY GDSII file + any top-cell name. chip-AGNOSTIC.
 """
@@ -218,17 +233,140 @@ def build_report(findings: List[Finding], stats: dict,
     }
 
 
+# ── --project resolution ────────────────────────────────────────────────────
+# Ordered by how close the artefact is to the thing that was actually taped
+# out. The sign-off GDS first, then the PnR working copy.
+_GDS_GLOBS = (
+    "phase3/stage4/gds/*.gds",
+    "phase3/stage3/pnr/*.gds",
+    "phase3/*.gds",
+)
+# The DEF that names the design the GDS was streamed from.
+_DEF_GLOBS = (
+    "phase3/stage3/pnr/routed.def",
+    "phase3/stage3/pnr/filled.def",
+    "phase3/stage3/pnr/*.def",
+)
+
+
+def _first_match(project: Path, globs) -> Optional[Path]:
+    for pat in globs:
+        hits = sorted(p for p in project.glob(pat) if p.is_file())
+        if hits:
+            return hits[0]
+    return None
+
+
+def _def_design_name(def_path: Path) -> Optional[str]:
+    """Read `DESIGN <name> ;` out of a DEF header (first 200 lines)."""
+    try:
+        with def_path.open("r", errors="replace") as fh:
+            for _i, line in enumerate(fh):
+                if _i > 200:
+                    break
+                s = line.strip()
+                if s.startswith("DESIGN "):
+                    tok = s.split()
+                    if len(tok) >= 2:
+                        return tok[1].strip(";").strip()
+    except OSError:
+        return None
+    return None
+
+
+def _l1_ic_name(project: Path) -> Optional[str]:
+    for pat in ("phase1/generated_docs/L1_*.json",
+                "phase1/generated_docs/*L1*.json"):
+        for p in sorted(project.glob(pat)):
+            try:
+                doc = json.loads(p.read_text(errors="replace"))
+            except Exception:  # noqa: BLE001 - a malformed L1 is not a verdict
+                continue
+            if not isinstance(doc, dict):
+                continue
+            for key in ("ic_name", "top_module", "design_top"):
+                val = doc.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+    return None
+
+
+def resolve_from_project(project: Path) -> Tuple[Optional[Path],
+                                                 Optional[str], List[str]]:
+    """Return (gds_path, expected_top, notes). Either may be None."""
+    notes: List[str] = []
+    gds = _first_match(project, _GDS_GLOBS)
+    if gds is None:
+        notes.append("no GDS found under " + ", ".join(_GDS_GLOBS))
+    top: Optional[str] = None
+    def_path = _first_match(project, _DEF_GLOBS)
+    if def_path is not None:
+        top = _def_design_name(def_path)
+        if top:
+            notes.append(f"expected top from DEF {def_path.name}: DESIGN {top}")
+        else:
+            notes.append(f"DEF {def_path.name} carries no `DESIGN <name> ;`")
+    else:
+        notes.append("no DEF found under " + ", ".join(_DEF_GLOBS))
+    if not top:
+        top = _l1_ic_name(project)
+        if top:
+            notes.append(f"expected top from L1 ic_name: {top}")
+    if not top:
+        notes.append("expected top-cell name is UNRESOLVED "
+                     "(no DEF DESIGN line, no L1 ic_name)")
+    return gds, top, notes
+
+
 def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Verify a GDSII file defines the expected top-cell name")
-    parser.add_argument("--gds-file", required=True, help="Path to GDSII file")
-    parser.add_argument("--top-name", required=True,
+    parser.add_argument("--gds-file", default=None, help="Path to GDSII file")
+    parser.add_argument("--top-name", default=None,
                         help="Expected top-cell name to match")
+    parser.add_argument("--project", default=None,
+                        help=("Project directory: resolve --gds-file and "
+                              "--top-name from the project's own artefacts "
+                              "(sign-off GDS + the DEF's `DESIGN <name> ;`, "
+                              "falling back to L1 ic_name). Unresolvable "
+                              "inputs are a DISCLOSED skip (rc 2)."))
     parser.add_argument("--json", default=None, help="Output JSON report path")
     args = parser.parse_args(argv)
 
+    resolution_notes: List[str] = []
+    if args.project:
+        project = Path(args.project)
+        if not project.is_dir():
+            print(f"ERROR: --project is not a directory: {project}",
+                  file=sys.stderr)
+            return 2
+        r_gds, r_top, resolution_notes = resolve_from_project(project)
+        gds_arg = args.gds_file or (str(r_gds) if r_gds else None)
+        top_arg = args.top_name or r_top
+        if not gds_arg or not top_arg:
+            skip = {
+                "program": "gds_topcell_name_check",
+                "verdict": "SKIP",
+                "reason": ("cannot judge top-cell identity yet — "
+                           + "; ".join(resolution_notes)),
+                "resolution": resolution_notes,
+                "project": str(project),
+            }
+            out = json.dumps(skip, indent=2, ensure_ascii=False)
+            if args.json:
+                Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+                Path(args.json).write_text(out)
+            print(out)
+            return 2
+        args.gds_file, args.top_name = gds_arg, top_arg
+    elif not args.gds_file or not args.top_name:
+        parser.error("--gds-file and --top-name are required "
+                     "unless --project is given")
+
     gds_path = Path(args.gds_file)
     findings, stats = check_topcell(gds_path, args.top_name)
+    if resolution_notes:
+        stats["resolution"] = resolution_notes
     report = build_report(findings, stats, str(gds_path))
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
 
