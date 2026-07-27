@@ -210,3 +210,113 @@ def test_exit2_bad_dir(tmp_path):
         capture_output=True, text=True,
     )
     assert r.returncode == 2
+
+
+# ── .v / .lib content predicates: a DECLARATION, not a substring ──────────
+# These two were `"module" not in text` and `"cell" not in text.lower()`.
+# Measured: a Verilog file whose only occurrence of the word sat inside a `//`
+# comment was signed off HARDMACRO_COMPLETE, and a Liberty file containing
+# only the word "cancelled" satisfied the cell predicate.
+
+def _seed_with(tmp_path: Path, block: str, verilog: str, liberty: str) -> None:
+    ad = tmp_path / "phase3" / "analog" / block
+    ad.mkdir(parents=True, exist_ok=True)
+    (ad / "spec.json").write_text("{}")
+    hm = tmp_path / "phase3" / "analog" / "hardmacro" / block
+    hm.mkdir(parents=True, exist_ok=True)
+    (hm / f"{block}.gds").write_bytes(build_real_gds())
+    (hm / f"{block}.lef").write_text(
+        f"MACRO {block}\n  PIN vout\n  END vout\nEND {block}\n")
+    (hm / f"{block}.lib").write_text(liberty)
+    (hm / f"{block}.v").write_text(verilog)
+
+
+_GOOD_LIB = 'library (ldo_lib) {\n  cell (ldo) {}\n}\n'
+_GOOD_V = "module ldo(input vin, output vout);\nendmodule\n"
+
+
+def test_fail_verilog_module_only_inside_a_comment(tmp_path):
+    """THE discriminator. A behavioural view of the hardmacro: the .v is what
+    digital PnR instantiates, so a file that declares nothing is not a
+    deliverable — no matter which words its comments contain."""
+    _seed_with(
+        tmp_path, "ldo",
+        verilog=("// this is a submodule placeholder comment mentioning "
+                 "module keyword\n"
+                 "/* another module reference, also a comment */\n"
+                 "wire vdd;\nwire vss;\nassign vdd = 1'b1;\n"),
+        liberty=_GOOD_LIB)
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rpt = _load_report(tmp_path)
+    assert rpt["passed"] is False
+    rules = {f["rule"] for f in rpt["findings"]}
+    assert "HARDMACRO_V_NO_MODULE" in rules, rpt["findings"]
+    assert "HARDMACRO_COMPLETE" not in rules, rpt["findings"]
+
+
+def test_fail_liberty_cell_substring_inside_another_word(tmp_path):
+    """THE discriminator for the Liberty half: 'cancelled' contains 'cell'."""
+    _seed_with(
+        tmp_path, "ldo",
+        verilog=_GOOD_V,
+        liberty="/* the release was cancelled, excellent, no timing here */\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rules = {f["rule"] for f in _load_report(tmp_path)["findings"]}
+    assert "HARDMACRO_LIB_NO_CELL" in rules
+
+
+@pytest.mark.parametrize("verilog", [
+    "module ldo(input vin, output vout);\nendmodule\n",
+    "`timescale 1ns/1ps\nmodule ldo (vin, vout);\ninput vin;\nendmodule\n",
+    "// wrapper\n(* keep *) module ldo #(parameter W=1) (input a);\n"
+    "endmodule\n",
+    "/* header */\n\nmodule\tldo(input a);\nendmodule\n",
+])
+def test_guard_real_verilog_module_declarations_still_pass(tmp_path, verilog):
+    """Direction-1 guard: every ordinary spelling of a module header — with a
+    timescale directive, an attribute, a parameter list, a tab — must keep
+    passing."""
+    _seed_with(tmp_path, "ldo", verilog=verilog, liberty=_GOOD_LIB)
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+
+
+def test_fail_liberty_with_only_a_test_cell_group(tmp_path):
+    """`test_cell` also contains the substring 'cell' but is not the timing
+    cell digital PnR links against. The predicate must require the `cell`
+    keyword itself, not a word that ends in it."""
+    _seed_with(
+        tmp_path, "ldo",
+        verilog=_GOOD_V,
+        liberty='library (ldo_lib) {\n  test_cell (ldo_tc) {}\n}\n')
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rules = {f["rule"] for f in _load_report(tmp_path)["findings"]}
+    assert "HARDMACRO_LIB_NO_CELL" in rules
+
+
+@pytest.mark.parametrize("liberty", [
+    'library (ldo_lib) {\n  cell (ldo) {}\n}\n',
+    'library(ldo_lib){\ncell(ldo){\narea : 100.0;\n}\n}\n',
+    'library (ldo_lib) {\n  /* comment */\n  cell ("ldo") {\n  }\n}\n',
+    'library (ldo_lib) {\n  CELL (ldo) {}\n}\n',
+    'library (ldo_lib) {\n  cell ("1v8_ldo") {}\n}\n',
+    'library (ldo_lib) {\n  test_cell (tc) {}\n  cell (ldo) {}\n}\n',
+])
+def test_guard_real_liberty_cell_groups_still_pass(tmp_path, liberty):
+    """Direction-1 guard: the Liberty group header with/without spaces, quoted,
+    or upper-cased must keep passing."""
+    _seed_with(tmp_path, "ldo", verilog=_GOOD_V, liberty=liberty)
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+
+
+def test_guard_stub_hardmacro_still_bypasses_content_predicates(tmp_path):
+    """Direction-1 guard: the deterministic-stub short-circuit sits ahead of
+    both predicates, so PASS_WITH_STUB is unaffected by tightening them."""
+    _seed_hardmacro(tmp_path, "ldo", None, stub=True)
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    assert _load_report(tmp_path)["summary"]["verdict_tier"] == "PASS_WITH_STUB"

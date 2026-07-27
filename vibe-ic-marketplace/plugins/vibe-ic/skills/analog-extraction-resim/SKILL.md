@@ -59,12 +59,24 @@ After analog layout in Magic, extracts parasitic RC and re-simulates across PVT 
 ## Output format
 
 ### `analog/<block>/pre_vs_post.json`
+
+Write it at `phase3/analog/<block>/pre_vs_post.json` — the canonical analog
+dir (`_path_layout.analog_dir`), which is what the A7 gate globs.
+
+**The container key is `comparisons` (plural).** This doc used to show
+`comparison` (singular); `analog_pre_vs_post_layout_check.py` has only ever
+read `comparisons` or `specs`, so a file authored exactly per the old example
+was parsed as zero comparable specs and the gate FAILed it
+`PRE_VS_POST_ZERO_COMPARED` — a correct result authored per its own
+instructions was rejected. The program is the single source of truth here, as
+it already is for the thresholds below.
+
 ```json
 {
   "block_name": "ldo_1v8",
   "pre_layout_file": "corner_results.json",
   "post_layout_file": "post_layout_corner_results.json",
-  "comparison": {
+  "comparisons": {
     "gain_db": {"pre": 62.3, "post": 58.1, "degradation_pct": -6.7, "status": "OK"},
     "ugb_mhz": {"pre": 11.2, "post": 7.5, "degradation_pct": -33.0, "status": "ERROR"},
     "vout_dc": {"pre": 1.8002, "post": 1.7998, "degradation_pct": -0.02, "status": "OK"}
@@ -73,6 +85,20 @@ After analog layout in Magic, extracts parasitic RC and re-simulates across PVT 
   "overall_status": "NEEDS_RELAYOUT"
 }
 ```
+
+Accepted spellings (exactly what the gate parses — nothing else is read):
+
+| position | accepted keys |
+|---|---|
+| container | `comparisons` (preferred) or `specs` |
+| container shape | dict of `{metric: {…}}`, or list of `{"name": …, …}` |
+| pre value | `pre_layout` or `pre` |
+| post value | `post_layout` or `post` |
+
+Both values must be numeric and `pre` must be non-zero, otherwise that metric
+is not counted. A file in which NO metric is comparable FAILs
+`PRE_VS_POST_ZERO_COMPARED` — a comparison gate must never report PASS having
+compared nothing.
 
 ## Degradation thresholds
 

@@ -32,6 +32,24 @@ from typing import List, Optional
 import _path_layout as _pl
 
 
+# ── accepted pre_vs_post.json schema ──────────────────────────────────────
+# Single source of truth for the key names, mirrored in
+# `skills/analog-extraction-resim/SKILL.md`. The two drifted once (the skill
+# documented "comparison", singular; this gate has only ever read
+# "comparisons"/"specs"), which made a result authored exactly per the skill's
+# own example FAIL as if it contained no data.
+_CONTAINER_KEYS: tuple = ("comparisons", "specs")
+_PRE_KEYS: tuple = ("pre_layout", "pre")
+_POST_KEYS: tuple = ("post_layout", "post")
+
+
+def _first_key(item: dict, keys: tuple):
+    for k in keys:
+        if k in item:
+            return item[k]
+    return None
+
+
 @dataclass
 class Finding:
     rule: str
@@ -76,6 +94,10 @@ def run_audit(project: Path) -> AuditResult:
     total_specs = 0
     errors = 0
     max_degradation = 0.0
+    # Blocks whose pre_vs_post.json parsed as JSON but exposed NO container
+    # under a key this gate reads. Kept so the zero-compared verdict can name
+    # the cause (schema drift) instead of implying the file held no data.
+    unreadable_schema: List[str] = []
 
     for pvp_path in pvp_files:
         block = pvp_path.parent.name
@@ -90,19 +112,31 @@ def run_audit(project: Path) -> AuditResult:
             ))
             continue
 
-        comparisons = data.get("comparisons", data.get("specs", {}))
+        # ONLY these container keys are read. `skills/analog-extraction-resim`
+        # documents the same list; when they drift, a spec-compliant result is
+        # scored as zero comparisons, so the drift is named explicitly below
+        # rather than surfacing as a bare "no numeric pre/post pairs".
+        container_key = next(
+            (k for k in _CONTAINER_KEYS if isinstance(data, dict) and k in data),
+            None)
+        comparisons = data.get(container_key) if container_key else None
         if isinstance(comparisons, list):
             comp_iter = comparisons
         elif isinstance(comparisons, dict):
             comp_iter = [{"name": k, **v} for k, v in comparisons.items()]
         else:
+            if isinstance(data, dict):
+                unreadable_schema.append(
+                    f"{block}: top-level keys "
+                    f"{sorted(str(k) for k in data)} — none of "
+                    f"{list(_CONTAINER_KEYS)} present")
             continue
 
         for item in comp_iter:
             if isinstance(item, dict):
                 name = item.get("name", item.get("spec", "?"))
-                pre_val = item.get("pre_layout", item.get("pre"))
-                post_val = item.get("post_layout", item.get("post"))
+                pre_val = _first_key(item, _PRE_KEYS)
+                post_val = _first_key(item, _POST_KEYS)
             else:
                 continue
 
@@ -157,13 +191,23 @@ def run_audit(project: Path) -> AuditResult:
     # comparison gate must FAIL, never PASS, with items_compared==0.
     if total_specs == 0:
         result.passed = False
+        detail = ""
+        if unreadable_schema:
+            # Name the schema drift. Without this the message read as "the
+            # file holds no data", which sent readers looking at the SPICE
+            # run when the real cause was a container key this gate does not
+            # read (measured: SKILL.md documented "comparison", singular).
+            detail = (" — SCHEMA: " + "; ".join(unreadable_schema)
+                      + f". Recognised container keys: {list(_CONTAINER_KEYS)};"
+                        f" per-item value keys: {list(_PRE_KEYS)} /"
+                        f" {list(_POST_KEYS)}")
         result.findings.append(Finding(
             rule="PRE_VS_POST_ZERO_COMPARED",
             severity="ERROR",
             message=("pre_vs_post.json present but 0 specs were "
                      "compared (no numeric pre/post pairs) — a "
                      "comparison gate must FAIL (or self-skip), never "
-                     "PASS, with items_compared==0 (#438c)"),
+                     "PASS, with items_compared==0 (#438c)" + detail),
         ))
 
     result.summary = {

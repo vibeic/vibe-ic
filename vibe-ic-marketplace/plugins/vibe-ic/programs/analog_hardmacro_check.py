@@ -5,8 +5,18 @@ Validates that each analog block has a complete hardmacro package under
 hardmacro/<block>/ containing:
   - <block>.gds  (carries REAL GDS geometry — see below)
   - <block>.lef  (contains MACRO and PIN keywords)
-  - <block>.lib  (contains cell keyword)
-  - <block>.v    (contains module definition)
+  - <block>.lib  (declares at least one Liberty `cell (<name>) { … }` group)
+  - <block>.v    (declares at least one Verilog `module <name>`)
+
+The .lib and .v predicates used to be bare substring tests — `"cell" not in
+text.lower()` and `"module" not in text`. Measured: a Verilog file whose ONLY
+occurrence of the word was inside a `//` comment ("// this is a submodule
+placeholder comment mentioning module keyword", plus `wire`/`assign` lines and
+no declaration at all) satisfied HARDMACRO_V_NO_MODULE and the block was signed
+off HARDMACRO_COMPLETE; a Liberty file containing only "/* the release was
+cancelled */" satisfied HARDMACRO_LIB_NO_CELL on the substring inside
+"cancelled". Both predicates now strip comments and require the DECLARATION to
+be PRESENT — the good thing asserted, not the bad token absent.
 
 The GDS predicate used to be `exists() and st_size != 0`. Measured: 500 bytes
 of non-GDS noise placed at hardmacro/<block>/<block>.gds, alongside a valid
@@ -35,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -69,6 +80,43 @@ def _gds_geometry_records(path: Path) -> int:
         return _gds_geometry_count(path.read_bytes())
     except OSError:
         return 0
+
+
+# ── declaration parsers (replacing the old bare substring tests) ───────────
+# Comments are stripped FIRST so a mention inside `//`, `/* */` or Liberty's
+# own `/* */` can never stand in for a declaration.
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+
+# `module <identifier>` — Verilog identifiers are [A-Za-z_][A-Za-z0-9_$]* or an
+# escaped identifier (`\name ` ). `module` must be a whole word.
+_V_MODULE_DECL_RE = re.compile(
+    r"(?:^|[^\w$])module\s+(?:\\\S+|[A-Za-z_][\w$]*)")
+# Liberty group header `cell (<name>) {` — `cell` must be a whole word, so
+# "cancelled" / "excellent" cannot satisfy it, and so can a `test_cell` /
+# `scaled_cell` group (both are prefixed by a word character). The name is any
+# non-empty, space-free token so digit-leading and quoted cell names are
+# accepted; an empty `cell ()` is not.
+_LIB_CELL_DECL_RE = re.compile(
+    r"(?:^|[^\w])cell\s*\(\s*[\"']?[^)\s\"']+[\"']?\s*\)",
+    re.IGNORECASE)
+
+
+def _strip_comments(text: str) -> str:
+    """Remove `/* … */` and `// …` comments. Shared by the Verilog and
+    Liberty predicates — both languages use exactly these two forms."""
+    return _LINE_COMMENT_RE.sub(" ", _BLOCK_COMMENT_RE.sub(" ", text))
+
+
+def has_verilog_module_decl(text: str) -> bool:
+    """True iff `text` declares at least one Verilog module OUTSIDE comments."""
+    return bool(_V_MODULE_DECL_RE.search(_strip_comments(text)))
+
+
+def has_liberty_cell_decl(text: str) -> bool:
+    """True iff `text` declares at least one Liberty `cell (<name>)` group
+    OUTSIDE comments."""
+    return bool(_LIB_CELL_DECL_RE.search(_strip_comments(text)))
 
 
 @dataclass
@@ -221,11 +269,12 @@ def run_audit(project: Path) -> AuditResult:
         elif lib.exists():
             try:
                 text = lib.read_text(errors="replace")
-                if "cell" not in text.lower():
+                if not has_liberty_cell_decl(text):
                     result.findings.append(Finding(
                         rule="HARDMACRO_LIB_NO_CELL",
                         severity="ERROR",
-                        message=f"Block '{block}': Liberty file missing cell definition",
+                        message=(f"Block '{block}': Liberty file declares no "
+                                 f"`cell (<name>)` group outside comments"),
                         file=str(lib),
                     ))
                     missing.append(f"{block}.lib (no cell)")
@@ -237,11 +286,12 @@ def run_audit(project: Path) -> AuditResult:
         elif verilog.exists():
             try:
                 text = verilog.read_text(errors="replace")
-                if f"module" not in text:
+                if not has_verilog_module_decl(text):
                     result.findings.append(Finding(
                         rule="HARDMACRO_V_NO_MODULE",
                         severity="ERROR",
-                        message=f"Block '{block}': Verilog file missing module definition",
+                        message=(f"Block '{block}': Verilog file declares no "
+                                 f"`module <name>` outside comments"),
                         file=str(verilog),
                     ))
                     missing.append(f"{block}.v (no module)")

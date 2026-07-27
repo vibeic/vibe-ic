@@ -1237,11 +1237,22 @@ steps:
     skills: [analog-spec-extract]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+    # PATH: the canonical location comes FIRST because it is the only one any
+    # producer writes. `analog_one_shot_runner` and `phase1_doc_one_shot_runner`
+    # both write through `_path_layout.analog_dir()` = phase3/analog/, and
+    # `analog_a1_spec_extract_check` reads phase3/analog/<block>/spec.json.
+    # This entry used to declare ONLY phase1/analog/*/spec.json, a path nothing
+    # writes; it appeared to work solely because `flow_compliance_check._glob_first`
+    # carries a hidden phase{1,2,3}/analog → canonical remap. Tools without that
+    # remap (flow_dashboard_data._resolve_spec) resolved the declared path to
+    # "absent" on a run that had in fact produced the artefact. The legacy
+    # phase1/ spelling is kept as an OR-alternative because
+    # `migrate_to_layout_p` moves a project-root analog/ tree there.
     required_outputs:
-      - "phase1/analog/*/spec.json"
+      - "phase3/analog/*/spec.json OR phase1/analog/*/spec.json"
     gate:
       all_of:
-        - files_exist: ["phase1/analog/*/spec.json"]
+        - files_exist: ["phase3/analog/*/spec.json OR phase1/analog/*/spec.json"]
         - program_exit_zero: "analog_a1_spec_extract_check . --json reports/analog/a1_spec.json"
     blocks_on: []
 
@@ -1251,11 +1262,13 @@ steps:
     skills: [analog-topology-select]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+    # PATH: canonical first — see the A1 note. The producer and
+    # `analog_a2_topology_select_check` both use phase3/analog/<block>/.
     required_outputs:
-      - "phase2/analog/*/topology.md"
+      - "phase3/analog/*/topology.md OR phase2/analog/*/topology.md"
     gate:
       all_of:
-        - files_exist: ["phase2/analog/*/topology.md"]
+        - files_exist: ["phase3/analog/*/topology.md OR phase2/analog/*/topology.md"]
         - program_exit_zero: "analog_a2_topology_select_check . --json reports/analog/a2_topology.json"
     blocks_on: [A1]
 
@@ -1266,11 +1279,12 @@ steps:
     mcp_tools: [eda_xschem_netlist]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+    # PATH: canonical first — see the A1 note.
     required_outputs:
-      - "phase2/analog/*/*.sp"
+      - "phase3/analog/*/*.sp OR phase2/analog/*/*.sp"
     gate:
       all_of:
-        - files_exist: ["phase2/analog/*/*.sp"]
+        - files_exist: ["phase3/analog/*/*.sp OR phase2/analog/*/*.sp"]
         - program_exit_zero: "analog_netlist_pdk_check . --json reports/phase2/gates/analog_netlist_pdk.json"
         # `analog_netlist_pdk_check` judges MODEL INCLUDES + BODY CONNECTIONS
         # by iterating device cards, so a `.subckt` shell with ZERO devices
@@ -1290,11 +1304,12 @@ steps:
     mcp_tools: [eda_spice_corner]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+    # PATH: canonical first — see the A1 note.
     required_outputs:
-      - "phase2/analog/*/corner_results.json"
+      - "phase3/analog/*/corner_results.json OR phase2/analog/*/corner_results.json"
     gate:
       all_of:
-        - files_exist: ["phase2/analog/*/corner_results.json"]
+        - files_exist: ["phase3/analog/*/corner_results.json OR phase2/analog/*/corner_results.json"]
         # v0.2.55 — use the HARDENED anti-stub A4 gate. The legacy
         # `analog_corner_sweep_check` exits 0 on a deterministic-stub
         # corner_results.json (no SPICE ran), which let the SOLE-
@@ -1320,6 +1335,32 @@ steps:
           any_of: true
         - program_exit_zero: "analog_a5_layout_check . --json reports/analog/a5_layout.json"
     blocks_on: [A4]
+    notes: |
+      KNOWN UNRESOLVED COUPLING — declared here so it stops being silent.
+      This is a DISCLOSURE, not a design intent, and not a resolution.
+
+      `analog_a5_layout_check` does not only judge the layout: it also
+      requires `phase3/analog/<block>/drc_clean.flag` and `lvs_match.flag`
+      (A5_DRC_FLAG_MISSING / A5_LVS_FLAG_MISSING). Those two files are A6's
+      OWN declared required_outputs, and A6 declares `blocks_on: [A5]`. So the
+      declared graph says A6 cannot run until A5 passes, while A5's gate
+      cannot pass until A6 has run. `analog_one_shot_runner` executes
+      A5_layout before A6_block_pv within each block's loop, so on a
+      single-pass run A5 reports FAIL for a reason that is not A5's to fix; it
+      only clears on a later pass.
+
+      This cannot be fixed by adding an edge — `blocks_on: [A4, A6]` would be
+      a literal cycle. The two candidate resolutions both change ownership and
+      need an owner decision:
+        (a) move the DRC/LVS-flag half of the A5 gate into A6, where a
+            STRICTER version of the same check already lives
+            (`analog_a6_block_pv_check` accepts richer evidence, rejects a
+            bare flag, and FAILs on no evidence) — no defect class becomes
+            invisible, but A5's documented contract shrinks; or
+        (b) keep A5's contract and re-scope the two steps so per-block PV is
+            not a separate declared step.
+      Until one is chosen, do NOT "fix" a first-pass A5 FAIL by relaxing the
+      flag rules — that would trade a false red for a false green.
 
   - id: A7
     name: "🔁 Post-Layout Resimulation"
@@ -1390,8 +1431,20 @@ steps:
     mcp_tools: [eda_spice, eda_simulate]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+    # EVIDENCE: `mixed_signal_cosim_check` — the gate this step runs — reads
+    # `phase3/mixed_signal/cosim/mixed_signal_results.json` as its
+    # authoritative aggregate report (the file its own anti-fabrication pass
+    # cites). That filename does not end in `_cosim_results.json`, so it never
+    # matched the declared glob, and a project whose ONLY cosim evidence was
+    # the aggregate short-circuited to MISSING in
+    # `flow_compliance_check.check_step` before the gate ran. The hw-measurement
+    # alternative is also spelled with its real prefix here: the bare
+    # `analog/` form resolved only through `_glob_first`'s hidden analog remap
+    # and read as absent to every tool without it (e.g. the dashboard), while
+    # A9's own optional_program_exit_zero condition already says
+    # `phase3/analog/*/hw_measurements.json`.
     required_outputs:
-      - "phase3/mixed_signal/cosim/*_cosim_results.json OR analog/*/hw_measurements.json"
+      - "phase3/mixed_signal/cosim/*_cosim_results.json OR phase3/mixed_signal/cosim/mixed_signal_results.json OR phase3/analog/*/hw_measurements.json"
     gate:
       all_of:
         - program_exit_zero: "mixed_signal_cosim_check . --json reports/phase2/gates/cosim.json"
@@ -2457,9 +2510,22 @@ steps:
     skills: [drc-fix, lvs-triage]
     programs:
       - analog_a6_block_pv_check
+    # EVIDENCE: these entries must name every artefact the A6 gate accepts,
+    # because `flow_compliance_check.check_step` treats required_outputs as a
+    # CHEAP PRE-CHECK and returns MISSING **without ever running the gate**
+    # when no entry resolves. `analog_a6_block_pv_check` treats the DRC/LVS
+    # REPORTS as its primary evidence (drc.report / *.lyrdb / drc.rpt;
+    # comp.json / lvs.report / lvs.rpt) and the .flag files as a lesser
+    # fallback that must itself carry a count/verdict line. Measured on a
+    # synthetic block carrying only drc.report ("Total DRC violations: 0") and
+    # lvs.report ("LVS match: true"): the gate ran standalone and returned
+    # PASS (rc=0, "1/1 block(s) DRC-0 + LVS-match") while check_step returned
+    # MISSING and never invoked it. Each entry below is one artefact with
+    # several accepted names, so this widens what SATISFIES A6, never what
+    # the gate accepts — the substantive verdict is still the program's.
     required_outputs:
-      - "phase3/analog/*/drc_clean.flag"
-      - "phase3/analog/*/lvs_match.flag"
+      - "phase3/analog/*/drc_clean.flag OR phase3/analog/*/drc.report OR phase3/analog/*/*.lyrdb OR phase3/analog/*/drc.rpt"
+      - "phase3/analog/*/lvs_match.flag OR phase3/analog/*/lvs.report OR phase3/analog/*/comp.json OR phase3/analog/*/lvs.rpt"
     gate:
       program_exit_zero: "analog_a6_block_pv_check . --json reports/phase2/gates/analog_block_pv.json"
     blocks_on: [A5]
