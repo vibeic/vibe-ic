@@ -13,7 +13,9 @@ helpers from here:
     each gate has its own audit logic and exit semantics.
 
 VACUOUS_PASS contract (chip-AGNOSTIC):
-  * `analog/analog_block_list.json` absent or empty → exit 0 +
+  * the analog block list absent at EVERY location in
+    `BLOCK_LIST_CANDIDATES` (`phase3/analog/`, `phase1/analog/`,
+    legacy `analog/`), or present but empty → exit 0 +
     "VACUOUS_PASS: no analog blocks declared".
   * Per-block, when called WITHOUT `--block`: report verdict per
     project (combine all blocks).
@@ -40,13 +42,62 @@ from pathlib import Path
 from typing import List, Optional
 
 
+# ── block-list location: three producers, three paths ─────────────────────
+# The analog block list is written to a DIFFERENT path by each of its
+# producers, and the A-gates used to read only one of them:
+#   * `analog_one_shot_runner` materialises the canonical
+#     `phase3/analog/analog_block_list.json` (`_pl.analog_dir`) so the
+#     per-step gates see the same blocks it planned;
+#   * `flow/phase1_phase2_phase3.yaml` keys the `condition:` of EVERY A-step
+#     on `phase1/analog/analog_block_list.json`, and `migrate_to_layout_p.py`
+#     moves a pre-v2 list to exactly that path (MEASURED: running the
+#     production migrator on a pre-v2 project emits the single move
+#     `analog/analog_block_list.json -> phase1/analog/analog_block_list.json`);
+#   * pre-v2 projects still carry the legacy top-level `analog/` copy.
+# Reading only the canonical path made every A-gate answer VACUOUS_PASS
+# "gate inapplicable" on a project laid out exactly as its own flow declares
+# — so the flow ACTIVATED A1-A4 (their `condition` reads the phase1 copy)
+# and then let a gate that had loaded no block list certify the step.
+# Sibling code already carries this tolerance:
+# `analog_block_list_emit_check._PROJECT_GLOBS` probes three locations and
+# `flow_compliance_check._has_canonical_analog_blocks` accepts more than one.
+# chip-AGNOSTIC: pure path resolution.
+BLOCK_LIST_CANDIDATES = (
+    "phase3/analog/analog_block_list.json",   # canonical runner dir
+    "phase1/analog/analog_block_list.json",   # what every A-step condition pins
+    "analog/analog_block_list.json",          # pre-v2 legacy layout
+)
+
+
+def no_block_list_reason() -> str:
+    """The VACUOUS_PASS reason a gate reports when no block list exists —
+    naming every location actually probed, so the message cannot claim the
+    gate looked somewhere it did not."""
+    return (f"no analog block list at any of "
+            f"{', '.join(BLOCK_LIST_CANDIDATES)}; gate inapplicable.")
+
+
+def block_list_path(project: Path) -> Optional[Path]:
+    """First EXISTING block-list file, in `BLOCK_LIST_CANDIDATES` order, or
+    None. The first existing file wins even when it declares ZERO blocks: an
+    explicit `[]` at the canonical path is the runner's documented
+    "pure-digital, skip on purpose" signal (`_load_block_list_with_status`
+    status=="empty") and a stale sibling copy must not override it."""
+    for rel in BLOCK_LIST_CANDIDATES:
+        cand = project / rel
+        if cand.is_file():
+            return cand
+    return None
+
+
 def load_block_list(project: Path) -> Optional[List[str]]:
     """Return list of declared analog block names, or None when no
-    analog block list exists. Empty list when file exists but no
-    blocks are declared. Mirrors `analog_artefact_substance_check`.
+    analog block list exists at ANY of `BLOCK_LIST_CANDIDATES`. Empty list
+    when a file exists but no blocks are declared. Mirrors
+    `analog_artefact_substance_check`.
     """
-    path = project / "phase3" / "analog" / "analog_block_list.json"
-    if not path.is_file():
+    path = block_list_path(project)
+    if path is None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -128,7 +179,14 @@ def _all_blocks_low_confidence(project: Path) -> bool:
     (a phantom keyword hit, never a spec-backed block). An empty list returns
     False here — the caller's existing empty-list VACUOUS path handles that.
     A list with ANY high-confidence (spec-backed) block returns False so a real
-    analog IC is still gated."""
+    analog IC is still gated.
+
+    DELIBERATELY canonical-path-only, NOT `block_list_path()`: True here is a
+    SKIP, so widening where this predicate looks would make the N/A escape
+    hatch reachable on projects it is not reachable on today — a weakening.
+    Fail-closed stays fail-closed; do not "align" this with
+    `BLOCK_LIST_CANDIDATES` without an owner decision on the blast radius of
+    the three P0 gates that consume it."""
     path = project / "phase3" / "analog" / "analog_block_list.json"
     if not path.is_file():
         return False
@@ -167,30 +225,52 @@ def analog_class_is_na(project: Path) -> bool:
 # carries an explicit canonical-analog-dir tolerance for its `files_exist`
 # globs (`_glob_rel`, "v0.2.55 — canonical-analog-dir tolerance").
 #
-# The A1-A4 gates hardcoded `phase3/analog/` only. A project laid out exactly
-# as its OWN flow declares — or migrated by `migrate_to_layout_p.py`, which
-# moves A1's spec to `phase1/analog/` and A2-A4's artefacts to
-# `phase2/analog/` — therefore made every gate report its artefact MISSING and
-# self-skip, measuring nothing. Probe the canonical runner dir FIRST so
-# runner-produced projects resolve to byte-identical paths, then fall back to
-# the flow-declared phase dir. chip-AGNOSTIC: pure path resolution.
+# The A1-A4 gates hardcoded `phase3/analog/` only, so a project laid out as
+# its OWN flow declares reported every artefact MISSING and self-skipped,
+# measuring nothing.
+#
+# `migrate_to_layout_p.py` does NOT reproduce the per-phase split the flow
+# declares. MEASURED by running the production migrator on a pre-v2 project
+# whose one block dir held spec.json + topology.md + <block>.sp +
+# corners.json: it emitted exactly two moves —
+#     analog/analog_block_list.json -> phase1/analog/analog_block_list.json
+#     analog/<block>                -> phase2/analog/<block>
+# `_classify_analog_block` picks ONE most-backend destination phase for the
+# WHOLE block dir, so on a migrated project A1's spec.json lands under
+# `phase2/analog/<block>/`, not under the `phase1/analog/` the flow declares
+# as A1's required_output. A candidate list of {canonical, declared-phase}
+# therefore still missed A1's spec on every migrated project.
+#
+# So probe EVERY analog root: the canonical runner dir FIRST (runner-produced
+# projects resolve to byte-identical paths — guarded), then the flow-declared
+# phase dir, then the remaining roots for the producer/declaration drift
+# above. Widening resolution is monotone: an artefact that used to read
+# MISSING can only start being MEASURED, never start being skipped.
+# chip-AGNOSTIC: pure path resolution.
 _DECLARED_ANALOG_ROOT = {
     1: "phase1/analog",
     2: "phase2/analog",
     3: "phase3/analog",
 }
 _CANONICAL_ANALOG_ROOT = "phase3/analog"
+_ALL_ANALOG_ROOTS = ("phase3/analog", "phase1/analog", "phase2/analog",
+                     "analog")
 
 
 def block_artefact_candidates(project: Path, block: str, filename: str,
                               declared_phase: int) -> List[Path]:
-    """Ordered candidate paths for one per-block A-step artefact:
-    the canonical runner dir first, then the flow-declared phase dir."""
-    cands = [project / _CANONICAL_ANALOG_ROOT / block / filename]
+    """Ordered candidate paths for one per-block A-step artefact: the
+    canonical runner dir first, then the flow-declared phase dir, then every
+    remaining analog root (a migrated project puts A1's spec under
+    `phase2/analog/` — see the note above)."""
+    order = [_CANONICAL_ANALOG_ROOT]
     declared = _DECLARED_ANALOG_ROOT.get(declared_phase)
-    if declared and declared != _CANONICAL_ANALOG_ROOT:
-        cands.append(project / declared / block / filename)
-    return cands
+    if declared and declared not in order:
+        order.append(declared)
+    for root in _ALL_ANALOG_ROOTS:
+        if root not in order:
+            order.append(root)
+    return [project / root / block / filename for root in order]
 
 
 def resolve_block_artefact(project: Path, block: str, filename: str,

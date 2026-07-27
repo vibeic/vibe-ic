@@ -41,6 +41,7 @@ from typing import List, Optional
 
 from _analog_a_check_common import (
     load_block_list, select_blocks, make_argparser, vacuous_pass,
+    no_block_list_reason,
     artefact_missing_for_block, emit_pass, emit_fail,
 )
 
@@ -120,8 +121,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):
         return vacuous_pass(GATE, args,
-                            "phase3/analog/analog_block_list.json missing or "
-                            "empty; gate inapplicable.")
+                            no_block_list_reason())
 
     blocks = select_blocks(blocks_all or [], args.block)
     if not blocks:

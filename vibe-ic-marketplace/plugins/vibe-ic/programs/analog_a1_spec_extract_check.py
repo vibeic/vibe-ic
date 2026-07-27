@@ -23,17 +23,21 @@ Failure rules:
   A1_SPEC_EMPTY          — parsed but empty / no fields
   A1_SPEC_NO_FIELDS      — declares 0 spec entries
 
-VACUOUS_PASS when `analog/analog_block_list.json` is missing or
-empty — the project is digital-only / pre-A1.
+VACUOUS_PASS when no analog block list exists at ANY of
+`phase3/analog/` (what the runner writes), `phase1/analog/` (what every
+A-step's `condition:` pins) or the legacy top-level `analog/` — or when the
+list that IS there declares no blocks — the project is digital-only / pre-A1.
 
 INCOMPLETE (rc=1) in project mode when SOME declared blocks have a
 spec.json and others have none: A1 cannot be certified done while a
 declared block has produced nothing. All blocks missing stays
 VACUOUS_PASS (defer to the skill).
 
-Artefact resolution: `phase3/analog/<block>/spec.json` (what the analog
-runner writes) OR `phase1/analog/<block>/spec.json` (what the flow
-declares as A1's required_output).
+Artefact resolution probes EVERY analog root, canonical runner dir first,
+then the flow-declared phase dir, then the rest: the runner writes
+`phase3/analog/<block>/`, the flow declares `phase1/analog/<block>/`, and
+`migrate_to_layout_p.py` relocates a whole pre-v2 block dir to
+`phase2/analog/<block>/` regardless of which step owns each file in it.
 
 Usage:
     python3 analog_a1_spec_extract_check.py <project_dir>
@@ -58,6 +62,7 @@ from typing import List, Optional
 
 from _analog_a_check_common import (
     load_block_list, select_blocks, make_argparser, vacuous_pass,
+    no_block_list_reason,
     artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
     resolve_block_artefact,
 )
@@ -177,8 +182,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):
         return vacuous_pass(GATE, args,
-                            "phase3/analog/analog_block_list.json missing or "
-                            "empty; gate inapplicable.")
+                            no_block_list_reason())
 
     blocks = select_blocks(blocks_all or [], args.block)
     if not blocks:

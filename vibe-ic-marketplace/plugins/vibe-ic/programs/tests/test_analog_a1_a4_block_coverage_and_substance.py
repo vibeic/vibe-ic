@@ -27,10 +27,22 @@ DEFECT 2 — A3 certified an empty `.subckt` shell.
 DEFECT 3 — the A3 gates never read the flow-declared path.
   `flow/phase1_phase2_phase3.yaml` declares A3's required_output as
   `phase2/analog/*/*.sp` (and A1's as `phase1/analog/*/spec.json`), matching
-  `_path_layout.phase2_analog_block_dir` / `phase1_analog_block_dir` and what
-  `migrate_to_layout_p.py` produces. Every A1-A4 gate hardcoded
-  `phase3/analog/` (where the analog RUNNER writes), so a project laid out
-  exactly as its own flow declares self-skipped and measured nothing.
+  `_path_layout.phase2_analog_block_dir` / `phase1_analog_block_dir`. Every
+  A1-A4 gate hardcoded `phase3/analog/` (where the analog RUNNER writes), so
+  a project laid out exactly as its own flow declares self-skipped and
+  measured nothing.
+
+  NOTE — `migrate_to_layout_p.py` does NOT reproduce that per-phase split.
+  MEASURED by running the production migrator on a pre-v2 project whose one
+  block dir held spec.json + topology.md + <block>.sp: it emits exactly two
+  moves, `analog/analog_block_list.json -> phase1/analog/...` and
+  `analog/<block> -> phase2/analog/<block>` — `_classify_analog_block` picks
+  ONE most-backend phase for the WHOLE dir, so a migrated project keeps A1's
+  spec.json under `phase2/analog/`. The end-to-end coverage of both real
+  layouts (flow-declared and migrator-produced) lives in
+  `test_analog_a1_a4_flow_declared_layout.py`, which builds them with the
+  block list where their own producer puts it rather than the
+  phase3-list/phase1-artefact hybrid no producer creates.
 
 Run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/<this file>
 """
@@ -42,6 +54,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 PLUGIN = PROGRAMS.parent
@@ -260,10 +273,13 @@ def test_artefact_at_flow_declared_path_is_read(
 ) -> None:
     """Artefact ONLY at the path the flow declares → PASS, not a self-skip.
 
-    On the base tree each gate reports the block MISSING (all-missing →
-    VACUOUS_PASS), i.e. it certifies the step having opened no file.
+    The block list goes where the flow's own `condition:` pins it
+    (`phase1/analog/analog_block_list.json`) — the ORIGINAL version of this
+    test wrote it to `phase3/analog` while writing the artefact to
+    `phase1|phase2/analog`, a hybrid no producer creates; it passed while the
+    real declared layout stayed a VACUOUS_PASS self-skip.
     """
-    _block_list(tmp_path, ["blk_ok"])
+    _block_list(tmp_path, ["blk_ok"], root="phase1/analog")
     _artefact(tmp_path, "blk_ok", filename, root=declared_root)
     r = _run(prog, tmp_path)
     assert r.returncode == 0, (prog.name, r.stdout, r.stderr)
@@ -277,9 +293,10 @@ def test_a3_defect_at_flow_declared_path_is_caught(tmp_path: Path) -> None:
     """A BAD netlist at the declared path must FAIL, not vanish into a skip.
 
     This is the load-bearing half of the path fix: reading the declared
-    path only matters if a defect there is reported.
+    path only matters if a defect there is reported. Block list at the path
+    the flow's own `condition:` pins, not the phase3 hybrid.
     """
-    _block_list(tmp_path, ["blk"])
+    _block_list(tmp_path, ["blk"], root="phase1/analog")
     d = tmp_path / "phase2/analog/blk"
     d.mkdir(parents=True, exist_ok=True)
     (d / "blk.sp").write_text(_EMPTY_SHELL.format(block="blk"))
@@ -330,23 +347,57 @@ def test_pdk_check_reports_defect_in_phase2_deck(tmp_path: Path) -> None:
     assert any(f["severity"] == "ERROR" for f in rpt["findings"]), rpt
 
 
-def test_a3_substance_gate_is_wired_into_the_flow(tmp_path: Path) -> None:
-    """A3's declared substance program must be a member of A3's gate.
+def _step_gate(step_id: str) -> dict:
+    """Step `step_id`'s parsed `gate:` mapping from the flow definition."""
+    doc = yaml.safe_load(FLOW_YAML.read_text(encoding="utf-8"))
+    for step in doc["steps"]:
+        if str(step.get("id")) == step_id:
+            return step.get("gate") or {}
+    raise AssertionError(f"step {step_id} not found in the flow definition")
 
-    Before this change `analog_a3_netlist_gen_check` appeared nowhere in
-    flow/phase1_phase2_phase3.yaml — it was an orphan program, so nothing
-    in the flow ever executed its ruleset.
+
+def _blocking_programs(gate: dict) -> list:
+    """Commands the gate runs under a BLOCKING key — i.e. a non-zero exit
+    makes the step non-green. Deliberately excludes the advisory /
+    optional variants (`advisory_program_exit_zero`,
+    `optional_program_exit_zero`), which RECORD an exit code without
+    acting on it."""
+    out = []
+    for entry in gate.get("all_of", []) or []:
+        if isinstance(entry, dict) and "program_exit_zero" in entry:
+            out.append(entry["program_exit_zero"])
+    if "program_exit_zero" in gate:
+        out.append(gate["program_exit_zero"])
+    return out
+
+
+def test_a3_substance_gate_is_wired_into_the_flow(tmp_path: Path) -> None:
+    """A3's substance program must be a BLOCKING member of A3's gate.
+
+    Before PR #465 `analog_a3_netlist_gen_check` appeared nowhere in
+    flow/phase1_phase2_phase3.yaml — an orphan program, so nothing in the
+    flow ever executed its ruleset.
+
+    This asserts the gate KEY, not the program NAME. The earlier version
+    only checked that the substring "analog_a3_netlist_gen_check" appeared
+    somewhere between the A3 and A4 ids and that the word
+    "program_exit_zero" appeared in the same slice — MEASURED: rewriting
+    A3's entry to `advisory_program_exit_zero:` (exactly the downgrade PR
+    #466 applied to step 35's dfm_screen_check three commits later) left
+    that version GREEN, so it could not detect the fix ceasing to block.
+    `advisory_program_exit_zero` even CONTAINS the substring
+    `program_exit_zero`.
     """
-    text = FLOW_YAML.read_text(encoding="utf-8")
-    assert "analog_a3_netlist_gen_check" in text, \
-        "A3's substance gate is not referenced by the flow at all"
-    # It must sit inside step A3's gate, next to analog_netlist_pdk_check.
-    a3_start = text.index("\n  - id: A3\n")
-    a4_start = text.index("\n  - id: A4\n")
-    a3_block = text[a3_start:a4_start]
-    assert "program_exit_zero" in a3_block
-    assert "analog_a3_netlist_gen_check" in a3_block, a3_block
-    assert "analog_netlist_pdk_check" in a3_block, a3_block
+    a3 = _step_gate("A3")
+    blocking = _blocking_programs(a3)
+    assert any(c.split()[0] == "analog_a3_netlist_gen_check"
+               for c in blocking), \
+        (f"A3's substance gate is not a BLOCKING member of step A3's gate; "
+         f"blocking programs are {blocking}, full gate {a3}")
+    assert any(c.split()[0] == "analog_netlist_pdk_check"
+               for c in blocking), \
+        (f"A3's PDK gate of record stopped being blocking; "
+         f"blocking programs are {blocking}")
 
 
 def test_pdk_check_audits_each_deck_exactly_once(tmp_path: Path) -> None:
