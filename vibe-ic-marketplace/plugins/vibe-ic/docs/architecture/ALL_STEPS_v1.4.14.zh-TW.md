@@ -155,7 +155,7 @@
 
 | # | 步驟 | 做什麼 | 輸入 | 輸出 | 工具 (EDA) | Programs / Skills |
 |---|---|---|---|---|---|---|
-| M1 | 頂層整合 | 數位 + 類比 GDS 合併與 macro 擺放；merged GDS 跑頂層 LVS（Magic 抽取 + netgen，macro blackbox）。 | 數位 GDS・hardmacro GDS | `top_merged.gds`・merge/LVS 報告 | KLayout merge + Magic/netgen top-LVS | `mixed_signal_merge_check`<br>skills：`analog-flow-orchestrate`・`flow-orchestrate` |
+| M1 | 頂層整合 | 數位 + 類比 GDS 合併與 macro 擺放；merged GDS 跑頂層 LVS（Magic 抽取 + netgen，macro blackbox）。 | 數位 GDS・hardmacro GDS | `top_merged.gds`・merge/LVS 報告 | KLayout merge + Magic/netgen top-LVS | `mixed_signal_top_lvs_run`（產出者）・`mixed_signal_merge_check`（gate）<br>skills：`analog-flow-orchestrate`・`flow-orchestrate` |
 | M2 | 電源域驗證 | 跨電源域 level-shifter / isolation 結構驗證，外加跨電源域訊號穿越檢查：由電源域定義推導 isolation/level-shifter 需求並稽核 UPF 策略。 | L21・merged 設計 | power_domain / level_shifter / isolation / signal-crossing 報告 | 結構驗證程式群 | `power_domain_crossing_check`・`level_shifter_required_check`・`isolation_cell_required_check`・`power_domain_signal_crossing_check`<br>skills：`ir-drop-triage` |
 | M3 | Mixed-signal 驗證 | AMS 共模擬與介面訊號完整性。 | merged 設計・cosim TB | cosim 結果・interface SI 報告 | AMS 共模擬 | `mixed_signal_cosim_check`・`mixed_signal_interface_si_check`<br>skills：`mixed-signal-cosim`・`ams-sim` |
 | M4 | Mixed-signal sign-off | 頂層實體驗證與最終判定（M1–M3 彙整）。 | M1–M3 報告 | `signoff.json` | 彙整判定 | `mixed_signal_signoff_check`<br>skills：`tapeout-checklist` |

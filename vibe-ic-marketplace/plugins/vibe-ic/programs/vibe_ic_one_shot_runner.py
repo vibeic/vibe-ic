@@ -747,6 +747,7 @@ def main() -> int:
         plan.append(("analog", "SKIPPED", 0))
 
     # ---------------- Phase 3 ----------------
+    phase3_top = flow_top
     if not halted_at and not args.skip_phase3:
         runner = _phase_runner("phase3")
         # Reuse the flow-level resolved top. If phase 2 GENERATED the RTL (the
@@ -779,9 +780,54 @@ def main() -> int:
     else:
         plan.append(("phase3", "SKIPPED", 0))
 
+    # ---------------- Mixed-signal M1 (A+D top merge + top-level LVS) ------
+    # M1-d4. `mixed_signal_top_lvs_run` is the ONLY writer of
+    # phase3/mixed_signal/top_merged.gds (M1's declared required_output) and of
+    # reports/analog/mixed_signal/top_lvs.json (the artefact
+    # mixed_signal_merge_check demands for a PASS) — and no runner invoked it.
+    # Measured on a synthetic A+D fixture with every input present: M1 came
+    # back MISSING from flow_compliance_check because top_merged.gds never
+    # existed, so its gate never even ran. Declaring the producer in the step's
+    # gate is not enough on its own: check_step returns MISSING on absent
+    # required_outputs BEFORE evaluating the gate, so the producer must be
+    # driven from the flow. This is that drive.
+    #
+    # NON-BLOCKING by construction, exactly like the A-track above: the M1 gate
+    # owns the verdict (a real netgen mismatch → M1 FAIL in the compliance
+    # audit); a merge that cannot run here must not halt the digital chain.
+    # Its inputs are the analog hardmacro GDS/Verilog (A8) and the phase-3
+    # sign-off GDS + gate netlist, so it runs only when BOTH tracks ran.
+    _ms_dispatch = (run_analog and not args.skip_phase3
+                    and halted_at not in ("phase1", "phase2"))
+    if _ms_dispatch:
+        _ms_json = (project / "reports" / "analog" / "mixed_signal"
+                    / "top_lvs_run.json")
+        # The merge/extract needs the PDK's magicrc + netgen setup, so it needs
+        # the RESOLVED pdk name, not the literal "auto" the operator may have
+        # passed. Phase 3 records what it actually resolved to; fall back to
+        # the CLI value when phase 3 did not run — an unresolvable name is the
+        # producer's rc=2 skip naming the missing tech, never a guess.
+        _ms_pdk = (reports.get("phase3") or {}).get("pdk") or args.pdk
+        rc = _run_phase(
+            "MIXED-SIGNAL M1 (A+D GDS merge → Magic extract → netgen LVS)",
+            PROGRAMS_DIR / "mixed_signal_top_lvs_run.py",
+            [str(project), "--top", phase3_top,
+             "--container", args.container, "--pdk", str(_ms_pdk),
+             "--json", str(_ms_json)],
+            env=_phase_env)
+        rep = _read_report(_ms_json)
+        # rc 2 is the producer's documented disclosed skip (inputs / tools /
+        # PDK tech absent) — record it as SKIP, never as a pass.
+        verdict = rep.get("verdict") or {0: "PASS", 2: "SKIP"}.get(rc, "FAIL")
+        plan.append(("mixed_signal", verdict, rc))
+        reports["mixed_signal"] = rep
+    else:
+        plan.append(("mixed_signal", "SKIPPED", 0))
+
     # ---------------- Aggregate ----------------
     digital_verdicts = [v for n, v, _ in plan
-                        if n != "analog" and v != "SKIPPED"]
+                        if n not in ("analog", "mixed_signal")
+                        and v != "SKIPPED"]
     overall = _aggregate(digital_verdicts) if digital_verdicts else "FAIL"
     summary = {
         "phase": "vibe-ic",
