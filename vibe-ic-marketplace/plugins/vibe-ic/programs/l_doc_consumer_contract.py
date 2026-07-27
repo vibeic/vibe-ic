@@ -134,6 +134,34 @@ def is_extraction_claimed(doc: Optional[dict]) -> bool:
     nothing is an honest skeleton. A layer that claims EXTRACTED, or
     carries non-empty ``extraction_evidence``, is asserting its content
     is real and is therefore held to the consumer contract.
+
+    DO NOT FUSE THIS WITH ``_STATUS_FOUND_NOTHING`` (vibe-ic#377)
+    ------------------------------------------------------------
+    The L16/L17/L18 gates carry a local ``_STATUS_FOUND_NOTHING`` set that
+    reads the SAME producer field, and it looks like a second spelling of
+    this predicate. It is not, and unifying them would be a semantic error.
+    They are two DIFFERENT binary projections of a THREE-valued producer
+    state -- NOT-RUN / RAN-AND-EMPTY / RAN-AND-FOUND:
+
+        this predicate asks   "did extraction run and assert a result?"
+        that set asks         "did extraction report an EMPTY result?"
+
+    The proof that they are not complements is a state on which BOTH are
+    False: ``NOT_YET_EXTRACTED`` (this returns False by its own exclusion
+    list; that set deliberately omits the token, because a skeleton whose
+    extraction has not run yet and which carries content is not a
+    contradiction). Complements cannot both be False on the same input.
+    ``EXTRACTION_FOUND_NOTHING`` is legitimately True for BOTH questions,
+    and that overlap is the answer to two questions, not drift.
+
+    Measured on the tracked corpus before writing this (2554 tracked L-doc
+    JSONs across 106 projects): 2022 sit in the third state on which both
+    are False, and the two predicates' domains are DISJOINT -- an AST walk
+    of all 3348 tracked .py files finds this function referenced only by the
+    L20/L22/L23 gates and that set only by the L16/L17/L18 gates, with no
+    dynamic-dispatch site touching either name. Zero tracked documents are
+    read by both, so a fusion would be justified by a vacuous measurement.
+    ``test_issue377_producer_status_vocabulary.py`` pins the invariant.
     """
     if not isinstance(doc, dict):
         return False

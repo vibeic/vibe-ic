@@ -77,6 +77,23 @@ E2 STATUS_CONTRADICTS_PAYLOAD — extraction_status claims success, zero
 E3 NO_ACTIONABLE_PROPERTY_IN_CONSUMER_WINDOW — properties exist, but none
    inside the window the consumer actually reads carries a resolvable anchor.
    The SVA generator provably receives zero bindable obligations.
+E4 PAYLOAD_WITHOUT_EXTRACTION — the MIRROR of E2, and the arm this file's
+   own `_STATUS_FOUND_NOTHING` vocabulary was declared for and never wired to.
+   The producer's own `extraction_status` says extraction contributed NOTHING,
+   yet the layer ships properties. Both halves were written by the same
+   emitter in the same emission, so the layer contradicts itself and no
+   consumer can tell which of the properties extraction actually supports.
+   E2 catches "status claims success, payload empty"; without E4 the opposite
+   direction was unchecked, and a status field that lies is worse than a
+   missing layer in EITHER direction.
+
+   WHAT E4 DELIBERATELY DOES NOT ASSERT: where the content came from. The
+   sibling rails L17-E1 / L18-E4 word the same shape as "template content from
+   an unrelated protocol"; that provenance claim was MEASURED FALSE on the
+   published parity corpus, where such payloads are authored per cell for that
+   cell's own subject. E4 asserts only the self-contradiction, which is read
+   directly off the two fields. Widening it to a provenance claim would
+   reintroduce the over-reaching verdict that was removed one layer over.
 W1 LOW_ACTIONABLE_RATIO (<50%)              — advisory.
 W2 NO_EXTRACTION_EVIDENCE                   — advisory.
 W3 CONSUMER_STALE_FILENAME_FALLBACK         — advisory: a literal that misses,
@@ -436,6 +453,30 @@ def audit(project: Path, programs_dir: Path, window: int,
                 f"{doc_name} emits no properties and says so "
                 f"(extraction_status={status!r}). Truthful — PASS."))
         return findings, info
+
+    # -- E4 PAYLOAD_WITHOUT_EXTRACTION (the mirror of E2) --------------------
+    # Reached only when the layer IS populated, so this arm and HONEST_EMPTY
+    # above are exhaustive over the found-nothing statuses: empty is truthful
+    # and passes, populated is self-contradictory and is reported.
+    if status in _STATUS_FOUND_NOTHING:
+        raw_ev = raw.get("extraction_evidence") or raw.get("evidence")
+        findings.append(Finding(
+            "ERROR", "PAYLOAD_WITHOUT_EXTRACTION",
+            f"{doc_name} reports extraction_status={status!r} — the producer "
+            f"says extraction contributed nothing — yet the layer ships "
+            f"{len(props)} propert(ies), and extraction_evidence is "
+            f"{'empty' if not raw_ev else 'present'}. Both fields were "
+            f"written by the same emitter in the same emission, so the layer "
+            f"contradicts itself: every property still reaches the SVA "
+            f"generator's consumer window as a verification obligation, and "
+            f"nothing downstream can tell which of them extraction actually "
+            f"supports. This finding asserts ONLY that self-contradiction — "
+            f"it makes no claim about where the content came from.",
+            {"status": status,
+             "properties_found": len(props),
+             "extraction_evidence_empty": not bool(raw_ev),
+             "emitted_by": raw.get("emitted_by"),
+             "property_containers": sorted({k for k, _ in props})}))
 
     results = []
     for idx, (container, item) in enumerate(props):
