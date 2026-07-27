@@ -13,6 +13,23 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 sys.path.insert(0, str(SCRIPT.parent))
 import signoff_audit as sa  # noqa: E402
 
+# 2026-07-27: tapeout mode gained a FIFTH evidence pillar (LVS). These
+# fixtures predate it and asserted a tape-out could be signed off with no
+# layout-vs-schematic evidence at all — that was the defect, not the intent
+# of these tests, so the fixtures now carry a genuine netgen match and the
+# threshold assertions were updated 4 → 5. See
+# test_signoff_audit_tapeout_signoff_first.py for the pillar's own tests.
+_LVS_MATCH = ("Subcircuit summary:\n"
+              "Circuit 1: top                  |Circuit 2: top\n"
+              "Netlists match uniquely.\n"
+              "Final result: Circuits match uniquely.\n")
+
+
+def _lvs_signoff(proj):
+    """Write the canonical genuine-match LVS sign-off report."""
+    (proj / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
+    (proj / "reports" / "phase3" / "lvs.rpt").write_text(_LVS_MATCH)
+
 
 # ---------------------------------------------------------------------------
 # Tapeout mode
@@ -22,32 +39,36 @@ def test_tapeout_all_evidence_pass(tmp_path):
     (tmp_path / "netlist_mapped.v").write_text("module top(); endmodule")
     (tmp_path / "timing_final.rpt").write_text("timing report")
     (tmp_path / "drc_clean.rpt").write_text("Total violations: 0\n")  # parseable count (#437a)
+    _lvs_signoff(tmp_path)
 
     result = sa._check_tapeout(tmp_path)
     assert result.passed is True
-    assert result.summary["evidence_count"] == 4
+    assert result.summary["evidence_count"] == 5
 
 
 def test_tapeout_3_of_4_strict_fails(tmp_path):
-    """Default (strict) threshold is 4/4. 3/4 must FAIL.
+    """Default (strict) threshold requires EVERY slot. Missing DRC must FAIL.
     Regression: prior threshold 3/4 let 7-of-28-step designs pass as
     'signed off' (see LL feedback_plugin_usage_discipline.md, 2026-04-21).
+    2026-07-27: the denominator is 5 (LVS pillar added); this fixture has
+    gds + netlist + timing = 3, so it is now 3-of-5 and still FAILs.
     """
     (tmp_path / "chip.gds").write_text("binary gds data")
     (tmp_path / "synth_netlist.v").write_text("module top(); endmodule")
     (tmp_path / "sta_report.rpt").write_text("timing report")
-    # No DRC report — 3/4 evidence
+    # No DRC report, no LVS report — 3 evidence slots
 
     # Ensure strict mode (_LENIENT off) — this is the default
     sa._LENIENT = False
     result = sa._check_tapeout(tmp_path)
-    assert result.passed is False  # strict: 3 < 4
+    assert result.passed is False  # strict: 3 < 5
     assert result.summary["evidence_count"] == 3
-    assert result.summary["threshold"] == 4
+    assert result.summary["threshold"] == 5
 
 
 def test_tapeout_3_of_4_strict_fail(tmp_path):
-    """v1.6.21: lenient mode removed — 3/4 evidence must FAIL strictly."""
+    """v1.6.21: lenient mode removed — partial evidence must FAIL strictly.
+    2026-07-27: denominator 4 → 5 (LVS pillar)."""
     (tmp_path / "chip.gds").write_text("binary gds data")
     (tmp_path / "synth_netlist.v").write_text("module top(); endmodule")
     (tmp_path / "sta_report.rpt").write_text("timing report")
@@ -55,7 +76,22 @@ def test_tapeout_3_of_4_strict_fail(tmp_path):
     result = sa._check_tapeout(tmp_path)
     assert result.passed is False
     assert result.summary["evidence_count"] == 3
-    assert result.summary["threshold"] == 4
+    assert result.summary["threshold"] == 5
+
+
+def test_tapeout_4_of_5_without_lvs_fails(tmp_path):
+    """2026-07-27: the four legacy slots complete, LVS absent → still FAIL.
+    A tape-out is DEFINED by a genuine layout-vs-schematic match."""
+    (tmp_path / "chip.gds").write_text("binary gds data")
+    (tmp_path / "netlist_mapped.v").write_text("module top(); endmodule")
+    (tmp_path / "timing_final.rpt").write_text("timing report")
+    (tmp_path / "drc_clean.rpt").write_text("Total violations: 0\n")
+
+    result = sa._check_tapeout(tmp_path)
+    assert result.passed is False
+    assert result.summary["evidence_count"] == 4
+    assert result.summary["threshold"] == 5
+    assert result.summary["evidence"]["lvs"] is False
 
 
 def test_tapeout_1_of_4_fail(tmp_path):
@@ -134,6 +170,7 @@ def test_tapeout_design_gds_outside_input_passes(tmp_path):
     (tmp_path / "synth_netlist.v").write_text("module chip_top(); endmodule")
     (tmp_path / "timing_final.rpt").write_text("timing report")
     (tmp_path / "drc_clean.rpt").write_text("Total violations: 0\n")  # parseable count (#437a)
+    _lvs_signoff(tmp_path)
 
     sa._LENIENT = False
     result = sa._check_tapeout(tmp_path)
