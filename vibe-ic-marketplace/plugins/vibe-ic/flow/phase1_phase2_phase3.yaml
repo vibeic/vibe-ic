@@ -860,6 +860,22 @@ steps:
       all_of:
         - files_exist: ["phase2/analog/*/*.sp"]
         - program_exit_zero: "analog_netlist_pdk_check . --json reports/phase2/gates/analog_netlist_pdk.json"
+        # WIRING — the `analog-netlist-gen` skill's own "Deterministic gates
+        # (run these — do not eyeball)" table names SIX programs; before this
+        # change only `analog_netlist_pdk_check` was ever invoked by anything.
+        # The four below existed, worked, and had measured rc=1 FAIL paths that
+        # nothing in the flow could ever reach. They are BLOCKING because each
+        # self-skips (rc 0 + INFO) when the project has no analog root / no
+        # `.sp` deck, so they can only speak on a project that actually reached
+        # A3 — and every rule they enforce is orthogonal to
+        # `analog_netlist_pdk_check` (which checks body connections + model-
+        # include PRESENCE, never graph connectivity, include ORDER, path
+        # portability, or the supply-vs-PDK contract; verified: it exits 0 on
+        # all four bad fixtures).
+        - program_exit_zero: "analog_netlist_connectivity_check . --json reports/phase2/gates/analog_netlist_connectivity.json"
+        - program_exit_zero: "analog_netlist_include_order_check . --json reports/phase2/gates/analog_netlist_include_order.json"
+        - program_exit_zero: "analog_netlist_path_lint . --json reports/phase2/gates/analog_netlist_path_lint.json"
+        - program_exit_zero: "analog_tb_supply_pdk_check . --json reports/phase2/gates/analog_tb_supply_pdk.json"
     blocks_on: [A2]
 
   - id: A4
@@ -930,7 +946,20 @@ steps:
       - "phase3/analog/hardmacro/*/*.gds"
       - "phase3/analog/hardmacro/*/*.v"
     gate:
-      program_exit_zero: "analog_hardmacro_check . --json reports/phase2/gates/hardmacro.json"
+      all_of:
+        - program_exit_zero: "analog_hardmacro_check . --json reports/phase2/gates/hardmacro.json"
+        # WIRING — `analog_hardmacro_check` only asserts the four artefacts
+        # EXIST (and explicitly accepts a deterministic-stub hardmacro), so an
+        # area-only Liberty — `library(x_stub){cell(x){area:10000;}}`, exactly
+        # what analog_one_shot_runner emits at the A8 stub tier — sailed
+        # through A8 and then made the integration STA vacuous: every path
+        # through the macro has zero delay, so it can never violate
+        # setup/hold. `analog_liberty_nonzero_delay_check` is the
+        # non-degeneracy gate the `analog-hardmacro-gen` skill already tells
+        # agents to run; nothing invoked it. BLOCKING: measured rc=1 on both
+        # the area-only stub (LIB_NO_TIMING) and an all-zero NLDM table
+        # (LIB_ZERO_DELAY), rc=0 when the project has no analog blocks.
+        - program_exit_zero: "analog_liberty_nonzero_delay_check . --json reports/phase2/gates/analog_liberty_nonzero_delay.json"
     blocks_on: [A7]
 
   - id: A9
