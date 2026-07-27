@@ -60033,6 +60033,25 @@ def main() -> int:
               f"{ho.get('numerator',0)}/{ho.get('denominator',0)} = "
               f"{ho.get('pct', 0.0):.1f}%")
     print(f"Coverage (overall):  {pct:.1f}%")
+    # v1.7.72 — for #499 defect 4. The three percentages above are
+    # computed over documents that EXTRACTED, so a document the
+    # ingester could not render cannot lower any of them. Measured on a
+    # real design, this block printed `254/254 = 100.0%` while a 21 KB
+    # document the design's own brief named as ground truth had
+    # contributed zero characters. Print the census next to the ratio so
+    # the two are never read apart.
+    _summary_overall = report.get("overall") or {}
+    _visited_n = _summary_overall.get("input_documents_visited")
+    _extracted_n2 = _summary_overall.get("input_documents_extracted")
+    _unread_n = _summary_overall.get("input_documents_unread") or 0
+    if _visited_n is not None:
+        print(f"Input documents:     {_visited_n} visited / "
+              f"{_extracted_n2} extracted / {_unread_n} UNREAD")
+    if _unread_n:
+        print("  !! the percentages above were computed WITHOUT these "
+              "documents — they cannot lower a coverage ratio:")
+        for _d in (report.get("unread_input_documents") or [])[:10]:
+            print(f"     UNREAD {_d.get('path')} — {_d.get('reason')}")
     print()
     print("=== AI deep-review handoff ===")
     print("After this runner completes, AI MUST invoke the "
