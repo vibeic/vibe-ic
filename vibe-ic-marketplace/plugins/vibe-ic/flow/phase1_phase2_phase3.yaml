@@ -450,7 +450,19 @@ steps:
       # as separate entries these were ALL-of-required, so every real run was
       # missing at least one and no run could satisfy them together.
       - "phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml OR phase2/stage1/sim/pass.flag OR phase2/stage1/sim_professional/**/results.xml"
-      - "reports/phase2/coverage/coverage_actual.json"   # produced by verilator_coverage_measure
+      # DECLARATION CORRECTION. This used to read "produced by
+      # verilator_coverage_measure", which is not true on any real run: the
+      # path has TWO producers — `verilator_coverage_measure measure` (the
+      # tool-generated line/toggle/branch artefact the gate below audits) and
+      # design_one_shot_runner, which writes a FUNCTIONAL-verification verdict
+      # payload here (verdict / evidence / verification_track /
+      # scenarios_covered, with NO `totals` container). The coverage gate now
+      # NAMES that collision instead of reading the foreign payload as an
+      # "input not applicable" exemption. Untangling the two onto separate
+      # paths moves every reader (coverage_closure, fpga_verification_audit
+      # --coverage, phase3 step_canonicalize_artefacts, flow_compliance_check's
+      # coverage self-skip supersession) and is not a gate-local change.
+      - "reports/phase2/coverage/coverage_actual.json"
     gate:
       all_of:
         - files_exist: ["phase2/stage1/sim/results.xml", "phase2/stage1/sim/pass.flag"]
@@ -500,11 +512,25 @@ steps:
         # vacuous_testbench_check, which judges TB-drives-DUT structure rather
         # than coverage.
         #
-        # `verilator_coverage_measure check` already exits 2 on an absent or
-        # untrustworthy artefact, which the gate runner surfaces as an explicit
-        # VACUOUS_PASS (the `__VACUOUS_HINT__` sentinel) rather than a bare
-        # pass. So running it unconditionally converts an INVISIBLE skip into a
-        # DISCLOSED one, and a below-threshold measurement still exits 1.
+        # `verilator_coverage_measure check` reports on an absent or
+        # untrustworthy artefact rather than staying silent, so running it
+        # unconditionally converts an INVISIBLE skip into a DISCLOSED one, and
+        # a below-threshold measurement still exits 1.
+        #
+        # COVERAGE-CREDIT SPLIT — that disclosure used to be rc=2 ->
+        # VACUOUS_PASS for BOTH "no artefact" and "an artefact that is
+        # not a coverage measurement",
+        # and VACUOUS_PASS rolls into `pass_count`, so the step collected PASS
+        # credit with no coverage behind it (MEASURED: the reference spm run
+        # reported Step 4 VACUOUS-PASS off a functional-verdict payload). The
+        # two meanings are now split:
+        #   rc=1  the artefact at the declared path is corrupt / mislabelled /
+        #         forged, OR no measurement exists on a host that HAS Verilator
+        #   rc=3  no measurement AND no Verilator on PATH -> WAIVED-DEFERRED,
+        #         a named `cap:verilator_coverage_toolchain` deferral that is
+        #         review_required and NOT counted as executed-PASS
+        # This is deliberately redder: on a host without Verilator this step
+        # can no longer reach PASS.
         - program_exit_zero: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json"
         # NEW TB PATH gate — the professional cocotb TB (professional_tb_gen)
         # must never silently pass a real functional mismatch. UNCONDITIONAL
