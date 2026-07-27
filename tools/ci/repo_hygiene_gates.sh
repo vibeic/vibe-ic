@@ -76,7 +76,7 @@ run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit
 # for six versions (0.2.29 pinned in 13 places, never published) while nothing
 # enforced it. --require-remote: the pinned tag must actually RESOLVE on ghcr;
 # an unreachable registry is a FAIL here, not an UNVERIFIED shrug.
-run "image-version pins resolve"        "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --check --require-remote
+run_tolerating_uncheckable "image-version pins resolve" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --check --require-remote
 
 # vibe-ic#306/#316 — the audit that measures which gates can actually stop a
 # run was itself wired into nothing while exiting 1. Recorded debt does not

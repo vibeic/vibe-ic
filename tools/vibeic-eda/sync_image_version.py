@@ -212,9 +212,19 @@ def check_latest_points_at_anchor(version: str,
         d_anchor = _query_ghcr_digest(GHCR_REPO, version)
     except Exception as e:  # noqa: BLE001
         if require_remote:
-            print(f"[FAIL] latest-vs-anchor: registry unverifiable "
-                  f"({e.__class__.__name__}) and --require-remote is set.")
-            return 1
+            # UNVERIFIABLE, NOT WRONG — and the distinction is the whole point
+            # of rc 2 in this repo (`run_tolerating_uncheckable`,
+            # `DIRTY_CHECKOUT`, `NOTHING_SCANNED`). #354 added
+            # --require-remote so an unreachable registry could not be a silent
+            # PASS, and that still holds: rc 2 is not a pass, it prints NOT
+            # CHECKED and the hygiene script says so on stderr. What it stops
+            # doing is reporting a transient network timeout in the SAME words
+            # as a genuinely wrong pin — measured 2026-07-27, one run failed on
+            # TimeoutError and the next two passed, on an unchanged tree.
+            print(f"[NOT CHECKED] latest-vs-anchor: registry unverifiable "
+                  f"({e.__class__.__name__}). This is NOT a pass — the tag an "
+                  f"outside reader pulls was not compared against the anchor.")
+            return 2
         print(f"  latest-vs-anchor         : UNVERIFIED "
               f"({e.__class__.__name__})")
         return 0
@@ -280,10 +290,13 @@ def check_anchor_vs_reality(version: str, require_remote: bool = False) -> int:
     tags, src = published_tags()
     if tags is None:
         if require_remote:
-            print(f"[FAIL] anchor-vs-reality: registry unverifiable ({src}) and "
-                  f"--require-remote is set. Set {PUBLISHED_TAG_ENV}=X.Y.Z to "
-                  f"pin, or fix network/registry access.")
-            return 1
+            # Same split as latest-vs-anchor above: a registry we cannot reach
+            # has told us nothing. rc 2 = NOT CHECKED, never a pass.
+            print(f"[NOT CHECKED] anchor-vs-reality: registry unverifiable "
+                  f"({src}). This is NOT a pass — no published tag was read. "
+                  f"Set {PUBLISHED_TAG_ENV}=X.Y.Z to pin, or fix "
+                  f"network/registry access.")
+            return 2
         print(f"  anchor-vs-reality        : UNVERIFIED ({src}) — internal "
               f"consistency only; set {PUBLISHED_TAG_ENV}=X.Y.Z or enable network")
         return 0
@@ -386,7 +399,12 @@ def do_check(root: Path, version: str, ignore,
             print(f"[PASS] all live pointers == {version}, anchor tracks "
                   f"reality, and :latest resolves to it")
             return 0
-        return anchor_rc or latest_rc
+        # A real disagreement (1) dominates an unverifiable one (2): if the
+        # registry answered for one axis and disagreed, that is a defect even
+        # though the other axis could not be reached.
+        if anchor_rc == 1 or latest_rc == 1:
+            return 1
+        return 2
     print(f"[FAIL] {len(drift_strict) + len(drift_net)} live pointer(s) != {version}:")
     for rel, ln, ver, kind in drift_strict:
         print(f"   {rel}:{ln}  {kind}={ver}  (want {version})")
