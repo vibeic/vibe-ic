@@ -18,11 +18,23 @@ Ordering checked:
     3. `write_verilog` appears at least once, on a line AFTER every
        `hilomap`.
 
+Two input shapes, both audited:
+    * a `.ys` script (`--ys-file`, or auto-discovered under a project dir) —
+      the ordering checks below run on the script text.
+    * NO `.ys` script, because the runner synthesised with an inline
+      `yosys -p '<commands>'` — the command is recovered from the runner's
+      own synth log (the "-- Running command" echo line) and the same
+      hilomap/flatten requirement is checked on it. Only when no inline
+      command was echoed anywhere does the gate fall back to reporting
+      VACUOUS_PASS.
+
 Usage:
     python3 yosys_hilomap_required_check.py --ys-file scripts/synth.ys
+    python3 yosys_hilomap_required_check.py <project_dir> [--json <out>]
 
 Exit codes:
-    0 — all three conditions satisfied.
+    0 — all three conditions satisfied, or the inline command verified, or
+        no auditable input exists at all (VACUOUS_PASS).
     1 — one or more conditions violated; stderr lists which.
     2 — argument or I/O error.
 """
@@ -253,12 +265,103 @@ def main(argv: list[str] | None = None) -> int:
 
     import json as _json
     if not ys_files:
-        # v1.6.180 (#72 P2-8) — positively confirm the inline-mode
-        # case. Look for runner artefacts and inline `yosys -p`
-        # invocations; report a distinct verdict tier when no
-        # supporting evidence is found so audit reviewers can spot
-        # an unconfirmed VACUOUS_PASS.
-        from _yosys_inline_mode_detect import detect_inline_mode
+        # ORGANIC / step-14 d7 — VERIFY the inline command before falling back
+        # to a vacuous verdict.
+        #
+        # This branch used to call `detect_inline_mode` ONLY, which answers
+        # "did SOME inline yosys run happen" from marker-FILE existence. That
+        # is adjacent to, not the same as, what this gate claims to decide:
+        # whether hilomap actually ran after techmap and before write_verilog.
+        # MEASURED on the real spm x ihp-sg13g2 run: this program wrote
+        # reports/phase2/gates/yosys_hilomap.json with verdict VACUOUS_PASS /
+        # reason_class inline_yosys_p_mode_confirmed — "gate is legitimately
+        # not applicable" — while phase2/stage2/synth/synth.log line 16 held
+        # the complete inline command, `... abc -liberty <lib>; hilomap
+        # -hicell <TIEHI> L_HI -locell <TIELO> L_LO; clean; ... write_verilog
+        # ...`. The ordering the gate exists to check was on disk, correct,
+        # and unread; the step self-reported "not applicable" instead of
+        # "verified".
+        #
+        # `audit_inline_yosys` (already in _yosys_inline_mode_detect, already
+        # used by flow_compliance_check's in-process Step-14 gate) parses the
+        # "-- Running command" echo line out of the runner's synth log and
+        # checks hilomap/-flatten on real-PDK (Liberty-bound) commands.
+        # Calling it here makes the DECLARED gate — the one whose JSON is the
+        # step's artefact — read the same evidence. Consequences:
+        #   * conformant real-PDK inline command -> verdict PASS (rc 0), with
+        #     the log named. Not vacuous: something was measured.
+        #   * non-conformant real-PDK inline command -> verdict FAIL, rc 1.
+        #     This gate can now fail where it previously could not; step 14's
+        #     `optional_program_exit_zero` makes that BLOCKING, and the rc=1
+        #     path was executed against a fixture before wiring it.
+        #   * ONLY simulation-only inline commands (no Liberty bound) ->
+        #     VACUOUS_PASS, but with the reason DERIVED from the command
+        #     rather than assumed: hilomap genuinely does not apply. The
+        #     verdict must not read as "verified", because no real-PDK
+        #     command was checked.
+        #   * no inline command echoed anywhere -> unchanged, fall through to
+        #     the pre-existing marker-file confirmation below.
+        from _yosys_inline_mode_detect import (
+            audit_inline_yosys, check_inline_command_conformance,
+            detect_inline_mode, extract_inline_yosys_commands)
+        inline_verdict, inline_logs, inline_reasons = \
+            audit_inline_yosys(project)
+        if inline_verdict in ("PASS", "FAIL"):
+            failed = inline_verdict == "FAIL"
+            # `audit_inline_yosys` returns PASS both when real-PDK commands
+            # conformed and when only sim-only commands ran. Re-derive which,
+            # so the reason text states what was actually examined.
+            n_real_pdk = sum(
+                1 for _rel, _cmd in extract_inline_yosys_commands(project)
+                if check_inline_command_conformance(_cmd)[1] == "real_pdk")
+            if failed:
+                verdict, reason_class = "FAIL", \
+                    "inline_yosys_command_nonconformant"
+                reason_text = (
+                    "no .ys scripts found; the inline `yosys -p` command "
+                    "extracted from the runner's synth log is NON-CONFORMANT "
+                    "— see messages (CLAUDE.md rule 4; OpenROAD "
+                    "detailed_route trips DRT-0305 'zero_ GROUND' on the "
+                    "unmapped tie net).")
+            elif n_real_pdk:
+                verdict, reason_class = "PASS", \
+                    "inline_yosys_command_verified"
+                reason_text = (
+                    f"no .ys scripts found, but {n_real_pdk} real-PDK "
+                    f"(Liberty-bound) inline `yosys -p` synthesis command(s) "
+                    f"were extracted from the runner's synth log and "
+                    f"VERIFIED: each issues hilomap and a flatten directive.")
+            else:
+                verdict, reason_class = "VACUOUS_PASS", \
+                    "inline_yosys_command_simulation_only"
+                reason_text = (
+                    "no .ys scripts found; the inline `yosys -p` command(s) "
+                    "extracted from the runner's synth log bind NO Liberty "
+                    "library, so this is a simulation-only synthesis and the "
+                    "tie-cell (hilomap) requirement does not apply. Nothing "
+                    "was verified against a real PDK.")
+            report = {
+                "verdict": verdict,
+                "reason_class": reason_class,
+                "reason": reason_text,
+                "inline_evidence": inline_logs,
+                "real_pdk_commands_audited": n_real_pdk,
+                "project": str(project), "messages": inline_reasons,
+            }
+            if args.json:
+                out = _Path(args.json)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(_json.dumps(report, indent=2) + "\n")
+            print(f"{verdict}: {reason_text}",
+                  file=sys.stderr if failed else sys.stdout)
+            for m in inline_reasons:
+                print(f"  {m}", file=sys.stderr)
+            return 1 if failed else 0
+
+        # v1.6.180 (#72 P2-8) — no inline command was echoed at all. Positively
+        # confirm the inline-mode case from marker files; report a distinct
+        # verdict tier when no supporting evidence is found so audit reviewers
+        # can spot an unconfirmed VACUOUS_PASS.
         inline_status, inline_evidence = detect_inline_mode(project)
         if inline_status == "confirmed":
             verdict = "VACUOUS_PASS"
