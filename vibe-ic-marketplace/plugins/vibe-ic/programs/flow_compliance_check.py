@@ -4386,6 +4386,192 @@ _STRUCTURAL_GATE_ARGV_ADAPTERS: Dict[str, tuple[str, ...]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# #496 — WHY EACH ZERO-DENOMINATOR GATE IS STILL REGISTERED AND STILL UNWIRED.
+#
+# #492 disqualified eight gates for reporting an empty (or unstated)
+# denominator and left the question open: if a gate has nothing to examine
+# ANYWHERE in the corpus, on what basis is it a structural gate?  That cannot
+# be answered from an exit code, so each trigger condition was taken back to
+# the 107 tracked `rtl` directories with a probe deliberately LOOSER than the
+# gate's own.  Three answers came back, and they are not interchangeable:
+#
+#   TRIGGER_ABSENT      the condition genuinely does not occur here. Keep the
+#                       gate; its PASS must read as "examined 0".
+#   EXTRACTION_BROKEN   the condition DOES occur and the gate cannot see it.
+#                       A real bug wearing permanent cleanliness as a disguise.
+#   ADVISORY_ONLY       structurally incapable of returning non-zero, so it is
+#                       a report, not a gate.
+#
+# NOTHING here is wired into the umbrella by #496, and two of the entries are
+# now specifically MORE dangerous to wire than before, because repairing their
+# extraction gave them real findings: `bit_count_modulo_check` now FAILs on
+# hdlc, for a defect confirmed by reading the RTL.  #492's bar (no new FAIL AND
+# a non-empty denominator) is unchanged and still governs; this table records
+# what a future conversion attempt has to answer, so it re-derives the
+# measurement instead of assuming it.  Asserted by
+# `tests/test_issue496_zero_denominator_gates.py`.
+# ---------------------------------------------------------------------------
+_ZERO_DENOMINATOR_CLASSIFICATION: Dict[str, Dict[str, str]] = {
+    "otp_write_lock_gate_check": {
+        "verdict": "TRIGGER_ABSENT",
+        "gate_denominator": "write_enable_sites: 0 on 107/107",
+        "corpus_probe": (
+            "A probe with no line-shape, no `1'b1` requirement and no "
+            "assignment requirement — any identifier matching "
+            "(otp|fuse|efuse|nvm|mtp|eeprom|flash|nvram|ee)\\w*_?"
+            "(we|wen|wr_en|write_en|prog|pgm|pwe|program)\\w* anywhere in any "
+            "file — returns 0 hits in 0/107 directories. No corpus design has "
+            "a non-volatile memory write path of any kind."),
+        "disposition": (
+            "KEEP, unwired. Valid rule, no coverage here. Its PASS now "
+            "discloses `examined 0` with the reason, so it cannot be read as "
+            "'no unguarded non-volatile write was found'."),
+    },
+    "response_payload_template_check": {
+        "verdict": "TRIGGER_ABSENT + ADVISORY_ONLY",
+        "gate_denominator": "total_assignments: 0 on 107/107",
+        "corpus_probe": (
+            "Buffer names hit in 3/107, none in a command dispatcher. A "
+            "looser probe — any file with an opcode `case` AND any "
+            "`<name>[<int>] <= ...` byte-indexed write, buffer name ignored — "
+            "selects exactly 1 file corpus-wide, whose indexed signal is "
+            "`ch_enable`, a per-channel enable vector, not a reply payload. "
+            "No command/response packet handler exists here."),
+        "disposition": (
+            "KEEP, unwired, and recorded as ADVISORY. Every finding it can "
+            "emit is severity WARN and `pass` is `not any(ERROR)`, so on any "
+            "readable directory it cannot return non-zero. Registering a "
+            "checker that is structurally incapable of failing is the "
+            "category error; the summary now says `advisory_only: true`."),
+    },
+    "cmd_arg_range_validation_check": {
+        "verdict": "TRIGGER_ABSENT (denominator was undisclosed, now stated)",
+        "gate_denominator": (
+            "disclosed nothing; measured 4/107 dispatcher files, of which "
+            "0/107 reach the rule body"),
+        "corpus_probe": (
+            "The 4 dispatchers are ibex_decoder.sv, aes_ctrl_reg_shadowed.sv, "
+            "serv_rv32i_core.v and an eSPI chip_top.v — instruction decoders "
+            "and a register block, none of which buffers a command packet. "
+            "The rule needs a command buffer AND a range-checkable argument "
+            "in the same file; the command-buffer half is absent from all 4."),
+        "disposition": (
+            "KEEP, unwired. Note that `dispatcher_files` is non-zero and is "
+            "NOT the denominator: publishing it as one would have overstated "
+            "coverage 4-to-0. The disclosed denominator is the count of files "
+            "the truncation rule was applied to."),
+    },
+    "transient_signal_latch_check": {
+        "verdict": "TRIGGER_ABSENT (denominator was undisclosed, now stated)",
+        "gate_denominator": (
+            "disclosed nothing; measured 303 files read, 18 transient "
+            "producers in 2/107, and 0/107 cross-file consumer reads"),
+        "corpus_probe": (
+            "The rule only evaluates a producer/consumer pair in DIFFERENT "
+            "files (`if cf == prod_file: continue`). subservient has 17 "
+            "transient producers and zero cross-file reads of them, so the "
+            "rule never runs. `files_scanned` is non-zero on 107/107 and "
+            "would read as full coverage; it is disclosed as detail, not as "
+            "the denominator."),
+        "disposition": (
+            "KEEP, unwired. This gate was grouped apart from the other six "
+            "as 'unknowable'; measured, it belongs WITH them — the answer is "
+            "a zero denominator, it simply could not be seen from a verdict "
+            "line that read `PASS — 0 errors, 0 warns`."),
+    },
+    "tristate_self_rx_mask_check": {
+        "verdict": "EXTRACTION_BROKEN",
+        "gate_denominator": (
+            "recorded as `inout_ports: []` on 107/107 — WRONG FIELD AND WRONG "
+            "VALUE: it collects 24 inout ports across 4/107. The real "
+            "denominator, `checked`, was 0 for an unprinted reason."),
+        "corpus_probe": (
+            "All 24 ports were dropped by an output-enable lookup that knew "
+            "exactly one spelling, `<name>_oe`. The narrowness is proven by "
+            "tracked repo content OUTSIDE the 107-directory window: "
+            "benchmark_external/cvdp/solved_design_db/rtl/"
+            "cvdp_copilot_apb_gpio_0005.sv declares `inout wire [W-1:0] "
+            "gpio`, drives it through `gpio_dir`, and taps it with a bare "
+            "`assign gpio_in = gpio;` — the exact raw self-RX tap this gate "
+            "exists to find, and it was skipped. STATED PRECISELY: inside the "
+            "107 the trigger really is absent — those 24 ports are caravel "
+            "power/analog pads and LPC blackbox stubs, and after the repair "
+            "they still, correctly, skip (0 examined, 0 ERROR, 0 WARNING "
+            "across all 107). So this gate is BOTH: extraction that was "
+            "demonstrably too narrow, over a corpus window that would not "
+            "have exercised it either way."),
+        "disposition": (
+            "REPAIRED, still unwired. Companion discovery covers the standard "
+            "spellings and every skipped port records why. Severity tracks "
+            "polarity confidence: only the active-high `_oe` form keeps "
+            "ERROR, because for `_oeb`/`_oen` the correct mask reverses the "
+            "ternary arms and `_dir` is a config register — widening what is "
+            "EXAMINED must not silently widen what is FAILED."),
+    },
+    "pulse_decoder_edge_check": {
+        "verdict": "EXTRACTION_BROKEN (two bugs that concealed each other)",
+        "gate_denominator": "files_checked: 0 on 107/107",
+        "corpus_probe": (
+            "benchmark-data/evaluation/phase1_parity/sent/phase2/stage1/rtl/"
+            "sent_rx.v is a SENT (SAE J2716) receiver — a multi-bucket "
+            "pulse-period classifier, exactly this gate's subject. Bug 1: the "
+            "selector required the literal token `low_cnt`; SENT spells it "
+            "`period_cnt` / `last_period` / `ticks_meas`. Bug 2: the "
+            "edge-detector recognizer only matched RISING idioms with the "
+            "negation on the SECOND operand, so SENT's "
+            "`wire falling = (~sin_s) & sin_s_d;` was invisible — fixing Bug "
+            "1 alone would have produced a confident false NO_EDGE_DETECTOR "
+            "against a design whose detector is on line 111."),
+        "disposition": (
+            "REPAIRED (both halves), still unwired. Measured after the "
+            "repair: selection 0 -> 1/107, that one being SENT, and 0 new "
+            "FAILs. Mutation control: replacing SENT's edge detector with a "
+            "level test makes the gate FAIL."),
+    },
+    "bit_count_modulo_check": {
+        "verdict": "EXTRACTION_BROKEN — was concealing a real RTL defect",
+        "gate_denominator": "checked: 0 on 107/107",
+        "corpus_probe": (
+            "The gate's own bit-counter regex matches 125 times across 6/107; "
+            "all were dropped by a symbol-valid conjunct enumerating five "
+            "literal spellings, while the corpus receivers use `frame_valid`, "
+            "`rx_char_valid`, `rx_bit_valid`, `rd_valid`, `left_valid`. "
+            "hdlc_core.v asserts `frame_valid <= 1'b1` and computes `fcs_ok` "
+            "at the closing flag with no `rx_bit_cnt == 0` test — its only "
+            "comparison against that counter is `== 3'd7`, the octet-fill "
+            "boundary. A frame ending mid-octet is accepted with its residual "
+            "bits discarded, which ISO/IEC 13239 requires to be rejected."),
+        "disposition": (
+            "REPAIRED, EMPHATICALLY still unwired. Selection 0 -> 2/107 and "
+            "the verdict changes on one: hdlc now FAILs, correctly. That is a "
+            "NEW FAIL over the corpus, so #492's bar now excludes this gate "
+            "for a second and better reason than before. Wiring it is a "
+            "decision about the hdlc defect, not about the gate."),
+    },
+    "l12_sequence_implementation_check": {
+        "verdict": "EXTRACTION_BROKEN (cannot reach its own input)",
+        "gate_denominator": "sequences_checked: 0 on 107/107",
+        "corpus_probe": (
+            "Not absence: `--l12-json` is optional, the umbrella does not "
+            "supply it, and the gate cannot discover the file from an RTL "
+            "directory. 105 of the 106 project trees holding a tracked rtl/ "
+            "directory ship a reachable L12 document; supplying it lifts "
+            "`sequences_checked` above zero in 7 of them, and on those 7 the "
+            "gate emits 3-4 ERROR findings each rather than passing."),
+        "disposition": (
+            "DISCLOSURE ONLY — the plumbing is deliberately NOT connected. "
+            "Every one of those findings inspected is NO_IMPL_MODULE against "
+            "a MONOLITHIC design (the eSPI project implements all three "
+            "declared sequences inside one chip_top.v, which the rule reads "
+            "as three missing modules because it matches sequence ids against "
+            "file basenames). Handing it its input before fixing that rule "
+            "would convert a silent gate into a loud wrong one. The zero now "
+            "names the missing --l12-json as its cause."),
+    },
+}
+
+
 def _structural_gate_argv(gate_name: str,
                           project: Path,
                           rtl_dir: Optional[Path] = None,

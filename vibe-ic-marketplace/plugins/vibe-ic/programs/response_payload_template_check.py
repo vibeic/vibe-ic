@@ -28,6 +28,32 @@ Usage:
     python3 response_payload_template_check.py --rtl-dir <dir> [--json <report.json>]
 
 Exit: 0 = PASS, 1 = findings, 2 = IO error.
+
+#496 — DENOMINATOR DISCLOSURE (classified: TRIGGER ABSENT FROM THIS CORPUS)
+--------------------------------------------------------------------------
+``total_assignments: 0`` on all 107 tracked ``rtl`` directories under
+``benchmark-data``. Re-measured for #496 against the corpus rather than against
+the exit code:
+
+  * The gate's own buffer-name list matches in only 3 of the 107 directories,
+    and in every one of those the file is not a command dispatcher, so the rule
+    stops before its body.
+  * A LOOSER probe — every file containing an opcode ``case`` AND any
+    ``<name>[<integer>] <= ...`` byte-indexed write, regardless of the buffer's
+    name — selects exactly ONE file corpus-wide, and its indexed signal is
+    ``ch_enable`` (a per-channel enable vector), not a response payload.
+
+So the subject of this rule — a command/response packet handler that assembles
+reply bytes into an indexed buffer — does not occur in this corpus. That is
+absence, not blindness.
+
+SECOND, INDEPENDENT PROPERTY, recorded because it bears on whether this belongs
+in a gate registry at all: every finding this program can emit is severity
+``WARN``, and ``pass`` is ``not any(severity == "ERROR")``. The only ERROR it
+can produce is the IO one. On any readable RTL directory it therefore CANNOT
+return non-zero — it is an advisory report, not a gate. It is left registered
+and unwired; converting it would add a checker that is structurally incapable
+of failing, which is the #492 bar's concern in its purest form.
 """
 from __future__ import annotations
 
@@ -38,6 +64,11 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Tuple
+
+import _gate_denominator as GD
+
+# #496 — one unit of this gate's denominator, in the gate's own terms.
+_DENOM_UNIT = "response-payload byte assignments in a command dispatcher"
 
 
 @dataclass
@@ -113,24 +144,64 @@ def _is_constant(rhs: str) -> bool:
     return bool(CONSTANT_VALUE_RE.match(rhs))
 
 
+def _denominator(files: int, buf_files: int, response_files: int,
+                 assignments: int) -> GD.Denominator:
+    details = {"files_scanned": files,
+               "files_with_a_response_buffer_name": buf_files,
+               "response_dispatcher_files": response_files}
+    if assignments:
+        return GD.Denominator(unit=_DENOM_UNIT, examined=assignments,
+                              considered=assignments, details=details)
+    if files == 0:
+        reason = "no readable .v/.sv file in this directory."
+    elif buf_files == 0:
+        reason = (
+            f"{files} RTL file(s) read, none naming a response buffer — "
+            "searched for rsp_buf / tx_buf / fixed_buf / resp_buf / "
+            "response_buf / tx_data / rsp_data / resp_data / out_buf / "
+            "send_buf. This design assembles no reply packet.")
+    elif response_files == 0:
+        reason = (
+            f"{buf_files} file(s) name a response buffer but none is a "
+            "command dispatcher (no `case (cmd/opcode/...)` and fewer than 3 "
+            "`if (cmd == ...)` comparisons), so there is no response HANDLER "
+            "whose payload bytes could be compared against their sources.")
+    else:
+        reason = (
+            f"{response_files} response-dispatcher file(s), but no byte "
+            "assignment of the form `<buf>[<integer>] <= <expr>;` was found "
+            "in them. The payload is not assembled through an indexed byte "
+            "buffer, which is the only shape this rule can read.")
+    return GD.Denominator(unit=_DENOM_UNIT, examined=0, considered=0,
+                          not_applicable_reason=reason, details=details)
+
+
 def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
     findings: List[Finding] = []
     if not rtl_dir.exists() or not rtl_dir.is_dir():
         findings.append(Finding("ERROR", "IO", f"RTL directory not found: {rtl_dir}"))
-        return findings, {}
+        return findings, GD.attach({}, GD.Denominator(
+            unit=_DENOM_UNIT, examined=0, considered=0,
+            not_applicable_reason=(
+                f"RTL directory not found: {rtl_dir} — nothing was read, so "
+                "this result is an input error, not a verdict.")))
 
     response_files: List[str] = []
     all_assignments: List[Dict] = []
+    files_scanned = 0
+    buf_files = 0
 
     for p in _find_v_files(rtl_dir):
         try:
             text = _strip_comments(p.read_text(errors="replace"))
         except OSError:
             continue
+        files_scanned += 1
         fname = str(p)
 
         if not RSP_BUF_RE.search(text):
             continue
+        buf_files += 1
 
         is_dispatcher = bool(DISPATCH_RE.search(text)) or \
             len(IF_CMD_RE.findall(text)) >= 3
@@ -191,12 +262,20 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
                     ]),
                 ))
 
-    return findings, {
+    summary: Dict = {
         "response_files": response_files,
+        "files_scanned": files_scanned,
         "total_assignments": len(all_assignments),
         "constant_assignments": sum(1 for a in all_assignments if a["constant"]),
         "dynamic_assignments": sum(1 for a in all_assignments if not a["constant"]),
+        # #496 — this program can only ever emit WARN, so `pass` is True on
+        # every readable directory. Stated in the output, not only in the
+        # docstring, so a consumer cannot mistake it for a gate.
+        "advisory_only": True,
     }
+    GD.attach(summary, _denominator(files_scanned, buf_files,
+                                    len(response_files), len(all_assignments)))
+    return findings, summary
 
 
 def main(argv: List[str] = None) -> int:
