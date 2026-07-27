@@ -316,13 +316,18 @@ def test_d2_guard_block_mode_missing_stays_waived_exit_2(
 # ===========================================================================
 # A5/d5 — the DRC / LVS sign-off flags must carry a real verdict
 #
-# Reproduced on main @ v1.7.36: a block with a real 255-byte layout.mag and
-# `: > drc_clean.flag` / `: > lvs_match.flag` (both 0 bytes, verified with
-# `find -printf '%s'`) returned `PASS — 1/1 block(s) clean`, rc=0, with and
-# without `--block`. The module docstring already claimed "any NON-EMPTY
-# file"; the code only did `is_file()`. One step later,
-# analog_a6_block_pv_check rejects exactly these flags
-# ("Bare flag with no count line -> NOT acceptable evidence").
+# Reproduced on main @ v1.7.36 with the fixture THIS FILE builds — a block
+# whose `_layout_only` layout.mag is 371 bytes (31-byte magic header + 20
+# `rect 0 0 100 100` lines) and whose `drc_clean.flag` / `lvs_match.flag` are
+# 0 bytes: `PASS — 1/1 block(s) clean`, rc=0, with and without `--block`.
+# (PR #464's prose cited a "255-byte layout.mag"; that was the author's own
+# ad-hoc fixture, not this one, and it does not reproduce byte-for-byte. Only
+# the >200-byte threshold is load-bearing, and both shapes clear it.)
+# The module docstring already claimed "any NON-EMPTY file"; the code only
+# did `is_file()`. One step later, analog_a6_block_pv_check rejects exactly
+# these flags — "Bare flag with no count line -> NOT acceptable evidence" —
+# BUT only when no DRC/LVS report sits beside them; see the FOLLOW-UP block
+# at the end of this file for the parity the original claim overstated.
 # ===========================================================================
 
 
@@ -376,7 +381,9 @@ def test_d5_whitespace_only_flags_fail(tmp_path: Path) -> None:
 
 def test_d5_verdictless_flags_fail(tmp_path: Path) -> None:
     """Non-empty but verdict-free flags ('clean' / 'match' with no count or
-    LVS verdict) are the shape A6 already refuses; A5 now refuses them too."""
+    LVS verdict), WITH NO DRC/LVS REPORT beside them, are the shape A6 already
+    refuses; A5 refuses them too. (The report-present case is the opposite
+    way round — see test_followup_bare_flags_beside_real_reports_*.)"""
     _block_list(tmp_path, ["ldo"])
     d = _layout_only(tmp_path, "ldo")
     (d / "drc_clean.flag").write_text("clean\n")
@@ -415,7 +422,7 @@ def test_d5_lvs_flag_declaring_mismatch_fails(tmp_path: Path) -> None:
 
 def test_d5_netgen_shaped_flag_without_terminal_verdict_fails(
         tmp_path: Path) -> None:
-    """Because the content check REUSES A6's parser rather than inventing a
+    """Because the evidence check REUSES A6's resolver rather than inventing a
     second dialect, A5 also inherits the shared netgen fail-safe: a
     netgen-shaped transcript with no terminal `Final result:` line is an
     unfinished compare and must not be read as a match."""
@@ -512,33 +519,266 @@ def test_d5_guard_missing_flag_file_still_reports_missing_rule(
     assert {f["rule"] for f in rpt["findings"]} == {"A5_DRC_FLAG_MISSING"}, rpt
 
 
+def _isolated_a5_without_a6(tmp_path: Path) -> Path:
+    """Copy the gate (and the shared helper it imports) into a directory that
+    does NOT contain `analog_a6_block_pv_check.py`, so the cross-program
+    import genuinely fails. Exercising degraded mode this way keeps the test
+    on the OBSERVABLE contract (exit code + rule set through the CLI); the
+    previous version monkeypatched private module globals and called private
+    helpers by name, so it passed the mutant only via AttributeError and would
+    have reddened against any correct fix that renamed or inlined them."""
+    import shutil
+
+    iso = tmp_path / "_iso_programs"
+    iso.mkdir()
+    for name in ("analog_a5_layout_check.py", "_analog_a_check_common.py"):
+        shutil.copy2(PROG.parent / name, iso / name)
+    assert not (iso / "analog_a6_block_pv_check.py").exists()
+    return iso / "analog_a5_layout_check.py"
+
+
+def _run_prog(prog: Path, project: Path,
+              *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(prog), str(project),
+         "--json", str(project / "report.json"), *args],
+        capture_output=True, text=True, cwd=str(project),
+    )
+
+
 def test_d5_parser_import_failure_degrades_but_never_fails_open(
         tmp_path: Path) -> None:
-    """Degraded-mode contract (a NEW behaviour, so it fails on the base tree
-    like the other d5 discriminators). The content check borrows A6's parsers
-    via a cross-program import. If that import ever fails the gate must
-    DEGRADE to the docstring's stated minimum (a non-empty flag) — never fail
-    open on a 0-byte flag, and never fail EVERY block on an ImportError."""
-    import importlib.util
+    """Degraded-mode contract, asserted through the CLI. The evidence check
+    borrows A6's readers via a cross-program import. If that import ever fails
+    the gate must DEGRADE to the docstring's stated minimum (a non-empty flag)
+    — never fail open on a 0-byte flag, and never turn EVERY block red on an
+    ImportError."""
+    prog = _isolated_a5_without_a6(tmp_path)
 
-    spec = importlib.util.spec_from_file_location("_a5_under_test", PROG)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_a5_under_test"] = mod
-    sys.path.insert(0, str(PROG.parent))
-    try:
-        spec.loader.exec_module(mod)
-    finally:
-        sys.path.remove(str(PROG.parent))
-    mod._PARSE_DRC_COUNT = None
-    mod._PARSE_LVS_MATCH = None
+    # (a) never fails OPEN: a 0-byte flag is still a FAIL without A6.
+    p_open = tmp_path / "p_open"
+    p_open.mkdir()
+    _block_list(p_open, ["ldo"])
+    d = _layout_only(p_open, "ldo")
+    (d / "drc_clean.flag").write_bytes(b"")
+    (d / "lvs_match.flag").write_text("lvs: match\n")
+    r = _run_prog(prog, p_open)
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+    rpt = json.loads((p_open / "report.json").read_text())
+    assert {f["rule"] for f in rpt["findings"]} == {"A5_DRC_FLAG_EMPTY"}, rpt
 
-    d = tmp_path / "blk"
-    d.mkdir()
-    empty = d / "drc_clean.flag"
-    empty.write_bytes(b"")
-    # Degraded mode still catches the 0-byte flag (never fails open) …
-    assert mod._drc_flag_defect(empty)[0] == "A5_DRC_FLAG_EMPTY"
-    # … but does not condemn a verdict-free flag it can no longer parse.
-    verdictless = d / "lvs_match.flag"
-    verdictless.write_text("clean\n")
-    assert mod._lvs_flag_defect(verdictless) is None
+    # (b) never fails CLOSED on every block: a verdict-free flag it can no
+    #     longer parse is not condemned, so an ImportError cannot blanket-red
+    #     the run.
+    p_closed = tmp_path / "p_closed"
+    p_closed.mkdir()
+    _block_list(p_closed, ["ldo"])
+    d = _layout_only(p_closed, "ldo")
+    (d / "drc_clean.flag").write_text("clean\n")
+    (d / "lvs_match.flag").write_text("ok\n")
+    r = _run_prog(prog, p_closed)
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+
+    # … and the SAME fixture is a FAIL when A6 IS importable, which is what
+    # proves (b) is degraded mode and not a hole in the normal path.
+    r = _run(p_closed)
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+
+
+# ===========================================================================
+# A5/d5 FOLLOW-UP — the PARITY the d5 fix CLAIMED but did not have
+#
+# PR #464's module comment and detail strings justify the flag-content check
+# as "exactly the standard `analog_a6_block_pv_check` already enforces one
+# step later" / "as A6 requires". Measured on main @ v1.7.58, that was false:
+# A6's `_drc_violations` / `_lvs_match` read the block's TOOL REPORTS first
+# (drc.report / *.lyrdb / comp.json / lvs.report …) and fall back to the flag
+# only last, whereas A5 read the FLAG ALONE. On one directory carrying a
+# real-geometry layout.mag, `drc.report` = "total errors = 0",
+# `lvs.report` = "Final result: Circuits match uniquely." and bare marker
+# flags "clean"/"match":
+#     analog_a6_block_pv_check -> rc=0 PASS (1/1 DRC-0 + LVS-match)
+#     analog_a5_layout_check   -> rc=1 FAIL (A5_DRC_FLAG_NO_EVIDENCE,
+#                                            A5_LVS_FLAG_NO_EVIDENCE)
+# and on the PR's merge-base (7153eb9e9) A5 PASSed that same directory. Since
+# A5's flow leg is a `program_exit_zero` inside `all_of`, that is a BLOCKING
+# false-fail live on main: driving the real `flow_compliance_check.py` on
+# that project moved step A5 from `status: PASS` (merge-base) to
+# `status: FAIL` (main) with the A5_*_NO_EVIDENCE text as its reason.
+# ===========================================================================
+
+
+def _reports(d: Path, *, drc: str = "Magic DRC summary\ntotal errors = 0\n",
+             lvs: str = ("Subcircuit summary:\n"
+                         "Final result: Circuits match uniquely.\n")) -> None:
+    """The tool reports A6 prefers over the flag."""
+    (d / "drc.report").write_text(drc)
+    (d / "lvs.report").write_text(lvs)
+
+
+def _run_a6(project: Path) -> subprocess.CompletedProcess:
+    a6 = PROG.parent / "analog_a6_block_pv_check.py"
+    return subprocess.run(
+        [sys.executable, str(a6), str(project),
+         "--json", str(project / "a6.json")],
+        capture_output=True, text=True,
+    )
+
+
+def test_followup_bare_flags_beside_real_reports_are_not_a_fail(
+        tmp_path: Path) -> None:
+    """THE FOLLOW-UP DISCRIMINATOR. Real DRC/LVS reports + bare marker flags:
+    the evidence for sign-off is present and says clean/match, so A5 must
+    PASS. On main this was rc=1 with A5_DRC_FLAG_NO_EVIDENCE +
+    A5_LVS_FLAG_NO_EVIDENCE."""
+    _block_list(tmp_path, ["ldo"])
+    d = _layout_only(tmp_path, "ldo")
+    _reports(d)
+    (d / "drc_clean.flag").write_text("clean\n")
+    (d / "lvs_match.flag").write_text("match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert rpt["verdict"] == "PASS", rpt
+
+
+def test_followup_a5_and_a6_agree_on_the_same_block_dir(
+        tmp_path: Path) -> None:
+    """The PROPERTY the committed comment asserts: A5 and A6 must not reach
+    opposite verdicts on one directory. Checked over four evidence shapes,
+    including the two where the evidence lives ONLY in the reports."""
+    shapes = [
+        ("reports_and_bare_flags", True, "clean\n", "match\n"),
+        ("reports_and_no_flags", True, None, None),
+        ("flags_only_real_verdicts", False, "violations: 0\n", "lvs: match\n"),
+        ("flags_only_bare", False, "clean\n", "match\n"),
+    ]
+    for name, with_reports, drc_flag, lvs_flag in shapes:
+        proj = tmp_path / name
+        proj.mkdir()
+        _block_list(proj, ["ldo"])
+        d = _layout_only(proj, "ldo")
+        if with_reports:
+            _reports(d)
+        if drc_flag is not None:
+            (d / "drc_clean.flag").write_text(drc_flag)
+        if lvs_flag is not None:
+            (d / "lvs_match.flag").write_text(lvs_flag)
+        a5 = _run(proj)
+        a6 = _run_a6(proj)
+        assert (a5.returncode == 0) == (a6.returncode == 0), (
+            name, a5.returncode, a5.stdout, a6.returncode, a6.stdout)
+
+
+def test_followup_no_flag_at_all_but_real_reports_passes(
+        tmp_path: Path) -> None:
+    """`analog_a6_native_pv.py` — the only real in-repo PRODUCER of per-block
+    PV evidence — writes `drc.report` / `comp.json` and writes NO
+    `drc_clean.flag` / `lvs_match.flag` at all. A5 must read what that
+    producer emits instead of demanding a file nothing writes."""
+    _block_list(tmp_path, ["ldo"])
+    d = _layout_only(tmp_path, "ldo")
+    _reports(d)
+    r = _run(tmp_path)
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+
+
+def test_followup_comp_json_is_accepted_lvs_evidence(tmp_path: Path) -> None:
+    """A6's LVS precedence starts at netgen's structured `comp.json`; A5
+    inherits it rather than re-deciding what an LVS verdict looks like."""
+    _block_list(tmp_path, ["ldo"])
+    d = _layout_only(tmp_path, "ldo")
+    (d / "drc.report").write_text("total errors = 0\n")
+    (d / "comp.json").write_text(json.dumps({"result": "match"}))
+    r = _run(tmp_path)
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+
+
+# ---- follow-up direction-1 guards: the fix must not become a loophole -----
+
+
+def test_followup_guard_report_violations_beat_a_flag_claiming_zero(
+        tmp_path: Path) -> None:
+    """DIRECTION-1 GUARD / anti-weakening. Precedence means the REPORT wins,
+    not 'whichever artefact says clean wins'. A drc.report declaring 3 errors
+    next to a `drc_clean.flag` saying `violations: 0` is a FAIL. On main
+    (flag-only) this PASSed."""
+    _block_list(tmp_path, ["ldo"])
+    d = _layout_only(tmp_path, "ldo")
+    _reports(d, drc="total errors = 3\n")
+    (d / "drc_clean.flag").write_text("violations: 0\n")
+    (d / "lvs_match.flag").write_text("lvs: match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert {f["rule"] for f in rpt["findings"]} == {"A5_DRC_NOT_CLEAN"}, rpt
+
+
+def test_followup_guard_report_mismatch_beats_a_flag_claiming_match(
+        tmp_path: Path) -> None:
+    """DIRECTION-1 GUARD / anti-weakening. Same for LVS: an lvs.report saying
+    the circuits do not match outranks an `lvs_match.flag` saying `match`."""
+    _block_list(tmp_path, ["ldo"])
+    d = _layout_only(tmp_path, "ldo")
+    _reports(d, lvs="Final result: Circuits do not match.\n")
+    (d / "drc_clean.flag").write_text("violations: 0\n")
+    (d / "lvs_match.flag").write_text("lvs: match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert {f["rule"] for f in rpt["findings"]} == {"A5_LVS_NOT_MATCH"}, rpt
+
+
+def test_followup_guard_empty_reports_do_not_rescue_a_bare_flag(
+        tmp_path: Path) -> None:
+    """DIRECTION-1 GUARD. The d5 hole must stay shut: report files that exist
+    but carry no verdict (0-byte / whitespace) are not evidence, so a bare
+    flag beside them is still A5_*_FLAG_NO_EVIDENCE."""
+    _block_list(tmp_path, ["ldo"])
+    d = _layout_only(tmp_path, "ldo")
+    (d / "drc.report").write_bytes(b"")
+    (d / "lvs.report").write_text("   \n")
+    (d / "drc_clean.flag").write_text("clean\n")
+    (d / "lvs_match.flag").write_text("match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert {f["rule"] for f in rpt["findings"]} == {
+        "A5_DRC_FLAG_NO_EVIDENCE", "A5_LVS_FLAG_NO_EVIDENCE"}, rpt
+
+
+def test_followup_guard_reports_do_not_excuse_a_missing_layout(
+        tmp_path: Path) -> None:
+    """DIRECTION-1 GUARD. Reading the PV reports must not leak into the d2
+    coverage rule: a declared block with perfect DRC/LVS evidence but NO
+    layout is still an uncovered block, so a 2-block project with one such
+    block stays INCOMPLETE."""
+    _block_list(tmp_path, ["blk_ok", "blk_missing"])
+    _layout_and_flags(tmp_path, "blk_ok")
+    d = tmp_path / "phase3" / "analog" / "blk_missing"
+    d.mkdir(parents=True)
+    _reports(d)
+    r = _run(tmp_path)
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert rpt["verdict"] == "INCOMPLETE", rpt
+    assert {f["rule"] for f in rpt["findings"]} == {"A5_LAYOUT_MISSING"}, rpt
+
+
+def test_followup_guard_detail_text_no_longer_misattributes_to_a6(
+        tmp_path: Path) -> None:
+    """The emitted detail said "need an explicit violation count … AS A6
+    REQUIRES", which A6 does not require when a report is present — an
+    operator following that message would rewrite a flag A6 was already
+    happy to ignore. The message must state A5's ACTUAL requirement: either
+    a report or a verdict in the flag."""
+    _block_list(tmp_path, ["ldo"])
+    d = _layout_only(tmp_path, "ldo")
+    (d / "drc_clean.flag").write_text("clean\n")
+    (d / "lvs_match.flag").write_text("ok\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    details = " ".join(f["detail"] for f in rpt["findings"])
+    assert "as A6 requires" not in details, details
+    assert "drc.report" in details and "lvs.report" in details, details

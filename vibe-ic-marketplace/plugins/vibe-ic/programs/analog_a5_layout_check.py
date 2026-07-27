@@ -23,26 +23,43 @@ with substance:
     now parses the .mag (paint `rect` / instance `use` lines) or walks
     the .gds record stream (BOUNDARY/PATH/SREF/AREF/BOX records) and
     rejects a geometry-empty or `deterministic_stub`-marked layout.
-  * `drc_clean.flag` present AND carrying an explicit zero-violation
-    verdict (`violations: 0` / `0 errors` / `DRC clean` …). A bare or
-    `touch`-created flag is NOT sign-off evidence — this is exactly the
-    standard `analog_a6_block_pv_check` already enforces one step later.
-  * `lvs_match.flag` present AND carrying an explicit match verdict
-    (`lvs: match` / `netlists match` / `match: true` …). Same rule.
+  * ZERO-violation DRC evidence for the block, read with the SAME
+    EVIDENCE PRECEDENCE `analog_a6_block_pv_check` uses one step later:
+    a DRC report (`drc.report` / `*.drc.report` / `*.lyrdb` / `drc.rpt`
+    / `*.drc`) FIRST, and only then `drc_clean.flag` — the flag counting
+    solely when it carries an explicit violation count (`violations: 0`
+    / `0 errors` / `DRC clean` …). A bare or `touch`-created flag with
+    no DRC report beside it is NOT sign-off evidence.
+  * MATCH LVS evidence with the same precedence: `comp.json`, then
+    `lvs.report` / `*.lvs.report` / `lvs.rpt` / `comp.out` / `*.lvs`,
+    then `lvs_match.flag` carrying an explicit match verdict
+    (`lvs: match` / `netlists match` / `match: true` …).
+
+    A5 delegates BOTH to A6's own `_drc_violations` / `_lvs_match`, so
+    the two gates can never disagree about the same block directory.
+    Reading the flag ALONE (v1.7.49–v1.7.58) made A5 red a block whose
+    PV evidence lived in the report files A6 prefers, while A6 stayed
+    green on the same directory — a blocking false-fail, since A5's flow
+    leg is a `program_exit_zero` inside `all_of`.
 
 Failure rules:
   A5_LAYOUT_MISSING        — neither layout.mag nor <block>.gds present
   A5_LAYOUT_TOO_SMALL      — layout source < 200 bytes (stub)
   A5_LAYOUT_EMPTY_GEOMETRY — layout source has no placed geometry (empty
                              stream or padded/deterministic stub)
-  A5_DRC_FLAG_MISSING      — drc_clean.flag absent
-  A5_DRC_FLAG_EMPTY        — drc_clean.flag present but empty/whitespace
-  A5_DRC_FLAG_NO_EVIDENCE  — drc_clean.flag carries no violation verdict
-  A5_DRC_NOT_CLEAN         — drc_clean.flag reports > 0 violations
-  A5_LVS_FLAG_MISSING      — lvs_match.flag absent
-  A5_LVS_FLAG_EMPTY        — lvs_match.flag present but empty/whitespace
-  A5_LVS_FLAG_NO_EVIDENCE  — lvs_match.flag carries no match verdict
-  A5_LVS_NOT_MATCH         — lvs_match.flag reports a mismatch
+  A5_DRC_FLAG_MISSING      — no DRC report AND no drc_clean.flag
+  A5_DRC_FLAG_EMPTY        — no DRC report and drc_clean.flag is
+                             empty/whitespace
+  A5_DRC_FLAG_NO_EVIDENCE  — no DRC report and drc_clean.flag carries no
+                             violation verdict
+  A5_DRC_NOT_CLEAN         — the winning DRC evidence reports > 0
+                             violations
+  A5_LVS_FLAG_MISSING      — no LVS report/comp.json AND no lvs_match.flag
+  A5_LVS_FLAG_EMPTY        — no LVS report and lvs_match.flag is
+                             empty/whitespace
+  A5_LVS_FLAG_NO_EVIDENCE  — no LVS report and lvs_match.flag carries no
+                             match verdict
+  A5_LVS_NOT_MATCH         — the winning LVS evidence reports a mismatch
 
 Project-level verdicts (no `--block`):
   VACUOUS_PASS — `analog/analog_block_list.json` missing or empty, or
@@ -72,18 +89,28 @@ SKILL = "analog-layout"
 MIN_LAYOUT_BYTES = 200
 
 
-# ── sign-off flag CONTENT (d5) ─────────────────────────────────────────────
+# ── per-block DRC / LVS SIGN-OFF EVIDENCE (d5 + its follow-up) ─────────────
 # A5 used to accept `drc_clean.flag` / `lvs_match.flag` on `is_file()` alone,
 # so a `touch`-created 0-byte flag certified DRC and LVS sign-off. That is
 # weaker than this module's own docstring ("any non-empty file") AND weaker
-# than the standard the flow already enforces one step later:
-# `analog_a6_block_pv_check` rejects a bare flag with
-# "Bare flag with no count line -> NOT acceptable evidence".
-# Reuse A6's parsers rather than writing a second dialect of the same rule —
-# they are tool-generic (Magic / KLayout / Calibre / Netgen phrasings), so
-# this stays chip-AGNOSTIC.
-def _load_pv_parsers():
-    """Return (parse_drc_count, parse_lvs_match) from the A6 gate, or
+# than the standard the flow enforces one step later.
+#
+# v1.7.49 (PR #464) closed that by parsing the FLAG's content with A6's
+# parsers — but justified it as "exactly the standard A6 already enforces",
+# which was NOT true: A6 reads the block's TOOL REPORTS first
+# (`_drc_violations` / `_lvs_match` walk drc.report / *.lyrdb / comp.json /
+# lvs.report …) and treats the flag only as a LAST-RESORT fallback. Reading
+# the flag alone therefore turned a block whose PV evidence lives in those
+# reports RED at A5 while A6 stayed GREEN on the same directory — a blocking
+# false-fail, because A5's flow leg is a `program_exit_zero` inside `all_of`.
+#
+# So A5 now borrows A6's whole EVIDENCE RESOLVER, not just its string
+# parsers: one gate cannot contradict the other about one directory, and the
+# accepted phrasings stay tool-generic (Magic / KLayout / Calibre / Netgen),
+# so this stays chip-AGNOSTIC.
+def _load_pv_evidence_readers():
+    """Return (drc_violations, lvs_match) — A6's per-block EVIDENCE readers,
+    each `(block_dir) -> (verdict|None, evidence_filename)` — or
     (None, None) when that module cannot be imported. NEVER fail open and
     never turn every block red on an import error: the caller degrades to
     the docstring's stated minimum (a non-empty flag) instead."""
@@ -92,12 +119,12 @@ def _load_pv_parsers():
         if here not in sys.path:
             sys.path.insert(0, here)
         import analog_a6_block_pv_check as _a6
-        return _a6._parse_drc_count, _a6._parse_lvs_match
+        return _a6._drc_violations, _a6._lvs_match
     except Exception:  # nosec — degraded mode is handled by the caller
         return None, None
 
 
-_PARSE_DRC_COUNT, _PARSE_LVS_MATCH = _load_pv_parsers()
+_DRC_VIOLATIONS, _LVS_MATCH = _load_pv_evidence_readers()
 
 
 def _flag_text(path: Path) -> str:
@@ -107,45 +134,73 @@ def _flag_text(path: Path) -> str:
         return ""
 
 
-def _drc_flag_defect(path: Path) -> Optional[tuple[str, str]]:
-    """Return (rule, detail) when `drc_clean.flag` is not real DRC sign-off
-    evidence, else None."""
-    text = _flag_text(path)
-    if not text.strip():
-        return ("A5_DRC_FLAG_EMPTY",
-                "drc_clean.flag is empty/whitespace — DRC was not signed "
-                "off, the flag was merely created")
-    if _PARSE_DRC_COUNT is None:
-        return None  # degraded: non-empty is the documented minimum
-    count = _PARSE_DRC_COUNT(text)
+def _no_evidence_defect(flag: Path, kind: str, reports: str
+                        ) -> tuple[str, str, Path]:
+    """Classify WHY a block has no acceptable {DRC,LVS} evidence, keeping the
+    absent-vs-contentless split so a finding still tells an operator whether
+    to RUN the tool or to FIX its output."""
+    prefix = "A5_DRC" if kind == "DRC" else "A5_LVS"
+    verdict_hint = ("an explicit violation count (e.g. `violations: 0`)"
+                    if kind == "DRC"
+                    else "an explicit match line (e.g. `lvs: match`)")
+    if not flag.is_file():
+        return (f"{prefix}_FLAG_MISSING",
+                f"no {kind} evidence for this block: neither a {kind} report "
+                f"({reports}) nor {flag.name} — {kind} was not signed off",
+                flag)
+    if not _flag_text(flag).strip():
+        return (f"{prefix}_FLAG_EMPTY",
+                f"{flag.name} is empty/whitespace and no {kind} report "
+                f"({reports}) sits beside it — {kind} was not signed off, "
+                f"the flag was merely created",
+                flag)
+    return (f"{prefix}_FLAG_NO_EVIDENCE",
+            f"{flag.name} carries no {kind} verdict and no {kind} report "
+            f"({reports}) sits beside it; supply either, or put "
+            f"{verdict_hint} in the flag",
+            flag)
+
+
+_DRC_REPORT_SHAPES = "drc.report / *.drc.report / *.lyrdb / drc.rpt / *.drc"
+_LVS_REPORT_SHAPES = "comp.json / lvs.report / *.lvs.report / lvs.rpt / *.lvs"
+
+
+def _drc_defect(bdir: Path) -> Optional[tuple[str, str, Path]]:
+    """Return (rule, detail, evidence_path) when a block has no zero-violation
+    DRC sign-off, else None. Evidence precedence is A6's (report first, flag
+    last), delegated to A6's own resolver so the two gates agree."""
+    flag = bdir / "drc_clean.flag"
+    if _DRC_VIOLATIONS is None:
+        # Degraded: A6 unavailable → the docstring's stated minimum applies.
+        # Still never fails OPEN on an absent/0-byte flag.
+        if not flag.is_file() or not _flag_text(flag).strip():
+            return _no_evidence_defect(flag, "DRC", _DRC_REPORT_SHAPES)
+        return None
+    count, evidence = _DRC_VIOLATIONS(bdir)
     if count is None:
-        return ("A5_DRC_FLAG_NO_EVIDENCE",
-                "drc_clean.flag carries no DRC verdict; need an explicit "
-                "violation count (e.g. `violations: 0`) as A6 requires")
+        return _no_evidence_defect(flag, "DRC", _DRC_REPORT_SHAPES)
     if count > 0:
         return ("A5_DRC_NOT_CLEAN",
-                f"drc_clean.flag reports {count} violation(s) (must be 0)")
+                f"{evidence} reports {count} violation(s) (must be 0)",
+                bdir / evidence)
     return None
 
 
-def _lvs_flag_defect(path: Path) -> Optional[tuple[str, str]]:
-    """Return (rule, detail) when `lvs_match.flag` is not real LVS sign-off
-    evidence, else None."""
-    text = _flag_text(path)
-    if not text.strip():
-        return ("A5_LVS_FLAG_EMPTY",
-                "lvs_match.flag is empty/whitespace — LVS was not signed "
-                "off, the flag was merely created")
-    if _PARSE_LVS_MATCH is None:
-        return None  # degraded: non-empty is the documented minimum
-    matched = _PARSE_LVS_MATCH(text)
+def _lvs_defect(bdir: Path) -> Optional[tuple[str, str, Path]]:
+    """Return (rule, detail, evidence_path) when a block has no LVS-match
+    sign-off, else None. Same A6 evidence precedence as `_drc_defect`."""
+    flag = bdir / "lvs_match.flag"
+    if _LVS_MATCH is None:
+        if not flag.is_file() or not _flag_text(flag).strip():
+            return _no_evidence_defect(flag, "LVS", _LVS_REPORT_SHAPES)
+        return None
+    matched, evidence = _LVS_MATCH(bdir)
     if matched is None:
-        return ("A5_LVS_FLAG_NO_EVIDENCE",
-                "lvs_match.flag carries no LVS verdict; need an explicit "
-                "match line (e.g. `lvs: match`) as A6 requires")
+        return _no_evidence_defect(flag, "LVS", _LVS_REPORT_SHAPES)
     if matched is False:
         return ("A5_LVS_NOT_MATCH",
-                "lvs_match.flag reports a mismatch (must be a match)")
+                f"{evidence} reports a mismatch (must be a match)",
+                bdir / evidence)
     return None
 
 
@@ -246,8 +301,6 @@ def _check_block(project: Path, block: str
     bdir = project / "phase3" / "analog" / block
     mag = bdir / "layout.mag"
     gds = bdir / f"{block}.gds"
-    drc_flag = bdir / "drc_clean.flag"
-    lvs_flag = bdir / "lvs_match.flag"
 
     findings: List[dict] = []
     layout_path: Optional[Path] = None
@@ -285,34 +338,15 @@ def _check_block(project: Path, block: str
                 "rel_path": str(layout_path.relative_to(project)),
                 "detail": f"{size}B but no real placed geometry: {geo_detail}",
             })
-    if not drc_flag.is_file():
+    for defect in (_drc_defect(bdir), _lvs_defect(bdir)):
+        if defect is None:
+            continue
+        rule, detail, evidence = defect
         findings.append({
-            "block": block, "rule": "A5_DRC_FLAG_MISSING",
-            "rel_path": str(drc_flag.relative_to(project)),
-            "detail": "drc_clean.flag absent (DRC not signed off)",
+            "block": block, "rule": rule,
+            "rel_path": str(evidence.relative_to(project)),
+            "detail": detail,
         })
-    else:
-        defect = _drc_flag_defect(drc_flag)
-        if defect is not None:
-            findings.append({
-                "block": block, "rule": defect[0],
-                "rel_path": str(drc_flag.relative_to(project)),
-                "detail": defect[1],
-            })
-    if not lvs_flag.is_file():
-        findings.append({
-            "block": block, "rule": "A5_LVS_FLAG_MISSING",
-            "rel_path": str(lvs_flag.relative_to(project)),
-            "detail": "lvs_match.flag absent (LVS not signed off)",
-        })
-    else:
-        defect = _lvs_flag_defect(lvs_flag)
-        if defect is not None:
-            findings.append({
-                "block": block, "rule": defect[0],
-                "rel_path": str(lvs_flag.relative_to(project)),
-                "detail": defect[1],
-            })
     if findings:
         return "FAIL", findings
     return "PASS", []
