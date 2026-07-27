@@ -18,13 +18,51 @@ Ordering checked:
     3. `write_verilog` appears at least once, on a line AFTER every
        `hilomap`.
 
+Two input shapes, both audited (the second landed in v1.7.64, PR #474; this
+docstring described only the first until then, so the file promised a
+narrower gate than it ships):
+    * a `.ys` script — `--ys-file <path>`, or every `*.ys` auto-discovered
+      under a project dir. The ordering checks above run on the script text.
+    * NO `.ys` script, because the runner synthesised with an inline
+      `yosys -p '<commands>'`. The command is recovered from the runner's own
+      synth log (the `-- Running command \\`...'` echo line) and the same
+      hilomap + flatten requirement is checked on its TEXT, by
+      `_yosys_inline_mode_detect.resolve_no_ys_script`.
+
+What the project-dir branch reports when there is no `.ys` script — note that
+`verdict` stays VACUOUS_PASS on every rc=0 tier, so `reason_class` is the
+field that says how much was actually verified:
+    rc=1  verdict FAIL,          reason_class inline_yosys_p_mode_nonconformant
+          — a real-PDK inline command (one that binds a Liberty library) is
+          missing hilomap and/or flatten. Blocking, by design.
+    rc=0  verdict VACUOUS_PASS,  reason_class inline_yosys_p_mode_conformant
+          — an inline command WAS extracted and checked, and it conforms (or
+          only simulation-only commands, which bind no Liberty, were found).
+          The verdict word is "vacuous" because no `.ys` script existed to
+          audit; the reason_class is what records that the command itself was
+          read and verified. `inline_evidence` names the log(s).
+    rc=0  verdict VACUOUS_PASS,  reason_class inline_yosys_p_mode_confirmed
+    rc=0  verdict VACUOUS_PASS_UNCONFIRMED,
+                                 reason_class inline_yosys_p_mode_unconfirmed
+          — no inline command was echoed anywhere, so nothing could be read.
+          These are the pre-v1.7.64 marker-FILE-existence tiers, kept: a
+          non-Yosys flow is legitimate, and `_unconfirmed` flags for a
+          reviewer that no synthesis evidence was found at all.
+
 Usage:
     python3 yosys_hilomap_required_check.py --ys-file scripts/synth.ys
+    python3 yosys_hilomap_required_check.py <project_dir> [--json <out>]
 
 Exit codes:
-    0 — all three conditions satisfied.
-    1 — one or more conditions violated; stderr lists which.
-    2 — argument or I/O error.
+    0 — every audited input satisfied the ordering; or a `.ys` script issues
+        none of {dfflibmap, abc, synth} and so is not a synth script at all;
+        or the no-`.ys`-script branch reached one of its three rc=0 tiers
+        above.
+    1 — one or more conditions violated; stderr lists which. Reachable from
+        BOTH branches — a non-conformant inline command fails here too.
+    2 — argument error, unreadable `--ys-file`, or a project dir that does
+        not exist. NOT used for "nothing to audit"; that is a rc=0
+        VACUOUS_PASS tier.
 """
 from __future__ import annotations
 
@@ -211,8 +249,13 @@ def main(argv: list[str] | None = None) -> int:
     # preserving the legacy `--ys-file <path>` form for direct CLI use.
     ap.add_argument("project_dir", nargs="?", default=None,
                     help="Project directory; auto-discovers *.ys scripts "
-                         "under synth/, phase3/, scripts/, and reports SKIP "
-                         "(rc=2) if none found.")
+                         "under synth/, phase3/, scripts/. If none are found "
+                         "it audits the inline `yosys -p` command echoed in "
+                         "the runner's synth log instead — rc=1 when that "
+                         "command is a non-conformant real-PDK one, else a "
+                         "rc=0 VACUOUS_PASS tier. (This help used to say "
+                         "'reports SKIP (rc=2) if none found'; that branch "
+                         "has never returned 2.)")
     ap.add_argument("--ys-file", default=None,
                     help="Path to a single Yosys .ys synthesis script.")
     ap.add_argument("--json", default=None,

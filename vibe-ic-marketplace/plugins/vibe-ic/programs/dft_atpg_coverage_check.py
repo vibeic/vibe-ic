@@ -28,17 +28,35 @@ mismatch between the recomputed verdict and the written boolean is
 surfaced as `self_assertion_mismatch` in the report (the recomputed
 number always wins).
 
-Honest-failure rules (NO vacuous pass on absence):
-  * coverage.json (and atpg_coverage.rpt) both absent          → FAIL (rc=1)
+Honest-failure rules (no UNDISCLOSED pass on absence):
+  * coverage.json (and atpg_coverage.rpt) both absent, and no disclosed
+    skip sentinel                                              → FAIL (rc=1)
   * present but no measured coverage number can be extracted   → FAIL (rc=1)
   * present but no target can be extracted                     → FAIL (rc=1)
   * measured < target                                          → FAIL (rc=1)
   * measured >= target                                         → PASS (rc=0)
+  * no measurable coverage AND a sibling sentinel in
+    phase2/stage2/dft/ self-reports verdict ∈ {SKIP, SKIPPED,
+    SKIPPED-CONDITION}                        → SKIPPED-CONDITION (rc=2)
 
-There is no SKIP path: Step 11 applies to every digital design that
-reaches synthesis. A design with no sequential logic still has a
-combinational stuck-at coverage number; absence of the report is a
-missing-evidence FAIL, not a not-applicable SKIP.
+THERE IS ONE SKIP PATH, AND IT IS DISCLOSED. This docstring used to say
+"There is no SKIP path" and "NO vacuous pass on absence" without
+qualification, which the shipped code has not matched since the disclosed-skip
+branch landed (see `main()`, guarded by
+`dft_signoff_common.disclosed_atpg_skip`): with genuinely absent stuck-at
+evidence AND a co-located `dft_atpg_not_run.json` sentinel, this program
+prints "SKIPPED-CONDITION" and returns rc=2, which flow_compliance_check
+scores as passed=True in its VACUOUS_PASS tier. Reproduced on the real
+spm x ihp-sg13g2 run (scan_netlist.v / atpg_coverage.rpt /
+reports/phase2/dft/coverage.json all absent): rc=2, not rc=1.
+
+The narrower rule the code DOES implement: absence alone is never enough.
+The skip requires BOTH the absence of any measurable coverage AND an
+explicit runner-written sentinel naming the capability gap. Step 11 still
+applies to every digital design that reaches synthesis, so an undisclosed
+absence remains a missing-evidence FAIL, and a design that DID produce a
+measurement is judged on that measurement — a real low coverage still FAILs
+whatever any sentinel says.
 
 FOUNDRY-GRADE FLOOR (2026-07 DFT-depth raise): the checker no longer
 trusts a lenient written target. It enforces a FOUNDRY floor (default
@@ -60,7 +78,9 @@ Usage:
     python3 dft_atpg_coverage_check.py <project_dir> [--coverage-json PATH]
     python3 dft_atpg_coverage_check.py <project_dir> [--foundry-floor 98]
 
-main(argv) -> int : 0 PASS / 1 FAIL / 2 IO-or-arg error.
+main(argv) -> int : 0 PASS / 1 FAIL / 2 IO-or-arg error OR disclosed
+                    SKIPPED-CONDITION (rc=2 is overloaded; the stdout line and
+                    the --json `verdict` field distinguish them).
 
 chip-AGNOSTIC: reads only the generic coverage.json / atpg_coverage.rpt
 schemas; no design-specific knowledge.

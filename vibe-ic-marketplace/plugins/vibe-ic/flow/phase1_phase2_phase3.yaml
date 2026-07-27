@@ -771,9 +771,31 @@ steps:
     skills: [synth-doctor]
     mcp_tools: [eda_synth]
     programs:
-      # Wave 82 — `synth_wrapper_gen` auto-generates the synthesis
-      # wrapper for inout-port designs (the wrapper splits inout into
-      # in/out/oen so Yosys can map cleanly). Run before Yosys.
+      # `synth_wrapper_gen` generates a synthesis wrapper for inout-port
+      # designs (it splits each inout into in/out/oen nets so Yosys can map
+      # them cleanly).
+      #
+      # NOT AUTO-INVOKED. This entry used to end "Run before Yosys", which
+      # reads as a statement that something in the flow runs it. Nothing does:
+      # `grep -rn synth_wrapper_gen` over the whole plugin outside tests/ hits
+      # only this list, programs/INDEX.md, two docs tables and the program
+      # itself. `phase3_one_shot_runner.step_synth` (the real Step-9 executor)
+      # contains no reference to it, `design_one_shot_runner` none, and the
+      # `eda_synth` MCP tool none. The program's own docstring named two
+      # trigger keys — `L9.synth_wrapper_required` and `needs_synth_wrapper`
+      # in ic_class_registry — that exist nowhere else in the tree; that claim
+      # has been corrected in the program.
+      #
+      # So it is an OPERATOR-INVOKED helper: an inout-bearing design must run
+      # `python3 programs/synth_wrapper_gen.py <project> --top <top>` by hand
+      # before synthesis. `flow_step_executor_coverage_check` cannot catch
+      # this — it classifies Step 9 as WIRED because the step's
+      # required_outputs (netlist.v) do get produced, and it has no per-program
+      # granularity. Wiring it automatically is a separate change and needs the
+      # generator's own correctness fixed first (its emitted wrapper drives
+      # every inout from the `_i` leg only and never connects the `_o`/`_oe`
+      # legs it declares), so auto-running it today would inject a wrapper that
+      # does not preserve the design.
       - synth_wrapper_gen
     required_outputs:
       - "phase2/stage2/synth/netlist.v"
@@ -802,6 +824,17 @@ steps:
     required_outputs:
       - "phase3/stage3/sta/pre_pnr_timing.rpt"
       - "reports/phase3/sta/pre_pnr_summary.json"
+    # DISCLOSED, deliberately NOT declared above: step 10 also emits
+    # `phase3/stage3/sta/pre_pnr_power_preview.rpt` (present, 2321 B, on the
+    # real spm x ihp-sg13g2 run). It is ADVISORY by construction —
+    # phase3_one_shot_runner emits it inside a try/except only when the
+    # container-backed OpenSTA `report_power` succeeds, and appends a note when
+    # it does not ("Best-effort; never gates."). required_outputs is ALL-of-N,
+    # so declaring it would report step 10 MISSING on every host where the
+    # container is unavailable even though the two artefacts step 10 actually
+    # signs off on are both present. Named here so that "what does step 10
+    # produce" is answerable from this file, without asserting the step is
+    # incomplete when an advisory preview is absent.
     gate:
       all_of:
         - files_exist: ["phase3/stage3/sta/pre_pnr_timing.rpt"]
@@ -840,6 +873,42 @@ steps:
     required_outputs:
       - "phase2/stage2/dft/scan_netlist.v"
       - "phase2/stage2/dft/atpg_coverage.rpt"
+      # PRODUCED BY STEP 11 BUT DELIBERATELY *NOT* DECLARED. Named here so
+      # that "what does step 11 write" is answerable from this file without
+      # any of these becoming a new way for the step to go red.
+      #   * phase2/stage2/dft/tv.json — the ATPG test vectors (287 KB on the
+      #     real spm x ihp-sg13g2 run). Declaring it was PROPOSED and is
+      #     WITHDRAWN, on two independent grounds:
+      #       (a) The stated basis — "satisfied by every run that satisfies
+      #           the two entries above it" — is FALSE. tv.json is written by
+      #           the ENGINE (`fault atpg -o /work/<tv>`), so it exists only
+      #           if that subprocess succeeded. atpg_coverage.rpt and
+      #           scan_netlist.v are written by fault_atpg_run.run_fault in
+      #           PYTHON, AFTER that subprocess returns, with NO `if ec`
+      #           guard (the only early return is the earlier `fault cut`
+      #           failure). On the cut-ok / atpg-failed shape the two declared
+      #           entries are present and tv.json is absent — exactly the new
+      #           red the basis denied.
+      #       (b) The population is ZERO. Denominator: a project snapshot is
+      #           any directory holding a tracked file under
+      #           {reports,phase1,phase2,phase3,steps}/ — 17 of them across 9
+      #           designs in benchmark-data/ic. None carries tv.json,
+      #           scan_netlist.v or atpg_coverage.rpt at all, so the change
+      #           has no evidence base and this repo does not build for a
+      #           population of one (vibe-ic#439), let alone zero.
+      #     Declaring tv.json needs the producer's failure path handled first
+      #     (write the two Python-side artefacts only when the engine ran, or
+      #     declare all three together), not a declaration added on its own.
+      #   * scan_netlist_prelim.v — exists ONLY on the disclosed-skip path
+      #     (design_one_shot_runner renames scan_netlist.v to it when the
+      #     engine measured nothing). MEASURED: on a successful step 11 the
+      #     declaration resolves 5/5 today and 5/6 with prelim added, i.e. it
+      #     would report every PASSING run MISSING.
+      #   * cell_model_combined.v — a concatenated copy of the PDK's own
+      #     stdcell + UDP models, a tool INPUT this step derives, not a result
+      #     of it.
+      #   * tv.json.raw_tv.json — an 18 MB engine-internal dump written by
+      #     Fault itself; no code in this plugin reads or names it.
       - "phase2/stage2/dft/transition_atpg_plan.md"
       - "reports/phase2/dft/coverage.json"
       - "reports/phase2/dft/bsdl_plan.json"
@@ -860,7 +929,16 @@ steps:
         # foundry_floor=95%). FAILs on measured < the foundry floor (e.g. the
         # sha256 0%-coverage no-scan-chain DESIGN_DEFICIT), on a fabricated
         # boolean that contradicts the recomputed number, and on
-        # absent/insufficient evidence (honest FAIL, never a vacuous pass).
+        # UNDISCLOSED absent/insufficient evidence (honest FAIL).
+        # ONE disclosed exception, which this comment used to deny by saying
+        # "never a vacuous pass": when there is no measurable coverage AND the
+        # runner left a `phase2/stage2/dft/dft_atpg_not_run.json` sentinel
+        # naming the capability gap, the program exits 2 / SKIPPED-CONDITION,
+        # which this file's own `program_exit_zero` handler scores as
+        # passed=True in the VACUOUS_PASS tier. Measured on the real
+        # spm x ihp-sg13g2 run: all three step-11 gate programs return rc=2
+        # there, not rc=1. Absence alone is still never enough — the producer
+        # has to have disclosed it.
         - program_exit_zero: "dft_atpg_coverage_check . --json reports/phase2/dft/atpg_coverage_gate.json"
         # BSDL: emit + gate the boundary-scan-cell-per-pad plan. A padded
         # design (pad ring / inout pads) must ship a BSDL; a bare core is a
@@ -868,8 +946,10 @@ steps:
         - program_exit_zero: "bsdl_emit . --json reports/phase2/dft/bsdl_plan.json"
         # Aggregate DFT sign-off (foundry bar): stuck-at >= floor AND
         # transition >= target (or DOCUMENTED engine-limited) AND BSDL
-        # present for a padded design (bare core SKIP). Absent evidence
-        # FAILs honestly (§4.05) — never a vacuous pass.
+        # present for a padded design (bare core SKIP). UNDISCLOSED absent
+        # evidence FAILs honestly (§4.05); an absence the producer disclosed
+        # via the dft_atpg_not_run.json sentinel exits 2 / SKIPPED-CONDITION
+        # — see the dft_atpg_coverage_check note above.
         - program_exit_zero: "dft_signoff_check . --json reports/phase2/dft/dft_signoff.json"
     blocks_on: [10]
 
@@ -886,6 +966,24 @@ steps:
     programs:
       - fmeda_fault_injection_coverage
       - fmeda_coverage_check
+    # NO required_outputs — DELIBERATE, and not the same omission as DT1-DT3
+    # (which now declare theirs). FS1 is the only step in this file whose
+    # artefact's ONLY producer anywhere in the plugin is the FIRST command of
+    # its own gate: `fmeda_fault_injection_coverage` is invoked here and
+    # nowhere else (no runner calls it; `grep -rn fmeda_fault_injection_coverage
+    # programs/` hits only the program itself and `fmeda_coverage_check`, which
+    # imports it as a library). flow_compliance_check evaluates required_outputs
+    # BEFORE the gate and returns MISSING early when every declared entry is
+    # absent, so declaring the artefact here stops the gate — and therefore the
+    # producer — from ever running. MEASURED: with
+    # `required_outputs: [reports/phase2/safety/fmeda_coverage.json]` added and
+    # reports/phase2/safety/ removed, two consecutive flow_compliance_check runs
+    # both report FS1 MISSING "no required_outputs found" and the directory is
+    # still absent afterwards — a permanent red the step can never clear.
+    # Declaring FS1's artefact requires FIRST wiring the producer into a runner
+    # (as DT1-DT3's producers are wired into
+    # phase3_one_shot_runner.run_at_speed_atpg_producers); that is a flow-wiring
+    # change, not a declaration change.
     gate:
       all_of:
         - program_exit_zero: "fmeda_fault_injection_coverage . --rtl-dir phase2/stage1/rtl --asil D --json reports/phase2/safety/fmeda_coverage.json"
@@ -925,6 +1023,38 @@ steps:
     programs:
       - transition_fault_atpg_run
       - transition_coverage_check
+    # DT1/DT2/DT3 declared NO required_outputs at all, so the artefact each
+    # step exists to produce was invisible to every tool that enumerates a
+    # step's evidence through this field (flow_dashboard_data._resolve_outputs
+    # returns n_total=0 and falls back to the loose umbrella token scan used
+    # for true umbrellas like P0; final_report_generate shows no artefact row).
+    # The producer already NAMES this exact path — `atpg_disclose_not_run`
+    # writes `skips_required_output: reports/phase2/dft/<x>_coverage.json` into
+    # its not-run record — so the claim existed on the producer side with no
+    # declaration to match it.
+    #
+    # ONE pattern, ONE branch, and deliberately NOT
+    # `<coverage>.json OR <x>_atpg_not_run.json`. The OR spelling was tried
+    # first and `flow_condition_reachability_check` rejected it, correctly, on
+    # two counts:
+    #   * R1 SELF-GATE — DT1's own condition names both branches, and `A OR B`
+    #     is any-of at the branch level, so the not-run record would keep DT1
+    #     green while the measurement it is conditioned on was gone.
+    #   * FALSE T3 BACKSTOP — `_build_backstop_index` indexes every branch of a
+    #     single pattern, so the OR made DT3's baselined self-disabling hole
+    #     LOOK closed (transition/path_delay coverage "backstopped" by DT1/DT2
+    #     going MISSING) when the record would in fact have satisfied the
+    #     declaration and kept them green. With one branch the backstop is real
+    #     and DT3's hole genuinely closes.
+    # COST, measured: on the disclosed not-run path the early required_outputs
+    # return now fires before the gate, so the step reports MISSING "no
+    # required_outputs found" instead of the gate's BLOCKED verdict quoting the
+    # recorded reason — `_declared_sibling_self_skip_for_missing` returns None
+    # here because it scans the MISSING path's directory (reports/phase2/dft/)
+    # and the record lives under phase2/stage2/dft/. Both outcomes are red and
+    # neither is a pass; the reason text is the price of a real backstop.
+    required_outputs:
+      - "reports/phase2/dft/transition_coverage.json"
     gate:
       # produce/validate split (mirrors Step 11): the RUNNER produces
       # transition_coverage.json (design_one_shot_runner, with the discovered
@@ -953,6 +1083,10 @@ steps:
     programs:
       - path_delay_fault_atpg_run
       - path_delay_coverage_check
+    # See the DT1 note: the measurement alone, single-branch, so its absence is
+    # loud and can back DT3's condition.
+    required_outputs:
+      - "reports/phase2/dft/path_delay_coverage.json"
     gate:
       # produce/validate split (mirrors Step 11 / DT1): the RUNNER produces
       # path_delay_coverage.json (phase3_one_shot_runner, once the routed
@@ -983,6 +1117,9 @@ steps:
     programs:
       - sdd_atpg_run
       - sdd_coverage_check
+    # See the DT1 note: the measurement alone, single-branch.
+    required_outputs:
+      - "reports/phase2/dft/sdd_coverage.json"
     gate:
       # produce/validate split (mirrors DT1/DT2): the RUNNER produces
       # sdd_coverage.json (phase3_one_shot_runner, after DT2); the flow GATE

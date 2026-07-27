@@ -12,7 +12,8 @@ tests. This program reads the design's TOP module I/O port list and emits:
   <project>/reports/phase2/dft/bsdl_plan.json (machine-readable per-pad BSC
                                                insertion plan + verdict)
 
-§4.05 honesty (never a vacuous pass):
+§4.05 honesty (no UNDISCLOSED pass on absence — one disclosed exception, the
+step-11 skip sentinel described at `main(argv)` below):
   * A design with NO I/O ports, or a bare CORE with no pad ring, has no
     boundary to scan → verdict "N_A" (honest not-applicable, exit 0). A
     bare core legitimately has no boundary scan.
@@ -39,7 +40,13 @@ Usage:
         [--top chip_top] [--padded|--bare|--auto] \\
         [--ir-length 4] [--json <out>] [--bsdl <out>]
 
-main(argv) -> int : 0 PASS/N_A / 1 FAIL / 2 IO-or-arg error.
+main(argv) -> int : 0 PASS/N_A / 1 FAIL / 2 IO-or-arg error OR disclosed
+                    SKIPPED-CONDITION (rc=2 is overloaded; the stdout line and
+                    the --json `verdict` field distinguish them). The
+                    SKIPPED-CONDITION path is taken when the step-11 scan
+                    netlist is absent and the runner left a
+                    `dft_atpg_not_run.json` sentinel disclosing why — see
+                    `dft_signoff_common.disclosed_atpg_skip`.
 
 chip-AGNOSTIC: reads only the generic Verilog port list + pad-cell name
 conventions; no design-specific knowledge.

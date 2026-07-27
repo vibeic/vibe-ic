@@ -9536,6 +9536,37 @@ def _dft_retain_unmeasured(project: Path, dft_dir: Path,
     return retained
 
 
+def _dft_atpg_gap_reason(pdk: Optional[str]) -> str:
+    """Prose reason for the step-11 ATPG disclosed-skip, naming THIS run's PDK.
+
+    The reason string used to be a constant that said Fault "is not turnkey on
+    the sky130 generic/UDP DFF forms" — on every run, whatever the PDK was.
+    MEASURED on the real spm x ihp-sg13g2 run (`launch.sh` line 6:
+    `--pdk ihp-sg13g2`): the emitted phase2/stage2/dft/dft_atpg_not_run.json
+    carried that sky130 sentence verbatim while its own structured
+    `pdk_detected` field said `generic_unmapped`. A reviewer reading the prose
+    — which is what the three step-11 gates echo to stdout, and what
+    flow_compliance_check quotes in its SKIPPED-CONDITION reason — was told the
+    limitation applies to a PDK this run never used.
+
+    The name is now taken from the netlist sniff (the same value that feeds
+    `pdk_detected`), so the prose and the structured field can no longer
+    disagree. `generic_unmapped` is the honest label when the sniff found no
+    library-mapped cells at all, which is the actual condition the OSS engine
+    trips on.
+    """
+    detected = pdk or "generic_unmapped"
+    return (
+        "OSS Fault ATPG could not measure sign-off stuck-at coverage on this "
+        "netlist (a library-MAPPED netlist with real stdcell DFFs is "
+        "required; Fault is validated on the commercial PDK and is not "
+        f"turnkey on the {detected} generic/UDP DFF forms). Real scan "
+        "insertion DID run (scan_netlist_prelim.v retained). Sign-off ATPG "
+        "coverage is a disclosed OSS capability gap; a mapped-netlist or "
+        "commercial ATPG path closes it."
+    )
+
+
 def _derive_dft_clock_name(blob: str) -> str:
     """Derive the primary functional clock port name from an RTL source blob
     for Fault ATPG's ``--clock`` argument. Chip-AGNOSTIC: pure string scan.
@@ -9742,8 +9773,12 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                     output_files=_outs))
             else:
                 # Engine could not measure sign-off coverage on this netlist
-                # (generic/unmapped netlist, or OSS Fault's sky130 DFF-detect
-                # limit). HONEST disclosed capability-gap — NOT a silent skip,
+                # (generic/unmapped netlist, or OSS Fault failing to detect the
+                # flop cells of WHICHEVER library this run mapped to — see
+                # `_dft_atpg_gap_reason`, which names the PDK the netlist sniff
+                # actually found. This comment used to hard-code "sky130",
+                # the same defect the reason string had.)
+                # HONEST disclosed capability-gap — NOT a silent skip,
                 # NOT a fabricated pass. Retain the real scan insertion as
                 # `scan_netlist_prelim.v` evidence, but make the CANONICAL
                 # gated outputs absent so the step-11 gate resolves to
@@ -9774,13 +9809,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                 retained = _dft_retain_unmeasured(project, dft_dir, cov_json)
                 _dft_disclose_skip(
                     dft_dir / "dft_atpg_not_run.json",
-                    "OSS Fault ATPG could not measure sign-off stuck-at coverage "
-                    "on this netlist (a library-MAPPED netlist with real stdcell "
-                    "DFFs is required; Fault is validated on the commercial PDK "
-                    "and is not turnkey on the sky130 generic/UDP DFF forms). "
-                    "Real scan insertion DID run (scan_netlist_prelim.v retained). "
-                    "Sign-off ATPG coverage is a disclosed OSS capability gap; a "
-                    "mapped-netlist or commercial ATPG path closes it.",
+                    _dft_atpg_gap_reason(pdk),
                     {"capability_flag": "cap:atpg_signoff_coverage",
                      "pdk_detected": pdk or "generic_unmapped",
                      "atpg_exit": cov.get("atpg_exit"),
