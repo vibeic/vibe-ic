@@ -19,7 +19,7 @@ and must NOT hard-block on name-conformance — it surfaces an advisory WARN and
 ALWAYS emits; the scorer is the sole arbiter.
 
 ACCEPTANCE (the field-agent's exact reproduction): a prompt that says
-`Modify the existing \`bar_core\`` + saves to `rtl/foo_top.sv`, completion
+`Modify the existing `bar_core`` + saves to `rtl/foo_top.sv`, completion
 `module bar_core` → emitted=1 (was BLOCKED/emitted=0), verdict PASS + advisory
 WARN.
 

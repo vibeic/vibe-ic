@@ -18,7 +18,7 @@ Workaround: use Yosys 0.62 to:
        leaves a single $-prim-based combinational + DFF netlist
   4. write_verilog
   5. run the existing atpg-name-harmonize tool (fix_fault_cut_names.py)
-     to convert remaining `\<NAME>.<sub>.<X>` escape identifiers to
+     to convert remaining `<NAME>.<sub>.<X>` escape identifiers to
      plain `_NAME__sub_X` form — Quartus accepts these.
 
 After this pass, Quartus elaborates the design as a single flat
