@@ -61,6 +61,7 @@ import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware
 import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
+import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -24586,6 +24587,25 @@ exit
 # is resolved from the PDK's OWN LEF/DEF layermap (routing/NET purpose), so the
 # recipe is PDK-AGNOSTIC (no chip/PDK literal). REAL measurement — no fabricated
 # number. Args arrive via `-rd gds= -rd map= -rd out=`.
+# The set of LEF layer names that COUNT as a metal layer is decided by the
+# CONSUMER of this measurement — `metal_layer_density_check._METAL_RE`, which
+# already accepts every open-PDK spelling (met1 / Metal1 / TopMetal1 / m1 /
+# capmetal1) and DISCARDS any key it does not match. Deriving the producer's
+# selector from that same regex (rather than restating it) is the point: the two
+# had drifted, and a producer that selects LESS than the consumer accepts writes
+# an EMPTY measurement that no one can distinguish from "this PDK has no metal".
+#
+# MEASURED, which is why this is derived and not hand-written: the producer's
+# own literal was `^(met\d+|li1)$` — the sky130 spelling only. sky130A's
+# layermap does use `met1..met5`+`li1`, but gf180mcuD's uses `Metal1..Metal5`
+# and ihp-sg13g2's uses `Metal1..Metal5`+`TopMetal1/2` (read from each PDK's own
+# klayout tech .map inside the container). Neither matched, so for BOTH of those
+# PDKs the real KLayout per-layer CMP-density measurement selected zero layers
+# and shipped `"layers": {}` — a well-formed report carrying no measurement.
+# `li1` is kept because sky130 measures it today; the consumer filters it out,
+# so it stays as disclosed measurement context and nothing regresses.
+_METAL_DENSITY_LAYER_RE = r"(?:%s)|(?:^li1$)" % _mld._METAL_RE.pattern
+
 _METAL_DENSITY_KLAYOUT_RECIPE = r'''
 import json, re, sys
 import pya
@@ -24593,9 +24613,10 @@ gds_path = globals().get("gds", "")
 map_path = globals().get("map", "")
 out_path = globals().get("out", "")
 # Parse the LEF/DEF layermap: "<lefname> <purpose> <gdslayer> <gdsdatatype>".
-# Keep the routing purpose (NET/SPNET) row per metal layer (met*/li1).
+# Keep the routing purpose (NET/SPNET) row per metal layer. The layer-name
+# pattern is injected from the CONSUMER gate's own regex so the two cannot drift.
 metal_layers = {}
-metal_re = re.compile(r"^(met\d+|li1)$", re.IGNORECASE)
+metal_re = re.compile(r"__METAL_LAYER_NAME_RE__", re.IGNORECASE)
 try:
     with open(map_path) as fh:
         for line in fh:
@@ -24649,6 +24670,26 @@ open(out_path, "w").write(json.dumps({
 '''
 
 
+def _metal_density_recipe() -> str:
+    """The KLayout density recipe with the CONSUMER's metal-layer-name regex
+    injected.
+
+    The guard asserts the pattern IS PRESENT rather than that the placeholder is
+    absent. The absent-check reads more naturally and is worthless: `str.replace`
+    substitutes every occurrence, so `token in result` is false by construction
+    and the check can never fire. Renaming the placeholder in the template while
+    leaving this call alone — the realistic drift, and the same one that shipped
+    the empty measurement in the first place — is caught only by looking for what
+    should be there."""
+    recipe = _METAL_DENSITY_KLAYOUT_RECIPE.replace(
+        "__METAL_LAYER_NAME_RE__", _METAL_DENSITY_LAYER_RE)
+    if _METAL_DENSITY_LAYER_RE not in recipe:
+        raise RuntimeError(
+            "metal-density recipe: the metal-layer-name regex was not injected "
+            "(template placeholder renamed?) — emitting it would measure nothing")
+    return recipe
+
+
 def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
                                container: str, out_json: Path,
                                notes: List[str]) -> bool:
@@ -24677,7 +24718,7 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
         return False
     out_json.parent.mkdir(parents=True, exist_ok=True)
     script = out_json.parent / "metal_density_klayout.py"
-    script.write_text(_METAL_DENSITY_KLAYOUT_RECIPE)
+    script.write_text(_metal_density_recipe())
     gds_c = _to_container_path(str(gds), container)
     map_c = _to_container_path(str(layermap), container)
     out_c = _to_container_path(str(out_json), container)
