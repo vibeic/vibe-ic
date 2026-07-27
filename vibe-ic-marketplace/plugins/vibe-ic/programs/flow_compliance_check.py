@@ -1563,6 +1563,39 @@ class StepResult:
     #       unmet requirement wearing an explanation.
     # Only (c) sets this flag, and only (c) is routed into the verdict.
     self_skip_disclosed: bool = False
+    # #497 step 1 — the STRUCTURED per-gate payload, emitted ALONGSIDE
+    # `reasons` and read by nothing yet.
+    #
+    # `reasons` is a prose list carrying six distinct line shapes, and four
+    # separate consumers re-derive its grammar from prefixes. Two of those
+    # consumers are `all(...)` predicates, so a mis-parse changes a VERDICT
+    # rather than a report. Three production breakages have come out of that
+    # one mechanism (empty `failed_gates` at >=2 failures; the #492 NOT-INVOKED
+    # disclosure scraped as 75 phantom failing gates; `passed_gate_count`
+    # pinned at 0 for its whole existence). This field is the beginning of the
+    # removal: the umbrella states each gate's outcome ONCE, in a typed record,
+    # with `NOT_INVOCABLE` a first-class verdict instead of a prose marker.
+    #
+    # THREE-STATE ON PURPOSE.  `None` means "this step publishes no structured
+    # gate records" — the honest answer for the ~56 flow steps, the A1-A9 and
+    # M1-M4 tracks, and any P0 whose umbrella did not run at all. `[]` means
+    # "published, and no gate was considered" — a real and different state (a
+    # project with no RTL: the umbrella reports SKIPPED-CONDITION having
+    # dispatched nothing). A `default_factory=list` would have merged those two
+    # into one `[]` and reintroduced, in the replacement, the exact ambiguity
+    # the replacement exists to remove.
+    #
+    # Serialisation note: `asdict` emits every field, so the `--json` report
+    # gains `"gate_records": null` on every step that does not publish. That is
+    # deliberate — a KEY THAT IS SOMETIMES ABSENT would force each consumer to
+    # decide for itself what a missing key means, which is the same
+    # re-derive-the-contract failure in a new place. One uniform key, one
+    # explicit "not published" value.
+    #
+    # Record shape (see `_p0_gate_record`):
+    #   {"name": str, "verdict": one of P0_GATE_VERDICTS,
+    #    "message": str, "evidence": dict}
+    gate_records: Optional[List[Dict[str, Any]]] = None
 
 
 # reports/ subdirs to also probe when a yaml-pattern starts with `reports/`.
@@ -4601,16 +4634,91 @@ def _structural_gate_argv(gate_name: str,
     return argv
 
 
+# ── #497 step 1: the P0 umbrella's structured per-gate payload ───────────────
+#
+# The outcome vocabulary, closed and enumerated. `NOT_INVOCABLE` is a VERDICT
+# here, not a marker inside a message: the gate returned nothing, which is
+# neither a pass, nor a failure, nor the input-missing skip that `SKIP` means.
+# Merging it into `SKIP` is what made 39 registered gates read as benign (#492);
+# expressing it as prose inside a `SKIP` line is what made them read as
+# FAILURES at the four consumers. Adding a sixth outcome later must be a change
+# to this tuple that a consumer has to handle, not a new sentence a consumer can
+# ignore.
+P0_GATE_VERDICTS: tuple[str, ...] = (
+    "PASS", "FAIL", "SKIP", "WAIVED", "NOT_INVOCABLE")
+
+
+def _p0_gate_record(name: str,
+                    verdict: str,
+                    message: str = "",
+                    evidence: Optional[Dict[str, Any]] = None
+                    ) -> Dict[str, Any]:
+    """One registered structural gate's outcome, stated once.
+
+    Built at the point where the outcome is DECIDED — beside the exit-code
+    branch, the class-skip branch, the waiver branch — so no later reader has
+    to recover it from the sentence some earlier branch wrote. That recovery is
+    the whole subject of #497.
+
+    ``message`` is the callee's own first line where the callee produced one
+    (a FAIL's first output line, the classifier's account of why an rc-2 was an
+    invocation defect), and the umbrella's own reason where the gate never ran
+    (class-not-applicable, analog deferred, no backing program). ``evidence``
+    is the machine-readable remainder: exit code, skip kind, waiver ticket.
+    """
+    assert verdict in P0_GATE_VERDICTS, verdict  # closed enum, not free text
+    return {
+        "name": name,
+        "verdict": verdict,
+        "message": message,
+        "evidence": dict(evidence or {}),
+    }
+
+
+def _p0_waiver_record(waiver: Dict[str, Any]) -> Dict[str, Any]:
+    """The record for a gate whose FAIL was converted to a deferred waiver.
+
+    Takes the waiver entry the umbrella already builds, so the record cannot
+    name a different gate, ticket or first line than the waiver it stands for.
+    """
+    return _p0_gate_record(
+        waiver["gate"], "WAIVED", waiver.get("first_line", ""),
+        {"ticket": waiver.get("ticket"),
+         "review_required": bool(waiver.get("review_required")),
+         "reason": waiver.get("reason", ""),
+         "detail": waiver.get("evidence", "")})
+
+
 def _run_structural_rtl_gates(project: Path,
                               strict_timing: bool = False,
                               allow_thin_input: bool = False,
-                              skip_analog: bool = False
+                              skip_analog: bool = False,
+                              records_out: Optional[List[Dict[str, Any]]] = None
                               ) -> tuple[bool, List[str], List[str], List[Dict[str, Any]]]:
     """v0.104: run all structural-RTL gates on the project's RTL directory.
 
     Each gate is invoked with the RTL directory as its positional arg.
     Exit 0 = PASS, exit 1 = FAIL, exit 2 = input-missing (skip).
     Returns (all_passed, fail_reasons, skip_reasons, waiver_entries).
+
+    #497 step 1 — ``records_out``, when a list is supplied, is EXTENDED with
+    one ``_p0_gate_record`` per registered gate, in canonical
+    ``_STRUCTURAL_RTL_GATES`` order, including the gates that PASS (which
+    contribute no entry to any of the three returned buckets, and so have been
+    unnameable by every consumer since the umbrella was written). The four
+    returned values are untouched, byte for byte.
+
+    WHY AN OUT-PARAMETER RATHER THAN A FIFTH RETURN VALUE.  This is a knowingly
+    unlovely shape, chosen because the alternative is not additive. The 4-tuple
+    is unpacked positionally at ~20 call sites across the test suite, and two of
+    those tests replace THIS FUNCTION with a stub returning a 4-tuple in order
+    to drive ``main()``; a fifth element breaks the first group and a separate
+    5-tuple entry point breaks the second. An optional keyword that existing
+    callers do not pass, and stubs absorb into ``**kwargs``, changes nothing for
+    either. The step that cuts the consumers over to the records inverts this —
+    the records become the return value and the three prose buckets become a
+    projection of them — at which point the out-parameter goes away with the
+    scrapers it exists to outlive.
 
     v1.6.97 (issue #29) — when ``allow_thin_input=True`` AND the
     project has fewer than ``THIN_INPUT_DOC_COUNT_THRESHOLD`` input
@@ -4645,6 +4753,12 @@ def _run_structural_rtl_gates(project: Path,
             # First element None = "not executed" — the caller renders the
             # P0 umbrella as SKIPPED-CONDITION (excluded from executed-PASS
             # counts), never as a PASS that pads a strict verdict.
+            #
+            # #497 — `records_out` is left EMPTY here, and that is the
+            # statement: no gate was considered, so there is no gate to
+            # record. The single skip line above names no gate; it is the
+            # umbrella explaining itself, which is precisely the kind of
+            # reason line a per-gate scraper has no business reading.
             return None, [], ["no RTL directory found — structural gates "
                               "skipped (analog track / pre-RTL)"], []
 
@@ -4680,6 +4794,10 @@ def _run_structural_rtl_gates(project: Path,
     # returning `(kind, payload)` instead of appending in place; the ordered
     # dispatch loop then appends in gate order, so the report is byte-identical
     # to the sequential path (env `VIBE_IC_COMPLIANCE_WORKERS=1` forces serial).
+    # #497 — every `return` below carries a THIRD element: the structured
+    # record for this gate. It is built in the branch that decides the outcome,
+    # so the record and the prose payload beside it cannot disagree without
+    # someone editing the same two lines.
     def _eval_gate_worker(gate_name: str):
         # #492 — the argv comes from the named builder, not an inline literal,
         # so the regression tests exercise the real construction path. Each
@@ -4697,7 +4815,9 @@ def _run_structural_rtl_gates(project: Path,
                 timeout=60,
             )
         except subprocess.TimeoutExpired:
-            return ("fail", f"FAIL: {gate_name} timed out")
+            return ("fail", f"FAIL: {gate_name} timed out",
+                    _p0_gate_record(gate_name, "FAIL", "timed out",
+                                    {"timeout_s": 60}))
         if r.returncode == 2:
             # #492 — rc 2 carried two unrelated meanings: "there was no input
             # to check" (a benign verdict FROM the gate) and "you called me
@@ -4719,10 +4839,18 @@ def _run_structural_rtl_gates(project: Path,
                 # f-string here is what let the reasons-list consumers drift
                 # from the producer and scrape this disclosure as a failing
                 # gate name (#492 follow-up).
+                #
+                # #497 — in the record the same fact needs no recogniser at
+                # all: the verdict field says NOT_INVOCABLE.
                 return ("skip",
                         _gate_invocation.format_not_invocable_entry(
-                            gate_name, _why))
-            return ("skip", gate_name)
+                            gate_name, _why),
+                        _p0_gate_record(gate_name, "NOT_INVOCABLE", _why,
+                                        {"exit_code": 2}))
+            return ("skip", gate_name,
+                    _p0_gate_record(gate_name, "SKIP", "",
+                                    {"exit_code": 2,
+                                     "skip_kind": "input-missing"}))
         elif r.returncode == 1:
             _full_out = (r.stdout.strip() or r.stderr.strip())
             first_line = _full_out.split("\n")[0][:200]
@@ -4749,7 +4877,7 @@ def _run_structural_rtl_gates(project: Path,
             # _is_thin_input_eligible.
             if (thin_input_eligible
                     and gate_name in _THIN_INPUT_WAIVER_GATES):
-                return ("waiver", {
+                _w = {
                     "gate": gate_name,
                     "review_required": True,
                     "ticket": _THIN_INPUT_WAIVER_TICKET,
@@ -4764,7 +4892,8 @@ def _run_structural_rtl_gates(project: Path,
                         "coverage-shape thin-input (any-doc-<100%-"
                         f"capture, doc count <= {MAX_THICK_DOC_THRESHOLD})"),
                     "first_line": first_line,
-                })
+                }
+                return ("waiver", _w, _p0_waiver_record(_w))
             # ORGANIC #708 — ORTHOGONAL reused-IP RTL-only-FSM deferral cap.
             # Fires at 100% completeness (the regime thin-input does NOT cover)
             # for the L6 ≥2-fsm_states floor FAIL of
@@ -4780,7 +4909,7 @@ def _run_structural_rtl_gates(project: Path,
                   and _names_fsm_floor
                   and _field_count_fail_is_solely_fsm_floor(_full_out)
                   and _reused_ip_rtl_only_fsm_cap_eligible(project)):
-                return ("waiver", {
+                _w = {
                     "gate": gate_name,
                     "review_required": True,
                     "ticket": _REUSED_IP_RTL_ONLY_FSM_CAP_TICKET,
@@ -4801,10 +4930,18 @@ def _run_structural_rtl_gates(project: Path,
                         "RTL + 100% completeness + no further doc state literal "
                         "+ no #706 FSM patch)"),
                     "first_line": _fsm_floor_line,
-                })
+                }
+                return ("waiver", _w, _p0_waiver_record(_w))
             else:
-                return ("fail", f"FAIL: {gate_name} — {first_line}")
-        return ("pass", None)
+                return ("fail", f"FAIL: {gate_name} — {first_line}",
+                        _p0_gate_record(gate_name, "FAIL", first_line,
+                                        {"exit_code": 1}))
+        # A PASS contributes no line to any bucket — which is exactly why
+        # `passed_gate_count` could never be recovered by reading the reasons
+        # list, and was 0 for the artifact's entire history. It contributes a
+        # RECORD.
+        return ("pass", None,
+                _p0_gate_record(gate_name, "PASS", "", {"exit_code": 0}))
 
     # Build the ordered task list: filter-skips resolve immediately (preserving
     # their position); runnable gates are submitted to the pool. Then dispatch
@@ -4826,30 +4963,40 @@ def _run_structural_rtl_gates(project: Path,
                 # This does not change the umbrella verdict (skips never fail
                 # it) and on a correctly-packaged tree it never fires, because
                 # every registered gate has its program.
+                _msg = (f"registered structural gate has no backing program "
+                        f"{prog.name} in {PROGRAMS_DIR.name}/ — checker did "
+                        f"not run")
                 _pending.append(
                     ("imm", ("skip",
-                             f"{gate_name} (SKIP: registered structural gate "
-                             f"has no backing program {prog.name} in "
-                             f"{PROGRAMS_DIR.name}/ — checker did not run)")))
+                             f"{gate_name} (SKIP: {_msg})",
+                             _p0_gate_record(
+                                 gate_name, "SKIP", _msg,
+                                 {"skip_kind": "no-backing-program"}))))
                 continue
             if gate_name in class_skips:
                 _pending.append(
                     ("imm", ("skip",
-                             f"{gate_name} (SKIP: {class_skips[gate_name]})")))
+                             f"{gate_name} (SKIP: {class_skips[gate_name]})",
+                             _p0_gate_record(
+                                 gate_name, "SKIP", class_skips[gate_name],
+                                 {"skip_kind": "class-not-applicable"}))))
                 continue
             if gate_name in analog_skip_gates:
+                _msg = ("analog track deferred via --skip-analog "
+                        "(review_required at analog / foundry sign-off)")
                 _pending.append(
                     ("imm", ("skip",
-                             f"{gate_name} (SKIP: analog track deferred via "
-                             "--skip-analog (review_required at analog / "
-                             "foundry sign-off))")))
+                             f"{gate_name} (SKIP: {_msg})",
+                             _p0_gate_record(
+                                 gate_name, "SKIP", _msg,
+                                 {"skip_kind": "analog-track-deferred"}))))
                 continue
             if _ex is not None:
                 _pending.append(("fut", _ex.submit(_eval_gate_worker, gate_name)))
             else:
                 _pending.append(("imm", _eval_gate_worker(gate_name)))
         for _tag, _item in _pending:
-            kind, payload = _item if _tag == "imm" else _item.result()
+            kind, payload, record = _item if _tag == "imm" else _item.result()
             if kind == "skip":
                 skips.append(payload)
             elif kind == "waiver":
@@ -4857,6 +5004,12 @@ def _run_structural_rtl_gates(project: Path,
             elif kind == "fail":
                 fails.append(payload)
             # "pass" → nothing appended
+            # …to the buckets. #497: every gate appends a RECORD, in the same
+            # canonical registry order the buckets are built in, so the
+            # records are an exact partition of _STRUCTURAL_RTL_GATES rather
+            # than a view of the three non-empty outcomes.
+            if records_out is not None:
+                records_out.append(record)
     finally:
         if _ex is not None:
             _ex.shutdown(wait=True)
@@ -7400,7 +7553,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     # distinct from "it ran and nothing passed". The audit JSON's
     # passed_gate_count reads this rather than scraping reasons prose.
     structural_passed_count: Optional[int] = None
+    # #497 step 1 — the P0 umbrella's structured per-gate payload. `None` until
+    # the umbrella runs, so a stage-3/4 invocation (where P0 does not run at
+    # all) publishes "no records" rather than an empty list that would read as
+    # "every gate was considered and none of them anything".
+    structural_gate_records: Optional[List[Dict[str, Any]]] = None
     if args.stage not in (3, 4):
+        structural_gate_records = []
         s_passed, s_fails, s_skips, s_waivers = _run_structural_rtl_gates(
             project,
             strict_timing=getattr(args, "strict_timing", False),
@@ -7410,6 +7569,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             # sub-gates obey the flag instead of FAILing the umbrella for
             # an explicitly-deferred analog track.
             skip_analog=getattr(args, "skip_analog", False),
+            # Additive out-parameter; nothing reads it yet. See the field
+            # comment on StepResult.gate_records for why it is an
+            # out-parameter and not a fifth return value.
+            records_out=structural_gate_records,
         )
         structural_waivers = s_waivers
         # The umbrella result is built UNCONDITIONALLY once the gates have
@@ -7439,6 +7602,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else "PASS" if s_passed else "FAIL"),
             reasons=reasons_combined,
             evidence=[],
+            # #497 step 1 — published ALONGSIDE `reasons`, which is unchanged.
+            # Nothing derives anything from this yet; cutting the four
+            # scrapers, the audit-JSON projection and the two all(...)
+            # predicates over to it are separate steps with their own
+            # measurements.
+            gate_records=structural_gate_records,
         )
 
     results: List[StepResult] = []
