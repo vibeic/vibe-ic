@@ -1704,6 +1704,83 @@ def _output_claim_matches(declared: str, missing_patterns: List[str]) -> bool:
     return any(d == _norm_out_path(p) for p in missing_patterns)
 
 
+# ---------------------------------------------------------------------------
+# The DECLARATION side of the disclosed-capability-gap contract
+# ---------------------------------------------------------------------------
+# 29/d7 tail (bucket `signoff_adj`, deferred item 8). The #675-strict promoter
+# below converts a step's MISSING required output into SKIPPED-CONDITION when a
+# co-located marker carries a `capability_flag`. Until now it only asked that
+# the flag be a NON-EMPTY STRING, so the "disclosure" was self-certifying: ANY
+# value promoted, including a flag naming a gap the platform declares CLOSED.
+#
+# MEASURED on the completed spm x ihp-sg13g2 run
+# (~/campaign_pr427/spm/converge_ihp-sg13g2, plugin @ origin/main v1.7.61):
+#
+#   _declared_sibling_self_skip_for_missing(proj, <step-29 outputs>)
+#     -> "phase3/stage3/sim_postlayout/sdf_sim_skipped.json: owns this output
+#         ... verdict=SKIPPED-CONDITION [cap:sdf_annotated_gatelevel_sim]"
+#
+# `cap:sdf_annotated_gatelevel_sim` was RETIRED in v1.7.37 — the runner HAS
+# driven a back-annotated sim since v1.3.94, `_PLATFORM_CAPABILITY_GAPS` records
+# step 29's gap as closed, and `test_phase3_sdf_skip_disclosure` forbids any
+# code path from emitting it. The gate still honoured it and step 29 came out
+# SKIPPED-CONDITION instead of MISSING. The producer-side half of that defect
+# was fixed where it belongs (phase3_one_shot_runner._SDF_SIM_CAP_GAPS now
+# hands out a flag only for the two genuinely-open gaps); what stayed open was
+# the GENERIC vector: nothing stopped the NEXT marker — or a hand-edited one —
+# from minting `cap:anything` and being believed.
+#
+# This frozenset is that missing declaration. A marker may defer only under a
+# flag NAMED HERE. Registering a flag is a deliberate, reviewed edit to the
+# gate; it is not a judgement this file can make from the marker's own text.
+#
+# NOTE the direction of the test: the guard asserts the claimed flag IS ON this
+# list, never that some bad token is absent. A "known-retired flags" denylist
+# would pass for every not-yet-invented name, which is exactly the hole.
+#
+# `test_capability_gap_flag_registry.py` keeps this in sync with the producers
+# and explains what its source scan can and cannot see.
+_DECLARED_CAPABILITY_GAP_FLAGS: frozenset = frozenset({
+    # --- phase2 / design_one_shot_runner ---------------------------------
+    # No OSS scan-insertion path produced a library-mapped scan netlist, so
+    # sign-off stuck-at coverage could not be measured.
+    "cap:atpg_signoff_coverage",
+    # No scan netlist exists to re-optimise (downstream of the above).
+    "cap:post_dft_scan_optimization",
+    # Transition/at-speed ATPG needs a timing-graded fault model the OSS
+    # ATPG chain does not provide.
+    "cap:at_speed_timing_graded_atpg",
+    # A CPU-class design has no reference ISA model to check results against.
+    "cap:cpu_functional_oracle",
+    # An analog verification intent has no digital oracle to check against.
+    "cap:analog_verification_intent_oracle",
+    # The spec declares a feature conditionally, with no declared trigger.
+    "cap:conditional_feature_undeclared",
+    # No CDC engine is wired for this design's clock-domain topology.
+    "cap:cdc",
+    # The coverage toolchain (verilator --coverage) is unavailable.
+    "cap:verilator_coverage_toolchain",
+    # --- phase3 / phase3_one_shot_runner ---------------------------------
+    # The built-in gate-sim testbench generator binds exactly one port
+    # contract and this design's top ports do not match it.
+    "cap:sdf_gatelevel_tb_port_contract",
+    # No stdcell Verilog simulation model resolves for this cell library.
+    "cap:sdf_gatelevel_pdk_cell_model",
+    # Critical-path SPICE correlation needs an extracted transistor netlist +
+    # analog stimulus + device models (an analog/mixed-signal capability).
+    "cap:post_layout_spice_correlation",
+})
+
+
+def _is_declared_capability_gap(flag: str) -> bool:
+    """True when `flag` NAMES a capability gap this module declares open.
+
+    Pure. An unregistered flag — a retired one, a typo, or a forged one — is
+    not a disclosure the gate can act on: the step keeps its real status.
+    """
+    return flag.strip() in _DECLARED_CAPABILITY_GAP_FLAGS
+
+
 def _declared_sibling_self_skip_for_missing(project: Path,
                                             missing_patterns: List[str]
                                             ) -> Optional[str]:
@@ -1724,12 +1801,15 @@ def _declared_sibling_self_skip_for_missing(project: Path,
     This strict form promotes MISSING→SKIPPED-CONDITION ONLY when a co-located
     sibling UNAMBIGUOUSLY OWNS this step's absent output. The sibling must carry:
       (1) a self-skip verdict (SKIP / SKIPPED / SKIPPED-CONDITION);
-      (2) a NON-EMPTY `capability_flag` — the disclosed OSS/analog capability gap
-          it defers under (capability-AWARE, not capability-blind). A hard
+      (2) a `capability_flag` naming a gap `_DECLARED_CAPABILITY_GAP_FLAGS`
+          declares OPEN (capability-AWARE, not capability-blind). A hard
           sign-off (DRC/LVS/ERC/STA) has NO disclosed capability gap, so no
-          legitimate runner marker ever defers it; and
+          legitimate runner marker ever defers it; and an unregistered flag —
+          retired, mistyped or forged — is a claim the platform does not make,
+          so it defers nothing; and
       (3) a `skips_required_output` (str or list) matching one of THIS step's
-          missing canonical outputs (exact or glob, either direction).
+          missing canonical outputs (EXACT normalized match, see
+          `_output_claim_matches`).
     A marker that omits (2) or (3), or whose `skips_required_output` names a
     DIFFERENT output, is IGNORED → the step stays MISSING. So a step-12 marker
     (owns `post_dft_netlist.v`) can never mask step-9's `netlist.v`, and a stray
@@ -1768,8 +1848,11 @@ def _declared_sibling_self_skip_for_missing(project: Path,
                 vd = str(data.get("verdict", "")).upper().replace("_", "-")
                 if vd not in _SELF_SKIP_VERDICTS:
                     continue
-                if not str(data.get("capability_flag", "")).strip():
-                    continue  # capability-AWARE: no disclosed gap → not eligible
+                if not _is_declared_capability_gap(
+                        str(data.get("capability_flag", ""))):
+                    # capability-AWARE: absent, retired, mistyped or forged
+                    # flag → the platform makes no such claim → not eligible.
+                    continue
                 declared = data.get("skips_required_output")
                 declared_list = ([declared] if isinstance(declared, str)
                                  else list(declared)
@@ -5794,11 +5877,13 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             # between steps (phase2/stage2/synth/ holds both step-9 netlist.v and
             # step-12's marker; reports/phase3/ holds many sign-offs). The strict
             # form promotes ONLY when a sibling UNAMBIGUOUSLY OWNS this step's
-            # absent output (self-skip verdict + a named capability_flag + a
-            # `skips_required_output` matching one of THIS step's missing
-            # patterns), so a step-12 marker can never mask a step-9 synth FAIL
-            # and no marker can mask a DRC/LVS sign-off. A marker lacking the
-            # ownership claim, or naming a different output, stays MISSING.
+            # absent output (self-skip verdict + a capability_flag REGISTERED in
+            # `_DECLARED_CAPABILITY_GAP_FLAGS` + a `skips_required_output`
+            # matching one of THIS step's missing patterns), so a step-12 marker
+            # can never mask a step-9 synth FAIL and no marker can mask a
+            # DRC/LVS sign-off. A marker lacking the ownership claim, naming a
+            # different output, or claiming a gap the platform does not declare
+            # open, stays MISSING.
             # Only the entries that ACTUALLY missed — under ALL-of-N some of
             # `outputs` may be present, and a sibling marker can only excuse the
             # artefact it names as absent.
