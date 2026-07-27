@@ -64,6 +64,22 @@ run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnosti
 # wired: 4 non-portable paths, all in a test fixture committed the day before.
 run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_check.py" "$PLUGIN"
 
+# vibe-ic#23 wiring sweep — the third member of that same plugin-source
+# anti-fabrication family. A shell command QUOTED in the CHANGELOG / plugin
+# manifest / README / docs is de-facto documentation; if its target does not
+# exist, the example is fabricated. The gate that checks this has existed
+# since v1.6.43 and its ONLY host was `tools/ci/run_plugin_self_audit.sh`,
+# a script whose own header calls itself "a pre-commit / pre-push CI step"
+# and which NOTHING invokes — a whole-repo grep for it returns four hits and
+# not one is an invocation. Its sibling `source_chip_agnostic_check` (line
+# above) was lifted out of that dead script and wired here; this one was
+# left behind, which is the same drift class this file exists to close.
+# Its inspiration was real: v1.6.42 shipped a CHANGELOG quoting
+# `$ bash tools/ci/run_plugin_self_audit.sh` before that script existed.
+# MEASURED at wiring time: 5 documents, 0 `$ `-prompt lines — see the
+# denominator in its PASS line. Thin today and honest about being thin.
+run "quoted commands reproducible"      "$ROOT" python3 "$PG/changelog_command_reproducibility_check.py" "$PLUGIN"
+
 # Three more of `gatekeeper_review`'s gates. That program is the PR merge gate
 # and is in NO CI workflow, while this repo lands most work by DIRECT PUSH — so
 # 9 of its 11 gates had never run on a landing. These three are repo-STATE
@@ -125,6 +141,20 @@ run "tracked blob size ceiling"         "$ROOT" python3 "$PG/tracked_blob_size_g
 # ship and no two agreed. Each was edited alone and stayed true to what its
 # author knew; nothing could notice the set had stopped being consistent.
 run "layout-artefact size policy"       "$ROOT" python3 "$PG/size_policy_drift_check.py"
+
+# ORGANIC #720 — the other half of "what must never reach a public push".
+# Session scratch orchestration scripts are written at the REPO ROOT
+# (`_review_backlog_*.js`, `_sweep_workflow.js`), and one `git add -A` puts
+# them in a public commit. `.gitignore:128` carries the root-anchored
+# `/_*.js` rule that stops that, and the rule is ALSO required not to be
+# over-broad: the tracked `mcp-eda/src/devices/_registry.js` in a SUBDIR
+# must stay visible. The guard for both halves shipped with the rule and was
+# then wired to nothing — its own docstring calls it a "Durable CI guard",
+# which was untrue for as long as no CI ran it. A prose rule a future editor
+# can drop is exactly what this file converts into an invariant.
+# Proven discriminating: a scratch repo with no rule -> rc 1; the rule
+# present with a tracked root `_dummy.js` -> rc 1 naming that file.
+run "gitignore scratch guard (#720)"    "$ROOT" python3 "$PG/gitignore_scratch_guard.py" --root "$ROOT"
 
 # vibe-ic#413 — a correction note that claims a repair its row never received
 # is a fabricated citation inside the artefact whose job is to prevent one.

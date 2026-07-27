@@ -85,8 +85,19 @@ def _audit_files(plugin_root: Path) -> List[Path]:
         plugin_root / ".claude-plugin" / "plugin.json",
         plugin_root.parent / ".claude-plugin" / "marketplace.json",
         plugin_root.parent / "CHANGELOG.md",
+        # The two above are off by ONE directory: `plugin_root.parent` is
+        # `<marketplace>/plugins`, and neither the marketplace manifest nor
+        # the marketplace CHANGELOG lives there — both sit one level up in
+        # `<marketplace>/`. Measured on this repo before the correction: the
+        # scan opened 4 documents and NOT `.claude-plugin/marketplace.json`,
+        # which this function's own docstring names as an input. A checker
+        # that cannot reach a file it declares reports clean about it
+        # forever. Added, not replaced, so any layout that did resolve the
+        # old paths keeps working.
+        plugin_root.parent.parent / ".claude-plugin" / "marketplace.json",
+        plugin_root.parent.parent / "CHANGELOG.md",
     ):
-        if cand.is_file():
+        if cand.is_file() and cand not in out:
             out.append(cand)
     repo_root = plugin_root.parent.parent.parent
     readme = repo_root / "README.md"
@@ -172,24 +183,42 @@ def _check_command(cmd: str, plugin_root: Path
     return None
 
 
-def audit(plugin_root: Path) -> Tuple[str, List[CommandFinding]]:
+def audit_with_stats(plugin_root: Path
+                     ) -> Tuple[str, List[CommandFinding], dict]:
+    """`audit()` plus the DENOMINATOR the verdict rests on.
+
+    vibe-ic#447 — this gate's PASS line used to read `PASS: every quoted
+    shell command references a real target` whether it had examined 412
+    documents or zero. That sentence is byte-identical for a real clean
+    run and for a walk that opened nothing, which is exactly the class
+    `gate_discloses_denominator_check` exists to close; the gate could
+    not be wired into `tools/ci/repo_hygiene_gates.sh` while its PASS
+    was silent about scope. Counts are collected here so the verdict can
+    state them; `audit()` keeps its two-value shape for existing callers.
+    """
     findings: List[CommandFinding] = []
+    stats = {"documents": 0, "prompt_lines": 0, "audited_commands": 0}
     if not plugin_root.is_dir():
-        return "VACUOUS_PASS", []
+        return "VACUOUS_PASS", [], stats
     files = _audit_files(plugin_root)
     if not files:
-        return "VACUOUS_PASS", []
+        return "VACUOUS_PASS", [], stats
 
     for f in files:
         try:
             text = f.read_text(encoding="utf-8")
         except OSError:
             continue
+        stats["documents"] += 1
         for ln_no, line in enumerate(text.splitlines(), start=1):
             m = _PROMPT_RE.match(line)
             if not m:
                 continue
             cmd = m.group("cmd")
+            stats["prompt_lines"] += 1
+            toks = cmd.split()
+            if toks and toks[0] in _AUDITED_VERBS:
+                stats["audited_commands"] += 1
             check = _check_command(cmd, plugin_root)
             if check is None:
                 continue
@@ -203,7 +232,12 @@ def audit(plugin_root: Path) -> Tuple[str, List[CommandFinding]]:
                 rule=rule, detail=detail,
             ))
 
-    return ("FAIL" if findings else "PASS"), findings
+    return ("FAIL" if findings else "PASS"), findings, stats
+
+
+def audit(plugin_root: Path) -> Tuple[str, List[CommandFinding]]:
+    verdict, findings, _stats = audit_with_stats(plugin_root)
+    return verdict, findings
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -220,11 +254,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: not a directory: {root}", file=sys.stderr)
         return 2
 
-    verdict, findings = audit(root)
+    verdict, findings, stats = audit_with_stats(root)
     report = {
         "gate": "changelog_command_reproducibility_check",
         "verdict": verdict,
         "plugin_root": str(root),
+        "documents_scanned": stats["documents"],
+        "prompt_lines_seen": stats["prompt_lines"],
+        "audited_commands": stats["audited_commands"],
         "findings_count": len(findings),
         "findings": [asdict(f) for f in findings[:200]],
     }
@@ -238,8 +275,11 @@ def main(argv: Optional[List[str]] = None) -> int:
               "marketplace.json found")
         return 0
     if verdict == "PASS":
-        print("PASS: every quoted shell command references a real "
-              "target")
+        # A PASS must state its denominator (vibe-ic#447): a scan of 412
+        # documents and a scan of 0 must not print the same sentence.
+        print(f"PASS: {stats['audited_commands']} audited command(s) of "
+              f"{stats['prompt_lines']} quoted `$ ` line(s) across "
+              f"{stats['documents']} document(s) reference a real target")
         return 0
     print(f"FAIL: {len(findings)} unreproducible quoted command(s):",
           file=sys.stderr)
