@@ -32,6 +32,18 @@ existence-only slots:
     pre-layout artefacts) and REFUSE to credit the slot when every
     candidate is a self-declared pre-sign-off intermediate.
 
+2026-07-28 -- tapeout mode gained an SI (crosstalk-delay) BLOCKING
+CONDITION, separate from the evidence pillars. `si_mcf_sta_check` can
+return a VACUOUS_PASS whose own written reason ends "Read this as NOT
+CHECKED"; the flow's step-27 gate credits that as a pass, which is right
+during development and wrong at a mask order. Tapeout mode now refuses to
+certify unless the SI verdict PROVED something, or the specific vacuity is
+accepted through the governed waiver channel (`waivers.json`
+`waived_steps[*].si_vacuity_accepted`, naming this step, with a human
+approver and a reason). A waiver can never launder a genuine SI FAIL, an
+absent/unparseable report, or a PASS with no denominator. See the
+"Tape-out SI" section below.
+
 v0.52 (2026-04-24): file discovery now excludes `input/`, `pdk/`,
 `vendor_ref/`, `references/` path segments. Prior versions counted
 PDK standard-cell GDS under `input/pdk/gds/` as design GDS evidence
@@ -546,6 +558,263 @@ def _evaluate_lvs(project_dir: Path):
         return rpt, None
 
 
+# Canonical tapeout-checklist step id in the phase1_phase2_phase3 flow. Used by
+# the SI blocking condition below (which waiver entries target this step) and by
+# the #651 waiver-entry emitter further down.
+_TAPEOUT_STEP_ID = 36
+
+
+# ---------------------------------------------------------------------------
+# Tape-out SI (crosstalk-delay) blocking condition
+# ---------------------------------------------------------------------------
+# Crosstalk is a mechanism that kills silicon. `si_mcf_sta_check` carries three
+# verdict tiers: PASS (the MCF fold was re-derived and proved), VACUOUS_PASS
+# (rc 2 — it re-derived NOTHING, and its own written reason ends "Read this as
+# NOT CHECKED"), and FAIL. The flow's step-27 gate credits rc 2 as a pass, which
+# is the right call DURING DEVELOPMENT: a design that has not been extracted yet
+# should not be blocked on an SI proof it cannot have.
+#
+# It is the wrong call at the moment a mask set is committed. "SI was checked
+# and is clean" and "SI was never checked" then become the same green light, and
+# the second one is the state that ships a chip whose aggressors were never
+# looked at. So the tapeout sign-off is where the two must separate.
+#
+# WHAT THIS BLOCK DOES. Tapeout mode refuses to certify on a VACUOUS SI verdict
+# unless the vacuity is ACCEPTED through the repo's ONE governed waiver channel,
+# `<project>/waivers.json`, as a normal `waived_steps` entry naming this step and
+# carrying `si_vacuity_accepted`::
+#
+#     {"waived_steps": [
+#       {"id": 36,
+#        "reason": "<>=20 chars saying why this vacuity is acceptable>",
+#        "approver": "<a human; self-approval is refused>",
+#        "si_vacuity_accepted": ["SPEF_NO_COUPLING_PAIRS"]}
+#     ]}
+#
+# The code in `si_vacuity_accepted` is the one THIS RUN's SI report published in
+# `summary.denominator.details.vacuity_code`. Naming it is what makes the entry
+# a disclosure rather than a blanket: an acceptance of "the extraction produced
+# no inter-net coupling" does not also accept "the SPEF could not be read", and
+# when the underlying state changes the code changes and the old entry stops
+# matching. A wildcard (`*`, `ALL`, `ANY`, ...) is refused for the same reason.
+#
+# Placement in `waivers.json` is deliberate and follows `pg_rail_geometry_check`:
+# the four waiver-legitimacy gates (`waivers_schema_check`,
+# `waiver_legitimacy_check`, `waiver_growth_check`, `waiver_staleness_check`) all
+# read `waived_steps`, so an entry written here is subject to every one of them,
+# and the reason/approver predicates are IMPORTED from `waivers_schema_check`
+# rather than restated. A marker file of this gate's own would be a parallel,
+# ungoverned channel; a code comment discloses nothing to a machine at all.
+#
+# WHAT A WAIVER MAY NEVER DO.
+#   * It may never launder a genuine SI violation. `verdict: FAIL` is refused
+#     with the waiver present and named in the report (`si_waiver_refused`).
+#   * It may never cover an ABSENT or unparseable report. That is not vacuity —
+#     vacuity is a gate that ran and disclosed that it proved nothing. A missing
+#     report is a gate that did not run, and there is no disclosure to accept.
+#   * It may never cover a PASS that does not carry a denominator proving it
+#     examined something. A bare `verdict: PASS` with no `denominator` block is
+#     the exact false-clean shape the SI gate was fixed for, and this consumer
+#     cannot tell such a report apart from one produced before the fix.
+#
+# The waiver does NOT make the tapeout a bare PASS. It demotes the verdict to
+# PASS_WITH_WAIVERS (rc 3 + the stdout sentinel), so the accepted vacuity is
+# carried in the exit code and in the flow's step listing, never absorbed
+# (CLAUDE.md rule 11 / #651).
+#
+# chip-AGNOSTIC: nothing here names a design, a PDK, a rail or a cell.
+
+#: `si_mcf_sta_check`'s report, at the path the step-27 flow gate writes it to.
+_SI_REPORT_REL = "reports/phase3/si_mcf_sta_check.json"
+
+#: The `waivers.json` field that accepts a named SI vacuity at the tapeout step.
+SI_DISCLOSURE_FIELD = "si_vacuity_accepted"
+
+#: Classification of the SI verdict this project carries into tapeout.
+SI_PROVED = "PROVED"            # a fold was re-derived and proved: clean
+SI_VACUOUS = "VACUOUS"          # disclosed skip — the ONLY waivable state
+SI_VIOLATION = "VIOLATION"      # the gate found a defect — never waivable
+SI_UNDISCLOSED = "UNDISCLOSED"  # a report that does not say what it examined
+SI_ABSENT = "ABSENT"            # no report, or bytes that are not a report
+
+#: Only one state may be accepted through the waiver channel. Named as a set so
+#: a future tier cannot become waivable by accident.
+_SI_WAIVABLE_STATES = frozenset({SI_VACUOUS})
+
+#: Tokens that would turn a named acceptance back into a blanket one.
+_SI_BLANKET_CODES = frozenset({
+    "*", "ALL", "ANY", "SI", "EVERYTHING", "VACUOUS", "VACUOUS_PASS", "-", "_",
+})
+
+
+def _classify_si(project_dir: Path) -> tuple:
+    """Return ``(state, detail)`` for this project's SI crosstalk-delay verdict.
+
+    ``detail`` always carries ``report`` (the path looked at) and ``why`` (prose
+    a human can act on); it carries ``vacuity_code`` only in the VACUOUS state.
+
+    Fail-closed at every step: an unreadable file, bytes that are not JSON, JSON
+    that is not an object, a missing verdict and an unrecognised verdict all
+    land in a non-creditable state, never in PROVED.
+    """
+    path = project_dir / _SI_REPORT_REL
+    detail = {"report": str(path)}
+    if not path.is_file():
+        detail["why"] = (
+            f"no SI crosstalk-delay verdict at {_SI_REPORT_REL}. That is not a "
+            f"vacuous check — it is the ABSENCE of one. Nothing ran, so there "
+            f"is no disclosure to accept and no waiver can cover it.")
+        return SI_ABSENT, detail
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as exc:
+        detail["why"] = (
+            f"the SI crosstalk-delay report at {_SI_REPORT_REL} could not be "
+            f"read as JSON ({exc.__class__.__name__}) — an unreadable verdict "
+            f"is no verdict; no waiver can cover it.")
+        return SI_ABSENT, detail
+    if not isinstance(doc, dict):
+        detail["why"] = (
+            f"the SI crosstalk-delay report at {_SI_REPORT_REL} parses to "
+            f"{type(doc).__name__}, not an object — no verdict can be read "
+            f"out of it; no waiver can cover it.")
+        return SI_ABSENT, detail
+
+    verdict = doc.get("verdict")
+    summary = doc.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+    denom = summary.get("denominator")
+    denom = denom if isinstance(denom, dict) else None
+    detail["verdict"] = verdict if isinstance(verdict, str) else ""
+
+    if verdict == "FAIL":
+        detail["why"] = (
+            "the SI crosstalk-delay gate FAILED — a defect was found. A "
+            "vacuity waiver accepts a check that proved nothing; it does not "
+            "accept a check that proved something wrong.")
+        return SI_VIOLATION, detail
+    if verdict == "VACUOUS_PASS":
+        code = ""
+        if denom is not None:
+            details = denom.get("details")
+            if isinstance(details, dict):
+                raw = details.get("vacuity_code")
+                if isinstance(raw, str):
+                    code = raw.strip().upper()
+        if not code:
+            detail["why"] = (
+                "the SI verdict is VACUOUS_PASS but the report does not name "
+                "WHICH vacuity (summary.denominator.details.vacuity_code is "
+                "absent or empty). An acceptance cannot name a vacuity the "
+                "report refuses to identify, so there is nothing waivable "
+                "here.")
+            return SI_UNDISCLOSED, detail
+        detail["vacuity_code"] = code
+        detail["why"] = str(denom.get("not_applicable_reason", "")).strip()
+        return SI_VACUOUS, detail
+    if verdict == "PASS":
+        if denom is None:
+            detail["why"] = (
+                "the SI verdict is PASS but the report carries no "
+                "`summary.denominator` block, so it never says how many folds "
+                "it proved. A PASS over an unstated denominator is the exact "
+                "false-clean this gate was fixed for and is not creditable at "
+                "tapeout.")
+            return SI_UNDISCLOSED, detail
+        examined = denom.get("examined")
+        if isinstance(examined, bool) or not isinstance(examined, int):
+            detail["why"] = (
+                f"the SI verdict is PASS but `denominator.examined` is "
+                f"{examined!r}, not an integer count — the report does not "
+                f"state what it examined.")
+            return SI_UNDISCLOSED, detail
+        if examined <= 0:
+            detail["why"] = (
+                "the SI verdict is PASS but `denominator.examined` is 0 — the "
+                "gate signed off over nothing. A report in that shape is "
+                "internally inconsistent (the gate emits VACUOUS_PASS for it), "
+                "so it is refused rather than accepted or waived.")
+            detail["examined"] = examined
+            return SI_UNDISCLOSED, detail
+        detail["examined"] = examined
+        detail["why"] = (f"{examined} victim-net MCF fold(s) re-derived and "
+                         f"proved against the bounded SPEF.")
+        return SI_PROVED, detail
+
+    detail["why"] = (
+        f"the SI crosstalk-delay report carries verdict {verdict!r}, which "
+        f"this gate does not recognise. An unrecognised verdict is not read "
+        f"as a pass.")
+    return SI_UNDISCLOSED, detail
+
+
+def _si_vacuity_disclosures(project_dir: Path) -> dict:
+    """Vacuity codes this project's governed waivers ACCEPT for the tapeout step.
+
+    Returns ``{CODE: {"source", "approver", "reason"}}``. An entry counts only
+    when it targets the tapeout step id AND would survive `waivers_schema_check`
+    — a reason of real length that is not a placeholder, and a named approver
+    who is neither a self-approver nor an unfilled scaffold slot. Those
+    predicates are IMPORTED, not restated, so this gate and the schema gate
+    cannot drift apart.
+
+    Fail-closed at every step: a missing file, unreadable bytes, malformed JSON,
+    or JSON that is legal but is not an object all accept nothing.
+    """
+    out: dict = {}
+    try:
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        import waivers_schema_check as _wv
+    except Exception:
+        # No vocabulary to validate against => nothing is disclosable and every
+        # vacuity blocks. Fail-closed, never fail-open.
+        return out
+    p = project_dir / "waivers.json"
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return out
+    if not isinstance(doc, dict):
+        return out
+    entries = doc.get("waived_steps")
+    if not isinstance(entries, list):
+        return out
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        # NAMES THE STEP. A waiver filed against some other step is not an
+        # acceptance of this one.
+        if str(entry.get("id")) != str(_TAPEOUT_STEP_ID):
+            continue
+        codes = entry.get(SI_DISCLOSURE_FIELD)
+        if not isinstance(codes, list) or not codes:
+            continue
+        reason = entry.get("reason")
+        if (not isinstance(reason, str)
+                or len(reason.strip()) < _wv.MIN_REASON_LEN
+                or _wv._is_placeholder(reason)):
+            continue
+        approver = entry.get("approver")
+        if (not isinstance(approver, str) or not approver.strip()
+                or _wv._is_self_approver(approver)
+                or _wv._is_placeholder_approver(approver)):
+            continue
+        for name in codes:
+            if not isinstance(name, str):
+                continue
+            code = name.strip().upper()
+            if not code or code in _SI_BLANKET_CODES:
+                continue
+            out[code] = {
+                "source": "waivers.json",
+                "approver": approver.strip(),
+                "reason": reason.strip(),
+            }
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Mode: tapeout
 # ---------------------------------------------------------------------------
@@ -1040,6 +1309,81 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
     if result.passed and lvs_power_pin_waived and verdict_tier == "PASS":
         verdict_tier = "PASS_WITH_WAIVERS"
 
+    # ── SI crosstalk-delay: the blocking condition, not an evidence slot ──
+    # Deliberately NOT a sixth pillar. The pillars ask "is the artefact there
+    # and is it sign-off-grade"; this asks "was the question ANSWERED". It can
+    # therefore veto a run that reached the threshold, which an evidence slot
+    # cannot express, and it can do so without shifting the 5-of-5 denominator
+    # every existing consumer of `summary.threshold` reads.
+    si_state, si_detail = _classify_si(project_dir)
+    si_accepted = _si_vacuity_disclosures(project_dir)
+    si_code = si_detail.get("vacuity_code", "")
+    si_waiver = si_accepted.get(si_code) if si_code else None
+    si_waived = False
+    si_waiver_refused = ""
+    if si_state == SI_PROVED:
+        result.findings.append(Finding(
+            rule="TAPEOUT_SI_PROVED", severity="INFO",
+            message=(f"SI crosstalk-delay sign-off: {si_detail['why']}"),
+            file=si_detail["report"]))
+    elif si_state == SI_VACUOUS and si_waiver is not None:
+        si_waived = True
+        result.findings.append(Finding(
+            rule="TAPEOUT_SI_VACUITY_WAIVED", severity="WARNING",
+            message=(
+                f"SI crosstalk-delay was NOT CHECKED (vacuity {si_code}) and "
+                f"the vacuity is ACCEPTED for this step by "
+                f"{si_waiver['approver']} in waivers.json: "
+                f"{si_waiver['reason']} — tapeout verdict is "
+                f"PASS_WITH_WAIVERS, never a bare PASS. Gate said: "
+                f"{si_detail['why']}"),
+            file=si_detail["report"]))
+    elif si_state == SI_VACUOUS:
+        # A waiver may exist and still not fit: wrong code, blanket code, no
+        # approver, placeholder reason, filed against another step. Say which.
+        near = sorted(si_accepted)
+        why_not = (f"the only accepted vacuit(y/ies) for this step are {near}"
+                   if near else
+                   "no governed waiver entry for this step accepts any SI "
+                   "vacuity (a code comment, a marker file or an absent report "
+                   "is not a disclosure)")
+        result.findings.append(Finding(
+            rule="TAPEOUT_SI_VACUOUS_UNWAIVED", severity="ERROR",
+            message=(
+                f"SI crosstalk-delay was NOT CHECKED (vacuity {si_code}) and "
+                f"nothing accepts it: {why_not}. Crosstalk kills silicon; "
+                f"'checked and clean' and 'never checked' are not the same "
+                f"green light at a mask order. To proceed, add a waivers.json "
+                f"`waived_steps` entry with id {_TAPEOUT_STEP_ID}, a named "
+                f"human `approver`, a reason, and "
+                f"`{SI_DISCLOSURE_FIELD}: [\"{si_code}\"]`. Gate said: "
+                f"{si_detail['why']}"),
+            file=si_detail["report"]))
+    else:
+        # VIOLATION / UNDISCLOSED / ABSENT — none of them waivable. If a waiver
+        # is nonetheless present, record that it was REFUSED, so an attempt to
+        # launder a real failure leaves a trace instead of vanishing.
+        if si_accepted:
+            si_waiver_refused = (
+                f"waivers.json accepts SI vacuit(y/ies) {sorted(si_accepted)} "
+                f"for this step, but the SI state is {si_state}, which is not "
+                f"a vacuity. A vacuity waiver accepts a check that proved "
+                f"nothing; it never accepts a failed, missing or undisclosed "
+                f"one.")
+        result.findings.append(Finding(
+            rule=f"TAPEOUT_SI_{si_state}", severity="ERROR",
+            message=((f"SI crosstalk-delay sign-off refused ({si_state}): "
+                      f"{si_detail['why']}")
+                     + (f" {si_waiver_refused}" if si_waiver_refused else "")),
+            file=si_detail["report"]))
+
+    if si_state != SI_PROVED and not si_waived:
+        # Veto. Whatever the evidence pillars said, this run is not signed off.
+        result.passed = False
+        verdict_tier = "FAIL"
+    elif result.passed and si_waived and verdict_tier == "PASS":
+        verdict_tier = "PASS_WITH_WAIVERS"
+
     result.summary = {
         "evidence": evidence,
         "evidence_count": evidence_count,
@@ -1049,6 +1393,19 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
         "lvs_power_pin_only_waived": lvs_power_pin_waived,
         "lvs_report": str(lvs_report) if lvs_report else "",
         "lvs_verdict": lvs_verdict or "",
+        "si_signoff": {
+            "state": si_state,
+            "report": si_detail.get("report", ""),
+            "verdict": si_detail.get("verdict", ""),
+            "vacuity_code": si_code,
+            "folds_proved": si_detail.get("examined", 0),
+            "waived": si_waived,
+            "waiver_approver": (si_waiver or {}).get("approver", ""),
+            "waiver_reason": (si_waiver or {}).get("reason", ""),
+            "waiver_refused": si_waiver_refused,
+            "accepted_vacuity_codes": sorted(si_accepted),
+            "why": si_detail.get("why", ""),
+        },
         "verdict_tier": verdict_tier,
     }
     return result
@@ -1146,8 +1503,8 @@ MODE_MAP = {
 # ---------------------------------------------------------------------------
 # #651 — waivers.json waiver-entry emitter
 # ---------------------------------------------------------------------------
-# Canonical Step-36 (tapeout checklist) id in the phase1_phase2_phase3 flow.
-_TAPEOUT_STEP_ID = 36
+# (`_TAPEOUT_STEP_ID` is defined above, beside the SI blocking condition that
+# also keys on it.)
 _TAPEOUT_WAIVER_TICKET = "ORGANIC-20260613-tapeout-drc-waiver"
 
 

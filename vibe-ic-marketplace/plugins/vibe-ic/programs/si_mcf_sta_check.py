@@ -443,11 +443,24 @@ def audit(project_dir: Path,
     return findings, stats
 
 
-def _vacuous_reason(stats: dict) -> str:
-    """Prose naming what was searched for and not found, per #496's contract.
+def _vacuity(stats: dict) -> Tuple[str, str]:
+    """``(code, prose)`` naming what was searched for and not found (#496).
+
+    The PROSE is what a human reads. The CODE is what a machine may cite: a
+    stable UPPER_SNAKE token identifying WHICH vacuity this is, so a consumer
+    that must decide whether a specific vacuity was accepted does not have to
+    substring-match a paragraph of English. Prose is rewritten whenever it can
+    be made clearer; a code is a contract. Both are derived from the SAME
+    branch, so they cannot disagree about which state the gate is in.
+
+    A consumer requiring the code to be named ALSO gets expiry for free: when
+    the underlying state changes (a grounded-only extraction replaced by an
+    unreadable SPEF, say) the code changes, and an acceptance recorded against
+    the old code no longer matches the new one.
 
     Only ever consumed when the gate examined 0 units; it is computed
-    unconditionally so ``Denominator`` can never be constructed without one."""
+    unconditionally so ``Denominator`` can never be constructed without a
+    reason."""
     recount = stats.get("recount", {}) or {}
     pairs = int(stats.get("coupling_pairs") or 0)
     caps = int(stats.get("coupling_caps") or 0)
@@ -456,40 +469,49 @@ def _vacuous_reason(stats: dict) -> str:
     compared = sum(int((v or {}).get("nets_checked", 0) or 0)
                    for v in recount.values())
     if not stats.get("report_read"):
+        code = "EMITTER_REPORT_UNREADABLE"
         why = ("the emitter's si_mcf_sta.json could not be read, so no fold "
                "was re-derived.")
     elif not stats.get("spef_read"):
+        code = "SPEF_UNREADABLE"
         why = ("the coupling SPEF the report names could not be read, so no "
                "fold was re-derived.")
     elif not nets and r_nets:
+        code = "SPEF_REDUCED_FORMAT_ONLY"
         why = (f"the SPEF the report names carries {r_nets} *R_NET record(s) "
                f"and no *D_NET block. The REDUCED format states a lumped RC pi "
                f"model instead of the node-level capacitances this gate folds, "
                f"so there is nothing here to re-derive a per-net fold from.")
     elif not nets:
+        code = "SPEF_NO_D_NET_RECORDS"
         why = (f"the SPEF the report names parses to 0 *D_NET records "
                f"({stats.get('spef_parsed_nets', 0)} net(s) resolved by the "
                f"shared parser), so there is no net to attribute a fold to.")
     elif not recount:
+        code = "NO_CORNER_RECOUNTED"
         why = ("no corner produced a bounded SPEF this gate could recount, so "
                "the MCF fold was never re-derived.")
     elif caps and not pairs:
         # A count of CAPS is not a count of PAIRS: `parse_spef` drops a 2-node
         # cap whose ends resolve to the same net, so this state is reachable
         # with plainly-present two-node capacitances.
+        code = "COUPLING_CAPS_INTRA_NET_ONLY"
         why = (f"the SPEF named by the report parses to {nets} net record(s) "
                f"and {caps} two-node (coupling) *CAP entr(y/ies), but none of "
                f"them couples two DIFFERENT nets — every one resolves within a "
                f"single net — so there is no inter-net fold to re-derive.")
     elif not pairs:
+        code = "SPEF_NO_COUPLING_PAIRS"
         why = (f"the SPEF named by the report parses to {nets} net record(s), "
                f"0 two-node (coupling) *CAP entries and therefore 0 inter-net "
                f"coupling pairs, so the MCF fold has nothing to re-derive.")
     elif not compared:
+        code = "NO_VICTIM_NET_RESOLVED"
         why = (f"{pairs} coupling pair(s) parsed, but none of their victim "
                f"nets resolves to a *D_NET block carrying grounded caps, so "
                f"no fold could be measured against the bounded SPEF.")
     else:
+        code = "ALL_EXPECTATIONS_ZERO"
         why = (f"{pairs} coupling pair(s) parsed and {compared} victim-net "
                f"comparison(s) ran, but EVERY one carried a re-derived "
                f"expectation of 0.0 — a comparison a dropped fold could not "
@@ -497,7 +519,13 @@ def _vacuous_reason(stats: dict) -> str:
                f"themselves are zero-valued, and by construction on the hold "
                f"corner in window-independent floor mode (MCF is 0 there). "
                f"Nothing was proved about the fold.")
-    return why + _NOT_SAID
+    return code, why + _NOT_SAID
+
+
+def _vacuous_reason(stats: dict) -> str:
+    """The prose half of :func:`_vacuity`. Kept as the name #496's contract
+    refers to; the branch logic lives in one place."""
+    return _vacuity(stats)[1]
 
 
 def denominator(stats: dict) -> _gd.Denominator:
@@ -520,12 +548,18 @@ def denominator(stats: dict) -> _gd.Denominator:
                    for v in recount.values())
     considered = sum(int((v or {}).get("nets_checked", 0) or 0)
                      for v in recount.values())
+    code, prose = _vacuity(stats)
     return _gd.Denominator(
         unit=DENOMINATOR_UNIT,
         examined=examined,
         considered=considered,
-        not_applicable_reason=_vacuous_reason(stats) if examined == 0 else "",
+        not_applicable_reason=prose if examined == 0 else "",
         details={
+            # The machine-citable name of THIS vacuity. Empty when the gate
+            # examined something — there is no vacuity to name. A consumer that
+            # must decide whether a specific vacuity was accepted cites this,
+            # never `not_applicable_reason`.
+            "vacuity_code": code if examined == 0 else "",
             "coupling_pairs": stats.get("coupling_pairs"),
             "coupling_caps": stats.get("coupling_caps"),
             "coupling_nets": stats.get("coupling_nets"),
