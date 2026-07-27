@@ -815,7 +815,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sdc_exception_correlation_check` | any | — | Step 8 SDC EXCEPTION |
 | `sdc_gen` | any | Wave 72 | auto-generate Synopsys Design Constraints (SDC). |
 | `sdc_syntax_check` | any | — | Deterministic compliance check for constraint-gen. |
-| `sdc_validator_check` | any | — | validate SDC against L8 timing constraints. |
+| `sdc_validator_check` | any | Wave 82 | validate SDC against L8 timing constraints. |
 | `sdd_atpg_run` | any | — | REAL Small-Delay-Defect (SDD) ATPG grade. FUSES OpenSTA |
 | `sdd_coverage_check` | any | — | REAL small-delay-defect (SDD) coverage GATE for the |
 | `sdf_gate_sim` | any | — | REAL SDF-annotated gate-level simulation (canonical Step 29). |
@@ -1842,7 +1842,7 @@ _(no programs in this group)_
 - `sdc_exception_correlation_check` — Step 8 SDC EXCEPTION
 - `sdc_gen` — auto-generate Synopsys Design Constraints (SDC).  _[Wave 72]_
 - `sdc_syntax_check` — Deterministic compliance check for constraint-gen.
-- `sdc_validator_check` — validate SDC against L8 timing constraints.
+- `sdc_validator_check` — validate SDC against L8 timing constraints.  _[Wave 82]_
 - `sdd_atpg_run` — REAL Small-Delay-Defect (SDD) ATPG grade. FUSES OpenSTA
 - `sdd_coverage_check` — REAL small-delay-defect (SDD) coverage GATE for the
 - `sdf_gate_sim` — REAL SDF-annotated gate-level simulation (canonical Step 29).
