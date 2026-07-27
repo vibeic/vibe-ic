@@ -634,6 +634,33 @@ def detect_ic_class(project_dir: Path,
     return profile
 
 
+def infer_ic_class_uncached(project_dir: Path) -> Dict[str, Any]:
+    """Run the classifier NOW and return the profile WITHOUT reading OR
+    writing ``<project>/reports/ic_class.json``.
+
+    re #495 Stage 1 — there are THREE layers of ``ic_class`` in a project and
+    only two of them had a name:
+
+      layer 1  the per-L-doc ``ic_class`` stamp   frozen at phase-1 emit time
+      layer 2  ``reports/ic_class.json``          frozen at the last
+                                                  ``refresh=True`` run
+      layer 3  what the classifier says TODAY
+
+    ``detect_ic_class(p)`` returns layer 2 whenever the file exists (the #435
+    persist-once contract) and ``detect_ic_class(p, refresh=True)`` is the only
+    way to reach layer 3 — but it PERSISTS, so a read-only consumer such as a
+    gate cannot use it without mutating the project it is auditing. Layer 3 was
+    therefore unreachable from any gate, and layer-2 staleness was invisible:
+    measured over the 103 tracked projects that carry a persisted profile,
+    layer 2 and layer 3 disagree on 24 of them.
+
+    This is the read-only door to layer 3. It is deliberately NOT wired into
+    any pass/fail verdict — see ``ic_class_consistency_check``, which uses it
+    to DISCLOSE staleness, not to fail on it. chip-AGNOSTIC.
+    """
+    return _detect_ic_class_infer(Path(project_dir))
+
+
 def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
     """The actual single-pass inference (see detect_ic_class)."""
     project = Path(project_dir)

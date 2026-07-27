@@ -2,7 +2,7 @@
   "doc_id": "L19",
   "doc_name": "L19_CONSTRAINTS_PDK",
   "applicability": "APPLICABLE",
-  "ic_class": "digital_arithmetic_primitive",
+  "ic_class": "pure_analog",
   "fields": {
     "pdk_target": "sg13g2",
     "die_area_budget_um": null,
