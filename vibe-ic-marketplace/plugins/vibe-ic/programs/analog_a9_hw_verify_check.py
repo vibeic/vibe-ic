@@ -29,8 +29,21 @@ Failure rules:
                               / measurement_count keys
   A9_HW_MEAS_NO_NUMERICS   — no numeric measurement entries
 
-VACUOUS_PASS when `analog/analog_block_list.json` is missing or empty.
-chip-AGNOSTIC.
+Project-mode tiers (no --block), in the order they are decided:
+
+  rc 1  FAIL          a measured block's artefact is unparsable / evidence-free
+  rc 0  VACUOUS_PASS  NO declared block was measured — a simulation-only close,
+                      which is legal by design (a headless / CI analog run must
+                      stay passable). Disclosed by PRINTING `VACUOUS_PASS:` and
+                      exiting 0, which `flow_compliance_check` reads in both its
+                      required and optional gate slots.
+  rc 1  INCOMPLETE    SOME declared blocks were measured and others were not.
+                      A bench demonstrably existed, so the unmeasured blocks are
+                      unmeasured WORK, not a disclosed capability gap.
+  rc 0  PASS          every declared block measured and sane.
+
+VACUOUS_PASS also when `phase3/analog/analog_block_list.json` is missing or
+empty. chip-AGNOSTIC.
 """
 from __future__ import annotations
 
@@ -41,7 +54,7 @@ from typing import List, Optional
 
 from _analog_a_check_common import (
     load_block_list, select_blocks, make_argparser, vacuous_pass,
-    artefact_missing_for_block, emit_pass, emit_fail,
+    artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
 )
 
 GATE = "analog_a9_hw_verify_check"
@@ -162,6 +175,27 @@ def main(argv: Optional[List[str]] = None) -> int:
                             f"all {len(missing_seen)} block(s) missing "
                             f"hw_measurements.json; defer to skill "
                             f"`{SKILL}`.")
+    # PARTIAL COVERAGE — the same hole v1.7.49 (A5) and v1.7.51 (A1-A4) closed,
+    # which A9 was left out of. Measured on main before this line existed:
+    #
+    #     3 declared blocks, 1 with hw_measurements.json
+    #     -> `PASS: analog_a9_hw_verify_check — 1/3 block(s) clean`, rc 0
+    #
+    # i.e. the gate stated "1/3" on the same line it certified the step done,
+    # and emitted NO disclosure token — so A9's flow step read a bare PASS while
+    # two declared blocks had no bench evidence at all. That is the exact shape
+    # the disclosure wired in v1.7.46 exists to prevent.
+    #
+    # This tier is deliberately NOT the VACUOUS_PASS above. All-blocks-missing
+    # means no bench was available and the gate has nothing applicable to judge
+    # — a disclosed capability gap. Some-blocks-missing means a bench WAS
+    # available (one block came off it) and the rest were simply not measured:
+    # unmeasured work, which cannot certify the step done. The flow declaration
+    # cannot compensate — A9's required_outputs is a single glob
+    # (`analog/*/hw_measurements.json`) that one matching block satisfies, so
+    # per-block coverage is knowable only here.
+    if missing_seen:
+        return emit_incomplete(GATE, args, missing_seen, summary, SKILL)
     return emit_pass(GATE, args, summary)
 
 

@@ -57,16 +57,29 @@ The analog counterpart to `flow-orchestrate`. Manages the complete analog design
 | A1 | Analog Spec Extraction | `analog-spec-extract` | `analog/<block>/spec.json` per detected block |
 | A2 | Topology + Initial Sizing | `analog-topology-select` + `analog-sizing` | `topology.md` + `sizing.md` per block |
 | A3 | Netlist Generation | `analog-netlist-gen` | `analog_netlist_pdk_check` exits 0 |
-| A4 | Corner Sweep + Optimization | `analog-sizing-loop` | `analog_corner_sweep_check` exits 0 |
+| A4 | Corner Sweep + Optimization | `analog-sizing-loop` | `analog_a4_corner_sweep_check` exits 0 |
 | A5 | Analog Layout | `analog-layout` + `eda_analog_layout` | `layout.mag` per block |
 | A6 | Per-Block Physical Verification (DRC + LVS) | `drc-fix` + `lvs-triage` | `analog_a6_block_pv_check` exits 0 |
 | A7 | Post-Layout Extraction + Resim | `analog-extraction-resim` | `analog_pre_vs_post_layout_check` exits 0 |
 | A8 | Hardmacro Generation | `analog-hardmacro-gen` | `analog_hardmacro_check` exits 0 |
-| A9 | HW Verification + Mixed-Signal | `analog-hw-tuning-loop` + `mixed-signal-cosim` | `analog_hw_spice_correlation_check` + `mixed_signal_cosim_check` exit 0 |
+| A9 | Co-Simulation (+ HW correlation when bench data exists) | `mixed-signal-cosim` + `analog-hw-tuning-loop` | `mixed_signal_cosim_check` + `analog_a9_hw_verify_check` exit 0; `analog_hw_spice_correlation_check` runs only when `phase3/analog/*/hw_measurements.json` exists |
 
 > **v1.6.14 Wave 90 — step renumber.** Pre-release decimal/sub-step
 > ids were integerised; the analog track is now A1-A9 (A1-A5 unchanged,
 > per-block PV is A6, Resim/Hardmacro/Cosim are A7/A8/A9).
+
+> **A9 does NOT mandate a bench measurement, and this table used to say it
+> did.** The A9 row above read *"HW Verification + Mixed-Signal"* — the exact
+> over-claim v1.7.46 deleted from the flow YAML's step name — for the whole
+> life of that change, surviving verbatim in the plugin's own canonical A1-A9
+> reference while the flow itself had been corrected. A9 is
+> a DISCLOSURE step: `analog_a9_hw_verify_check` reports `PASS` when every
+> declared block was measured, `FAIL` when a measured block carries no numeric
+> evidence, `INCOMPLETE` when some declared blocks were measured and others
+> were not, and a printed `VACUOUS_PASS:` at rc 0 when no block was measured at
+> all — a simulation-only close, which stays legal so headless and CI analog
+> runs remain passable. Requiring a lab measurement here would make them
+> permanently unpassable; reporting a bare `PASS` for one was the defect.
 
 ## Hard rules
 

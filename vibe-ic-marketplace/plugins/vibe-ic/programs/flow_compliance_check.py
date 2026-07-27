@@ -4715,6 +4715,43 @@ _FPGA_BOARD_STEP_IDS = frozenset(
 _ANALOG_BENCH_STEP_IDS = frozenset({"A9"})
 
 
+def _hardware_waiver_is_moot(project: Path, step: Dict[str, Any]) -> bool:
+    """True when a --skip-hardware waiver would be issued for a step that does
+    not apply to this design at all.
+
+    A `--skip-hardware` waiver answers ONE question: "this run had no bench, so
+    the step could not produce its evidence — carry the obligation forward."
+    A step whose declared `condition` is unmet asks a different question and has
+    a different answer: the design never needed the step, so there is no
+    obligation to carry.
+
+    Both `--skip-hardware` branches sit ABOVE the `condition` handling in
+    `check_step` (they short-circuit), so without this predicate the flag turns
+    "not applicable" into "waived, review before sign-off". That is not cosmetic:
+    any WAIVED count downgrades the audit's Overall verdict to
+    PASS_WITH_WAIVERS.
+
+    MEASURED on the completed pure-digital ihp-sg13g2 SPM run (no
+    phase1/analog/, no phase3/analog/), `flow_compliance_check <proj> --phase 3
+    --skip-hardware`, A9's own step line:
+
+        v1.7.45 (pre-#461)   SKIPPED-CONDITION   condition not met: files_exist
+                                                 [phase1/analog/analog_block_list.json]
+        v1.7.46..v1.7.58     WAIVED              analog bench-hardware step
+                                                 waived via --skip-hardware
+                                                 (WAIVED 1→2, SKIPPED 18→17)
+
+    Written against BOTH hardware sets rather than only the analog one: steps 6
+    and 39 declare no `condition` today, so this is a measured no-op for them —
+    but the latent shape is identical, and a future condition on an FPGA step
+    would otherwise re-open the same hole.
+    """
+    condition = step.get("condition")
+    if not condition:
+        return False
+    return not _check_condition(project, condition)
+
+
 # ── v0.2.103 (#496): analog PDK-substitution waiver path ───────────────────
 # When a project's L19 declares a target process with NO public ngspice
 # models (e.g. an IHP/TSMC node), the runner's own sizing/netlist decks
@@ -5618,7 +5655,9 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # ORGANIC #608 — the waived set is now DERIVED from the canonical name→id
     # table (_FPGA_BOARD_STEP_IDS = {6, 39}), not the stale literal (6, 37) that
     # a Wave 90 renumber broke (37 became GDSII; FPGA-final moved to 39).
-    if skip_hardware and isinstance(sid, int) and sid in _FPGA_BOARD_STEP_IDS:
+    if (skip_hardware and isinstance(sid, int)
+            and sid in _FPGA_BOARD_STEP_IDS
+            and not _hardware_waiver_is_moot(project, step)):
         result.status = "WAIVED"
         result.reasons.append(
             "FPGA-board step waived via --skip-hardware: no physical FPGA "
@@ -5634,7 +5673,19 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # in the report as WAIVED with review_required while A9 — the step that
     # needs a lab bench — disclosed nothing at all. Same run mode, same absent
     # hardware, two different stories. This states A9's, using the same tier.
-    if skip_hardware and str(sid) in _ANALOG_BENCH_STEP_IDS:
+    #
+    # REACHABILITY, stated so the next reader does not over-read this: no runner
+    # forwards --skip-hardware to this program. `design_one_shot_runner.
+    # _build_final_audit_cmd` forwards only --skip-analog, and vibe_ic_one_shot_
+    # runner / phase23_one_shot_runner forward --skip-hardware to PHASE 2 (the
+    # FPGA burn), not here. So this branch — and the _FPGA_BOARD_STEP_IDS one
+    # above, which has always had the same property — fires only on a direct
+    # `flow_compliance_check.py <proj> --skip-hardware` invocation. A9 is now
+    # waived on exactly the same launch paths as step 6, which is what
+    # "the way it waives step 6" means; it does not mean runner-launched runs
+    # newly waive anything.
+    if (skip_hardware and str(sid) in _ANALOG_BENCH_STEP_IDS
+            and not _hardware_waiver_is_moot(project, step)):
         result.status = "WAIVED"
         result.reasons.append(
             "analog bench-hardware step waived via --skip-hardware: no lab "

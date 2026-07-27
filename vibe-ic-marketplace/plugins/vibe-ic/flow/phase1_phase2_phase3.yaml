@@ -1199,15 +1199,32 @@ steps:
             command: "analog_hw_spice_correlation_check . --json reports/phase2/gates/hw_spice_corr.json"
             condition_files_exist: ["phase3/analog/*/hw_measurements.json"]
         # The DISCLOSURE half. analog_a9_hw_verify_check already existed and
-        # already judges hw_measurements.json substance correctly — it was just
-        # wired only into analog_one_shot_runner, never into this gate, so the
-        # flow verdict could not see it. Its three outcomes are exactly the
-        # tiers this step needs: every block measured and sane -> rc 0 PASS; a
-        # block measured but with no evidence keys / no numeric measurement ->
-        # rc 1 FAIL; no block measured at all -> rc 2, which check_step surfaces
-        # as VACUOUS_PASS. That last tier is the point: a simulation-only close
-        # stays legal (headless and CI analog runs must remain possible) but
-        # stops being reported as an undifferentiated PASS.
+        # already judges hw_measurements.json substance correctly. It was
+        # already a member of flow_compliance_check's `_STRUCTURAL_RTL_GATES`,
+        # so the P0 umbrella step already ran it and the OVERALL flow verdict
+        # could already see its rc=1 FAIL — what could not see it was A9's OWN
+        # step line, which is the line a reader checks to learn whether A9 is
+        # done. Wiring it here closes that gap.
+        #
+        # Its project-mode outcomes are the tiers this step needs:
+        #   every declared block measured and sane          -> rc 0, `PASS`
+        #   a measured block with no evidence / no numerics  -> rc 1, `FAIL`
+        #   SOME declared blocks measured, others not        -> rc 1, `INCOMPLETE`
+        #   NO declared block measured at all                -> rc 0, and the
+        #     program PRINTS a `VACUOUS_PASS:` line. It is rc 0, NOT rc 2 —
+        #     `_analog_a_check_common.vacuous_pass()` returns 0; the rc-2 path
+        #     (`artefact_missing_for_block`) exists only in `--block` mode,
+        #     which this command never uses. That is precisely why the same
+        #     change had to teach check_step's REQUIRED `program_exit_zero`
+        #     branch to read the printed token: at rc 0 with no token read,
+        #     this tier was indistinguishable from a bench-verified close.
+        #     check_step surfaces the token as VACUOUS_PASS.
+        #
+        # The VACUOUS_PASS tier is the point: a simulation-only close stays
+        # legal (headless and CI analog runs must remain possible) but stops
+        # being reported as an undifferentiated PASS. The INCOMPLETE tier is the
+        # counterweight — once a bench has demonstrably measured one declared
+        # block, the unmeasured rest are unmeasured work, not a capability gap.
         - program_exit_zero: "analog_a9_hw_verify_check . --json reports/phase2/gates/a9_hw_verify.json"
     blocks_on: [A8]
 

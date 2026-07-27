@@ -180,9 +180,19 @@ ALLOWLIST: dict[tuple, str] = {
         "PASS on a run with no hardware evidence at all, indistinguishable from "
         "a bench-verified close. Both halves are now real: A9 is in "
         "`_ANALOG_BENCH_STEP_IDS` so `--skip-hardware` waives it the way it "
-        "waives step 6, and A9's gate runs `analog_a9_hw_verify_check`, whose "
-        "rc=2 surfaces a simulation-only close as VACUOUS_PASS rather than "
-        "PASS. Simulation-only closure stays legal; it is no longer silent.",
+        "waives step 6 — on the same launch paths, which means a DIRECT "
+        "`flow_compliance_check.py --skip-hardware` invocation only; no runner "
+        "forwards that flag to this program, for the analog steps OR the FPGA "
+        "ones — and only when A9's own `condition` is met, so a design that "
+        "declares no analog block stays SKIPPED-CONDITION instead of acquiring "
+        "a review_required waiver it never needed. A9's gate also runs "
+        "`analog_a9_hw_verify_check`, which discloses a simulation-only close "
+        "by PRINTING `VACUOUS_PASS:` at rc 0 (NOT rc 2 — `vacuous_pass()` "
+        "returns 0; rc 2 belongs to `--block` mode, which the wired command "
+        "never uses), and `check_step` surfaces that printed token as "
+        "VACUOUS_PASS rather than PASS. Reading the token in the REQUIRED gate "
+        "slot as well as the optional one is what made the tier visible at all. "
+        "Simulation-only closure stays legal; it is no longer silent.",
     ("27", "si_mcf_sta_check",
      "reports/phase3/si_mcf_sta.json"):
         "Documented ADVISORY axis. The MCF crosstalk-delay check is a "
