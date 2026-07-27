@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Step 29 — the skip-marker must disclose what ACTUALLY happened.
 
-Defect (HIGH, dimension 7), second half: whenever
+Defect (HIGH, dimension 6 (skip discipline)), second half: whenever
 `phase3/stage3/sim_postlayout/results.log` was absent, the runner wrote ONE
 canned `sdf_sim_skipped.json`:
 

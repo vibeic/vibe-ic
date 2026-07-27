@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Step 39 — a WAIVED on_board_pass.json may not waive ITSELF.
 
-Defect (HIGH, dimension 7): `fpga_on_board_attestation_check.main` short-
+Defect (HIGH, dimension 6 (skip discipline)): `fpga_on_board_attestation_check.main` short-
 circuited to `[PASS] ... return 0` when the manifest it audits declared
 `verdict in {WAIVED, SKIP}` plus `all_scenarios_passed` / `review_required` /
 `waiver_ticket`. All four fields live inside that ONE file, so a four-line

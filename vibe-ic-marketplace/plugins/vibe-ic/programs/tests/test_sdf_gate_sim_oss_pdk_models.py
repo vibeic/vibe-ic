@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Step 29 — the SDF gate-level sim must be reachable on the OPEN PDKs.
 
-Defect (HIGH, dimension 7): on the real completed digital run
+Defect (HIGH, dimension 6 (skip discipline)): on the real completed digital run
 (spm / ihp-sg13g2) `post_layout_sim_check` FAILed with
 `NO_RESULTS: Neither results.log nor pass.flag found in sim_postlayout/`, yet
 the step was audited as `SKIPPED-CONDITION` under
