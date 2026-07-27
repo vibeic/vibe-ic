@@ -70,6 +70,7 @@ from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 import _path_layout as _pl
 import _sim_results_bridge as _srb
+import fpga_board_capability as _fpga_cap
 
 try:
     import yaml
@@ -4823,23 +4824,13 @@ def _line_containing(text: str, pos: int) -> str:
 _FPGA_SKIP_WAIVER_TICKET = "fpga-board-prototype-capgap-v1.0.18"
 
 
-def _fpga_skip_disclosed(project: Path) -> bool:
-    """ORGANIC #607 — True iff the runner HONESTLY self-reports a deliberate
-    FPGA skip: reports/phase2/fpga/quartus_map_audit.json carries
-    verdict==SKIP AND sof_present==False. This is the disclosed-skip predicate;
-    an UNDISCLOSED missing .sof (no audit file, a non-SKIP verdict, or
-    sof_present claimed True) returns False so the step's natural FAIL/MISSING
-    stands. chip-AGNOSTIC: keyed on the runner's own SKIP self-report, no chip
-    name."""
-    audit = project / "reports" / "phase2" / "fpga" / "quartus_map_audit.json"
-    try:
-        d = json.loads(audit.read_text())
-    except (OSError, ValueError):
-        return False
-    if not isinstance(d, dict):
-        return False
-    return (str(d.get("verdict", "")).upper() == "SKIP"
-            and d.get("sof_present") is False)
+# Moved to fpga_board_capability.py (#446 follow-up) so a P0 sub-gate that
+# is NOT one of _FPGA_BOARD_STEP_IDS (rig_topology_disclosure_check runs
+# inside the structural-RTL umbrella, never as its own flow step) can
+# consult the identical signal. Kept as a thin alias — every existing call
+# site in this file is unchanged — so this is a pure relocation, not a
+# behavioural edit.
+_fpga_skip_disclosed = _fpga_cap.fpga_skip_disclosed
 
 
 def _synthesise_fpga_skip_waivers(

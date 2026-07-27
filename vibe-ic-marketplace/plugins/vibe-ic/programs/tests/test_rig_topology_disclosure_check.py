@@ -122,3 +122,77 @@ def test_help():
     r = subprocess.run([sys.executable, str(PROG), "--help"], capture_output=True, text=True)
     assert r.returncode == 0
     assert "project_dir" in r.stdout
+
+
+# ── FPGA-skip disclosure exemption (#607 shared predicate) ─────────────
+# Measured on the real spm x ihp-sg13g2 campaign: rig_topology.json never
+# existed (no FPGA board was ever part of this ASIC PDK sign-off run), so
+# this gate hard-FAILed a project whose OWN run already discloses, in the
+# established #607 shape, that no hardware rig is involved at all. A
+# requirement for hardware wiring is meaningless when there is no hardware.
+
+def _write_fpga_audit(project: Path, verdict: str, sof_present) -> None:
+    d = project / "reports" / "phase2" / "fpga"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "quartus_map_audit.json").write_text(json.dumps(
+        {"verdict": verdict, "sof_present": sof_present}))
+
+
+def test_disclosed_fpga_skip_exempts_missing_topology(tmp_path: Path):
+    """DIRECTION 2 — the organic case: a genuine #607 disclosed skip."""
+    _write_fpga_audit(tmp_path, "SKIP", False)
+    rc, out = _run(str(tmp_path))
+    assert rc == 0, out
+    assert out["verdict"] == "PASS"
+    assert out["errors"] == 0
+    assert any(f["rule"] == "rig_topology_na_no_fpga_run" for f in out["findings"])
+
+
+def test_no_audit_file_at_all_still_fails(tmp_path: Path):
+    """DIRECTION 1 — no disclosure exists (the pre-existing default
+    behaviour, unchanged): still FAIL."""
+    rc, out = _run(str(tmp_path))
+    assert rc == 1, out
+    assert out["verdict"] == "FAIL"
+
+
+def test_fpga_genuinely_compiled_still_fails(tmp_path: Path):
+    """DIRECTION 1 — FPGA bring-up IS part of this run (sof_present=True):
+    the exemption must NOT fire, and a missing rig topology is a real gap."""
+    _write_fpga_audit(tmp_path, "PASS", True)
+    rc, out = _run(str(tmp_path))
+    assert rc == 1, out
+    assert out["verdict"] == "FAIL"
+
+
+def test_non_skip_verdict_still_fails(tmp_path: Path):
+    """DIRECTION 1 — an undisclosed/ambiguous state (verdict != SKIP) must
+    not be read as an exemption."""
+    _write_fpga_audit(tmp_path, "ERROR", False)
+    rc, out = _run(str(tmp_path))
+    assert rc == 1, out
+    assert out["verdict"] == "FAIL"
+
+
+def test_malformed_audit_json_still_fails(tmp_path: Path):
+    """DIRECTION 1 — an unreadable audit file must not be silently treated
+    as a disclosure; fail-closed, matching fpga_board_capability's own
+    contract."""
+    d = tmp_path / "reports" / "phase2" / "fpga"
+    d.mkdir(parents=True)
+    (d / "quartus_map_audit.json").write_text("{not valid json")
+    rc, out = _run(str(tmp_path))
+    assert rc == 1, out
+
+
+def test_a_declared_topology_still_validates_normally_when_fpga_skipped(tmp_path: Path):
+    """DIRECTION 1 sibling: if a project DOES declare a topology even while
+    FPGA is disclosed-skipped, the exemption must not short-circuit real
+    field validation — a present-but-broken declaration still fails on its
+    own merits."""
+    _write_fpga_audit(tmp_path, "SKIP", False)
+    (tmp_path / "rig_topology.json").write_text(json.dumps({"fpga_board": "x"}))
+    rc, out = _run(str(tmp_path))
+    assert rc == 1, out
+    assert out["verdict"] == "FAIL"
+    assert any(f["rule"] == "rig_topology_missing_required" for f in out["findings"])
