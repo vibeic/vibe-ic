@@ -3,12 +3,24 @@
 
 Replaces skill `sdc-validator` (archived).
 
-Two independent checks:
+Three independent checks:
 
   1. STRUCTURE — every .sdc must carry create_clock / set_input_delay /
      set_output_delay.
 
-  2. L8 CROSS-CHECK (`--l8`, L8 CROSS-CHECK) — the cross-check the flow has
+  2. SEARCH-ROOT HONESTY — `[SKIP] no .sdc files` must mean "this project
+     ships no SDC", not "I was pointed somewhere that has none". Those two
+     were byte-identical outputs at exit 0, so a gate handed the wrong
+     positional (the 8/d2 defect) or a project whose SDC producer wrote
+     outside `phase2/stage2/constraints` certified step 8 from files it
+     never read. When the searched roots are empty but the project carries
+     .sdc files elsewhere, the program now exits 1 with
+     `SDC_SEARCH_ROOT_MISDIRECTED` and names both the roots it searched and
+     the files it found. A project with no .sdc anywhere still SKIPs at
+     exit 0 — that case is blocked by `sdc_syntax_check`, step 8's first
+     all_of member.
+
+  3. L8 CROSS-CHECK (`--l8`, L8 CROSS-CHECK) — the cross-check the flow has
      declared since Wave 82 ("`sdc_validator_check` cross-checks the SDC
      against L8_TIMING_WAVEFORM constraints; complements sdc_syntax_check
      which only validates SDC syntax") but never implemented: `--l8` was
@@ -23,12 +35,112 @@ Two independent checks:
 The L8 cross-check is ADDITIVE: the three-directive structural test is
 unchanged, and a project invoked without `--l8` (or whose L8 carries no
 clock records at all — timing_windows/timing_constants/waveforms are
-routinely empty) behaves exactly as before.
+routinely empty) is judged by checks 1 and 2 alone.
+
+Check 2 is NOT additive and is not meant to be: it converts a class of
+silent exit-0 skips into failures. On a project whose SDC is where the flow
+declares it, it never runs at all — the stray scan is reached only after the
+search-root glob has already come back empty.
 """
-import argparse, json, re, sys
+import argparse, json, os, re, sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+
+# ----- search roots and the misdirection diagnostic ------------------
+
+#: The directories this program validates, as (display, resolver). The
+#: positional is the PROJECT ROOT; these are resolved from it, which is why
+#: handing the gate `phase2/stage2/constraints` produced the doubled
+#: `phase2/stage2/constraints/phase2/stage2/constraints`.
+_SEARCH_ROOTS = (
+    ("phase2/stage1/fpga", _pl.fpga_early_dir),
+    ("phase2/stage2/constraints", _pl.constraints_dir),
+)
+
+#: Pruned from the stray scan: VCS/tool metadata that cannot hold a
+#: project's constraints. NOTHING else is pruned — a vendor .sdc under
+#: `input/` is still evidence that the project carries constraint files the
+#: declared search roots do not see, which is what the diagnostic reports.
+_SCAN_PRUNE_DIRS = frozenset({".git", ".hg", ".svn", "__pycache__",
+                              ".venv", "node_modules"})
+
+#: The scan runs only when the search roots came back empty, i.e. only on an
+#: already-broken project, and stops once it has enough evidence to name the
+#: problem. Listing every stray is not the point; proving one exists is.
+_STRAY_SCAN_LIMIT = 8
+
+
+def search_roots(project: Path) -> List[Path]:
+    """The directories `find_sdc_files` globs, in glob order."""
+    return [fn(Path(project)) for _, fn in _SEARCH_ROOTS]
+
+
+def find_sdc_files(project: Path) -> List[Path]:
+    """Every `*.sdc` directly under a search root, deterministically ordered."""
+    out: List[Path] = []
+    for root in search_roots(project):
+        if root.is_dir():
+            out.extend(sorted(root.glob("*.sdc")))
+    return out
+
+
+def stray_sdc_files(project: Path,
+                    limit: int = _STRAY_SCAN_LIMIT) -> List[Path]:
+    """`.sdc` files under `project` that no search root covers.
+
+    Only called when the search roots yielded nothing, so an empty result
+    means "this project genuinely ships no SDC" and a non-empty one means
+    "the SDC exists, the searched roots just do not see it".
+
+    A search root is skipped but NOT pruned: `find_sdc_files` globs `*.sdc`
+    directly under it, so `phase2/stage2/constraints/sub/top.sdc` is an SDC
+    the roots cannot see and is correctly reported as one."""
+    root = Path(project)
+    covered = {r.resolve() for r in search_roots(root)}
+    found: List[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root, onerror=None):
+        dirnames[:] = sorted(d for d in dirnames if d not in _SCAN_PRUNE_DIRS)
+        here = Path(dirpath)
+        try:
+            if here.resolve() in covered:
+                continue
+        except OSError:
+            pass
+        for fn in sorted(filenames):
+            if fn.endswith(".sdc"):
+                found.append(here / fn)
+                if len(found) >= limit:
+                    return found
+    return found
+
+
+def misdirected_search_root_issue(project: Path) -> Optional[str]:
+    """The `SDC_SEARCH_ROOT_MISDIRECTED` diagnostic, or None when the
+    project truly carries no SDC at all."""
+    strays = stray_sdc_files(project)
+    if not strays:
+        return None
+    root = Path(project)
+    shown = []
+    for s in strays:
+        try:
+            shown.append(str(s.relative_to(root)))
+        except ValueError:
+            shown.append(str(s))
+    count = (f"at least {len(strays)}" if len(strays) >= _STRAY_SCAN_LIMIT
+             else str(len(strays)))
+    return (
+        "SDC_SEARCH_ROOT_MISDIRECTED: the searched roots ("
+        + ", ".join(d for d, _ in _SEARCH_ROOTS)
+        + f" under {root}) hold no .sdc, but the project carries "
+        + f"{count} .sdc file(s) elsewhere: "
+        + ", ".join(shown)
+        + " — step 8 cannot be certified from files it did not read. Either "
+          "the positional handed to sdc_validator_check is not the project "
+          "root, or the SDC producer wrote outside the declared constraints "
+          "directory")
+
 
 # ----- L8 <-> SDC cross-check ---------------------------------------
 
@@ -275,6 +387,7 @@ def _emit(args, sdc_files, issues) -> None:
             args.json.parent.mkdir(parents=True, exist_ok=True)
             args.json.write_text(json.dumps({
                 "verdict": "FAIL" if issues else "PASS",
+                "search_roots": [str(r) for r in search_roots(args.project)],
                 "sdc_files_checked": [str(p) for p in sdc_files],
                 "l8": str(args.l8) if args.l8 else None,
                 "issues": issues,
@@ -293,18 +406,22 @@ def main():
                         "clock periods against")
     p.add_argument("--json", type=Path, help="optional JSON output path")
     args = p.parse_args()
-    sdc_files = list((_pl.fpga_early_dir(args.project)).glob("*.sdc")) + \
-                list((_pl.constraints_dir(args.project)).glob("*.sdc")) if (_pl.constraints_dir(args.project)).is_dir() else \
-                list((_pl.fpga_early_dir(args.project)).glob("*.sdc"))
+    sdc_files = find_sdc_files(args.project)
     # L8 self-consistency is a property of L8 alone, so it is evaluated
     # BEFORE the no-SDC skip: a contradictory constraint document must not
     # be able to hide behind an empty SDC glob.
     l8_doc, l8_err = load_l8(args.l8)
     l8_self = l8_self_issues(l8_doc, l8_err)
-    if l8_self and not sdc_files:
-        _emit(args, [], l8_self)
-        return 1
     if not sdc_files:
+        # An empty glob has two very different causes and used to print the
+        # same line at the same exit code for both. Separate them before
+        # skipping: a project that carries .sdc the search roots cannot see
+        # has NOT been validated, and must not exit 0.
+        misdirected = misdirected_search_root_issue(args.project)
+        pre = ([misdirected] if misdirected else []) + l8_self
+        if pre:
+            _emit(args, [], pre)
+            return 1
         print("[SKIP] sdc_validator_check: no .sdc files")
         return 0
     issues = []

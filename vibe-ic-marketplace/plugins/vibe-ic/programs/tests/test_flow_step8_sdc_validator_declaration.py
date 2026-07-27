@@ -38,22 +38,23 @@ Direction-1 guards assert what must NOT change: the project-root call shape
 still works, a project with genuinely no .sdc anywhere still SKIPs at rc 0,
 and an FPGA-side SDC is still validated.
 
-DEFERRED, deliberately
-----------------------
-The recommended companion hardening — make `sdc_validator_check` emit a loud
-non-zero `SDC_SEARCH_ROOT_MISDIRECTED` when the project carries .sdc files but
-none are under the search roots, instead of the indistinguishable
-`[SKIP] no .sdc files` — is NOT in this change. It was written and measured
-(it turns the pre-fix invocation from rc 0 into rc 1 on the real project), then
-withdrawn: `programs/sdc_validator_check.py` is being rewritten concurrently by
-another fix group, which is adding an L8 cross-check and grows the file from 53
-to 332 lines while keeping the search-root glob (their lines 296-298) and the
-silent skip (their line 308) byte-identical to main. Editing the same region
-would collide. The declaration fix here is what ARMS their cross-check too: on
-the real project their program is reached only because the positional is now
-the project root. The re-breakage guard that hardening would have provided is
-covered by `test_shipped_gate_command_validates_a_real_constraints_sdc`, which
-fails if the shipped gate ever SKIPs a project that ships an SDC.
+THE DEFERRED COMPANION HARDENING HAS SINCE LANDED
+-------------------------------------------------
+This module originally recorded, as DEFERRED, the program-side half of the fix:
+make `sdc_validator_check` emit a loud non-zero `SDC_SEARCH_ROOT_MISDIRECTED`
+when the project carries .sdc files but none sit under the search roots,
+instead of the indistinguishable `[SKIP] no .sdc files`. It was withheld only
+because `programs/sdc_validator_check.py` was being rewritten concurrently by
+the group that added the L8 cross-check (53 -> 332 lines), and editing the same
+region would have collided. Both landed (PR #469), so the hardening is now
+shipped and lives in `test_sdc_search_root_misdirection.py`.
+
+One consequence is visible here: `test_the_prefix_positional_*` below used to
+assert that a misdirected invocation is INDISTINGUISHABLE from an empty
+project. That was the defect written down as an expectation. It now asserts
+the corrected property — the misdirected invocation still validates nothing
+(which is why the DECLARATION had to change) but says so at exit 1 instead of
+skipping at exit 0.
 """
 from __future__ import annotations
 
@@ -185,22 +186,33 @@ def _run_prog(args):
                           capture_output=True, text=True, timeout=60)
 
 
-def test_the_prefix_positional_reaches_no_sdc_at_all(tmp_path):
+def test_the_prefix_positional_still_reaches_no_sdc_but_no_longer_hides_it(
+        tmp_path):
     """Pin WHY the declaration had to change, against the program as it ships.
+
     Handed the constraints directory, the program resolves
-    phase2/stage2/constraints/phase2/stage2/constraints — reads nothing — and
-    reports the same `no .sdc files` it reports for a project that genuinely
-    has none. That indistinguishability is the whole defect; the DECLARATION is
-    what fixes it (see the DEFERRED note in this module's docstring for the
-    program-side self-diagnostic)."""
+    phase2/stage2/constraints/phase2/stage2/constraints and reads NOTHING —
+    that half is unchanged and is exactly why the yaml positional had to become
+    the project root. What changed is the reporting: it used to print the same
+    `no .sdc files` line, at the same exit 0, that it prints for a project which
+    genuinely ships none. This test asserted that indistinguishability as the
+    expected behaviour, i.e. it encoded the defect. It now asserts the corrected
+    property.
+    """
     project = _project(tmp_path, constraints=_GOOD_SDC)
     cp = _run_prog([str(project / "phase2" / "stage2" / "constraints")])
-    assert "[SKIP]" in cp.stdout, cp.stdout
+    assert "SDC file(s) OK" not in cp.stdout, (
+        "premise: the misdirected positional must still validate NO SDC — if "
+        f"it now reaches one, this test is scanning the wrong thing: {cp.stdout!r}")
+    assert cp.returncode == 1, (
+        "a misdirected search root must not exit 0 — that is the silent "
+        f"certification this program was hardened against. {cp.stdout!r}")
     empty = _project(tmp_path / "empty")
     cp2 = _run_prog([str(empty)])
-    assert cp.stdout.strip() == cp2.stdout.strip(), (
-        "premise: a misdirected invocation is indistinguishable from an empty "
-        f"project. misdirected={cp.stdout!r} empty={cp2.stdout!r}")
+    assert cp2.returncode == 0 and "[SKIP]" in cp2.stdout, cp2.stdout
+    assert cp.stdout.strip() != cp2.stdout.strip(), (
+        "a misdirected invocation must no longer be indistinguishable from an "
+        f"empty project. misdirected={cp.stdout!r} empty={cp2.stdout!r}")
 
 
 # ── direction-1 guards: behaviour that must NOT change ──────────────────────
