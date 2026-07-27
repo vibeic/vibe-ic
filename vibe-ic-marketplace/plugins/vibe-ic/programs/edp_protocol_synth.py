@@ -59,6 +59,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
+# Generic auto-dispatch opt-in (read by phase1_doc_one_shot_runner [14e2b/15]).
+AUTO_DISPATCH = True
+
 
 def _ensure_dict(d: dict, key: str) -> dict:
     """Return d[key] as a dict, replacing a pre-existing None/empty/non-dict."""

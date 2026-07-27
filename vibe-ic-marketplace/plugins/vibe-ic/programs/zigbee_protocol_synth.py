@@ -47,6 +47,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
+# Generic auto-dispatch opt-in (read by phase1_doc_one_shot_runner [14e2b/15]).
+AUTO_DISPATCH = True
+
 
 # ----------------------------------------------------------------------
 # Module-level CONTENT-ONLY detector (the runner wires this; evaluated on

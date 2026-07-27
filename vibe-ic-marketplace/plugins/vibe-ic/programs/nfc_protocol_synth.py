@@ -29,6 +29,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+# Generic auto-dispatch opt-in (read by phase1_doc_one_shot_runner [14e2b/15]).
+AUTO_DISPATCH = True
+
 
 # ---------------------------------------------------------------------------
 # I/O helpers (mirror sdmmc/spi/i2c synth conventions)
