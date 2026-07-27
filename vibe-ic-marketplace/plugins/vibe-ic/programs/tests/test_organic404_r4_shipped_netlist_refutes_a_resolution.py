@@ -149,6 +149,44 @@ def test_an_untracked_netlist_is_not_read(tmp_path):
     assert _GATE.shipped_netlist_port_widths(d) == {"x": 32}
 
 
+def test_a_netlist_reached_through_a_tracked_link_is_not_read(tmp_path):
+    """#404 — the same #447 question, through the door the PATH filter left
+    open.
+
+    The link IS tracked, so the path filter above waves it through, and the
+    reader then DEREFERENCES it into a target the tree does not carry. A
+    clean clone gets a dangling link and answers `{}`; a host that kept its
+    run output answers 4. Same commit, two answers.
+
+    MEASURED on this repo when this landed: 172 tracked symlinks, 43 pointing
+    outside the index, 6 of them `.v` files this very reader globs — which
+    made 3 of 15 published cells answer differently on the two trees.
+
+    The assertion is `{}`, the clean-clone answer, WITH the target present on
+    disk — so a reader that still dereferences fails here rather than passing
+    for the wrong reason."""
+    d = tmp_path / "cell"
+    _write(d, "run_output/netlist.v", _netlist("m", "  input [3:0] x;\n"))
+    link = d / "phase2" / "stage2" / "synth" / "netlist.v"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to("../../../run_output/netlist.v")
+    _publish(d, ["phase2/stage2/synth/netlist.v"])       # the LINK, not target
+    assert link.read_text().strip().endswith("endmodule")   # readable HERE
+    assert _GATE.shipped_netlist_port_widths(d) == {}
+
+
+def test_a_netlist_reached_through_a_link_the_tree_DOES_carry_is_read(tmp_path):
+    """The paired half. 128 of this repo's 172 tracked links point at tracked
+    files; refusing those would drop content a clean clone does receive."""
+    d = tmp_path / "cell"
+    _write(d, "run_output/netlist.v", _netlist("m", "  input [3:0] x;\n"))
+    link = d / "phase2" / "stage2" / "synth" / "netlist.v"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to("../../../run_output/netlist.v")
+    _publish(d, ["run_output/netlist.v", "phase2/stage2/synth/netlist.v"])
+    assert _GATE.shipped_netlist_port_widths(d) == {"x": 4}
+
+
 def test_no_published_netlist_yields_nothing_not_a_default(tmp_path):
     """4 of 15 corpus cells ship none. `{}` leaves every rail exactly as it
     was; a default would have invented agreement."""
