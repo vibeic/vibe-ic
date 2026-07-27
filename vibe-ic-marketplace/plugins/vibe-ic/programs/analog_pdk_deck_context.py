@@ -187,9 +187,23 @@ class DeckContext:
     # passes farm_dir, the entry lib is loaded through a per-root basename farm so
     # its bare relative `.include` / `.lib` targets resolve even across a
     # split-staged PDK. None when no farm was built — every known open PDK, and
-    # every current runtime caller (none pass farm_dir yet). Carries COUNTS + the
-    # farm dir only, never a lib basename (NDA).
+    # every current runtime caller. "No runtime caller passes farm_dir" is an
+    # AST-checked claim, not prose: see test_issue193_custom_pdk_primary_
+    # selection_ngspice::test_no_production_caller_wires_the_first_staged_strategy
+    # (a keyword grep cannot see a POSITIONAL farm_dir; measured). Carries COUNTS
+    # + the farm dir only, never a lib basename (NDA).
     include_farm: Optional[Dict[str, Any]] = None
+    # vibe-ic#193 — WHICH primary-selection strategy elected `model_lib`. TWO are
+    # live in this module and `farm_dir` is the only switch between them, so a
+    # context (and every artefact derived from it) could not previously say which
+    # one produced its lib. Purely a RECORD: it changes no selection and endorses
+    # neither. One of:
+    #   PRIMARY_BY_DEVICE_RANK  — the device-defining ranking (#149 / v1.4.58)
+    #   PRIMARY_BY_ENTRY_LIB    — the resolver's declared entry lib, i.e.
+    #                             `spice_libs[0]`, loaded through the include farm
+    #   PRIMARY_BY_KNOWN_TABLE  — the open-PDK authored table (no election)
+    #   PRIMARY_NONE            — nothing readable to elect
+    primary_policy: Optional[str] = None
 
     def as_json(self) -> Dict[str, Any]:
         return {
@@ -205,7 +219,15 @@ class DeckContext:
             "unresolved_roles": self.unresolved_roles,
             "work_items": self.work_items, "disclosure": self.disclosure,
             "include_farm": self.include_farm,
+            "primary_policy": self.primary_policy,
         }
+
+
+# vibe-ic#193 — the two primary-selection strategies that are BOTH live here.
+PRIMARY_BY_DEVICE_RANK = "device-defining-rank"
+PRIMARY_BY_ENTRY_LIB = "resolver-entry-lib"
+PRIMARY_BY_KNOWN_TABLE = "known-family-table"
+PRIMARY_NONE = "none"
 
 
 # ── lib parsing (pure) ──────────────────────────────────────────────────────
@@ -417,6 +439,8 @@ def known_family_context(selector: str) -> DeckContext:
         # substrate/well node injection (keeps the sky130 deck byte-identical).
         device_terminals={role: 4 for role in fam["device_map"]},
         template_family=_template_family,
+        # no election happens on this path — the lib comes from the table.
+        primary_policy=PRIMARY_BY_KNOWN_TABLE,
         disclosure=(
             f"known open PDK '{selector}' — device map + corner sections "
             f"from the plugin's authored template family (no lib parse)."
@@ -701,8 +725,10 @@ def custom_family_context(res: Dict[str, Any],
         return (n_defines, is_aggregator, n_composed, n_sections)
 
     primary = None
+    primary_policy = PRIMARY_NONE
     if readable:
         primary = max(readable, key=_primary_rank)
+        primary_policy = PRIMARY_BY_DEVICE_RANK
 
     # The emitted deck loads ONE lib: `.lib <primary> <section>`. The device
     # subckts it instantiates must come from THAT lib's closure — otherwise a
@@ -791,6 +817,10 @@ def custom_family_context(res: Dict[str, Any],
             farmed_entry = (farm.get("map") or {}).get(str(Path(entry)))
             if farmed_entry:
                 primary = farmed_entry     # load the entry lib THROUGH the farm
+                # vibe-ic#193 — this branch OVERRIDES the device-defining ranking
+                # with the resolver's declared entry lib (`spice_libs[0]`). It is
+                # the second live strategy; record which one won.
+                primary_policy = PRIMARY_BY_ENTRY_LIB
             if farm.get("ambiguous") or farm.get("missing"):
                 work_items.append(
                     "NEEDS_NATIVE_TEMPLATE: the entry model lib composes other "
@@ -806,6 +836,10 @@ def custom_family_context(res: Dict[str, Any],
                      if primary_composed else "")
     term_note = (f"; device_terminals={device_terminals}"
                  if any(v > 4 for v in device_terminals.values()) else "")
+    # vibe-ic#193 — name the electing strategy in the human-readable disclosure
+    # too, so an artefact carrying only the prose still says which world it came
+    # from. States WHICH ran; asserts nothing about which SHOULD.
+    policy_note = f" [primary elected by: {primary_policy}]"
     disclosure = (
         f"custom PDK family '{family}' ({source}) — device map + corner "
         f"sections parsed from {len(readable)} resolved model lib(s); "
@@ -813,7 +847,7 @@ def custom_family_context(res: Dict[str, Any],
         + (f" (note: {unread_note})" if unread_note else "")
         if status == "OK" else
         f"custom PDK family '{family}' ({source}) NOT natively emittable: "
-        + " | ".join(work_items))
+        + " | ".join(work_items)) + policy_note
     return DeckContext(
         status=status, source=source, family=str(family) if family else None,
         model_lib=primary, model_lib_includes=readable,
@@ -821,7 +855,8 @@ def custom_family_context(res: Dict[str, Any],
         typ_section=typ, process_corners=process,
         device_map=device_map, device_terminals=device_terminals,
         unresolved_roles=unresolved,
-        work_items=work_items, disclosure=disclosure, include_farm=farm)
+        work_items=work_items, disclosure=disclosure, include_farm=farm,
+        primary_policy=primary_policy)
 
 
 def resolve_deck_context(pdk_selector: str,

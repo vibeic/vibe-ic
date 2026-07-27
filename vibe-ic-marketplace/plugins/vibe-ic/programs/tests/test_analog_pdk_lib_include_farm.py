@@ -26,8 +26,6 @@ import os
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import analog_pdk_deck_context as APDC          # noqa: E402
 import analog_real_corner_sweep as ARS          # noqa: E402
@@ -89,56 +87,55 @@ def test_split_staged_libs_are_colocated_for_the_shim(tmp_path):
     assert ctx.include_farm["missing"] == 0
 
 
-# CAPTURED-FLOOR (architectural divergence, tracked in a backlog issue): this
-# test encodes afec053fb's ENTRY-LIB(shim)-primary intent — with no farm it
-# expects model_lib == res["spice_lib"], which the resolver sets to
-# spice_libs[0] (the FIRST staged lib). HEAD's custom_family_context instead
-# picks the DEVICE-DEFINING lib (ORGANIC #149 / v1.4.58), which is more
-# principled than "the first staged lib" and yields a directly-loadable deck for
-# this fixture. Making it green would require flipping HEAD to shim-first, which
-# changes the runtime primary-selection for EVERY custom PDK and CANNOT be
-# verified without ngspice + a commercial PDK — an owner decision, not a CI fix.
-# xfail keeps this VISIBLE (xfailed, not a masking skip); the farm CAPABILITY
-# itself is fully restored and exercised by the other 12 tests here.
+# vibe-ic#193 — THE XFAIL THAT USED TO LIVE HERE IS RETIRED, and the reason is
+# a measurement, not a preference.
 #
-# STRICT, and that is the point of this marker now. `strict=False` reports the
-# same result in two contradictory worlds: HEAD picks the device-defining lib
-# (today), or HEAD has silently become shim-first (an XPASS nobody is told
-# about). A marker that cannot distinguish "the divergence still stands" from
-# "the divergence was resolved behind my back" is not recording anything.
-# Measured deterministic over 5 consecutive runs, and there is no global
-# `xfail_strict`, so this is an explicit per-marker choice.
-# With strict=True, adopting the afec ordering turns the suite RED until
-# whoever adopts it comes back here and says so — which is exactly the
-# ceremony an owner decision deserves.
-# vibe-ic#193 UPDATE — the "unverifiable without ngspice" clause is DISCHARGED.
-# The measurement now lives in, and is executed by,
-# `test_issue193_custom_pdk_primary_selection_ngspice.py` (real ngspice-46+):
-#   * split staging (THIS fixture): spice_libs[0] names a deck ngspice cannot
-#     load — "Could not find library file"; HEAD's pick solves.
-#   * co-located + shim staged first: the two policies elect the SAME lib.
-#   * co-located + device lib staged first: they differ, and HEAD's pick solves
-#     while spice_libs[0] dies with "Undefined parameter".
-# The OWNER's decision is still open and the runtime is deliberately unchanged;
-# what is no longer open is whether the two selections are equivalent. They are
-# not, and the simulator falls on HEAD's side in every case it can separate.
-@pytest.mark.xfail(strict=True, reason=(
-    "architectural divergence: afec spice_libs[0]/entry-shim-primary assumption "
-    "vs HEAD #149/v1.4.58 device-defining-lib-primary. MEASURED (vibe-ic#193, "
-    "real ngspice-46+, see test_issue193_custom_pdk_primary_selection_ngspice"
-    ".py): on THIS split-staged fixture spice_libs[0] yields a deck ngspice "
-    "cannot load at all, while HEAD's pick solves; the two policies coincide "
-    "once the include closure is co-located. Flipping to first-staged-lib would "
-    "change the runtime primary-selection for every custom PDK — pending owner "
-    "decision (captured-floor issue). The ngspice verification is DONE. "
-    "STRICT: if this ever XPASSes the runtime policy changed without the "
-    "decision being made, and that must be loud, not silent."))
+# It asserted afec053fb's ENTRY-LIB(shim)-primary intent (`model_lib ==
+# res["spice_lib"] == spice_libs[0]`) against HEAD's device-defining-lib pick
+# (#149 / v1.4.58), and was marked `xfail(strict=True)` so that ADOPTING the
+# afec ordering would turn the suite red rather than XPASS in silence.
+#
+# It only half worked. An xfail is satisfied by ANY failure of its body, so it
+# could distinguish exactly one of the four ways the runtime's primary selection
+# can change. Measured, one mutation at a time, on this tree:
+#
+#   runtime mutation                        marker verdict   rc
+#   --------------------------------------  ---------------  --  -------
+#   primary = spice_libs[0] (afec adoption)  FAILED (XPASS)   1   caught
+#   primary = None (elects nothing)          xfailed          0   BLIND
+#   primary = an unstaged third path         xfailed          0   BLIND
+#   selection raises                         xfailed          0   BLIND
+#
+# A marker whose stated job is "if this ever XPASSes the runtime policy changed"
+# was reporting success for three of the four changes it existed to catch. The
+# explicit assertions in test_issue193_custom_pdk_primary_selection_ngspice.py
+# catch ALL FOUR — measured across this file plus that one, in the same four
+# mutations and the order above: 7, 12, 11 and 16 tests red, rc 1 every time.
+# So the record lives there, as assertions on the CURRENT behaviour with the
+# alternative recorded beside them, which is what this repo prefers over a
+# marker that is green in any world but one.
+#
+# Nothing about the owner's decision changed. Adopting the afec ordering still
+# turns the suite red — 7 named tests, headed by test_head_diverges_from_spice_
+# libs0_only_in_the_split_staging — so whoever adopts it still has to come back
+# and say so. Same ceremony, now total instead of one-quarter. THIS test keeps
+# the policy-NEUTRAL job it is named for: no farm_dir means raw staged paths,
+# and it stays green under either policy.
 def test_no_farm_dir_keeps_the_raw_path(tmp_path):
-    """Opt-in: a caller that asks for no farm gets exactly the previous paths."""
-    res, shim, _dev = _stage_split(tmp_path)
+    """Opt-in: a caller that asks for no farm gets exactly the previous paths.
+
+    Deliberately says nothing about WHICH staged lib is elected — that is the
+    open architectural question and it is recorded in the #193 file. What is
+    asserted here is the opt-in contract: no farm is built, and the elected lib
+    is one of the raw staged paths rather than anything under a farm directory.
+    """
+    res, _shim, _dev = _stage_split(tmp_path)
     ctx = APDC.custom_family_context(res)
-    assert ctx.model_lib == str(shim)
     assert ctx.include_farm is None
+    assert ctx.model_lib in res["spice_libs"], (
+        "no farm_dir must leave the elected lib as one of the RAW staged paths; "
+        f"got {ctx.model_lib} for staged {res['spice_libs']}")
+    assert not Path(ctx.model_lib).is_symlink()
 
 
 def test_known_open_pdk_never_farms(tmp_path):

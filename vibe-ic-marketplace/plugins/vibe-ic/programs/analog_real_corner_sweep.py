@@ -1825,6 +1825,12 @@ def run_block(project, block, container, pdk, topology_override):
         "pdk_arg": pdk,
         "pdk_model_lib_resolved": (getattr(ctx, "model_lib", None)
                                    if ctx is not None else None),
+        # vibe-ic#193 — WHICH primary-selection strategy produced that lib. Two
+        # are live in analog_pdk_deck_context and `farm_dir` switches between
+        # them, so a sweep result that records only the path cannot say which
+        # world it ran in. Records; endorses neither.
+        "pdk_primary_policy": (getattr(ctx, "primary_policy", None)
+                               if ctx is not None else None),
         "spec_label": target["label"],
         # GAP-ANALOG-2 — first-class L5-inheritance provenance: whether the
         # verdict target came from the block's L5 spec or the static default,
