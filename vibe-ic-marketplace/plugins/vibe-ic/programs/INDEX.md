@@ -671,7 +671,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_gate_contract_check` | any | v0.74 | Meta-checker for Phase 1 deterministic gates. |
 | `phase1_input_vs_generated_completeness_check` | any | v0.60 | Phase 1 coverage gate |
 | `phase1_json_converge` | any | — | deterministic comparator for the Phase-1 |
-| `phase1_k5_quality_check` | any | — | catch the 6 K5 issues found by real Phase-2 synth. |
+| `phase1_k5_quality_check` | any | — | catch the K5 issues found by real Phase-2 synth. |
 | `phase1_loop_stop_condition_check` | any | — | deterministic STOP gate for the |
 | `phase1_no_waivers_used_check` | any | Wave 23 | gate (Wave 23, v0.119.55). |
 | `phase1_one_shot_runner` | any | — | Phase 1 unified dispatcher. |
@@ -1701,7 +1701,7 @@ _(no programs in this group)_
 - `phase1_gate_contract_check` — Meta-checker for Phase 1 deterministic gates.  _[v0.74]_
 - `phase1_input_vs_generated_completeness_check` — Phase 1 coverage gate  _[v0.60]_
 - `phase1_json_converge` — deterministic comparator for the Phase-1
-- `phase1_k5_quality_check` — catch the 6 K5 issues found by real Phase-2 synth.
+- `phase1_k5_quality_check` — catch the K5 issues found by real Phase-2 synth.
 - `phase1_loop_stop_condition_check` — deterministic STOP gate for the
 - `phase1_no_waivers_used_check` — gate (Wave 23, v0.119.55).  _[Wave 23]_
 - `phase1_one_shot_runner` — Phase 1 unified dispatcher.

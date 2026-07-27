@@ -4179,13 +4179,40 @@ def _digital_backend_is_na(project: Path) -> Tuple[bool, str]:
 # a false PASS, which is worse — the umbrella would then be certifying a check
 # that examined nothing).
 #
-# EMPTY ON PURPOSE in this commit. The rc-2 discriminator below is landable on
-# its own and its blast radius is zero by construction — it changes no gate's
-# behaviour, it only stops the umbrella from calling a caller defect a benign
-# skip. Conversions are a separate, per-gate, individually-measured decision and
-# must not hold the discriminator hostage; each one arrives with its own corpus
-# measurement in `tests/test_issue492_gate_argv_conversions.py`.
-_STRUCTURAL_GATE_ARGV_ADAPTERS: Dict[str, tuple[str, ...]] = {}
+# MEASURED at v1.7.68 over the 107 tracked RTL directories under benchmark-data,
+# driving each candidate with `--rtl-dir <dir>` on a scratch MIRROR of the corpus
+# (no gate CLI was pointed at the tracked tree). 14 of the rejected gates want
+# only `--rtl-dir`, a value the umbrella already derives — but wanting it is not
+# enough. TWO bars have to be cleared, and the second is the one that disqualifies
+# most of them: the gate must not start FAILing everything (a false skip traded
+# for a false FAIL), and it must actually EXAMINE something, because a PASS over
+# an empty denominator is a false PASS and is strictly worse than the skip it
+# replaces — the umbrella would then be certifying a check that looked at nothing.
+#
+# DENOMINATOR, stated so it reproduces: 107 is `git ls-files benchmark-data`
+# filtered to directories named `rtl` holding .v/.sv. The sweep also covered one
+# directory named `src` (subservient's vendored formal copy), because the filter
+# used this function's own rtl_dir alternation ("phase2/stage1/rtl","rtl","src",
+# "hdl") — 108 dirs in total. Every number below is quoted on the reproducible
+# 107; including the 108th changes no verdict for either converted gate.
+#
+# Exactly two clear both bars:
+#
+#   sustained_vs_edge_check        0/107 FAIL, denominator disclosed on 107/107
+#                                  ("27 files scanned" on the largest design)
+#   timer_freeze_after_state_check 0/107 FAIL, `files_scanned` non-zero 107/107
+#
+# Six more add no FAIL but report an EMPTY denominator on all 107 (e.g.
+# `pulse_decoder_edge_check` `files_checked: 0`, `tristate_self_rx_mask_check`
+# `inout_ports: []`); one discloses no denominator at all; four would redden the
+# corpus (`testbench_exists_check` 102/107). All stay disclosed as NOT INVOKED.
+# The full table, and the rule that licenses a conversion, are pinned in
+# `tests/test_issue492_gate_argv_conversions.py` so a future conversion has to
+# re-derive the measurement rather than assume it.
+_STRUCTURAL_GATE_ARGV_ADAPTERS: Dict[str, tuple[str, ...]] = {
+    "sustained_vs_edge_check": ("--rtl-dir",),
+    "timer_freeze_after_state_check": ("--rtl-dir",),
+}
 
 
 def _structural_gate_argv(gate_name: str,
