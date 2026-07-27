@@ -11095,9 +11095,20 @@ def _emit_cts_report_if_complete(project: Path, top: str):
         body.append("")
     body.extend(cts_lines)
     rpt.write_text("\n".join(body) + "\n")
-    # ORGANIC #568 — durable DOUBLE: a JSON sidecar so the structured CTS
-    # evidence survives even if the human-readable rpt is later touched. The
-    # canonicalize fallback prefers whichever durable artefact is present.
+    # ORGANIC #568 — a JSON sidecar carrying the same CTS evidence in
+    # structured form.
+    #
+    # WHAT IT IS NOT: this comment used to claim "the canonicalize fallback
+    # prefers whichever durable artefact is present". It does not, and nothing
+    # else does either — `cts_quality_check` parses ONLY clock_tree.rpt
+    # (`_CTS_RPT_CANDIDATES`), step 19's required_outputs names only
+    # clock_tree.rpt, and a repo-wide search finds no reader of clock_tree.json
+    # outside tests. It is a write-only debugging sidecar, and it is
+    # deliberately NOT declared as a required_output: it is written on the
+    # metrics path only (the #568 EVIDENCE-LOST branch above writes the .rpt
+    # and returns before reaching here) and its write is wrapped in a
+    # swallow-OSError, so declaring it would manufacture a MISSING on a branch
+    # that is working as designed.
     try:
         (cts_out / "clock_tree.json").write_text(
             json.dumps({
@@ -19613,6 +19624,46 @@ def _canonical_gds_is_stale(primary_gds: Path, canon_gds: Path) -> bool:
         return True
 
 
+def _clock_plan_stale_inputs(project: Path, clock_plan: Path,
+                             inputs) -> List[str]:
+    """Inputs NEWER than `clock_plan`, project-relative and sorted.
+
+    Same family as `_canonical_gds_is_stale`, for the Step-16 artefact. The
+    Step-16 refresh test was CONTENT-only: once clock_plan.json carried a
+    populated `clocks` array it was never rewritten, however much later the
+    design was regenerated. Measured on the real completed run
+    `campaign_pr427/spm/converge_ihp-sg13g2`::
+
+        clock_plan.json  1785077203
+        floorplan.def    1785078102   (+15 min)
+        placed.def       1785078103   (+15 min)
+
+    The plan is DERIVED from the project's SDCs, so an SDC edited after it was
+    written (a re-run at a different period, a clock added) would leave the
+    stale plan — and every skew target keyed off it — describing the old
+    design. Re-deriving is cheap and idempotent.
+
+    Returns [] when the plan does not exist yet (the plain first-write case,
+    not a staleness decision) and when a stat fails — an unreadable mtime is
+    not evidence of staleness, and the CONTENT test already covers the
+    unreadable-plan case by rewriting it.
+    """
+    try:
+        if not clock_plan.is_file():
+            return []
+        plan_mtime = clock_plan.stat().st_mtime
+    except OSError:
+        return []
+    newer: List[str] = []
+    for p in inputs:
+        try:
+            if p.is_file() and p.stat().st_mtime > plan_mtime:
+                newer.append(str(p.relative_to(project)))
+        except (OSError, ValueError):
+            continue
+    return sorted(set(newer))
+
+
 # ---------------------------------------------------------------------------
 # At-speed ATPG (DT1/DT2/DT3) producers — vibe-ic#235
 #
@@ -20867,7 +20918,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 f"#620: declared {len(_pv_declared)} PV sign-off output(s) "
                 f"in provenance.jsonl: {_pv_declared}")
 
-    # --- Step 16: clock plan + clock tree report -----------------------
+    # --- Step 16 artefact: clock plan ----------------------------------
+    # (Step 19's clock_tree.rpt/.json are emitted further down in this same
+    # block; the section header used to claim both were "Step 16", which is
+    # what attributed the CTS report to the wrong step. clock_tree.rpt is
+    # step 19's declared required_output, not step 16's.)
+    #
     # Emit a SUBSTANTIVE clock_plan.json that clock_plan_check.py accepts:
     # one entry per `create_clock` found across the project's SDCs, each
     # carrying name + positive period_ns + source port. clock_plan_check
@@ -20882,7 +20938,14 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # requires each clock to carry name + positive period_ns + source; a stub
     # FAILs CLOCK_NO_PERIOD/CLOCK_NO_SOURCE and drops every SDC clock. Refresh
     # whenever the existing plan lacks a populated `clocks` list. chip-AGNOSTIC.
+    #
+    # STALENESS. The refresh test above is CONTENT-only, so a plan carrying a
+    # populated `clocks` array was never rewritten however much later the design
+    # was regenerated — see `_clock_plan_stale_inputs` for the measurement.
+    # Refresh is therefore ALSO triggered when the plan is older than an input
+    # it is derived from (any *.sdc) or than the DEF the CTS pass runs against.
     _needs_refresh = True
+    _sdc_paths = sorted(project.rglob("*.sdc"))
     if clock_plan.is_file():
         try:
             _existing = json.loads(clock_plan.read_text(errors="ignore"))
@@ -20890,9 +20953,17 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             _needs_refresh = not (isinstance(_cl, list) and _cl)
         except Exception:
             _needs_refresh = True
+        if not _needs_refresh:
+            _stale_against = _clock_plan_stale_inputs(
+                project, clock_plan, list(_sdc_paths) + [primary_def])
+            if _stale_against:
+                _needs_refresh = True
+                notes.append(
+                    f"clock_plan.json was older than {_stale_against[:4]} — "
+                    "re-derived from the current SDCs rather than left stale")
     if _needs_refresh and primary_def.is_file():
         _sdc_texts = []
-        for _sdc in sorted(project.rglob("*.sdc")):
+        for _sdc in _sdc_paths:
             try:
                 _sdc_texts.append(_sdc.read_text(errors="ignore"))
             except OSError:
