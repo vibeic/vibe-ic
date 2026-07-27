@@ -167,6 +167,13 @@ class TestTapeoutSignoffCheck:
         # count — an unparseable "clean" stub is refused, so the fixture
         # carries a parseable zero-count signoff shape.
         (tmp_path / "drc.rpt").write_text("Total violations: 0\n")
+        # 2026-07-27: tapeout mode gained a fifth pillar (LVS) — a tape-out is
+        # DEFINED by a genuine layout-vs-schematic match, so "with evidence"
+        # now means five slots, not four.
+        (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "reports/phase3/lvs.rpt").write_text(
+            "Netlists match uniquely.\n"
+            "Final result: Circuits match uniquely.\n")
         assert _run_wrapper("tapeout_signoff_check.py", str(tmp_path)) == 0
 
 

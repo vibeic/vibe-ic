@@ -44,6 +44,12 @@ def _tapeout_base(tmp_path):
     (tmp_path / "phase3/stage4/gds/chip_top.gds").write_text("gds binary")
     (tmp_path / "synth_netlist.v").write_text("module chip_top(); endmodule")
     (tmp_path / "timing_final.rpt").write_text("timing report")
+    # 2026-07-27: tapeout mode gained a fifth LVS pillar. This fixture is
+    # about the DRC slot's substance rule; it needs a genuine LVS match so
+    # the DRC assertions are not masked by a missing-LVS FAIL.
+    (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reports/phase3/lvs.rpt").write_text(
+        "Netlists match uniquely.\nFinal result: Circuits match uniquely.\n")
 
 
 def test_tapeout_drc_fails_on_nonzero_signoff_count(tmp_path):
