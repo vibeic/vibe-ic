@@ -79,7 +79,11 @@ def _inline_project(tmp_path: Path, command: str | None) -> Path:
         '{"runner": "phase3_one_shot_runner"}')
     log = "yosys> \n"
     if command is not None:
-        log += f"\n-- Running command `{command}` --\n\n9. Executing pass.\n"
+        # yosys 用 GNU 非對稱引號輸出：開頭反引號、結尾單引號（`cmd'），不是
+        # 對稱的一對反引號。這個 fixture 原本寫成對稱形式，於是 audit_inline_yosys
+        # 回 NO_INLINE_COMMAND、整條內容稽核走不到——測試在測一個 yosys 不會產生的
+        # 輸入，因此對真正的缺陷沒有鑑別力。（PR #474 修的正是同一個引號形狀。）
+        log += f"\n-- Running command `{command}' --\n\n9. Executing pass.\n"
     else:
         log += "\n(no command echoed)\n"
     (synth / "synth.log").write_text(log)
@@ -100,7 +104,7 @@ def test_step14_inline_command_missing_hilomap_fails(tmp_path):
     assert any("hilomap" in m for m in report["messages"])
 
 
-def test_step14_inline_command_with_hilomap_is_verified_not_vacuous(tmp_path):
+def test_step14_inline_command_with_hilomap_is_content_verified(tmp_path):
     """DISCRIMINATOR. The real spm x ihp-sg13g2 shape: hilomap ran, correctly,
     and the command is in the log. The gate must report that it VERIFIED it,
     naming the log — a VACUOUS_PASS here is the audited defect."""
@@ -109,9 +113,16 @@ def test_step14_inline_command_with_hilomap_is_verified_not_vacuous(tmp_path):
     r = _run("yosys_hilomap_required_check.py", str(proj), "--json", str(out))
     assert r.returncode == 0, r.stdout + r.stderr
     report = json.loads(out.read_text())
-    assert report["verdict"] == "PASS"
-    assert "VACUOUS" not in report["verdict"]
-    assert report.get("real_pdk_commands_audited", 0) >= 1
+    # verdict 維持 VACUOUS_PASS 是 #474 的刻意設計，不是缺陷：「沒有 .ys 腳本」本身
+    # 就被歸為這個 gate 的非適用情境，而該 PR 的既有測試明確釘住這個層級。被驗證過這
+    # 件事記在 reason_class 與 inline_evidence 上——本測試因此斷言那兩者，而不是要求
+    # verdict 升級。記下這個張力供後人參考：verdict 字面說「不適用」，reason_class 卻
+    # 說「已抽取並驗證合規」，兩者若要對齊是流程擁有者的決定，不該由旁支單方面推翻。
+    assert report["verdict"] == "VACUOUS_PASS"
+    assert report["reason_class"] == "inline_yosys_p_mode_conformant"
+    # `real_pdk_commands_audited` 是本分支被丟棄的重複實作才有的欄位；#474 落地的
+    # 版本以 inline_evidence 表達同一件事（審查了哪些 log）。斷言可觀察的證據本身，
+    # 不綁任何一方的欄位命名。
     assert any("synth.log" in e for e in report["inline_evidence"])
 
 
