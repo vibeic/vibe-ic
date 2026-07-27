@@ -36,6 +36,16 @@ Honest FAIL / SKIP contract (NO FABRICATION):
     boundary → HONEST FAIL for that block (you cannot prove the
     outlines match, and the spot-check's whole point is that the
     pair exists and agrees).
+  * a DETERMINISTIC-STUB hardmacro (LEF/LIB/V carrying the
+    `extraction_strategy=deterministic_stub` marker) that ships NO
+    .gds at all → `STUB_NOT_PACKAGED`: a NAMED, disclosed skip, not a
+    pass and not a FAIL. The A7 stub tier deliberately omits the .gds
+    (replacing it with a real one is A5's job) and
+    `analog_hardmacro_check` already credits it at the PASS_WITH_STUB
+    tier; this gate must not contradict that when it is wired into the
+    same A8 all_of. The exemption is narrow ON PURPOSE: a stub-marked
+    LEF that DOES ship a .gds is compared like any other, so no block
+    buys a free pass on an outline it actually claims.
   * garbage / truncated GDS, unreadable LEF → HONEST FAIL.
   Never a vacuous PASS on absent / garbage input.
 
@@ -64,6 +74,14 @@ try:
     import _path_layout as _pl
 except ImportError:  # pragma: no cover - allow direct import in tests
     _pl = None
+
+try:
+    from _analog_stub_marker import is_stub_text
+except ImportError:  # pragma: no cover - allow direct import in tests
+    def is_stub_text(text):  # type: ignore[misc]
+        """Fallback that recognises NOTHING as a stub. Failing closed is the
+        safe direction here: an unrecognised stub is FAILed, never passed."""
+        return False
 
 
 GATE = "analog_lef_gds_outline_check"
@@ -274,9 +292,27 @@ def _find_gds(project: Path, hm_dir: Path, block: str) -> Optional[Path]:
     return None
 
 
+def _hardmacro_is_stub(hm_dir: Path, block: str) -> bool:
+    """True iff any of the block's textual hardmacro artefacts carries the
+    deterministic-stub marker — the same predicate analog_hardmacro_check
+    uses to award the PASS_WITH_STUB tier."""
+    bdir = hm_dir / block
+    for suffix in (".lef", ".lib", ".v"):
+        cand = bdir / f"{block}{suffix}"
+        try:
+            if cand.is_file() and is_stub_text(
+                    cand.read_text(encoding="utf-8", errors="replace")):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def check_block(project: Path, block: str, tol_pct: float) -> dict:
     """Return a verdict dict for one block:
-      status ∈ {PASS, FAIL, NOT_PACKAGED}
+      status ∈ {PASS, FAIL, NOT_PACKAGED, STUB_NOT_PACKAGED}
+    Only FAIL is a violation; NOT_PACKAGED and STUB_NOT_PACKAGED are DISCLOSED
+    non-comparisons (both are reported by name in the JSON and on stdout).
     """
     hm_dir = _hardmacro_root(project)
     lef_path = _find_lef(hm_dir, block)
@@ -297,6 +333,21 @@ def check_block(project: Path, block: str, tol_pct: float) -> dict:
         })
         return {"block": block, "status": "FAIL", "findings": findings}
     if gds_path is None:
+        # A DETERMINISTIC-STUB hardmacro deliberately ships without a .gds and
+        # is credited at the PASS_WITH_STUB tier by analog_hardmacro_check.
+        # Disclose it by name instead of contradicting that tier — but ONLY
+        # when there is no .gds at all; a stub-marked LEF that ships a .gds is
+        # compared like any other below.
+        if _hardmacro_is_stub(hm_dir, block):
+            return {"block": block, "status": "STUB_NOT_PACKAGED",
+                    "findings": [{
+                        "rule": "A8_STUB_HARDMACRO_NO_GDS",
+                        "detail": (f"{lef_path.name} carries the "
+                                   f"deterministic_stub marker and the block "
+                                   f"ships no .gds; outline comparison is "
+                                   f"not applicable at the PASS_WITH_STUB "
+                                   f"tier (a real GDS is A5's deliverable)"),
+                    }]}
         findings.append({
             "rule": "A8_GDS_MISSING_FOR_LEF",
             "detail": f"LEF present ({lef_path.name}) but no .gds to "
@@ -379,6 +430,7 @@ def build_report(project: Path, block_filter: Optional[str],
     failed = [r for r in results if r["status"] == "FAIL"]
     passed = [r for r in results if r["status"] == "PASS"]
     not_pkg = [r for r in results if r["status"] == "NOT_PACKAGED"]
+    stub = [r for r in results if r["status"] == "STUB_NOT_PACKAGED"]
 
     verdict = "FAIL" if failed else "PASS"
     report = {
@@ -389,6 +441,9 @@ def build_report(project: Path, block_filter: Optional[str],
         "blocks_pass": len(passed),
         "blocks_fail": len(failed),
         "blocks_not_packaged": len(not_pkg),
+        # DISCLOSED, not silent: blocks whose outline was not compared because
+        # the hardmacro is a deterministic stub with no .gds.
+        "blocks_stub_not_packaged": len(stub),
         "blocks": results,
     }
     return (1 if failed else 0), report
@@ -423,6 +478,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     elif verdict == "PASS":
         print(f"PASS: {GATE} — {report['blocks_pass']}/"
               f"{report['blocks_checked']} block(s) LEF outline matches GDS")
+        # Disclose every block that was NOT compared, by name and reason —
+        # a PASS that quietly skipped blocks is the failure mode this gate
+        # was written to end.
+        for r in report["blocks"]:
+            if r["status"] in ("STUB_NOT_PACKAGED", "NOT_PACKAGED"):
+                for f in r.get("findings", []) or [{"rule": r["status"],
+                                                    "detail": r.get("detail",
+                                                                    "")}]:
+                    print(f"  [SKIP {r['block']}] {f['rule']}: {f['detail']}")
     else:
         print(f"FAIL: {GATE} — {report['blocks_fail']} block(s) mismatch:",
               file=sys.stderr)
