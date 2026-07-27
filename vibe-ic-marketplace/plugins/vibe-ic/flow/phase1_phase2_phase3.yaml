@@ -606,10 +606,22 @@ steps:
     gate:
       all_of:
         - files_exist: ["phase2/stage1/fpga/output_files/*.sof"]
-        # quartus_map_audit takes report-path positional; glob expands in compliance gate (cwd=project).
-        # Audit produces findings; non-zero exit allowed when JSON report is present and reviewed
-        # under the waiver mechanism. Here we require only the JSON exists + .sof exists.
         - files_exist: ["reports/phase2/fpga/quartus_map_audit.json"]
+        # `quartus_map_audit` has been declared in this step's `programs:` list
+        # since Wave 82, and NOTHING ever executed it. The audit JSON was
+        # hand-written by design_one_shot_runner as
+        # `"PASS" if fpga_compile.status == "PASS" else "SKIP"` — a verdict
+        # restated from another step's status, on a *.map.rpt the scanner never
+        # opened. Requiring only that the JSON EXISTS meant nothing on disk
+        # could contradict it.
+        #
+        # Gate mode re-scans every *.map.rpt itself, so a hand-written
+        # `audited: true, findings: []` cannot buy a PASS either. It exits 0
+        # with a `no-build` disclosure when there is no .sof at all: this leg
+        # audits a build, it never certifies that one happened — the .sof
+        # requirement stays with the files_exist leg above and the #607/#663
+        # board-absent capability-gap waiver, both unchanged.
+        - program_exit_zero: "quartus_map_audit --project . --json reports/phase2/gates/quartus_map_audit.json"
         # fpga_verification_audit only fires when the human report exists;
         # not all projects ship one (FPGA-skip projects, sub-agent runs
         # without a board). Skips harmlessly via condition_files_exist.

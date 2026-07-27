@@ -101,6 +101,8 @@ import rtl_provenance as _rtl_prov  # authored-RTL guard for phase2/stage1/rtl/
 # rather than carrying a divergent copy.
 import synth_frontend as _sf
 import lec_gate_netlist_select as _lec_gns  # ATPG-cut predicate (diagnosis only)
+import _yosys_stat as _ystat  # shared yosys `stat` parser (step 9 stats.json)
+import quartus_map_audit as _qma  # step 6 .map.rpt silent-failure scanner
 
 # Path inside the iic-osic-tools container where the EDA tools live (yosys
 # + the slang plugin, sv2v, verilator). Mirrors phase3_one_shot_runner.
@@ -8141,6 +8143,27 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                  f"-flatten`. Detail: {tail}"),
                 [str(out_v), str(log)],
                 extras={"synth_frontend": synth_frontend})
+        # Step 9 declares `phase2/stage2/synth/area.rpt OR
+        # phase2/stage2/synth/stats.json` as a required output, and NOTHING in
+        # the plugin has ever written either path (every area.rpt is the
+        # phase-3 OpenROAD one). Post-#455 that made step 9 report MISSING on
+        # every run — including this one, where synthesis genuinely succeeded
+        # and yosys `stat` printed the numbers straight into the log we already
+        # keep. Persist the measurement the tool already made.
+        #
+        # ANTI-FABRICATION: `build_stats_payload` returns None when the capture
+        # carries no yosys stat line at all (the docker-fallback path can
+        # return rc=0 with an empty stdout capture). No stat block => NO
+        # artefact, so step 9 stays honestly MISSING rather than gaining a
+        # fabricated zero on an unmeasured synthesis.
+        _ystat.emit_stats_json(
+            synth_dir,
+            out + "\n" + err,
+            log_rel="phase2/stage2/synth/yosys.log",
+            netlist_rel="phase2/stage2/synth/netlist.v",
+            tool="yosys",
+            frontend=synth_frontend,
+        )
         _pass_extras = {"synth_frontend": synth_frontend}
         if _prune_advisory:  # ORGANIC #778 — surface the over-broad-tail advisory
             _pass_extras["catalog_glue_prune_advisory"] = _prune_advisory
@@ -9814,6 +9837,21 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
     return results
 
 
+def _sha256_file(path: Path) -> Optional[str]:
+    """``sha256:<hex>`` of a file, matching the DE10 driver's own
+    `burn_provenance.sof_sha256` format and `fpga_on_board_attestation_check`'s
+    `_sha256`. None on any IO error — never a fabricated digest."""
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return f"sha256:{h.hexdigest()}"
+
+
 def step_emit_phase2_manifests(project: Path,
                                 plan: List[StepResult],
                                 top_name: Optional[str] = None,
@@ -10178,8 +10216,31 @@ def step_emit_phase2_manifests(project: Path,
     # not run" (never attempted) and 12 carry "qsf missing — caller must
     # produce it" (attempted and blocked, which is somebody's bug). Both said
     # SKIP, and nothing downstream could tell them apart.
-    w("reports/phase2/fpga/quartus_map_audit.json", {
-        "verdict": "PASS" if sof_present else "SKIP",
+    #
+    # THE AUDIT NOW RUNS. Until v1.7.36 this emitter restated fpga_compile's
+    # status as the audit verdict — `"PASS" if sof_present else "SKIP"` — and
+    # `programs/quartus_map_audit.py` (declared in step 6's `programs:` list,
+    # and the only thing in the plugin that knows the Stuck-at-GND /
+    # Warning(10030) / Warning(10855) / lost-fanout patterns) was never
+    # executed by any runner or gate. A Quartus compile that returns 0 errors
+    # while having optimised a register to a constant or dropped an `initial`
+    # block is EXACTLY the case the scanner exists for, and it recorded
+    # `verdict: PASS` on it. The scanner, its patterns and its tests already
+    # existed; only the call site was missing.
+    #
+    # The three verdict shapes, and what each one is allowed to claim:
+    #   sof + map.rpt  → scan really ran; verdict PASS/FAIL from the FINDINGS,
+    #                    `audited: true`, findings carried in the artefact.
+    #   sof, no map.rpt→ verdict SKIP with sof_present TRUE and
+    #                    skip_reason="map_rpt_absent" — an unscanned build is
+    #                    never certified. (`fpga_skip_disclosed` requires
+    #                    sof_present is False, so this shape cannot be mistaken
+    #                    for the #607/#663 board-absent cap-gap disclosure.)
+    #   no sof         → the pre-existing disclosed-skip shape, byte-compatible
+    #                    (verdict SKIP + sof_present False + skip_reason), which
+    #                    four consumers key on. Fields are ADDED, never removed.
+    _audit_payload: Dict[str, Any] = {
+        "verdict": "SKIP",
         "sof_present": sof_present,
         "skip_reason": (None if sof_present
                         else "not_attempted" if fpga_compile_step is None
@@ -10187,7 +10248,36 @@ def step_emit_phase2_manifests(project: Path,
         "compile_log": "fpga/compile.log",
         "evidence": (fpga_compile_step.detail if fpga_compile_step
                      else "fpga_compile not run"),
-    })
+        "audited": False,
+        "map_reports": [],
+        "findings": [],
+        "finding_count": 0,
+    }
+    if sof_present:
+        try:
+            _scanned = _qma.scan_project(project)
+        except Exception as _exc:  # a scan error must never crash the runner
+            _scanned = {"audited": False, "map_reports": [], "findings": [],
+                        "finding_count": 0, "scan_error": repr(_exc)}
+        _audit_payload.update(_scanned)
+        if _scanned.get("audited"):
+            _audit_payload["verdict"] = (
+                "FAIL" if _scanned["finding_count"] else "PASS")
+            _audit_payload["skip_reason"] = None
+            if _scanned["finding_count"]:
+                _rules = sorted({f["rule"] for f in _scanned["findings"]})
+                _audit_payload["evidence"] = (
+                    f"{_scanned['finding_count']} silent-failure indicator(s) "
+                    f"in {', '.join(_scanned['map_reports'])}: "
+                    f"{', '.join(_rules)}")
+        else:
+            # A .sof with no .map.rpt to scan. NOT a PASS — nothing was read.
+            _audit_payload["skip_reason"] = "map_rpt_absent"
+            _audit_payload["evidence"] = (
+                "compile produced a .sof but no *.map.rpt under "
+                "phase2/stage1/fpga/output_files/ — nothing to audit, so this "
+                "build is NOT certified clean")
+    w("reports/phase2/fpga/quartus_map_audit.json", _audit_payload)
     usb_hid_tester_step = by_name.get("usb_hid_tester_verify")
     fpga_burn_step = by_name.get("fpga_burn")
 
@@ -10279,9 +10369,58 @@ def step_emit_phase2_manifests(project: Path,
     # so Step 39's json_field_true(on_board_pass.json,
     # "all_scenarios_passed") clears, plus review_required+ticket+
     # evidence so the PASS_WITH_WAIVERS audit trail is honest.
+    def _stage_final_bitstream(abs_sof: Optional[str]) -> Optional[Path]:
+        """Copy the bitstream fpga_burn ACTUALLY programmed to the final
+        sign-off path, and return it.
+
+        Step 39 declares `phase2/stage1/fpga/final/*.sof` as a required output
+        and `fpga_on_board_attestation_check`'s own docstring documents
+        `bitstream_path: "phase2/stage1/fpga/final/<name>.sof"` — yet NO code
+        in the plugin ever wrote a file under any `fpga/final` directory (a
+        third path, `_path_layout.fpga_final_dir` → `phase3/stage4/fpga`, was
+        only ever `mkdir`ed). Post-#455 (required_outputs is ALL-of-N) that
+        made a genuinely successful on-board sign-off report MISSING.
+
+        ANTI-FABRICATION: this only ever copies a file fpga_burn reported as
+        PASS and that exists on disk. No burn (or no bitstream) ⇒ returns None
+        ⇒ the manifest's bitstream fields stay blank and step 39 fails
+        correctly, exactly as before. Staging is a copy, never a move: step 6's
+        early-prototype artefact stays at
+        `phase2/stage1/fpga/output_files/*.sof` so the prototype and the final
+        sign-off remain distinguishable.
+        """
+        if not abs_sof:
+            return None
+        if not (fpga_burn_step is not None
+                and fpga_burn_step.status == "PASS"):
+            return None
+        src = Path(abs_sof)
+        if not src.is_file():
+            return None
+        try:
+            dst_dir = _pl.fpga_final_dir(project)
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            dst = dst_dir / src.name
+            if dst.resolve() == src.resolve():
+                return dst
+            dst.write_bytes(src.read_bytes())
+            return dst
+        except OSError:
+            return None
+
     prov = _burn_provenance()
-    bs_rel = _bitstream_path_rel(prov.get("sof_path"))
-    bs_sha = prov.get("sof_sha256")
+    _final_sof = _stage_final_bitstream(prov.get("sof_path"))
+    # The attestation check hashes whatever `bitstream_path` names, so the sha
+    # must be taken on the STAGED copy or every attestation would flip to
+    # bitstream-hash-mismatch. A byte copy hashes identically, but recompute
+    # rather than assume — the manifest has to be self-consistent with the file
+    # it points at, not with the file it was copied from.
+    if _final_sof is not None:
+        bs_rel = _bitstream_path_rel(str(_final_sof))
+        bs_sha = _sha256_file(_final_sof) or prov.get("sof_sha256")
+    else:
+        bs_rel = _bitstream_path_rel(prov.get("sof_path"))
+        bs_sha = prov.get("sof_sha256")
     board = _board_string(prov)
     burn_at = prov.get("burn_at")
     scenarios = _scenarios_from_usb_hid_tester()
