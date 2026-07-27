@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""Step-30 ERC + sign-off density-rule verification (real substance).
+"""Step-31 ERC + sign-off density-rule verification (real substance).
 
-This is the Step-30 *physical-verification* density + ERC checker. It is a
-DIFFERENT check from `metal_fill_density_check` (Step 33): Step 30 runs BEFORE
-metal fill, so `filled.def` / `metal_fill.done` do not exist yet and the
-fill-marker logic of `metal_fill_density_check` would wrongly FAIL here.
+This is the Step-31 *physical-verification* density + ERC checker. It is a
+DIFFERENT check from `metal_fill_density_check` (Step 34): the flow's step
+ORDER puts Step 31 before Step 34, so this checker must not key off
+`filled.def` / `metal_fill.done` — the fill-marker logic of
+`metal_fill_density_check` would wrongly FAIL here.
+
+The density artefact it reads, reports/density.{json,rpt}, is written by the
+metal-fill emitter and is declared as Step 34's required_output. The runner
+emits metal fill before the ERC report inside one pass, so the artefact is on
+disk when this gate runs; when it genuinely is not, that is DENSITY_MISSING
+(ERROR, rc=1) — see the exit-code policy in main().
 
 What this verifies (no fabrication, real parsing of the produced artefact):
 
-  DENSITY sub-check (gate condition: a density report exists):
+  DENSITY sub-check (UNCONDITIONAL — see the exit-code policy in main()):
     * The density artefact (reports/density.json or reports/density.rpt, also
       reports/phase3/...) must parse, be non-empty, carry a recognizable EDA
       tool provenance signature, AND contain a real numeric density metric.
@@ -186,7 +193,7 @@ def _check_density(project_dir: Path, findings: List[Finding], stats: dict) -> N
         findings.append(Finding(
             "ERROR", "DENSITY_MISSING",
             "No density artefact (reports/density.json or reports/density.rpt) "
-            "found — the Step-30 density sub-check cannot verify substance"))
+            "found — the Step-31 density sub-check cannot verify substance"))
         return
 
     stats["density_checked"] = True
@@ -389,7 +396,7 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
 
 def main(argv: list = None) -> int:
     ap = argparse.ArgumentParser(
-        description="Step-30 ERC + sign-off density-rule verification")
+        description="Step-31 ERC + sign-off density-rule verification")
     ap.add_argument("project_dir", help="Project root directory")
     ap.add_argument("--json", default=None, help="JSON report output path")
     args = ap.parse_args(argv)
@@ -410,15 +417,17 @@ def main(argv: list = None) -> int:
     print(out)
 
     # Exit code policy (honest, never vacuous):
-    #   * The Step-30 gate fires this checker only when reports/density.rpt
-    #     exists, so a missing density artefact at runtime is unexpected and
-    #     is recorded as DENSITY_MISSING (ERROR) -> rc=1 (honest FAIL), NOT a
-    #     vacuous pass on absence.
+    #   * The Step-31 gate fires this checker UNCONDITIONALLY (vibe-ic#220 made
+    #     it a plain `program_exit_zero`; it used to be conditional on one of
+    #     the density/ERC artefacts already existing, which disarmed exactly the
+    #     absence case it is here to catch). A missing density artefact is
+    #     therefore recorded as DENSITY_MISSING (ERROR) -> rc=1 (honest FAIL),
+    #     NOT a vacuous pass on absence.
     #   * rc=2 (SKIP) is reserved for the genuine "step did not apply" case:
     #     zero findings AND nothing examined (no density artefact present and
     #     no ERC report). Because a missing density artefact is an ERROR, this
-    #     SKIP path is only reachable when invoked outside the gate condition
-    #     and there is literally nothing to check.
+    #     SKIP path is unreachable from the Step-31 gate and is only reached
+    #     when the program is invoked directly with literally nothing to check.
     has_error = report["summary"]["errors_count"] > 0
     nothing_examined = (not stats["density_checked"]
                         and not stats["erc_checked"])

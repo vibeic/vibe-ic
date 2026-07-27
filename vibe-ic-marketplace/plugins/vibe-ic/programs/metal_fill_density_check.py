@@ -1,5 +1,25 @@
 #!/usr/bin/env python3
-"""Verify metal fill was inserted and density is within bounds."""
+"""Verify metal fill was inserted, and judge any PER-LAYER density it carries.
+
+WHAT THIS GATE DOES AND DOES NOT MEASURE
+----------------------------------------
+It reads the fill artefacts (filled.def / metal_fill.done) and the fill
+emitter's own reports/density.{json,rpt}, and it substantiates that the fill
+achieved SOMETHING (fillers placed, or the DEF grew, or rows were already
+full, or an attested sparse-die skip).
+
+The foundry's per-LAYER CMP density window is a different measurement, and
+this gate applies it only when the density artefact actually carries per-layer
+numbers. The OpenROAD filler_placement report normally does NOT: it carries
+row/core utilization, which is not metal density. The summary used to report
+``density_checked: true`` for that case — true only in the sense that a file
+was opened — so a run in which not one per-layer density value was ever
+examined read as though the density rule had been verified. Measured on the
+real spm x ihp-sg13g2 run: layers_ok=0, layers_bad=0, pass=true, and
+``density_checked: true``. The summary now says both things separately
+(``density_artefact_read`` vs ``per_layer_density_verified``) and names, in a
+NAMED INFO finding, who does judge the per-layer rule when this gate does not.
+"""
 from __future__ import annotations
 
 import argparse
@@ -41,8 +61,14 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
             project_dir / "reports" / "density.rpt").exists():
         density_rpt = project_dir / "reports" / "density.rpt"
 
+    # `density_artefact_read` = a density artefact was opened (the old
+    # `density_checked`, renamed because that name asserted a per-layer
+    # verification the flag never carried). `per_layer_density_verified` is
+    # derived after the parse: True only when at least one real per-layer CMP
+    # density value was examined against the window.
     stats = {"fill_marker": False, "filled_larger": None,
-             "density_checked": False, "layers_ok": 0, "layers_bad": 0,
+             "density_artefact_read": False, "per_layer_density_verified": False,
+             "layers_ok": 0, "layers_bad": 0,
              "filled_byte_identical": None}
 
     if not filled_def.exists() and not fill_done.exists():
@@ -78,7 +104,7 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     filler_n = None
     row_util = None
     if density_json.exists():
-        stats["density_checked"] = True
+        stats["density_artefact_read"] = True
         try:
             data = json.loads(density_json.read_text())
         except (json.JSONDecodeError, OSError) as exc:
@@ -124,10 +150,32 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
                         f"Layer {name} density {density:.1f}% outside "
                         f"[{_MIN_DENSITY}%, {_MAX_DENSITY}%]"))
     elif density_rpt.exists():
-        stats["density_checked"] = True
+        stats["density_artefact_read"] = True
         if density_rpt.stat().st_size == 0:
             findings.append(Finding("WARNING", "EMPTY_RPT",
                                     "density.rpt is empty"))
+
+    # The honest per-layer answer, derived from what was ACTUALLY examined —
+    # not from whether a file existed.
+    stats["per_layer_density_verified"] = (
+        stats["layers_ok"] + stats["layers_bad"]) > 0
+    if stats["density_artefact_read"] and not stats["per_layer_density_verified"]:
+        # NAMED, non-blocking: the per-layer CMP window is a real rule and it
+        # IS enforced — by the KLayout sign-off DRC deck (met_min_ca_density,
+        # via drc_report_check at Step 31) and by metal_layer_density_check
+        # against reports/phase3/metal_density.json. It is simply not what THIS
+        # gate measured on this run, and the report must say so rather than
+        # leave a reader to infer it from layers_ok=0.
+        findings.append(Finding(
+            "INFO", "PER_LAYER_DENSITY_NOT_VERIFIED_HERE",
+            "the density artefact carries no per-layer metal CMP density "
+            f"(0 layer values examined; window [{_MIN_DENSITY}%, "
+            f"{_MAX_DENSITY}%] not applied by this gate) — it carries the "
+            "OpenROAD filler_placement row/core utilization instead. The "
+            "per-layer rule is judged by the KLayout sign-off DRC deck "
+            "(met_min_ca_density) and by metal_layer_density_check against "
+            "reports/phase3/metal_density.json, NOT here.",
+            details="per_layer_density_verified=false"))
 
     # ORGANIC-20260606 #445 — SUBSTANCE: a fill step that placed 0
     # fillers AND grew nothing AND has no in-window per-layer density
@@ -228,7 +276,12 @@ def build_report(findings: List[Finding], stats: dict,
         "project_dir": project_dir,
         "summary": {
             "fill_marker": stats["fill_marker"],
-            "density_checked": stats["density_checked"],
+            # Two separate facts. `density_artefact_read` is the old
+            # `density_checked` under a name that does not claim more than it
+            # knows; `per_layer_density_verified` is the claim a reader was
+            # previously invited to draw from it.
+            "density_artefact_read": stats["density_artefact_read"],
+            "per_layer_density_verified": stats["per_layer_density_verified"],
             "layers_ok": stats["layers_ok"],
             "layers_bad": stats["layers_bad"],
             "findings_count": len(findings),
