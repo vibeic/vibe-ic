@@ -42,9 +42,29 @@ Verdicts
 chip-AGNOSTIC: corner designators are matched by the same general convention
 patterns used by corner_coverage_audit.py; no PDK / vendor cell is hard-coded.
 
+Project mode (`--project`), added when this check was wired into the flow
+------------------------------------------------------------------------
+A flow gate CANNOT be conditioned on the hold artefact's existence: a project
+that produced no hold analysis at all is the very defect this check exists to
+name, and a `condition_files_exist` on that path would disable the check in
+exactly that case (`flow_condition_reachability_check` — the self-disabling
+condition guard — refuses that shape, and refused this one).
+
+So `--project <dir>` DISCOVERS every hold-analysis script/log in the project
+and judges ALL of them, which also closes a real gap: a flow can emit two hold
+views (the multi-corner OCV one and the SI-MCF re-run), and only one of them
+being FF-fed is not good enough. `_resolve_flow_liberty` in si_mcf_sta.py
+recovers its Liberty from the SETUP script, so the second view is precisely
+where an SS-fed hold analysis appears.
+
+Finding nothing is a DISCLOSED skip (rc 2) that prints every pattern searched
+— never a silent pass, and never a cry-wolf FAIL on a flow that names its hold
+artefacts differently.
+
 Usage
 -----
     python3 hold_corner_coverage_check.py <hold_tcl_or_log> [--json <out>]
+    python3 hold_corner_coverage_check.py --project . [--json <out>]
 """
 from __future__ import annotations
 
@@ -163,14 +183,107 @@ def evaluate(text: Optional[str]) -> Tuple[str, int, dict]:
     return "PASS", 0, report
 
 
+# ── --project discovery ─────────────────────────────────────────────────────
+# The SCRIPTS/LOGS that DRIVE a hold analysis. Report files (*.rpt) are
+# deliberately excluded: they carry the analysis RESULT, not the Liberty it was
+# fed, and mining them would invent verdicts from output text.
+_HOLD_GLOBS = (
+    "phase3/stage3/sta/*hold*.tcl",
+    "phase3/stage3/sta/*hold*.sdc",
+    "phase3/stage3/sta/*hold*.log",
+    "phase3/stage3/extracted/*hold*.tcl",
+    "phase3/stage3/extracted/*/*hold*.tcl",
+    "phase3/stage3/extracted/*/*hold*.log",
+    "phase3/stage3/sta/*/*hold*.tcl",
+)
+
+
+def discover_hold_artefacts(project: Path) -> List[Path]:
+    seen, out = set(), []
+    for pat in _HOLD_GLOBS:
+        for p in sorted(project.glob(pat)):
+            if p.is_file() and p not in seen:
+                seen.add(p)
+                out.append(p)
+    return out
+
+
+def _judge(p: Path) -> Tuple[str, int, dict]:
+    try:
+        text: Optional[str] = p.read_text(errors="replace")
+    except OSError:
+        text = None
+    verdict, rc, report = evaluate(text)
+    report["artefact"] = str(p)
+    return verdict, rc, report
+
+
+def _emit(report: dict, json_path: Optional[str]) -> None:
+    if not json_path:
+        return
+    outp = Path(json_path)
+    outp.parent.mkdir(parents=True, exist_ok=True)
+    outp.write_text(json.dumps(report, indent=2) + "\n")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Confirm hold analysis uses the FF (fast) corner")
-    ap.add_argument("hold_artefact",
+    ap.add_argument("hold_artefact", nargs="?", default=None,
                     help="hold-analysis Tcl / SDC / log that drives the "
                          "min-path (hold) check")
+    ap.add_argument("--project", default=None,
+                    help=("Project directory: discover and judge EVERY "
+                          "hold-analysis script/log in it. A flow gate cannot "
+                          "be conditioned on one artefact's existence without "
+                          "disabling itself in the case it exists to catch, so "
+                          "this is the mode the flow uses. Finding none is a "
+                          "DISCLOSED skip (rc 2) listing what was searched."))
     ap.add_argument("--json", help="write JSON report to this path")
     args = ap.parse_args(argv)
+
+    if args.project is not None:
+        project = Path(args.project)
+        if not project.is_dir():
+            print(f"ERROR: --project is not a directory: {project}",
+                  file=sys.stderr)
+            return 2
+        found = discover_hold_artefacts(project)
+        if not found:
+            report = {
+                "tool": _TOOL, "verdict": "SKIP", "reason": "NO_HOLD_ARTEFACT",
+                "message": ("no hold-analysis script/log found — nothing to "
+                            "judge. NOT a pass: this run has no evidence that "
+                            "hold was analysed at the fast corner."),
+                "searched": list(_HOLD_GLOBS), "artefacts": [],
+            }
+            _emit(report, args.json)
+            print(f"=== {_TOOL} === verdict: SKIP")
+            print(f"  {report['message']}")
+            print(f"  searched: {', '.join(_HOLD_GLOBS)}")
+            return 2
+        results = [_judge(p) for p in found]
+        failing = [r for r in results if r[0] == "FAIL"]
+        report = {
+            "tool": _TOOL,
+            "verdict": "FAIL" if failing else "PASS",
+            "artefacts_judged": len(results),
+            "artefacts": [r[2] for r in results],
+            "failing": [r[2]["artefact"] for r in failing],
+        }
+        _emit(report, args.json)
+        print(f"=== {_TOOL} === verdict: {report['verdict']}")
+        print(f"  hold artefacts judged: {len(results)}")
+        for v, _rc, rep in results:
+            corners = rep.get("hold_feed_corners") or []
+            print(f"  [{v}] {rep['artefact']} corners={corners}")
+            if v == "FAIL":
+                print(f"        FAIL [{rep.get('reason')}]: "
+                      f"{rep.get('message')}")
+        return 1 if failing else 0
+
+    if not args.hold_artefact:
+        ap.error("a hold artefact path is required unless --project is given")
 
     p = Path(args.hold_artefact)
     text: Optional[str]
@@ -185,10 +298,7 @@ def main(argv=None) -> int:
     verdict, rc, report = evaluate(text)
     report["artefact"] = str(p)
 
-    if args.json:
-        outp = Path(args.json)
-        outp.parent.mkdir(parents=True, exist_ok=True)
-        outp.write_text(json.dumps(report, indent=2) + "\n")
+    _emit(report, args.json)
     print(f"=== {_TOOL} === verdict: {verdict}")
     if report.get("hold_feed_corners"):
         print(f"  hold feed corners: {report['hold_feed_corners']}")

@@ -17,13 +17,39 @@ Detected constructs:
   6. `typedef`, `enum`, `struct`, `union` keywords
   7. `import` package statements
 
+Two verdicts, ONE exit code — and why `--fail-on` now exists
+-----------------------------------------------------------
+This program answers two unrelated questions and used to collapse both onto
+rc=1:
+
+  NEEDS_SV             informational. "read_verilog needs -sv." Not a defect;
+                       modern RTL is expected to hit this. It is also already
+                       ENFORCED elsewhere — `yosys_script_template_check`
+                       requires `-sv` on a read_verilog by default and is a
+                       wired Step-14 gate.
+  FAIL_UNPACKED_PORTS  a real defect. An unpacked-array port on a module port
+                       list; Yosys 0.64 chokes on it even WITH -sv, so
+                       synthesis will fail. No other program implements this
+                       rule (`rtl_hygiene_lint` has no unpacked-array-PORT
+                       rule; `synth_doctor` only classifies the yosys log
+                       AFTER the failure).
+
+Wiring the program as a blocking gate on the shared rc=1 would have failed
+every SystemVerilog design for a non-defect. `--fail-on unpacked-ports`
+scopes the exit code to the defect axis so the flow can block on it; the
+default (`--fail-on any`) is the historical behaviour, unchanged.
+
 Usage:
     python3 sv_compat_check.py --rtl-dir ./rtl/ --out-dir /tmp/check
     python3 sv_compat_check.py --rtl-dir ./rtl/ --out-dir /tmp/check --verbose
+    python3 sv_compat_check.py --rtl-dir ./rtl/ --out-dir /tmp/check \
+        --fail-on unpacked-ports        # flow-gate mode: block on the defect
 
 Exit codes:
-    0 = Plain Verilog OK (no SV constructs found)
-    1 = Needs -sv flag (SV constructs detected)
+    0 = Plain Verilog OK (no SV constructs found), or --fail-on
+        unpacked-ports and no unpacked-array port was found
+    1 = Needs -sv flag (SV constructs detected), or (either mode) an
+        un-waived unpacked-array port on a module port list
     2 = Usage / file error
 
 Generality: works for ANY Verilog/SystemVerilog design. No IC-specific logic.
@@ -414,6 +440,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help='Output directory for report JSON')
     parser.add_argument('--verbose', action='store_true',
                         help='Print findings to stdout')
+    parser.add_argument('--fail-on', choices=('any', 'unpacked-ports'),
+                        default='any',
+                        help=("Which finding class sets rc=1. `any` (default, "
+                              "historical) also fails on NEEDS_SV, which is "
+                              "informational rather than a defect. "
+                              "`unpacked-ports` scopes the exit code to the "
+                              "Yosys-fatal unpacked-array-port rule so the "
+                              "flow can gate on it; NEEDS_SV is then still "
+                              "reported on stdout and in the JSON, but does "
+                              "not fail."))
     args = parser.parse_args(argv)
 
     rtl_dir = Path(args.rtl_dir)
@@ -457,7 +493,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if report['needs_sv']:
         print(f"NEEDS_SV: {report['total_constructs']} SystemVerilog construct(s) found. "
               f"Use read_verilog -sv in Yosys.")
-        return 1
+        # `--fail-on unpacked-ports`: NEEDS_SV is reported but is NOT a defect
+        # (see the module docstring) — the -sv requirement itself is enforced
+        # by the wired yosys_script_template_check gate.
+        return 0 if args.fail_on == 'unpacked-ports' else 1
     else:
         print("PLAIN_VERILOG_OK: No SystemVerilog constructs detected.")
         return 0
