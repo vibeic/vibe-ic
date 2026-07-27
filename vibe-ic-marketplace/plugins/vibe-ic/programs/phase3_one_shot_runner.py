@@ -62,6 +62,7 @@ import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — 
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
+import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -7638,13 +7639,36 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # Record what this netlist was ACTUALLY synthesised from, so the next
     # run's cache-reuse decision compares CONTENT, not clocks (#349/#336).
     _write_synth_inputs_sidecar(netlist, _pl.rtl_dir(project))
+    # Lift the area figure out of the synthesis log and into the artefact the
+    # flow's synthesis step declares. This MUST happen here, inside the run:
+    # the log is a working file that publication does not necessarily carry,
+    # so a tool that scrapes it afterwards finds the number where the run
+    # happened and finds nothing in a fresh clone. Emitting it as a run output
+    # is what gets it into the published tree.
+    #
+    # The emitter REFUSES rather than guess when the log's area lines are all
+    # per-module locals with no design roll-up; in that case no artefact
+    # appears and the step's declared output stays honestly absent. A wrong
+    # area figure in a sign-off artefact is worse than no figure.
+    _area_stats = None
+    try:
+        _area_stats = _sas.emit_for_run(project, log, netlist)
+    except Exception:
+        _area_stats = None
+    _synth_evidence = [str(netlist), str(log)]
+    if _area_stats is not None:
+        _synth_evidence.append(str(_area_stats))
     return StepResult("synth", "PASS", time.time() - t0,
                       f"netlist={netlist.name} cells={cell_count} "
-                      f"frontend={synth_frontend}",
-                      [str(netlist), str(log)],
+                      f"frontend={synth_frontend}"
+                      + (f" area_stats={_area_stats.name}"
+                         if _area_stats is not None else " area_stats=none"),
+                      _synth_evidence,
                       extras={"synth_frontend": synth_frontend,
                               "reference_flow_qor_knobs": _rf_notes,
-                              "macro_define_decision": _macro_def})
+                              "macro_define_decision": _macro_def,
+                              "area_stats": (str(_area_stats)
+                                             if _area_stats else None)})
 
 
 # ---------------------------------------------------------------------------
