@@ -45,9 +45,10 @@ Failure rules:
   A5_LVS_NOT_MATCH         — lvs_match.flag reports a mismatch
 
 Project-level verdicts (no `--block`):
-  VACUOUS_PASS — `analog/analog_block_list.json` missing or empty, or
-                 EVERY declared block is still missing its layout (the
-                 step has not run at all → defer to skill `analog-layout`).
+  VACUOUS_PASS — no `analog_block_list.json` under `phase3/analog/` or
+                 `phase1/analog/`, or it declares no blocks; or EVERY
+                 declared block is still missing its layout (the step
+                 has not run at all → defer to skill `analog-layout`).
   INCOMPLETE   — SOME declared blocks produced a layout and others produced
                  none (exit 1). A5's own requirement was never met for the
                  uncovered blocks, so the gate must not certify the step:
@@ -63,8 +64,9 @@ from pathlib import Path
 from typing import List, Optional
 
 from _analog_a_check_common import (
+    BLOCK_LIST_ABSENT_REASON,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
-    artefact_missing_for_block, emit_pass, emit_fail, write_report,
+    artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
 )
 
 GATE = "analog_a5_layout_check"
@@ -149,33 +151,19 @@ def _lvs_flag_defect(path: Path) -> Optional[tuple[str, str]]:
     return None
 
 
-def emit_incomplete(gate: str, args, missing: List[dict],
-                    summary: dict) -> int:
-    """Project-level INCOMPLETE (exit 1): some declared blocks produced a
-    layout and others produced none. A gate may EXPLAIN an absent artefact
-    (the all-missing VACUOUS_PASS below does exactly that, naming the
-    upstream skill) but it may not CERTIFY the step done without one — so
-    partial coverage is neither PASS nor a deferral.
-
-    Kept local to this gate on purpose: the same helper is being added to
-    `_analog_a_check_common` by the sibling A2/A4 fixes, and duplicating a
-    9-line emitter is cheaper than three branches conflicting on one shared
-    file. Dedupe into the shared module once those land."""
-    report = {
-        "gate": gate,
-        "verdict": "INCOMPLETE",
-        **summary,
-        "findings": missing,
-    }
-    write_report(args.json, report)
-    blocks = ", ".join(sorted({str(f.get("block", "?")) for f in missing}))
-    print(f"INCOMPLETE: {gate} — "
-          f"{summary.get('blocks_pass', 0)}/"
-          f"{summary.get('blocks_checked', 0)} block(s) clean, "
-          f"{len(missing)} declared block(s) produced NO layout at all "
-          f"[{blocks}] — cannot certify A5; invoke skill `{SKILL}` for "
-          f"the uncovered block(s)", file=sys.stderr)
-    return 1
+# Project-level INCOMPLETE (exit 1) — some declared blocks produced a layout
+# and others produced none — is emitted by the SHARED
+# `_analog_a_check_common.emit_incomplete`, the same emitter A1-A4 use.
+#
+# An earlier fix shipped a byte-local copy of that emitter here, because the
+# shared helper was landing on a sibling branch at the same time and three
+# branches adding an identically-named function to one file would have
+# collided. Those branches have landed. The local copy produced a REPORT that
+# differed from A1-A4's for the same verdict: it carried no
+# `incomplete_blocks`, no `suggested_skill` and no `reason`, so a consumer
+# reading an A5 INCOMPLETE report could not learn which blocks were uncovered
+# or which skill to invoke, while the A1-A4 report told it both. Same verdict
+# string and same exit code, so nothing that keys on those is affected.
 
 
 # ORGANIC #144 — real-geometry parsing.
@@ -329,8 +317,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):
         return vacuous_pass(GATE, args,
-                            "phase3/analog/analog_block_list.json missing or "
-                            "empty; gate inapplicable.")
+                            BLOCK_LIST_ABSENT_REASON)
 
     blocks = select_blocks(blocks_all or [], args.block)
     if not blocks:
@@ -377,7 +364,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # that ONE matching block satisfies, so only this per-block gate can see
     # the uncovered blocks. Refuse to certify; name them instead.
     if missing_seen:
-        return emit_incomplete(GATE, args, missing_seen, summary)
+        return emit_incomplete(GATE, args, missing_seen, summary, SKILL)
     return emit_pass(GATE, args, summary)
 
 
