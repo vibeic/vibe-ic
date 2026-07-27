@@ -29448,6 +29448,217 @@ _RE_L4_NO_REGMAP = re.compile(
     r'不需\s*產生.*register\s*file')
 
 
+# v1.7.75 — for #507. L4 keeps every register the input DECLARED.
+#
+# `registers[:128]` was a bare slice with no stated rationale, and the
+# only thing it could ever do was drop registers without saying so. That
+# is tolerable for prose-derived entries — those come from heuristic
+# walkers and a runaway table is a real risk — but a register the input
+# DECLARES is the design's own statement, and dropping one is data loss
+# of exactly the kind #507 is about. The cap is kept for the heuristic
+# entries and raised, per-run, to admit every declared one; whatever it
+# still drops is written down.
+_L4_PROSE_REGISTER_CAP = 128
+_V1_7_75_DECLARED_STRATEGY = "hdl_typedef_enum_address_v1_7_75"
+
+
+def _v1_7_75_register_is_declared(reg: Any) -> bool:
+    """True when this L4 register carries an input DECLARATION."""
+    if not isinstance(reg, dict):
+        return False
+    strat = str(reg.get("extraction_strategy") or "")
+    if _V1_7_75_DECLARED_STRATEGY in strat:
+        return True
+    return bool(str(reg.get("declared_type") or "").strip())
+
+
+def _v1_7_75_cap_registers(
+        registers: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]],
+                                                  Dict[str, Any]]:
+    """Apply the L4 register cap without ever dropping a declared one.
+
+    Returns ``(kept, truncation_record)``. Declaration order is
+    preserved: the cap decides WHICH entries survive, never their order.
+    ``truncation_record["dropped"]`` is 0 when nothing was cut, and the
+    record is emitted either way so the absence of a cut is a stated
+    fact rather than an assumption.
+    """
+    total = len(registers)
+    keep_idx = set(range(min(total, _L4_PROSE_REGISTER_CAP)))
+    for i, reg in enumerate(registers):
+        if _v1_7_75_register_is_declared(reg):
+            keep_idx.add(i)
+    kept = [r for i, r in enumerate(registers) if i in keep_idx]
+    dropped = [r for i, r in enumerate(registers) if i not in keep_idx]
+    record: Dict[str, Any] = {
+        "cap": _L4_PROSE_REGISTER_CAP,
+        "collected": total,
+        "carried": len(kept),
+        "dropped": len(dropped),
+        "declared_never_dropped": True,
+        "dropped_names": [str(r.get("name") or "") for r in dropped[:32]],
+        "reason": (
+            "heuristic prose-derived registers beyond the cap were cut; "
+            "registers the input DECLARES are exempt from the cap"
+            if dropped else
+            "every collected register is carried; the cap did not bite"),
+    }
+    return kept, record
+
+
+def _v1_7_75_absorb_deduped_regmap_row(existing: Dict[str, Any],
+                                       row: Dict[str, Any]) -> bool:
+    """Keep what a deduped register-table row knew. Returns True if it
+    contributed anything.
+
+    Dropping a row because another source already carries its address
+    also drops everything ELSE that row carried: its own name for the
+    register, its access and description columns, and the evidence line
+    naming the document and the literal it was read from.
+
+    Measured for #507 — routing an address-valued `typedef enum` into L4
+    made the declaration the FIRST source for 145 addresses, and the
+    documentation table rows that AGREED with it were then dropped
+    whole. Twenty-one address literals left the input-completeness
+    denominator with them, and the doc that had been at 100% fell to
+    52%. The dedupe is right — two records at one address is an
+    ambiguous decode. The silence is not: a source that corroborates
+    another has still told you something.
+    """
+    contributed = False
+    name = str(row.get("name") or "").strip()
+    if name and name != str(existing.get("name") or "").strip():
+        aliases = existing.setdefault("also_named", [])
+        if isinstance(aliases, list) and name not in aliases:
+            aliases.append(name)
+            contributed = True
+    for key in ("access", "description", "reset_value", "default"):
+        val = row.get(key)
+        if (isinstance(val, str) and val.strip()
+                and not str(existing.get(key) or "").strip()):
+            existing[key] = val
+            contributed = True
+    ev = row.get("evidence")
+    if ev:
+        corr = existing.setdefault("corroborating_evidence", [])
+        if isinstance(corr, list) and ev not in corr:
+            corr.append(ev)
+            contributed = True
+    return contributed
+
+
+def _v1_7_75_merge_declared_register_bindings(
+        registers: List[Dict[str, Any]],
+        extracted: Dict[str, str],
+        evidence: Dict[str, List[Dict[str, str]]]) -> Dict[str, Any]:
+    """Route every ADDRESS-VALUED `typedef enum` into L4's registers[].
+
+    `CSR_<NAME> = 12'h<addr>` is a name bound to a register address, and
+    L4 is the layer that carries register addresses. Before #507 the
+    harvester had no branch for this shape at all, so 145 such bindings
+    in one measured package reached the L docs only where prose
+    elsewhere happened to repeat the name — 84 of them nowhere.
+
+    A binding whose address a prose walker ALREADY captured is not
+    duplicated: the existing record is stamped with the name and the
+    type the input declares it under, so the declaration corroborates
+    the prose entry instead of competing with it. Only an address no
+    entry carries is appended.
+
+    Chip-AGNOSTIC: the routing decision is `_hdl_enum.route_enum`, which
+    reads the member set's shape and never the type's name.
+    """
+    record: Dict[str, Any] = {
+        "bindings": 0,
+        "already_carried": 0,
+        "appended": 0,
+        "sources": [],
+    }
+    try:
+        declared_enums = _hdlenum.address_map_enums(extracted)
+    except Exception:
+        return record
+    if not declared_enums:
+        return record
+
+    by_address: Dict[int, Dict[str, Any]] = {}
+    for reg in registers:
+        if not isinstance(reg, dict):
+            continue
+        addr = reg.get("address_int")
+        if isinstance(addr, int) and not isinstance(addr, bool):
+            by_address.setdefault(addr, reg)
+
+    for enum in declared_enums:
+        src = str(enum.get("source_file") or "")
+        type_name = str(enum.get("type_name") or "")
+        width = enum.get("declared_width")
+        bindings = enum.get("bindings") or []
+        src_ref = f"input/docs/{src}" if src else "input/docs"
+        n_new = 0
+        n_seen = 0
+        for binding in bindings:
+            name = str(binding.get("name") or "").strip()
+            value = binding.get("value")
+            if not name or not isinstance(value, int):
+                continue
+            record["bindings"] += 1
+            prior = by_address.get(value)
+            if prior is not None:
+                # The prose walker already carries this address. Stamp
+                # the declaration onto it rather than emitting a second
+                # register at the same address — an ambiguous decode is
+                # exactly what `l4_regmap_phase2_emitter_contract_check`
+                # blocks on.
+                n_seen += 1
+                prior.setdefault("declared_name", name)
+                prior.setdefault("declared_type", type_name)
+                corr = prior.setdefault("corroborating_evidence", [])
+                if isinstance(corr, list):
+                    stamp = f"{src_ref} (typedef enum {type_name})"
+                    if stamp not in corr:
+                        corr.append(stamp)
+                continue
+            reg = {
+                "address": f"0x{value:x}",
+                "address_int": value,
+                "name": name,
+                "declared_name": name,
+                "declared_type": type_name,
+                "access": "",
+                "default": "",
+                "description": "",
+                "fields": [],
+                "width_bits": width,
+                "evidence": f"{src_ref} (typedef enum {type_name})",
+                "extraction_strategy": _V1_7_75_DECLARED_STRATEGY,
+            }
+            registers.append(reg)
+            by_address[value] = reg
+            n_new += 1
+        record["already_carried"] += n_seen
+        record["appended"] += n_new
+        record["sources"].append({
+            "type_name": type_name,
+            "source_file": src_ref,
+            "declared_width": width,
+            "bindings": len(bindings),
+            "already_carried": n_seen,
+            "appended": n_new,
+            "routing_rule": (enum.get("routing") or {}).get("rule"),
+            "routing_reason": (enum.get("routing") or {}).get("reason"),
+        })
+        ev = evidence.setdefault(src_ref, [])
+        if len(ev) < 24:
+            ev.append({
+                "literal": (f"typedef enum {type_name} — "
+                            f"{len(bindings)} register address binding(s)"),
+                "label": ("register address bindings declared by a staged "
+                          "HDL input (v1.7.75)"),
+            })
+    return record
+
+
 def gen_l4_regmap(project: Path,
                   extracted: Dict[str, str]) -> LDocResult:
     """L4: register / OTP layout + IP macro reference.
@@ -31406,11 +31617,23 @@ def gen_l4_regmap(project: Path,
     # only ensure they run before this call. Chip-AGNOSTIC.
     _v1_6_591_backfill_reset_value_kind(registers)
 
+    # v1.7.75 — for #507. Address-valued `typedef enum` declarations in
+    # a staged HDL input are register-map bindings; route them here,
+    # after every prose walker, so an address the prose already carries
+    # is corroborated rather than duplicated.
+    _v1_7_75_declared = _v1_7_75_merge_declared_register_bindings(
+        registers, extracted, evidence)
+    if _v1_7_75_declared["appended"]:
+        no_registers_in_input = False
+    _v1_7_75_registers, _v1_7_75_cap_record = (
+        _v1_7_75_cap_registers(registers))
+
     content = {
         "schema_version": 2,
         "doc_class": "regmap",
         "ic_name": ic_name,
-        "registers": registers[:128],
+        "registers": _v1_7_75_registers,
+        "register_cap_v1_7_75": _v1_7_75_cap_record,
         "no_registers_in_input": no_registers_in_input,
         "otp_layout": otp_layout,
         "no_otp_layout_in_input": no_otp_layout_in_input_l4,
@@ -31425,6 +31648,46 @@ def gen_l4_regmap(project: Path,
         # these for CPU-internal state definitions without
         # generating bogus address-decode logic.
         "internal_registers": _v1_6_567_internal_registers[:256],
+    }
+
+    # v1.7.75 — for #507. L4's DENOMINATOR.
+    #
+    # `l4_regmap_enumerated_values_typed_check` reported PASS — "2
+    # multi-bit enum-eligible fields all carry typed code->meaning
+    # enumerated_values" — on an L4 that was missing 84 of the 145
+    # register address bindings its own input declares. The gate was not
+    # wrong: it had no view of how many registers the input declares, so
+    # a shortfall of any size sat behind its PASS. A numerator with no
+    # denominator.
+    #
+    # This block is the denominator, measured at emit time from the
+    # input's own declarations. It is DESCRIPTIVE — the gate re-derives
+    # both sides from the input and the emitted L4 rather than trusting
+    # these numbers, because a denominator a producer computes for its
+    # own consumer can only ever confirm itself.
+    _v1_7_75_carried_names = {
+        str(r.get("declared_name") or "")
+        for r in _v1_7_75_registers if isinstance(r, dict)
+    }
+    _v1_7_75_declared_names = [
+        str(b.get("name") or "")
+        for e in (_hdlenum.address_map_enums(extracted) or [])
+        for b in (e.get("bindings") or [])
+    ]
+    content["input_declared_registers"] = {
+        "declared": len(_v1_7_75_declared_names),
+        "carried_at_emit": sum(1 for n in _v1_7_75_declared_names
+                               if n and n in _v1_7_75_carried_names),
+        "absent_at_emit": sorted(
+            n for n in _v1_7_75_declared_names
+            if n and n not in _v1_7_75_carried_names),
+        "already_carried_by_prose": _v1_7_75_declared["already_carried"],
+        "appended": _v1_7_75_declared["appended"],
+        "sources": _v1_7_75_declared["sources"],
+        "measured_at": "gen_l4_regmap emit",
+        "authority": (
+            "descriptive only — l4_regmap_declared_register_coverage_check "
+            "re-derives both sides independently"),
     }
 
     # v1.6.95 — issue #27 Capability 1. Lift README key-length facts
@@ -49592,15 +49855,22 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
     # Existing addr_hex set covers both the new (addr_hex) and legacy
     # (address) row shapes, so we never duplicate against the existing
     # _reg_row_re_a/b/c matches that emitted "address": "0xNN".
+    #
+    # v1.7.75 — for #507. Keep the RECORD as well as the address, so a
+    # deduped row can hand over what it knew (see
+    # `_v1_7_75_absorb_deduped_regmap_row`).
     existing_addrs = set()
+    existing_by_addr: Dict[str, Dict[str, Any]] = {}
     for r in registers:
         if not isinstance(r, dict):
             continue
         ah = r.get("addr_hex") or r.get("address")
         if isinstance(ah, str):
             existing_addrs.add(ah.lower())
+            existing_by_addr.setdefault(ah.lower(), r)
 
     appended = 0
+    absorbed = 0
     # #616 — also re-scan `.md` register docs (e.g. an auto-generated GFM
     # `*_registers.md`), not only `.txt`; the GFM pipe-table parser lives in
     # extract_regmap_table and needs the .md content to reach it.
@@ -49623,12 +49893,21 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
             if not ah:
                 continue
             if ah in existing_addrs:
+                # v1.7.75 — for #507. Another source already carries
+                # this address. Take what the row knew before dropping
+                # it; a dedupe that discards a whole record discards
+                # every fact on it, not just the duplicated one.
+                prior = existing_by_addr.get(ah.lower())
+                if prior is not None and _v1_7_75_absorb_deduped_regmap_row(
+                        prior, row):
+                    absorbed += 1
                 continue
             registers.append(row)
             existing_addrs.add(ah)
+            existing_by_addr.setdefault(ah.lower(), row)
             appended += 1
 
-    if appended == 0:
+    if appended == 0 and absorbed == 0:
         return
 
     l4["registers"] = registers
@@ -56615,6 +56894,40 @@ def main() -> int:
         if cov_cp.returncode == 1:
             cov_gate_failed = True
 
+    # v1.7.75 — for #507. Publish the routing decision for EVERY
+    # `typedef enum` the staged HDL inputs declare, before the layers
+    # that consume them are generated.
+    #
+    # The harvester used to route by type-name vocabulary alone, which
+    # decided two of the twenty-five declarations in one measured
+    # package. The other twenty-three had no destination AND no record:
+    # their members reached the L docs only where prose elsewhere
+    # happened to name them, so a design could lose 84 declared register
+    # addresses with nothing anywhere reporting a shortfall. Every
+    # decision — including "no layer consumes this shape" — is now
+    # written down with its reason, and `_hdl_enum.EnumRouting` refuses
+    # to be constructed without one.
+    try:
+        _v1_7_75_inventory = _hdlenum.routing_inventory(extracted)
+    except Exception as _exc:  # pragma: no cover — defensive
+        _v1_7_75_inventory = []
+        print(f"      hdl_enum_routing: SKIP (not derivable: {_exc})")
+    if _v1_7_75_inventory:
+        _v1_7_75_summary = _hdlenum.routing_summary(_v1_7_75_inventory)
+        _v1_7_75_path = _pl.report_path(
+            project, "phase1/hdl_enum_routing.json")
+        _v1_7_75_path.parent.mkdir(parents=True, exist_ok=True)
+        _v1_7_75_path.write_text(
+            json.dumps(_v1_7_75_summary, indent=2), encoding="utf-8")
+        _v1_7_75_dests = ", ".join(
+            f"{k} x{v}" for k, v in
+            sorted(_v1_7_75_summary["by_destination"].items()))
+        print(f"      hdl_enum_routing: "
+              f"{_v1_7_75_summary['typedef_enums']} typedef enum(s) "
+              f"declared by staged HDL input(s) — {_v1_7_75_dests} "
+              f"(every decision recorded in "
+              f"reports/phase1/hdl_enum_routing.json)")
+
     _run_layer("[5/15]", "L4_REGMAP",
                lambda: gen_l4_regmap(project, extracted))
     _run_layer("[6/15]", "L5_ADI_SPEC",
@@ -56641,6 +56954,13 @@ def main() -> int:
          "l4_regmap_emitter_contract"),
         ("l4_regmap_enumerated_values_typed_check",
          "l4_regmap_enumerated_values"),
+        # v1.7.75 — for #507. L4's denominator: how many register
+        # address bindings the input DECLARES against how many L4
+        # carries. Without it a shortfall of any size sits behind the
+        # enum-typing gate's PASS, which audits only the fields that
+        # are already present.
+        ("l4_regmap_declared_register_coverage_check",
+         "l4_regmap_declared_register_coverage"),
         ("l5_analog_block_spec_actionable_check",
          "l5_analog_block_spec_actionable"),
         ("l6_fsm_scaffold_actionable_check",

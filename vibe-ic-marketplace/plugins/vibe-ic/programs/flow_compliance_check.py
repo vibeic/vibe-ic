@@ -1088,6 +1088,14 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #       Closes 4-state debounce / filter mode gap (audit line
     #       28, 67, 77).
     "l4_regmap_enumerated_values_typed_check",
+    #   L4 denominator (#507): the enum-typing gate above audits the
+    #       fields that are PRESENT and has no view of how many
+    #       registers the input DECLARES, so a layer missing 84 of the
+    #       145 address bindings its own staged HDL input declares
+    #       reported PASS. This gate re-derives both sides — declared
+    #       from the input, carried from L4 — so a shortfall cannot sit
+    #       behind a numerator with no denominator.
+    "l4_regmap_declared_register_coverage_check",
     # layergate-2 — SEMANTIC layer gates for L4/L5/L6. Each asserts the
     # layer carries what its CONSUMER needs in an ACTIONABLE form, by
     # importing the consuming program and inspecting its real output —

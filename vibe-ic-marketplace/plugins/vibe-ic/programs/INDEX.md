@@ -499,6 +499,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l3_opcode_name_coverage_check` | any | — | v1.6.131 (#51 Fix 6) |
 | `l3_opcode_pre_wake_allowed_typed_check` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 37 | Wave 37 (v0.119.69). |
 | `l3_opcode_response_template_check` | any | Wave 37 | Wave 37 / A2 |
+| `l4_regmap_declared_register_coverage_check` | any | — | L4's DENOMINATOR (#507). |
 | `l4_regmap_enumerated_values_typed_check` | any | Wave 38 | Wave 38 / B3 |
 | `l4_regmap_phase2_emitter_contract_check` | any | — | SEMANTIC layer gate for L4. |
 | `l4_systemrdl_export` | any | — | export an L4 register map as SystemRDL 2.0, and |
@@ -1532,6 +1533,7 @@ _(no programs in this group)_
 - `l3_opcode_dispatch_key_actionable_check` — L3 consumer-contract gate.
 - `l3_opcode_name_coverage_check` — v1.6.131 (#51 Fix 6)
 - `l3_opcode_response_template_check` — Wave 37 / A2  _[Wave 37]_
+- `l4_regmap_declared_register_coverage_check` — L4's DENOMINATOR (#507).
 - `l4_regmap_enumerated_values_typed_check` — Wave 38 / B3  _[Wave 38]_
 - `l4_regmap_phase2_emitter_contract_check` — SEMANTIC layer gate for L4.
 - `l4_systemrdl_export` — export an L4 register map as SystemRDL 2.0, and
