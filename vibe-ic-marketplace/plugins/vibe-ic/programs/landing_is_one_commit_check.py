@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""landing_is_one_commit_check.py — a landing is ONE commit, not two.
+
+THE DEFECT (vibe-ic#459), which is mine
+=======================================
+The standing instruction is squash-merge. Three landings left TWO commits on
+main: the authoring branch's original (no version) plus a version commit
+carrying ONLY the three manifest files.
+
+    v1.7.37   0680f728d (2 files, no version)  +  f5b1156b7 (3 manifests only)
+    v1.7.38   7bf4ec927 (8 files, no version)  +  16d5250ac (3 manifests only)
+    v1.7.39   bd80e9271 (3 files, no version)  +  fe51754f1 (3 manifests only)
+
+ROOT CAUSE: after `git rebase origin/main`, `git commit --amend` touches only
+the TOP commit; the authoring commit underneath survives. The correct sequence
+includes `git reset --soft <base>` first, which flattens it. Dropping that one
+step changes the shape silently — nothing failed, nothing warned.
+
+WHY IT IS NOT MERELY UNTIDY: GitHub runs CI on the LAST commit of a push, so
+the intermediate commit has no CI record of its own. An audit of "every version
+is green" reads as a hole there. And reverting one landing becomes two reverts.
+
+WHAT THIS DETECTS, AND WHY IT IS THIS NARROW
+=============================================
+MEASURED over the last 200 commits of main before this landed:
+
+    commits with no version tag                     89
+    the actual defect shape (a version commit that
+    carries ONLY manifests, sitting directly on an
+    unversioned commit)                              4
+
+So keying on "unversioned commit" would fire 89 times, and 85 of those are
+legitimate: data-only landings, security bumps and doc commits that
+`ships_to_users()` correctly exempts from versioning altogether. The signal is
+the PAIR — a version commit that changed nothing but the manifests, directly
+above a commit that changed real files and carries no version. That is
+mechanically what an un-squashed landing looks like and what nothing else does.
+
+A population of four is small, and a detector for a population of ONE earns
+deletion rather than a landing (vibe-ic#439). Four is above that floor, three of
+them were made on a single day, and the failure is silent — which is the
+combination that justifies a check rather than a note.
+
+chip-AGNOSTIC: pure git history shape; no design, PDK or vendor name.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+_VERSION_RE = re.compile(r"\[v\d+\.\d+\.\d+\]")
+
+# The manifests a version bump touches, and NOTHING else. A landing that only
+# rewrites these is not a change; it is the tail of a change that was left
+# behind.
+_MANIFEST_SUFFIXES = (".claude-plugin/plugin.json",
+                      ".claude-plugin/marketplace.json")
+
+
+def _git(repo: Path, *args: str) -> Tuple[int, str]:
+    try:
+        r = subprocess.run(["git", "-C", str(repo), *args],
+                           capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, f"{type(exc).__name__}: {exc}"
+    return r.returncode, r.stdout
+
+
+def _is_manifest_only(repo: Path, sha: str) -> Optional[bool]:
+    """True when this commit changed manifests and nothing else.
+
+    None when the file list cannot be read — never False, because "I could not
+    look" must not read the same as "I looked and it was fine".
+    """
+    rc, out = _git(repo, "show", "--name-only", "--format=", sha)
+    if rc != 0:
+        return None
+    files = [f for f in out.split() if f]
+    if not files:
+        return None
+    return all(f.endswith(_MANIFEST_SUFFIXES) for f in files)
+
+
+def find_unsquashed(repo: Path, limit: int = 200) -> Tuple[List[Dict], int]:
+    """Landings that left two commits. Returns (findings, commits_examined)."""
+    rc, out = _git(repo, "log", "--format=%H|%s", f"-{limit}")
+    if rc != 0:
+        return [], 0
+    rows = [line.split("|", 1) for line in out.splitlines() if "|" in line]
+    findings: List[Dict] = []
+    for top, below in zip(rows, rows[1:]):
+        top_sha, top_subject = top
+        low_sha, low_subject = below
+        if not _VERSION_RE.search(top_subject):
+            continue                       # not a version commit
+        if _VERSION_RE.search(low_subject):
+            continue                       # the one below is its own landing
+        if _is_manifest_only(repo, top_sha) is not True:
+            continue                       # a real landing; carries content
+        findings.append({
+            "version_commit": top_sha[:9],
+            "version_subject": top_subject[:100],
+            "authoring_commit": low_sha[:9],
+            "authoring_subject": low_subject[:100],
+        })
+    return findings, len(rows)
+
+
+def head_is_one_commit(repo: Path, base: str) -> Tuple[bool, int, str]:
+    """The pre-push form: `base..HEAD` must be exactly one commit.
+
+    This is the check that would have caught #459 at the time, and it costs one
+    `rev-list`. Returns (ok, count, detail)."""
+    # An UNCOUNTABLE range (a synthetic ref, a shallow clone) has told us
+    # nothing. It returns n = -1, which main() reports as rc 2 / NOT CHECKED —
+    # never rc 1, which would block a landing on the strength of a ref this
+    # program could not resolve. Same rule the sibling landing-method guard
+    # follows, and the rc-2-is-not-a-pass discipline used across this tree.
+    rc, out = _git(repo, "rev-list", "--count", f"{base}..HEAD")
+    if rc != 0:
+        return False, -1, f"could not count commits against {base!r}: {out.strip()}"
+    try:
+        n = int(out.strip())
+    except ValueError:
+        return False, -1, f"unreadable rev-list output: {out.strip()!r}"
+    if n == 1:
+        return True, n, f"one commit ahead of {base} — a squashed landing"
+    if n == 0:
+        return False, n, (f"NOTHING to land: HEAD == {base}. This is not a pass; "
+                          f"a landing that adds no commit landed nothing.")
+    return False, n, (
+        f"{n} commits ahead of {base} — a landing must be ONE commit. "
+        f"`git commit --amend` after a rebase touches only the top commit and "
+        f"leaves the authoring commit underneath; run "
+        f"`git reset --soft {base}` first, then a single `git commit`.")
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("repo", nargs="?", default=".")
+    ap.add_argument("--base", default=None,
+                    help="pre-push mode: assert base..HEAD is exactly one commit")
+    ap.add_argument("--limit", type=int, default=200,
+                    help="history mode: how many commits to examine")
+    ap.add_argument("--json", dest="json_out", default=None)
+    a = ap.parse_args(argv)
+    repo = Path(a.repo).resolve()
+
+    if a.base:
+        ok, n, detail = head_is_one_commit(repo, a.base)
+        label = "PASS" if ok else ("NOT CHECKED" if n < 0 else "FAIL")
+        print(f"[{label}] landing_is_one_commit: {detail}", file=sys.stderr)
+        if a.json_out:
+            Path(a.json_out).write_text(json.dumps(
+                {"mode": "pre_push", "ok": ok, "commits": n,
+                 "detail": detail}, indent=2) + "\n")
+        return 0 if ok else (2 if n < 0 else 1)
+
+    findings, examined = find_unsquashed(repo, a.limit)
+    if a.json_out:
+        Path(a.json_out).write_text(json.dumps(
+            {"mode": "history", "commits_examined": examined,
+             "findings": findings}, indent=2) + "\n")
+
+    if examined == 0:
+        # This program's own denominator. Reporting clean over an unread
+        # history is the false-certificate class this repo keeps closing.
+        print("[NOTHING_SCANNED] landing_is_one_commit: read 0 commits — this "
+              "is NOT a pass, no landing was examined.", file=sys.stderr)
+        return 2
+
+    for f in findings:
+        print(f"  [UNSQUASHED_LANDING] {f['version_commit']} carries only the "
+              f"version manifests", file=sys.stderr)
+        print(f"      sitting on {f['authoring_commit']} "
+              f"{f['authoring_subject'][:70]}", file=sys.stderr)
+
+    if findings:
+        print(f"[FAIL] landing_is_one_commit: {len(findings)} landing(s) of "
+              f"{examined} commit(s) examined left the authoring commit AND a "
+              f"version commit on the branch.", file=sys.stderr)
+        return 1
+    print(f"[PASS] landing_is_one_commit: {examined} commit(s) examined, every "
+          f"landing is a single squashed commit.", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

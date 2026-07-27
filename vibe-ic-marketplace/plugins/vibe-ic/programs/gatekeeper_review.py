@@ -479,6 +479,33 @@ def real_artefact_backing_gate(repo: Path, base: str, head: str) -> GateResult:
 # (the real phantom-revert surface); rc 2 unresolvable ref. Unlike the other
 # gates this does not judge the CHANGE — only the safe way to LAND it.
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# landing_is_one_commit_check — the OTHER landing-method guard.
+#
+# A landing is ONE commit. Three landings left TWO on main (vibe-ic#459): the
+# authoring commit plus a version commit carrying only the manifests, because
+# `git commit --amend` after a rebase touches only the top commit. Nothing
+# failed and nothing warned, and GitHub runs CI on the LAST commit of a push,
+# so the intermediate one has no CI record of its own.
+#
+# rc 0 one commit / rc 1 two or more, or zero (nothing landed). rc 2 means the
+# range could not be counted, which is reported as a skip rather than a pass —
+# an uncountable range has told us nothing.
+# --------------------------------------------------------------------------
+def one_commit_gate(repo: Path, base: str) -> GateResult:
+    prog = _PROGRAMS_DIR / "landing_is_one_commit_check.py"
+    if not prog.is_file():
+        return GateResult("landing_is_one_commit_check", 2,
+                          f"checker missing at {prog}")
+    rc, out, err = _run_program(prog, [str(repo), "--base", base])
+    detail = (err or out).strip().splitlines()
+    reason = detail[-1] if detail else "no output"
+    if rc == 2:
+        return GateResult("landing_is_one_commit_check", -1,
+                          f"skipped — range not countable: {reason}")
+    return GateResult("landing_is_one_commit_check", rc, reason)
+
+
 def stale_branch_gate(repo: Path, base: str, head: str) -> GateResult:
     prog = _PROGRAMS_DIR / "gatekeeper_stale_branch_check.py"
     if not prog.is_file():
@@ -733,6 +760,11 @@ def review(base: str, head: str, *,
     gates.append(commit_msg_nda_gate(repo, base, head))
     gates.append(nda_diff_scan_gate(repo, base, head))
     gates.append(stale_branch_gate(repo, base, head))
+    # #459 — the landing SHAPE, alongside the landing METHOD above. Only
+    # meaningful when head is the working HEAD (the gatekeeper's own pre-push
+    # check); a synthetic head ref makes the range uncountable and the gate
+    # reports a skip rather than a pass.
+    gates.append(one_commit_gate(repo, base))
     gates.append(real_artefact_backing_gate(repo, base, head))
     gates.append(acceptance_control_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))
