@@ -1,0 +1,68 @@
+{
+  "check": "gds_geometry_antenna_deck",
+  "runner": "container:vibeic-eda:klayout",
+  "config_source": "signoff/gate_oxide_deck.json",
+  "gds": "/home/reyerchu/vibe-ic-wt-a857c45b-covsdc/vibe-ic-marketplace/scratch_geom_signoff_tests/diode_off/phase3/stage4/gds/top.gds",
+  "worst_ratio": 50.0,
+  "violations": 1,
+  "deck": {
+    "verdict": "FAIL",
+    "gds": "/home/reyerchu/vibe-ic-wt-a857c45b-covsdc/vibe-ic-marketplace/scratch_geom_signoff_tests/diode_off/phase3/stage4/gds/top.gds",
+    "worst_ratio": 50.0,
+    "violations": 1,
+    "per_layer": {
+      "met1": {
+        "limit": 40.0,
+        "metric": "layer",
+        "worst_ratio": 50.0,
+        "violations": 1,
+        "detail": [
+          {
+            "metal_um2": 50.0,
+            "gate_um2": 1.0,
+            "ratio": 50.0
+          }
+        ],
+        "diode_relieved": 0,
+        "relieved": [],
+        "suggestions": [
+          {
+            "gate_bbox_um": [
+              0.75,
+              0.0,
+              1.25,
+              2.0
+            ],
+            "diode_xy_um": [
+              1.0,
+              1.0
+            ],
+            "ratio": 50.0
+          }
+        ]
+      },
+      "met2": {
+        "limit": 40.0,
+        "metric": "layer",
+        "worst_ratio": 0.0,
+        "violations": 0,
+        "detail": [],
+        "diode_relieved": 0,
+        "relieved": [],
+        "suggestions": []
+      }
+    },
+    "diode_credit": false,
+    "diode_recognition": {
+      "enabled": true,
+      "relieved_nets": 0,
+      "insertion_sites": 1
+    }
+  },
+  "verdict": "FAIL",
+  "reason": "1 antenna violation(s) in the GDS geometry; worst ratio 50.0",
+  "cross_check": {
+    "verdict": "NOT_RUN",
+    "reason": "no router antenna report to cross-check against"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "verdict": "FAIL",
+  "gds": "/home/reyerchu/vibe-ic-wt-a857c45b-covsdc/vibe-ic-marketplace/scratch_geom_signoff_tests/viol/phase3/stage4/gds/top.gds",
+  "worst_ratio": 50.0,
+  "violations": 1,
+  "per_layer": {
+    "met1": {
+      "limit": 40.0,
+      "metric": "cumulative",
+      "worst_ratio": 50.0,
+      "violations": 1,
+      "detail": [
+        {
+          "metal_um2": 50.0,
+          "gate_um2": 1.0,
+          "ratio": 50.0
+        }
+      ]
+    },
+    "met2": {
+      "limit": 40.0,
+      "metric": "cumulative",
+      "worst_ratio": 0.0,
+      "violations": 0,
+      "detail": []
+    }
+  },
+  "diode_credit": false
+}
