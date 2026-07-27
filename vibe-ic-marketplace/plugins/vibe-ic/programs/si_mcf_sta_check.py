@@ -242,6 +242,7 @@ from typing import Dict, List, Optional, Tuple
 
 import _gate_denominator as _gd
 import _path_layout as _pl
+import _record_adjudication as _ra
 import si_mcf_sta as M
 
 #: Exit codes. 2 is the DISCLOSED SKIP tier, never an error tier — see the
@@ -695,36 +696,49 @@ def denominator(stats: dict,
     )
 
 
-def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict:
-    denom = denominator(stats, findings)
-    not_run, defect = error_categories(findings)
-    # FOUR STATES, FOUR TOKENS (#506). The old precedence was "any ERROR
-    # outranks vacuity", which left "the gate could not obtain its input" with
-    # nowhere to go and rendered it as the design carrying a violation.
-    #
-    # A gate that examined nothing has not signed anything off. `pass` keeps its
-    # literal meaning — the fold was re-derived and found honest — so a consumer
-    # reading only that field can no longer be handed a vacuous run as a clean
-    # one. The four-way answer is in `verdict`.
+def verdict_for(defect: bool, not_run: bool, vacuous: bool) -> str:
+    """This gate's verdict precedence, in one place (#506, #510).
+
+    FOUR STATES, FOUR TOKENS (#506). The old precedence was "any ERROR
+    outranks vacuity", which left "the gate could not obtain its input" with
+    nowhere to go and rendered it as the design carrying a violation.
+
+    A gate that examined nothing has not signed anything off. `pass` keeps its
+    literal meaning — the fold was re-derived and found honest — so a consumer
+    reading only that field can no longer be handed a vacuous run as a clean
+    one. The four-way answer is in `verdict`.
+
+    EXTRACTED FROM ``build_report`` FOR #510, and the extraction is the point:
+    ``RECORD_ADJUDICATION`` re-adjudicates already-published records against
+    this same function, so a change to the precedence reaches the post-hoc
+    check by construction. A copy of these five lines living beside the rules
+    would be a second thing to remember to update, which is exactly the
+    staleness #510 is about.
+    """
     if defect:
         # Examined a real artefact and found it wrong. UNCHANGED, deliberately:
         # this is the rule the gate was written for and #506 does not soften it.
-        verdict = "FAIL"
-    elif not_run and denom.is_vacuous:
+        return "FAIL"
+    if not_run and vacuous:
         # Could not obtain the input, and proved nothing. The fourth state.
-        verdict = "NOT_RUN"
-    elif not_run:
+        return "NOT_RUN"
+    if not_run:
         # PARTIAL, and the other direction of the same lie. Some corner's fold
         # WAS re-derived and proved; another corner's input was missing. Calling
         # that "NOT_RUN" would deny work the gate demonstrably did, so it keeps
         # the FAIL it had. There is no contradiction to resolve here: the
         # denominator is non-zero, so `vacuous` is false and the reason is
         # empty — the artefact already carried exactly one answer.
-        verdict = "FAIL"
-    elif denom.is_vacuous:
-        verdict = "VACUOUS_PASS"
-    else:
-        verdict = "PASS"
+        return "FAIL"
+    if vacuous:
+        return "VACUOUS_PASS"
+    return "PASS"
+
+
+def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict:
+    denom = denominator(stats, findings)
+    not_run, defect = error_categories(findings)
+    verdict = verdict_for(bool(defect), bool(not_run), denom.is_vacuous)
     summary = {
         "corners_checked": stats.get("corners_checked", []),
         "windows_exact": stats.get("windows_exact"),
@@ -753,6 +767,95 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
         "monotonicity": stats.get("monotonicity", {}),
         "findings": [asdict(f) for f in findings],
     }
+
+
+# ── re-adjudicating THIS gate's already-published records (#510) ────────────
+# A landed rule changes what this gate certifies from now on and does nothing
+# to the records already committed. `published_record_staleness_check` asks
+# every gate that appears in the corpus which of its published verdicts it
+# would still issue, decided FROM THE RECORD ALONE — the original SPEFs are
+# gone (#506), so re-running is not available and never will be for old cells.
+
+def _zero_fold_supersession(record: dict):
+    """Would this gate still issue the verdict this record carries?
+
+    THE ONE THING A RECORD PROVES ON PAPER. ``examined`` counts victim-net
+    folds re-derived and PROVED, and every expectation is built from the
+    coupling pairs (`victim_folded_caps` / `floor_folded_caps` are handed
+    `pairs`). With no pairs the expectation map is empty on every corner, so
+    ``examined == 0`` follows from ``summary.coupling_pairs == 0`` with no
+    other input — no SPEF, no report, no host. That is the whole reason this
+    rule is expressible and a timing claim would not be.
+
+    THE CONVERSE IS NOT CLAIMED. A non-zero pair count does NOT prove
+    ``examined > 0``: a coupled net whose re-derived expectation is 0.0 —
+    zero-valued coupling caps, or the entire hold corner in
+    window-independent floor mode — contributes a comparison and no proof. So
+    the rule declines to speak rather than certify a record it cannot decide.
+    """
+    pairs = _ra.read_field(record, "summary.coupling_pairs")
+    if isinstance(pairs, bool) or not isinstance(pairs, int):
+        return _ra.Undecidable(
+            f"summary.coupling_pairs is {pairs!r}, not a count, so whether "
+            f"this run re-derived any fold cannot be read off the record")
+    if pairs != 0:
+        return None
+    findings = record.get("findings")
+    if not isinstance(findings, list) or any(
+            not isinstance(f, dict) for f in findings):
+        return _ra.Undecidable(
+            "`findings` is not a list of objects, so the ERROR categories the "
+            "verdict precedence reads cannot be recovered from the record")
+    rebuilt = [Finding(severity=str(f.get("severity", "")),
+                       category=str(f.get("category", "")),
+                       message=str(f.get("message", ""))) for f in findings]
+    not_run, defect = error_categories(rebuilt)
+    # The gate's OWN precedence function, not a copy of it — see `verdict_for`.
+    would = verdict_for(bool(defect), bool(not_run), vacuous=True)
+    carried = record.get("verdict")
+    if would == carried:
+        return None
+    return _ra.Supersession(
+        would_issue=would,
+        because=(f"the record states summary.coupling_pairs: 0, so no "
+                 f"inter-net fold existed to re-derive and this run proved "
+                 f"nothing (examined == 0) — its own recount agrees at "
+                 f"nets_checked 0. Under the rule landed in #502 a run that "
+                 f"re-derived nothing is a DISCLOSED SKIP, not a sign-off: "
+                 f"this gate would answer {would} today, not {carried}. "
+                 f"Decided entirely from fields the record carries; the "
+                 f"original extraction was not consulted and is not needed."))
+
+
+RECORD_ADJUDICATION = _ra.declare(
+    __file__,
+    gate="si_mcf_sta_check",
+    # The entry point of the verdict decision. The fingerprint follows the
+    # module-local call closure from here, so `verdict_for`, `denominator`
+    # (which DEFINES vacuity) and `error_categories` are all covered without
+    # being listed — an author cannot under-declare the surface.
+    decision_roots=("build_report",),
+    # Regenerate with:
+    #   python3 published_record_staleness_check.py \
+    #       --print-decision-digest si_mcf_sta_check
+    # It changes when the decision logic changes — INCLUDING the written
+    # reasons, which are part of what a rule pins. Updating it is the act of
+    # re-reviewing the rules below against the new logic; that is the point,
+    # and a fingerprint that stayed quiet through a prose rewrite of a verdict
+    # reason would be the wrong kind of quiet.
+    decision_digest=(
+        "e9efb72c97abfea5a5b2fcf8076cec81a08c14dbb59dcaeaaea4488bd68d3759"),
+    rules=(
+        _ra.Rule(
+            rule_id="si_mcf_sta_check.zero-fold-is-not-a-signoff",
+            landed_in="#502",
+            requires=("summary.coupling_pairs", "findings"),
+            decide=_zero_fold_supersession,
+            what=("a run that re-derived zero coupling folds signed nothing "
+                  "off; PASS is no longer one of its available verdicts"),
+        ),
+    ),
+)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

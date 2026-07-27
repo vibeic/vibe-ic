@@ -1,0 +1,9 @@
+{
+  "_comment": "Published gate records carrying a verdict their gate's CURRENT rules would not issue (vibe-ic#510). MAY ONLY SHRINK. Correcting one is the benchmark-agent's commit under NO-MIX — results and plugin fixes never share a commit — so they are recorded here, not silently fixed by the plugin that found them.",
+  "previous_size": null,
+  "scope_expanded": null,
+  "known": [
+    "si_mcf_sta_check::ic/edge_llm_accel/reports/phase3/si_mcf_sta_check.json::PASS->VACUOUS_PASS::si_mcf_sta_check.zero-fold-is-not-a-signoff",
+    "si_mcf_sta_check::ic/spm/v1.5.58_ihp-sg13g2/reports/phase3/si_mcf_sta_check.json::PASS->VACUOUS_PASS::si_mcf_sta_check.zero-fold-is-not-a-signoff"
+  ]
+}

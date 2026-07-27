@@ -237,6 +237,18 @@ run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_arti
 # ADDED, not after a run has already published a wrong FAIL count.
 run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary_rollup_consistency_check.py
 
+# vibe-ic#510 — a landed gate rule changes what the plugin certifies FROM NOW
+# ON and does nothing to the records already published. v1.7.73 landed #502
+# (an SI sign-off that re-derived zero coupling folds is VACUOUS_PASS, not
+# PASS) and two of the seven tracked si_mcf_sta_check records still said PASS
+# beside coupling_pairs: 0 — one of them the artefact #502 was filed about.
+# Nothing measured the gap. Re-adjudicates every published record against its
+# own gate's CURRENT rules, decided FROM THE RECORD (the inputs are gone —
+# #506), and REPORTS: correcting a published record is the benchmark-agent's
+# commit under NO-MIX, so the two are a recorded debt here and anything NEW —
+# or a gate whose rules changed without re-review — fails.
+run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py"
+
 if [ "$fail" -ne 0 ]; then
   echo "repo_hygiene_gates: at least one gate FAILED" >&2
   exit 1

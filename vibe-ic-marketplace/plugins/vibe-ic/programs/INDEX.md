@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 989
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 989)
+- **Total programs (excluding helpers / shims):** 990
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 990)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 980 |
+| `any` | 981 |
 
 ## Alphabetical listing
 
@@ -741,6 +741,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `provenance_output_hash_completeness_check` | any | v0.2.102 | verify that |
 | `psi5_protocol_synth` | any | — | Peripheral Sensor Interface 5 (PSI5) protocol synth helper. |
 | `ptp_protocol_synth` | any | — | IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76). |
+| `published_record_staleness_check` | any | — | a landed gate rule does not reach the |
 | `pulse_decoder_edge_check` | any | — | Enforce rising-edge-driven classification in |
 | `pvt_matrix_check` | any | — | PVT-matrix substance gate (ORGANIC-20260606 #442). |
 | `qsf_gen` | any | Wave 72 | auto-generate Quartus QSF (FPGA pin assignments). |
@@ -1061,7 +1062,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (980 programs)
+### `any` (981 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1773,6 +1774,7 @@ _(no programs in this group)_
 - `provenance_output_hash_completeness_check` — verify that  _[v0.2.102]_
 - `psi5_protocol_synth` — Peripheral Sensor Interface 5 (PSI5) protocol synth helper.
 - `ptp_protocol_synth` — IEEE 1588 Precision Time Protocol (PTP) synth helper (protocol #76).
+- `published_record_staleness_check` — a landed gate rule does not reach the
 - `pulse_decoder_edge_check` — Enforce rising-edge-driven classification in
 - `pvt_matrix_check` — PVT-matrix substance gate (ORGANIC-20260606 #442).
 - `qsf_gen` — auto-generate Quartus QSF (FPGA pin assignments).  _[Wave 72]_
