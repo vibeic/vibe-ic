@@ -69,11 +69,20 @@ def _report_db(category_counts: dict) -> str:
 
 
 def _base_project(tmp_path: Path) -> Path:
-    """gds + netlist + timing always present; DRC supplied per-test."""
+    """gds + netlist + timing + genuine-match LVS always present; DRC
+    supplied per-test.
+
+    2026-07-27: tapeout mode gained a fifth pillar (LVS). This suite pins the
+    rc/sentinel/waiver-accounting CONTRACT, not the pillar set, so the base
+    fixture now carries a genuine netgen match — without it every case here
+    would collapse onto FAIL and stop discriminating the three tiers."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "chip_top.gds").write_text("HEADER")
     (tmp_path / "chip_top_synth.v").write_text("module chip_top();endmodule\n")
     (tmp_path / "sta_timing.rpt").write_text("slack 0.1\n")
+    (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reports/phase3/lvs.rpt").write_text(
+        "Netlists match uniquely.\nFinal result: Circuits match uniquely.\n")
     return tmp_path
 
 
@@ -94,7 +103,7 @@ def _clean_project(tmp_path: Path) -> Path:
 
 
 def _fail_project(tmp_path: Path) -> Path:
-    """No DRC report at all → 3/4 evidence → FAIL."""
+    """No DRC report at all → 4 of 5 evidence → FAIL."""
     return _base_project(tmp_path)
 
 

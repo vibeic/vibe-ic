@@ -10,12 +10,27 @@ flow, use `flow_compliance_check.py` instead — it validates every mandatory
 step, not just 4 coarse buckets.
 
 Modes:
-  tapeout  -- Check for GDS, netlist, timing report, DRC report
+  tapeout  -- Check for GDS, netlist, timing report, DRC report, LVS report
   flow     -- Check for synth, pnr, gds, sta stage evidence
 
-Default threshold (updated 2026-04-21): 4 of 4 (strict).
+Default threshold (updated 2026-04-21): strict, ALL slots required.
 (Previously 3 of 4 — that was too lenient and let 7-of-28-step designs
 pass as "signed off". The lenient mode was removed in v1.6.21.)
+
+2026-07-27 -- tapeout mode gained a FIFTH pillar (LVS) and lost two
+existence-only slots:
+
+  * LVS: a foundry tape-out is DEFINED by a genuine LVS match. The
+    tapeout-tier LVS gate (`lvs_tapeout_signoff_check`) already existed
+    but was ORPHANED — nothing in the executed flow ever invoked it, so
+    Step 36 certified "tapeout checklist" on a project that had never
+    proven layout-vs-schematic. The tapeout threshold is now 5 of 5.
+  * netlist / timing: both slots credited `rglob()[0]` — an arbitrary
+    filesystem-order pick, the same existence-only bug class the DRC slot
+    was fixed for in #437a. They now rank candidates sign-off-first (the
+    post-route netlist and the post-route/SPEF STA outrank synthesis and
+    pre-layout artefacts) and REFUSE to credit the slot when every
+    candidate is a self-declared pre-sign-off intermediate.
 
 v0.52 (2026-04-24): file discovery now excludes `input/`, `pdk/`,
 `vendor_ref/`, `references/` path segments. Prior versions counted
@@ -179,6 +194,119 @@ def _has_files(project_dir: Path, patterns: List[str],
     return found
 
 
+# ---------------------------------------------------------------------------
+# Sign-off-first ranking for the netlist / timing evidence slots
+# ---------------------------------------------------------------------------
+# ORGANIC-20260606-existence-only-signoff-gates (#437a) was fixed for the DRC
+# slot only. The netlist and timing slots kept crediting `rglob()[0]` — an
+# arbitrary, filesystem-order pick with no ranking and no content check.
+#
+# Measured on a completed spm x ihp-sg13g2 run (2026-07-27, main @ v1.7.36):
+#   TAPEOUT_NETLIST_EXISTS credited phase2/stage2/dft/scan_netlist_prelim.v
+#     while the post-route netlist phase3/stage3/pnr/spm_pnr.v (100847 B) sat
+#     in the same project — and matched NONE of the four netlist globs, so it
+#     could not have been credited even if the slot had ranked its candidates.
+#   TAPEOUT_TIMING_EXISTS credited steps/10_pre_layout_sta_multi_corner/
+#     pre_pnr_timing.rpt — a PRE-layout STA — while
+#     phase3/stage3/sta/post_route_timing.rpt existed.
+# Both slots reported `true` and the checklist read 4/4 PASS.
+#
+# Two changes, mirroring the DRC slot 40 lines below which already does this:
+#   (1) rank candidates sign-off-first and cite the best one;
+#   (2) REFUSE to credit the slot when EVERY candidate is a self-declared
+#       pre-sign-off intermediate. A preliminary netlist or a pre-layout STA
+#       is not a thing a tape-out is signed off on, and a gate may explain an
+#       absent artefact but may not certify the step without one.
+# Ranking only ever REORDERS; the pre-sign-off refusal is a separate,
+# separately-named substance rule so the two cannot be confused.
+_PRESIGNOFF_MARKERS = (
+    "prelim",          # covers "preliminary"
+    "draft",
+    "provisional",
+    "pre_pnr", "pre-pnr", "prepnr",
+    "pre_layout", "pre-layout", "prelayout",
+    "pre_route", "pre-route", "preroute",
+    "pre_place", "pre-place", "preplace",
+    "preview",
+)
+
+
+def _rel_parts(path: Path, project_dir: Path) -> List[str]:
+    """Lower-cased path segments of `path` relative to `project_dir`.
+
+    Falls back to the file name alone when `path` is not under
+    `project_dir`, so a project checked out below e.g. /home/x/draft/ can
+    never be mistaken for a project full of draft artefacts.
+    """
+    try:
+        rel = path.relative_to(project_dir)
+    except ValueError:
+        return [path.name.lower()]
+    return [p.lower() for p in rel.parts]
+
+
+def _is_presignoff_artifact(path: Path, project_dir: Path) -> bool:
+    """True when the artefact's own in-project path DECLARES it a
+    pre-sign-off intermediate (prelim / pre-layout / pre-PnR / draft)."""
+    joined = "/".join(_rel_parts(path, project_dir))
+    return any(marker in joined for marker in _PRESIGNOFF_MARKERS)
+
+
+#: rank assigned to a self-declared pre-sign-off artefact — always last, and
+#: the value the substance rule refuses to credit.
+_PRESIGNOFF_RANK = 9
+
+
+def _netlist_rank(path: Path, project_dir: Path) -> int:
+    """Sign-off-first ordering for the tape-out netlist slot.
+
+    0 — post-route / P&R netlist (the netlist that is actually taped out)
+    1 — synthesis / gate-level mapped netlist
+    2 — any other glob hit
+    9 — self-declared pre-sign-off intermediate (never credited)
+    """
+    if _is_presignoff_artifact(path, project_dir):
+        return _PRESIGNOFF_RANK
+    parts = set(_rel_parts(path, project_dir)[:-1])
+    name = path.name.lower()
+    if "pnr" in parts or any(t in name for t in (
+            "pnr", "post_route", "postroute", "routed", "place_route")):
+        return 0
+    if "synth" in parts or any(t in name for t in (
+            "synth", "mapped", "gate")):
+        return 1
+    return 2
+
+
+def _timing_rank(path: Path, project_dir: Path) -> int:
+    """Sign-off-first ordering for the tape-out timing slot.
+
+    0 — post-route / parasitic-annotated / multi-corner sign-off STA
+    1 — any other glob hit
+    9 — self-declared pre-sign-off (pre-layout / pre-PnR) STA (never credited)
+    """
+    if _is_presignoff_artifact(path, project_dir):
+        return _PRESIGNOFF_RANK
+    name = path.name.lower()
+    if any(t in name for t in ("post_route", "postroute", "post_layout",
+                               "postlayout", "signoff", "sign_off", "spef",
+                               "ocv", "mcorner", "multi_corner")):
+        return 0
+    return 1
+
+
+def _rank_signoff_first(paths: List[Path], project_dir: Path, ranker) -> List[Path]:
+    """Order candidates sign-off-first. Never drops a candidate.
+
+    The `steps/` tree mirrors phase2/phase3 artefacts through symlinks, so a
+    real file and its mirror tie on rank; the real file wins the tie-break
+    (so the evidence cites the canonical path, not a duplicate of it) and the
+    remaining order is deterministic by path string.
+    """
+    return sorted(paths, key=lambda p: (ranker(p, project_dir),
+                                        p.is_symlink(), str(p)))
+
+
 def _has_dir(project_dir: Path, name: str) -> bool:
     """Check if a stage directory exists (case-insensitive search). Looks
     at the top level and inside the canonical phase2/<stage>/ and
@@ -206,6 +334,71 @@ def _has_dir(project_dir: Path, name: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Tape-out LVS pillar
+# ---------------------------------------------------------------------------
+# `lvs_tapeout_signoff_check` — the tapeout-tier LVS gate that refuses to
+# credit a netgen POWER_PIN_ONLY waiver as a genuine sign-off match — has been
+# in programs/ since v1.3.94 and is invoked by NOTHING in the executed flow
+# (grep: no flow/*.yaml step, no runner call — only signoff_ladder_run.py,
+# which is itself never invoked). So Step 36 certified "tapeout checklist"
+# with no LVS evidence of any kind. This pillar wires the existing checker in.
+#
+# We locate the report ourselves rather than calling `lvs_tapeout_signoff_check
+# .check()`: that helper's last-resort glob is a bare `*.rpt`, which in a
+# project with no LVS report at all would hand us the DRC report and label it
+# LVS evidence. We reuse the part that carries the substance — the pure
+# `evaluate()` verdict — and apply signoff_audit's own input-path exclusion.
+_LVS_REPORT_CANDIDATES = (
+    "reports/phase3/lvs.rpt",
+    "reports/lvs.rpt",
+    "phase3/reports/lvs.rpt",
+)
+_LVS_GLOBS = ["*lvs*.rpt", "*lvs*.out", "*netgen*.rpt", "*.lvs.report",
+              "comp.out"]
+
+
+def _find_lvs_report(project_dir: Path):
+    """Locate the LVS sign-off report, canonical path first. None if absent."""
+    for cand in _LVS_REPORT_CANDIDATES:
+        p = project_dir / cand
+        if p.is_file():
+            return p
+    hits = [p for p in _has_files(project_dir, _LVS_GLOBS) if p.is_file()]
+    if not hits:
+        return None
+    # Deterministic, and prefer a real file over a `steps/` mirror symlink.
+    return sorted(hits, key=lambda p: (p.is_symlink(), str(p)))[0]
+
+
+def _evaluate_lvs(project_dir: Path):
+    """Return (report_path, verdict_dict). Either element may be None.
+
+    verdict_dict is `lvs_tapeout_signoff_check.evaluate()`'s output. A None
+    verdict with a non-None path means the tapeout-tier LVS evaluator could
+    not be imported or the report could not be read — an UNVERIFIABLE state
+    that is treated as missing evidence, never as a pass.
+    """
+    rpt = _find_lvs_report(project_dir)
+    if rpt is None:
+        return None, None
+    try:
+        blob = rpt.read_text(errors="replace")
+    except OSError:
+        return rpt, None
+    try:
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from lvs_tapeout_signoff_check import evaluate as _lvs_evaluate
+    except Exception:
+        return rpt, None
+    try:
+        return rpt, _lvs_evaluate(blob)
+    except Exception:
+        return rpt, None
+
+
+# ---------------------------------------------------------------------------
 # Mode: tapeout
 # ---------------------------------------------------------------------------
 def _check_tapeout(project_dir: Path) -> AuditResult:
@@ -217,6 +410,9 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
     # — a routing-DRC-clean design whose only DRC items are foundry-cell
     # internal rules. Demotes the final verdict to PASS_WITH_WAIVERS.
     drc_library_internal_waived = False
+    # 2026-07-27: set when the LVS slot is credited by a POWER_PIN_ONLY
+    # netgen waiver rather than a genuine match — same demotion contract.
+    lvs_power_pin_waived = False
 
     # (a) GDS file exists
     gds_files = _has_files(project_dir, ["*.gds", "*.gds2", "*.gdsii",
@@ -234,31 +430,71 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
             rule="TAPEOUT_GDS_EXISTS", severity="ERROR",
             message="No GDS file found (*.gds, *.gds2, *.gdsii)"))
 
-    # (b) Synthesis netlist exists
+    # (b) Tape-out netlist exists — RANKED, and never a pre-sign-off draft.
+    # `*pnr*.v` / `*routed*.v` were added 2026-07-27: the canonical
+    # post-route netlist the flow emits at phase3/stage3/pnr/<top>_pnr.v
+    # matched none of the four original globs, so the slot could only ever be
+    # credited by a synthesis-or-earlier netlist.
     netlist_files = _has_files(project_dir, ["*netlist*.v", "*synth*.v",
-                                              "*gate*.v", "*mapped*.v"])
-    if netlist_files:
+                                              "*gate*.v", "*mapped*.v",
+                                              "*pnr*.v", "*routed*.v"])
+    netlist_files = _rank_signoff_first(netlist_files, project_dir,
+                                        _netlist_rank)
+    netlist_signoff = [p for p in netlist_files
+                       if _netlist_rank(p, project_dir) != _PRESIGNOFF_RANK]
+    if netlist_signoff:
+        chosen_netlist = netlist_signoff[0]
         evidence["netlist"] = True
         evidence_count += 1
         result.findings.append(Finding(
             rule="TAPEOUT_NETLIST_EXISTS", severity="INFO",
-            message=f"Synthesis netlist found: {netlist_files[0].name}",
+            message=f"Tape-out netlist found: {chosen_netlist.name}",
+            file=str(chosen_netlist)))
+    elif netlist_files:
+        # Candidates exist but every one of them DECLARES itself a
+        # pre-sign-off intermediate. Naming the files is the disclosure; the
+        # slot is still not credited (#437a: substance, not existence).
+        evidence["netlist"] = False
+        _names = ", ".join(sorted({p.name for p in netlist_files})[:5])
+        result.findings.append(Finding(
+            rule="TAPEOUT_NETLIST_PRESIGNOFF_ONLY", severity="ERROR",
+            message=(f"Only pre-sign-off netlist(s) found ({_names}) — a "
+                     f"preliminary/pre-P&R netlist is not the netlist a "
+                     f"tape-out is signed off on. Produce the post-route "
+                     f"netlist (phase3/stage3/pnr/<top>_pnr.v) before "
+                     f"claiming Step 36."),
             file=str(netlist_files[0])))
     else:
         evidence["netlist"] = False
         result.findings.append(Finding(
             rule="TAPEOUT_NETLIST_EXISTS", severity="ERROR",
-            message="No synthesis netlist found (*netlist*.v, *synth*.v, *gate*.v)"))
+            message=("No tape-out netlist found (*netlist*.v, *synth*.v, "
+                     "*gate*.v, *mapped*.v, *pnr*.v, *routed*.v)")))
 
-    # (c) Timing report exists
+    # (c) Timing report exists — RANKED, and never a pre-layout STA.
     timing_files = _has_files(project_dir, ["*timing*.rpt", "*sta*.rpt",
                                              "*timing*.log", "*STA*.rpt"])
-    if timing_files:
+    timing_files = _rank_signoff_first(timing_files, project_dir,
+                                       _timing_rank)
+    timing_signoff = [p for p in timing_files
+                      if _timing_rank(p, project_dir) != _PRESIGNOFF_RANK]
+    if timing_signoff:
+        chosen_timing = timing_signoff[0]
         evidence["timing"] = True
         evidence_count += 1
         result.findings.append(Finding(
             rule="TAPEOUT_TIMING_EXISTS", severity="INFO",
-            message=f"Timing report found: {timing_files[0].name}",
+            message=f"Timing report found: {chosen_timing.name}",
+            file=str(chosen_timing)))
+    elif timing_files:
+        evidence["timing"] = False
+        _names = ", ".join(sorted({p.name for p in timing_files})[:5])
+        result.findings.append(Finding(
+            rule="TAPEOUT_TIMING_PRESIGNOFF_ONLY", severity="ERROR",
+            message=(f"Only pre-sign-off timing report(s) found ({_names}) "
+                     f"— a pre-layout / pre-P&R STA is not tape-out timing "
+                     f"sign-off. Produce the post-route (SPEF-annotated / "
+                     f"multi-corner) STA before claiming Step 36."),
             file=str(timing_files[0])))
     else:
         evidence["timing"] = False
@@ -416,7 +652,71 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
             rule="TAPEOUT_DRC_EXISTS", severity="ERROR",
             message="No DRC report found (*drc*.rpt/log)"))
 
-    threshold = _resolve_threshold(default_strict=4, total=4)
+    # (e) LVS — SUBSTANCE, via the tapeout-tier gate that already exists.
+    # A foundry tape-out is DEFINED by "Circuits match uniquely, zero
+    # mismatch". A netgen POWER_PIN_ONLY mismatch is a reasoned TRIAGE
+    # waiver, so it is credited ONLY through the PASS_WITH_WAIVERS demotion
+    # path — never as a bare PASS. A signal-net mismatch, an incomplete
+    # compare, an unreadable report and an absent report are all
+    # missing evidence.
+    lvs_report, lvs_result = _evaluate_lvs(project_dir)
+    lvs_verdict = (lvs_result or {}).get("tapeout_verdict")
+    if lvs_verdict == "GENUINE_MATCH":
+        evidence["lvs"] = True
+        evidence_count += 1
+        result.findings.append(Finding(
+            rule="TAPEOUT_LVS_MATCH", severity="INFO",
+            message=(f"LVS sign-off report '{lvs_report.name}': genuine "
+                     f"netgen match (unique match + Final result line)"),
+            file=str(lvs_report)))
+    elif lvs_verdict == "WAIVED_PENDING_POWER_AWARE":
+        evidence["lvs"] = "power_pin_only_waived"
+        evidence_count += 1
+        lvs_power_pin_waived = True
+        result.findings.append(Finding(
+            rule="TAPEOUT_LVS_POWER_PIN_WAIVED", severity="WARNING",
+            message=(f"LVS report '{lvs_report.name}' is a POWER_PIN_ONLY "
+                     f"mismatch — a reasoned triage waiver, NOT a genuine "
+                     f"tape-out match. LVS slot credited as a waiver; "
+                     f"tapeout verdict demoted to PASS_WITH_WAIVERS. Reach a "
+                     f"genuine match with a power-aware gate netlist "
+                     f"(VPWR/VGND top ports + PG connectivity) before mask "
+                     f"order."),
+            file=str(lvs_report)))
+    elif lvs_verdict == "SIGNAL_NET_MISMATCH":
+        evidence["lvs"] = False
+        result.findings.append(Finding(
+            rule="TAPEOUT_LVS_MISMATCH", severity="ERROR",
+            message=(f"LVS report '{lvs_report.name}' carries a real "
+                     f"signal-net mismatch — an open connectivity defect. "
+                     f"Never waved through."),
+            file=str(lvs_report)))
+    elif lvs_report is not None and lvs_result is None:
+        evidence["lvs"] = False
+        result.findings.append(Finding(
+            rule="TAPEOUT_LVS_UNVERIFIABLE", severity="ERROR",
+            message=(f"LVS report '{lvs_report.name}' found but the "
+                     f"tapeout-tier LVS evaluator could not read/classify "
+                     f"it — refusing an existence-only PASS (#437a)."),
+            file=str(lvs_report)))
+    elif lvs_report is not None:
+        evidence["lvs"] = False
+        result.findings.append(Finding(
+            rule="TAPEOUT_LVS_INCOMPLETE", severity="ERROR",
+            message=(f"LVS report '{lvs_report.name}' did not reach a "
+                     f"top-level compare (verdict {lvs_verdict}) — missing "
+                     f"evidence, never a tape-out pass."),
+            file=str(lvs_report)))
+    else:
+        evidence["lvs"] = False
+        result.findings.append(Finding(
+            rule="TAPEOUT_LVS_EXISTS", severity="ERROR",
+            message=("No LVS sign-off report found (reports/phase3/lvs.rpt, "
+                     "*lvs*.rpt, *netgen*.rpt) — a tape-out is DEFINED by a "
+                     "genuine layout-vs-schematic match; the checklist "
+                     "cannot certify Step 36 without one.")))
+
+    threshold = _resolve_threshold(default_strict=5, total=5)
     result.passed = evidence_count >= threshold
 
     # v1.6.178 (#72 P2-7) — DRC/LVS ENV_UNAVAILABLE waiver.
@@ -454,6 +754,31 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
                         f"phase3_one_shot.json; tapeout checklist "
                         f"demoted to PASS_WITH_WAIVERS.")))
             result.passed = evidence_count >= threshold
+        # Same backfill for the LVS slot: `_read_phase3_env_unavailable_steps`
+        # has always returned 'lvs', but before the LVS pillar existed there
+        # was no slot for it to credit.
+        if not evidence.get("lvs") and "lvs" in env_unavailable_steps:
+            evidence["lvs"] = "env_unavailable"
+            evidence_count += 1
+            for f in result.findings:
+                if (f.rule.startswith("TAPEOUT_LVS_")
+                        and f.severity == "ERROR"):
+                    f.severity = "WARNING"
+                    f.message = (
+                        f"LVS evidence missing AND phase3 step reports "
+                        f"ENV_UNAVAILABLE — waived. Step 36 demoted to "
+                        f"PASS_WITH_WAIVERS; explicit human signoff "
+                        f"required before mask order.")
+                    break
+            else:
+                result.findings.append(Finding(
+                    rule="TAPEOUT_LVS_WAIVED_ENV_UNAVAILABLE",
+                    severity="WARNING",
+                    message=(
+                        f"LVS step reported ENV_UNAVAILABLE in "
+                        f"phase3_one_shot.json; tapeout checklist "
+                        f"demoted to PASS_WITH_WAIVERS.")))
+            result.passed = evidence_count >= threshold
         if result.passed:
             verdict_tier = "PASS_WITH_WAIVERS"
             result.findings.append(Finding(
@@ -473,12 +798,21 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
     if result.passed and drc_library_internal_waived and verdict_tier == "PASS":
         verdict_tier = "PASS_WITH_WAIVERS"
 
+    # Same contract for the LVS pillar: a POWER_PIN_ONLY netgen waiver is not
+    # a genuine tape-out match, so it may reach the threshold but it may
+    # NEVER read as a bare PASS (CLAUDE.md rule 11 / #651).
+    if result.passed and lvs_power_pin_waived and verdict_tier == "PASS":
+        verdict_tier = "PASS_WITH_WAIVERS"
+
     result.summary = {
         "evidence": evidence,
         "evidence_count": evidence_count,
         "threshold": threshold,
         "env_unavailable_steps": env_unavailable_steps,
         "drc_library_internal_waived": drc_library_internal_waived,
+        "lvs_power_pin_only_waived": lvs_power_pin_waived,
+        "lvs_report": str(lvs_report) if lvs_report else "",
+        "lvs_verdict": lvs_verdict or "",
         "verdict_tier": verdict_tier,
     }
     return result
@@ -659,7 +993,8 @@ def main(argv: list = None) -> int:
         result.findings.append(Finding(
             rule="PROJECT_DIR_EXISTS", severity="ERROR",
             message=f"Project directory does not exist: {project_dir}"))
-        result.summary = {"evidence_count": 0, "threshold": _resolve_threshold(4, 4)}
+        result.summary = {"evidence_count": 0,
+                          "threshold": _resolve_threshold(5, 5)}
     else:
         checker = MODE_MAP[args.mode]
         result = checker(project_dir)
