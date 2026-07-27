@@ -31,8 +31,11 @@ protocol. No chip / tester / PDK identifiers in this code.
 Usage:
     python3 sustained_vs_edge_check.py \\
         --rtl-dir ./rtl/ \\
-        --spec-text ./generated_docs/spec_text.txt \\
-        --out-dir /tmp/check
+        --spec-text ./generated_docs/spec_text.txt
+
+`--out-dir` is OPTIONAL and has no default: omit it and the gate writes no
+file at all (verdict on stdout). Pass a project-relative directory —
+e.g. `--out-dir ./reports/` — when you want the JSON report on disk.
 
 The `--spec-text` is any concatenation of input docs (post-pdftotext,
 libreoffice convert) — it just needs to be searchable text.
@@ -157,14 +160,29 @@ def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0])
     ap.add_argument("--rtl-dir", required=True, type=Path)
     ap.add_argument("--spec-text", type=Path, help="Concatenated spec text (optional; gates more strictly when provided)")
-    ap.add_argument("--out-dir", type=Path, default=Path("/tmp/sustained_vs_edge"))
+    # #494 — a read-only validator writes NOTHING unless a caller asks for it.
+    # This used to default to a hardcoded `/tmp/sustained_vs_edge`, so every
+    # invocation — including the P0 umbrella's, which passes only --rtl-dir —
+    # deposited a JSON report at a fixed shared path nobody requested. Two
+    # concurrent umbrella runs (two projects, or CI alongside a local run)
+    # silently overwrote each other's report, so the file a human later read
+    # while diagnosing could belong to a different design with nothing marking
+    # it as such. A fixed name under a world-writable directory is also the
+    # textbook symlink-hijack target, and this repo's own
+    # `project_outputs_in_tree_check` FAILs a project for citing exactly such a
+    # /tmp artifact. Omitted now means stdout only; pass --out-dir to opt in.
+    ap.add_argument("--out-dir", type=Path, default=None,
+                    help="Directory to write the JSON report into. Omitted "
+                         "(the default) = write no file at all; the verdict "
+                         "goes to stdout only.")
     ap.add_argument("--strict", action="store_true", help="Treat warns as errors (exit 1)")
     args = ap.parse_args(argv)
 
     if not args.rtl_dir.is_dir():
         print(f"ERROR: rtl-dir not found: {args.rtl_dir}", file=sys.stderr)
         return 2
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.out_dir is not None:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
 
     sustain_clauses = []
     spec_signals: List[str] = []
@@ -230,15 +248,23 @@ def main(argv: List[str] | None = None) -> int:
 
     res = Result(status=status, findings=findings, files_scanned=len(rtl_files),
                  files_unreadable=len(unreadable), spec_signals=spec_signals[:30])
-    out_json = args.out_dir / "sustained_vs_edge_check.json"
-    out_json.write_text(json.dumps(asdict(res), indent=2, default=str))
+    # #494 — write only when asked. Kept at the original position (before the
+    # summary print) so the stdout the umbrella reads is byte-identical when
+    # --out-dir IS supplied; `out_json` stays None otherwise and the trailing
+    # `json:` line — which would name a path that does not exist — is dropped
+    # with it.
+    out_json = None
+    if args.out_dir is not None:
+        out_json = args.out_dir / "sustained_vs_edge_check.json"
+        out_json.write_text(json.dumps(asdict(res), indent=2, default=str))
     print(f"sustained_vs_edge_check: {status} — {len(errors)} errors, {len(warns)} warns, {len(rtl_files)} files scanned")
     print(f"findings: {len(findings)}")
     for f in findings[:20]:
         print(f"  [{f.severity}] {f.file}:{f.line} signal={f.signal}  sustain_counter={f.has_sustain_counter}")
         if f.spec_match:
             print(f"    spec: {f.spec_match}")
-    print(f"json: {out_json}")
+    if out_json is not None:
+        print(f"json: {out_json}")
     return 0 if status == "PASS" else 1
 
 

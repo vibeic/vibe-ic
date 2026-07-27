@@ -29,7 +29,11 @@ Heuristic exit:
 Generality: any synchronous RTL design. No chip / tester / PDK names.
 
 Usage:
-    python3 transient_signal_latch_check.py --rtl-dir ./rtl/ --out-dir /tmp
+    python3 transient_signal_latch_check.py --rtl-dir ./rtl/
+
+`--out-dir` is OPTIONAL and has no default: omit it and the gate writes no
+file at all (verdict on stdout). Pass a project-relative directory —
+e.g. `--out-dir ./reports/` — when you want the JSON report on disk.
 """
 from __future__ import annotations
 import argparse, json, re, sys
@@ -123,14 +127,23 @@ def scan_consumers(p: Path, signal: str) -> List[Tuple[int, str, bool, str]]:
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.strip().split("\n")[0])
     ap.add_argument("--rtl-dir", required=True, type=Path)
-    ap.add_argument("--out-dir", type=Path, default=Path("/tmp/transient_signal_latch_check"))
+    # #494 — a read-only validator writes NOTHING unless a caller asks for it.
+    # See the sibling note in `sustained_vs_edge_check.py`: a hardcoded
+    # `/tmp/<gatename>` default made every invocation deposit a report at a
+    # fixed shared path, which concurrent runs overwrite without a trace and
+    # which is a standing symlink-hijack target on a multi-user host.
+    ap.add_argument("--out-dir", type=Path, default=None,
+                    help="Directory to write the JSON report into. Omitted "
+                         "(the default) = write no file at all; the verdict "
+                         "goes to stdout only.")
     ap.add_argument("--strict", action="store_true")
     args = ap.parse_args(argv)
 
     if not args.rtl_dir.is_dir():
         print(f"ERROR: rtl-dir not found: {args.rtl_dir}", file=sys.stderr)
         return 2
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.out_dir is not None:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
 
     rtl_files = sorted([p for p in args.rtl_dir.rglob("*") if p.suffix.lower() in {".v", ".sv", ".vh", ".svh"}])
     # Step 1: collect transient signals (handshake-gated drivers)
@@ -165,14 +178,19 @@ def main(argv: List[str] | None = None) -> int:
     warns = [f for f in findings if f.severity == "WARN"]
     status = "PASS" if not errors and (not args.strict or not warns) else "FAIL"
     res = Result(status=status, findings=findings, files_scanned=len(rtl_files))
-    out_json = args.out_dir / "transient_signal_latch_check.json"
-    out_json.write_text(json.dumps(asdict(res), indent=2, default=str))
+    # #494 — write only when asked; position preserved so stdout is
+    # byte-identical when --out-dir IS supplied.
+    out_json = None
+    if args.out_dir is not None:
+        out_json = args.out_dir / "transient_signal_latch_check.json"
+        out_json.write_text(json.dumps(asdict(res), indent=2, default=str))
     print(f"transient_signal_latch_check: {status} — {len(errors)} errors, {len(warns)} warns")
     for f in findings[:20]:
         print(f"  [{f.severity}] signal={f.signal}")
         print(f"    producer {f.producer_file}:{f.producer_line}")
         print(f"    consumer {f.consumer_file}:{f.consumer_line} ({f.multi_cycle_evidence})")
-    print(f"json: {out_json}")
+    if out_json is not None:
+        print(f"json: {out_json}")
     return 0 if status == "PASS" else 1
 
 
