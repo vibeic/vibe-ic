@@ -6248,6 +6248,8 @@ def _v1_6_605_remap_surviving_dlatch(
 # ::TestSynthFrontendSelection imports them off this module).
 # ---------------------------------------------------------------------------
 import synth_frontend as _sf
+# Staged-adder-map recipe + post-run "did it actually bind?" verification.
+import adder_map_techmap as _amt
 
 _SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
 _decide_synth_frontend = _sf.decide_synth_frontend
@@ -7511,20 +7513,40 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # workdir and `techmap -map <file>` it (the exact ORFS directive). A
     # declared path that is absent / unreadable / an unexpanded flow variable
     # is SKIPPED + disclosed — never fabricated (§4.05).
+    #
+    # TWO MEASURED DEFECTS THIS BLOCK FIXES (both reproduced against the real
+    # flow on a 32-bit multi-operand datapath) — see adder_map_techmap.py:
+    #   (1) `techmap -map <map>` ALONE silently rewrites nothing when the map
+    #       keys on `$lcu`, which is what EVERY parallel-prefix map keys on
+    #       (yosys's own `+/choices/*.v` included). After `alumacc` the design
+    #       carries `$alu`, and it is the `$alu` rule inside `+/techmap.v` that
+    #       creates the `$lcu`. Measured: a declared Kogge-Stone map produced
+    #       `_90_lcu_brent_kung` (the DEFAULT) and an area within 0.04% of
+    #       applying no map at all. Fix = yosys's documented ordering, the
+    #       staged map FIRST and `+/techmap.v` in the SAME call, applied ONLY
+    #       when the map needs it (a map keyed on `$add`/`$alu` is emitted
+    #       exactly as before, byte-identical).
+    #   (2) The note claimed the knob was applied on the strength of "the file
+    #       was staged", never checking. A silent no-op was reported as an
+    #       ADOPTED knob. Fix = the note is now written AFTER the yosys run
+    #       from yosys's own `Using template ...` lines (below, post-run);
+    #       absence of evidence reads NOT APPLIED, never success (§4.05).
     _adder_map_clause = ""
+    _adder_map_text = ""          # staged map source, for the post-run verify
+    _adder_map_name = ""
     _adder_declared = _rf_knobs.get("ADDER_MAP_FILE")
     if isinstance(_adder_declared, str) and _adder_declared:
         _adder_src = _resolve_adder_map_file(project, _adder_declared)
         if _adder_src is not None:
             try:
                 _staged_adder = out_dir / "_ref_adder_map.v"
-                _staged_adder.write_text(
-                    _adder_src.read_text(errors="ignore"))
-                _adder_map_clause = (
-                    f"techmap -map {out_dir_c}/_ref_adder_map.v; ")
-                _rf_notes.append(
-                    f"ADDER_MAP_FILE -> techmap -map ({_adder_src.name})")
+                _adder_map_text = _adder_src.read_text(errors="ignore")
+                _staged_adder.write_text(_adder_map_text)
+                _adder_map_name = _adder_src.name
+                _adder_map_clause = _amt.build_adder_map_step(
+                    f"{out_dir_c}/_ref_adder_map.v", _adder_map_text) + "; "
             except Exception:
+                _adder_map_text = ""
                 _rf_notes.append(
                     f"ADDER_MAP_FILE SKIPPED (stage failed: {_adder_declared})")
         else:
@@ -7574,6 +7596,21 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # progressing synth is never killed; only a hang dies.
     rc, out, err = _docker_exec(container, yosys_cmd, marker=netlist_c)
     log = out_dir / "synth.log"
+    # The ADDER_MAP_FILE provenance line is written HERE, not where the clause
+    # was built, because "staged" is not "applied". yosys names every map module
+    # it instantiates ("Using template <t> for cells of type <c>."); that log is
+    # the only honest evidence the design's declared adder architecture is the
+    # one in the netlist. No evidence -> NOT APPLIED (never a silent success),
+    # and the note says what yosys used INSTEAD so the miss is actionable.
+    if _adder_map_text:
+        _amt_applied, _amt_reason = _amt.verify_map_applied(
+            out + "\n" + err, _adder_map_text)
+        _rf_notes.append(
+            _amt.applied_note(_adder_map_name, _amt_applied, _amt_reason))
+        if not _amt_applied:
+            print(f"[phase3][synth][WARN] ADDER_MAP_FILE declared by the "
+                  f"design's reference_flow did NOT bind: {_amt_reason}",
+                  file=sys.stderr)
     _rf_header = ("=== REFERENCE-FLOW QoR-KNOB INGEST "
                   "(input/reference_flow) ===\n"
                   + "\n".join(_rf_notes) + "\n\n") if _rf_notes else ""

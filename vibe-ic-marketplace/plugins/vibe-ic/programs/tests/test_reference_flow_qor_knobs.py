@@ -227,7 +227,21 @@ def _min_project(tmp_path: Path) -> "tuple[Path, mod.PdkConfig]":
     return project, pdk
 
 
-def _capture_synth(monkeypatch, project: Path, pdk) -> "tuple[object, str]":
+# yosys announces every techmap module it instantiates. `step_synth` now reads
+# these lines to decide whether a DECLARED ADDER_MAP_FILE actually bound, so a
+# test that wants the "applied" verdict must supply the matching evidence.
+_YOSYS_LOG_MAP_APPLIED = (
+    "Number of cells:  42\n"
+    "Using template \\my_adder_map for cells of type $add.\n")
+# The SILENT-FALL-THROUGH shape: the map was staged, but yosys mapped the
+# arithmetic with its own default instead.
+_YOSYS_LOG_MAP_NOT_USED = (
+    "Number of cells:  42\n"
+    "Using template \\_90_lcu_brent_kung for cells of type $lcu.\n")
+
+
+def _capture_synth(monkeypatch, project: Path, pdk,
+                   stdout: str = "Number of cells:  42\n") -> "tuple[object, str]":
     container = "vibe-test-container"
     monkeypatch.setitem(mod._CONTAINER_MOUNTS_CACHE, container, [])
     netlist = _pl.synth_dir(project) / "top_synth.v"
@@ -237,7 +251,7 @@ def _capture_synth(monkeypatch, project: Path, pdk) -> "tuple[object, str]":
         cmds.append(cmd)
         netlist.parent.mkdir(parents=True, exist_ok=True)
         netlist.write_text("module top(); INV i(); endmodule\n")
-        return (0, "Number of cells:  42\n", "")
+        return (0, stdout, "")
 
     monkeypatch.setattr(mod, "_docker_exec", _fake_docker_exec)
     result = mod.step_synth(project, "top", pdk, container)
@@ -265,9 +279,13 @@ class TestStepSynthKnobEmission:
                 "REMOVE_ABC_BUFFERS = 1\n"
                 "ADDER_MAP_FILE = adders.v\n"
             ),
-            "adders.v": "// adder techmap map file\n",
+            # A map keyed on a FRONT-END cell type ($add): it needs no base-map
+            # help, so the emitted command must stay the legacy single -map form.
+            "adders.v": ('(* techmap_celltype = "$add" *)\n'
+                         "module my_adder_map(A, B, Y); endmodule\n"),
         })
-        result, cmd = _capture_synth(monkeypatch, project, pdk)
+        result, cmd = _capture_synth(monkeypatch, project, pdk,
+                                     stdout=_YOSYS_LOG_MAP_APPLIED)
         assert result.status == "PASS", result.detail
         # SWAP_ARITH_OPERATORS → alumacc (before generic synth mapping)
         assert "alumacc;" in cmd
@@ -280,13 +298,58 @@ class TestStepSynthKnobEmission:
         assert cmd.index("abc -liberty") < cmd.index("opt_clean -purge;")
         notes = result.extras.get("reference_flow_qor_knobs")
         assert any("SWAP_ARITH_OPERATORS" in n for n in notes)
-        assert any("ADDER_MAP_FILE -> techmap" in n for n in notes)
+        # The knob is reported ADOPTED only because yosys's log SHOWS the map's
+        # own module was instantiated — "staged" alone is not "applied".
+        assert any("ADDER_MAP_FILE -> techmap" in n and "APPLIED" in n
+                   for n in notes)
         assert any("REMOVE_ABC_BUFFERS" in n for n in notes)
         # HONEST-SCOPE (live-run fidelity finding): the SWAP_ARITH note must NOT
         # over-claim a timing-repair — alumacc is disclosed as a structural
         # enabler that needs the adder techmap, not an operand-swap on its own.
         _swap = next(n for n in notes if n.startswith("SWAP_ARITH_OPERATORS"))
         assert "NOT an operand-swap timing-repair" in _swap
+
+    def test_lcu_keyed_map_gets_the_base_techmap_in_the_SAME_call(
+            self, monkeypatch, tmp_path):
+        """A parallel-prefix map keys on `$lcu`, which does not exist until the
+        `$alu` rule runs. Emitting `techmap -map <map>` alone rewrites NOTHING
+        and the design silently ships the DEFAULT adder architecture. The map
+        must therefore be combined with `+/techmap.v` in ONE call, map first."""
+        project, pdk = _min_project(tmp_path)
+        _stage_reference_flow(project, {
+            "orfs_config.mk": "ADDER_MAP_FILE = adders.v\n",
+            "adders.v": ('(* techmap_celltype = "$lcu" *)\n'
+                         "module _80_lcu_kogge_stone(P, G, CI, CO); endmodule\n"),
+        })
+        _, cmd = _capture_synth(
+            monkeypatch, project, pdk,
+            stdout="Using template \\_80_lcu_kogge_stone for cells of type $lcu.\n")
+        staged = "_ref_adder_map.v"
+        assert staged in cmd and "+/techmap.v" in cmd
+        # ONE techmap call carrying both, staged map FIRST so it wins.
+        assert f"{staged} -map +/techmap.v" in cmd
+
+    def test_staged_map_that_did_NOT_bind_is_reported_NOT_APPLIED(
+            self, monkeypatch, tmp_path):
+        """THE REGRESSION: the map was staged and the command emitted, but
+        yosys mapped the arithmetic with its own default instead. The run must
+        NOT record this as an adopted knob."""
+        project, pdk = _min_project(tmp_path)
+        _stage_reference_flow(project, {
+            "orfs_config.mk": "ADDER_MAP_FILE = adders.v\n",
+            "adders.v": ('(* techmap_celltype = "$lcu" *)\n'
+                         "module _80_lcu_kogge_stone(P, G, CI, CO); endmodule\n"),
+        })
+        result, _ = _capture_synth(monkeypatch, project, pdk,
+                                   stdout=_YOSYS_LOG_MAP_NOT_USED)
+        notes = result.extras.get("reference_flow_qor_knobs")
+        adder = [n for n in notes if "ADDER_MAP_FILE" in n]
+        assert adder, "the declared knob must still be disclosed"
+        assert any("NOT APPLIED" in n for n in adder), adder
+        # It must never read as an adopted knob...
+        assert not any("ADDER_MAP_FILE -> techmap" in n for n in adder), adder
+        # ...and it must say what ran INSTEAD, so the miss is actionable.
+        assert any("_90_lcu_brent_kung" in n for n in adder), adder
 
     def test_adder_map_missing_file_skipped_disclosed(self, monkeypatch, tmp_path):
         # §4.05: ADDER_MAP_FILE points at a missing file → techmap NOT injected,

@@ -31,6 +31,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `accumulate_synth` | any | — | deterministic SOLVER for the CVDP sequential |
 | `ace_protocol_synth` | any | — | AMBA AXI/ACE coherency-extension protocol synth helper. |
 | `afdx_protocol_synth` | any | — | AFDX / ARINC 664 Part 7 protocol synth helper. |
+| `adder_map_techmap` | any | — | staged adder-techmap recipe + applied-verification. |
 | `agent_checkin_scope_guard` | any | — | role-based check-in (commit) path-scope gate. |
 | `agent_report_presence_check` | any | — | verify the project ships a structured |
 | `agent_report_sha256_attestation_check` | any | — | verify the project's |
@@ -1067,6 +1068,7 @@ _(no programs in this group)_
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
 - `afdx_protocol_synth` — AFDX / ARINC 664 Part 7 protocol synth helper.
+- `adder_map_techmap` — staged adder-techmap recipe + applied-verification.
 - `agent_checkin_scope_guard` — role-based check-in (commit) path-scope gate.
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
