@@ -29,6 +29,8 @@ from __future__ import annotations
 import argparse, json, sys
 from pathlib import Path
 
+import _spec_floor_keys as _sfk   # noqa: E402  (re #495 Stage 0)
+
 try:
     import yaml
 except ImportError:
@@ -104,22 +106,25 @@ def count_opcodes(l3: dict) -> int:
 
 
 def extract_crc_poly(l3: dict) -> str | None:
-    """Find the CRC polynomial string."""
+    """Find the CRC polynomial string.
+
+    re #495 Stage 0 — the incumbent read was ``{crc,crc8,crc_config}.{poly,
+    polynomial}``, none of which any producer writes: the doc-extraction
+    producers emit ``crc.poly_hex`` and ``crc_parameters.polynomial_hex``.
+    The incumbent container/field order is preserved and the producer
+    spellings appended, so a doc that does carry ``crc.poly`` still resolves
+    to exactly the same value."""
     if not l3:
         return None
-    for key in ("crc", "crc8", "crc_config"):
-        v = l3.get(key)
-        if isinstance(v, dict):
-            p = v.get("poly") or v.get("polynomial")
-            if p:
-                # normalise — accept "0x31", "0x07", "0x8c" mirror-of-0x31
-                return str(p).lower()
+    for key in _sfk.L3_CRC_CONTAINER_KEYS:
+        p = _sfk.first_crc_poly(l3.get(key))
+        if p:
+            # normalise — accept "0x31", "0x07", "0x8c" mirror-of-0x31
+            return p
     # Also check nested under frame_format etc.
     ff = l3.get("frame_format")
     if isinstance(ff, dict):
-        v = ff.get("crc")
-        if isinstance(v, dict):
-            return str(v.get("poly", "")).lower() or None
+        return _sfk.first_crc_poly(ff.get("crc"))
     return None
 
 
@@ -181,26 +186,26 @@ def count_l9_ports(l9: dict) -> int:
     `top_level_ports` / `ports` / `dtop_ports` at the JSON root. v0.56
     descends into the orchestrator-mandated nested location too, so the
     floor check actually fires (regression caught by B1 multi-IC run —
-    prior version always returned 0 for orchestrator-shaped L9 docs)."""
+    prior version always returned 0 for orchestrator-shaped L9 docs).
+
+    re #495 Stage 0: the root-key list read only the LEGACY mirror ``ports``
+    and missed ``top_ports`` — the CANONICAL spelling per #490, which the L9
+    emitter writes alongside ``ports`` / ``top_module_pins`` and which every
+    other port consumer in the tree reads first. Selection is now
+    first-NON-EMPTY rather than first-PRESENT, so an empty ``ports: []`` can
+    no longer shadow a populated ``top_ports``."""
     if not l9:
         return 0
     # Nested orchestrator locations (preferred — current schema)
-    for parent_key in ("dtop_top_level", "dtop", "top_level"):
+    for parent_key in _sfk.L9_TOP_PORT_NESTED_PARENT_KEYS:
         parent = l9.get(parent_key)
-        if isinstance(parent, dict):
-            for sub in ("ports", "top_level_ports"):
-                v = parent.get(sub)
-                if isinstance(v, list):
-                    return len(v)
-                if isinstance(v, dict):
-                    return len(v)
-    # Legacy root-level keys
-    for key in ("top_level_ports", "ports", "dtop_ports"):
-        v = l9.get(key)
-        if isinstance(v, list):
+        _sub, v = _sfk.first_nonempty(parent, _sfk.L9_TOP_PORT_NESTED_SUB_KEYS)
+        if isinstance(v, (list, dict)):
             return len(v)
-        if isinstance(v, dict):
-            return len(v)
+    # Root-level keys (legacy spellings first, canonical + mirrors appended)
+    _key, v = _sfk.first_nonempty(l9, _sfk.L9_TOP_PORT_ROOT_KEYS)
+    if isinstance(v, (list, dict)):
+        return len(v)
     return 0
 
 
