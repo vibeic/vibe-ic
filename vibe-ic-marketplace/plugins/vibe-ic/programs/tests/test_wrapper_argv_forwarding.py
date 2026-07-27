@@ -159,12 +159,41 @@ def test_wrapper_writes_the_json_the_caller_asked_for(tmp_path, wrapper, mode):
 @pytest.mark.parametrize("wrapper,mode", sorted(_WRAPPERS.items()))
 def test_wrapper_does_not_swallow_an_invalid_mode(tmp_path, wrapper, mode):
     """A mode that is not an eda_report_audit choice is a broken declaration.
-    It must reach argparse (rc 2) instead of being silently replaced by the
-    wrapper's own hardcoded mode."""
+    It must NOT be silently replaced by the wrapper's own hardcoded mode.
+
+    UPDATED with #490. This asserted rc 2, i.e. "let argparse reject it".
+    That was right about the intent and wrong about the exit code:
+    `flow_compliance_check._check_program_exit_zero` credits rc 2 as a
+    VACUOUS_PASS and `return True`s unconditionally, so a command line
+    argparse itself rejected turned the step GREEN. The wrappers now REFUSE
+    an unpinnable mode themselves and exit 1. The requirement the test exists
+    for — the wrapper must not absorb it — is unchanged and still asserted."""
     r = _run(wrapper, str(_project(tmp_path)), "--mode", "phase3/stage3/sta")
-    assert r.returncode == 2, (
-        f"{wrapper} is still absorbing an invalid --mode")
-    assert "invalid choice" in (r.stderr + r.stdout)
+    blob = (r.stderr + r.stdout).lower()
+
+    src = (_PROGRAMS / wrapper).read_text()
+    adopted = "_report_check_argv" in src
+
+    if adopted:
+        # drc (#490) / lvs (#489) / power: the wrapper refuses it itself and
+        # exits 1, because rc 2 is credited as a vacuous PASS by the gate
+        # runner and a refusal must never spend that credit.
+        assert r.returncode == 1, (
+            f"{wrapper} adopted the shared splitter but did not refuse: "
+            f"rc={r.returncode}")
+        assert "refused" in blob, blob
+    else:
+        # antenna / ir_drop have NOT adopted it — #490 measured that their
+        # declared --json paths are already written by phase3_one_shot_runner
+        # under a DIFFERENT schema, so honouring --json there would clobber a
+        # real sign-off artefact. Each needs a path decision before an argv
+        # fix. Until then the old behaviour stands: argparse rejects it (rc 2).
+        # This arm is a LEDGER of what has not been converted, and it flips to
+        # the arm above the moment one of them adopts the helper.
+        assert r.returncode == 2, (
+            f"{wrapper} neither adopted the splitter nor let argparse reject "
+            f"the mode: rc={r.returncode}")
+        assert "invalid choice" in blob, blob
 
 
 # ===========================================================================
@@ -418,8 +447,16 @@ def test_d1_explicit_mode_still_selects_that_mode(tmp_path, wrapper, mode):
 
 
 def test_no_argument_defaults_to_the_current_directory():
-    """`main([])` must never happen — the wrapper substitutes ".". (Not a
-    direction-1 guard: `build_argv` is introduced by this change, so it cannot
-    hold on the pre-fix tree.)"""
-    import drc_report_check as W
-    assert W.build_argv([]) == [".", "--mode", "drc"]
+    """`main([])` must never happen — the wrapper substitutes ".".
+
+    UPDATED with #490. This called `drc_report_check.build_argv`, an API that
+    existed only in #485's version of the drc fix. #490's version landed
+    instead (it adopts the shared splitter, pins the mode in both spellings,
+    refuses any other, and maps argparse's own rc 2 to rc 1), so the assertion
+    now goes through the shared helper — the thing that actually decides the
+    project directory for every wrapper."""
+    from _report_check_argv import split_and_pin
+    proj, passthrough, rejected = split_and_pin([], mode="drc")
+    assert proj == "."
+    assert passthrough == []
+    assert rejected is None

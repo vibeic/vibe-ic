@@ -34,9 +34,20 @@ from eda_report_audit import main
 # scope). Two implementations of one question is exactly how this defect class
 # propagated; #489 factored the helper and #490 flagged this copy before it
 # could land beside it.
-from _report_check_argv import split_argv
+from _report_check_argv import split_and_pin
 
 
 if __name__ == "__main__":
-    _proj, _passthrough = split_argv(sys.argv[1:])
+    # `split_and_pin`, not `split_argv`: the plain splitter FORWARDS a
+    # caller's `--mode` verbatim, so it would arrive after the pinned pair and
+    # argparse's last-wins would hand the caller whichever audit they named.
+    # Measured while making this change: `--mode drc` produced
+    # `eda_report_audit:drc` under a wrapper whose whole job is to pin power.
+    _proj, _passthrough, _rejected = split_and_pin(sys.argv[1:], mode="power")
+    if _rejected is not None:
+        print(f"REFUSED: this wrapper pins `--mode power`; the caller asked "
+              f"for `{_rejected}`. A sign-off auditor whose domain a caller "
+              f"can change by flag spelling is a false-certificate vector. "
+              f"NOTHING was certified.", file=sys.stderr)
+        sys.exit(1)
     sys.exit(main([_proj, "--mode", "power", *_passthrough]))
