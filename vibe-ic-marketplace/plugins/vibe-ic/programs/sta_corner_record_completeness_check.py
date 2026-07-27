@@ -239,6 +239,21 @@ _CITING_ARTIFACTS = (
 # `worst slack max -1.71` / `worst slack min 0.54` (OpenSTA max=setup, min=hold)
 _WORST_SLACK_RE = re.compile(
     r"worst\s+slack\s+(max|min)\s+(-?\d+(?:\.\d+)?)", re.IGNORECASE)
+# `worst slack max INF` — OpenSTA's NO-PATHS-ANALYSED sentinel, not a number.
+# `worst_slack` starts at infinity and takes the min over the analysed paths,
+# so it is still INF exactly when the path set was EMPTY. Measured in the
+# corpus: three published reports whose whole body is
+#     No paths found. / tns max 0.00 / wns max 0.00 / worst slack max INF
+# The `wns 0.00` there is arithmetically derived (`wns = min(0, worst_slack)`)
+# and carries NO independent evidence — it reads 0.00 *because* nothing was
+# analysed, not because timing was met. Reading it as a met +0.000 ns is this
+# gate's own founding defect ("an unreported corner is indistinguishable from
+# a met one") reproduced inside its own reader, so the sentinel is matched
+# BEFORE `_WORST_SLACK_RE` — which would otherwise scrape a bogus `1` out of
+# an exponent-form `1e+30`.
+_WORST_SLACK_NO_PATH_RE = re.compile(
+    r"worst\s+slack\s+(max|min)\s+[-+]?(?:inf(?:inity)?|1(?:\.0+)?e\+?30)\b",
+    re.IGNORECASE)
 # `WNS -0.05` and `WNS = -0.05` are both real summary-line dialects (some
 # tools/scripts insert the `=`, OpenSTA's own `report_wns`/report_tns` do
 # not) — `[:=]?` accepts the separator without requiring it, widening
@@ -345,11 +360,35 @@ def extract_slacks(text: str) -> Dict[str, Optional[float]]:
     `report_checks` default is the max path) unless an enclosing HOLD section
     says otherwise — hold is then left None, which is honest: a report that
     never labelled a min analysis did not report hold, and the rules say so
-    rather than inventing a number."""
-    setup: Optional[float] = None
-    hold: Optional[float] = None
-    tns: Optional[float] = None
+    rather than inventing a number.
+
+    An axis whose authoritative `worst slack` line is the NO-PATHS sentinel
+    (`INF`) analysed nothing, so its non-negative `wns`/`tns` summary lines are
+    withheld rather than returned as a met 0.000 ns — see
+    `_WORST_SLACK_NO_PATH_RE`. A NEGATIVE summary value is never withheld: it
+    cannot be an echo of infinity, and a completeness gate must not suppress
+    evidence of a violation. The return shape is unchanged (three
+    Optional[float] fields) because callers iterate `.values()` numerically."""
     section: Optional[str] = None
+    # Accumulate per SECTION and resolve at the END. Two reasons the resolution
+    # cannot be done inline: OpenSTA prints the `wns`/`tns` summary lines BEFORE
+    # the `worst slack` line they derive from, so vacuity is not yet known when
+    # a summary is read; and vacuity is a property of ONE section, not of the
+    # body — a report can carry an empty section beside a real one, and the
+    # empty section's 0.00 must not drag down the corner that did analyse
+    # paths. A body with no banners is simply one section.
+    b_ws: List[Dict[str, List[float]]] = []    # `worst slack` lines, per block
+    b_wns: List[Dict[str, List[float]]] = []   # `wns` summary lines, per block
+    b_tns: List[Dict[str, List[float]]] = []
+    b_np: List[Dict[str, bool]] = []           # no-paths sentinel seen, per axis
+
+    def _open_block() -> None:
+        b_ws.append({"max": [], "min": []})
+        b_wns.append({"max": [], "min": []})
+        b_tns.append({"max": [], "min": []})
+        b_np.append({"max": False, "min": False})
+
+    _open_block()
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -357,34 +396,55 @@ def extract_slacks(text: str) -> Dict[str, Optional[float]]:
         msec = _SECTION_RE.search(line)
         if msec:
             section = msec.group(1).upper()
+            _open_block()
+            continue
+
+        mnp = _WORST_SLACK_NO_PATH_RE.search(line)
+        if mnp:
+            b_np[-1][mnp.group(1).lower()] = True
             continue
 
         mws = _WORST_SLACK_RE.search(line)
         if mws:
-            val = float(mws.group(2))
-            if mws.group(1).lower() == "max":
-                setup = _merge_slack(setup, val)
-            else:
-                hold = _merge_slack(hold, val)
+            b_ws[-1][mws.group(1).lower()].append(float(mws.group(2)))
             continue
 
         mwns = _WNS_RE.search(line)
         if mwns:
-            val = float(mwns.group(2))
             mode = (mwns.group(1) or "").lower()
             if not mode:
                 mode = "min" if section == "HOLD" else "max"
-            if mode == "max":
-                setup = _merge_slack(setup, val)
-            else:
-                hold = _merge_slack(hold, val)
+            b_wns[-1][mode].append(float(mwns.group(2)))
             continue
 
         mtns = _TNS_RE.search(line)
         if mtns:
-            tns = _merge_slack(tns, float(mtns.group(2)))
+            mode = (mtns.group(1) or "").lower()
+            if not mode:
+                mode = "min" if section == "HOLD" else "max"
+            b_tns[-1][mode].append(float(mtns.group(2)))
 
-    return {"setup_wns_ns": setup, "hold_wns_ns": hold, "tns_ns": tns}
+    pool: Dict[str, List[float]] = {"max": [], "min": []}
+    tns_pool: List[float] = []
+    for ws, wns, tns_v, no_path in zip(b_ws, b_wns, b_tns, b_np):
+        for axis in ("max", "min"):
+            # Vacuous: this section declared the axis had no paths and produced
+            # no finite worst slack of its own. Its NON-NEGATIVE summaries are
+            # the arithmetic echo of the empty path set and are dropped; a
+            # NEGATIVE one is kept, because it cannot be an echo of infinity
+            # and a completeness gate must not suppress a violation.
+            vacuous = no_path[axis] and not ws[axis]
+            keep_wns = ([v for v in wns[axis] if v < 0] if vacuous
+                        else wns[axis])
+            keep_tns = ([v for v in tns_v[axis] if v < 0] if vacuous
+                        else tns_v[axis])
+            pool[axis].extend(ws[axis])
+            pool[axis].extend(keep_wns)
+            tns_pool.extend(keep_tns)
+
+    return {"setup_wns_ns": min(pool["max"]) if pool["max"] else None,
+            "hold_wns_ns": min(pool["min"]) if pool["min"] else None,
+            "tns_ns": min(tns_pool) if tns_pool else None}
 
 
 def extract_drv(text: str) -> Dict[str, object]:
