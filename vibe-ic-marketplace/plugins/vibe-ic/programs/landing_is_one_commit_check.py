@@ -111,7 +111,8 @@ def find_unsquashed(repo: Path, limit: int = 200) -> Tuple[List[Dict], int]:
     return findings, len(rows)
 
 
-def head_is_one_commit(repo: Path, base: str) -> Tuple[bool, int, str]:
+def head_is_one_commit(repo: Path, base: str,
+                       batch: bool = False) -> Tuple[bool, int, str]:
     """The pre-push form: `base..HEAD` must be exactly one commit.
 
     This is the check that would have caught #459 at the time, and it costs one
@@ -128,16 +129,59 @@ def head_is_one_commit(repo: Path, base: str) -> Tuple[bool, int, str]:
         n = int(out.strip())
     except ValueError:
         return False, -1, f"unreadable rev-list output: {out.strip()!r}"
-    if n == 1:
-        return True, n, f"one commit ahead of {base} — a squashed landing"
     if n == 0:
         return False, n, (f"NOTHING to land: HEAD == {base}. This is not a pass; "
                           f"a landing that adds no commit landed nothing.")
-    return False, n, (
-        f"{n} commits ahead of {base} — a landing must be ONE commit. "
-        f"`git commit --amend` after a rebase touches only the top commit and "
-        f"leaves the authoring commit underneath; run "
-        f"`git reset --soft {base}` first, then a single `git commit`.")
+    if n == 1:
+        return True, n, f"one commit ahead of {base} — a squashed landing"
+    if not batch:
+        return False, n, (
+            f"{n} commits ahead of {base} — a single landing must be ONE commit. "
+            f"`git commit --amend` after a rebase touches only the top commit and "
+            f"leaves the authoring commit underneath; run "
+            f"`git reset --soft {base}` first, then a single `git commit`. "
+            f"If this is a deliberate BATCH of several PR landings, pass "
+            f"--batch, which checks the batch's own shape instead.")
+
+    # BATCH MODE — several PR landings pushed together under one version bump
+    # and one CI run. The per-landing rule does not apply, but the defect it
+    # exists for still does, so the batch is checked for a STRICTLY STRONGER
+    # property rather than waved through:
+    #
+    #   * no commit in the range may be manifest-only — that is exactly the
+    #     stranded version commit this program was written for, and a batch is
+    #     not a licence to leave one;
+    #   * exactly ONE commit may carry a version bump, and it must be the LAST,
+    #     so the pushed tip is the version the batch publishes and every
+    #     intermediate commit is a real landing.
+    rc, out = _git(repo, "rev-list", "--reverse", f"{base}..HEAD")
+    shas = [s for s in out.split() if s]
+    if rc != 0 or len(shas) != n:
+        return False, -1, f"could not list the {n} commits in {base}..HEAD"
+    bare, versioned = [], []
+    for sha in shas:
+        if _is_manifest_only(repo, sha) is True:
+            bare.append(sha[:9])
+        rc2, subj = _git(repo, "log", "-1", "--format=%s", sha)
+        if rc2 == 0 and _VERSION_RE.search(subj):
+            versioned.append(sha[:9])
+    if bare:
+        return False, n, (
+            f"batch of {n}, but {len(bare)} commit(s) carry ONLY the version "
+            f"manifests: {bare}. A batch does not excuse a stranded version "
+            f"commit — that is the defect this check exists for.")
+    if len(versioned) != 1:
+        return False, n, (
+            f"batch of {n} carries {len(versioned)} version-tagged commit(s) "
+            f"{versioned}; a batch publishes exactly ONE version.")
+    if versioned[0] != shas[-1][:9]:
+        return False, n, (
+            f"batch of {n} bumps the version at {versioned[0]}, which is not "
+            f"the tip ({shas[-1][:9]}). The pushed tip must be the version the "
+            f"batch publishes, or CI green refers to a tree nobody released.")
+    return True, n, (
+        f"batch of {n} landing(s) ahead of {base}: no manifest-only commit, "
+        f"one version bump, carried by the tip")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -145,6 +189,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("repo", nargs="?", default=".")
     ap.add_argument("--base", default=None,
                     help="pre-push mode: assert base..HEAD is exactly one commit")
+    ap.add_argument("--batch", action="store_true",
+                    help="several PR landings under one version bump and one CI "
+                         "run: check the batch's shape instead of demanding one "
+                         "commit (see head_is_one_commit)")
     ap.add_argument("--limit", type=int, default=200,
                     help="history mode: how many commits to examine")
     ap.add_argument("--json", dest="json_out", default=None)
@@ -152,7 +200,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     repo = Path(a.repo).resolve()
 
     if a.base:
-        ok, n, detail = head_is_one_commit(repo, a.base)
+        ok, n, detail = head_is_one_commit(repo, a.base, batch=a.batch)
         label = "PASS" if ok else ("NOT CHECKED" if n < 0 else "FAIL")
         print(f"[{label}] landing_is_one_commit: {detail}", file=sys.stderr)
         if a.json_out:

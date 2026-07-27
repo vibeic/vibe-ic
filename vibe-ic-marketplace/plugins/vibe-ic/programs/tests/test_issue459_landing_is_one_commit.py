@@ -183,3 +183,66 @@ def test_an_uncountable_range_is_NOT_CHECKED_not_a_block(tmp_path):
     ok, n, detail = L.head_is_one_commit(d, "NOSUCHREF")
     assert not ok and n == -1, (ok, n, detail)
     assert L.main([str(d), "--base", "NOSUCHREF"]) == 2
+
+
+# ── batch mode (owner directive 2026-07-27: land N PRs under ONE version) ──
+# The per-landing rule does not apply to a deliberate batch, but the defect it
+# exists for still does. Batch mode checks a STRICTLY STRONGER property: no
+# manifest-only commit anywhere in the range, exactly one version bump, and it
+# must be the tip — so CI green refers to the tree actually published.
+def test_a_clean_batch_passes(tmp_path):
+    d = _repo(tmp_path)
+    base = _commit(d, "base", {"seed.txt": "x\n"})
+    _commit(d, "fix(a): w", {"programs/a.py": "1\n"})
+    _commit(d, "fix(b): w", {"programs/b.py": "1\n"})
+    _commit(d, "fix(c): w [v1.2.3]",
+            {"programs/c.py": "1\n", _MANIFEST: '{"version":"1.2.3"}\n'})
+    ok, n, detail = L.head_is_one_commit(d, base, batch=True)
+    assert ok and n == 3, detail
+
+
+def test_a_batch_with_a_stranded_version_commit_still_FAILS(tmp_path):
+    """THE POINT. A batch is not a licence to leave the manifest-only commit
+    this whole check was written for."""
+    d = _repo(tmp_path)
+    base = _commit(d, "base", {"seed.txt": "x\n"})
+    _commit(d, "fix(a): w", {"programs/a.py": "1\n"})
+    _commit(d, "fix(a): w [v1.2.3]", {_MANIFEST: '{"version":"1.2.3"}\n'})
+    ok, _n, detail = L.head_is_one_commit(d, base, batch=True)
+    assert not ok
+    assert "manifest" in detail.lower(), detail
+
+
+def test_a_batch_bumping_twice_FAILS(tmp_path):
+    d = _repo(tmp_path)
+    base = _commit(d, "base", {"seed.txt": "x\n"})
+    _commit(d, "fix(a): w [v1.2.3]",
+            {"programs/a.py": "1\n", _MANIFEST: '{"version":"1.2.3"}\n'})
+    _commit(d, "fix(b): w [v1.2.4]",
+            {"programs/b.py": "1\n", _MANIFEST: '{"version":"1.2.4"}\n'})
+    ok, _n, detail = L.head_is_one_commit(d, base, batch=True)
+    assert not ok and "exactly ONE version" in detail
+
+
+def test_a_batch_whose_version_is_not_the_tip_FAILS(tmp_path):
+    """CI runs on the pushed TIP. If the version bump is buried mid-batch, a
+    green CI refers to a tree nobody released."""
+    d = _repo(tmp_path)
+    base = _commit(d, "base", {"seed.txt": "x\n"})
+    _commit(d, "fix(a): w [v1.2.3]",
+            {"programs/a.py": "1\n", _MANIFEST: '{"version":"1.2.3"}\n'})
+    _commit(d, "fix(b): w", {"programs/b.py": "1\n"})
+    ok, _n, detail = L.head_is_one_commit(d, base, batch=True)
+    assert not ok and "tip" in detail
+
+
+def test_batch_mode_is_OPT_IN(tmp_path):
+    """Without --batch the strict single-landing rule is unchanged, so batching
+    cannot happen by accident."""
+    d = _repo(tmp_path)
+    base = _commit(d, "base", {"seed.txt": "x\n"})
+    _commit(d, "fix(a): w", {"programs/a.py": "1\n"})
+    _commit(d, "fix(b): w [v1.2.3]",
+            {"programs/b.py": "1\n", _MANIFEST: '{"version":"1.2.3"}\n'})
+    ok, _n, detail = L.head_is_one_commit(d, base)
+    assert not ok and "--batch" in detail
