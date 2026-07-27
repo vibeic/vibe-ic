@@ -60,7 +60,8 @@ chapter is an ordinary, correct design.
 Exit codes:
   0 PASS / PASS_WITH_WAIVERS / VACUOUS_PASS
   1 FAIL
-  2 input error / silent skip (L3 absent — phase1 hadn't run yet)
+  2 input error / silent skip (L3 absent — phase1 hadn't run yet) /
+    NOT_CHECKED (empty L3 but the input was not fully read — #499)
 """
 from __future__ import annotations
 
@@ -85,6 +86,10 @@ PLACEHOLDER_NAMES = frozenset({
 PLACEHOLDER_THRESHOLD = 0.0  # v1.6.132 — 100% coverage required
 
 import _path_layout as _pl
+# v1.7.72 — for #499. VACUOUS_PASS asserts something about the INPUT
+# ("no command protocol in input"). That assertion is only available
+# once the input has actually been read.
+import _input_ingest as _ingest
 
 
 def _is_placeholder(op: Dict[str, Any]) -> bool:
@@ -162,17 +167,39 @@ def main(argv: List[str] | None = None) -> int:
     # #454 follow-up — read the emitter's refusal counter so neither branch
     # below can state an absence or an endorsement the document contradicts.
     refused = _refusal_count(l3)
+    # v1.7.72 — for #499. Whether the ingester read every staged
+    # document. Measured on a real CPU: both L3 gates reported
+    # VACUOUS_PASS — "no command protocol in input" — while the document
+    # declaring its eleven opcodes had been dropped by the converter and
+    # recorded as dropped in the ingester's own skip log. The gate could
+    # not have known; now it can, and it says so instead of certifying
+    # an absence over input it never read.
+    unread_docs = _ingest.unread_input_documents(project)
     if not isinstance(opcodes, list) or not opcodes:
-        # No opcodes — this is the no_opcodes_in_input case.
-        verdict = "VACUOUS_PASS"
-        report = {
-            "gate": GATE, "verdict": verdict,
-            "reason": "L3.opcodes empty — no command protocol in input "
-                      "(structurally correct for non-protocol IPs)."
-                      + _refusal_disclosure(refused, empty=True),
-            "total": 0, "placeholders": 0, "placeholder_ratio": 0.0,
-            "threshold": PLACEHOLDER_THRESHOLD,
-        }
+        if unread_docs:
+            verdict = "NOT_CHECKED"
+            report = {
+                "gate": GATE, "verdict": verdict,
+                "reason": "L3.opcodes empty, but the input was not fully "
+                          "read — no conclusion about the design is "
+                          "available."
+                          + _ingest.absence_claim_disclosure(project)
+                          + _refusal_disclosure(refused, empty=True),
+                "total": 0, "placeholders": 0, "placeholder_ratio": 0.0,
+                "threshold": PLACEHOLDER_THRESHOLD,
+            }
+        else:
+            # No opcodes — this is the no_opcodes_in_input case.
+            verdict = "VACUOUS_PASS"
+            report = {
+                "gate": GATE, "verdict": verdict,
+                "reason": "L3.opcodes empty — no command protocol in input "
+                          "(structurally correct for non-protocol IPs)."
+                          + _refusal_disclosure(refused, empty=True),
+                "total": 0, "placeholders": 0, "placeholder_ratio": 0.0,
+                "threshold": PLACEHOLDER_THRESHOLD,
+            }
+        report["unread_input_documents"] = unread_docs
     else:
         total = len(opcodes)
         placeholders = sum(1 for op in opcodes
@@ -213,6 +240,14 @@ def main(argv: List[str] | None = None) -> int:
     if verdict == "FAIL":
         print(f"FAIL: {report['reason']}", file=sys.stderr)
         return 1
+    # v1.7.72 — for #499. NOT_CHECKED is rc 2, the gate's documented
+    # "could not check" code — deliberately NOT rc 0. The design is not
+    # accused of anything; the gate simply declines to certify an
+    # absence over input it never read. Blocking on unread input is the
+    # ingest-completeness check's job, not this gate's.
+    if verdict == "NOT_CHECKED":
+        print(f"NOT_CHECKED: {report['reason']}", file=sys.stderr)
+        return 2
     if verdict == "VACUOUS_PASS":
         print(f"VACUOUS_PASS: {report['reason']}")
         return 0

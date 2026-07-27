@@ -72,9 +72,14 @@ Verdicts
 ------------------------------------------------------------------
   PASS         every opcode carries a unique, parseable dispatch key
   VACUOUS_PASS L3.opcodes empty/absent (non-protocol IP — the
-               `no_opcodes_in_input: true` case)
+               `no_opcodes_in_input: true` case) AND every staged
+               document was read
+  NOT_CHECKED  L3.opcodes empty/absent but the Phase-1 ingester left a
+               staged document unread, so the emptiness cannot be
+               attributed to the design (#499). rc 2.
   FAIL         any unparseable hex, hex collision, or mnemonic collision
-  rc 2         L3 absent / unparseable / project dir absent
+  rc 2         L3 absent / unparseable / project dir absent /
+               NOT_CHECKED
 
 Waiver: `waivers.json` key `l3_opcode_dispatch_key_intentional`
 (>= 40 chars) downgrades FAIL to PASS_WITH_WAIVER.
@@ -94,6 +99,9 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _path_layout as _pl  # noqa: E402
+# v1.7.72 — for #499. A vacuous pass asserts something about the input;
+# the assertion is only available once the input has been read.
+import _input_ingest as _ingest  # noqa: E402
 
 GATE = "l3_opcode_dispatch_key_actionable_check"
 WAIVER_KEY = "l3_opcode_dispatch_key_intentional"
@@ -173,10 +181,25 @@ def evaluate(project: Path) -> Dict[str, Any]:
 
     opcodes = l3.get("opcodes")
     if not isinstance(opcodes, list) or not opcodes:
+        # v1.7.72 — for #499. The VACUOUS_PASS sentence is a claim about
+        # the INPUT, and it is only available once the input has been
+        # read. Measured on a real CPU: this gate and its sibling both
+        # certified "no command protocol in input" while the document
+        # declaring eleven opcodes sat in the ingester's skip log.
+        unread_docs = _ingest.unread_input_documents(project)
+        if unread_docs:
+            return {"gate": GATE, "verdict": "NOT_CHECKED", "rc": 2,
+                    "reason": "L3.opcodes empty/absent, but the input was "
+                              "not fully read — no conclusion about the "
+                              "design is available."
+                              + _ingest.absence_claim_disclosure(project),
+                    "total": 0, "violations": [],
+                    "unread_input_documents": unread_docs}
         return {"gate": GATE, "verdict": "VACUOUS_PASS", "rc": 0,
                 "reason": "L3.opcodes empty/absent — no command protocol in "
                           "input (structurally correct for non-protocol IPs).",
-                "total": 0, "violations": []}
+                "total": 0, "violations": [],
+                "unread_input_documents": []}
 
     violations: List[Dict[str, Any]] = []
     by_hex: Dict[int, List[str]] = defaultdict(list)

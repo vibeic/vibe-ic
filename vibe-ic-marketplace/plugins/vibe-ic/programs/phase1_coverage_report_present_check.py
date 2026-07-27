@@ -56,6 +56,10 @@ _PROG_DIR = str(Path(__file__).resolve().parent)
 if _PROG_DIR not in sys.path:
     sys.path.insert(0, _PROG_DIR)
 
+# v1.7.72 — for #499 defect 4. The coverage ratio is computed over
+# documents that EXTRACTED, so it cannot see one that did not.
+import _input_ingest as _ingest  # noqa: E402
+
 
 # Wave 23 (v0.119.55) — threshold raised from 95.0 to 100.0; no
 # waiver. The legacy `phase1_coverage_below_threshold_intentional`
@@ -223,6 +227,35 @@ def _check(project: Path) -> tuple[int, str]:
     pct = overall.get("pct")
     hit = overall.get("hit")
     total = overall.get("total")
+
+    # v1.7.72 — for #499 defect 4. This gate demands 100% coverage, but
+    # the ratio it reads is built ONLY from documents that extracted:
+    # a document the ingester could not render contributes to neither
+    # numerator nor denominator, so it cannot lower the number. Measured
+    # on a real design: `254/254 = 100.0%` with a 21 KB ground-truth
+    # document contributing nothing, and this gate PASSed it.
+    #
+    # A converter gap is checked BEFORE the ratio, because no percentage
+    # computed over the documents that survived can speak for the one
+    # that did not. Only the converter-gap subset blocks — a decoder
+    # missing from this particular machine is disclosed by the report
+    # but is not the plugin's defect and must not hard-fail a user's run
+    # with no waiver.
+    gaps = _ingest.converter_gap_documents(project)
+    if gaps:
+        listed = "\n".join(f"  - {g['path']}: {g['reason']}"
+                           for g in gaps[:8])
+        return 1, (
+            f"FAIL — Phase 1 (doc-extraction) left {len(gaps)} staged "
+            f"document(s) UNREAD: the ingester has no working converter "
+            f"for them, so their content reached no L doc and the "
+            f"coverage percentage below was computed without them "
+            f"(pct={pct}).\n{listed}\n"
+            f"  A coverage figure that cannot notice missing input is "
+            f"not measuring coverage of the input. Add a converter "
+            f"branch in phase1_doc_one_shot_runner.extract_one() — do "
+            f"NOT waive; there is no waiver for this gate."
+        )
 
     if pct is None or total in (None, 0):
         # Report exists but no patterns/L docs were available — treat

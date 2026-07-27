@@ -90,6 +90,21 @@ from typing import List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ic_class_profile import detect_ic_class  # noqa: E402
+# v1.7.72 — for #499. The code-literal reader moved to a shared module
+# so the Phase-1 encoding LIFTER reads exactly the bytes this gate
+# derives its requirement from. Before the move the two had separate
+# notions of what a code looks like and the detector was strictly
+# stronger than the extractor: a field whose description read "Always
+# set to 2'b01 to indicate vectored interrupt handling" was reported as
+# declaring one code and carrying zero bindings, and no amount of input
+# completeness could have satisfied it. Same regex, same key list, same
+# distinct-literal list, on both sides.
+from _code_literal import (  # noqa: E402
+    CODE_LITERAL_RE,
+    FIELD_TEXT_KEYS,
+    declared_codes as _shared_declared_codes,
+    field_text as _shared_field_text,
+)
 
 
 # Wave 43 (v0.119.75) — explicit ic_class_profile guard.
@@ -152,20 +167,14 @@ _FIELD_NAME_KEYS = ("name", "field", "bit_field", "field_name",
 # Free-text keys carrying the field's own documentation. S3 derives the
 # required enum cardinality from these — the design's own input — so the
 # gate can never demand a code the input does not declare.
-_FIELD_TEXT_KEYS = ("description", "meaning", "notes", "note", "comment",
-                    "detail", "details", "evidence", "doc")
+# v1.7.72 (#499) — sourced from `_code_literal`; the lifter reads the
+# same tuple. Names kept for anything pinned to them.
+_FIELD_TEXT_KEYS = FIELD_TEXT_KEYS
 
 # A literal code binding as vendor docs write it. Value-shaped and
 # radix-explicit so ordinary prose numbers are not mistaken for codes.
-_CODE_LITERAL_RE = re.compile(
-    r"""(?:
-        \b\d+'[bBhHdDoO][0-9a-fA-FxXzZ_]+      # 2'b01, 4'hF
-      | \b0[xX][0-9a-fA-F]+\b                   # 0x3
-      | \b0[bB][01_]+\b                         # 0b01
-      | (?<![\w'])[01]{2,8}(?=\s*(?:=|:|->|=>|—|--)\s*\S)  # 00 = idle
-    )""",
-    re.VERBOSE,
-)
+# v1.7.72 (#499) — one pattern, shared with the lifter.
+_CODE_LITERAL_RE = CODE_LITERAL_RE
 
 # Keys an enum entry may use for the two halves of a code -> meaning
 # binding. S2 requires BOTH halves; a bare token list is not a binding.
@@ -240,17 +249,12 @@ def _field_name(field: dict) -> str:
 
 
 def _field_text(field: dict) -> str:
-    """The field's own documentation text, from the design's own input."""
-    parts = []
-    for k in _FIELD_TEXT_KEYS:
-        v = field.get(k)
-        if isinstance(v, str) and v.strip():
-            parts.append(v)
-        elif isinstance(v, dict):
-            for vv in v.values():
-                if isinstance(vv, str) and vv.strip():
-                    parts.append(vv)
-    return " ".join(parts)
+    """The field's own documentation text, from the design's own input.
+
+    v1.7.72 (#499) — delegates to `_code_literal.field_text` so the
+    Phase-1 lifter walks the same keys this gate reads.
+    """
+    return _shared_field_text(field)
 
 
 def _declared_codes(field: dict) -> List[str]:
@@ -259,16 +263,13 @@ def _declared_codes(field: dict) -> List[str]:
     Derived from the design's own input text, never from a hardcoded
     expectation. The gate requires the enum to capture at least this
     many codes, so it can never force the invention of a code the
-    input does not state."""
-    text = _field_text(field)
-    if not text:
-        return []
-    seen: List[str] = []
-    for m in _CODE_LITERAL_RE.findall(text):
-        tok = str(m).strip()
-        if tok and tok not in seen:
-            seen.append(tok)
-    return seen
+    input does not state.
+
+    v1.7.72 (#499) — delegates to `_code_literal.declared_codes`, which
+    the Phase-1 lifter also calls: the list this gate counts and the
+    list the lifter emits from are now the same list by construction.
+    """
+    return _shared_declared_codes(field)
 
 
 def _binding_entries(field: dict) -> int:

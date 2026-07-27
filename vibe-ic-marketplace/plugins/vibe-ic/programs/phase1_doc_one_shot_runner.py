@@ -160,6 +160,26 @@ from _incidental_mention import (  # noqa: E402
     subject_term as _subject_term,
 )
 
+# ─── One code-literal reader, shared with the L4 gate (#499) ──────────
+# `l4_regmap_enumerated_values_typed_check` derives how many code ->
+# meaning bindings a field OWES by scanning the field's own text with
+# `CODE_LITERAL_RE`. The lifter below must emit from exactly that scan,
+# over exactly those keys, or the detector ends up strictly stronger
+# than the extractor and the layer can never satisfy the gate no matter
+# how complete the input is. See `_code_literal` for the measurement.
+from _code_literal import (  # noqa: E402
+    CODE_LITERAL_RE as _CODE_LITERAL_RE,
+    declared_codes as _cl_declared_codes,
+    field_text as _cl_field_text,
+    natural_binary_pattern as _cl_natural_binary_pattern,
+    split_sentences as _cl_split_sentences,
+    to_binary_pattern as _cl_to_binary_pattern,
+)
+# ─── `typedef enum` harvester for staged HDL inputs (#499) ────────────
+import _hdl_enum as _hdlenum  # noqa: E402
+# ─── Was the input actually READ? (#499) ──────────────────────────────
+import _input_ingest as _ingest  # noqa: E402
+
 
 def _design_identity_fields(project: Path) -> dict:
     gd = _pl.generated_docs_dir(project)
@@ -666,6 +686,17 @@ _V1_6_350_SPICE_NETLIST_SUFFIXES = frozenset({
     ".cir", ".sp", ".spice", ".cdl", ".net", ".ckt",
 })
 
+# v1.7.72 — for #499 defect 1. HDL-source extensions. Verilog /
+# SystemVerilog design and package files are plain ASCII exactly like
+# the SPICE netlists above; `extract_one` had no branch for them, so a
+# design that stages its parameter / CSR package as ground truth had
+# that document silently converted to the empty string. Chip-AGNOSTIC:
+# these are IEEE-1364 / IEEE-1800 file-name conventions, not a
+# chip-class literal.
+_V1_7_72_HDL_SOURCE_SUFFIXES = frozenset({
+    ".sv", ".v", ".svh", ".vh",
+})
+
 # `* pin <NAME>,<NET>` or `* pin <NAME> <NET>` — canonical SPICE
 # pin-comment line used by Cadence Virtuoso, Synopsys, Mentor.
 _V1_6_350_RE_SPICE_PIN_COMMENT = re.compile(
@@ -1071,6 +1102,26 @@ def extract_one(p: Path) -> str:
     # L5.design_parameters respectively. Chip-AGNOSTIC: SPICE
     # syntax is identical across every analog / mixed-signal IC.
     if suf in _V1_6_350_SPICE_NETLIST_SUFFIXES:
+        try:
+            return p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
+    # v1.7.72 — for #499 defect 1. HDL source (`.sv` / `.v` / `.svh` /
+    # `.vh`) is the one plain-ASCII industry-standard format that fell
+    # through this dispatch to `""`. A design that names an HDL package
+    # as its parameter / CSR ground truth had that document silently
+    # dropped: the runner recorded the drop in
+    # `extraction_skipped.json` ("converter for extension '.sv'
+    # returned empty") while every downstream metric read a clean zero.
+    #
+    # The asymmetry was the tell: SPICE netlists directly above are
+    # ingested verbatim as plain ASCII, and extension-less files get a
+    # text sniff — Verilog / SystemVerilog is not less plain-text than
+    # either. Read verbatim, exactly like the SPICE branch; the
+    # `typedef enum` harvester (`_hdl_enum.parse_typedef_enums`) then
+    # lifts the declarations downstream. Chip-AGNOSTIC: HDL syntax is
+    # identical across every digital IC.
+    if suf in _V1_7_72_HDL_SOURCE_SUFFIXES:
         try:
             return p.read_text(encoding="utf-8", errors="replace")
         except Exception:
@@ -23232,6 +23283,67 @@ def gen_l3_cmd_protocol(project: Path,
                                 "label": "len_max (extracted, "
                                          "disk-scan fallback)"})
 
+    # v1.7.72 — for #499. Opcodes DECLARED by a staged HDL input.
+    #
+    # Every strategy above SYNTHESISES opcodes from documentation prose
+    # and tables, which is why they sit behind the v1.6.245 precondition
+    # gate: on a processor core, stray hex tokens in an ISA chapter
+    # fabricate opcodes. A `typedef enum` in an HDL package the design
+    # itself staged is not synthesis — it is the design stating its own
+    # opcode table, with a name and an explicit value per member. It is
+    # therefore admitted independently of the synthesis precondition,
+    # and only from `enum_role == "opcode"` type names.
+    #
+    # Measured (#499): with `.sv` dropped by the converter, both L3
+    # opcode gates reported VACUOUS_PASS — "no command protocol in
+    # input" — for a CPU whose staged package declares eleven opcodes.
+    # A dropped document manufactures a clean-looking zero.
+    #
+    # Members with no explicit value are NOT emitted: a dispatch key the
+    # document did not state is exactly the fabrication the gates catch.
+    _v1_7_72_seen_opcode_keys = {
+        (str((op or {}).get("name") or "").upper(),
+         str((op or {}).get("hex") or "").lower())
+        for op in opcodes if isinstance(op, dict)
+    }
+    for _enum in _hdlenum.harvest_enums(extracted):
+        if _enum.get("enum_role") != _hdlenum.ROLE_OPCODE:
+            continue
+        _src = _enum.get("source_file") or ""
+        for _mem in _enum.get("members") or []:
+            _val = _mem.get("value")
+            if not isinstance(_val, int) or isinstance(_val, bool):
+                continue
+            _name = str(_mem.get("name") or "").strip()
+            if not _name:
+                continue
+            _hex = f"0x{_val:02x}"
+            _key = (_name.upper(), _hex.lower())
+            if _key in _v1_7_72_seen_opcode_keys:
+                continue
+            _v1_7_72_seen_opcode_keys.add(_key)
+            opcodes.append({
+                "name": _name,
+                "hex": _hex,
+                "code_literal": _mem.get("literal"),
+                "width_bits": _enum.get("declared_width"),
+                "declared_type": _enum.get("type_name"),
+                "rx_len": None,
+                "tx_len": None,
+                "response_opcode_hex": None,
+                "pre_wake_allowed": False,
+                "evidence": f"input/docs/{_src}",
+                "extraction_strategy":
+                    "hdl_typedef_enum_opcode_v1_7_72",
+            })
+            _ev = evidence.setdefault(f"input/docs/{_src}", [])
+            if len(_ev) < 24:
+                _ev.append({
+                    "literal": f"{_name} = {_mem.get('literal')}",
+                    "label": (f"opcode declared by "
+                              f"`typedef enum {_enum.get('type_name')}`"),
+                })
+
     # Wave-on-fix: per-opcode response_payload_template + argument_constraints.
     # Heuristic chip-AGNOSTIC default: response_opcode at byte_offset=0,
     # CRC residue at last byte_offset; intermediate bytes flagged TBD with
@@ -24107,6 +24219,14 @@ def _v1_6_512_lift_field_encoding(
         existing.append({
             "pattern": pat,
             "mnem": mnem,
+            # v1.7.72 — for #499. `mnem` is not one of the meaning
+            # keys `l4_regmap_enumerated_values_typed_check` reads, so
+            # a tier that emitted only `mnem` + an empty `description`
+            # produced a binding the gate could not see — the same
+            # extractor/detector drift #499 was filed about, one tier
+            # over. The mnemonic IS the meaning the document states;
+            # publish it under a key the consumer reads.
+            "meaning": desc or mnem,
             "description": desc,
             "extraction_strategy":
                 "field_encoding_prose_v1_6_512",
@@ -24128,6 +24248,9 @@ def _v1_6_512_lift_field_encoding(
         existing.append({
             "pattern": pat,
             "mnem": mnem,
+            # v1.7.72 — see the Tier-1 note above: publish the meaning
+            # under a key the consuming gate actually reads.
+            "meaning": desc or mnem,
             "description": desc,
             "extraction_strategy":
                 "field_encoding_table_row_v1_6_512",
@@ -24145,10 +24268,17 @@ def _v1_6_512_lift_field_encoding(
     # Tier-2 above are exempt: their length-match guard already
     # rejects short binary strings under wide fields, so they
     # cannot produce the same false positive. chip-AGNOSTIC.
-    if _v1_6_518_is_likely_reserved_field(field, width):
-        if existing:
-            field["encoding"] = existing
-        return appended
+    #
+    # v1.7.72 — for #499. The guard says "for the decimal Tier-4 walker
+    # only" and its own comment exempts the binary tiers, but it was
+    # written as an early `return`, so it silently gated everything
+    # appended after it too. Measured on a real 30-bit field: the
+    # width>=16 branch fired and the code-literal tier below never ran,
+    # even though that tier does no zero-padding — the behaviour the
+    # guard exists to prevent. Narrowed to a conditional around the
+    # decimal loop it was documented to guard.
+    _v1_7_72_decimal_eligible = not _v1_6_518_is_likely_reserved_field(
+        field, width)
     # v1.6.517 — for #354 R5 Fix 2. Tier 3 — decimal encoding
     # shape (`0 = MODE_A` / `1 = MODE_B` style). Some
     # real-benchmark CSR docs use decimal patterns instead of
@@ -24159,8 +24289,8 @@ def _v1_6_512_lift_field_encoding(
     # the canonical binary form. (pattern, mnem) key dedup
     # against the Tier-1/Tier-2 emits keeps the walker
     # idempotent. chip-AGNOSTIC.
-    for m in _V1_6_517_ENCODING_DECIMAL_PROSE_RE.finditer(
-            window_text):
+    for m in (_V1_6_517_ENCODING_DECIMAL_PROSE_RE.finditer(window_text)
+              if _v1_7_72_decimal_eligible else ()):
         raw_dec = m.group("dec")
         try:
             dec_val = int(raw_dec)
@@ -24179,13 +24309,152 @@ def _v1_6_512_lift_field_encoding(
         existing.append({
             "pattern": bin_pat,
             "mnem": mnem,
+            # v1.7.72 — see the Tier-1 note above.
+            "meaning": mnem,
             "description": "",
             "extraction_strategy":
                 "field_encoding_decimal_v1_6_517",
         })
         appended += 1
+    # v1.7.72 — for #499 defect 2. Tier 5 — the code-literal form the
+    # gate has always been able to SEE but no tier could produce.
+    appended += _v1_7_72_lift_code_literal_encoding(
+        field, width, existing, existing_keys)
     if existing:
         field["encoding"] = existing
+    return appended
+
+
+# v1.7.72 — for #499 defect 2. `identifier[hi:lo]` — the bit slice a
+# sentence names alongside a constant. Pure Verilog part-select syntax.
+_V1_7_72_BIT_SLICE_RE = re.compile(
+    r"\b[A-Za-z_]\w*\s*\[\s*(?P<hi>\d+)\s*:\s*(?P<lo>\d+)\s*\]")
+
+
+def _v1_7_72_slice_of_width(sentence: str,
+                            want_width: int) -> Optional[str]:
+    """The first ``hi:lo`` slice in ``sentence`` that is exactly
+    ``want_width`` bits wide, or ``None``.
+
+    Used to record WHAT a narrower constant constrains, so a 6-bit
+    literal stated about bits 7:2 of a 30-bit field is never filed as
+    an encoding of the whole field.
+    """
+    for m in _V1_7_72_BIT_SLICE_RE.finditer(sentence or ""):
+        try:
+            hi, lo = int(m.group("hi")), int(m.group("lo"))
+        except ValueError:
+            continue
+        if abs(hi - lo) + 1 == want_width:
+            return f"{max(hi, lo)}:{min(hi, lo)}"
+    return None
+
+
+def _v1_7_72_lift_code_literal_encoding(
+        field: Dict[str, Any],
+        width: int,
+        existing: List[Dict[str, Any]],
+        existing_keys: Set[Tuple[str, str]]) -> int:
+    """v1.7.72 — for #499 defect 2. Lift the code -> meaning binding a
+    field states in its OWN description, in the Verilog-literal form.
+
+    The shape the four earlier tiers all miss::
+
+        MODE: Always set to 2'b01 to indicate vectored interrupt
+              handling (read-only).
+
+    There is no ``=`` and no table row — the code and its meaning sit
+    in one sentence of prose that Phase 1 had ALREADY captured into
+    ``field["description"]``. ``l4_regmap_enumerated_values_typed_check``
+    reads that same string, finds ``2'b01`` with its own regex, and
+    requires one binding; the lifter walked past it. That asymmetry —
+    detector strictly stronger than extractor — is the defect.
+
+    So this tier does not carry a regex of its own. It calls
+    ``_code_literal.declared_codes`` / ``field_text``: literally the
+    functions the gate calls, over literally the bytes the gate reads.
+    The set the gate counts and the set this emits from cannot diverge
+    because there is only one set.
+
+    Rules, all of them about NOT asserting more than the document does:
+
+      * ONE literal per sentence. A sentence carrying two or more
+        codes is an enumeration (``00 = idle, 01 = busy``) and belongs
+        to Tiers 1-3, which capture the per-code mnemonic; binding all
+        of them to the same whole-sentence meaning would be worse than
+        not binding them.
+      * A pattern already bound by an earlier tier is left alone.
+      * A literal whose declared width equals the field's is rendered
+        at the field width. One that does NOT is rendered at its own
+        width and recorded with ``pattern_width`` plus, when the
+        sentence names one, the ``applies_to_bits`` slice it
+        constrains — because ``mtvec[7:2] is always set to 6'b0`` says
+        something about six bits, not about the thirty-bit field that
+        contains them, and zero-extending it would claim the field is
+        zero.
+      * A narrower literal must be radix-explicit. A bare binary run
+        whose length disagrees with the field width is far more likely
+        to be an unrelated number than a code for this field.
+      * ``4'bxx`` yields nothing: an unknown bit is not an encoding.
+
+    Chip-AGNOSTIC.
+    """
+    text = _cl_field_text(field)
+    if not text:
+        return 0
+    codes = _cl_declared_codes(field)
+    if not codes:
+        return 0
+    bound_patterns = {
+        str(e.get("pattern") or "")
+        for e in existing if isinstance(e, dict)
+    }
+    appended = 0
+    for sentence in _cl_split_sentences(text):
+        toks: List[str] = []
+        for raw in _CODE_LITERAL_RE.findall(sentence):
+            tok = str(raw).strip()
+            if tok and tok not in toks:
+                toks.append(tok)
+        if len(toks) != 1:
+            continue
+        tok = toks[0]
+        pattern = _cl_to_binary_pattern(tok, width)
+        pattern_width = width
+        applies_to = None
+        if pattern is None:
+            # Not this field's width — keep the constant at the width
+            # the document declared it at, and say which slice it is
+            # about when the document says so.
+            radix_explicit = ("'" in tok
+                              or tok[:2].lower() in ("0x", "0b"))
+            if not radix_explicit:
+                continue
+            natural = _cl_natural_binary_pattern(tok)
+            if natural is None:
+                continue
+            pattern_width, pattern = natural
+            applies_to = _v1_7_72_slice_of_width(sentence, pattern_width)
+        if pattern in bound_patterns:
+            continue
+        key = (pattern, "")
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        bound_patterns.add(pattern)
+        entry: Dict[str, Any] = {
+            "pattern": pattern,
+            "pattern_width": pattern_width,
+            "code": tok,
+            "meaning": sentence[:300],
+            "description": sentence[:300],
+            "extraction_strategy":
+                "field_encoding_code_literal_v1_7_72",
+        }
+        if applies_to:
+            entry["applies_to_bits"] = applies_to
+        existing.append(entry)
+        appended += 1
     return appended
 
 
@@ -25038,6 +25307,71 @@ def _infer_uniform_access_from_prose(prose_window: str) -> Optional[str]:
     return raw
 
 
+# v1.7.72 — for #499 defect 3. An RST grid table's LOGICAL rows are
+# delimited by `+---+` separator lines, not by physical newlines: every
+# `|...|` line between two separators belongs to the same row. The CSR
+# bit-field walkers iterated physical lines and required a bit range in
+# column 1, so a row whose text wrapped onto a second line lost
+# everything after the wrap:
+#
+#     | 31:2  | **BASE:** ... always aligned to 256 bytes, i.e.,      |
+#     |       | ``mtvec[7:2]`` is always set to 6'b0.                 |
+#
+# stored as "...always aligned to 256 bytes, i.e.," — the sentence cut
+# mid-clause, taking the `6'b0` constant with it. Truncated text is
+# worse than absent text: it reads as a complete field description.
+#
+# Joining is the RST grammar, not a heuristic, so it is applied once to
+# the window before parsing rather than patched into each walker.
+_V1_7_72_RE_GRID_BODY_LINE = re.compile(r"^\s*\|.*\|\s*$")
+
+
+def _v1_7_72_join_rst_grid_rows(window: str) -> str:
+    """Collapse each RST grid-table logical row onto one physical line.
+
+    Cells are joined with a single space; a blank continuation cell
+    contributes nothing. Non-table lines pass through byte-identical,
+    and a table whose rows never wrap is returned semantically
+    unchanged, so the walkers downstream see the same input they always
+    did except where a row genuinely continued.
+    """
+    if not window or "|" not in window:
+        return window
+    out: List[str] = []
+    pending: Optional[List[str]] = None
+
+    def _flush() -> None:
+        nonlocal pending
+        if pending is not None:
+            out.append("| " + " | ".join(c.strip() for c in pending) + " |")
+            pending = None
+
+    for line in window.splitlines():
+        if _RE_RST_GRID_SEP_LINE.match(line):
+            _flush()
+            out.append(line)
+            continue
+        if _V1_7_72_RE_GRID_BODY_LINE.match(line):
+            cells = line.strip()[1:-1].split("|")
+            if pending is None:
+                pending = [c.strip() for c in cells]
+            elif len(cells) == len(pending):
+                pending = [
+                    (" ".join(p for p in (prev, cur.strip()) if p)).strip()
+                    for prev, cur in zip(pending, cells)
+                ]
+            else:
+                # Column count changed — not a continuation of the same
+                # logical row. Emit what we have and start over.
+                _flush()
+                pending = [c.strip() for c in cells]
+            continue
+        _flush()
+        out.append(line)
+    _flush()
+    return "\n".join(out)
+
+
 def _parse_csr_2col_grid(window: str,
                          prose_above: Optional[str] = None
                          ) -> List[Dict[str, Any]]:
@@ -25052,9 +25386,13 @@ def _parse_csr_2col_grid(window: str,
     so downstream gates can spot the unknown.
 
     Chip-AGNOSTIC: structural-only.
+
+    v1.7.72 — for #499 defect 3. Continuation rows are joined first; a
+    wrapped cell used to lose everything after the wrap.
     """
     if not window:
         return []
+    window = _v1_7_72_join_rst_grid_rows(window)
     lines = window.splitlines(keepends=False)
     sep_idx = -1
     for i, ln in enumerate(lines):
@@ -25239,10 +25577,14 @@ def _v1_6_412_parse_bit_definition_grid(
 
     Chip-AGNOSTIC: pure structural RST grammar; no chip / vendor /
     project literal in the regex or this helper.
+
+    v1.7.72 — for #499 defect 3. Continuation rows are joined first, in
+    step with the other two RST grid walkers.
     """
     fields: List[Dict[str, Any]] = []
     if not window:
         return fields
+    window = _v1_7_72_join_rst_grid_rows(window)
     if not _V1_6_412_RE_BIT_DEFINITION_HEADER.search(window):
         return fields
     seen_bits: set = set()
@@ -25772,9 +26114,14 @@ def _parse_csr_bitfield_grid(window: str) -> List[Dict[str, Any]]:
     return a list of `register.fields[]` entries (field_name, bits,
     msb, lsb, access, description). Returns `[]` when no grid is
     present or the header doesn't carry the canonical Bit / R/W /
-    Description columns."""
+    Description columns.
+
+    v1.7.72 — for #499 defect 3. Continuation rows are joined first, so
+    a wrapped description cell keeps the clause that follows the wrap.
+    """
     if not window:
         return []
+    window = _v1_7_72_join_rst_grid_rows(window)
     # Locate first separator line.
     lines = window.splitlines(keepends=False)
     sep_idx = -1
@@ -33968,6 +34315,60 @@ def gen_l6_control_logic(project: Path,
                 "extraction_strategy":
                     "pipeline_stages_inline_bracket_v1_6_462",
             })
+
+    # v1.7.72 — for #499. States DECLARED by a staged HDL input.
+    #
+    # Every tier above infers states from prose ("returns to IDLE"),
+    # arrows, or Verilog `parameter` lines. A `typedef enum` whose type
+    # name declares it a state type is the design enumerating its own
+    # controller states — the strongest evidence a document can carry,
+    # and the one Phase 1 could not read at all while `.sv` was being
+    # dropped by the converter.
+    #
+    # Measured (#499): the prose walker derived exactly ONE state, from
+    # a passing mention in an unrelated chapter, while the staged
+    # package declared ten. `l6_fsm_scaffold_actionable_check` was
+    # right to refuse "a module that cannot leave reset".
+    #
+    # Encodings are NOT synthesised. These members carry no explicit
+    # values, so no `encoding` is emitted for them — SystemVerilog's
+    # implicit numbering is a language default, not something the
+    # document said.
+    _v1_7_72_seen_states = {
+        str(s.get("name") or "") for s in extracted_states
+        if isinstance(s, dict)
+    }
+    for _enum in _hdlenum.harvest_enums(extracted):
+        if _enum.get("enum_role") != _hdlenum.ROLE_FSM_STATE:
+            continue
+        _src = _enum.get("source_file") or ""
+        for _mem in _enum.get("members") or []:
+            _name = str(_mem.get("name") or "").strip()
+            if not _name or _name in _v1_7_72_seen_states:
+                continue
+            _v1_7_72_seen_states.add(_name)
+            _state: Dict[str, Any] = {
+                "name": _name,
+                "transitions": [],
+                "actions": [],
+                "evidence": (f"input/docs/{_src} "
+                             f"(typedef enum {_enum.get('type_name')})"),
+                "extraction_strategy":
+                    "hdl_typedef_enum_state_v1_7_72",
+                "declared_type": _enum.get("type_name"),
+            }
+            if isinstance(_mem.get("value"), int) and not isinstance(
+                    _mem.get("value"), bool):
+                _state["encoding"] = _mem.get("literal")
+                _state["encoding_value"] = _mem.get("value")
+            extracted_states.append(_state)
+            _ev = evidence.setdefault(f"input/docs/{_src}", [])
+            if len(_ev) < 28:
+                _ev.append({
+                    "literal": _name,
+                    "label": (f"FSM state declared by "
+                              f"`typedef enum {_enum.get('type_name')}`"),
+                })
 
     # v1.6.59 — closes issue #5 follow-up. The AID 5-state template
     # (Tier B in v1.6.58) was a per-class boilerplate that never
@@ -47208,6 +47609,28 @@ def emit_coverage_report(project: Path,
     except Exception:
         vendor_tokens = denom
 
+    # v1.7.72 — for #499 defect 4. The denominator above is built from
+    # `input_doc/*.txt`, i.e. from documents that EXTRACTED. A document
+    # the ingester visited and could not render contributes nothing to
+    # the numerator and nothing to the denominator, so it cannot lower
+    # the percentage: measured on a real design, this report said
+    # `254/254 = 100.0%` while a 21 KB document the design's own brief
+    # named as ground truth had contributed zero characters.
+    #
+    # A ratio that cannot notice missing input is not measuring coverage
+    # OF the input. The percentage itself is not touched — it is a
+    # literal-coverage figure and reshaping it would only move the
+    # dishonesty — but the report now carries the document-level census
+    # beside it, and a document left unread is disclosed in
+    # `overall.status` rather than averaged away.
+    _unread_docs = _ingest.unread_input_documents(project)
+    _skip_log = _ingest.read_skip_log(project) or {}
+    _visited = _skip_log.get("total_visited")
+    _extracted_n = _skip_log.get("total_extracted")
+    _status = "PASS" if pct >= 80.0 else "FAIL"
+    if _unread_docs:
+        _status = "FAIL_INPUT_NOT_FULLY_READ"
+
     report = {
         "overall": {
             "denominator": denom,
@@ -47218,8 +47641,20 @@ def emit_coverage_report(project: Path,
             "numerator": numer,
             "pct": round(pct, 2),
             "target_pct": 80.0,
-            "status": "PASS" if pct >= 80.0 else "FAIL",
+            "status": _status,
+            # v1.7.72 (#499) — the census the percentage cannot see.
+            "input_documents_visited": _visited,
+            "input_documents_extracted": _extracted_n,
+            "input_documents_unread": len(_unread_docs),
+            "measures": ("coverage of literals found in documents that "
+                         "EXTRACTED; a document that did not extract "
+                         "contributes to neither numerator nor "
+                         "denominator"),
         },
+        # v1.7.72 (#499) — named, not just counted, so a reader does not
+        # have to open a second report to learn WHICH document is
+        # missing from the number above.
+        "unread_input_documents": _unread_docs,
         # v1.6.9 Fix 5 — separate curated-vs-hands_on metrics so the
         # SUMMARY can render both.
         "curated": {
@@ -47245,6 +47680,17 @@ def emit_coverage_report(project: Path,
     out_md.parent.mkdir(parents=True, exist_ok=True)
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+    # v1.7.72 (#499) — the document census renders next to the ratio, so
+    # a reader cannot see 100% without also seeing what was not read.
+    _unread_md = (
+        "- input documents: **{v} visited / {e} extracted / "
+        "{u} UNREAD**\n".format(
+            v=_visited if _visited is not None else "?",
+            e=_extracted_n if _extracted_n is not None else "?",
+            u=len(_unread_docs))
+        + "".join(f"  - UNREAD: `{d['path']}` — {d['reason']}\n"
+                  for d in _unread_docs[:10])
+    )
     out_md.write_text(
         f"# Extraction coverage report\n\n"
         f"- denominator (unique literals in input_doc/): **{denom}**\n"
@@ -47253,7 +47699,13 @@ def emit_coverage_report(project: Path,
         f"- status: **{report['overall']['status']}** (target ≥80%)\n"
         f"- curated: **{gate_hits}/{gate_total} = {gate_pct:.1f}%**\n"
         f"- hands_on: **{handson_hits}/{handson_total} = {handson_pct:.1f}%**"
-        f"\n\n"
+        f"\n"
+        + _unread_md
+        + "\n> The percentage measures literals in documents that "
+          "EXTRACTED. A document that did not extract contributes to "
+          "neither numerator nor denominator, so it cannot lower the "
+          "ratio — read the census line above alongside it.\n"
+        f"\n"
         f"## Per-L-doc\n\n"
         + "\n".join(
             f"- {r.name}: evidence={r.evidence_count} todo={r.todo_count}"
@@ -47878,6 +48330,86 @@ _RTL_ORACLE_LEAK_RE = re.compile(
     r")"
 )
 
+# v1.7.72 — for #499. The `\.sv\s*$` clause above cannot tell the IP's
+# own generated RTL from an HDL document the DESIGN ITSELF staged as an
+# input. Both end in `.sv`, and `fsm_tokens[].source` carries a bare
+# basename, so path context is not available in the value.
+#
+# Measured (#499): with the `.sv` converter branch added, the very first
+# full-flow run aborted at exit 2 on
+#     L6_CONTROL_LOGIC.json.fsm_tokens[3].source: 'ibex_pkg.sv'
+# — a file the design's own `phase1_prompt.md` names as its "Parameter /
+# CSR ground truth", sitting in `input/docs/`. The guard was doing
+# exactly what #38 asked of it and was nonetheless wrong: the rule is
+# "phase 1 must not read the IP's own RTL or downstream BUILD
+# ARTEFACTS", and a staged input document is neither.
+#
+# The discriminator is provenance, not extension. `input/docs/` is the
+# tree the ingester walks; a file that exists there IS an input, by
+# definition of how it got there. Everything else the regex catches —
+# `phase2`, `phase3`, `stage1/rtl`, `/rtl/`, `harvested from *.sv` — is
+# a build-tree token and stays an unconditional violation, so a citation
+# of `phase2/stage1/rtl/foo.sv` is still caught even if a same-named
+# file happens to be staged.
+#
+# Chip-AGNOSTIC: a filesystem-convention path plus the design's own
+# staged file names.
+_V1_7_72_HDL_ORACLE_SUFFIX_ONLY_RE = re.compile(r"(?i)\.sv\s*$")
+_V1_7_72_BUILD_TREE_ORACLE_RE = re.compile(
+    r"(?i)("
+    r"\bphase2\b"
+    r"|\bphase3\b"
+    r"|stage1/rtl"
+    r"|harvested\s+from\s+\S+\.(?:sv|v|vhd|vhdl)\b"
+    r"|/rtl/"
+    r")"
+)
+
+
+def _v1_7_72_staged_input_doc_names(project: Path) -> Set[str]:
+    """Every file name the design staged under ``input/docs/``.
+
+    Returned as a set of lowercase basenames PLUS project-relative
+    POSIX paths, because L-doc evidence cites documents both ways
+    (``ibex_pkg.sv`` from ``fsm_tokens[].source``,
+    ``input/docs/ibex_pkg.sv`` from ``extraction_evidence``).
+    """
+    names: Set[str] = set()
+    src = project / "input" / "docs"
+    if not src.is_dir():
+        return names
+    try:
+        for f in src.rglob("*"):
+            if not f.is_file():
+                continue
+            names.add(f.name.lower())
+            try:
+                names.add(f.relative_to(project).as_posix().lower())
+            except ValueError:
+                pass
+    except Exception:
+        return names
+    return names
+
+
+def _v1_7_72_is_staged_input_citation(value: str,
+                                      staged: Set[str]) -> bool:
+    """True when ``value`` cites a document the design staged itself.
+
+    The value may carry a trailing parenthetical provenance note
+    (``"input/docs/foo.sv (pipeline stage)"``), so the leading path
+    token is what gets compared.
+    """
+    if not staged or not isinstance(value, str):
+        return False
+    token = value.strip().split()[0] if value.strip().split() else ""
+    token = token.strip("'\"`,;").lower()
+    if not token:
+        return False
+    if token in staged:
+        return True
+    return token.rsplit("/", 1)[-1] in staged
+
 
 # v1.6.603 — for #407 P0. The walker was applying
 # `_RTL_ORACLE_LEAK_RE` to EVERY string in the L*.json tree,
@@ -47900,7 +48432,8 @@ _V1_6_603_ORACLE_LEAK_SUSPECT_KEYS = frozenset({
 
 
 def _assert_no_rtl_oracle_leak_in_l_doc(
-        l_doc_dict: Any, doc_name: str) -> List[str]:
+        l_doc_dict: Any, doc_name: str,
+        staged_input_docs: Optional[Set[str]] = None) -> List[str]:
     """v1.6.107 (#38) — walk a single L*.json dict and return a list of
     forbidden-token paths. Returns ``[]`` when clean.
 
@@ -47936,9 +48469,19 @@ def _assert_no_rtl_oracle_leak_in_l_doc(
                     or last_key not in
                     _V1_6_603_ORACLE_LEAK_SUSPECT_KEYS):
                 return
-            if _RTL_ORACLE_LEAK_RE.search(obj):
-                snippet = obj if len(obj) <= 80 else obj[:80] + "..."
-                violations.append(f"{doc_name}{path}: '{snippet}'")
+            if not _RTL_ORACLE_LEAK_RE.search(obj):
+                return
+            # v1.7.72 — for #499. A build-tree token is always a
+            # violation. The HDL-suffix clause alone is a violation
+            # only when the cited file is NOT one the design staged
+            # under input/docs/ — see the constant block above.
+            if (not _V1_7_72_BUILD_TREE_ORACLE_RE.search(obj)
+                    and _V1_7_72_HDL_ORACLE_SUFFIX_ONLY_RE.search(obj)
+                    and _v1_7_72_is_staged_input_citation(
+                        obj, staged_input_docs or set())):
+                return
+            snippet = obj if len(obj) <= 80 else obj[:80] + "..."
+            violations.append(f"{doc_name}{path}: '{snippet}'")
 
     _walk(l_doc_dict, "")
     return violations
@@ -47955,13 +48498,18 @@ def _scan_generated_docs_for_oracle_leak(project: Path) -> List[str]:
     if not gd.is_dir():
         return []
     all_violations: List[str] = []
+    # v1.7.72 — for #499. Computed once per scan: the design's own
+    # staged input documents, so an HDL file the design named as its
+    # ground truth is not mistaken for the IP's generated RTL.
+    _staged = _v1_7_72_staged_input_doc_names(project)
     for l_path in sorted(gd.glob("L*.json")):
         try:
             data = json.loads(l_path.read_text(encoding="utf-8"))
         except Exception:
             continue
         all_violations.extend(
-            _assert_no_rtl_oracle_leak_in_l_doc(data, l_path.name))
+            _assert_no_rtl_oracle_leak_in_l_doc(
+                data, l_path.name, staged_input_docs=_staged))
     if all_violations:
         try:
             log_dir = project / "reports" / "phase1"
