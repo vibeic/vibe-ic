@@ -19,6 +19,55 @@ class Finding:
     details: str = ""
 
 
+# ---------------------------------------------------------------------------
+# v1.7.37 — FAIL-CLOSED advisory disclosure (#437 follow-up, Step 27 / d5).
+#
+# The pre-v1.7.37 predicate ALLOW-LISTED two emitter verdict strings
+# ("ADVISORY_SCREEN_ONLY", "SI_SPEF_SCREEN_PASS") plus the substring
+# "advisory" in `method`. Measured on a real converged run, the no-SPEF
+# fallback emitter writes a THIRD string, "SCREEN_PASS", whose method text
+# says "decoupled-C wire-RC screen ... full coupling-cap crosstalk needs a
+# SPEF" and whose note says "this is a structural screen, not a full SI
+# sign-off" — and the gate reported a bare `verdict: PASS`,
+# `advisory_screen_only: false`, zero findings. An artefact that explicitly
+# disclaims sign-off was laundered into sign-off by an allow-list miss.
+#
+# The predicate is now inverted: an SI artefact is ADVISORY unless it
+# POSITIVELY declares timing-window SI sign-off. A new emitter string can no
+# longer buy a clean PASS by not being on a list. rc is unchanged (WARNING,
+# not ERROR) — this is a disclosure fix, not a new pass/fail rule.
+# ---------------------------------------------------------------------------
+
+# An explicit boolean is the canonical positive declaration.
+_SIGNOFF_DECL_KEYS = ("timing_window_signoff", "si_signoff", "full_si_signoff")
+
+# Textual positive declaration, for third-party emitters carrying no boolean:
+# the artefact must name timing-window / switching-window SI analysis...
+_SIGNOFF_TEXT_MARKERS = (
+    "timing-window", "timing window",
+    "switching-window", "switching window",
+)
+# ...AND must not describe itself as a screen / bound / watch-list, which is
+# what every non-sign-off SI artefact in this codebase calls itself.
+_SCREEN_MARKERS = (
+    "screen", "advisory", "watch-list", "watchlist",
+    "upper bound", "not a full si sign-off", "not a full si signoff",
+    "not sign-off", "not signoff", "deferred",
+)
+
+
+def declares_si_signoff(blob: str, data: dict | None = None) -> bool:
+    """True only when the artefact POSITIVELY declares timing-window SI
+    sign-off. Everything else — including an artefact that says nothing at
+    all about its own tier — is treated as an advisory screen."""
+    if data is not None and any(bool(data.get(k)) for k in _SIGNOFF_DECL_KEYS):
+        return True
+    low = blob.lower()
+    if any(m in low for m in _SCREEN_MARKERS):
+        return False
+    return any(m in low for m in _SIGNOFF_TEXT_MARKERS)
+
+
 def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     findings: List[Finding] = []
     rpt = _pl.report_path(project_dir, "si_crosstalk.rpt")
@@ -45,24 +94,25 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         stats["violations"] = violations
 
         # ORGANIC-20260606 (#437 follow-up comment) — advisory-screen
-        # DISCLOSURE: the open-flow emitter's capacitive (floating-
-        # victim) screen hardwires violations_count=0 and honestly says
-        # so; the gate must not launder that into a clean sign-off PASS.
-        # Surface the tier + the coupling-dominated watch-list.
-        verdict_str = str(data.get("verdict", ""))
-        method_str = str(data.get("method", ""))
-        is_advisory = (verdict_str in ("ADVISORY_SCREEN_ONLY",
-                                       "SI_SPEF_SCREEN_PASS")
-                       or "advisory" in method_str.lower())
+        # DISCLOSURE: the open-flow emitters hardwire violations_count=0
+        # and honestly say so; the gate must not launder that into a clean
+        # sign-off PASS. Surface the tier + the coupling-dominated
+        # watch-list. v1.7.37 makes the predicate fail-closed (see the
+        # module-level note on `declares_si_signoff`).
+        blob = " ".join(str(data.get(k, "")) for k in
+                        ("verdict", "method", "mode", "tool", "note"))
+        is_advisory = not declares_si_signoff(blob, data)
         stats["advisory_screen_only"] = is_advisory
         dominated = data.get("nets_coupling_dominated_gt0p9")
         if is_advisory:
             findings.append(Finding(
                 "WARNING", "SI_ADVISORY_SCREEN_ONLY",
-                "SI artifact is a capacitive ADVISORY screen "
-                "(floating-victim bound, violations_count hardwired 0) — "
-                "NOT timing-window SI sign-off; review required before "
-                "presenting as sign-off (#437)"))
+                "SI artifact does not declare timing-window SI sign-off — "
+                "treated as an ADVISORY screen (the open-flow screens are "
+                "floating-victim capacitive bounds with violations_count "
+                "hardwired 0); review required before presenting as "
+                "sign-off (#437)",
+                details=f"verdict={data.get('verdict', '(absent)')!r}"))
             if isinstance(dominated, (int, float)) and dominated > 0:
                 findings.append(Finding(
                     "WARNING", "SI_COUPLING_DOMINATED_WATCHLIST",
@@ -92,6 +142,23 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         if rpt.stat().st_size == 0:
             findings.append(Finding("ERROR", "EMPTY_RPT",
                                     "si_crosstalk.rpt is empty"))
+        else:
+            # v1.7.37 — the same fail-closed disclosure applies to the .rpt
+            # form. Otherwise the JSON tightening is trivially bypassed by
+            # emitting only the text report, whose own body says
+            # "crosstalk screen: PASS".
+            try:
+                text = rpt.read_text(errors="replace")[:64 * 1024]
+            except OSError:
+                text = ""
+            rpt_advisory = not declares_si_signoff(text)
+            stats["advisory_screen_only"] = rpt_advisory
+            if rpt_advisory:
+                findings.append(Finding(
+                    "WARNING", "SI_ADVISORY_SCREEN_ONLY",
+                    "SI artifact does not declare timing-window SI "
+                    "sign-off — treated as an ADVISORY screen; review "
+                    "required before presenting as sign-off (#437)"))
     else:
         findings.append(Finding("ERROR", "NO_REPORT",
                                 "Neither si_crosstalk.rpt nor si_crosstalk.json found"))

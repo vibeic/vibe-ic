@@ -253,45 +253,34 @@ def main(argv: list[str] | None = None) -> int:
 
     import json as _json
     if not ys_files:
-        # v1.6.180 (#72 P2-8) — positively confirm the inline-mode
-        # case. Look for runner artefacts and inline `yosys -p`
-        # invocations; report a distinct verdict tier when no
-        # supporting evidence is found so audit reviewers can spot
-        # an unconfirmed VACUOUS_PASS.
-        from _yosys_inline_mode_detect import detect_inline_mode
-        inline_status, inline_evidence = detect_inline_mode(project)
-        if inline_status == "confirmed":
-            verdict = "VACUOUS_PASS"
-            reason_class = "inline_yosys_p_mode_confirmed"
-            reason_text = (
-                "no .ys scripts found, BUT inline `yosys -p` runner "
-                "mode is positively confirmed by project markers "
-                f"({len(inline_evidence)} evidence path(s)); gate is "
-                "legitimately not applicable."
-            )
-        else:
-            verdict = "VACUOUS_PASS_UNCONFIRMED"
-            reason_class = "inline_yosys_p_mode_unconfirmed"
-            reason_text = (
-                "no .ys scripts found AND no inline `yosys -p` "
-                "runner-mode markers detected. Gate stays rc=0 "
-                "(vacuous) but reviewers should confirm a synthesis "
-                "step actually ran — otherwise a missing synth "
-                "artefact is being silently masked."
-            )
+        # v1.6.180 (#72 P2-8) — positively confirm the inline-mode case.
+        # v1.7.37 — before falling back to that file-existence confirmer,
+        # run the #649 CONTENT audit on the inline `yosys -p` command the
+        # runner echoed into its synth log. Until now the content audit
+        # existed only inside flow_compliance_check._run_yosys_gates, and
+        # that in-process copy governs Step 14 only when it FAILs; the gate
+        # the flow YAML actually declares (this CLI) emitted VACUOUS_PASS
+        # for a real-PDK inline synth that skipped hilomap.
+        from _yosys_inline_mode_detect import resolve_no_ys_script
+        rc, fields = resolve_no_ys_script(project)
+        verdict = fields["verdict"]
+        reason_text = fields["reason"]
         report = {
             "verdict": verdict,
-            "reason_class": reason_class,
+            "reason_class": fields["reason_class"],
             "reason": reason_text,
-            "inline_evidence": inline_evidence,
-            "project": str(project), "messages": [],
+            "inline_evidence": fields["inline_evidence"],
+            "project": str(project), "messages": fields["messages"],
         }
         if args.json:
             out = _Path(args.json)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(_json.dumps(report, indent=2) + "\n")
-        print(f"{verdict}: {reason_text}")
-        return 0
+        stream = sys.stderr if rc else sys.stdout
+        print(f"{verdict}: {reason_text}", file=stream)
+        for m in report["messages"]:
+            print(f"  {m}", file=stream)
+        return rc
 
     overall = 0
     findings: list[dict] = []

@@ -207,40 +207,35 @@ def main(argv: list[str] | None = None) -> int:
     ys_files = sorted(set(ys_files))
     if not ys_files:
         # v1.6.180 (#72 P2-8) — confirm-or-flag the inline-mode case.
-        from _yosys_inline_mode_detect import detect_inline_mode
-        inline_status, inline_evidence = detect_inline_mode(project)
-        if inline_status == "confirmed":
-            verdict = "VACUOUS_PASS"
-            reason_class = "inline_yosys_p_mode_confirmed"
-            reason_text = (
-                "no .ys scripts found, BUT inline `yosys -p` runner "
-                "mode is positively confirmed by project markers "
-                f"({len(inline_evidence)} evidence path(s)); gate is "
-                "legitimately not applicable."
-            )
-        else:
-            verdict = "VACUOUS_PASS_UNCONFIRMED"
-            reason_class = "inline_yosys_p_mode_unconfirmed"
-            reason_text = (
-                "no .ys scripts found AND no inline `yosys -p` "
-                "runner-mode markers detected. Gate stays rc=0 "
-                "(vacuous) but reviewers should confirm a synthesis "
-                "step actually ran — otherwise a missing synth "
-                "artefact is being silently masked."
-            )
+        # v1.7.37 — run the #649 CONTENT audit on the inline `yosys -p`
+        # command first; only a NO_INLINE_COMMAND result falls through to
+        # the weaker file-existence confirmer. NOTE: --simulation-only is
+        # deliberately NOT consulted here. The inline audit classifies each
+        # extracted command by whether it binds a Liberty library, which is
+        # an objective property of the command yosys actually ran; letting a
+        # caller-supplied flag waive a real-PDK command would reintroduce
+        # exactly the bypass #649 closed.
+        from _yosys_inline_mode_detect import resolve_no_ys_script
+        rc, fields = resolve_no_ys_script(project)
+        verdict = fields["verdict"]
+        reason_text = fields["reason"]
         report = {
             "verdict": verdict,
-            "reason_class": reason_class,
+            "reason_class": fields["reason_class"],
             "reason": reason_text,
-            "inline_evidence": inline_evidence,
+            "inline_evidence": fields["inline_evidence"],
             "project": str(project), "findings": [],
+            "messages": fields["messages"],
         }
         if args.json:
             out = _Path(args.json)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(_json.dumps(report, indent=2) + "\n")
-        print(f"{verdict}: {reason_text}")
-        return 0
+        stream = sys.stderr if rc else sys.stdout
+        print(f"{verdict}: {reason_text}", file=stream)
+        for m in report["messages"]:
+            print(f"  {m}", file=stream)
+        return rc
 
     overall = 0
     findings: list[dict] = []
