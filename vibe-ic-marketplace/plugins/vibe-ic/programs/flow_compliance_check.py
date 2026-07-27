@@ -1382,7 +1382,15 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "practical_notes_specificity_check",
     "rtl_precheck_gate",
     "scope_periodic_pulse_check",
-    "skill_compliance_triangle_check",
+    # PR #462 follow-up (2026-07-27): "skill_compliance_triangle_check" was
+    # removed from this tuple. `git log --diff-filter=A` over the whole
+    # history returns nothing for programs/skill_compliance_triangle_check.py
+    # — the program has NEVER existed. The umbrella loop below silently
+    # `continue`s past a name with no file, so the entry ran nothing while
+    # the umbrella advertised `len(_STRUCTURAL_RTL_GATES)` checkers:
+    # measured 242 declared, 241 runnable. A denominator that counts a gate
+    # that cannot run is the same lie as a gate that passes without looking.
+    # test_flow_compliance_check.py now asserts every name here resolves.
     # The spec said the plugin MUST declare an artifact, the plugin did not,
     # and NO gate noticed — because a gate that nothing invokes notices
     # nothing.  spec_required_artifact_check reads the project's OWN Phase-1

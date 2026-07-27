@@ -317,3 +317,31 @@ def test_missing_required_hint_flags_genuinely_absent(tmp_path):
     for label in ("generated_docs", "extraction_patterns.json", "waivers.json",
                   "reports/extraction_coverage_report.md"):
         assert label in missing
+
+
+# ---------------------------------------------------------------------------
+# PR #462 follow-up — the P0 umbrella's denominator must be its real one.
+#
+# The umbrella loop does `prog = PROGRAMS_DIR / f"{gate_name}.py"` then
+# `if not prog.exists(): continue`, but reports its size as
+# `len(_STRUCTURAL_RTL_GATES)`. A name with no file is therefore counted and
+# never run. Measured on main before the fix: 242 declared, 241 runnable —
+# the ghost being a checker that has never existed in this repo's history.
+# ---------------------------------------------------------------------------
+def test_every_structural_rtl_gate_name_has_a_program():
+    sys.path.insert(0, str(PROG.parent))
+    import flow_compliance_check as mod
+    ghosts = [g for g in mod._STRUCTURAL_RTL_GATES
+              if not (PROG.parent / f"{g}.py").exists()]
+    assert ghosts == [], (
+        "these names are counted in the P0 umbrella's denominator but have "
+        f"no program to run: {ghosts}")
+
+
+def test_structural_rtl_gate_tuple_has_no_duplicates():
+    """A duplicate would inflate the same denominator a second way."""
+    sys.path.insert(0, str(PROG.parent))
+    import flow_compliance_check as mod
+    names = list(mod._STRUCTURAL_RTL_GATES)
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    assert dupes == [], f"duplicated gate names: {dupes}"

@@ -130,7 +130,7 @@ def test_fail_tj_estimate_from_theta_ja(tmp_path):
 # --------------------------------------------------- HONEST SKIP / §4.05
 
 def test_skip_power_not_computed(tmp_path):
-    """Open-PDK power_report_gen fallback with not_computed → SKIP, not PASS."""
+    """Runner OpenSTA-failure fallback with not_computed → SKIP, not PASS."""
     rpt = _write(tmp_path / "power.rpt",
                  "# Total Power: not_computed\n# Leakage Power: not_computed\n")
     r = _run(rpt, "--die-area-mm2", "1.0")

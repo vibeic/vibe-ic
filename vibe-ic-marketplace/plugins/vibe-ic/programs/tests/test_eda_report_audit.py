@@ -225,6 +225,103 @@ def test_power_missing_dynamic_fail(tmp_path):
     assert result.summary["has_dynamic"] is False
 
 
+# --------------------------------------------------------------------------
+# Power substance — a NAMED CATEGORY IS NOT A VALUE (PR #462 follow-up).
+#
+# `phase3_one_shot_runner._emit_power_report` writes this exact shape when
+# the OpenSTA `report_power` invocation fails: real tool signature, all
+# three category names, every wattage the literal string `not_computed`.
+# Measured on main before this fix: passed=true, tool_authentic=true.
+# The sibling gate thermal_screen_check SKIPs the same bytes.
+# --------------------------------------------------------------------------
+_RUNNER_NOT_COMPUTED_FALLBACK = (
+    "# OpenROAD/OpenSTA report_power - fallback emitted by\n"
+    "# phase3_one_shot_runner because the live invocation returned rc=1.\n"
+    "# Tool: openroad (sta).\n"
+    "# === Power Report (categories) ===\n"
+    "# Group: sequential\n"
+    "#   leakage power: not_computed (OpenSTA rc=1)\n"
+    "#   dynamic power: not_computed\n"
+    "#   internal power: not_computed\n"
+    "# Group: combinational\n"
+    "#   leakage power: not_computed\n"
+    "#   dynamic power: not_computed\n"
+    "#   internal power: not_computed\n"
+    "# Total Power: not_computed\n"
+)
+
+
+def test_power_not_computed_fallback_is_not_certified(tmp_path):
+    rpt = tmp_path / "power.rpt"
+    rpt.write_text(_RUNNER_NOT_COMPUTED_FALLBACK + _PAD)
+    result = era._check_power(tmp_path)
+    assert result.passed is False
+    # The categories ARE named — that is exactly why word-matching passed it.
+    assert result.summary["has_leakage"] is True
+    assert result.summary["has_dynamic"] is True
+    assert result.summary["tool_authentic"] is True
+    assert result.summary["values_not_computed"] is True
+    assert result.summary["has_numeric_value"] is False
+    assert {f.rule for f in result.findings} >= {"POWER_VALUES_NOT_COMPUTED",
+                                                 "POWER_VALUE_NUMERIC"}
+
+
+def test_power_categories_without_any_value_fail(tmp_path):
+    """No `not_computed` marker either — just labels and a tool banner."""
+    rpt = tmp_path / "power.rpt"
+    rpt.write_text(
+        "OpenROAD Power Report\n"
+        "Group: sequential\nleakage power\ndynamic power\ninternal power\n"
+        + _PAD)
+    result = era._check_power(tmp_path)
+    assert result.passed is False
+    assert result.summary["has_numeric_value"] is False
+    assert "POWER_VALUE_NUMERIC" in {f.rule for f in result.findings}
+
+
+def test_power_opensta_table_still_passes(tmp_path):
+    """Direction-1: OpenSTA's real report_power table must stay green.
+
+    This is the shape the completed ihp-sg13g2 digital run emits; the gate
+    was re-run against that artefact and returned rc=0 after the fix.
+
+    Asserts only the observable verdict, deliberately not the new summary
+    keys, so it holds on the pre-fix program too — a direction-1 guard has
+    to survive the mutant it is guarding against.
+    """
+    rpt = tmp_path / "power.rpt"
+    rpt.write_text(
+        "# OpenSTA report_power — automatic emission by\n"
+        "# phase3_one_shot_runner (canonicalize_artefacts step).\n"
+        "# Tool: openroad / sta (OpenSTA Power Report).\n"
+        "# === Begin OpenSTA Power Report ===\n"
+        "OpenSTA 3.1.0 Copyright (c) 2026, Parallax Software, Inc.\n"
+        "POWER_ANALYSIS_MODE: vectorless_sdc\n"
+        "Group                  Internal  Switching    Leakage      Total\n"
+        "                          Power      Power      Power      Power (Watts)\n"
+        "----------------------------------------------------------------\n"
+        "Sequential             3.70e-04   7.05e-06   3.02e-08   3.77e-04  92.5%\n"
+        "Combinational          1.71e-05   1.36e-05   2.95e-08   3.06e-05   7.5%\n"
+        "Total                  3.87e-04   2.07e-05   5.97e-08   4.08e-04 100.0%\n"
+        + _PAD)
+    result = era._check_power(tmp_path)
+    assert result.passed is True
+
+
+def test_power_declared_capability_gap_still_waives(tmp_path):
+    """Direction-1: a DECLARED gap is still the sanctioned green path — the
+    fix must not have turned the waiver route red along with the fake one."""
+    import json as _json
+    (tmp_path / "waivers.json").write_text(_json.dumps({
+        "power_report_unavailable_reason":
+            "no OpenSTA in this container image; power deferred to sign-off"}))
+    rpt = tmp_path / "power.rpt"
+    rpt.write_text(_RUNNER_NOT_COMPUTED_FALLBACK + _PAD)
+    result = era._check_power(tmp_path)
+    assert result.passed is True
+    assert result.summary["waived"] is True
+
+
 # ---------------------------------------------------------------------------
 # EM mode
 # ---------------------------------------------------------------------------

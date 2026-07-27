@@ -36,8 +36,10 @@ Junction temperature (optional, gated only when available):
 Honest-verdict rules (NO vacuous pass on absence):
   * power report absent / unreadable                      → SKIP (rc 3)
   * power report present but no total power extractable    → SKIP (rc 3)
-      (e.g. a power_report_gen fallback with "not_computed" — the open
-       PDK could not compute power; SKIP, never fabricate a density)
+      (e.g. phase3_one_shot_runner's `_emit_power_report` fallback,
+       which writes every wattage as "not_computed" when the OpenSTA
+       `report_power` invocation fails — SKIP, never fabricate a
+       density)
   * die area absent (no --die-area, no DEF, no floorplan)  → SKIP (rc 3)
   * die area degenerate / non-positive                     → SKIP (rc 3)
   * power_density  >=  limit                               → FAIL (rc 1)
@@ -334,7 +336,8 @@ def evaluate(power_path: Path, die_source: Optional[Path],
     total_w, p_prov = (_power_from_json(data) if data is not None
                        else _power_from_text(raw))
     if total_w is None or total_w <= 0:
-        # A power_report_gen fallback carrying "not_computed" lands here.
+        # phase3_one_shot_runner's OpenSTA-failure fallback power.rpt,
+        # which carries "not_computed" for every wattage, lands here.
         reason = ("power_not_computed"
                   if (data is None and _NOT_COMPUTED_RE.search(raw))
                   else "no_total_power_value")

@@ -245,6 +245,20 @@ MIN_REPORT_BYTES = {
     "antenna": 200,   # OpenROAD check_antennas clean reports are short but real
 }
 
+# --- power substance: a NAMED CATEGORY IS NOT A VALUE (PR #462 follow-up) ---
+# The marker every honest producer in this repo writes when it could not
+# compute power. `thermal_screen_check` already keys its SKIP off the same
+# token; the power gate now refuses to certify the same bytes.
+_POWER_NOT_COMPUTED_RE = re.compile(r"not[_\s-]?computed", re.I)
+# A wattage: scientific notation as OpenSTA's report_power table prints it
+# (`3.70e-04`), or a decimal with an explicit W unit (`0.12 mW`, `1.2 uW`).
+# Deliberately NOT "any digit" — the fallback report embeds area.rpt, an
+# `rc=1` and a version string, all of which carry digits.
+_POWER_VALUE_RE = re.compile(
+    r"\d+(?:\.\d+)?[eE][-+]?\d+"
+    r"|\d+(?:\.\d+)?\s*[kKmMuUµnNpPfF]?[wW]\b"
+)
+
 
 def _has_tool_signature(text: str, mode: str) -> tuple[bool, str]:
     """Return (found, matched_pattern) — case-insensitive."""
@@ -680,12 +694,14 @@ def _check_power(project_dir: Path) -> AuditResult:
     has_leak = False
     has_dyn = False
     best_file = ""
+    joined = []
 
     for fp in files:
         try:
             text = fp.read_text(errors="replace")
         except OSError:
             continue
+        joined.append(text)
         if leak_re.search(text):
             has_leak = True
         if dyn_re.search(text):
@@ -693,21 +709,60 @@ def _check_power(project_dir: Path) -> AuditResult:
         if not best_file:
             best_file = str(fp)
 
+    all_text = "\n".join(joined)
+    # PR #462 follow-up, measured 2026-07-27. Until this line existed the
+    # power gate matched only the WORDS "leakage"/"dynamic" and never a
+    # value, so `phase3_one_shot_runner._emit_power_report`'s OpenSTA-failure
+    # fallback — which writes "not_computed" for every wattage and whose own
+    # comment says the categories are "named explicitly so the
+    # eda_report_audit:power gate substance check accepts the file" — was
+    # CERTIFIED. Reproduced on a 5100 B fixture of exactly that text:
+    # rc=0, {"passed": true, "has_leakage": true, "has_dynamic": true,
+    # "tool_authentic": true}. The sibling gate thermal_screen_check reads
+    # the same bytes and SKIPs (skip_reason "power_not_computed"); two gates
+    # disagreed on one artefact and the lying one was the certifying one.
+    # A report that self-declares it did not compute power is an ABSENT
+    # artefact: it may be explained by a declared capability gap
+    # (waivers.json `power_report_unavailable_reason`, handled above), never
+    # certified. The completed sg13g2 digital run's real OpenSTA power.rpt
+    # carries a numeric table and is unaffected — verified on that artefact.
+    not_computed = bool(_POWER_NOT_COMPUTED_RE.search(all_text))
+    has_value = bool(_POWER_VALUE_RE.search(all_text))
+
     if not has_leak:
         result.findings.append(Finding(
             rule="POWER_LEAKAGE_REPORTED", severity="ERROR",
-            message="No leakage/static power value found in report",
+            message="No leakage/static power category found in report",
             file=best_file))
     if not has_dyn:
         result.findings.append(Finding(
             rule="POWER_DYNAMIC_REPORTED", severity="ERROR",
-            message="No dynamic/switching power value found in report",
+            message="No dynamic/switching power category found in report",
+            file=best_file))
+    if not_computed:
+        result.findings.append(Finding(
+            rule="POWER_VALUES_NOT_COMPUTED", severity="ERROR",
+            message=("Report self-declares its power values as "
+                     "'not_computed' — the categories are named but no "
+                     "power was computed. Declare the capability gap in "
+                     "waivers.json (power_report_unavailable_reason) or "
+                     "re-run report_power; a named category is not a value"),
+            file=best_file))
+    if not has_value:
+        result.findings.append(Finding(
+            rule="POWER_VALUE_NUMERIC", severity="ERROR",
+            message=("No numeric power value found in report (expected a "
+                     "wattage such as '3.70e-04' or '0.12 mW'); category "
+                     "labels alone do not constitute a power report"),
             file=best_file))
 
     authentic = _check_tool_authenticity(files, "power", result)
-    result.passed = has_leak and has_dyn and authentic
+    result.passed = (has_leak and has_dyn and authentic
+                     and has_value and not not_computed)
     result.summary = {"files_found": len(files), "has_leakage": has_leak,
-                      "has_dynamic": has_dyn, "tool_authentic": authentic}
+                      "has_dynamic": has_dyn, "tool_authentic": authentic,
+                      "has_numeric_value": has_value,
+                      "values_not_computed": not_computed}
     return result
 
 

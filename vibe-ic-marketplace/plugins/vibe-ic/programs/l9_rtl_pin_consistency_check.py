@@ -31,8 +31,9 @@ existence is checked by Phase 2 structural gates).
 Open-drain handling
 ===================
 When L9 marks a pin `open_drain: true`, this gate does NOT inspect
-the QSF/SDC; that contract is owned by `aid_class_qsf_gen.py`. We
-only verify the L9 schema field is well-formed (boolean) so the
+the QSF/SDC; that contract is owned by `qsf_gen.py` (it turns an L9
+`open_drain: true` port into the QSF `output_open_drain` assignment).
+We only verify the L9 schema field is well-formed (boolean) so the
 downstream generator has the data it needs.
 
 Detection (chip-AGNOSTIC)

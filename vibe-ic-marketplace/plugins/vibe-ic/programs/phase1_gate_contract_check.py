@@ -19,10 +19,19 @@ plugin-level contract so that the flow orchestrator can rely on it:
   7. `<name>` is referenced in `vibe-ic/flow/phase1_phase2_phase3.yaml`
      (wired into the 33-step flow, not an orphan).
 
-This meta-check is orthogonal to `skill_compliance_triangle_check.py`
-(which audits SKILL.md/compliance.yaml/tests triangles for user-
-invocable skills). Phase 1 gates are NOT skills — they're
-deterministic flow programs. They need their OWN contract.
+This meta-check is orthogonal to skill-compliance auditing (the
+SKILL.md / compliance.yaml / tests triangle a user-invocable skill
+must carry). Phase 1 gates are NOT skills — they're deterministic
+flow programs. They need their OWN contract.
+
+NOTE (2026-07, PR #462 follow-up): this paragraph previously named a
+program skill_compliance_triangle_check.py (written here without
+backticks on purpose — see dead_program_reference_check) as the
+skill-side counterpart. `git log --diff-filter=A` over the whole
+history returns nothing for that path: the program has never existed
+in this repo, so an agent following the text would have run a
+nonexistent checker. The sentence now describes the concern without
+naming a program.
 
 Usage
 -----

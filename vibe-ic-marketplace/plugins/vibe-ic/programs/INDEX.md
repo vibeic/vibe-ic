@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 986
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 986)
+- **Total programs (excluding helpers / shims):** 987
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 987)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 977 |
+| `any` | 978 |
 
 ## Alphabetical listing
 
@@ -234,6 +234,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ddr5_protocol_synth` | any | — | DDR5 SDRAM protocol synth helper (JEDEC JESD79-5). |
 | `ddr_protocol_synth` | any | v0.1.84 | DDR (DDR3 SDRAM)-class protocol synth helper. |
 | `dead_plugin_path_check` | any | — | no retired-second-plugin path may ship. |
+| `dead_program_reference_check` | any | — | shipped doctrine may not name a program |
 | `dead_timing_constant_warn` | any | — | R4 cheap WARN gate |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
 | `decap_route_short_guard` | any | — | remove VDD<->VSS shorts caused by decap fillers placed |
@@ -1058,7 +1059,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (977 programs)
+### `any` (978 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1265,6 +1266,7 @@ _(no programs in this group)_
 - `ddr5_protocol_synth` — DDR5 SDRAM protocol synth helper (JEDEC JESD79-5).
 - `ddr_protocol_synth` — DDR (DDR3 SDRAM)-class protocol synth helper.  _[v0.1.84]_
 - `dead_plugin_path_check` — no retired-second-plugin path may ship.
+- `dead_program_reference_check` — shipped doctrine may not name a program
 - `dead_timing_constant_warn` — R4 cheap WARN gate
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
 - `decap_route_short_guard` — remove VDD<->VSS shorts caused by decap fillers placed

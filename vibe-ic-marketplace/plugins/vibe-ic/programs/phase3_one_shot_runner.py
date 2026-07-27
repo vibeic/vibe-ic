@@ -23255,9 +23255,22 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
                        container: str, power_rpt: Path,
                        notes: List[str]) -> bool:
     """Run OpenSTA `report_power` against the routed netlist and emit
-    `power.rpt`. Best-effort. The report contains explicit `leakage`
-    and `dynamic` keywords so the downstream `power_report_check`
-    (eda_report_audit:power) accepts it."""
+    `power.rpt`. Best-effort; returns True only when a real report was
+    produced.
+
+    The real report carries the `leakage` / `dynamic` / `internal`
+    category labels AND the numeric wattages `report_power` prints, which
+    is what the downstream `power_report_check` (eda_report_audit:power)
+    requires. It is NOT the case that naming the categories is enough:
+    until PR #462's follow-up (2026-07-27) that gate matched only the
+    category WORDS, so the fallback below — every wattage written
+    `not_computed` — was certified passed=true. The gate now also
+    requires a numeric value and rejects a self-declared `not_computed`
+    report, so the fallback FAILs it, which is the truthful verdict.
+    An environment with no operational OpenSTA declares the gap in
+    `<project>/waivers.json` under `power_report_unavailable_reason`;
+    that is the disclosed capability-gap skip, and it is the only way
+    this step is allowed to be green without power numbers."""
     pnr_out = _pl.pnr_dir(project)
     netlist = _pl.synth_dir(project) / f"{top}_synth.v"
     sdc_path = pnr_out / "constraint.sdc"
@@ -23337,8 +23350,10 @@ exit
             f"# Group breakdown (Sequential / Combinational / Clock / Macro / Pad)\n"
             f"# follows the OpenSTA report_power tabular format. Each row\n"
             f"# carries Internal Power, Switching Power, Leakage Power, Total Power.\n"
-            f"# Categories named explicitly so the eda_report_audit:power gate\n"
-            f"# substance check (leakage + dynamic + tool-signature) accepts the file.\n"
+            f"# Categories are named because report_power names them; the\n"
+            f"# eda_report_audit:power substance check needs the category\n"
+            f"# labels AND a numeric wattage AND a tool signature, and the\n"
+            f"# numbers below are report_power's own.\n"
             f"#\n"
             f"# === Begin OpenSTA Power Report ===\n"
         )
@@ -23352,11 +23367,19 @@ exit
         area_text = area_rpt.read_text() if area_rpt.is_file() else "(area.rpt missing)"
         # Combine the OpenSTA stderr (tool-output context) with the
         # report_design_area numbers so the file carries (a) a real
-        # tool-signature anchor ("openroad" + "Group:" markers), (b)
-        # leakage / dynamic / internal categories the eda_report_audit
-        # power gate looks for, and (c) the explicit not_computed
-        # markers so reviewers are not misled. We do NOT fabricate
-        # numerical wattage values.
+        # tool-signature anchor ("openroad" + "Group:" markers), (b) the
+        # leakage / dynamic / internal category names, and (c) the
+        # explicit not_computed markers so reviewers are not misled. We
+        # do NOT fabricate numerical wattage values.
+        #
+        # PR #462 follow-up (2026-07-27): (a) + (b) used to be sufficient
+        # for eda_report_audit:power to certify this file — measured
+        # rc=0, passed=true on exactly this text. They are not any more:
+        # that gate now also demands a numeric wattage and rejects a
+        # self-declared `not_computed` report, so this fallback FAILs it.
+        # That FAIL is correct — no power was computed. The green path
+        # for an environment without OpenSTA is the DECLARED one:
+        # `waivers.json` -> `power_report_unavailable_reason`.
         sta_stderr = ((out or "") + "\n" + (err or "")).strip() or "(no output captured)"
         power_rpt.write_text(
             f"# OpenROAD/OpenSTA report_power — fallback emitted by\n"
@@ -23399,8 +23422,11 @@ exit
         )
         notes.append(
             f"power.rpt written as fallback (rc={rc}); does NOT carry "
-            f"numerical leakage/dynamic values — reviewer must re-run "
-            f"OpenSTA report_power before tapeout.")
+            f"numerical leakage/dynamic values — eda_report_audit:power "
+            f"will FAIL it (POWER_VALUES_NOT_COMPUTED). Re-run OpenSTA "
+            f"report_power, or declare the capability gap in "
+            f"waivers.json under `power_report_unavailable_reason`; do "
+            f"not sign the step off on this file.")
         return False
     return True
 

@@ -222,6 +222,16 @@ run "gates disclose their denominator" "$ROOT" python3 "$PG/gate_discloses_denom
 run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
+
+# PR #462 follow-up — the sibling of the gate above, for PROGRAM names rather
+# than the retired PLUGIN token. #462 deleted four programs and left
+# l9_rtl_pin_consistency_check naming one of them as the live owner of the
+# open-drain QSF contract; nothing imports a docstring, so every reachability
+# and import check stayed green and the merge landed. Two further instances
+# were already on main, one of them a program that has NEVER existed. Takes a
+# REPO root (it resolves references against every *.py in the repo, not just
+# the plugin's). ~0.4s.
+run "dead program reference"            "$ROOT" python3 "$PG/dead_program_reference_check.py" "$ROOT"
 run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_health_audit.py
 run "verdict token propagation"         "$PLUGIN" python3 programs/verdict_token_propagation_check.py
 run "signoff gate self-skip"            "$PLUGIN" python3 programs/signoff_gate_self_skip_consistency_check.py
