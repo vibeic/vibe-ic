@@ -26,8 +26,130 @@ SPEF actually carries it:
      BETTER than the nominal grounded slack (after > before), that contradicts
      the physics of the bound -> FAIL ("reported slack better than the bound").
 
+THE ZERO THIS GATE USED TO SIGN OFF
+===================================
+Every re-derivation above is denominated in COUPLING PAIRS. The gate counted
+them (``coupling_pairs``), printed the count in its summary, and then never
+turned it into anything: rules 1-3 iterate ``expected``, which is derived from
+the pairs, so with zero pairs ``nets_checked`` is 0, ``violations`` is empty,
+``ok`` is True — and the verdict was ``PASS`` with ``findings: []``. A SPEF
+carrying only grounded caps therefore produced a sign-off byte-identical to one
+whose fold was fully re-derived and proved. That is precisely the false-clean
+the gate exists to prevent, one level up from the one it was written to catch.
+
+MEASURED, ON THIS REPO'S OWN PUBLISHED BENCHMARK DATA — not a hypothetical. The
+tracked corpus (``git ls-files | grep '\\.spef$'`` -> 20 files) carries the same
+tracked design extracted under three PDK variants. Two of them carry 4,932 and
+5,292 coupling ``*CAP`` entries; the third carries 2,184 grounded entries across
+465 net records and **0** coupling entries, and its committed
+``reports/phase3/si_mcf_sta.json`` records ``coupling_pairs: 0``. Running this
+gate on those tracked artefacts, pre-change: ``verdict PASS``, ``rc 0``,
+``nets_checked {setup: 0, hold: 0}``. Post-change: ``VACUOUS_PASS``, ``rc 2``,
+with the reason written down. The coupled sibling examines 366 nets per corner
+and PASSes on both trees. The false-clean was landed, published and re-derivable
+from the tree.
+
+NO SIGN-OFF WITHOUT A DENOMINATOR. The gate now states, in
+``summary.denominator`` (``_gate_denominator``), how many victim-net fold
+re-derivations it actually PROVED — and when that number is 0 it is not a
+PASS. It is a DISCLOSED SKIP: verdict ``VACUOUS_PASS``, rc 2, a
+``VACUOUS_PASS:`` token on stderr, and a written reason.
+
+AND THE DENOMINATOR COUNTS PROOFS, NOT VISITS — the first cut of this fix did
+not, and an adversarial pass broke it there. ``independent_recount``'s own
+``nets_checked`` counts nets that ENTERED its loop; a net whose re-derived
+expectation is 0.0 enters it and its assertion becomes ``increase >= -1e-9``,
+which no bounded SPEF that merely failed to fold can violate. Two states hit
+that at full scale:
+
+  * COUPLING CAPS WITH ZERO VALUE. The pairs exist, ``floor_folded_caps`` keys
+    every victim net, ``nets_checked`` is maximal, every expectation is 0.
+    Measured on a derivative of a tracked coupled artefact whose 4,932 two-node
+    ``*CAP`` values were collapsed to 0 (16% of them already are 0 as tracked):
+    the first cut reported ``examined 732``, a denominator block byte-identical
+    to the genuinely-proved run, and rc 0 PASS. It now reports
+    ``considered 732, examined 0`` -> VACUOUS_PASS, rc 2.
+  * THE HOLD CORNER IN FLOOR MODE, BY CONSTRUCTION. ``MCF_HOLD_WORST`` is 0, so
+    ``floor_folded_caps(pairs, "hold")`` is 0.0 for every net and no hold
+    comparison can fail on the fold axis. Every real-artefact run in this
+    repo's tracked corpus is floor mode (the windows JSON path is machine-local
+    and absent), so the honest headline for a coupled tracked variant is
+    ``examined 365`` of ``considered 732``, not 732. ``details`` carries both
+    axes per corner (``nets_compared_per_corner`` / ``folds_proved_per_corner``)
+    so ``{"setup": 365, "hold": 0}`` is readable without re-deriving it. NOT
+    CLOSED BY THIS CHANGE: a bounded SPEF that drops the hold fold entirely
+    still exits 0 in floor mode, because in floor mode there is no lower bound
+    to violate. The change makes that gap visible in the report; whether a
+    corner proving nothing should move the whole verdict is a sign-off-policy
+    question, not a bug.
+
+WHY A SKIP AND NOT A FAIL — the two causes of a zero, and how far they separate.
+A grounded-only extraction (mode, corner, or a tool that emitted no 2-node caps)
+genuinely leaves the SI fold nothing to verify; failing it would trade a
+false-clean for a false-alarm. A SPEF that is not the one the numbers came from
+(wrong file, truncated, a parse that matched nothing) means the gate is
+reporting on the wrong artefact. From what this checker can observe the two are
+PARTLY separable, and only partly:
+
+  * SEPARABLE — the file the report names resolves to NO net at all under ALL
+    THREE readings this gate has: the ``*D_NET`` recount, the shared
+    ``parse_spef`` (which additionally models ``*D_PNET`` and pin membership),
+    and the ``*R_NET`` reduced-format count — ``SPEF_NO_NET_RECORDS``.
+    Requiring all three is what keeps this from failing a SPEF whose shape some
+    of them do not model. TWO READINGS WERE NOT ENOUGH: neither the recount nor
+    ``parse_spef`` models the REDUCED (``*R_NET``) form, so the two-reading
+    version hard-FAILED a legal IEEE-1481 artefact that this repo's own
+    ``spef_extraction_check`` certifies as sound (``has_nets = bool(d_nets or
+    r_nets)``) — one half of a single change calling the other half's clean
+    artefact the wrong file. A reduced-format SPEF now takes the skip tier,
+    with a reason naming why a lumped RC pi model has no per-net fold to
+    re-derive. Nothing carrying slack numbers can come from a file that is
+    empty under all three. ERROR.
+  * SEPARABLE — the emitter's own report says it saw ``coupling_pairs > 0`` and
+    the gate re-parsing the SAME path sees none (``COUPLING_LOST_SINCE_EMIT``).
+    Both use the same parser on the same file, so the bytes changed after the
+    numbers were produced. ERROR. (The mirror direction — gate sees pairs the
+    emitter did not — needs no new rule: the recount then finds residual
+    coupling or a missing fold and FAILs on rule 2/3.)
+  * SEPARABLE — with no coupling in the original, the bounded SPEF still
+    carries MORE grounded charge than the original (``FOLD_WITHOUT_SOURCE``).
+    There was nothing to fold, so the two files are not a matched pair. This is
+    the over-application half of rule 3, which was unreachable at zero pairs
+    because its ceiling is derived from the pairs. ERROR.
+  * NOT SEPARABLE — a well-formed SPEF of the WRONG design, or a
+    correctly-read grounded-only extraction. Both parse to net records, grounded
+    caps and zero pairs, and nothing in the checker's inputs tells them apart.
+    This is the conservative tier: VACUOUS_PASS, whose written reason states
+    that a reader may NOT conclude anything about crosstalk delay from it.
+
+A PAIR IS NOT A CAP, and the disclosure must not trade one for the other.
+``coupling_pairs`` counts INTER-NET pairs after ``parse_spef`` has resolved both
+node ends and dropped any two-node cap landing twice on the same net; on one
+tracked artefact 4,932 coupling ``*CAP`` entries collapse to 1,558 pairs. A
+reason that reported the pair count under the words "two-node capacitances"
+would therefore state a falsehood about a file that plainly carries them —
+which is what the first cut of this fix did. Both numbers are now measured
+(``coupling_caps`` via ``si_mcf_sta.count_coupling_caps``) and the reason names
+whichever it means, including the case where caps exist but couple no two
+distinct nets.
+
+WHERE THE WRITTEN REASON DOES AND DOES NOT SURFACE. It is in the JSON report
+(``summary.denominator.not_applicable_reason``) and on stderr. It does NOT
+reach the flow's per-step listing: ``flow_compliance_check.
+_check_program_exit_zero`` discards the captured snippet on rc 2 and returns
+the generic ``__VACUOUS_HINT__`` marker, so the step renders with the repo-wide
+"input not applicable" wording rather than this gate's own prose. That is a
+pre-existing convention shared by every rc-2 gate; changing it is a repo-wide
+behaviour change and is deliberately not made here. A reviewer who needs the
+reason must read the JSON.
+
 Exit 0 = PASS (every corner's bound is genuinely applied + reported honestly),
-1 = FAIL, 2 = IO/arg error. Writes reports/phase3/si_mcf_sta_check.json.
+1 = FAIL **and every refused / mis-invoked run**, 2 = VACUOUS_PASS (nothing was
+re-derived; NOT a sign-off). rc 2 was formerly the arg-error code; it is now
+reserved for the disclosed skip, because ``flow_compliance_check.
+_check_program_exit_zero`` credits rc 2 as a pass unconditionally and an
+argparse-rejected invocation must never be credited as one (same reasoning as
+``drc_report_check``). Writes reports/phase3/si_mcf_sta_check.json.
 """
 from __future__ import annotations
 
@@ -38,8 +160,51 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import _gate_denominator as _gd
 import _path_layout as _pl
 import si_mcf_sta as M
+
+#: Exit codes. 2 is the DISCLOSED SKIP tier, never an error tier — see the
+#: module docstring.
+RC_PASS = 0
+RC_FAIL = 1
+RC_VACUOUS = 2
+
+#: One unit of what this gate measures. Named here so the report, the reason
+#: prose and any consumer sweeping the gate set agree by construction.
+#:
+#: A COMPARISON IS NOT A PROOF. The recount's own ``nets_checked`` counts nets
+#: that ENTERED its loop, which includes every net whose re-derived expectation
+#: is exactly 0.0 — the assertion then degenerates to ``increase >= -1e-9`` and
+#: cannot fail whatever the bounded SPEF contains. Two states produce that at
+#: scale: coupling caps carrying value 0 (already 16% of the entries in one
+#: tracked artefact), and the whole HOLD corner in window-independent floor mode
+#: (``MCF_HOLD_WORST == 0``, so ``floor_folded_caps`` is 0 for every net).
+#: Counting those as examined coverage is the same displaced zero this gate was
+#: fixed for, one notch in. ``examined`` therefore counts only the comparisons a
+#: dropped fold could actually have FAILED; the wider population lands in
+#: ``considered``.
+DENOMINATOR_UNIT = ("victim-net MCF folds re-derived and PROVED against the "
+                    "bounded SPEF (one per coupled net per corner, counting "
+                    "only nets whose re-derived expectation is non-zero — a "
+                    "comparison against an expected fold of 0.0 cannot fail "
+                    "and proves nothing)")
+
+#: Passed explicitly to ``independent_recount`` so the tolerance the recount
+#: applies and the tolerance ``_is_falsifiable`` reasons about cannot drift
+#: apart into a denominator that counts comparisons the recount would skip.
+RECOUNT_REL_TOL = 0.02
+RECOUNT_ABS_TOL_PF = 1e-9
+
+#: Appended to every vacuous reason. The point of the tier is that it says what
+#: a reader may NOT conclude, which a bare "PASS" cannot.
+_NOT_SAID = (
+    " WHAT THIS VERDICT DOES NOT SAY: it is NOT a crosstalk-delay sign-off — "
+    "no fold was re-derived, so nothing about SI was verified. The checker "
+    "cannot distinguish a genuinely grounded-only extraction from a coupled "
+    "one that was replaced, truncated, or never handed to it, beyond the "
+    "cases it fails outright; both parse to zero coupling pairs. Read this as "
+    "NOT CHECKED.")
 
 
 @dataclass
@@ -47,6 +212,35 @@ class Finding:
     severity: str          # ERROR / WARNING / INFO
     category: str
     message: str
+
+
+def _is_falsifiable(expected_fold_pf: float) -> bool:
+    """Could a silently-dropped fold have FAILED this net's comparison?
+
+    ``independent_recount`` flags a net when
+    ``increase < exp - max(rel_tol*exp, abs_tol)``. With ``exp == 0`` that floor
+    is ``-abs_tol``, so any bounded SPEF that did not LOSE charge satisfies it —
+    the comparison ran but could not have failed. Written from the same two
+    constants the recount is handed, so the two readings cannot diverge."""
+    exp = float(expected_fold_pf)
+    return exp - max(RECOUNT_REL_TOL * exp, RECOUNT_ABS_TOL_PF) > 0.0
+
+
+def count_r_net_records(spef_text: str) -> int:
+    """Number of ``*R_NET`` (REDUCED-format) net records.
+
+    THE THIRD READING, and the reason ``SPEF_NO_NET_RECORDS`` needs one. IEEE
+    1481 reduced format states a net as a driver + a lumped RC pi model instead
+    of a detailed node network, so a valid ``*R_NET``-only SPEF resolves to zero
+    under ``net_grounded_totals`` (keys on ``*D_NET``) AND zero under
+    ``parse_spef`` (models ``*D_NET`` / ``*D_PNET``). Failing on those two
+    readings alone therefore hard-FAILED a legitimate artefact that this repo's
+    own ``spef_extraction_check`` certifies — it computes
+    ``has_nets = bool(d_nets or r_nets)``. Counting the third form is what keeps
+    a legal SPEF out of an ERROR whose message asserts the gate is reading the
+    wrong file."""
+    return sum(1 for raw in spef_text.splitlines()
+               if raw.strip().startswith("*R_NET"))
 
 
 def _load_windows(report: dict, net_driver_pins) -> Tuple[Optional[dict], bool]:
@@ -79,6 +273,7 @@ def audit(project_dir: Path,
         findings.append(Finding("ERROR", "BAD_JSON",
                                 f"cannot parse si_mcf_sta.json: {exc}"))
         return findings, stats
+    stats["report_read"] = True
 
     orig_spef = report.get("spef")
     if not orig_spef or not Path(orig_spef).exists():
@@ -86,9 +281,66 @@ def audit(project_dir: Path,
                                 f"original coupling SPEF missing: {orig_spef}"))
         return findings, stats
     orig_text = Path(orig_spef).read_text(errors="replace")
+    stats["spef_read"] = True
     sp = M.parse_spef(orig_text)
     pairs = M.coupling_pairs(sp)
     stats["coupling_pairs"] = len(pairs)
+    stats["coupling_nets"] = len({n for pair in pairs for n in pair})
+    # PAIRS ARE NOT CAPS, and the disclosure prose must not say one and mean the
+    # other. `coupling_pairs` is a count of INTER-NET pairs after `parse_spef`
+    # has resolved both nodes and DROPPED any 2-node cap whose ends land on the
+    # SAME net; on one tracked artefact 4,932 coupling *CAP entries collapse to
+    # 1,558 pairs. A file can therefore plainly carry two-node capacitances and
+    # still have zero pairs. Both numbers are recorded so the reason can name
+    # the one it means.
+    stats["coupling_caps"] = M.count_coupling_caps(orig_text)
+
+    # SUBSTANCE OF THE ARTEFACT ABOUT TO BE CERTIFIED. `net_grounded_totals`
+    # seeds one entry per `*D_NET` record, so its length is the net-record
+    # count AS THE RECOUNT ITSELF SEES IT — a counter that cannot disagree with
+    # the code it is guarding.
+    orig_grounded = M.net_grounded_totals(orig_text)
+    stats["spef_net_records"] = len(orig_grounded)
+    stats["emitter_coupling_pairs"] = report.get("coupling_pairs")
+
+    # SECOND AND THIRD INDEPENDENT VIEWS of "did anything parse as a net". The
+    # recount's counter keys on `*D_NET` only; the shared `parse_spef` also
+    # resolves `*D_PNET` and pin/port membership; neither models the REDUCED
+    # (`*R_NET`) form at all. The ERROR below fires only when ALL THREE find
+    # nothing, so a SPEF shaped in a way some of them do not model can never be
+    # failed by it — the readings that are blind leave a zero in the disclosure
+    # instead, and the gate takes its skip tier.
+    parsed_nets = (set(sp["cg"]) | set(sp["node_net"].values())
+                   | set(sp["net_driver_pins"]) | set(sp["net_load_pins"]))
+    stats["spef_parsed_nets"] = len(parsed_nets)
+    stats["spef_r_net_records"] = count_r_net_records(orig_text)
+
+    if not orig_grounded and not parsed_nets and not stats["spef_r_net_records"]:
+        # Cause (b), decided: the file the report NAMES as the SPEF the slack
+        # numbers came from resolves to no net at all, by either reading.
+        # Whatever it is, the reported STA cannot have been derived from it, so
+        # this gate is certifying the wrong artefact. Not a skip — a
+        # contradiction.
+        findings.append(Finding(
+            "ERROR", "SPEF_NO_NET_RECORDS",
+            f"the SPEF named by the report resolves to 0 nets under ALL THREE "
+            f"readings — the *D_NET recount, the shared SPEF parser "
+            f"(*D_NET/*D_PNET) and the *R_NET reduced-format count: "
+            f"{orig_spef} — a report carrying corner slacks cannot have come "
+            f"from it; the gate is reading the wrong artefact"))
+        return findings, stats
+
+    emitted_pairs = report.get("coupling_pairs")
+    if isinstance(emitted_pairs, int) and emitted_pairs > 0 and not pairs:
+        # Cause (b), decided: emitter and gate ran the SAME parser over the
+        # SAME path and disagree about whether coupling EXISTS. The bytes
+        # changed after the numbers were produced.
+        findings.append(Finding(
+            "ERROR", "COUPLING_LOST_SINCE_EMIT",
+            f"the report states it extracted {emitted_pairs} coupling pair(s) "
+            f"from {orig_spef}, but re-parsing that path with the same parser "
+            f"finds 0 — the SPEF is not the one the reported slacks were "
+            f"derived from"))
 
     net_windows, exact = _load_windows(report, sp["net_driver_pins"])
     stats["windows_exact"] = exact
@@ -109,18 +361,59 @@ def audit(project_dir: Path,
             continue
         bounded_text = Path(bounded).read_text(errors="replace")
 
-        # (1-3) independent cap-level recount (the false-clean-proof)
-        expected = None if exact else M.floor_folded_caps(pairs, corner)
+        # (1-3) independent cap-level recount (the false-clean-proof).
+        # `expected` is computed HERE for both modes — identical arithmetic to
+        # what `independent_recount` would do internally when handed None — so
+        # the gate can count how many of those comparisons were capable of
+        # failing without re-deriving the fold a second time or guessing.
+        if exact:
+            expected, _worst = M.victim_folded_caps(pairs, net_windows or {},
+                                                    corner, guard)
+        else:
+            expected = M.floor_folded_caps(pairs, corner)
         rc = M.independent_recount(orig_text, bounded_text,
                                    net_windows or {}, corner, guard,
+                                   rel_tol=RECOUNT_REL_TOL,
+                                   abs_tol_pf=RECOUNT_ABS_TOL_PF,
                                    expected=expected)
+        # THE LOAD-BEARING HALF of `nets_checked`. `independent_recount` skips a
+        # net with no *D_NET block, so intersecting with `orig_grounded` matches
+        # its loop exactly; `_is_falsifiable` then keeps only the nets whose
+        # expectation a dropped fold could have violated.
+        proved = sum(1 for net, exp in expected.items()
+                     if net in orig_grounded and _is_falsifiable(exp))
         stats["recount"][corner] = {
             "ok": rc["ok"], "nets_checked": rc["nets_checked"],
+            "folds_proved": proved,
             "residual_coupling_caps": rc["residual_coupling_caps"],
             "violations": rc["violations"][:20],
             "mode": "exact-window" if exact else "window-independent-floor",
         }
         stats["corners_checked"].append(corner)
+
+        # (3b) THE OVER-APPLICATION HALF OF RULE 3, AT ZERO PAIRS. The recount's
+        # ceiling is `MCF * sum(Cc)` per net, so with no coupling pairs the
+        # ceiling is 0 for every net and the loop that would enforce it never
+        # runs (`expected` is empty). Enforce it directly: nothing to fold means
+        # the bounded SPEF must not carry MORE grounded charge than the
+        # original. If it does, the emitter folded from a source that is not in
+        # the file this gate read — cause (b), decided.
+        if not pairs:
+            bounded_g = M.net_grounded_totals(bounded_text)
+            inflated: List[str] = []
+            for net, before in orig_grounded.items():
+                after = bounded_g.get(net, before)   # net absent => no delta
+                if after - before > max(1e-9, 0.02 * abs(before)):
+                    inflated.append(net)
+            stats["recount"][corner]["fold_without_source_nets"] = len(inflated)
+            if inflated:
+                findings.append(Finding(
+                    "ERROR", "FOLD_WITHOUT_SOURCE",
+                    f"{corner}: the original SPEF carries no coupling caps, yet "
+                    f"{len(inflated)} net(s) gained grounded charge in the "
+                    f"bounded SPEF — the fold has no source in the file this "
+                    f"gate read; the two SPEFs are not a matched pair"))
+
         if not rc["ok"]:
             n = len(rc["violations"])
             findings.append(Finding(
@@ -150,21 +443,133 @@ def audit(project_dir: Path,
     return findings, stats
 
 
+def _vacuous_reason(stats: dict) -> str:
+    """Prose naming what was searched for and not found, per #496's contract.
+
+    Only ever consumed when the gate examined 0 units; it is computed
+    unconditionally so ``Denominator`` can never be constructed without one."""
+    recount = stats.get("recount", {}) or {}
+    pairs = int(stats.get("coupling_pairs") or 0)
+    caps = int(stats.get("coupling_caps") or 0)
+    nets = int(stats.get("spef_net_records") or 0)
+    r_nets = int(stats.get("spef_r_net_records") or 0)
+    compared = sum(int((v or {}).get("nets_checked", 0) or 0)
+                   for v in recount.values())
+    if not stats.get("report_read"):
+        why = ("the emitter's si_mcf_sta.json could not be read, so no fold "
+               "was re-derived.")
+    elif not stats.get("spef_read"):
+        why = ("the coupling SPEF the report names could not be read, so no "
+               "fold was re-derived.")
+    elif not nets and r_nets:
+        why = (f"the SPEF the report names carries {r_nets} *R_NET record(s) "
+               f"and no *D_NET block. The REDUCED format states a lumped RC pi "
+               f"model instead of the node-level capacitances this gate folds, "
+               f"so there is nothing here to re-derive a per-net fold from.")
+    elif not nets:
+        why = (f"the SPEF the report names parses to 0 *D_NET records "
+               f"({stats.get('spef_parsed_nets', 0)} net(s) resolved by the "
+               f"shared parser), so there is no net to attribute a fold to.")
+    elif not recount:
+        why = ("no corner produced a bounded SPEF this gate could recount, so "
+               "the MCF fold was never re-derived.")
+    elif caps and not pairs:
+        # A count of CAPS is not a count of PAIRS: `parse_spef` drops a 2-node
+        # cap whose ends resolve to the same net, so this state is reachable
+        # with plainly-present two-node capacitances.
+        why = (f"the SPEF named by the report parses to {nets} net record(s) "
+               f"and {caps} two-node (coupling) *CAP entr(y/ies), but none of "
+               f"them couples two DIFFERENT nets — every one resolves within a "
+               f"single net — so there is no inter-net fold to re-derive.")
+    elif not pairs:
+        why = (f"the SPEF named by the report parses to {nets} net record(s), "
+               f"0 two-node (coupling) *CAP entries and therefore 0 inter-net "
+               f"coupling pairs, so the MCF fold has nothing to re-derive.")
+    elif not compared:
+        why = (f"{pairs} coupling pair(s) parsed, but none of their victim "
+               f"nets resolves to a *D_NET block carrying grounded caps, so "
+               f"no fold could be measured against the bounded SPEF.")
+    else:
+        why = (f"{pairs} coupling pair(s) parsed and {compared} victim-net "
+               f"comparison(s) ran, but EVERY one carried a re-derived "
+               f"expectation of 0.0 — a comparison a dropped fold could not "
+               f"have failed. Reachable when the coupling capacitances "
+               f"themselves are zero-valued, and by construction on the hold "
+               f"corner in window-independent floor mode (MCF is 0 there). "
+               f"Nothing was proved about the fold.")
+    return why + _NOT_SAID
+
+
+def denominator(stats: dict) -> _gd.Denominator:
+    """What the re-derivation actually PROVED (#496).
+
+    ``examined`` is the number of victim-net comparisons a silently-dropped
+    fold could have FAILED — the recount's own loop, minus every net whose
+    re-derived expectation is 0.0 and whose assertion therefore degenerates to
+    ``increase >= -1e-9``. ``considered`` is the wider population that entered
+    that loop (the old ``nets_checked``), kept so ``considered > 0`` with
+    ``examined == 0`` — the exact shape #496 exists to make visible — is
+    readable straight off the report instead of only from the source.
+
+    Per-corner counts are in ``details`` on BOTH axes, because the two diverge
+    structurally: in window-independent floor mode the hold corner's
+    expectation is 0 for every net, so it contributes comparisons and no
+    proofs, and a reader must be able to see that without re-deriving it."""
+    recount = stats.get("recount", {}) or {}
+    examined = sum(int((v or {}).get("folds_proved", 0) or 0)
+                   for v in recount.values())
+    considered = sum(int((v or {}).get("nets_checked", 0) or 0)
+                     for v in recount.values())
+    return _gd.Denominator(
+        unit=DENOMINATOR_UNIT,
+        examined=examined,
+        considered=considered,
+        not_applicable_reason=_vacuous_reason(stats) if examined == 0 else "",
+        details={
+            "coupling_pairs": stats.get("coupling_pairs"),
+            "coupling_caps": stats.get("coupling_caps"),
+            "coupling_nets": stats.get("coupling_nets"),
+            "spef_net_records": stats.get("spef_net_records"),
+            "spef_parsed_nets": stats.get("spef_parsed_nets"),
+            "spef_r_net_records": stats.get("spef_r_net_records"),
+            "emitter_coupling_pairs": stats.get("emitter_coupling_pairs"),
+            "nets_compared_per_corner": {
+                c: (v or {}).get("nets_checked") for c, v in recount.items()},
+            "folds_proved_per_corner": {
+                c: (v or {}).get("folds_proved") for c, v in recount.items()},
+        },
+    )
+
+
 def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict:
-    ok = all(f.severity != "ERROR" for f in findings)
+    no_errors = all(f.severity != "ERROR" for f in findings)
+    denom = denominator(stats)
+    # A gate that examined nothing has not signed anything off. `pass` keeps its
+    # literal meaning — the fold was re-derived and found honest — so a consumer
+    # reading only that field can no longer be handed a vacuous run as a clean
+    # one. The three-way answer is in `verdict`.
+    if not no_errors:
+        verdict = "FAIL"
+    elif denom.is_vacuous:
+        verdict = "VACUOUS_PASS"
+    else:
+        verdict = "PASS"
+    summary = {
+        "corners_checked": stats.get("corners_checked", []),
+        "windows_exact": stats.get("windows_exact"),
+        "coupling_pairs": stats.get("coupling_pairs"),
+        "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
+        "findings_count": len(findings),
+        "pass": verdict == "PASS",
+        "vacuous": denom.is_vacuous,
+    }
+    _gd.attach(summary, denom)
     return {
         "program": "si_mcf_sta_check",
         "version": "1.0.0",
         "project_dir": project_dir,
-        "verdict": "PASS" if ok else "FAIL",
-        "summary": {
-            "corners_checked": stats.get("corners_checked", []),
-            "windows_exact": stats.get("windows_exact"),
-            "coupling_pairs": stats.get("coupling_pairs"),
-            "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
-            "findings_count": len(findings),
-            "pass": ok,
-        },
+        "verdict": verdict,
+        "summary": summary,
         "recount": stats.get("recount", {}),
         "monotonicity": stats.get("monotonicity", {}),
         "findings": [asdict(f) for f in findings],
@@ -183,8 +588,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     project_dir = Path(args.project_dir)
     if not project_dir.is_dir():
+        # rc 1, NOT 2: rc 2 is the disclosed-skip tier and the flow credits it
+        # as a pass unconditionally. A run that never started must not be
+        # credited as one. See the module docstring.
         print(f"ERROR: not a directory: {project_dir}", file=sys.stderr)
-        return 2
+        return RC_FAIL
 
     findings, stats = audit(
         project_dir, Path(args.report) if args.report else None)
@@ -195,7 +603,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(out + "\n")
     print(out)
-    return 0 if report["summary"]["pass"] else 1
+    if report["verdict"] == "VACUOUS_PASS":
+        # STDOUT STAYS THE REPORT JSON AND NOTHING ELSE; the token goes to
+        # stderr, which `flow_compliance_check._check_program_exit_zero` also
+        # captures into the snippet `_stdout_signals_vacuous` scans. rc 2 alone
+        # already promotes the step to the VACUOUS-PASS tier — the token is the
+        # second, rc-independent channel, for consumers that read text.
+        denom = report["summary"][_gd.DENOMINATOR_KEY]
+        print(f"VACUOUS_PASS: {denom['not_applicable_reason']}",
+              file=sys.stderr)
+        return RC_VACUOUS
+    return RC_PASS if report["verdict"] == "PASS" else RC_FAIL
 
 
 if __name__ == "__main__":

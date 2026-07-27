@@ -492,18 +492,24 @@ def net_grounded_totals(spef_text: str) -> Dict[str, float]:
 
 
 def count_coupling_caps(spef_text: str) -> int:
-    """Number of coupling (2-node, 4-token) *CAP entries in a SPEF."""
+    """Number of coupling (2-node, 4-token) *CAP entries in a SPEF.
+
+    ANY directive ends a ``*CAP`` body. The earlier form listed the closers
+    explicitly (``*RES`` / ``*CONN`` / ``*D_NET`` / ``*END``), which silently
+    missed ``*D_PNET`` — ``"*D_PNET".startswith("*D_NET")`` is False — so a
+    physical-net block following a ``*CAP`` section kept feeding body lines to
+    the counter. That made this function and ``spef_extraction_check.scan_spef``
+    (which has always ended the body on any directive) agree only empirically,
+    on OpenROAD-shaped files; they now agree by construction, which is what
+    lets either be cited as a cross-check of the other."""
     n = 0
-    section: Optional[str] = None
+    in_cap = False
     for raw in spef_text.splitlines():
         s = raw.strip()
-        if s.startswith("*CAP"):
-            section = "cap"
+        if s.startswith("*"):
+            in_cap = s.startswith("*CAP")
             continue
-        if s.startswith(("*RES", "*CONN", "*D_NET", "*END")):
-            section = None if not s.startswith("*CAP") else section
-            continue
-        if section == "cap":
+        if in_cap:
             toks = _cap_tokens(raw)
             if toks is not None and len(toks) == 4:
                 n += 1
