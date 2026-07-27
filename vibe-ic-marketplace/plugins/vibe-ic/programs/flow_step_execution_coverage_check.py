@@ -4,7 +4,7 @@
 `flow_compliance_check.py` already classifies each canonical step
 (PASS / FAIL / MISSING / SKIPPED-CONDITION / WAIVED / VACUOUS-PASS) by inspecting
 its `required_outputs`. What it does NOT do — and what this gate adds — is enforce
-the two invariants an author actually cares about:
+the three invariants an author actually cares about:
 
   1. NO-SKIP COMPLETENESS. Every *applicable* step (i.e. not legitimately
      SKIPPED-CONDITION / WAIVED / DEFERRED) must have actually run and produced
@@ -28,7 +28,17 @@ the two invariants an author actually cares about:
          / antenna / IR-drop / SI). Producing a GDS or ticking "ready for
          foundry" while DRC never ran is an integrity violation, not a warning.
 
-Ordering edges come from the flow yaml's own `blocks_on` field (`_load_blocks_on`);
+  3. NO SELF-VACUOUS CERTIFICATE. This gate refuses to certify a run it could not
+     actually inspect. Both inputs — the compliance report and the `blocks_on`
+     graph — are load-checked, every `counts` field carries the DENOMINATOR the
+     verdict was computed over, and any state in which the ordering invariant was
+     not enforced over at least one edge exits 2 (NOT CHECKED), never 0. Before
+     this, a missing / corrupt flow yaml was swallowed by a bare
+     `except Exception: return {}`, the gate checked ZERO edges, and it printed a
+     counts line byte-identical to a healthy all-PASS run. That is the same class
+     of false certificate invariant 2 exists to stop, so it may not live here.
+
+Ordering edges come from the flow yaml's own `blocks_on` field (`load_blocks_on`);
 the *roles* used by the name-based fallback and by the vacuous-ancestor rule are
 derived from the step NAME and `stage` (universal flow-stage vocabulary), NOT from a
 per-chip allow-list — so the guard is chip-AGNOSTIC and survives flow-yaml
@@ -37,8 +47,16 @@ renumbering.
 Usage:
     python3 flow_step_execution_coverage_check.py <project_dir> [--json report.json]
                                                   [--compliance-json <precomputed.json>]
-    exit 0 = every applicable step ran AND no step outran a step it blocks_on
-    exit 1 = one or more applicable steps MISSING, or an ORDERING-VIOLATION
+    exit 0 = PASS        — every applicable step ran AND no step outran a step it
+                           blocks_on, over a disclosed non-zero denominator
+    exit 1 = FAIL        — one or more applicable steps MISSING, or an
+                           ORDERING-VIOLATION
+    exit 2 = NOT CHECKED — the gate could not look: unreadable/unparseable
+                           compliance report or flow yaml, PyYAML absent, a flow
+                           yaml that declares zero `blocks_on` edges, a report
+                           with zero steps or zero applicable steps, or a
+                           mistyped CLI flag. "I could not look" NEVER reads the
+                           same as "I looked and it was fine".
 
 The compliance classification is reused verbatim: this gate runs
 `flow_compliance_check.py --json` itself (or consumes a precomputed report via
@@ -54,6 +72,10 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _DEFAULT_FLOW = _HERE.parent / "flow" / "phase1_phase2_phase3.yaml"
+
+# Exit codes. 2 = NOT CHECKED is a first-class verdict, not an error code: it is
+# what the gate must return whenever it could not actually inspect the run.
+VERDICT_RC = {"PASS": 0, "FAIL": 1, "NOT-CHECKED": 2}
 
 # ── role classification by universal flow-stage name ─────────────────────────
 # Terminal hand-off steps: emitting/ticking these asserts the design is done.
@@ -89,27 +111,38 @@ _REAL_DONE = {"PASS"}
 # (rc=2 "input not applicable", e.g. the synthesis-handoff gate on a design with
 # no hi/lo tie cells or no yosys-script template). For an ordinary design PROCESS
 # step that is an acceptable predecessor — it ran, it did not fail, it was not
-# silently MISSING. It is NOT acceptable for a step whose whole job is to certify
-# something: a SIGN-OFF (DRC/LVS/PERC/SPICE/…) that verified nothing, or a
-# stage-5 SILICON ATTESTATION (fab intake / wafer sort / packaging / final test /
-# reliability qual) that attested to nothing. Both must still block a downstream
-# done-claim — you cannot wafer-sort a lot the foundry never delivered, and the
-# downstream step's own PASS asserts the upstream physical event occurred. See
-# `_blocks_when_vacuous`, applied in analyze().
+# silently MISSING. It is NOT acceptable for a step whose whole job is to CERTIFY
+# something: a SIGN-OFF (DRC/LVS/PERC/SPICE/…) that verified nothing, a TERMINAL
+# hand-off (GDSII output / Foundry Handoff / Tapeout checklist) that handed off
+# nothing, or a stage-5 SILICON ATTESTATION (fab intake / wafer sort / packaging
+# / final test / reliability qual) that attested to nothing. All three must still
+# block a downstream done-claim — you cannot wafer-sort a lot the foundry never
+# delivered, and the downstream step's own PASS asserts the upstream event
+# occurred. See `_blocks_when_vacuous`, applied in analyze().
 _VACUOUS = {"VACUOUS-PASS"}
 
 
 def _blocks_when_vacuous(step: dict) -> bool:
     """True when a VACUOUS-PASS on `step` must STILL block a downstream done-claim.
 
-    Sign-off steps and stage-5 silicon attestations both certify something; a
-    vacuous verdict on either means nothing was certified, so a successor may not
-    be credited as done on top of it. Ordinary process steps return False — they
-    ran and did not fail, which is a legitimate predecessor state.
+    Sign-off steps, TERMINAL hand-off steps and stage-5 silicon attestations all
+    certify something; a vacuous verdict on any of them means nothing was
+    certified, so a successor may not be credited as done on top of it. Ordinary
+    process steps return False — they ran and did not fail, which is a legitimate
+    predecessor state.
+
+    The terminal limb closes a hole the module's own docstring already forbade:
+    `_TERMINAL_RE` identifies GDSII output / Foundry Handoff / Tapeout checklist
+    as the steps whose emission ASSERTS the design is done, and invariant 2 says
+    producing a GDS while DRC never ran is an integrity violation — yet a VACUOUS
+    hand-off used to be waved through as an acceptable predecessor, so a foundry
+    handoff that verified nothing still credited Fabrication and everything after
+    it. Same reasoning as the sign-off limb, same class of false certificate.
     """
     name = step.get("name", "") or ""
     stage = str(step.get("stage") or "")
     return bool(_SIGNOFF_RE.search(name)
+                or _TERMINAL_RE.search(name)
                 or stage.startswith(_SILICON_STAGE_PREFIX)
                 or _SILICON_ATTEST_RE.search(name))
 
@@ -118,32 +151,64 @@ def _norm(status: str) -> str:
     return str(status or "").upper().replace("_", "-").strip()
 
 
+class NotChecked(Exception):
+    """The gate could not inspect its input. Never degrades into a PASS."""
+
+
 def _run_compliance(project: Path) -> dict:
     out = Path(tempfile.mkstemp(suffix="_compliance.json")[1])
     prog = _HERE / "flow_compliance_check.py"
-    subprocess.run([sys.executable, str(prog), str(project), "--json", str(out)],
-                   capture_output=True, text=True)
+    cp = subprocess.run(
+        [sys.executable, str(prog), str(project), "--json", str(out)],
+        capture_output=True, text=True)
     # flow_compliance_check exits 1 on FAIL/MISSING; that is expected — we only
-    # need the JSON it writes, not its exit code.
+    # need the JSON it writes, not its exit code. But if it wrote NO usable JSON
+    # we have no per-step verdicts at all, and inventing an empty report here
+    # would manufacture exactly the false certificate this gate exists to stop.
     try:
-        return json.loads(out.read_text())
+        raw = out.read_text()
+    except OSError as exc:
+        raise NotChecked(
+            f"flow_compliance_check produced no report ({exc.__class__.__name__}); "
+            f"rc={cp.returncode}") from exc
     finally:
         try:
             out.unlink()
         except OSError:
             pass
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        tail = (cp.stderr or cp.stdout or "").strip().splitlines()[-1:] or [""]
+        raise NotChecked(
+            f"flow_compliance_check wrote no parseable JSON for {project} "
+            f"(rc={cp.returncode}, {exc.__class__.__name__}): {tail[0][:200]}"
+        ) from exc
 
 
-def _load_blocks_on(flow_path: Path) -> dict:
+def load_blocks_on(flow_path: Path) -> tuple:
     """Build the {step_id: [parent_id,...]} dependency graph from the flow yaml's
     declared `blocks_on` edges — the SAME edges flow_compliance_check consumes.
-    Returns {} if the yaml or PyYAML is unavailable (the gate then falls back to
-    the name-based terminal guard). Ids are stringified for uniform lookup."""
+    Ids are stringified for uniform lookup.
+
+    Returns (graph, provenance). `provenance` is "LOADED" only when the yaml
+    parsed AND declared at least one edge; otherwise it names the reason the
+    ordering invariant cannot be enforced from this yaml. Callers must surface it
+    — this used to be a bare `except Exception: return {}`, which turned "the
+    flow yaml is missing/corrupt" into a silent zero-edge run that still printed
+    PASS with a counts line indistinguishable from a healthy one."""
     try:
         import yaml
-        doc = yaml.safe_load(flow_path.read_text())
-    except Exception:
-        return {}
+    except Exception as exc:            # pragma: no cover - env without PyYAML
+        return {}, f"NO-PYYAML ({exc.__class__.__name__}: {exc})"
+    try:
+        text = Path(flow_path).read_text()
+    except OSError as exc:
+        return {}, f"UNREADABLE ({exc.__class__.__name__}: {flow_path})"
+    try:
+        doc = yaml.safe_load(text)
+    except Exception as exc:
+        return {}, f"UNPARSEABLE ({exc.__class__.__name__}: {flow_path})"
     graph: dict = {}
 
     def walk(o):
@@ -159,7 +224,22 @@ def _load_blocks_on(flow_path: Path) -> dict:
                 walk(v)
 
     walk(doc)
-    return graph
+    if not _edge_count(graph):
+        return graph, f"NO-EDGES (flow yaml declares no blocks_on: {flow_path})"
+    return graph, "LOADED"
+
+
+def _load_blocks_on(flow_path: Path) -> dict:
+    """Back-compat shim: the graph alone, provenance discarded. Do NOT use it to
+    decide a verdict — use `load_blocks_on` and surface the provenance."""
+    return load_blocks_on(flow_path)[0]
+
+
+def _edge_count(graph: dict) -> int:
+    """Number of (child, parent) blocks_on edges — the ordering check's raw
+    denominator. A graph can be non-empty (every step present) and still carry
+    ZERO edges, in which case nothing is enforceable."""
+    return sum(len(v or []) for v in (graph or {}).values())
 
 
 def _ancestors(sid: str, graph: dict) -> list:
@@ -175,7 +255,8 @@ def _ancestors(sid: str, graph: dict) -> list:
     return out
 
 
-def analyze(report: dict, graph: dict | None = None) -> dict:
+def analyze(report: dict, graph: dict | None = None,
+            graph_provenance: str | None = None) -> dict:
     graph = graph or {}
     steps = report.get("steps", [])
     by_id = {str(s.get("id")): s for s in steps}
@@ -184,9 +265,12 @@ def analyze(report: dict, graph: dict | None = None) -> dict:
     applicable_missing = []
     signoff_steps = []
     terminal_steps = []
+    steps_applicable = 0
     for s in steps:
         name = s.get("name", "")
         st = _norm(s.get("status"))
+        if st not in _NOT_APPLICABLE:
+            steps_applicable += 1
         if st not in _NOT_APPLICABLE and st == "MISSING":
             applicable_missing.append(s)
         if _SIGNOFF_RE.search(name):
@@ -196,6 +280,11 @@ def analyze(report: dict, graph: dict | None = None) -> dict:
 
     ordering_violations = []
     seen_pairs = set()
+    # DENOMINATOR of the ordering invariant: how many (done-step, applicable
+    # ancestor) pairs were actually adjudicated. A PASS that adjudicated zero
+    # pairs asserts nothing, and must not be reported the same way as a PASS that
+    # adjudicated hundreds.
+    ancestor_edges_checked = 0
 
     def _emit(term, anc_id):
         anc = by_id.get(str(anc_id))
@@ -222,14 +311,15 @@ def analyze(report: dict, graph: dict | None = None) -> dict:
             ast = status_of.get(anc_id)
             if ast is None or ast in _NOT_APPLICABLE:
                 continue
+            ancestor_edges_checked += 1
             if ast in _REAL_DONE:
                 continue
             # VACUOUS-PASS ancestor: acceptable UNLESS the ancestor's job was to
-            # certify something — a sign-off that verified nothing, or a stage-5
-            # silicon attestation that attested to nothing, must still block. A
-            # vacuous PROCESS step (e.g. synth-handoff with no tie-cells to check)
-            # ran and did not fail — it is not a silent MISSING and does not break
-            # ordering.
+            # certify something — a sign-off that verified nothing, a TERMINAL
+            # hand-off that handed off nothing, or a stage-5 silicon attestation
+            # that attested to nothing must all still block. A vacuous PROCESS
+            # step (e.g. synth-handoff with no tie-cells to check) ran and did not
+            # fail — it is not a silent MISSING and does not break ordering.
             if ast in _VACUOUS:
                 anc = by_id.get(anc_id)
                 if anc and not _blocks_when_vacuous(anc):
@@ -250,25 +340,91 @@ def analyze(report: dict, graph: dict | None = None) -> dict:
                 continue
             _emit(t, sg.get("id"))
 
-    ok = not applicable_missing and not ordering_violations
+    # ── NOT-CHECKED: every way the gate can have inspected nothing. Each one
+    # used to render as an ordinary PASS with a counts line indistinguishable
+    # from a healthy run. FAIL still wins over NOT-CHECKED — a violation found
+    # over a partial view is still a violation.
+    blocks_on_edges = _edge_count(graph)
+    provenance = graph_provenance or (
+        "LOADED" if blocks_on_edges else
+        "NO-EDGES (caller supplied a graph with no blocks_on edges)")
+    not_checked = []
+    if not steps:
+        not_checked.append(
+            "compliance report declares 0 steps — nothing to enforce")
+    elif not steps_applicable:
+        not_checked.append(
+            f"all {len(steps)} steps are SKIPPED / WAIVED / DEFERRED — 0 "
+            f"applicable steps, so no completeness claim was tested")
+    if not blocks_on_edges:
+        not_checked.append(
+            f"blocks_on graph carries 0 edges, so the ordering invariant was "
+            f"never enforced: {provenance}")
+
+    if applicable_missing or ordering_violations:
+        verdict = "FAIL"
+    elif not_checked:
+        verdict = "NOT-CHECKED"
+    else:
+        verdict = "PASS"
+
     return {
-        "verdict": "PASS" if ok else "FAIL",
+        "verdict": verdict,
+        "not_checked": not_checked,
+        "graph_provenance": provenance,
         "applicable_missing": [
             {"id": s.get("id"), "name": s.get("name"), "stage": s.get("stage")}
             for s in applicable_missing],
         "ordering_violations": ordering_violations,
         "counts": {
             "steps_total": len(steps),
+            "steps_applicable": steps_applicable,
             "applicable_missing": len(applicable_missing),
             "signoff_steps": len(signoff_steps),
             "terminal_steps": len(terminal_steps),
+            # DENOMINATORS — a PASS is only as strong as these.
+            "blocks_on_edges_loaded": blocks_on_edges,
+            "ancestor_edges_checked": ancestor_edges_checked,
             "ordering_violations": len(ordering_violations),
         },
     }
 
 
+def _load_report(args) -> dict:
+    """The compliance report, or NotChecked. Never a silently-empty dict."""
+    project = Path(args.project).resolve()
+    if args.compliance_json:
+        src = Path(args.compliance_json)
+        try:
+            raw = src.read_text()
+        except OSError as exc:
+            raise NotChecked(
+                f"--compliance-json is unreadable "
+                f"({exc.__class__.__name__}: {src})") from exc
+        try:
+            report = json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            raise NotChecked(
+                f"--compliance-json is not parseable JSON "
+                f"({exc.__class__.__name__}: {src})") from exc
+    else:
+        if not project.is_dir():
+            raise NotChecked(f"project directory does not exist: {project}")
+        report = _run_compliance(project)
+    if not isinstance(report, dict) or not isinstance(report.get("steps"), list):
+        raise NotChecked(
+            "compliance report has no `steps` list — wrong file, or a report "
+            "shape this gate cannot read")
+    return report
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0],
+        # A mistyped flag must ERROR, never silently bind to a different option
+        # by prefix (`--flow` → `--flow-def`) and never be ignored. argparse's
+        # own error path exits 2, which is this gate's NOT-CHECKED code.
+        allow_abbrev=False)
     ap.add_argument("project")
     ap.add_argument("--json", help="write this gate's report here")
     ap.add_argument("--compliance-json",
@@ -278,13 +434,30 @@ def main() -> int:
     args = ap.parse_args()
 
     project = Path(args.project).resolve()
-    if args.compliance_json:
-        report = json.loads(Path(args.compliance_json).read_text())
-    else:
-        report = _run_compliance(project)
+    graph, provenance = load_blocks_on(Path(args.flow_def))
+    try:
+        report = _load_report(args)
+    except NotChecked as exc:
+        print(f"=== flow step-execution coverage — {project.name} ===")
+        print(f"\nNOT CHECKED — {exc}")
+        print(f"flow-graph: {provenance}  "
+              f"blocks-on-edges={_edge_count(graph)}")
+        if args.json:
+            Path(args.json).write_text(json.dumps(
+                {"verdict": "NOT-CHECKED", "not_checked": [str(exc)],
+                 "graph_provenance": provenance, "project": str(project),
+                 "counts": {"steps_total": 0, "steps_applicable": 0,
+                            "applicable_missing": 0, "signoff_steps": 0,
+                            "terminal_steps": 0,
+                            "blocks_on_edges_loaded": _edge_count(graph),
+                            "ancestor_edges_checked": 0,
+                            "ordering_violations": 0},
+                 "applicable_missing": [], "ordering_violations": []},
+                indent=2, ensure_ascii=False))
+        print("\nVERDICT: NOT-CHECKED")
+        return VERDICT_RC["NOT-CHECKED"]
 
-    graph = _load_blocks_on(Path(args.flow_def))
-    res = analyze(report, graph)
+    res = analyze(report, graph, provenance)
     res["project"] = str(project)
     res["compliance_overall"] = report.get("overall")
 
@@ -293,9 +466,19 @@ def main() -> int:
 
     print(f"=== flow step-execution coverage — {project.name} ===")
     c = res["counts"]
-    print(f"steps={c['steps_total']}  applicable-MISSING={c['applicable_missing']}"
+    print(f"steps={c['steps_total']}  applicable={c['steps_applicable']}"
+          f"  applicable-MISSING={c['applicable_missing']}"
           f"  sign-off-steps={c['signoff_steps']}  terminal-steps={c['terminal_steps']}"
           f"  ordering-violations={c['ordering_violations']}")
+    # The denominator the verdict rests on — printed on EVERY run, so a PASS can
+    # never look the same as a run that inspected nothing.
+    print(f"denominators: blocks-on-edges-loaded={c['blocks_on_edges_loaded']}"
+          f"  ancestor-edges-checked={c['ancestor_edges_checked']}"
+          f"  flow-graph={res['graph_provenance']}")
+    if res["not_checked"]:
+        print("\nNOT CHECKED (the gate could not inspect this):")
+        for why in res["not_checked"]:
+            print(f"  - {why}")
     if res["applicable_missing"]:
         print("\nSILENTLY-SKIPPED (applicable step never produced output):")
         for s in res["applicable_missing"]:
@@ -311,7 +494,7 @@ def main() -> int:
             print(f"  [{v['terminal_id']}] {v['terminal']} = {v['terminal_status']}"
                   f"  ⟵ but  [{v['signoff_id']}] {v['signoff']} = {v['signoff_status']}")
     print(f"\nVERDICT: {res['verdict']}")
-    return 0 if res["verdict"] == "PASS" else 1
+    return VERDICT_RC.get(res["verdict"], VERDICT_RC["FAIL"])
 
 
 if __name__ == "__main__":
