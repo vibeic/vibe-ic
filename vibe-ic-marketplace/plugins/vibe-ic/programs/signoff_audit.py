@@ -195,11 +195,11 @@ def _has_files(project_dir: Path, patterns: List[str],
 
 
 # ---------------------------------------------------------------------------
-# Sign-off-first ranking for the netlist / timing evidence slots
+# Sign-off-first ranking for the GDS / netlist / timing evidence slots
 # ---------------------------------------------------------------------------
 # ORGANIC-20260606-existence-only-signoff-gates (#437a) was fixed for the DRC
-# slot only. The netlist and timing slots kept crediting `rglob()[0]` — an
-# arbitrary, filesystem-order pick with no ranking and no content check.
+# slot only. The GDS, netlist and timing slots kept crediting `rglob()[0]` —
+# an arbitrary, filesystem-order pick with no ranking and no content check.
 #
 # Measured on a completed spm x ihp-sg13g2 run (2026-07-27, main @ v1.7.36):
 #   TAPEOUT_NETLIST_EXISTS credited phase2/stage2/dft/scan_netlist_prelim.v
@@ -210,13 +210,22 @@ def _has_files(project_dir: Path, patterns: List[str],
 #     pre_pnr_timing.rpt — a PRE-layout STA — while
 #     phase3/stage3/sta/post_route_timing.rpt existed.
 # Both slots reported `true` and the checklist read 4/4 PASS.
+#   TAPEOUT_GDS_EXISTS (the deferred tail, fixed 2026-07-27 in the same shape)
+#     credited steps/37_gdsii_output_only_if_step_31_pv_fully_clean/spm.gds —
+#     a symlink MIRROR — while the flow's declared stream-out artefact
+#     phase3/stage4/gds/spm.gds (881530 B), the exact file step 37's
+#     gds_size_check / gds_substance_check / provenance_check verify, and a
+#     STALE 1014178 B copy under phase3/stage4/foundry_handoff/ both sat in
+#     the same project. The checklist therefore named a path whose substance
+#     nothing had checked, and could equally have named the stale copy.
 #
 # Two changes, mirroring the DRC slot 40 lines below which already does this:
 #   (1) rank candidates sign-off-first and cite the best one;
 #   (2) REFUSE to credit the slot when EVERY candidate is a self-declared
-#       pre-sign-off intermediate. A preliminary netlist or a pre-layout STA
-#       is not a thing a tape-out is signed off on, and a gate may explain an
-#       absent artefact but may not certify the step without one.
+#       pre-sign-off intermediate. A preliminary netlist, a pre-layout STA or
+#       a draft layout is not a thing a tape-out is signed off on, and a gate
+#       may explain an absent artefact but may not certify the step without
+#       one.
 # Ranking only ever REORDERS; the pre-sign-off refusal is a separate,
 # separately-named substance rule so the two cannot be confused.
 _PRESIGNOFF_MARKERS = (
@@ -293,6 +302,53 @@ def _timing_rank(path: Path, project_dir: Path) -> int:
                                "ocv", "mcorner", "multi_corner")):
         return 0
     return 1
+
+
+#: the flow's DECLARED stream-out artefact for Step 37 ("GDSII output"):
+#: `phase3/stage4/gds/*.gds`. It is also the exact path `gds_size_check`,
+#: `gds_substance_check` and `provenance_check` are pointed at by that step's
+#: gate, so citing anything else makes the tape-out checklist describe a
+#: different file from the one the substance gates verified.
+_DECLARED_GDS_DIR_PARTS = ("phase3", "stage4", "gds")
+#: Step 38's scribe-line PCM / alignment frame is FOUNDRY-SUPPLIED — the flow
+#: yaml says so explicitly and `foundry_handoff_package_check` keeps it out of
+#: its required files. It is an INPUT in the same sense as `input/pdk/gds/`,
+#: so it must never outrank a design GDS in the tape-out slot.
+_FOUNDRY_SUPPLIED_GDS_STEMS = ("scribe_line_layout",)
+
+
+def _gds_rank(path: Path, project_dir: Path) -> int:
+    """Sign-off-first ordering for the tape-out GDS slot.
+
+    0 — the flow's declared stream-out artefact, `phase3/stage4/gds/*.gds`
+    1 — any other in-`phase3/` GDS (the P&R hand-off copy, an analog or
+        mixed-signal merge, the foundry-handoff copy of the design)
+    2 — any other glob hit (a `steps/` mirror, an ad-hoc copy at the root)
+    3 — a FOUNDRY-SUPPLIED frame (scribe line / PCM), which is not the
+        design and may only ever be a last resort
+    9 — self-declared pre-sign-off intermediate (never credited)
+
+    Measured on a completed spm x ihp-sg13g2 run (2026-07-27): four GDS files
+    exist and the unranked `rglob()[0]` cited
+    `steps/37_gdsii_output_only_if_step_31_pv_fully_clean/spm.gds` — a symlink
+    mirror — while `phase3/stage4/gds/spm.gds` (the declared artefact, and a
+    DIFFERENT 881530 B file from the stale 1014178 B foundry-handoff copy) sat
+    in the same project.
+    """
+    if _is_presignoff_artifact(path, project_dir):
+        return _PRESIGNOFF_RANK
+    parts = _rel_parts(path, project_dir)
+    if any(path.name.lower().startswith(s)
+           for s in _FOUNDRY_SUPPLIED_GDS_STEMS):
+        return 3
+    dirs = parts[:-1]
+    for i in range(len(dirs) - len(_DECLARED_GDS_DIR_PARTS) + 1):
+        if tuple(dirs[i:i + len(_DECLARED_GDS_DIR_PARTS)]) == \
+                _DECLARED_GDS_DIR_PARTS:
+            return 0
+    if "phase3" in dirs:
+        return 1
+    return 2
 
 
 def _rank_signoff_first(paths: List[Path], project_dir: Path, ranker) -> List[Path]:
@@ -414,15 +470,39 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
     # netgen waiver rather than a genuine match — same demotion contract.
     lvs_power_pin_waived = False
 
-    # (a) GDS file exists
+    # (a) GDS — RANKED, and never a pre-sign-off draft.
+    # 2026-07-27: this slot kept the unranked `_has_files(...)[0]` pick after
+    # the netlist and timing slots were fixed, so on the real completed run it
+    # cited a `steps/` mirror symlink instead of the declared stream-out
+    # artefact the step-37 substance gates actually verified. Same two changes
+    # as the two slots below: rank sign-off-first, and refuse to credit the
+    # slot when every candidate declares itself a pre-sign-off intermediate.
     gds_files = _has_files(project_dir, ["*.gds", "*.gds2", "*.gdsii",
                                           "*.GDS", "*.GDSII"])
-    if gds_files:
+    gds_files = _rank_signoff_first(gds_files, project_dir, _gds_rank)
+    gds_signoff = [p for p in gds_files
+                   if _gds_rank(p, project_dir) != _PRESIGNOFF_RANK]
+    if gds_signoff:
+        chosen_gds = gds_signoff[0]
         evidence["gds"] = True
         evidence_count += 1
         result.findings.append(Finding(
             rule="TAPEOUT_GDS_EXISTS", severity="INFO",
-            message=f"GDS file found: {gds_files[0].name}",
+            message=f"GDS file found: {chosen_gds.name}",
+            file=str(chosen_gds)))
+    elif gds_files:
+        # Candidates exist but every one of them DECLARES itself a
+        # pre-sign-off intermediate. Naming the files is the disclosure; the
+        # slot is still not credited (#437a: substance, not existence).
+        evidence["gds"] = False
+        _names = ", ".join(sorted({p.name for p in gds_files})[:5])
+        result.findings.append(Finding(
+            rule="TAPEOUT_GDS_PRESIGNOFF_ONLY", severity="ERROR",
+            message=(f"Only pre-sign-off GDS(es) found ({_names}) — a "
+                     f"draft/preview layout is not the GDS a tape-out is "
+                     f"signed off on. Stream out the sign-off layout "
+                     f"(phase3/stage4/gds/<top>.gds) before claiming "
+                     f"Step 36."),
             file=str(gds_files[0])))
     else:
         evidence["gds"] = False
