@@ -11,22 +11,33 @@ the two invariants an author actually cares about:
      output. An applicable step whose status is MISSING is a silently-skipped
      step — the exact "中間漏步驟" failure: the runner never drove it.
 
-  2. TERMINAL-STEP ORDERING GUARD. A terminal hand-off step (GDSII output /
-     Foundry Handoff / Tapeout checklist) must NOT be marked done while any of
-     its sign-off predecessors (Physical Verification / DRC / LVS / ERC /
-     post-route STA / parasitic extraction / antenna / IR-drop / SI) has not
-     PASSed. Producing a GDS or ticking "ready for foundry" while DRC never ran
-     is an integrity violation, not a warning.
+  2. ORDERING GUARD. No step may be marked done (PASS / VACUOUS-PASS) while an
+     applicable step it declares it depends on has not truly PASSed. This is
+     enforced two ways, and the code is wider than the name "terminal guard"
+     suggests:
 
-The predecessor/terminal roles are derived from the step NAME (universal flow-stage
-vocabulary), NOT from a per-chip allow-list — so the guard is chip-AGNOSTIC and
-survives flow-yaml renumbering. When the flow yaml grows an explicit `depends_on`
-field, `_terminal_of`/`_signoff_of` fall back to it automatically (see below).
+       * PRIMARY (graph): for EVERY step claimed done, walk its transitive
+         `blocks_on` ancestry from the flow yaml and flag any applicable
+         ancestor that is MISSING / FAIL — or VACUOUS-PASS when a vacuous
+         ancestor is not an acceptable predecessor (see `_blocks_when_vacuous`).
+         This is not restricted to terminal steps or to sign-off ancestors.
+       * FALLBACK (name): a terminal hand-off step (GDSII output / Foundry
+         Handoff / Tapeout checklist) that ships NO `blocks_on` edges at all is
+         still guarded against every applicable sign-off step (Physical
+         Verification / DRC / LVS / ERC / post-route STA / parasitic extraction
+         / antenna / IR-drop / SI). Producing a GDS or ticking "ready for
+         foundry" while DRC never ran is an integrity violation, not a warning.
+
+Ordering edges come from the flow yaml's own `blocks_on` field (`_load_blocks_on`);
+the *roles* used by the name-based fallback and by the vacuous-ancestor rule are
+derived from the step NAME and `stage` (universal flow-stage vocabulary), NOT from a
+per-chip allow-list — so the guard is chip-AGNOSTIC and survives flow-yaml
+renumbering.
 
 Usage:
     python3 flow_step_execution_coverage_check.py <project_dir> [--json report.json]
                                                   [--compliance-json <precomputed.json>]
-    exit 0 = every applicable step ran AND no terminal step outran its sign-off
+    exit 0 = every applicable step ran AND no step outran a step it blocks_on
     exit 1 = one or more applicable steps MISSING, or an ORDERING-VIOLATION
 
 The compliance classification is reused verbatim: this gate runs
@@ -57,6 +68,18 @@ _SIGNOFF_RE = re.compile(
     r"|post-?layout\s*spice|spice\s*(?:correlation|verification)|(?<![a-z])perc(?![a-z])",
     re.IGNORECASE)
 
+# Silicon / manufacturing attestation steps (flow stage 5). These do not verify a
+# design property — they attest that a PHYSICAL EVENT happened: the mask set and
+# wafer lot came back from the foundry, wafers were sorted, parts were packaged,
+# final-tested, reliability-qualified. Classified by the flow's own `stage` field
+# first (declarative, immune to rewording) with a name fallback for reports that
+# carry no stage.
+_SILICON_STAGE_PREFIX = "stage5"
+_SILICON_ATTEST_RE = re.compile(
+    r"fabrication|wafer\s*(?:sort|fab|lot|probe)|probe\s*test|packaging"
+    r"|final\s*test|burn-?in|reliability\s*qual|(?<![a-z])htol(?![a-z])",
+    re.IGNORECASE)
+
 # A step is "legitimately not run" (does NOT count as a skip) in these states.
 _NOT_APPLICABLE = {"SKIPPED-CONDITION", "SKIPPED", "WAIVED",
                    "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM", "DEFERRED"}
@@ -64,13 +87,31 @@ _NOT_APPLICABLE = {"SKIPPED-CONDITION", "SKIPPED", "WAIVED",
 _REAL_DONE = {"PASS"}
 # VACUOUS-PASS = the gate RAN and legitimately had nothing applicable to check
 # (rc=2 "input not applicable", e.g. the synthesis-handoff gate on a design with
-# no hi/lo tie cells or no yosys-script template). For a NON-sign-off process
+# no hi/lo tie cells or no yosys-script template). For an ordinary design PROCESS
 # step that is an acceptable predecessor — it ran, it did not fail, it was not
-# silently MISSING. But a VACUOUS-PASS on a SIGN-OFF step (DRC/LVS/PERC/SPICE/…)
-# is dangerous (a sign-off that verified nothing) and MUST still block a
-# downstream done-claim. So VACUOUS-PASS is accepted as an ancestor ONLY when the
-# ancestor is not a sign-off step (see _SIGNOFF_RE gate in analyze()).
+# silently MISSING. It is NOT acceptable for a step whose whole job is to certify
+# something: a SIGN-OFF (DRC/LVS/PERC/SPICE/…) that verified nothing, or a
+# stage-5 SILICON ATTESTATION (fab intake / wafer sort / packaging / final test /
+# reliability qual) that attested to nothing. Both must still block a downstream
+# done-claim — you cannot wafer-sort a lot the foundry never delivered, and the
+# downstream step's own PASS asserts the upstream physical event occurred. See
+# `_blocks_when_vacuous`, applied in analyze().
 _VACUOUS = {"VACUOUS-PASS"}
+
+
+def _blocks_when_vacuous(step: dict) -> bool:
+    """True when a VACUOUS-PASS on `step` must STILL block a downstream done-claim.
+
+    Sign-off steps and stage-5 silicon attestations both certify something; a
+    vacuous verdict on either means nothing was certified, so a successor may not
+    be credited as done on top of it. Ordinary process steps return False — they
+    ran and did not fail, which is a legitimate predecessor state.
+    """
+    name = step.get("name", "") or ""
+    stage = str(step.get("stage") or "")
+    return bool(_SIGNOFF_RE.search(name)
+                or stage.startswith(_SILICON_STAGE_PREFIX)
+                or _SILICON_ATTEST_RE.search(name))
 
 
 def _norm(status: str) -> str:
@@ -183,13 +224,15 @@ def analyze(report: dict, graph: dict | None = None) -> dict:
                 continue
             if ast in _REAL_DONE:
                 continue
-            # VACUOUS-PASS ancestor: acceptable UNLESS it is a sign-off step (a
-            # sign-off that verified nothing must still block). A vacuous PROCESS
-            # step (e.g. synth-handoff with no tie-cells to check) ran and did not
-            # fail — it is not a silent MISSING and does not break ordering.
+            # VACUOUS-PASS ancestor: acceptable UNLESS the ancestor's job was to
+            # certify something — a sign-off that verified nothing, or a stage-5
+            # silicon attestation that attested to nothing, must still block. A
+            # vacuous PROCESS step (e.g. synth-handoff with no tie-cells to check)
+            # ran and did not fail — it is not a silent MISSING and does not break
+            # ordering.
             if ast in _VACUOUS:
                 anc = by_id.get(anc_id)
-                if anc and not _SIGNOFF_RE.search(anc.get("name", "")):
+                if anc and not _blocks_when_vacuous(anc):
                     continue
             _emit(s, anc_id)
 
@@ -258,7 +301,12 @@ def main() -> int:
         for s in res["applicable_missing"]:
             print(f"  MISSING  [{s['id']}] {s['name']}")
     if res["ordering_violations"]:
-        print("\nORDERING-VIOLATION (terminal step marked done before sign-off passed):")
+        # NB the JSON keys are historical: `terminal_*` is the step CLAIMED DONE
+        # (any step, not only a terminal hand-off) and `signoff_*` is the
+        # PREDECESSOR that had not PASSed (any applicable ancestor, not only a
+        # sign-off). The keys are kept for report consumers; the wording here
+        # describes what the check actually emits.
+        print("\nORDERING-VIOLATION (step marked done before a step it depends on passed):")
         for v in res["ordering_violations"]:
             print(f"  [{v['terminal_id']}] {v['terminal']} = {v['terminal_status']}"
                   f"  ⟵ but  [{v['signoff_id']}] {v['signoff']} = {v['signoff_status']}")
