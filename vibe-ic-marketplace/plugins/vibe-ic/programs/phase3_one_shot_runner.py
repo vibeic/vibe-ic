@@ -62,6 +62,7 @@ import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — 
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
+import _yosys_stat as _ystat  # shared yosys `stat` parser (step 9 stats.json)
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -7638,6 +7639,24 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # Record what this netlist was ACTUALLY synthesised from, so the next
     # run's cache-reuse decision compares CONTENT, not clocks (#349/#336).
     _write_synth_inputs_sidecar(netlist, _pl.rtl_dir(project))
+    # Step 9 declares `phase2/stage2/synth/area.rpt OR
+    # phase2/stage2/synth/stats.json`; nothing in the plugin has ever written
+    # either path, so post-#455 step 9 reported MISSING on runs whose synthesis
+    # genuinely succeeded. This synth already runs `stat -liberty`, i.e. it
+    # already measured both the cell count AND the design area — persist it.
+    # ANTI-FABRICATION: None when the capture carries no yosys stat line at all
+    # => nothing written => step 9 stays honestly MISSING.
+    _ystat.emit_stats_json(
+        out_dir,
+        out + "\n" + err,
+        log_rel=str(log.relative_to(project)) if log.is_relative_to(project)
+                else str(log),
+        netlist_rel=str(netlist.relative_to(project))
+                    if netlist.is_relative_to(project) else str(netlist),
+        tool="yosys",
+        frontend=synth_frontend,
+        liberty=str(liberty_c),
+    )
     return StepResult("synth", "PASS", time.time() - t0,
                       f"netlist={netlist.name} cells={cell_count} "
                       f"frontend={synth_frontend}",
