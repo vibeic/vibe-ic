@@ -37,6 +37,7 @@ import argparse, json, sys
 from pathlib import Path
 
 import _spec_floor_keys as _sfk   # noqa: E402  (re #495 Stage 0)
+import _class_template_resolve as _ctr   # noqa: E402  (re #495 Stage 3)
 
 try:
     import yaml
@@ -112,20 +113,17 @@ def count_l12_sequences(l12: dict) -> tuple[int, list, list]:
 
 def load_class_template(class_path: str, class_kb: Path) -> dict:
     tdir = class_kb / "templates"
-    cand = tdir / f"{class_path}.yaml"
-    if not cand.exists():
-        # Fallback: prefer the most-generic ("any-ic") when the specific class has
-        # no template; cable-side-id-ic's floor is <benchmark>-specific and must NOT be
-        # applied to arbitrary ICs.
-        for fb in ("any-ic",):
-            c = tdir / f"{fb}.yaml"
-            if c.exists():
-                cand = c; break
-    if not cand.exists():
-        # chip-AGNOSTIC silent-skip: when class template is absent (e.g.
-        # any-ic / generic project), gate has no floor to enforce.
+    if not tdir.exists():
         return None
-    return _load_yaml(cand)
+    # re #495 Stage 3 — own template, else the nearest templated ANCESTOR in
+    # the class tree, else the vacuous `any-ic`. The incumbent chain skipped
+    # step 2 entirely, so every one of the 20 template-less nodes silently
+    # dropped to a NO-floor template even when the tree named an ancestor that
+    # has one (`hash-function` -> `crypto-engine`, `spi-peripheral` ->
+    # `protocol-ic`). `any-ic` remains the terminal fallback so a class the
+    # tree does not contain still cannot pick up a protocol-specific floor.
+    r = _ctr.resolve(class_path, class_kb, neutral_chain=("any-ic",))
+    return r["template"]
 
 
 def check(docs_dir: Path, class_kb: Path, class_path: str) -> dict:

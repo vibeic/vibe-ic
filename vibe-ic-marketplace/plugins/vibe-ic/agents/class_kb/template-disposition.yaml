@@ -1,0 +1,184 @@
+_comment: 're #495 Stage 3 — the declared disposition of every class-tree node and
+  every template file. The issue asked whether the 20 nodes without a template should
+  be POPULATED or DELETED. Measured answer: NEITHER. In an inheritance tree a node
+  without its own template means ''adds nothing beyond my parent'' — which is what
+  digital-ic.yaml already says of itself in prose and what gap_detect._spec_floor_from_chain
+  has always done. What was broken is that the two single-template consumers substituted
+  the ORPHAN generic-ic template instead of walking to an ancestor, silently, and
+  not even in a consistent direction: looser than the taxonomy for the protocol-ic
+  and crypto-engine children, stricter for the digital-ic children whose ancestors
+  carry no floor at all. Since Stage 3 all three consumers walk. This file records
+  the resulting disposition so ''no template'' is a declared state rather than an
+  accident, and programs/tests/test_v1_7_72_issue495_template_hole_inheritance.py
+  re-derives every entry from disk so it cannot drift.'
+known_divergence:
+  node: uart-peripheral
+  rule: L3_opcode_count_min
+  what: gap_detect._spec_floor_from_chain accumulates root->leaf with dict.update,
+    so a rule a child OMITS is inherited from the parent anyway; there is no way
+    in that scheme to say 'my parent floors this and I do not'. templates/uart-peripheral.yaml
+    is the one template that tries, dropping L3_opcode_count_min with the reason
+    on the line where it would have gone ('No L3 opcode floor — UART carries arbitrary
+    bytes, not opcodes'), and gap_detect re-imposes protocol-ic's value of 4. The
+    two single-template consumers honour the omission, so the semantics disagree
+    on exactly this one node.
+  not_fixed_here: Changing an inheritance rule is not a template hole, gap_detect's
+    chain walk is the subject of the following stage, and gap_detect produces 0
+    gaps corpus-wide today so nothing is currently mis-scored. Pinned by programs/tests/test_v1_7_72_issue495_template_hole_inheritance.py
+    so it stays a decision rather than a rediscovery.
+nodes:
+  analog-mixed-ic:
+    disposition: inherit
+    inherits_from: any-ic
+    spec_floor_keys: 0
+  any-ic:
+    disposition: own_template
+    template: templates/any-ic.yaml
+    spec_floor_keys: 0
+  apb-peripheral:
+    disposition: own_template
+    template: templates/apb-peripheral.yaml
+    spec_floor_keys: 9
+  block-cipher:
+    disposition: inherit
+    inherits_from: crypto-engine
+    spec_floor_keys: 7
+  bus-controller:
+    disposition: own_template
+    template: templates/bus-controller.yaml
+    spec_floor_keys: 7
+  cable-side-id-ic:
+    disposition: own_template
+    template: templates/cable-side-id-ic.yaml
+    spec_floor_keys: 12
+  crypto-engine:
+    disposition: own_template
+    template: templates/crypto-engine.yaml
+    spec_floor_keys: 7
+  debug-block:
+    disposition: inherit
+    inherits_from: digital-ic
+    spec_floor_keys: 0
+  digital-ic:
+    disposition: own_template
+    template: templates/digital-ic.yaml
+    spec_floor_keys: 0
+  display-controller:
+    disposition: inherit
+    inherits_from: digital-ic
+    spec_floor_keys: 0
+  dsp-block:
+    disposition: inherit
+    inherits_from: digital-ic
+    spec_floor_keys: 0
+  feature-cpu:
+    disposition: inherit
+    inherits_from: processor
+    spec_floor_keys: 7
+  hash-function:
+    disposition: inherit
+    inherits_from: crypto-engine
+    spec_floor_keys: 7
+  hash-function-csr:
+    disposition: inherit
+    inherits_from: crypto-engine
+    spec_floor_keys: 7
+  hash-function-miner:
+    disposition: inherit
+    inherits_from: crypto-engine
+    spec_floor_keys: 7
+  hash-function-streaming:
+    disposition: inherit
+    inherits_from: crypto-engine
+    spec_floor_keys: 7
+  i2c-peripheral:
+    disposition: inherit
+    inherits_from: protocol-ic
+    spec_floor_keys: 10
+  memory-controller:
+    disposition: own_template
+    template: templates/memory-controller.yaml
+    spec_floor_keys: 9
+  network-controller:
+    disposition: inherit
+    inherits_from: digital-ic
+    spec_floor_keys: 0
+  ooo-cpu:
+    disposition: inherit
+    inherits_from: processor
+    spec_floor_keys: 7
+  peripheral-timer:
+    disposition: inherit
+    inherits_from: digital-ic
+    spec_floor_keys: 0
+  processor:
+    disposition: own_template
+    template: templates/processor.yaml
+    spec_floor_keys: 7
+  protocol-bridge:
+    disposition: inherit
+    inherits_from: protocol-ic
+    spec_floor_keys: 10
+  protocol-ic:
+    disposition: own_template
+    template: templates/protocol-ic.yaml
+    spec_floor_keys: 10
+  rng:
+    disposition: inherit
+    inherits_from: crypto-engine
+    spec_floor_keys: 7
+  root-of-trust:
+    disposition: inherit
+    inherits_from: digital-ic
+    spec_floor_keys: 0
+  simple-cpu:
+    disposition: inherit
+    inherits_from: processor
+    spec_floor_keys: 7
+  soc-harness:
+    disposition: own_template
+    template: templates/soc-harness.yaml
+    spec_floor_keys: 7
+  spi-peripheral:
+    disposition: inherit
+    inherits_from: protocol-ic
+    spec_floor_keys: 10
+  stream-cipher:
+    disposition: inherit
+    inherits_from: crypto-engine
+    spec_floor_keys: 7
+  uart-peripheral:
+    disposition: own_template
+    template: templates/uart-peripheral.yaml
+    spec_floor_keys: 9
+orphan_templates:
+  analog-front-end:
+    disposition: keep_explicit_only
+    reason: 'Reachable only by an explicit --class-path. It is a live class in the
+      Q-bank taxonomy (agents/qbank/analog-front-end_L2.yaml and _L8.yaml) but has
+      never been a node in class-tree.yaml. NOT promoted to a node here: its spec_floor
+      carries L10_cmd_response_min and L11_calibration_tables_min, and both are
+      unsatisfiable across all 201 tracked doc-sets (L10 test cases carry no `category`
+      key at all, and `calibration_tables` is an empty list in every one of the
+      106 doc-sets that emit it). Promoting it would give the data_converter / mixed_signal_otp
+      classes a permanent 2-finding red that no design could clear. Promote it once
+      those two rules have a producer, or once the floors can read an honest-absence
+      sentinel.'
+  cable-side-id-ic-maxim-style:
+    disposition: keep_explicit_only
+    reason: Reachable only by an explicit --class-path, and exercised that way by
+      programs/tests/test_phase1_quality_parity_check.py. A tightened variant of
+      the cable-side-id-ic floor (L6_required_submodules plus higher submodule /
+      port minimums) for one implementation style; it is a profile a user opts into,
+      not a class the classifier can detect, so it does not belong in the detection
+      taxonomy.
+  generic-ic:
+    disposition: keep_non_node
+    reason: 'Deliberately not a node. It is the NEUTRAL floor that phase1_quality_parity_check
+      substitutes for a class the tree does not contain at all — an unregistered
+      name, a third-party class, a typo — so that an unknown class can never inherit
+      a protocol-specific floor. Making it a node would put it in the inheritance
+      graph, where it has no meaningful parent or children. Since #495 Stage 3 it
+      no longer also stands in for the 20 template-less NODES, which inherit from
+      their ancestors instead, so its role is now exactly the one it was written
+      for.'

@@ -30,6 +30,8 @@ import argparse, json, sys
 from pathlib import Path
 
 import _spec_floor_keys as _sfk   # noqa: E402  (re #495 Stage 0)
+import _class_template_resolve as _ctr   # noqa: E402  (re #495 Stage 3)
+from _class_template_resolve import resolve as resolve_class_template  # noqa: E402
 
 try:
     import yaml
@@ -58,27 +60,34 @@ def find_class_template(class_path: str, class_kb_dir: Path) -> tuple[dict, bool
     chain defaulted to ``cable-side-id-ic`` first, so any leaf not in the KB
     (an accelerator, a DSP block, a bridge …) was scored against SERIAL-ID-IC
     floors (opcode-count >= 8 / CRC-8 whitelist / 64-byte OTP) that do not
-    apply to it. The chain now falls back to ``generic-ic`` — a small
+    apply to it. The chain falls back to ``generic-ic`` — a small
     CLASS-AGNOSTIC floor — and finally to the vacuous ``any-ic`` only if that
-    neutral template is somehow absent. chip-AGNOSTIC."""
+    neutral template is somehow absent. chip-AGNOSTIC.
+
+    re #495 Stage 3 — that neutral fallback was ALSO catching the 20 class-tree
+    nodes that have no template of their own, which is a different case with a
+    real answer: in an inheritance tree, "no template" means "adds nothing
+    beyond my parent". `generic-ic` is not any node's ancestor (it is not a node
+    at all), so substituting it was applying a sibling's floor, silently, and
+    not even consistently in one direction — LOOSER than the taxonomy for
+    `hash-function` / `spi-peripheral` / `i2c-peripheral` / `protocol-bridge`
+    (2 floor keys instead of 7-10) and STRICTER for `dsp-block` /
+    `analog-mixed-ic` / `debug-block` and the other digital-ic children (whose
+    ancestors carry NO floor at all). Resolution now goes own -> nearest
+    templated ANCESTOR -> neutral, matching what
+    `gap_detect._spec_floor_from_chain` has always done, and `fallback_applied`
+    keeps meaning only the genuine unknown-class case."""
     templates_dir = class_kb_dir / "templates"
     if not templates_dir.exists():
         raise FileNotFoundError(f"class_kb/templates not found at {templates_dir}")
-    candidate = templates_dir / f"{class_path}.yaml"
-    fallback_applied = False
-    if not candidate.exists():
-        fallback_applied = True
-        # NEUTRAL fallback chain — never a protocol-specific class. generic-ic
-        # carries the class-agnostic floor; any-ic is the last-resort vacuous
-        # template so a missing generic-ic degrades to a WARN, not a hard error.
-        for fallback in ("generic-ic", "any-ic"):
-            c = templates_dir / f"{fallback}.yaml"
-            if c.exists():
-                candidate = c
-                break
-    if not candidate.exists():
+    r = resolve_class_template(class_path, class_kb_dir)
+    if r["template"] is None:
         raise FileNotFoundError(f"no class template found for {class_path}")
-    return load_yaml(candidate), fallback_applied
+    # `fallback_applied` keeps its original meaning — "an unknown class was
+    # given a NEUTRAL floor" — and therefore stays False for the inheritance
+    # case added in #495 Stage 3, which is not a fallback but the tree's own
+    # answer. `check()` reports the inheritance separately.
+    return r["template"], r["how"] == _ctr.NEUTRAL
 
 
 def load_layer(docs_dir: Path, layer: str) -> dict | None:
@@ -222,7 +231,15 @@ def count_l9_wires(l9: dict) -> int:
 
 
 def check(docs_dir: Path, class_kb: Path, class_path: str) -> dict:
-    tpl, fallback_applied = find_class_template(class_path, class_kb)
+    # One resolution, reused: `how` drives the disclosures below, and
+    # `fallback_applied` keeps its original narrow meaning (unknown class ->
+    # NEUTRAL floor) so the incumbent `unknown_class_generic_floor` warning is
+    # unchanged. re #495 Stage 3.
+    _res = resolve_class_template(class_path, class_kb)
+    if _res["template"] is None:
+        raise FileNotFoundError(f"no class template found for {class_path}")
+    tpl = _res["template"]
+    fallback_applied = _res["how"] == _ctr.NEUTRAL
     floor = (tpl or {}).get("spec_floor") or {}
 
     l3 = load_layer(docs_dir, "L3")
@@ -382,6 +399,26 @@ def check(docs_dir: Path, class_kb: Path, class_path: str) -> dict:
                         f"(`{tpl.get('class') if tpl else 'any-ic'}`) was applied "
                         "instead of a protocol-specific one. Add a dedicated "
                         "class template if this IC needs tighter floors."),
+        })
+    # re #495 Stage 3 — when the floor came from an ANCESTOR rather than the
+    # class's own template, say so. This is the case that used to be silently
+    # served a sibling orphan's floor; naming it is what stops a template-less
+    # node from "reading as success". Disclosure only — no finding is added.
+    if _res["how"] == _ctr.INHERITED:
+        warnings.append({
+            "severity": "WARN",
+            "rule": "class_floor_inherited_from_ancestor",
+            "class_path": class_path,
+            "template_used": _res["used"],
+            "message": (
+                f"class `{class_path}` is a class-tree node with no template of "
+                f"its own, so the floor was INHERITED from its nearest "
+                f"templated ancestor `{_res['used']}` — the same walk "
+                f"gap_detect._spec_floor_from_chain performs. Before #495 "
+                f"Stage 3 this case was served the `generic-ic` floor instead, "
+                f"which is not an ancestor of any node. Give "
+                f"`{class_path}` its own template if it needs a tighter "
+                f"floor than `{_res['used']}`."),
         })
     # re #495 Stage 2 — a class_path written in the REGISTRY taxonomy cannot be
     # resolved by the class-tree taxonomy: the two share no names. Until now
