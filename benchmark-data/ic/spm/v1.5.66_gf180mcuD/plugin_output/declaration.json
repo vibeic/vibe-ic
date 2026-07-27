@@ -1,0 +1,8 @@
+{
+  "bit_order": "LSB_first",
+  "reset_polarity": "active_high",
+  "latency_cycles": 2,
+  "integer_encoding": "signed_2c",
+  "multiplier_algorithm": "carry_save_serial_parallel_array",
+  "size_param": 32
+}

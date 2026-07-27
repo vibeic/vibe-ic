@@ -93,6 +93,7 @@ import _path_layout as _pl
 import _rtl_include_hub as _hub  # shared include-hub aggregator predicate
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 import _lesson_digest  # surface the captured-lesson digest to spec-to-rtl authors
+import spec_declaration_emit as _decl  # the spec's FREE-CHOICE declaration contract
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import rtl_provenance as _rtl_prov  # authored-RTL guard for phase2/stage1/rtl/
 # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — shared SV-frontend
@@ -2286,6 +2287,39 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
             pass
     except Exception:
         pass
+    # ------------------------------------------------------------------ #
+    # THE SPEC'S FREE-CHOICE DECLARATION CONTRACT.
+    #
+    # Some specs make the author declare, IN A MACHINE-READABLE FILE AND
+    # BEFORE RTL AUTHORING BEGINS, the interface choices that no downstream
+    # tool can infer — serial bit order, reset-release latency, integer
+    # encoding, reset polarity, the parameter the build ran at. Two correct
+    # designs disagree on all of them, so the comparison procedure cannot
+    # pair its reference output without being told.
+    #
+    # That contract is fully extractable from the SAME Phase-1 documents this
+    # function has already read, and it is knowable HERE — at the handoff,
+    # before a line of RTL exists. Surfacing it anywhere later means the
+    # choice is made implicitly while writing RTL and then reconstructed from
+    # a header comment, which is how a load-bearing fact ends up in prose.
+    #
+    # Advisory and best-effort, exactly like the digests above: the contract
+    # goes to phase2/stage1/declaration_contract.json — deliberately NOT the
+    # spec-declared declaration path, so it can never be mistaken for the
+    # declaration itself nor turn spec_required_artifact_check green.
+    # ------------------------------------------------------------------ #
+    decl_contract_path = None
+    n_decl_fields = 0
+    n_decl_required = 0
+    try:
+        _p, _contracts = _decl.stage_contract(project)
+        if _contracts:
+            decl_contract_path = str(_p)
+            _names = {f["name"]: f for c in _contracts for f in c["fields"]}
+            n_decl_fields = len(_names)
+            n_decl_required = sum(1 for f in _names.values() if f["required"])
+    except Exception:
+        pass
     lessons_hint = (
         f"\nMANDATORY before authoring: open `{digest_path}` ({n_lessons} "
         f"chip-AGNOSTIC genre-convention lessons) and APPLY every section "
@@ -2301,12 +2335,29 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
         f"it and keep whichever attempt the gates PASS — measured to recover "
         f"designs the primary digest misses (union lift)."
         if db_digest_path else "")
+    decl_hint = (
+        f"\nDECLARE YOUR FREE CHOICES FIRST (MANDATORY when present): this "
+        f"spec requires a machine-readable declaration of {n_decl_fields} "
+        f"interface choice(s) ({n_decl_required} REQUIRED) BEFORE RTL "
+        f"authoring — see `{decl_contract_path}`. Decide them now, then write "
+        f"RTL that conforms, then emit the declaration:\n"
+        f"    python3 plugins/vibe-ic/programs/spec_declaration_emit.py "
+        f"<project> --set <field>=<value> ...\n"
+        f"The emitter REFUSES to write a declaration while any REQUIRED field "
+        f"is undetermined — it will name the field. Do NOT leave these to be "
+        f"re-derived from an RTL header comment later: a free choice recorded "
+        f"only in prose is a free choice a downstream tool has to guess."
+        if decl_contract_path else "")
     extras: Dict[str, Any] = {"lessons_digest": digest_path,
                               "lessons_count": n_lessons}
     if db_digest_path:
         extras["ic_expert_db_digest"] = db_digest_path
         extras["ic_expert_db_count"] = n_db
-    return lessons_hint + db_hint, extras
+    if decl_contract_path:
+        extras["declaration_contract"] = decl_contract_path
+        extras["declaration_field_count"] = n_decl_fields
+        extras["declaration_required_count"] = n_decl_required
+    return lessons_hint + db_hint + decl_hint, extras
 
 
 def step_rtl_gen(project: Path, ic_class: str,
