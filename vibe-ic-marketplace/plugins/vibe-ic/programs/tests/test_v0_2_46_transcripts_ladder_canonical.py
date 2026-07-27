@@ -80,7 +80,18 @@ def test_populated_clean_transcripts_score_through_audit_pass(tmp_path):
         f"read {ds}/Prob001_prompt.txt ok\n")
     out = _score(ds, run)
     assert "blindness_audit: PASS" in (out.stdout + out.stderr)
-    assert "NOTICE" not in out.stdout
+    # What #415 asserts here is that the BLINDNESS-AUDIT notice branch did not
+    # fire — the audit ran and vouched for the run, so no disclosure is owed.
+    # It used to say `"NOTICE" not in out.stdout`, which forbade the WORD, not
+    # the branch: "NOTICE:" is this front door's standing prefix for any
+    # non-fatal disclosure (--allow-direct-agent already used it), so the bare
+    # substring made the test fail the moment a second, unrelated disclosure was
+    # added — wire/benchmark_ip's § 6 RESULT.md gate saying the deliverable is
+    # not written yet. Verified identical on both trees for this scenario: rc 0,
+    # blindness_audit PASS, pass_at_1.json written, blindness branch silent.
+    # Pin the branch by the phrase its own sibling test pins it by.
+    assert "blindness audit unavailable" not in out.stdout
+    assert "blindness audit skipped" not in out.stdout
 
 
 def test_shape_c_rules_carry_export_requirement():
