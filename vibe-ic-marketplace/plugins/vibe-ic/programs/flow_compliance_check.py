@@ -79,6 +79,7 @@ from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import _path_layout as _pl
+import _reused_ip_predicate as _reused_ip
 import _sim_results_bridge as _srb
 import _gate_invocation
 import fpga_board_capability as _fpga_cap
@@ -3198,69 +3199,17 @@ def _is_thin_input_eligible(project: Path) -> bool:
 
 
 # ─── ORGANIC #708 — reused-IP RTL-only-FSM deferral cap helpers ──────────────
-def _detected_class_rtl_gen_null_and_vendor_rtl(project: Path) -> bool:
-    """KEY (a): the detected IC class has rtl_gen=null in
-    ic_class_registry.json (a from-spec-RTL / vendor-IP class — processor_cpu /
-    digital_arithmetic_primitive / crypto_accelerator / digital_cmd_driven /
-    … — read from the registry, NEVER a chip-name literal) AND vendor/reused RTL
-    is present (input/vendor_rtl/ has ≥1 .v/.sv, OR the rtl_dir's
-    SOURCE_MANIFEST.json declares reused_ip=true).
-
-    Excludes from-scratch/authored designs (whose docs MUST fully specify the
-    FSM): a class with a deterministic rtl_gen, or a project with no vendor RTL,
-    keeps the FAIL. Fail-closed: any read/import error → False."""
-    import sys as _sys
-    if str(PROGRAMS_DIR) not in _sys.path:
-        _sys.path.insert(0, str(PROGRAMS_DIR))
-    # (a.1) class rtl_gen=null via the registry (same resolution the
-    # pure-analog detector uses above — name OR synonym match).
-    try:
-        from ic_class_profile import detect_ic_class as _detect
-        profile = _detect(project) or {}
-    except Exception:
-        return False
-    ic_class = str(profile.get("ic_class") or "unknown")
-    # ORGANIC #708 round-2 fix (3): an UNRESOLVED / unknown detection must be
-    # fail-closed — a design we couldn't classify gets NO floor relaxation. The
-    # registry carries an `unknown_protocol_class` entry (rtl_gen=null, synonym
-    # `unknown`) used as the runner's fallback target; matching it here would
-    # let an UNCLASSIFIED design with a stray vendor .v ride the cap. Reject the
-    # unknown class (and its registry alias) BEFORE the registry lookup so the
-    # docstring's "unknown/unresolvable → False" contract actually holds.
-    if ic_class in ("", "unknown", "unknown_protocol_class"):
-        return False
-    config = None
-    try:
-        reg = json.loads(
-            (PROGRAMS_DIR / "ic_class_registry.json").read_text())
-        for c in (reg.get("classes") or []):
-            cname = c.get("name")
-            if cname == "unknown_protocol_class":
-                continue  # never the cap's eligibility target (fail-closed)
-            if (cname == ic_class
-                    or ic_class in (c.get("synonyms") or [])):
-                config = c
-                break
-    except Exception:
-        return False
-    if config is None:
-        return False  # unknown/unresolvable class → fail-closed
-    if config.get("rtl_gen") is not None:
-        return False  # from-spec/deterministic-RTL class → docs must specify
-    # (a.2) vendor/reused RTL must be present.
-    vendor_dir = project / "input" / "vendor_rtl"
-    if vendor_dir.is_dir() and (any(vendor_dir.rglob("*.v"))
-                                or any(vendor_dir.rglob("*.sv"))):
-        return True
-    mf = _pl.rtl_dir(project) / "SOURCE_MANIFEST.json"
-    if mf.is_file():
-        try:
-            mdata = json.loads(mf.read_text())
-        except Exception:
-            return False
-        if isinstance(mdata, dict) and mdata.get("reused_ip") is True:
-            return True
-    return False
+# KEY (a) — "the detected class has rtl_gen=null AND reused RTL is staged" —
+# used to be implemented here, in full, and mirrored a second time inside
+# `l_doc_structured_field_count_check` (whose copy said so in its own
+# docstring). #504 measured what two copies of one idea cost: a third consumer
+# (`l6_fsm_scaffold_actionable_check`) held NEITHER copy and blocked Phase 1 on
+# a claim about a scaffold consumer that does not run for a reused-IP design.
+# The predicate now lives once, in `_reused_ip_predicate`, and all three read
+# it. Same semantics, same fail-closed behaviour — see that module's docstring
+# for why the per-caller rejection set is an argument rather than a constant.
+_detected_class_rtl_gen_null_and_vendor_rtl = (
+    _reused_ip.detected_class_rtl_gen_null_and_vendor_rtl)
 
 
 def _completeness_is_full_and_not_tiny(project: Path) -> bool:

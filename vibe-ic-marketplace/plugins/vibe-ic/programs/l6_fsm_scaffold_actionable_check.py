@@ -79,6 +79,49 @@ machine-matchable rule from a paragraph that happened to contain the
 right letters. Fully general: no vocabulary is hardcoded here, only the
 boundary predicate.
 
+Part A is stated in terms of a consumer — so it must check the
+consumer runs (#504)
+====================================================================
+Every sentence of Part A is a claim about ``phase2_scaffold_gen.
+emit_fsm_v()``: what it writes when handed 0 states, 1 state, no
+transitions, a dangling target. For a REUSED-IP design that function
+never authors the RTL. The detected class carries ``rtl_gen: null`` in
+``ic_class_registry.json`` and the design stages its own implementation,
+so ``design_one_shot_runner`` routes phase 2 through
+``reused_ip_rtl_consume`` and phase 2 builds from the staged files — it
+is never handed an L6-derived state enum at all. Part A's failure text
+then describes a consequence that cannot occur, and Phase 1 halts on it.
+
+The predicate that knows this is NOT restated here. It is imported from
+``_reused_ip_predicate`` — the same module ``flow_compliance_check`` and
+``l_doc_structured_field_count_check`` read, so all three gates answer
+"is this design's RTL reused IP?" with one implementation instead of the
+three-readers/two-copies arrangement #504 measured.
+
+AND IT IS A DISCLOSURE, NOT A PASS. This is the half that matters. What
+a reused-IP project carries when Part A defers is an L6 with states, no
+transitions, and nothing that checked either — certifying that as
+``PASS: FSM is actionable`` would publish a document nobody read as a
+verified one. So the deferral has its own verdict tier, following
+``si_mcf_sta_check``'s: verdict ``VACUOUS_PASS``, **rc 2**, a
+``_gate_denominator.Denominator`` recording ``examined 0`` of
+``considered <derived states>`` with a written
+``not_applicable_reason`` that names the states found, the transitions
+absent, and the consumer that does not run — plus a ``VACUOUS_PASS:``
+token on stderr. rc 2 is not rc 0: a genuinely-verified FSM still exits
+0, and no reader can confuse the two.
+
+The deferral covers Part A ONLY. Part B's consumer is
+``l11_sequence_covers_l6_reject_rules_check``, which runs for every
+design whatever authored the RTL, so a reject-rule failure still FAILs
+at rc 1 — the disclosure of Part A is printed alongside it.
+
+Nor is either existing escape the answer for such a design: setting
+``no_fsm_in_input`` would assert the input documents no FSM when it
+documents one, and the ``l6_fsm_scaffold_degraded_intentional`` waiver
+asserts an intentional simplification when nothing was simplified. Both
+would be false statements. A disclosed skip is the only honest shape.
+
 Fail-safe / no-false-positive design
 ====================================
 * No L6 file → SKIP(2).
@@ -87,6 +130,13 @@ Fail-safe / no-false-positive design
 * No ``reject_rules[]`` → Part B SKIPs.
 * If the consuming programs cannot be imported the gate SKIPs rather
   than guessing at their contract.
+* The reused-IP deferral is evaluated ONLY after Part A has already
+  produced a failure, so a design whose L6 IS scaffoldable keeps its
+  rc-0 PASS. And it is fail-closed in every direction: an unimportable
+  predicate module, an unclassifiable design, a class with a
+  deterministic ``rtl_gen``, or a project staging no RTL all keep the
+  FAIL. A scaffold-generated design is exactly the case Part A is
+  correct about, and it still blocks.
 
 Waiver: ``l6_fsm_scaffold_degraded_intentional`` (>=40 chars) in
 ``<project>/waivers.json``.
@@ -98,7 +148,8 @@ Usage:
 Exit codes:
     0 = PASS / SKIP-by-class / PASS_WITH_WAIVER
     1 = FAIL (blocks)
-    2 = input-missing / not-applicable (skip)
+    2 = input-missing / not-applicable (skip), and the #504 disclosed
+        VACUOUS_PASS — NOT a sign-off, see above
 """
 from __future__ import annotations
 
@@ -112,7 +163,26 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _gate_denominator as _gd  # noqa: E402
 import _path_layout as _pl  # noqa: E402
+
+try:
+    import _reused_ip_predicate as _reused_ip  # noqa: E402
+except Exception:  # noqa: BLE001 — fail-closed: no module, no deferral
+    _reused_ip = None  # type: ignore[assignment]
+
+#: Exit codes. 2 carries BOTH the pre-existing "nothing to check" skip and
+#: the #504 disclosed VACUOUS_PASS — neither is a sign-off, and the phase-1
+#: runner + `flow_compliance_check._check_program_exit_zero` already treat rc 2
+#: as non-blocking-but-labelled, so the tier needs no new plumbing.
+RC_PASS = 0
+RC_FAIL = 1
+RC_VACUOUS = 2
+
+#: One unit of what Part A measures, in this gate's own terms. Named once so
+#: the denominator block, the reason prose and any cross-gate disclosure sweep
+#: agree by construction rather than by re-typing the string.
+DENOM_UNIT = "L6 FSM state(s) reaching phase2_scaffold_gen.emit_fsm_v()"
 
 WAIVER_KEY = "l6_fsm_scaffold_degraded_intentional"
 WAIVER_MIN_LEN = 40
@@ -264,6 +334,53 @@ def _kw_on_token_boundary(kw: str, text: str) -> bool:
         text, re.IGNORECASE) is not None
 
 
+def _scaffold_consumer_is_bypassed(project: Path) -> bool:
+    """True when phase 2 will NOT build this design's RTL from L6.
+
+    The whole of Part A is stated in terms of what
+    ``phase2_scaffold_gen.emit_fsm_v()`` emits. When the design is reused IP —
+    the detected class carries ``rtl_gen: null`` AND reused RTL is staged —
+    ``design_one_shot_runner`` routes phase 2 through ``reused_ip_rtl_consume``
+    and that emitter is never reached, so Part A's requirements have no
+    consumer to be actionable BY.
+
+    Delegates to the ONE shared reader (``_reused_ip_predicate``) — no second
+    copy of the predicate lives here. Fail-closed: an unimportable module or a
+    raising predicate answers False, which keeps the FAIL."""
+    if _reused_ip is None:
+        return False
+    try:
+        return bool(
+            _reused_ip.detected_class_rtl_gen_null_and_vendor_rtl(project))
+    except Exception:  # noqa: BLE001 — a broken probe never relaxes a gate
+        return False
+
+
+def _deferral_reason(derived: List[Any], transitions_declared: int) -> str:
+    """The written reason a reader gets INSTEAD of a verdict on Part A.
+
+    It has to say three things or it is worse than the FAIL it replaces: what
+    the layer actually carries, what it does not, and which consumer's absence
+    is the reason nobody checked. Chip-AGNOSTIC — the state names are the
+    project's own data, never a literal in this file."""
+    names = [str(s) for s in derived]
+    shown = ", ".join(names[:8]) + ("…" if len(names) > 8 else "")
+    return (
+        "phase2_scaffold_gen.emit_fsm_v() — the consumer every requirement in "
+        "this part is stated in terms of — does not author RTL for this "
+        "project: the detected ic_class carries rtl_gen=null in "
+        "ic_class_registry.json and reused RTL is staged, so phase 2 takes the "
+        "reused_ip_rtl_consume path and builds from the staged implementation "
+        "rather than from an L6-derived state enum. WHAT L6 CARRIES, "
+        f"UNVERIFIED: {len(names)} derived state(s)"
+        + (f" [{shown}]" if names else "")
+        + f" and {transitions_declared} declared transition(s). NOTHING in "
+        "this run compared those states, or the transitions they lack, "
+        "against the staged implementation's own FSM. This is a disclosure "
+        "that the requirement's consumer is absent — NOT a finding that the "
+        "requirement is met, and NOT a sign-off on L6.")
+
+
 def _waived(project: Path) -> Tuple[bool, str]:
     p = project / "waivers.json"
     if not p.is_file():
@@ -297,6 +414,11 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "reject_rules_checked": 0,
         "failures": [],
         "warnings": [],
+        # #504 — Part A's consumer model, made explicit in the report rather
+        # than assumed. True means phase2_scaffold_gen.emit_fsm_v() really is
+        # what builds this design's FSM, so Part A's requirements bind.
+        "scaffold_consumer_runs": True,
+        "deferred_to_staged_rtl": [],
     }
 
     l6p = _find_l6(project)
@@ -316,7 +438,14 @@ def evaluate(project: Path) -> Dict[str, Any]:
         out["failures"] = [out["reason"]]
         return out
 
-    failures: List[str] = []
+    # #504 — the two parts are collected SEPARATELY because they have
+    # different consumers and therefore different applicability. Part A is
+    # about phase2_scaffold_gen.emit_fsm_v(), which a reused-IP design never
+    # reaches; Part B is about l11_sequence_covers_l6_reject_rules_check, which
+    # runs whatever authored the RTL. Merging them into one list is what made
+    # the FSM half unable to state its own consumer model.
+    fsm_failures: List[str] = []
+    rule_failures: List[str] = []
     warnings: List[str] = []
     parts_run: List[str] = []
 
@@ -348,7 +477,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
 
             # A1 — at least 2 states.
             if len(derived) == 0:
-                failures.append(
+                fsm_failures.append(
                     "L6 asserts the input contains an FSM "
                     f"(no_fsm_in_input={l6.get('no_fsm_in_input')!r}, "
                     f"raw state entries={len(raw_states)}) but "
@@ -359,7 +488,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
                     "under a key the emitter reads (fsm_states / "
                     "fsm_hints*), not merely under 'states'")
             elif len(derived) == 1:
-                failures.append(
+                fsm_failures.append(
                     f"only 1 FSM state derived ({derived[0]!r}) — "
                     "emit_fsm_v() gives it a 1-bit state register that "
                     "can never change value, so <top>_fsm.v is a module "
@@ -368,7 +497,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
 
             # A2 — at least one transition to scaffold from.
             if derived and not transitions:
-                failures.append(
+                fsm_failures.append(
                     f"{len(derived)} state(s) derived but L6 declares 0 "
                     "transitions (no per-state transitions[] and no "
                     "top-level fsm_transitions[]). emit_fsm_v()'s body "
@@ -396,7 +525,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
                         dangling.append(
                             f"{tr.get('_from') or '?'} -> {tgt}")
                 if dangling:
-                    failures.append(
+                    fsm_failures.append(
                         f"{len(dangling)} transition(s) target a state "
                         "that is not in the derived state set "
                         f"({sorted(norm)}): {', '.join(dangling[:4])}. "
@@ -423,14 +552,14 @@ def evaluate(project: Path) -> Dict[str, Any]:
 
                 # B1 — identity + condition.
                 if not ident:
-                    failures.append(
+                    rule_failures.append(
                         f"reject_rules[{idx}]: no name/rule_id — the "
                         "L11/L12 coverage gate reports rules by identity "
                         "and a test author cannot reference an anonymous "
                         "rule")
                     continue
                 if not cond:
-                    failures.append(
+                    rule_failures.append(
                         f"{label}: empty condition — "
                         "l11_sequence_covers_l6_reject_rules_check "
                         "matches L11/L12 sequences against this text; "
@@ -442,14 +571,14 @@ def evaluate(project: Path) -> Dict[str, Any]:
                 try:
                     kws = list(l11._rule_keywords(rule))
                 except Exception as exc:
-                    failures.append(
+                    rule_failures.append(
                         f"{label}: consumer extractor _rule_keywords() "
                         f"raised {type(exc).__name__}: {exc}")
                     continue
 
                 text = _rule_text(rule)
                 if not kws:
-                    failures.append(
+                    rule_failures.append(
                         f"{label}: the consumer's own extractor "
                         "(_rule_keywords) derives NO keyword from this "
                         "rule. l11_sequence_covers_l6_reject_rules_check "
@@ -462,7 +591,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
 
                 anchored = [k for k in kws if _kw_on_token_boundary(k, text)]
                 if not anchored:
-                    failures.append(
+                    rule_failures.append(
                         f"{label}: every keyword the consumer derives "
                         f"({kws[:4]}) matches only INSIDE a longer token "
                         "of the condition, i.e. by accident — the "
@@ -478,13 +607,59 @@ def evaluate(project: Path) -> Dict[str, Any]:
             "reject_rules[] — nothing this gate can hold it to")
         return out
 
+    # ---------------- #504 — Part A's consumer model ----------------
+    # Asked ONLY once Part A has already produced a failure: a design whose L6
+    # IS scaffoldable never reaches this branch and keeps its rc-0 PASS, so the
+    # deferral cannot turn a verified FSM into a disclosed one. The predicate
+    # is the shared reader's, not a copy.
+    if fsm_failures and _scaffold_consumer_is_bypassed(project):
+        out["scaffold_consumer_runs"] = False
+        out["deferred_to_staged_rtl"] = fsm_failures
+        fsm_failures = []
+        # NO PASS WITHOUT A DENOMINATOR (_gate_denominator): the states were
+        # CONSIDERED — derived out of L6, counted, named — and EXAMINED against
+        # nothing, because the thing that would have examined them does not
+        # run. Constructing this with examined == 0 and no reason raises, so
+        # the disclosure cannot regress into silence by omission.
+        _gd.attach(out, _gd.Denominator(
+            unit=DENOM_UNIT,
+            examined=0,
+            considered=len(out["derived_states"]),
+            not_applicable_reason=_deferral_reason(
+                out["derived_states"], out["transitions_declared"]),
+            details={
+                "consumer": "phase2_scaffold_gen.emit_fsm_v",
+                "consumer_runs": False,
+                "actual_rtl_source": "reused_ip_rtl_consume (staged RTL)",
+                "transitions_declared": out["transitions_declared"],
+                "derived_states": [str(s) for s in out["derived_states"]],
+            }))
+
+    failures = fsm_failures + rule_failures
     out["failures"] = failures
     out["warnings"] = warnings
     if failures:
+        # Part B failures survive the deferral: their consumer runs for every
+        # design. The Part-A disclosure is reported alongside, never instead.
         out["verdict"] = "FAIL"
         out["reason"] = (
             f"{len(failures)} L6 item(s) are not actionable by their "
             f"consumers (parts checked: {'+'.join(parts_run)})")
+    elif out["deferred_to_staged_rtl"]:
+        # The FSM half examined nothing, so the gate has not signed it off —
+        # whatever Part B found. rc 2, not rc 0.
+        out["verdict"] = "VACUOUS_PASS"
+        bits = [
+            f"FSM scaffold contract NOT CHECKED: "
+            f"{len(out['derived_states'])} state(s) derived, "
+            f"{out['transitions_declared']} transition(s) declared, and "
+            f"phase2_scaffold_gen.emit_fsm_v() does not run for this project "
+            f"(reused IP: class rtl_gen=null + staged RTL) — disclosed skip, "
+            f"NOT a sign-off"]
+        if "reject_rules" in parts_run:
+            bits.append(f"{out['reject_rules_checked']} reject_rule(s) "
+                        "machine-matchable by the L11/L12 coverage gate")
+        out["reason"] = "; ".join(bits)
     else:
         bits = []
         if "fsm" in parts_run:
@@ -538,10 +713,27 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if res["verdict"] == "SKIP":
         print(f"[SKIP] l6_fsm_scaffold_actionable_check: {res['reason']}")
-        return 2
+        return RC_VACUOUS
     if res["verdict"] == "PASS":
         print(f"[PASS] l6_fsm_scaffold_actionable_check: {res['reason']}")
-        return 0
+        return RC_PASS
+    if res["verdict"] == "VACUOUS_PASS":
+        # The FIRST stdout line is what `phase1_doc_one_shot_runner` echoes
+        # into the run log (`stdout.splitlines()[0]`), so it has to carry the
+        # disclosure on its own — not point at a report nobody opens.
+        print("[VACUOUS_PASS] l6_fsm_scaffold_actionable_check: "
+              f"{res['reason']}")
+        for f in res.get("deferred_to_staged_rtl", [])[:8]:
+            print(f"  • NOT CHECKED: {f}")
+        denom = res.get(_gd.DENOMINATOR_KEY) or {}
+        reason = str(denom.get("not_applicable_reason") or "")
+        if reason:
+            print(f"  {reason}")
+        # Second, rc-independent channel, mirroring si_mcf_sta_check: the
+        # `VACUOUS_PASS:` token `flow_compliance_check._stdout_signals_vacuous`
+        # scans for, on stderr so it cannot be mistaken for the verdict line.
+        print(f"VACUOUS_PASS: {reason}", file=sys.stderr)
+        return RC_VACUOUS
 
     waived, rationale = _waived(project)
     if waived:
@@ -550,11 +742,16 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{rationale[:70]}…")
         for f in res["failures"][:6]:
             print(f"  • {f}")
-        return 0
+        return RC_PASS
 
     print(f"[FAIL] l6_fsm_scaffold_actionable_check: {res['reason']}")
     for f in res["failures"][:8]:
         print(f"  • {f}")
+    # A FAIL on Part B does not un-disclose Part A: if the FSM half was
+    # deferred it is still reported here, so the reader is never handed a
+    # verdict that silently covers a part nobody examined.
+    for f in res.get("deferred_to_staged_rtl", [])[:8]:
+        print(f"  • NOT CHECKED (scaffold consumer does not run): {f}")
     print()
     print("  Fix in L6_CONTROL_LOGIC.json, from the design's OWN input "
           "documents only:")
@@ -567,7 +764,7 @@ def main(argv: Optional[List[str]] = None) -> int:
           "document — set no_fsm_in_input: true instead.)")
     print(f"  Or document the alternative in waivers.json under "
           f'"{WAIVER_KEY}" (>={WAIVER_MIN_LEN} chars).')
-    return 1
+    return RC_FAIL
 
 
 if __name__ == "__main__":

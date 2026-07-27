@@ -79,6 +79,8 @@ _PROG_DIR = str(Path(__file__).resolve().parent)
 if _PROG_DIR not in sys.path:
     sys.path.insert(0, _PROG_DIR)
 
+import _reused_ip_predicate as _reused_ip  # noqa: E402
+
 # Wave 36 (v0.119.68) — IC class profile lets us drop layer
 # requirements that don't apply (e.g. L3 / L6 on a pure-analog
 # PMIC). Imported lazily so the program still runs standalone.
@@ -819,6 +821,16 @@ _TYPEDEF_ENUM_RE = _re.compile(
 )
 
 
+# Both halves of the reused-IP predicate used to be implemented here — the
+# class-registry half as `_class_rtl_gen_null`, the staged-RTL half as
+# `_staged_vendor_rtl_text`, whose docstring admitted it "mirrors
+# flow_compliance_check._detected_class_rtl_gen_null_and_vendor_rtl's KEY-(a.2)
+# vendor-RTL probe". #504 removed the mirror: the predicate lives once, in
+# `_reused_ip_predicate`, and this gate reads it. The `bare_fpga` rejection this
+# gate applies on top (its floors are PROTOCOL floors — a bare FPGA target has
+# no protocol) travels as the explicit `fail_closed` argument, so the difference
+# between this caller and the composite one is written at the call site instead
+# of being buried in a second copy.
 def _class_rtl_gen_null(ic_class: str) -> bool:
     """True iff the registry marks this class with rtl_gen=null (a from-spec /
     reused-IP class — processor_cpu / digital_arithmetic_primitive /
@@ -826,45 +838,14 @@ def _class_rtl_gen_null(ic_class: str) -> bool:
     literal). bare_fpga / unknown_protocol_class are rejected up front
     (fail-closed): an unclassified design earns NO relaxation. Any read/parse
     error → False (fail-closed)."""
-    if ic_class in _NO_PROTOCOL_FAIL_CLOSED:
-        return False
-    try:
-        reg = json.loads(
-            (Path(__file__).resolve().parent / "ic_class_registry.json")
-            .read_text())
-        for e in reg.get("classes", []):
-            if e.get("name") == "unknown_protocol_class":
-                continue  # never an eligibility target (fail-closed)
-            if (e.get("name") == ic_class
-                    or ic_class in (e.get("synonyms") or [])):
-                return e.get("rtl_gen") is None
-    except (OSError, ValueError):
-        pass
-    return False
+    return _reused_ip.class_rtl_gen_null(
+        ic_class, fail_closed=_NO_PROTOCOL_FAIL_CLOSED)
 
 
-def _staged_vendor_rtl_text(project) -> str | None:
-    """Return the concatenated text of every staged vendor/reused RTL file
-    (`input/vendor_rtl/**.v|.sv`), or None when no such directory / file exists.
-    Mirrors flow_compliance_check._detected_class_rtl_gen_null_and_vendor_rtl's
-    KEY-(a.2) vendor-RTL probe. Read errors on an individual file are skipped
-    (best-effort harvest); a wholly absent dir → None (fail-closed signal)."""
-    if project is None:
-        return None
-    try:
-        vendor_dir = Path(project) / "input" / "vendor_rtl"
-    except Exception:
-        return None
-    if not vendor_dir.is_dir():
-        return None
-    chunks: list[str] = []
-    for pat in ("*.v", "*.sv"):
-        for f in sorted(vendor_dir.rglob(pat)):
-            try:
-                chunks.append(f.read_text(errors="replace"))
-            except OSError:
-                continue
-    return "\n".join(chunks) if chunks else None
+#: The staged vendor/reused RTL text harvest — the shared prober, re-exported
+#: under this gate's original name so the #748 harvest call sites below read
+#: unchanged.
+_staged_vendor_rtl_text = _reused_ip.staged_vendor_rtl_text
 
 
 def _strip_v_comments(src: str) -> str:
