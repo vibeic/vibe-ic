@@ -46,7 +46,17 @@ from typing import List, Optional, Sequence, Tuple
 # it before this tuple is consulted: the tuple is a faithful description of the
 # wrapped CLI, and a test derives the same set from ``eda_report_audit``'s real
 # parser so a new value-taking option there cannot silently reintroduce defect 2.
-VALUE_FLAGS: Tuple[str, ...] = ("--mode", "--json")
+# Every option `eda_report_audit` takes a VALUE for. The anti-drift test
+# derives this set from that program's REAL argparse parser, so adding one
+# there reddens immediately instead of silently making the next token look
+# like a project directory.
+#
+# `--under` was added by the step-21 scoping work landing in the same batch.
+# Without it here, `--under sub/dir myproj` resolved the project to `sub/dir`
+# — the exact defect class this helper exists to close, arriving through a
+# sibling change rather than a copy. The guard caught it on the accumulation
+# branch; neither PR alone was red.
+VALUE_FLAGS: Tuple[str, ...] = ("--mode", "--json", "--under")
 
 
 def split_argv(

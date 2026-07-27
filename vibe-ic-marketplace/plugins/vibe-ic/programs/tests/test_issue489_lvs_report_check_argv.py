@@ -346,6 +346,26 @@ def test_value_flags_cover_eda_report_audit_s_real_parser():
         f"_report_check_argv.VALUE_FLAGS is {argv_helper.VALUE_FLAGS}")
 
 
+def test_under_value_is_not_taken_as_the_project_dir():
+    """THE DRIFT THE GUARD ABOVE CAUGHT, pinned as behaviour.
+
+    `--under` was added to `eda_report_audit` by the step-21 scoping work that
+    landed in the same batch as this helper. Neither change was red alone; the
+    accumulation was. Before `--under` joined VALUE_FLAGS:
+
+        split_argv(["--under", "sub/dir", "myproj", "--mode", "lvs"])
+            -> project = "sub/dir"          <- the flag's ARGUMENT
+               passthrough = ["--under", "myproj", ...]
+
+    i.e. the auditor would have run against the scope directory and forwarded
+    the real project as the scope. That is this helper's own defect class,
+    arriving through a sibling change rather than a copy."""
+    proj, rest = argv_helper.split_argv(
+        ["--under", "sub/dir", "myproj", "--mode", "lvs"])
+    assert proj == "myproj", proj
+    assert rest == ["--under", "sub/dir", "--mode", "lvs"], rest
+
+
 # ── the shared splitter, as a pure function ──────────────────────────────
 
 @pytest.mark.parametrize("rest,expected", [
