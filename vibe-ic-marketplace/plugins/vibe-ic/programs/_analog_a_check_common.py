@@ -22,6 +22,14 @@ VACUOUS_PASS contract (chip-AGNOSTIC):
     the upstream skill, so analog_one_shot_runner emits WAIVED
     (back-compat with the v1.6.34 runner behaviour).
   * Per-block, when artefact is present but stub: exit 1 (FAIL).
+
+INCOMPLETE contract (project mode only):
+  * When SOME declared blocks carry the step's artefact and others
+    carry none, the step is NOT done. `emit_incomplete` reports
+    verdict INCOMPLETE, names every uncovered block, and exits 1.
+    The all-blocks-missing case keeps its VACUOUS_PASS (the "the
+    skill has not run yet, defer to it" contract) and `--block` mode
+    keeps its exit-2 WAIVED deferral untouched.
 """
 from __future__ import annotations
 
@@ -148,6 +156,56 @@ def analog_class_is_na(project: Path) -> bool:
     return _ic_class_says_non_analog(project) and _all_blocks_low_confidence(project)
 
 
+# ── per-block artefact resolution across the phase-distributed layout ──────
+# `_path_layout` splits the analog block dirs by phase — A1's spec under
+# `phase1/analog/<block>/`, A2-A4's frontend artefacts under
+# `phase2/analog/<block>/`, A5-A9's backend artefacts under
+# `phase3/analog/<block>/` — and `flow/phase1_phase2_phase3.yaml` declares each
+# A-step's `required_outputs` at exactly those prefixes. The analog RUNNER,
+# however, writes every block artefact under the single canonical
+# `_pl.analog_dir` (== `phase3/analog/`); that is why `flow_compliance_check`
+# carries an explicit canonical-analog-dir tolerance for its `files_exist`
+# globs (`_glob_rel`, "v0.2.55 — canonical-analog-dir tolerance").
+#
+# The A1-A4 gates hardcoded `phase3/analog/` only. A project laid out exactly
+# as its OWN flow declares — or migrated by `migrate_to_layout_p.py`, which
+# moves A1's spec to `phase1/analog/` and A2-A4's artefacts to
+# `phase2/analog/` — therefore made every gate report its artefact MISSING and
+# self-skip, measuring nothing. Probe the canonical runner dir FIRST so
+# runner-produced projects resolve to byte-identical paths, then fall back to
+# the flow-declared phase dir. chip-AGNOSTIC: pure path resolution.
+_DECLARED_ANALOG_ROOT = {
+    1: "phase1/analog",
+    2: "phase2/analog",
+    3: "phase3/analog",
+}
+_CANONICAL_ANALOG_ROOT = "phase3/analog"
+
+
+def block_artefact_candidates(project: Path, block: str, filename: str,
+                              declared_phase: int) -> List[Path]:
+    """Ordered candidate paths for one per-block A-step artefact:
+    the canonical runner dir first, then the flow-declared phase dir."""
+    cands = [project / _CANONICAL_ANALOG_ROOT / block / filename]
+    declared = _DECLARED_ANALOG_ROOT.get(declared_phase)
+    if declared and declared != _CANONICAL_ANALOG_ROOT:
+        cands.append(project / declared / block / filename)
+    return cands
+
+
+def resolve_block_artefact(project: Path, block: str, filename: str,
+                           declared_phase: int) -> tuple:
+    """Return `(path, found)`. `path` is the first candidate that exists;
+    when none exists it is the CANONICAL path, so a MISSING finding keeps
+    naming the same `rel_path` these gates have always reported."""
+    cands = block_artefact_candidates(project, block, filename,
+                                      declared_phase)
+    for cand in cands:
+        if cand.is_file():
+            return cand, True
+    return cands[0], False
+
+
 def select_blocks(blocks: List[str],
                   block_filter: Optional[str]) -> List[str]:
     """When `--block <name>` is given, restrict to that block (even
@@ -230,6 +288,55 @@ def emit_pass(gate_name: str, args, summary: dict) -> int:
           f"{summary.get('blocks_pass', 0)}/"
           f"{summary.get('blocks_checked', 0)} block(s) clean")
     return 0
+
+
+def emit_incomplete(gate_name: str, args, missing: list, summary: dict,
+                    skill: str) -> int:
+    """Project mode, PARTIAL block coverage: some declared blocks carry the
+    step's artefact, others carry none. Exit 1.
+
+    Before this existed, the project-mode tail of every A1-A4 gate fell
+    through to `emit_pass`, so a run in which the upstream skill produced an
+    artefact for 1 of N declared blocks was certified `PASS` — the step was
+    reported done while N-1 declared blocks had been measured on nothing.
+    The flow declaration cannot catch this: each A-step declares a single
+    GLOB (`phase2/analog/*/topology.md`) and `flow_compliance_check` satisfies
+    a glob entry on its FIRST match, so per-block coverage is knowable only
+    here.
+
+    INCOMPLETE is deliberately distinct from FAIL: a block with NO artefact is
+    unmeasured work, not a measured defect. Both are non-zero, so neither can
+    certify the step done. The all-blocks-missing VACUOUS_PASS (defer to the
+    skill) and the `--block` exit-2 WAIVED deferral are untouched.
+    """
+    blocks = []
+    for f in missing:
+        b = f.get("block")
+        if b and b not in blocks:
+            blocks.append(b)
+    report = {
+        "gate": gate_name,
+        "verdict": "INCOMPLETE",
+        **summary,
+        "incomplete_blocks": blocks,
+        "suggested_skill": skill,
+        "reason": (f"{len(blocks)} of {summary.get('blocks_checked', 0)} "
+                   f"declared analog block(s) produced no artefact for this "
+                   f"step; invoke skill `{skill}` for them"),
+        "findings": missing,
+    }
+    write_report(args.json, report)
+    print(f"INCOMPLETE: {gate_name} — "
+          f"{summary.get('blocks_pass', 0)}/"
+          f"{summary.get('blocks_checked', 0)} declared block(s) covered; "
+          f"no artefact for: {', '.join(blocks) or '?'} "
+          f"(invoke skill `{skill}`)", file=sys.stderr)
+    for f in missing[:8]:
+        print(f"  [{f.get('block', '?')}] {f.get('rule', '?')}: "
+              f"{f.get('detail', '')}", file=sys.stderr)
+    if len(missing) > 8:
+        print(f"  ... and {len(missing) - 8} more", file=sys.stderr)
+    return 1
 
 
 def emit_fail(gate_name: str, args, findings: list, summary: dict) -> int:

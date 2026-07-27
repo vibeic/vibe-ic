@@ -36,6 +36,16 @@ WAIVED → PASS when the agent has emitted real corner data, even
 before the project has a complete 9-corner Monte-Carlo set.
 
 VACUOUS_PASS when `analog/analog_block_list.json` is missing or empty.
+
+INCOMPLETE (rc=1) in project mode when SOME declared blocks have a
+corner_results.json and others have none: a PVT sweep run for a subset
+of the declared blocks does not certify A4 done. All blocks missing
+stays VACUOUS_PASS (defer to `ams-sim`).
+
+Artefact resolution: `phase3/analog/<block>/corner_results.json` (what the
+analog runner writes) OR `phase2/analog/<block>/corner_results.json` (what
+the flow declares as A4's required_output).
+
 chip-AGNOSTIC.
 """
 from __future__ import annotations
@@ -47,11 +57,13 @@ from typing import List, Optional
 
 from _analog_a_check_common import (
     load_block_list, select_blocks, make_argparser, vacuous_pass,
-    artefact_missing_for_block, emit_pass, emit_fail,
+    artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
+    resolve_block_artefact,
 )
 
 GATE = "analog_a4_corner_sweep_check"
 SKILL = "ams-sim"
+DECLARED_PHASE = 2
 
 
 def _worst_corner_margin_fail(data: dict, corners: list) -> Optional[dict]:
@@ -120,10 +132,11 @@ def _worst_corner_margin_fail(data: dict, corners: list) -> Optional[dict]:
 
 def _check_block(project: Path, block: str
                  ) -> tuple[Optional[str], List[dict]]:
-    path = project / "phase3" / "analog" / block / "corner_results.json"
-    rel = str(path.relative_to(project)) if path.exists() \
+    path, found = resolve_block_artefact(
+        project, block, "corner_results.json", DECLARED_PHASE)
+    rel = str(path.relative_to(project)) if found \
         else f"analog/{block}/corner_results.json"
-    if not path.is_file():
+    if not found:
         return "MISSING", [{
             "block": block, "rule": "A4_CORNERS_MISSING",
             "rel_path": rel, "detail": "corner_results.json not found",
@@ -298,6 +311,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                             f"all {len(missing_seen)} block(s) missing "
                             f"corner_results.json; defer to skill "
                             f"`{SKILL}`.")
+    if missing_seen:
+        # Mixed PASS + missing. Until v1.7.36 this fell through to
+        # emit_pass, certifying A4 done while a declared block never had
+        # a PVT sweep run at all.
+        return emit_incomplete(GATE, args, missing_seen, summary, SKILL)
     return emit_pass(GATE, args, summary)
 
 
