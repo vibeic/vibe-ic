@@ -145,11 +145,24 @@ def test_issue470_live_yaml_step31_gate_is_nested():
         f"Step 31 still carries gate-shaped keys at the step level: "
         f"{GATE_PREDICATE_KEYS & set(step31.keys())}"
     )
-    # The promoted gate still has all five original sub-gates intact.
-    assert len(step31["gate"]["all_of"]) == 5, (
-        "Step 31 gate must keep all 5 sub-gates (drc, lvs, 2x provenance, "
-        "erc_density)"
-    )
+    # The promoted gate still carries all five ORIGINAL sub-gates.
+    #
+    # This asserted `len(...) == 5`, which said "the five survived" by proxy.
+    # The proxy broke the moment #488 legitimately added a sixth
+    # (`pg_rail_geometry_check`) — a count cannot tell an ADDITION from a
+    # LOSS, and this test exists to catch the loss. Changing 5 to 6 would just
+    # re-arm the same trap for the next addition, so it now names what must
+    # survive and stays silent about what else step 31 may grow.
+    _cmds = " ".join(str(v) for sub in step31["gate"]["all_of"]
+                     for v in sub.values())
+    for _required in ("drc_report_check", "lvs_report_check",
+                      "erc_density_check"):
+        assert _required in _cmds, (
+            f"Step 31 gate lost its {_required} sub-gate: {_cmds}")
+    assert _cmds.count("provenance_check") == 2, (
+        f"Step 31 gate must keep BOTH provenance checks: {_cmds}")
+    assert len(step31["gate"]["all_of"]) >= 5, (
+        f"Step 31 gate dropped below its five original sub-gates: {_cmds}")
 
 
 # ── (2) DEFENSE regression — promotion + visible warning ───────────────────
