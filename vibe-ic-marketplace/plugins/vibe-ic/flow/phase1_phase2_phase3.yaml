@@ -1790,6 +1790,26 @@ steps:
   # fails, ECO applies targeted netlist patches and re-runs the
   # failing checks. If all sign-off steps passed on first attempt,
   # the ECO step records "no_eco_needed" and passes through.
+  #
+  # v1.7.64 — what the AUTO-trigger actually does vs what the skill does.
+  # `eco_trigger_decision.decide()` (shared by phase3_one_shot_runner and
+  # eco_status_gen) is the ONLY producer of `no_eco_needed.flag`. It:
+  #   * DECIDES ON TIMING from the multi-corner OCV sign-off (ss/ff), falling
+  #     back to single-corner tt when the PDK exposes one corner (§4.05), and
+  #     AUTO-RUNS `eco_timing_repair.tcl` for a timing violation;
+  #   * FAILS CLOSED on the NON-timing domains — it reads the sign-off
+  #     verdicts this run already wrote (reports/phase3/{ir_drop,em,
+  #     si_crosstalk,lvs,lvs_verdict,erc,antenna}.json,
+  #     reports/phase2/gates/{erc_density,perc_signoff}.json) and REFUSES to
+  #     write `no_eco_needed.flag` while any of them reports a HARD failure.
+  #     It does NOT auto-repair those domains: the flag is withheld, this
+  #     step's gate goes red (NO_ECO_ARTIFACT), and the `eco-plan` skill owns
+  #     the repair. Before v1.7.64 the decision read STA alone, so a run with
+  #     a failed IR-drop / EM / SI / PV sign-off still certified "no ECO
+  #     needed" and `eco_loop_audit` short-circuited to PASS.
+  #   Only explicit hard-fail signals count (verdict/status/result FAIL,
+  #   VIOLATED, MISMATCH…, or passed/pass/summary.pass == false). Missing,
+  #   unparseable, advisory and review-tier artefacts do NOT demand an ECO.
   - id: 32
     name: "🔁 ECO (Engineering Change Order — repair loop)"
     stage: stage3
