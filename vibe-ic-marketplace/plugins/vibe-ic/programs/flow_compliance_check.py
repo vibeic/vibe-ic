@@ -29,6 +29,14 @@ walks the project directory, and verifies every step has:
   (a) all required_outputs present (file globs), AND
   (b) its gate predicate passes.
 
+(b) has ONE documented exception, and it never yields a PASS. When EVERY
+declared output of a step is absent AND a co-located sibling marker
+unambiguously OWNS those outputs with a named capability flag, the step
+resolves to SKIPPED-CONDITION (#675 strict) without the gate predicate being
+evaluated — the gate reads the same absent outputs, so it could only restate
+the absence. The step listing then names the gate that did not run, as an
+ADVISORY line, so the omission is disclosed rather than inferred.
+
 Unlike the legacy `signoff_audit.py` which passes at 3-of-4 evidence, this
 program requires **every** step to pass unless a matching entry exists in
 `<project>/waivers.json`. A waived step is reported as SKIPPED-WAIVED but
@@ -4599,6 +4607,115 @@ def _maybe_forward_skip_analog(project: Path, cmd_str: str,
     return cmd_str + " " + " ".join(shlex.quote(t) for t in extra)
 
 
+_PROGRAM_GATE_KEYS = (
+    "program_exit_zero",
+    "optional_program_exit_zero",
+    "advisory_program_exit_zero",
+)
+
+
+def _declared_gate_commands(gate: Any) -> List[str]:
+    """Names of the gate PROGRAMS a step declares, walking the gate spec.
+
+    Structural walk of the same nested shapes `_evaluate_gate` executes
+    (all_of / any_of lists of sub-gates; a program key holding either a bare
+    command string or a {"command": ...} dict) — NOT a text scan, so it cannot
+    be fooled by, or trip over, a program name mentioned in a yaml comment
+    (comments are gone by the time PyYAML hands us this dict) or by a path
+    argument that happens to contain a program's name.
+
+    Returns first tokens (program names), de-duplicated, in declaration order.
+    Empty list when the step declares no program gate at all.
+    """
+    out: List[str] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                _walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key in ("all_of", "any_of"):
+            sub = node.get(key)
+            # `any_of: true` is a MODIFIER flag on a files_exist block, not a
+            # nested gate list — only recurse into real containers.
+            if isinstance(sub, (list, dict)):
+                _walk(sub)
+        for key in _PROGRAM_GATE_KEYS:
+            spec = node.get(key)
+            if isinstance(spec, dict):
+                spec = spec.get("command")
+            if not isinstance(spec, str) or not spec.strip():
+                continue
+            try:
+                name = shlex.split(spec)[0]
+            except ValueError:
+                name = spec.split()[0]
+            if name not in out:
+                out.append(name)
+
+    _walk(gate)
+    return out
+
+
+# Gate predicate keys that are NOT program invocations. A step whose gate is
+# built only out of these declares a real, evaluated gate — it just has no
+# program name to print.
+_PREDICATE_GATE_KEYS = ("files_exist", "json_field_true")
+
+
+def _declared_gate_summary(gate: Any) -> str:
+    """Short human description of the gate a step DECLARES — for disclosing a
+    gate that did not run. Empty string ⇒ the step really declares no gate.
+
+    `_declared_gate_commands` answers a NARROWER question (which gate PROGRAMS
+    are declared) and correctly returns [] for a gate assembled only out of
+    `files_exist` / `json_field_true` predicates. Reading that emptiness as
+    "this step has no gate" is what made the #675-strict disclosure fire
+    nowhere: over the whole corpus the strict self-skip resolves 3 times, all
+    on the same step, and that step's gate is `files_exist: [...]` — so the
+    ADVISORY was gained 0 of 3 times, on exactly the population it was written
+    for. A gate is a gate whether or not it shells out.
+
+    Program gates are named by program (that is the useful identifier); the
+    predicate gates are named by kind and subject.
+    """
+    parts: List[str] = []
+
+    def _add(s: str) -> None:
+        if s and s not in parts:
+            parts.append(s)
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                _walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key in ("all_of", "any_of"):
+            sub = node.get(key)
+            # `any_of: true` is a MODIFIER on a files_exist block, not a
+            # nested gate list — only recurse into real containers.
+            if isinstance(sub, (list, dict)):
+                _walk(sub)
+        for name in _declared_gate_commands(
+                {k: v for k, v in node.items()
+                 if k in _PROGRAM_GATE_KEYS}):
+            _add(name)
+        files = node.get("files_exist")
+        if isinstance(files, (list, tuple)) and files:
+            _add(f"files_exist[{', '.join(str(f) for f in files)}]")
+        jft = node.get("json_field_true")
+        if isinstance(jft, dict):
+            _add(f"json_field_true[{jft.get('file', '?')}:"
+                 f"{jft.get('field', '?')}]")
+
+    _walk(gate)
+    return ", ".join(parts)
+
+
 def _evaluate_gate(project: Path, gate: Dict[str, Any],
                    skip_analog: bool = False) -> tuple[bool, List[str]]:
     """Evaluate a gate spec, return (passed, reasons).
@@ -6091,6 +6208,44 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     "SKIPPED-CONDITION: canonical output absent but a co-located "
                     "sibling that OWNS it honestly self-reports a disclosed "
                     f"capability-gap skip (#675 strict): {skip_hint}")
+                # ── The step's DECLARED gate is not the thing that produced
+                # this verdict, and until now the report never said so.
+                # Measured on the real spm x ihp-sg13g2 converge run: steps 29
+                # and 30 reported SKIPPED-CONDITION with reasons that never
+                # named post_layout_sim_check / spice_correlation_check, while
+                # running either program directly on the same project returned
+                # rc=1 — i.e. the declared gate was dead code on this path, and
+                # a reader had no way to tell whether it had run and agreed.
+                #
+                # The gate is NOT re-run to decide the verdict here, and the
+                # status is NOT changed: this early-return fires only when ALL
+                # of the step's declared outputs are absent AND a sibling
+                # marker unambiguously OWNS them with a named capability flag,
+                # which is precisely the disclosed capability-gap skip #675
+                # exists to record. Its declared gate reads those same absent
+                # outputs, so it can only restate the absence — running it to
+                # produce a FAIL would replace an honest, named disclosure with
+                # a defect claim that is really the same fact counted twice.
+                # What was missing was the DISCLOSURE, so name the gate that
+                # did not run and let a reviewer see the omission instead of
+                # inferring agreement. ADVISORY: never blocks (#306).
+                #
+                # The summary — not `_declared_gate_commands` — decides
+                # whether there is anything to disclose. A gate assembled only
+                # out of `files_exist` / `json_field_true` has no program name,
+                # and keying the disclosure off the program list meant the
+                # ADVISORY fired on none of the steps this path actually
+                # resolves. Empty summary ⇒ the step genuinely declares no gate
+                # and there is nothing that failed to run.
+                _dead_gate = _declared_gate_summary(step.get("gate"))
+                if _dead_gate:
+                    result.reasons.append(
+                        f"ADVISORY (non-blocking, #306): declared gate "
+                        f"{_dead_gate} was NOT evaluated for this step — the "
+                        f"disclosed capability-gap skip above resolved it. The "
+                        f"gate audits the same absent output(s) the sibling "
+                        f"marker owns, so its verdict would restate that "
+                        f"absence, not add a finding.")
         return _apply_capability_gap(
             _evidence_integrity_scan(project, result), sid)
 

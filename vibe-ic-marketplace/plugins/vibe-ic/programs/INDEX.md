@@ -289,7 +289,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `encoder_decoder_synth` | any | — | deterministic SOLVER for the PRIORITY-ENCODER family. |
 | `encoder_synth` | any | — | deterministic SOLVER for the CVDP PRIORITY-ENCODER / |
 | `enhancement_emit` | any | v0.1.35 | driver for the benchmark-enhancement-capture skill. |
-| `erc_density_check` | any | — | Step-30 ERC + sign-off density-rule verification (real substance). |
+| `erc_density_check` | any | — | Step-31 ERC + sign-off density-rule verification (real substance). |
 | `erc_float_owner_classify` | any | v0.3.16 | ORGANIC #514. Classify ERC floating nets/pins BY OWNER into |
 | `espi_protocol_synth` | any | — | Enhanced Serial Peripheral Interface (eSPI) protocol synth helper. |
 | `ethercat_protocol_synth` | any | v0.1.84 | EtherCAT-class protocol synth helper. |
@@ -569,7 +569,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `memory_synth` | any | — | a DETERMINISTIC solver for the CVDP parameterized MEMORY |
 | `metadata_content_substance_check` | any | — | guard against empty / near-empty |
 | `metal_fill_config_gen` | any | — | derive a per-layer density metal-fill config from a PDK's |
-| `metal_fill_density_check` | any | — | Verify metal fill was inserted and density is within bounds. |
+| `metal_fill_density_check` | any | — | Verify metal fill was inserted, and judge any PER-LAYER density it carries. |
 | `metal_fill_emit` | any | — | per-layer density metal fill on the streamed GDS. |
 | `metal_layer_density_check` | any | — | PER-LAYER metal-density sign-off gate for tapeout. |
 | `migrate_to_canonical_taxonomy` | any | — | one-shot migration tool that moves |
@@ -1319,7 +1319,7 @@ _(no programs in this group)_
 - `encoder_decoder_synth` — deterministic SOLVER for the PRIORITY-ENCODER family.
 - `encoder_synth` — deterministic SOLVER for the CVDP PRIORITY-ENCODER /
 - `enhancement_emit` — driver for the benchmark-enhancement-capture skill.  _[v0.1.35]_
-- `erc_density_check` — Step-30 ERC + sign-off density-rule verification (real substance).
+- `erc_density_check` — Step-31 ERC + sign-off density-rule verification (real substance).
 - `erc_float_owner_classify` — ORGANIC #514. Classify ERC floating nets/pins BY OWNER into  _[v0.3.16]_
 - `espi_protocol_synth` — Enhanced Serial Peripheral Interface (eSPI) protocol synth helper.
 - `ethercat_protocol_synth` — EtherCAT-class protocol synth helper.  _[v0.1.84]_
@@ -1598,7 +1598,7 @@ _(no programs in this group)_
 - `memory_synth` — a DETERMINISTIC solver for the CVDP parameterized MEMORY
 - `metadata_content_substance_check` — guard against empty / near-empty
 - `metal_fill_config_gen` — derive a per-layer density metal-fill config from a PDK's
-- `metal_fill_density_check` — Verify metal fill was inserted and density is within bounds.
+- `metal_fill_density_check` — Verify metal fill was inserted, and judge any PER-LAYER density it carries.
 - `metal_fill_emit` — per-layer density metal fill on the streamed GDS.
 - `metal_layer_density_check` — PER-LAYER metal-density sign-off gate for tapeout.
 - `migrate_to_canonical_taxonomy` — one-shot migration tool that moves
