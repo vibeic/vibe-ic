@@ -77,6 +77,55 @@ def _parent_chain(class_path: str, class_tree: Dict[str, Any]) -> List[str]:
     """Return [any-ic, ..., class_path] walking the class_tree inheritance.
 
     class_tree is the parsed class-tree.yaml (nested dict).
+
+    THIS DOES NOT SPLIT A BREADCRUMB, AND THAT IS CURRENTLY DELIBERATE
+    ------------------------------------------------------------------
+    A `class_path` of "any-ic > digital-ic > apb-peripheral" is returned as a
+    single-element chain, so no template matches, no floor applies, and this
+    doc-set silently gets no gaps. `phase1_quality_parity_check`,
+    `no_protocol_consistency_check` and `layer_extension_presence_check` all
+    reduce the breadcrumb to its leaf first. Normalising here is therefore the
+    MASTER SWITCH for vibe-ic#495: it is the one change that makes the
+    class-tree floors apply to real doc-sets.
+
+    Measured before leaving it off (re #495 Stage 4) — all 201 tracked
+    doc-sets, PYTHONHASHSEED=0, `_parent_chain` monkey-patched in-process
+    against a fresh corpus copy:
+
+        gaps      0 -> 105        red   0/201 -> 3/201
+
+    All 105 land on ONE project's three doc-set views, 35 each, and NONE of the
+    35 is a real design defect:
+
+        5   the gate reads a key the producer does not write — the Stage-0
+            defect, unrepaired on this side: L1.package vs `package_info`,
+            L1.electrical_characteristics vs `electrical_specs`,
+            L2.requirements vs `functional_requirements`, L4.register_map vs
+            `register_map_present`, L9.top_level_ports vs `ports`;
+        8   `document_id`, on eight layers — `defaultable: true` in any-ic.yaml
+            and emitted by no producer in the tree;
+       ~9   facts the document EXPLICITLY declares absent from its source via
+            the `no_*_in_input` sentinels it already carries. `detect_gaps` has
+            no honest-absence escape and cannot see them;
+       ~9   apb-peripheral-specific facts demanded of a matmul accelerator
+            whose `apb-peripheral` breadcrumb is itself in question.
+
+    And it is not only a reporting change: with a resolvable chain `auto_fill`
+    fills 33 facts per doc-set including `L9.top_level_ports = []`
+    (provenance `defaulted`), which trips `l9_completeness_check`'s "Section
+    'top_level_ports' exists but is empty" ERROR — the co-requisite hazard
+    already recorded in `_RETIRED_MECHANISMS` below.
+
+    PREREQUISITES before throwing the switch, in order:
+      1. `_fact_covers_path` reads the producer key spellings (extend the
+         Stage-0 `_spec_floor_keys` treatment to the required-fact matcher);
+      2. `detect_gaps` honours the `no_*_in_input` honest-absence sentinels the
+         producers already emit;
+      3. `auto_fill` stops filling a required list-typed fact with `[]`;
+      4. the class actually assigned to a design is correct (#495 Stage 1).
+
+    Pinned, both halves, by
+    `programs/tests/test_v1_7_72_issue495_parent_chain_switch_cost.py`.
     """
     # Flatten tree: child -> parent.
     parent_of: Dict[str, Optional[str]] = {}
