@@ -383,6 +383,40 @@ def check(docs_dir: Path, class_kb: Path, class_path: str) -> dict:
                         "instead of a protocol-specific one. Add a dedicated "
                         "class template if this IC needs tighter floors."),
         })
+    # re #495 Stage 2 — a class_path written in the REGISTRY taxonomy cannot be
+    # resolved by the class-tree taxonomy: the two share no names. Until now
+    # that mismatch was silent — the class simply fell through to the neutral
+    # floor above and nothing said why. Each registry entry now declares which
+    # tree node it belongs to and what that declaration is worth, so say it.
+    # This is DISCLOSURE ONLY: `findings` is untouched, so no verdict moves.
+    # The mapping is deliberately NOT applied here — measured over the corpus,
+    # applying it adds 21 findings of which 0 are defects (11 sit on floors no
+    # doc-set can satisfy, 10 on fields the document explicitly declares absent
+    # from its source). Applying it is gated on the floors first learning to
+    # read the honest-absence sentinels the producers already emit.
+    if fallback_applied:
+        try:
+            from ic_class_profile import class_tree_node_for as _ctn
+            m = _ctn(class_path)
+        except Exception:
+            m = None
+        if m and m.get("registry_matched"):
+            warnings.append({
+                "severity": "WARN",
+                "rule": "registry_class_not_in_class_tree",
+                "class_path": class_path,
+                "class_tree_node": m.get("node"),
+                "class_tree_node_status": m.get("status"),
+                "message": (
+                    f"`{class_path}` is a name from programs/"
+                    f"ic_class_registry.json, which shares no names with "
+                    f"agents/class_kb/class-tree.yaml, so the class tree could "
+                    f"not resolve it and the neutral floor above was used "
+                    f"instead. The registry declares its tree node as "
+                    f"{m.get('node')!r} (status "
+                    f"{m.get('status')!r}); that declaration is recorded, not "
+                    f"applied. Basis: {m.get('basis')}"),
+            })
     if tpl is not None and not floor:
         warnings.append({
             "severity": "WARN",

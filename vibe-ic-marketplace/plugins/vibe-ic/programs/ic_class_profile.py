@@ -1418,6 +1418,40 @@ def _lookup_registry_class(ic_class: str) -> Optional[dict]:
     return None
 
 
+def class_tree_node_for(ic_class: str) -> Dict[str, Any]:
+    """re #495 Stage 2 — translate a REGISTRY class name into a class-tree node.
+
+    The registry (snake_case) and ``agents/class_kb/class-tree.yaml``
+    (kebab-case) share no names, so a ``class_path`` written by the registry
+    side cannot be resolved by the tree side. Each registry entry now declares
+    where it belongs, with a status that says what that declaration is WORTH:
+
+      ``mapped``                   node exists and its template carries a floor
+      ``mapped_floorless``         node exists, template deliberately has no
+                                   floor (any-ic / digital-ic are categorical
+                                   intermediates) — resolving there is honest
+                                   and scores nothing
+      ``mapped_template_missing``  node exists, NO template — resolving there is
+                                   measurably identical to not resolving at all
+      ``unmappable``               no node can be asserted without over-claiming
+
+    Returns ``{"node", "status", "basis", "registry_matched"}``. An unknown name
+    fails closed to ``status="unregistered"`` and ``node=None`` so no caller can
+    mistake ignorance for a mapping. chip-AGNOSTIC: a table lookup.
+    """
+    cfg = _lookup_registry_class(ic_class)
+    if cfg is None:
+        return {"node": None, "status": "unregistered", "basis": "",
+                "registry_matched": False}
+    node = cfg.get("class_tree_node")
+    return {
+        "node": node if isinstance(node, str) and node else None,
+        "status": cfg.get("class_tree_node_status") or "undeclared",
+        "basis": cfg.get("class_tree_node_basis") or "",
+        "registry_matched": True,
+    }
+
+
 def class_verification_flags(ic_class: str) -> Dict[str, Any]:
     """Return the verification-track applicability flags for ``ic_class``.
 
