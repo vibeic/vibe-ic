@@ -25354,14 +25354,23 @@ def _v1_7_72_join_rst_grid_rows(window: str) -> str:
 
     Cells are joined with a single space; a blank continuation cell
     contributes nothing. Non-table lines pass through byte-identical,
-    and a table whose rows never wrap is returned semantically
-    unchanged, so the walkers downstream see the same input they always
-    did except where a row genuinely continued.
+    and a table whose rows never wrap is returned unchanged, so the
+    walkers downstream see the same input they always did except where a
+    row genuinely continued.
+
+    Only text INSIDE an RST grid block is touched — a block is entered
+    by a ``+---+`` separator and left by the first non-``|`` line. A
+    Markdown pipe table has no ``+---+`` separator, so its rows are not
+    grid rows and merging them would corrupt a table this function has
+    no business rewriting. (Found by probing the function with a
+    Markdown table before trusting it: without the block guard it
+    collapsed all three rows of one into a single line.)
     """
     if not window or "|" not in window:
         return window
     out: List[str] = []
     pending: Optional[List[str]] = None
+    in_grid = False
 
     def _flush() -> None:
         nonlocal pending
@@ -25372,9 +25381,10 @@ def _v1_7_72_join_rst_grid_rows(window: str) -> str:
     for line in window.splitlines():
         if _RE_RST_GRID_SEP_LINE.match(line):
             _flush()
+            in_grid = True
             out.append(line)
             continue
-        if _V1_7_72_RE_GRID_BODY_LINE.match(line):
+        if in_grid and _V1_7_72_RE_GRID_BODY_LINE.match(line):
             cells = line.strip()[1:-1].split("|")
             if pending is None:
                 pending = [c.strip() for c in cells]
@@ -25390,9 +25400,15 @@ def _v1_7_72_join_rst_grid_rows(window: str) -> str:
                 pending = [c.strip() for c in cells]
             continue
         _flush()
+        in_grid = False
         out.append(line)
     _flush()
-    return "\n".join(out)
+    joined = "\n".join(out)
+    # `splitlines()` drops a trailing newline; restore it so a window
+    # with no wrapped row round-trips byte-identical.
+    if window.endswith("\n") and not joined.endswith("\n"):
+        joined += "\n"
+    return joined
 
 
 def _parse_csr_2col_grid(window: str,

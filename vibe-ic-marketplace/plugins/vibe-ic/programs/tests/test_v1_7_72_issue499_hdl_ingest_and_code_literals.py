@@ -327,9 +327,32 @@ def test_unwrapped_grid_is_unchanged_by_the_join() -> None:
         "Always set to 2'b01 to indicate vectored mode.")
 
 
-def test_join_leaves_non_table_text_alone() -> None:
-    text = "Intro paragraph.\n\nAnother line.\n"
+@pytest.mark.parametrize("text", [
+    # Prose.
+    "Intro paragraph.\n\nAnother line.\n",
+    # A MARKDOWN pipe table. It has no `+---+` separator, so its rows
+    # are not RST grid rows. Probing the join with this before trusting
+    # it caught the function collapsing all three rows into one.
+    "| Bits | Name |\n|------|------|\n| 1:0  | MODE |\n",
+    # Ragged cell counts inside a grid — not a continuation.
+    "+--+--+\n| a | b |\n| c |\n+--+--+\n",
+    # A row missing its trailing pipe.
+    "+--+--+\n| a | b\n+--+--+\n",
+    # A well-formed grid whose rows do not wrap.
+    "+--+--+\n| a | b |\n+--+--+\n",
+])
+def test_join_is_a_no_op_on_everything_that_does_not_wrap(text) -> None:
+    """Byte-identical, including the trailing newline."""
     assert RUNNER._v1_7_72_join_rst_grid_rows(text) == text
+
+
+def test_join_merges_only_a_genuine_continuation() -> None:
+    wrapped = ("+--+--+\n"
+               "| 1:0 | MODE: set to |\n"
+               "|     | 2'b01 always. |\n"
+               "+--+--+\n")
+    assert RUNNER._v1_7_72_join_rst_grid_rows(wrapped) == (
+        "+--+--+\n| 1:0 | MODE: set to 2'b01 always. |\n+--+--+\n")
 
 
 # ═══════════════════════════════════════════════════════════════════════
