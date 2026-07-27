@@ -101,6 +101,31 @@ run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_r
 # real inputs: the fixture proves the logic, never the artefacts.
 run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_wiring_audit.py"
 
+# WIRING (wire/signoff) — two plugin-SOURCE audits that ran nowhere. Neither
+# can be a flow gate: `flow_compliance_check` audits a chip-design project
+# tree, and these two judge the plugin's own source, so this lane is the only
+# real execution channel they have. (`tools/ci/run_plugin_self_audit.sh` is not
+# it: no workflow, hook or script invokes that file — wiring into it would be
+# wiring into a dead lane.)
+#
+# flow_step_executor_coverage_check answers a question nothing else answers.
+# Its already-wired companion `flow_step_execution_coverage_check`
+# (flow_compliance_check.py) proves a step COMPLETED in a run; this one proves
+# an EXECUTOR EXISTS to run it at all. A step that is defined and audited with
+# no runner producing its outputs can only ever be MISSING — the root cause of
+# "middle steps silently skipped". --strict makes an ORPHANED step red;
+# measured at wiring time: 70 steps, 48 WIRED, 0 ORPHANED, and it already
+# names 5 real CONDITIONAL-TRACK gaps (A3, M1-M4) without failing on them.
+run "flow step-executor coverage"       "$ROOT" python3 "$PG/flow_step_executor_coverage_check.py" --strict
+
+# convergence_doctrine_present_check pins the #716 program-first + AI-backup
+# DUAL-TRACK convergence doctrine in benchmark-enhancement-capture/SKILL.md.
+# The doctrine is prose, so nothing but this guard can notice it being edited
+# away; open-benchmark-methodology/SKILL.md cross-REFERENCES the guard in a
+# sentence, which is a mention, not an instruction to run it. Measured
+# discriminating: rc 0 on the shipped skill, rc 1 with the markers stripped.
+run "convergence doctrine present"      "$ROOT" python3 "$PG/convergence_doctrine_present_check.py" --skill "$PLUGIN/skills/benchmark-enhancement-capture/SKILL.md"
+
 # The three NDA guards all scan a DELTA (commit messages, an added diff, the
 # plugin source). None can see a token that is ALREADY tracked, so one that
 # landed before a guard existed stays served by the repo forever while every

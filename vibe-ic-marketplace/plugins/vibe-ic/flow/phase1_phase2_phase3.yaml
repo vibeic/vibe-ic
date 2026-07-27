@@ -366,6 +366,21 @@ steps:
         - optional_program_exit_zero:
             command: "fpga_wrapper_input_polluter_check --rtl phase2/stage1/rtl --json reports/phase2/gates/fpga_input_polluter.json"
             condition_files_exist: ["phase2/stage1/rtl"]
+        # WIRING (wire/signoff) — sv_compat_check, scoped to its ONE defect
+        # rule. An unpacked-array port on a module port list makes Yosys 0.64
+        # fail even with -sv, and no other program implements that rule:
+        # rtl_hygiene_lint has no unpacked-array-PORT rule, and synth_doctor
+        # only classifies the yosys log AFTER synthesis has already died. Until
+        # now the check was reachable only through skills/synth-doctor's
+        # `cross_check`, which _shared/skill_runner.py runs with `--help` (its
+        # own comment says so) — i.e. it was never run on RTL by anything.
+        # `--fail-on unpacked-ports` is required here: the program's other rc=1
+        # path is NEEDS_SV, which is informational (and already enforced by the
+        # wired yosys_script_template_check), so gating on the bare exit code
+        # would fail every SystemVerilog design for a non-defect.
+        - optional_program_exit_zero:
+            command: "sv_compat_check --rtl-dir phase2/stage1/rtl --out-dir reports/phase2/gates --fail-on unpacked-ports"
+            condition_files_exist: ["phase2/stage1/rtl"]
     blocks_on: [1]
 
   - id: 3
@@ -633,6 +648,16 @@ steps:
         # a PVT matrix; single-corner must be disclosed, never presented
         # as multi-corner.
         - program_exit_zero: "pvt_matrix_check . --json reports/phase2/gates/pvt_matrix.json"
+        # NOTE (wire/signoff): this step's THIRD declared deliverable,
+        # `<top>.upf`, is produced by `l21_to_upf_emit`, which is wired as a
+        # runner subprocess in phase3_one_shot_runner.step_canonicalize_artefacts
+        # beside the SDC / pvt_matrix emission — it is a PRODUCER, not a
+        # verdict, and a gate slot is the wrong channel for it. Measured
+        # reason it is not a gate here: on a single-domain design it exits 2,
+        # and a single rc=2 sub-gate promotes the WHOLE step to VACUOUS_PASS
+        # ("every executed sub-gate was vacuously satisfied") even though
+        # sdc_syntax_check and pvt_matrix_check above really ran — a label
+        # that would be false on every pure-digital project.
     blocks_on: [1]
 
   - id: 8
@@ -699,6 +724,26 @@ steps:
         - files_exist: ["phase2/stage2/synth/netlist.v"]
         - program_exit_zero: "synth_netlist_check --netlist phase2/stage2/synth/netlist.v --json reports/phase2/synth_netlist.json"
         - program_exit_zero: "provenance_check . --output phase2/stage2/synth/netlist.v --tool yosys,yosys-abc"
+        # WIRING (wire/signoff) — pdk_consistency_check: every cell instantiated
+        # in the mapped netlist must exist in the selected PDK Liberty. Nothing
+        # in the flow gated that. The only other place the same set is computed
+        # is phase3_one_shot_runner._synthesize_physical_cell_stubs, which uses
+        # it to EMIT blackbox stubs — i.e. to paper the difference over so
+        # post-layout LEC still runs — and returns None. CELL_NOT_IN_PDK appears
+        # nowhere else in the tree.
+        # SCOPE, stated plainly: the gate needs a READABLE Liberty, and on a
+        # container-PDK run the Liberty lives at /foss/pdks/... INSIDE the
+        # iic-osic-tools image (measured on 8HD-4: /foss/pdks is empty on the
+        # host that evaluates these gates). So it is conditioned on the
+        # documented project-local staging path `input/pdk/liberty/` (the
+        # `custom_auto_detect` path in README.md; the same convention
+        # sdd_atpg_run.py and dfm_screen_check already read). It fires for
+        # staged-PDK projects and stays silent for container-PDK ones. Making it
+        # unconditional needs the runner to record the resolved Liberty path in
+        # a project artefact — an owner decision, not a wiring one.
+        - optional_program_exit_zero:
+            command: "pdk_consistency_check --netlist phase2/stage2/synth/netlist.v --pdk-lib input/pdk/liberty/*.lib --json reports/phase2/gates/pdk_consistency.json"
+            condition_files_exist: ["input/pdk/liberty/*.lib"]
     blocks_on: [2, 3, 8]
 
   - id: 10
@@ -1294,6 +1339,16 @@ steps:
         # on a missing/empty/garbage DEF. The canonical final hold sign-off is
         # Step 23 post-route STA — this gate only confirms Step-20 did real work.
         - program_exit_zero: "hold_closure_check . --json reports/phase3/pnr/hold_closure.json"
+        # WIRING (wire/signoff) — hold_corner_coverage_check. skills/hold-fix
+        # gives the literal command line but nothing ever ran it, so the ONE
+        # rule that makes a hold number mean anything went unenforced: hold is
+        # worst at FF, and a hold analysis fed the SS/TT Liberty under-reports
+        # violations. hold_closure_check above only reads slack + DEF deltas;
+        # corner_coverage_audit only proves SS/TT/FF .lib files EXIST somewhere.
+        # Neither reads which Liberty the min-path analysis actually consumed.
+        - optional_program_exit_zero:
+            command: "hold_corner_coverage_check phase3/stage3/sta/sta_mcorner_ocv_hold.tcl --json reports/phase3/sta/hold_corner_coverage.json"
+            condition_files_exist: ["phase3/stage3/sta/sta_mcorner_ocv_hold.tcl"]
     blocks_on: [19]
 
   - id: 21
@@ -1531,6 +1586,16 @@ steps:
         - optional_program_exit_zero:
             command: "si_mcf_sta_check . --json reports/phase3/si_mcf_sta_check.json"
             condition_files_exist: ["reports/phase3/si_mcf_sta.json"]
+        # WIRING (wire/signoff) — hold_corner_coverage_check on the MCF-bounded
+        # HOLD re-run. si_mcf_sta_check above re-counts the Cc*MCF fold; it never
+        # looks at which Liberty the min-path (hold) view reads. The MCF hold Tcl
+        # is emitted by si_mcf_sta.py, whose `_resolve_flow_liberty` recovers the
+        # Liberty from the SETUP script and reuses it for the hold run — so this
+        # is the exact artefact that can silently become an SS-fed hold analysis.
+        # Same gate as Step 20, pointed at the SI-MCF hold script.
+        - optional_program_exit_zero:
+            command: "hold_corner_coverage_check phase3/stage3/extracted/si_mcf/si_mcf_sta_mcf_hold.tcl --json reports/phase3/si_mcf_hold_corner_coverage.json"
+            condition_files_exist: ["phase3/stage3/extracted/si_mcf/si_mcf_sta_mcf_hold.tcl"]
     blocks_on: [22]
 
   # ── Step 28: PERC / Reliability Sign-off ─────────────────
@@ -1653,6 +1718,48 @@ steps:
         # exits 1 on an absent density artefact, so the checker was correct all
         # along and only its condition suppressed it.
         - program_exit_zero: "erc_density_check . --json reports/phase2/gates/erc_density.json"
+        # WIRING (wire/signoff) — drc_vacuous_pass_check was written for this
+        # step ("flips a 0-violation DRC verdict to INCONCLUSIVE unless the log
+        # proves geometry was loaded", skills/benchmark-verify/SKILL.md:25) and
+        # nothing ever ran it. drc_report_check above counts violations; it has
+        # no way to tell "0 violations because the layout is clean" from "0
+        # violations because the DRC engine was handed an empty cell". This gate
+        # MEASURES the layout the run consumed (pure-Python GDSII record walk /
+        # DEF COMPONENTS header / klayout.db when importable) and only then lets
+        # a 0-count verdict stand. Tool-agnostic, so it covers the KLayout and
+        # DEF paths that phase3_one_shot_runner's Magic-transcript-only
+        # `_detect_vacuous_magic` cannot see. rc 0 PASS / 1 INCONCLUSIVE /
+        # 2 SKIP-before-layout (→ VACUOUS_PASS tier, never a silent green).
+        - program_exit_zero: "drc_vacuous_pass_check . --json reports/phase3/drc_vacuous_pass.json"
+        # WIRING (wire/signoff) — lvs_signoff_guard. skills/lvs-triage/SKILL.md
+        # calls this the "Mandatory sign-off guard" and skills/tapeout-checklist
+        # names it the enforcer for "LVS clean", but it only ever ran if an agent
+        # happened to read that prose. lvs_report_check above parses the netgen
+        # verdict; it cannot refuse a CLAIMED match whose extracted top .subckt
+        # is PORTLESS (netgen then has no anchor to seed top-level pin matching,
+        # so "match" is vacuous — ORGANIC-20260531). Conditional on the extracted
+        # netlist because pre-extraction projects have nothing to judge.
+        # --project (not a bare --spice): `--top` defaults to the FIRST
+        # .subckt, which in a Magic-extracted hierarchical netlist is a
+        # STANDARD CELL. Measured on the real ihp-sg13g2 sign-off run, the
+        # bare form judged a 2-port leaf while the design top has 38 — a guard
+        # that would PASS a portless real top, i.e. the false-clean it exists
+        # to refuse. --project takes the top from the DEF the layout was
+        # extracted from and reads reports/phase3/lvs.rpt, so the guard trips
+        # only on a CLAIMED match over a portless top.
+        - optional_program_exit_zero:
+            command: "lvs_signoff_guard --project ."
+            condition_files_exist: ["phase3/stage3/extracted/*_extracted.sp"]
+        # WIRING (wire/signoff) — lvs_triage_classify is ADVISORY on purpose:
+        # its `_cli()` ends `return 0` unconditionally, so it has NO reachable
+        # FAIL path and must never be able to fail a step. It is a report
+        # emitter (4-category LVS triage + top-3 root-cause hints, the
+        # deterministic form of skills/lvs-triage Workflow step 1); wiring it
+        # here makes the triage artefact exist on every run instead of only
+        # when someone runs it by hand.
+        - advisory_program_exit_zero:
+            command: "lvs_triage_classify --report reports/phase3/lvs.rpt --out-json reports/phase3/lvs_triage.json"
+            condition_files_exist: ["reports/phase3/lvs.rpt"]
     blocks_on: [23, 24, 25, 26, 27, 29, 30]
 
   # ── Step 32: ECO ─────────────────────────────────────────────
@@ -1808,6 +1915,18 @@ steps:
         # from phase3/stage3/pnr/routed.def — a derived floor, never a
         # per-design constant. Hard FAIL; VACUOUS_PASS before stream-out.
         - program_exit_zero: "gds_substance_check . --json reports/phase3/gds_substance.json"
+        # WIRING (wire/signoff) — gds_topcell_name_check. Its sibling from the
+        # SAME phase3-backend-verify checklist item 6, gds_size_check, is the
+        # gate two lines up; the top-cell-NAME half of that item was never
+        # wired, so "top cell name matches" stayed a thing an agent did by hand
+        # — which is exactly what the program's own docstring says it was
+        # extracted to stop. gds_size_check and gds_substance_check both judge
+        # HOW MUCH is in the file; neither judges WHICH cell is the root, so a
+        # GDS whose top is a leftover sub-cell (or a differently-named copy)
+        # signs off clean today. --project resolves the expected name from the
+        # DEF the layout was streamed from, making this a GDS-vs-DEF identity
+        # assertion; rc=2 (DISCLOSED skip) before stream-out.
+        - program_exit_zero: "gds_topcell_name_check --project . --json reports/phase3/gds_topcell_name.json"
         # Provenance required: GDS must be produced by a real streamer
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
@@ -1907,7 +2026,26 @@ steps:
       - "phase3/mixed_signal/top_merged.gds"
       - "reports/analog/mixed_signal/merge.json"
     gate:
-      program_exit_zero: "mixed_signal_merge_check . --json reports/analog/mixed_signal/merge.json"
+      all_of:
+        # WIRING (wire/signoff) — the PRODUCER, wired ahead of its consumer.
+        # v0.2.84 added the substance rule to mixed_signal_merge_check
+        # (MERGE_NOT_LVS_SUBSTANTIATED, rc=1 when top_merged.gds exists with no
+        # reports/analog/mixed_signal/top_lvs.json) and wired the CONSUMER only.
+        # `top_lvs.json` is written by exactly one file in the tree —
+        # mixed_signal_top_lvs_run.py:241 — and nothing invoked it, so on a real
+        # mixed-signal project the M1 gate could only FAIL or be waived: the
+        # substance check was structurally unsatisfiable as shipped. There is no
+        # runner that drives M1-M4 (flow_step_executor_coverage_check reports
+        # M1-M4 as CONDITIONAL-TRACK, no digital runner), so the step gate is
+        # the only execution point the mixed-signal track has today.
+        # Conditional on the analog hardmacros it merges; rc=2 SKIP (missing
+        # KLayout / Magic / netgen / PDK tech) → VACUOUS_PASS, and the consumer
+        # below then reports the merge as NOT LVS-verified rather than passing
+        # on presence.
+        - optional_program_exit_zero:
+            command: "mixed_signal_top_lvs_run . --json reports/analog/mixed_signal/top_lvs_run.json"
+            condition_files_exist: ["phase3/analog/hardmacro"]
+        - program_exit_zero: "mixed_signal_merge_check . --json reports/analog/mixed_signal/merge.json"
     blocks_on: [A8, 15]
     notes: |
       Merge each analog analog/hardmacro GDS into the digital top GDS at

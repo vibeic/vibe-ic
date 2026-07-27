@@ -94,6 +94,14 @@ def main(argv=None) -> int:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(text + "\n")
     print(text)
+    # DENOMINATOR (vibe-ic#447 discipline, required once this gate was wired
+    # into tools/ci/repo_hygiene_gates.sh): a PASS must say how much it looked
+    # at. The JSON above carries the lists; this line carries the count, so a
+    # reader can tell "11 of 11 markers matched" from "the file I read was not
+    # the skill".
+    print(f"convergence_doctrine_present_check: "
+          f"{len(evidence['found'])} of {len(_REQUIRED_MARKERS)} required "
+          f"doctrine marker(s) present in {skill_path}")
     if not evidence["present"]:
         print("FAIL: convergence doctrine markers MISSING: "
               f"{evidence['missing']}", file=sys.stderr)

@@ -142,6 +142,16 @@ try:
     import spec_example_smoke_tb as _spec_smoke  # type: ignore
 except Exception:  # pragma: no cover - defensive (program missing)
     _spec_smoke = None
+# B2b — clause_smoke_tb (#740 G2), the EXAMPLE-FREE complement to B2. Wired
+# here (wire/signoff) because this is the only place a PROMPT exists: the
+# flow's project layouts carry L1-L27 documents, never the prose prompt this
+# gate parses, so no flow step can host it. Its sibling G5 from the same #740
+# change landed INSIDE this file while G2 shipped as a standalone program and
+# was never hooked to anything.
+try:
+    import clause_smoke_tb as _clause_smoke  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _clause_smoke = None
 try:
     from fsm_transition_completeness_check import check_text as _fsm_check_text  # type: ignore
 except Exception:  # pragma: no cover - defensive (program missing)
@@ -2924,6 +2934,42 @@ def spec_example_smoke_gate_record(rid, completion, prompt_text, top, workdir):
     return True, f"spec-example-smoke {verdict}: {reason}"
 
 
+# ── B2b CLAUSE smoke-TB PRE-EMIT block (#740 G2) ─────────────────────────────
+# B2 above executes the prompt's own worked-example ROWS. Many code-completion
+# prompts state the function PROSAICALLY ("output y is HIGH when a is GREATER
+# THAN b") and carry no numeric example table at all — for those B2 finds
+# nothing and the deterministic chain has NO functional check, so the hidden
+# scorer is the first thing that ever runs the design. clause_smoke_tb parses
+# the prompt's RELATIONAL clauses, derives operand values that make each
+# relation true and false, and asserts the named output. Same blindness
+# contract as B2 (prompt + authored RTL only) and the same block discipline:
+# BLOCK only on verdict == "BLOCK" (a derived vector mismatched the RTL). Its
+# own NOT_APPLICABLE / SKIP (no clause derivable, no iverilog) and its
+# TB_COMPILE_SKIP path are advisory by construction — §4.05, a false block is
+# irreversible.
+def clause_smoke_gate_record(rid, completion, prompt_text, top, workdir):
+    """Return (ok, note). ok=False only on a clear clause-smoke BLOCK."""
+    if _clause_smoke is None:
+        return True, "clause-smoke unavailable — skipped"
+    if not prompt_text:
+        return True, "no prompt — clause-smoke skipped"
+    code, _kind = extract_code(completion or "")
+    if not (code or "").strip():
+        return True, "no RTL — clause-smoke skipped"
+    rp = workdir / "dut_clause.sv"
+    rp.write_text(code)
+    try:
+        rc, report = _clause_smoke.run_clause_smoke(rp, prompt_text, top,
+                                                    warn=False)
+    except Exception as e:  # pragma: no cover - defensive
+        return True, f"clause-smoke raised (advisory): {e}"
+    verdict = report.get("verdict", "NOT_APPLICABLE")
+    reason = report.get("reason", "")
+    if rc != 0 and verdict == "BLOCK":
+        return False, f"clause-smoke BLOCK: {reason}"
+    return True, f"clause-smoke {verdict}: {reason}"
+
+
 def _structural_finding_gate(check_text_fn, label, completion):
     """Shared driver for the two zero-FP STRUCTURAL checks (B3 FSM transition
     completeness #522 / B4 handshake livelock + result stability #523): run the
@@ -3561,6 +3607,19 @@ def main(argv=None) -> int:
                     ok = False
                     entry["verdict"] = "BLOCKED"
                     entry["smoke_block"] = _b2_note
+                # B2b — the EXAMPLE-FREE complement (#740 G2). Covers exactly
+                # the prompts B2 provably cannot touch: prose-only functional
+                # statements with no golden row.
+                _b2b_ok, _b2b_note = clause_smoke_gate_record(
+                    _rid_s, out_rec.get("completion", ""),
+                    prompts.get(_rid_s, ""), _ex_top, _b2wd)
+                if _b2b_note.startswith(("clause-smoke PASS",
+                                         "clause-smoke BLOCK")):
+                    entry["clause_smoke"] = _b2b_note
+                if not _b2b_ok:
+                    ok = False
+                    entry["verdict"] = "BLOCKED"
+                    entry["clause_smoke_block"] = _b2b_note
                 # ORGANIC (GATE-AS-SOLE-EMIT) — B3 FSM transition-completeness
                 # (#522) + B4 handshake livelock / result-stability (#523): two
                 # zero-FP STRUCTURAL checks (pure parse, no sim). BLOCK on an
