@@ -484,6 +484,52 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     rs_cp = subprocess.run(rs_cmd, capture_output=True,
                                             text=True, timeout=600)
                     if rs_cp.returncode == 0:
+                        # wire/analog_other — Monte-Carlo YIELD, the missing
+                        # PRODUCER behind an already-wired assertion.
+                        # `analog_corner_sweep_check` (registered in
+                        # flow_compliance_check._STRUCTURAL_RTL_GATES) carries
+                        #     mc_yield = data.get("mc_yield_pct")
+                        #     if mc_yield is not None and mc_yield < 95.0: FAIL
+                        # and `analog_mc_yield_run` is the ONLY writer of that
+                        # key anywhere in the tree — but nothing ever ran it,
+                        # so `mc_yield_pct` was never present and that branch
+                        # was dead in every real run. This is a PRODUCER call,
+                        # not a verdict: it re-writes corner_results.json with
+                        # mc_yield_pct / mc_runs / mc_pass so the existing gate
+                        # can finally fire.
+                        # Strictly best-effort and fail-open: the program
+                        # refuses honestly with rc=2 (and writes NOTHING) when
+                        # ngspice / the container / a runnable deck / numeric
+                        # spec limits are absent, or when MC produced no
+                        # statistical spread. rc=0 on both its PASS and FAIL
+                        # verdicts — the yield NUMBER is the artefact; judging
+                        # it stays with the wired gate. Opt out with
+                        # VIBEIC_ANALOG_MC=0.
+                        if os.environ.get("VIBEIC_ANALOG_MC", "1") != "0":
+                            mc_prog = PROGRAMS_DIR / "analog_mc_yield_run.py"
+                            if mc_prog.is_file():
+                                mc_cmd = [
+                                    sys.executable, str(mc_prog), str(project),
+                                    "--block", bname,
+                                    "--n",
+                                    os.environ.get("VIBEIC_ANALOG_MC_N", "100"),
+                                    "--container",
+                                    os.environ.get("VIBEIC_ANALOG_CONTAINER",
+                                                    "vibeic-eda"),
+                                    "--pdk",
+                                    os.environ.get("VIBEIC_ANALOG_PDK",
+                                                    "sky130")]
+                                try:
+                                    subprocess.run(mc_cmd, capture_output=True,
+                                                    text=True, timeout=3600)
+                                except (subprocess.TimeoutExpired, OSError):
+                                    # A slow / absent MC harness must never
+                                    # take down a corner sweep that already
+                                    # succeeded. corner_results.json is left
+                                    # exactly as the sweep wrote it and the
+                                    # gate's mc_yield_pct branch stays inert,
+                                    # i.e. today's behaviour.
+                                    pass
                         # Real ngspice wrote corner_results.json — re-run
                         # the substance gate; PASS means real sim
                         # converged AND met spec_results.status==PASS.

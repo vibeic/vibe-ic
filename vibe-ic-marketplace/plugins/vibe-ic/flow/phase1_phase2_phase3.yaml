@@ -1156,6 +1156,25 @@ steps:
             command: "ip_integration_check . --json reports/phase2/gates/ip_integration.json"
             condition_files_exist: ["input/pdk_local", "phase3/analog/hardmacro"]
         - files_exist: ["phase3/stage3/pnr/floorplan.def"]
+        # wire/analog_other — enforce `blocks_on: [..., A8]` DETERMINISTICALLY.
+        # `blocks_on` is an ordering DECLARATION; nothing verified it, so a
+        # floorplan DEF written while an analog block still had no A8
+        # hardmacro LEF abstract passed this step. Digital PnR reads
+        # phase3/analog/hardmacro/<block>/<block>.lef to reserve the block's
+        # footprint / pins / routing blockage; without it the block is
+        # dropped or placed abstract-less — an unroutable, silicon-DOA
+        # mixed-signal layout. skills/analog-flow-orchestrate declares this
+        # "Hard rule #1" and names this exact program as its enforcer, but
+        # only an agent reading that skill ever ran it.
+        # BLOCKING, and safe to block: the gate exits 0 with an explicit
+        # SKIP on a pure-digital project (no phase3/analog/
+        # analog_block_list.json → reason=no_analog_blocks) and on a
+        # pre-floorplan project (no DEF → reason=floorplan_not_run); it
+        # reaches rc=1 ONLY when the DEF exists AND an unwaived block has no
+        # A8 LEF. Blocks may be waived per-block via
+        # phase3/analog/waivers.json ({"analog_waivers":[{"block":…,
+        # "step":"A8"}]}).
+        - program_exit_zero: "analog_a8_before_floorplan_check . --json reports/phase3/pnr/analog_a8_before_floorplan.json"
         - program_exit_zero: "floorplan_pdn_check . --json reports/phase3/pnr/floorplan_pdn.json"
     blocks_on: [13, 14, A8]
 

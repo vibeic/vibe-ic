@@ -331,6 +331,51 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "analog_a7_post_layout_resim_check",
     "analog_a8_hardmacro_gen_check",
     "analog_a9_hw_verify_check",
+    # ── wire/analog_other — analog gates that EXISTED and WORKED but that
+    # nothing deterministic ever invoked (only skill prose, or only their
+    # own unit test). Each was re-confirmed by execution before being
+    # registered here: every one exits 0 on a digital-only / pre-analog
+    # project (the umbrella's wiring criterion) and every one has a
+    # measured rc=1 FAIL branch on a real defect fixture.
+    #
+    #  * analog_a0_skip_forbidden_check — a top-level "we skipped analog"
+    #    verdict (`analog/A0_skip_decision.json`) with NO per-block
+    #    A0_implementation_status.json and no L5.analog_blocks_detected=
+    #    false. Only skills/analog-spec-extract prose forbade it.
+    #  * analog_block_list_emit_check — the master block list every other
+    #    A-gate reads: block_count vs len(blocks), per-entry name/type,
+    #    and spec_file resolution on disk. A block_count that lies
+    #    silently shrinks the whole analog sweep.
+    #  * analog_hardmacro_pinname_consistency_check — LEF PIN names vs
+    #    behavioural-Verilog ports vs spec.json `interface.pins`. The
+    #    wired A8 gates (analog_hardmacro_check /
+    #    analog_a8_hardmacro_gen_check) read neither pin set, so a
+    #    LEF/Verilog pin mismatch (integration-LVS failure) passed.
+    #  * analog_lef_gds_outline_check — the LEF `SIZE w BY h` line vs the
+    #    real GDS bounding box. The wired A8 gates prove only that a
+    #    MACRO/PIN keyword and a non-empty GDS exist, so an abstract that
+    #    understates the block's true extent (macro overlap in digital
+    #    PnR) passed.
+    #  * analog_adc_enob_corner_check — per-corner ENOB (or SNDR) vs the
+    #    spec.json ENOB target. The wired analog_corner_sweep_check has
+    #    no ENOB concept at all, so a converter meeting ENOB at TT/27C
+    #    and drooping at SS/125C shipped un-flagged.
+    #  * analog_sigma_delta_gain_floor_check — the 20*log10(OSR)
+    #    integrator-gain leakage floor for oversampled ΔΣ / incremental
+    #    converters. Nothing else asserts it.
+    #  * analog_corner_lib_realism_lint — an inline LEVEL=1 / ideal MOSFET
+    #    model card standing in for the foundry corner library with NO
+    #    disclosure. The wired analog_netlist_pdk_check checks model-
+    #    include presence, body ties and device names — never LEVEL=1.
+    #    (`*_lint.py`, so checker_execution_wiring_audit — which globs
+    #    only `*_check.py` / `*_audit.py` — could never see it either.)
+    "analog_a0_skip_forbidden_check",
+    "analog_block_list_emit_check",
+    "analog_hardmacro_pinname_consistency_check",
+    "analog_lef_gds_outline_check",
+    "analog_adc_enob_corner_check",
+    "analog_sigma_delta_gain_floor_check",
+    "analog_corner_lib_realism_lint",
     # v0.108: half-duplex protocol RTL invariant gates
     "break_framing_vs_l3_check",
     "break_handler_safety_check",

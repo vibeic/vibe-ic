@@ -33,10 +33,10 @@ list FAILs, an absent list is an honest SKIP, and a present-but-garbage
 Usage:
     python3 analog_block_list_emit_check.py <path_or_project> [--project] [--json out.json]
 
-    With --project, the positional arg is the project root and the gate
-    looks for analog/analog_block_list.json (and phase3/analog/...) under
-    it AND resolves each spec_file relative to the root. Without
-    --project, the positional arg is the block-list JSON file itself
+    When the positional arg IS a directory (or --project is given) it is
+    the project root: the gate looks for analog/analog_block_list.json
+    (and phase3/analog/...) under it AND resolves each spec_file relative
+    to the root. When it is a FILE, it is the block-list JSON itself
     (spec_file existence is NOT checked).
 
 Exit codes:
@@ -166,21 +166,34 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--project", action="store_true",
                     help="treat `path` as project root; locate "
                          "analog/analog_block_list.json under it and "
-                         "resolve each spec_file on disk")
+                         "resolve each spec_file on disk (implied when "
+                         "`path` IS a directory)")
     ap.add_argument("--json", default=None, help="write JSON report")
     args = ap.parse_args(argv)
 
     arg = args.path.resolve()
 
+    # wire/analog_other — a DIRECTORY positional means project mode, with or
+    # without the flag. Every gate runner in this repo (the P0 structural
+    # umbrella in flow_compliance_check._run_structural_rtl_gates, and the
+    # flow YAML `program_exit_zero` shape) invokes a gate as
+    # `python3 <gate>.py <project_dir>` and passes NO extra flags. Without
+    # this, a project-dir argument fell through to file mode, `arg.is_file()`
+    # was False, and the gate reported VACUOUS_PASS on EVERY project no
+    # matter how broken its block list — wired but structurally inert.
+    # `--project` is kept for back-compat; file mode is unchanged for a file
+    # argument.
+    project_mode = args.project or arg.is_dir()
+
     if args.project and not arg.is_dir():
         print(f"error: --project given but not a directory: {arg}",
               file=sys.stderr)
         return 2
-    if not args.project and not arg.exists():
+    if not project_mode and not arg.exists():
         print(f"error: path not found: {arg}", file=sys.stderr)
         return 2
 
-    bl_path, project_root = _locate(arg, args.project)
+    bl_path, project_root = _locate(arg, project_mode)
 
     if bl_path is None:
         report = {"status": "VACUOUS_PASS",
