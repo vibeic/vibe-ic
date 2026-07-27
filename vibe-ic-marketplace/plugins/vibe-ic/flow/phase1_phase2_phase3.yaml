@@ -577,6 +577,24 @@ steps:
         # The check resolves the top module from L9 if present; the
         # tb file pattern is sim_full_stack/tb_<top>_full.v.
         - program_exit_zero: "bit_level_full_stack_tb_check . --json reports/phase2/gates/bit_level_full_stack.json"
+        # DFT_FCC / 5-d1 — `assertion_property_check` was DECLARED in this
+        # step's `programs:` list since v0.x but NOTHING ever invoked it:
+        # a whole-tree grep found it in no runner, no gate and no MCP tool,
+        # so the header's own contract ("when a step maps to a
+        # deterministic program, use `program:` … all must succeed") was
+        # broken by an orphan declaration. On the reference run
+        # (spm × ihp-sg13g2) the program exits 1 —
+        # {files_checked: 4, valid_files: 0, errors: 9} — while step 5
+        # resolved to VACUOUS_PASS. Fixing the GATE (not the declaration)
+        # is the honest half: the program encodes a check nothing else
+        # performs, and its subject (does an assertion file actually
+        # DECLARE and ASSERT a property, or is it a stub?) is real.
+        # Wired UNCONDITIONALLY, not via condition_files_exist — the
+        # conditional form is the invisible-skip antipattern this file
+        # calls out elsewhere. A project with no assertion candidate at
+        # all exits 2 → VACUOUS_PASS, which is what preserves the #608
+        # honest SKIPPED-CONDITION for a project with no formal harness.
+        - program_exit_zero: "assertion_property_check . --json reports/phase2/gates/assertion_property.json"
     blocks_on: [2]
 
   - id: 6
