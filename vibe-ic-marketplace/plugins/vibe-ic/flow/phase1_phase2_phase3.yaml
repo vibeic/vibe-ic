@@ -1756,6 +1756,19 @@ steps:
       all_of:
         - program_exit_zero: "drc_report_check . --mode drc --json reports/phase3/drc_signoff.json"
         - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
+        # 每一條宣告的電源/地軌都必須有真實金屬幾何。MEASURED on a real tapeout
+        # run with a third-party hard macro on a second supply: the DEF declared
+        # the rail, bound the macro's supply pin to it, and the rail carried ZERO
+        # routed geometry — while THREE tools reported success. PG_CONNECT_AUDIT
+        # counts pins whose net pointer is NULL (this pin's was valid, pointing
+        # at the empty rail); PSM-0040 "all shapes on net X are connected" is
+        # vacuously true over an empty shape set; and the router had nothing to
+        # route so nothing to fail on. Each answered its own question correctly;
+        # none answered "can current reach this pin", and no gate asked.
+        # A rail legitimately delivered at integration is a hierarchical split,
+        # not a defect — but it must be DISCLOSED in a machine-readable marker
+        # (reports/phase3/pdn_integration_supplied.json), never left silent.
+        - program_exit_zero: "pg_rail_geometry_check . --json reports/phase3/pg_rail_geometry.json"
         # Provenance required: sign-off DRC / LVS reports must come
         # from real tool runs (klayout / magic for DRC; netgen OR the KLayout
         # NetlistComparer for LVS — v1.3.94: the geometric KLayout comparer is a
