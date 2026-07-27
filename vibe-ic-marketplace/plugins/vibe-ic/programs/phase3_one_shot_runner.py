@@ -19261,6 +19261,147 @@ def step_drv_promotion_corroboration(project: Path) -> StepResult:
                       time.time() - t0, f"inconclusive (rc={cp.returncode}): {detail}")
 
 
+# ---------------------------------------------------------------------------
+# Steps 23 / 25 — the sign-off gates the flow DECLARES that no runner ran.
+#
+# `flow/phase1_phase2_phase3.yaml` declares four checkers on the two post-route
+# sign-off steps:
+#
+#   step 23  sta_report_check · post_route_signoff_corner_check ·
+#            sta_corner_record_completeness_check
+#   step 25  em_report_check
+#
+# None of them was ever executed automatically. The phase-3 orchestrators never
+# load the flow yaml at all (`grep -n 'phase1_phase2_phase3.yaml\|FLOW_YAML'`
+# over phase3_one_shot_runner / vibe_ic_one_shot_runner / phase23_one_shot_runner
+# returns nothing), and the only `flow_compliance_check` call site in the runner
+# chain is `design_one_shot_runner`'s `--phase 2 --strict-structural`, whose
+# verdict is filtered to `r.id == 'P0'` and never reaches stage3. The plugin's
+# own `flow_gate_enforcement_audit` classified all three named gates AUDIT_ONLY.
+# A declaration is not a wiring — this is the wiring, in the shape
+# `step_drv_promotion_corroboration` (above) established for #306: the verdict
+# lands in `plan`, so a FAIL is a FAIL of the run.
+#
+# BLAST RADIUS, measured before wiring anything, over the 14 published phase-3
+# run-roots under `benchmark-data/ic` (the same corpus and the same evidence bar
+# #306 used). This is NOT a zero-cost wiring and must not be presented as one:
+#
+#   sta_report_check                      FAILs  9/14
+#   sta_corner_record_completeness_check  FAILs  6/14
+#   em_report_check                       FAILs  6/14
+#   post_route_signoff_corner_check       FAILs  2/14
+#
+# The findings are real, not artefacts of partial snapshots. The sharpest one:
+# `benchmark-data/ic/sha256/clean_run_v1422_20260715` — a run published as CLEAN
+# — reports `setup worst-slack -1.710 ns at the sign-off (max-RC) corner is
+# VIOLATED`. That is verbatim the #147 defect the step-23 gate comment was
+# written about, sitting in the corpus, undetected, because the gate that
+# detects it had no caller. On the real completed run used to measure this
+# change (`campaign_pr427/spm/converge_ihp-sg13g2`) all four return rc 0.
+#
+# Exit-code convention is `step_drv_promotion_corroboration`'s, which is
+# `flow_compliance_check`'s:
+#   rc 0  PASS (includes each checker's NOT_APPLICABLE self-skip — no STA
+#         corner declared, no multicorner report, no EM report)
+#   rc 1  FAIL — a real finding about the design
+#   rc 2+ the gate could not read its inputs or was mis-invoked: inconclusive,
+#         not a verdict about the design, so SKIP rather than failing a run
+#         over a checker fault.
+#
+# `post_route_signoff_corner_check` is declared in the yaml under
+# `condition_files_exist: [phase3/stage3/sta/sta_spef_multicorner.rpt]` but is
+# wired here UNCONDITIONALLY, which is strictly stronger and never differs on
+# the condition's false branch: with no multicorner report `check()` returns
+# NOT_APPLICABLE → rc 0, i.e. exactly what the unrun conditional gate produced.
+# Measured on all 14 run-roots; the 12 without a multicorner report all return 0.
+# ---------------------------------------------------------------------------
+_DECLARED_SIGNOFF_GATES = (
+    # (step name, program, output path relative to <project>, extra argv)
+    ("sta_signoff", "sta_report_check.py",
+     "reports/phase3/sta/post_route_summary.json", ("--mode", "sta")),
+    ("sta_corner", "post_route_signoff_corner_check.py",
+     "reports/phase3/sta/post_route_signoff_corner.json", ()),
+    ("sta_record", "sta_corner_record_completeness_check.py",
+     "reports/phase3/sta/sta_corner_record_completeness.json", ()),
+    ("em_signoff", "em_report_check.py",
+     "reports/phase3/em_signoff.json", ("--mode", "em")),
+)
+
+
+def _gate_detail(out_json: Path, stdout: str, stderr: str) -> str:
+    """A readable one-line reason, preferring the verdict JSON's own findings.
+
+    The `eda_report_audit` wrappers print their whole report to stdout, so a
+    raw tail shows the trailing summary dict and drops the findings that say
+    WHY. Read the file the gate just wrote and surface the rules/reasons.
+    """
+    try:
+        doc = json.loads(out_json.read_text())
+    except (OSError, ValueError):
+        return (stdout or stderr or "").strip()[-600:]
+    parts: List[str] = []
+    for f in (doc.get("findings") or [])[:6]:
+        if isinstance(f, dict):
+            parts.append(f"{f.get('rule', '?')}: {str(f.get('message', ''))[:160]}")
+        else:
+            parts.append(str(f)[:160])
+    for r in (doc.get("reasons") or [])[:6]:
+        parts.append(str(r)[:200])
+    if not parts:
+        verdict = doc.get("verdict") or doc.get("status")
+        if verdict:
+            parts.append(str(verdict))
+    return ("; ".join(parts) or
+            (stdout or stderr or "").strip()[-600:])[:600]
+
+
+def _run_declared_signoff_gate(project: Path, name: str, program: str,
+                               out_rel: str,
+                               extra_argv: tuple = ()) -> StepResult:
+    """Invoke one flow-declared sign-off gate inline, blocking on its verdict."""
+    t0 = time.time()
+    prog = PROGRAMS_DIR / program
+    if not prog.is_file():
+        return StepResult(name, "SKIP", time.time() - t0,
+                          f"gate program not present: {program}")
+    if not project.is_dir():
+        # Do NOT mkdir our way into existence here: creating the report
+        # directory would also create the PROJECT directory, and each checker
+        # keys its rc-2 "cannot read my inputs" branch on `project.is_dir()`.
+        # Fabricating the tree would turn that fault into a NOT_APPLICABLE
+        # rc 0, i.e. a green verdict about a project that is not there.
+        return StepResult(name, "SKIP", time.time() - t0,
+                          f"project directory does not exist: {project}")
+    out_json = project / out_rel
+    try:
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return StepResult(name, "SKIP", time.time() - t0,
+                          f"cannot create {out_json.parent}: {exc}")
+    cmd = [sys.executable, str(prog), str(project), *extra_argv,
+           "--json", str(out_json)]
+    try:
+        cp = subprocess.run(cmd, timeout=900, check=False,
+                            capture_output=True, text=True)
+    except Exception as exc:                                  # noqa: BLE001
+        return StepResult(name, "SKIP", time.time() - t0,
+                          f"gate could not run: {exc}")
+    detail = _gate_detail(out_json, cp.stdout or "", cp.stderr or "")
+    outputs = [str(out_json)] if out_json.is_file() else []
+    if cp.returncode == 0:
+        return StepResult(name, "PASS", time.time() - t0, detail, outputs)
+    if cp.returncode == 1:
+        return StepResult(name, "FAIL", time.time() - t0, detail, outputs)
+    return StepResult(name, "SKIP", time.time() - t0,
+                      f"inconclusive (rc={cp.returncode}): {detail}", outputs)
+
+
+def step_declared_signoff_gates(project: Path) -> List[StepResult]:
+    """Every flow-declared step-23/25 sign-off gate, one StepResult each."""
+    return [_run_declared_signoff_gate(project, *g) for g in
+            _DECLARED_SIGNOFF_GATES]
+
+
 def _step37_restamp_canon_gds_provenance(project: Path, top: str,
                                          canon_gds: Path) -> None:
     """After Step 37 writes phase3/stage4/gds/<top>.gds, update provenance.jsonl
@@ -26659,6 +26800,15 @@ def main() -> int:
     # tape-out checklist on top of a route whose claimed improvement the
     # sign-off may contradict.
     plan.append(step_drv_promotion_corroboration(project))
+
+    # Steps 23 / 25 — the sign-off gates the flow DECLARES but that no runner
+    # ever executed (see `_DECLARED_SIGNOFF_GATES` for the measured blast
+    # radius and the exit-code convention). They run HERE for the same reason
+    # the #306 gate above does: after `step_canonicalize_artefacts`, which is
+    # what emits `phase3/stage3/sta/*.rpt` and `reports/phase3/em.rpt`, and
+    # BEFORE the derived-artefact generators build the hand-off pack and
+    # tape-out checklist on top of a sign-off nobody checked.
+    plan.extend(step_declared_signoff_gates(project))
 
     # v1.6.36 — invoke the derived-artefact generators (each emits its
     # own canonical path; failures are best-effort and logged in notes).
