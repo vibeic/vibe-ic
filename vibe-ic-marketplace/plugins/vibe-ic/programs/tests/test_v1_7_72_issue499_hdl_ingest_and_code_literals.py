@@ -285,8 +285,9 @@ def test_wide_field_reserved_guard_still_gates_only_the_decimal_tier() -> None:
              "description": "Counter index 2 = Foo in an unrelated table."}
     RUNNER._v1_6_512_lift_field_encoding(field, field["description"])
     # No 32-bit zero-padded decimal attribution.
+    decimal_tier = "field_encoding_decimal_v1_6_517"
     for e in field.get("encoding") or []:
-        assert e.get("extraction_strategy") != "field_encoding_decimal_v1_6_517"
+        assert e.get("extraction_strategy") != decimal_tier
 
 
 # ═══════════════════════════════════════════════════════════════════════
