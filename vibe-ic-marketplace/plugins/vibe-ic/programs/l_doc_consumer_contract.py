@@ -245,7 +245,19 @@ def sibling_l_doc_texts(project: Path, codes: Iterable[str]
         if path is None or doc is None:
             continue
         try:
-            out.append((path, json.dumps(doc, ensure_ascii=False)))
+            # vibe-ic#476 — INDENT IS LOAD-BEARING, not cosmetic.
+            #
+            # `_hit_line` finds "the line the match sits on" by scanning for
+            # newlines, and both `framed_hits` and `signoff_qualifier` document
+            # themselves as LINE-SCOPED — the correction that made "proximity is
+            # not membership" true. A compact `json.dumps` emits NO newline, so on
+            # this path every hit's "line" was the WHOLE DOCUMENT.
+            #
+            # Measured over the tracked corpus: 2448 of 2448 sibling texts across
+            # 106 projects were single-line, running from 192 to 1_420_065
+            # characters. One unrelated field saying "informative" anywhere in a
+            # 1.4 MB blob therefore disclaimed every requirement in it.
+            out.append((path, json.dumps(doc, ensure_ascii=False, indent=2)))
         except Exception:
             continue
     return out
