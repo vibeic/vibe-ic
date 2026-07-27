@@ -507,12 +507,14 @@ def real_artefact_backing_gate(repo: Path, base: str, head: str) -> GateResult:
 # OPT-IN: without the flag the single-landing rule is unchanged, so a real
 # `commit --amend` slip still fails exactly as before.
 # --------------------------------------------------------------------------
-def one_commit_gate(repo: Path, base: str, batch: bool = False) -> GateResult:
+def one_commit_gate(repo: Path, base: str, head: str = "HEAD",
+                    batch: bool = False) -> GateResult:
     prog = _PROGRAMS_DIR / "landing_is_one_commit_check.py"
     if not prog.is_file():
         return GateResult("landing_is_one_commit_check", 2,
                           f"checker missing at {prog}")
-    argv = [str(repo), "--base", base] + (["--batch"] if batch else [])
+    argv = ([str(repo), "--base", base, "--head", head]
+            + (["--batch"] if batch else []))
     rc, out, err = _run_program(prog, argv)
     detail = (err or out).strip().splitlines()
     reason = detail[-1] if detail else "no output"
@@ -777,11 +779,16 @@ def review(base: str, head: str, *,
     gates.append(commit_msg_nda_gate(repo, base, head))
     gates.append(nda_diff_scan_gate(repo, base, head))
     gates.append(stale_branch_gate(repo, base, head))
-    # #459 — the landing SHAPE, alongside the landing METHOD above. Only
-    # meaningful when head is the working HEAD (the gatekeeper's own pre-push
-    # check); a synthetic head ref makes the range uncountable and the gate
-    # reports a skip rather than a pass.
-    gates.append(one_commit_gate(repo, base, batch=batch))
+    # #459 — the landing SHAPE, alongside the landing METHOD above.
+    #
+    # v1.7.65: this used to omit `head`, and the comment that stood here
+    # claimed a synthetic head ref would make the range uncountable so the
+    # gate would skip. It did no such thing — `head` was simply never passed,
+    # and the checker counted the REVIEWER'S working HEAD. Reviewing a PR from
+    # a checkout parked on a clean one-commit landing returned PASS over an
+    # unsquashed branch. An unresolvable ref is rc 2 / NOT CHECKED, which is
+    # what the old comment promised and the code now delivers.
+    gates.append(one_commit_gate(repo, base, head, batch=batch))
     gates.append(real_artefact_backing_gate(repo, base, head))
     gates.append(acceptance_control_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))

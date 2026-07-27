@@ -163,36 +163,71 @@ def test_an_uncountable_range_is_a_SKIP_not_a_pass_in_batch_mode(tmp_path):
         assert res.rc == -1, (batch, res.summary)
 
 
-# ── the CLI surface, because the function passing is not the whole path ────
-def _landing_gate_rc(project: Path, base: str, extra: list) -> int:
-    """Run the REAL CLI and read the landing gate's rc out of its JSON."""
-    out = project / "verdict.json"
-    subprocess.run(
-        [sys.executable, str(_PROGRAMS / "gatekeeper_review.py"),
-         "--repo", str(project), "--base", base, "--head", "HEAD",
-         "--json", str(out)] + extra,
-        capture_output=True, text=True)
-    assert out.is_file(), "the review produced no verdict at all"
-    import json
-    gates = {g["name"]: g["rc"] for g in json.loads(out.read_text())["gates"]}
+# ── the two wiring hops, each DRIVEN, and each cheap ──────────────────────
+#
+# THE TEST THIS FILE MOST NEEDED, and the one I got wrong TWICE.
+#
+# Attempt 1 asserted that the SOURCE TEXT contained the call
+# `one_commit_gate(repo, base, batch=args.batch)`. It passed while that exact
+# line raised `NameError: name 'args' is not defined` — `args` is bound in
+# `main()`, the call site is in `review()`. A test that reads the source
+# instead of running it certified a program that could not run.
+#
+# Attempt 2 drove the whole `gatekeeper_review` CLI twice. That is honest, and
+# it TIMED OUT in CI (`--timeout` per test, 2-core runner): the review scans
+# the plugin root, runs the full audit and the chip-agnostic guard over
+# thousands of files, none of which this test is about. A test that cannot
+# finish is not a stricter test, it is a red main.
+#
+# The repair is to keep BOTH hops driven and make each one cheap:
+#
+#   argparse -> review()   captured at the call site in `main()`, so the real
+#                          parser and the real call are exercised;
+#   review() -> the gate   driven for real against a TINY plugin_root, which
+#                          makes the unrelated heavy gates trivial while the
+#                          landing gate does exactly what it does in
+#                          production (~0.4s).
+#
+# Neither hop is asserted from source text, and neither pays for the other's
+# work.
+def _tiny_plugin_root(tmp_path: Path) -> Path:
+    """A plugin root with nothing in it, so the scanning gates cost nothing.
+    The landing gate does not read it at all."""
+    root = tmp_path / "tiny-plugin"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text('{"version":"1.0.0"}\n')
+    return root
+
+
+def _landing_gate_rc(project: Path, base: str, tmp_path: Path,
+                     batch: bool) -> int:
+    v = GR.review(base, "HEAD", repo=project,
+                  plugin_root=_tiny_plugin_root(tmp_path), batch=batch)
+    gates = {g.name: g.rc for g in v.gates}
     assert "landing_is_one_commit_check" in gates, gates
     return gates["landing_is_one_commit_check"]
 
 
-def test_the_flag_reaches_the_gate_through_the_CLI(tmp_path):
-    """THE TEST THIS FILE MOST NEEDED, and the one I first got wrong.
-
-    My original version asserted that the SOURCE TEXT contained the call
-    `one_commit_gate(repo, base, batch=args.batch)`. It passed while that
-    exact line raised `NameError: name 'args' is not defined` at runtime —
-    `args` is bound in `main()`, and the call site lives in `review()`. A test
-    that reads the source instead of running it is the false-certificate shape
-    this repo keeps closing, and it certified a program that could not run.
-
-    So this now drives the actual CLI, end to end, and reads the gate's rc out
-    of the emitted verdict. The wiring runs from argparse through `review()`'s
-    parameter to the gate; asserting on `one_commit_gate` alone would not
-    exercise either hop."""
+def test_the_flag_reaches_the_gate_through_review(tmp_path):
+    """HOP 2, driven. This is the hop the NameError was on."""
     d, base = _batch_of_three(tmp_path)
-    assert _landing_gate_rc(d, base, ["--batch"]) == 0
-    assert _landing_gate_rc(d, base, []) == 1
+    assert _landing_gate_rc(d, base, tmp_path / "a", batch=True) == 0
+    assert _landing_gate_rc(d, base, tmp_path / "b", batch=False) == 1
+
+
+def test_the_flag_reaches_review_through_argparse(tmp_path, monkeypatch):
+    """HOP 1, driven. The real parser, the real call site in `main()` — only
+    the review body is stood in for, because it is hop 2's job and it is
+    tested above."""
+    seen = {}
+
+    def _spy(base, head, **kw):
+        seen.update(kw, base=base, head=head)
+        raise RuntimeError("stop here — the wiring is what is under test")
+
+    monkeypatch.setattr(GR, "review", _spy)
+    d, base = _batch_of_three(tmp_path)
+    for flags, expected in (([], False), (["--batch"], True)):
+        seen.clear()
+        GR.main(["--repo", str(d), "--base", base, "--head", "HEAD"] + flags)
+        assert seen.get("batch") is expected, (flags, seen)

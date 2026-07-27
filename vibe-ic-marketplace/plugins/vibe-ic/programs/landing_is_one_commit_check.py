@@ -41,6 +41,22 @@ deletion rather than a landing (vibe-ic#439). Four is above that floor, three of
 them were made on a single day, and the failure is silent — which is the
 combination that justifies a check rather than a note.
 
+v1.7.65 — THE CHECK WAS MEASURING THE WRONG TREE
+=================================================
+`head_is_one_commit` hard-coded `base..HEAD`, and `gatekeeper_review` never
+passed the `--head` it was reviewing. So a REVIEW of somebody else's branch
+counted the REVIEWER'S OWN working checkout instead of the branch under
+review. Reproduced end to end: with the working tree parked on a clean
+one-commit landing, reviewing a three-commit branch whose tip carries only the
+version manifests — this program's exact defect shape — returned
+
+    [PASS] landing_is_one_commit: one commit ahead of <base> - a squashed landing
+
+rc 0, over a tree nobody was reviewing. The gate that exists to catch an
+unsquashed landing certified one. `head` is now a parameter, defaulting to
+HEAD so the pre-push use is unchanged, and an unresolvable ref is rc 2 (NOT
+CHECKED) rather than a verdict about some other branch.
+
 chip-AGNOSTIC: pure git history shape; no design, PDK or vendor name.
 """
 from __future__ import annotations
@@ -112,8 +128,14 @@ def find_unsquashed(repo: Path, limit: int = 200) -> Tuple[List[Dict], int]:
 
 
 def head_is_one_commit(repo: Path, base: str,
-                       batch: bool = False) -> Tuple[bool, int, str]:
-    """The pre-push form: `base..HEAD` must be exactly one commit.
+                       batch: bool = False,
+                       head: str = "HEAD") -> Tuple[bool, int, str]:
+    """The pre-push form: `base..head` must be exactly one commit.
+
+    `head` defaults to the working HEAD, which is the pre-push use. A REVIEW
+    of somebody else's branch MUST pass the ref under review — see the
+    v1.7.65 note in the module docstring for why leaving it implicit produced
+    a PASS over a tree nobody was reviewing.
 
     This is the check that would have caught #459 at the time, and it costs one
     `rev-list`. Returns (ok, count, detail)."""
@@ -122,16 +144,18 @@ def head_is_one_commit(repo: Path, base: str,
     # never rc 1, which would block a landing on the strength of a ref this
     # program could not resolve. Same rule the sibling landing-method guard
     # follows, and the rc-2-is-not-a-pass discipline used across this tree.
-    rc, out = _git(repo, "rev-list", "--count", f"{base}..HEAD")
+    rc, out = _git(repo, "rev-list", "--count", f"{base}..{head}")
     if rc != 0:
-        return False, -1, f"could not count commits against {base!r}: {out.strip()}"
+        return False, -1, (f"could not count commits in {base}..{head}: "
+                           f"{out.strip()}")
     try:
         n = int(out.strip())
     except ValueError:
         return False, -1, f"unreadable rev-list output: {out.strip()!r}"
     if n == 0:
-        return False, n, (f"NOTHING to land: HEAD == {base}. This is not a pass; "
-                          f"a landing that adds no commit landed nothing.")
+        return False, n, (f"NOTHING to land: {head} == {base}. This is not a "
+                          f"pass; a landing that adds no commit landed "
+                          f"nothing.")
     if n == 1:
         return True, n, f"one commit ahead of {base} — a squashed landing"
     if not batch:
@@ -154,10 +178,10 @@ def head_is_one_commit(repo: Path, base: str,
     #   * exactly ONE commit may carry a version bump, and it must be the LAST,
     #     so the pushed tip is the version the batch publishes and every
     #     intermediate commit is a real landing.
-    rc, out = _git(repo, "rev-list", "--reverse", f"{base}..HEAD")
+    rc, out = _git(repo, "rev-list", "--reverse", f"{base}..{head}")
     shas = [s for s in out.split() if s]
     if rc != 0 or len(shas) != n:
-        return False, -1, f"could not list the {n} commits in {base}..HEAD"
+        return False, -1, f"could not list the {n} commits in {base}..{head}"
     bare, versioned = [], []
     for sha in shas:
         if _is_manifest_only(repo, sha) is True:
@@ -189,6 +213,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("repo", nargs="?", default=".")
     ap.add_argument("--base", default=None,
                     help="pre-push mode: assert base..HEAD is exactly one commit")
+    ap.add_argument("--head", default="HEAD",
+                    help="pre-push mode: the ref UNDER REVIEW (default HEAD, "
+                         "the reviewer's own working checkout). A review of "
+                         "somebody else's branch MUST pass it, or the answer "
+                         "describes the wrong tree.")
     ap.add_argument("--batch", action="store_true",
                     help="several PR landings under one version bump and one CI "
                          "run: check the batch's shape instead of demanding one "
@@ -200,13 +229,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     repo = Path(a.repo).resolve()
 
     if a.base:
-        ok, n, detail = head_is_one_commit(repo, a.base, batch=a.batch)
+        ok, n, detail = head_is_one_commit(repo, a.base, batch=a.batch,
+                                           head=a.head)
         label = "PASS" if ok else ("NOT CHECKED" if n < 0 else "FAIL")
         print(f"[{label}] landing_is_one_commit: {detail}", file=sys.stderr)
         if a.json_out:
             Path(a.json_out).write_text(json.dumps(
-                {"mode": "pre_push", "ok": ok, "commits": n,
-                 "detail": detail}, indent=2) + "\n")
+                {"mode": "pre_push", "base": a.base, "head": a.head,
+                 "ok": ok, "commits": n, "detail": detail}, indent=2) + "\n")
         return 0 if ok else (2 if n < 0 else 1)
 
     findings, examined = find_unsquashed(repo, a.limit)
