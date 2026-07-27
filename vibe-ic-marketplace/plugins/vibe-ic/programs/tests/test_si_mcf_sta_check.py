@@ -142,9 +142,20 @@ def test_gate_fails_slack_better_than_bound(tmp_path):
 
 
 def test_gate_missing_report(tmp_path):
+    """#506 — a gate that could not obtain its input is NOT_RUN, not FAIL.
+
+    This assertion read `verdict == "FAIL"` until #506 split the ERROR set:
+    `NO_REPORT` means the gate never got to look, and reporting that as a
+    design failure is how a report with an unreadable `spef` path came to say
+    "FAIL" and "Read this as NOT CHECKED" in the same file. THE EXIT CODE DOES
+    NOT MOVE — `NOT_RUN` is still rc 1, so nothing got quieter; only the answer
+    got true. Pinned end-to-end (not just on the token) in
+    `test_si_mcf_not_run_is_not_a_design_failure.py`."""
     proj = tmp_path / "empty"
     (proj / "reports" / "phase3").mkdir(parents=True)
     findings, stats = G.audit(proj)
     rep = G.build_report(findings, stats, str(proj))
-    assert rep["verdict"] == "FAIL"
+    assert rep["verdict"] == "NOT_RUN"
+    assert rep["summary"]["vacuous"] is True
+    assert rep["summary"]["pass"] is False
     assert any(f["category"] == "NO_REPORT" for f in rep["findings"])

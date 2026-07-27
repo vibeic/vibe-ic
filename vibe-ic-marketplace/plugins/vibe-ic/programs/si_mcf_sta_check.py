@@ -169,13 +169,67 @@ pre-existing convention shared by every rc-2 gate; changing it is a repo-wide
 behaviour change and is deliberately not made here. A reviewer who needs the
 reason must read the JSON.
 
+AND THE SAME DEFECT ONCE RAN INVERTED — a run that examined NOTHING reported as
+a design defect (#506). Until this was split, the verdict precedence was "any
+ERROR outranks vacuity", and the gate had THREE verdict tokens for FOUR states.
+The fourth — THE GATE COULD NOT OBTAIN ITS INPUT — had nowhere to go, so a run
+whose ``spef`` path does not exist on the reading host emitted, in one JSON,
+``verdict: FAIL`` beside ``vacuous: true`` and a reason ending "Read this as NOT
+CHECKED". Two contradictory answers in one artefact: a reader keying on
+``verdict`` learned the design failed SI sign-off, a reader keying on
+``vacuous`` learned nothing had been checked. On a PUBLISHED report whose
+``spef`` field is an absolute path from the authoring machine (see the paragraph
+above — still not fixed in the emitter), that made the verdict a function of
+WHICH HOST read the file, and the visible remedy for "this design fails SI" is
+to go change the design.
+
+THE ERROR CATEGORIES ARE NOT ONE KIND OF THING, and ``NOT_RUN_CATEGORIES`` is
+where that is written down:
+
+    NO_REPORT  BAD_JSON  NO_SPEF  NO_CORNER  NO_BOUNDED_SPEF
+        the gate never got to look                            -> ``NOT_RUN``
+    SPEF_NO_NET_RECORDS  COUPLING_LOST_SINCE_EMIT
+    FOLD_WITHOUT_SOURCE  FOLD_NOT_APPLIED  SLACK_BETTER_THAN_BOUND
+        the gate looked at a real artefact and it was wrong    -> ``FAIL``
+
+Only the first list is enumerated. Anything NOT on it is a substantive defect,
+so a category added later defaults to the LOUD tier and can never be demoted
+into a skip by omission — the fail-safe direction for a gate whose whole purpose
+is catching a false-clean.
+
+THE EXIT CODE DELIBERATELY DOES NOT MOVE. ``NOT_RUN`` is rc 1, exactly as the
+FAIL it was carved out of, and the "1 = FAIL and every refused / mis-invoked
+run" policy below is UNCHANGED by #506. The tempting alternative — rc 2, the
+disclosed-skip tier — was measured against ``flow_compliance_check.
+_check_program_exit_zero``, which credits rc 2 as a PASS unconditionally.
+``NO_BOUNDED_SPEF`` fires when the emitter's OWN report names a bounded SPEF
+that is absent: an INCOMPLETE SIGN-OFF, not an inapplicable one. Under rc 2 that
+step would render as a vacuous pass and a genuinely broken sign-off would look
+skipped — trading #506's false negative for a false clean, which is the very
+trade this gate exists to refuse. #506 asked for ONE answer per artefact, not
+for a quieter one: the token disambiguates, the exit code stays loud.
+
+CONSEQUENTLY ``summary.vacuous`` IS THE VERDICT TIER, NOT THE RAW ZERO. Three of
+the substantive-defect categories (``SPEF_NO_NET_RECORDS``,
+``COUPLING_LOST_SINCE_EMIT``, ``FOLD_WITHOUT_SOURCE``) fire with
+``examined == 0``, because a file that is the wrong artefact is decided WITHOUT
+any fold being re-derivable from it. Deriving ``vacuous`` straight from
+``examined`` therefore reproduced the contradiction on those three as well.
+``vacuous`` now means "this run reached no conclusion" (true for ``NOT_RUN`` and
+``VACUOUS_PASS``, false for ``PASS`` and ``FAIL``); the raw count stays visible
+and unmodified at ``summary.denominator.examined``, and a rejected artefact
+still owes the written reason ``_gate_denominator`` requires — it is simply the
+reason a REJECTED artefact gets (``_rejected_reason``) rather than a skip's, so
+the NOT-CHECKED disclaimer never ships beside a decided failure.
+
 Exit 0 = PASS (every corner's bound is genuinely applied + reported honestly),
-1 = FAIL **and every refused / mis-invoked run**, 2 = VACUOUS_PASS (nothing was
-re-derived; NOT a sign-off). rc 2 was formerly the arg-error code; it is now
-reserved for the disclosed skip, because ``flow_compliance_check.
-_check_program_exit_zero`` credits rc 2 as a pass unconditionally and an
-argparse-rejected invocation must never be credited as one (same reasoning as
-``drc_report_check``). Writes reports/phase3/si_mcf_sta_check.json.
+1 = FAIL **and every refused / mis-invoked run** (including the ``NOT_RUN``
+tier — see above), 2 = VACUOUS_PASS (nothing was re-derived; NOT a sign-off).
+rc 2 was formerly the arg-error code; it is now reserved for the disclosed skip,
+because ``flow_compliance_check._check_program_exit_zero`` credits rc 2 as a
+pass unconditionally and an argparse-rejected invocation must never be credited
+as one (same reasoning as ``drc_report_check``). Writes
+reports/phase3/si_mcf_sta_check.json.
 """
 from __future__ import annotations
 
@@ -191,10 +245,30 @@ import _path_layout as _pl
 import si_mcf_sta as M
 
 #: Exit codes. 2 is the DISCLOSED SKIP tier, never an error tier — see the
-#: module docstring.
+#: module docstring. The ``NOT_RUN`` verdict shares ``RC_FAIL`` on purpose: it
+#: is a distinct ANSWER, not a quieter one (#506).
 RC_PASS = 0
 RC_FAIL = 1
 RC_VACUOUS = 2
+
+#: The ERROR categories that mean THE GATE NEVER GOT TO LOOK — the input it
+#: audits could not be obtained, read, or located (#506).
+#:
+#: ENUMERATED IN THIS DIRECTION ON PURPOSE. The complement — "the gate looked at
+#: a real artefact and it was wrong" — is NOT listed anywhere, so membership of
+#: the loud tier is the DEFAULT. A category added to this gate later is a
+#: substantive defect until someone deliberately writes it into this set, which
+#: is a reviewable edit; the opposite arrangement would let a new category slip
+#: into the skip tier by nobody remembering to list it. For a gate whose whole
+#: purpose is catching a false-clean, the failure mode of forgetting must be
+#: "too loud", never "too quiet".
+NOT_RUN_CATEGORIES = frozenset({
+    "NO_REPORT",         # the emitter's report is not there
+    "BAD_JSON",          # ... or is not parseable
+    "NO_SPEF",           # the SPEF the report names is not on this host
+    "NO_CORNER",         # the report carries no record for a corner
+    "NO_BOUNDED_SPEF",   # ... or names a bounded SPEF that is not there
+})
 
 #: One unit of what this gate measures. Named here so the report, the reason
 #: prose and any consumer sweeping the gate set agree by construction.
@@ -238,6 +312,23 @@ class Finding:
     severity: str          # ERROR / WARNING / INFO
     category: str
     message: str
+
+
+def error_categories(findings: List[Finding]) -> Tuple[List[str], List[str]]:
+    """Split the ERROR findings into (could-not-run, examined-and-wrong).
+
+    Order-preserving and de-duplicated, because both lists are quoted verbatim
+    into the written reason a reader gets. WARNING / INFO findings are not a
+    verdict and never enter either list."""
+    not_run: List[str] = []
+    defect: List[str] = []
+    for f in findings:
+        if f.severity != "ERROR":
+            continue
+        bucket = not_run if f.category in NOT_RUN_CATEGORIES else defect
+        if f.category not in bucket:
+            bucket.append(f.category)
+    return not_run, defect
 
 
 def _is_falsifiable(expected_fold_pf: float) -> bool:
@@ -526,7 +617,31 @@ def _vacuous_reason(stats: dict) -> str:
     return why + _NOT_SAID
 
 
-def denominator(stats: dict) -> _gd.Denominator:
+def _rejected_reason(defect_categories: List[str]) -> str:
+    """The written reason a DECIDED FAILURE with a zero denominator owes (#506).
+
+    Three substantive-defect categories fire with ``examined == 0``:
+    ``SPEF_NO_NET_RECORDS``, ``COUPLING_LOST_SINCE_EMIT`` and
+    ``FOLD_WITHOUT_SOURCE``. A file that is the WRONG ARTEFACT is decided
+    without any fold being re-derivable from it, so the zero is real — but
+    ``_vacuous_reason``'s prose ends "Read this as NOT CHECKED", which denies a
+    conclusion the gate demonstrably reached. Shipping that beside
+    ``verdict: FAIL`` is the #506 contradiction with the categories swapped.
+
+    ``_gate_denominator.Denominator`` still REQUIRES a reason at zero and that
+    requirement is kept: the zero is disclosed, it is simply disclosed as what
+    it is."""
+    cats = ", ".join(defect_categories) or "a substantive finding"
+    return (f"no victim-net fold was re-derived because the artefact was "
+            f"REJECTED before one could be: {cats}. WHAT THIS VERDICT DOES "
+            f"SAY: the gate DID reach a conclusion about the artefact it was "
+            f"handed and that conclusion is a FAILURE — this zero is a decided "
+            f"verdict, not a skip, and must not be read as one. The findings "
+            f"carry it.")
+
+
+def denominator(stats: dict,
+                findings: Optional[List[Finding]] = None) -> _gd.Denominator:
     """What the re-derivation actually PROVED (#496).
 
     ``examined`` is the number of victim-net comparisons a silently-dropped
@@ -540,17 +655,30 @@ def denominator(stats: dict) -> _gd.Denominator:
     Per-corner counts are in ``details`` on BOTH axes, because the two diverge
     structurally: in window-independent floor mode the hold corner's
     expectation is 0 for every net, so it contributes comparisons and no
-    proofs, and a reader must be able to see that without re-deriving it."""
+    proofs, and a reader must be able to see that without re-deriving it.
+
+    ``findings`` (optional, #506) selects WHICH written reason a zero gets: a
+    zero reached because the artefact was REJECTED is a decided verdict, not a
+    skip, and must not carry the skip's NOT-CHECKED disclaimer. Omitting the
+    argument keeps the pre-#506 behaviour for direct callers that only have the
+    stats dict."""
     recount = stats.get("recount", {}) or {}
     examined = sum(int((v or {}).get("folds_proved", 0) or 0)
                    for v in recount.values())
     considered = sum(int((v or {}).get("nets_checked", 0) or 0)
                      for v in recount.values())
+    _, defect = error_categories(findings or [])
+    if examined:
+        reason = ""
+    elif defect:
+        reason = _rejected_reason(defect)
+    else:
+        reason = _vacuous_reason(stats)
     return _gd.Denominator(
         unit=DENOMINATOR_UNIT,
         examined=examined,
         considered=considered,
-        not_applicable_reason=_vacuous_reason(stats) if examined == 0 else "",
+        not_applicable_reason=reason,
         details={
             "coupling_pairs": stats.get("coupling_pairs"),
             "coupling_caps": stats.get("coupling_caps"),
@@ -568,13 +696,30 @@ def denominator(stats: dict) -> _gd.Denominator:
 
 
 def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict:
-    no_errors = all(f.severity != "ERROR" for f in findings)
-    denom = denominator(stats)
+    denom = denominator(stats, findings)
+    not_run, defect = error_categories(findings)
+    # FOUR STATES, FOUR TOKENS (#506). The old precedence was "any ERROR
+    # outranks vacuity", which left "the gate could not obtain its input" with
+    # nowhere to go and rendered it as the design carrying a violation.
+    #
     # A gate that examined nothing has not signed anything off. `pass` keeps its
     # literal meaning — the fold was re-derived and found honest — so a consumer
     # reading only that field can no longer be handed a vacuous run as a clean
-    # one. The three-way answer is in `verdict`.
-    if not no_errors:
+    # one. The four-way answer is in `verdict`.
+    if defect:
+        # Examined a real artefact and found it wrong. UNCHANGED, deliberately:
+        # this is the rule the gate was written for and #506 does not soften it.
+        verdict = "FAIL"
+    elif not_run and denom.is_vacuous:
+        # Could not obtain the input, and proved nothing. The fourth state.
+        verdict = "NOT_RUN"
+    elif not_run:
+        # PARTIAL, and the other direction of the same lie. Some corner's fold
+        # WAS re-derived and proved; another corner's input was missing. Calling
+        # that "NOT_RUN" would deny work the gate demonstrably did, so it keeps
+        # the FAIL it had. There is no contradiction to resolve here: the
+        # denominator is non-zero, so `vacuous` is false and the reason is
+        # empty — the artefact already carried exactly one answer.
         verdict = "FAIL"
     elif denom.is_vacuous:
         verdict = "VACUOUS_PASS"
@@ -587,7 +732,15 @@ def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict
         "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
         "findings_count": len(findings),
         "pass": verdict == "PASS",
-        "vacuous": denom.is_vacuous,
+        # THE VERDICT TIER, NOT THE RAW ZERO (#506). Three substantive-defect
+        # categories fire with `examined == 0` — a file that is the wrong
+        # artefact is decided without any fold being re-derivable from it — so
+        # deriving this flag straight from the denominator put `vacuous: true`
+        # beside `verdict: FAIL` and the report answered its reader twice. It
+        # now means "this run reached no conclusion", which is exactly the set
+        # {NOT_RUN, VACUOUS_PASS}. The raw count is unmodified and still
+        # visible at `summary.denominator.examined`.
+        "vacuous": verdict in ("NOT_RUN", "VACUOUS_PASS"),
     }
     _gd.attach(summary, denom)
     return {
@@ -629,16 +782,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(out + "\n")
     print(out)
+    denom = report["summary"][_gd.DENOMINATOR_KEY]
     if report["verdict"] == "VACUOUS_PASS":
         # STDOUT STAYS THE REPORT JSON AND NOTHING ELSE; the token goes to
         # stderr, which `flow_compliance_check._check_program_exit_zero` also
         # captures into the snippet `_stdout_signals_vacuous` scans. rc 2 alone
         # already promotes the step to the VACUOUS-PASS tier — the token is the
         # second, rc-independent channel, for consumers that read text.
-        denom = report["summary"][_gd.DENOMINATOR_KEY]
         print(f"VACUOUS_PASS: {denom['not_applicable_reason']}",
               file=sys.stderr)
         return RC_VACUOUS
+    if report["verdict"] == "NOT_RUN":
+        # #506 — the text channel for the fourth state, and it must NOT be the
+        # `VACUOUS_PASS` token: `flow_compliance_check._stdout_signals_vacuous`
+        # matches that at line start and would promote the step to the pass
+        # tier, which is precisely the trade the rc decision refuses (see the
+        # module docstring). rc stays 1, so the step FAILs exactly as before.
+        print(f"NOT_RUN: {denom['not_applicable_reason']}", file=sys.stderr)
+        return RC_FAIL
     return RC_PASS if report["verdict"] == "PASS" else RC_FAIL
 
 
