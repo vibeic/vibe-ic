@@ -646,6 +646,120 @@ def sniff_pdk_from_netlist(netlist_text: str) -> str | None:
     return None
 
 
+def _count_yaml_block_items(text: str, key: str) -> int:
+    """DFT_FCC / 11-d3 — count the `- item` entries of ONE top-level block
+    sequence in Fault's flat coverage-metadata YAML.
+
+    Fault writes `ratio:` followed by several sibling top-level sequences
+    (`faultPoints:`, `sa0Covered:`, `sa1Covered:`, `sa0Uncovered:`,
+    `sa1Uncovered:`).  A naive `grep -c '^- '` sums ALL of them; this walks
+    from the requested key to the next top-level key so the count belongs to
+    that block only.  Returns 0 when the key is absent — the caller must then
+    keep faults_total at 0 rather than invent one.
+    """
+    lines = text.splitlines()
+    try:
+        start = next(i for i, ln in enumerate(lines)
+                     if ln.strip() == f"{key}:")
+    except StopIteration:
+        return 0
+    n = 0
+    for ln in lines[start + 1:]:
+        if ln.startswith("- "):
+            n += 1
+            continue
+        if not ln.strip():
+            continue
+        # any other non-indented, non-item line ends the block
+        if not ln[:1].isspace():
+            break
+    return n
+
+
+def parse_atpg_coverage(cov_text: str, atpg_log: str, atpg_exit: int) -> dict:
+    """DFT_FCC / 11-d3 — parse a stuck-at ATPG result and DISCLOSE its sources.
+
+    Fault 0.9 reports a run through two channels: its machine-readable
+    coverage metadata (``ratio:`` plus the ``faultPoints:`` enumeration, the
+    ``--output-coverage-metadata`` file) and its container stdout
+    (``Found N fault sites`` / ``Final coverage: Y%``).
+
+    The pre-existing parser read ``coverage_pct`` from EITHER channel but read
+    ``faults_total`` from the stdout scrape ONLY. That asymmetry is the defect:
+    ``design_one_shot_runner``'s step 11 decided "did the engine measure?" from
+    ``faults_total > 0``, so a clean run whose metadata file held a real ratio
+    was still classified as an OSS capability gap the moment that one stdout
+    line was absent — and the caller then DELETED the coverage artefacts, so
+    nothing downstream could contradict the claim.
+
+    Two changes, both source-disclosing rather than value-inventing:
+
+      * ``faults_total`` falls back to a COUNT of the ``faultPoints:`` entries
+        in Fault's own metadata. That is a count of the TOOL's output, not an
+        estimate of ours. Verified against the reference run
+        (spm × ihp-sg13g2): ``len(faultPoints) == 1000`` == the value the
+        stdout scrape reports, so the two channels agree exactly.
+      * ``coverage_measured`` is stated explicitly, and requires ALL of
+        rc==0, a coverage number from a NAMED source, a non-zero coverage and
+        a non-empty fault universe — so an engine that could not elaborate the
+        netlist (no cell model, generic netlist, DFF-detect failure) still
+        reports False and keeps its honest disclosed capability gap. A 0% from
+        a non-run is NOT a measurement.
+
+    ``coverage_source`` / ``faults_total_source`` name the channel each number
+    came from so a reviewer can tell a parsed number from a counted one.
+    """
+    coverage_ratio = 0.0
+    faults_total = 0
+    coverage_source: str | None = None
+    faults_total_source: str | None = None
+
+    if cov_text:
+        m_ratio = re.search(r"^ratio\s*:\s*([0-9.eE+\-]+)", cov_text,
+                            re.MULTILINE)
+        if m_ratio:
+            val = float(m_ratio.group(1))
+            coverage_ratio = val * 100.0 if val <= 1.0 else val
+            coverage_source = "fault_coverage_metadata_yaml:ratio"
+
+    # Fallbacks from stdout log
+    if coverage_ratio == 0.0:
+        m = re.search(r"Final coverage:\s*([0-9.]+)\s*%", atpg_log)
+        if m:
+            coverage_ratio = float(m.group(1))
+            coverage_source = "atpg_stdout:Final coverage"
+    if coverage_ratio == 0.0:
+        m = re.search(r"[Cc]overage[^0-9]*([0-9.]+)\s*%", atpg_log)
+        if m:
+            coverage_ratio = float(m.group(1))
+            coverage_source = "atpg_stdout:coverage"
+
+    m_total = re.search(r"Found\s+(\d+)\s+fault\s+sites", atpg_log)
+    if m_total:
+        faults_total = int(m_total.group(1))
+        faults_total_source = "atpg_stdout:Found N fault sites"
+    elif cov_text:
+        n_points = _count_yaml_block_items(cov_text, "faultPoints")
+        if n_points > 0:
+            faults_total = n_points
+            faults_total_source = "fault_coverage_metadata_yaml:faultPoints"
+
+    # Derive covered count rather than counting YAML "-" lines (which also
+    # match testVectors etc. and over-counts).
+    faults_covered = int(round(faults_total * coverage_ratio / 100.0))
+
+    return {
+        "coverage_pct": coverage_ratio,
+        "faults_total": faults_total,
+        "faults_covered": faults_covered,
+        "coverage_source": coverage_source,
+        "faults_total_source": faults_total_source,
+        "coverage_measured": bool(
+            atpg_exit == 0 and coverage_source is not None
+            and coverage_ratio > 0.0 and faults_total > 0),
+    }
+
+
 def resolve_mapped_netlist(project: Path, netlist_rel: str) -> tuple[str, str | None]:
     """If `netlist_rel` is generic-unmapped, resolve to a tech-mapped sibling
     in the same synth dir. Returns (resolved_rel, switch_note|None). When the
@@ -1086,38 +1200,15 @@ def run_fault(
     ec, out, err = _run_docker(project, [atpg_shell], timeout=1800, pdk_dir=pdk_dir)
     atpg_log = (out + "\n" + err)[-2000:]
 
-    # Parse coverage. Fault 0.9 emits `ratio: <fractional>` in the YAML
-    # metadata + "Found X fault sites" / "Final coverage: Y%" in stdout.
-    coverage_ratio = 0.0
-    faults_total = 0
     cov_file = project / cov_out
-    if cov_file.exists():
-        text = cov_file.read_text()
-        m_ratio = re.search(
-            r"^ratio\s*:\s*([0-9.eE+\-]+)", text, re.MULTILINE,
-        )
-        if m_ratio:
-            val = float(m_ratio.group(1))
-            coverage_ratio = val * 100.0 if val <= 1.0 else val
-
-    # Fallbacks from stdout log
-    if coverage_ratio == 0.0:
-        m = re.search(r"Final coverage:\s*([0-9.]+)\s*%", atpg_log)
-        if m:
-            coverage_ratio = float(m.group(1))
-    m_total = re.search(r"Found\s+(\d+)\s+fault\s+sites", atpg_log)
-    if m_total:
-        faults_total = int(m_total.group(1))
-
-    # Derive covered count rather than counting YAML "-" lines (which also
-    # match testVectors etc. and over-counts).
-    faults_covered = int(round(faults_total * coverage_ratio / 100.0))
-
-    # Also grep the atpg stdout for a coverage number — Fault prints it at end
-    if coverage_ratio == 0.0:
-        m = re.search(r"[Cc]overage[^0-9]*([0-9.]+)\s*%", atpg_log)
-        if m:
-            coverage_ratio = float(m.group(1))
+    cov_text = cov_file.read_text() if cov_file.exists() else ""
+    parsed = parse_atpg_coverage(cov_text, atpg_log, ec)
+    coverage_ratio = parsed["coverage_pct"]
+    faults_total = parsed["faults_total"]
+    faults_covered = parsed["faults_covered"]
+    coverage_source = parsed["coverage_source"]
+    faults_total_source = parsed["faults_total_source"]
+    coverage_measured = parsed["coverage_measured"]
 
     # ── Transition (at-speed) fault model — SECOND model, own target ──
     transition = None
@@ -1182,6 +1273,12 @@ def run_fault(
         "coverage_pct": coverage_ratio,
         "faults_covered": faults_covered,
         "faults_total": faults_total,
+        # DFT_FCC / 11-d3 — the producer DECLARES whether this run is a real
+        # measurement, and names the artefact each number was read out of, so
+        # no consumer has to re-derive that from a single scraped integer.
+        "coverage_measured": coverage_measured,
+        "coverage_source": coverage_source,
+        "faults_total_source": faults_total_source,
         "cell_model": cell_model,
         "dff_cells": dff_cells,
         "target_pct": min_coverage,

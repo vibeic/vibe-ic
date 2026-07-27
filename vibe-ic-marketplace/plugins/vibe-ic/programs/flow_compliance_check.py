@@ -1515,6 +1515,21 @@ class StepResult:
     # the step line (e.g. "blocked-by-upstream(5)" /
     # "deferred-by-upstream(A5, ticket=...)"). Empty = no cascade.
     cascade_note: str = ""
+    # DFT_FCC / 11-d7 — True when this step is SKIPPED-CONDITION because the
+    # runner emitted a DISCLOSED CAPABILITY-GAP marker for it (the #608/#675
+    # self-skip evidence: a self-skip verdict + a named capability_flag).
+    #
+    # SKIPPED-CONDITION covers three quite different situations and they must
+    # not be conflated:
+    #   (a) the step is genuinely INAPPLICABLE — its `condition` is unmet
+    #       (no analog blocks on a digital chip), or the operator deferred a
+    #       whole track (`--skip-analog`). Costs nothing; correct.
+    #   (b) a class-N/A skip attributed by the IC-class table.  Same.
+    #   (c) the step SHOULD have run, its sign-off artefact does NOT exist,
+    #       and the runner DISCLOSED a capability gap instead. That is a real
+    #       unmet requirement wearing an explanation.
+    # Only (c) sets this flag, and only (c) is routed into the verdict.
+    self_skip_disclosed: bool = False
 
 
 # reports/ subdirs to also probe when a yaml-pattern starts with `reports/`.
@@ -5793,6 +5808,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 project, missing_pats)
             if skip_hint:
                 result.status = "SKIPPED-CONDITION"
+                result.self_skip_disclosed = True   # DFT_FCC / 11-d7
                 result.reasons.append(
                     "SKIPPED-CONDITION: canonical output absent but a co-located "
                     "sibling that OWNS it honestly self-reports a disclosed "
@@ -5899,6 +5915,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             # the formal step FALLING THROUGH to VACUOUS_PASS, masking the
             # disclosed skip — relaxed here.)
             result.status = "SKIPPED-CONDITION"
+            result.self_skip_disclosed = True   # DFT_FCC / 11-d7
             for h in skip_hints:
                 result.reasons.append(
                     f"SKIPPED-CONDITION: gate evidence self-reports a skip "
@@ -6604,15 +6621,57 @@ def main(argv: Optional[List[str]] = None) -> int:
         # EDA tool harnesses that aren't expected to be in scope when
         # `--phase 2 --strict-structural` is run.
         scoped = [r for r in results if r.id == "P0"]
-        failing = [r for r in scoped if r.status == "FAIL"]
-        missing = [r for r in scoped if r.status == "MISSING"]
-        setup_required_skipped = [r for r in scoped
-                                  if r.status == "SKIPPED-SETUP-REQUIRED"]
     else:
-        failing = [r for r in results if r.status == "FAIL"]
-        missing = [r for r in results if r.status == "MISSING"]
-        setup_required_skipped = [r for r in results
-                                  if r.status == "SKIPPED-SETUP-REQUIRED"]
+        scoped = results
+    failing = [r for r in scoped if r.status == "FAIL"]
+    missing = [r for r in scoped if r.status == "MISSING"]
+    setup_required_skipped = [r for r in scoped
+                              if r.status == "SKIPPED-SETUP-REQUIRED"]
+
+    # DFT_FCC / 11-d7 — the THIRD bucket: a sign-off-bar step that
+    # self-skipped.
+    #
+    # SKIPPED-CONDITION appeared in the verdict path at exactly one place —
+    # subtracted from `total_required` below — so it could never make a run
+    # non-green. That is right for the 20-odd steps in a typical run that are
+    # genuinely inapplicable (analog steps on a digital chip, and so on), and
+    # wrong for a step this module ALREADY enumerates as a sign-off bar the
+    # open-source container cannot clear.
+    #
+    # MEASURED on the reference run (spm × ihp-sg13g2): step 11 (DFT
+    # insertion / ATPG sign-off coverage) resolves to SKIPPED-CONDITION with
+    # all three of its declared outputs absent, and the verdict line does not
+    # mention it — with the unrelated P0 structural gate clean, that run lands
+    # on PASS_WITH_WAIVERS with the DFT sign-off gap invisible. Meanwhile
+    # `_OPEN_SOURCE_CONTAINER_BLOCKED_STEPS` lists step 11 by name, and the
+    # PASS_WITH_OPEN_SOURCE_CONSTRAINTS tier built for exactly this scenario
+    # (review_required=true + an explicit deferral list) never fires, because
+    # it only runs on an already-FAIL verdict and step 11 was in neither the
+    # failing nor the missing bucket.
+    #
+    # So: treat such a skip like `missing` — it enters `ok` in strict mode
+    # (lenient mode tolerates MISSING, and tolerates this the same way), which
+    # routes the run through the promotion below and out to
+    # PASS_WITH_OPEN_SOURCE_CONSTRAINTS when the tier's own preconditions
+    # hold.
+    #
+    # TWO predicates, both required, so no new policy is invented:
+    #   * `self_skip_disclosed` — the step SHOULD have run and the runner
+    #     DISCLOSED a capability gap in place of its sign-off artefact
+    #     (#608/#675). This excludes the genuinely-inapplicable skips, which
+    #     are the large majority: on the reference run 22 steps are
+    #     SKIPPED-CONDITION, of which A3-A9 read "analog track skipped via
+    #     --skip-analog" and M1-M4 read "condition not met" on a pure-digital
+    #     chip. Those are not deferred sign-off and must stay cost-free.
+    #   * membership of `_OPEN_SOURCE_CONTAINER_BLOCKED_STEPS` — the step is
+    #     already enumerated here as a sign-off bar the open-source container
+    #     cannot clear.
+    oss_blocked_skipped = [
+        r for r in scoped
+        if r.status == "SKIPPED-CONDITION"
+        and r.self_skip_disclosed
+        and r.id in _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS
+    ]
 
     # v1.6.99 (issue #31 Bug 2) — informational-only step exclusion.
     # Steps whose ONLY failures cite gates in INFORMATIONAL_GATES are
@@ -6636,16 +6695,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.lenient:
         ok = len(failing) == 0 and len(setup_required_skipped) == 0
     else:
+        # DFT_FCC / 11-d7 — oss_blocked_skipped joins failing/missing here.
+        # It is treated exactly like `missing` (strict-mode only), because a
+        # sign-off step that did not run is not distinguishable from one whose
+        # sign-off artefact is absent. The FAIL this produces is normally
+        # promoted straight back out to PASS_WITH_OPEN_SOURCE_CONSTRAINTS by
+        # the tier below — the point is that the gap has to travel THROUGH
+        # the verdict rather than around it.
         ok = (len(failing) == 0 and len(missing) == 0
-              and len(setup_required_skipped) == 0)
+              and len(setup_required_skipped) == 0
+              and len(oss_blocked_skipped) == 0)
 
     # Output
     # v0.3.5 — #502: DEFERRED-BY-UPSTREAM is deferred work tied to the
     # parent's waiver ticket, so it leaves the required denominator the
     # same way the parent's WAIVED does.
+    # DFT_FCC / 11-d7 — …but an OSS-blocked sign-off step that self-skipped
+    # stays IN the denominator: it is a requirement that was not met, so
+    # discounting it inflated the X/Y executed-PASS metric by making the
+    # unmet requirement disappear from Y as well as from X.
     total_required = (len(steps) - counts["WAIVED"]
                       - counts["DEFERRED-BY-UPSTREAM"]
-                      - counts.get("SKIPPED-CONDITION", 0))
+                      - counts.get("SKIPPED-CONDITION", 0)
+                      + len(oss_blocked_skipped))
     # Wave 93 — VACUOUS_PASS rolls into `pass_count` for the X/Y metric
     # since it represents a step that *did* run cleanly (just on input
     # that didn't apply); the discrete count is still surfaced below.
@@ -6844,7 +6916,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 forced_fail_effective = False
 
         non_blocked_failing = []
-        for r in failing + missing:
+        # DFT_FCC / 11-d7 — oss_blocked_skipped members are in the table by
+        # construction, so they never add to non_blocked_failing; they are
+        # included for the same reason failing/missing are, so a future edit
+        # to the table cannot silently drop them from the promotion guard.
+        for r in failing + missing + oss_blocked_skipped:
             if r.id in _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS:
                 continue
             if r.id == "P0" and p0_is_deferrable:
@@ -6867,13 +6943,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         # filter still keeps these items out of `non_blocked_failing`
         # (so they don't gate promotion) but the print/audit emission
         # now sees the full list. chip-AGNOSTIC.
-        deferral_source = list(failing) + list(missing)
+        # DFT_FCC / 11-d7 — a self-skipped sign-off step is a deferral the
+        # tapeout vendor's must-close list cannot omit either.
+        deferral_source = list(failing) + list(missing) + list(oss_blocked_skipped)
         deferral_source += [r for r in informational_only_failing
                             if (r.id in _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS
                                 or (r.id == "P0" and p0_is_deferrable))]
         if (not non_blocked_failing
                 and not forced_fail_effective
-                and (failing or missing or informational_only_failing)
+                and (failing or missing or informational_only_failing
+                     or oss_blocked_skipped)
                 and prereq_pass):
             for r in deferral_source:
                 if r.id == "P0":
@@ -6926,6 +7005,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"    • Step {d['step_id']} ({d['step_name']}): "
                       f"{d['status']} — needs "
                       f"{d['commercial_tool_required']}")
+    # DFT_FCC / 11-d7 — never let a sign-off-bar self-skip pass unmentioned at
+    # the verdict line, whether or not the promotion tier fired.
+    if oss_blocked_skipped and overall != "PASS_WITH_OPEN_SOURCE_CONSTRAINTS":
+        print(f"  ⚠ {len(oss_blocked_skipped)} SIGN-OFF step(s) SELF-SKIPPED "
+              f"(disclosed capability gap on a step this flow lists as an "
+              f"open-source-container sign-off bar) — review required:")
+        for r in oss_blocked_skipped:
+            print(f"    • Step {r.id} ({r.name}) — needs "
+                  f"{_OPEN_SOURCE_CONTAINER_BLOCKED_STEPS.get(r.id, '?')}")
     if structural_fail_lines:
         print(f"Phase 2 strict-structural mode: "
               f"{len(structural_fail_lines)} structural gates FAILed")
@@ -7092,6 +7180,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             # it. Empty list when the verdict is not
             # PASS_WITH_OPEN_SOURCE_CONSTRAINTS.
             "open_source_constraints_deferrals": os_constraints_deferrals,
+            # DFT_FCC / 11-d7 — the sign-off-bar steps that SELF-SKIPPED.
+            # These used to appear nowhere in the verdict path (they were
+            # only subtracted from total_required), so a DFT / formal /
+            # post-DFT-LEC sign-off gap could sit inside a run reported as
+            # PASS. Surfaced here by step id so a reviewer and any dashboard
+            # can see the gap without re-deriving it from the per-step table.
+            "open_source_blocked_self_skipped_steps": [
+                {"step_id": r.id, "step_name": r.name,
+                 "commercial_tool_required":
+                     _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS.get(r.id, "?"),
+                 "review_required": True}
+                for r in oss_blocked_skipped
+            ],
             "command_argv": list(sys.argv),
         }
         # v1.6.27: route via auto-router so the audit lands at

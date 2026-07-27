@@ -9370,6 +9370,149 @@ def lec_step_status_from_report(lec_json: Path) -> Tuple[str, str]:
     return "SKIP", verdict
 
 
+def _dft_atpg_sniff_pdk(project: Path, netlist_rel: str) -> Tuple[Path, str]:
+    """DFT_FCC / 11-d3 — resolve the netlist Fault ATPG will ACTUALLY use, and
+    sniff the PDK from THAT file. Returns ``(netlist_path, pdk_id)``; pdk_id is
+    ``""`` for a generic/unmapped netlist.
+
+    Why the resolution step is part of the sniff:
+    ``design_one_shot_runner`` writes ``phase2/stage2/synth/netlist.v`` as a
+    technology-GENERIC yosys netlist (``dffunmap; abc -g cmos2``), so sniffing
+    that path can only ever answer "generic". ``fault_atpg_run`` does not run
+    on it either — ``resolve_mapped_netlist`` silently switches to the
+    tech-mapped ``*_synth.v`` sibling, because iverilog cannot simulate
+    ``$_NAND_``/``$_DFF_P_`` primitives. So the PDK we DECLARED on the command
+    line and the PDK the engine USED were read out of two different files.
+
+    Measured on the reference run (spm × ihp-sg13g2): ``netlist.v`` holds
+    221 ``$_NAND_`` / 127 ``$_NOR_`` / 64 ``$_DFF_P_`` and zero ``sg13g2``
+    cells → sniff returned "" → ``--pdk unmapped`` → ``fault_atpg_run``
+    returned rc=2 "unsupported pdk" with a report carrying no coverage at all,
+    which the step-11 caller then read as "the engine could not measure" and
+    disclosed as an OSS capability gap. The mapped sibling ``spm_synth.v``
+    (64 ``sg13g2_dfrbpq_1``) was sitting in the same directory and sniffs
+    cleanly to ``ihp-sg13g2``.
+
+    chip-AGNOSTIC: cell-name prefixes only, no design identifier.
+    """
+    nl = project / netlist_rel
+    sniff = nl
+    try:
+        import fault_atpg_run as _fatpg  # sibling program, same directory
+        resolved_rel, switch_note = _fatpg.resolve_mapped_netlist(
+            project, netlist_rel)
+        if switch_note:
+            sniff = project / resolved_rel
+    except Exception:
+        sniff = nl
+    try:
+        head = sniff.read_text(errors="ignore")[:20000]
+    except Exception:
+        head = ""
+    if "sky130_fd_sc_hd__" in head:
+        return sniff, "sky130"
+    if "gf180mcu" in head:
+        return sniff, "gf180"
+    if re.search(r"\bsg13g2_[a-z0-9_]+\b", head):
+        # ORGANIC #410 — an IHP-mapped netlist names its cells `sg13g2_*`,
+        # which matched none of the branches above, so `pdk` stayed "" and the
+        # `--pdk` flag was OMITTED. `fault_atpg_run` then applied its OWN
+        # default and resolved a DIFFERENT PDK's Verilog cell model, while the
+        # artefact recorded `generic_unmapped` — neither the PDK the design was
+        # built on nor the one actually used appeared anywhere. That is #389's
+        # sentence reached through a second table. `fault_atpg_run.PDK_CONFIG`
+        # has carried an `ihp-sg13g2` entry all along; only this sniff could
+        # not reach it.
+        return sniff, "ihp-sg13g2"
+    if re.search(r"\bDFFHQD\d|\bAOI211D1\b", head):
+        # v1.3.94 — commercial 180nm PDK. Its SKU is resolved from the private
+        # config (empty in public installs -> generic behaviour).
+        return sniff, _cpdk.COMMERCIAL_PDK_ID
+    return sniff, ""   # generic / unmapped netlist
+
+
+def _rel_or_name(project: Path, p: Path) -> str:
+    """Project-relative path when possible, bare name otherwise."""
+    try:
+        return str(p.relative_to(project))
+    except ValueError:
+        return p.name
+
+
+def _dft_atpg_measured(cov: dict) -> bool:
+    """DFT_FCC / 11-d3 — did the ATPG engine actually MEASURE stuck-at
+    coverage, per the producer's own declaration?
+
+    The caller used to answer this with ``faults_total > 0`` alone, and
+    ``fault_atpg_run`` populated ``faults_total`` ONLY from a scrape of the
+    container's stdout (``Found N fault sites``). A run that finished cleanly
+    and left Fault's own machine-readable coverage metadata on disk with a real
+    ratio therefore still read as "the engine could not measure" whenever that
+    one stdout line was absent — and the caller's not-measured branch then
+    DELETED the coverage artefacts, so nothing downstream could contradict it.
+
+    `fault_atpg_run` now DECLARES ``coverage_measured``. Prefer the
+    declaration; fall back to the legacy predicate for reports written by an
+    older plugin version.
+    """
+    if not isinstance(cov, dict):
+        return False
+    if "coverage_measured" in cov:
+        return bool(cov.get("coverage_measured"))
+    try:
+        return int(cov.get("faults_total") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _dft_retain_unmeasured(project: Path, dft_dir: Path,
+                           cov_json: Path) -> List[str]:
+    """DFT_FCC / 11-d3 — RETAIN, do not DELETE, the artefacts of an ATPG run
+    that produced no measurement. Returns the project-relative paths retained.
+
+    The canonical measurement artefacts (``atpg_coverage.rpt``,
+    ``reports/phase2/dft/coverage.json``, ``coverage.yml``) must be ABSENT for
+    step 11 to resolve to SKIPPED-CONDITION via the disclosed skip-note rather
+    than a 0%-coverage FAIL — and that is legitimate ONLY on the path where
+    the engine genuinely produced no measurement. But this code used to
+    ``unlink()`` them, which destroys the evidence a reviewer needs in order to
+    CHECK that claim, and makes a disclosed skip indistinguishable from a
+    suppressed result.
+
+    Moving each file aside under a disclosed ``*.unmeasured.*`` name keeps both
+    properties: no gate can mistake the retained file for a measurement, and
+    nothing is destroyed. Every retained path is named in the sentinel.
+    """
+    retained: List[str] = []
+
+    def _rel(p: Path) -> str:
+        return _rel_or_name(project, p)
+
+    prelim = dft_dir / "scan_netlist_prelim.v"
+    if prelim.is_file():
+        retained.append(_rel(prelim))
+    for stale, keep in (
+        (dft_dir / "atpg_coverage.rpt",
+         dft_dir / "atpg_coverage.unmeasured.rpt"),
+        (cov_json, cov_json.with_name("coverage.unmeasured.json")),
+        (dft_dir / "coverage.yml", dft_dir / "coverage.unmeasured.yml"),
+    ):
+        if not stale.exists():
+            continue
+        try:
+            stale.replace(keep)
+            retained.append(_rel(keep))
+        except Exception:
+            # Retention must never leave the CANONICAL (measurement-shaped)
+            # artefact in place — that would let a non-measurement be read as
+            # a measurement. Deleting is the fallback, never the default.
+            try:
+                stale.unlink()
+            except Exception:
+                pass
+    return retained
+
+
 def _derive_dft_clock_name(blob: str) -> str:
     """Derive the primary functional clock port name from an RTL source blob
     for Fault ATPG's ``--clock`` argument. Chip-AGNOSTIC: pure string scan.
@@ -9483,32 +9626,22 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         # the right behavioural cell-model (sky130/gf180). A GENERIC yosys
         # netlist ($_NAND_/$_DFF_ …) is NOT ATPG-simulatable — Fault needs a
         # library-mapped netlist — so it is flagged engine-limited below.
-        head = ""
-        try:
-            head = netlist.read_text(errors="ignore")[:20000]
-        except Exception:
-            head = ""
-        if "sky130_fd_sc_hd__" in head:
-            pdk = "sky130"
-        elif "gf180mcu" in head:
-            pdk = "gf180"
-        elif re.search(r"\bsg13g2_[a-z0-9_]+\b", head):
-            # ORGANIC #410 — an IHP-mapped netlist names its cells `sg13g2_*`,
-            # which matched none of the branches above, so `pdk` stayed "" and
-            # the `--pdk` flag was OMITTED. `fault_atpg_run` then applied its
-            # OWN default and resolved a DIFFERENT PDK's Verilog cell model,
-            # while the artefact recorded `generic_unmapped` — neither the PDK
-            # the design was built on nor the one actually used appeared
-            # anywhere. That is #389's sentence reached through a second
-            # table. `fault_atpg_run.PDK_CONFIG` has carried an `ihp-sg13g2`
-            # entry all along; only this sniff could not reach it.
-            pdk = "ihp-sg13g2"
-        elif re.search(r"\bDFFHQD\d|\bAOI211D1\b", head):
-            # v1.3.94 — commercial 180nm PDK. Its SKU is resolved from the
-            # private config (empty in public installs -> generic behaviour).
-            pdk = _cpdk.COMMERCIAL_PDK_ID
-        else:
-            pdk = ""   # generic / unmapped netlist
+        #
+        # DFT_FCC / 11-d3 — sniff the netlist ATPG WILL ACTUALLY USE, not the
+        # one we ask for. This runner writes phase2/stage2/synth/netlist.v as
+        # a technology-GENERIC yosys netlist (`dffunmap; abc -g cmos2`), so
+        # sniffing it can only ever answer "generic". `fault_atpg_run` then
+        # silently switches to the tech-mapped sibling (spm_synth.v et al) via
+        # resolve_mapped_netlist — meaning the PDK we declared and the PDK the
+        # engine used came from two different files. Measured on the reference
+        # run (spm × ihp-sg13g2): netlist.v = 221 $_NAND_ / 127 $_NOR_ /
+        # 64 $_DFF_P_ and zero sg13g2 cells → pdk="" → `--pdk unmapped` →
+        # fault_atpg_run returns rc=2 "unsupported pdk" with a report carrying
+        # NO faults_total, which the not-measured branch below then reads as
+        # "engine could not measure" and discloses as a capability gap. The
+        # mapped sibling was right there and sniffs cleanly to ihp-sg13g2.
+        sniff_netlist, pdk = _dft_atpg_sniff_pdk(
+            project, "phase2/stage2/synth/netlist.v")
         cov_json = reports_dir / "phase2/dft/coverage.json"
         cov_json.parent.mkdir(parents=True, exist_ok=True)
         cmd = [sys.executable, str(PROGRAMS_DIR / "fault_atpg_run.py"),
@@ -9533,20 +9666,38 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
             scan_nl = dft_dir / "scan_netlist.v"
-            # Did the ATPG ENGINE actually MEASURE coverage? (faults_total>0).
+            # Did the ATPG ENGINE actually MEASURE coverage?
             # An engine that could not run at all (missing model, generic
-            # netlist, DFF-detect failure) leaves faults_total==0 — that is a
+            # netlist, DFF-detect failure) produces no measurement — that is a
             # documented OSS-tool capability gap, NOT a measured-low result.
+            #
+            # DFT_FCC / 11-d3 — this used to be `faults_total > 0` alone, and
+            # `faults_total` is populated ONLY by a scrape of the container's
+            # stdout ("Found N fault sites"). So an ATPG run that finished
+            # cleanly and left Fault's own coverage metadata on disk with a
+            # real ratio was still classified "could not measure" whenever
+            # that one stdout line was missing — and the branch below then
+            # DELETED the evidence. `fault_atpg_run` now DECLARES
+            # `coverage_measured` and names the artefact each number came
+            # from; prefer the declaration, and keep the legacy predicate as
+            # the fallback for reports produced by an older plugin version.
             measured = False
             cov = {}
             try:
                 cov = json.loads(cov_json.read_text())
-                measured = int(cov.get("faults_total") or 0) > 0
+                measured = _dft_atpg_measured(cov)
             except Exception:
                 measured = False
-            if scan_nl.is_file() and measured:
-                # real DFT + real coverage measurement → let the coverage gate
-                # judge PASS/FAIL honestly. Also emit the BSDL plan.
+            # DFT_FCC / 11-d3 — the condition was `scan_nl.is_file() and
+            # measured`, so a REAL coverage measurement whose scan netlist
+            # happened to be missing fell into the disclosed-capability-gap
+            # branch and had its measurement erased. A measurement is a
+            # measurement: keep it canonical and let the gates judge. A
+            # missing scan netlist is then reported by the step-11 sub-gates
+            # that require it, which is where that gap belongs.
+            if measured:
+                # real coverage measurement → let the coverage gate judge
+                # PASS/FAIL honestly. Also emit the BSDL plan.
                 try:
                     subprocess.run(
                         [sys.executable, str(PROGRAMS_DIR / "bsdl_emit.py"),
@@ -9555,6 +9706,9 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                         capture_output=True, text=True, timeout=300)
                 except Exception:
                     pass
+                _outs = ["reports/phase2/dft/coverage.json"]
+                if scan_nl.is_file():
+                    _outs.insert(0, "phase2/stage2/dft/scan_netlist.v")
                 results.append(StepResult(
                     "dft_insertion",
                     "PASS" if r.returncode == 0 else "PASS_W_WARN",
@@ -9562,8 +9716,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                     f"Fault ATPG measured stuck-at coverage="
                     f"{cov.get('coverage_pct')}% (rc={r.returncode}, clock={clk}, "
                     f"pdk={pdk or 'generic'})",
-                    output_files=["phase2/stage2/dft/scan_netlist.v",
-                                  "reports/phase2/dft/coverage.json"]))
+                    output_files=_outs))
             else:
                 # Engine could not measure sign-off coverage on this netlist
                 # (generic/unmapped netlist, or OSS Fault's sky130 DFF-detect
@@ -9579,17 +9732,23 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                         scan_nl.replace(dft_dir / "scan_netlist_prelim.v")
                     except Exception:
                         pass
-                # Remove the misleading canonical/measurable outputs so ALL
-                # step-11 sub-gates see cleanly-absent inputs + the sibling
-                # skip-note → SKIPPED-CONDITION (not a 0%-coverage FAIL). Their
-                # substance (faults_total, atpg_exit, log) is captured in the
-                # sentinel below, so nothing honest is lost.
-                for stale in (dft_dir / "atpg_coverage.rpt", cov_json,
-                              dft_dir / "coverage.yml"):
-                    try:
-                        stale.unlink()
-                    except Exception:
-                        pass
+                # DFT_FCC / 11-d3 — RETAIN, do not DELETE.
+                #
+                # This loop used to `unlink()` atpg_coverage.rpt,
+                # reports/phase2/dft/coverage.json and coverage.yml. The
+                # canonical measurement artefacts DO have to be absent for the
+                # step-11 gate to resolve to SKIPPED-CONDITION rather than a
+                # 0%-coverage FAIL — that part is right, and only right
+                # because we get here ONLY when the engine produced no
+                # measurement. But erasing whatever the engine did leave
+                # destroys the evidence a reviewer needs to check that claim,
+                # and it is the one operation that can make a disclosed skip
+                # indistinguishable from a suppressed result.
+                #
+                # So: move them aside under a disclosed `*.unmeasured.*` name
+                # and NAME every retained file in the sentinel. No gate can
+                # mistake them for a measurement, and nothing is destroyed.
+                retained = _dft_retain_unmeasured(project, dft_dir, cov_json)
                 _dft_disclose_skip(
                     dft_dir / "dft_atpg_not_run.json",
                     "OSS Fault ATPG could not measure sign-off stuck-at coverage "
@@ -9603,6 +9762,16 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                      "pdk_detected": pdk or "generic_unmapped",
                      "atpg_exit": cov.get("atpg_exit"),
                      "faults_total": cov.get("faults_total"),
+                     # DFT_FCC / 11-d3 — the producer's own declaration and
+                     # the artefacts it left, NAMED. A reviewer must be able
+                     # to re-derive "the engine did not measure" from files
+                     # that still exist, not take this sentinel's word.
+                     "coverage_measured": cov.get("coverage_measured"),
+                     "coverage_source": cov.get("coverage_source"),
+                     "netlist_used": cov.get("netlist"),
+                     "netlist_pdk_sniffed_from": _rel_or_name(project,
+                                                              sniff_netlist),
+                     "retained_evidence": retained,
                      "log_excerpt": log_tail})
                 results.append(StepResult("dft_insertion", "SKIP",
                                time.time() - t0,

@@ -14,11 +14,24 @@ What it catches:
 
 Usage:
     python3 assertion_property_check.py ./my_project
-    python3 assertion_property_check.py ./my_project --json
+    python3 assertion_property_check.py ./my_project --json            # stdout
+    python3 assertion_property_check.py . --json reports/…/assert.json # file
 
 Exit codes:
     0 = at least 1 valid assertion file found
-    1 = no valid assertion files found
+    1 = assertion candidates EXIST but none is valid (the real defect)
+    2 = INPUT NOT APPLICABLE — the project contains no .sv/.sva file that
+        mentions `assert`/`property` at all, so there is nothing for this
+        gate to audit. This is the flow-wide "input-missing skip"
+        convention (`_check_program_exit_zero` in flow_compliance_check.py
+        maps rc==2 → VACUOUS_PASS), and it is what keeps the #608 honest
+        SKIPPED-CONDITION for a project with no formal/assertion harness
+        from turning into a FAIL now that this gate is WIRED into step 5.
+
+        NOTE the split: rc=2 is reserved for "no candidate exists". The
+        moment a candidate file exists, a missing `property` declaration or
+        a missing `assert property` statement is a DEFECT (rc=1), never an
+        inapplicable input.
 
 Generality: works for ANY IC project with SVA assertions.
 No external tool dependencies — pure Python.
@@ -52,6 +65,14 @@ class AuditResult:
     passed: bool
     findings: List[Finding] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
+    # True  → the gate had real input to audit (assertion candidates exist).
+    # False → NOTHING to audit; `passed` stays False (the audit did not
+    #         succeed) but main() reports the flow-wide rc=2 "input not
+    #         applicable" convention instead of rc=1 "defect found".
+    # Kept as a SEPARATE field rather than folding it into `passed` so the
+    # library-level contract (`audit().passed`) is unchanged for existing
+    # callers/tests: no assertion file is still not a pass.
+    applicable: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +118,9 @@ def audit(project_dir: str) -> AuditResult:
             passed=False,
             findings=findings,
             summary={"files_checked": 0, "valid_files": 0},
+            # A missing project directory is a REAL error, not an
+            # inapplicable input — keep it on the rc=1 path.
+            applicable=True,
         )
 
     assertion_files = discover_assertion_files(base)
@@ -112,6 +136,13 @@ def audit(project_dir: str) -> AuditResult:
             passed=False,
             findings=findings,
             summary={"files_checked": 0, "valid_files": 0},
+            # Nothing to audit anywhere in the tree → rc=2 (input not
+            # applicable), the convention flow_compliance_check maps to
+            # VACUOUS_PASS. Without this split, wiring the gate into step 5
+            # would convert every project that legitimately has no formal /
+            # assertion harness (the #608 SKIPPED-CONDITION case) into a
+            # hard FAIL.
+            applicable=False,
         )
 
     valid_files = 0
@@ -213,22 +244,42 @@ def main():
         description="Deterministic compliance check for assertion-gen"
     )
     p.add_argument("project_dir", nargs="?", default=".")
-    p.add_argument("--json", action="store_true",
-                   help="Output JSON report to stdout")
+    # `--json` alone keeps the historical stdout behaviour; `--json <path>`
+    # writes the report to that path, which is what every WIRED gate in
+    # flow/phase1_phase2_phase3.yaml does (the gate needs a dereferenceable
+    # evidence artefact, not a stdout blob).
+    p.add_argument("--json", nargs="?", const="-", default=None,
+                   metavar="PATH",
+                   help="Write the JSON report to PATH "
+                        "(bare --json = stdout, as before)")
     args = p.parse_args()
 
     result = audit(args.project_dir)
+    payload = json.dumps(asdict(result), indent=2, ensure_ascii=False)
 
-    if args.json:
-        print(json.dumps(asdict(result), indent=2, ensure_ascii=False))
-    else:
+    if args.json == "-":
+        print(payload)
+    elif args.json:
+        out = Path(args.json)
+        if not out.is_absolute():
+            out = Path(args.project_dir) / out
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(payload, encoding="utf-8")
+
+    if args.json != "-":
         for f in result.findings:
             tag = f"[{f.file}] " if f.file else ""
             print(f"[{f.severity}] {f.rule}: {tag}{f.message}")
-        status = "PASS" if result.passed else "FAIL"
+        if not result.applicable:
+            status = "SKIP"
+        else:
+            status = "PASS" if result.passed else "FAIL"
         print(f"\n{status} — {result.summary}")
 
-    sys.exit(0 if result.passed else 1)
+    if result.passed:
+        sys.exit(0)
+    # rc=2 == "input not applicable" (nothing to audit); rc=1 == real defect.
+    sys.exit(1 if result.applicable else 2)
 
 
 if __name__ == "__main__":
