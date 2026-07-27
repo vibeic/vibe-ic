@@ -20720,13 +20720,20 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # CONDITION note below still fires (never a fabricated results.log). iverilog
     # applies net (interconnect) SDF delays but not IOPATH cell-arc delays (a
     # known Icarus limit); at-speed CELL timing stays STA's job (Step 23/28).
+    _sdf_sim_result: Optional[Dict[str, object]] = None
     if sdf_out.is_file() and sdf_out.stat().st_size > 0:
         try:
             import sdf_gate_sim
-            sdf_gate_sim.run(project, top=top, container=container, notes=notes)
+            _sdf_sim_result = sdf_gate_sim.run(
+                project, top=top, container=container, notes=notes)
             if (sim_pl_out / "results.log").is_file():
                 written.append(str(sim_pl_out / "results.log"))
         except Exception as _sdfsim_exc:
+            # A raised exception is a REAL failure of a capability the runner
+            # HAS, not a capability gap — record it as such so the disclosure
+            # below cannot launder it into a cap-gap skip.
+            _sdf_sim_result = {"verdict": "ERROR",
+                               "reason": f"sdf_gate_sim raised: {_sdfsim_exc}"}
             notes.append(f"sdf_gate_sim non-fatal: {_sdfsim_exc}")
 
     # --- Steps DT1/DT2/DT3 — at-speed ATPG PRODUCERS ---------------------
@@ -20760,13 +20767,29 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         except Exception as _mcf_exc:
             notes.append(f"si_mcf_sta non-fatal: {_mcf_exc}")
 
-    # #437(d): the runner does NOT run an SDF-annotated gate-level re-sim
-    # — "RTL TB PASS + post-route TNS=0" is an RTL-sim approximation, and
-    # an approximation must not wear the gate's pass.flag. Emit an honest
-    # SKIPPED-CONDITION self-report (named so it does NOT satisfy step
-    # 28's required outputs); flow_compliance maps the absent evidence to
-    # SKIPPED-CONDITION via cap:sdf_annotated_gatelevel_sim. A real SDF
-    # sim (results.log with $sdf_annotate) still gates normally.
+    # Step 29 self-report when no results.log was produced.
+    #
+    # v1.7.37 — this used to write ONE canned marker for EVERY no-results.log
+    # path, claiming `capability_flag: cap:sdf_annotated_gatelevel_sim` and the
+    # reason "the open-tool runner emits the SDF but does not drive a
+    # back-annotated sim (#437d)". That text has been FALSE since v1.3.94: the
+    # block ~50 lines above DOES drive `sdf_gate_sim.run()`, and
+    # flow_compliance_check._PLATFORM_CAPABILITY_GAPS itself records step 29's
+    # gap as CLOSED. A blanket capability-gap claim therefore laundered every
+    # real failure (compile error, aborted simulator, missing routed netlist,
+    # missing SDF) into a disclosed-skip that flow_compliance promotes from
+    # MISSING to SKIPPED-CONDITION.
+    #
+    # The declaration is now derived from what ACTUALLY happened, and only the
+    # two genuine gaps in this producer keep a capability_flag:
+    #   * the built-in gate-sim testbench generator binds exactly one port
+    #     contract (bit-serial multiplier) — a real, named tooling gap;
+    #   * the PDK's stdcell Verilog simulation model cannot be resolved (an
+    #     unknown library: neither host-staged under input/pdk/verilog/ nor
+    #     present in the container PDK table).
+    # Everything else — no routed netlist, no SDF, compile failure, simulator
+    # error — is a REAL defect and is written WITHOUT a capability_flag, so the
+    # #675-strict promoter refuses it and step 29 stays MISSING. chip-AGNOSTIC.
     refsim_pass = (project / "phase2/stage1/sim/pass.flag").is_file() or \
         (project / "phase2/stage1/sim/results.xml").is_file()
     # #527 — the ECO decision gates on the SPEF-based report when present
@@ -20776,20 +20799,13 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     skip_note = sim_pl_out / "sdf_sim_skipped.json"
     if not (sim_pl_out / "results.log").is_file() and not skip_note.is_file():
         sim_pl_out.mkdir(parents=True, exist_ok=True)
-        skip_note.write_text(json.dumps({
-            "verdict": "SKIPPED-CONDITION",
-            "reason": ("no SDF-annotated gate-level re-simulation ran; "
-                       "the open-tool runner emits the SDF but does not "
-                       "drive a back-annotated sim (#437d). RTL-TB+STA is "
-                       "an approximation, not gate-level timing sim."),
-            "capability_flag": "cap:sdf_annotated_gatelevel_sim",
-            # OWN the step-29 canonical outputs so flow_compliance's STRICT
-            # early-MISSING promotion (#675 strict) can defer step 29 WITHOUT
-            # this marker being able to mask any other step's absent output.
-            "skips_required_output": [
-                "phase3/stage3/sim_postlayout/results.log",
-                "phase3/stage3/sim_postlayout/pass.flag",
-            ],
+        _cap_flag, _reason = _sdf_sim_skip_disclosure(_sdf_sim_result, sdf_out)
+        _payload: Dict[str, object] = {
+            # A named capability gap may EXPLAIN the absent artefact; a real
+            # failure may not, so it self-reports ERROR (not a skip verdict)
+            # and the step stays MISSING.
+            "verdict": "SKIPPED-CONDITION" if _cap_flag else "ERROR",
+            "reason": _reason,
             # #484: per-design identity so this honest SKIP shape differs
             # per design (not flagged as a canned cross-design report).
             "design_identity": _design_identity_fields(project),
@@ -20798,7 +20814,17 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "post_route_tns_zero": bool(tns_zero),
                 "sdf_emitted": sdf_out.is_file() and sdf_out.stat().st_size > 0,
             },
-        }, indent=2) + "\n")
+        }
+        if _cap_flag:
+            _payload["capability_flag"] = _cap_flag
+            # OWN the step-29 canonical outputs so flow_compliance's STRICT
+            # early-MISSING promotion (#675 strict) can defer step 29 WITHOUT
+            # this marker being able to mask any other step's absent output.
+            _payload["skips_required_output"] = [
+                "phase3/stage3/sim_postlayout/results.log",
+                "phase3/stage3/sim_postlayout/pass.flag",
+            ]
+        skip_note.write_text(json.dumps(_payload, indent=2) + "\n")
         written.append(str(skip_note))
 
     # --- Step 30: Post-Layout SPICE correlation — honest disclosed-skip ----
@@ -23001,6 +23027,63 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         f"post-layout LEC: {doc['verdict']} (gold={gold_kind}, "
         f"proven={doc['proven_points']}, unproven={doc['unproven_points']})")
     return str(doc["verdict"])
+
+
+# Step 29 disclosure table. Maps what `sdf_gate_sim.run()` actually reported to
+# (capability_flag, reason). A NON-EMPTY capability_flag is a claim that the
+# PLATFORM cannot do this — it must therefore name a gap that is genuinely open,
+# and only these two are. Everything absent from this table is a real defect and
+# gets flag=None, which the #675-strict promoter refuses (step stays MISSING).
+# Pure data + pure function → unit-testable without a container. chip-AGNOSTIC.
+_SDF_SIM_CAP_GAPS: Dict[str, Tuple[str, str]] = {
+    "port shape": (
+        "cap:sdf_gatelevel_tb_port_contract",
+        "SDF-annotated gate-level sim NOT run: the built-in gate-sim "
+        "testbench generator binds exactly one port contract (bit-serial "
+        "multiplier: clk + reset + one multi-bit input + one 1-bit input + "
+        "one 1-bit output) and this design's top ports do not match it. The "
+        "SDF was emitted and the simulator is available; the missing piece is "
+        "a design-shaped self-checking gate-level testbench.",
+    ),
+    "no pdk lib": (
+        "cap:sdf_gatelevel_pdk_cell_model",
+        "SDF-annotated gate-level sim NOT run: no stdcell Verilog simulation "
+        "model could be resolved for this design's cell library — neither "
+        "host-staged under input/pdk/verilog/ nor known to the in-container "
+        "PDK model table (pdk_cell_models.PDK_CELL_MODELS).",
+    ),
+}
+
+
+def _sdf_sim_skip_disclosure(sim_result: Optional[Dict[str, object]],
+                             sdf_out: Path) -> Tuple[Optional[str], str]:
+    """Derive (capability_flag, reason) for `sdf_sim_skipped.json`.
+
+    `sim_result` is exactly what `sdf_gate_sim.run()` returned (None when it was
+    never invoked because no SDF exists). Returns flag=None for every REAL
+    failure, so the marker cannot promote a defect to SKIPPED-CONDITION.
+    """
+    if sim_result is None:
+        if not (sdf_out.is_file() and sdf_out.stat().st_size > 0):
+            return (None,
+                    "SDF-annotated gate-level sim NOT run: no SDF was emitted "
+                    f"({sdf_out.name} absent or empty), so the simulation "
+                    "could not be attempted. This is a MISSING upstream "
+                    "artefact, not a platform capability gap.")
+        return (None,
+                "SDF-annotated gate-level sim NOT run: the SDF exists but the "
+                "gate-level simulation producer was never invoked. This is a "
+                "runner defect, not a platform capability gap.")
+    reason = str(sim_result.get("reason", "") or "")
+    verdict = str(sim_result.get("verdict", "") or "")
+    if verdict == "NOT_APPLICABLE" and reason in _SDF_SIM_CAP_GAPS:
+        return _SDF_SIM_CAP_GAPS[reason]
+    return (None,
+            "SDF-annotated gate-level sim did NOT produce results.log: "
+            f"sdf_gate_sim reported verdict={verdict or '?'} "
+            f"reason={reason or '?'}. The runner DOES drive a back-annotated "
+            "sim (v1.3.94+), so this is a real failure of an implemented "
+            "capability — NOT a disclosed capability gap.")
 
 
 def _emit_sdf(project: Path, top: str, pdk: PdkConfig, container: str,

@@ -207,11 +207,53 @@ def inspect(project: Path, min_scenarios: int = 1) -> List[Finding]:
     return findings
 
 
+# ── waiver plumbing (same contract as final_test_attestation_check.py) ──
+# Deliberately identical to the sibling gate: a waiver is an entry in the
+# project's `waivers.json`, written by `waivers_materialize.py` from the
+# machinery-sanctioned ENV_UNAVAILABLE auto-waivers (or hand-authored with a
+# named approver). It is NOT a field inside the manifest this gate audits.
+_STEP_ID = "39"
+_STEP_LABEL = "fpga_on_board_attestation"
+
+
+def _load_waivers(project: Path) -> List[dict]:
+    p = project / "waivers.json"
+    if not p.is_file():
+        return []
+    try:
+        return (json.loads(p.read_text()).get("waived_steps") or [])
+    except Exception:
+        return []
+
+
+def _step_waived(project: Path, *step_labels: str) -> dict | None:
+    """Return the waivers.json entry covering this step, or None."""
+    wanted = [str(s).strip() for s in step_labels if str(s).strip()]
+    for w in _load_waivers(project):
+        if not isinstance(w, dict):
+            continue
+        sid = str(w.get("id", "")).strip()
+        ticket = str(w.get("ticket", "") or "")
+        for lbl in wanted:
+            if sid == lbl or (lbl in ticket and not lbl.isdigit()):
+                return w
+    return None
+
+
+def _write_report(json_path: str | None, payload: dict) -> None:
+    if not json_path:
+        return
+    Path(json_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(json_path).write_text(json.dumps(payload, indent=2,
+                                          ensure_ascii=False) + "\n")
+
+
 def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     p.add_argument("project_dir")
     p.add_argument("--min-scenarios", type=int, default=1)
     p.add_argument("--json", help="Write JSON report to this path")
+    p.add_argument("--step-label", default=_STEP_LABEL)
     args = p.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
@@ -220,30 +262,63 @@ def main(argv: List[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
-    # v1.6.99 — WAIVED short-circuit: when on_board_pass.json declares
-    # verdict=WAIVED with full waiver evidence (all_scenarios_passed +
-    # review_required + waiver_ticket), accept it as PASS without
-    # demanding physical-attestation artefacts that don't exist on
-    # no-rig projects. Aligns Step 36's two sub-gates internally
-    # (json_field_true + program_exit_zero now agree on WAIVED tier).
-    # Narrow check: half-filled SKIP manifests do NOT bypass; only a
-    # properly-staged WAIVED tier short-circuits.
+    # WAIVED short-circuit — v1.7.37 hardening.
+    #
+    # v1.6.99 accepted `verdict in {WAIVED, SKIP}` plus three more fields of the
+    # SAME manifest (all_scenarios_passed / review_required / waiver_ticket) as
+    # sufficient to return 0. Every one of those fields lives inside the file
+    # this gate exists to audit, so a four-line hand-written on_board_pass.json
+    # cleared the whole hardware sign-off with no .sof, no programmer log and no
+    # evidence artefact — the exact pure-JSON self-attestation the module
+    # docstring says is "unachievable". A waiver must come from OUTSIDE the
+    # audited artefact, so it is now cross-referenced against the project's
+    # `waivers.json` (id 39 / label fpga_on_board_attestation), exactly like the
+    # sibling final_test_attestation_check.
+    #
+    # SKIP is also no longer accepted: SKIP is not a waiver tier, it is what the
+    # runner writes when the board test simply did not happen (and it is what
+    # the real pure-digital run emits). Only an explicit WAIVED manifest backed
+    # by a real waiver short-circuits.
+    #
+    # The sanctioned no-rig route is UNCHANGED and still resolves: on a
+    # disclosed FPGA-skip project, waivers_materialize.py already writes the
+    # ENV_UNAVAILABLE cap-gap waiver for id 39, and flow_compliance_check
+    # applies it at the step level.
     manifest_path = project / "reports/phase2/fpga/on_board_pass.json"
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text())
         except (json.JSONDecodeError, OSError):
             manifest = None
-        if isinstance(manifest, dict) and manifest.get("verdict") in {"WAIVED", "SKIP"}:
+        if isinstance(manifest, dict) and manifest.get("verdict") == "WAIVED":
             if (manifest.get("all_scenarios_passed") is True
                     and manifest.get("review_required") is True
                     and manifest.get("waiver_ticket")):
+                waiver = _step_waived(project, _STEP_ID, args.step_label)
+                if waiver is not None:
+                    print(
+                        f"[WAIVED] fpga_on_board_attestation_check: "
+                        f"verdict=WAIVED, manifest ticket="
+                        f"{manifest['waiver_ticket']}, waivers.json ticket="
+                        f"{waiver.get('ticket', '?')} "
+                        f"(approver: {waiver.get('approver', '?')})"
+                    )
+                    _write_report(args.json, {
+                        "overall": "WAIVED",
+                        "manifest_verdict": "WAIVED",
+                        "manifest_waiver_ticket": manifest.get("waiver_ticket"),
+                        "waiver": waiver,
+                        "findings": [],
+                    })
+                    return 0
                 print(
-                    f"[PASS] fpga_on_board_attestation_check: WAIVED "
-                    f"(verdict={manifest['verdict']}, "
-                    f"ticket={manifest['waiver_ticket']})"
-                )
-                return 0
+                    "fpga_on_board_attestation_check: on_board_pass.json "
+                    "self-declares verdict=WAIVED but NO matching entry exists "
+                    f"in {project.name}/waivers.json (id {_STEP_ID} / label "
+                    f"{args.step_label}). A step cannot waive itself from "
+                    "inside the artefact this gate audits — falling through to "
+                    "the full evidence inspection.",
+                    file=sys.stderr)
 
     findings = inspect(project, min_scenarios=args.min_scenarios)
     errors = [f for f in findings if f.severity == "error"]
@@ -256,12 +331,10 @@ def main(argv: List[str] | None = None) -> int:
         print(f"  {icon} [{f.severity}] {f.rule}: {f.message}")
     print(f"\nOverall: {'PASS' if not errors else 'FAIL'}")
 
-    if args.json:
-        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(json.dumps({
-            "overall": "PASS" if not errors else "FAIL",
-            "findings": [asdict(f) for f in findings],
-        }, indent=2))
+    _write_report(args.json, {
+        "overall": "PASS" if not errors else "FAIL",
+        "findings": [asdict(f) for f in findings],
+    })
 
     return 0 if not errors else 1
 
