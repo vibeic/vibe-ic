@@ -437,11 +437,28 @@ def shipped_netlist_port_widths(project: Path) -> Dict[str, int]:
     contradiction. "Indistinguishable" becomes "distinguishable in the failing
     direction", which is the direction that matters.
 
-    MEASURED over the published corpus (15 cells with an L9):
+    MEASURED, re-derived at v1.7.67 by calling this function on every cell.
+    Denominators, because the old note stated none: 106 project dirs carry a
+    `phase1/generated_docs/L9_*.json`, of which 15 sit under
+    `benchmark-data/ic` — those 15 are the "published corpus" below. Over all
+    106, 15 resolve and 91 return `{}`.
 
-        multiple netlists agree on every port      10
-        no published netlist                        4   -> {} , never a pass
-        one file, same port name at two widths      1   -> see below
+    Over the 15:
+
+        netlists agree on every port                7
+        no published netlist candidate at all       7   -> {} , never a pass
+        candidate exists, top module not unique     1   -> {} , see below
+
+    THE OLD NOTE HERE SAID 10 / 4 / 1 AND TWO OF THOSE WERE WRONG. It was
+    taken on a working checkout whose only netlist candidates for three cells
+    were tracked symlinks into an UNTRACKED `phase2/stage2/`, so they read on
+    the machine that had run the flow and vanished on a clean clone — the very
+    host-dependence `_published_tree` exists to remove, re-entering through
+    symlink dereference. That hole was closed at v1.7.65 and those three cells
+    now carry tracked regular files, so they resolve honestly. The count moved
+    for a second reason too: the corpus gained cells with no netlist. Numbers
+    here are corpus-state-dependent by nature; re-derive rather than trust
+    them, which is why the method is stated above and not just the result.
 
     That last one changed the design. One corpus design declares the same port
     NAME at 32 and at 33 bits inside a single file, because a port name is
