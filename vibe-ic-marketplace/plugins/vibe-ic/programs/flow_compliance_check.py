@@ -6191,7 +6191,34 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # through, and only downgrade a PASS-tier gate verdict afterwards (see
     # `_missing_entries` handling below the gate): a gate may explain an absent
     # output, it may not certify the step as done without one.
-    if outputs and missing_entries and not result.evidence:
+    # ── the early exit must not pre-empt a gate that IS the producer ──────
+    # `_gate_json_targets` + the re-probe below the gate already implement one
+    # rule: an entry the step's OWN gate writes via `--json` is re-probed AFTER
+    # the gate has had its chance. That rule was unreachable for a whole class
+    # of steps. When EVERY declared entry is such a target, nothing exists on
+    # disk before the gate runs, `result.evidence` is empty, and this early
+    # return fired first — so the gate never ran, the producer never wrote, and
+    # the step was MISSING on every run, permanently. A step in that shape
+    # therefore could not declare its artefacts at all, which is why the flow's
+    # only such step (FS1) carried the note "declaring the artefact here stops
+    # the gate — and therefore the producer — from ever running".
+    #
+    # The exemption is deliberately narrow: EVERY missing entry must be a
+    # `--json` target of THIS step's own gate, and the step must have a gate.
+    # An entry produced by anything else still early-MISSINGs exactly as
+    # before, so this cannot excuse a genuinely absent upstream output. And it
+    # is not a free pass: the gate runs, the re-probe looks again, and the
+    # ALL-of-N downgrade below turns a PASS-tier verdict with an unwritten
+    # declared output into MISSING. "The gate exited zero and produced nothing"
+    # is now a red step instead of an unaskable question.
+    _self_produced = _gate_json_targets(step)
+    _gate_is_sole_producer = bool(
+        _self_produced
+        and step.get("gate")
+        and all(pat in _self_produced for pat in missing_entries)
+    )
+    if outputs and missing_entries and not result.evidence \
+            and not _gate_is_sole_producer:
         result.status = "MISSING"
         result.reasons.append(
             f"no required_outputs found (expected: {outputs})")
@@ -6449,9 +6476,13 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # v1.6.269 (#126) — ENV_UNAVAILABLE fallback promotion. If the
     # ── required_outputs is ALL-of-N: a gate may not certify a step done
     # while one of its own declared outputs was never produced ────────────
-    # Applied only to a PASS-tier verdict, and only when SOME evidence existed
-    # (the all-absent case already returned MISSING above). Every other verdict
-    # is left exactly as the gate produced it: SKIPPED-CONDITION is the #675
+    # Applied only to a PASS-tier verdict. It is reached either when SOME
+    # declared output was already present, or — since the gate-is-sole-producer
+    # exemption above — when EVERY declared output is one this step's own gate
+    # writes and the gate has now had its chance to write it. Both land here for
+    # the same reason: the gate ran, and a PASS may not certify the step while a
+    # declared output it was supposed to produce is still absent. Every other
+    # verdict is left exactly as the gate produced it: SKIPPED-CONDITION is #675
     # honest capability-gap disclosure, FAIL is a real defect the gate detected,
     # WAIVED is an approved deferral — replacing any of those with MISSING would
     # destroy information, not add rigour.

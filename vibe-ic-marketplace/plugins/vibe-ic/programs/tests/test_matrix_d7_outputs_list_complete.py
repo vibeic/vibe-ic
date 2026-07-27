@@ -11,8 +11,8 @@ and takes its "absent" branch, and the run reports PASS.
 One cell per flow step, 63 in all, each ending in exactly one of three
 machine-checkable states:
 
-  ENFORCED  the live predicate runs and passes            53
-  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason   9
+  ENFORCED  the live predicate runs and passes            59
+  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason   3
   NA        the NA precondition is asserted LIVE           1
 
 ====================================================================
@@ -96,170 +96,24 @@ RESOLUTION_LIMITS_AS_MEASURED = 5
 # ──────────────────────────────────────────────────────────────────────
 # Waivers
 # ──────────────────────────────────────────────────────────────────────
-#: Waivers this dimension needs, mirrored locally because
-#: ``matrix_63x8/waivers.py`` is SHARED by eight concurrently-running agents
-#: and its own docstring forbids a sibling editing it ("concurrent edits to a
-#: shared registry lose entries"). These are reported verbatim to the
-#: orchestrator in ``waiver_requests``; once it lands them in
-#: ``waivers.WAIVERS`` this tuple is dead weight and should be deleted —
-#: :func:`_waiver_for` already prefers the central registry, so the migration
-#: is a no-op at the point of use.
+#: The local mirror, now EMPTY. It existed only while ``matrix_63x8/waivers.py``
+#: was being written by eight concurrently-running agents; the entries have
+#: landed centrally and :func:`_waiver_for` prefers the central registry, so
+#: emptying it is a no-op at the point of use. A new waiver goes to
+#: ``waivers.WAIVERS``, not here.
 #:
-#: Each one is a CURRENTLY-REAL, source-verified defect, so the xfail is
-#: ``strict=True``: the moment the yaml declares the artefact, the cell
-#: XPASSes, the suite goes red, and the waiver must be removed. That is the
-#: anti-rot mechanism, not a formality.
-PENDING_WAIVERS = (
-    waivers.Waiver(
-        step_id="D1",
-        dim=DIM,
-        reason=(
-            "D1 emits phase1/generated_docs/L8_RTL_CONSTANTS.json but declares "
-            "only L1-L12 and L13_*; step 2's gate both READS it as an input and "
-            "gates on it via condition_files_exist, so when D1 fails to write "
-            "it the step-2 clause SKIPS silently instead of failing. Declaring "
-            "it is a yaml change nobody has made yet."
-        ),
-        evidence=(
-            "producer programs/phase1_doc_one_shot_runner.py:47845 "
-            "(_pl.generated_docs_dir(project) / 'L8_RTL_CONSTANTS.json'); "
-            "consumer flow/phase1_phase2_phase3.yaml:363-364 "
-            "(threshold_range_contiguity_check + condition_files_exist)"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=7,
-        dim=DIM,
-        reason=(
-            "The runner emits reports/phase3/single_corner_stance.json to "
-            "disclose a single-corner PVT run, and step 7's own gate program "
-            "pvt_matrix_check loads it (both the phase3 and the legacy phase2 "
-            "location) to decide its stance; no step's required_outputs names "
-            "either path, so nothing verifies the disclosure was written."
-        ),
-        evidence=(
-            "producer programs/phase3_one_shot_runner.py:20341 "
-            "(rpt_phase3 / 'single_corner_stance.json'); consumer "
-            "programs/pvt_matrix_check.py:44-45 then :105"
-        ),
-    ),
-    waivers.Waiver(
-        step_id="FS1",
-        dim=DIM,
-        reason=(
-            "FS1 declares no required_outputs key at all while its gate writes "
-            "two real JSON artefacts, so there is no list for the flow's "
-            "presence checks to key off. An absent list cannot be complete; "
-            "adding one is a yaml change nobody has made yet."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml FS1 step has no required_outputs "
-            "key while its gate runs 'fmeda_fault_injection_coverage ... --json "
-            "reports/phase2/safety/fmeda_coverage.json' and 'fmeda_coverage_check "
-            "... --json reports/phase2/safety/fmeda_coverage_gate.json'"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=21,
-        dim=DIM,
-        reason=(
-            "The runner derives reports/phase3/drc_router.rpt from the OpenROAD "
-            "routing log and step 21's own gate command feeds that exact path "
-            "to drc_report_check via --under, yet no step's required_outputs "
-            "names it: if the derivation silently fails the gate loses its "
-            "router-DRC evidence with nothing reporting the loss."
-        ),
-        evidence=(
-            "producer programs/phase3_one_shot_runner.py:21706 "
-            "((rpt_phase3 / 'drc_router.rpt').write_text(body)); consumer is "
-            "step 21's own gate command '--under reports/phase3/drc_router.rpt'"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=23,
-        dim=DIM,
-        reason=(
-            "Thirteen multi-corner / SPEF-based STA artefacts the runner emits "
-            "and step 23's own checkers read (sta_mcorner_ocv.rpt, "
-            "sta_spef_based.rpt, sta_spef_multicorner.rpt and their "
-            "reports/phase3 mirrors, plus the mcorner_ocv and "
-            "multi_corner_spef stance files) appear in no step's "
-            "required_outputs, and two gate-designated outputs of this step are "
-            "read by OTHER programs. Step 23 declares only post_route_timing.rpt "
-            "and post_route_summary.json."
-        ),
-        evidence=(
-            "producers programs/phase3_one_shot_runner.py:20549 and :20638 "
-            "(sta_out / 'sta_spef_based.rpt', sta_out / 'sta_mcorner_ocv.rpt') "
-            "with mirrors at :20555 and :20668; consumers "
-            "programs/sta_corner_record_completeness_check.py:233-234 and "
-            "programs/post_route_signoff_corner_check.py"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=25,
-        dim=DIM,
-        reason=(
-            "Step 25's gate writes reports/phase3/em_signoff.json via "
-            "em_report_check --json and the phase-3 runner reads that exact "
-            "path back in its declared-signoff-gate table, so the artefact is "
-            "cross-program load-bearing rather than self-verifying; step 25's "
-            "required_outputs names only the .rpt."
-        ),
-        evidence=(
-            "consumer programs/phase3_one_shot_runner.py:19674 "
-            "('reports/phase3/em_signoff.json', ('--mode', 'em')); writer is "
-            "em_report_check, whose --json is a proven write via its "
-            "signoff_report_check delegate"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=28,
-        dim=DIM,
-        reason=(
-            "reports/phase2/gates/perc_signoff.json is written by step 28's own "
-            "gate and read by eco_trigger_decision, which uses it as one of the "
-            "inputs to the ECO trigger decision; no step's required_outputs "
-            "names it, so its absence silently changes an ECO decision instead "
-            "of failing a gate."
-        ),
-        evidence=(
-            "consumer programs/eco_trigger_decision.py:96 "
-            "(('perc_signoff', 'reports/phase2/gates/perc_signoff.json'))"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=31,
-        dim=DIM,
-        reason=(
-            "Two gate-designated outputs of step 31, reports/phase3/lvs.json and "
-            "reports/phase2/gates/erc_density.json, are read by "
-            "eco_trigger_decision as ECO-trigger inputs while step 31 declares "
-            "only the three .rpt files; the JSONs carry the machine-readable "
-            "verdict the .rpt does not, and nothing verifies they exist."
-        ),
-        evidence=(
-            "consumer programs/eco_trigger_decision.py:91 and :95 "
-            "(('lvs', 'reports/phase3/lvs.json'), "
-            "('erc_density', 'reports/phase2/gates/erc_density.json'))"
-        ),
-    ),
-    waivers.Waiver(
-        step_id="M1",
-        dim=DIM,
-        reason=(
-            "reports/analog/mixed_signal/top_lvs.json is the artefact that "
-            "substantiates M1's PASS — mixed_signal_top_lvs_run writes it and "
-            "mixed_signal_merge_check's PASS branch is contingent on reading it "
-            "— yet M1's required_outputs names only top_merged.gds and "
-            "merge.json, so nothing independently verifies its presence."
-        ),
-        evidence=(
-            "producer programs/mixed_signal_top_lvs_run.py:19; consumer "
-            "programs/mixed_signal_merge_check.py:89-90 (candidate list "
-            "'reports/analog/mixed_signal/top_lvs.json')"
-        ),
-    ),
+#: Whatever lives there is a CURRENTLY-REAL, source-verified defect, so the
+#: xfail is ``strict=True``: the moment the yaml declares the artefact, the
+#: cell XPASSes, the suite goes red, and the waiver must be removed. That is
+#: the anti-rot mechanism, not a formality — and it is what forced the seven
+#: cells closed on 2026-07-28 to be closed in the flow rather than in a table.
+PENDING_WAIVERS: tuple = (
+    # EMPTY, and it stays empty. The nine entries this tuple carried are now in
+    # ``matrix_63x8.waivers.WAIVERS`` — seven of them CLOSED (the artefact is
+    # declared; see the flow yaml's per-entry notes), two NARROWED and living
+    # centrally. :func:`_waiver_for` prefers the central registry, so the
+    # migration is a no-op at the point of use and a new waiver belongs there,
+    # not here.
 )
 
 _PENDING_BY_KEY = {w.key: w for w in PENDING_WAIVERS}

@@ -56,7 +56,15 @@ EXPECTED_DIMS = 8
 # from the yaml. If the flow legitimately changes, these numbers change with it
 # in ONE place and the reviewer is forced to look.
 CENSUS_GATE_PRESENT = 62
-CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
+# 2026-07-28, RE-REVIEWED and changed 61 -> 62: FS1 gained a `required_outputs`
+# key. It had none because `flow_compliance_check` returned MISSING before the
+# gate ran, and FS1's gate IS the sole producer of its artefacts, so declaring
+# anything made the step a permanent red. That ordering defect is fixed (the
+# early exit stands down when EVERY missing entry is one of the step's own gate
+# `--json` targets), and FS1 now declares both FMEDA artefacts. Dimension 7's
+# W4 rule ("a gate designates outputs on a step with no required_outputs") no
+# longer fires on it.
+CENSUS_REQUIRED_OUTPUTS_PRESENT = 62
 CENSUS_BLOCKS_ON_PRESENT = 62
 CENSUS_BLOCKS_ON_NON_EMPTY = 60
 CENSUS_GATE_PROGRAMS_NON_EMPTY = 60
@@ -395,8 +403,17 @@ def test_output_entries_classify_into_the_four_kinds():
             kind = F.classify_output(entry)
             assert kind in F.OUTPUT_KINDS
             seen[kind] += 1
-    assert sum(seen.values()) == 126, seen
-    assert seen[F.FILE] == 92
+    # 2026-07-28, RE-REVIEWED: 126 -> 135, all NINE new entries are plain FILE
+    # (92 -> 101); the GLOB and ANY_OF populations are untouched. Each one is a
+    # load-bearing artefact the flow already produced and a gate already read
+    # while no step declared it — dimension 7's finding — and each is recorded
+    # in the dimension-3 manifest with the run root, path and byte size it was
+    # measured at: D1 L8_RTL_CONSTANTS.json, 21 reports/phase3/drc_router.rpt,
+    # 23 sta_corner_record_completeness.json, 25 em_signoff.json (PRODUCED_LIVE),
+    # 28 perc_signoff.json, 31 lvs.json + erc_density.json, and FS1's two FMEDA
+    # artefacts (FS1's whole required_outputs key is new).
+    assert sum(seen.values()) == 135, seen
+    assert seen[F.FILE] == 101
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

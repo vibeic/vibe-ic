@@ -89,15 +89,23 @@ is never read. Every predicate here is recomputed from the current flow yaml and
 the current ``flow_compliance_check.py`` by executing them.
 
 ====================================================================
-CELL STATES (63 = 61 + 0 + 2)
+CELL STATES (63 = 62 + 0 + 1)
 ====================================================================
-  ENFORCED  61 — every step that declares ``required_outputs``.
+  ENFORCED  62 — every step that declares ``required_outputs``.
   WAIVED     0 — ``matrix_63x8.waivers.WAIVERS`` is empty for this dimension.
-  NA         2 — ``FS1`` and ``P0`` declare no ``required_outputs`` at all, so
-                 there is no declared artefact that can go missing. The NA test
-                 asserts that PRECONDITION live: the day either step gains a
-                 ``required_outputs`` key the NA self-invalidates and goes red,
-                 forcing re-evaluation. It never calls ``pytest.skip()``.
+  NA         1 — ``P0`` declares no ``required_outputs`` at all, so there is no
+                 declared artefact that can go missing. The NA test asserts that
+                 PRECONDITION live: the day it gains a ``required_outputs`` key
+                 the NA self-invalidates and goes red, forcing re-evaluation. It
+                 never calls ``pytest.skip()``.
+
+                 2026-07-28: ``FS1`` left this population. It declared nothing
+                 because ``flow_compliance_check`` returned MISSING before the
+                 gate ran and FS1's gate is the sole producer of its artefacts,
+                 so any declaration was a permanent red; with that ordering
+                 defect fixed FS1 declares both FMEDA artefacts and its cell is
+                 ENFORCED. The tripwire below did its job: it went red exactly
+                 once, here.
 
 ``test_d8_cell_census_is_complete`` proves the three states partition the 63
 exactly, so a cell cannot go silently unprobed.
@@ -576,7 +584,7 @@ INTERACTION_STEP = _pick_interaction_step()
 #: a 61/0/2 split that is no longer true, with nobody told. Pinning the set
 #: makes that transition red exactly once, in the place where the split is
 #: written down.
-NA_STEPS_AS_MEASURED: Tuple[str, ...] = ("FS1", "P0")
+NA_STEPS_AS_MEASURED: Tuple[str, ...] = ("P0",)
 
 #: `flow_compliance_check._PLATFORM_CAPABILITY_GAPS` as measured 2026-07-27.
 #:
@@ -1131,19 +1139,36 @@ def test_d8_cell_census_is_complete():
 #: fixture, measured 2026-07-27. See
 #: ``test_d8_downgrade_is_reachable_through_each_steps_own_real_gate``.
 REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
-    "1", "2", "12", "A1", "A2", "A4", "A5", "A8", "14", "30", "32", "35",
-    "38", "A6",
+    # 2026-07-28: GAINED "FS1" (the non-shrinking direction this pin is here to
+    # distinguish). FS1 previously declared no required_outputs, so the sweep
+    # below skipped it entirely; it now declares both FMEDA artefacts, its own
+    # gate reaches PASS on the seeded fixture, and dropping either declared
+    # output downgrades the step — i.e. one more cell is enforced through the
+    # production gate rather than through a substituted one. Nothing was lost.
+    "1", "2", "FS1", "12", "A1", "A2", "A4", "A5", "A8", "14", "30", "32",
+    "35", "38", "A6",
 )
 
 _PASS_TIER_LABELS = frozenset({"PASS", "VACUOUS_PASS", "VACUOUS-PASS"})
 
 
 @lru_cache(maxsize=1)
-def _real_gate_sweep() -> Dict[str, Tuple[str, str]]:
-    """``{step: (seeded status, status after dropping one declared output)}``
-    using each step's OWN gate, for every step whose real gate reaches a PASS
-    tier on the seeded fixture."""
-    out: Dict[str, Tuple[str, str]] = {}
+def _real_gate_sweep() -> Dict[str, Tuple[str, str, bool]]:
+    """``{step: (seeded status, status after dropping one declared output,
+    the dropped artefact was RE-CREATED by the gate)}`` using each step's OWN
+    gate, for every step whose real gate reaches a PASS tier on the seeded
+    fixture.
+
+    The third field is measured, not assumed, and it exists because dropping a
+    declared output is not always a perturbation. When the step's own gate is
+    the artefact's PRODUCER — FS1, whose two FMEDA artefacts are written by the
+    two commands of its own gate — ``check_step`` runs the gate, the gate writes
+    the file back, and the tree the verdict was reached over is byte-for-byte
+    the seeded one. Reporting that as "the artefact vanished with no
+    consequence" states something the disk contradicts. So the re-creation is
+    OBSERVED after the run and reported alongside the status.
+    """
+    out: Dict[str, Tuple[str, str, bool]] = {}
     for sid in F.step_ids():
         key = F.normalize_id(sid)
         if not F.declares_required_outputs(sid) or not F.has_gate(sid):
@@ -1164,7 +1189,13 @@ def _real_gate_sweep() -> Dict[str, Tuple[str, str]]:
             dropped = tmp / "dropped"
             dropped.mkdir(parents=True)
             _materialize(dropped, step, drop_entries=(outs[0],))
-            out[key] = (seeded, FCC.check_step(dropped, step, {}).status)
+            status = FCC.check_step(dropped, step, {}).status
+            # Did the gate put the dropped artefact back? Asked of the disk,
+            # with the same resolver check_step used to look for it.
+            regenerated = any(
+                FCC._glob_first(dropped, alt) for alt in alternatives(outs[0])
+            )
+            out[key] = (seeded, status, regenerated)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     return out
@@ -1203,12 +1234,49 @@ def test_d8_downgrade_is_reachable_through_each_steps_own_real_gate():
         f"Lost: {sorted(set(REAL_GATE_PASS_TIER_STEPS) - set(measured))}; "
         f"gained: {sorted(set(measured) - set(REAL_GATE_PASS_TIER_STEPS))}."
     )
-    survivors = {k: v for k, v in sweep.items() if v[1] in _PASS_TIER_LABELS}
+    # A PASS tier after the drop is only a finding when the artefact REALLY
+    # STAYED ABSENT. 2026-07-28: FS1 entered this population, and it is the one
+    # step whose declared artefacts are written by its OWN gate's two commands —
+    # so `check_step` runs the gate, the gate writes both files back, and the
+    # tree the PASS was reached over is the seeded one. The drop was undone
+    # before the verdict; the experiment did not run. Grading that as "vanished
+    # with no consequence" asserts something the disk contradicts, which is the
+    # adjacent-measurement error this suite exists to remove — so the
+    # re-creation is MEASURED (`_real_gate_sweep`'s third field) and those steps
+    # are reported separately instead of being counted as survivors.
+    #
+    # This cannot launder a real survivor: the exemption keys off the artefact
+    # being PRESENT after the run. A step that passes while its declared output
+    # is genuinely absent still has `regenerated is False` and still fails here.
+    # MUTATION-PROVED 2026-07-28, on the guarded program and reverted: delete
+    # the `out_path.write_text(...)` in `fmeda_fault_injection_coverage.main`
+    # so the producer exits 0 writing nothing. FS1's dropped-run status becomes
+    # MISSING and `regenerated` becomes False — it leaves the exempted
+    # population entirely and this test goes RED on the pin below
+    # ("measured [], pinned ['FS1']"). The exemption cannot outlive the
+    # re-creation it is granted for.
+    survivors = {
+        k: v for k, v in sweep.items()
+        if v[1] in _PASS_TIER_LABELS and not v[2]
+    }
     assert not survivors, (
         f"with one declared output removed, these steps' OWN gates still "
-        f"resolved to a PASS tier: {survivors!r}. FAIL and MISSING are both "
-        f"acceptable — FAIL means the gate itself noticed, which is stronger — "
-        f"but a PASS tier means the artefact vanished with no consequence."
+        f"resolved to a PASS tier AND the artefact was still absent "
+        f"afterwards: {survivors!r}. FAIL and MISSING are both acceptable — "
+        f"FAIL means the gate itself noticed, which is stronger — but a PASS "
+        f"tier over a genuinely absent artefact means it vanished with no "
+        f"consequence."
+    )
+    # The exempted population is REPORTED, never silent, and it must stay a
+    # population this module can name: a step here is enforced against
+    # "the gate produced nothing", not against "the artefact was deleted".
+    producer_gated = sorted(k for k, v in sweep.items()
+                            if v[1] in _PASS_TIER_LABELS and v[2])
+    assert producer_gated == ["FS1"], (
+        f"the set of steps whose OWN gate RE-CREATES a dropped declared output "
+        f"changed: measured {producer_gated}, pinned ['FS1']. Such a step's "
+        f"declared outputs cannot be probed by removal — say which they are "
+        f"and why, here, in the same change."
     )
 
 

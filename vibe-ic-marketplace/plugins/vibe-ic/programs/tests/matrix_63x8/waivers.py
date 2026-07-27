@@ -575,140 +575,47 @@ WAIVERS: Tuple[Waiver, ...] = (
     ),
 
     # ── dimension 7 — is the required_outputs list complete? ───────────
-    Waiver(
-        step_id="D1",
-        dim=7,
-        reason=(
-            "D1 emits phase1/generated_docs/L8_RTL_CONSTANTS.json but declares "
-            "only L1-L12 and L13_*; step 2's gate both READS it as an input "
-            "and gates on it via condition_files_exist, so when D1 fails to "
-            "write it the step-2 clause SKIPS silently instead of failing. "
-            "Declaring it is a yaml change nobody has made yet."
-        ),
-        evidence=(
-            "producer programs/phase1_doc_one_shot_runner.py:47845 "
-            "(_pl.generated_docs_dir(project) / 'L8_RTL_CONSTANTS.json'); "
-            "consumer flow/phase1_phase2_phase3.yaml:363-364 "
-            "(threshold_range_contiguity_check + condition_files_exist)"
-        ),
-    ),
+    # Six of the nine original entries were CLOSED on 2026-07-28 by declaring
+    # the artefact (D1, 21, 25, 28, 31) and, for FS1, by first fixing the
+    # flow_compliance_check ordering defect that made declaring impossible.
+    # The three below are the residue. Two (7, 23) are blocked on the same
+    # thing: `required_outputs` is ALL-of-N with no conditional spelling, so an
+    # artefact the flow emits only on one branch of a genuine design/PDK
+    # condition cannot be declared without failing the other branch. The third
+    # (M1) is blocked on evidence: the artefact exists in no published run root,
+    # so declaring it would move the gap from dimension 7 to dimension 3.
     Waiver(
         step_id="7",
         dim=7,
         reason=(
-            "The runner emits reports/phase3/single_corner_stance.json to "
-            "disclose a single-corner PVT run, and step 7's own gate program "
-            "pvt_matrix_check loads it (both the phase3 and the legacy phase2 "
-            "location) to decide its stance; no step's required_outputs names "
-            "either path, so nothing verifies the disclosure was written."
+            "reports/phase3/single_corner_stance.json is emitted ONLY on the "
+            "single-corner branch — phase3_one_shot_runner writes it under "
+            "`if len(corners) < 2 and not pvt.get('multi_corner')` — and a "
+            "multi-corner run legitimately produces none, so an unconditional "
+            "required_outputs entry converts every honest multi-corner run "
+            "into MISSING. required_outputs is ALL-of-N and its only any-of "
+            "spelling is ' OR ' between paths; every alternative that would "
+            "cover the multi-corner branch (pvt_matrix.json, the gate's own "
+            "reports/phase2/gates/pvt_matrix.json) is present on EVERY run, "
+            "so the entry could never fail and would be a declaration that "
+            "measures nothing. Closing this needs a producer change that "
+            "emits a corner-stance disclosure on BOTH branches, plus a "
+            "re-publish of the affected roots — a flow change with its own "
+            "verification, not a declaration change."
         ),
         evidence=(
-            "producer programs/phase3_one_shot_runner.py:20341 (rpt_phase3 / "
-            "'single_corner_stance.json'); consumer "
-            "programs/pvt_matrix_check.py:44-45 then :105"
-        ),
-    ),
-    Waiver(
-        step_id="FS1",
-        dim=7,
-        reason=(
-            "FS1 declares no required_outputs key at all while its gate writes "
-            "two real JSON artefacts, so there is no list for the flow's "
-            "presence checks to key off. An absent list cannot be complete; "
-            "adding one is a yaml change nobody has made yet."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml FS1 step has no required_outputs "
-            "key while its gate runs 'fmeda_fault_injection_coverage ... "
-            "--json reports/phase2/safety/fmeda_coverage.json' and "
-            "'fmeda_coverage_check ... --json "
-            "reports/phase2/safety/fmeda_coverage_gate.json'"
-        ),
-    ),
-    Waiver(
-        step_id="21",
-        dim=7,
-        reason=(
-            "The runner derives reports/phase3/drc_router.rpt from the "
-            "OpenROAD routing log and step 21's own gate command feeds that "
-            "exact path to drc_report_check via --under, yet no step's "
-            "required_outputs names it: if the derivation silently fails the "
-            "gate loses its router-DRC evidence with nothing reporting the "
-            "loss."
-        ),
-        evidence=(
-            "producer programs/phase3_one_shot_runner.py:21706 ((rpt_phase3 / "
-            "'drc_router.rpt').write_text(body)); consumer is step 21's own "
-            "gate command '--under reports/phase3/drc_router.rpt'"
-        ),
-    ),
-    Waiver(
-        step_id="23",
-        dim=7,
-        reason=(
-            "Thirteen multi-corner / SPEF-based STA artefacts the runner emits "
-            "and step 23's own checkers read (sta_mcorner_ocv.rpt, "
-            "sta_spef_based.rpt, sta_spef_multicorner.rpt and their "
-            "reports/phase3 mirrors, plus the mcorner_ocv and "
-            "multi_corner_spef stance files) appear in no step's "
-            "required_outputs, and two gate-designated outputs of this step "
-            "are read by OTHER programs. Step 23 declares only "
-            "post_route_timing.rpt and post_route_summary.json."
-        ),
-        evidence=(
-            "producers programs/phase3_one_shot_runner.py:20549 and :20638 "
-            "(sta_out / 'sta_spef_based.rpt', sta_out / "
-            "'sta_mcorner_ocv.rpt') with mirrors at :20555 and :20668; "
-            "consumers programs/sta_corner_record_completeness_check.py:"
-            "233-234 and programs/post_route_signoff_corner_check.py"
-        ),
-    ),
-    Waiver(
-        step_id="25",
-        dim=7,
-        reason=(
-            "Step 25's gate writes reports/phase3/em_signoff.json via "
-            "em_report_check --json and the phase-3 runner reads that exact "
-            "path back in its declared-signoff-gate table, so the artefact is "
-            "cross-program load-bearing rather than self-verifying; step 25's "
-            "required_outputs names only the .rpt."
-        ),
-        evidence=(
-            "consumer programs/phase3_one_shot_runner.py:19674 "
-            "('reports/phase3/em_signoff.json', ('--mode', 'em')); writer is "
-            "em_report_check, whose --json is a proven write via its "
-            "signoff_report_check delegate"
-        ),
-    ),
-    Waiver(
-        step_id="28",
-        dim=7,
-        reason=(
-            "reports/phase2/gates/perc_signoff.json is written by step 28's "
-            "own gate and read by eco_trigger_decision, which uses it as one "
-            "of the inputs to the ECO trigger decision; no step's "
-            "required_outputs names it, so its absence silently changes an ECO "
-            "decision instead of failing a gate."
-        ),
-        evidence=(
-            "consumer programs/eco_trigger_decision.py:96 (('perc_signoff', "
-            "'reports/phase2/gates/perc_signoff.json'))"
-        ),
-    ),
-    Waiver(
-        step_id="31",
-        dim=7,
-        reason=(
-            "Two gate-designated outputs of step 31, reports/phase3/lvs.json "
-            "and reports/phase2/gates/erc_density.json, are read by "
-            "eco_trigger_decision as ECO-trigger inputs while step 31 declares "
-            "only the three .rpt files; the JSONs carry the machine-readable "
-            "verdict the .rpt does not, and nothing verifies they exist."
-        ),
-        evidence=(
-            "consumer programs/eco_trigger_decision.py:91 and :95 (('lvs', "
-            "'reports/phase3/lvs.json'), ('erc_density', "
-            "'reports/phase2/gates/erc_density.json'))"
+            "producer programs/phase3_one_shot_runner.py:20321-20344 (the "
+            "`len(corners) < 2` guard around `rpt_phase3 / "
+            "'single_corner_stance.json'`); consumer "
+            "programs/pvt_matrix_check.py:44-45 then :105. MEASURED "
+            "2026-07-28 with flow_compliance_check.check_step over the nine "
+            "tracked roots holding phase2/stage2/constraints/pvt_matrix.json: "
+            "adding the entry moves benchmark-data/ic/spm/v1.5.58_ihp-sg13g2, "
+            "v1.5.65_sky130A and v1.5.66_gf180mcuD from PASS to MISSING "
+            "('required_outputs missing: "
+            "[reports/phase3/single_corner_stance.json]') — three "
+            "multi-corner runs failed for producing no single-corner "
+            "disclosure. The other six are FAIL/PASS-unchanged."
         ),
     ),
     Waiver(
@@ -719,12 +626,73 @@ WAIVERS: Tuple[Waiver, ...] = (
             "substantiates M1's PASS — mixed_signal_top_lvs_run writes it and "
             "mixed_signal_merge_check's PASS branch is contingent on reading "
             "it — yet M1's required_outputs names only top_merged.gds and "
-            "merge.json, so nothing independently verifies its presence."
+            "merge.json, so nothing independently verifies its presence. "
+            "Declaring it was PREPARED and then withdrawn on evidence: the "
+            "artefact exists in NONE of the twelve admissible run roots and "
+            "its producer needs KLayout + Magic + netgen in a container, so "
+            "it cannot be shown produced live here either. Declaring it would "
+            "add a second UNPROVEN entry to M1's dimension-3 waiver — moving "
+            "the gap between dimensions rather than closing it. What closes "
+            "this: publish one run root in which mixed_signal_top_lvs_run "
+            "actually executed, then declare the artefact and record it."
         ),
         evidence=(
-            "producer programs/mixed_signal_top_lvs_run.py:19; consumer "
-            "programs/mixed_signal_merge_check.py:89-90 (candidate list "
-            "'reports/analog/mixed_signal/top_lvs.json')"
+            "producer programs/mixed_signal_top_lvs_run.py:256 "
+            "((rpt_dir / 'top_lvs.json').write_text(...), in the same block "
+            "as the already-declared merge.json); consumer "
+            "programs/mixed_signal_merge_check.py:88-90 then :107. MEASURED "
+            "2026-07-28 with test_matrix_d3_outputs_produced.resolve_anywhere("
+            "'reports/analog/mixed_signal/top_lvs.json') -> None over all 12 "
+            "run roots, while the sibling merge.json resolves at "
+            "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e "
+            "(497 B). Mutation check that the declaration WOULD be live: with "
+            "mixed_signal_merge_check's MERGE_NOT_LVS_SUBSTANTIATED branch "
+            "flipped to its historical PASS-on-presence stub, M1 reports PASS "
+            "without the declaration and MISSING with it."
+        ),
+    ),
+    Waiver(
+        step_id="23",
+        dim=7,
+        reason=(
+            "Fourteen artefacts remain undeclared after "
+            "reports/phase3/sta/sta_corner_record_completeness.json was "
+            "declared on 2026-07-28 (that one is the step's own unconditional "
+            "gate --json target, so it closed with no verdict change on any "
+            "published root). The residue splits in two and BOTH halves are "
+            "conditional-by-design. (a) The two multi-corner STANCE files are "
+            "written only when the post-route DEF exists, and six of the "
+            "eight tracked roots carrying this step's already-declared "
+            "post_route_timing.rpt predate that emitter; five of them PASS "
+            "today and go MISSING if the stance files are declared. (b) The "
+            "three sign-off .rpt files are each emitted on one branch of a "
+            "real PDK condition — sta_mcorner_ocv.rpt only when the ss and ff "
+            "process libraries genuinely differ, sta_spef_multicorner.rpt "
+            "only with two or more corner SPEFs, sta_spef_based.rpt only with "
+            "a non-empty SPEF — and their absence is DISCLOSED in the stance "
+            "files (`report: null`, `multicorner_sta_report: null`). Pairing "
+            "each .rpt with its stance file via ' OR ' would declare the "
+            "name, but with the stance ALSO declared the pair could never "
+            "fail on its own, so it would be decoration. Closing this needs "
+            "the (a) decision — re-publish the six roots, or add a "
+            "conditional/disclosed-skip spelling to required_outputs — taken "
+            "first; then (b) follows as OR-pairs that can actually fail."
+        ),
+        evidence=(
+            "producers programs/phase3_one_shot_runner.py:20549 and :20638 "
+            "(sta_out / 'sta_spef_based.rpt', sta_out / "
+            "'sta_mcorner_ocv.rpt') with mirrors at :20555 and :20668, and "
+            "the two stance writes at :20567 and :20639 both guarded by "
+            "`if primary_def.is_file() and _signoff_regen(...)`; consumer "
+            "programs/sta_corner_record_completeness_check.py:195-215 "
+            "(_PROCESS_STANCE_CANDIDATES / _RC_STANCE_CANDIDATES / "
+            "_MULTICORNER_CANDIDATES / _MCORNER_OCV_CANDIDATES / "
+            "_NOMINAL_SPEF_CANDIDATES). MEASURED 2026-07-28 with "
+            "flow_compliance_check.check_step over the eight tracked roots "
+            "holding phase3/stage3/sta/post_route_timing.rpt: declaring the "
+            "two stance files moves phase1_parity/{espi,lpc/phase3,mdio,"
+            "sgmii} and benchmark-data/ic/caravel_user_project from PASS to "
+            "MISSING (5 of 8); the other three are FAIL before and after."
         ),
     ),
 )

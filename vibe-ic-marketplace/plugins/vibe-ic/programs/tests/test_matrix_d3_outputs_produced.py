@@ -759,10 +759,18 @@ def test_d3_cell_states_partition_all_63_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (52, 4, 7), (
+    # 2026-07-28, RE-REVIEWED and changed (52, 4, 7) -> (53, 4, 6): FS1 moved
+    # from NA_NO_REQUIRED_OUTPUTS to ENFORCED. It declared no outputs at all
+    # because `flow_compliance_check` evaluated required_outputs BEFORE the gate
+    # and FS1's gate is the sole producer of its artefacts, so any declaration
+    # was a permanent MISSING. With that ordering defect fixed FS1 declares both
+    # FMEDA artefacts, and BOTH are recorded here as PRODUCED_BY_RUN with the
+    # run root, path and byte size they were measured at. Nothing left an
+    # enforced state; one entered it.
+    assert (len(enforced), len(waived), len(na)) == (53, 4, 6), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(52, 4, 7) on 2026-07-27. A step moving between states is a real "
+        f"(53, 4, 6) on 2026-07-28. A step moving between states is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed."
     )

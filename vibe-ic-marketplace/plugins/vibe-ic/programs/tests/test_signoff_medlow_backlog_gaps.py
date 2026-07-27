@@ -911,9 +911,15 @@ def _touch(project: Path, rel: str, body: str = "x\n") -> Path:
 @pytest.mark.parametrize("sid,files,dropped", [
     # Step 28 PERC: the runner writes all three together; only the .json was
     # declared, so the .rpt and the sign-off memo were verified by nobody.
+    # 2026-07-28: the list gained reports/phase2/gates/perc_signoff.json — the
+    # step's fourth declared output, the PERC sign-off VERDICT that
+    # `eco_trigger_decision` reads as an ECO-trigger input. The seeded set must
+    # be the step's FULL required_outputs or the control assertion below
+    # ("all present is not MISSING") measures the seed list, not the flow.
     (28, ["reports/phase3/perc_equivalent.json",
           "reports/phase3/perc_equivalent.rpt",
-          "reports/phase3/PERC_SIGNOFF_MEMO.md"],
+          "reports/phase3/PERC_SIGNOFF_MEMO.md",
+          "reports/phase2/gates/perc_signoff.json"],
      "reports/phase3/PERC_SIGNOFF_MEMO.md"),
     # Step 32 ECO: the trigger decision is written on EVERY branch, including
     # the one that writes neither eco_log.json nor no_eco_needed.flag.
