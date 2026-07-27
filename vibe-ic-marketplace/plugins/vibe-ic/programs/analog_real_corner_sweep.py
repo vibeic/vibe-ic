@@ -864,12 +864,14 @@ def _run_ngspice(container, sp_in_container, cwd=None):
     There is no `-I` / search-path option, and `set sourcepath` does not apply.
 
     So for a staged PDK whose libs span several directories, a shim's bare-name
-    cross-directory hop satisfies NEITHER and is fatal. Pointing cwd at any one
-    EXISTING directory cannot fix that (no existing directory holds the whole
-    closure) — which is why build_lib_include_farm CREATES one, and why `cwd`
-    must then be that farm: co-location supplies the first hop, cwd supplies
-    every hop after it. Both halves are required; each alone still fails. See
-    analog_pdk_deck_context.build_lib_include_farm.
+    cross-directory hop satisfies NEITHER and is fatal, and pointing cwd at any
+    one EXISTING directory cannot fix it (no existing directory holds the whole
+    closure). A symlink farm that CREATES such a directory used to exist for
+    exactly this, paired with cwd — but only ever under the entry-lib primary
+    strategy, which vibe-ic#193 retired; see
+    analog_pdk_deck_context.RETIRED_PRIMARY_STRATEGIES, which records how to
+    bring both halves back together if a consumer needs them. Note that BOTH
+    halves were required and neither was wired: every call below passes cwd=None.
 
     When cwd is None the invocation is unchanged (the open-PDK sky130/gf180
     decks include their model lib by ABSOLUTE path). chip-AGNOSTIC."""

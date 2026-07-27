@@ -2,19 +2,19 @@
 
 THE ISSUE, RESTATED
 ===================
-`test_analog_pdk_lib_include_farm.py::test_no_farm_dir_keeps_the_raw_path` is
-`@pytest.mark.xfail(strict=False)` because it asserts `model_lib ==
-spice_libs[0]` (FIRST-STAGED lib / entry shim wins) while HEAD's
-`custom_family_context` ranks by DEVICE-DEFINING lib (#149 / v1.4.58). The
-issue parks the divergence as "two plausible arguments, unverifiable without
-ngspice — pending owner decision". An `xfail(strict=False)` that never resolves
-is a permanent unknown, so this file MEASURES the thing instead of arguing it.
+`analog_pdk_deck_context` carried TWO primary-selection strategies: the
+DEVICE-DEFINING rank (#149 / v1.4.58) and the FIRST-STAGED lib / entry shim
+(`model_lib == spice_libs[0]`, the afec lineage). The issue parked the
+divergence as "two plausible arguments, unverifiable without ngspice — pending
+owner decision", which an `xfail(strict=False)` recorded as a permanent unknown.
+This file MEASURED the thing instead of arguing it: it stages the issue's OWN
+fixture, asks each strategy which lib it elects, and hands BOTH candidates to a
+real ngspice.
 
-**IT DECIDES NOTHING.** No runtime selection is changed here, and the xfail
-stays exactly where the owner left it. What this file removes is the
-"unverifiable" clause: it stages the issue's OWN fixture, asks HEAD which lib
-it elects, and hands BOTH candidates to a real ngspice — so the owner decides
-from a measurement.
+The owner has since decided — device-defining rank, single strategy — and the
+second one is DELETED (see the section below). The measurements are kept
+because they are the reasoning behind that decision, and because they record
+what the retired strategy would have done.
 
 WHAT WAS MEASURED (ngspice-46+, vibeic-eda:0.2.30)
 ==================================================
@@ -51,46 +51,70 @@ Findings, each pinned by a test below:
      When the sibling is elsewhere BOTH lose it — the shim's closure collapses
      2 -> 0 and its deck dies with "Could not find library file". HEAD elects
      the lib that is loadable, which is not a policy choice at all.
-  5. Case D is nobody's win: neither candidate runs. That is what the include
-     farm exists for — and no production caller passes `farm_dir`, so the
-     runtime cannot reach the repair.
+  5. Case D is nobody's win: neither candidate runs. The include farm was the
+     only thing that addressed it, and the runtime could never reach that
+     repair — no production caller passed `farm_dir`. Case D is therefore a
+     GENUINE OPEN GAP that the retirement does not close and does not widen:
+     a split-staged, non-self-contained PDK still needs its libs co-located,
+     and the honest fix is to co-locate the closure at STAGING time rather than
+     to reinstate a policy switch. Recorded so the deletion is not read as
+     having solved it.
 
 The container-backed tests SKIP (never fail) when no ngspice is available; the
 pure-python ones always run and pin the mechanism.
 
-WHICH WORLD IS THE RUNTIME IN? (the second half of this file)
-=============================================================
-BOTH strategies are live in the shipped module, and `farm_dir` is the ONLY
-switch between them:
+THE OWNER DECIDED, AND THE SECOND STRATEGY IS DELETED
+====================================================
+The measurements above were the input; the decision is the device-defining rank
+as the SINGLE primary-selection strategy. The entry-lib / first-staged strategy
+and the symlink farm that served it are gone from
+`analog_pdk_deck_context`, and the epitaph — what it did, why it went, and the
+concrete steps to bring it back — is
+`RETIRED_PRIMARY_STRATEGIES["resolver-entry-lib"]` in that module.
 
-    farm_dir is None -> primary = max(readable, key=_primary_rank)   (HEAD)
-    farm_dir is set  -> primary = res["spice_lib"] == spice_libs[0]  (afec),
-                        loaded through the include farm
+The deletion was safe to make because the strategy had no live consumer, and
+that was RE-VERIFIED before removing anything rather than taken from the earlier
+comment. What was checked, and what was not:
 
-Three things follow, each pinned below and each MEASURED on this tree:
+  * every `.py` in this repo, by AST, with the positional index of the switch
+    parameter read from `inspect.signature` — a positional pass cannot hide from
+    that, and it is how the strategy was once wired into the sole production
+    call site by a one-line edit with the whole analog/PDK suite still green.
+    Result: 50 call sites to the three entry points, of which exactly ONE is
+    production (`analog_real_corner_sweep` -> `resolve_deck_context`) and it
+    passed no farm_dir; 3 were internal to the defining module and 46 were
+    tests.
+  * the strategy's OTHER half was unwired too: a farm only works if ngspice
+    also RUNS from it, and both production `_run_ngspice` call sites pass
+    cwd=None.
+  * `vibeic/vibeic-eda` and the vibeic/* tool forks: checked by direct grep of
+    local clones (vibeic-eda at origin/main, 0 behind) — no reference. GitHub
+    org-wide code search was NOT usable as evidence: control queries against
+    those repos return 0 hits, so its silence proves nothing. Repos and
+    branches outside what is named here were not checked.
 
-  A. The claim "no production caller passes farm_dir" was previously checked by
-     grepping for `farm_dir=` / `build_lib_include_farm(`. Passing it
-     POSITIONALLY defeats that grep entirely: wiring the first-staged strategy
-     into the sole production caller with a one-line positional edit left the
-     analog/PDK sweep at 1661 passed / 10 skipped / 1 xfailed, rc 0. The check
-     is now AST-based, with the positional index read from the signature.
-  B. The two strategies elect a DIFFERENT primary lib in 8 of the 17 custom-PDK
-     configurations this repo tracks — including the rung-2 container-installed
-     shape, where `spice_libs[0]` is an auxiliary lib defining ZERO devices.
-     The divergence changes the answer in just under half the corpus.
-  C. A DeckContext now records WHICH strategy elected its `model_lib`
-     (`primary_policy`), so an artefact can no longer be silent about the world
-     it came from.
+What this half of the file does now:
 
-None of that decides the owner's question. It makes the two answers
-distinguishable — which they were not.
+  A. `test_exactly_one_primary_selection_strategy_exists` — the guard, rewritten
+     from "no production caller wires the second strategy" to "there is no
+     second strategy". Still AST, still refuses to report PASS while examining
+     nothing, and proven able to go red by injecting a fake first-staged call
+     site into a production module.
+  B. The corpus census is KEPT, as a record of what the retired strategy WOULD
+     have elected: a different lib in 8 of the 17 tracked configurations,
+     including a rung-2 shape where it names a lib defining ZERO devices. A
+     deletion whose consequences are unrecorded is indistinguishable from one
+     nobody measured.
+  C. `primary_policy` stays on the DeckContext and in the sweep artefact. With
+     one strategy it is no longer a disambiguator — it is what would make a
+     future second strategy visible in the artefact from its first run.
 """
 from __future__ import annotations
 
 import ast
 import inspect
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -470,124 +494,212 @@ def test_ngspice_split_and_non_self_contained_neither_candidate_loads(
 
 
 # =====================================================================
-# WHICH WORLD IS THE RUNTIME IN? — both strategies are live, and `farm_dir`
-# is the only switch between them.
+# ONE STRATEGY, AND THE RECORD OF THE ONE THAT WAS DELETED.
 # =====================================================================
 
-def _farm_dir_position(fn) -> int:
-    """The POSITIONAL index of `farm_dir` in `fn`'s signature, read from the
-    signature itself so a re-ordered parameter list cannot silently defeat the
-    scan below."""
-    params = list(inspect.signature(fn).parameters)
-    assert "farm_dir" in params, (
-        f"{fn.__name__} no longer takes farm_dir — the first-staged strategy "
-        f"moved; re-derive this scan. params={params}")
-    return params.index("farm_dir")
+RETIRED_KEY = "resolver-entry-lib"
+ENTRY_POINTS = ("custom_family_context", "resolve_deck_context")
 
 
-def test_no_production_caller_wires_the_first_staged_strategy():
-    """BOTH primary-selection strategies are live in the shipped runtime:
+def _retirement_record():
+    recs = getattr(APDC, "RETIRED_PRIMARY_STRATEGIES", None)
+    assert isinstance(recs, dict) and RETIRED_KEY in recs, (
+        "the deleted strategy's record is gone from analog_pdk_deck_context. "
+        "The record is not decoration: the guard below reads the retired switch "
+        "parameter and symbol names OUT of it, so removing it silently disarms "
+        f"the guard. found={type(recs).__name__}")
+    return recs[RETIRED_KEY]
 
-        farm_dir is None  -> primary = max(readable, key=_primary_rank)
-                             (device-defining rank, #149 / v1.4.58)
-        farm_dir is set   -> primary = res["spice_lib"] == spice_libs[0],
-                             loaded through the include farm (the afec policy)
 
-    So "which policy does the product use?" is decided by ONE argument, and
-    this test is the repo's answer. It asserts the CURRENT wiring — no
-    production caller passes farm_dir, so only the device-defining rank is
-    reachable — and it is the thing that must go red the day that changes.
+def test_the_deleted_strategy_left_a_usable_record():
+    """A deletion with no record is indistinguishable from a strategy nobody
+    ever considered — and the next person to want entry-lib primary selection
+    would rediscover the whole argument from scratch.
 
-    AST, NOT GREP, and the difference is measured, not stylistic. The previous
-    version of this test matched the source lines `build_lib_include_farm(` and
-    `farm_dir=`. Passing farm_dir POSITIONALLY —
-        resolve_deck_context(pdk, res, required, reader, bdir / "_libfarm")
-    — wires the first-staged strategy into the sole production caller and
-    matches NEITHER pattern. Measured on this tree with exactly that one-line
-    change: 1661 passed / 10 skipped / 1 xfailed, rc 0. The repo could not tell
-    which world it was in.
+    Asserts the record is SUBSTANTIVE, not merely present: every field carries
+    real prose, it names the git revision the deleted code is recoverable from,
+    and it names the symbols that went. Presence-only assertions would pass on a
+    record of empty strings, which is the failure mode worth guarding.
     """
-    targets = {
-        "custom_family_context": _farm_dir_position(APDC.custom_family_context),
-        "resolve_deck_context": _farm_dir_position(APDC.resolve_deck_context),
-        "build_lib_include_farm": None,   # taking a farm dir IS its signature
-    }
-    defining = Path(APDC.__file__).name
+    rec = _retirement_record()
+    required = ("what_it_did", "why_removed", "how_to_reintroduce",
+                "switch_parameter", "deleted_symbols", "retired_in", "evidence")
+    missing = [k for k in required if k not in rec]
+    assert missing == [], f"the retirement record is missing {missing}"
+
+    for k in ("what_it_did", "why_removed", "how_to_reintroduce"):
+        assert isinstance(rec[k], str) and len(rec[k].split()) >= 25, (
+            f"'{k}' is {len(str(rec[k]).split())} words — a stub. This field is "
+            f"the only thing standing between a future maintainer and "
+            f"re-deriving the whole #193 argument.")
+
+    # the restore instructions must name a revision the code can be recovered
+    # from, or "restore from git history" is not actionable
+    assert re.search(r"v\d+\.\d+\.\d+", rec["how_to_reintroduce"]), (
+        "how_to_reintroduce does not name a revision to restore the deleted "
+        f"code from: {rec['how_to_reintroduce']!r}")
+    assert isinstance(rec["deleted_symbols"], tuple) and rec["deleted_symbols"]
+    assert rec["switch_parameter"] == "farm_dir"
+
+
+def test_exactly_one_primary_selection_strategy_exists():
+    """THE GUARD. It used to assert "no production caller wires the SECOND
+    strategy"; after vibe-ic#193 it asserts there IS no second strategy.
+
+    Four independent checks, because a strategy can come back at four different
+    layers:
+
+      1. the retired SYMBOLS are not back in the defining module;
+      2. no entry point takes the strategy SWITCH parameter again (read from
+         `inspect.signature` — the historical defeat of this check was passing
+         `farm_dir` POSITIONALLY, which a keyword grep cannot see, so nothing
+         here is matched by name in source text);
+      3. inside `custom_family_context`, `primary_policy` can only ever be
+         assigned the ONE election policy plus the no-election sentinel;
+      4. an AST scan of every module under programs/ finds no call site that
+         re-wires a retired symbol or passes the switch — including a call with
+         MORE positional arguments than the entry point's signature accepts,
+         which is exactly the shape that once slipped through.
+
+    NON-VACUOUS BY CONSTRUCTION: it refuses to report PASS unless it actually
+    parsed modules, actually saw entry-point call sites, and actually found
+    policy assignments to inspect — and it discloses all three counts.
+
+    PROVEN ABLE TO GO RED: a fake first-staged call site
+    (`_apdc.build_lib_include_farm(libs, d)`) injected into a production module
+    turns check 4 red; re-adding a `farm_dir=None` parameter to
+    `custom_family_context` turns check 2 red. Both were measured.
+    """
+    rec = _retirement_record()
+    switch = rec["switch_parameter"]
+    gone = tuple(rec["deleted_symbols"])
+
+    # ── 1. the symbols are not back ──────────────────────────────────────────
+    resurrected = [s for s in gone if hasattr(APDC, s)]
+    assert resurrected == [], (
+        f"retired symbol(s) {resurrected} are defined again in "
+        f"{Path(APDC.__file__).name}. If the entry-lib strategy is being "
+        f"reintroduced, follow RETIRED_PRIMARY_STRATEGIES['{RETIRED_KEY}']"
+        f"['how_to_reintroduce'] and update this guard deliberately.")
+
+    # ── 2. no entry point takes the switch again ─────────────────────────────
+    sigs = {}
+    for name in ENTRY_POINTS:
+        fn = getattr(APDC, name, None)
+        assert fn is not None, (
+            f"vacuous: entry point {name} no longer exists, so checking its "
+            f"signature proves nothing about the strategy")
+        params = list(inspect.signature(fn).parameters)
+        sigs[name] = params
+        assert switch not in params, (
+            f"{name} takes '{switch}' again — that single argument is what made "
+            f"the product's primary-selection policy a call-site decision. "
+            f"params={params}")
+
+    # ── 3. one election policy inside custom_family_context ──────────────────
+    module_tree = ast.parse(Path(APDC.__file__).read_text(errors="replace"))
+    fn_node = next((n for n in ast.walk(module_tree)
+                    if isinstance(n, ast.FunctionDef)
+                    and n.name == "custom_family_context"), None)
+    assert fn_node is not None, (
+        "vacuous: custom_family_context was renamed, so the policy scan below "
+        "is not reading the electing function at all")
+    assigned = []
+    for node in ast.walk(fn_node):
+        if not isinstance(node, ast.Assign):
+            continue
+        for tgt in node.targets:
+            if isinstance(tgt, ast.Name) and tgt.id == "primary_policy":
+                assigned.append(node.value.id if isinstance(node.value, ast.Name)
+                                else ast.dump(node.value))
+    assert len(assigned) >= 2, (
+        f"vacuous: only {len(assigned)} assignment(s) to primary_policy found "
+        f"in custom_family_context; the election moved and this check is no "
+        f"longer reading it")
+    assert set(assigned) == {"PRIMARY_BY_DEVICE_RANK", "PRIMARY_NONE"}, (
+        f"custom_family_context can now elect under {sorted(set(assigned))}. "
+        f"vibe-ic#193 settled on ONE election strategy "
+        f"(PRIMARY_BY_DEVICE_RANK) plus the no-election sentinel; a third name "
+        f"here is a second strategy arriving without a decision.")
+
+    # ── 4. no call site re-wires it ──────────────────────────────────────────
+    defining = Path(APDC.__file__).resolve()
     scanned, calls, wired = 0, 0, []
-    for py in sorted(PROGS.glob("*.py")):
-        if py.name == defining:
-            continue                       # the module that DEFINES the switch
+    for py in sorted(PROGS.rglob("*.py")):
+        if py.resolve() == defining:
+            continue                     # covered exhaustively by checks 1-3
         try:
             tree = ast.parse(py.read_text(errors="replace"))
-        except SyntaxError:                # a program that does not parse is
-            continue                       # not a caller of anything
+        except SyntaxError:              # a program that does not parse is
+            continue                     # not a caller of anything
         scanned += 1
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            fn = node.func
-            name = (fn.attr if isinstance(fn, ast.Attribute)
-                    else fn.id if isinstance(fn, ast.Name) else None)
-            if name not in targets:
+            f = node.func
+            name = (f.attr if isinstance(f, ast.Attribute)
+                    else f.id if isinstance(f, ast.Name) else None)
+            where = f"{py.relative_to(PROGS)}:{node.lineno}: {name}(...)"
+            if name in gone:
+                wired.append(f"{where}  [calls a retired symbol]")
+                continue
+            if name not in ENTRY_POINTS:
                 continue
             calls += 1
-            idx = targets[name]
-            passes = ("farm_dir" in [k.arg for k in node.keywords]
-                      or idx is None                       # the farm builder
-                      or len(node.args) > idx)             # POSITIONAL farm_dir
-            if passes:
-                wired.append(f"{py.name}:{node.lineno}: {name}(...)")
+            if switch in [k.arg for k in node.keywords]:
+                wired.append(f"{where}  [passes {switch}=]")
+            elif len(node.args) > len(sigs[name]):
+                wired.append(f"{where}  [{len(node.args)} positional args vs a "
+                             f"{len(sigs[name])}-parameter signature — the "
+                             f"positional shape that once slipped through]")
 
-    # A gate that examined nothing must not report PASS.
     assert scanned >= 2, (
-        f"vacuous: only {scanned} production module(s) parsed — the scan found "
-        f"nothing because it looked at nothing, not because nothing is wired")
+        f"vacuous: only {scanned} module(s) parsed — the scan found nothing "
+        f"because it looked at nothing, not because nothing is wired")
     assert calls >= 1, (
-        f"vacuous: {scanned} modules parsed but ZERO calls to {sorted(targets)} "
-        f"were seen; the runtime entry point was renamed or moved and this scan "
-        f"is no longer measuring the wiring it claims to measure")
-
+        f"vacuous: {scanned} modules parsed but ZERO calls to {list(ENTRY_POINTS)} "
+        f"were seen; the entry points were renamed or moved and this scan is no "
+        f"longer measuring the wiring it claims to measure")
     assert wired == [], (
-        f"the first-staged-lib strategy is now REACHABLE from production "
-        f"({len(wired)} of {calls} call sites across {scanned} modules). That "
-        f"is the vibe-ic#193 architectural decision being taken by a call-site "
-        f"edit. If it is intended, say so here and re-measure the census in "
-        f"test_the_two_strategies_disagree_on_the_tracked_corpus.\n"
+        f"the retired first-staged/entry-lib strategy is REACHABLE again "
+        f"({len(wired)} site(s) across {scanned} modules, {calls} entry-point "
+        f"call sites seen). That is the vibe-ic#193 decision being reversed by "
+        f"a call-site edit. If it is intended, follow "
+        f"RETIRED_PRIMARY_STRATEGIES['{RETIRED_KEY}']['how_to_reintroduce'] and "
+        f"re-state the census in "
+        f"test_the_retired_strategy_would_still_change_the_corpus.\n"
         + "\n".join(wired))
 
-    # And the strategy is genuinely IMPLEMENTED, not merely unreferenced — the
-    # gap is WIRING, not capability, which is what makes it a live decision.
-    assert callable(APDC.build_lib_include_farm)
 
+def test_the_context_records_the_strategy_that_elected_the_primary(tmp_path):
+    """`primary_policy` survives the deletion on purpose.
 
-def test_the_context_records_which_strategy_elected_the_primary(tmp_path):
-    """A context (and every artefact derived from it) must say WHICH of the two
-    live strategies produced its `model_lib`. Before this, two runs that elected
-    DIFFERENT libs by DIFFERENT policies were indistinguishable downstream.
+    With two strategies it answered "which world am I in". With one it is the
+    artefact's positive statement of its policy — which is what would make a
+    future SECOND strategy visible in the artefact from its first run, instead
+    of eight months later.
 
-    Records; decides nothing. Both values are asserted, so neither policy can be
-    quietly relabelled as the other.
+    Also asserts the retired policy VALUE is gone, so the surviving constant
+    cannot be quietly relabelled into the deleted one.
     """
-    res, shim, dev = _stage(tmp_path, split=True, self_contained=True)
+    res, _shim, dev = _stage(tmp_path, split=True, self_contained=True)
 
-    off = APDC.custom_family_context(res)
-    assert off.primary_policy == APDC.PRIMARY_BY_DEVICE_RANK
-    assert off.model_lib == str(dev)
-    assert APDC.PRIMARY_BY_DEVICE_RANK in off.disclosure
-
-    on = APDC.custom_family_context(res, farm_dir=tmp_path / "farm")
-    assert on.primary_policy == APDC.PRIMARY_BY_ENTRY_LIB
-    assert Path(on.model_lib).resolve() == shim.resolve(), (
-        "the farm branch loads the resolver's ENTRY lib (spice_libs[0]) — that "
-        "is the whole of the second strategy")
-    assert APDC.PRIMARY_BY_ENTRY_LIB in on.disclosure
-
-    # the two policies are not the same function here, which is the point
-    assert Path(off.model_lib).resolve() != Path(on.model_lib).resolve()
+    ctx = APDC.custom_family_context(res)
+    assert ctx.primary_policy == APDC.PRIMARY_BY_DEVICE_RANK
+    assert ctx.model_lib == str(dev)
+    assert APDC.PRIMARY_BY_DEVICE_RANK in ctx.disclosure
+    assert ctx.as_json()["primary_policy"] == APDC.PRIMARY_BY_DEVICE_RANK
 
     # the open-PDK path elects nothing at all, and says so
     assert APDC.resolve_deck_context("sky130").primary_policy == \
         APDC.PRIMARY_BY_KNOWN_TABLE
+
+    # the retired policy value is not reachable under any name
+    assert not hasattr(APDC, "PRIMARY_BY_ENTRY_LIB")
+    live = {v for k, v in vars(APDC).items()
+            if k.startswith("PRIMARY_") and isinstance(v, str)}
+    assert live == {APDC.PRIMARY_BY_DEVICE_RANK, APDC.PRIMARY_BY_KNOWN_TABLE,
+                    APDC.PRIMARY_NONE}, sorted(live)
 
 
 def test_the_sweep_result_carries_the_electing_strategy():
@@ -709,19 +821,25 @@ def _corpus(tmp_path):
     return out
 
 
-def test_the_two_strategies_disagree_on_the_tracked_corpus(tmp_path):
-    """HOW BIG is the divergence? A divergence that never changes an outcome is
-    a different problem from one that does — so it is counted, with the
-    denominator stated.
+def test_the_retired_strategy_would_still_change_the_corpus(tmp_path):
+    """WHAT WAS GIVEN UP, counted. A deletion whose consequences are unrecorded
+    is indistinguishable from one nobody measured, so the footprint of the
+    retired entry-lib strategy is kept here with its denominator stated.
 
-    MEASURED on this tree: the device-defining rank and `spice_libs[0]` elect a
-    DIFFERENT primary library in 8 of the 17 tracked configurations. It is
-    therefore not an argument about an edge case; it changes the elected lib in
-    just under half of every arrangement the repo knows how to build.
+    `spice_libs[0]` is computed inline — it does not call the deleted code, so
+    this survives the deletion and remains executable evidence rather than
+    prose about a strategy that is gone.
+
+    MEASURED on this tree: the surviving device-defining rank and the retired
+    `spice_libs[0]` elect a DIFFERENT primary library in 8 of the 17 tracked
+    configurations. The retirement therefore changed nothing observable (the
+    strategy was unreachable) while removing a policy that WOULD have changed
+    the elected lib in just under half of every arrangement the repo knows how
+    to build — which is exactly why it could not be left switchable.
 
     The counts are asserted exactly. If a future change moves the footprint —
     in EITHER direction — this goes red and the new number has to be stated
-    here deliberately. It endorses neither policy.
+    here deliberately.
     """
     corpus = _corpus(tmp_path)
     disagree = []

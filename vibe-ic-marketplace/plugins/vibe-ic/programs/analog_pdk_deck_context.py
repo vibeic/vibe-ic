@@ -26,8 +26,6 @@ hygiene — never PDK content).
 """
 from __future__ import annotations
 
-import hashlib
-import os
 import posixpath
 import re
 from dataclasses import dataclass, field
@@ -183,24 +181,13 @@ class DeckContext:
     unresolved_roles: List[str] = field(default_factory=list)
     work_items: List[str] = field(default_factory=list)
     disclosure: str = ""
-    # include farm (GAP-ANALOG corner-include resolution, OPT-IN): when a caller
-    # passes farm_dir, the entry lib is loaded through a per-root basename farm so
-    # its bare relative `.include` / `.lib` targets resolve even across a
-    # split-staged PDK. None when no farm was built — every known open PDK, and
-    # every current runtime caller. "No runtime caller passes farm_dir" is an
-    # AST-checked claim, not prose: see test_issue193_custom_pdk_primary_
-    # selection_ngspice::test_no_production_caller_wires_the_first_staged_strategy
-    # (a keyword grep cannot see a POSITIONAL farm_dir; measured). Carries COUNTS
-    # + the farm dir only, never a lib basename (NDA).
-    include_farm: Optional[Dict[str, Any]] = None
-    # vibe-ic#193 — WHICH primary-selection strategy elected `model_lib`. TWO are
-    # live in this module and `farm_dir` is the only switch between them, so a
-    # context (and every artefact derived from it) could not previously say which
-    # one produced its lib. Purely a RECORD: it changes no selection and endorses
-    # neither. One of:
+    # vibe-ic#193 — WHICH primary-selection strategy elected `model_lib`. There
+    # is now exactly ONE election strategy (see RETIRED_PRIMARY_STRATEGIES for
+    # the second one and why it is gone), so this is no longer a "which world am
+    # I in" disambiguator — it is the artefact's positive statement of the
+    # strategy it was produced under, which is what makes a future SECOND
+    # strategy visible in the artefact from day one. One of:
     #   PRIMARY_BY_DEVICE_RANK  — the device-defining ranking (#149 / v1.4.58)
-    #   PRIMARY_BY_ENTRY_LIB    — the resolver's declared entry lib, i.e.
-    #                             `spice_libs[0]`, loaded through the include farm
     #   PRIMARY_BY_KNOWN_TABLE  — the open-PDK authored table (no election)
     #   PRIMARY_NONE            — nothing readable to elect
     primary_policy: Optional[str] = None
@@ -218,16 +205,92 @@ class DeckContext:
             "device_terminals": self.device_terminals,
             "unresolved_roles": self.unresolved_roles,
             "work_items": self.work_items, "disclosure": self.disclosure,
-            "include_farm": self.include_farm,
             "primary_policy": self.primary_policy,
         }
 
 
-# vibe-ic#193 — the two primary-selection strategies that are BOTH live here.
+# vibe-ic#193 — the SINGLE primary-selection strategy for a parsed custom family
+# (`PRIMARY_BY_DEVICE_RANK`), plus the two non-election outcomes. A second
+# strategy used to live beside it; see RETIRED_PRIMARY_STRATEGIES.
 PRIMARY_BY_DEVICE_RANK = "device-defining-rank"
-PRIMARY_BY_ENTRY_LIB = "resolver-entry-lib"
 PRIMARY_BY_KNOWN_TABLE = "known-family-table"
 PRIMARY_NONE = "none"
+
+# ── the record of a DELETED strategy ────────────────────────────────────────
+# A deletion that leaves no trace is indistinguishable from a strategy that was
+# never considered. This module carried TWO primary-selection strategies for
+# eight months; the owner's vibe-ic#193 decision keeps one. What follows is the
+# retired one's epitaph — what it did, why it went, and what to do if it is
+# wanted back — kept HERE rather than in a commit message because the next
+# person to need it will be reading this file, not the log.
+#
+# It is also LOAD-BEARING: the #193 guard reads `switch_parameter` and
+# `deleted_symbols` from this record to check that the retired strategy has not
+# quietly returned. Editing this record loosens that guard, so edit it
+# deliberately.
+RETIRED_PRIMARY_STRATEGIES = {
+    "resolver-entry-lib": {
+        "aka": ("first-staged lib", "entry shim", "the afec ordering"),
+        "retired_in": "vibe-ic#193 (owner decision)",
+        "what_it_did": (
+            "Elected `res['spice_lib']` — the resolver's DECLARED entry lib, "
+            "which is `spice_libs[0]` — as the deck's primary model lib, and "
+            "loaded it through a per-root basename symlink farm so its bare "
+            "relative `.include` / `.lib` targets resolved even when the PDK "
+            "was staged across several directories."),
+        "switch_parameter": "farm_dir",
+        "how_it_was_selected": (
+            "`custom_family_context(..., farm_dir=<dir>)` — a runtime argument, "
+            "not a config value. farm_dir=None ran the device-defining rank; "
+            "farm_dir set ran this one. One argument, two products."),
+        "deleted_symbols": (
+            "PRIMARY_BY_ENTRY_LIB", "build_lib_include_farm", "lib_farm_dir",
+            "LIB_FARM_DIRNAME", "_resolve_include_closure",
+            "_cross_file_include_targets"),
+        "deleted_fields": ("include_farm",),
+        "why_removed": (
+            "(1) UNREACHABLE: an AST scan of every .py in the repo — with the "
+            "positional index of `farm_dir` read from `inspect.signature`, so a "
+            "positional pass could not hide — found exactly ONE production call "
+            "site (analog_real_corner_sweep -> resolve_deck_context) and it "
+            "passed no farm_dir. The strategy's other half was unwired too: the "
+            "farm only works if ngspice also RUNS from it, and both production "
+            "`_run_ngspice` call sites pass cwd=None. "
+            "(2) NOT FREE TO KEEP: while both strategies were live the repo "
+            "could not say which one it was running. A one-line POSITIONAL edit "
+            "at that single call site switched the product's primary selection "
+            "for every custom PDK and left the analog/PDK suite green. "
+            "(3) MEASURED AGAINST IT: on the tracked corpus the two strategies "
+            "elect a different lib in 8 of 17 configurations, and in every "
+            "arrangement a simulator could tell apart, ngspice favoured the "
+            "surviving strategy — including one shape where this one elects a "
+            "lib whose transitive closure defines ZERO device subckts."),
+        "evidence": (
+            "test_issue193_custom_pdk_primary_selection_ngspice.py — the "
+            "ngspice cases (A/B/C/D/E), the corpus census, and the "
+            "zero-device-lib consequence are all still executed and still "
+            "record what this strategy WOULD have done."),
+        "how_to_reintroduce": (
+            "Do NOT resurrect it as an argument. The defect was never the "
+            "ranking — it was that a runtime switch made the product's policy "
+            "invisible. If a farm-lineage consumer (afec) needs entry-lib "
+            "primary selection: (a) restore the include-farm builder from git "
+            "history at vibe-ic v1.7.69 (analog_pdk_deck_context.py, "
+            "`build_lib_include_farm` + `_resolve_include_closure` + "
+            "`_cross_file_include_targets`) and its tests from "
+            "test_analog_pdk_lib_include_farm.py at the same revision; "
+            "(b) make the strategy an EXPLICIT, declared property of the "
+            "resolved PDK — carried in the resolver result and echoed in "
+            "`primary_policy` and the sweep artefact — not a call-site "
+            "argument, so the artefact names the policy without anyone having "
+            "to read the call site; (c) wire the sweep's ngspice cwd to the "
+            "farm at the same time, or the farm is inert; (d) re-state the "
+            "corpus census in "
+            "test_the_retired_strategy_would_still_change_the_corpus and add "
+            "this strategy to the guard's expected set — the guard is designed "
+            "to go red on its return, which is the point."),
+    },
+}
 
 
 # ── lib parsing (pure) ──────────────────────────────────────────────────────
@@ -284,17 +347,10 @@ _INCLUDE_RE = re.compile(
 # by a section name); distinct from the `.lib <bare-identifier>` section DEF.
 _LIB_INCLUDE_RE = re.compile(
     r'(?im)^\s*\.lib\s+["\']?([^"\'\s]*[./][^"\'\s]*)["\']?\s+\S+')
-# The FILE token pulled in by an include-FORM line: `.lib <target> <section>` or
-# `.include <target>` — used by the include-closure farm to tell a COMPOSITION
-# shim (whose sections stitch in OTHER lib files) from a raw device lib. These
-# are DISTINCT from _LIB_INCLUDE_RE (which requires a path-ish token): the farm
-# resolver walks bare-name targets too, so it captures ANY two-arg `.lib` file
-# token. Structural — no PDK-name / vendor / SKU literal.
-_INCLUDE_DIRECTIVE_RE = re.compile(r"(?im)^[ \t]*\.include\b")
-_LIB_INCLUDE_TARGET_RE = re.compile(
-    r"""(?im)^[ \t]*\.lib[ \t]+("[^"]*"|'[^']*'|\S+)[ \t]+\S+[ \t]*$""")
-_INCLUDE_TARGET_RE = re.compile(
-    r"""(?im)^[ \t]*\.include[ \t]+("[^"]*"|'[^']*'|\S+)""")
+# (vibe-ic#193: the bare-name include-TARGET regexes that used to sit here
+# served only the retired entry-lib strategy's symlink farm — see
+# RETIRED_PRIMARY_STRATEGIES. `_LIB_INCLUDE_RE` above, which the surviving
+# device-rank parse uses, is a different pattern and stays.)
 
 
 def _iter_includes(text: str):
@@ -459,188 +515,29 @@ def _default_reader(path: str) -> Optional[str]:
         return None
 
 
-def _cross_file_include_targets(text: str, self_basename: str) -> set:
-    """The set of OTHER lib-file basenames a lib pulls in via include-form lines
-    (`.lib <file> <section>` / `.include <file>`), excluding a self-reference.
-    A COMPOSITION shim stitches in the device model lib(s) + prerequisite libs
-    this way; a raw device lib defines devices inline and pulls in nothing (or
-    only self). Structural — no chip / vendor / SKU literal."""
-    out: set = set()
-    for rex in (_LIB_INCLUDE_TARGET_RE, _INCLUDE_TARGET_RE):
-        for m in rex.finditer(text or ""):
-            tgt = m.group(1).strip("\"'")
-            base = Path(tgt).name
-            if base and base != self_basename:
-                out.add(base)
-    return out
-
-
-LIB_FARM_DIRNAME = ".pdk_lib_farm"
-
-
-def lib_farm_dir(project: Any) -> Path:
-    """The canonical per-project model-lib include farm (see
-    build_lib_include_farm). One farm per project, shared by every analog block
-    and by the MC-yield path, so the same staged lib is always loaded through the
-    same path. Dot-prefixed and git-excluded from the inside — the SKU-bearing
-    link names never enter the repo."""
-    return Path(project) / "phase3" / "analog" / LIB_FARM_DIRNAME
-
-
-def _resolve_include_closure(roots: List[Path], libs: List[Path]
-                             ) -> Tuple[List[Path], List[str], List[str]]:
-    """Walk the transitive bare-name include graph from `roots` over the staged
-    `libs`. Returns (closure, ambiguous, missing) where `closure` is the ordered
-    set of files really reachable, and the two lists name the UNRESOLVABLE hops
-    (as target basenames, for the caller to count — never to guess with).
-
-    Each hop is resolved the way ngspice itself would, then widened by exactly
-    one deterministic step:
-      1. a file of that name NEXT TO the including file wins outright (this is
-         ngspice's own rule — unambiguous by construction);
-      2. otherwise the staged set is searched by basename: exactly ONE distinct
-         file → that one; TWO OR MORE → AMBIGUOUS, resolved for neither.
-    So the closure only ever contains files a correct resolver would have loaded;
-    it never picks between same-named candidates."""
-    by_base: Dict[str, List[Path]] = {}
-    for p in libs:
-        by_base.setdefault(p.name, []).append(p)
-    closure: List[Path] = []
-    seen: set = set()
-    ambiguous: List[str] = []
-    missing: List[str] = []
-    queue = list(roots)
-    while queue:
-        cur = queue.pop(0)
-        try:
-            key = str(cur.resolve())
-        except OSError:
-            continue
-        if key in seen or not cur.is_file():
-            continue
-        seen.add(key)
-        closure.append(cur)
-        try:
-            txt = cur.read_text(errors="replace")
-        except OSError:
-            continue
-        for tgt in sorted(_cross_file_include_targets(txt, cur.name)):
-            sib = cur.parent / tgt
-            if sib.is_file():
-                queue.append(sib)                        # rule 1: ngspice's own
-                continue
-            cands = {str(p.resolve()): p for p in by_base.get(tgt, [])
-                     if p.is_file()}
-            if len(cands) == 1:
-                queue.append(next(iter(cands.values())))  # rule 2: unique
-            elif len(cands) > 1:
-                ambiguous.append(tgt)
-            else:
-                missing.append(tgt)
-    return closure, ambiguous, missing
-
-
-def build_lib_include_farm(libs: List[str], farm_dir: Any,
-                           roots: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Co-locate the model libs REACHABLE from `roots` under one directory as
-    SYMLINKS keyed by basename, and return
-    {"dir", "map": {staged-path: farm-path}, "n_linked", "ambiguous", "missing"}.
-
-    WHY (GAP-ANALOG, corner-include resolution): a PDK's composed corner shim
-    stitches in its prerequisite / device libs by BARE RELATIVE NAME, and ngspice
-    resolves a relative `.include` / `.lib` target against the directory of the
-    INCLUDING FILE — never against the process cwd. When the staged libs span
-    several directories, a bare include that crosses a directory boundary is
-    unresolvable from ANY cwd ("Could not find library file …" → fatal exit(1) on
-    every corner). Loading the entry lib through a farm whose members are all
-    basename-siblings makes every hop resolve, transitively, without copying or
-    rewriting a single byte of PDK content.
-
-    Scoped to the include CLOSURE of `roots`, not to every staged lib: a PDK may
-    legitimately stage two different files under one basename in different
-    directories, and only one of them is reachable. Farming the whole staged set
-    flat would make that name ambiguous and block an otherwise-resolvable deck.
-
-    Cannot silently substitute a wrong lib:
-      * a hop whose basename has two DISTINCT candidates and no same-directory
-        winner is AMBIGUOUS — it is linked for NEITHER, so ngspice fails loudly
-        rather than loading an arbitrary one;
-      * a target genuinely absent from the staged set is absent from the farm too
-        — ngspice still errors and the run still fails;
-      * the farm holds symlinks only, so a linked lib is byte-for-byte the file
-        the resolver chose.
-
-    chip/PDK-AGNOSTIC (structural — no vendor / SKU / filename literal). NDA: the
-    summary carries COUNTS and the farm dir only, never a lib basename, and the
-    farm self-excludes from git so the SKU-bearing link names never enter the
-    repo."""
-    staged = []
-    for lib in libs:
-        p = Path(lib)
-        try:
-            if p.is_file():
-                staged.append(p)
-        except OSError:
-            continue
-    root_paths = [Path(r) for r in (roots if roots is not None else libs)]
-    closure, ambiguous, missing = _resolve_include_closure(root_paths, staged)
-    empty = {"dir": None, "map": {}, "n_linked": 0,
-             "ambiguous": len(set(ambiguous)), "missing": len(set(missing))}
-    if not closure:
-        return empty
-    # One farm per ROOT SET: two entry libs whose closures disagree on a basename
-    # must not share a directory, or the second would silently shadow the first.
-    tag = hashlib.sha256(
-        "\n".join(sorted(str(p.resolve()) for p in root_paths)).encode()
-    ).hexdigest()[:12]
-    farm = Path(farm_dir) / tag
-    try:
-        farm.mkdir(parents=True, exist_ok=True)
-        (Path(farm_dir) / ".gitignore").write_text("*\n")
-    except OSError as exc:
-        return dict(empty, error=str(exc))
-    # a basename claimed by two DISTINCT files INSIDE the closure cannot be
-    # represented in a flat farm — link neither, and report it as ambiguous.
-    by_base: Dict[str, set] = {}
-    for p in closure:
-        by_base.setdefault(p.name, set()).add(str(p.resolve()))
-    shadowed = {b for b, reals in by_base.items() if len(reals) > 1}
-    mapping: Dict[str, str] = {}
-    for p in closure:
-        if p.name in shadowed:
-            continue
-        # link to the ABSOLUTE STAGED path (not the realpath): the container
-        # already reaches the staged path today, and the PDK's own symlink chain
-        # stays exactly as it was staged.
-        target = str(p.absolute())
-        link = farm / p.name
-        try:
-            if link.is_symlink():
-                if os.readlink(str(link)) != target:
-                    link.unlink()
-                    link.symlink_to(target)
-            elif link.exists():
-                continue                    # a real file squats the name — leave it
-            else:
-                link.symlink_to(target)
-        except OSError:
-            continue
-        mapping[str(p)] = str(link)
-    return {"dir": str(farm), "map": mapping, "n_linked": len(mapping),
-            "ambiguous": len(set(ambiguous) | shadowed),
-            "missing": len(set(missing))}
+# vibe-ic#193 — the include-farm builder that served the retired entry-lib
+# strategy stood here (`_cross_file_include_targets`,
+# `_resolve_include_closure`, `LIB_FARM_DIRNAME`, `lib_farm_dir`,
+# `build_lib_include_farm`). It is gone with the strategy it existed for:
+# the farm's only effect was to redirect `primary` to the resolver's entry
+# lib, so without that redirect it built symlinks nothing ever loaded. See
+# RETIRED_PRIMARY_STRATEGIES for the epitaph and the restore instructions.
 
 
 def custom_family_context(res: Dict[str, Any],
                           required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
                           reader: Optional[Callable[[str], Optional[str]]] = None,
-                          farm_dir: Any = None,
                           ) -> DeckContext:
     """Build the deck context for a RESOLVED custom / installed non-open family
     (rung 1 project_custom_pdk, or rung 2 container_installed of an unknown
     family) by PARSING its resolved model libs. Fails HONESTLY
     (NEEDS_NATIVE_TEMPLATE) when a required device role or a corner section
-    cannot be resolved — never emits sky130 devices for a foreign lib."""
+    cannot be resolved — never emits sky130 devices for a foreign lib.
+
+    vibe-ic#193: the primary model lib is elected by ONE strategy, the
+    device-defining rank below. There is no argument that changes that — the
+    strategy this function runs is a property of the function, so the call site
+    no longer decides the product's PDK policy."""
     reader = reader or _default_reader
     source = res.get("source") or "container_installed"
     family = res.get("family") or res.get("target")
@@ -800,36 +697,11 @@ def custom_family_context(res: Dict[str, Any],
     if unread and work_items:
         work_items.append("NEEDS_NATIVE_TEMPLATE: " + unread_note)
 
-    # ── include farm (GAP-ANALOG corner-include resolution) — OPT-IN ──────────
-    # Load the ENTRY lib (the resolver's declared `spice_lib`, falling back to the
-    # ranked primary) through a per-root basename farm so its bare relative
-    # `.include` / `.lib` targets resolve even across a split-staged PDK — ngspice
-    # resolves such a target against the INCLUDING FILE's directory, so no cwd
-    # choice can help. PURELY opt-in: no farm_dir (every current runtime caller,
-    # and every known open PDK, which never reaches here) keeps the raw-path
-    # behaviour byte-identical. When a hop cannot be resolved to ONE file the
-    # context fails honestly rather than guessing which staged lib was meant.
-    farm = None
-    if farm_dir is not None:
-        entry = res.get("spice_lib") or primary
-        if entry:
-            farm = build_lib_include_farm(readable, farm_dir, roots=[entry])
-            farmed_entry = (farm.get("map") or {}).get(str(Path(entry)))
-            if farmed_entry:
-                primary = farmed_entry     # load the entry lib THROUGH the farm
-                # vibe-ic#193 — this branch OVERRIDES the device-defining ranking
-                # with the resolver's declared entry lib (`spice_libs[0]`). It is
-                # the second live strategy; record which one won.
-                primary_policy = PRIMARY_BY_ENTRY_LIB
-            if farm.get("ambiguous") or farm.get("missing"):
-                work_items.append(
-                    "NEEDS_NATIVE_TEMPLATE: the entry model lib composes other "
-                    "libs by bare relative name (which ngspice resolves against "
-                    "the INCLUDING FILE's directory), and "
-                    f"{farm.get('ambiguous')} such target(s) are ambiguous "
-                    f"across the staged libs while {farm.get('missing')} are "
-                    "absent from them — refusing to guess which file is meant")
-            farm = {k: v for k, v in farm.items() if k != "map"}
+    # (vibe-ic#193: an OPT-IN branch stood here that replaced `primary` with the
+    # resolver's declared entry lib, loaded through a symlink farm. It was the
+    # second primary-selection strategy and it is retired — see
+    # RETIRED_PRIMARY_STRATEGIES. `primary` is now whatever the rank above
+    # elected, on every path.)
 
     status = "OK" if (not work_items) else "NEEDS_NATIVE_TEMPLATE"
     composed_note = (f"; composed-corner sections={primary_composed}"
@@ -837,8 +709,9 @@ def custom_family_context(res: Dict[str, Any],
     term_note = (f"; device_terminals={device_terminals}"
                  if any(v > 4 for v in device_terminals.values()) else "")
     # vibe-ic#193 — name the electing strategy in the human-readable disclosure
-    # too, so an artefact carrying only the prose still says which world it came
-    # from. States WHICH ran; asserts nothing about which SHOULD.
+    # too, so an artefact carrying only the prose still states its policy. With
+    # one strategy left this is a positive record rather than a disambiguator:
+    # it is what would make a future second strategy visible immediately.
     policy_note = f" [primary elected by: {primary_policy}]"
     disclosure = (
         f"custom PDK family '{family}' ({source}) — device map + corner "
@@ -855,7 +728,7 @@ def custom_family_context(res: Dict[str, Any],
         typ_section=typ, process_corners=process,
         device_map=device_map, device_terminals=device_terminals,
         unresolved_roles=unresolved,
-        work_items=work_items, disclosure=disclosure, include_farm=farm,
+        work_items=work_items, disclosure=disclosure,
         primary_policy=primary_policy)
 
 
@@ -863,7 +736,6 @@ def resolve_deck_context(pdk_selector: str,
                          res: Optional[Dict[str, Any]] = None,
                          required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
                          reader: Optional[Callable[[str], Optional[str]]] = None,
-                         farm_dir: Any = None,
                          ) -> DeckContext:
     """Dispatcher — the ONE entry point the deck emitter calls.
 
@@ -878,11 +750,11 @@ def resolve_deck_context(pdk_selector: str,
     if res and res.get("available"):
         src = res.get("source")
         if src == "project_custom_pdk":
-            return custom_family_context(res, required, reader, farm_dir)
+            return custom_family_context(res, required, reader)
         if src == "container_installed":
             matched = (res.get("matched_dir") or "").lower()
             # a known open family installed in the container → fast path;
             # an UNKNOWN installed family → parse it (family-agnostic).
             if not any(k in matched for k in _KNOWN_FAMILIES):
-                return custom_family_context(res, required, reader, farm_dir)
+                return custom_family_context(res, required, reader)
     return known_family_context(pdk_selector)
