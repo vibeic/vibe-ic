@@ -1426,7 +1426,30 @@ steps:
     gate:
       all_of:
         - files_exist: ["phase3/stage3/pnr/routed.def"]
-        - program_exit_zero: "drc_report_check . --mode drc --json reports/phase3/drc_router.json"
+        # STEP-SCOPED. `eda_report_audit` discovers reports by project-wide
+        # rglob, with no relationship to the step asking. Measured on the real
+        # completed run campaign_pr427/spm/converge_ihp-sg13g2, this gate
+        # reported files_found=5 and cited
+        # `steps/31_physical_verification_drc_lvs_erc_density/drc_signoff.rpt`
+        # — STEP 31's KLayout sign-off DRC — as the report its verdict was
+        # reached over, with real_violation_total summed across all five. Both
+        # directions are wrong: step 31's report can carry this gate when the
+        # router's own is absent, and step 31's violations can fail routing.
+        # `--under` restricts discovery to THIS step's own router-DRC
+        # artefacts: the emitter's `phase3/stage3/pnr/routed.drc.rpt` (declared
+        # above) and the canonicalised copy `reports/phase3/drc_router.rpt`,
+        # both written by phase3_one_shot_runner's Step-21 emitter. Scoped, the
+        # real run reports files_found=1 on routed.drc.rpt and still rc=0.
+        #
+        # BLAST RADIUS, measured over the 26 phase-3 roots under
+        # benchmark-data/ic: 7 move rc 0 -> 1. Six are `<root>/reports`
+        # pseudo-roots the enumeration produced (a gate is invoked with the
+        # project root, not its reports/ subdir). The seventh,
+        # `benchmark-data/ic/sha256`, is a genuine root holding NO router-DRC
+        # report of its own — its PASS was earned entirely by the DRC reports
+        # of the nested clean_run_* snapshots underneath it. rc=1 there is the
+        # correct verdict, and it is the rc=1 path having been SEEN to execute.
+        - program_exit_zero: "drc_report_check . --mode drc --under phase3/stage3/pnr --under reports/phase3/drc_router.rpt --json reports/phase3/drc_router.json"
         # Anti-fabrication: all 5 stage DEFs must be byte-distinct,
         # size-monotone, instance-count growing, and routed.def must
         # contain `+ ROUTED` geometry. Added 2026-04-22 after bench-a
@@ -1488,6 +1511,36 @@ steps:
     required_outputs:
       - "phase3/stage3/sta/post_route_timing.rpt"
       - "reports/phase3/sta/post_route_summary.json"
+      # The two multi-corner STANCE files. This step is named "multi-corner
+      # multi-mode sign-off" and its own sub-gate
+      # (`sta_corner_record_completeness_check`) reads these to decide whether
+      # the record accounts for every DECLARED sign-off corner — yet neither
+      # was declared by any step in the flow, so nothing verified that the
+      # step's corner stance was recorded at all. Both are written
+      # UNCONDITIONALLY by `step_canonicalize_artefacts` whenever a primary DEF
+      # exists (which step 23 requires anyway): they are §4.05 DISCLOSURE
+      # artefacts that state the stance even when the multi-corner run degraded
+      # to single-corner, so they exist on the honest-limitation path too.
+      # Present in 7 of the published phase-3 roots under benchmark-data/ic vs
+      # 6 for the already-declared post_route_timing.rpt.
+      #
+      # COST: two archived roots (caravel_user_project, subservient) predate
+      # the TAPEOUT-SIGNOFF-P1 producer and carry post_route_timing.rpt with no
+      # stance file; re-auditing those archives now reports the missing entry.
+      # That is accurate — those runs recorded no corner stance.
+      - "reports/phase3/multi_corner_spef_stance.json"
+      - "reports/phase3/mcorner_ocv_stance.json"
+      # NOT declared, deliberately:
+      #   phase3/stage3/sta/sta_mcorner_ocv.rpt — written only when the PDK's
+      #     ss and ff process libraries genuinely differ; a single-liberty PDK
+      #     legitimately produces none, and its absence is already DISCLOSED in
+      #     mcorner_ocv_stance.json (`report: null`), which IS declared above.
+      #   phase3/stage3/sta/sta_spef_based.rpt — conditional on a non-empty
+      #     SPEF, and extraction has a documented tool-unavailable waiver path.
+      #   reports/phase3/sta/drv_promotion_corroboration.json — produced ONLY
+      #     by this step's own gate, and flow_compliance_check evaluates
+      #     required_outputs BEFORE running the gate, so declaring it would
+      #     report MISSING on every first evaluation.
     gate:
       all_of:
         - files_exist: ["phase3/stage3/sta/post_route_timing.rpt"]
@@ -1550,7 +1603,16 @@ steps:
       - "reports/phase3/ir_drop.json"
     gate:
       all_of:
-        - program_exit_zero: "ir_drop_report_check . --mode ir_drop --json reports/phase3/ir_drop.json"
+        # OUTPUT-PATH COLLISION (same shape as step 25's, fixed with it in
+        # PR #473 and completed here). This declared
+        # `--json reports/phase3/ir_drop.json`, which is the PRODUCER's file:
+        # `step_canonicalize_artefacts` → `_emit_ir_em_reports` writes the PSM
+        # measurement there (worst_ir_uv / budget_uv / verdict) and the runner
+        # reads it back as this step's evidence — it is also this step's own
+        # required_output above. It survived only because the wrapper discarded
+        # the caller's argv; now that the flag is honoured, the audit verdict
+        # goes to a SEPARATE file or the checker destroys what it audits.
+        - program_exit_zero: "ir_drop_report_check . --mode ir_drop --json reports/phase3/ir_drop_signoff.json"
         # v1.3.96 — VCD-vectored DYNAMIC IR (OpenROAD PSM read_vcd + activity-
         # weighted analyze_power_grid). Blocks on a real budget when a design
         # VCD exists; a genuinely-absent VCD → SKIPPED_CONDITION rc 0 (never
@@ -1568,6 +1630,14 @@ steps:
     skills: [em-check]
     required_outputs:
       - "reports/phase3/em.rpt"
+      # The MEASUREMENT (`verdict: MEASURED`, max_segment_current_A,
+      # segments_analysed) the runner reads back as this step's sign-off
+      # evidence — `_read_verdict(reports/phase3/em.json)`. It was produced on
+      # every run and declared by nothing, so no gate ever verified the file the
+      # step's own verdict is read from. `_emit_ir_em_reports` writes em.rpt and
+      # em.json inside ONE `if has_em:` branch, so this entry is satisfiable
+      # exactly whenever the already-declared em.rpt is.
+      - "reports/phase3/em.json"
     gate:
       # OUTPUT-PATH COLLISION. This declared `--json reports/phase3/em.json`,
       # which is the PRODUCER's file: `step_canonicalize_artefacts` →
@@ -1591,6 +1661,13 @@ steps:
       - gds_antenna_deck_check
     required_outputs:
       - "reports/phase3/antenna.rpt"
+      # The MEASUREMENT (net_violations / pin_violations / clean / verdict) the
+      # runner reads back as this step's evidence —
+      # `_read_verdict(reports/phase3/antenna.json)`. Produced on every run,
+      # declared by nothing. Both `_emit_antenna_report` branches write
+      # antenna.rpt and antenna.json together and return True only there, so
+      # this entry is satisfiable exactly whenever the declared antenna.rpt is.
+      - "reports/phase3/antenna.json"
     gate:
       all_of:
         # Substance gate (was presence-only) — parses the OpenROAD check_antennas
@@ -1599,7 +1676,14 @@ steps:
         # This is a ROUTER-REPORT consumer: it can only repeat what the router
         # already believed. PRESERVED unchanged — the deck below ADDS a second
         # opinion, it does not replace this one.
-        - program_exit_zero: "antenna_report_check . --mode antenna --json reports/phase3/antenna.json"
+        # OUTPUT-PATH COLLISION, same shape as steps 24/25: this declared
+        # `--json reports/phase3/antenna.json`, the PRODUCER's measurement file
+        # (and now this step's required_output above). The audit verdict goes to
+        # a separate file. `eda_report_audit` also globs `*antenna*.json`, so
+        # `_discover` was taught to skip its own verdict documents — measured
+        # before that guard, a second run of this gate re-ingested its own
+        # output and files_found went 1 -> 2.
+        - program_exit_zero: "antenna_report_check . --mode antenna --json reports/phase3/antenna_signoff.json"
         # INDEPENDENT GDS-geometry antenna sign-off (the authoritative second
         # opinion the flow never had). Reconstructs the as-fabricated
         # connectivity from the streamed GDS and computes per-net
@@ -1657,6 +1741,21 @@ steps:
         # the emitted report (advisory) rather than hard-failing a negative
         # bounded slack — a negative bound is a WARNING watch-item for a
         # commercial SI tool. Self-skips when no MCF report was produced.
+        #
+        # VACUITY, and why `blocks_on: [22]` is not enough on its own. Every
+        # check on this axis re-derives a Cc*MCF fold, so an extraction that
+        # carried NO coupling cap satisfies all of them by having nothing to
+        # measure. Step 22 legitimately PASSes at its declared tier-1
+        # (grounded-cap-only) extraction, so the dependency does not prevent
+        # "upstream inadequate, downstream clean PASS". Measured on the real
+        # completed run campaign_pr427/spm/converge_ihp-sg13g2: 2040 grounded
+        # *CAP entries, 0 coupling entries, si_mcf_sta_check coupling_pairs=0,
+        # nets_checked=0, before==after — and verdict "PASS". Both ends now
+        # DISCLOSE instead: step 22's spef_extraction_check emits
+        # NO_COUPLING_CAPS, and si_mcf_sta_check's verdict reads
+        # VACUOUS_NO_COUPLING. Both stay rc 0 — a tier-1 extraction is a
+        # declared capability tier, not a defect; what is forbidden is
+        # certifying SI clean off it.
         - optional_program_exit_zero:
             command: "si_mcf_sta_check . --json reports/phase3/si_mcf_sta_check.json"
             condition_files_exist: ["reports/phase3/si_mcf_sta.json"]

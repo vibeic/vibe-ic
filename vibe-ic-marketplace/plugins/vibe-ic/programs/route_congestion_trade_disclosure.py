@@ -85,6 +85,51 @@ _LOG_CANDIDATES = (
     "reports/phase3/pnr.log",
 )
 
+# SDC DISCOVERY. `clock_nets()` used to probe three hardcoded FILENAMES —
+# `phase3/stage3/pnr/constraints.sdc`, `phase3/stage3/sdc/design.sdc`,
+# `reports/phase3/constraints.sdc`. The phase-3 runner writes
+# `phase3/stage3/pnr/constraint.sdc` (SINGULAR — `_ATPG_SDC_REL`, and the
+# `read_sdc {pnr}/constraint.sdc` in every OpenROAD script it emits), so not one
+# of the three ever matched a real run. Measured on the real completed run
+# `campaign_pr427/spm/converge_ihp-sg13g2`, whose constraint.sdc contains
+# `create_clock -name clk -period 10.0 [get_ports clk]`::
+#
+#     origin/main   clock_evidence_available = false   clock_nets = []
+#
+# i.e. the clock-vs-signal classification this disclosure exists to make could
+# never be made on real data, for the sole reason that the consumer guessed a
+# filename the producer does not use.
+#
+# Discovery is now by DIRECTORY + `*.sdc`, matching `clock_plan_check`'s
+# `_SDC_DIR_CANDIDATES` (the plugin's existing convention for the same
+# question) so a filename change on either side cannot silently break it again.
+_SDC_DIR_CANDIDATES = (
+    # clock_plan_check._SDC_DIR_CANDIDATES, in its order …
+    "phase3/stage3/constraints",
+    "phase3/stage3/cts/constraints",
+    "phase3/stage3/pnr",
+    "phase2/stage2/constraints",
+    "phase2/stage1/fpga",
+    "constraints",
+    # … plus the two directories the old hardcoded filenames reached into, so
+    # nothing that was reachable before becomes unreachable now.
+    "phase3/stage3/sdc",
+    "reports/phase3",
+)
+
+
+def find_sdc_files(project: Path) -> List[Path]:
+    """Every `*.sdc` under the known constraint directories, in a stable order."""
+    seen: List[Path] = []
+    for rel in _SDC_DIR_CANDIDATES:
+        d = project / rel
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.sdc")):
+            if f not in seen:
+                seen.append(f)
+    return seen
+
 
 def find_pnr_log(project: Path) -> Optional[Path]:
     for rel in _LOG_CANDIDATES:
@@ -100,11 +145,7 @@ def clock_nets(project: Path) -> Set[str]:
     Returns an empty set when there is no evidence — callers must then treat
     classification as UNKNOWN rather than guessing from the name."""
     out: Set[str] = set()
-    for rel in ("phase3/stage3/pnr/constraints.sdc", "phase3/stage3/sdc/design.sdc",
-                "reports/phase3/constraints.sdc"):
-        p = project / rel
-        if not p.is_file():
-            continue
+    for p in find_sdc_files(project):
         txt = p.read_text(errors="replace")
         # create_clock binds a PORT; create_generated_clock binds a derived
         # clock (divided / gated), which is exactly where a net like

@@ -26,8 +26,33 @@ SPEF actually carries it:
      BETTER than the nominal grounded slack (after > before), that contradicts
      the physics of the bound -> FAIL ("reported slack better than the bound").
 
+VACUITY (the case every step above is silent about)
+===================================================
+Steps 1-4 all reason about coupling caps. When the extraction carried NONE, every
+one of them is trivially satisfied: there is no ``Cc`` to drop, so nothing can be
+caught dropping it. Measured on the real completed run
+``campaign_pr427/spm/converge_ihp-sg13g2`` (pure-digital standard cell)::
+
+    summary.coupling_pairs          0
+    recount.setup.nets_checked      0     residual_coupling_caps 0
+    recount.hold.nets_checked       0     residual_coupling_caps 0
+    monotonicity setup              5.8691 -> 5.8691   (before == after)
+    verdict                         "PASS"
+
+That last line is the defect. A gate whose stated purpose is to prevent a
+false-clean SI sign-off returned a plain ``PASS`` for a run in which it measured
+nothing — while its sibling ``si_crosstalk_check`` already names exactly this
+situation (``verdict: ADVISORY_SCREEN_ONLY`` + a ``SI_ADVISORY_SCREEN_ONLY``
+WARNING). The verdict now names the tier: ``VACUOUS_NO_COUPLING``, with a
+``SI_MCF_VACUOUS_NO_COUPLING`` WARNING that points at the upstream cause. The
+absence originates at step 22, which now discloses it there too
+(``spef_extraction_check``: ``NO_COUPLING_CAPS``).
+
 Exit 0 = PASS (every corner's bound is genuinely applied + reported honestly),
-1 = FAIL, 2 = IO/arg error. Writes reports/phase3/si_mcf_sta_check.json.
+1 = FAIL, 2 = IO/arg error. A vacuous run stays rc 0 — a grounded-cap-only
+extraction is step 22's declared tier 1, a legitimate result, and turning it
+into a FAIL would fail every pure-digital run for a capability gap rather than a
+defect. What it must not do is CERTIFY. Writes reports/phase3/si_mcf_sta_check.json.
 """
 from __future__ import annotations
 
@@ -89,6 +114,20 @@ def audit(project_dir: Path,
     sp = M.parse_spef(orig_text)
     pairs = M.coupling_pairs(sp)
     stats["coupling_pairs"] = len(pairs)
+
+    # VACUITY. Every check below re-derives a Cc*MCF fold. With no coupling
+    # cap in the extraction there is no fold to verify, so each one passes by
+    # having nothing to measure. Disclose it rather than let the emptiness read
+    # as a clean sign-off (the sibling si_crosstalk_check already does this).
+    if not pairs:
+        stats["vacuous_no_coupling"] = True
+        findings.append(Finding(
+            "WARNING", "SI_MCF_VACUOUS_NO_COUPLING",
+            "the original SPEF carries 0 coupling (2-node) caps, so the "
+            "MCF-fold recount has nothing to verify — this verdict is VACUOUS, "
+            "not an SI measurement. Cause is upstream at step 22 extraction "
+            "(see spef_extraction_check NO_COUPLING_CAPS): a grounded-cap-only "
+            "SPEF cannot support crosstalk analysis."))
 
     net_windows, exact = _load_windows(report, sp["net_driver_pins"])
     stats["windows_exact"] = exact
@@ -152,15 +191,21 @@ def audit(project_dir: Path,
 
 def build_report(findings: List[Finding], stats: dict, project_dir: str) -> dict:
     ok = all(f.severity != "ERROR" for f in findings)
+    vacuous = stats.get("vacuous_no_coupling", False)
     return {
         "program": "si_mcf_sta_check",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "project_dir": project_dir,
-        "verdict": "PASS" if ok else "FAIL",
+        # The headline names the tier, exactly as si_crosstalk_check's does: a
+        # recount that had no coupling cap to recount is never presented as a
+        # plain sign-off PASS.
+        "verdict": ("VACUOUS_NO_COUPLING" if ok and vacuous
+                    else "PASS" if ok else "FAIL"),
         "summary": {
             "corners_checked": stats.get("corners_checked", []),
             "windows_exact": stats.get("windows_exact"),
             "coupling_pairs": stats.get("coupling_pairs"),
+            "vacuous_no_coupling": vacuous,
             "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
             "findings_count": len(findings),
             "pass": ok,

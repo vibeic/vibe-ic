@@ -251,6 +251,37 @@ def _extract_clocks(plan):
 # ----------------------------------------------------------------------
 # SDC create_clock harvesting (for dropped-clock detection)
 # ----------------------------------------------------------------------
+# Artefacts the plan is derived from (the SDCs) or describes (the DEFs the
+# floorplan / placement / CTS pass produce). A plan older than any of them was
+# written for an earlier state of the design.
+_PLAN_INPUT_CANDIDATES = [
+    "phase3/stage3/pnr/floorplan.def",
+    "phase3/stage3/pnr/placed.def",
+]
+
+
+def _stale_inputs(project: Path, plan_path: Path):
+    """Relative paths of plan inputs NEWER than the plan itself, sorted.
+
+    Returns [] when the plan is fresh, when nothing to compare exists, or when
+    a stat fails — an unreadable mtime is not evidence of staleness.
+    """
+    try:
+        plan_mtime = plan_path.stat().st_mtime
+    except OSError:
+        return []
+    newer = []
+    candidates = list(_find_sdc_files(project))
+    candidates += [project / rel for rel in _PLAN_INPUT_CANDIDATES]
+    for p in candidates:
+        try:
+            if p.is_file() and p.stat().st_mtime > plan_mtime:
+                newer.append(str(p.relative_to(project)))
+        except (OSError, ValueError):
+            continue
+    return sorted(set(newer))
+
+
 def _find_sdc_files(project: Path):
     seen = []
     for rel in _SDC_DIR_CANDIDATES:
@@ -468,6 +499,33 @@ def main(argv=None):
             "severity": "INFO", "rule": "NO_SDC",
             "message": "no SDC create_clock found — dropped-clock cross-check "
                        "skipped (plan substance still verified)",
+        })
+
+    # ---- freshness DISCLOSURE (advisory) -------------------------------
+    # The plan is derived from the project's SDCs and describes the design the
+    # floorplan/placement realise. Nothing here ever compared their ages.
+    # Measured on the real completed run campaign_pr427/spm/converge_ihp-sg13g2:
+    # clock_plan.json mtime 1785077203 vs floorplan.def 1785078102 and
+    # placed.def 1785078103 — the plan predates both by ~15 min, because the
+    # runner's own refresh test was content-only (a populated `clocks` array was
+    # never rewritten). The producer now re-derives the plan when an input is
+    # newer (phase3_one_shot_runner, Step-16 artefact block); this reports the
+    # condition for plans written by an older runner.
+    #
+    # ADVISORY, not blocking: on that run the stale plan's content still agreed
+    # with the live constraint.sdc (clk / 10 ns), i.e. no wrong answer was
+    # produced, and a blocking slot here would FAIL every already-completed run
+    # for a provenance condition the producer fix prevents going forward. rc is
+    # unchanged; the fact is now in the report instead of nowhere.
+    stale_against = _stale_inputs(project, plan_path)
+    if stale_against:
+        findings.append({
+            "severity": "WARNING", "rule": "CLOCK_PLAN_STALE",
+            "message": f"{plan_rel} is OLDER than {stale_against} — it was "
+                       f"written before the input(s) it is derived from / the "
+                       f"placement it describes. Content was not re-derived on "
+                       f"this run; a period or clock changed since would not "
+                       f"be reflected here.",
         })
 
     verdict = "PASS" if ok else "FAIL"
