@@ -5,9 +5,15 @@ mixed_signal_signoff_check.py — gate M4 (hardened, anti-fabrication).
 M4 — Mixed-signal sign-off (final verdict roll-up)
 ==================================================
 
-The producing step writes ``reports/analog/mixed_signal/signoff.json`` with a
+M4's input, ``reports/analog/mixed_signal/signoff.json``, carries a
 self-asserted ``ready_for_tapeout`` boolean.  Trusting that boolean alone is an
-anti-fabrication hole: the step would be signing off on its own work.
+anti-fabrication hole: whoever wrote it would be signing off on their own work.
+
+That file is an INPUT: no program shipped in this plugin writes it (M4-d4,
+corrected 2026-07 — this docstring used to open with "The producing step
+writes …", which sent the reader looking for a step that does not exist). It
+is authored by the mixed-signal sign-off owner, and its absence on an
+applicable project is a FAIL below, never a vacuous PASS.
 
 This checker therefore performs REAL DETERMINISTIC SUBSTANCE verification:
 
