@@ -158,10 +158,22 @@ module tb_hdlc_stuff_fcserr;
         end
 
         // ---- TEST 2: FCS-error case --------------------------------
-        // Replay the same stream but flip one data bit (index 12, inside
-        // the first payload byte region after the opening flag).  The
-        // frame must still complete but fcs_ok must be 0.
-        feed_stream(12);
+        // Replay the same stream but flip one payload data bit so the
+        // FCS-16 residue no longer matches.  The frame must still
+        // complete (frame_valid=1) but fcs_ok must be 0.
+        //
+        // The flip index must be chosen so the corruption is an FCS error
+        // and ONLY an FCS error.  Wire index 12 (used previously) is not:
+        // it is payload[0] bit 4, the fifth 1 of a five-ones run, so
+        // clearing it means the 0 that follows at index 13 is no longer a
+        // stuffed bit.  The deframer then collects that 0 as data, the
+        // body ends one bit past an octet boundary, and the frame is a
+        // FRAMING error as well — which the deframer now rejects outright
+        // (see tb_hdlc_octet_align).  Wire index 34 is payload[2] bit 7 —
+        // still a payload bit ahead of the FCS, but not adjacent to a
+        // stuff boundary, so octet alignment survives and the FCS residue
+        // alone is what fails.
+        feed_stream(34);
 
         if (!seen_valid) begin
             $display("[TB] TEST2 FAIL: frame_valid never asserted on corrupted frame");

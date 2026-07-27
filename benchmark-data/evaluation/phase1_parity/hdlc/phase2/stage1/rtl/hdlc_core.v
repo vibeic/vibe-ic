@@ -28,8 +28,10 @@
 //     consecutive 1-bits, strip the following 0-bit), detects ABORT
 //     (>=7 consecutive 1-bits) and IDLE (>=15 consecutive 1-bits),
 //     deserialises octets LSB-first into Address/Control/Information,
-//     and on the closing FLAG checks the FCS-16 residue (0x1D0F on a
-//     correct receive).  Raises frame_valid (1-clk) with fcs_ok.   [L6/L8]
+//     and on the closing FLAG checks BOTH octet alignment AND the FCS-16
+//     residue (0x1D0F on a correct receive).  An octet-aligned close
+//     raises frame_valid (1-clk) with fcs_ok; a close that lands mid-octet
+//     raises rx_align_err (1-clk) instead and delivers nothing. [L6/L8]
 //
 // Spec grounding (every rule traceable to an L-doc):
 //   * FLAG = 0x7E = binary 01111110.                                [L3 frame_field_layout, L8 FLAG_VALUE]
@@ -45,6 +47,26 @@
 //     .../FCS_CHECK/DELIVER/ABORT.
 //   * No protocol-layer register map; concrete IP defines its own    [L4 notes]
 //     mode/status/FIFO CSR — we provide a minimal byte+status CSR.
+//
+// Octet-alignment decision — NOT DERIVABLE FROM THE L-DOCS (recorded here
+// because the RTL depends on it and the spec is silent):
+//   The source document is explicitly permissive — "Data is usually sent in
+//   multiples of 8 bits, but only some variants require this; others
+//   theoretically permit data alignments on other than 8-bit boundaries"
+//   — and no L-doc names a non-integral-octet frame as an error.  L16
+//   compliance_failure_modes lists only FCS_ERROR and ABORT_DETECTED for
+//   the framing layer; L2 error_response_conditions likewise.
+//   THIS IP implements the octet-aligned variant, and it has no choice:
+//   rx_buf is a byte array, rx_len counts whole octets, and the receive
+//   CRC is folded one OCTET at a time (crc16_byte), so bits left over in a
+//   partial octet are structurally outside the FCS-covered region.  L2
+//   performance_of_error_detection only claims CRC coverage "in the
+//   FCS-covered region", so nothing in the design vouches for those bits.
+//   Accepting such a frame would therefore let an extraneous or lost bit at
+//   the tail of a frame pass with fcs_ok=1 — precisely the error class the
+//   FCS exists to catch.  A close that does not land on an octet boundary
+//   is consequently treated as an invalid frame: discarded, and reported
+//   on rx_align_err.
 //
 // Implementation style : single-clock SYNCHRONOUS design.  Both engines
 //   run in the chip's `clk` domain (Mode-0 bit clock: one wire bit per
@@ -99,6 +121,7 @@ module hdlc_core #(
     output reg                           frame_valid,  // 1-clk strobe: a frame finished
     output reg                           fcs_ok,       // valid w/ frame_valid: FCS residue matched
     output reg                           rx_abort,     // 1-clk strobe: abort sequence seen
+    output reg                           rx_align_err, // 1-clk strobe: closing flag landed mid-octet
     output reg                           rx_idle,      // level: line idle (>=15 ones)
     output reg                           rx_overrun    // sticky: payload exceeded buffer
 );
@@ -143,6 +166,12 @@ module hdlc_core #(
         end
     endfunction
 
+    // TX payload buffer.  Declared HERE, ahead of tx_fcs_calc, because a
+    // function may not reference an identifier declared later in the same
+    // scope — with the declaration below the function, elaboration fails
+    // with "Unable to bind wire/reg/memory `tx_buf[k]'".
+    reg [7:0]      tx_buf [0:MAX_PAYLOAD_BYTES-1];
+
     // Pre-compute the transmit FCS over the loaded payload buffer:
     // CRC-CCITT, init 0xFFFF, MSB-first per byte, over the first `n`
     // payload bytes, then complemented (transmit_output_inversion).
@@ -167,7 +196,6 @@ module hdlc_core #(
                      TX_CFLAG = 3'd3,   // closing flag
                      TX_FIN   = 3'd4;
 
-    reg [7:0]      tx_buf [0:MAX_PAYLOAD_BYTES-1];
     reg [2:0]      tx_state;
     reg [7:0]      tx_fcs_hi, tx_fcs_lo;     // complemented FCS bytes to send
     reg [IDXW:0]   tx_nbytes;                // payload byte count latched at start
@@ -338,6 +366,8 @@ module hdlc_core #(
     //    six_ones_pending, bit==0 -> FLAG    : frame boundary
     //    six_ones_pending, bit==1 -> >=7 ones: ABORT
     //  Otherwise the bit is a real data bit, assembled LSB-first.
+    //  On FLAG, rx_bit_cnt is ALSO the octet-alignment witness: see
+    //  rx_octet_aligned below.  A misaligned close is an invalid frame.
     // ================================================================
     localparam [1:0] RX_HUNT = 2'd0,   // search for opening flag
                      RX_RECV = 2'd1,   // collecting octets (de-stuffing)
@@ -359,6 +389,21 @@ module hdlc_core #(
     // octet completed by the current de-stuffed data bit (LSB-first).
     wire [7:0] rx_full_octet = {rx_bit, rx_octet[7:1]};
 
+    // ---- octet-alignment predicate at the closing flag ----------------
+    // The closing flag 0x7E is 0 1 1 1 1 1 1 0 on the wire (LSB-first) and
+    // is only RECOGNISED on its last bit, so by the time the flag is
+    // disambiguated its first SIX bits — the leading 0 and the first five
+    // 1s — have already been absorbed by the octet assembler as ordinary
+    // data bits (the sixth 1 sets rx_six_pending and is not collected, and
+    // the trailing 0 is the disambiguating bit).  A frame body that ended
+    // exactly on an octet boundary therefore leaves rx_bit_cnt sitting at
+    // exactly 6 when the flag is seen; ANY other value is the count of
+    // residual body bits that did not fill an octet.  (Measured: aligned
+    // -> 6; 1..7 stray bits -> 7,0,1,2,3,4,5 respectively — all distinct
+    // from 6, so this predicate is exact, not approximate.)
+    localparam [2:0] FLAG_PRECOLLECTED_BITS = 3'd6;
+    wire rx_octet_aligned = (rx_bit_cnt == FLAG_PRECOLLECTED_BITS);
+
     always @(posedge clk) begin
         if (!rst_n) begin
             rx_state       <= RX_HUNT;
@@ -373,6 +418,7 @@ module hdlc_core #(
             frame_valid    <= 1'b0;
             fcs_ok         <= 1'b0;
             rx_abort       <= 1'b0;
+            rx_align_err   <= 1'b0;
             rx_idle        <= 1'b0;
             rx_overrun     <= 1'b0;
             rx_idle_ones   <= 16'd0;
@@ -381,8 +427,9 @@ module hdlc_core #(
             for (bi = 0; bi < MAX_PAYLOAD_BYTES; bi = bi + 1)
                 rx_buf[bi] <= 8'h00;
         end else begin
-            frame_valid <= 1'b0;        // 1-clk strobes default low
-            rx_abort    <= 1'b0;
+            frame_valid  <= 1'b0;       // 1-clk strobes default low
+            rx_abort     <= 1'b0;
+            rx_align_err <= 1'b0;
 
             if (rx_bit_valid) begin
                 rx_shift <= rx_window;
@@ -423,13 +470,32 @@ module hdlc_core #(
                             rx_six_pending <= 1'b0;
                             if (rx_bit == 1'b0) begin
                                 // 0 1 1 1 1 1 1 0 = 0x7E -> closing flag.
-                                frame_valid <= 1'b1;
-                                fcs_ok      <= (rx_crc == CRC_RESIDUE) &&
-                                               (rx_byte_cnt >= {{(IDXW-1){1'b0}}, 2'd2});
-                                if (rx_byte_cnt >= {{(IDXW-1){1'b0}}, 2'd2})
-                                    rx_len <= rx_byte_cnt[IDXW-1:0] - {{(IDXW-2){1'b0}}, 2'd2};
-                                else
-                                    rx_len <= {IDXW{1'b0}};
+                                if (rx_octet_aligned) begin
+                                    frame_valid <= 1'b1;
+                                    fcs_ok      <= (rx_crc == CRC_RESIDUE) &&
+                                                   (rx_byte_cnt >= {{(IDXW-1){1'b0}}, 2'd2});
+                                    if (rx_byte_cnt >= {{(IDXW-1){1'b0}}, 2'd2})
+                                        rx_len <= rx_byte_cnt[IDXW-1:0] - {{(IDXW-2){1'b0}}, 2'd2};
+                                    else
+                                        rx_len <= {IDXW{1'b0}};
+                                end else begin
+                                    // Body did not end on an octet boundary.
+                                    // The residual bits never completed an
+                                    // octet, so they were never folded into
+                                    // rx_crc and never written to rx_buf —
+                                    // they are outside the FCS-covered
+                                    // region and nothing vouches for them.
+                                    // Delivering the frame here would let an
+                                    // extraneous/lost tail bit pass as a
+                                    // clean receive.  Discard it, and report
+                                    // WHY on a strobe of its own rather than
+                                    // aliasing rx_abort (a different line
+                                    // event, counted separately) or lying
+                                    // through fcs_ok (a different error).
+                                    rx_align_err <= 1'b1;
+                                    fcs_ok       <= 1'b0;
+                                    rx_len       <= {IDXW{1'b0}};
+                                end
                                 rx_state <= RX_DONE;
                             end else begin
                                 // 7+ consecutive ones -> ABORT.
