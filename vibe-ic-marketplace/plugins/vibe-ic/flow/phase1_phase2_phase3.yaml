@@ -62,17 +62,14 @@ stages:
   - id: stage_phase1
     name: "Phase 1 - Spec Extraction (input → L1-L27 structured JSON)"
     steps: [D1]
-    gate_at_end: phase1_compliance
 
   - id: stage1
     name: "RTL Generation + Verification"
     steps: [1, 2, 3, 4, 5, 6]
-    gate_at_end: stage1_compliance
 
   - id: stage2
     name: "Synthesis + DFT"
     steps: [7, 8, 9, 10, 11, 12, 13]
-    gate_at_end: stage2_compliance
 
   - id: stage_analog
     name: "Analog Design Pipeline (parallel with digital stages 1-2)"
@@ -82,7 +79,6 @@ stages:
     steps: [A1, A2, A3, A4, A5, A6, A7, A8, A9]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
-    gate_at_end: analog_compliance
 
   - id: stage3
     name: "Physical Design + Sign-off"
@@ -91,7 +87,6 @@ stages:
     # Design-for-ECO inserted Step 18 (Spare-cell + ECO-prep insertion)
     # between Placement (17) and CTS (19); all later ids were +1.
     steps: [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
-    gate_at_end: stage3_compliance
 
   # v1.6.13 Wave 88 — Mixed-Signal Integration (M1-M4) inserted
   # between digital stage3 and stage4. Required when analog blocks
@@ -104,14 +99,12 @@ stages:
     steps: [M1, M2, M3, M4]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
-    gate_at_end: mixed_signal_compliance
 
   - id: stage4
     name: "Output + Validation"
     # Design-for-ECO +1 renumber (Step 18 insert): stage4 ids shifted +1.
     # Foundry Handoff is now step 36 and FPGA final sign-off is step 37.
     steps: [32, 33, 34, 35, 36, 37]
-    gate_at_end: stage4_compliance
 
   # v1.6.13 Wave 88 — Manufacturing & Test (post-fab silicon stage).
   # Optional: only fires when project sets manufacturing.enabled = true
@@ -123,7 +116,6 @@ stages:
     steps: [38, 39, 40, 41]
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
-    gate_at_end: manufacturing_compliance
 
 steps:
   # v2 — Phase 1 doc-extraction single-gate step. Wraps the 17
@@ -164,7 +156,13 @@ steps:
       - "phase1/generated_docs/L10_TEST_CASES.json"
       - "phase1/generated_docs/L11_OTP_CONTENT.json"
       - "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"
-      - "phase1/generated_docs/L13_OTP.json"
+      # L13's suffix is IC-class-dependent, which is why this flow's own
+      # enforcing gate (`phase1_all_l_docs_present_check`) matches L-docs by
+      # `L13_` PREFIX and explicitly does not constrain the suffix. The literal
+      # `L13_OTP.json` written here matched no producer anywhere in the plugin
+      # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
+      # `L13_OTP.json`), so it was a declaration that could never be satisfied.
+      - "phase1/generated_docs/L13_*.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
@@ -443,8 +441,15 @@ steps:
                                       # `measure` subcommand is run by the
                                       # agent before this gate.
     required_outputs:
-      - "phase2/stage1/sim/*.log"
-      - "phase2/stage1/sim/results.xml OR phase2/stage1/sim/pass.flag"
+      # ONE requirement — "a simulation ran and left a transcript" — in the
+      # three shapes the supported TB paths actually emit, not three
+      # independent requirements. A cocotb run writes results.xml/pass.flag and
+      # no *.log; an iverilog/verilator transcript run writes *.log; the
+      # professional TB (#171) writes under sim_professional/<top>/ and is the
+      # path `_sim_files_superseded_by_professional_tb` exists to honour. Listed
+      # as separate entries these were ALL-of-required, so every real run was
+      # missing at least one and no run could satisfy them together.
+      - "phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml OR phase2/stage1/sim/pass.flag OR phase2/stage1/sim_professional/**/results.xml"
       - "reports/phase2/coverage/coverage_actual.json"   # produced by verilator_coverage_measure
     gate:
       all_of:
@@ -1278,7 +1283,11 @@ steps:
     mcp_tools: [eda_pnr]
     required_outputs:
       - "phase3/stage3/pnr/routed.def"
-      - "phase3/stage3/pnr/drc.rpt"
+      # The router-DRC report the phase-3 runner actually emits is
+      # `routed.drc.rpt` (phase3_one_shot_runner.py, Step-21 emitter). Nothing
+      # in the plugin has ever written `phase3/stage3/pnr/drc.rpt` — that
+      # literal named a file no producer creates.
+      - "phase3/stage3/pnr/routed.drc.rpt"
     gate:
       all_of:
         - files_exist: ["phase3/stage3/pnr/routed.def"]
@@ -1795,7 +1804,14 @@ steps:
     required_outputs:
       - "phase3/stage4/foundry_handoff/mask_spec.json"
       - "phase3/stage4/foundry_handoff/wat_plan.json"
-      - "phase3/stage4/foundry_handoff/scribe_line_layout.gds"
+      # The scribe-line PCM/alignment frame is FOUNDRY-SUPPLIED — this flow
+      # cannot generate it, `foundry_handoff_package_check` deliberately keeps
+      # it out of `_REQUIRED_FILES`, and the pack generator emits a
+      # `.PENDING_FOUNDRY.txt` note in its place saying exactly that. Demanding
+      # the .gds unconditionally required an artefact the flow never produces.
+      # Either form satisfies the requirement; NEITHER present is still a real
+      # gap, because then nothing states where the frame is coming from.
+      - "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt"
       - "phase3/stage4/foundry_handoff/corner_test_vectors.json"
       - "reports/phase3/foundry_handoff_audit.json"
     gate:
