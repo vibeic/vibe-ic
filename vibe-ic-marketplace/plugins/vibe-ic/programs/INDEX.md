@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 987
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 987)
+- **Total programs (excluding helpers / shims):** 989
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 989)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 978 |
+| `any` | 980 |
 
 ## Alphabetical listing
 
@@ -525,6 +525,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_taxonomy` | any | v0.1.51 | L-doc taxonomy single source of truth. |
 | `l_doc_todo_stub_count_check` | any | — | D3 program-first capture of the |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
+| `landing_is_one_commit_check` | any | — | a landing is ONE commit, not two. |
 | `latchup_esd_spacing_check` | any | v0.2.30 | the OPEN-SOURCE GEOMETRY-LAYER half of PERC |
 | `latency_conformance_check` | any | — | v1.0 plugin gate (ORGANIC #705). |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
@@ -919,6 +920,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sv_compat_check` | any | — | Check if Verilog files require the -sv flag for Yosys synthesis. |
 | `sv_package_closure_check` | any | — | SystemVerilog package-dependency closure gate |
 | `swd_protocol_synth` | any | — | ARM Serial Wire Debug (SWD) / ADIv5 deterministic |
+| `synth_area_stats_emit` | any | — | publish the synthesis area figure as an artefact. |
 | `synth_doctor` | any | v0.1.96 | Yosys synthesis-log error classifier (synth-doctor Pattern-B → program). |
 | `synth_frontend` | any | — | Shared SystemVerilog-frontend selection logic. |
 | `synth_netlist_check` | any | — | Deterministic synthesis netlist validation checker. |
@@ -1059,7 +1061,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (978 programs)
+### `any` (980 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1555,6 +1557,7 @@ _(no programs in this group)_
 - `l_doc_taxonomy` — L-doc taxonomy single source of truth.  _[v0.1.51]_
 - `l_doc_todo_stub_count_check` — D3 program-first capture of the
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
+- `landing_is_one_commit_check` — a landing is ONE commit, not two.
 - `latchup_esd_spacing_check` — the OPEN-SOURCE GEOMETRY-LAYER half of PERC  _[v0.2.30]_
 - `latency_conformance_check` — v1.0 plugin gate (ORGANIC #705).
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
@@ -1947,6 +1950,7 @@ _(no programs in this group)_
 - `sv_compat_check` — Check if Verilog files require the -sv flag for Yosys synthesis.
 - `sv_package_closure_check` — SystemVerilog package-dependency closure gate
 - `swd_protocol_synth` — ARM Serial Wire Debug (SWD) / ADIv5 deterministic
+- `synth_area_stats_emit` — publish the synthesis area figure as an artefact.
 - `synth_doctor` — Yosys synthesis-log error classifier (synth-doctor Pattern-B → program).  _[v0.1.96]_
 - `synth_frontend` — Shared SystemVerilog-frontend selection logic.
 - `synth_netlist_check` — Deterministic synthesis netlist validation checker.
