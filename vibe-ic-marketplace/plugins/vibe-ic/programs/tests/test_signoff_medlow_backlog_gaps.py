@@ -684,7 +684,13 @@ def _self_skip_project(tmp_path: Path) -> Path:
     (d / "sdf_sim_skipped.json").write_text(json.dumps({
         "verdict": "SKIPPED-CONDITION",
         "reason": "no SDF-annotated gate-level re-simulation ran",
-        "capability_flag": "cap:sdf_annotated_gatelevel_sim",
+        # gatekeeper: was `cap:sdf_annotated_gatelevel_sim`, which #479 (landing in
+        # the same batch) records as RETIRED in v1.7.37 and deliberately keeps
+        # OUT of its registry. #479 also binds each flag to the outputs it may
+        # defer; the flag below is the registered one bound to this fixture's
+        # `phase3/stage3/sim_postlayout/*` outputs, so this test exercises the
+        # disclosure contract rather than a gap that no longer exists.
+        "capability_flag": "cap:sdf_gatelevel_tb_port_contract",
         "skips_required_output": [
             "phase3/stage3/sim_postlayout/results.log",
             "phase3/stage3/sim_postlayout/pass.flag"],
@@ -724,7 +730,10 @@ def _predicate_gate_self_skip_project(tmp_path: Path) -> Path:
     (d / "post_dft_netlist_skipped.json").write_text(json.dumps({
         "verdict": "SKIPPED-CONDITION",
         "reason": "scan insertion was disclosed-skipped upstream",
-        "capability_flag": "cap:scan_chain_insertion",
+        # gatekeeper: `cap:scan_chain_insertion` is not in #479's registry either.
+        # The registered flag bound to `phase2/stage2/synth/post_dft_netlist.v`
+        # is the one below.
+        "capability_flag": "cap:post_dft_scan_optimization",
         "skips_required_output": ["phase2/stage2/synth/post_dft_netlist.v"],
     }) + "\n")
     return proj
