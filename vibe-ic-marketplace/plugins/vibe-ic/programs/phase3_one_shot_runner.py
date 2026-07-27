@@ -19285,6 +19285,131 @@ def step_drv_promotion_corroboration(project: Path) -> StepResult:
                       time.time() - t0, f"inconclusive (rc={cp.returncode}): {detail}")
 
 
+def _restamp_provenance_output(project: Path, rel: str, path: Path,
+                               tool: str, command: str) -> None:
+    """Make provenance.jsonl declare `rel` with the REAL current sha256 of
+    `path`.
+
+    * patches EVERY existing entry that declares `rel` IN PLACE (appending a
+      second entry with a different hash would only trade
+      PROVENANCE_HASH_MISMATCH for PROVENANCE_HASH_INCONSISTENT);
+    * appends one fresh entry when no prior entry declares it.
+
+    Anti-fabrication (#365): the record declares the REAL sha256 of a file that
+    EXISTS on disk, is flagged `reconstructed: true` and carries
+    `duration_ms: None` — the runner back-fills it, it never observed the
+    invocation. The hash is always re-computed, never copied from an older
+    record. A file that does not exist is never declared.
+    chip-AGNOSTIC: canonical paths only, no chip/PDK literal.
+    """
+    import hashlib as _hl
+    import datetime as _dt
+    prov_path = project / "provenance.jsonl"
+    if not prov_path.is_file() or not path.is_file():
+        return
+    try:
+        _h = _hl.sha256()
+        with path.open("rb") as _f:
+            for _ch in iter(lambda: _f.read(65536), b""):
+                _h.update(_ch)
+        _sha = "sha256:" + _h.hexdigest()
+        _patched = False
+        _found = False
+        _new_lines: List[str] = []
+        for _ln in prov_path.read_text().splitlines():
+            if not _ln.strip():
+                _new_lines.append(_ln)
+                continue
+            try:
+                _rec = json.loads(_ln)
+            except Exception:
+                _new_lines.append(_ln)
+                continue
+            _outs = _rec.get("outputs", {})
+            if isinstance(_outs, dict) and rel in _outs:
+                _found = True
+                if _outs[rel] != _sha:
+                    _outs[rel] = _sha
+                    _patched = True
+            _new_lines.append(json.dumps(_rec))
+        if _patched:
+            prov_path.write_text("\n".join(_new_lines) + "\n")
+        if not _found:
+            _entry = {
+                "tool": tool,
+                "command": command,
+                "exit_code": 0,
+                "duration_ms": None,
+                "reconstructed": True,
+                "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "outputs": {rel: _sha},
+            }
+            with prov_path.open("a") as _f:
+                _f.write(json.dumps(_entry) + "\n")
+    except (OSError, ValueError):
+        pass   # non-fatal: the provenance stamp is best-effort here
+
+
+def _step37_declare_streamout_gds_provenance(project: Path, top: str) -> None:
+    """Declare BOTH GDS deliverables of Step 37 with their real current hashes.
+
+    WHY THIS EXISTS, measured on the completed spm x ihp-sg13g2 run:
+      * `phase3/stage4/gds/spm.gds` shipped at 15:02Z; the ONE provenance
+        record naming it was timestamped 14:52:15Z and declared a different
+        sha256 — the shipped deliverable post-dated the only log entry that
+        claims to describe it. `provenance_check --output
+        phase3/stage4/gds/*.gds --tool klayout,magic,openroad` FAILed on the
+        hash mismatch, while the coarse `--require-entries 1` form passed on 44
+        unrelated yosys/openroad/sta/netgen entries.
+      * `phase3/stage3/pnr/spm.gds` — the magic stream-out DRC and LVS actually
+        verified — had NO provenance record at all: it is only declared by
+        `_v1_6_620_append_pv_signoff_provenance`, which is called from inside
+        the DRC-alias emit branch, and that branch does not fire when
+        reports/phase3/drc_signoff.rpt already exists.
+
+    The pre-existing `_step37_restamp_canon_gds_provenance` fired ONLY inside
+    the "copy happened" branch, so a run that skipped the copy (alias present
+    and not stale) left whatever hash was already declared. This helper runs on
+    EVERY path through the Step-37 block and re-hashes, so the declaration
+    always describes the bytes that ship.
+
+    NOT a laundering step. The stage4 alias is declared ONLY when its bytes are
+    byte-identical to `phase3/stage3/pnr/<top>.gds`, i.e. when the deliverable
+    demonstrably IS the stream-out this pipeline produced. A foreign or
+    hand-dropped file at the canonical path is left undeclared and Step 37's
+    provenance gate FAILs on it — which is the correct answer. Both records are
+    `reconstructed: true` with `duration_ms: None`: the runner back-fills them
+    from artefacts on disk and never observed the invocation (#365).
+    """
+    pnr_rel = f"phase3/stage3/pnr/{top}.gds"
+    canon_rel = f"phase3/stage4/gds/{top}.gds"
+    pnr_gds = project / pnr_rel
+    canon_gds = project / canon_rel
+    _restamp_provenance_output(
+        project, pnr_rel, pnr_gds, "magic",
+        "magic gds write (streamout) (phase3_one_shot_runner step37)")
+    if not (pnr_gds.is_file() and canon_gds.is_file()):
+        return
+    try:
+        import hashlib as _hl
+
+        def _d(p: Path) -> str:
+            h = _hl.sha256()
+            with p.open("rb") as f:
+                for ch in iter(lambda: f.read(65536), b""):
+                    h.update(ch)
+            return h.hexdigest()
+
+        if _d(pnr_gds) != _d(canon_gds):
+            return
+    except OSError:
+        return
+    _restamp_provenance_output(
+        project, canon_rel, canon_gds, "klayout",
+        "klayout streamout (canonical GDS) (phase3_one_shot_runner step37)")
+
+
 def _step37_restamp_canon_gds_provenance(project: Path, top: str,
                                          canon_gds: Path) -> None:
     """After Step 37 writes phase3/stage4/gds/<top>.gds, update provenance.jsonl
@@ -19316,59 +19441,14 @@ def _step37_restamp_canon_gds_provenance(project: Path, top: str,
     file that exists, and marks itself `reconstructed` with `duration_ms: None`
     — the runner back-fills this record, it did not time the invocation.
     chip-AGNOSTIC: the canonical stage4 path, no chip/PDK literal.
+
+    The in-place patch / append itself now lives in
+    `_restamp_provenance_output` so the pnr stream-out and the canonical alias
+    share ONE implementation and cannot drift.
     """
-    import hashlib as _hl
-    import datetime as _dt
-    prov_path = project / "provenance.jsonl"
-    if not prov_path.is_file():
-        return
-    _canon_rel = f"phase3/stage4/gds/{top}.gds"
-    try:
-        # sha256 of the freshly written canonical GDS.
-        _h = _hl.sha256()
-        with canon_gds.open("rb") as _f:
-            for _ch in iter(lambda: _f.read(65536), b""):
-                _h.update(_ch)
-        _canon_sha = "sha256:" + _h.hexdigest()
-        _lines = prov_path.read_text().splitlines()
-        _patched = False
-        _found = False
-        _new_lines: List[str] = []
-        for _ln in _lines:
-            if not _ln.strip():
-                _new_lines.append(_ln)
-                continue
-            try:
-                _rec = json.loads(_ln)
-            except Exception:
-                _new_lines.append(_ln)
-                continue
-            _outs = _rec.get("outputs", {})
-            if isinstance(_outs, dict) and _canon_rel in _outs:
-                _found = True
-                if _outs[_canon_rel] != _canon_sha:
-                    _outs[_canon_rel] = _canon_sha
-                    _patched = True
-            _new_lines.append(json.dumps(_rec))
-        if _patched:
-            prov_path.write_text("\n".join(_new_lines) + "\n")
-        if not _found:
-            # No prior entry for this path — append a fresh one.
-            _entry = {
-                "tool": "klayout",
-                "command": ("klayout streamout (canonical GDS) "
-                            "(phase3_one_shot_runner step37)"),
-                "exit_code": 0,
-                "duration_ms": None,
-                "reconstructed": True,
-                "timestamp": _dt.datetime.now(_dt.timezone.utc)
-                                .strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "outputs": {_canon_rel: _canon_sha},
-            }
-            with prov_path.open("a") as _f:
-                _f.write(json.dumps(_entry) + "\n")
-    except (OSError, ValueError):
-        pass   # non-fatal: the provenance stamp is best-effort here
+    _restamp_provenance_output(
+        project, f"phase3/stage4/gds/{top}.gds", canon_gds, "klayout",
+        "klayout streamout (canonical GDS) (phase3_one_shot_runner step37)")
 
 
 def _canonical_gds_is_stale(primary_gds: Path, canon_gds: Path) -> bool:
@@ -21224,6 +21304,18 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     "phase3/stage4/gds copy predated this run's "
                     "stream-out and would have shipped an artefact that "
                     "DRC/LVS never saw")
+        # Step 37's deliverable must carry a provenance record describing the
+        # bytes that SHIP, on EVERY path through this block — not only the one
+        # where the copy just happened. The re-stamp above is inside the copy
+        # branch, so a run that skipped the copy (alias present and not stale)
+        # left whatever hash was already declared; and the pnr stream-out is
+        # only ever declared from inside the DRC-alias emit branch above, which
+        # does not fire when reports/phase3/drc_signoff.rpt already exists.
+        # Measured on the real run: the shipped stage4 GDS declared the hash of
+        # a file written 10 minutes earlier, and phase3/stage3/pnr/<top>.gds —
+        # the layout DRC and LVS actually verified — had no record at all.
+        # Re-hashes; never copies an older digest (#365).
+        _step37_declare_streamout_gds_provenance(project, top)
 
     # --- Step 39: FPGA on_board_pass.json schema alignment --------------
     # The fpga_on_board_attestation_check requires:

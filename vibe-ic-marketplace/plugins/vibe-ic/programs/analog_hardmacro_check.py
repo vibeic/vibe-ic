@@ -3,10 +3,21 @@
 
 Validates that each analog block has a complete hardmacro package under
 hardmacro/<block>/ containing:
-  - <block>.gds  (non-empty)
+  - <block>.gds  (carries REAL GDS geometry — see below)
   - <block>.lef  (contains MACRO and PIN keywords)
   - <block>.lib  (contains cell keyword)
   - <block>.v    (contains module definition)
+
+The GDS predicate used to be `exists() and st_size != 0`. Measured: 500 bytes
+of non-GDS noise placed at hardmacro/<block>/<block>.gds, alongside a valid
+LEF/LIB/V, produced `[PASS] analog_hardmacro_check` + HARDMACRO_COMPLETE —
+while the SIBLING A5 gate, on the exact same bytes, reported 0 geometry
+records and rejected it. A hardmacro is the artefact digital PnR instantiates;
+size is not evidence that a layout exists. The predicate is now the same
+record walk A5 uses (`analog_a5_layout_check._gds_geometry_count`: BOUNDARY /
+PATH / SREF / AREF / BOX), so the gate of record for A8 is no longer weaker
+than its sibling on the identical file type. It sits AFTER the
+deterministic-stub short-circuit, so the PASS_WITH_STUB tier is untouched.
 
 Self-skips (exit 0 + INFO) when:
   - No analog blocks detected (no analog_block_list.json or empty)
@@ -30,6 +41,34 @@ from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
 from _analog_stub_marker import is_stub_text  # v1.6.177 (#72 P1-6)
+# ONE parser for "does this GDS carry geometry", shared with the A5 gate so the
+# two cannot drift apart on the same file type. Guarded: a checker must never
+# be silently disarmed by an import error, so an unavailable parser is a hard
+# error at use time (see _gds_geometry_records), not a skipped predicate.
+try:
+    from analog_a5_layout_check import _gds_geometry_count
+except ImportError:  # pragma: no cover - programs/ is always on sys.path
+    _gds_geometry_count = None  # type: ignore[assignment]
+
+
+def _gds_geometry_records(path: Path) -> int:
+    """Number of GDS geometry/placement records in `path`.
+
+    Raises RuntimeError when the shared parser could not be imported — a gate
+    that cannot evaluate its own predicate must say so, never return a value
+    that reads as "clean". Deliberately NOT caught in main(): an uncaught
+    exception exits 1, which flow_compliance_check reads as FAIL. Returning
+    rc 2 would be read as VACUOUS_PASS — silently green — which is the failure
+    mode this predicate exists to end.
+    """
+    if _gds_geometry_count is None:
+        raise RuntimeError(
+            "analog_a5_layout_check._gds_geometry_count unavailable; the GDS "
+            "geometry predicate cannot be evaluated")
+    try:
+        return _gds_geometry_count(path.read_bytes())
+    except OSError:
+        return 0
 
 
 @dataclass
@@ -133,8 +172,25 @@ def run_audit(project: Path) -> AuditResult:
             ))
             continue
 
+        # NOTE: this sits AFTER the stub short-circuit above on purpose — a
+        # deterministic-stub hardmacro deliberately ships without a .gds and
+        # keeps passing at the PASS_WITH_STUB tier.
         if not gds.exists() or gds.stat().st_size == 0:
             missing.append(f"{block}.gds")
+        elif _gds_geometry_records(gds) <= 0:
+            # Non-empty is not evidence of a layout. The identical bytes are
+            # rejected by analog_a5_layout_check; A8 must not be the weaker
+            # gate on the same file type.
+            result.findings.append(Finding(
+                rule="HARDMACRO_GDS_NO_GEOMETRY",
+                severity="ERROR",
+                message=(f"Block '{block}': GDS carries no "
+                         f"BOUNDARY/PATH/SREF/AREF/BOX record "
+                         f"({gds.stat().st_size} bytes of padding, garbage "
+                         f"or an empty library) — not a layout"),
+                file=str(gds),
+            ))
+            missing.append(f"{block}.gds (no geometry)")
 
         if not lef.exists():
             missing.append(f"{block}.lef")
