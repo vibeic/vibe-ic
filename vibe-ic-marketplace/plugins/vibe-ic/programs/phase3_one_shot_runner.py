@@ -20908,7 +20908,15 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # (single-corner PDK) we fall back to today's tt behavior (honest, no
     # regression); we NEVER SKIP an ECO when a real multi-corner violation
     # exists, and NEVER fabricate closure (a genuine ss floor stays VIOLATED).
-    _eco_decision = _eco_dec.decide(mc_ocv_stance, tns_zero)
+    # v1.7.37 (Step 32 / d5) — `project=` lets the shared decision ALSO read
+    # the non-timing sign-off verdicts this same run wrote (IR drop / EM / SI /
+    # LVS / ERC / antenna / density / PERC). Step 32's YAML says "if any
+    # sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE) fails, ECO
+    # applies"; the decision previously read STA alone, so a hard-failed
+    # IR-drop sign-off still wrote no_eco_needed.flag. The timing-repair TCL
+    # stays gated on `timing_eco_needed`, so a non-timing failure withholds the
+    # certificate WITHOUT firing a repair that does not address it.
+    _eco_decision = _eco_dec.decide(mc_ocv_stance, tns_zero, project=project)
     _eco_flag = eco_out / "no_eco_needed.flag"
     if not _eco_decision["eco_needed"]:
         # No violation at the authoritative basis → no ECO needed.
@@ -20919,7 +20927,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 f"# Basis: {_eco_decision['basis']} "
                 f"(mc_ocv_available={_eco_decision['mc_ocv_available']}).\n"
                 "# Reason: no setup/hold violation at the authoritative timing\n"
-                "# basis (multi-corner OCV when available, else single-corner tt).\n"
+                "# basis (multi-corner OCV when available, else single-corner tt),\n"
+                "# and no hard failure in the non-timing sign-off domains.\n"
                 f"# Single-corner source: {_sta_for_eco.relative_to(project)}\n"
             )
             written.append(str(_eco_flag))
@@ -20930,15 +20939,27 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         # stale optimistic no_eco_needed.flag first.
         if _eco_flag.is_file():
             _eco_flag.unlink()
-            notes.append(
-                "cleared stale no_eco_needed.flag — a real "
-                f"{_eco_decision['basis']} violation exists at "
-                f"{','.join(_eco_decision['violated_corners']) or 'tt'}.")
+            notes.append("cleared stale no_eco_needed.flag — "
+                         + _eco_decision["reason"])
         _eco_decision["eco_before"] = {
             "setup_worst_slack_ns": _eco_decision["setup_worst_slack_ns"],
             "hold_worst_slack_ns": _eco_decision["hold_worst_slack_ns"],
         }
-        if _eco_decision["mc_ocv_available"] and eco_tcl_path.is_file():
+        if not _eco_decision["timing_eco_needed"]:
+            # v1.7.37 — a NON-TIMING sign-off domain failed while timing is
+            # clean. eco_timing_repair.tcl repairs timing and would not touch
+            # the failing domain, so firing it here would be theatre; writing
+            # an eco_log.json would fabricate a repair that never happened.
+            # We withhold the "no ECO needed" certificate and stop: Step 32's
+            # gate then reports NO_ECO_ARTIFACT / FAIL, which is the honest
+            # outcome, and hands off to the eco-plan skill.
+            _eco_decision["action"] = "eco_required_non_timing"
+            notes.append(
+                "ECO REQUIRED (non-timing): " + _eco_decision["reason"]
+                + " — no_eco_needed.flag deliberately NOT written; the "
+                "timing-repair ECO does not apply, triage via the eco-plan "
+                "skill.")
+        elif _eco_decision["mc_ocv_available"] and eco_tcl_path.is_file():
             # AUTO-TRIGGER FIRES: run the multi-corner-aware ECO.
             notes.append(
                 "ECO auto-trigger FIRING: multi-corner OCV surfaced a real "
@@ -24341,7 +24362,14 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
                    "crosstalk needs a SPEF with coupling caps — none was produced "
                    "for this run (e.g. routing-less DEF). When a SPEF IS present "
                    "the runner uses the real coupling-cap screen instead (v0.2.6)."),
-        "verdict": "SCREEN_PASS",
+        # v1.7.37 (Step 27 / d5) — was "SCREEN_PASS". The strictly-stronger
+        # SPEF sibling above already emits ADVISORY_SCREEN_ONLY; this weaker
+        # no-SPEF fallback emitted a third, unlisted string, which
+        # si_crosstalk_check's allow-list did not recognise, so the run that
+        # had the LEAST SI evidence produced the CLEANEST gate verdict
+        # (`verdict: PASS`, advisory_screen_only: false). The two ends now
+        # use one vocabulary; the checker is independently fail-closed.
+        "verdict": "ADVISORY_SCREEN_ONLY",
         "note": ("No SPEF coupling caps available for this run; this is a "
                  "structural screen, not a full SI sign-off. The OpenRCX SPEF "
                  "path (v0.2.5) produces real coupling caps when the DEF is routed."),
@@ -24362,7 +24390,11 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
         "#\n"
         "max_crosstalk_noise: 0.0 mV\n"
         "violations_count: 0\n"
-        "crosstalk screen: PASS (decoupled-C; SPEF-based SI deferred)\n"
+        # v1.7.37 — the .rpt headline named the tier "PASS", so a reader (or
+        # the .rpt branch of si_crosstalk_check) could take a screen for a
+        # sign-off. Name the tier the same way the JSON does.
+        "crosstalk: ADVISORY_SCREEN_ONLY (decoupled-C screen; SPEF-based SI "
+        "deferred — NOT a timing-window SI sign-off)\n"
         "# end of si_crosstalk.rpt\n")
     notes.append("SI: decoupled-C screen emitted (SPEF-based SI deferred)")
     return True
