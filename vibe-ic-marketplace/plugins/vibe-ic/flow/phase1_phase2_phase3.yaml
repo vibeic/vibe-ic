@@ -1680,7 +1680,18 @@ steps:
     programs:
       - perc_signoff_check
     required_outputs:
+      # `phase3_one_shot_runner._emit_perc_equivalent` writes ALL THREE of
+      # these in one pass (perc_equivalent.json at the JSON writer, then the
+      # human-readable .rpt, then `_emit_perc_signoff_memo` → the memo) and the
+      # call site appends all three to `written`. Only the .json was declared,
+      # so the .rpt and the sign-off memo — the two artefacts a human reviewer
+      # actually reads — were produced by every run and verified by none.
+      # They are emitted together or not at all (one early-return guards the
+      # whole emitter on the routed DEF), so declaring them cannot manufacture
+      # a MISSING that the already-declared .json would not also raise.
       - "reports/phase3/perc_equivalent.json"
+      - "reports/phase3/perc_equivalent.rpt"
+      - "reports/phase3/PERC_SIGNOFF_MEMO.md"
     gate:
       all_of:
         - files_exist: ["reports/phase3/perc_equivalent.json"]
@@ -1758,10 +1769,11 @@ steps:
         # cannot pin-match, so lvs.rpt may be attributed to klayout).
         - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,openroad"
         - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic,klayout"
-        # Step-30 ERC + sign-off density substance (replaces the dangling
+        # Step-31 ERC + sign-off density substance (replaces the dangling
         # density_check that referenced a non-existent program). This is a
-        # DIFFERENT check from metal_fill_density_check (Step 34): Step 31 runs
-        # BEFORE metal fill, so filled.def / metal_fill.done do not exist yet.
+        # DIFFERENT check from metal_fill_density_check (Step 34): the flow's
+        # step ORDER puts Step 31 before Step 34, so this gate must never key
+        # off filled.def / metal_fill.done.
         # erc_density_check (a) verifies any PER-LAYER metal CMP density is in
         # the foundry 20-80% window (foundry rejects at CMP otherwise), (b) when
         # the artefact only carries OpenROAD filler_placement std-cell ROW
@@ -1776,20 +1788,46 @@ steps:
         # promise three lines above ("Missing/empty/provenance-less/metric-less
         # artefact => honest FAIL (never a vacuous pass)"). With all four
         # trigger paths absent the gate never ran, and Step 31's
-        # `required_outputs` is ANY-of, so a present drc_signoff.rpt kept the
-        # step green with NO ERC and NO density verification behind it.
+        # `required_outputs` was ANY-of at the time, so a present
+        # drc_signoff.rpt kept the step green with NO ERC and NO density
+        # verification behind it. (required_outputs is ALL-of-N since PR #455 —
+        # each declared entry must now be satisfied on its own; the " OR "
+        # spelling INSIDE one entry is what stays any-of.)
         # erc_density_check already emits DENSITY_MISSING at ERROR severity and
         # exits 1 on an absent density artefact, so the checker was correct all
         # along and only its condition suppressed it.
+        #
+        # The density artefact this gate reads — reports/density.{json,rpt} —
+        # is written by `_emit_metal_fill`, i.e. it is STEP 34's artefact, and
+        # it is declared there (not here: declaring another step's output on
+        # this step would raise a MISSING against the wrong step). The runner
+        # emits metal fill BEFORE the ERC report in the same pass, so the
+        # artefact exists by the time this gate runs even though the audit
+        # numbering puts Step 34 later.
         - program_exit_zero: "erc_density_check . --json reports/phase2/gates/erc_density.json"
     blocks_on: [23, 24, 25, 26, 27, 29, 30]
 
   # ── Step 32: ECO ─────────────────────────────────────────────
   # Industry standard: Engineering Change Order repair loop.
-  # If any sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE)
-  # fails, ECO applies targeted netlist patches and re-runs the
-  # failing checks. If all sign-off steps passed on first attempt,
-  # the ECO step records "no_eco_needed" and passes through.
+  #
+  # WHAT THE AUTO-TRIGGER ACTUALLY CONSULTS (do not widen this text without
+  # widening the code): `eco_trigger_decision.decide(stance, tt_clean)` takes
+  # exactly two inputs, BOTH from STA (Step 23) — the multi-corner OCV stance
+  # (reports/phase3/mcorner_ocv_stance.json) when it is authoritative, else the
+  # single-corner tt post-route TNS. None of the other sign-off predecessors
+  # named in `blocks_on` (24 IR-drop, 25 EM, 26 antenna, 27 SI, 29 post-sim,
+  # 30 SPICE, 31 DRC/LVS/ERC) is read by the trigger, and the ECO script it
+  # fires is repair_design/repair_timing — a TIMING repair, which could not fix
+  # a DRC/LVS/antenna defect even if it were triggered by one. `blocks_on`
+  # here is an ORDERING constraint (ECO must not be judged done before its
+  # sign-off predecessors are judged), NOT a trigger input list. A non-timing
+  # sign-off failure is routed by that step's own `closed_loop` entry and by
+  # human review — it does not auto-fire this step. This comment used to claim
+  # "if any sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE) fails,
+  # ECO applies targeted netlist patches", which the code has never done.
+  #
+  # If all sign-off steps passed on first attempt, the ECO step records
+  # "no_eco_needed" and passes through.
   - id: 32
     name: "🔁 ECO (Engineering Change Order — repair loop)"
     stage: stage3
@@ -1799,6 +1837,18 @@ steps:
     skills: [eco-plan]
     required_outputs:
       - "phase3/stage3/eco/eco_log.json OR phase3/stage3/eco/no_eco_needed.flag"
+      # The trigger DECISION itself is a durable §4.05 audit-trail artefact and
+      # is written on EVERY branch of the ECO block (no-ECO-needed, ECO fired,
+      # and the single-corner "eco_required, not auto-run" fallback — the one
+      # branch that writes NEITHER eco_log.json NOR no_eco_needed.flag). It
+      # records the basis, whether multi-corner OCV was available, and the
+      # violated corners; without it a reviewer cannot tell WHY the ECO did or
+      # did not fire. Nothing verified it before.
+      # NOT declared here, deliberately: no_eco_summary.json (eco_status_gen
+      # writes it only on the no-ECO branch) and eco_timing_repair.tcl (a
+      # best-effort pre-stage inside try/except) — both are branch-conditional,
+      # so declaring them would manufacture a MISSING on a legitimate run.
+      - "phase3/stage3/eco/eco_trigger_decision.json"
     gate:
       all_of:
         - files_exist: ["phase3/stage3/eco/eco_log.json", "phase3/stage3/eco/no_eco_needed.flag"]
@@ -1816,7 +1866,18 @@ steps:
       - "reports/phase3/power.rpt"
       - "reports/phase3/power.json"
     gate:
-      program_exit_zero: "power_report_check . --mode power --json reports/phase3/power.json"
+      # The audit trail goes to the gates/ directory, NOT to
+      # reports/phase3/power.json. That path is this step's declared
+      # required_output and holds the RUNNER's power summary
+      # ({tool: opensta, source, analysis_mode, verdict}); the checker writes a
+      # different schema ({program: eda_report_audit:power, passed, findings}),
+      # so pointing --json at it would overwrite the power data with the audit
+      # of that data. It never actually did, because power_report_check.py
+      # rebuilt its own argv and dropped every flag after the project dir — the
+      # declared --json was dead, and no audit trail was written anywhere. The
+      # wrapper now forwards its flags (same fix lvs_report_check got in #507),
+      # so this path had to become a real, separate one at the same time.
+      program_exit_zero: "power_report_check . --mode power --json reports/phase2/gates/power_report.json"
     blocks_on: [23]
 
   # ── Step 34: Metal Fill (ECO-aware density fill insertion) ───
@@ -1851,6 +1912,17 @@ steps:
       - metal_fill_emit
     required_outputs:
       - "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done"
+      # The density report is STEP 34's artefact — `_emit_metal_fill` writes
+      # reports/density.{rpt,json} on the same success path that produces
+      # filled.def, and returns False (writing neither) on every failure path.
+      # Two gates READ it — metal_fill_density_check here and erc_density_check
+      # at Step 31 — and until now NO step declared it, so a run that lost the
+      # density report would have both gates degrade silently instead of any
+      # step reporting MISSING. `report_path` routes the canonical name to
+      # reports/phase3/ while the runner writes reports/ root, and BOTH readers
+      # accept either location, so both are accepted here too.
+      - "reports/density.json OR reports/phase3/density.json"
+      - "reports/density.rpt OR reports/phase3/density.rpt"
     gate:
       all_of:
         - files_exist: ["phase3/stage3/pnr/filled.def", "phase3/stage3/pnr/metal_fill.done"]
@@ -1992,12 +2064,16 @@ steps:
       - "phase3/stage4/foundry_handoff/mask_spec.json"
       - "phase3/stage4/foundry_handoff/wat_plan.json"
       # The scribe-line PCM/alignment frame is FOUNDRY-SUPPLIED — this flow
-      # cannot generate it, `foundry_handoff_package_check` deliberately keeps
-      # it out of `_REQUIRED_FILES`, and the pack generator emits a
-      # `.PENDING_FOUNDRY.txt` note in its place saying exactly that. Demanding
-      # the .gds unconditionally required an artefact the flow never produces.
+      # cannot generate it, and the pack generator emits a `.PENDING_FOUNDRY.txt`
+      # note in its place saying exactly that. Demanding the .gds
+      # unconditionally required an artefact the flow never produces.
       # Either form satisfies the requirement; NEITHER present is still a real
       # gap, because then nothing states where the frame is coming from.
+      # `foundry_handoff_package_check` enforces the SAME either-form rule (it
+      # used to keep the member out of `_REQUIRED_FILES` entirely, which is why
+      # a kit with no frame and no note still reported "all required artefacts
+      # present"), and when the note is what satisfied it, the gate surfaces
+      # PENDING_FOUNDRY_scribe_line_layout so the tapeout checklist tracks it.
       - "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt"
       - "phase3/stage4/foundry_handoff/corner_test_vectors.json"
       - "reports/phase3/foundry_handoff_audit.json"
@@ -2034,7 +2110,14 @@ steps:
       all_of:
         - json_field_true: {file: "reports/phase2/fpga/on_board_pass.json", field: "all_scenarios_passed", expect: true}
         - program_exit_zero: "fpga_on_board_attestation_check . --json reports/phase2/fpga/on_board_attestation.json --min-scenarios 1"
-    blocks_on: [13]
+    # Step 6 is the ONLY step in this flow that compiles/burns an FPGA image
+    # and the sole producer of any .sof (grep the file: 6 and 39 are the only
+    # steps that name a .sof path, and 39's own programs — bringup_plan_gen,
+    # fpga_on_board_attestation_check — produce none). It was absent from this
+    # list both directly and transitively (39→13→12→…→1/2/3/7/8/9/10 never
+    # reaches 6), so a final sign-off could be judged done while the step that
+    # builds the bitstream it signs off had failed.
+    blocks_on: [6, 13]
 
 # ─────────────────────────────────────────────────────────────────
 # Wave 88 closed 4 assessment-report gaps (Mixed-Signal Integration

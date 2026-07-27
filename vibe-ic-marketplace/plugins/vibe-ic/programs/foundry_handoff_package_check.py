@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
 """
 foundry_handoff_package_check.py — gate (v1.6.13 Wave 88, integerised
-in v1.6.14 Wave 90, renumbered Step 34 → 35 in v1.6.15 Wave 91).
+in v1.6.14 Wave 90, renumbered Step 34 → 35 in v1.6.15 Wave 91, and
+Step 35 → 38 by the later renumbering the flow yaml already carries).
 
-Step 35 — foundry-handoff kit completeness
+Step 38 — foundry-handoff kit completeness
 
 Behaviour
 ---------
 * SKIP (rc=2) — required artefacts missing AND step not waived.
 * WAIVED (rc=0) — `waivers.json` declares step waived (evidence + ticket).
-* PASS (rc=0) — required files present; gate-specific predicate is a
-  stub in v1.6.13 (PASS-on-presence).
-* FAIL (rc=1) — files present but predicate fails (not used in v1.6.13).
+* PASS (rc=0) — every required kit member present AND every substance
+  predicate below satisfied.
+* FAIL (rc=1) — a 0-byte member, a TODO/TBD placeholder, an invalid
+  cell_count / pdk=unknown, or no chip GDS matching the design's own name.
+
+"Completeness" is measured against `_REQUIRED_FILES`, which now covers the
+FOUR kit members the pack generator emits, not two of them. It previously
+listed only mask_spec.json and wat_plan.json, so corner_test_vectors.json
+could be absent and the scribe-line frame unaccounted for while the gate
+reported "all required artefacts present" — measured on a real run where
+scribe_line_layout.gds was absent and the PASS never mentioned it.
+The fifth entry the flow yaml declares for Step 38,
+reports/phase3/foundry_handoff_audit.json, is THIS gate's own output and is
+deliberately not self-required here.
 
 chip-AGNOSTIC. No vendor / IC / tool-specific data hard-coded.
 
@@ -51,8 +63,41 @@ def _step_waived(project, step_label):
 
 _GATE_NAME = 'foundry_handoff_package_check'
 _GATE_LABEL = 'foundry_handoff'
-_REQUIRED_FILES = ['phase3/stage4/foundry_handoff/mask_spec.json', 'phase3/stage4/foundry_handoff/wat_plan.json']
+# Each entry is ONE required kit member. A tuple means "any ONE of these
+# spellings satisfies this member" — used only for the scribe-line frame,
+# which the flow cannot generate: foundry_handoff_pack_gen deliberately writes
+# a plainly-named `.PENDING_FOUNDRY.txt` note instead of a file wearing the
+# .gds name (#446), and the flow yaml declares exactly the same either-form
+# requirement. NEITHER present is still a real gap — then nothing at all states
+# where the frame is coming from.
+_REQUIRED_FILES = [
+    'phase3/stage4/foundry_handoff/mask_spec.json',
+    'phase3/stage4/foundry_handoff/wat_plan.json',
+    'phase3/stage4/foundry_handoff/corner_test_vectors.json',
+    ('phase3/stage4/foundry_handoff/scribe_line_layout.gds',
+     'phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt'),
+]
+# The scribe-line note satisfies the requirement but is NOT a delivered
+# artefact — when it is what satisfied the member, the open item is surfaced
+# in `pending_foundry_fields` under this name so the tapeout checklist
+# (tapeout_checklist_gen reads exactly that list) carries it as a reviewer
+# to-do. Before this, the generator's honest disclosure was written to disk and
+# read by nobody: the PENDING_FOUNDRY_* scan only inspects dict keys inside
+# .json members, so a sibling .txt note could never appear in it.
+_SCRIBE_PENDING_NOTE = (
+    'phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt')
+_SCRIBE_PENDING_FIELD = 'PENDING_FOUNDRY_scribe_line_layout'
 _WAIVER_RATIONALE = 'Foundry-handoff kit assembler not shipped.'
+
+
+def _member_alternatives(entry):
+    """Normalise a _REQUIRED_FILES entry to its tuple of accepted spellings."""
+    return entry if isinstance(entry, tuple) else (entry,)
+
+
+def _member_label(entry):
+    """Human/report label for a required-kit member."""
+    return " OR ".join(_member_alternatives(entry))
 
 # v1.6.162 (#60 P2-7) — explicit chip-GDS requirement. Field agent
 # observed Step 35 PASS on a project whose only foundry-handoff GDS
@@ -301,8 +346,17 @@ def main(argv=None):
         print(f"[{_GATE_NAME}] project dir not found: {project}", file=sys.stderr)
         return 2
 
-    found = [p for p in _REQUIRED_FILES if list(project.glob(p))]
-    missing = [p for p in _REQUIRED_FILES if p not in found]
+    found, missing = [], []
+    scribe_satisfied_by_note = False
+    for entry in _REQUIRED_FILES:
+        hit = next((alt for alt in _member_alternatives(entry)
+                    if list(project.glob(alt))), None)
+        if hit is None:
+            missing.append(_member_label(entry))
+        else:
+            found.append(hit)
+            if hit == _SCRIBE_PENDING_NOTE:
+                scribe_satisfied_by_note = True
 
     # v1.6.162 (#60 P2-7) — chip-GDS gate.
     ic_name = _read_l1_ic_name(project)
@@ -430,6 +484,15 @@ def main(argv=None):
                                     f"submittable (#437b)."),
                     })
 
+    # #446/#449 — the scribe-line frame is accounted for by a plainly-named
+    # disclosure note rather than a delivered .gds. That is an OPEN FOUNDRY
+    # ITEM, so it joins the same list the JSON-key scan feeds and reaches the
+    # tapeout checklist. Prepended so it is never truncated out of the finding
+    # message's first-12 slice.
+    if scribe_satisfied_by_note:
+        pending_foundry_fields.insert(
+            0, f"{_SCRIBE_PENDING_NOTE}:{_SCRIBE_PENDING_FIELD}")
+
     waiver = _step_waived(project, args.step_label)
     if substance_findings and not waiver:
         verdict, rc = "FAIL", 1
@@ -480,7 +543,9 @@ def main(argv=None):
         "gate": _GATE_NAME,
         "verdict": verdict,
         "step_label": args.step_label,
-        "required_files": _REQUIRED_FILES,
+        # Report the LABELS (tuple entries flattened to "A OR B") so the JSON
+        # stays a list of strings for downstream readers.
+        "required_files": [_member_label(e) for e in _REQUIRED_FILES],
         "found": found,
         "missing": missing,
         "ic_name": ic_name,
