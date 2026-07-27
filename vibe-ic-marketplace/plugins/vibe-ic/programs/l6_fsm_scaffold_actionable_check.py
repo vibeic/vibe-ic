@@ -1,17 +1,34 @@
 #!/usr/bin/env python3
 """l6_fsm_scaffold_actionable_check.py — SEMANTIC layer gate for L6.
 
+THE CONSUMER MODEL, STATED FIRST BECAUSE PART A DEPENDS ON IT (#509)
+=====================================================================
+``phase2_scaffold_gen`` is an ORACLE, not a flow step. No runner and no
+step of ``flow/phase1_phase2_phase3.yaml`` calls it, at any version; Phase
+2 authors RTL through ``design_one_shot_runner.step_rtl_gen``. What the
+module is, is an EXECUTABLE SPECIFICATION of what a conforming Phase 2
+must be able to produce from L6, and Part A below drives it as such.
+
+Every Part-A sentence is therefore COUNTERFACTUAL by construction: it says
+what a conforming phase 2 WOULD be handed, not what phase 2 does receive.
+That is a complete justification — the contract is what is being enforced,
+and an L6 that cannot yield a scaffoldable FSM is underspecified whether or
+not any program consumes it — and it is the only honest one. A blocking
+gate whose stated reason does not happen is a gate nobody can evaluate.
+See ``phase2_scaffold_gen``'s own docstring for the measurement.
+
 BLOCKS (exit 1). Rationale for blocking rather than advising
 =============================================================
-Both consumers of L6 degrade SILENTLY and in the PASS direction:
+Both readers of L6 degrade SILENTLY and in the PASS direction:
 
-  * ``phase2_scaffold_gen.emit_fsm_v()`` emits a syntactically valid
-    Verilog module from whatever L6 gives it. Zero states → a file
-    stamped "intentionally empty". One state → a module whose only
-    behaviour is ``state <= S_<the one state>`` on reset, with the
-    transition body left as a ``// TODO`` comment. Both compile. Both
-    are indistinguishable from a healthy scaffold to every downstream
-    step.
+  * ``phase2_scaffold_gen.emit_fsm_v()`` — the scaffold contract's
+    reference implementation — emits a syntactically valid Verilog
+    module from whatever L6 gives it. Zero states → a file stamped
+    "intentionally empty". One state → a module whose only behaviour is
+    ``state <= S_<the one state>`` on reset, with the transition body
+    left as a ``// TODO`` comment. Both compile. An L6 that yields
+    either is indistinguishable, to every presence-shaped check, from
+    one that yields a healthy scaffold.
   * ``l11_sequence_covers_l6_reject_rules_check`` contains the literal
     branch ``if not kws: # generic rule — accept any silent sequence``.
     A reject rule whose condition yields no keyword therefore does not
@@ -30,12 +47,13 @@ The contract this gate enforces
 
 Part A — the FSM skeleton (previously ungated)
 ----------------------------------------------
-``phase2_scaffold_gen.derive_fsm_states(l6)`` is the *only* path from
-L6 into ``<top>_fsm.v``. It reads ``fsm_states`` / ``fsm_hints*`` — not
-``states`` — so an L6 that puts its state list under a key the emitter
-does not read produces an EMPTY FSM while every token-presence check
-sees a populated layer. This gate calls the emitter's own derivation
-function, so it measures exactly what phase 2 will receive.
+``phase2_scaffold_gen.derive_fsm_states(l6)`` is the *only* path the
+scaffold contract defines from L6 into a ``<top>_fsm.v``. It reads
+``fsm_states`` / ``fsm_hints*`` — not ``states`` — so an L6 that puts its
+state list under a key the emitter does not read yields an EMPTY FSM
+while every token-presence check sees a populated layer. This gate calls
+the emitter's own derivation function, so it measures exactly what a
+conforming phase 2 would be handed rather than restating the rule.
 
 Triggered only by L6's OWN self-declaration that the input contains an
 FSM (``no_fsm_in_input`` / ``no_fsm_states_in_input`` both false, or a
@@ -43,13 +61,14 @@ non-empty state list). A design that honestly records "there is no FSM
 in my input" is not penalised. Requirements when triggered:
 
   A1  ``derive_fsm_states()`` must yield >= 2 states. One state is not
-      a state machine: ``emit_fsm_v`` gives it a 1-bit ``state``
+      a state machine: ``emit_fsm_v`` would give it a 1-bit ``state``
       register that can never change value.
   A2  the layer must carry at least one transition — per-state
       ``transitions[]`` or a top-level ``fsm_transitions``/
       ``transitions`` list. ``emit_fsm_v``'s body is literally
       ``// TODO — transition logic per L6.fsm_transitions``; with zero
-      transitions there is nothing for phase 2 to scaffold from.
+      transitions there is nothing a conforming phase 2 could scaffold
+      from.
   A3  every transition target must name a state that exists in the
       derived state set. A dangling target is a scaffold that cannot
       be built. Derived purely from L6's own contents.
@@ -79,18 +98,26 @@ machine-matchable rule from a paragraph that happened to contain the
 right letters. Fully general: no vocabulary is hardcoded here, only the
 boundary predicate.
 
-Part A is stated in terms of a consumer — so it must check the
-consumer runs (#504)
+Part A is stated in terms of a contract — so it must check the contract
+BINDS this design (#504)
 ====================================================================
 Every sentence of Part A is a claim about ``phase2_scaffold_gen.
 emit_fsm_v()``: what it writes when handed 0 states, 1 state, no
-transitions, a dangling target. For a REUSED-IP design that function
-never authors the RTL. The detected class carries ``rtl_gen: null`` in
-``ic_class_registry.json`` and the design stages its own implementation,
-so ``design_one_shot_runner`` routes phase 2 through
-``reused_ip_rtl_consume`` and phase 2 builds from the staged files — it
-is never handed an L6-derived state enum at all. Part A's failure text
-then describes a consequence that cannot occur, and Phase 1 halts on it.
+transitions, a dangling target. For a REUSED-IP design the scaffold
+contract does not describe phase 2's obligation at all. The detected
+class carries ``rtl_gen: null`` in ``ic_class_registry.json`` and the
+design stages its own implementation, so ``design_one_shot_runner``
+routes phase 2 through ``reused_ip_rtl_consume`` and phase 2 builds from
+the staged files — a conforming phase 2 for such a design is never
+obliged to derive a state enum from L6 at all. Part A's requirement then
+has nothing to bind, and Phase 1 halts on it.
+
+Note the two are different questions and #509 did not merge them. Part A
+is counterfactual for EVERY design, because the oracle runs for none;
+what #504 measured is narrower — that for a reused-IP design the
+counterfactual itself is vacuous, since the phase 2 the contract
+describes is not the phase 2 this design gets. That is what the
+disclosure below discloses.
 
 The predicate that knows this is NOT restated here. It is imported from
 ``_reused_ip_predicate`` — the same module ``flow_compliance_check`` and
@@ -182,7 +209,8 @@ RC_VACUOUS = 2
 #: One unit of what Part A measures, in this gate's own terms. Named once so
 #: the denominator block, the reason prose and any cross-gate disclosure sweep
 #: agree by construction rather than by re-typing the string.
-DENOM_UNIT = "L6 FSM state(s) reaching phase2_scaffold_gen.emit_fsm_v()"
+DENOM_UNIT = ("L6 FSM state(s) a conforming phase 2 would take into "
+              "phase2_scaffold_gen.emit_fsm_v()")
 
 WAIVER_KEY = "l6_fsm_scaffold_degraded_intentional"
 WAIVER_MIN_LEN = 40
@@ -407,14 +435,15 @@ def _kw_on_token_boundary(kw: str, text: str) -> bool:
 
 
 def _scaffold_consumer_is_bypassed(project: Path) -> bool:
-    """True when phase 2 will NOT build this design's RTL from L6.
+    """True when the scaffold contract does not bind this design's phase 2.
 
     The whole of Part A is stated in terms of what
-    ``phase2_scaffold_gen.emit_fsm_v()`` emits. When the design is reused IP —
-    the detected class carries ``rtl_gen: null`` AND reused RTL is staged —
-    ``design_one_shot_runner`` routes phase 2 through ``reused_ip_rtl_consume``
-    and that emitter is never reached, so Part A's requirements have no
-    consumer to be actionable BY.
+    ``phase2_scaffold_gen.emit_fsm_v()`` would emit. When the design is reused
+    IP — the detected class carries ``rtl_gen: null`` AND reused RTL is staged
+    — ``design_one_shot_runner`` routes phase 2 through
+    ``reused_ip_rtl_consume``, so a conforming phase 2 for THIS design derives
+    no state enum from L6 and Part A's requirements have no obligation to be
+    actionable FOR.
 
     Delegates to the ONE shared reader (``_reused_ip_predicate``) — no second
     copy of the predicate lives here. Fail-closed: an unimportable module or a
@@ -432,25 +461,25 @@ def _deferral_reason(derived: List[Any], transitions_declared: int) -> str:
     """The written reason a reader gets INSTEAD of a verdict on Part A.
 
     It has to say three things or it is worse than the FAIL it replaces: what
-    the layer actually carries, what it does not, and which consumer's absence
-    is the reason nobody checked. Chip-AGNOSTIC — the state names are the
-    project's own data, never a literal in this file."""
+    the layer actually carries, what it does not, and why the contract this
+    part enforces does not bind this design. Chip-AGNOSTIC — the state names
+    are the project's own data, never a literal in this file."""
     names = [str(s) for s in derived]
     shown = ", ".join(names[:8]) + ("…" if len(names) > 8 else "")
     return (
-        "phase2_scaffold_gen.emit_fsm_v() — the consumer every requirement in "
-        "this part is stated in terms of — does not author RTL for this "
-        "project: the detected ic_class carries rtl_gen=null in "
-        "ic_class_registry.json and reused RTL is staged, so phase 2 takes the "
-        "reused_ip_rtl_consume path and builds from the staged implementation "
-        "rather than from an L6-derived state enum. WHAT L6 CARRIES, "
-        f"UNVERIFIED: {len(names)} derived state(s)"
+        "phase2_scaffold_gen.emit_fsm_v() — the scaffold-contract oracle every "
+        "requirement in this part is stated in terms of — states no obligation "
+        "for this project: the detected ic_class carries rtl_gen=null in "
+        "ic_class_registry.json and reused RTL is staged, so a conforming "
+        "phase 2 takes the reused_ip_rtl_consume path and builds from the "
+        "staged implementation rather than deriving a state enum from L6. "
+        f"WHAT L6 CARRIES, UNVERIFIED: {len(names)} derived state(s)"
         + (f" [{shown}]" if names else "")
         + f" and {transitions_declared} declared transition(s). NOTHING in "
         "this run compared those states, or the transitions they lack, "
         "against the staged implementation's own FSM. This is a disclosure "
-        "that the requirement's consumer is absent — NOT a finding that the "
-        "requirement is met, and NOT a sign-off on L6.")
+        "that the requirement has no binding contract here — NOT a finding "
+        "that the requirement is met, and NOT a sign-off on L6.")
 
 
 def _waived(project: Path) -> Tuple[bool, str]:
@@ -563,8 +592,8 @@ def evaluate(project: Path) -> Dict[str, Any]:
                     f"L6 attributes its states to {len(machines)} "
                     "DISTINCT state machines — "
                     + "; ".join(_machine_label(m) for m in machines[:4])
-                    + ". The state list phase 2 receives is their union, "
-                    "not one machine")
+                    + ". The state list a conforming phase 2 would be "
+                    "handed is their union, not one machine")
             for m in machines:
                 if m.get("closed") or len(m.get("states") or []) != 1:
                     continue
@@ -584,21 +613,24 @@ def evaluate(project: Path) -> Dict[str, Any]:
                     f"(no_fsm_in_input={l6.get('no_fsm_in_input')!r}, "
                     f"raw state entries={len(raw_states)}) but "
                     "phase2_scaffold_gen.derive_fsm_states() — the ONLY "
-                    "path from L6 into <top>_fsm.v — returns 0 states. "
-                    "emit_fsm_v() will write a file stamped "
-                    "'intentionally empty'. Check the state list is "
-                    "under a key the emitter reads (fsm_states / "
-                    "fsm_hints*), not merely under 'states'")
+                    "path the scaffold contract defines from L6 into a "
+                    "<top>_fsm.v — returns 0 states, so a conforming "
+                    "phase 2 would write a file stamped 'intentionally "
+                    "empty'. Check the state list is under a key the "
+                    "emitter reads (fsm_states / fsm_hints*), not merely "
+                    "under 'states'")
             elif len(derived) == 1:
                 _only = machines[0] if len(machines) == 1 else None
                 fsm_failures.append(
                     f"only 1 FSM state derived ({derived[0]!r}"
                     + (f", machine {_only.get('machine_id')}"
                        if _only else "")
-                    + ") — emit_fsm_v() gives it a 1-bit state register "
-                    "that can never change value, so <top>_fsm.v is a "
-                    "module that cannot leave reset. A control layer "
-                    "that declares an FSM must enumerate >= 2 states")
+                    + ") — emit_fsm_v() would give it a 1-bit state "
+                    "register that can never change value, so the "
+                    "<top>_fsm.v a conforming phase 2 owes for this L6 "
+                    "is a module that cannot leave reset. A control "
+                    "layer that declares an FSM must enumerate >= 2 "
+                    "states")
 
             # A2 — at least one transition to scaffold from.
             # v1.7.74 — for #505. Same trigger, but the finding is
@@ -614,9 +646,9 @@ def evaluate(project: Path) -> Dict[str, Any]:
                     f"for any of the {len(machines) or 1} state "
                     f"machine(s) it describes — {_per_machine}. "
                     "emit_fsm_v()'s body is literally '// TODO — "
-                    "transition logic per L6.fsm_transitions', so phase "
-                    "2 receives a state enum with no transition "
-                    "information at all")
+                    "transition logic per L6.fsm_transitions', so a "
+                    "conforming phase 2 would receive a state enum with "
+                    "no transition information at all")
 
             # A3 — no dangling transition targets.
             if derived and transitions:
@@ -642,7 +674,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
                         f"{len(dangling)} transition(s) target a state "
                         "that is not in the derived state set "
                         f"({sorted(norm)}): {', '.join(dangling[:4])}. "
-                        "phase 2 cannot scaffold an edge to a state it "
+                        "No phase 2 can scaffold an edge to a state it "
                         "was never given")
 
     # ---------------- Part B — reject_rules actionability ----------------
@@ -766,9 +798,9 @@ def evaluate(project: Path) -> Dict[str, Any]:
             f"FSM scaffold contract NOT CHECKED: "
             f"{len(out['derived_states'])} state(s) derived, "
             f"{out['transitions_declared']} transition(s) declared, and "
-            f"phase2_scaffold_gen.emit_fsm_v() does not run for this project "
-            f"(reused IP: class rtl_gen=null + staged RTL) — disclosed skip, "
-            f"NOT a sign-off"]
+            f"the phase2_scaffold_gen.emit_fsm_v() contract does not bind "
+            f"this project (reused IP: class rtl_gen=null + staged RTL) — "
+            f"disclosed skip, NOT a sign-off"]
         if "reject_rules" in parts_run:
             bits.append(f"{out['reject_rules_checked']} reject_rule(s) "
                         "machine-matchable by the L11/L12 coverage gate")
@@ -778,7 +810,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
         if "fsm" in parts_run:
             bits.append(f"{len(out['derived_states'])} state(s) / "
                         f"{out['transitions_declared']} transition(s) "
-                        "reach phase2_scaffold_gen")
+                        "satisfy the phase2_scaffold_gen contract")
         if "reject_rules" in parts_run:
             bits.append(f"{out['reject_rules_checked']} reject_rule(s) "
                         "machine-matchable by the L11/L12 coverage gate")
@@ -864,7 +896,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # deferred it is still reported here, so the reader is never handed a
     # verdict that silently covers a part nobody examined.
     for f in res.get("deferred_to_staged_rtl", [])[:8]:
-        print(f"  • NOT CHECKED (scaffold consumer does not run): {f}")
+        print(f"  • NOT CHECKED (scaffold contract does not bind this "
+              f"design): {f}")
     print()
     print("  Fix in L6_CONTROL_LOGIC.json, from the design's OWN input "
           "documents only:")

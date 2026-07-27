@@ -690,7 +690,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase23_completion_self_audit_check` | any | v0.109 | v0.109 mandatory self-audit gate. |
 | `phase23_one_shot_runner` | any | — | Phase 2 + Phase 3 chain. |
 | `phase2_one_shot_runner` | any | — | public-name shim over design_one_shot_runner. |
-| `phase2_scaffold_gen` | any | v0.1.88 | Phase 1 L docs → Phase 2 Verilog scaffolding. |
+| `phase2_scaffold_gen` | any | v0.1.88 | ORACLE ONLY: the executable specification of what a conforming Phase 2 emits from the L docs. Nothing in the flow runs it. |
 | `phase2_verify_aggregate` | any | v0.1.50 | Phase 2 output verification aggregator (Pattern-C → program). |
 | `phase3_backend_step` | any | — | single dispatcher for Phase 3 backend per-step entries. |
 | `phase3_one_shot_runner` | any | — | single-call orchestrator for Phase 3 (synth → GDS). |
@@ -1722,7 +1722,7 @@ _(no programs in this group)_
 - `phase23_completion_self_audit_check` — v0.109 mandatory self-audit gate.  _[v0.109]_
 - `phase23_one_shot_runner` — Phase 2 + Phase 3 chain.
 - `phase2_one_shot_runner` — public-name shim over design_one_shot_runner.
-- `phase2_scaffold_gen` — Phase 1 L docs → Phase 2 Verilog scaffolding.  _[v0.1.88]_
+- `phase2_scaffold_gen` — ORACLE ONLY: the executable specification of what a conforming Phase 2 emits from the L docs. Nothing in the flow runs it.  _[v0.1.88]_
 - `phase2_verify_aggregate` — Phase 2 output verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phase3_backend_step` — single dispatcher for Phase 3 backend per-step entries.
 - `phase3_one_shot_runner` — single-call orchestrator for Phase 3 (synth → GDS).

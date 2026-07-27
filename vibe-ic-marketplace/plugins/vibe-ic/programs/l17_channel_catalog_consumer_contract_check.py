@@ -29,17 +29,30 @@ Promotion to BLOCKS is a one-line change once the producer stops stamping
 unextracted narrative into this layer — argue it from a re-measurement of the
 same corpus, not from this docstring.
 
+THE CONSUMER MODEL — WHAT "CONSUMER" MEANS IN THIS FILE (#509)
+---------------------------------------------------------------
+`phase2_scaffold_gen` is a CONTRACT ORACLE, not a flow step: no runner and no
+step of `flow/phase1_phase2_phase3.yaml` calls it, at any version, and Phase 2
+authors RTL through `design_one_shot_runner.step_rtl_gen`. It is the
+EXECUTABLE SPECIFICATION of the port-list derivation a conforming Phase 2
+owes, which is why this gate imports and drives it rather than restating its
+rules. Every finding below is therefore stated as what a CONFORMING PHASE 2
+WOULD emit — never as what phase 2 does emit. The requirements are unchanged:
+a catalog that cannot yield a well-formed port list is underspecified whether
+or not any program consumes it.
+
 WHY IT MATTERS
 --------------
-L17 is not a documentation layer — it is the FIRST source of the emitted top
-module's PORT LIST. `phase2_scaffold_gen.derive_signals(l17, l9)` reads
+L17 is not a documentation layer — it is the FIRST source the port-list
+contract reads. `phase2_scaffold_gen.derive_signals(l17, l9)` reads
 `L17.channels[]` and `L17.global_signals[]` ahead of L9, and the cocotb scaffold
-decides "clocked vs combinational" from whatever that derivation returns
-("No clock port detected in L17/L9; combinational or ..."). A wrong or empty
-L17 therefore silently produces a wrong module interface — the failure surfaces
-five steps downstream as a port mismatch or an unclocked testbench, with an
-opaque error. That is precisely the L21_POWER_INTENT failure mode this gate
-family exists to prevent, so it must be able to stop the flow.
+it specifies decides "clocked vs combinational" from whatever that derivation
+returns ("No clock port detected in L17/L9; combinational or ..."). A wrong or
+empty L17 therefore silently specifies a wrong module interface — a failure
+that would surface five steps downstream as a port mismatch or an unclocked
+testbench, with an opaque error. That is precisely the L21_POWER_INTENT
+failure mode this gate family exists to prevent, so it must be able to stop
+the flow.
 
 THE PRINCIPLE THIS GATE ENCODES
 -------------------------------
@@ -47,10 +60,10 @@ THE PRINCIPLE THIS GATE ENCODES
   CONSUMES IT, in an actionable form — not when a token appears somewhere.
 
 So this gate does not count tokens and does not test "is the file non-empty".
-It **runs the consumer's own derivation** (it imports
+It **runs the contract's own derivation** (it imports
 `phase2_scaffold_gen.derive_signals` / `_is_clock_name` / `_sanitize_id`) and
-asserts the derived artefact is usable. What the consumer silently drops, this
-gate reports.
+asserts the derived artefact is usable. What that derivation silently drops,
+this gate reports.
 
 WHAT IT CATCHES
 ---------------
@@ -85,8 +98,8 @@ E3b CHANNEL_GROUP_COLLAPSED_TO_ONE_PORT
     consumer's own derivation, because `derive_signals` reads
     `channels[].name` and never expands `channels[].signals[]`. A catalog whose
     channels are GROUPS (the shape the Phase-1 extractor emits: one entry per
-    channel group carrying its member rows) therefore emits the GROUP name as a
-    single port and drops every member. The declared interface silently
+    channel group carrying its member rows) therefore specifies the GROUP name
+    as a single port and drops every member. The declared interface silently
     shrinks from N signals to 1.
 
 E3g CHANNEL_NAME_FUSES_DECLARED_SIGNALS
@@ -94,7 +107,7 @@ E3g CHANNEL_NAME_FUSES_DECLARED_SIGNALS
     identifier-shaped tokens (`"AA / BB"`, `"AA, BB, CC"`), and the consumer's
     own derivation turns that whole string into ONE port. `_sanitize_id`
     rewrites the delimiter to an underscore, so N declared signals fuse into a
-    single terminal and N-1 of them never reach the emitted top module.
+    single terminal and N-1 of them would never reach the top module a conforming phase 2 emits.
     THIS IS E3b'S HARM THROUGH A DOOR E3b CANNOT SEE. E3b detects the same
     collapse only when the members are rows in `channels[].signals[]`; when the
     catalog names its members INSIDE the entry's own `name` string there is no
@@ -187,7 +200,8 @@ E5 CLOCK_PORT_SYNTHESISED_BY_CONSUMER
     The design's own L-docs declare it sequential (`clock_domains`, `clocks`, a
     clock period, or an FSM / pipeline), but NEITHER L17 nor L9 declares a
     clock PORT, so `derive_signals` invents a "clk" stub to fill the hole and
-    the emitted top-module interface no longer matches the design.
+    the top-module interface a conforming phase 2 emits would no longer match
+    the design.
     NOTE ON WHY IT IS PHRASED THIS WAY: `derive_signals` ALWAYS auto-adds a
     clk/rst stub, so the obvious test — "did a clock port come out?" — can
     never fail. This rail instead asks whether the clock the consumer emitted
@@ -666,9 +680,9 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
                             "why": "not an object"})
             continue
         # A channel is port-derivable only if SOME declared name of its own
-        # carries identifier content. When none does, the consumer's
-        # _sanitize_id() substitutes a placeholder and the emitted top module
-        # gains a port the design never declared.
+        # carries identifier content. When none does, the contract's
+        # _sanitize_id() substitutes a placeholder and the top module a
+        # conforming phase 2 emits gains a port the design never declared.
         if not _any_identifier_content(ch):
             dropped.append({"channel": ch.get("name"),
                             "keys": sorted(ch.keys()),
@@ -715,33 +729,34 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
         findings.append(Finding(
             "ERROR", "CHANNEL_GROUP_COLLAPSED_TO_ONE_PORT",
             f"{len(collapsed)} channel(s) declare member signals but collapse "
-            f"to a single port under the consumer's own derivation — {lost} "
-            f"declared signal(s) never reach the emitted top module. "
+            f"to a single port under the contract's own derivation — {lost} "
+            f"declared signal(s) would never reach the top module a "
+            f"conforming phase 2 emits. "
             f"phase2_scaffold_gen.derive_signals reads `channels[].name` only "
             f"and does not expand `channels[].signals[]`, so a catalog whose "
-            f"channels are GROUPS emits the group name as one port instead of "
-            f"its members. Either the catalog must list member signals as "
-            f"channels, or derive_signals must expand them.",
+            f"channels are GROUPS specifies the group name as one port "
+            f"instead of its members. Either the catalog must list member "
+            f"signals as channels, or derive_signals must expand them.",
             {"collapsed": collapsed[:10]}))
 
     if dropped:
         findings.append(Finding(
             "ERROR", "CHANNEL_NOT_PORT_DERIVABLE",
             f"{len(dropped)} declared channel(s) contribute ZERO ports when "
-            f"the real consumer derivation (phase2_scaffold_gen."
-            f"derive_signals) is run over this L17. The consumer drops them "
-            f"silently; the emitted top module will be missing that "
-            f"interface.",
+            f"the contract's own derivation (phase2_scaffold_gen."
+            f"derive_signals) is run over this L17. The derivation drops them "
+            f"silently; the top module a conforming phase 2 emits would be "
+            f"missing that interface.",
             {"dropped": dropped[:20]}))
 
     if inout_guessed:
         findings.append(Finding(
             "ERROR", "CHANNEL_DIRECTION_SILENTLY_INOUT",
             f"{len(inout_guessed)} declared channel signal(s) carry no "
-            f"direction key that the consumer reads "
+            f"direction key that the contract's derivation reads "
             f"(`direction_master` / `direction`). "
             f"phase2_scaffold_gen._normalize_dir(None) returns 'inout', so "
-            f"these become silently bidirectional top-level ports.",
+            f"these would become silently bidirectional top-level ports.",
             {"signals": sorted(set(inout_guessed))[:20]}))
 
     # -- E3g CHANNEL_NAME_FUSES_DECLARED_SIGNALS ---------------------------
@@ -799,11 +814,12 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
         findings.append(Finding(
             "ERROR", "CHANNEL_NAME_FUSES_DECLARED_SIGNALS",
             f"{len(fused)} catalog entr(y/ies) name TWO OR MORE signals inside "
-            f"a single `name` string, and the consumer's own derivation fuses "
+            f"a single `name` string, and the contract's own derivation fuses "
             f"each whole string into ONE port — "
             f"phase2_scaffold_gen._sanitize_id rewrites the delimiter to an "
-            f"underscore, so {_lost} declared signal(s) never reach the "
-            f"emitted top module. This is the same loss E3b reports, arriving "
+            f"underscore, so {_lost} declared signal(s) would never reach the "
+            f"top module a conforming phase 2 emits. This is the same loss "
+            f"E3b reports, arriving "
             f"through a door E3b cannot see: E3b counts "
             f"`channels[].signals[]`, and an entry that enumerates its members "
             f"in its own name has no such list, while E3 passes it because the "
@@ -923,12 +939,12 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
         findings.append(Finding(
             "ERROR", "PORT_WIDTH_UNRESOLVED_BY_CONSUMER",
             f"{len(refused_widths)} port(s) whose L9 entry declares a "
-            f"SYMBOLIC or non-numeric width come out of the consumer's own "
+            f"SYMBOLIC or non-numeric width come out of the contract's own "
             f"derivation with NO width at all: "
             f"phase2_scaffold_gen.derive_signals marks them `width: None` "
             f"and every scaffold emitter REFUSES to render them, so the "
             f"generator emits nothing and exits 1 rather than declaring a "
-            f"1-bit scalar for a bus. That refusal is the consumer behaving "
+            f"1-bit scalar for a bus. That refusal is the contract behaving "
             f"correctly — this finding is about the LAYER, which still "
             f"cannot be scaffolded. The remedy is in L1/L9: state the width "
             f"as an integer, or declare the parameter the range names in "
@@ -940,13 +956,14 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
     if collapsed_widths:
         findings.append(Finding(
             "ERROR", "PORT_WIDTH_COLLAPSED_TO_ONE_BIT",
-            f"{len(collapsed_widths)} port(s) are emitted as 1-bit scalars by "
-            f"the consumer's own derivation while the L9 entry they come from "
+            f"{len(collapsed_widths)} port(s) come out of the contract's own "
+            f"derivation as 1-bit scalars while the L9 entry they come from "
             f"carries a SYMBOLIC or non-numeric width. "
             f"phase2_scaffold_gen.derive_signals coerces any width that is "
             f"neither an int nor a digit-string to 1 with no diagnostic, so "
-            f"the emitted top module's interface is narrower than the design "
-            f"declares and the error surfaces several steps downstream. "
+            f"the interface a conforming phase 2 emits would be narrower than "
+            f"the design declares and the error would surface several steps "
+            f"downstream. "
             f"This gate REPORTS only — resolving the symbol and writing it "
             f"back into an L-doc was measured (#404) to turn a correct FAIL "
             f"into a PASS, because `parameters[]` carries no module or layer "
@@ -1017,8 +1034,8 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
             f"declares a clock port, so phase2_scaffold_gen.derive_signals "
             f"invented {synth_clocks} to fill the hole. The clock requirement "
             f"exists in another layer and is ABSENT from the layer that "
-            f"derives the top-module interface; the emitted port list "
-            f"therefore does not match the design.",
+            f"derives the top-module interface; the port list a conforming "
+            f"phase 2 emits would therefore not match the design.",
             {"declared_clock_evidence": clock_reasons[:8],
              "synthesised_ports": synthetic,
              "declared_port_count": len(declared)}))
@@ -1032,7 +1049,7 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
         findings.append(Finding(
             "WARNING", "CHANNEL_PURPOSE_MISSING",
             f"{len(no_purpose)} channel(s) carry no purpose/description/"
-            f"semantics; the consumer emits an empty port comment.",
+            f"semantics; the derivation yields an empty port comment.",
             {"channels": no_purpose[:20]}))
 
     ev = raw17.get("extraction_evidence") or raw17.get("evidence")

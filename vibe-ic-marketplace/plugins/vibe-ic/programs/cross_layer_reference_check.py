@@ -88,14 +88,22 @@ non-empty reference field:
              of identifiers it addresses.
   2. RESOLVE each identifier to an id inside the row's declared
              ``target.scope_layers``, and evaluate the row's value.
-  3. OBSERVE what the CONSUMER's own derivation produces for the same
-             element, and compare.
+  3. OBSERVE what the CONSUMING derivation produces for the same element,
+             and compare.
 
 Leg 3 is what separates this from the layer gates that already exist. A
 layer gate can only ask whether a layer's own content is well formed. Both
 layers here ARE well formed — that is the premise of the defect class. The
-disagreement is only visible from the consumer's side, so the gate runs the
-consumer's real code (imported, not reimplemented) and diffs the result.
+disagreement is only visible from the consuming side, so the gate runs that
+derivation's real code (imported, not reimplemented) and diffs the result.
+
+WHAT "CONSUMER" MEANS HERE (#509). The one registered adapter drives
+``phase2_scaffold_gen.derive_signals``, which is a CONTRACT ORACLE and not a
+flow step: no runner and no step of ``flow/phase1_phase2_phase3.yaml`` calls
+it, at any version. So a finding on leg 3 says the reference is unreachable
+by the derivation a conforming phase 2 owes — not that some running program
+read a wrong number. That is the stronger claim of the two, because it holds
+for every phase 2 that satisfies the contract.
 
 SCOPE IS LOAD-BEARING — READ THIS BEFORE ADDING A ROW
 ------------------------------------------------------
@@ -472,8 +480,15 @@ def _adapter_scaffold_derive_signals(
 ) -> Optional[Dict[str, Dict[str, Any]]]:
     """`phase2_scaffold_gen.derive_signals(L17, L9)` -> {port: {"width": n}}.
 
-    This is the derivation that decides the emitted top-module port list.
-    Returns None when the consumer cannot be imported, which is reported
+    This is the derivation that DEFINES the top-module port list a conforming
+    phase 2 owes. `phase2_scaffold_gen` is a CONTRACT ORACLE and not a flow
+    step — no runner and no step of `flow/phase1_phase2_phase3.yaml` calls it,
+    at any version (#509) — so leg 3 below observes what that specification
+    produces, never what a running phase 2 produced. That is what makes the
+    disagreement it reports meaningful: the reference is unreachable BY THE
+    CONTRACT, which every conforming phase 2 must satisfy.
+
+    Returns None when the oracle cannot be imported, which is reported
     rather than silently treated as agreement.
     """
     src = _HERE / "phase2_scaffold_gen.py"
@@ -714,10 +729,10 @@ def _judge_element(row, eid, rec, raw, scope_by_name, all_by_name,
         resolved_from=sorted(env.items()),
         detail=(
             f"{eid} references {sorted(env.items())} and resolves to "
-            f"{value_name}={resolved}; {consumer_cfg['adapter']} — the layer "
-            f"that consumes it — derives {value_name}={got}. The value is "
-            f"present in the layer that produces it and unreachable by the "
-            f"layer that consumes it."))]
+            f"{value_name}={resolved}; {consumer_cfg['adapter']} — the "
+            f"derivation that would consume it — yields {value_name}={got}. "
+            f"The value is present in the layer that produces it and "
+            f"unreachable by the derivation that would consume it."))]
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1090,8 +1105,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         # and the old line called that "3 declared reference(s)".
         print(f"[PASS] {GATE}: {report['elements_judged']} declared "
               f"reference(s) — carried by {report['elements_examined']} "
-              f"producer record(s) — resolve in scope and reach their "
-              f"consumer.")
+              f"producer record(s) — resolve in scope and reach the "
+              f"derivation that would consume them.")
         return 0
     if verdict == "PASS_WITH_WAIVER":
         print(f"[PASS_WITH_WAIVER] {GATE}: {len(report['findings'])} "

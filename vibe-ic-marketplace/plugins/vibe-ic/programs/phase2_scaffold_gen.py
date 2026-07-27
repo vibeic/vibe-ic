@@ -1,4 +1,47 @@
-"""phase2_scaffold_gen.py — Phase 1 L docs → Phase 2 Verilog scaffolding.
+"""phase2_scaffold_gen.py — ORACLE ONLY: the executable specification of what a conforming Phase 2 emits from the L docs. Nothing in the flow runs it.
+
+ORACLE-ONLY — READ THIS BEFORE TREATING THIS MODULE AS LIVE CODE (#509)
+=======================================================================
+Nothing in the shipping flow calls this program to author RTL. Measured
+across ALL refs at v1.7.73 and re-measured on this change:
+
+    programs/*runner*.py naming it ........ none, at any version
+    flow/phase1_phase2_phase3.yaml ........ does not name it
+    subprocess / CLI invocation ........... none
+    anything else writing <top>_fsm.v ..... none
+
+`emit_fsm_v()` / `derive_fsm_states()` are reached from this module's own
+`main()` and from the layer gates below — nowhere else. Phase 2 authors RTL
+through a different and fully-developed path: `design_one_shot_runner.
+step_rtl_gen` dispatches deterministically, WAIVEs to the `spec-to-rtl`
+skill for a class carrying `rtl_gen: null`, and consults
+`reused_ip_rtl_consume` for a design that stages its own implementation.
+
+So what this module IS, is a REFERENCE IMPLEMENTATION: an executable
+statement of what a conforming Phase 2 must be able to produce from the L
+docs. The layer gates import it and drive it as a CONTRACT ORACLE, and that
+is the whole of its production role. It is a good one — an executable spec
+beats a prose one, and it is why #404 and #377 were catchable at all:
+
+    l1_pin_bus_width_actionable_check        l16_compliance_properties_…
+    l4_regmap_phase2_emitter_contract_check  l17_channel_catalog_consumer_…
+    l6_fsm_scaffold_actionable_check         cross_layer_reference_check
+    regmap_bit_layout_check                  (l10 / l22 cite it in prose)
+
+WHAT THAT OBLIGES EVERY SENTENCE WRITTEN ABOUT THIS MODULE TO SAY. A
+requirement derived from it is a claim about what a CONFORMING PHASE 2
+WOULD receive — never about what phase 2 does receive. The two read alike
+and are not alike: a gate that blocks on a consequence which does not occur
+is a gate no reader can evaluate, which is what #509 measured on the L6
+gate. The requirements themselves survive unchanged, because an L doc that
+cannot yield a scaffoldable FSM, a unique register identifier or a
+resolvable port width is underspecified whether or not any program consumes
+it. Only the justification becomes counterfactual.
+
+`tests/test_issue509_phase2_scaffold_gen_is_oracle_only.py` pins all four
+measurements above over the real tree. Wiring this module into the flow is
+a legitimate thing to decide; doing it silently is not, and that test is
+what makes the decision loud.
 
 v0.1.88 — bridges Phase 1 protocol coverage (39 families, ~51 KLoC of L docs)
 into deterministic Phase 2 RTL scaffolding. Reads `phase1/generated_docs/L*.json`
@@ -10,7 +53,8 @@ names. Each output file is a SKELETON: ports declared and tied to TODO
 stubs, FSM states enumerated, registers laid out. The user/LLM fills in
 behavior; the harness enforces that ports/widths/states match the spec.
 
-Outputs (per protocol benchmark project):
+Outputs — WHEN THE CLI BELOW IS RUN BY HAND. No flow step produces these
+files; the gates drive the derivation functions in memory and write nothing.
 
     phase2/stage1/scaffold/
       ├── <top>_top.v                — module + port list + sub-module instances

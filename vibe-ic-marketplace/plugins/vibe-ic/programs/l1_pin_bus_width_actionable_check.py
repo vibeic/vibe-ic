@@ -4,8 +4,8 @@
 VERDICT SEMANTICS: **BLOCKS** (exit 1 on FAIL).
 ------------------------------------------------------------------
 Why blocking and not advisory: the artefact this gate protects is the
-*top-module port list*. A pin recorded here reaches phase2 THROUGH L9 —
-`phase1_doc_one_shot_runner` promotes each L1 pin's
+*top-module port list*. A pin recorded here reaches that list
+THROUGH L9 — `phase1_doc_one_shot_runner` promotes each L1 pin's
 `{width, msb, lsb, width_symbolic, optional}` into the matching L9 entry, and
 `phase2_scaffold_gen.derive_signals` reads `L17.channels[]` then
 `L9.top_ports` / `L9.ports`. It never reads `pin_table` (ORGANIC #404
@@ -15,13 +15,18 @@ port declaration FROM `L1.pin_table[]` directly; that sent the next author
 to the wrong file, which is how #404 cost a day. The gate itself is
 unchanged and still correct — L1 is where the width must become actionable.
 `l9_rtl_pin_consistency_check` later diffs the emitted RTL back against the
-same table. A pin whose width is not
-resolvable to an integer is emitted as a 1-bit scalar port. Nothing
-downstream errors at that moment — the failure surfaces many steps
-later as a width-mismatch, a truncated datapath, or an
-`l9_rtl_pin_consistency` diff with an opaque cause. Advising here
-would reproduce the documented failure mode where a layer gate said
-FAIL and the flow continued anyway. So: FAIL => rc 1.
+same table.
+
+`phase2_scaffold_gen.derive_signals` is a CONTRACT ORACLE, not a flow step
+(#509): no runner and no step of `flow/phase1_phase2_phase3.yaml` calls it,
+at any version. It is the executable statement of the derivation a
+conforming phase 2 owes, and this gate names it for that reason. So a pin
+whose width is not resolvable to an integer is a pin any conforming phase 2
+would emit as a 1-bit scalar port — and nothing errors at that moment. The
+failure surfaces many steps later as a width-mismatch, a truncated
+datapath, or an `l9_rtl_pin_consistency` diff with an opaque cause.
+Advising here would reproduce the documented failure mode where a layer
+gate said FAIL and the flow continued anyway. So: FAIL => rc 1.
 
 The principle it embodies
 ------------------------------------------------------------------
@@ -42,9 +47,9 @@ declaration can be emitted from. Measured on real Phase-1 output
      "msb": null, "lsb": null}
 
 `width` is PRESENT — a presence-shaped check reports CAPTURED — but it
-is a prose sentence. `int(width)` is impossible, so phase2 emits a
-1-bit `x` for what the design's own interface table declares as an
-N-bit multiplicand bus.
+is a prose sentence. `int(width)` is impossible, so a conforming phase 2
+would emit a 1-bit `x` for what the design's own interface table
+declares as an N-bit multiplicand bus.
 
 What is derived, and from what
 ------------------------------------------------------------------
@@ -165,10 +170,10 @@ def _resolved_width(
     pin: Dict[str, Any],
     params: Optional[Dict[str, Tuple[int, str]]] = None,
 ) -> Optional[int]:
-    """Bit width the port-list consumer can actually emit, or None.
+    """Bit width the port-list contract can actually be met with, or None.
 
     Accepts an integer `width`, an integer `msb`/`lsb` pair, or a
-    pure-numeric string (`"32"`) — phase2 int()s that successfully.
+    pure-numeric string (`"32"`) — the oracle int()s that successfully.
     A prose string is NOT actionable and returns None.
 
     Finally, a STRUCTURED symbolic width (`width_symbolic`) is resolved
@@ -202,8 +207,8 @@ def _resolved_width(
 #   extraction FAILED     caravel `irq`:
 #       width=None, width_symbolic=None, msb=None, lsb=None
 #       The design's own inputs index bit 2, so it is >= 3 bits, and
-#       nothing in L1 says so. phase2 really does emit a 1-bit port.
-#       This is a real defect and MUST keep failing.
+#       nothing in L1 says so. A conforming phase 2 really would emit a
+#       1-bit port. This is a real defect and MUST keep failing.
 #
 #   extraction SUCCEEDED  spm `x`:
 #       width='N-bit(`[size-1:0]`,parameter `size` ...)'   <- prose
@@ -491,7 +496,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
                         f"`{name}`, so it is at least {lower} bits wide, but "
                         f"L1 carries width={pin.get('width')!r} / "
                         f"msb={pin.get('msb')!r} / lsb={pin.get('lsb')!r} — "
-                        f"phase2 emits a 1-bit port."),
+                        f"a conforming phase 2 would emit a 1-bit port."),
                 })
             elif got < lower:
                 violations.append({
@@ -546,7 +551,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
         return report
     report.update(verdict="FAIL", rc=1, reason=(
         f"{len(violations)}/{bus_confirmed} bus-confirmed pin(s) carry no "
-        f"width phase2 can emit a port declaration from."))
+        f"width a conforming phase 2 could emit a port declaration from."))
     return report
 
 

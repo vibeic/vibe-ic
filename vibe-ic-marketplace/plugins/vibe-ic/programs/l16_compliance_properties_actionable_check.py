@@ -26,10 +26,20 @@ never does over a real corpus, that is worth knowing too.
 
 WHY THIS LAYER IS LOAD-BEARING
 ------------------------------
-L16's consumers are the SVA property-stub generator
+L16's readers are the SVA property-stub generator
 (`professional_tb_gen.build_assertions`) and the compliance-vector catalog
-(`phase2_scaffold_gen.emit_compliance_vectors`). Both turn an L16 property into
-a verification obligation. A property that carries no machine-usable anchor
+(`phase2_scaffold_gen.emit_compliance_vectors`). They are not the same kind of
+thing and #509 measured the difference: `professional_tb_gen` RUNS — the flow
+wires it at `phase1_phase2_phase3.yaml` step `professional_tb_gen`, driven by
+`design_one_shot_runner.step_professional_tb_gen` — while `phase2_scaffold_gen`
+is a CONTRACT ORACLE no runner and no flow step calls, at any version. So the
+first turns an L16 property into a verification obligation, and the second
+states the obligation a conforming phase 2 would owe. Rail 1 below is
+unaffected either way: a program that opens only a filename which exists in
+zero runs cannot reach this layer whether it runs today or is the
+specification something else must satisfy tomorrow.
+
+A property that carries no machine-usable anchor
 becomes a 120-char comment: the layer looks populated, the completeness report
 says CAPTURED, and the verification obligation reaches NOBODY. That is the same
 false-CAPTURED shape as the L21_POWER_INTENT defect that aborted a whole

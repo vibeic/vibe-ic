@@ -317,7 +317,12 @@ def test_part_b_failure_survives_the_part_a_deferral(tmp_path):
     assert data["failures"], "the reject-rule failure must survive"
     assert data["scaffold_consumer_runs"] is False
     assert len(data["deferred_to_staged_rtl"]) == 1
-    assert "NOT CHECKED (scaffold consumer does not run)" in r.stdout
+    # #509 reworded the label counterfactually — the oracle runs for NO
+    # design, so "does not run" could not distinguish this one. The pin is
+    # unchanged in strength: the deferred Part-A item is still printed
+    # alongside the Part-B FAIL.
+    assert ("NOT CHECKED (scaffold contract does not bind this design)"
+            in r.stdout)
 
 
 def test_honest_no_fsm_declaration_is_untouched(tmp_path):
