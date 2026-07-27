@@ -37,17 +37,59 @@ from eda_report_audit import main
 from _report_check_argv import split_and_pin
 
 
-if __name__ == "__main__":
+RC_FAIL = 1
+
+
+def run(caller_argv) -> int:
+    """Resolve the caller's argv and run the pinned power audit.
+
+    EVERY non-audit exit maps to RC_FAIL, and that is the whole point of
+    wrapping `main` instead of calling `sys.exit(main(...))` directly.
+    `flow_compliance_check._check_program_exit_zero` credits rc 2 as a
+    VACUOUS_PASS and `return True`s unconditionally, so argparse's own rc 2 —
+    which it raises for an unknown flag, a flag missing its value, or a
+    duplicate positional — turned Step 33 GREEN. `--help` was worse: rc 0,
+    a sign-off credit spent on a program that audited nothing.
+
+    Measured before this change, against `drc`/`lvs`, which already had it:
+
+        power  --json=2  --under=2  --nonsuch=2  <proj> <proj>=2  --help=0
+        drc    --json=1  --under=1  --nonsuch=1  <proj> <proj>=1  --help=1
+        lvs    --json=1  --under=1  --nonsuch=1  <proj> <proj>=1  --help=1
+
+    `power_report_check` adopted the shared splitter in this same batch but
+    not the rc contract that goes with it. Nothing caught it because
+    `test_wrapper_argv_forwarding._WRAPPERS` covers drc / ir_drop / antenna
+    and power appears in neither arm.
+    """
     # `split_and_pin`, not `split_argv`: the plain splitter FORWARDS a
     # caller's `--mode` verbatim, so it would arrive after the pinned pair and
     # argparse's last-wins would hand the caller whichever audit they named.
-    # Measured while making this change: `--mode drc` produced
-    # `eda_report_audit:drc` under a wrapper whose whole job is to pin power.
-    _proj, _passthrough, _rejected = split_and_pin(sys.argv[1:], mode="power")
-    if _rejected is not None:
+    # Measured: `--mode drc` produced `eda_report_audit:drc` under a wrapper
+    # whose whole job is to pin power.
+    proj, passthrough, rejected = split_and_pin(caller_argv, mode="power")
+    if rejected is not None:
         print(f"REFUSED: this wrapper pins `--mode power`; the caller asked "
-              f"for `{_rejected}`. A sign-off auditor whose domain a caller "
+              f"for `{rejected}`. A sign-off auditor whose domain a caller "
               f"can change by flag spelling is a false-certificate vector. "
               f"NOTHING was certified.", file=sys.stderr)
-        sys.exit(1)
-    sys.exit(main([_proj, "--mode", "power", *_passthrough]))
+        return RC_FAIL
+    try:
+        rc = main([proj, "--mode", "power", *passthrough])
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else RC_FAIL
+        if code == 0:
+            # `--help` and friends: argparse exited cleanly having audited
+            # NOTHING. Exiting 0 here spends a sign-off credit for it.
+            print("REFUSED: this invocation printed usage/help and audited "
+                  "nothing; it must not spend a sign-off credit.",
+                  file=sys.stderr)
+        else:
+            print(f"REFUSED: the audit did not run (argument error, exit "
+                  f"{code}). NOTHING was certified.", file=sys.stderr)
+        return RC_FAIL
+    return RC_FAIL if rc not in (0, 1) else rc
+
+
+if __name__ == "__main__":
+    sys.exit(run(sys.argv[1:]))
