@@ -80,6 +80,7 @@ from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import _path_layout as _pl
 import _sim_results_bridge as _srb
+import _gate_invocation
 import fpga_board_capability as _fpga_cap
 
 try:
@@ -4168,6 +4169,54 @@ def _digital_backend_is_na(project: Path) -> Tuple[bool, str]:
     return result
 
 
+# ── #492: the umbrella's argv, as ONE named construction ─────────────────────
+# Gates whose CLI does NOT accept the umbrella's default `[<project>]` shape but
+# which this umbrella can invoke correctly, because the flag they want is a value
+# the umbrella already computed. ONE ENTRY HERE IS A CONVERSION, and a conversion
+# is only honest when it has been measured: a gate that starts running must not
+# start FAILing everything (that trades a false skip for a false FAIL), and it
+# must not start PASSing over an empty denominator (that trades a false skip for
+# a false PASS, which is worse — the umbrella would then be certifying a check
+# that examined nothing).
+#
+# EMPTY ON PURPOSE in this commit. The rc-2 discriminator below is landable on
+# its own and its blast radius is zero by construction — it changes no gate's
+# behaviour, it only stops the umbrella from calling a caller defect a benign
+# skip. Conversions are a separate, per-gate, individually-measured decision and
+# must not hold the discriminator hostage; each one arrives with its own corpus
+# measurement in `tests/test_issue492_gate_argv_conversions.py`.
+_STRUCTURAL_GATE_ARGV_ADAPTERS: Dict[str, tuple[str, ...]] = {}
+
+
+def _structural_gate_argv(gate_name: str,
+                          project: Path,
+                          rtl_dir: Optional[Path] = None,
+                          strict_timing: bool = False) -> List[str]:
+    """Build the argv the P0 umbrella runs a structural gate with.
+
+    #492 — this used to be an inline literal inside the worker, which meant a
+    test could only ever re-type it, and a re-typed argv agrees with the umbrella
+    by coincidence rather than by construction. It is a named function so the
+    regression tests drive the SAME code the umbrella runs.
+    """
+    prog = PROGRAMS_DIR / f"{gate_name}.py"
+    adapter = _STRUCTURAL_GATE_ARGV_ADAPTERS.get(gate_name)
+    if adapter is not None:
+        target = str(rtl_dir if rtl_dir is not None else project)
+        argv = [sys.executable, str(prog)]
+        for flag in adapter:
+            argv += [flag, target]
+    else:
+        # v0.118 fix: pass `project` (not `rtl_dir`) so gates can access
+        # project-level artefacts (generated_docs/L*.json, waivers.json,
+        # output_files/, *.qsf).
+        argv = [sys.executable, str(prog), str(project)]
+    # v1.6.32: forward --strict-timing to the provenance gate only.
+    if strict_timing and gate_name == "provenance_output_hash_completeness_check":
+        argv.append("--strict-timing")
+    return argv
+
+
 def _run_structural_rtl_gates(project: Path,
                               strict_timing: bool = False,
                               allow_thin_input: bool = False,
@@ -4248,21 +4297,14 @@ def _run_structural_rtl_gates(project: Path,
     # dispatch loop then appends in gate order, so the report is byte-identical
     # to the sequential path (env `VIBE_IC_COMPLIANCE_WORKERS=1` forces serial).
     def _eval_gate_worker(gate_name: str):
-        prog = PROGRAMS_DIR / f"{gate_name}.py"
+        # #492 — the argv comes from the named builder, not an inline literal,
+        # so the regression tests exercise the real construction path. Each
+        # gate uses project.rglob for RTL discovery, so giving them the project
+        # root finds RTL AND project files. The rtl_dir check above only gates
+        # the entire runner ("if no RTL at all, skip the lot").
+        argv = _structural_gate_argv(gate_name, project, rtl_dir=rtl_dir,
+                                     strict_timing=strict_timing)
         try:
-            # v0.118 fix: pass `project` (not `rtl_dir`) so gates can
-            # access project-level artefacts (generated_docs/L*.json,
-            # waivers.json, output_files/, *.qsf). Each gate uses
-            # project.rglob for RTL discovery, so giving them the
-            # project root finds RTL AND project files. The rtl_dir
-            # check above only gates the entire runner ("if no RTL at
-            # all, skip the lot").
-            argv = [sys.executable, str(prog), str(project)]
-            # v1.6.32: forward --strict-timing to the provenance gate
-            # only. Other gates don't accept it.
-            if strict_timing and gate_name == \
-               "provenance_output_hash_completeness_check":
-                argv.append("--strict-timing")
             r = subprocess.run(
                 argv,
                 cwd=project,
@@ -4273,6 +4315,26 @@ def _run_structural_rtl_gates(project: Path,
         except subprocess.TimeoutExpired:
             return ("fail", f"FAIL: {gate_name} timed out")
         if r.returncode == 2:
+            # #492 — rc 2 carried two unrelated meanings: "there was no input
+            # to check" (a benign verdict FROM the gate) and "you called me
+            # wrongly" (a defect IN THIS CALLER). Recording the second as a
+            # skip is what let 39 registered gates be permanently silent while
+            # the umbrella advertised that all of them ran. Separate them, and
+            # say which one happened.
+            #
+            # A not-invocable gate is NOT converted to a FAIL: the gate
+            # returned no verdict at all, so calling it a failure would be a
+            # second false claim in the opposite direction. It is disclosed by
+            # name, with the callee's own error text as the evidence.
+            _why = _gate_invocation.classify_not_invocable(
+                r.stdout, r.stderr,
+                supplied_flags=[a for a in argv if a.startswith("--")])
+            if _why:
+                return ("skip",
+                        f"{gate_name} "
+                        f"({_gate_invocation.NOT_INVOCABLE_SENTINEL}: "
+                        f"{_why} — this gate returned NO verdict; the umbrella "
+                        f"has not checked what it audits)")
             return ("skip", gate_name)
         elif r.returncode == 1:
             _full_out = (r.stdout.strip() or r.stderr.strip())
@@ -7001,8 +7063,27 @@ def main(argv: Optional[List[str]] = None) -> int:
              f"{w['first_line']}")
             for w in s_waivers
         ]
+        # #492 — separate the two populations that rc 2 used to merge. A gate
+        # that argument parsing rejected produced NO verdict; listing it under
+        # the same "SKIP:" heading as a gate that looked and found no input is
+        # what made 39 registered gates read as benign. They are counted and
+        # headed separately, so the umbrella can no longer imply it checked
+        # what those gates audit.
+        not_invoked = [s for s in s_skips
+                       if _gate_invocation.is_not_invocable_entry(s)]
+        plain_skips = [s for s in s_skips
+                       if not _gate_invocation.is_not_invocable_entry(s)]
+        not_invoked_lines: List[str] = []
+        if not_invoked:
+            not_invoked_lines.append(
+                f"NEVER VALIDLY INVOKED ({len(not_invoked)} of "
+                f"{len(_STRUCTURAL_RTL_GATES)} registered gates) — argument "
+                f"parsing rejected the umbrella's argv, so these gates "
+                f"returned no verdict and what they audit is UNCHECKED:")
+            not_invoked_lines += [f"  - {s}" for s in not_invoked]
         reasons_combined = (failed_gate_lines
-                            + [f"SKIP: {s}" for s in s_skips]
+                            + not_invoked_lines
+                            + [f"SKIP: {s}" for s in plain_skips]
                             + waiver_lines)
         if not reasons_combined:
             # Clean sweep. Say so explicitly rather than emitting a
