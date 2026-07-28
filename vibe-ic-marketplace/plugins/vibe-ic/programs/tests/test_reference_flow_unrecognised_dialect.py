@@ -204,12 +204,12 @@ class TestAuditReportsTheUnrecognisedFile:
             self, tmp_path):
         # The mixed case, which the status alone cannot express: knobs WERE
         # adopted from one file while another was not understood at all. The
-        # verdict is `knobs-adopted` and the disclosure must survive it,
+        # verdict is an ADOPTED-family one and the disclosure must survive it,
         # because that is exactly the run whose report a reader trusts most.
         _stage(tmp_path, {"good.mk": _RECOGNISED_MK,
                           "other.tcl": _UNRECOGNISED_TCL})
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert a["status"] == "knobs-adopted"
+        assert a["status"] == "knobs-adopted-some-withheld"
         assert a["unrecognised_dialect"] == ["input/reference_flow/other.tcl"]
         assert a["ingest_complete"] is False
         txt = _render(tmp_path, a)
@@ -228,9 +228,13 @@ class TestNoLeakAndRobustness:
         a = mod._reference_flow_pnr_audit(tmp_path)
         assert a["unrecognised_dialect"] == []
         assert a["ingest_complete"] is True
-        assert a["status"] == "knobs-adopted"
-        assert a["applied"]["die_target_util"] == 0.5
+        assert a["status"] == "knobs-adopted-some-withheld"
         assert a["applied"]["repair_tns_percent"] == 100
+        # #541 — the supply-class knob in the same file is withheld, and that
+        # is a DECISION about the knob, not a failure to read the file: the
+        # ingest is still complete and the dialect is still recognised.
+        assert a["applied"]["die_target_util"] is None
+        assert [w["knob"] for w in a["withheld"]] == ["CORE_UTILIZATION"]
 
     def test_no_config_project_is_unaffected(self, tmp_path):
         a = mod._reference_flow_pnr_audit(tmp_path)

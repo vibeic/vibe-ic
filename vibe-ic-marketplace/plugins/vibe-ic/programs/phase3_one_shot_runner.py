@@ -6491,11 +6491,75 @@ def _resolve_adder_map_file(project: Path, declared: str) -> Optional[Path]:
 #   * A knob is applied ONLY when the design literally declares a VALID numeric
 #     value; an out-of-range / non-numeric / unexpanded-variable declaration is
 #     dropped + disclosed, never fabricated.
-_ORFS_NUM_PNR_KNOBS = (
-    "CORE_UTILIZATION", "FP_CORE_UTIL", "PLACE_DENSITY",
-    "PLACE_DENSITY_LB_ADDON", "TNS_END_PERCENT",
-    "CTS_CLUSTER_SIZE", "CTS_CLUSTER_DIAMETER",
-)
+#
+# Each recognized ORFS numeric PnR knob, keyed to the phase-3 flow PARAMETER(s)
+# it feeds. This is the ingest's VOCABULARY: adding a knob here without naming
+# the parameter it steers is impossible, and every downstream question about a
+# knob ("which flow parameter does it move", "is that parameter one this flow
+# may take from a foreign recipe") is answered from this one table rather than
+# from a second list of names that would drift away from it.
+_ORFS_PNR_KNOB_PARAMS: Dict[str, Tuple[str, ...]] = {
+    # floorplan geometry — the die the auto-sizer targets and how tightly
+    # global placement packs the core.
+    "CORE_UTILIZATION":       ("die_target_util", "place_density"),
+    "FP_CORE_UTIL":           ("die_target_util", "place_density"),
+    "PLACE_DENSITY":          ("place_density",),
+    "PLACE_DENSITY_LB_ADDON": ("place_density",),
+    # optimization inside whatever floorplan the flow chose.
+    "TNS_END_PERCENT":        ("repair_tns_percent",),
+    "CTS_CLUSTER_SIZE":       ("cts_cluster_size",),
+    "CTS_CLUSTER_DIAMETER":   ("cts_cluster_diameter",),
+}
+_ORFS_NUM_PNR_KNOBS = tuple(_ORFS_PNR_KNOB_PARAMS)
+
+# ── #541 — the ROUTING-RESOURCE-SUPPLY class is READ but NOT APPLIED ──────────
+# A staged reference flow is a recipe that closed in ANOTHER flow, with another
+# placer, router and repair pipeline. Two of the five PnR parameters above are
+# categorically different from the other three:
+#
+#   `die_target_util` and `place_density` set the ROUTING RESOURCE SUPPLY — how
+#   much die area a given cell area gets, and how tightly that area is packed.
+#   Phase-3 does not pick those from taste: it sizes the die from its OWN
+#   routing-headroom calibration (`_AUTO_DIE_TARGET_UTIL`) and its congestion
+#   self-rescue, the route-loosen ladder, is PINNED to that same calibration —
+#   `_ROUTE_LOOSEN_UTIL_LADDER` starts at `_AUTO_DIE_TARGET_UTIL` and each rung
+#   is a strictly looser util below it. Taking the supply numbers from a foreign
+#   recipe therefore does two things at once: it replaces a calibrated quantity
+#   with an uncalibrated one, AND it leaves the only mechanism that could
+#   recover from the resulting congestion calibrated to a value the run no
+#   longer uses, so the ladder cannot even undo it.
+#
+#   The other three parameters steer OPTIMIZATION INSIDE whatever floorplan
+#   phase-3 chose for itself. They perturb the netlist (buffers, clock tree);
+#   they do not replace a self-calibrated quantity, and the flow's existing
+#   over-utilization upsize retry still governs the area they consume.
+#
+# So the supply class is INGESTED, PARSED, UNDERSTOOD — and deliberately NOT
+# APPLIED, reported knob-by-knob with this reason. It is the sibling of the
+# `unrecognised_dialect` case ("opened it, understood nothing"): this is
+# "understood it, declined to apply it", and the one thing that must never
+# happen is for either to be silently absent from the record.
+#
+# Note the line this does NOT cross: a design's OWN authored floorplan contract
+# (an L9/L19 `DIE_AREA`, or an explicit `--die-um`) is a statement about THIS
+# flow and still wins outright — see `_effective_die_um`. What is withheld is
+# only a floorplan number inherited from a different flow's recipe.
+#
+# The class is a property of the flow PARAMETER, so it is declared on the five
+# parameter names and the knob membership is DERIVED from the vocabulary above.
+_RF_ROUTING_SUPPLY_PARAMS = frozenset({"die_target_util", "place_density"})
+
+_ORFS_WITHHELD_PNR_KNOBS = frozenset(
+    k for k, params in _ORFS_PNR_KNOB_PARAMS.items()
+    if _RF_ROUTING_SUPPLY_PARAMS.intersection(params))
+
+_RF_WITHHELD_REASON = (
+    "routing-resource-supply knob — READ and UNDERSTOOD, deliberately NOT "
+    "applied. It sets the die area / placement density, which phase-3 sizes "
+    "from its own routing-headroom calibration and which its congestion "
+    "self-rescue (the route-loosen ladder) is pinned to; a floorplan inherited "
+    "from another flow's placer+router is not known to route here. The "
+    "phase-3 default is kept")
 
 # EVERY knob name any phase-3 ingest honours — the PnR knobs above PLUS the
 # synth-side knobs consumed by `step_synth` (`_reference_flow_qor_knobs`). This
@@ -6806,23 +6870,32 @@ def _reference_flow_pnr_mapping(
          "repair_tns_percent":   int   | None,  # repair_timing -repair_tns
          "cts_cluster_size":     int   | None,  # clock_tree_synthesis
          "cts_cluster_diameter": float | None,  #   sink-clustering knobs
+         "withheld":             [{...}, ...],  # read, understood, NOT applied
          "notes":                [str, ...]}    # audit trail
 
-    ORFS semantics honored faithfully:
-      * CORE_UTILIZATION / FP_CORE_UTIL (percent) → the floorplan core-util the
-        auto-die sizer targets (die_target_util = pct / 100).
-      * PLACE_DENSITY (fraction) → global_placement -density verbatim; else, when
-        only CORE_UTILIZATION is declared, ORFS DERIVES the place density as
-        CORE_UTILIZATION/100 + PLACE_DENSITY_LB_ADDON (LB_ADDON defaults 0).
+    ORFS semantics honored faithfully for the OPTIMIZATION class:
       * TNS_END_PERCENT → repair_timing -repair_tns (the percent of endpoints the
         setup repair chases — 100 = full TNS, not just the single worst path).
       * CTS_CLUSTER_SIZE / CTS_CLUSTER_DIAMETER → TritonCTS sink-clustering.
 
-    Every value is range-validated. An out-of-range declaration is dropped AND
-    DISCLOSED — it is never fabricated / never applied (§4.05), and it never
-    passes silently: a rejected knob produces a ``REJECTED ...`` entry in both
-    ``notes`` and ``rejected`` so a run whose knob was discarded is
-    distinguishable in the report from a run that declared nothing at all.
+    The ROUTING-RESOURCE-SUPPLY class (`_ORFS_WITHHELD_PNR_KNOBS`:
+    CORE_UTILIZATION / FP_CORE_UTIL / PLACE_DENSITY / PLACE_DENSITY_LB_ADDON,
+    i.e. every knob feeding `die_target_util` or `place_density`) is READ,
+    PARSED and deliberately NOT APPLIED — `die_target_util` and `place_density`
+    stay None and the phase-3 defaults hold. Each such declaration is recorded
+    in ``withheld`` (knob, value, source, the parameter it would have fed, the
+    reason) and in ``notes`` as a ``WITHHELD ...`` line, so it is visible as a
+    decision rather than absent as an omission. See #541 and the class rationale
+    at `_RF_ROUTING_SUPPLY_PARAMS`.
+
+    Every APPLIED-class value is range-validated. An out-of-range declaration
+    is dropped AND DISCLOSED — it is never fabricated / never applied (§4.05),
+    and it never passes silently: a rejected knob produces a ``REJECTED ...``
+    entry in both ``notes`` and ``rejected`` so a run whose knob was discarded
+    is distinguishable in the report from a run that declared nothing at all.
+    A WITHHELD-class value is deliberately not range-judged (nothing would have
+    applied it at any value); its declared value is carried verbatim so a
+    malformed declaration is still visible.
 
     ``sources`` (optional, from `_reference_flow_pnr_knob_sources`) maps each
     knob to the config file that declared it; when supplied, every note names
@@ -6831,11 +6904,12 @@ def _reference_flow_pnr_mapping(
     their documented derivation, no design/vendor/SKU literal."""
     notes: List[str] = []
     rejected: List[Dict[str, str]] = []
+    withheld: List[Dict[str, str]] = []
     out: Dict[str, object] = {
         "place_density": None, "die_target_util": None,
         "repair_tns_percent": None, "cts_cluster_size": None,
         "cts_cluster_diameter": None, "notes": notes,
-        "rejected": rejected,
+        "rejected": rejected, "withheld": withheld,
     }
     src = sources or {}
 
@@ -6863,56 +6937,35 @@ def _reference_flow_pnr_mapping(
             f"REJECTED {name}={vs} — {reason}; default kept"
             f"{_src_suffix(name)}")
 
-    _core_util_key = "CORE_UTILIZATION" if "CORE_UTILIZATION" in knobs \
-        else "FP_CORE_UTIL"
-    core_util = _f("CORE_UTILIZATION")
-    if core_util is None:
-        core_util = _f("FP_CORE_UTIL")
-    lb_addon = _f("PLACE_DENSITY_LB_ADDON")
-    place_density = _f("PLACE_DENSITY")
+    # ── #541 — WITHHOLD the routing-resource-supply class ───────────────────
+    # `die_target_util` / `place_density` are NOT taken from a foreign recipe
+    # (see `_ORFS_WITHHELD_PNR_KNOBS`). The declaration is not ignored: it is
+    # recorded here, with its value, its source file and the reason, so the
+    # report can state "understood, and deliberately not applied" — the one
+    # thing that must never happen is for it to vanish from the record.
+    #
+    # The value is deliberately NOT range-validated: a knob this flow will not
+    # apply at any value is not made more or less applicable by its value, and
+    # emitting a range verdict on it would imply that a value in range WOULD
+    # have been applied. The declared value is carried verbatim instead, so a
+    # malformed declaration is still visible to the reader.
+    for _wk in sorted(_ORFS_WITHHELD_PNR_KNOBS):
+        if _wk not in knobs:
+            continue
+        withheld.append({
+            "knob": _wk, "value": str(knobs[_wk]),
+            "source": src.get(_wk, ""),
+            "params": ", ".join(_ORFS_PNR_KNOB_PARAMS[_wk]),
+            "reason": _RF_WITHHELD_REASON,
+        })
+        notes.append(
+            f"WITHHELD {_wk}={knobs[_wk]} -> "
+            f"{'/'.join(_ORFS_PNR_KNOB_PARAMS[_wk])} — {_RF_WITHHELD_REASON}"
+            f"{_src_suffix(_wk)}")
+
     tns = _f("TNS_END_PERCENT")
     cluster_size = _f("CTS_CLUSTER_SIZE")
     cluster_diam = _f("CTS_CLUSTER_DIAMETER")
-    _core_util_ok = core_util is not None and 0.0 < core_util <= 100.0
-
-    # CORE_UTILIZATION / FP_CORE_UTIL (percent) → auto-die core-util target.
-    if _core_util_ok:
-        out["die_target_util"] = core_util / 100.0
-        notes.append(
-            f"{_core_util_key}={core_util:g}% -> --die-um auto core-util target "
-            f"{core_util / 100.0:g}{_src_suffix(_core_util_key)}")
-    elif core_util is not None:
-        _reject(_core_util_key, core_util,
-                "outside the valid core-utilization range (0 < util <= 100%)")
-
-    # global_placement -density: explicit PLACE_DENSITY wins; else ORFS derives
-    # it from CORE_UTILIZATION + PLACE_DENSITY_LB_ADDON.
-    if place_density is not None and 0.0 < place_density <= 1.0:
-        out["place_density"] = place_density
-        notes.append(
-            f"PLACE_DENSITY={place_density:g} -> global_placement -density "
-            f"{place_density:g}{_src_suffix('PLACE_DENSITY')}")
-    else:
-        if place_density is not None:
-            _reject("PLACE_DENSITY", place_density,
-                    "outside the valid placement-density range (0 < d <= 1)")
-        if _core_util_ok:
-            derived = core_util / 100.0 + (lb_addon if lb_addon is not None
-                                           else 0.0)
-            _addon_s = (f" + PLACE_DENSITY_LB_ADDON={lb_addon:g}"
-                        if lb_addon is not None else "")
-            if 0.0 < derived <= 1.0:
-                out["place_density"] = derived
-                notes.append(
-                    f"{_core_util_key}={core_util:g}%{_addon_s} -> derived "
-                    f"global_placement -density {derived:g} (ORFS PLACE_DENSITY "
-                    f"derivation; no explicit PLACE_DENSITY declared)"
-                    f"{_src_suffix(_core_util_key, 'PLACE_DENSITY_LB_ADDON')}")
-            else:
-                _reject("PLACE_DENSITY_LB_ADDON", lb_addon,
-                        f"ORFS-derived placement density {derived:g} "
-                        f"(CORE_UTILIZATION={core_util:g}%{_addon_s}) is "
-                        f"outside (0, 1]")
 
     if tns is not None and 0.0 <= tns <= 100.0:
         out["repair_tns_percent"] = int(round(tns))
@@ -6945,11 +6998,21 @@ def _reference_flow_pnr_mapping(
 
 
 def _reference_flow_declared_die_util(project: Path) -> Optional[float]:
-    """The design's reference_flow-declared floorplan core-util target as a
-    fraction (0..1), or None. Single-sourced through
-    `_reference_flow_pnr_mapping`. Consulted by the auto-die sizer AFTER the L9
-    doc (both are design-provided; the L9 generated constraint is the design's
-    own authored floorplan target, so it wins). chip-AGNOSTIC."""
+    """The reference-flow floorplan core-util target the auto-die sizer may
+    use, as a fraction (0..1), or None.
+
+    Single-sourced through `_reference_flow_pnr_mapping` — it does NOT re-read
+    or re-decide anything. Since #541 the mapping WITHHOLDS every knob feeding
+    `die_target_util` (the routing-resource-supply class), so this returns None
+    for a staged reference flow just as it does for an absent one, and the
+    auto-die sizer falls back to its own routing-headroom calibration. The hook
+    is kept live rather than deleted so the sizer's precedence chain still
+    reads from one place: if the withheld class is ever narrowed, the die
+    target flows through here again with no re-wiring.
+
+    A design's OWN authored floorplan is unaffected: `_l9_declared_die_util`
+    and an explicit `--die-um` are consulted first and still win.
+    chip-AGNOSTIC."""
     v = _reference_flow_pnr_mapping(_reference_flow_pnr_knobs(project)).get(
         "die_target_util")
     return v if isinstance(v, float) else None
@@ -6983,14 +7046,31 @@ def _reference_flow_declared_die_util(project: Path) -> Optional[float]:
 #                     says, so it must not borrow that verdict (#503).
 #   knobs-rejected  — PnR knobs were declared but ALL were unusable → generic
 #                     defaults, with the reason for each drop.
-#   knobs-adopted   — at least one PnR knob was adopted and applied.
+#   knobs-withheld  — PnR knobs were declared and NONE was applied, because
+#                     every one of them belongs to the routing-resource-supply
+#                     class this flow declines to inherit (#541). Distinct from
+#                     `knobs-rejected`: nothing was unusable, and distinct from
+#                     `knobs-adopted`: nothing was applied.
+#   knobs-adopted-some-withheld — at least one PnR knob was applied AND at
+#                     least one was withheld. It must not borrow the
+#                     `knobs-adopted` verdict, whose sentence reads as "phase-3
+#                     adopted the knobs the design declares" — here it adopted
+#                     some and declined others, and which is which is the whole
+#                     question the reader came with.
+#   knobs-adopted   — at least one PnR knob was adopted and applied, and none
+#                     was withheld.
 _RF_PNR_REPORT_STEM = "reference_flow_knobs"
 
 # The buckets every declared name is partitioned into, in PRECEDENCE order. A
 # name that reaches two lists (declared twice — once with an unusable value and
 # once with a usable one) is counted under the FIRST bucket here, so the
 # partition stays a partition and the identity below can close.
-_RF_PNR_BUCKETS = ("adopted", "rejected", "honoured_elsewhere",
+#
+# `withheld` sits directly after `adopted` and BEFORE `rejected`: a knob in the
+# routing-resource-supply class is not applied at any value, so "we declined
+# this class" is the fact that decides the run and "its value was also
+# malformed" is a detail about a value nothing was going to read.
+_RF_PNR_BUCKETS = ("adopted", "withheld", "rejected", "honoured_elsewhere",
                    "not_recognised")
 
 
@@ -7037,6 +7117,38 @@ def _rf_pnr_accounting(all_declared: Sequence[str],
         "balanced": (not unaccounted
                      and sum(counts.values()) == total),
     }
+
+
+def _rf_withheld_entries(
+        all_declared_values: Dict[str, Dict[str, str]]) -> List[Dict[str, str]]:
+    """Provenance rows for the declared names in the ROUTING-RESOURCE-SUPPLY
+    class — read, parsed, understood, and deliberately NOT applied (#541).
+    Pure.
+
+    Sourced from ``all_declared_values`` (EVERY assignment the config makes)
+    rather than from the numerically-valid subset, because a withheld knob is
+    withheld whatever its value: reading only the valid subset would make a
+    malformed `CORE_UTILIZATION` disappear from the record entirely, which is
+    the exact failure this class of reporting exists to prevent. The declared
+    value is carried verbatim, so a malformed declaration is still visible.
+
+    Membership is derived from the ingest vocabulary
+    (`_ORFS_PNR_KNOB_PARAMS` → `_ORFS_WITHHELD_PNR_KNOBS`), so a knob added to
+    the vocabulary is classified by the parameter it feeds and cannot drift out
+    of this list."""
+    rows: List[Dict[str, str]] = []
+    for knob in sorted(all_declared_values):
+        if knob not in _ORFS_WITHHELD_PNR_KNOBS:
+            continue
+        d = all_declared_values[knob]
+        rows.append({
+            "knob": knob,
+            "value": d.get("value", ""),
+            "source": d.get("source", ""),
+            "params": ", ".join(_ORFS_PNR_KNOB_PARAMS[knob]),
+            "reason": _RF_WITHHELD_REASON,
+        })
+    return rows
 
 
 def _rf_honoured_elsewhere_entries(
@@ -7102,10 +7214,18 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
     # CORE_UTILIZATION to add to) is NOT reported as adopted: claiming it was
     # would be exactly the misleading audit trail this report exists to prevent.
     _applied_notes = [n for n in mapping["notes"]     # type: ignore[union-attr]
-                      if not n.startswith("REJECTED")]
+                      if not n.startswith(("REJECTED", "WITHHELD"))]
+    # #541 — the routing-resource-supply class, read and deliberately not
+    # applied. Built from EVERY assignment (not the valid subset) so a
+    # malformed declaration in this class is still on the record.
+    withheld = _rf_withheld_entries(
+        scan["all_declared_values"])               # type: ignore[arg-type]
+    _withheld_names = {w["knob"] for w in withheld}
     adopted: List[Dict[str, str]] = []
     inert: List[Dict[str, str]] = []
     for k, d in sorted(declared.items()):
+        if k in _withheld_names:
+            continue                    # reported under `withheld`, not here
         if any(r["knob"] == k for r in
                mapping["rejected"]):            # type: ignore[union-attr]
             continue
@@ -7117,9 +7237,14 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
                                "companion knob to apply it to); default kept")
             inert.append(entry)
     # Ingest-stage rejections (non-numeric) + mapping-stage rejections
-    # (out-of-range) are one list for the reader.
-    rejected = list(scan["rejected"]) + list(   # type: ignore[arg-type]
-        mapping["rejected"]) + inert             # type: ignore[arg-type]
+    # (out-of-range) are one list for the reader. A withheld-class name is
+    # filtered out of it: the ingest never consulted its value, so publishing a
+    # value verdict beside the withhold would tell the reader that a different
+    # value might have been applied. It appears once, under `withheld`.
+    rejected = [r for r in (list(scan["rejected"])       # type: ignore[arg-type]
+                            + list(mapping["rejected"])  # type: ignore[arg-type]
+                            + inert)
+                if r["knob"] not in _withheld_names]
 
     # ---- COVERAGE (the denominator) ---------------------------------------
     # `adopted` alone is a numerator with no denominator: it cannot distinguish
@@ -7154,6 +7279,7 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
     accounting = _rf_pnr_accounting(
         list(all_declared),
         {"adopted": [a["knob"] for a in adopted],
+         "withheld": [w["knob"] for w in withheld],
          "rejected": [r["knob"] for r in rejected],
          "honoured_elsewhere": [h["knob"] for h in honoured_elsewhere],
          "not_recognised": [n["knob"] for n in not_recognised]})
@@ -7198,6 +7324,19 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         # whose headline likewise asserts the declaration was NOT ignored)
         # because both describe an ingest that did not see the whole recipe.
         status = "config-dialect-unrecognised"
+    elif not declared and not rejected and withheld:
+        # Every PnR knob the config declares is in the withheld class AND every
+        # one of them was malformed, so `declared` (the numerically-valid set)
+        # is empty. It is still a WITHHOLD, not a rejection: the value was never
+        # consulted, so `knobs-rejected` — "none were usable" — would name the
+        # wrong reason for the same outcome.
+        #
+        # Ranked ABOVE `knobs-honoured-elsewhere`, whose headline asserts the
+        # config "declares NO floorplan / place / CTS / timing knob". Here it
+        # DOES declare one — this ingest read it and declined it — so borrowing
+        # that verdict would state the opposite of the truth, the same way
+        # `no-knobs` would (#503, #541).
+        status = "knobs-withheld"
     elif not declared and not rejected and honoured_elsewhere:
         # No PnR knob — but the config DID declare knobs another phase-3
         # subsystem honours. `no-knobs` closes with "Nothing was silently
@@ -7207,10 +7346,14 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         status = "knobs-honoured-elsewhere"
     elif not declared and not rejected:
         status = "no-knobs"
-    elif not adopted:
-        status = "knobs-rejected"
-    else:
+    elif adopted and withheld:
+        status = "knobs-adopted-some-withheld"
+    elif adopted:
         status = "knobs-adopted"
+    elif withheld:
+        status = "knobs-withheld"
+    else:
+        status = "knobs-rejected"
     return {
         "status": status,
         "config_dir": scan["config_dir"],
@@ -7225,6 +7368,7 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         "honoured_elsewhere": honoured_elsewhere,
         "accounting": accounting,
         "adopted": adopted,
+        "withheld": withheld,
         "rejected": rejected,
         "applied": {k: mapping[k] for k in
                     ("place_density", "die_target_util", "repair_tns_percent",
@@ -7278,6 +7422,31 @@ _RF_PNR_STATUS_HEADLINE = {
         "`input/reference_flow` declares, in place of its generic defaults. "
         "Every adopted knob, its value, and the file that declared it are "
         "listed below."),
+    "knobs-withheld": (
+        "The staged `input/reference_flow` declares floorplan / placement "
+        "knobs and phase-3 applied NONE of them. They were read, parsed and "
+        "UNDERSTOOD — and deliberately withheld, because they set the routing "
+        "resource supply (die area / placement density), which this flow sizes "
+        "from its OWN routing-headroom calibration and which its congestion "
+        "self-rescue is pinned to. A floorplan that closed under a different "
+        "placer and router is not known to route here (#541). Phase-3 used its "
+        "GENERIC floorplan defaults; nothing was fabricated and nothing was "
+        "silently dropped — every withheld knob is listed below with its "
+        "value, its declaring file and the parameter it would have fed. A "
+        "floorplan the design authors for THIS flow (an L9/L19 `DIE_AREA`, or "
+        "an explicit `--die-um`) is NOT affected and still wins outright."),
+    "knobs-adopted-some-withheld": (
+        "Phase-3 adopted SOME of the knobs the design's own staged "
+        "`input/reference_flow` declares and deliberately WITHHELD others. "
+        "The adopted knobs steer optimization inside the floorplan phase-3 "
+        "chose; the withheld ones would have set the routing resource supply "
+        "(die area / placement density), which this flow sizes from its own "
+        "routing-headroom calibration and does not inherit from another "
+        "flow's recipe (#541). Both sets are listed below — with values, "
+        "declaring files, and for each withheld knob the parameter it would "
+        "have fed and the reason it did not. A floorplan the design authors "
+        "for THIS flow (an L9/L19 `DIE_AREA`, or an explicit `--die-um`) is "
+        "NOT affected and still wins outright."),
 }
 
 # LOCKSTEP: the statuses `_reference_flow_pnr_audit` can emit and the headline
@@ -7356,6 +7525,8 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
                 "| bucket | declared names |", "|---|---|",
                 f"| adopted (applied to a PnR parameter) "
                 f"| {counts.get('adopted', 0)} |",
+                f"| read and understood, deliberately NOT applied "
+                f"| {counts.get('withheld', 0)} |",
                 f"| declared but not applied | {counts.get('rejected', 0)} |",
                 f"| honoured by another phase-3 subsystem "
                 f"| {counts.get('honoured_elsewhere', 0)} |",
@@ -7449,6 +7620,42 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
                 for a in adopted] + [""]
     else:
         out += ["_None — the generic defaults are in force._", ""]
+
+    # #541 — READ, UNDERSTOOD, DELIBERATELY NOT APPLIED. Its own section, above
+    # every other not-applied list, because it is the only one whose reason is a
+    # DECISION of this flow rather than a property of the declaration. Merging
+    # it into "Declared but NOT applied" would put "your value was malformed"
+    # and "we understood you and declined" under one heading.
+    withheld: List[Dict[str, str]] = \
+        audit.get("withheld", [])                  # type: ignore[assignment]
+    if withheld:
+        out += ["## Read and understood — deliberately NOT applied", "",
+                "These knobs were parsed and understood. Phase-3 declined to "
+                "apply them: they set the ROUTING RESOURCE SUPPLY — the die "
+                "area a given cell area gets, and how tightly global placement "
+                "packs it — and phase-3 sizes those from its OWN "
+                "routing-headroom calibration, which its congestion "
+                "self-rescue (the route-loosen ladder) is pinned to. A "
+                "floorplan that closed under a different flow's placer and "
+                "router is not known to route under this one, and adopting it "
+                "would also leave the only mechanism that could recover from "
+                "the resulting congestion calibrated to a number the run no "
+                "longer uses.", "",
+                "This is a DECISION, not a failure to read: the values below "
+                "are exactly what the design declared, and phase-3's generic "
+                "floorplan defaults were kept in their place. It does NOT "
+                "affect a floorplan the design authors for THIS flow — an "
+                "L9/L19 `DIE_AREA` or an explicit `--die-um` still wins "
+                "outright.", "",
+                "| knob | declared value | source file | would have fed "
+                "| reason |",
+                "|---|---|---|---|---|"]
+        for w in withheld:
+            shown = f"`{w['value']}`" if w.get("value") else "_(empty)_"
+            out.append(
+                f"| `{w['knob']}` | {shown} | `{w.get('source', '')}` "
+                f"| `{w.get('params', '')}` | {w.get('reason', '')} |")
+        out.append("")
 
     # A SEPARATE section, deliberately not merged into "Adopted knobs": these
     # knobs are honoured by a DIFFERENT subsystem, and a reader asking "why did
@@ -12693,10 +12900,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # chip-AGNOSTIC. Apply ONLY the numeric back-end knobs the design's OWN
     # input/reference_flow explicitly declares. No reference_flow → {} → the
     # placement `util` is unchanged and every template clause is empty, so the
-    # generated pnr.tcl is BYTE-IDENTICAL to the legacy flow (§4.05 no-leak). The
-    # CORE_UTILIZATION→die-util mapping was already consumed by the auto-die
-    # sizer above (via `_reference_flow_declared_die_util`); here we consume the
-    # placement-density override + the repair_tns / CTS-cluster directives.
+    # generated pnr.tcl is BYTE-IDENTICAL to the legacy flow (§4.05 no-leak).
+    #
+    # #541 — the ROUTING-RESOURCE-SUPPLY class is WITHHELD: `place_density` and
+    # `die_target_util` come back None however much the design declares, so the
+    # die stays the auto-sizer's and `util` stays the phase-3 default. What a
+    # staged reference flow still steers here is the OPTIMIZATION class — the
+    # repair_tns budget and the CTS sink-clustering directives. The withheld
+    # knobs are reported knob-by-knob by the audit below, never dropped. (The
+    # `place_density` hook is kept live rather than deleted so the density has
+    # one consumer if the withheld class is ever narrowed.)
     #
     # AUDIT (#198 Branch 1): the ingest decides, `_reference_flow_pnr_audit`
     # RECORDS — every adopted knob with its value + source file, every declared-

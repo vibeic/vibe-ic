@@ -83,14 +83,16 @@ def _stage(project: Path, files: dict) -> Path:
 
 
 def _bucket_names(audit) -> dict:
-    """The four buckets as name-sets, read from the AUDIT the flow produces."""
-    return {
-        "adopted": {a["knob"] for a in audit["adopted"]},
-        "rejected": {r["knob"] for r in audit["rejected"]},
-        "honoured_elsewhere": {h["knob"]
-                               for h in audit.get("honoured_elsewhere", [])},
-        "not_recognised": {n["knob"] for n in audit["not_recognised"]},
-    }
+    """EVERY bucket as a name-set, read from the AUDIT the flow produces.
+
+    DERIVED from `_RF_PNR_BUCKETS` rather than listed by hand. When this helper
+    named its four buckets literally, adding a fifth (`withheld`, #541) made
+    every identity assertion below fail against a correct audit — the helper,
+    not the producer, was the thing that had drifted. Deriving it means a
+    bucket added to the producer is covered here with no edit, which is exactly
+    the property these tests exist to guarantee for the report itself."""
+    return {b: {e["knob"] for e in audit.get(b, [])}
+            for b in mod._RF_PNR_BUCKETS}
 
 
 def _render(project: Path, audit) -> str:
@@ -237,12 +239,15 @@ class TestHonouredElsewhereProvenance:
         assert "CARRIED" in h["effect"]
 
     def test_bucket_is_distinct_from_adopted(self, tmp_path):
-        # Both kinds in one config: the reader must be able to tell which
-        # subsystem honoured which knob. Merging them would lose that.
-        _stage(tmp_path, {"flow.mk": ("CORE_UTILIZATION = 50\n"
+        # All three kinds in one config: the reader must be able to tell which
+        # subsystem honoured which knob, and which knob was understood and
+        # declined. Merging any two would lose that.
+        _stage(tmp_path, {"flow.mk": ("TNS_END_PERCENT = 100\n"
+                                      "CORE_UTILIZATION = 50\n"
                                       "SWAP_ARITH_OPERATORS = 1\n")})
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert {x["knob"] for x in a["adopted"]} == {"CORE_UTILIZATION"}
+        assert {x["knob"] for x in a["adopted"]} == {"TNS_END_PERCENT"}
+        assert {x["knob"] for x in a["withheld"]} == {"CORE_UTILIZATION"}
         assert {x["knob"] for x in a["honoured_elsewhere"]} == {
             "SWAP_ARITH_OPERATORS"}
 
@@ -320,25 +325,60 @@ class TestEmptyDeclarationIsADeclaration:
             self, tmp_path):
         # An empty PnR knob is a declaration we cannot use. It must be
         # DISCLOSED, and it must not fabricate or clobber a valid value.
-        _stage(tmp_path, {"flow.mk": ("CORE_UTILIZATION = 50\n"
-                                      "CORE_UTILIZATION :=\n")})
+        # (Vehicle is an APPLIED knob — since #541 a supply-class knob is not
+        # value-judged at all, so it cannot exercise last-valid-wins.)
+        _stage(tmp_path, {"flow.mk": ("TNS_END_PERCENT = 100\n"
+                                      "TNS_END_PERCENT :=\n")})
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert a["applied"]["die_target_util"] == 0.5     # last VALID kept
-        assert any(r["knob"] == "CORE_UTILIZATION" for r in a["rejected"])
+        assert a["applied"]["repair_tns_percent"] == 100  # last VALID kept
+        assert any(r["knob"] == "TNS_END_PERCENT" for r in a["rejected"])
         assert a["accounting"]["balanced"] is True
+
+    def test_empty_withheld_knob_is_still_on_the_record(self, tmp_path):
+        # #541 — an empty declaration of a WITHHELD knob must not vanish. It is
+        # withheld (that is the fact that decided the run) and its declared
+        # value is carried verbatim, so a malformed/empty declaration is still
+        # visible to the reader.
+        _stage(tmp_path, {"flow.mk": "CORE_UTILIZATION :=\n"})
+        a = mod._reference_flow_pnr_audit(tmp_path)
+        assert a["applied"]["die_target_util"] is None
+        held = {x["knob"]: x for x in a["withheld"]}
+        assert set(held) == {"CORE_UTILIZATION"}
+        assert held["CORE_UTILIZATION"]["value"] == ""
+        assert a["rejected"] == []
+        assert a["accounting"]["balanced"] is True
+
+    def test_malformed_withheld_knob_outranks_honoured_elsewhere(self,
+                                                                 tmp_path):
+        """A MALFORMED withheld knob leaves the numerically-valid set empty, so
+        the verdict ladder falls through to the `not declared and not rejected`
+        branches. `knobs-honoured-elsewhere` must not claim it: that headline
+        asserts the config declares NO floorplan/place/CTS/timing knob, and
+        here it declares one this ingest read and declined."""
+        _stage(tmp_path, {"flow.mk": ("CORE_UTILIZATION = $(SOME_VAR)\n"
+                                      "REMOVE_ABC_BUFFERS = 1\n")})
+        a = mod._reference_flow_pnr_audit(tmp_path)
+        assert a["status"] == "knobs-withheld"
+        assert [w["knob"] for w in a["withheld"]] == ["CORE_UTILIZATION"]
+        assert [h["knob"] for h in a["honoured_elsewhere"]] == [
+            "REMOVE_ABC_BUFFERS"]
+        assert a["applied"]["die_target_util"] is None
+        assert a["accounting"]["balanced"] is True
+        txt = _render(tmp_path, a)
+        assert "declares NO floorplan" not in txt
 
     def test_bare_tcl_set_is_a_read_not_an_empty_assignment(self, tmp_path):
         # NEGATIVE CONTROL on the regex relaxation: `set NAME` (and
         # `set ::env(NAME)`) READ a Tcl variable. Admitting them as
         # assignments-to-empty would invent a declaration the config never
         # made — and would let a bare read clear a real value.
-        _stage(tmp_path, {"flow.tcl": ("set ::env(CORE_UTILIZATION) 50\n"
-                                       "set CORE_UTILIZATION\n"
+        _stage(tmp_path, {"flow.tcl": ("set ::env(TNS_END_PERCENT) 100\n"
+                                       "set TNS_END_PERCENT\n"
                                        "set ::env(ADDER_MAP_FILE)\n")})
         scan = mod._rf_pnr_scan(tmp_path)
-        assert set(scan["all_declared"]) == {"CORE_UTILIZATION"}
+        assert set(scan["all_declared"]) == {"TNS_END_PERCENT"}
         assert mod._reference_flow_pnr_audit(
-            tmp_path)["applied"]["die_target_util"] == 0.5
+            tmp_path)["applied"]["repair_tns_percent"] == 100
 
 
 # ---------------------------------------------------------------------------
@@ -376,8 +416,12 @@ class TestStatusAndHeadlineLockstep:
             "no-knobs": {"flow.mk": "SOME_FLOW_VAR = 42\n"},
             "knobs-honoured-elsewhere": {
                 "flow.mk": "REMOVE_ABC_BUFFERS = 1\n"},
-            "knobs-rejected": {"flow.mk": "CORE_UTILIZATION = 400\n"},
-            "knobs-adopted": {"flow.mk": "CORE_UTILIZATION = 50\n"},
+            "knobs-rejected": {"flow.mk": "TNS_END_PERCENT = 400\n"},
+            "knobs-adopted": {"flow.mk": "TNS_END_PERCENT = 100\n"},
+            # #541 — the two verdicts a withheld supply-class knob can reach.
+            "knobs-withheld": {"flow.mk": "CORE_UTILIZATION = 50\n"},
+            "knobs-adopted-some-withheld": {
+                "flow.mk": "CORE_UTILIZATION = 50\nTNS_END_PERCENT = 100\n"},
             # A recipe file this ingest opens, parses, and recognises NOTHING
             # in — a lowercase-Tcl flow-variable dialect. Distinct from
             # "no-knobs" (`SOME_FLOW_VAR = 42` above), which IS recognised as
@@ -452,10 +496,12 @@ class TestFlowBehaviourUnchanged:
         assert a["adopted"] == []
 
     def test_pnr_parameters_are_unchanged_by_the_new_bucket(self, tmp_path):
+        # The OPTIMIZATION class is applied; the SUPPLY class is withheld
+        # (#541), so the two floorplan parameters stay at the phase-3 default.
         _stage(tmp_path, {"orfs_config.mk": _IMBALANCED_MK})
         a = mod._reference_flow_pnr_audit(tmp_path)
         assert a["applied"] == {
-            "place_density": 0.75, "die_target_util": 0.5,
+            "place_density": None, "die_target_util": None,
             "repair_tns_percent": 100, "cts_cluster_size": 20,
             "cts_cluster_diameter": 50.0}
 

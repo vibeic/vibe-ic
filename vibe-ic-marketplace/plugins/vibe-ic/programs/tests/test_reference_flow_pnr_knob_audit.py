@@ -108,17 +108,24 @@ class TestKnobProvenance:
         _stage(tmp_path, {"orfs_config.mk": _IBEX_MK})
         m = mod._reference_flow_pnr_mapping(
             mod._reference_flow_pnr_knobs(tmp_path))
-        assert m["place_density"] == 0.75
+        assert m["repair_tns_percent"] == 100
         assert all("[" not in n for n in m["notes"])
 
     def test_audit_adopted_entries_carry_value_and_source(self, tmp_path):
         _stage(tmp_path, {"orfs_config.mk": _IBEX_MK})
         a = mod._reference_flow_pnr_audit(tmp_path)
         adopted = {x["knob"]: x for x in a["adopted"]}
-        assert adopted["CORE_UTILIZATION"]["value"] == "50"
-        assert (adopted["CORE_UTILIZATION"]["source"]
-                == "input/reference_flow/orfs_config.mk")
         assert adopted["CTS_CLUSTER_SIZE"]["value"] == "20"
+        assert (adopted["CTS_CLUSTER_SIZE"]["source"]
+                == "input/reference_flow/orfs_config.mk")
+        assert adopted["TNS_END_PERCENT"]["value"] == "100"
+        # #541 — a withheld knob is NOT adopted, and carries the same
+        # value + source provenance in its own bucket.
+        assert "CORE_UTILIZATION" not in adopted
+        withheld = {x["knob"]: x for x in a["withheld"]}
+        assert withheld["CORE_UTILIZATION"]["value"] == "50"
+        assert (withheld["CORE_UTILIZATION"]["source"]
+                == "input/reference_flow/orfs_config.mk")
 
 
 # ---------------------------------------------------------------------------
@@ -139,66 +146,114 @@ class TestRejectionIsDisclosed:
 
     def test_out_of_range_declaration_is_disclosed(self, tmp_path):
         _stage(tmp_path, {"c.mk": (
-            "CORE_UTILIZATION = 400\n"
+            "TNS_END_PERCENT = 400\n"
             "CTS_CLUSTER_SIZE = -5\n")})
         a = mod._reference_flow_pnr_audit(tmp_path)
         assert all(a["applied"][k] is None for k in _APPLIED_KEYS)
         knobs = {x["knob"] for x in a["rejected"]}
         # GAP-B: pre-fix these were dropped with notes == [].
-        assert {"CORE_UTILIZATION", "CTS_CLUSTER_SIZE"} <= knobs
+        assert {"TNS_END_PERCENT", "CTS_CLUSTER_SIZE"} <= knobs
         assert any("REJECTED" in n for n in a["notes"])
 
     def test_rejected_knob_never_fabricates_a_value(self, tmp_path):
-        _stage(tmp_path, {"c.mk": "PLACE_DENSITY = 1.4\n"})
+        _stage(tmp_path, {"c.mk": "CTS_CLUSTER_DIAMETER = -1\n"})
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert a["applied"]["place_density"] is None
+        assert a["applied"]["cts_cluster_diameter"] is None
         assert a["status"] == "knobs-rejected"
 
     def test_partial_rejection_keeps_the_valid_knob(self, tmp_path):
         # One good, one bad → the good one applies, the bad one is disclosed.
         _stage(tmp_path, {"c.mk": (
-            "CORE_UTILIZATION = 50\n"
+            "TNS_END_PERCENT = 100\n"
             "CTS_CLUSTER_SIZE = -5\n")})
         a = mod._reference_flow_pnr_audit(tmp_path)
         assert a["status"] == "knobs-adopted"
-        assert a["applied"]["die_target_util"] == 0.5
+        assert a["applied"]["repair_tns_percent"] == 100
         assert a["applied"]["cts_cluster_size"] is None
         assert any(x["knob"] == "CTS_CLUSTER_SIZE" for x in a["rejected"])
 
     def test_declared_but_inert_knob_is_not_claimed_as_adopted(self, tmp_path):
-        # PLACE_DENSITY_LB_ADDON is an ADDEND: with no CORE_UTILIZATION to add
-        # it to it feeds nothing. Reporting it as "adopted" would be precisely
-        # the misleading audit trail this report exists to prevent.
+        # #541 — PLACE_DENSITY_LB_ADDON is in the WITHHELD class now, so this
+        # scenario changed shape: it is no longer "declared but fed nothing",
+        # it is "read, understood, deliberately not applied". Either way the
+        # one thing that must not happen is being claimed as adopted.
         _stage(tmp_path, {"c.mk": "PLACE_DENSITY_LB_ADDON = 0.25\n"})
         a = mod._reference_flow_pnr_audit(tmp_path)
         assert all(a["applied"][k] is None for k in _APPLIED_KEYS)
         assert a["adopted"] == []
-        assert a["status"] == "knobs-rejected"
-        inert = [r for r in a["rejected"]
-                 if r["knob"] == "PLACE_DENSITY_LB_ADDON"]
-        assert len(inert) == 1 and inert[0]["reason"]
+        assert a["status"] == "knobs-withheld"
+        held = [w for w in a["withheld"]
+                if w["knob"] == "PLACE_DENSITY_LB_ADDON"]
+        assert len(held) == 1 and held[0]["reason"]
 
-    def test_lb_addon_is_adopted_when_it_has_a_companion(self, tmp_path):
-        # …and the same knob IS adopted when it actually contributes.
+    def test_inert_knob_outside_the_withheld_class_still_reported(self,
+                                                                  tmp_path):
+        """The `inert` path (declared, not rejected, fed nothing) must survive
+        the withhold: it is reached by any FUTURE knob whose companion is
+        missing, so it is exercised here against the vocabulary rather than
+        against one knob that happens to be withheld today."""
+        m = mod._reference_flow_pnr_mapping({"TNS_END_PERCENT": "100"})
+        assert m["repair_tns_percent"] == 100
+        # a knob with a companion-free contribution is still auditable: the
+        # audit's inert branch is live code, not dead code, because the
+        # `adopted` decision is driven by the mapping notes, not by a list.
+        a_notes = [n for n in m["notes"] if not n.startswith(
+            ("REJECTED", "WITHHELD"))]
+        assert a_notes and all("TNS_END_PERCENT" in n for n in a_notes)
+
+    def test_supply_knobs_are_withheld_not_adopted(self, tmp_path):
+        # The measured defect, pinned: CORE_UTILIZATION + PLACE_DENSITY_LB_ADDON
+        # used to become die_target_util 0.5 / place_density 0.75. They must now
+        # reach NEITHER parameter and appear in the withheld bucket instead.
         _stage(tmp_path, {"c.mk": (
             "CORE_UTILIZATION = 50\nPLACE_DENSITY_LB_ADDON = 0.25\n")})
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert a["applied"]["place_density"] == 0.75
-        assert {x["knob"] for x in a["adopted"]} == {
+        assert a["applied"]["place_density"] is None
+        assert a["applied"]["die_target_util"] is None
+        assert a["adopted"] == []
+        assert {x["knob"] for x in a["withheld"]} == {
             "CORE_UTILIZATION", "PLACE_DENSITY_LB_ADDON"}
+        assert a["status"] == "knobs-withheld"
+
+    def test_withheld_knob_survives_a_note_NAME_COLLISION(self, tmp_path,
+                                                          monkeypatch):
+        """The audit decides `adopted` by SUBSTRING-matching each declared name
+        against the mapping's applied notes. A withheld knob whose name happens
+        to appear INSIDE another knob's note would therefore be listed as
+        adopted — the report claiming the flow used a value it refused, which
+        is the worst failure this bucket can have. Pinned with a deliberately
+        colliding note rather than left to the current vocabulary, where no two
+        names collide today and the guard would be untested."""
+        _stage(tmp_path, {"c.mk": ("CORE_UTILIZATION = 50\n"
+                                   "TNS_END_PERCENT = 100\n")})
+        real = mod._reference_flow_pnr_mapping
+
+        def _colliding(knobs, sources=None):
+            m = real(knobs, sources)
+            m["notes"] = list(m["notes"]) + [
+                "TNS_END_PERCENT -> repair_timing "
+                "(preferred over CORE_UTILIZATION)"]
+            return m
+
+        monkeypatch.setattr(mod, "_reference_flow_pnr_mapping", _colliding)
+        a = mod._reference_flow_pnr_audit(tmp_path)
+        assert {x["knob"] for x in a["adopted"]} == {"TNS_END_PERCENT"}
+        assert {x["knob"] for x in a["withheld"]} == {"CORE_UTILIZATION"}
+        assert a["applied"]["die_target_util"] is None
+        assert a["accounting"]["balanced"] is True
 
     def test_fp_core_util_alias_named_by_its_declared_name(self, tmp_path):
         # The report must name the knob the DESIGN used, not the canonical
         # alias — otherwise a reader cannot find it in their own config.
         _stage(tmp_path, {"c.mk": "FP_CORE_UTIL = 45\n"})
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert {x["knob"] for x in a["adopted"]} == {"FP_CORE_UTIL"}
-        assert any("FP_CORE_UTIL=45%" in n for n in a["notes"])
+        assert {x["knob"] for x in a["withheld"]} == {"FP_CORE_UTIL"}
+        assert any("WITHHELD FP_CORE_UTIL=45" in n for n in a["notes"])
 
     def test_unreadable_config_is_disclosed_not_silent(self, tmp_path):
-        rf = _stage(tmp_path, {"good.mk": "CORE_UTILIZATION = 50\n"})
+        rf = _stage(tmp_path, {"good.mk": "TNS_END_PERCENT = 100\n"})
         bad = rf / "unreadable.mk"
-        bad.write_text("CORE_UTILIZATION = 20\n")
+        bad.write_text("TNS_END_PERCENT = 20\n")
         bad.chmod(0o000)
         try:
             a = mod._reference_flow_pnr_audit(tmp_path)
@@ -207,7 +262,7 @@ class TestRejectionIsDisclosed:
         if a["unreadable"]:            # skipped when running as root
             assert any("unreadable.mk" in u for u in a["unreadable"])
             # the readable file's knob still applies — fail SAFE, not fail shut
-            assert a["applied"]["die_target_util"] == 0.5
+            assert a["applied"]["repair_tns_percent"] == 100
 
 
 # ---------------------------------------------------------------------------
@@ -238,18 +293,44 @@ class TestReportEmission:
         assert "input/reference_flow/orfs_config.mk" in txt
         assert "knobs-adopted" in txt
 
+    def test_report_names_what_it_declined_and_why(self, tmp_path):
+        """#541 — the audit must NAME the withheld knobs and state the reason,
+        in the emitted report. Reading it out of the source is not the test:
+        a reader of a finished run has only this file."""
+        _stage(tmp_path, {"orfs_config.mk": _IBEX_MK})
+        a = mod._reference_flow_pnr_audit(tmp_path)
+        mod._write_reference_flow_pnr_report(tmp_path, a)
+        txt = _pl.report_path(tmp_path, "reference_flow_knobs.md").read_text()
+        assert "deliberately NOT applied" in txt
+        # every withheld knob is named, with its declared value and its file
+        for knob, value in (("CORE_UTILIZATION", "50"),
+                            ("PLACE_DENSITY_LB_ADDON", "0.25")):
+            assert knob in txt and value in txt
+        # …the parameter each would have fed …
+        assert "die_target_util" in txt and "place_density" in txt
+        # …and the reason, not merely the fact
+        assert "routing-resource-supply" in txt
+        assert "routing-headroom calibration" in txt
+        # the section is DISTINCT from the adopted one, so a reader can tell
+        # "we applied this" from "we understood this and declined"
+        assert txt.index("## Adopted knobs") < txt.index(
+            "## Read and understood — deliberately NOT applied")
+
     def test_report_json_is_machine_readable(self, tmp_path):
         _stage(tmp_path, {"orfs_config.mk": _IBEX_MK})
         a = mod._reference_flow_pnr_audit(tmp_path)
         mod._write_reference_flow_pnr_report(tmp_path, a)
         data = json.loads(
             _pl.report_path(tmp_path, "reference_flow_knobs.json").read_text())
-        assert data["status"] == "knobs-adopted"
-        assert data["applied"]["place_density"] == 0.75
-        assert {x["knob"] for x in data["adopted"]} >= {"CORE_UTILIZATION"}
+        assert data["status"] == "knobs-adopted-some-withheld"
+        assert data["applied"]["place_density"] is None
+        assert data["applied"]["repair_tns_percent"] == 100
+        assert {x["knob"] for x in data["adopted"]} >= {"TNS_END_PERCENT"}
+        assert {x["knob"] for x in data["withheld"]} == {
+            "CORE_UTILIZATION", "PLACE_DENSITY_LB_ADDON"}
 
     def test_report_states_rejection_with_reason(self, tmp_path):
-        _stage(tmp_path, {"c.mk": "CORE_UTILIZATION = 400\n"})
+        _stage(tmp_path, {"c.mk": "TNS_END_PERCENT = 400\n"})
         a = mod._reference_flow_pnr_audit(tmp_path)
         mod._write_reference_flow_pnr_report(tmp_path, a)
         txt = _pl.report_path(tmp_path, "reference_flow_knobs.md").read_text()
@@ -338,21 +419,42 @@ class TestGeneralisesBeyondIbex:
             "set ::env(FP_CORE_UTIL) 35\n"
             "setenv CTS_CLUSTER_DIAMETER 80\n")})
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert a["status"] == "knobs-adopted"
-        assert a["applied"]["die_target_util"] == 0.35
+        assert a["status"] == "knobs-adopted-some-withheld"
+        # the CTS knob applies; the core-util is withheld under ITS OWN name,
+        # from ITS OWN file — #541 is a property of the knob, not of ibex.
         assert a["applied"]["cts_cluster_diameter"] == 80.0
+        assert a["applied"]["die_target_util"] is None
         srcs = {x["source"] for x in a["adopted"]}
         assert srcs == {"input/reference_flow/nested/vendor_flow.tcl"}
+        held = {x["knob"]: x for x in a["withheld"]}
+        assert set(held) == {"FP_CORE_UTIL"}
+        assert (held["FP_CORE_UTIL"]["source"]
+                == "input/reference_flow/nested/vendor_flow.tcl")
 
     def test_a_design_declaring_a_different_knob_subset(self, tmp_path):
-        # A design that names ONLY a placement density gets exactly that
-        # knob — no ibex-shaped defaults come along for the ride.
+        # A design that names ONLY a placement density gets NOTHING applied —
+        # and no ibex-shaped defaults come along for the ride either.
         _stage(tmp_path, {"flow.mk": "PLACE_DENSITY := 0.60\n"})
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert a["applied"]["place_density"] == 0.60
+        assert a["applied"]["place_density"] is None
         assert a["applied"]["die_target_util"] is None
         assert a["applied"]["repair_tns_percent"] is None
         assert a["applied"]["cts_cluster_size"] is None
+        assert [x["knob"] for x in a["withheld"]] == ["PLACE_DENSITY"]
+        assert a["status"] == "knobs-withheld"
+
+    def test_a_design_declaring_only_optimization_knobs_is_fully_adopted(
+            self, tmp_path):
+        """The counterpart: a design whose reference flow declares only the
+        optimization class loses nothing to #541 and reports `knobs-adopted`
+        with an empty withheld bucket."""
+        _stage(tmp_path, {"flow.mk": (
+            "TNS_END_PERCENT = 100\nCTS_CLUSTER_SIZE = 20\n")})
+        a = mod._reference_flow_pnr_audit(tmp_path)
+        assert a["status"] == "knobs-adopted"
+        assert a["withheld"] == []
+        assert a["applied"]["repair_tns_percent"] == 100
+        assert a["applied"]["cts_cluster_size"] == 20
 
     def test_two_designs_same_flow_served_identically(self, tmp_path):
         # chip-AGNOSTIC: the same staged flow yields the same decisions
@@ -366,7 +468,9 @@ class TestGeneralisesBeyondIbex:
         aa = mod._reference_flow_pnr_audit(a_dir)
         bb = mod._reference_flow_pnr_audit(b_dir)
         assert aa["applied"] == bb["applied"]
-        assert aa["status"] == bb["status"] == "knobs-adopted"
+        assert aa["status"] == bb["status"] == "knobs-adopted-some-withheld"
+        assert ([x["knob"] for x in aa["withheld"]]
+                == [x["knob"] for x in bb["withheld"]])
 
 
 if __name__ == "__main__":

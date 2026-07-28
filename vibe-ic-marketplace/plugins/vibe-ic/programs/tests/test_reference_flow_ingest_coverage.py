@@ -240,21 +240,22 @@ class TestDisclosureChangesNothing:
         # Counting a name in the denominator must not admit it to the flow.
         _stage(tmp_path, {"flow.mk": _MIXED_MK})
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert a["applied"]["die_target_util"] == 0.5     # from CORE_UTILIZATION
         assert a["applied"]["repair_tns_percent"] == 100  # from TNS_END_PERCENT
-        # derived from CORE_UTILIZATION alone (ORFS semantics), NOT from any of
-        # the four unrecognised names
-        assert a["applied"]["place_density"] == 0.5
+        # #541 — CORE_UTILIZATION is withheld, so NEITHER floorplan parameter
+        # is set. Neither is set by any of the four unrecognised names either,
+        # which is what this test is here to prove.
+        assert a["applied"]["die_target_util"] is None
+        assert a["applied"]["place_density"] is None
         # nothing declared CTS clustering, so it stays at the generic default
         assert a["applied"]["cts_cluster_size"] is None
         assert a["applied"]["cts_cluster_diameter"] is None
 
     def test_unexamined_file_contents_never_reach_applied_parameters(
             self, tmp_path):
-        rf = _stage(tmp_path, {"flow.mk": "CORE_UTILIZATION = 50\n"})
-        (rf / "rules.json").write_text('{"CORE_UTILIZATION": 90}\n')
+        rf = _stage(tmp_path, {"flow.mk": "TNS_END_PERCENT = 100\n"})
+        (rf / "rules.json").write_text('{"TNS_END_PERCENT": 90}\n')
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert a["applied"]["die_target_util"] == 0.5     # the .mk value, not 90
+        assert a["applied"]["repair_tns_percent"] == 100   # the .mk value, not 90
 
 
 # ---------------------------------------------------------------------------
@@ -290,10 +291,10 @@ class TestOracleBoundary:
 
     def test_no_oracle_value_reaches_the_flow(self, tmp_path):
         # The classifier must never become an extractor.
-        _stage(tmp_path, {"flow.mk": "CORE_UTILIZATION = 50\n",
+        _stage(tmp_path, {"flow.mk": "TNS_END_PERCENT = 100\n",
                           "rules.json": _ORACLE_RULES})
         a = mod._reference_flow_pnr_audit(tmp_path)
-        assert a["applied"]["die_target_util"] == 0.5
+        assert a["applied"]["repair_tns_percent"] == 100
         blob = json.dumps(a)
         for leaked in ("177762", "-0.5", "drc_errors", "netlist__hash"):
             assert leaked not in blob
