@@ -11303,7 +11303,13 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "# odb. (verified live on ibex: full repair+reroute completes.)\n"
         f"read_def {pnr_dir_c}/post_hold.def\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
-        "\n"
+        # #543 -- the ECO resizes too, and it also ran without the v1.2.86
+        # cell-pool exclusion: 1 instance of `sky130_fd_sc_hd__probe_p_8` reached
+        # the ECO netlist on the measured ibex run. THREE resizing paths existed
+        # and only `pnr.tcl` carried the guard; a do-not-use list that binds on
+        # one resizer and not the others is not a list, it is a coincidence.
+        + _dont_use_family_fallback_tcl()
+        + "\n"
         f"if {{[catch {{set_wire_rc -signal -layer {metal_prefix}1}} _swr_sig]}} {{\n"
         f"  if {{[catch {{set_wire_rc -layer {metal_prefix}1}} _swr_sig2]}} {{\n"
         "    puts \"ECO_SET_WIRE_RC_SIGNAL_NONFATAL: $_swr_sig2\"\n"
@@ -15011,7 +15017,23 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"read_liberty {ss_liberty_c}\n"
         f"read_def {pnr_dir_c}/routed.def\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
-        f"if {{[catch {{set_wire_rc -signal -layer {mp}1}} e]}} {{ "
+        # #543 -- THIS STEP RESIZES, so it needs the same cell-pool exclusion the
+        # PnR session has. It did not have it: `pnr.tcl` carries the v1.2.86
+        # do-not-use block and this Tcl carried none, so `repair_design` /
+        # `repair_timing` here were free to insert exactly the cell that block
+        # exists to keep out. MEASURED on ibex x sky130A, one run: 4 instances of
+        # `sky130_fd_sc_hd__probe_p_8` in the repaired netlist, then
+        #     [WARNING DRT-0087] No valid pattern for unique instance place7863,
+        #                        master is sky130_fd_sc_hd__probe_p_8
+        #     [ERROR   DRT-0085] Valid access pattern combination not found
+        # FOUR times -- once pre-reroute and once per convergence iteration. Every
+        # one was swallowed by its own `catch` as SHIP_DR_NONFATAL /
+        # SHIP_CVG_DR_NONFATAL, and the step still published SHIP_WNS_POSTROUTE --
+        # a name that says post-REROUTE -- from a design whose reroute never
+        # completed. The v1.2.86 docstring describes this exact failure; the guard
+        # was simply never emitted on this path.
+        + _dont_use_family_fallback_tcl()
+        + f"if {{[catch {{set_wire_rc -signal -layer {mp}1}} e]}} {{ "
         f"if {{[catch {{set_wire_rc -layer {mp}1}} e2]}} {{ "
         f"puts \"SHIP_SWR_SIG_NONFATAL: $e2\" }} }}\n"
         f"if {{[catch {{set_wire_rc -clock -layer {mp}5}} e]}} {{ "
@@ -15491,7 +15513,12 @@ def _ship_wire_length_escalation_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"read_liberty {ss_liberty_c}\n"
         f"read_def {pnr_dir_c}/routed.def\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
-        f"if {{[catch {{set_wire_rc -signal -layer {mp}1}} e]}} {{ "
+        # #543 -- same reason as the sign-off repair Tcl above: this path resizes,
+        # so the unroutable characterization masters (__probe / __lpflow / __dly)
+        # must leave its pool before `repair_design` can pick one. Emitting the
+        # guard in one resizing path and not the other is how it went missing.
+        + _dont_use_family_fallback_tcl()
+        + f"if {{[catch {{set_wire_rc -signal -layer {mp}1}} e]}} {{ "
         f"if {{[catch {{set_wire_rc -layer {mp}1}} e2]}} {{ "
         f"puts \"SHIP_ESC_SWR_SIG_NONFATAL: $e2\" }} }}\n"
         f"if {{[catch {{set_wire_rc -clock -layer {mp}5}} e]}} {{ "
