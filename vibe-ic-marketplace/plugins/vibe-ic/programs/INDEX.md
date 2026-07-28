@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 987
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 987)
+- **Total programs (excluding helpers / shims):** 988
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 988)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 978 |
+| `any` | 979 |
 
 ## Alphabetical listing
 
@@ -876,6 +876,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
 | `spec_context_sibling_detect` | any | — | PROGRAM-FIRST context-sibling collision advisory. |
 | `spec_coverage_check` | any | — | ORGANIC #697 [P1, chip-AGNOSTIC] |
+| `spec_declaration_emit` | any | — | the designer's FREE choices, declared not inferred. |
 | `spec_electrical_extract` | any | — | PROGRAM-FIRST structural extractor for stated |
 | `spec_enumset_extract` | any | — | PROGRAM-FIRST structural extractor for CVDP |
 | `spec_example_smoke_tb` | any | — | ORGANIC #728 [P1, chip-AGNOSTIC] |
@@ -1059,7 +1060,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (978 programs)
+### `any` (979 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1904,6 +1905,7 @@ _(no programs in this group)_
 - `spec_conformance_check` — Spec↔RTL contract-conformance gate.
 - `spec_context_sibling_detect` — PROGRAM-FIRST context-sibling collision advisory.
 - `spec_coverage_check` — ORGANIC #697 [P1, chip-AGNOSTIC]
+- `spec_declaration_emit` — the designer's FREE choices, declared not inferred.
 - `spec_electrical_extract` — PROGRAM-FIRST structural extractor for stated
 - `spec_enumset_extract` — PROGRAM-FIRST structural extractor for CVDP
 - `spec_example_smoke_tb` — ORGANIC #728 [P1, chip-AGNOSTIC]

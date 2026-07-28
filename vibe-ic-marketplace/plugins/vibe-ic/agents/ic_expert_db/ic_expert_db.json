@@ -3,8 +3,8 @@
   "_schema": "entries[].{ic_class, lesson_count, lessons[], related?[] (optional cross-links to sibling ic_class names sharing a core craft)}",
   "_source": "distilled from proven-correct (officially-scored PASS) reference designs, plus owner-reviewed general-convention distills from fail-mode triage prose (see capture_log.md); benchmark identifiers scrubbed at build time (blindness); §4.05 ORACLE-SOURCE ban enforced by ic_expert_db_consistency_check.py.",
   "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
-  "classes": 101,
-  "total_lessons": 161,
+  "classes": 102,
+  "total_lessons": 162,
   "entries": [
     {
       "ic_class": "accumulator-datapath",
@@ -241,6 +241,9 @@
         "When the signal-description table and the module-definition skeleton disagree on a port name (tables s_ready/m0_ready/m1_ready vs skeleton's truncated s_read/m0_read/m1_read), emit BOTH spellings as aliased ports (extend the reset/clock name-variant alias generator to read<->ready typo pairs); if only one spelling can be kept, keep the SKELETON/header spelling — binding follows the declaration.",
         "Unless the spec says otherwise, every declared output must carry a DEFINED value at every cycle after reset: drive 0 when idle/undecoded rather than leaving X/Z or a stale value, zero-extend a narrow field read over a wider bus, and give reset-less registered outputs a deterministic power-up value (initial = 0) so a time-zero sample reads 0, not X. Reads of unmapped/reserved addresses return 0, and writes to read-only or unmapped space are side-effect-free unless an error response is explicitly specified.",
         "When a verbatim code header/skeleton (module declaration, port list, parameter list) CONFLICTS with a prose/table description, the code header wins for every BINDING fact — module name, port names, port order, widths, parameter names — because integration binds against the declaration, not the prose; the prose/table wins only for BEHAVIOR the header cannot express. For a probable typo pair between the two (a port named _read in the header vs _ready in the table), keep the header spelling on the port (optionally alias both) and note the discrepancy in a comment — do not 'correct' the declaration from the table."
+      ],
+      "related": [
+        "declared-free-choice-defaults"
       ]
     },
     {
@@ -801,7 +804,8 @@
       "related": [
         "radix4-booth-multiplier",
         "sequential-multiplier",
-        "processor-cpu-core"
+        "processor-cpu-core",
+        "declared-free-choice-defaults"
       ]
     },
     {
@@ -892,6 +896,9 @@
       "lesson_count": 1,
       "lessons": [
         "When a spec mentions a reset without stating polarity or synchrony, take the convention from the SIGNAL NAME first: an _n/_b suffix (rst_n, resetn, nreset) means active-LOW, a bare rst/reset means active-HIGH. Put the reset in the sensitivity list (asynchronous assert) only when the prose says asynchronous / 'immediately' / 'regardless of the clock'; otherwise default to synchronous sampling at the active clock edge. Reset must return EVERY architectural register AND every declared output to its stated reset value (0 when unstated) so a sample taken right after deassertion reads defined values. When the spec says a control/clear input 'clears all outputs' with no timing qualifier, the asynchronous-assert form is the robust superset — it satisfies both an immediate-sampling and an edge-sampling consumer, while the synchronous-only form fails the immediate one."
+      ],
+      "related": [
+        "declared-free-choice-defaults"
       ]
     },
     {
@@ -913,6 +920,9 @@
       "lesson_count": 1,
       "lessons": [
         "When a spec does not state signedness, operands are UNSIGNED by default; switch to signed (two's-complement) interpretation only when the prose says signed/negative/two's complement or a worked example uses a negative value. When signed, cast BOTH operands explicitly ($signed on each side of a compare/multiply/shift): in Verilog a single unsigned operand silently makes the whole expression unsigned, which flips comparisons and right-shifts. Overflow behavior defaults to natural modulo-2^N wrap-around unless the spec says saturate/clamp; a stated saturation applies on BOTH the positive and negative side of a signed range."
+      ],
+      "related": [
+        "declared-free-choice-defaults"
       ]
     },
     {
@@ -937,6 +947,19 @@
         "command-driven-memory-controller-fsm",
         "secure-register-bank-fsm",
         "register-file-with-bist"
+      ]
+    },
+    {
+      "ic_class": "declared-free-choice-defaults",
+      "lesson_count": 1,
+      "lessons": [
+        "When a spec leaves an interface decision to the implementer AND asks for it to be recorded in a structured file (a 'MUST declare <path>' clause followed by a field table), treat those fields as FREE CHOICES: decisions no downstream tool can recover from the artifacts by inference — serial bit order, the latency from reset release to the first valid beat, integer encoding, reset polarity, the parameter value this build actually ran at, which optional feature axis was selected. Two correct designs disagree on all of them, so a comparison procedure that is not told cannot pair its reference output, and a procedure that guesses fails a correct design for a reason unrelated to its function. DECIDE each field and record it in the spec-declared machine-readable file BEFORE authoring the RTL that embodies it, then author RTL that conforms to what you declared. An RTL header comment (even a well-meant 'DECLARED CHOICES: bit_order = ...' block) is prose: it is not schema-checked, it is not diffable against a consumer's expectation, and a consumer that scrapes it is one reformat away from silently guessing — keep it as an additional human-readable copy, never as the artifact. Three traps: (1) never invent a value to fill the file, because a default-filled declaration is worse than an absent one — it reads as green while the comparison pairs against a value nobody chose, so an undetermined required choice deserves an honest refusal that NAMES the field; (2) never adopt the spec's example value as your choice, because the example column records what a reference implementation happened to pick and copying it makes the document author the designer; (3) an informational field you did not decide is OMITTED, not placeholder-filled, since a missing key already resolves to 'cannot pair' everywhere while a placeholder has to be special-cased by every reader. The deterministic helper is programs/spec_declaration_emit.py, which reads the field list, the required/informational tier and the target path out of the project's own Phase-1 documents rather than a table baked into the program, so a design declaring a completely different field set gets the same treatment."
+      ],
+      "related": [
+        "reset-interface-defaults",
+        "arithmetic-signedness-defaults",
+        "bus-interface-defaults",
+        "serial-parallel-multiplier"
       ]
     }
   ]

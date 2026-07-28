@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "program": "spec_declaration_emit",
+  "generated_at": "2026-07-27T19:53:21.074210+00:00",
+  "declaration_path": "plugin_output/declaration.json",
+  "contract_source": "phase1/input_doc/L7_verification_plan.txt",
+  "contract_clause": "**必須**於 `plugin_output/declaration.json` 聲明",
+  "required_column_found": true,
+  "fields": {
+    "bit_order": {
+      "required": true,
+      "required_marker": "✅",
+      "required_marker_recognized": true,
+      "spec_example_values": [
+        "\"LSB_first\"",
+        "\"MSB_first\""
+      ],
+      "status": "determined",
+      "value": "LSB_first",
+      "provenance": "rtl_header_declaration",
+      "provenance_detail": "phase2/stage1/rtl/spm.v",
+      "recovered_from_prose": true
+    },
+    "reset_polarity": {
+      "required": true,
+      "required_marker": "✅",
+      "required_marker_recognized": true,
+      "spec_example_values": [
+        "\"active_high\""
+      ],
+      "status": "determined",
+      "value": "active_high",
+      "provenance": "rtl_header_declaration",
+      "provenance_detail": "phase2/stage1/rtl/spm.v",
+      "recovered_from_prose": true
+    },
+    "latency_cycles": {
+      "required": true,
+      "required_marker": "✅",
+      "required_marker_recognized": true,
+      "spec_example_values": [],
+      "status": "determined",
+      "value": 2,
+      "provenance": "rtl_header_declaration",
+      "provenance_detail": "phase2/stage1/rtl/spm.v",
+      "recovered_from_prose": true
+    },
+    "integer_encoding": {
+      "required": true,
+      "required_marker": "✅",
+      "required_marker_recognized": true,
+      "spec_example_values": [
+        "\"signed_2c\"",
+        "\"unsigned\""
+      ],
+      "status": "determined",
+      "value": "signed_2c",
+      "provenance": "rtl_header_declaration",
+      "provenance_detail": "phase2/stage1/rtl/spm.v",
+      "recovered_from_prose": true
+    },
+    "multiplier_algorithm": {
+      "required": false,
+      "required_marker": "⚠️ 資訊性",
+      "required_marker_recognized": true,
+      "spec_example_values": [
+        "\"carry_save_bit_serial\""
+      ],
+      "status": "determined",
+      "value": "carry_save_serial_parallel_array",
+      "provenance": "rtl_header_declaration",
+      "provenance_detail": "phase2/stage1/rtl/spm.v",
+      "recovered_from_prose": true
+    },
+    "size_param": {
+      "required": true,
+      "required_marker": "✅",
+      "required_marker_recognized": true,
+      "spec_example_values": [
+        "32",
+        "8 / 16"
+      ],
+      "status": "determined",
+      "value": 32,
+      "provenance": "author_declared",
+      "recovered_from_prose": false
+    }
+  },
+  "undetermined_informational": [],
+  "recovered_from_prose": [
+    "bit_order",
+    "integer_encoding",
+    "latency_cycles",
+    "multiplier_algorithm",
+    "reset_polarity"
+  ],
+  "preserved_foreign_keys": []
+}
