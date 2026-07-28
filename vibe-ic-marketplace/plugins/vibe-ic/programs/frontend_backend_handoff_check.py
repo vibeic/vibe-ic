@@ -26,8 +26,18 @@ HEURISTIC
 
 SELF-SKIP
 ---------
-If no ``synth/`` directory and no ``*.sdc`` files exist, the project
-has not reached backend stage yet — PASS with INFO.
+If no ``synth/`` directory and no ``*.sdc`` files exist, the project has not
+reached backend stage yet — there is no handoff to audit, so the gate examined
+nothing and exits 2 (#515). This is the gate's dominant outcome: 279 of 327
+tracked project roots.
+
+WHY ``NO_DFT_EVIDENCE`` IS **NOT** PART OF THAT (#515 judgement)
+---------------------------------------------------------------
+See the comment at the ``NO_DFT_EVIDENCE`` finding in ``audit()``. In short:
+it fires only on the path where every required deliverable WAS examined, so it
+is an advisory on a real pass, not a skip — and the "should this design have
+scan at all?" question is owned by ``l20_dft_scan_topology_actionable_check``,
+which derives it from the design's own requirement documents.
 
 USAGE
 -----
@@ -35,9 +45,11 @@ USAGE
 
 EXIT CODES
 ----------
-    0 — PASS or self-skip
+    0 — PASS: the handoff was examined and every required deliverable is
+        present (possibly with non-blocking WARN advisories)
     1 — FAIL (missing deliverables)
-    2 — IO / argument error
+    2 — VACUOUS: nothing was examined — the project has not reached backend
+        stage (no synth dir and no SDC), so no handoff exists yet
 """
 from __future__ import annotations
 
@@ -49,6 +61,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
+import _vacuous_exit as _vx
 
 
 @dataclass
@@ -157,7 +170,8 @@ def audit(project: Path) -> AuditResult:
         result.summary = {"skipped": True, "reason": "not_backend_stage"}
         result.findings.append(Finding(
             "SKIP", "INFO",
-            "Project has not reached backend stage.",
+            "Project has not reached backend stage — no frontend/backend "
+            "handoff exists yet, so nothing was examined.",
         ))
         return result
 
@@ -207,10 +221,48 @@ def audit(project: Path) -> AuditResult:
                 "entering backend flow.",
             ))
 
+    # ── #515 JUDGEMENT: NO_DFT_EVIDENCE stays a NON-BLOCKING rc-0 ADVISORY ──
+    #
+    # #515 asked whether absent DFT is a REAL FINDING (a design that should
+    # have scan and does not -> rc 1) or an INAPPLICABLE CHECK (DFT out of
+    # scope -> rc 2). Decided deliberately, from evidence, as NEITHER:
+    #
+    # NOT rc 2. This branch is only reachable with `summary["skipped"] is
+    # False` — i.e. the project HAS reached backend stage and the netlist,
+    # SDC, floorplan and hardmacro-LEF checks above all ran on real artefacts.
+    # Exiting 2 would report "nothing was examined" about a run that examined
+    # everything the gate audits, which is the same false claim #515 removes,
+    # pointed the other way. Measured: on ic/ibex, ic/caravel_user_project and
+    # ic/opentitan_aes this finding co-occurs with a fully-executed check and
+    # an "All required frontend deliverables present" PASS.
+    #
+    # NOT rc 1. To FAIL a design for missing scan, a gate must first know that
+    # scan was REQUIRED of it. This gate has no such evidence: _find_dft_
+    # evidence is a regex for four literal identifiers over `*.v`. It cannot
+    # tell "DFT was required and skipped" from "DFT is legitimately out of
+    # scope" (FPGA target, analog block, pre-DFT-insertion stage, an SoC
+    # integrator's job) or from "scan exists under names I do not recognise".
+    # A FAIL derived from that would be a verdict about this gate's recogniser
+    # rather than about the design — a fabricated finding, which is worse than
+    # the vacuous PASS #515 is closing.
+    #
+    # The question DOES have an owner: l20_dft_scan_topology_actionable_check
+    # F2 (REQUIREMENT_OUTSIDE_CONSUMING_LAYER) BLOCKS on exactly it, and it
+    # derives the requirement from the design's OWN input docs and sibling
+    # L-docs, exiting 2 when no DFT requirement is derivable. Duplicating that
+    # verdict here with strictly less evidence would make the weaker gate the
+    # one that stops the flow.
+    #
+    # So: advisory, rc 0, worded as an advisory. If a DFT requirement is ever
+    # threaded into this gate's inputs, this comment is the tripwire — the
+    # promotion to rc 1 becomes justifiable at that point and not before.
     if not _find_dft_evidence(project):
         result.findings.append(Finding(
             "NO_DFT_EVIDENCE", "WARN",
-            "No DFT scan chain signals (scan_en/scan_in/scan_out) detected. "
+            "ADVISORY (non-blocking): no DFT scan chain signals "
+            "(scan_en/scan_in/scan_out/scan_mode) detected. This gate cannot "
+            "tell 'DFT required and skipped' from 'DFT out of scope' — "
+            "l20_dft_scan_topology_actionable_check owns that verdict. "
             "Consider inserting DFT before backend flow.",
         ))
 
@@ -232,7 +284,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     target = Path(args.project_dir)
     if not target.exists():
         print(f"error: not found: {target}", file=sys.stderr)
-        return 2
+        return _vx.RC_VACUOUS
 
     result = audit(target)
     report = {
@@ -253,9 +305,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         for f in result.findings:
             print(f"[{f.severity}] {f.rule} @ {f.file}:{f.line}: {f.message}")
         errors = [f for f in result.findings if f.severity == "ERROR"]
-        print(f"\n{len(errors)} error(s); verdict: {'FAIL' if errors else 'PASS'}")
+        verdict = ("FAIL" if errors
+                   else "VACUOUS (nothing examined)"
+                   if _vx.summary_is_skipped(result.summary) else "PASS")
+        print(f"\n{len(errors)} error(s); verdict: {verdict}")
 
-    return 0 if result.passed else 1
+    # #515 — routed from the gate's OWN `summary["skipped"]`. Only the
+    # `not_backend_stage` / `not_a_directory` branches set it; a run that
+    # reached the deliverable checks reports PASS or FAIL on what it found,
+    # advisories included (see the NO_DFT_EVIDENCE judgement in `audit`).
+    skipped = _vx.summary_is_skipped(result.summary)
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program,
+                             str(result.summary.get("reason", "unspecified")))
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

@@ -31,9 +31,12 @@ USAGE
 
 EXIT CODES
 ----------
-    0 — PASS or self-skip (no break signals / no half-duplex bus)
+    0 — PASS: break handlers were examined and are properly guarded
     1 — FAIL (unsafe break handler)
-    2 — IO / argument error
+    2 — VACUOUS: nothing was examined — no RTL at all, or no break signals,
+        so this design is not a break-based protocol and the gate does not
+        apply to it. #515: this used to be rc 0, which credited the gate in
+        the plain PASS tier for designs it had never looked at.
 """
 from __future__ import annotations
 
@@ -44,6 +47,8 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
+
+import _vacuous_exit as _vx
 
 
 @dataclass
@@ -195,7 +200,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     target = Path(args.rtl_dir)
     if not target.exists():
         print(f"error: not found: {target}", file=sys.stderr)
-        return 2
+        return _vx.RC_VACUOUS
 
     result = audit(target)
     report = {
@@ -216,9 +221,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         for f in result.findings:
             print(f"[{f.severity}] {f.rule} @ {f.file}:{f.line}: {f.message}")
         errors = [f for f in result.findings if f.severity == "ERROR"]
-        print(f"\n{len(errors)} error(s); verdict: {'FAIL' if errors else 'PASS'}")
+        verdict = ("FAIL" if errors
+                   else "VACUOUS (nothing examined)"
+                   if _vx.summary_is_skipped(result.summary) else "PASS")
+        print(f"\n{len(errors)} error(s); verdict: {verdict}")
 
-    return 0 if result.passed else 1
+    # #515 — the exit code is routed from the gate's OWN structured
+    # conclusion (`summary["skipped"]`), never from the text above. Three of
+    # this gate's four outcomes were vacuous: no RTL directory, no RTL files,
+    # and no break signals anywhere. All three used to exit 0 and be counted
+    # as a real pass; two of them printed nothing at all, so the whole of the
+    # gate's output was the line `0 error(s); verdict: PASS`.
+    skipped = _vx.summary_is_skipped(result.summary)
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program,
+                             str(result.summary.get("reason", "unspecified")))
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

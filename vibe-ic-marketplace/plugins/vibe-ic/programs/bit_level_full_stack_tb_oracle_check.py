@@ -48,9 +48,11 @@ Rules
 5. FAIL if ``rtl_top`` is named but no matching file exists in any
    ``rtl/`` subtree.
 6. WARN if ``vectors_total < 16``.
-7. SKIP (exit 0) when no ``results.json`` is present (this gate is the
-   "raised bar" companion of the legacy gate; legacy gate handles the
-   missing-file case).
+7. VACUOUS (exit 2, #515) when no ``results.json`` is present (this gate is
+   the "raised bar" companion of the legacy gate; legacy gate handles the
+   missing-file case), and likewise when ``results.json`` declares
+   ``command_oracle_applicable: false``. Both are "nothing was examined",
+   and both used to exit 0.
 8. Honors waiver ``bit_level_oracle_skipped`` (>= 40 chars).
 9. (ORGANIC-20260528) FAIL if ANY scored vector lacks a concrete golden
    ``expected_bytes`` — i.e. it is missing / null / empty, or it
@@ -73,9 +75,16 @@ Usage
 
 Exit codes
 ----------
-    0 — PASS / SKIP / PASS_WITH_WAIVER / WARN-only
+    0 — PASS / PASS_WITH_WAIVER / WARN-only — an oracle was examined
     1 — FAIL
-    2 — input-missing
+    2 — VACUOUS: nothing was examined (#515). Three paths reach it: the
+        project directory does not exist; no ``results.json`` was found; or
+        ``results.json`` honestly declares ``command_oracle_applicable:
+        false`` for a non-protocol IC. The last two used to exit 0 — and the
+        third one printed the positive sign-off sentence
+        ``PASS — bit-level oracle structurally valid (None vectors,
+        None/None passed)``, built out of three ``None``s, while ``check()``
+        had already recorded ``skipped: True`` that ``main()`` never read.
 """
 from __future__ import annotations
 
@@ -86,6 +95,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 import _path_layout as _pl
+import _vacuous_exit as _vx
 
 
 WAIVER_KEY = "bit_level_oracle_skipped"
@@ -807,28 +817,46 @@ def main():
     project = Path(args.project_dir).resolve()
     if not project.exists():
         print(f"FAIL — project dir not found: {project}", file=sys.stderr)
-        return 2
+        return _vx.RC_VACUOUS
 
     if args.results_json:
         results_path = Path(args.results_json).resolve()
         if not results_path.is_file():
             print(f"FAIL — results.json not found: {results_path}",
                   file=sys.stderr)
-            return 1
+            return _vx.RC_FAIL
     else:
         results_path = _find_results(project)
         if not results_path:
+            # #515 — vacuous, not a pass. The word "PASS" used to lead this
+            # line (`PASS_SKIP`) while the gate had opened nothing.
             print(
-                "PASS_SKIP — no sim/sim_full_stack/results.json found; "
-                "legacy bit_level_full_stack_tb_check covers the "
-                "missing-file case"
+                "SKIP — no sim/sim_full_stack/results.json found; nothing "
+                "was examined (legacy bit_level_full_stack_tb_check covers "
+                "the missing-file case)"
             )
-            return 0
+            _vx.announce_vacuous("bit_level_full_stack_tb_oracle_check",
+                                 "no_results_json")
+            return _vx.RC_VACUOUS
 
     result = check(project, results_path)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(json.dumps(result, indent=2))
+
+    # #515 — `check()` has always computed `skipped` for the
+    # `command_oracle_applicable: false` N/A escape, and `main()` has never
+    # read it. Read it here, BEFORE the pass branch, so the gate's own
+    # conclusion decides the exit code. Guarded on `result["pass"]` so a
+    # result that somehow carried both flags still reports the violation.
+    if result["pass"] and result.get("skipped"):
+        for f in result.get("findings", []):
+            print(f"SKIP: {f['rule']} — {f['message']}")
+        print("VACUOUS — the bit-level command-byte oracle does not apply to "
+              "this IC; NO vectors were compared")
+        _vx.announce_vacuous("bit_level_full_stack_tb_oracle_check",
+                             "command_oracle_not_applicable")
+        return _vx.RC_VACUOUS
 
     if result["pass"]:
         if result.get("warnings"):
@@ -846,7 +874,7 @@ def main():
                 f"{result.get('vectors_passed')}/{result.get('vectors_total')}"
                 f" passed)"
             )
-        return 0
+        return _vx.RC_PASS
 
     is_waived, why = waived(project)
     if is_waived:
@@ -856,14 +884,14 @@ def main():
         )
         for f in result["findings"]:
             print(f"  • {f['rule']} — {f['message'][:120]}")
-        return 0
+        return _vx.RC_PASS
 
     print(f"FAIL — {len(result['findings'])} bit-level oracle violation(s)")
     for f in result["findings"]:
         print(f"FAIL: {f['rule']} — {f['message']}")
     for w in result.get("warnings", []):
         print(f"WARN: {w['rule']} — {w['message']}")
-    return 1
+    return _vx.RC_FAIL
 
 
 if __name__ == "__main__":
