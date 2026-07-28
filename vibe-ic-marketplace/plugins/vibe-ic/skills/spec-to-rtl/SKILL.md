@@ -66,6 +66,45 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    away: the same extraction runs as a BLOCKING assertion at `final_audit`, so
    a missing declaration costs an entire Phase 2 (hygiene, lint, synth, DFT, a
    multi-minute LEC) to discover a file that took seconds to write.
+
+   **— and DECIDE + RECORD YOUR FREE CHOICES *BEFORE* YOU AUTHOR (MANDATORY) —**
+   The preflight above tells you WHICH files the spec demands. When one of them
+   is a DECLARATION — a "MUST declare `<path>`" clause followed by a field table
+   — the file is not paperwork you can write afterwards. Its fields are FREE
+   CHOICES: decisions no downstream tool can recover by inference (serial bit
+   order, reset-release latency, integer encoding, reset polarity, the parameter
+   this build ran at, which optional feature axis you selected). Two correct
+   designs disagree on all of them, so the comparison procedure cannot pair its
+   reference output unless you tell it.
+
+   The runner already staged the contract for you at
+   `<project>/phase2/stage1/declaration_contract.json` (extras key
+   `declaration_contract`). Read it, DECIDE each field, and record them:
+
+   ```bash
+   python3 plugins/vibe-ic/programs/spec_declaration_emit.py <project> --contract
+   python3 plugins/vibe-ic/programs/spec_declaration_emit.py <project> \
+       --set <field>=<value> --set <field>=<value> ...
+   ```
+
+   Then author RTL that CONFORMS to what you declared — not the other way round.
+
+   Rules that are easy to get wrong:
+   - The emitter **refuses** (rc=1, naming the field) while any REQUIRED choice
+     is undetermined, and writes nothing. That refusal is correct: a
+     default-filled declaration would turn the required-artifact gate green
+     against a value nobody chose.
+   - **Do not copy the spec's example value** into the declaration. The example
+     column records what a reference implementation happened to pick; copying it
+     makes the document author the designer.
+   - An informational field you did not decide is **omitted**, never
+     placeholder-filled.
+   - `--from-rtl-declaration` exists ONLY for a legacy design whose RTL was
+     written before the declaration; it promotes an existing
+     `key = value` header block and stamps every field it takes as
+     `recovered_from_prose` in the provenance sidecar. Do not use it as the
+     normal path — a free choice recorded only in an RTL comment is a free
+     choice a downstream tool has to guess.
 2. **Respect the blind rule**: read ONLY the L docs + original prompt. NEVER
    read `testbench.v`, `verified_*.v`, hidden cocotb harness, or any reference
    RTL the upstream benchmark ships. This is enforced by the open-benchmark-
