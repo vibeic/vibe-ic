@@ -1278,3 +1278,95 @@ def test_a_schema1_sidecar_is_carried_without_a_false_alarm(tmp_path):
     prov = _provenance(p)
     assert prov["recovered_from_prose"] == ["bit_order", "latency_cycles"]
     assert prov["fields"]["bit_order"]["provenance"] == "rtl_header_declaration"
+
+
+# ---------------------------------------------------------------------------
+# The SAME generator writes two spellings of the DECLARED CHOICES block, and
+# this reader accepted only one.  A design that had declared all of its free
+# choices was reported as having declared none — the reader's failure to parse
+# published as the designer's failure to declare.  Measured across the tracked
+# spm variants: some write `field = value`, one aligns the value in a column.
+# ---------------------------------------------------------------------------
+
+RTL_ALIGNED_COLUMN = """\
+// spm - bit-serial multiplier
+//
+// DECLARED CHOICES (L7 7.0 - mirrored in the declaration)
+//   bit_order            MSB_first     y is streamed MSB-first
+//   latency_cycles       4             y[i] sampled at edge t
+//
+// ALGORITHM  (the recurrence below is the choice made here)
+//   acc = acc + x when y_t is set; the shift is what makes it serial
+//   latency_cycles       999           THIS prose must not be read
+module dut (input clk, input rst, output reg q);
+  always @(posedge clk) q <= 1'b0;
+endmodule
+"""
+
+
+def _emit_with_rtl(tmp_path, rtl_text):
+    project = _make_project(tmp_path, ZH_CONTRACT)
+    rtl = project / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True, exist_ok=True)
+    (rtl / "dut.v").write_text(rtl_text)
+    return project, _run_emit(project, "--from-rtl-declaration")
+
+
+def test_an_aligned_column_block_is_read_like_the_equals_form(tmp_path):
+    """The column layout is a declaration, not prose."""
+    project, r = _emit_with_rtl(tmp_path, RTL_ALIGNED_COLUMN)
+    assert r.returncode == 0, r.stderr
+    decl = _declaration(project)
+    assert decl["bit_order"] == "MSB_first"
+    assert decl["latency_cycles"] == 4
+
+
+def test_the_aligned_form_is_confined_to_the_declared_choices_block(tmp_path):
+    """`latency_cycles 999` in the ALGORITHM prose must not be read.
+
+    The block anchor is what makes the column gap safe: without it, any comment
+    with two spaces after a field name would become a declaration.
+    """
+    project, r = _emit_with_rtl(tmp_path, RTL_ALIGNED_COLUMN)
+    assert r.returncode == 0, r.stderr
+    assert _declaration(project)["latency_cycles"] == 4, "read the prose line"
+
+
+def test_prose_spacing_is_still_not_a_declaration(tmp_path):
+    """One space is prose; a column is a layout.  The gap is the discriminator."""
+    text = RTL_ALIGNED_COLUMN.replace(
+        "//   bit_order            MSB_first     y is streamed MSB-first",
+        "//   bit_order is MSB_first as discussed")
+    _project, r = _emit_with_rtl(tmp_path, text)
+    assert r.returncode == 1, "single-space prose was accepted as a declaration"
+
+
+def test_a_near_miss_is_named_rather_than_reported_as_absent(tmp_path):
+    """"I did not find it" and "I found it and could not read it" differ.
+
+    Reporting the second as the first is what led a reader to conclude a design
+    had never declared its free choices at all.
+    """
+    text = RTL_ALIGNED_COLUMN.replace(
+        "//   bit_order            MSB_first     y is streamed MSB-first",
+        "//   bit_order is MSB_first as discussed")
+    _project, r = _emit_with_rtl(tmp_path, text)
+    assert r.returncode == 1
+    assert "NOT read from" in r.stderr, r.stderr
+    assert "bit_order" in r.stderr
+    assert "dut.v:" in r.stderr, "the near miss must carry file:line"
+    assert "DECLARED CHOICES" in r.stderr, "must say what form would be read"
+
+
+def test_the_block_closes_at_the_next_heading(tmp_path):
+    """A block running to end-of-comments would put every paragraph in scope."""
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import spec_declaration_emit as M
+    scanned = M._scan_declaration_lines(RTL_ALIGNED_COLUMN)
+    inside = M._declaration_block_lines(scanned)
+    bodies = {ln: t.strip() for ln, t in scanned}
+    assert inside, "the block was not detected at all"
+    for ln in inside:
+        assert "acc = acc + x" not in bodies[ln], "ALGORITHM prose is in scope"
+        assert "999" not in bodies[ln], "the prose latency line is in scope"
+    assert any("bit_order" in bodies[ln] for ln in inside)
