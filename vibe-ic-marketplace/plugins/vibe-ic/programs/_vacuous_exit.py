@@ -60,6 +60,21 @@ rc 3 IS NOT OURS
 rc 3 is ``PASS_WITH_WAIVERS`` (#651) and is honoured only together with a
 matching ``PASS_WITH_WAIVERS`` stdout sentinel. ``exit_code`` never returns 3
 and nothing here emits that sentinel, so the two conventions cannot collide.
+
+#521 ADDED THE MISSING SHARED SITE, AND WHY
+===========================================
+``gate_discloses_denominator_check`` recorded, with a measurement, that
+fourteen analog / SPICE gates answered a bare ``[PASS] <gate>`` over a project
+with nothing in it, and that "there is no shared site to fix": each one
+carried its OWN inline ``print(f"[{status}] <name>")``, so the convention was
+COPIED fifteen times rather than shared once. ``verdict_line`` is that site.
+It renders the same three-way conclusion ``exit_code`` routes, from the SAME
+two booleans, so a gate cannot print one verdict and exit with another — which
+is the drift that let a skip be announced in prose and credited as a pass.
+
+It still cannot INVENT a denominator: what each gate examined is per-gate work.
+What it CAN do, and does, is refuse to render a bare ``PASS`` for a result the
+gate itself marked skipped, and name the gate's own reason token when it does.
 """
 from __future__ import annotations
 
@@ -73,6 +88,8 @@ __all__ = [
     "VACUOUS_STDOUT_SENTINEL",
     "exit_code",
     "summary_is_skipped",
+    "skip_reason",
+    "verdict_line",
     "announce_vacuous",
 ]
 
@@ -102,6 +119,42 @@ def summary_is_skipped(summary: Any) -> bool:
     fail-safe direction for a helper that can only ever REMOVE a plain PASS.
     """
     return bool(isinstance(summary, dict) and summary.get("skipped"))
+
+
+def skip_reason(summary: Any, default: str = "unspecified") -> str:
+    """The gate's OWN machine-readable skip-reason token from its summary.
+
+    Same fail-safe shape as ``summary_is_skipped``: a missing / non-dict
+    summary, or a reason that is absent or empty, yields ``default`` rather
+    than raising, because this is only ever used to LABEL a conclusion the
+    gate already reached — it never decides one.
+    """
+    if isinstance(summary, dict):
+        reason = summary.get("reason")
+        if reason:
+            return str(reason)
+    return default
+
+
+def verdict_line(gate: str, passed: bool, skipped: bool, reason: str,
+                 pass_token: str = "PASS") -> str:
+    """The one-line verdict a gate prints in its human (non ``--json``) mode.
+
+    Derived from the SAME ``(passed, skipped)`` pair ``exit_code`` routes, so
+    the printed word and the exit code cannot disagree. FAIL beats VACUOUS
+    here for the same reason it does there.
+
+    ``pass_token`` exists for the gates that already distinguish ``PASS`` from
+    ``PASS_WITH_WAIVERS`` on this line; it applies ONLY to a genuine pass. A
+    waiver is a judgement about findings the gate made over artefacts it read,
+    so it can never describe a run that read nothing.
+    """
+    if not passed:
+        return f"[FAIL] {gate}"
+    if skipped:
+        return (f"[VACUOUS] {gate} — examined nothing (reason: {reason}); "
+                f"this is NOT a pass over the design")
+    return f"[{pass_token}] {gate}"
 
 
 def announce_vacuous(gate: str, reason: str,

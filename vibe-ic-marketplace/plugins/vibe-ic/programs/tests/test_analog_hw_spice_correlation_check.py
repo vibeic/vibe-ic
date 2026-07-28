@@ -25,7 +25,7 @@ def _load_report(tmp_path: Path) -> dict:
 
 def test_skip_no_analog_dir(tmp_path):
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS (rc 2): the gate examined nothing.
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True
@@ -36,7 +36,7 @@ def test_skip_no_hw_data(tmp_path):
     (tmp_path / "phase3" / "analog" / "ldo").mkdir(parents=True)
     (tmp_path / "phase3" / "analog" / "ldo" / "spec.json").write_text("{}")
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS (rc 2): the gate examined nothing.
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True

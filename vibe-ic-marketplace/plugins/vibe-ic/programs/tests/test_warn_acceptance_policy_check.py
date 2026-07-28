@@ -9,4 +9,7 @@ def _run(args, **kw): return subprocess.run([sys.executable, str(PROG)] + args, 
 def test_help():
     r = _run(["--help"]); assert r.returncode == 0
 def test_empty_project(tmp_path):
-    r = _run(["--project-dir", str(tmp_path)]); assert r.returncode == 0
+    # #521 — a project with no reports directory is VACUOUS (rc 2): not a
+    # single gate report was read, so "every WARN is addressed" is true only
+    # because no WARN was ever loaded.
+    r = _run(["--project-dir", str(tmp_path)]); assert r.returncode == 2

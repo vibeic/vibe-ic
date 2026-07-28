@@ -289,30 +289,21 @@ _PENDING_WAIVERS: Tuple[W.Waiver, ...] = (
             "verdict='VACUOUS_PASS'. Measured 2026-07-27 on v1.7.68."
         ),
     ),
-    W.Waiver(
-        step_id=30,
-        dim=DIM,
-        reason=(
-            "spice_correlation_check self-declares summary.skipped=true with "
-            "reason='no_spef' and exits 0 with no stdout at all, so step 30 "
-            "resolves to a plain PASS. The step's only other gate leg is an "
-            "any-of files_exist over SPICE decks (phase3/stage3/spice/*.sp ...), "
-            "a DIFFERENT artefact from the SPEF the checker skips on, so the "
-            "T4 hard-gate backstop that protects the structurally identical "
-            "A3/A7 skips does not apply here: a project that ships SPICE decks "
-            "but no extracted SPEF passes post-layout SPICE correlation without "
-            "any correlation having been measured."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml step 30 gate.all_of[0].files_exist "
-            "names the .sp decks, not the .spef. Reproduce: seed "
-            "P/phase3/stage3/spice/x.sp then flow_compliance_check P --flow-def "
-            "<one-step 30 yaml> -> status 'PASS' while "
-            "P/reports/phase2/gates/spice_correlation.json carries "
-            "{'summary': {'skipped': true, 'reason': 'no_spef'}}. Measured "
-            "2026-07-27 on v1.7.68."
-        ),
-    ),
+    # STEP 30's WAIVER IS DELETED, NOT AMENDED — #521 CLOSED IT.
+    #
+    # It read: "spice_correlation_check self-declares summary.skipped=true with
+    # reason='no_spef' and exits 0 with no stdout at all, so step 30 resolves
+    # to a plain PASS ... a project that ships SPICE decks but no extracted
+    # SPEF passes post-layout SPICE correlation without any correlation having
+    # been measured." (Measured 2026-07-27 on v1.7.68.)
+    #
+    # That is exactly the defect #521 fixed, arrived at independently: the
+    # gate now routes its own `summary["skipped"]` through
+    # `_vacuous_exit.exit_code` and answers rc 2, so the SAME reproduction the
+    # evidence field prescribed now resolves step 30 to VACUOUS_PASS. The
+    # waiver is strict-xfail, so leaving it here would XPASS and fail this
+    # module — which is how a waiver registry is supposed to notice that the
+    # hole it describes has been closed. Deleting the row is the disclosure.
     W.Waiver(
         step_id="DT2",
         dim=DIM,

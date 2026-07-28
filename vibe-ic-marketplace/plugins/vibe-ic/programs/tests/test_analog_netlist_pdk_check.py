@@ -146,7 +146,7 @@ def test_fail_no_model_include(tmp_path):
 
 def test_skip_no_sp(tmp_path):
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS (rc 2): the gate examined nothing.
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True

@@ -101,7 +101,7 @@ def test_fail_no_overlap(tmp_path):
 # -- SKIP: no analog dir → honest self-skip, exit 0 --
 def test_skip_no_analog(tmp_path):
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS (rc 2): the gate examined nothing.
     rep = _report(tmp_path)
     assert rep["summary"]["skipped"] is True
 

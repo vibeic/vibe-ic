@@ -29,7 +29,7 @@ PATH / SREF / AREF / BOX), so the gate of record for A8 is no longer weaker
 than its sibling on the identical file type. It sits AFTER the
 deterministic-stub short-circuit, so the PASS_WITH_STUB tier is untouched.
 
-Self-skips (exit 0 + INFO) when:
+Self-skips when:
   - No analog blocks detected (no analog_block_list.json or empty)
 
 Usage:
@@ -37,9 +37,13 @@ Usage:
     python3 analog_hardmacro_check.py <project_dir> --json reports/gates/hardmacro.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: at least one analog block was found and its hardmacro package
+        is complete
     1 = FAIL (missing or corrupt hardmacro files)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — this project declares no analog block,
+        so there is no hardmacro package to deliver. #521: this used to be
+        rc 0, which credited the gate in the plain PASS tier on 183 of the 200
+        tracked project roots. Also rc 2 for an IO / parse error.
 """
 from __future__ import annotations
 
@@ -51,6 +55,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
+import _vacuous_exit as _vx
 from _analog_stub_marker import is_stub_text  # v1.6.177 (#72 P1-6)
 # ONE parser for "does this GDS carry geometry", shared with the A5 gate so the
 # two cannot drift apart on the same file type. Guarded: a checker must never
@@ -376,14 +381,20 @@ def main(argv: list = None) -> int:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out)
 
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
     if not args.json:
-        status = waiver_status if result.passed else "FAIL"
-        print(f"[{status}] analog_hardmacro_check")
+        print(_vx.verdict_line("analog_hardmacro_check", result.passed,
+                               skipped, reason, pass_token=waiver_status))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

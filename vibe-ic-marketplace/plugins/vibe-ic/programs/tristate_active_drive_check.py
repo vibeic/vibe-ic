@@ -15,9 +15,13 @@ Usage:
     python3 tristate_active_drive_check.py <project_dir> --json [PATH]
 
 Exit codes:
-    0 = PASS (active-drive or skip)
+    0 = PASS: inout ports were found and audited, and the drive form is
+        acceptable
     1 = FAIL (pure open-drain on single-master protocol)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — no RTL, no inout port in it, or the
+        declared protocol makes open-drain correct so this gate holds no
+        opinion. #521: all four used to be rc 0, on 171 of the 200 tracked
+        project roots. Also rc 2 for an IO / parse error.
 """
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List
 import _path_layout as _pl
+import _vacuous_exit as _vx
 
 # Wave 36 (v0.119.68) — LIN is a single-master multi-slave protocol;
 # strictly speaking it does not belong in MULTI_MASTER_PROTOCOLS.
@@ -341,6 +346,13 @@ def main() -> int:
 
     result = run_audit(args.project_dir, l2_path=args.l2_json)
 
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    # The examined path builds a summary with COUNTS and no `skipped` key at
+    # all, which `summary_is_skipped` reads as "examined something" — the
+    # fail-safe direction, and why a real audit here still exits 0.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
     if args.json is not None:
         out = asdict(result)
         txt = json.dumps(out, indent=2)
@@ -350,8 +362,8 @@ def main() -> int:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
             Path(args.json).write_text(txt + "\n")
     else:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] tristate_active_drive_check")
+        print(_vx.verdict_line("tristate_active_drive_check", result.passed,
+                               skipped, reason))
         print(f"  inout ports: {result.summary.get('inout_ports', 0)}")
         print(f"  open-drain patterns: {result.summary.get('open_drain_patterns', 0)}")
         print(f"  active-drive patterns: {result.summary.get('active_drive_patterns', 0)}")
@@ -360,7 +372,9 @@ def main() -> int:
                 loc = f"{f.file}:{f.line}" if f.file else ""
                 print(f"  [{f.severity}] {f.rule}: {f.message} {loc}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

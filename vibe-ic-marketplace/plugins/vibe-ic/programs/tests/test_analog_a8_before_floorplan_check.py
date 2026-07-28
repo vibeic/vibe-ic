@@ -43,9 +43,14 @@ def _a8_lef(project: Path, block: str):
 # ── SKIP edges ───────────────────────────────────────────────────────────
 
 def test_skip_no_block_list(tmp_path):
-    """Pure-digital IC: no analog blocks → honest SKIP, exit 0."""
+    """Pure-digital IC: no analog blocks → VACUOUS (rc 2).
+
+    #521: this asserted rc 0, which is what put the skip in the plain PASS
+    tier of `flow_compliance_check`. The report assertions below are
+    unchanged — the gate's conclusion was always right; only the exit code
+    that carried it was wrong."""
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2
     rpt = _report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True
@@ -54,23 +59,23 @@ def test_skip_no_block_list(tmp_path):
 
 def test_skip_floorplan_not_run(tmp_path):
     """Block list present but floorplan has not run → constraint not yet
-    triggered → honest SKIP, NOT a vacuous PASS of the ordering rule."""
+    triggered → VACUOUS, NOT a vacuous PASS of the ordering rule (#521)."""
     _block_list(tmp_path, ["ldo_1v8", "por"])
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2
     rpt = _report(tmp_path)
     assert rpt["summary"]["skipped"] is True
     assert rpt["summary"]["reason"] == "floorplan_not_run"
 
 
 def test_garbage_block_list_skips(tmp_path):
-    """Unparseable block list is treated as no analog content → SKIP."""
+    """Unparseable block list is treated as no analog content → VACUOUS."""
     bl = tmp_path / "phase3" / "analog" / "analog_block_list.json"
     bl.parent.mkdir(parents=True, exist_ok=True)
     bl.write_text("{ this is not valid json ::::")
     _floorplan(tmp_path)
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2
     rpt = _report(tmp_path)
     assert rpt["summary"]["skipped"] is True
     assert rpt["summary"]["reason"] == "no_analog_blocks"

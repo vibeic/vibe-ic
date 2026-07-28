@@ -79,7 +79,7 @@ def test_fail_spec_violation(tmp_path):
 
 def test_skip_no_data(tmp_path):
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS, not a plain PASS
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["skipped"] is True

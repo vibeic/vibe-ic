@@ -252,13 +252,24 @@ def test_guard_stub_marker_buys_no_free_pass_when_a_gds_is_shipped(tmp_path):
 
 
 def test_guard_digital_only_project_is_vacuous_pass_on_both_gates(tmp_path):
-    """The completed spm x ihp-sg13g2 run ships no analog_block_list.json.
-    Neither gate may turn that red."""
+    """A completed digital-only run ships no analog_block_list.json. Neither
+    gate may turn that red.
+
+    #521 — this test's NAME already said "vacuous pass" while its assertion
+    said rc 0, which is the whole defect in one line: the tier was named in
+    prose and discarded in the exit code. `analog_hardmacro_check` now answers
+    rc 2 (the vacuous tier); `analog_lef_gds_outline_check` was already at
+    rc 0 with its own stdout disclosure and is untouched. Neither is red,
+    which is what this guard protects.
+    """
     project = tmp_path / "digital"
     (project / "phase2" / "stage1" / "rtl").mkdir(parents=True)
+    expected = {HARDMACRO: 2, OUTLINE: 0}
     for prog in (HARDMACRO, OUTLINE):
         cp = _run(prog, project)
-        assert cp.returncode == 0, f"{prog.name}: {cp.stdout}{cp.stderr}"
+        assert cp.returncode == expected[prog], (
+            f"{prog.name}: {cp.stdout}{cp.stderr}")
+        assert cp.returncode != 1, f"{prog.name} turned a digital project red"
 
 
 def test_guard_outline_check_self_skips_an_unpackaged_block(tmp_path):

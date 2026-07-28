@@ -157,7 +157,8 @@ class TestGracefulDegrade:
         proj = tmp_path / "empty_project"
         proj.mkdir()
         res = run_cli(proj)
-        assert res.returncode == 0
+        # #521 — a margin gate that read no margin is VACUOUS (rc 2).
+        assert res.returncode == 2
         result = mod.run_audit(proj)
         assert result.summary.get("skipped") is True
         assert result.summary.get("reason") == "no_analog_dir"

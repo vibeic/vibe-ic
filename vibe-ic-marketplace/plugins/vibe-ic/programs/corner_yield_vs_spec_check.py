@@ -34,7 +34,7 @@ band / limit magnitude.
 
 HONEST FAIL / SKIP (NO vacuous PASS):
   * No analog/ dir, or no block carries BOTH spec.json AND
-    corner_results.json → exit 0 + INFO skip (nothing to check).
+    corner_results.json → rc 2 VACUOUS (nothing to check).
   * spec.json present but corner_results.json missing for a block that
     HAS a spec.json → FAIL (you declared specs but produced no corner
     evidence) unless the whole project has no corner data at all.
@@ -51,9 +51,14 @@ Usage:
         --json reports/gates/corner_yield_vs_spec.json
 
 Exit codes:
-    0 = PASS (all blocks' corners satisfy spec.json) or self-skip
+    0 = PASS: at least one block's spec.json + corner_results.json pair was
+        re-derived and every corner satisfies its limits
     1 = FAIL (a corner violates a spec, or a spec block has no limits)
-    2 = IO / argument error
+    2 = VACUOUS: nothing was examined — no analog/ directory, or no block
+        carries BOTH spec.json and corner_results.json, so no yield was
+        re-derived against any limit. #521: both used to be rc 0, on 197 of
+        the 200 tracked project roots — the whole-gate counterpart of the
+        "NO vacuous PASS" rules above. Also rc 2 for an IO / argument error.
 """
 from __future__ import annotations
 
@@ -63,6 +68,8 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional
+
+import _vacuous_exit as _vx
 
 
 _STUB_KEY = "extraction_strategy"
@@ -365,16 +372,23 @@ def main(argv: Optional[list] = None) -> int:
 
     result = run_audit(args.project_dir)
     out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out)
     else:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] corner_yield_vs_spec_check")
+        print(_vx.verdict_line("corner_yield_vs_spec_check", result.passed,
+                               skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
-    return 0 if result.passed else 1
+
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

@@ -18,9 +18,13 @@ Usage:
     python3 otp_image_layer_consistency_check.py <project_dir> --l11-json L11.json
 
 Exit codes:
-    0 = PASS (all match, or skip)
+    0 = PASS: an L11 address map and RTL/hex initialisers were both found and
+        every declared address matches
     1 = FAIL (one or more mismatches)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — no L11_OTP_CONTENT.json (or it
+        declares no address), or no OTP/ROM initialiser in the RTL, so no
+        address was ever compared. #521: both used to be rc 0, on 200 of the
+        200 tracked project roots. Also rc 2 for an IO / parse error.
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional
 import _path_layout as _pl
+import _vacuous_exit as _vx
 
 MEM_INIT_RE = re.compile(
     r"mem\s*\[\s*(?:\d+'[hHdDbB])?\s*([0-9a-fA-F]+)\s*\]\s*"
@@ -286,6 +291,10 @@ def main() -> int:
 
     result = run_audit(args.project_dir, l11_path=args.l11_json)
 
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
     if args.json is not None:
         out = asdict(result)
         txt = json.dumps(out, indent=2)
@@ -295,8 +304,8 @@ def main() -> int:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
             Path(args.json).write_text(txt + "\n")
     else:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] otp_image_layer_consistency_check")
+        print(_vx.verdict_line("otp_image_layer_consistency_check",
+                               result.passed, skipped, reason))
         s = result.summary
         print(f"  L11 addresses: {s.get('l11_addresses', 0)}")
         print(f"  RTL inits found: {s.get('rtl_inits', 0)}")
@@ -308,7 +317,9 @@ def main() -> int:
                 loc = f"{f.file}:{f.line}" if f.file else ""
                 print(f"  [{f.severity}] {f.rule}: {f.message} {loc}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

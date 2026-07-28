@@ -520,32 +520,25 @@ WAIVERS: Tuple[Waiver, ...] = (
             "verdict='VACUOUS_PASS'. Measured 2026-07-27 on v1.7.68."
         ),
     ),
-    Waiver(
-        step_id="30",
-        dim=6,
-        reason=(
-            "spice_correlation_check self-declares summary.skipped=true with "
-            "reason='no_spef' and exits 0 with no stdout at all, so step 30 "
-            "resolves to a plain PASS. The step's only other gate leg is an "
-            "any-of files_exist over SPICE decks (phase3/stage3/spice/*.sp OR "
-            "*.spice OR sim_spice/*.sp) — a DIFFERENT artefact from the SPEF "
-            "the checker skips on — so the T4 hard-gate backstop that "
-            "legitimately protects the structurally identical A3 and A7 skips "
-            "does not apply here. A project that ships SPICE decks but no "
-            "extracted SPEF passes post-layout SPICE correlation with no "
-            "correlation having been measured."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml step 30 gate.all_of[0].files_exist "
-            "names the .sp decks, not the .spef. Reproduce: mkdir -p "
-            "P/phase3/stage3/spice && touch P/phase3/stage3/spice/x.sp && "
-            "python3 programs/flow_compliance_check.py P --flow-def <one-step "
-            "30 yaml> --json r.json -> status 'PASS' while "
-            "P/reports/phase2/gates/spice_correlation.json carries "
-            "{'summary': {'skipped': true, 'reason': 'no_spef'}}. Measured "
-            "2026-07-27 on v1.7.68."
-        ),
-    ),
+    # 30/dim-6 IS DELETED — #521 CLOSED IT, AND THE REGISTRY NOTICED.
+    #
+    # The waiver read: "spice_correlation_check self-declares
+    # summary.skipped=true with reason='no_spef' and exits 0 with no stdout at
+    # all, so step 30 resolves to a plain PASS ... A project that ships SPICE
+    # decks but no extracted SPEF passes post-layout SPICE correlation with no
+    # correlation having been measured." (Measured 2026-07-27 on v1.7.68.)
+    #
+    # #521 arrived at the same defect from the other end — a mixed-signal
+    # design on which seventeen gates reported PASS about analog content that
+    # was not there — and fixed it at the source: `spice_correlation_check`
+    # now routes its own `summary["skipped"]` through
+    # `_vacuous_exit.exit_code` and answers rc 2. Running the reproduction
+    # this evidence field prescribes now yields step 30 = VACUOUS_PASS.
+    #
+    # These waivers are strict xfails, so a closed hole does not quietly
+    # linger: leaving the row here XPASSes and FAILS the module. Deleting it
+    # is the disclosure, and it is the only edit that makes the registry a
+    # count of what is still open rather than of what once was.
     Waiver(
         step_id="DT2",
         dim=6,

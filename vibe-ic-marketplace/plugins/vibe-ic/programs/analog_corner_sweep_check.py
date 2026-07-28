@@ -9,7 +9,7 @@ For each analog/<block>/corner_results.json, checks:
   2. No missing results (results_found == total_corners)
   3. All spec_results entries pass (no status: "FAIL")
 
-Self-skips (exit 0 + INFO) when:
+Self-skips when:
   - No analog/*/corner_results.json files found
 
 Usage:
@@ -17,9 +17,13 @@ Usage:
     python3 analog_corner_sweep_check.py <project_dir> --json reports/gates/analog_corners.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: corner_results.json was read for at least one block and the
+        PVT coverage + spec results in it are sufficient
     1 = FAIL (insufficient corners or spec violation)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — no analog/ directory, or no
+        analog/*/corner_results.json at all. #521: both used to be rc 0, so a
+        PVT-coverage gate that read no corner was credited in the plain PASS
+        tier. Also rc 2 for an IO / parse error.
 """
 from __future__ import annotations
 
@@ -30,6 +34,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 import _path_layout as _pl
+import _vacuous_exit as _vx
 from _analog_stub_marker import is_stub_json  # v1.6.177 (#72 P1-6)
 
 MIN_CORNERS = 9
@@ -319,14 +324,20 @@ def main(argv: list = None) -> int:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out)
 
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
     if not args.json:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] analog_corner_sweep_check")
+        print(_vx.verdict_line("analog_corner_sweep_check", result.passed,
+                               skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

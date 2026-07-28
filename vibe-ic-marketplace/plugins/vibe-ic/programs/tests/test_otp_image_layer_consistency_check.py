@@ -92,12 +92,12 @@ def test_fail_missing_address(tmp_path):
 
 
 def test_skip_no_l11(tmp_path):
-    """No L11 JSON → PASS (skip)."""
+    """No L11 JSON -> VACUOUS (#521)."""
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True, exist_ok=True)
     (rtl / "otp_ctrl.v").write_text("module otp_ctrl; endmodule\n")
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS (rc 2): the gate examined nothing.
     j = json.loads(r.stdout)
     assert j["passed"] is True
     rules = [f["rule"] for f in j["findings"]]
@@ -105,7 +105,7 @@ def test_skip_no_l11(tmp_path):
 
 
 def test_skip_no_otp(tmp_path):
-    """L11 exists but no OTP module in RTL → PASS (skip)."""
+    """L11 exists but no OTP module in RTL -> VACUOUS (#521)."""
     _make_l11(tmp_path / "phase1" / "generated_docs", [
         {"address": "0x00", "value": "0x10"},
     ])
@@ -113,7 +113,7 @@ def test_skip_no_otp(tmp_path):
     rtl.mkdir(parents=True, exist_ok=True)
     (rtl / "core.v").write_text("module core; endmodule\n")
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2      # #521 — VACUOUS (rc 2): the gate examined nothing.
     j = json.loads(r.stdout)
     assert j["passed"] is True
     rules = [f["rule"] for f in j["findings"]]

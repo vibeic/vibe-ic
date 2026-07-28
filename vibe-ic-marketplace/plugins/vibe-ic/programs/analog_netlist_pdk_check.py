@@ -13,17 +13,20 @@ Validates that analog SPICE netlists follow correct PDK conventions:
      known-model set is sourced from programs/pdk_registry.json (per-PDK
      `device_models`), NOT a hardcoded literal in this file.
 
-Self-skips (exit 0 + INFO) when:
-  - No .sp files under analog/
+Self-skips when:
+  - No analog/ directory, or no .sp files under it
 
 Usage:
     python3 analog_netlist_pdk_check.py <project_dir>
     python3 analog_netlist_pdk_check.py <project_dir> --json reports/gates/analog_pdk.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: at least one .sp deck was read and its PDK conventions hold
     1 = FAIL (PDK convention violation)
-    2 = IO / parse error
+    2 = VACUOUS: nothing was examined — no analog/ directory, or no .sp file
+        in it, so no model include and no body connection was ever inspected.
+        #521: both used to be rc 0, on 197 of the 200 tracked project roots.
+        Also rc 2 for an IO / parse error.
 """
 from __future__ import annotations
 
@@ -36,6 +39,7 @@ from pathlib import Path
 from typing import List, Optional, Set, Tuple
 import _path_layout as _pl
 import _waiver_entries as _we
+import _vacuous_exit as _vx
 from _analog_stub_marker import is_stub_text  # v1.6.177 (#72 P1-6)
 
 
@@ -642,14 +646,20 @@ def main(argv: list = None) -> int:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out)
 
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
     if not args.json:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] analog_netlist_pdk_check")
+        print(_vx.verdict_line("analog_netlist_pdk_check", result.passed,
+                               skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

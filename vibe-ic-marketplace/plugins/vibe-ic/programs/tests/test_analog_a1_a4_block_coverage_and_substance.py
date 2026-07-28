@@ -584,10 +584,15 @@ def test_guard_fail_outranks_incomplete(tmp_path: Path) -> None:
 
 
 def test_guard_pdk_check_no_analog_dir_still_skips(tmp_path: Path) -> None:
-    """A pure-digital project keeps its cost-free skip on analog_netlist_pdk."""
+    """A pure-digital project keeps its cost-free skip on analog_netlist_pdk.
+
+    #521 — the skip is unchanged; what changed is that it is now REPORTED as
+    one. rc 2 is the vacuous tier, not a failure: this guard exists to prove
+    a digital project is never turned red, and rc 2 does not turn it red.
+    """
     (tmp_path / "phase2/stage2").mkdir(parents=True, exist_ok=True)
     r = _run(PDK, tmp_path)
-    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert r.returncode == 2, (r.stdout, r.stderr)
     rpt = _report(tmp_path)
     assert rpt["summary"] == {"skipped": True, "reason": "no_analog_dir"}
     assert rpt["passed"] is True
@@ -595,10 +600,10 @@ def test_guard_pdk_check_no_analog_dir_still_skips(tmp_path: Path) -> None:
 
 def test_guard_pdk_check_analog_dir_without_decks_still_skips(
         tmp_path: Path) -> None:
-    """An analog dir carrying no `.sp` keeps SKIP_NO_SP_FILES."""
+    """An analog dir carrying no `.sp` keeps SKIP_NO_SP_FILES (#521: rc 2)."""
     (tmp_path / "phase3/analog").mkdir(parents=True, exist_ok=True)
     r = _run(PDK, tmp_path)
-    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert r.returncode == 2, (r.stdout, r.stderr)
     rpt = _report(tmp_path)
     assert rpt["summary"] == {"skipped": True, "reason": "no_sp_files"}
 

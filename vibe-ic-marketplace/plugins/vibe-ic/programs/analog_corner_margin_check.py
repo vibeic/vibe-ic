@@ -43,9 +43,14 @@ Usage:
         --json reports/gates/analog_corner_margin.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS: at least one block's A4 corner artefact was read and every
+        corner it declares meets the floor
     1 = FAIL (insufficient corners or a corner below the margin floor)
-    2 = IO / argument error
+    2 = VACUOUS: nothing was examined — no analog/ directory, or no block
+        carries a readable A4 corner artefact (a deterministic stub reads as
+        no data). #521: both used to be rc 0, so a margin gate that read no
+        margin was credited in the plain PASS tier. Also rc 2 for an IO /
+        argument error.
 """
 from __future__ import annotations
 
@@ -57,6 +62,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import _path_layout as _pl
+import _vacuous_exit as _vx
 from _analog_stub_marker import is_stub_json
 
 # Thresholds — verbatim from skills/analog-output-verify/SKILL.md (A4):
@@ -340,14 +346,20 @@ def main(argv: Optional[list] = None) -> int:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out)
 
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(result.summary)
+    reason = _vx.skip_reason(result.summary)
+
     if not args.json:
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{status}] analog_corner_margin_check")
+        print(_vx.verdict_line("analog_corner_margin_check", result.passed,
+                               skipped, reason))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if result.passed else 1
+    if result.passed and skipped:
+        _vx.announce_vacuous(result.program, reason)
+    return _vx.exit_code(result.passed, skipped)
 
 
 if __name__ == "__main__":

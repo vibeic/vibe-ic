@@ -263,37 +263,29 @@ def discloses_a_reason(text: str) -> bool:
 # ---------------------------------------------------------------------------
 _MEASURED_ON = "2026-07-28"
 
+# #521 CLOSED FOURTEEN OF THE FIFTEEN, AND THE MECHANISM ABOVE IS WHAT
+# REQUIRED THE DELETION. Every analog / SPICE entry that was frozen here on
+# 2026-07-28 has been removed, because each of those gates now routes its own
+# `summary["skipped"]` through `_vacuous_exit.exit_code` and answers rc 2 —
+# not rc 0 — over a project with nothing in it. `audit_project_gates` only
+# collects `silent` from rc-0 results, so leaving the entries in place would
+# have raised fourteen STALE_INVENTORY_ENTRY findings. That is the ratchet
+# working exactly as its docstring promises: the list got SHORTER, by a
+# visible edit, and it could not have stayed the same.
+#
+# The prediction in the note above — "a batch rewrite of thirteen gates is
+# thirteen unmeasured edits riding on one measurement" — was the right caution
+# and is answered by measurement rather than waived: the seventeen gates of
+# #521 were swept over 200 tracked project roots before and after, and the
+# only tier movement is PASS -> VACUOUS.
+#
+# `benchmark_clean_room_check` is untouched and REMAINS. Its defect is a
+# different one (a sentence that states the finding rather than the
+# population, while the gate genuinely exits 0), so #521's fix does not reach
+# it and it must keep being counted.
 _EMPTY_PROJECT_SILENT_PASS: Dict[str, Dict[str, str]] = {
     name: {"measured": _MEASURED_ON, "reason": reason}
     for name, reason in (
-        ("analog_block_coverage_check",
-         "entire output is `[PASS] analog_block_coverage_check`"),
-        ("analog_corner_margin_check",
-         "entire output is `[PASS] analog_corner_margin_check`"),
-        ("analog_corner_sweep_check",
-         "entire output is `[PASS] analog_corner_sweep_check`"),
-        ("analog_digital_interface_check",
-         "entire output is `[PASS] analog_digital_interface_check`"),
-        ("analog_hardmacro_check",
-         "entire output is `[PASS] analog_hardmacro_check`"),
-        ("analog_hardmacro_pinname_consistency_check",
-         "entire output is `[PASS] analog_hardmacro_pinname_consistency_check`"),
-        ("analog_hw_spice_correlation_check",
-         "entire output is `[PASS] analog_hw_spice_correlation_check`"),
-        ("analog_liberty_nonzero_delay_check",
-         "entire output is `[PASS] analog_liberty_nonzero_delay_check`"),
-        ("analog_netlist_connectivity_check",
-         "entire output is `[PASS] analog_netlist_connectivity_check`"),
-        ("analog_netlist_pdk_check",
-         "entire output is `[PASS] analog_netlist_pdk_check`"),
-        ("analog_pre_vs_post_layout_check",
-         "entire output is `[PASS] analog_pre_vs_post_layout_check`"),
-        ("analog_tb_supply_pdk_check",
-         "entire output is `[PASS] analog_tb_supply_pdk_check`"),
-        ("spice_correlation_check",
-         "entire output is `[PASS] spice_correlation_check`"),
-        ("corner_yield_vs_spec_check",
-         "entire output is `[PASS] corner_yield_vs_spec_check`"),
         ("benchmark_clean_room_check",
          "`PASS: clean-room run dir (no inherited samples / scores)` states "
          "the finding, not the population — equally true over a directory "

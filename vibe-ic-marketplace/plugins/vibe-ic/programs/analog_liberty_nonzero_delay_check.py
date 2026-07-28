@@ -29,7 +29,7 @@ STA is meaningless. That is exactly the stub Liberty emitted at the
 A7 stub tier (`library(ldo_stub) { cell(ldo) { area : 10000 ; } }`).
 
 Honesty rules (NO vacuous PASS):
-  * No analog blocks                 -> SKIP (exit 0, INFO).
+  * No analog blocks                 -> VACUOUS (rc 2).
   * .lib missing for a spec'd block  -> FAIL (cannot sign off STA).
   * .lib present but unparseable     -> FAIL.
   * .lib has a cell but NO timing-bearing attribute at all -> FAIL
@@ -41,9 +41,14 @@ Usage:
     python3 analog_liberty_nonzero_delay_check.py <project_dir> --json out.json
 
 Exit codes:
-    0 = PASS (every block has a non-degenerate Liberty) or SKIP
+    0 = PASS: at least one analog block was found and every Liberty is
+        non-degenerate
     1 = FAIL (>=1 zero-delay / stub / missing Liberty)
-    2 = IO / argument error
+    2 = VACUOUS: nothing was examined — this project declares no analog block,
+        so there is no Liberty to prove non-degenerate. #521: the header
+        already said "Honesty rules (NO vacuous PASS)" and this branch was
+        exactly that, exiting 0 on 197 of the 200 tracked project roots. Also
+        rc 2 for an IO / argument error.
 """
 from __future__ import annotations
 
@@ -59,6 +64,8 @@ try:
     import _path_layout as _pl
 except ImportError:  # pragma: no cover
     _pl = None
+
+import _vacuous_exit as _vx
 
 
 # Timing-bearing scalar attributes (single `attr : value ;`).
@@ -284,17 +291,23 @@ def main(argv: List[str] = None) -> int:
     res = run_audit(args.project_dir)
     out = json.dumps(asdict(res), indent=2, ensure_ascii=False)
 
+    # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
+    skipped = _vx.summary_is_skipped(res.summary)
+    reason = _vx.skip_reason(res.summary)
+
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out)
     else:
-        status = "PASS" if res.passed else "FAIL"
-        print(f"[{status}] analog_liberty_nonzero_delay_check")
+        print(_vx.verdict_line("analog_liberty_nonzero_delay_check",
+                               res.passed, skipped, reason))
         for f in res.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
-    return 0 if res.passed else 1
+    if res.passed and skipped:
+        _vx.announce_vacuous(res.program, reason)
+    return _vx.exit_code(res.passed, skipped)
 
 
 if __name__ == "__main__":
