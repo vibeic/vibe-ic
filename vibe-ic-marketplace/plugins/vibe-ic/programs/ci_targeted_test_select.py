@@ -30,6 +30,13 @@ plugin-relative), the selected subset is the UNION of:
 
   3. ALWAYS the curated doctrine SMOKE set (governance + core gates).
 
+  4. For each changed SHARED TEST-HELPER module — any ``*.py`` under
+     ``programs/tests/`` that is NOT a ``test_*.py`` file, e.g.
+     ``programs/tests/matrix_63x8/waivers.py`` or
+     ``programs/tests/_hostpaths.py`` — every test file that IMPORTS it,
+     derived from the tests' own ``import`` statements rather than from a
+     hand-written list. See ``_helper_consumers`` for the exact edges.
+
 Output: plugin-root-relative test paths, one per line, deduped and sorted, to
 stdout. The list is NEVER empty — the smoke set is the floor. If git is
 unavailable (no history / not a repo), only the smoke set is emitted.
@@ -37,6 +44,96 @@ unavailable (no history / not a repo), only the smoke set is emitted.
 This is deliberately a PROGRAM, not workflow YAML: the mapping is testable and
 lives next to the tests it selects. See
 ``programs/tests/test_ci_targeted_test_select.py``.
+
+SHARED TEST-HELPER MODULES  (vibe-ic#534, measured 2026-07-28)
+==============================================================
+Rules 1 and 2 between them see only ``programs/<stem>.py`` / ``benchmark/
+<stem>.py`` and ``programs/tests/test_*.py``. A third population exists and was
+invisible to both: SHARED code that lives under ``programs/tests/`` but is not
+itself a test — ``matrix_63x8/{waivers,cells,flowref}.py``, ``_hostpaths.py``,
+``_plugin_tree.py``, ``_source_pin.py``, ``_gdsii.py``, ``matrix_d4_probe.py``,
+``matrix_d7_artifact_graph.py``. Measured on this tree BEFORE rule 4, with the
+real CLI (``--base HEAD``, one-line edit to ``matrix_63x8/waivers.py``): the
+selector saw the changed path (``1 changed path(s)``) and emitted 15 files —
+exactly the smoke floor, 0 of the 11 test files that import it.
+
+That was not an ordinary coverage gap. ``matrix_63x8/waivers.py`` is the CENTRAL
+waiver registry that vibe-ic#527 (v1.7.86) and #530 (v1.7.88) deliberately
+consolidated, moving waiver text out of per-dimension mirrors so one accepted
+gap has exactly one text. Consolidation is what makes the hole expensive: a
+single edit there can flip the verdict of a cell in any of the eight dimensions,
+and a targeted CI that runs none of them is green for no reason. Both #527's and
+#530's authors were told BY HAND to run all the matrix files, which is the
+workaround rule 4 removes.
+
+Rule 4 is DERIVED, not listed. A hand-list of the consumer filenames would be a
+second registry beside the first, free to drift from it — the exact defect #527
+and #530 spent two versions removing, and it would have been wrong on arrival:
+the report that opened #534 said ten consumers; the tree has ELEVEN, the
+eleventh being ``test_matrix_waiver_single_source.py``, which #530 itself added.
+So the edges come from the tests' own ``import`` statements, parsed with ``ast``:
+
+  * a helper's importable name is derived from its path relative to
+    ``programs/tests/`` (``matrix_63x8/waivers.py`` -> ``matrix_63x8.waivers``,
+    ``matrix_63x8/__init__.py`` -> ``matrix_63x8``), plus its bare basename when
+    that name is unambiguous — this tree really does bare-import a nested helper
+    after an inline ``sys.path.insert`` (``from synthetic_protocol_blobs import
+    …``), so path-dotted names alone would miss it;
+  * importing ``a.b`` imports ``a``, so ancestor packages count as imported.
+    This is what couples the whole ``matrix_63x8`` package: a test that reads
+    only ``cells`` is still selected when ``waivers`` changes, because both
+    resolve through the package whose contents moved. For this tree the
+    package-ancestor edge changes nothing (all 11 consumers import ``waivers``
+    directly); it is the margin that keeps rule 4 correct for the NEXT dimension
+    module, which is the failure mode a hand-list has;
+  * helper -> helper edges are followed transitively, so a change to
+    ``flowref.py`` reaches the tests that import ``matrix_d4_probe``.
+
+Cost is paid only when a helper actually changes: the index is built lazily, and
+the ``ast`` parse runs only on test files whose text contains a target's
+top-level name (a sound superset filter — no import form of ``a.b`` can omit the
+literal ``a``). Measured on this tree, 1986 test files:
+
+    changed helper                      tests selected (excl. 15 smoke)   wall
+    matrix_63x8/waivers.py                 11                             ~1 s
+    matrix_63x8/cells.py                   11
+    matrix_63x8/flowref.py                 11
+    matrix_d4_probe.py                      1
+    matrix_d7_artifact_graph.py             1
+    _hostpaths.py                         116
+    _plugin_tree.py                        24
+    _source_pin.py                          8
+    _gdsii.py                               7
+
+KNOWN RESIDUALS, measured 2026-07-28 while closing #534, deliberately NOT fixed
+here. Recorded so the next reader inherits the numbers instead of re-deriving
+them:
+
+  * ``conftest.py`` — pytest injects it; no test file names it in an import, so
+    the derived rule correctly finds zero consumers, while a change to it really
+    does affect all 1986. Selecting the whole tree is the same non-answer as
+    selecting none of it, so it stays out until someone measures a budget for it.
+  * NON-``.py`` fixtures — 33 files under ``programs/tests/fixtures/`` (23) and
+    ``phase1_fixtures/`` (11), named by 15 test files. Consumed by PATH literal,
+    not by import, and the selector skips non-``.py`` changed paths before any
+    rule runs, so a fixture edit selects the smoke floor. Reaching them needs a
+    path-literal scan — a different rule from this one, keyed on strings rather
+    than on the import graph.
+  * SHARED HELPERS THAT LIVE IN ``programs/``, not under ``programs/tests/``.
+    ``_waiver_entries.py`` and ``_evidence_independence.py`` are the two named
+    in #534's follow-up question; both are genuinely unreachable today, but by
+    the #452 orphan mechanism below, NOT by the rule-4 hole: rule 1 does see
+    them as source modules and finds no ``test__waiver_entries*.py`` to own.
+    Measured over the 38 leading-underscore modules under ``programs/`` /
+    ``benchmark/`` — the repo's convention for "shared helper, no standalone
+    gate", hence no eponymous test — 144 importer edges are unreachable today,
+    worst single module ``_path_layout`` at 43, mean 3.8. That is far cheaper
+    than ``--mode reference`` (which keys on any identifier MENTION: 198 files
+    for ``phase3_one_shot_runner``), so an import-derived rule 1b is tractable.
+    It is left out because it changes the DEFAULT per-landing cost for many
+    unrelated diffs, and this module already exposes that trade-off as an
+    owner-facing ``--mode`` frontier with its own measured table. Widening the
+    default is that owner's call, not a side effect of #534.
 
 WHAT THE OWNERSHIP RULE CANNOT REACH  (vibe-ic#452, measured 2026-07-27)
 =======================================================================
@@ -109,6 +206,7 @@ an x.y.0 MILESTONE, whose full-suite job lives in a workflow that fires only on
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
@@ -290,6 +388,200 @@ def _build_reference_index(
     return index
 
 
+# ---------------------------------------------------------------------------
+# Rule 4 — shared TEST-HELPER modules (vibe-ic#534). Everything below is built
+# LAZILY: nothing here runs unless a changed path is a helper module, so the
+# common case (a source or test file changed) pays exactly nothing.
+# ---------------------------------------------------------------------------
+
+
+def _is_test_helper(rel: str) -> bool:
+    """Is ``rel`` (plugin-relative) a shared helper module under the tests dir?
+
+    A ``*.py`` file under ``programs/tests/`` — at any depth — whose basename is
+    not ``test_*.py``. That is exactly the population rules 1 and 2 cannot see:
+    rule 1 only looks at top-level ``programs/`` and ``benchmark/``, rule 2 only
+    at ``test_*.py``.
+    """
+    if not rel.endswith(".py") or not rel.startswith(_TESTS_REL + "/"):
+        return False
+    return not Path(rel).name.startswith("test_")
+
+
+def _with_ancestors(dotted: str) -> set[str]:
+    """``a.b.c`` -> ``{a, a.b, a.b.c}``.
+
+    Importing ``a.b.c`` executes ``a`` and ``a.b`` too, so a consumer of any of
+    them is coupled to the package the changed module lives in.
+    """
+    parts = dotted.split(".")
+    return {".".join(parts[: i + 1]) for i in range(len(parts))}
+
+
+def _helper_module_names(plugin_root: Path, source_stems: set[str]) -> dict[str, set[str]]:
+    """Map plugin-rel helper path -> every name it can be imported by.
+
+    Two naming schemes are emitted because the tree really uses both:
+
+    * the path-dotted name relative to ``programs/tests/`` (which conftest puts
+      on ``sys.path``): ``matrix_63x8/waivers.py`` -> ``matrix_63x8.waivers``,
+      and ``<pkg>/__init__.py`` -> ``<pkg>``;
+    * the bare basename, for nested helpers imported by bare name after an
+      inline ``sys.path.insert`` (``from synthetic_protocol_blobs import …``).
+      Emitted ONLY when unambiguous: dropped if two helpers share the basename,
+      or if it collides with a top-level source stem (``import waivers_schema_
+      check`` must stay a rule-1 source module, never a tests-dir helper).
+    """
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return {}
+
+    paths: list[Path] = []
+    for py in tests_dir.rglob("*.py"):
+        if py.name.startswith("test_") or not py.is_file():
+            continue
+        paths.append(py)
+
+    # Count basenames first so an ambiguous bare alias can be withheld.
+    base_counts: dict[str, int] = {}
+    for py in paths:
+        stem = py.parent.name if py.name == "__init__.py" else py.stem
+        base_counts[stem] = base_counts.get(stem, 0) + 1
+
+    out: dict[str, set[str]] = {}
+    for py in paths:
+        rel_in_tests = py.relative_to(tests_dir)
+        parts = list(rel_in_tests.parts)
+        if parts[-1] == "__init__.py":
+            parts = parts[:-1]
+            if not parts:          # programs/tests/__init__.py — not a package
+                continue
+        else:
+            parts[-1] = rel_in_tests.stem
+        dotted = ".".join(parts)
+        names = {dotted}
+        bare = parts[-1]
+        if base_counts.get(bare, 0) == 1 and bare not in source_stems:
+            names.add(bare)
+        out[f"{_TESTS_REL}/{py.relative_to(tests_dir).as_posix()}"] = names
+    return out
+
+
+def _imported_module_names(text: str, own_package: str | None) -> set[str] | None:
+    """Every module name imported by ``text``, ancestors included.
+
+    ``own_package`` is the dotted package the file lives in (``matrix_63x8`` for
+    ``matrix_63x8/cells.py``, ``None`` at the tests-dir top level) and resolves
+    relative imports: inside ``matrix_63x8``, ``from . import flowref`` and
+    ``from .flowref import StepId`` both yield ``matrix_63x8.flowref``.
+
+    Returns ``None`` when the file cannot be parsed — a selector must not go
+    quiet because one file is unreadable or syntactically broken; the caller
+    treats ``None`` as "unknown", not as "imports nothing".
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                found |= _with_ancestors(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                # Relative: climb `level - 1` packages up from own_package.
+                if own_package is None:
+                    continue
+                base_parts = own_package.split(".")
+                up = node.level - 1
+                base_parts = base_parts[: len(base_parts) - up] if up else base_parts
+                if not base_parts:
+                    continue
+                base = ".".join(base_parts)
+                mod = f"{base}.{node.module}" if node.module else base
+            else:
+                if not node.module:
+                    continue
+                mod = node.module
+            found |= _with_ancestors(mod)
+            # `from a.b import c` also binds `a.b.c` when c is a submodule.
+            for alias in node.names:
+                if alias.name != "*":
+                    found.add(f"{mod}.{alias.name}")
+    return found
+
+
+def _own_package(rel: str) -> str | None:
+    """Dotted package of a plugin-rel tests file, or None at the tests root."""
+    parts = Path(rel[len(_TESTS_REL) + 1:]).parts[:-1]
+    return ".".join(parts) if parts else None
+
+
+def _helper_consumers(plugin_root: Path, changed_helpers: list[str],
+                      source_stems: set[str]) -> set[str]:
+    """Plugin-rel test files that import any of ``changed_helpers``.
+
+    Three edge kinds, all derived from ``import`` statements — never listed:
+
+      1. direct     — a test imports the changed module by either of its names;
+      2. package    — a test imports an ANCESTOR package of the changed module
+                      (``from matrix_63x8 import cells`` when ``waivers.py``
+                      changed), because both resolve through the package whose
+                      contents moved;
+      3. transitive — helper -> helper -> test (a change to ``flowref.py``
+                      reaches the tests that import ``matrix_d4_probe``).
+    """
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return set()
+    helpers = _helper_module_names(plugin_root, source_stems)
+
+    targets: set[str] = set()
+    for rel in changed_helpers:
+        for name in helpers.get(rel, set()):
+            targets |= _with_ancestors(name)
+    if not targets:
+        return set()
+
+    # (3) Close over helper -> helper imports until nothing new is reached.
+    helper_imports: dict[str, set[str]] = {}
+    for rel in helpers:
+        try:
+            txt = (plugin_root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        got = _imported_module_names(txt, _own_package(rel))
+        helper_imports[rel] = set() if got is None else got
+    for _ in range(len(helpers) + 1):
+        grew = False
+        for rel, imported in helper_imports.items():
+            names = helpers.get(rel, set())
+            if names <= targets or not (imported & targets):
+                continue
+            targets |= {a for n in names for a in _with_ancestors(n)}
+            grew = True
+        if not grew:
+            break
+
+    # Sound superset pre-filter: no import form of `a.b` can omit the literal
+    # `a`, so a file without any target's top-level name cannot import one.
+    tops = {t.split(".")[0] for t in targets}
+    selected: set[str] = set()
+    for tf in tests_dir.glob("test_*.py"):
+        try:
+            txt = tf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not any(top in txt for top in tops):
+            continue
+        rel = f"{_TESTS_REL}/{tf.name}"
+        imported = _imported_module_names(txt, None)
+        if imported is None or imported & targets:
+            selected.add(rel)
+    return selected
+
+
 def _smoke_set(plugin_root: Path) -> set[str]:
     """The curated smoke set, filtered to basenames that actually exist."""
     out: set[str] = set()
@@ -310,8 +602,14 @@ def select_tests(
     """Pure selector: changed files -> sorted plugin-rel test paths.
 
     Always includes the smoke set (the floor); adds owned tests for changed
-    source modules and directly-changed test files. Never returns an empty list
-    (smoke floor), assuming at least one smoke basename exists on disk.
+    source modules, directly-changed test files, and — for a changed SHARED
+    TEST-HELPER module under ``programs/tests/`` — the tests that import it
+    (rule 4, vibe-ic#534). Never returns an empty list (smoke floor), assuming
+    at least one smoke basename exists on disk.
+
+    Rule 4 applies in EVERY mode: it is not a coverage/cost trade-off like the
+    ``--mode`` frontier below but a population the other rules never see at all,
+    and it costs nothing unless a helper is in the diff.
 
     ``mode`` is OPT-IN and defaults to the shipped behaviour:
 
@@ -337,6 +635,7 @@ def select_tests(
         ref_index = _build_reference_index(plugin_root, source_stems)
 
     selected: set[str] = set(_smoke_set(plugin_root))
+    changed_helpers: list[str] = []
 
     for raw in changed_paths:
         rel = _to_plugin_rel(raw, plugin_prefix)
@@ -348,6 +647,10 @@ def select_tests(
             if (plugin_root / rel).is_file():
                 selected.add(rel)
             continue
+        # (4) a changed shared test-helper module -> the tests that import it.
+        if _is_test_helper(rel):
+            changed_helpers.append(rel)
+            continue
         # (1) a changed top-level source module -> its owned tests.
         if rp.parent.as_posix() in _SOURCE_DIRS and not rp.name.startswith("test_"):
             selected |= index.get(rp.stem, set())
@@ -356,6 +659,11 @@ def select_tests(
                 refs = ref_index.get(rp.stem, set())
                 if mode == MODE_REFERENCE or len(refs) <= ref_max_tests:
                     selected |= refs
+
+    # (4) Built LAZILY — only when a shared test-helper module actually changed,
+    # so the common case never reads the tree.
+    if changed_helpers:
+        selected |= _helper_consumers(plugin_root, changed_helpers, source_stems)
 
     # Only emit tests that exist on disk (robust against a stale index entry).
     return sorted(t for t in selected if (plugin_root / t).is_file())

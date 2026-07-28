@@ -7,10 +7,13 @@ Feeds SYNTHETIC changed-file lists (no real git) and asserts:
   * the smoke set is ALWAYS present (the coverage floor),
   * longest-owning-stem prevents cross-module over-selection,
   * the CLI --base path works with git monkeypatched,
-  * git-unavailable falls back to the smoke set (never empty).
+  * git-unavailable falls back to the smoke set (never empty),
+  * a changed SHARED TEST-HELPER module under programs/tests/ selects the tests
+    that import it, without selecting the tree (rule 4, vibe-ic#534).
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -308,3 +311,272 @@ def test_cli_mode_flag_plumbs_through(monkeypatch, capsys):
     assert sel.main(["--base", "deadbeef", "--mode", "reference"]) == 0
     ref = {l for l in capsys.readouterr().out.splitlines() if l.strip()}
     assert default < ref, "--mode reference must widen the CLI selection"
+
+
+# ---- rule 4: shared TEST-HELPER modules (vibe-ic#534) ----------------------
+#
+# The gap these pin: `programs/tests/matrix_63x8/waivers.py` is the single
+# central waiver registry that #527 (v1.7.86) and #530 (v1.7.88) consolidated
+# — one accepted gap, one text — and BEFORE rule 4 a change to it selected
+# nothing but the smoke floor, so the eight dimension modules whose verdicts it
+# can flip never ran. Both #527's and #530's authors were told BY HAND to run
+# the matrix files instead.
+#
+# These tests deliberately do NOT hard-code the consumer filenames. A list here
+# would be a second registry beside the first, free to drift from it — the exact
+# defect #527/#530 removed — and it would already have been wrong: the report
+# that opened #534 said ten consumers, the tree has eleven. The expected set is
+# re-derived from the tests' own import lines by a regex that shares no code
+# with the selector's `ast` implementation, so the two can disagree.
+
+_MATRIX_PKG = "matrix_63x8"
+_REGISTRY_REL = f"{TESTS_REL}/{_MATRIX_PKG}/waivers.py"
+_IMPORTS_MATRIX = re.compile(rf"^[ \t]*(?:from|import)[ \t]+{_MATRIX_PKG}\b", re.M)
+
+
+def _matrix_consumers_by_independent_scan() -> set[str]:
+    """Every test file whose SOURCE imports the matrix package.
+
+    Independent oracle: a line-anchored regex over the import statements, not
+    the selector's ast walk. Line-anchored so a mention inside a string literal
+    (`"from _hostpaths import require_repo\\n"`, a real pattern in this tree)
+    is not counted as an import.
+    """
+    out = set()
+    for tf in (PLUGIN_ROOT / TESTS_REL).glob("test_*.py"):
+        if _IMPORTS_MATRIX.search(tf.read_text(encoding="utf-8", errors="replace")):
+            out.add(f"{TESTS_REL}/{tf.name}")
+    return out
+
+
+def test_changed_waiver_registry_selects_every_test_that_reads_it():
+    """A change to the central registry must select ALL of its consumers.
+
+    Fails if the helper mapping is removed: without rule 4 the selection is
+    exactly the smoke floor and every consumer is missing.
+    """
+    assert (PLUGIN_ROOT / _REGISTRY_REL).is_file(), (
+        f"{_REGISTRY_REL} moved — re-point this guard, do not delete it")
+    expected = _matrix_consumers_by_independent_scan()
+    assert len(expected) >= 8, (
+        f"independent scan found only {len(expected)} consumers of "
+        f"{_MATRIX_PKG}; the matrix has eight dimensions plus its meta-tests, "
+        f"so the scan itself is broken — fix the oracle before trusting a PASS")
+
+    out = set(sel.select_tests([_REGISTRY_REL], PLUGIN_ROOT, plugin_prefix=""))
+    missing = sorted(expected - out)
+    assert not missing, (
+        f"changing the central waiver registry {_REGISTRY_REL} selected none of "
+        f"{missing} — those tests resolve their verdicts against it, so a green "
+        f"targeted CI on such a change means nothing (vibe-ic#534)")
+    _smoke_present(out)
+
+
+def test_waiver_registry_change_does_not_select_the_whole_tree():
+    """Both directions: catching the consumers must not mean catching everyone.
+
+    A selector that returns everything is as useless as one that returns
+    nothing — it just moves the cost instead of the blindness.
+    """
+    all_tests = {f"{TESTS_REL}/{p.name}"
+                 for p in (PLUGIN_ROOT / TESTS_REL).glob("test_*.py")}
+    out = set(sel.select_tests([_REGISTRY_REL], PLUGIN_ROOT, plugin_prefix=""))
+    allowed = _matrix_consumers_by_independent_scan() | sel._smoke_set(PLUGIN_ROOT)
+    assert out <= allowed, (
+        f"over-selection: {sorted(out - allowed)} neither import the registry "
+        f"nor belong to the smoke floor")
+    assert len(out) < len(all_tests) // 4, (
+        f"selected {len(out)} of {len(all_tests)} test files for a one-module "
+        f"change — that is a full-suite run wearing a selector's name")
+
+
+def test_helper_rule_does_not_widen_unrelated_selections():
+    """Rule 4 must be inert for diffs that touch no tests-dir helper."""
+    for changed, label in (
+        ([], "empty diff"),
+        (["README.md", f"{TESTS_REL}/{_MATRIX_PKG}/README.md"], "docs only"),
+        ([f"{TESTS_REL}/{_MATRIX_PKG}/waivers.txt"], "non-.py in the helper dir"),
+    ):
+        out = set(sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix=""))
+        assert out == sel._smoke_set(PLUGIN_ROOT), (
+            f"{label}: rule 4 leaked {sorted(out - sel._smoke_set(PLUGIN_ROOT))}")
+
+    src = set(sel.select_tests(["programs/flow_compliance_check.py"],
+                               PLUGIN_ROOT, plugin_prefix=""))
+    assert f"{TESTS_REL}/test_flow_compliance_check.py" in src
+    assert not (src & _matrix_consumers_by_independent_scan()), (
+        "a plain source-module change pulled in the matrix consumers")
+
+
+# ---- the mapping is DERIVED, proven on a synthetic tree --------------------
+
+def _fake_plugin(tmp_path: Path) -> Path:
+    root = tmp_path / "vibe-ic"
+    (root / "programs" / "tests").mkdir(parents=True)
+    return root
+
+
+def test_helper_mapping_is_derived_from_imports_not_a_filename_list(tmp_path):
+    """Names that exist nowhere in this repo still map correctly.
+
+    This is what separates a derived rule from a hand-list: a hand-list can only
+    know the filenames someone remembered to add to it, and the whole point of
+    #534 is that such a list drifts from the registry it is supposed to track.
+    """
+    root = _fake_plugin(tmp_path)
+    t = root / "programs" / "tests"
+    (t / "brandnewpkg").mkdir()
+    (t / "brandnewpkg" / "__init__.py").write_text("", encoding="utf-8")
+    (t / "brandnewpkg" / "reg.py").write_text("VALUES = {}\n", encoding="utf-8")
+    (t / "brandnewpkg" / "other.py").write_text("X = 1\n", encoding="utf-8")
+    (t / "test_reads_reg.py").write_text(
+        "from brandnewpkg import reg\n", encoding="utf-8")
+    (t / "test_reads_other.py").write_text(
+        "from brandnewpkg import other as O\n", encoding="utf-8")
+    (t / "test_unrelated.py").write_text("import os\n", encoding="utf-8")
+
+    out = set(sel.select_tests(["programs/tests/brandnewpkg/reg.py"],
+                               root, plugin_prefix=""))
+    assert f"{TESTS_REL}/test_reads_reg.py" in out, "direct import edge missing"
+    assert f"{TESTS_REL}/test_reads_other.py" in out, (
+        "package-ancestor edge missing: a test reading a SIBLING module of the "
+        "changed registry resolves through the same package and must be run — "
+        "this is the margin a hand-list of today's filenames cannot have")
+    assert f"{TESTS_REL}/test_unrelated.py" not in out, "over-selection"
+
+
+def test_helper_rule_ignores_the_name_in_string_literals(tmp_path):
+    """Precision: a MENTION is not an import.
+
+    Real pattern in this tree — test_real_artefact_test_backing_check.py embeds
+    `"from _hostpaths import require_repo\\n"` as fixture text. A grep-based
+    rule selects it; the ast rule correctly does not.
+    """
+    root = _fake_plugin(tmp_path)
+    t = root / "programs" / "tests"
+    (t / "helper_mod.py").write_text("Y = 2\n", encoding="utf-8")
+    (t / "test_mentions.py").write_text(
+        'SRC = "from helper_mod import thing\\n"\n', encoding="utf-8")
+    (t / "test_imports.py").write_text("import helper_mod\n", encoding="utf-8")
+
+    out = set(sel.select_tests(["programs/tests/helper_mod.py"],
+                               root, plugin_prefix=""))
+    assert f"{TESTS_REL}/test_imports.py" in out
+    assert f"{TESTS_REL}/test_mentions.py" not in out, (
+        "a string literal naming the helper was read as an import")
+
+
+def test_helper_rule_follows_helper_to_helper_edges(tmp_path):
+    """A change two hops away still reaches the test.
+
+    `matrix_d4_probe` imports `matrix_63x8.flowref` and the d4 test imports the
+    probe; without transitivity a flowref change would miss that test whenever
+    it stops importing flowref itself.
+    """
+    root = _fake_plugin(tmp_path)
+    t = root / "programs" / "tests"
+    (t / "pkg").mkdir()
+    (t / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (t / "pkg" / "base.py").write_text("B = 1\n", encoding="utf-8")
+    (t / "probe.py").write_text("from pkg import base\n", encoding="utf-8")
+    (t / "test_via_probe.py").write_text("import probe\n", encoding="utf-8")
+    (t / "test_nothing.py").write_text("import sys\n", encoding="utf-8")
+
+    out = set(sel.select_tests(["programs/tests/pkg/base.py"],
+                               root, plugin_prefix=""))
+    assert f"{TESTS_REL}/test_via_probe.py" in out, (
+        "helper -> helper -> test edge not followed")
+    assert f"{TESTS_REL}/test_nothing.py" not in out
+
+
+def test_helper_rule_resolves_relative_intra_package_imports(tmp_path):
+    """`from . import x` / `from .x import y` inside a package must resolve.
+
+    The matrix package uses exactly this form (`from . import flowref`), so a
+    resolver that skipped relative imports would silently lose every intra-
+    package edge while still looking like it worked from the outside.
+    """
+    root = _fake_plugin(tmp_path)
+    t = root / "programs" / "tests"
+    (t / "p").mkdir()
+    (t / "p" / "__init__.py").write_text("", encoding="utf-8")
+    (t / "p" / "leaf.py").write_text("L = 1\n", encoding="utf-8")
+    # Consumes leaf ONLY through relative imports.
+    (t / "p" / "mid.py").write_text(
+        "from . import leaf\nfrom .leaf import L\n", encoding="utf-8")
+    (t / "test_uses_mid.py").write_text("from p import mid\n", encoding="utf-8")
+
+    assert sel._imported_module_names("from . import leaf\n", "p") >= {"p", "p.leaf"}
+    assert sel._imported_module_names("from .leaf import L\n", "p") >= {"p.leaf"}
+    out = set(sel.select_tests(["programs/tests/p/leaf.py"], root, plugin_prefix=""))
+    assert f"{TESTS_REL}/test_uses_mid.py" in out
+
+
+def test_bare_alias_withheld_when_it_collides_with_a_source_module(tmp_path):
+    """A tests-dir helper must not hijack a top-level source module's name.
+
+    `import waivers_schema_check` is a rule-1 source module; if a helper's bare
+    basename were emitted unconditionally, a same-named helper would start
+    claiming that module's tests.
+    """
+    root = _fake_plugin(tmp_path)
+    (root / "programs" / "collider.py").write_text("Z = 0\n", encoding="utf-8")
+    t = root / "programs" / "tests"
+    (t / "sub").mkdir()
+    (t / "sub" / "__init__.py").write_text("", encoding="utf-8")
+    (t / "sub" / "collider.py").write_text("Z = 1\n", encoding="utf-8")
+
+    names = sel._helper_module_names(root, sel._source_stems(root))
+    assert names[f"{TESTS_REL}/sub/collider.py"] == {"sub.collider"}, (
+        "bare alias emitted despite colliding with a top-level source stem")
+
+
+def test_package_init_maps_to_the_package_not_to_a_module_named_init(tmp_path):
+    """`pkg/__init__.py` is the module `pkg`, never `pkg.__init__`.
+
+    Pinned on its own because the package-ancestor edge currently MASKS a wrong
+    answer here — `pkg.__init__`'s ancestors include `pkg`, so the selection
+    comes out identical (measured). The day someone tightens or removes that
+    edge, this becomes load-bearing, and a mutation that survives only because
+    another rule is covering for it is not a tested property.
+    """
+    root = _fake_plugin(tmp_path)
+    t = root / "programs" / "tests"
+    (t / "apkg").mkdir()
+    (t / "apkg" / "__init__.py").write_text("", encoding="utf-8")
+    names = sel._helper_module_names(root, sel._source_stems(root))
+    assert names[f"{TESTS_REL}/apkg/__init__.py"] == {"apkg"}, (
+        "a package's __init__.py must map to the package name")
+
+    real = sel._helper_module_names(PLUGIN_ROOT, sel._source_stems(PLUGIN_ROOT))
+    init_rel = f"{TESTS_REL}/{_MATRIX_PKG}/__init__.py"
+    if (PLUGIN_ROOT / init_rel).is_file():
+        assert _MATRIX_PKG in real[init_rel]
+
+
+def test_helper_index_not_built_when_no_helper_changed(monkeypatch):
+    """Cost guard: rule 4 must be lazy, exactly like the reference index."""
+    calls = []
+    monkeypatch.setattr(
+        sel, "_helper_consumers",
+        lambda *a, **k: calls.append(a) or set())
+    sel.select_tests(["programs/flow_compliance_check.py"], PLUGIN_ROOT,
+                     plugin_prefix="")
+    assert not calls, "helper index built for a diff with no tests-dir helper"
+    sel.select_tests([_REGISTRY_REL], PLUGIN_ROOT, plugin_prefix="")
+    assert calls, "helper index NOT built for a changed tests-dir helper"
+
+
+def test_unparseable_helper_or_test_does_not_silence_the_selector(tmp_path):
+    """A broken file must not turn the selector quiet.
+
+    `_imported_module_names` returns None for unparseable text and the caller
+    treats that as UNKNOWN — select it — rather than as "imports nothing".
+    """
+    assert sel._imported_module_names("def (\n", None) is None
+    root = _fake_plugin(tmp_path)
+    t = root / "programs" / "tests"
+    (t / "h.py").write_text("Q = 1\n", encoding="utf-8")
+    (t / "test_broken.py").write_text("import h\ndef (\n", encoding="utf-8")
+    out = set(sel.select_tests(["programs/tests/h.py"], root, plugin_prefix=""))
+    assert f"{TESTS_REL}/test_broken.py" in out
