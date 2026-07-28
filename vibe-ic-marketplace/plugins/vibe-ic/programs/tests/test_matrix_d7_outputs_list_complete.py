@@ -35,6 +35,19 @@ classified EVIDENCE / INCIDENTAL and is REPORTED, not enforced
 (``test_evidence_class_artefacts_are_genuinely_self_verifying``). Keeping that
 split is what makes a green cell mean something.
 
+W1 AND W4 DO NOT SPEAK ABOUT A PRODUCER THE FLOW ITSELF MARKS OPTIONAL
+(2026-07-28, #537). Both rules conclude "this belongs in ``required_outputs``",
+and ``required_outputs`` is UNCONDITIONAL — ``flow_compliance_check`` returns
+MISSING the moment a declared entry is absent. An
+``optional_program_exit_zero`` clause runs only when its
+``condition_files_exist`` are all present, so its ``--json`` output is
+legitimately absent on any project that did not meet the condition, and
+declaring it would assert a production the same yaml denies two keys below.
+Those artefacts are REPORTED by ``matrix_d7_artifact_graph.conditional_findings``
+and graded by ``test_conditional_class_is_earned_from_the_flows_own_gate``;
+that the exemption is narrow, and that W1 has not been disabled wholesale, are
+each proved by a live yaml mutation below.
+
 ====================================================================
 THE ANTI-ADJACENCY GUARDS
 ====================================================================
@@ -75,16 +88,24 @@ Mutation-proved before landing; each mutation applied to the GUARDED THING
     -> W3 fires (its own gate asserts that file exists) -> step 19 red.
   * ``provenance_check`` made to write ``args.output``
     -> the input-shaped-flag guard goes red.
+  * an ``optional_program_exit_zero`` clause retyped ``program_exit_zero``,
+    and (separately) its ``condition_files_exist`` emptied
+    -> its output leaves the CONDITIONAL class and W1 fires on it again.
+  * the sole declaration of an UNCONDITIONALLY produced, outside-read gate
+    output deleted -> W1 fires, proving the optionality exemption did not
+    retire the rule.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
+import yaml
 
 import flow_compliance_check as FCC
 import matrix_d7_artifact_graph as G
@@ -95,8 +116,11 @@ from matrix_63x8.cells import cells_for
 DIM = 7
 
 #: Number of entries in ``matrix_d7_artifact_graph.RESOLUTION_LIMITS``, pinned
-#: as measured 2026-07-27. See ``test_resolution_limits_are_declared``.
-RESOLUTION_LIMITS_AS_MEASURED = 5
+#: as measured 2026-07-28. See ``test_resolution_limits_are_declared``.
+#: 5 -> 6 with #537: the module now exempts a flow-declared-optional producer
+#: from W1/W4 and states, as the sixth limit, that whether such a producer's
+#: CONDITION was met is a property of a run tree it never reads.
+RESOLUTION_LIMITS_AS_MEASURED = 6
 
 # ─────────────────────────────────────────────────────────────────────
 # Waivers — ONE registry, the one that is consumed
@@ -156,6 +180,17 @@ def _describe(step_id, findings):
     ]
     for f in findings:
         lines.append(f"  * {f}")
+    # Name what was EXEMPTED beside what was charged. Otherwise a reader
+    # fixing this step cannot tell an artefact the rules deliberately skipped
+    # from one they never saw.
+    exempt = G.conditional_findings(step_id)
+    if exempt:
+        lines.append(
+            f"  [{len(exempt)} further undeclared artefact(s) NOT charged — "
+            f"the flow marks the producer optional_program_exit_zero:]"
+        )
+        for f in exempt:
+            lines.append(f"    - {f.path} (condition: see gate)")
     return "\n".join(lines)
 
 
@@ -187,6 +222,12 @@ def test_d7_required_outputs_list_is_complete(cell, record_property):
 
     evidence = G.evidence_findings(sid)
     record_property("d7_evidence_undeclared", [f.path for f in evidence])
+    # The exempted class is recorded on the cell too, so "W1 skipped it" is a
+    # published property of the run and not a silent branch in the analyser.
+    record_property(
+        "d7_conditional_undeclared",
+        [f.path for f in G.conditional_findings(sid)],
+    )
 
     findings = G.findings_for(sid)
     assert not findings, _describe(sid, findings)
@@ -304,6 +345,407 @@ def test_evidence_class_artefacts_are_genuinely_self_verifying():
         "no EVIDENCE-class artefacts found at all; the gate-output extraction "
         "has collapsed and the enforced rules are running on an empty set"
     )
+
+
+def test_conditional_class_is_earned_from_the_flows_own_gate():
+    """The W1/W4 optionality exemption is derived from the yaml, per path.
+
+    The exemption is the one thing in this dimension that turns a red cell
+    green without anybody declaring anything, so it is the one thing most able
+    to launder a real omission. Every claim it rests on is re-derived HERE
+    from ``flowref.gate_clauses`` — not by calling the analyser's own
+    predicate back — so a bug in :func:`conditional_output_targets` is caught
+    rather than confirmed:
+
+      * the path really is designated by at least one of the step's clauses;
+      * EVERY clause of that step designating it is
+        ``optional_program_exit_zero`` (one unconditional writer and the
+        artefact is produced on every run, so it belongs in the list);
+      * every one of those clauses carries a NON-EMPTY
+        ``condition_files_exist`` (an ``optional_`` clause with no condition
+        runs always, and its output is unconditional);
+      * the path is genuinely UNdeclared, so the exemption is not being
+        applied to a non-finding; and
+      * it has a reader outside its own writer, i.e. it is exactly what W1
+        would have charged — not something ``evidence_findings`` already
+        covers.
+    """
+    population = [
+        (F.normalize_id(sid), f)
+        for sid in F.step_ids()
+        for f in G.conditional_findings(sid)
+    ]
+    # THE FLOOR. An empty class makes every loop below run zero times, and a
+    # green result would mean the exemption is unexamined rather than sound.
+    assert population, (
+        "no step has a gate output that the flow marks "
+        "`optional_program_exit_zero` AND something outside its writer reads, "
+        "so the W1/W4 optionality exemption is asserting nothing. If the flow "
+        "genuinely no longer has one, remove the exemption in the same change "
+        "rather than leaving an unexercised branch in the analyser."
+    )
+
+    for sid, finding in population:
+        clauses = [
+            c for c in F.gate_clauses(sid)
+            if any(p == finding.path for p, _prog in G.clause_output_targets(c))
+        ]
+        assert clauses, (
+            f"step {sid}: {finding.path} is exempted from W1 but NO gate "
+            f"clause of this step designates it as a written output — the "
+            f"exemption is being applied to a path the gate does not produce"
+        )
+        wrong_kind = [c.kind for c in clauses if c.kind != F.K_OPTIONAL]
+        assert not wrong_kind, (
+            f"step {sid}: {finding.path} is exempted as conditionally "
+            f"produced, but {len(wrong_kind)} clause(s) of kind {wrong_kind} "
+            f"write it unconditionally. It is produced on every run and must "
+            f"be enforced, not exempted."
+        )
+        unconditioned = [c.raw for c in clauses if not c.condition_files]
+        assert not unconditioned, (
+            f"step {sid}: {finding.path} is exempted as conditionally "
+            f"produced, but an optional_program_exit_zero clause carries no "
+            f"condition_files_exist, so it runs on every project exactly like "
+            f"a plain program_exit_zero: {unconditioned}"
+        )
+        assert G.declaring_entry(finding.path) is None, (
+            f"step {sid}: {finding.path} is declared after all — the "
+            f"conditional class is carrying a non-finding"
+        )
+        assert finding.consumers, (
+            f"step {sid}: {finding.path} has no reader outside its writer, so "
+            f"it is EVIDENCE and belongs in evidence_findings(); the two "
+            f"reported classes must partition, not overlap"
+        )
+
+    # ...and they really do partition: nothing is reported twice.
+    for sid in F.step_ids():
+        cond = {f.path for f in G.conditional_findings(sid)}
+        ev = {f.path for f in G.evidence_findings(sid)}
+        assert not (cond & ev), (
+            f"step {F.normalize_id(sid)}: {sorted(cond & ev)} is reported as "
+            f"BOTH conditional and evidence"
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The optionality exemption, mutation-controlled
+# ──────────────────────────────────────────────────────────────────────
+def _mutated_flow(tmp_path: Path, name: str, edit) -> Path:
+    """Write a scratch copy of the flow with *edit* applied to its document.
+
+    The real yaml is NEVER touched: this worktree is shared, and a test that
+    edits the file it grades would corrupt every sibling that runs after it.
+    """
+    doc = yaml.safe_load(F.FLOW_YAML.read_text(encoding="utf-8"))
+    edit(doc)
+    out = tmp_path / name
+    out.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
+    return out
+
+
+class _SwappedFlow:
+    """Point flowref at *path*, drop both modules' memos, restore on exit."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._original: Optional[Path] = None
+
+    def __enter__(self):
+        self._original = F.FLOW_YAML
+        F.set_flow_yaml(self._path)   # clears flowref's caches
+        G.clear_flow_caches()
+        return self
+
+    def __exit__(self, *exc):
+        F.set_flow_yaml(self._original)
+        G.clear_flow_caches()
+        return False
+
+
+def _w1_paths(step_id) -> Tuple[str, ...]:
+    return tuple(
+        f.path for f in G.findings_for(step_id) if f.rule == G.W1
+    )
+
+
+def _unconditional_declared_anchor():
+    """``(step, path, entry)`` for a live W1 anchor, or ``None``.
+
+    A gate output that is produced UNCONDITIONALLY (``program_exit_zero``),
+    read by something other than its writer, and declared by its own step at
+    that exact path with a basename no other entry shares. Deleting that one
+    entry must make W1 fire — and because every condition is re-measured here,
+    the anchor follows the flow instead of rotting into a hard-coded pair.
+    """
+    basename_uses = Counter(
+        os.path.basename(d) for d in G._all_declared() if d
+    )
+    for sid in F.step_ids():
+        key = F.normalize_id(sid)
+        declared = G.declared_entries().get(key, frozenset())
+        for clause in F.gate_clauses(sid):
+            if clause.kind != F.K_PROGRAM:
+                continue
+            for path, prog in G.clause_output_targets(clause):
+                if path not in declared:
+                    continue
+                if basename_uses[os.path.basename(path)] != 1:
+                    continue
+                if not G._consumers_of_output(path, prog):
+                    continue
+                for entry in F.required_outputs(sid):
+                    if entry.strip().lstrip("./") == path:
+                        return key, path, entry
+    return None
+
+
+def test_w1_still_fires_on_an_unconditionally_produced_undeclared_output(tmp_path):
+    """The optionality exemption narrowed W1; it did not retire it.
+
+    On the live tree W1 now charges NOTHING — both artefacts it used to charge
+    come from ``optional_program_exit_zero`` clauses. A rule that fires on
+    nothing is indistinguishable from a rule that has been switched off, and
+    "switched off" is the failure mode this whole change could most easily
+    have been. So the rule is proved live the same way W3 is: mutate the
+    guarded thing (the yaml) and require the red.
+
+    The mutation is the smallest one that can matter — delete the ONE
+    ``required_outputs`` entry that declares an unconditionally-produced,
+    outside-read gate output — and the step must be charged for exactly that
+    path.
+    """
+    anchor = _unconditional_declared_anchor()
+    assert anchor is not None, (
+        "no gate output in the flow is unconditionally produced, outside-read "
+        "and declared at its exact path by its own step, so W1's live "
+        "falsifiability cannot be demonstrated. Do not delete this test to "
+        "make that go away: if the population is genuinely empty, W1 governs "
+        "nothing and must be removed with its reason stated."
+    )
+    step, path, entry = anchor
+    assert not _w1_paths(step), (
+        f"step {step} already carries a W1 finding before the mutation, so "
+        f"this test cannot attribute the red to the deleted declaration"
+    )
+
+    def strip(doc):
+        for s in doc["steps"]:
+            if F.normalize_id(s["id"]) == step:
+                s["required_outputs"] = [
+                    e for e in s["required_outputs"] if e != entry
+                ]
+
+    mutated = _mutated_flow(tmp_path, "w1_declaration_stripped.yaml", strip)
+    with _SwappedFlow(mutated):
+        assert entry not in F.required_outputs(step), "mutation did not apply"
+        assert path in _w1_paths(step), (
+            f"step {step}: {entry!r} was deleted from required_outputs and W1 "
+            f"did NOT charge {path} — an unconditionally produced, "
+            f"outside-read, undeclared gate output. W1 has stopped enforcing."
+        )
+
+    # Restored, and the tree is measurably back where it started.
+    assert entry in F.required_outputs(step)
+    assert not _w1_paths(step)
+
+
+def _conditional_anchor():
+    """``(step, path)`` of a CONDITIONAL finding on an OTHERWISE-CLEAN step.
+
+    "Otherwise clean" is what makes the control a control. Step 23 also
+    carries a conditional output, but it is red for thirteen unrelated W2
+    findings, so a red observed after mutating it would prove nothing about
+    the exemption. The anchor is therefore the conditional finding whose step
+    has no other finding at all — on the current flow that is step 27, and it
+    is found by measurement rather than named.
+    """
+    for sid in F.step_ids():
+        findings = G.conditional_findings(sid)
+        if findings and not G.findings_for(sid):
+            return F.normalize_id(sid), findings[0].path
+    return None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["retype_clause_unconditional", "empty_condition_files"],
+)
+def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
+    tmp_path, mutation
+):
+    """Take the optionality away and the cell goes red again.
+
+    Two independent ways to remove it, because the exemption has two
+    conditions and either alone would be a hole:
+
+      ``retype_clause_unconditional``  the clause becomes
+          ``program_exit_zero``. The producer now runs on every project, the
+          artefact is produced unconditionally, and it must be declared.
+      ``empty_condition_files``       the clause stays ``optional_`` but its
+          ``condition_files_exist`` is emptied. ``flow_compliance_check``
+          blocks on such a clause exactly like a plain one, so the VOCABULARY
+          alone must not buy an exemption — only a real condition does.
+
+    Both mutate the yaml, never a test. If either fails to redden the cell,
+    step 27 is green for a reason other than the one this change claims.
+    """
+    anchor = _conditional_anchor()
+    assert anchor is not None, (
+        "no step is GREEN solely because of the optionality exemption, so "
+        "removing the optionality cannot be shown to redden anything and this "
+        "control measures nothing"
+    )
+    step, path = anchor
+    assert not G.findings_for(step), (
+        f"step {step} is already red before the mutation; the control cannot "
+        f"attribute the red to the mutation"
+    )
+
+    def edit(doc):
+        for s in doc["steps"]:
+            if F.normalize_id(s["id"]) != step:
+                continue
+            for clause in (s.get("gate") or {}).get("all_of") or []:
+                spec = clause.get(F.K_OPTIONAL)
+                if not isinstance(spec, dict):
+                    continue
+                if path not in str(spec.get("command", "")):
+                    continue
+                if mutation == "retype_clause_unconditional":
+                    del clause[F.K_OPTIONAL]
+                    clause[F.K_PROGRAM] = spec["command"]
+                else:
+                    spec["condition_files_exist"] = []
+
+    mutated = _mutated_flow(tmp_path, f"d7_{mutation}.yaml", edit)
+    with _SwappedFlow(mutated):
+        assert path not in {
+            p for p, _w, _c in G.conditional_output_targets(step)
+        }, (
+            f"step {step}: after {mutation!r} the flow no longer declares "
+            f"{path}'s producer conditional, yet the analyser still exempts "
+            f"it — the exemption is not reading the gate"
+        )
+        assert path in _w1_paths(step), (
+            f"step {step}: after {mutation!r} the producer of {path} runs "
+            f"unconditionally and nothing declares the artefact, so W1 must "
+            f"charge it. It did not: findings were "
+            f"{[str(f) for f in G.findings_for(step)]}"
+        )
+
+    # And back: the exemption returns with the flow's own optionality.
+    assert path in {p for p, _w, _c in G.conditional_output_targets(step)}
+    assert not G.findings_for(step)
+
+
+def _no_list_but_writes_anchor():
+    """``(step, paths)`` of a step with NO ``required_outputs`` whose gate writes.
+
+    W4's whole subject. On the current flow that is FS1 alone, and its two
+    outputs come from plain ``program_exit_zero`` clauses — which is exactly
+    why W4's optionality exemption has no live subject and must be proved on a
+    mutated flow instead of asserted into the source and never exercised.
+    """
+    for sid in F.step_ids():
+        if F.declares_required_outputs(sid):
+            continue
+        targets = G.gate_output_targets(sid)
+        if targets:
+            return F.normalize_id(sid), tuple(p for p, _w in targets)
+    return None
+
+
+@pytest.mark.parametrize(
+    "condition, w4_expected",
+    [
+        # A real condition: production IS conditional, so an absent
+        # `required_outputs` key has nothing it was obliged to hold.
+        (["phase2/stage1/rtl"], False),
+        # The same clause KIND with an empty condition list runs on every
+        # project, so the outputs are unconditional and W4 must still charge
+        # them. Spelling `optional_` must not be enough on its own.
+        ([], True),
+    ],
+    ids=["real_condition_exempts", "empty_condition_does_not"],
+)
+def test_w4_exemption_is_exercised_on_a_mutated_flow(tmp_path, condition,
+                                                     w4_expected):
+    """W4 skips a conditionally-produced output — proved, not asserted.
+
+    W1 and W4 share one premise ("this belongs in ``required_outputs``") and
+    therefore one defect, so #537 fixed both. But every step in the current
+    flow that omits ``required_outputs`` produces its gate outputs
+    UNCONDITIONALLY, so W4's half of the fix governs nothing on this tree: a
+    mutation that deletes it changes no verdict, which means shipping it
+    without this test would ship an unexecuted branch.
+
+    So the subject is manufactured, in a scratch copy of the yaml: retype the
+    anchor step's gate clauses ``optional_program_exit_zero`` and require W4
+    to behave the way the fix claims — silent when the condition is real,
+    unchanged when the condition list is empty.
+    """
+    anchor = _no_list_but_writes_anchor()
+    assert anchor is not None, (
+        "no step declares gate outputs without a required_outputs key, so W4 "
+        "governs nothing at all and should be removed rather than exempted"
+    )
+    step, paths = anchor
+    before = {f.path for f in G.findings_for(step) if f.rule == G.W4}
+    assert before == set(paths), (
+        f"step {step}: W4 charges {sorted(before)} but the gate designates "
+        f"{sorted(paths)} — the baseline for this control is not what it "
+        f"claims to be"
+    )
+
+    def retype(doc):
+        for s in doc["steps"]:
+            if F.normalize_id(s["id"]) != step:
+                continue
+            for clause in (s.get("gate") or {}).get("all_of") or []:
+                cmd = clause.pop(F.K_PROGRAM, None)
+                if cmd is None:
+                    continue
+                clause[F.K_OPTIONAL] = {
+                    "command": cmd,
+                    "condition_files_exist": list(condition),
+                }
+
+    mutated = _mutated_flow(tmp_path, f"d7_w4_{len(condition)}.yaml", retype)
+    with _SwappedFlow(mutated):
+        assert G.gate_output_targets(step), (
+            "the retyped clauses no longer designate any output — the "
+            "mutation broke the subject instead of changing its optionality"
+        )
+        assert not F.declares_required_outputs(step), "mutation changed the key"
+        after = {f.path for f in G.findings_for(step) if f.rule == G.W4}
+        if w4_expected:
+            assert after == set(paths), (
+                f"step {step}: its gate clauses are optional_program_exit_zero "
+                f"with an EMPTY condition_files_exist, so they run on every "
+                f"project and their outputs are unconditional. W4 must still "
+                f"charge {sorted(paths)}; it charged {sorted(after)}."
+            )
+        else:
+            assert not after, (
+                f"step {step}: its gate now declares every output "
+                f"conditionally produced (on {condition}), so an absent "
+                f"required_outputs key is not an incomplete list. W4 charged "
+                f"{sorted(after)} anyway."
+            )
+            # And the artefacts are not lost: with no outside reader they are
+            # the EVIDENCE class, still reported.
+            reported = {f.path for f in G.evidence_findings(step)} | {
+                f.path for f in G.conditional_findings(step)
+            }
+            assert set(paths) <= reported, (
+                f"step {step}: {sorted(set(paths) - reported)} was exempted "
+                f"from W4 and is reported by NEITHER evidence_findings nor "
+                f"conditional_findings — the exemption made it invisible"
+            )
+
+    assert {f.path for f in G.findings_for(step) if f.rule == G.W4} == set(paths)
 
 
 def test_unattributable_findings_are_surfaced_not_dropped():

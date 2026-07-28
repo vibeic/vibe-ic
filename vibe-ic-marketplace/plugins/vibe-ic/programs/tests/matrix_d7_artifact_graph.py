@@ -51,6 +51,12 @@ of them fires.
     checks them in the same invocation" (audit note, step 2). So a path whose
     ONLY reader is its own writer is INCIDENTAL and is not enforced here.
 
+    W1 asserts the path belongs in ``required_outputs``, and
+    ``required_outputs`` is UNCONDITIONAL — ``flow_compliance_check`` returns
+    MISSING when a declared entry is absent, on every project, with no
+    escape. So W1 may only speak about a path the flow says is produced
+    unconditionally. See :func:`conditional_output_targets`.
+
 ``W2  produced_consumed_undeclared``  — LOAD_BEARING
     An artefact path that
       * some program in ``programs/`` **writes** (AST write position), and
@@ -98,6 +104,53 @@ Everything else a step writes — a ``--json`` evidence file nobody else reads,
 a log, a cache — is classified :data:`EVIDENCE` or :data:`INCIDENTAL` and is
 **reported, not enforced** (:func:`evidence_findings`). That split is the
 brief's, and keeping it means a green test means something.
+
+====================================================================
+THE FLOW'S OWN OPTIONALITY — WHY W1 AND W4 ARE NOT UNIVERSAL
+====================================================================
+The gate grammar carries three exec-clause kinds with three different force
+levels (``matrix_63x8.flowref`` §3), and one of them makes production
+**conditional**::
+
+    - optional_program_exit_zero:
+        command: "si_mcf_sta_check . --json reports/phase3/si_mcf_sta_check.json"
+        condition_files_exist: ["reports/phase3/si_mcf_sta.json"]
+
+That clause runs — and therefore that ``--json`` file exists — only when every
+path in ``condition_files_exist`` is present. The flow is stating, in its own
+vocabulary, that the artefact legitimately may not be produced.
+
+``required_outputs`` has no conditional form. It is ALL-of-N and it is
+unconditional: ``flow_compliance_check`` returns MISSING the moment a declared
+entry is absent. So moving a conditionally-produced artefact into
+``required_outputs`` does not record a fact — it asserts something the same
+yaml file denies two keys below, and it turns every project that legitimately
+did not meet the condition into a MISSING.
+
+This module carried no notion of that until 2026-07-28: it contained zero
+references to ``optional_program_exit_zero`` while 13 steps used the form, so
+W1 read "gate output with an outside reader" as "required output" with no
+account of a producer the flow itself marks optional. Step 27 was the first
+case where such an output acquired an external reader (#533 made
+``signoff_audit`` read it), and it went red for a completeness defect that was
+not one. See :func:`conditional_output_targets`, which W1 and W4 both now
+consult, and :func:`conditional_findings`, which REPORTS what they skip.
+
+MEASURED at the time of the change, so the trade is visible rather than
+implied: 25 gate-designated outputs come from an ``optional_program_exit_zero``
+clause, across 13 steps (2, 4, 6, 8, 14, 15, 18, 23, 26, 27, 32, 34, A9); all
+28 such clauses carry a NON-EMPTY ``condition_files_exist``; and **not one of
+those 25 is declared at its exact path in any step's** ``required_outputs``.
+(Two match only through the basename relaxation below, at a different
+directory.) The flow's practice was already uniform; the analyser was the one
+thing that did not know it.
+
+WHAT THIS DOES NOT EXEMPT. The exemption is per-PATH and it is unanimous: a
+path is conditional only when EVERY clause of that step designating it is an
+``optional_program_exit_zero`` carrying a non-empty ``condition_files_exist``.
+One unconditional clause writing the same path anywhere in the step, or an
+``optional_`` clause with an empty condition list (which always runs), and the
+path is enforced exactly as before.
 
 ====================================================================
 THE BASENAME RELAXATION — a deliberate precision/recall trade
@@ -166,11 +219,18 @@ _WRITE_MODE_RE = re.compile(r"[waxWAX+]")
 LOAD_BEARING = "LOAD_BEARING"
 EVIDENCE = "EVIDENCE"
 INCIDENTAL = "INCIDENTAL"
+#: Undeclared, has an outside reader, and the flow marks its producer optional.
+#: Reported by :func:`conditional_findings`, enforced by nothing — a
+#: conditionally-produced artefact is not a *required* output.
+CONDITIONAL = "CONDITIONAL"
 
 W1 = "W1:gate_output_read_elsewhere"
 W2 = "W2:produced_consumed_undeclared"
 W3 = "W3:gate_required_file_undeclared"
 W4 = "W4:no_required_outputs_but_gate_writes"
+
+#: The REPORTED (never enforced) class for a flow-declared-optional producer.
+C1 = "C1:conditional_producer_output"
 
 #: What this module provably CANNOT see. Quoted verbatim into `known_gap`.
 RESOLUTION_LIMITS: Tuple[str, ...] = (
@@ -194,6 +254,12 @@ RESOLUTION_LIMITS: Tuple[str, ...] = (
     "A write performed inside a shelled-out tool script (an OpenROAD/KLayout "
     "TCL heredoc embedded as a Python string) is not a Python write "
     "position and is invisible to this module.",
+    "Whether an `optional_program_exit_zero` clause's `condition_files_exist` "
+    "was SATISFIED is a property of one run tree, not of the flow. This "
+    "module reads the flow, so it can see only that production was declared "
+    "conditional — never whether the condition held. On a run where it DID "
+    "hold, the producer ran and the artefact must exist; its absence there is "
+    "a real defect that conditional_findings() reports and no cell enforces.",
 )
 
 
@@ -668,9 +734,8 @@ def split_command(command: str) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
     )
 
 
-@lru_cache(maxsize=None)
-def gate_output_targets(step_id) -> Tuple[Tuple[str, str], ...]:
-    """``((path, writing_program), ...)`` the gate designates as OUTPUTS.
+def clause_output_targets(clause: F.GateClause) -> Tuple[Tuple[str, str], ...]:
+    """``((path, writing_program), ...)`` ONE gate clause designates as OUTPUTS.
 
     A flag in :data:`OUTPUT_FLAGS` only counts once
     :func:`flag_value_is_written` has PROVEN the receiving program writes it.
@@ -685,34 +750,122 @@ def gate_output_targets(step_id) -> Tuple[Tuple[str, str], ...]:
 
     Both are spelled exactly like an output flag. Trusting the spelling would
     have charged step 6 with emitting a file it only reads.
+
+    Per-CLAUSE and not per-step, because the clause is where the flow records
+    whether the producer runs unconditionally: :func:`gate_output_targets`
+    unions this over a step's clauses, and
+    :func:`conditional_output_targets` partitions the same set by the
+    clause's ``kind``. Both reading one extractor is what stops the two
+    answers from drifting apart.
+    """
+    if clause.command is None or not clause.program:
+        return ()
+    out: List[Tuple[str, str]] = []
+    toks = clause.command.split()
+    i = 1
+    while i < len(toks):
+        tok = toks[i]
+        if tok.startswith("--") and "=" in tok:
+            flag, value = tok.split("=", 1)
+            step = 1
+        elif tok.startswith("-") and i + 1 < len(toks) and not toks[i + 1].startswith("-"):
+            flag, value = tok, toks[i + 1]
+            step = 2
+        else:
+            i += 1
+            continue
+        i += step
+        if flag not in OUTPUT_FLAGS:
+            continue
+        if flag_value_is_written(clause.program, flag) is not True:
+            continue
+        path = value.lstrip("./")
+        if path in (".", "") or (path, clause.program) in out:
+            continue
+        out.append((path, clause.program))
+    return tuple(out)
+
+
+@lru_cache(maxsize=None)
+def gate_output_targets(step_id) -> Tuple[Tuple[str, str], ...]:
+    """``((path, writing_program), ...)`` the gate designates as OUTPUTS.
+
+    The union over the step's clauses of :func:`clause_output_targets`, in
+    declaration order. Deliberately NOT filtered by clause kind: this is the
+    honest set of everything the gate designates, and
+    :func:`na_precondition` reads it to decide whether a step has any
+    dimension-7 question at all. Filtering optionality in HERE would silently
+    turn a step whose only outputs are conditional into an NA cell — a state
+    change nobody asked for, reached by a change about enforcement.
     """
     out: List[Tuple[str, str]] = []
     for clause in F.gate_clauses(step_id):
-        if clause.command is None or not clause.program:
-            continue
-        toks = clause.command.split()
-        i = 1
-        while i < len(toks):
-            tok = toks[i]
-            if tok.startswith("--") and "=" in tok:
-                flag, value = tok.split("=", 1)
-                step = 1
-            elif tok.startswith("-") and i + 1 < len(toks) and not toks[i + 1].startswith("-"):
-                flag, value = tok, toks[i + 1]
-                step = 2
-            else:
-                i += 1
-                continue
-            i += step
-            if flag not in OUTPUT_FLAGS:
-                continue
-            if flag_value_is_written(clause.program, flag) is not True:
-                continue
-            path = value.lstrip("./")
-            if path in (".", "") or (path, clause.program) in out:
-                continue
-            out.append((path, clause.program))
+        for pair in clause_output_targets(clause):
+            if pair not in out:
+                out.append(pair)
     return tuple(out)
+
+
+@lru_cache(maxsize=None)
+def conditional_output_targets(step_id) -> Tuple[Tuple[str, str, Tuple[str, ...]], ...]:
+    """``((path, writer, condition_files), ...)`` the FLOW declares conditional.
+
+    A path qualifies only when the step's own gate is unanimous about it:
+
+      1. at least one clause of this step designates it as a written output;
+      2. EVERY clause of this step that designates it has kind
+         ``optional_program_exit_zero``; and
+      3. every one of those clauses carries a NON-EMPTY
+         ``condition_files_exist``.
+
+    (2) is what stops the exemption laundering a real omission. If one clause
+    writes the path unconditionally and another writes it optionally, then the
+    artefact IS produced on every run and belongs in ``required_outputs`` —
+    the optional clause does not buy the unconditional one an exemption.
+
+    (3) is the same guard against the vocabulary rather than the semantics. An
+    ``optional_program_exit_zero`` whose condition list is empty or absent runs
+    on every project — ``flow_compliance_check`` blocks on it exactly like a
+    plain ``program_exit_zero`` — so its output is unconditional and stays
+    enforced. All 28 optional clauses in the current yaml carry a non-empty
+    condition list, so this leg fires on nothing today; it is a live
+    invariant, and emptying one condition list moves that path back under W1.
+
+    ``condition_files`` is the UNION over the qualifying clauses, so a caller
+    can quote the flow's own reason without re-walking the gate.
+    """
+    per_path: Dict[str, List[str]] = {}
+    writer: Dict[str, str] = {}
+    kinds: Dict[str, Set[str]] = {}
+    unconditioned: Set[str] = set()
+    for clause in F.gate_clauses(step_id):
+        for path, prog in clause_output_targets(clause):
+            kinds.setdefault(path, set()).add(clause.kind)
+            writer.setdefault(path, prog)
+            if clause.kind == F.K_OPTIONAL:
+                if clause.condition_files:
+                    acc = per_path.setdefault(path, [])
+                    for cf in clause.condition_files:
+                        cf = str(cf).lstrip("./")
+                        if cf not in acc:
+                            acc.append(cf)
+                else:
+                    unconditioned.add(path)
+
+    out: List[Tuple[str, str, Tuple[str, ...]]] = []
+    for path, ks in kinds.items():
+        if ks != {F.K_OPTIONAL}:
+            continue          # (2) some clause produces it unconditionally
+        if path in unconditioned:
+            continue          # (3) an optional clause with no condition
+        out.append((path, writer[path], tuple(per_path.get(path, ()))))
+    return tuple(out)
+
+
+@lru_cache(maxsize=None)
+def _conditional_paths(step_id) -> FrozenSet[str]:
+    """Just the paths of :func:`conditional_output_targets`, for membership."""
+    return frozenset(p for p, _w, _c in conditional_output_targets(step_id))
 
 
 @lru_cache(maxsize=None)
@@ -934,10 +1087,18 @@ def findings_for(step_id) -> Tuple[Finding, ...]:
     out: List[Finding] = []
 
     # ---- W4: no list at all, yet the gate designates outputs -----------
+    # `conditional` is excluded from BOTH load-bearing rules below. Neither
+    # can be stated about an artefact the flow declares conditionally
+    # produced: W1 says "this belongs in required_outputs" and W4 says "a
+    # list is missing that would hold it", and `required_outputs` is
+    # unconditional, so both would assert a production the same yaml denies.
     targets = gate_output_targets(step_id)
+    conditional = _conditional_paths(step_id)
     seen_w4: Set[str] = set()
     if targets and not F.declares_required_outputs(step_id):
         for path, writer in targets:
+            if path in conditional:
+                continue
             seen_w4.add(path)
             out.append(
                 Finding(
@@ -956,7 +1117,7 @@ def findings_for(step_id) -> Tuple[Finding, ...]:
 
     # ---- W1: gate-designated output somebody else reads ----------------
     for path, writer in targets:
-        if path in seen_w4 or declaring_entry(path):
+        if path in seen_w4 or path in conditional or declaring_entry(path):
             continue
         consumers = _consumers_of_output(path, writer)
         if not consumers:
@@ -1024,6 +1185,53 @@ def findings_for(step_id) -> Tuple[Finding, ...]:
 
 
 @lru_cache(maxsize=None)
+def conditional_findings(step_id) -> Tuple[Finding, ...]:
+    """Undeclared gate outputs W1 SKIPS because the flow marks them optional.
+
+    Reported, never enforced — and reported precisely so that "not enforced"
+    is not the same as "not written down". This is the population W1 would
+    have charged: an artefact with a reader outside its own writer, whose
+    every designating clause in this step is an
+    ``optional_program_exit_zero`` with a real ``condition_files_exist``.
+
+    The residue is deliberately narrow. A conditional output with NO outside
+    reader is already reported by :func:`evidence_findings` and is not
+    repeated here, so the two lists partition rather than overlap, and the
+    older, stronger claim (self-verifying) keeps its full subject.
+
+    ``detail`` quotes the flow's own condition, because that is the whole
+    justification: read it and you can check the exemption against the yaml
+    without trusting this module.
+    """
+    key = F.normalize_id(step_id)
+    out: List[Finding] = []
+    for path, writer, cond in conditional_output_targets(step_id):
+        if declaring_entry(path):
+            continue
+        consumers = _consumers_of_output(path, writer)
+        if not consumers:
+            continue  # already EVIDENCE — self-verifying, not repeated here
+        out.append(
+            Finding(
+                step_id=key,
+                rule=C1,
+                path=path,
+                klass=CONDITIONAL,
+                producer=writer,
+                consumers=consumers,
+                detail=(
+                    "the step's gate declares this producer "
+                    f"optional_program_exit_zero on {list(cond)}, so the "
+                    "artefact is legitimately absent whenever that condition "
+                    "is not met; required_outputs is unconditional and cannot "
+                    "state it"
+                ),
+            )
+        )
+    return tuple(out)
+
+
+@lru_cache(maxsize=None)
 def evidence_findings(step_id) -> Tuple[Finding, ...]:
     """Undeclared gate outputs whose ONLY reader is their own writer.
 
@@ -1072,6 +1280,41 @@ def na_precondition(step_id) -> Optional[str]:
     return "declares neither a gate nor required_outputs"
 
 
+def clear_flow_caches() -> None:
+    """Drop every memo DERIVED FROM THE FLOW YAML.
+
+    Paired with ``flowref.set_flow_yaml``: the falsifiability harness swaps
+    the yaml under a tmp path and every answer this module memoised about the
+    old one has to go, or a mutation test grades the file it replaced.
+
+    The AST indices (``_trees``, ``write_index``, ``literal_index``,
+    ``writers_of``, ``flag_value_is_written``, ``_local_modules``,
+    ``program_literals``) are deliberately NOT cleared: they are functions of
+    ``programs/*.py``, which a yaml swap does not touch, and re-parsing the
+    whole program tree per mutation would cost seconds per test for an answer
+    that cannot have changed.
+    """
+    for fn in (
+        output_flag_pairs,
+        gate_output_targets,
+        conditional_output_targets,
+        _conditional_paths,
+        gate_input_paths,
+        flow_consumers,
+        declared_entries,
+        _all_declared,
+        _all_declared_basenames,
+        _step_condition_basenames,
+        _same_dir_declarers,
+        _gate_consumers,
+        _w2_population,
+        findings_for,
+        conditional_findings,
+        evidence_findings,
+    ):
+        fn.cache_clear()
+
+
 __all__ = [
     "OUTPUT_FLAGS",
     "ARTIFACT_SUFFIXES",
@@ -1079,14 +1322,18 @@ __all__ = [
     "LOAD_BEARING",
     "EVIDENCE",
     "INCIDENTAL",
+    "CONDITIONAL",
     "W1",
     "W2",
     "W3",
     "W4",
+    "C1",
     "Finding",
     "is_artifact_path",
     "split_command",
+    "clause_output_targets",
     "gate_output_targets",
+    "conditional_output_targets",
     "gate_input_paths",
     "flow_consumers",
     "declared_entries",
@@ -1096,9 +1343,11 @@ __all__ = [
     "write_index",
     "writers_of",
     "findings_for",
+    "conditional_findings",
     "evidence_findings",
     "unattributable_findings",
     "flag_value_is_written",
     "output_flag_pairs",
     "na_precondition",
+    "clear_flow_caches",
 ]
