@@ -447,20 +447,38 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
     sync_props = [p for p in props if not p.is_async]
     async_props = [p for p in props if p.is_async]
 
-    assert_lines = []
+    # CONCURRENT form, and the equivalence is exact rather than approximate.
+    #
+    #     always @(posedge clk) if (G) assert (X);      the immediate form
+    #     property p; @(posedge clk) G |-> X; endproperty
+    #     assert property (p);                          the concurrent form
+    #
+    # Both sample G and X at the same edge and both are vacuously true when G is
+    # false, so this is a change of spelling and not of meaning.  `|->` is the
+    # OVERLAPPING implication on purpose: `|=>` would move the consequent one
+    # cycle later and prove something the design does not claim.
+    #
+    # WHY THE SPELLING MATTERS.  Step 5's gate requires `property <name>` and
+    # `assert property`, so the immediate form left it permanently red — and
+    # until v0.2.31 of the EDA image there was no honest way out: our yosys fork
+    # could not parse a named property at all (measured: 42/42 spellings
+    # rejected, and a harness written to satisfy the gate returned rc=16 from
+    # SymbiYosys).  Emitting it then would have traded a proof that ran for a
+    # green light that did not.  The fork now parses it AND proves it — a false
+    # property FAILs with a counterexample, a true one passes — so the gate can
+    # be satisfied by real work rather than by relaxing it.
+    prop_lines, assert_lines = [], []
     idx = 0
-    for p in sync_props:
+    for p, guard in ([(p, "rst_active_q") for p in sync_props]
+                     + [(p, "rst_active") for p in async_props]):
         idx += 1
-        assert_lines.append(
-            f"    always @(posedge {clock})\n"
-            f"        if (f_past_valid && rst_active_q)\n"
-            f"            a_reset_safety_{idx}: assert ({p.output} == {p.value});")
-    for p in async_props:
-        idx += 1
-        assert_lines.append(
-            f"    always @(posedge {clock})\n"
-            f"        if (f_past_valid && rst_active)\n"
-            f"            a_reset_safety_{idx}: assert ({p.output} == {p.value});")
+        name = f"p_reset_safety_{idx}"
+        prop_lines.append(
+            f"    property {name};\n"
+            f"        @(posedge {clock})\n"
+            f"            (f_past_valid && {guard}) |-> ({p.output} == {p.value});\n"
+            f"    endproperty")
+        assert_lines.append(f"    a_reset_safety_{idx}: assert property ({name});")
 
     body_parts = [
         "\n".join(in_decls),
@@ -477,6 +495,9 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
             f"    always @(posedge {clock}) rst_active_q <= rst_active;",
         ]
     body_parts.append("")
+    body_parts += prop_lines
+    if prop_lines:
+        body_parts.append("")
     body_parts += assert_lines
     body = "\n".join(bp for bp in body_parts if bp is not None)
 
