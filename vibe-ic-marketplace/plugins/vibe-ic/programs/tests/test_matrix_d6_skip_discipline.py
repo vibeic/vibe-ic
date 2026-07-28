@@ -246,110 +246,46 @@ _PROSE_SKIP_RE = re.compile(
 )
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Waivers
-# ──────────────────────────────────────────────────────────────────────
-# `matrix_63x8.waivers.WAIVERS` is a SHARED file owned by the orchestrator (see
-# its module docstring: eight dimension modules share this worktree, so a
-# sibling reports a waiver rather than editing the registry and losing a
-# concurrent entry). These three are dimension 6's *requests*, carried locally
-# until they are applied centrally, and they are consumed through the SAME
-# `strict=True` xfail mark, so the anti-rot property is identical: the moment
-# one of these gaps is fixed the cell XPASSes and the suite goes red, forcing
-# the waiver's removal.
+# ─────────────────────────────────────────────────────────────────────
+# Waivers — ONE registry, the one that is consumed
+# ─────────────────────────────────────────────────────────────────────
+# This module used to carry a `_PENDING_WAIVERS` mirror of its two dimension-6
+# waivers, added while eight agents shared one worktree and a concurrent edit to
+# `matrix_63x8.waivers.WAIVERS` could lose an entry. The orchestrator has since
+# landed both centrally, so `_waiver_for` and `_mark_for` read the central copy
+# and ignored the local one.
 #
-# `_mark_for` prefers the central registry, so applying them centrally makes
-# the local copy inert rather than duplicated.
-_PENDING_WAIVERS: Tuple[W.Waiver, ...] = (
-    W.Waiver(
-        step_id="FS1",
-        dim=DIM,
-        reason=(
-            "Both mandatory gate programs self-declare inapplicability and the "
-            "step still resolves to a plain PASS. fmeda_fault_injection_coverage "
-            "writes verdict='NOT_APPLICABLE' and fmeda_coverage_check writes "
-            "verdict='VACUOUS_PASS' into their own --json reports, but each exits "
-            "0 and neither prints a line STARTING with 'VACUOUS_PASS' "
-            "(fmeda_coverage_check's line starts '[PASS] fmeda_coverage_check: "
-            "VACUOUS_PASS ...'), which is the only rc=0 disclosure channel "
-            "_check_program_exit_zero reads. flow_compliance_check's own comment "
-            "names a JSON top-level verdict of VACUOUS_PASS as a disclosure "
-            "channel, but no consumer reads the report file, so the disclosure "
-            "cannot reach the tier. FS1's condition is files_exist "
-            "['phase2/stage1/rtl'], satisfied by every design, so this is the "
-            "default outcome for every non-safety chip, not a corner case."
-        ),
-        evidence=(
-            "programs/flow_compliance_check.py:2182-2196 (the three declared "
-            "disclosure channels) vs :2255-2264 (_stdout_signals_vacuous requires "
-            "the token at LINE START) and :4796-4816 (no report file is read). "
-            "Reproduce: mkdir -p P/phase2/stage1/rtl && flow_compliance_check P "
-            "--flow-def <one-step FS1 yaml> --json r.json -> step FS1 status "
-            "'PASS'; P/reports/phase2/safety/fmeda_coverage_gate.json carries "
-            "verdict='VACUOUS_PASS'. Measured 2026-07-27 on v1.7.68."
-        ),
-    ),
-    # STEP 30's WAIVER IS DELETED, NOT AMENDED — #521 CLOSED IT.
-    #
-    # It read: "spice_correlation_check self-declares summary.skipped=true with
-    # reason='no_spef' and exits 0 with no stdout at all, so step 30 resolves
-    # to a plain PASS ... a project that ships SPICE decks but no extracted
-    # SPEF passes post-layout SPICE correlation without any correlation having
-    # been measured." (Measured 2026-07-27 on v1.7.68.)
-    #
-    # That is exactly the defect #521 fixed, arrived at independently: the
-    # gate now routes its own `summary["skipped"]` through
-    # `_vacuous_exit.exit_code` and answers rc 2, so the SAME reproduction the
-    # evidence field prescribed now resolves step 30 to VACUOUS_PASS. The
-    # waiver is strict-xfail, so leaving it here would XPASS and fail this
-    # module — which is how a waiver registry is supposed to notice that the
-    # hole it describes has been closed. Deleting the row is the disclosure.
-    W.Waiver(
-        step_id="DT2",
-        dim=DIM,
-        reason=(
-            "DT2's step-level condition is ALL-of over three paths, two of which "
-            "(phase2/stage2/dft/cut_netlist.v and phase3/stage3/pnr/*_pnr.v) are "
-            "the very artefacts whose absence DT2 exists to detect, so the step "
-            "disappears in exactly the scenario it was written for. The repo "
-            "AGREES: flow_condition_reachability_check classifies it "
-            "'self-disabling' and it is carried in "
-            "flow_condition_reachability_baseline.json as a known-open hole owned "
-            "by vibe-ic#235. That baseline is a proper machine-readable, "
-            "owner-attributed disclosure — which is why this is a waiver and not "
-            "a silent gap — but a disclosed self-disabling condition is still a "
-            "skip that hides its own subject, so the cell is not enforced-clean."
-        ),
-        evidence=(
-            "flow/flow_condition_reachability_baseline.json (owner: vibe-ic#235). "
-            "Reproduce: python3 programs/flow_condition_reachability_check.py "
-            "--json r.json -> r.json['known_open_holes'][0]['step'] == 'DT2', "
-            "verdict 'self-disabling'. Measured 2026-07-27 on v1.7.68."
-        ),
-    ),
-)
+# The two copies HAD ALREADY DRIFTED by the time the mirror was removed. The
+# central FS1 entry said "no consumer ever opens the report file" and named the
+# plain PASS as the DEFAULT outcome for every non-safety chip; the local one
+# said "no consumer reads the report file" and called it merely "the default
+# outcome". The central FS1 evidence reproduced through
+# `python3 programs/flow_compliance_check.py`; the local one named a bare
+# `flow_compliance_check`, which is not a runnable command. The central DT2
+# evidence carried the owner's "PRODUCER + CONSUMER halves LANDED; flow-YAML
+# wire BLOCKED" note and named cut_netlist.v and *_pnr.v as the non-surviving
+# triggers; the local one carried neither. Two accounts of one gap, with `or`
+# silently choosing.
+#
+# Dimension 5 compared its two copies on every run and stayed identical; this
+# module never compared them, which is why the drift went unnoticed. The mirror
+# is deleted rather than re-synchronised: a waiver is a public admission, and it
+# can have exactly one text.
 
-_PENDING_BY_KEY: Dict[Tuple[str, int], W.Waiver] = {
-    w.key: w for w in _PENDING_WAIVERS
-}
+
+def dim_waivers() -> Tuple[W.Waiver, ...]:
+    """This dimension's waivers, from the one registry that is consumed."""
+    return tuple(W.waivers_for_dim(DIM))
 
 
 def _waiver_for(step_id) -> Optional[W.Waiver]:
-    """Central registry first, local pending request second."""
-    return W.waiver_for(step_id, DIM) or _PENDING_BY_KEY.get(
-        (F.normalize_id(step_id), DIM)
-    )
+    """The waiver for this cell, or ``None``. Single source: the registry."""
+    return W.waiver_for(step_id, DIM)
 
 
 def _mark_for(step_id):
     """`strict=True` xfail mark for a waived cell, or ``None``."""
-    central = W.xfail_mark(step_id, DIM)
-    if central is not None:
-        return central
-    local = _PENDING_BY_KEY.get((F.normalize_id(step_id), DIM))
-    if local is None:
-        return None
-    return pytest.mark.xfail(strict=True, reason=local.xfail_reason)
+    return W.xfail_mark(step_id, DIM)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1332,7 +1268,8 @@ def test_d6_waivers_are_evidence_backed_and_strict():
     ``strict=True`` is the anti-rot mechanism: when one of these gaps is fixed
     the cell XPASSes and this suite goes red, forcing the waiver's removal.
     """
-    for waiver in _PENDING_WAIVERS:
+    assert dim_waivers(), f"dimension {DIM} declares no waiver at all"
+    for waiver in dim_waivers():
         problems = W.validate(waiver)
         assert not problems, f"waiver {waiver.label}: {problems}"
         assert waiver.dim == DIM
@@ -1342,8 +1279,8 @@ def test_d6_waivers_are_evidence_backed_and_strict():
             f"{waiver.label}: xfail mark is not strict — a non-strict xfail "
             f"rots silently forever"
         )
-    keys = [w.key for w in _PENDING_WAIVERS]
-    assert len(set(keys)) == len(keys), f"duplicate pending waivers: {keys}"
+    keys = [w.key for w in dim_waivers()]
+    assert len(set(keys)) == len(keys), f"duplicate waivers: {keys}"
 
 
 def test_d6_probe_flow_yaml_is_not_redirected():

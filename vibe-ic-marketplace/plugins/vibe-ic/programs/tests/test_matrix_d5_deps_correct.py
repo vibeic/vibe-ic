@@ -614,148 +614,35 @@ def d5_problems(step_id) -> List[str]:
     return problems
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Accepted gaps
-# ══════════════════════════════════════════════════════════════════════
-#: Waivers this module needs. They live here, not in ``matrix_63x8.waivers``,
-#: because eight dimension modules share one worktree and concurrent edits to a
-#: shared registry lose entries; they are reported to the orchestrator for
-#: central application. :func:`_waiver_for` prefers the central registry the
-#: moment an entry lands there, so this table degrades to dead weight rather
-#: than to a second source of truth. ``test_d5_local_waivers_are_valid``
-#: re-validates every one against ``waivers.validate`` and
-#: ``test_d5_local_waivers_do_not_shadow_the_registry`` fails if a landed
-#: central waiver and a local one ever disagree.
-#:
-#: Every one of these is a LIVE, REPRODUCED defect, not an un-mechanisable
-#: cell: the predicate genuinely fails on the current tree. ``strict=True`` is
-#: therefore load-bearing in the strongest way — the day the dependency is
-#: fixed, the cell XPASSes, the suite goes red, and the waiver must be deleted.
-_LOCAL_WAIVERS: Tuple[W.Waiver, ...] = (
-    W.Waiver(
-        step_id=8,
-        dim=DIM,
-        reason=(
-            "LIVE DEFECT, reproduced: step 8's gate program "
-            "sdc_exception_correlation_check reads reports/phase2/cdc/crossing.json "
-            "— step 3's declared required_output — to decide whether each "
-            "set_false_path is justified, but step 8 declares blocks_on:[7] whose "
-            "closure is {7, 1, D1} and does not reach step 3. The read is wrapped "
-            "in `except (OSError, ValueError): pass`, so a missing or STALE "
-            "crossing.json does not fail the step; it silently empties the "
-            "known-async-pair set and every legitimate CDC false_path is then "
-            "reported SDC_EXCEPTION_UNJUSTIFIED. Step 3 is declared EARLIER in the "
-            "yaml, so this is a plainly addable edge, not a structural conflict."
-        ),
-        evidence=(
-            "programs/sdc_exception_correlation_check.py:46 "
-            "`cdc = project / \"reports\" / \"phase2\" / \"cdc\" / \"crossing.json\"`; "
-            "producer flow/phase1_phase2_phase3.yaml:401 (step 3 required_outputs); "
-            "consumer flow/phase1_phase2_phase3.yaml:766 (step 8, blocks_on:[7])"
-        ),
-    ),
-    W.Waiver(
-        step_id="DT2",
-        dim=DIM,
-        reason=(
-            "LIVE DEFECT, reproduced: DT2's own condition.files_exist names "
-            "phase3/stage3/extracted/*.spef, which is step 22's declared "
-            "required_output, but DT2 declares blocks_on:[DT1] and step 22 is not "
-            "in its closure. The condition makes DT2 self-skip when the SPEF is "
-            "absent, which prevents a crash but NOT a stale read: on a resumed "
-            "project a SPEF from a previous run makes DT2 run at-speed path-delay "
-            "ATPG against last run's parasitics. The edge cannot simply be added "
-            "— step 22 is declared at yaml index 34 and DT2 at index 14, so "
-            "DT2 -> 22 would be a forward edge; the real fix is a flow-ordering "
-            "decision (DT2 belongs after Phase-3 extraction), not a one-line "
-            "blocks_on edit."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml:1128-1152 (DT2: condition line 1135 "
-            "lists phase3/stage3/extracted/*.spef; blocks_on:[DT1]); producer "
-            "flow/phase1_phase2_phase3.yaml:1728,1735 (step 22 required_outputs)"
-        ),
-    ),
-    W.Waiver(
-        step_id="A5",
-        dim=DIM,
-        reason=(
-            "LIVE DEFECT, reproduced, and CIRCULAR: A5's wired gate program "
-            "analog_a5_layout_check builds and reads <block>/drc_clean.flag and "
-            "<block>/lvs_match.flag and requires both to carry a clean verdict "
-            "before A5 can PASS — but those two are A6's declared "
-            "required_outputs, and A6 declares blocks_on:[A5]. So the true data "
-            "dependency runs A5 -> A6 while the declared ordering runs A6 -> A5. "
-            "No blocks_on edit fixes this: adding A5 -> A6 closes a cycle. One of "
-            "the two sides is wrong and a program cannot decide which without the "
-            "design intent (either A5 must stop requiring PV evidence, or the "
-            "A5/A6 split is misdrawn)."
-        ),
-        evidence=(
-            "programs/analog_a5_layout_check.py:237-238 "
-            "`drc_flag = bdir / \"drc_clean.flag\"` / "
-            "`lvs_flag = bdir / \"lvs_match.flag\"` (gate at "
-            "flow/phase1_phase2_phase3.yaml:1323, blocks_on:[A4]); producer A6 at "
-            "flow/phase1_phase2_phase3.yaml:2526, blocks_on:[A5]"
-        ),
-    ),
-    W.Waiver(
-        step_id=18,
-        dim=DIM,
-        reason=(
-            "LIVE DEFECT, reproduced, and UNSATISFIABLE BY EDGE: step 18's gate "
-            "program spare_cell_preservation_check resolves the DEF it audits by "
-            "preferring phase3/stage3/pnr/filled.def (step 34's declared output) "
-            "and falling back to routed.def (step 21's), neither of which is in "
-            "step 18's closure (blocks_on:[17]). On a resumed project both files "
-            "survive from the previous run, so step 18 — spare-cell insertion, "
-            "which runs BEFORE routing and metal fill — audits last run's final "
-            "DEF and reports spare-cell survival that this run never established. "
-            "The dependency cannot be declared: 21 and 34 are both downstream of "
-            "18, so the edge would close a cycle. The fix belongs in the program "
-            "(the caller must name the stage-appropriate DEF), which is why no "
-            "blocks_on value can make this cell green."
-        ),
-        evidence=(
-            "programs/spare_cell_preservation_check.py:314-320 "
-            "`for fname in (\"filled.def\", \"routed.def\")`; producers "
-            "flow/phase1_phase2_phase3.yaml:1673 (step 21 routed.def) and :2295 "
-            "(step 34 filled.def); consumer flow/phase1_phase2_phase3.yaml:1582 "
-            "(step 18, blocks_on:[17])"
-        ),
-    ),
-    W.Waiver(
-        step_id="A7",
-        dim=DIM,
-        reason=(
-            "LIVE DEFECT, reproduced: A7 declares blocks_on:[A6] but A6 is "
-            "declared at yaml index 52 — after step 39 — while A7 sits at index "
-            "23, so this is the flow's only FORWARD edge. flow_compliance_check "
-            "evaluates steps in canonical declaration order and its #503 cascade "
-            "attribution walks each track in that same order taking the first "
-            "FAIL as the cut point, so an A6 FAIL is positioned after A7 and can "
-            "never be attributed as A7's root cause; A7 reports an independent "
-            "gap instead of a downstream consequence. Fixing it means MOVING A6's "
-            "yaml block between A5 and A7, an edit to the shared flow document "
-            "that this module must not make."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml:1365 (A7, blocks_on:[A6]) vs :2526 "
-            "(A6) — A6's declaration index is 52, A7's is 23, measured by "
-            "`[str(s['id']) for s in yaml.safe_load(open(flow))['steps']]`; "
-            "consumer flow_compliance_check.py:6672-6690 (`for sid in order:`)"
-        ),
-    ),
-)
+# ═════════════════════════════════════════════════════════════════════
+# Accepted gaps — ONE registry, the one that is consumed
+# ═════════════════════════════════════════════════════════════════════
+# This module used to carry a `_LOCAL_WAIVERS` mirror of its five dimension-5
+# waivers, added while eight agents shared one worktree and a concurrent edit to
+# `matrix_63x8.waivers.WAIVERS` could lose an entry. The orchestrator has since
+# landed all five centrally, so `_waiver_for` read the central copy and ignored
+# the local one — an edit to the mirror changed nothing a reader ever saw.
+#
+# #527 deleted the same structure from dimension 3 after its two copies were
+# found telling different stories about one accepted gap. The mirror is deleted
+# rather than re-synchronised: a waiver is a public admission, and it can have
+# exactly one text.
+#
+# Every one of these waivers is a LIVE, REPRODUCED defect, not an
+# un-mechanisable cell: the predicate genuinely fails on the current tree.
+# ``strict=True`` is therefore load-bearing in the strongest way — the day the
+# dependency is fixed, the cell XPASSes, the suite goes red, and the waiver must
+# be deleted.
 
-_LOCAL_BY_KEY: Dict[Tuple[str, int], W.Waiver] = {w.key: w for w in _LOCAL_WAIVERS}
+
+def dim_waivers() -> Tuple[W.Waiver, ...]:
+    """This dimension's waivers, from the one registry that is consumed."""
+    return tuple(W.waivers_for_dim(DIM))
 
 
 def _waiver_for(step_id):
-    """The central registry's waiver if it has landed, else the local one."""
-    return W.waiver_for(step_id, DIM) or _LOCAL_BY_KEY.get(
-        (F.normalize_id(step_id), DIM)
-    )
+    """The waiver for this cell, or ``None``. Single source: the registry."""
+    return W.waiver_for(step_id, DIM)
 
 
 def _is_na(step_id) -> bool:
@@ -993,70 +880,33 @@ def test_d5_runtime_ordering_guard_loads_the_same_edges():
     )
 
 
-def test_d5_local_waivers_are_valid():
-    """Local waivers obey the same validator as the central registry."""
+def test_d5_waivers_meet_the_registry_bar():
+    """This dimension's waivers obey the shared validator.
+
+    Reads the ONE registry. The module-local ``_LOCAL_WAIVERS`` mirror this
+    used to validate was deleted: ``_waiver_for`` had preferred the central
+    copy for some time, so validating the mirror graded a table nothing read.
+    """
+    assert dim_waivers(), f"dimension {DIM} declares no waiver at all"
     problems = {}
-    for waiver in _LOCAL_WAIVERS:
+    for waiver in dim_waivers():
         found = W.validate(waiver)
         if found:
             problems[waiver.label] = found
-    assert not problems, f"invalid local waiver(s): {problems}"
-    assert all(w.dim == DIM for w in _LOCAL_WAIVERS), (
-        f"local table carries a non-dimension-{DIM} waiver: "
-        f"{[w.label for w in _LOCAL_WAIVERS if w.dim != DIM]}"
+    assert not problems, f"invalid dimension-{DIM} waiver(s): {problems}"
+    assert all(w.dim == DIM for w in dim_waivers()), (
+        f"waivers_for_dim({DIM}) returned a foreign dimension: "
+        f"{[w.label for w in dim_waivers() if w.dim != DIM]}"
     )
-    assert len(_LOCAL_BY_KEY) == len(_LOCAL_WAIVERS), (
-        "duplicate keys in the local waiver table"
-    )
-
-
-def test_d5_local_waivers_do_not_shadow_the_registry():
-    """A landed central waiver must match the local one it replaces.
-
-    Prevents the local table becoming a second, diverging source of truth once
-    the orchestrator applies these waivers to ``matrix_63x8.waivers``.
-    """
-    # 2026-07-27, adversarial finding (LOW): while `waivers.WAIVERS` was still
-    # empty every iteration hit `continue`, so this test passed having compared
-    # nothing. It was a forward-looking guard that could not fail. The floor
-    # below makes the vacuity itself observable: once ANY dimension-5 waiver
-    # has landed centrally, EVERY local mirror must have a central counterpart,
-    # so a half-landed registry (the state in which the two sources really do
-    # diverge) reddens instead of passing silently.
-    compared = 0
-    orphans = []
-    central_dim = W.waivers_for_dim(DIM)
-    for key, local in _LOCAL_BY_KEY.items():
-        central = W.waiver_for(key[0], key[1])
-        if central is None:
-            orphans.append(local.label)
-            continue
-        compared += 1
-        assert central.reason.strip() == local.reason.strip(), (
-            f"{local.label}: central waiver reason differs from the local one; "
-            f"delete the local entry rather than letting the two drift"
-        )
-        assert central.evidence.strip() == local.evidence.strip(), (
-            f"{local.label}: central waiver evidence differs from the local one"
-        )
-    if central_dim:
-        assert not orphans, (
-            f"{len(central_dim)} dimension-{DIM} waiver(s) have landed in "
-            f"matrix_63x8.waivers.WAIVERS but {orphans} are still only local. "
-            f"A half-landed registry is the state in which the two sources "
-            f"diverge unnoticed: land the rest, or delete the local mirrors."
-        )
-        assert compared == len(_LOCAL_BY_KEY), (
-            f"compared {compared} of {len(_LOCAL_BY_KEY)} local waivers "
-            f"against the central registry"
-        )
+    keys = [w.key for w in dim_waivers()]
+    assert len(set(keys)) == len(keys), f"duplicate waiver keys: {keys}"
 
 
 def test_d5_every_waiver_names_a_declared_step():
     """A waiver for a step that no longer exists is a rotted waiver."""
     unknown = [
         w.label
-        for w in _LOCAL_WAIVERS + W.waivers_for_dim(DIM)
+        for w in dim_waivers()
         if not F.has_step(w.step_id)
     ]
     assert not unknown, f"waiver(s) for steps absent from the flow: {unknown}"
