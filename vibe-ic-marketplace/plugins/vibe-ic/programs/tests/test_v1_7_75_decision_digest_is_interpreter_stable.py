@@ -79,14 +79,41 @@ def test_an_edit_OUTSIDE_the_closure_does_not_move_it():
     assert before == after, "unrelated() is not reachable from root()"
 
 
-def test_comments_and_formatting_do_not_move_it():
-    """A fingerprint that moved on a reflow would train its reader to re-stamp
-    it without reading, which is how a real drift gets waved through."""
-    noisy = _SRC.replace("def helper(b):", "# a comment\ndef helper(  b  ):")
-    assert _digest(_SRC) == _digest(noisy)
+def test_reformatting_inside_the_closure_DOES_move_it_and_that_is_the_price():
+    """The cost of an interpreter-independent fingerprint, pinned so it is a
+    decision and not a surprise.
+
+    v1.7.74 hashed `ast.dump`, v1.7.75 hashed `ast.unparse`; CI rejected both,
+    because both ask CPython to re-emit the tree and CPython changes what it
+    emits between releases. The only input nothing in CPython can move is the
+    file's own bytes. That buys correctness and costs quiet: re-wrapping a CODE
+    line inside a decision function now moves the digest. Blank and
+    comment-only lines are still dropped, so those remain free.
+
+    A slightly noisy fingerprint that works beats a quiet one that does not."""
+    rewrapped = _SRC.replace("    return b * 2", "    return (\n        b * 2\n    )")
+    assert _digest(_SRC) != _digest(rewrapped)
 
 
-def test_a_docstring_rewrite_does_not_move_it():
-    with_doc = _SRC.replace("def helper(b):\n", 'def helper(b):\n    """One."""\n')
-    other_doc = _SRC.replace("def helper(b):\n", 'def helper(b):\n    """Two."""\n')
-    assert _digest(with_doc) == _digest(other_doc)
+def test_blank_and_comment_only_lines_alone_do_NOT_move_it():
+    """The normalisation that survives: pure text, no parser asked to
+    normalise anything, so it cannot drift with the interpreter."""
+    padded = _SRC.replace("def helper(b):\n", "\ndef helper(b):\n\n")
+    assert _digest(_SRC) == _digest(padded)
+
+
+def test_a_docstring_rewrite_DOES_move_it_as_the_declaration_always_claimed():
+    """This is a repair, not a regression.
+
+    si_mcf_sta_check.py's own comment above `decision_digest` says the digest
+    "changes when the decision logic changes — INCLUDING the written reasons,
+    which are part of what a rule pins", and that a fingerprint staying quiet
+    through a prose rewrite "would be the wrong kind of quiet".
+
+    The previous implementation ran `_without_docstring` first, so it stayed
+    quiet through exactly that. The stored comment described a behaviour the
+    code did not have. Hashing the file's own bytes brings them into
+    agreement."""
+    one = _SRC.replace("def helper(b):\n", 'def helper(b):\n    """One."""\n')
+    two = _SRC.replace("def helper(b):\n", 'def helper(b):\n    """Two."""\n')
+    assert _digest(one) != _digest(two)

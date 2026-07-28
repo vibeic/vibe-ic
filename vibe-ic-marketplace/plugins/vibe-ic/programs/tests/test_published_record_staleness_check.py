@@ -322,15 +322,17 @@ def test_the_shipped_declaration_matches_its_gate(tmp_path):
     assert SI.RECORD_ADJUDICATION.drift() is None
 
 
-def test_fingerprint_ignores_comments_docstrings_and_formatting():
+def test_fingerprint_ignores_comments_blank_lines_and_leading_module_text():
+    """Three of the four insensitivities this test originally claimed survive
+    the v1.7.76 rebuild, and they survive for a better reason: they are pure
+    text normalisation (drop blank and comment-only lines, rstrip the rest), so
+    nothing about them can drift with the interpreter."""
     a = ('def build_report(x):\n'
-         '    """One thing."""\n'
          '    if x:\n'
          '        return "FAIL"\n'
          '    return "PASS"\n')
     b = ('# a new comment\n'
          'def build_report(x):\n'
-         '    """A completely rewritten docstring, much longer."""\n'
          '    # an explanation\n'
          '    if x:\n'
          '        return "FAIL"\n'
@@ -339,6 +341,32 @@ def test_fingerprint_ignores_comments_docstrings_and_formatting():
     roots = ("build_report",)
     assert (_ra.decision_fingerprint(a, roots)
             == _ra.decision_fingerprint(b, roots))
+
+
+def test_fingerprint_now_MOVES_on_a_docstring_rewrite():
+    """The fourth claim is reversed, deliberately, and it is a repair.
+
+    This test used to assert that rewriting a decision function's docstring left
+    the fingerprint alone — the old implementation ran `_without_docstring`
+    first. But si_mcf_sta_check.py's own comment above its `decision_digest`
+    says the opposite, verbatim: the digest "changes when the decision logic
+    changes — INCLUDING the written reasons, which are part of what a rule
+    pins", and a fingerprint that stayed quiet through a prose rewrite of a
+    verdict reason "would be the wrong kind of quiet".
+
+    The declaration's documentation and its implementation disagreed. Hashing
+    the definition's own source bytes — the v1.7.76 repair for the
+    interpreter-dependence that took CI red twice — brings them into agreement.
+    """
+    a = ('def build_report(x):\n'
+         '    """One thing."""\n'
+         '    return "PASS"\n')
+    b = ('def build_report(x):\n'
+         '    """A completely rewritten reason, much longer."""\n'
+         '    return "PASS"\n')
+    roots = ("build_report",)
+    assert (_ra.decision_fingerprint(a, roots)
+            != _ra.decision_fingerprint(b, roots))
 
 
 def test_fingerprint_changes_when_a_decision_branch_changes():

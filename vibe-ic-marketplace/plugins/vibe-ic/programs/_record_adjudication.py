@@ -324,6 +324,44 @@ def _referenced_names(node: ast.AST) -> List[str]:
     return [n.id for n in ast.walk(node) if isinstance(n, ast.Name)]
 
 
+def _normalised_source(source: str, node: ast.AST) -> str:
+    """The definition's OWN SOURCE TEXT, normalised with pure string operations.
+
+    WHY NOT AN AST SERIALISATION — v1.7.74 and v1.7.75 each shipped one and CI
+    rejected both. `ast.dump` serialises node FIELDS and CPython adds fields
+    between releases (3.12 gave `FunctionDef` a `type_params`). `ast.unparse` is
+    a code GENERATOR whose output CPython is equally free to change, and it did.
+    Either way the digest measured the logic AND the interpreter while claiming
+    to measure only the logic: a declaration stamped on 3.12 read as
+    RULES_UNREVIEWED on CI's 3.11, its gate's records became undecidable, the
+    recorded debt then looked paid, and the gate failed. Every one of those
+    steps is a correct inference from a false premise.
+
+    The repair is to stop asking the interpreter to re-emit anything. The AST is
+    used ONLY to locate the definition — line numbers are a property of the
+    file, not of the parser version — and the bytes hashed are the file's own.
+    Nothing CPython changes between releases can reach them.
+
+    Normalisation is pure text: drop blank and comment-only lines, rstrip the
+    rest. That absorbs the reformatting a fingerprint should not care about
+    without asking a parser to normalise anything. Re-wrapping a CODE line
+    does move it, unlike before; blank and comment-only lines stay free. A
+    slightly noisier fingerprint that works beats a quiet one that does not.
+    """
+    seg = ast.get_source_segment(source, node)
+    if seg is None:  # pragma: no cover - needs a node built without positions
+        raise FingerprintError(
+            "no source segment for %s" % getattr(node, "name", "?"))
+    kept = []
+    for raw in seg.splitlines():
+        line = raw.rstrip()
+        bare = line.lstrip()
+        if not bare or bare.startswith("#"):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def decision_fingerprint(source: str, roots: Sequence[str]) -> str:
     """sha256 over the executable logic reachable from ``roots``.
 
@@ -363,17 +401,9 @@ def decision_fingerprint(source: str, roots: Sequence[str]) -> str:
 
     h = hashlib.sha256()
     for name in sorted(closure):
-        node = _without_docstring(closure[name])
         h.update(name.encode())
         h.update(b"\0")
-        # `ast.dump` serialises NODE FIELDS, and CPython adds fields between
-        # releases — 3.12 gave FunctionDef a `type_params`, so identical logic
-        # hashed differently on 3.11 and 3.12. The digest then reported
-        # RULES_UNREVIEWED on a Python upgrade, i.e. it measured the logic AND
-        # the interpreter while claiming to measure only the logic (v1.7.75).
-        # `ast.unparse` emits canonical SOURCE: no node-field additions leak in,
-        # and formatting/comments are already normalised away by the parse.
-        h.update(ast.unparse(node).encode())
+        h.update(_normalised_source(source, closure[name]).encode())
         h.update(b"\n")
     return h.hexdigest()
 
