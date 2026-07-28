@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPT.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 import signoff_audit as sa  # noqa: E402
 import _gdsii  # noqa: E402
+import _si_signoff_fixture  # noqa: E402
 
 # 2026-07-27 (review follow-up): the tape-out GDS slot is credited ONLY by the
 # flow's declared stream-out artefact (`phase3/stage4/gds/*.gds`) carrying real
@@ -41,6 +42,16 @@ def _lvs_signoff(proj):
     (proj / "reports" / "phase3" / "lvs.rpt").write_text(_LVS_MATCH)
 
 
+# 2026-07-28: tapeout mode gained an SI (crosstalk-delay) blocking condition —
+# a verdict that proved nothing (or no verdict at all) refuses to certify. The
+# fixtures below are about the EVIDENCE PILLARS, so the ones that mean "every
+# pillar is present" now also carry a PROVED SI verdict. Fixtures that mean
+# "a pillar is missing" are untouched: they must still FAIL, and they do.
+def _si_proved(proj):
+    """Write the SI verdict a genuinely-checked run produces."""
+    _si_signoff_fixture.write_proved_si_report(proj)
+
+
 # ---------------------------------------------------------------------------
 # Tapeout mode
 # ---------------------------------------------------------------------------
@@ -50,6 +61,7 @@ def test_tapeout_all_evidence_pass(tmp_path):
     (tmp_path / "timing_final.rpt").write_text("timing report")
     (tmp_path / "drc_clean.rpt").write_text("Total violations: 0\n")  # parseable count (#437a)
     _lvs_signoff(tmp_path)
+    _si_proved(tmp_path)
 
     result = sa._check_tapeout(tmp_path)
     assert result.passed is True
@@ -181,6 +193,7 @@ def test_tapeout_design_gds_outside_input_passes(tmp_path):
     (tmp_path / "timing_final.rpt").write_text("timing report")
     (tmp_path / "drc_clean.rpt").write_text("Total violations: 0\n")  # parseable count (#437a)
     _lvs_signoff(tmp_path)
+    _si_proved(tmp_path)
 
     sa._LENIENT = False
     result = sa._check_tapeout(tmp_path)

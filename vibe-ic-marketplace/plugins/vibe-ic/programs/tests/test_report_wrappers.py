@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _gdsii  # noqa: E402
+import _si_signoff_fixture  # noqa: E402
 
 # 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
 # declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
@@ -183,6 +184,11 @@ class TestTapeoutSignoffCheck:
         (tmp_path / "reports/phase3/lvs.rpt").write_text(
             "Netlists match uniquely.\n"
             "Final result: Circuits match uniquely.\n")
+        # 2026-07-28: tape-out mode gained an SI (crosstalk-delay) blocking
+        # condition — a run whose crosstalk-delay check proved nothing, or
+        # never ran, no longer certifies. "With evidence" now includes a
+        # PROVED SI verdict.
+        _si_signoff_fixture.write_proved_si_report(tmp_path)
         assert _run_wrapper("tapeout_signoff_check.py", str(tmp_path)) == 0
 
 
