@@ -844,7 +844,7 @@ RECORD_ADJUDICATION = _ra.declare(
     # and a fingerprint that stayed quiet through a prose rewrite of a verdict
     # reason would be the wrong kind of quiet.
     decision_digest=(
-        "e9efb72c97abfea5a5b2fcf8076cec81a08c14dbb59dcaeaaea4488bd68d3759"),
+        "1d0825edb8b815bd4b20f68d3c30bc18fa1d06bfab9962eaecca9d4f2366379d"),
     rules=(
         _ra.Rule(
             rule_id="si_mcf_sta_check.zero-fold-is-not-a-signoff",

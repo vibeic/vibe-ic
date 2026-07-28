@@ -366,7 +366,14 @@ def decision_fingerprint(source: str, roots: Sequence[str]) -> str:
         node = _without_docstring(closure[name])
         h.update(name.encode())
         h.update(b"\0")
-        h.update(ast.dump(node, include_attributes=False).encode())
+        # `ast.dump` serialises NODE FIELDS, and CPython adds fields between
+        # releases — 3.12 gave FunctionDef a `type_params`, so identical logic
+        # hashed differently on 3.11 and 3.12. The digest then reported
+        # RULES_UNREVIEWED on a Python upgrade, i.e. it measured the logic AND
+        # the interpreter while claiming to measure only the logic (v1.7.75).
+        # `ast.unparse` emits canonical SOURCE: no node-field additions leak in,
+        # and formatting/comments are already normalised away by the parse.
+        h.update(ast.unparse(node).encode())
         h.update(b"\n")
     return h.hexdigest()
 
