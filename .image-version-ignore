@@ -37,3 +37,19 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_gf180_registry_assets_re
 # anything. Bumping it to the current VERSION would delete the defect the test
 # reproduces, which is the opposite of what this drift-net is for.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_container_image_provenance.py
+
+# A PUBLISHED sign-off run record: it states which image regenerated that IR
+# result. benchmark-data is read-only to the flow for exactly this reason — the
+# tag names the toolchain that produced the numbers beside it, so advancing it
+# would attribute those numbers to an image that never ran them.
+benchmark-data/ic/spm/v1.5.66_gf180mcuD/reports/phase3/DYNAMIC_IR_REGENERATED.md
+
+# A MEASUREMENT NOTE, not an install pointer. The comment records what `docker
+# inspect` actually returned for a named image and docker version, while
+# correcting an earlier revision that had asserted the opposite from reasoning.
+# The whole value of that note is that it says which image was on the bench; a
+# sentence beginning "MEASURED on the image this repo ships" cannot have its
+# version advanced without ceasing to be a measurement. The file's OTHER tag
+# (the `--require-image` usage example) carries no ghcr prefix and is not a
+# pointer this net scans, so ignoring the file costs no live coverage today.
+vibe-ic-marketplace/plugins/vibe-ic/programs/container_image_provenance.py
