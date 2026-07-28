@@ -20,7 +20,8 @@ enforces schema + content rules:
   against the dialect it is written in:
 
   (1) `waived_steps` — A NAMED HUMAN APPROVES.
-        id        integer in 1..40 (main-track step id), OR
+        id        any step id THE FLOW DECLARES (#526 — derived, never
+                  re-typed; see "THE CEILING IS DERIVED" below), OR
                   "A<n>" with n in 1..16 (analog stage), OR
                   "M<n>" with n in 1..16 (mixed-signal stage), OR
                   "P0" (preflight structural-RTL umbrella, Wave 91), OR
@@ -72,12 +73,36 @@ enforces schema + content rules:
     review_required  bool (default true)
     ticket        str (e.g. Linear/Jira issue id)
 
+  THE CEILING IS DERIVED FROM THE FLOW, NOT RE-TYPED (#526)
+  ---------------------------------------------------------
+  This program's accepted step ids used to be the hand-maintained range
+  `1..40`, while `flow/phase1_phase2_phase3.yaml` — the file
+  `flow_compliance_check` treats as the single source of truth for the step
+  set — declares 44 integer ids plus alphabetic ones. The two drifted 4
+  apart, and the drift was not merely "that waiver was ignored": this
+  program's ERRORS become `SystemExit(1)` inside
+  `flow_compliance_check._load_waivers`, so ONE waiver naming a real step the
+  ceiling had not heard of produced NO COMPLIANCE REPORT AT ALL. Measured at
+  v1.7.85, NINE of the 63 ids the flow declares were rejected that way:
+  41, 42, 43, 44 and the alphabetic `D1`, `FS1`, `DT1`, `DT2`, `DT3` — which
+  is why the remedy is a DERIVED ID SET and not a corrected number. A scalar
+  ceiling of 44 would still have rejected the five alphabetic ones.
+
+  So the vocabulary is read from the flow definition (`flow_step_ids`) and an
+  id that names a step the flow ACTUALLY DECLARES is valid by construction.
+  That is the same rule #519/v1.7.83 already applied to role-resolved ids
+  ("a role resolved through the canonical map is valid by construction and is
+  not re-range-checked"), extended to the hand-authored integer path it left
+  behind. `--max-step` survives as an OVERRIDE — see its help text.
+
 v1.6.14 Wave 90 — decimal "<int>.<int>" sub-step ids were retired in
 favour of integer + alphabetic stage ids. The decimal acceptance
 pattern is removed (pre-release; no migration path needed).
 v1.6.15 Wave 91 — main track raised 1..39 → 1..40 (pre-PnR Yosys gate
 promoted to Step 14, stage3-5 cascade +1) and `P0` accepted as the
 new id for the structural-RTL preflight umbrella (replaces -1).
+#526 — those two hand-edits are what the derivation replaces; a range this
+program has to bump by hand every time the flow grows is the defect.
 
 Placeholder strings rejected in reason:
     "TODO", "TBD", "n/a", "N/A", "not done", "skip", "skipped",
@@ -89,7 +114,8 @@ Self-approval rejected: approver in {"agent","claude","ai","self",
 Usage:
     python3 waivers_schema_check.py <project_dir>
     python3 waivers_schema_check.py <project_dir> --json out.json
-    python3 waivers_schema_check.py <project_dir> --max-step 40
+    python3 waivers_schema_check.py <project_dir> --max-step 60
+    python3 waivers_schema_check.py <project_dir> --strict-ids
 
 Exit codes:
     0 = valid (or no waivers file)
@@ -132,6 +158,128 @@ PLACEHOLDER_APPROVERS = {
 }
 
 MIN_REASON_LEN = 20
+
+
+# ----------------------------------------------------------------------
+# #526 — the step-id vocabulary, DERIVED from the flow definition
+# ----------------------------------------------------------------------
+#: The flow definition whose `steps:` list IS the step set. Named once; the
+#: ids themselves are never restated in this file.
+FLOW_DEF_FILENAME = "phase1_phase2_phase3.yaml"
+
+#: Ceiling used ONLY when the flow definition cannot be read at all (PyYAML
+#: absent, or this program vendored away from its plugin tree). It is a
+#: FALLBACK, not the truth, and it is deliberately the historical value so
+#: that an unreadable flow degrades to the previous behaviour instead of to
+#: something new. Every path that uses it records `max_step_source` in the
+#: summary, so "we guessed" is never indistinguishable from "we derived".
+FALLBACK_MAX_STEP = 40
+
+#: {(path, mtime_ns, size): frozenset(ids)} — re-derived whenever the flow
+#: file changes on disk, so a test that grows a fixture flow sees the growth.
+_FLOW_ID_CACHE: Dict[Any, frozenset] = {}
+
+
+def find_flow_def() -> Path:
+    """Locate `flow/phase1_phase2_phase3.yaml` for the installed plugin.
+
+    Mirrors the unified-layout half of `flow_compliance_check._find_flow_def`.
+    It is restated rather than imported because `flow_compliance_check`
+    imports THIS module (`_load_waivers` -> `waivers_schema_check.validate`),
+    so importing it back would be a cycle — and because this program must
+    keep working standalone, which that heavyweight module does not (it
+    `sys.exit(2)`s at import time when PyYAML is missing).
+    """
+    here = Path(__file__).resolve()
+    for ancestor in (here.parent.parent,
+                     here.parent.parent.parent,
+                     here.parent.parent.parent.parent):
+        cand = ancestor / "flow" / FLOW_DEF_FILENAME
+        if cand.is_file():
+            return cand
+    return here.parent.parent / "flow" / FLOW_DEF_FILENAME
+
+
+def flow_step_ids(flow_def: Path | None = None) -> frozenset:
+    """Every step id the flow definition DECLARES, exactly as written.
+
+    Integers (`1`..`44`) and alphabetic stage ids (`A5`, `M2`, `P0`, `D1`,
+    `FS1`, `DT3`, ...) alike — the set is whatever `steps:` says, which is
+    the point: a waiver naming a step the flow declares must never be
+    rejected for naming it.
+
+    Returns an EMPTY set when the flow cannot be read (no PyYAML, missing or
+    unparseable file). Empty means "no derived vocabulary", which callers
+    resolve to :data:`FALLBACK_MAX_STEP` — fail-SOFT, because a validator
+    that raised here would take down every gate that merely wanted to ask
+    whether a waiver was well-formed.
+    """
+    path = Path(flow_def) if flow_def is not None else find_flow_def()
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return frozenset()
+    if key in _FLOW_ID_CACHE:
+        return _FLOW_ID_CACHE[key]
+    try:
+        import yaml  # imported lazily: standalone use must not require it
+        data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # ImportError, YAMLError, OSError — all "not derivable"
+        return frozenset()
+    steps = (data or {}).get("steps") if isinstance(data, dict) else None
+    if not isinstance(steps, list):
+        return frozenset()
+    ids = frozenset(
+        s["id"] for s in steps
+        if isinstance(s, dict) and isinstance(s.get("id"), (int, str))
+        and not isinstance(s.get("id"), bool)
+    )
+    _FLOW_ID_CACHE[key] = ids
+    return ids
+
+
+def flow_max_step(flow_def: Path | None = None) -> int | None:
+    """Highest INTEGER main-track step id the flow declares, or None when the
+    flow is unreadable. This is the derived default for ``max_step``."""
+    ints = [i for i in flow_step_ids(flow_def)
+            if isinstance(i, int) and not isinstance(i, bool)]
+    return max(ints) if ints else None
+
+
+def _canonical_flow_id(raw: str, declared: frozenset) -> Any:
+    """The flow's own spelling of ``raw``, or None when the flow declares no
+    such step. Case-insensitive, because the existing `A<n>`/`M<n>`/`P0`
+    forms have always been accepted case-insensitively and a hand-authored
+    `"dt1"` should not mean something different from `"DT1"`."""
+    norm = raw.strip().casefold()
+    if not norm:
+        return None
+    for declared_id in declared:
+        if isinstance(declared_id, str) and declared_id.casefold() == norm:
+            return declared_id
+    return None
+
+
+def _consumer_coerced_id(raw: Any) -> Any:
+    """What the COMPLIANCE READER makes of this id.
+
+    A verbatim restatement of `flow_compliance_check._load_waivers._parse_id`
+    (`int(v)` else `str(v)`), which is a nested function and therefore not
+    importable — and which could not be imported anyway without a cycle.
+
+    It is restated because the SEVERITY of an id finding depends on it. An id
+    this schema rejects is harmless when the reader also binds it to nothing
+    (it can waive no step), but NOT harmless when the reader's looser `int()`
+    lands it on a real step after this validator declined to check the entry:
+    `"39"` and `39.5` both reach step 39 that way. `test_issue526_*` pins the
+    two readers in agreement by running the REAL `flow_compliance_check`, so
+    this copy cannot drift unnoticed.
+    """
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        return str(raw)
 
 
 @dataclass
@@ -184,16 +332,55 @@ def _is_placeholder_approver(s: str) -> bool:
     return norm in PLACEHOLDER_APPROVERS
 
 
-def validate(project: Path, max_step: int = 40,
-             strict_review_required: bool = False
+def validate(project: Path, max_step: int | None = None,
+             strict_review_required: bool = False,
+             strict_ids: bool = False,
+             flow_def: Path | None = None
              ) -> tuple[List[WaiverFinding], Dict[str, Any]]:
+    """Validate ``project``/waivers.json.
+
+    ``max_step`` — OVERRIDE. None (the default) means "derive the ceiling
+    from the flow definition", which is the only setting that cannot drift
+    away from the flow. Pass a number only to validate against a flow this
+    program cannot read; see the CLI help for the full rationale. An explicit
+    number EXTENDS the accepted range, it never subtracts a step the flow
+    declares — #526: `flow_compliance_check._load_waivers` still carries its
+    own `max_step: int = 40` and passes it explicitly, so a rule that let the
+    caller's stale ceiling win would have left the defect exactly where it
+    was found.
+
+    ``strict_ids`` — upgrade the id findings from WARNING back to ERROR, for
+    standalone gate use where a nonzero exit is the whole signal. Mirrors
+    ``strict_review_required``. Off by default so that an unusable id costs
+    the reader one warning line instead of the entire compliance report.
+
+    ``flow_def`` — point the derivation at a specific flow definition
+    (tests; alternate flows). Defaults to the installed plugin's.
+    """
     findings: List[WaiverFinding] = []
     wpath = project / "waivers.json"
+
+    declared_ids = flow_step_ids(flow_def)
+    derived_max = flow_max_step(flow_def)
+    if max_step is not None:
+        effective_max, max_step_source = max_step, "caller-override"
+    elif derived_max is not None:
+        effective_max, max_step_source = derived_max, "derived-from-flow"
+    else:
+        effective_max, max_step_source = FALLBACK_MAX_STEP, "fallback-flow-unreadable"
 
     summary: Dict[str, Any] = {
         "waivers_file": str(wpath),
         "exists": wpath.exists(),
         "waiver_count": 0,
+        # #526 — the ceiling and where it came from are REPORTED, so a run
+        # that silently degraded to the fallback is distinguishable from one
+        # that read the flow. "we guessed 40" must never look like "the flow
+        # says 40".
+        "flow_def": str(Path(flow_def) if flow_def is not None else find_flow_def()),
+        "flow_step_ids_declared": len(declared_ids),
+        "max_step": effective_max,
+        "max_step_source": max_step_source,
     }
 
     if not wpath.exists():
@@ -302,14 +489,20 @@ def validate(project: Path, max_step: int = 40,
             continue
 
         # id — accept:
-        #   (a) integer in 1..max_step (main-track steps), or
-        #   (b) string "step_<n>_..." with n in 1..max_step, or
+        #   (a) integer in 1..effective_max (main-track steps), or
+        #   (b) string "step_<n>_..." with n in 1..effective_max, or
         #   (c) string "A<n>" with n in 1..16 (analog A1-A16 from
         #       phase1_phase2_phase3.yaml stage_analog track; chip-AGNOSTIC).
         #   (d) string "M<n>" with n in 1..16 (mixed-signal M1-M16,
         #       M1-M4 currently used).
         #   (e) string "P0" — preflight structural-RTL umbrella
         #       (Wave 91 / v1.6.15; replaces synthetic step -1).
+        #   (g) #526 — ANY id the flow definition DECLARES, integer or
+        #       alphabetic. This is the rule that makes the others
+        #       maintenance-free: `41`-`44` and `D1`/`FS1`/`DT1`-`DT3` are
+        #       real steps that (a)-(e) had never been taught about, and
+        #       because a rejection here becomes `SystemExit(1)` in
+        #       `flow_compliance_check`, each one deleted the whole report.
         # v1.6.14 Wave 90 — decimal "<int>.<int>" sub-step ids retired.
         # Wave 88 introduced patch ids that Wave 90 integerised; the
         # decimal pattern is no longer accepted.
@@ -367,34 +560,121 @@ def validate(project: Path, max_step: int = 40,
                 elif pm:
                     sid = "P0"
                     is_preflight = True
+                # #526 (g) — an alphabetic id the FLOW declares. `D1`, `FS1`,
+                # `DT1`-`DT3` are steps of the canonical flow that none of the
+                # patterns above had ever been taught, so a waiver naming one
+                # was rejected as unparseable and took the report with it.
+                # Canonicalised to the flow's own spelling so that dedup and
+                # reporting agree with the flow.
+                elif (flow_alpha := _canonical_flow_id(stripped,
+                                                       declared_ids)) is not None:
+                    sid = flow_alpha
         # #519 — an id RESOLVED from a canonical role name is valid by
         # construction and is not re-range-checked. The map is the source of
         # truth for which steps a role names, and it legitimately reaches past
-        # `max_step`: `htol` binds to Step 44, while this program's default
-        # max_step is still 40. Range-checking a resolved id therefore rejected
-        # a correct waiver as out-of-range — and since `flow_compliance_check`
-        # turns any schema error into SystemExit(1), that killed the entire
-        # compliance run for every project deferring HTOL. The range check
-        # exists to catch a hand-authored `id: 999`, which this is not.
-        digital_ok = isinstance(sid, int) and (1 <= sid <= max_step)
+        # a hand-typed ceiling: `htol` binds to Step 44, while this program's
+        # default max_step used to be 40. Range-checking a resolved id
+        # therefore rejected a correct waiver as out-of-range — and since
+        # `flow_compliance_check` turns any schema error into SystemExit(1),
+        # that killed the entire compliance run for every project deferring
+        # HTOL.
+        #
+        # #526 — "valid by construction" is the right rule and it was applied
+        # to only one of the two paths that need it. The map is a source of
+        # truth for which steps a ROLE names; the FLOW DEFINITION is the
+        # source of truth for which steps EXIST, and `flow_compliance_check`
+        # already treats it that way. So `flow_ok` extends the same
+        # construction to a hand-authored id: if the flow declares that step,
+        # the step exists, and no ceiling this program was handed can make it
+        # not exist. That matters concretely because `flow_compliance_check.
+        # _load_waivers` carries its OWN `max_step: int = 40` and passes it
+        # EXPLICITLY — a fix that only corrected this function's default would
+        # have been overridden by the caller and changed nothing.
+        #
+        # The range check keeps its real job: catching a hand-authored
+        # `id: 999`, which names nothing.
+        flow_ok = sid is not None and sid in declared_ids
+        digital_ok = isinstance(sid, int) and (1 <= sid <= effective_max)
         analog_ok = is_analog and isinstance(sid, str)
         mixed_signal_ok = is_mixed_signal and isinstance(sid, str)
         preflight_ok = is_preflight and isinstance(sid, str)
         role_ok = role_name is not None and sid is not None
         if not (digital_ok or analog_ok or mixed_signal_ok
-                or preflight_ok or role_ok):
-            findings.append(WaiverFinding(
-                severity="error", entry_index=i,
-                step_id=sid if isinstance(sid, int) else -1,
-                rule="id-range",
-                message=(
-                    f"id must be integer in 1..{max_step} "
-                    "(or 'step_<n>_…', 'A<n>' with n<=16, "
-                    "'M<n>' with n<=16, or 'P0'), "
-                    f"got {raw_sid!r}"
-                ),
-            ))
-            continue
+                or preflight_ok or role_ok or flow_ok):
+            # #526 — WHAT SEVERITY, and why it is not a matter of taste.
+            #
+            # This program's ERRORS become `SystemExit(1)` inside
+            # `flow_compliance_check._load_waivers`, so the severity decides
+            # whether the reader gets a report with a complaint in it or NO
+            # REPORT AT ALL. The rule that follows is: an id finding is fatal
+            # only where fatality is the ONLY protection left. Measured
+            # against the real consumer, there are exactly three cases.
+            coerced = _consumer_coerced_id(raw_sid)
+            id_sev = "error" if strict_ids else "warning"
+
+            if not attestation_dialect and "id" not in entry:
+                # (1) NO `id` KEY AT ALL. `_load_waivers` does `w["id"]` on
+                # every `waived_steps` entry, so this raises KeyError there
+                # and the run dies either way — downgrading would only swap
+                # this precise message for the caller's bare
+                # "cannot parse waivers.json: 'id'". Precise beats vague when
+                # the outcome is identical; this stays an ERROR.
+                findings.append(WaiverFinding(
+                    severity="error", entry_index=i, step_id=-1,
+                    rule="id-missing",
+                    message=(
+                        "no `id` field. The compliance reader indexes every "
+                        "`waived_steps` entry by `id` and cannot load this "
+                        "file without one — add a canonical step id "
+                        "(an integer the flow declares, 'A<n>', 'M<n>' or "
+                        "'P0')."
+                    ),
+                ))
+                continue
+
+            if coerced in declared_ids:
+                # (2) A NON-CANONICAL SPELLING THE READER STILL BINDS TO A
+                # REAL STEP. `"39"` and `39.5` are not valid ids here, but
+                # `_load_waivers`'s `int()` lands both on step 39 and waives
+                # it. Skipping the entry — which is what the old `continue`
+                # did — would hand the consumer an exemption this program
+                # never checked for a reason or an approver. So the entry is
+                # bound to the coerced step and validated in full, and the
+                # spelling is DISCLOSED. Nothing is applied unvalidated, and
+                # the report survives to say so.
+                findings.append(WaiverFinding(
+                    severity=id_sev, entry_index=i,
+                    step_id=coerced if isinstance(coerced, int) else -1,
+                    rule="id-noncanonical-spelling",
+                    message=(
+                        f"id={raw_sid!r} is not a canonical step id, but the "
+                        f"compliance reader coerces it to step {coerced!r} "
+                        f"and will apply this waiver there. Write the "
+                        f"canonical id {coerced!r} so the two readers cannot "
+                        f"disagree."
+                    ),
+                ))
+                sid = coerced
+            else:
+                # (3) AN ID THAT NAMES NOTHING. `_load_waivers` files it under
+                # a key no flow step has, so it grants NO exemption — the
+                # waiver is inert. An ERROR here would not withhold anything;
+                # it would only delete the report that says the waiver is
+                # inert. WARNING, and `--strict-ids` restores the hard exit
+                # for standalone gate use where the exit code is the signal.
+                findings.append(WaiverFinding(
+                    severity=id_sev, entry_index=i,
+                    step_id=sid if isinstance(sid, int) else -1,
+                    rule="id-range",
+                    message=(
+                        f"id must name a step the flow declares (integer in "
+                        f"1..{effective_max}, or 'step_<n>_…', 'A<n>' with "
+                        f"n<=16, 'M<n>' with n<=16, 'P0', or an alphabetic "
+                        f"stage id the flow defines), got {raw_sid!r}. This "
+                        f"waiver names no flow step, so it exempts nothing."
+                    ),
+                ))
+                continue
 
         # #519 — deduplicate on the identifier AS WRITTEN, not on the resolved
         # id. Role names are many-to-one onto flow steps (Step 31 is "Physical
@@ -417,9 +697,17 @@ def validate(project: Path, max_step: int = 40,
 
         # v0.112 (BACKLOG-v10 P0.2): cascades_to validation. Optional
         # field — if present, must be a list of valid step ids (digital
-        # int 1..max_step or analog A<n> 1..16). Each cascaded id must
+        # int 1..effective_max or analog A<n> 1..16). Each cascaded id must
         # NOT also have its own waiver entry (would duplicate-shadow the
         # cascade source). Reduces N+1 entries to 1 root.
+        #
+        # #526 — this list was range-checked against the SAME hand-typed
+        # ceiling as `id`, so it carried the identical defect: a root waiver
+        # cascading to a real step past the ceiling (`cascades_to: [44]`, or
+        # any alphabetic flow id) was rejected, and the rejection deleted the
+        # compliance report. It is held to the derived vocabulary now, and its
+        # severity follows the same rule as `id` — a cascade child that names
+        # no step propagates nothing, so saying so must not cost the report.
         cascades = entry.get("cascades_to")
         if cascades is not None:
             if not isinstance(cascades, list):
@@ -440,14 +728,21 @@ def validate(project: Path, max_step: int = 40,
                             cs = child.strip().upper()
                         elif cmm and 1 <= int(cmm.group(1)) <= 16:
                             cs = child.strip().upper()
+                        elif (child_alpha := _canonical_flow_id(
+                                child, declared_ids)) is not None:
+                            cs = child_alpha
                     if not (
-                        (isinstance(cs, int) and 1 <= cs <= max_step)
+                        (isinstance(cs, int) and 1 <= cs <= effective_max)
+                        or (cs is not None and cs in declared_ids)
                         or isinstance(cs, str)
                     ):
                         findings.append(WaiverFinding(
-                            severity="error", entry_index=i, step_id=sid,
+                            severity=("error" if strict_ids else "warning"),
+                            entry_index=i, step_id=sid,
                             rule="cascades-id-invalid",
-                            message=f"cascades_to[{j}]={child!r} is not a valid step id",
+                            message=(f"cascades_to[{j}]={child!r} names no step "
+                                     f"the flow declares, so it propagates no "
+                                     f"waiver"),
                         ))
                     elif cs == sid:
                         findings.append(WaiverFinding(
@@ -705,13 +1000,29 @@ def validate(project: Path, max_step: int = 40,
 def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     p.add_argument("project_dir", help="Project directory containing (optional) waivers.json")
-    p.add_argument("--max-step", type=int, default=40,
-                   help="Highest valid main-track step id "
-                        "(default 40 for phase1_phase2_phase3 v1.6.15 flow)")
+    p.add_argument("--max-step", type=int, default=None,
+                   help=("OVERRIDE the highest valid main-track step id. "
+                         "The default is DERIVED from the flow definition "
+                         "(#526) — the flow is the single source of truth "
+                         "for the step set, and a number kept in sync by "
+                         "hand is how this program's ceiling and the flow "
+                         "drifted 4 steps apart. Pass this only when "
+                         "validating against a flow this program cannot "
+                         "read; it EXTENDS the accepted range and never "
+                         "subtracts a step the flow declares."))
     p.add_argument("--json", help="Write JSON report to this path")
     p.add_argument("--strict-review-required", action="store_true",
                    help=("v1.6.12: when set, missing review_required field "
                          "is upgraded from WARN to ERROR (exit 1)."))
+    p.add_argument("--strict-ids", action="store_true",
+                   help=("#526: when set, an id that names no flow step is "
+                         "upgraded from WARN to ERROR (exit 1). Off by "
+                         "default because these findings are consumed by "
+                         "`flow_compliance_check`, which turns any error "
+                         "into SystemExit(1) — an inert waiver must not "
+                         "cost the reader the whole compliance report. Set "
+                         "it when running this program standalone as a "
+                         "gate, where the exit code is the signal."))
     args = p.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
@@ -720,7 +1031,8 @@ def main(argv: List[str] | None = None) -> int:
         return 2
 
     findings, summary = validate(project, max_step=args.max_step,
-                                 strict_review_required=args.strict_review_required)
+                                 strict_review_required=args.strict_review_required,
+                                 strict_ids=args.strict_ids)
 
     errors = [f for f in findings if f.severity == "error"]
     warnings = [f for f in findings if f.severity == "warning"]
@@ -730,6 +1042,13 @@ def main(argv: List[str] | None = None) -> int:
     else:
         print(f"\n=== Waivers schema check ===")
         print(f"File: {summary['waivers_file']}")
+        # #526 — print WHERE the ceiling came from. A run that silently fell
+        # back because the flow was unreadable must not look like one that
+        # read it.
+        print(f"Step ids: {summary['flow_step_ids_declared']} declared by "
+              f"{summary['flow_def']}")
+        print(f"Max main-track step: {summary['max_step']} "
+              f"({summary['max_step_source']})")
         print(f"Waiver count: {summary['waiver_count']}")
         print(f"Errors: {len(errors)}    Warnings: {len(warnings)}\n")
         for f in findings:
