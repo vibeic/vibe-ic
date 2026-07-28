@@ -22520,6 +22520,85 @@ _SIGNOFF_MAX_FANOUT_NOTE = (
 # pathological design can't blow the report file up unboundedly.
 _CHECK_TYPES_VIOLATORS_MAX_COUNT = 2000
 
+# ORGANIC #540 — worst-PATH evidence markers. `report_worst_slack` prints a
+# NUMBER; only `report_checks` prints the startpoint/endpoint/arrival breakdown
+# that says WHAT produced it. These markers record whether that dump was
+# actually obtained, so a downstream gate never has to infer it from the
+# presence or absence of free text. Mirrors the check-types marker pair:
+# _REPORTED only on the success branch, _FAILED (carrying the tool's own reason)
+# on the failure branch — never silence. chip/PDK-AGNOSTIC.
+_SIGNOFF_WORST_PATHS_MARKER = "SIGNOFF_WORST_PATHS_REPORTED path_delay="
+_SIGNOFF_WORST_PATHS_FAILED = "SIGNOFF_WORST_PATHS_FAILED path_delay="
+
+# How many worst paths the sign-off reports dump. 3 keeps the report readable
+# while still showing the runner-up paths a triager needs to tell "one marginal
+# endpoint" from "a whole cone".
+_SIGNOFF_WORST_PATH_COUNT = 3
+
+
+def _report_worst_paths_tcl(rpt_c: str, flag: str) -> str:
+    """ORGANIC #540 — emit the worst-PATH dump for a sign-off STA report.
+
+    `flag` is the caller's setup/hold selector in `report_worst_slack` spelling
+    (``-max`` / ``-min``); this helper translates it to the spelling
+    `report_checks` actually accepts.
+
+    THE BUG THIS EXISTS TO KILL. Both corner emitters used to interpolate the
+    SAME `flag` into both commands::
+
+        report_worst_slack -max >> rpt                                  # valid
+        catch {report_checks -max -group_path_count 3 ... >> rpt}        # INVALID
+
+    `report_worst_slack` takes `-max`/`-min`; `report_checks` does NOT — it
+    takes `-path_delay max|min`. Verified against the OpenSTA the image ships
+    (3.1.0 244797f162)::
+
+        report_checks -max ...          -> Error 514: '-max' is not a known
+                                           keyword or flag.
+        report_checks -min ...          -> Error 514: '-min' is not a known
+                                           keyword or flag.
+        report_checks -path_delay max   -> accepted (reaches path analysis)
+
+    The command therefore failed on EVERY invocation, at every corner, on every
+    design — and the enclosing `catch` swallowed it in silence, so each report
+    kept its `worst slack` number and lost the path that produced it. Measured
+    over the tracked corpus at the time of the fix: 0 of 9 `sta_mcorner_ocv*.rpt`
+    carried a worst-path dump, against 51 of 106 for every other STA report (the
+    ones that survive are `_emit_spef_sta`'s, which calls a bare `report_checks`
+    with no flag and is therefore unaffected).
+
+    HOW THE CATCH BECAME THE BUG. That `catch` was added by an EARLIER fix for
+    this very Error 514 — raised then by the deprecated `-group_count`. That fix
+    renamed the flag to `-group_path_count` and wrapped the call so a failure
+    could no longer abort the script and take the `report_check_types` DRV query
+    down with it. It did not notice the `{flag}` beside it. The guard added to
+    stop an abort then spent its whole life silently swallowing the command it
+    was placed there to protect: the DRV query it was protecting ran fine, so
+    the run looked fixed, while the path dump was gone.
+
+    So the guard STAYS — a `report_checks` hiccup must never again abort the
+    script before the DRV query — but it is no longer SILENT. Success appends
+    ``SIGNOFF_WORST_PATHS_REPORTED``; failure appends
+    ``SIGNOFF_WORST_PATHS_FAILED ... reason=<tool error>``. Either way the
+    report STATES whether its slack has path evidence behind it, which is what
+    `sta_signoff_rigor_check` now gates on. chip/PDK-AGNOSTIC: stock OpenSTA
+    flags only, no design or PDK literal."""
+    mode = "min" if flag.lstrip("-") == "min" else "max"
+    return (
+        f"if {{[catch {{report_checks -path_delay {mode} "
+        f"-group_path_count {_SIGNOFF_WORST_PATH_COUNT} "
+        f"-fields {{slew capacitance}} >> {rpt_c}}} _wperr]}} {{\n"
+        f"  set _wf [open {rpt_c} a]\n"
+        f'  puts $_wf "{_SIGNOFF_WORST_PATHS_FAILED}{mode} reason=$_wperr"\n'
+        f"  close $_wf\n"
+        f"}} else {{\n"
+        f"  set _wf [open {rpt_c} a]\n"
+        f'  puts $_wf "{_SIGNOFF_WORST_PATHS_MARKER}{mode} '
+        f'group_path_count={_SIGNOFF_WORST_PATH_COUNT}"\n'
+        f"  close $_wf\n"
+        f"}}\n"
+    )
+
 
 def _report_check_types_tcl(rpt_c: str) -> str:
     """Emit `report_check_types -recovery -removal -max_slew -min_pulse_width
@@ -23491,15 +23570,13 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
-            # `-group_count` is a DEPRECATED OpenSTA flag: on 3.1.0 it raises
-            # Error 514 and ABORTS the -no_init -exit script, so the
-            # report_check_types DRV query below never ran and this sign-off
-            # report silently carried NO max_slew/max_capacitance check at
-            # all. Use the current `-group_path_count`, wrapped in `catch`
-            # (identical to the process-axis stanza), so a report_checks
-            # hiccup can never again swallow the DRV query.
-            f"catch {{report_checks {flag} -group_path_count 3 "
-            f"-fields {{slew capacitance}} >> {rpt_c}}}\n"
+            # Worst-PATH dump (ORGANIC #540). `flag` is report_worst_slack's
+            # spelling (-max/-min); report_checks needs `-path_delay max|min`,
+            # and passing the raw flag raised Error 514 into the swallowing
+            # `catch` on every single invocation — this report carried its
+            # slack and never the path behind it. The shared helper does the
+            # translation and records whether the dump was obtained.
+            f"{_report_worst_paths_tcl(rpt_c, flag)}"
             # DRV (max_slew / max_capacitance): previously never asked for in
             # this report, so slew violations at a corner were unreportable.
             f"{_report_check_types_tcl(rpt_c)}"
@@ -23732,9 +23809,13 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
-            # show the worst-path SLEWS so the slew explosion is visible.
-            f"catch {{report_checks {flag} -group_path_count 3 "
-            f"-fields {{slew capacitance}} >> {rpt_c}}}\n"
+            # Worst-PATH dump + the path SLEWS, so the slew explosion and the
+            # cone that carries it are both visible (ORGANIC #540: this is the
+            # SS sign-off report, and passing report_worst_slack's `-max`/`-min`
+            # straight to report_checks made it Error 514 into a silent `catch`
+            # every time — the governing slow-corner verdict was recorded with
+            # no evidence of the path that produced it, on every design).
+            f"{_report_worst_paths_tcl(rpt_c, flag)}"
             # recovery/removal + min-pulse-width + max-slew + max-cap sign-off
             # check types (guarded + marked — the emitter attests the checks).
             f"{_report_check_types_tcl(rpt_c)}"

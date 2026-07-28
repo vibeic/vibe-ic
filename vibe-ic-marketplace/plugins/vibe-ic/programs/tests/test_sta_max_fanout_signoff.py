@@ -98,6 +98,12 @@ _REPORT_BODY = (
     "   0.42   slack (MET)\n"
     "worst slack max 0.42\n"
     "OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV\n"
+    # ORGANIC #540 — the worst-path marker the emitter writes between the slack
+    # lines and the check-types tables. Built from the runner's own constant so
+    # this fixture cannot drift from what the emitter actually emits. Its
+    # position is the emitted one: report_checks runs BEFORE report_check_types,
+    # so the marker lands ahead of the DRV tables and cannot hold one open.
+    f"{R._SIGNOFF_WORST_PATHS_MARKER}max group_path_count=3\n"
     "max slew\n"
     "----------\n"
     "Pin                    Limit    Slew   Slack\n"

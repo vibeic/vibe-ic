@@ -16,9 +16,19 @@ v1.2.x wired those into the SPEF STA TCL:
 This gate verifies a sign-off STA report actually CARRIES that rigor, so a run
 cannot claim "timing signed off" on the pre-fix optimistic basis.
 
+ORGANIC #540 added a FOURTH dimension: WORST-PATH EVIDENCE. This gate used to
+ask only whether the report carried a derate and the check types — never whether
+it carried the PATH behind its own governing slack. It therefore PASSed reports
+whose `report_checks` had silently errored inside a `catch`, which over the
+tracked corpus was every single multi-corner OCV report (0 of 9 carried a path
+dump, against 51 of 106 for the other STA reports). A slack with no path is a
+verdict that reads the same whether or not the thing behind it was examined,
+which is precisely what this gate exists to stop.
+
 Verdict:
   PASS  — the report shows OCV derating was applied AND carries recovery/removal
-          AND min-pulse-width evidence (a full-rigor sign-off basis).
+          AND min-pulse-width evidence AND accounts for its own worst slack with
+          a path (a full-rigor sign-off basis).
   FAIL  — the report exists but is MISSING one or more (the finding lists which):
           an optimistic sign-off, not a foundry-grade one.
   rc=2  — the report path is absent/unreadable (missing-evidence IO error).
@@ -92,6 +102,34 @@ _MPW_RE = re.compile(r"min[_ ]pulse[_ ]width", re.IGNORECASE)
 _CHECK_TYPES_MARKER_RE = re.compile(
     r"SIGNOFF_CHECK_TYPES_REPORTED\s+(?P<types>.+)", re.IGNORECASE)
 
+# ORGANIC #540 — WORST-PATH EVIDENCE. `report_worst_slack` prints a NUMBER;
+# only `report_checks` prints the startpoint/endpoint/arrival breakdown that
+# says WHAT produced it. This gate could not tell those apart: it asked whether
+# the report carried a DERATE and the CHECK TYPES, never whether it carried the
+# path behind its own governing slack. So a report whose `report_checks` had
+# silently errored — which, measured over the tracked corpus, was 9 of 9
+# `sta_mcorner_ocv*.rpt` — was byte-indistinguishable to this gate from one that
+# dumped its full critical path, and PASSED. The gate enforcing sign-off rigour
+# was blind to the one thing that would make its input auditable.
+#
+# Evidence, most authoritative first:
+#   1. the emitter marker (tool-version-independent, and the ONLY signal that
+#      distinguishes "queried and this design has no such path" from "never
+#      queried" — an empty path table and an errored one look identical),
+#   2. an explicit FAILED marker naming the tool's own reason — that is
+#      NEGATIVE evidence and must never be read as absence of a problem,
+#   3. fallback: a literal path dump in the body, which is how a report from a
+#      pre-marker emitter or another tool still counts (`_emit_spef_sta` calls a
+#      bare `report_checks` and has always produced one).
+_WORST_PATHS_MARKER_RE = re.compile(
+    r"SIGNOFF_WORST_PATHS_REPORTED\s+path_delay=(\S+)", re.IGNORECASE)
+_WORST_PATHS_FAILED_RE = re.compile(
+    r"SIGNOFF_WORST_PATHS_FAILED\s+path_delay=(\S+)\s+reason=(.*)",
+    re.IGNORECASE)
+# A real OpenSTA/OpenROAD path dump. chip-AGNOSTIC: universal report structure.
+_PATH_DUMP_RE = re.compile(
+    r"^\s*(?:Startpoint|Endpoint)\s*:|data arrival time", re.IGNORECASE | re.M)
+
 
 def _find_report(target: Path) -> Optional[Path]:
     """Resolve the sign-off STA report. Accepts a file or a directory.
@@ -132,7 +170,31 @@ def evaluate(report_text: str) -> Dict[str, object]:
     removal = "removal" in marker_types or bool(_REMOVAL_RE.search(report_text))
     mpw = ("min_pulse_width" in marker_types or "min pulse width" in marker_types
            or bool(_MPW_RE.search(report_text)))
+    # ORGANIC #540 — worst-path evidence behind the report's own slack.
+    path_failures = [f"path_delay={m.group(1)}: {m.group(2).strip()}"
+                     for m in _WORST_PATHS_FAILED_RE.finditer(report_text)]
+    if _WORST_PATHS_MARKER_RE.search(report_text):
+        path_source = "marker"
+    elif _PATH_DUMP_RE.search(report_text):
+        path_source = "path-dump"
+    else:
+        path_source = None
+    # A pass that ERRORED is negative evidence, and it outranks a sibling pass
+    # that succeeded: a report whose hold path dump died still cannot account
+    # for its hold slack, so a partial report is not an evidenced one.
+    worst_path_evidence = bool(path_source) and not path_failures
+
     missing: List[str] = []
+    if not worst_path_evidence:
+        if path_failures:
+            missing.append(
+                "worst-path evidence — the report's own path query FAILED and "
+                "said so: " + "; ".join(path_failures))
+        else:
+            missing.append(
+                "worst-path evidence (report_checks startpoint/endpoint/data "
+                "arrival time, or the SIGNOFF_WORST_PATHS_REPORTED marker) — "
+                "the report records a slack with nothing behind it")
     if not ocv:
         missing.append("OCV derating (set_timing_derate / OCV_DERATE_APPLIED / "
                        "read_aocv / AOCV_TABLE_APPLIED)")
@@ -165,6 +227,10 @@ def evaluate(report_text: str) -> Dict[str, object]:
         "recovery_checked": recovery,
         "removal_checked": removal,
         "min_pulse_width_checked": mpw,
+        # ORGANIC #540 — is the slack in this report accountable to a path?
+        "worst_path_evidence": worst_path_evidence,
+        "worst_path_evidence_source": path_source,   # "marker"|"path-dump"|None
+        "worst_path_query_failures": path_failures,
         "missing": missing,
         "ocv_scope": ocv_scope,
     }
