@@ -28,6 +28,13 @@ THE THREE PROPERTIES THESE TESTS PIN
    registration that could silently drift would be the very defect this
    program exists to catch, one level up.
 
+4. A DEBT NOBODY RE-EXAMINED IS NOT A DEBT SOMEBODY PAID (section 7, #536).
+   The register MAY ONLY SHRINK, so *shrink the register* is an irreversible
+   instruction, and until #536 it was derived by set subtraction — which
+   cannot tell a record that was re-adjudicated clean from one that was never
+   adjudicated. Section 7 injects each way a record becomes undecidable and
+   requires the resolution claim, and the instruction, to disappear.
+
 AND ONE BEHAVIOURAL PIN, which no source fingerprint can give: the real gate
 CLI is run on both shipped zero-coupling fixtures and the adjudicator must
 agree with the verdict the gate actually emitted. That is what keeps the rule's
@@ -550,7 +557,12 @@ def test_a_new_superseded_record_fails_even_with_debt_recorded(tmp_path):
 
 
 def test_a_paid_debt_must_shrink_the_register(tmp_path):
-    """A stale entry in the register would become standing permission."""
+    """A stale entry in the register would become standing permission.
+
+    This is the ONE shape that earns the shrink instruction: the rule named in
+    the entry RAN over the record named in the entry and declined to supersede
+    it. Section 8 pins everything that merely looks like it from the outside.
+    """
     root = _corpus(tmp_path, {
         "ic/ad/reports/phase3/si_mcf_sta_check.json": _si_record(
             verdict="VACUOUS_PASS", coupling_pairs=0)})   # corrected upstream
@@ -559,8 +571,12 @@ def test_a_paid_debt_must_shrink_the_register(tmp_path):
         "PASS->VACUOUS_PASS::si_mcf_sta_check.zero-fold-is-not-a-signoff"])
     rc, rep, se = _report(root, tmp_path / "b", "--baseline", str(bl))
     assert rc == 1
-    assert len(rep["summary"]["superseded_debt_paid"]) == 1
+    assert len(rep["summary"]["superseded_debt_resolved"]) == 1
+    assert [c["status"] for c in rep["summary"]["recorded_debt_status"]] == [
+        P.DEBT_RESOLVED]
+    assert rep["summary"]["records_adjudicated"] == 1
     assert "the debt was paid" in se
+    assert "shrink" in se
 
 
 def test_a_different_staleness_on_a_recorded_record_is_new(tmp_path):
@@ -687,7 +703,262 @@ def test_adjudicator_agrees_with_what_the_real_gate_emits(tmp_path, fixture):
         assert emitted["summary"]["coupling_pairs"] > 0
 
 
-# ── 7. the real corpus, which is why this program exists ───────────────────
+# ── 7. "never examined" is not "no longer superseded" (vibe-ic#536) ────────
+#
+# The register MAY ONLY SHRINK, so the instruction it emits — *shrink the
+# register* — is a destructive, irreversible edit. Until #536 that
+# instruction was derived by set subtraction: an entry that produced no finding
+# was PAID. An entry that was never adjudicated also produces no finding, and
+# on this repo's own corpus at v1.7.89 a stale decision digest made both
+# recorded entries undecidable and the gate duly reported both as paid. Both
+# records still carried PASS and both still superseded.
+#
+# These tests fix the inference, not one of its false premises. Section 4
+# already pins that a stale declaration is caught; what is pinned here is that
+# NOTHING follows about the register from an entry nobody looked at.
+_ENTRY = ("si_mcf_sta_check::{rec}::PASS->VACUOUS_PASS::"
+          "si_mcf_sta_check.zero-fold-is-not-a-signoff")
+
+
+def _stale_digest(src: str) -> str:
+    """The declared digest, reverted — the exact v1.7.89 state, on any commit.
+
+    Substituting the FIRST 64-hex literal after `decision_digest=` keeps this
+    independent of what the current digest happens to be, so the mutation
+    cannot quietly stop applying when the gate's logic next moves.
+    """
+    import re
+    out, n = re.subn(r'(decision_digest=\(\s*")[0-9a-f]{64}(")',
+                     r"\g<1>" + "5" * 64 + r"\g<2>", src, count=1)
+    assert n == 1, "the declaration no longer has a substitutable digest"
+    return out
+
+
+def _withdraw_declaration(src: str) -> str:
+    assert src.count("RECORD_ADJUDICATION = _ra.declare(") == 1
+    return src.replace("RECORD_ADJUDICATION = _ra.declare(",
+                       "_WITHDRAWN = _ra.declare(", 1)
+
+
+def _no_gate_module(tmp_path: Path) -> Path:
+    """A programs dir the gate module is absent from."""
+    d = tmp_path / "gate_module_gone"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def test_an_unadjudicated_entry_is_not_reported_as_a_resolved_one(tmp_path):
+    """THE DEFECT, injected the way it was found: a stale decision digest.
+
+    The record is untouched and still superseded. The only thing that changed
+    is that nothing could adjudicate it — and the gate must not turn that into
+    an instruction to delete the entry that records it.
+    """
+    rec = "ic/aj/reports/phase3/si_mcf_sta_check.json"
+    root = _corpus(tmp_path, {rec: _si_record(verdict="PASS",
+                                              coupling_pairs=0)})
+    altered = _gate_copy(tmp_path, _stale_digest)
+    bl = _baseline(tmp_path, [_ENTRY.format(rec=rec)])
+
+    rc, rep, se = _report(root, tmp_path / "b", "--baseline", str(bl),
+                          programs_dir=altered)
+    s = rep["summary"]
+    assert rc == 1                                  # the DRIFT, and only it
+    assert s["gates_unreviewed"] == ["si_mcf_sta_check"]
+    assert s["records_adjudicated"] == 0
+    assert s["superseded_debt_resolved"] == []
+    assert s["superseded_debt_unadjudicated"] == [_ENTRY.format(rec=rec)]
+    [c] = s["recorded_debt_status"]
+    assert c["status"] == P.DEBT_UNADJUDICATED
+    assert c["blocked_by"] == P.UNDECIDABLE_RULES_UNREVIEWED
+    # ... and the destructive instruction is not issued at all
+    assert "the debt was paid" not in se
+    assert "shrink" not in se
+    assert "RULES_UNREVIEWED" in se
+
+    # The record really is still superseded — the claim the old message made
+    # about it was false, not merely unsupported.
+    rc2, rep2, _se2 = _report(root, tmp_path / "c", "--ignore-baseline")
+    assert rc2 == 1
+    assert [P.debt_key(f) for f in rep2["findings"]
+            if f["kind"] == P.STALE] == [_ENTRY.format(rec=rec)]
+
+
+@pytest.mark.parametrize("how", ["stale_digest", "declaration_withdrawn",
+                                 "gate_module_absent", "fields_absent"])
+def test_no_undecidability_class_can_pass_for_a_resolved_debt(tmp_path, how):
+    """The conflation was never specific to rule drift.
+
+    Two of these are WORSE than the injection in the issue: a missing gate
+    module and a withdrawn declaration raise no other alarm, so *shrink the
+    register* was the ONLY thing the gate said. A reader following the one
+    instruction on screen would have deleted live debt with nothing to warn
+    them.
+    """
+    rec = "ic/ak/reports/phase3/si_mcf_sta_check.json"
+    record = _si_record(verdict="PASS", coupling_pairs=0)
+    programs_dir = None
+    if how == "stale_digest":
+        programs_dir = _gate_copy(tmp_path, _stale_digest)
+    elif how == "declaration_withdrawn":
+        programs_dir = _gate_copy(tmp_path, _withdraw_declaration)
+    elif how == "gate_module_absent":
+        programs_dir = _no_gate_module(tmp_path)
+    else:
+        del record["summary"]["coupling_pairs"]
+
+    root = _corpus(tmp_path, {rec: record})
+    bl = _baseline(tmp_path, [_ENTRY.format(rec=rec)])
+    rc, rep, se = _report(root, tmp_path / "b", "--baseline", str(bl),
+                          programs_dir=programs_dir)
+    s = rep["summary"]
+    assert s["records_adjudicated"] == 0
+    assert s["superseded_debt_resolved"] == [], how
+    assert s["recorded_debt_status"][0]["status"] == P.DEBT_UNADJUDICATED
+    assert "the debt was paid" not in se, how
+    assert "shrink" not in se, how
+    # rc 1 only where something else is genuinely red (the drift); the rest are
+    # the disclosed-skip tier, which is what "nothing was adjudicated" means.
+    assert rc == (1 if how == "stale_digest" else 2), how
+
+
+def test_nothing_adjudicated_yields_no_resolution_claim_at_all(tmp_path):
+    """The property stated as a property, over a whole register.
+
+    `RESOLVED` requires membership in the adjudicated population, so an empty
+    adjudicated population can produce no resolution — by construction, not by
+    a special case someone has to remember to keep.
+    """
+    root = _corpus(tmp_path, {
+        "ic/al/r.json": {"program": "lec_run", "verdict": "PASS"}})
+    bl = _baseline(tmp_path, [
+        _ENTRY.format(rec=f"ic/gone_{i}/r.json") for i in range(5)])
+    rc, rep, se = _report(root, tmp_path / "b", "--baseline", str(bl))
+    s = rep["summary"]
+    assert s["records_adjudicated"] == 0
+    assert s["superseded_debt_resolved"] == []
+    assert rc == 2
+    assert "the debt was paid" not in se
+
+
+def test_an_entry_whose_record_is_no_longer_published_is_reported_not_claimed(
+        tmp_path):
+    """Inert, and said to be inert — but not called a re-adjudication.
+
+    The entry can suppress nothing, which a reader should know. That it is
+    inert is an observation of the CORPUS though; a record can also leave the
+    population by becoming unparsable or by the check being pointed at the
+    wrong tree, and neither of those is a debt anybody paid.
+    """
+    root = _corpus(tmp_path, {
+        "ic/am/reports/phase3/si_mcf_sta_check.json": _si_record(
+            verdict="PASS", coupling_pairs=9)})
+    bl = _baseline(tmp_path, [_ENTRY.format(rec="ic/deleted/r.json")])
+    rc, rep, se = _report(root, tmp_path / "b", "--baseline", str(bl))
+    s = rep["summary"]
+    assert rc == 0, se
+    assert s["records_adjudicated"] == 1          # something WAS adjudicated
+    assert s["superseded_debt_resolved"] == []
+    assert s["recorded_debt_status"][0]["status"] == P.DEBT_RECORD_UNPUBLISHED
+    assert "the debt was paid" not in se
+    assert "no such record" in se
+
+
+def test_an_entry_whose_rule_did_not_run_is_not_resolved_by_the_others(
+        tmp_path):
+    """Per RULE, not per record — a record can be partly adjudicated.
+
+    The record here IS adjudicated, by the rule the gate does declare. An entry
+    naming a DIFFERENT rule was not re-examined by that, and inheriting the
+    other rule's silence would be the same wrong inference at finer grain.
+    """
+    rec = "ic/an/reports/phase3/si_mcf_sta_check.json"
+    root = _corpus(tmp_path, {rec: _si_record(verdict="PASS",
+                                              coupling_pairs=9)})
+    bl = _baseline(tmp_path, [
+        f"si_mcf_sta_check::{rec}::PASS->FAIL::si_mcf_sta_check.a-rule-that-"
+        f"was-withdrawn"])
+    rc, rep, se = _report(root, tmp_path / "b", "--baseline", str(bl))
+    s = rep["summary"]
+    assert rc == 0, se
+    assert s["records_adjudicated"] == 1
+    assert s["superseded_debt_resolved"] == []
+    c = s["recorded_debt_status"][0]
+    assert c["status"] == P.DEBT_UNADJUDICATED
+    assert c["blocked_by"] == P.DEBT_RULE_NOT_APPLIED
+    assert "the debt was paid" not in se
+
+
+def test_an_unreadable_register_entry_is_not_a_resolution(tmp_path):
+    """A hand-edited register can hold something that names no record."""
+    root = _corpus(tmp_path, {
+        "ic/ao/reports/phase3/si_mcf_sta_check.json": _si_record(
+            verdict="PASS", coupling_pairs=9)})
+    bl = _baseline(tmp_path, ["not-a-key"])
+    rc, rep, se = _report(root, tmp_path / "b", "--baseline", str(bl))
+    assert rc == 0, se
+    assert rep["summary"]["superseded_debt_resolved"] == []
+    assert rep["summary"]["recorded_debt_status"][0]["status"] == (
+        P.DEBT_ENTRY_UNREADABLE)
+    assert "the debt was paid" not in se
+
+
+def test_the_debt_key_round_trips_through_its_parser():
+    """The two halves of the entry format cannot drift apart.
+
+    Read outside-in, so a record path is whatever lies between the gate and the
+    rule — including a separator, which a corpus path is entitled to contain
+    and which this program has no business forbidding.
+    """
+    for rec in ("ic/a/r.json", "ic/a::b/r.json", "r.json"):
+        f = {"gate": "g", "record": rec, "carried_verdict": "PASS",
+             "would_issue": "VACUOUS_PASS", "rule_id": "g.rule"}
+        assert P.parse_debt_key(P.debt_key(f)) == (
+            "g", rec, "PASS->VACUOUS_PASS", "g.rule")
+    for bad in ("", "g", "g::r", "g::r::PASS->FAIL", "::r::PASS->FAIL::x"):
+        assert P.parse_debt_key(bad) is None, bad
+
+
+def test_write_baseline_refuses_to_drop_what_nothing_re_adjudicated(tmp_path):
+    """The same deletion through the other door — and it was worse there.
+
+    `--write-baseline` performed the shrink the FAIL message asked for, and
+    performed it silently at rc 0: measured against the real register under a
+    stale digest, the pre-fix write path left ZERO entries and exited clean.
+    """
+    rec = "ic/ap/reports/phase3/si_mcf_sta_check.json"
+    root = _corpus(tmp_path, {rec: _si_record(verdict="PASS",
+                                              coupling_pairs=0)})
+    altered = _gate_copy(tmp_path, _stale_digest)
+    bl = _baseline(tmp_path, [_ENTRY.format(rec=rec)])
+
+    rc, _so, se = _run(root, "--baseline", str(bl), "--write-baseline",
+                       programs_dir=altered)
+    assert rc == 1
+    assert "refusing to DROP" in se
+    assert json.loads(bl.read_text())["known"] == [_ENTRY.format(rec=rec)]
+
+    # ... and it is not a flag away: --ignore-baseline is a READ semantic, so a
+    # write must still know what it is about to delete.
+    rc2, _so2, se2 = _run(root, "--baseline", str(bl), "--write-baseline",
+                          "--ignore-baseline", programs_dir=altered)
+    assert rc2 == 1, se2
+    assert json.loads(bl.read_text())["known"] == [_ENTRY.format(rec=rec)]
+
+
+def test_write_baseline_still_drops_an_entry_that_was_re_adjudicated(tmp_path):
+    """The guard must not freeze the register: a real shrink still writes."""
+    root = _corpus(tmp_path, {
+        "ic/aq/reports/phase3/si_mcf_sta_check.json": _si_record(
+            verdict="VACUOUS_PASS", coupling_pairs=0)})   # corrected upstream
+    bl = _baseline(tmp_path, [
+        _ENTRY.format(rec="ic/aq/reports/phase3/si_mcf_sta_check.json")])
+    rc, _so, se = _run(root, "--baseline", str(bl), "--write-baseline")
+    assert rc == 0, se
+    assert json.loads(bl.read_text())["known"] == []
+
+
+# ── 8. the real corpus, which is why this program exists ───────────────────
 @pytest.mark.skipif(not _CORPUS.is_dir(), reason="no published corpus here")
 def test_runs_on_the_real_published_corpus_and_stays_decisive(tmp_path):
     """Structural, so it survives the benchmark-agent correcting the records.

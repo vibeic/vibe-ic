@@ -97,11 +97,54 @@ RULE DRIFT IS NEVER BASELINEABLE. ``RULES_UNREVIEWED`` is plugin-side debt,
 fixable in the same commit that caused it, by the same person. Letting it be
 recorded would defeat the one requirement the register exists beside.
 
+A RECORDED ENTRY IS ONLY "PAID" IF SOMETHING RE-EXAMINED IT (vibe-ic#536)
+-------------------------------------------------------------------------
+The register's shrink-only rule needs a way to notice that an entry stopped
+being stale, and until #536 that way was set subtraction: an entry in the
+register that produced no finding this run was booked as PAID and the gate
+printed *shrink the register*. Set subtraction cannot tell "the record was
+re-adjudicated and is clean" from "the record was never adjudicated at all",
+and those are the same observation — no finding.
+
+Measured, on this repo's own corpus at v1.7.89: the declared decision digest
+was stale, so ``si_mcf_sta_check``'s seven records were UNDECIDABLE, so neither
+recorded entry produced a finding, so both were reported *no longer superseded
+— the debt was paid; shrink the register*. Both records still carried ``PASS``
+and both still superseded to ``VACUOUS_PASS`` when the rule was run directly.
+The instruction was to delete two live debts from a register that MAY ONLY
+SHRINK, i.e. an irreversible edit derived from an absence of evidence. The same
+false claim is produced — alone, with nothing else red — by a gate module going
+missing or a declaration being withdrawn: three different undecidability
+classes, one wrong inference.
+
+So the resolution question is asked ONLY of the ADJUDICATED population, per
+entry, per RULE:
+
+    RESOLVED           the rule named in the entry RAN over the record named in
+                       the entry, this run, and declined to supersede it. The
+                       only positive evidence available, and the only status
+                       that instructs a shrink.
+    STILL_SUPERSEDED   the entry reproduced its finding — the recorded debt.
+    UNADJUDICATED      the record was not adjudicated by that rule (any
+                       undecidability class, or the rule no longer runs over
+                       it). NOT evidence about the debt, in either direction;
+                       reported with what blocked it, and never a shrink.
+    RECORD_NOT_PUBLISHED  the corpus no longer carries the record. The entry is
+                       inert — it can suppress nothing — but its inertness is
+                       an observation of the corpus, not an adjudication, so it
+                       is reported and does not instruct anything either.
+
+``adjudicated == 0`` therefore yields no resolution claim at all, by
+construction rather than by a special case. ``--write-baseline`` obeys the same
+rule from the other side: it REFUSES to drop an entry that was not adjudicated,
+because shrinking on an absence of evidence is the deletion this check exists
+to prevent, merely performed by the tool instead of by hand.
+
 Exit: 0 = PASS (records adjudicated, nothing superseded beyond the recorded
 debt, no rule drift), 1 = FAIL (a NEW superseded record, a recorded entry that
-is no longer stale, a gate whose rules are unreviewed, or --strict and a
-publishing gate registered nothing), 2 = VACUOUS_PASS (no record could be
-adjudicated at all — a disclosed skip, never a sign-off).
+was RE-ADJUDICATED and is no longer stale, a gate whose rules are unreviewed,
+or --strict and a publishing gate registered nothing), 2 = VACUOUS_PASS (no
+record could be adjudicated at all — a disclosed skip, never a sign-off).
 
 chip-AGNOSTIC: keyed on gate names and record field paths only. No design, PDK
 or vendor name appears here, and a rule cannot introduce one because a rule
@@ -142,6 +185,27 @@ STALE = "STALE_VERDICT"
 #: is given. Beside the program, like the register #306/#316 established.
 DEFAULT_BASELINE = "published_record_staleness_baseline.json"
 
+#: What this run found out about one RECORDED register entry. Exactly one is
+#: attached to every entry, and only ``DEBT_RESOLVED`` instructs a shrink —
+#: everything else is either the debt reproducing itself or an absence of
+#: evidence, and an absence of evidence must never drive an irreversible edit
+#: to a register that MAY ONLY SHRINK (#536).
+DEBT_STILL_SUPERSEDED = "STILL_SUPERSEDED"
+DEBT_RESOLVED = "RESOLVED"
+DEBT_UNADJUDICATED = "UNADJUDICATED"
+DEBT_RECORD_UNPUBLISHED = "RECORD_NOT_PUBLISHED"
+DEBT_ENTRY_UNREADABLE = "ENTRY_UNREADABLE"
+
+#: The blocker for an entry whose RECORD was adjudicated but whose RULE did not
+#: run over it — removed, renamed, or blocked on a field the rules that DID run
+#: did not need. Distinct from the record-level undecidability reasons because
+#: the record itself was decidable; this rule was not applied to it.
+DEBT_RULE_NOT_APPLIED = "RULE_NOT_APPLIED"
+
+#: Field separator of a register entry. Kept in one place so ``debt_key`` and
+#: ``parse_debt_key`` cannot drift apart.
+KEY_SEP = "::"
+
 
 def debt_key(finding: Dict[str, Any]) -> str:
     """The identity of one superseded record, for the debt register.
@@ -150,9 +214,109 @@ def debt_key(finding: Dict[str, Any]) -> str:
     later goes stale a DIFFERENT way, or under a rule landed afterwards, is a
     new defect and must not be covered by an entry recorded for the old one.
     """
-    return (f"{finding['gate']}::{finding['record']}::"
-            f"{finding['carried_verdict']}->{finding['would_issue']}::"
+    return (f"{finding['gate']}{KEY_SEP}{finding['record']}{KEY_SEP}"
+            f"{finding['carried_verdict']}->{finding['would_issue']}{KEY_SEP}"
             f"{finding['rule_id']}")
+
+
+def parse_debt_key(key: str) -> Optional[Tuple[str, str, str, str]]:
+    """``(gate, record, verdict_pair, rule_id)`` for one register entry.
+
+    Read from the OUTSIDE IN. The gate name and the rule id are program-level
+    identifiers and carry no separator; the RECORD is a corpus path and is not
+    this program's to constrain, so whatever is between them is the record.
+    Anything that does not split into at least four fields returns None: an
+    entry nobody can resolve to a record must not be resolvable to a verdict
+    about that record either, and guessing would put the wrong record's
+    adjudication behind someone's debt.
+    """
+    parts = str(key).split(KEY_SEP)
+    if len(parts) < 4:
+        return None
+    gate, rule_id, pair = parts[0], parts[-1], parts[-2]
+    record = KEY_SEP.join(parts[1:-2])
+    if not gate or not record or not rule_id:
+        return None
+    return gate, record, pair, rule_id
+
+
+def _adjudication_index(report: Dict[str, Any]) -> Tuple[
+        set, Dict[str, Dict[str, Any]], set]:
+    """What this run actually examined, keyed the way an entry names it.
+
+    ``ran`` is per (record, RULE): a record can be adjudicated by one rule while
+    another is blocked on a field only it reads, and an entry recorded for the
+    blocked rule was not re-examined merely because its record appears in the
+    adjudicated list.
+    """
+    ran = {(a["record"], rid)
+           for a in report.get("adjudicated", [])
+           for rid in (a.get("rules_applied") or [])}
+    undecidable = {u["record"]: u for u in report.get("undecidable", [])}
+    present = {a["record"] for a in report.get("adjudicated", [])} | set(
+        undecidable)
+    return ran, undecidable, present
+
+
+def classify_recorded_debt(prev: List[str], now: List[str],
+                           report: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """What this run learned about each RECORDED entry — one status each.
+
+    The whole point is the middle two statuses. Before #536 this was
+    ``[k for k in prev if k not in now]`` and everything that was not still
+    stale was called PAID, so a stale declaration, a missing gate module or a
+    withdrawn declaration each produced *the debt was paid; shrink the
+    register* over live debt. Nothing here asks whether an entry produced a
+    finding until after it has established that something re-examined it.
+    """
+    ran, undecidable, present = _adjudication_index(report)
+    now_set = set(now)
+    out: List[Dict[str, Any]] = []
+    for key in prev:
+        parsed = parse_debt_key(key)
+        if parsed is None:
+            out.append({
+                "entry": key, "status": DEBT_ENTRY_UNREADABLE,
+                "blocked_by": DEBT_ENTRY_UNREADABLE,
+                "detail": (f"not in <gate>{KEY_SEP}<record>{KEY_SEP}"
+                           f"<carried>-><would_issue>{KEY_SEP}<rule_id> form, "
+                           f"so it names no record this run could look at")})
+            continue
+        gate, record, _pair, rule_id = parsed
+        common = {"entry": key, "gate": gate, "record": record,
+                  "rule_id": rule_id}
+        if key in now_set:
+            out.append({**common, "status": DEBT_STILL_SUPERSEDED,
+                        "blocked_by": "",
+                        "detail": (f"{rule_id} ran over this record and it "
+                                   f"still carries the verdict recorded here")})
+        elif (record, rule_id) in ran:
+            out.append({**common, "status": DEBT_RESOLVED, "blocked_by": "",
+                        "detail": (f"{rule_id} ran over this record this run "
+                                   f"and did not supersede it — the entry now "
+                                   f"describes a verdict the record no longer "
+                                   f"carries")})
+        elif record in undecidable:
+            u = undecidable[record]
+            out.append({**common, "status": DEBT_UNADJUDICATED,
+                        "blocked_by": u.get("reason", ""),
+                        "detail": u.get("detail", "")})
+        elif record in present:
+            out.append({**common, "status": DEBT_UNADJUDICATED,
+                        "blocked_by": DEBT_RULE_NOT_APPLIED,
+                        "detail": (f"the record was adjudicated, but not by "
+                                   f"{rule_id}: that rule is no longer "
+                                   f"registered under this name, or its "
+                                   f"required fields are absent from a record "
+                                   f"the other rules could still read")})
+        else:
+            out.append({**common, "status": DEBT_RECORD_UNPUBLISHED,
+                        "blocked_by": "",
+                        "detail": ("the corpus scanned here carries no such "
+                                   "record, so the entry can suppress nothing "
+                                   "— which is an observation of the corpus, "
+                                   "not an adjudication of the verdict")})
+    return out
 
 
 @dataclass
@@ -399,6 +563,37 @@ def _print_human(report: Dict[str, Any], strict_gates: List[str]) -> None:
           f"scanned)", file=sys.stderr)
     for reason, n in sorted(det["undecidable_by_reason"].items()):
         print(f"    undecidable {reason}: {n}", file=sys.stderr)
+    _print_recorded_debt(s.get("recorded_debt_status") or [])
+
+
+def _print_recorded_debt(recorded: List[Dict[str, Any]]) -> None:
+    """Every recorded entry, with what this run could say about it.
+
+    Printed at EVERY exit code on purpose. The classes that carry no
+    instruction are the ones a reader most needs: a register entry nothing
+    re-examined is invisible in the findings, and invisibility is what let an
+    unexamined entry be read as a paid one (#536).
+    """
+    order = {DEBT_RESOLVED: 0, DEBT_UNADJUDICATED: 1,
+             DEBT_ENTRY_UNREADABLE: 1, DEBT_RECORD_UNPUBLISHED: 2,
+             DEBT_STILL_SUPERSEDED: 3}
+    for c in sorted(recorded, key=lambda c: (order.get(c["status"], 9),
+                                             c["entry"])):
+        tag = c["status"]
+        if c.get("blocked_by") and tag != DEBT_ENTRY_UNREADABLE:
+            tag = f"{tag} blocked_by={c['blocked_by']}"
+        print(f"  (recorded debt: {tag}) {c['entry']}", file=sys.stderr)
+        if c["status"] in (DEBT_UNADJUDICATED, DEBT_ENTRY_UNREADABLE,
+                           DEBT_RECORD_UNPUBLISHED):
+            print(f"      {c['detail']}", file=sys.stderr)
+            # Deliberately worded without the words this program uses when it
+            # DOES have evidence. The two claims must not be confusable by
+            # grep, by a scrollback skim, or by the tests: the instruction to
+            # shrink the register is issued in exactly one situation and its
+            # vocabulary belongs to that situation alone (#536).
+            print(f"      NOT a resolution: nothing re-adjudicated this "
+                  f"entry, so this run says nothing about whether the record "
+                  f"is still superseded. The entry stays.", file=sys.stderr)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -488,13 +683,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # elsewhere and the register must be named explicitly.
     bl_path = (Path(a.baseline) if a.baseline
                else (None if a.corpus_root else _HERE / DEFAULT_BASELINE))
-    prev: Optional[List[str]] = None
-    if not a.ignore_baseline and bl_path is not None and bl_path.is_file():
-        try:
-            prev = sorted(str(x) for x in
-                          (json.loads(bl_path.read_text()).get("known") or []))
-        except (OSError, ValueError):
-            prev = None
+    on_disk = _read_register(bl_path)
+    prev: Optional[List[str]] = None if a.ignore_baseline else on_disk
 
     if a.write_baseline:
         if bl_path is None:
@@ -502,15 +692,34 @@ def main(argv: Optional[List[str]] = None) -> int:
                   "explicit --baseline; the default register describes the "
                   "default corpus.", file=sys.stderr)
             return 1
-        return _write_baseline(bl_path, now, prev, a.scope_expanded)
+        # ON_DISK, NOT PREV. `--ignore-baseline` asks for an answer computed as
+        # if nothing were recorded — a READ semantic. A write that honoured it
+        # would not know what it was about to delete, which disables both the
+        # refuse-to-grow guard and the refuse-to-drop-the-unadjudicated guard
+        # below, i.e. it would be a flag that reopens the hole they close.
+        return _write_baseline(bl_path, now, on_disk, a.scope_expanded,
+                               classify_recorded_debt(on_disk or [], now,
+                                                      report))
+
+    # Shrinking the register by hand on this program's say-so and shrinking it
+    # with --write-baseline are the same irreversible edit, so both rest on the
+    # same classification (#536).
+    recorded = classify_recorded_debt(prev or [], now, report)
 
     new = [k for k in now if prev is None or k not in set(prev)]
-    paid = [] if prev is None else [k for k in prev if k not in set(now)]
+    resolved = [c["entry"] for c in recorded if c["status"] == DEBT_RESOLVED]
     s["superseded_new"] = new
     s["superseded_recorded_as_debt"] = [] if prev is None else prev
-    s["superseded_debt_paid"] = paid
+    s["superseded_debt_resolved"] = resolved
+    s["superseded_debt_unadjudicated"] = [
+        c["entry"] for c in recorded
+        if c["status"] in (DEBT_UNADJUDICATED, DEBT_ENTRY_UNREADABLE)]
+    s["superseded_debt_record_unpublished"] = [
+        c["entry"] for c in recorded
+        if c["status"] == DEBT_RECORD_UNPUBLISHED]
+    s["recorded_debt_status"] = recorded
 
-    if new or paid or s["gates_unreviewed"] or strict_gates:
+    if new or resolved or s["gates_unreviewed"] or strict_gates:
         verdict = "FAIL"
     elif s["vacuous"]:
         verdict = "VACUOUS_PASS"
@@ -531,11 +740,10 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return 2
     if verdict == "FAIL":
-        for k in paid:
-            print(f"  (resolved) {k}", file=sys.stderr)
-        if paid:
-            print(f"[FAIL] {len(paid)} recorded entr(ies) are no longer "
-                  f"superseded — the debt was paid; shrink "
+        if resolved:
+            print(f"[FAIL] {len(resolved)} recorded entr(ies) were "
+                  f"RE-ADJUDICATED by the rule that recorded them and are no "
+                  f"longer superseded — the debt was paid; shrink "
                   f"{bl_path.name if bl_path else DEFAULT_BASELINE} so "
                   f"it cannot become standing permission.", file=sys.stderr)
         if new:
@@ -558,8 +766,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+def _read_register(bl_path: Optional[Path]) -> Optional[List[str]]:
+    """The recorded entries, or None when there is no readable register.
+
+    None is "nothing is recorded", which is exactly what the caller needs to
+    distinguish from an empty register: an unreadable file must not be read as
+    a register that records nothing.
+    """
+    if bl_path is None or not bl_path.is_file():
+        return None
+    try:
+        return sorted(str(x) for x in
+                      (json.loads(bl_path.read_text()).get("known") or []))
+    except (OSError, ValueError):
+        return None
+
+
 def _write_baseline(bl_path: Path, now: List[str], prev: Optional[List[str]],
-                    scope_expanded: Optional[str]) -> int:
+                    scope_expanded: Optional[str],
+                    recorded: List[Dict[str, Any]]) -> int:
     """Record today's superseded records as debt. MAY ONLY SHRINK.
 
     A register that may grow is not a register, it is a habit. Growing it needs
@@ -568,7 +793,28 @@ def _write_baseline(bl_path: Path, now: List[str], prev: Optional[List[str]],
     pre-existing staleness surfacing there is not a regression. Anything else
     that grows it is the corpus getting worse, which is what the register
     exists to stop.
+
+    AND IT MAY NOT SHRINK ON AN ABSENCE OF EVIDENCE (#536). Shrink-only makes
+    every drop irreversible by this program, so a drop needs the same positive
+    evidence the read path now requires: the entry's own rule ran over the
+    entry's own record and declined to supersede it. An entry that was merely
+    not adjudicated — stale declaration, absent gate module, withdrawn
+    declaration, unreadable field — is dropped by set subtraction just as
+    quietly, and that is the deletion this check exists to prevent, performed
+    by the tool instead of by hand.
     """
+    blocked = [c for c in recorded
+               if c["status"] in (DEBT_UNADJUDICATED, DEBT_ENTRY_UNREADABLE)]
+    if blocked:
+        for c in blocked:
+            print(f"  (not adjudicated: {c.get('blocked_by') or '?'}) "
+                  f"{c['entry']}", file=sys.stderr)
+        print(f"[FAIL] refusing to DROP {len(blocked)} recorded entr(ies) "
+              f"nothing re-adjudicated this run. The register MAY ONLY SHRINK, "
+              f"so a drop is irreversible here, and 'produced no finding' is "
+              f"not evidence the debt was paid when the rule never ran (#536). "
+              f"Fix what made them undecidable, then write.", file=sys.stderr)
+        return 1
     if scope_expanded is not None and len(scope_expanded.strip()) < 30:
         print("[FAIL] --scope-expanded needs a real reason (>=30 chars) "
               "naming which gate's rules newly adjudicate these records.",
