@@ -99,6 +99,15 @@ The excluded set is not silent. Every unresolved callee at or above the ceiling
 is COUNTED and PRINTED as advisory with its file and line, so a reader can see
 what the allowlist did not judge instead of inferring it from a clean verdict.
 
+THE POPULATION IS EVERY TREE A PYTEST LANE RUNS, WHICH IS TWO
+--------------------------------------------------------------
+The report named one tree. The workflows run two: the plugin's
+``programs/tests`` and the repo's ``tools``. They are scanned with different
+globs, and the difference is stated rather than being a silent inconsistency —
+see ``TOOLS_DIR_REL`` for the measurement behind it. Each root's file count is
+printed on every run, so a root that stops resolving shrinks a number a reader
+can see rather than quietly leaving the denominator.
+
 chip-AGNOSTIC: pure Python/YAML structure. No design, PDK, vendor or process
 literal appears here.
 
@@ -118,7 +127,6 @@ import argparse
 import ast
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -144,6 +152,23 @@ CEILING_DIVISOR = 3
 
 #: Scanned population, relative to the plugin root.
 TESTS_DIR_REL = "programs/tests"
+
+#: The SECOND tree a pytest lane runs (`pytest -q tools` in the milestone job),
+#: and the reason it is scanned with a narrower glob than the first.
+#:
+#: Everything under `programs/tests/` exists to be run by pytest, helpers
+#: included — which is why that root is scanned as `*.py`, and it earned its
+#: keep: `matrix_d4_probe.py` is not a `test_` file and carried a 90 s bound
+#: that five test files spend. `tools/` is not like that. It mixes production
+#: entry points with their tests in one directory, and a production tool's
+#: timeout is its RUNTIME behaviour, not a bound the harness ever imposes.
+#: Measured: 66 `.py` under `tools/`, 15 readable bounds, 4 above the ceiling —
+#: all four in `flow_runner.py` / `phase1_menu.py` / `pipeline_run.py`, none of
+#: which pytest ever executes. Lowering those would change what the tools do.
+#: So this root is scanned as `test_*.py`, and the exclusion is stated here
+#: rather than being a silent difference between two globs.
+TOOLS_DIR_REL = "tools"
+TOOLS_GLOB = "test_*.py"
 
 
 class HarnessBound:
@@ -494,16 +519,24 @@ def scan_source(text: str, rel_path: str, ceiling: int
     return findings, unresolved, total
 
 
-def scan_tree(tests_root: Path, ceiling: int) -> Dict:
+def scan_tree(tests_root: Path, ceiling: int, glob: str = "*.py",
+              anchor: Optional[Path] = None) -> Dict:
     findings: List[Finding] = []
     unresolved: List[Finding] = []
     files = 0
     sites = 0
     unparseable: List[str] = []
     root = Path(tests_root)
-    for py in sorted(root.rglob("*.py")):
+    # Report paths relative to the PLUGIN root when the scan root is the
+    # shipped one, so a finding can be pasted straight into an editor; fall
+    # back to the scan root for any other `--tests-root`, rather than raising.
+    base = Path(anchor) if anchor else root.parent.parent
+    for py in sorted(root.rglob(glob)):
         files += 1
-        rel = str(py.relative_to(root.parent.parent))
+        try:
+            rel = str(py.relative_to(base))
+        except ValueError:
+            rel = str(py.relative_to(root))
         try:
             text = py.read_text(errors="replace")
         except OSError:
@@ -520,6 +553,30 @@ def scan_tree(tests_root: Path, ceiling: int) -> Dict:
     return {"files": files, "bounded_sites": sites, "findings": findings,
             "unresolved_above_ceiling": unresolved,
             "unparseable": unparseable}
+
+
+def scan_roots(roots: Sequence[Tuple[Path, str, Optional[Path]]],
+               ceiling: int) -> Dict:
+    """Merge `scan_tree` over every root a pytest lane actually runs.
+
+    Kept as a merge rather than one root with one glob because the two trees
+    are not the same KIND of directory — see `TOOLS_DIR_REL` for why one is
+    scanned whole and the other only for its test files.
+    """
+    merged = {"files": 0, "bounded_sites": 0, "findings": [],
+              "unresolved_above_ceiling": [], "unparseable": [], "roots": []}
+    for root, glob, anchor in roots:
+        rep = scan_tree(root, ceiling, glob, anchor)
+        merged["files"] += rep["files"]
+        merged["bounded_sites"] += rep["bounded_sites"]
+        merged["findings"].extend(rep["findings"])
+        merged["unresolved_above_ceiling"].extend(
+            rep["unresolved_above_ceiling"])
+        merged["unparseable"].extend(rep["unparseable"])
+        merged["roots"].append({"root": str(root), "glob": glob,
+                                "files": rep["files"],
+                                "bounded_sites": rep["bounded_sites"]})
+    return merged
 
 
 # --- census (the measurement behind the divisor) ---------------------------
@@ -555,20 +612,30 @@ def bounded_calls_per_test_function(tests_root: Path) -> Dict[int, int]:
 
 # --- CLI -------------------------------------------------------------------
 
-def _resolve_tests_root(repo_root: Optional[Path],
-                        explicit: Optional[str]) -> Optional[Path]:
+def _scan_roots(repo_root: Optional[Path], explicit: Optional[str]
+                ) -> List[Tuple[Path, str, Optional[Path]]]:
+    """Every tree a pytest lane runs, as (root, glob, path-report anchor).
+
+    `--tests-root` REPLACES the set rather than adding to it: a caller that
+    narrowed the scan and silently also got the default would read the result
+    as covering something it does not.
+    """
     if explicit:
         p = Path(explicit)
-        return p if p.is_dir() else None
-    bases: List[Path] = []
+        return [(p, "*.py", None)] if p.is_dir() else []
+    roots: List[Tuple[Path, str, Optional[Path]]] = []
+    plugins: List[Path] = []
     if repo_root:
-        bases.append(repo_root / "vibe-ic-marketplace" / "plugins" / "vibe-ic")
-    bases.append(Path(__file__).resolve().parent.parent)
-    for b in bases:
+        plugins.append(repo_root / "vibe-ic-marketplace" / "plugins" / "vibe-ic")
+    plugins.append(Path(__file__).resolve().parent.parent)
+    for b in plugins:
         cand = b / TESTS_DIR_REL
         if cand.is_dir():
-            return cand
-    return None
+            roots.append((cand, "*.py", None))
+            break
+    if repo_root and (repo_root / TOOLS_DIR_REL).is_dir():
+        roots.append((repo_root / TOOLS_DIR_REL, TOOLS_GLOB, repo_root))
+    return roots
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -593,7 +660,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     bounds = harness_bounds(repo_root) if repo_root else []
     harness = min((b.seconds for b in bounds), default=None)
-    tests_root = _resolve_tests_root(repo_root, args.tests_root)
+    roots = _scan_roots(repo_root, args.tests_root)
 
     # Two ways to have nothing to say, and neither of them is a pass. Reported
     # BEFORE the scan so the message names the missing input rather than an
@@ -606,14 +673,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "pass.")
         return 2
     ceiling = harness // CEILING_DIVISOR
-    if tests_root is None:
+    if not roots:
         print(f"[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: harness "
               f"bound {harness}s resolved, but no test tree to scan "
               f"({args.tests_root or TESTS_DIR_REL} not found) -- 0 files "
               "examined, which is NOT a pass.")
         return 2
 
-    rep = scan_tree(tests_root, ceiling)
+    rep = scan_roots(roots, ceiling)
 
     print(f"ci_harness_timeout_ceiling_check: harness bound {harness}s "
           f"(minimum of {len(bounds)} pytest invocation(s) in "
@@ -622,8 +689,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for b in bounds:
         marker = "  <- binding" if b.seconds == harness else ""
         print(f"   {b.workflow}:{b.line}  --timeout={b.seconds}{marker}")
-    print(f"  scanned {rep['files']} file(s) under {tests_root}, "
+    print(f"  scanned {rep['files']} file(s) in {len(rep['roots'])} tree(s), "
           f"{rep['bounded_sites']} readable bound(s) at call sites")
+    for r in rep["roots"]:
+        print(f"     {r['files']:5} file(s) ({r['glob']})  {r['root']}")
     if rep["unparseable"]:
         print(f"  {len(rep['unparseable'])} file(s) could not be parsed and "
               f"were NOT judged: {', '.join(rep['unparseable'][:5])}")
@@ -640,7 +709,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"disclosure, not a silent truncation)")
 
     if args.table:
-        hist = bounded_calls_per_test_function(tests_root)
+        hist: Dict[int, int] = {}
+        for root, _glob, _anchor in roots:
+            for n, c in bounded_calls_per_test_function(root).items():
+                hist[n] = hist.get(n, 0) + c
         print("  bounded call sites per test function (the census the "
               "divisor is chosen against):")
         for n in sorted(hist):
@@ -653,6 +725,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "ceiling_seconds": ceiling,
             "ceiling_divisor": CEILING_DIVISOR,
             "harness_bounds": [b.as_dict() for b in bounds],
+            "roots": rep["roots"],
             "files": rep["files"],
             "bounded_sites": rep["bounded_sites"],
             "findings": [f.as_dict() for f in rep["findings"]],

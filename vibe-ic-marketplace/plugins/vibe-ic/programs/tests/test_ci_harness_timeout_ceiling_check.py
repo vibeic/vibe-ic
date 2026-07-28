@@ -242,6 +242,69 @@ def test_the_advisory_population_is_printed_with_its_denominator(tmp_path):
     assert "mock_runner" in proc.stdout
 
 
+# ── the population is every tree a pytest lane runs ──────────────────────────
+
+def test_both_pytest_trees_are_scanned():
+    """The report named one tree; the workflows run two. A gate that scanned
+    only the first would be silent about a lane CI really executes."""
+    root = C.find_repo_root()
+    if root is None:
+        pytest.skip("no .github/workflows in reach")
+    roots = C._scan_roots(root, None)
+    names = [Path(r).name for r, _g, _a in roots]
+    assert "tests" in names and C.TOOLS_DIR_REL in names, roots
+
+
+def test_the_two_trees_use_different_globs_for_a_measured_reason():
+    """`programs/tests` is scanned whole because everything in it exists to be
+    run by pytest — which caught a 90 s bound in a non-`test_` helper. `tools`
+    mixes production entry points with tests, and a tool's own timeout is
+    runtime behaviour, not a bound the harness imposes.
+
+    Asserted by MEASURING the difference the glob makes, not by reading the
+    comment that explains it: widening `tools` to `*.py` produces findings, and
+    every one of them is in a file pytest never executes as a test."""
+    root = C.find_repo_root()
+    if root is None:
+        pytest.skip("no .github/workflows in reach")
+    by_name = {Path(r).name: g for r, g, _a in C._scan_roots(root, None)}
+    assert by_name["tests"] == "*.py"
+    assert by_name[C.TOOLS_DIR_REL] == C.TOOLS_GLOB
+
+    ceiling = C.inner_timeout_ceiling(root)
+    tools = root / C.TOOLS_DIR_REL
+    narrow = C.scan_tree(tools, ceiling, C.TOOLS_GLOB, root)
+    wide = C.scan_tree(tools, ceiling, "*.py", root)
+    assert narrow["findings"] == [], [str(f) for f in narrow["findings"]]
+    assert wide["findings"], (
+        "widening the glob no longer changes the answer — if `tools` now holds "
+        "only tests, scan it whole and delete this distinction")
+    for f in wide["findings"]:
+        assert not Path(f.path).name.startswith("test_"), str(f)
+
+
+def test_an_explicit_tests_root_replaces_the_set_and_does_not_add_to_it(
+        tmp_path):
+    """A caller that narrowed the scan and silently also got the default would
+    read the result as covering something it does not."""
+    (tmp_path / "only").mkdir()
+    roots = C._scan_roots(C.find_repo_root(), str(tmp_path / "only"))
+    assert [r for r, _g, _a in roots] == [tmp_path / "only"]
+
+
+def test_each_root_prints_its_own_file_count(tmp_path):
+    root = C.find_repo_root()
+    if root is None:
+        pytest.skip("no .github/workflows in reach")
+    out = tmp_path / "r.json"
+    subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
+                   capture_output=True, text=True, timeout=_T)
+    doc = json.loads(out.read_text())
+    assert len(doc["roots"]) == 2
+    assert sum(r["files"] for r in doc["roots"]) == doc["files"]
+    assert all(r["files"] > 0 for r in doc["roots"])
+
+
 # ── a bound spelled as a constant ────────────────────────────────────────────
 
 def test_a_module_constant_bound_is_resolved_to_its_value():
@@ -282,35 +345,48 @@ def test_the_ceiling_itself_is_allowed_and_one_second_over_is_not():
 
 # ── falsifiability against the real tree ─────────────────────────────────────
 
-def test_the_shipped_tree_passes_and_an_injected_offender_fails(tmp_path):
-    """A gate that has never failed has not been shown to work.
+def test_the_shipped_tree_is_clean(tmp_path):
+    """Half one of falsifiability, and the ratchet: the shipped program over
+    the shipped roots, READ-ONLY."""
+    root = C.find_repo_root()
+    if root is None:
+        pytest.skip("no .github/workflows in reach")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-2000:]
+    assert "[PASS]" in proc.stdout
 
-    Runs the SHIPPED program against the SHIPPED tree twice: clean, then with
-    one offender written into the real scan root, then clean again. The file is
-    removed in a finally so a failure cannot leave the tree dirty.
+
+def test_an_injected_offender_makes_the_shipped_program_fail(tmp_path):
+    """Half two: a gate that has never failed has not been shown to work.
+
+    The offender goes into a THROWAWAY scan root, never into the shipped tree.
+    Writing it into `programs/tests` would be a defect of its own: this repo is
+    worked by several agents at once, so for the length of the run every other
+    session's gate would see a FAIL that is not theirs, and two copies of this
+    test would delete each other's file. `--tests-root` gives the same
+    demonstration — the same shipped program, the same resolver reading the
+    same real workflows — with nothing shared to corrupt.
     """
     root = C.find_repo_root()
     if root is None:
         pytest.skip("no .github/workflows in reach")
-    tests_root = _PROGRAMS / "tests"
-    argv = [sys.executable, str(_PROG), str(root)]
-
-    before = subprocess.run(argv, capture_output=True, text=True, timeout=_T)
-    assert before.returncode == 0, before.stdout[-4000:] + before.stderr[-2000:]
-
-    victim = tests_root / "_ci_timeout_ceiling_injected_offender.py"
-    try:
-        victim.write_text("import subprocess\n"
-                          "subprocess.run(['true'], timeout=900)\n",
-                          encoding="utf-8")
-        red = subprocess.run(argv, capture_output=True, text=True, timeout=_T)
-    finally:
-        victim.unlink(missing_ok=True)
+    victim = tmp_path / "test_injected_offender.py"
+    victim.write_text("import subprocess\n"
+                      "subprocess.run(['true'], timeout=900)\n",
+                      encoding="utf-8")
+    red = subprocess.run(
+        [sys.executable, str(_PROG), str(root), "--tests-root", str(tmp_path)],
+        capture_output=True, text=True, timeout=_T)
     assert red.returncode == 1, red.stdout[-4000:]
     assert victim.name in red.stdout and "timeout=900" in red.stdout
+    assert "[FAIL]" in red.stdout
 
-    after = subprocess.run(argv, capture_output=True, text=True, timeout=_T)
-    assert after.returncode == 0, after.stdout[-4000:]
+    victim.unlink()
+    green = subprocess.run(
+        [sys.executable, str(_PROG), str(root), "--tests-root", str(tmp_path)],
+        capture_output=True, text=True, timeout=_T)
+    assert green.returncode == 0, green.stdout[-4000:]
 
 
 def test_the_json_record_carries_what_the_text_says(tmp_path):
