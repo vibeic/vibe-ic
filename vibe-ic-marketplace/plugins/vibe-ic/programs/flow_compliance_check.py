@@ -5679,6 +5679,26 @@ _ENV_WAIVER_REJECTIONS: List[str] = []
 #: Populated by `_load_waivers`, which clears it on entry.
 _ENV_WAIVER_EVIDENCE_NOTES: List[str] = []
 
+#: #529 — `waivers`-dialect entries this module READ but did NOT bind to a flow
+#: step, each with the reason. The loop below binds one tier, ENV_UNAVAILABLE;
+#: every other entry took a bare `continue` and left no trace, so a report was
+#: byte-identical whether the project carried a fully attested waiver or no
+#: waivers.json at all. Measured over every tracked waivers.json: 8 of 8
+#: `waivers`-dialect entries (7 verdict_tier WAIVED, 1 PASS_STRUCTURAL, 0
+#: ENV_UNAVAILABLE) hit that `continue`, so the mechanism #216 built for
+#: "a rejected waiver must never vanish" covered none of the corpus.
+#:
+#: A THIRD list, separate from BOTH of the above, on purpose:
+#:   * not `_ENV_WAIVER_REJECTIONS` — nothing here was refused. A WAIVED-tier
+#:     entry is not an error; calling it a rejection would say the step lost an
+#:     exemption it never asked this module for, which is the opposite lie.
+#:   * not `_ENV_WAIVER_EVIDENCE_NOTES` — those waivers were APPLIED and the
+#:     note qualifies them. These were not applied at all.
+#: Every entry here is INFORMATIONAL: it changes no step verdict, no count and
+#: no exit code. It exists so a reader can tell "read and inapplicable" from
+#: "nobody read this file".
+_WAIVER_NOT_BOUND_DISCLOSURES: List[str] = []
+
 
 # #519 — the map MOVED to `_waiver_entries`, which is where the waiver
 # vocabulary lives now, and is re-exported here under its historical name so
@@ -5983,11 +6003,71 @@ def _refuse_stale_waivers(project: Path, out: Dict[Any, Dict[str, Any]]) -> None
         pass
 
 
+def _unbound_tier_disclosure(index: int,
+                             entry: Dict[str, Any],
+                             raw_tier: Any,
+                             tier: str) -> str:
+    """#529 — the advisory for a `waivers`-dialect entry whose `verdict_tier`
+    is not ENV_UNAVAILABLE, i.e. one this module read and did not bind.
+
+    WHAT IT MUST AND MUST NOT SAY. It must not read as a rejection: the entry
+    is typically well-formed, ticketed and reviewable, and refusing it would be
+    a second falsehood in the opposite direction from the silence. It must also
+    not hand-wave that the entry "is for another consumer", because — measured
+    by execution over every tracked waivers.json and every program that reads
+    one — NO code anywhere branches on the tier VALUE except on the single
+    string ENV_UNAVAILABLE (here, and `waiver_staleness.is_env_unavailable`).
+    Substituting a garbage tier changed no consumer's output. So the honest
+    statement is narrow and durable: the ENTRY is consumed, tier-blind, by the
+    waiver-hygiene gates and rendered for a human by `final_report_generate`;
+    the TIER is a human-readable record of the producing step's status, and no
+    gate binds it to a verdict.
+
+    chip-AGNOSTIC: renders only the entry's own structural fields."""
+    if isinstance(raw_tier, str) and tier:
+        tier_phrase = f"verdict_tier {tier!r}"
+    elif raw_tier is None or (isinstance(raw_tier, str) and not tier):
+        tier_phrase = "no `verdict_tier`"
+    else:
+        tier_phrase = (f"a `verdict_tier` of type "
+                       f"{type(raw_tier).__name__}, not a string")
+    raw_step = entry.get("step")
+    step_name = raw_step.strip().lower() if isinstance(raw_step, str) else ""
+    sid = _we.resolve_step_name(step_name)
+    if sid is not None:
+        step_phrase = f"step {step_name!r} (flow step {sid})"
+        merits = f"flow step {sid} is"
+    elif step_name:
+        step_phrase = (f"step {step_name!r}, which is not a recognised flow "
+                       f"role name")
+        merits = "every flow step is"
+    else:
+        step_phrase = "no readable `step`"
+        merits = "every flow step is"
+    ticket = entry.get("ticket")
+    ticket_phrase = (f", ticket {ticket!r}" if isinstance(ticket, str) and ticket
+                     else ", no ticket")
+    return (
+        f"WAIVER READ, NOT BOUND — waivers.json `waivers` entry {index} names "
+        f"{step_phrase} and carries {tier_phrase}{ticket_phrase}. "
+        f"flow_compliance_check binds ONLY verdict_tier 'ENV_UNAVAILABLE' "
+        f"entries to a flow step, so this entry granted nothing and refused "
+        f"nothing: {merits} reported on its own merits, exactly as it would be "
+        f"with no waivers.json at all. This is DISCLOSURE, NOT a rejection — "
+        f"the entry is still examined, tier-blind, by the waiver-hygiene gates "
+        f"(waivers_schema_check, waiver_legitimacy_check, "
+        f"waiver_staleness_check) and is listed for review in "
+        f"reports/final_summary.md. No gate binds a non-ENV_UNAVAILABLE tier "
+        f"to a step verdict; the tier records the producing step's status for "
+        f"a human reader, not a machine decision.")
+
+
 def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]]:
     """Load waivers AFTER validating schema. Returns {} if file missing.
     Raises SystemExit(1) if waivers.json exists but is malformed/rubber-stamped."""
     _ENV_WAIVER_REJECTIONS.clear()  # #216 — fresh per call
     _ENV_WAIVER_EVIDENCE_NOTES.clear()  # #524 — fresh per call
+    _WAIVER_NOT_BOUND_DISCLOSURES.clear()  # #529 — fresh per call
     wpath = project / "waivers.json"
     if not wpath.exists():
         # v0.2.103 (#496) — even with no waivers.json, the disclosed
@@ -6076,11 +6156,38 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
         # collected and surfaced as named advisories. Rejection still means
         # the step is NOT waived and strict mode still fails it — this makes
         # the report LOUDER, never greener.
-        for w in data.get("waivers", []) or []:
+        # #529 — and NO `continue` in this loop is silent. #216 gave the two
+        # rejection branches a voice but left three others mute: a non-object
+        # entry, an entry whose tier is not ENV_UNAVAILABLE, and an entry
+        # superseded by a `waived_steps` entry for the same step. The middle
+        # one is the whole corpus. Each now records why it was not bound.
+        #
+        # The entry list comes from the SHARED reader (#519's `_waiver_entries`)
+        # rather than `data.get("waivers")`, so "which key holds the entries" is
+        # answered in one place; `entries_by_key` also yields nothing — instead
+        # of iterating a dict's keys — when `waivers` holds a non-list.
+        for _idx, w in enumerate(_we.entries_by_key(data).get("waivers", [])):
             if not isinstance(w, dict):
+                _WAIVER_NOT_BOUND_DISCLOSURES.append(
+                    f"WAIVER ENTRY UNREADABLE — waivers.json `waivers` entry "
+                    f"{_idx} is a {type(w).__name__}, not an object, so no "
+                    f"step, tier, ticket or rationale could be read from it "
+                    f"and it was skipped. No step verdict is affected. Fix or "
+                    f"remove the entry.")
                 continue
-            tier = (w.get("verdict_tier") or "").strip().upper()
+            # DEFENSIVE READ, NOT a schema opinion (#519's rule: a schema error
+            # must not take the report down). `verdict_tier` holding a non-string
+            # used to reach `.strip()` and raise, and the sole handler of this
+            # block turns any exception into SystemExit(1) — so ONE mistyped
+            # field deleted the entire compliance report, all 40+ steps of it,
+            # and printed only "cannot parse". A non-string tier is now simply
+            # a tier that does not equal ENV_UNAVAILABLE, disclosed like any
+            # other unbound entry.
+            _raw_tier = w.get("verdict_tier")
+            tier = _raw_tier.strip().upper() if isinstance(_raw_tier, str) else ""
             if tier != "ENV_UNAVAILABLE":
+                _WAIVER_NOT_BOUND_DISCLOSURES.append(
+                    _unbound_tier_disclosure(_idx, w, _raw_tier, tier))
                 continue
             step_name = (w.get("step") or "").strip().lower()
             sid = _ENV_UNAVAILABLE_STEP_NAME_TO_ID.get(step_name)
@@ -6124,7 +6231,22 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
                 )
                 continue
             if sid in out:
-                continue  # explicit waived_steps entry takes precedence
+                # explicit waived_steps entry takes precedence. #529 — say so.
+                # The step IS waived, by the other entry, so this is neither a
+                # rejection nor a lost exemption; what a reader could not see
+                # before is WHICH of two entries supplied the rationale and
+                # ticket the report is quoting.
+                _WAIVER_NOT_BOUND_DISCLOSURES.append(
+                    f"WAIVER SUPERSEDED — waivers.json `waivers` entry {_idx} "
+                    f"(verdict_tier ENV_UNAVAILABLE, step {step_name!r} → flow "
+                    f"step {sid}, ticket {ticket!r}) was NOT applied: a "
+                    f"`waived_steps` entry for the same step is already in "
+                    f"force and takes precedence. Flow step {sid} IS waived — "
+                    f"by that other entry, whose rationale and ticket are the "
+                    f"ones this report quotes — so no verdict changes. If this "
+                    f"entry's rationale is the accurate one, remove the "
+                    f"competing `waived_steps` entry.")
+                continue
             # #524 — the attestation quartet stands in for a human signature
             # (#519), so `evidence` carries the signature's weight. But the
             # test above is `evidence[] non-empty`, a LENGTH test, and a list
@@ -7733,6 +7855,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     # changes is that the reader can now tell which kind of evidence bought
     # the deferral, instead of the verdict reading identically either way.
     advisories.extend(_ENV_WAIVER_EVIDENCE_NOTES)
+    # #529 — a `waivers`-dialect entry this run READ but did not bind is
+    # disclosed here. Informational only: it changes no verdict, no count and
+    # no exit code. Without it a compliance report was byte-identical whether
+    # the project carried a ticketed, evidenced, review_required waiver or no
+    # waivers.json at all, so a reader could not tell "considered and
+    # inapplicable" from "nobody read this file".
+    advisories.extend(_WAIVER_NOT_BOUND_DISCLOSURES)
     step20_pass = any(r.id == 20 and r.status == "PASS" for r in results)
     has_mcorner = bool(
         list(project.glob("sta/mcorner_*.rpt"))
