@@ -908,8 +908,15 @@ RECORD_ADJUDICATION = _ra.declare(
     # re-reviewing the rules below against the new logic; that is the point,
     # and a fingerprint that stayed quiet through a prose rewrite of a verdict
     # reason would be the wrong kind of quiet.
+    # Re-reviewed at v1.7.90 after #533 reworked this closure: `_vacuity` now
+    # returns (code, prose), and `denominator` assigns `not_applicable_reason`
+    # and `vacuity_code` together per branch so a REJECTED artefact publishes
+    # no vacuity code. None of that changes WHICH verdict a zero-fold run
+    # receives — verified by running the rule below against both corpus
+    # records carrying `summary.coupling_pairs: 0`, which still supersede
+    # PASS -> VACUOUS_PASS. The rule holds unchanged under the new logic.
     decision_digest=(
-        "550ab181f0d28c345395055bfe307131e2b37f0bd622e929b118078232fd7768"),
+        "2737122db70ec1c5d0fdd0c7535a2bdcac21c70dcf544989d0f4dcc1877bbf5b"),
     rules=(
         _ra.Rule(
             rule_id="si_mcf_sta_check.zero-fold-is-not-a-signoff",
