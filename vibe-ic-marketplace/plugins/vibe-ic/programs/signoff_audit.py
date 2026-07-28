@@ -584,12 +584,27 @@ _TAPEOUT_STEP_ID = 36
 # `<project>/waivers.json`, as a normal `waived_steps` entry naming this step and
 # carrying `si_vacuity_accepted`::
 #
-#     {"waived_steps": [
+#     {"growth_rationale": "<why this release carries one more waiver>",
+#      "waived_steps": [
 #       {"id": 36,
 #        "reason": "<>=20 chars saying why this vacuity is acceptable>",
 #        "approver": "<a human; self-approval is refused>",
+#        "approved_at": "<ISO-8601 timestamp>",
+#        "review_required": true,
+#        "ticket": "<tracker id for closing this waiver>",
 #        "si_vacuity_accepted": ["SPEF_NO_COUPLING_PAIRS"]}
 #     ]}
+#
+# Only `id`, `reason`, `approver` and `si_vacuity_accepted` are read by THIS
+# condition. The other four are what the SIBLING waiver gates need, and they
+# are written here because an example that this gate accepts and its siblings
+# reject is a trap: measured on the four-field entry, `waiver_growth_check`
+# returns rc 1 (`UNJUSTIFIED_WAIVER_GROWTH` — net count grew with no
+# `growth_rationale`), `waiver_staleness_check` rc 2 (no parseable
+# `approved_at`, so the entry can never AGE), and `waivers_schema_check` warns
+# `review-required-missing` / `ticket-missing`. A waiver that no gate can age
+# or close is a permanent one, which is the opposite of what a disclosure is
+# for.
 #
 # The code in `si_vacuity_accepted` is the one THIS RUN's SI report published in
 # `summary.denominator.details.vacuity_code`. Naming it is what makes the entry
@@ -616,6 +631,26 @@ _TAPEOUT_STEP_ID = 36
 #     examined something. A bare `verdict: PASS` with no `denominator` block is
 #     the exact false-clean shape the SI gate was fixed for, and this consumer
 #     cannot tell such a report apart from one produced before the fix.
+#   * It may never cover a report that CONTRADICTS ITSELF, on either branch.
+#     `verdict: PASS` with `denominator.examined == 0`, and `verdict:
+#     VACUOUS_PASS` with `examined != 0`, with ERROR findings in its body, or
+#     with `summary.pass`/`summary.vacuous` disagreeing with the verdict, are
+#     all refused. Those two refusals are MIRRORS and must stay so: the report
+#     body is the evidence the emitter derives its verdict from, so relabelling
+#     the verdict field does not relabel the report. Defending only the PASS
+#     side would leave the waivable state — the one this whole condition exists
+#     to govern — as the undefended one.
+#
+# WHAT THIS BLOCK CANNOT DO, stated so nobody reads more into it. Every check
+# here reads ONE file, so it can only catch a report that indicts ITSELF. A
+# report whose body has been rewritten end to end — the ERROR findings deleted,
+# `errors_count` zeroed, the flags and the denominator all made to agree with a
+# forged verdict — is indistinguishable from a genuine vacuity to any consumer
+# of that file alone, and it is waivable. What the mirror buys is the COST: the
+# laundering that worked before was editing one word, and now it is fabricating
+# the whole body. Closing the remainder needs evidence this consumer does not
+# have (re-running the gate, or an artefact signature), not a stricter read of
+# the same bytes.
 #
 # The waiver does NOT make the tapeout a bare PASS. It demotes the verdict to
 # PASS_WITH_WAIVERS (rc 3 + the stdout sentinel), so the accepted vacuity is
@@ -647,6 +682,260 @@ _SI_BLANKET_CODES = frozenset({
 })
 
 
+def _si_defect_evidence(doc: dict, summary: dict) -> str:
+    """Prose naming the defect evidence in the report BODY, or ``""``.
+
+    Read BEFORE the verdict string, deliberately. `si_mcf_sta_check` derives
+    its verdict FROM this body, and the defect branch outranks every other
+    tier::
+
+        no_errors = all(f.severity != "ERROR" for f in findings)
+        if not no_errors:      verdict = "FAIL"
+        elif denom.is_vacuous: verdict = "VACUOUS_PASS"
+        else:                  verdict = "PASS"
+
+    So a report whose body carries an ERROR is a FAIL whatever its ``verdict``
+    field has been edited to say. Re-deriving that here instead of trusting the
+    label is what keeps the separation between "waivable" and "never waivable"
+    off the ORDER the verdict strings happen to be tested in: relabelling a
+    genuine FAIL as VACUOUS_PASS does not move it into the waivable branch,
+    because its body follows it there.
+
+    Only POSITIVE evidence counts. An absent ``findings`` list or an absent
+    ``errors_count`` is not read as a defect — this must not turn a legitimate
+    report into an alarm, only refuse one that indicts itself.
+    """
+    findings = doc.get("findings")
+    if isinstance(findings, list):
+        errs = [f for f in findings
+                if isinstance(f, dict)
+                and str(f.get("severity", "")).strip().upper() == "ERROR"]
+        if errs:
+            first = errs[0]
+            # `category` is the field si_mcf_sta_check's `Finding` dataclass
+            # actually carries (severity / category / message). Citing only
+            # `rule`/`code` degraded the prose to a literal `?` on every report
+            # the real gate produces, while the name was sitting in the file.
+            named = (first.get("category") or first.get("rule")
+                     or first.get("code") or "?")
+            return (f"the report body carries {len(errs)} ERROR finding(s) "
+                    f"(first: {named} "
+                    f"— {str(first.get('message', ''))[:160]})")
+    count = summary.get("errors_count")
+    if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+        return f"the report's own `summary.errors_count` is {count}"
+    return ""
+
+
+def _si_body_malformed(doc: dict, summary: dict) -> str:
+    """Prose naming a report body that cannot be AUDITED, or ``""``.
+
+    `_si_defect_evidence` reads only POSITIVE evidence, so a body that has been
+    reshaped until that evidence is unreadable — ``findings`` turned into an
+    object or a list of strings, ``errors_count`` turned into ``"1"`` — would
+    otherwise read as "no defect found" when what actually happened is "the
+    defect channel was disabled". Absence is tolerated everywhere; only a field
+    that is PRESENT in a shape the emitter never writes refuses.
+
+    Applied to every verdict alike, before the verdict is dispatched on, so the
+    two branches cannot drift apart on it.
+    """
+    findings = doc.get("findings")
+    if findings is not None and not isinstance(findings, list):
+        return (f"`findings` is {type(findings).__name__}, not a list — the "
+                f"gate always writes a list, so the severity channel this "
+                f"consumer reads has been reshaped out of view")
+    if isinstance(findings, list):
+        bad = [f for f in findings if not isinstance(f, dict)]
+        if bad:
+            return (f"{len(bad)} of {len(findings)} `findings` entries are "
+                    f"not objects, so their severity cannot be read")
+    count = summary.get("errors_count")
+    if count is not None and (isinstance(count, bool)
+                              or not isinstance(count, int)):
+        return (f"`summary.errors_count` is {count!r}, not an integer — the "
+                f"gate writes a count, so this report did not come from it")
+    return ""
+
+
+def _si_defect_channel_unauditable(doc: dict, summary: dict) -> str:
+    """Prose naming a report whose DEFECT CHANNEL cannot be audited, or ``""``.
+
+    `_si_defect_evidence` reads only POSITIVE evidence, and `_si_body_malformed`
+    tolerates ABSENCE, so between them a report could have its defect channel
+    DELETED and then read as "no defect found". Measured: a real emitter FAIL
+    (1 ERROR finding, ``errors_count`` 1) needed one relabelled word plus
+    ``del findings`` and ``del summary.errors_count`` to reach
+    ``PASS_WITH_WAIVERS`` at rc 3 — and, relabelled ``PASS`` instead, to reach
+    a clean rc 0 ``PROVED`` with no waiver involved at all.
+
+    "Absence is not evidence of a defect" is right. "Absence is not evidence of
+    a CLEAN RUN" is the half that was missing. A report asking to be CREDITED —
+    proved, or accepted as a disclosed vacuity — has to expose the channel its
+    verdict was derived from. This is applied to both creditable states and to
+    neither failing one, so it can never turn a FAIL into something softer.
+
+    Every clause reads a field the EMITTER writes UNCONDITIONALLY, in the same
+    dict literal, from the same list::
+
+        "errors_count":   sum(1 for f in findings if f.severity == "ERROR"),
+        "findings_count": len(findings),
+        "findings":       [asdict(f) for f in findings],
+
+    Verified across all six commits that have ever touched
+    `si_mcf_sta_check.py` and against every checker-output report in the tree,
+    so ``findings_count != len(findings)`` is unreachable from the emitter and
+    an absent key proves the file was edited after it was written.
+
+    WHAT THIS CANNOT DO: a body rewritten END TO END so that all three agree
+    with a forged verdict is still indistinguishable from a genuine one. What
+    the clause buys is COST — the laundering that worked was two deletions;
+    now every count has to be forged consistently — not impossibility. Closing
+    the remainder needs evidence this consumer does not have (re-running the
+    gate, or a signature over the report).
+    """
+    findings = doc.get("findings")
+    errors_count = summary.get("errors_count")
+    findings_count = summary.get("findings_count")
+
+    absent = [name for name, value in (
+        ("findings", findings),
+        ("summary.errors_count", errors_count),
+        ("summary.findings_count", findings_count)) if value is None]
+    if absent:
+        return ("it does not carry " + ", ".join(f"`{n}`" for n in absent)
+                + " — the gate writes all three unconditionally from the same "
+                  "findings list, so a report missing one has had the channel "
+                  "its verdict was derived from removed. An absent defect "
+                  "channel is not a clean run; it is an unauditable one")
+    if not isinstance(findings, list):
+        return (f"`findings` is {type(findings).__name__}, not a list — the "
+                f"severity channel this consumer reads has been reshaped")
+    for name, value in (("summary.errors_count", errors_count),
+                        ("summary.findings_count", findings_count)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            return (f"`{name}` is {value!r}, not an integer count — the gate "
+                    f"writes an integer, so this report did not come from it")
+    # `findings` is `[asdict(f) for f in findings]` over a dataclass whose
+    # fields are severity / category / message, so EVERY entry carries a
+    # string `severity`. An entry without one is not a finding this gate
+    # wrote, and it is the cheap way to blind the severity read while leaving
+    # the counts agreeing: renaming the key to `level` kept the ERROR prose
+    # legible in the file and still reached a waived rc 3.
+    for i, f in enumerate(findings):
+        if not isinstance(f, dict):
+            return (f"`findings[{i}]` is {type(f).__name__}, not an object, so "
+                    f"its severity cannot be read")
+        if not isinstance(f.get("severity"), str):
+            return (f"`findings[{i}]` carries no string `severity` — the gate "
+                    f"writes every finding from a dataclass that always has "
+                    f"one, so the severity channel has been renamed or "
+                    f"removed rather than being absent")
+    if findings_count != len(findings):
+        return (f"`summary.findings_count` is {findings_count} while "
+                f"`findings` holds {len(findings)} entr(y/ies). The gate sets "
+                f"that count to `len(findings)` in the same dict literal, so "
+                f"the two cannot legitimately disagree — this report indicts "
+                f"itself")
+    # Narrow by construction, and stated so rather than left looking broader
+    # than it is: any POSITIVE disagreement here has already been refused by
+    # `_si_defect_evidence`, which fires on an ERROR finding OR on
+    # `errors_count > 0`. What reaches this clause is the residue — a count
+    # BELOW the number of ERROR findings in the body, i.e. a negative one,
+    # which `sum(...)` cannot produce. Measured: of 25 (findings, count)
+    # combinations that disagree, exactly the negative-count ones arrive here.
+    actual_errors = sum(
+        1 for f in findings
+        if isinstance(f, dict)
+        and str(f.get("severity", "")).strip().upper() == "ERROR")
+    if errors_count != actual_errors:
+        return (f"`summary.errors_count` is {errors_count} while the body "
+                f"carries {actual_errors} ERROR finding(s). The gate derives "
+                f"that count from the same list it publishes, so the two "
+                f"cannot legitimately disagree")
+    return ""
+
+
+def _si_flag_contradicts(summary: dict, key: str, forbidden: bool) -> bool:
+    """Is ``summary[key]`` PRESENT and equal to `forbidden`, JSON-int spellings
+    included?
+
+    ``summary.get("pass") is True`` misses ``pass: 1``, and
+    ``summary.get("vacuous") is False`` misses ``vacuous: 0`` — measured: both
+    clauses were silently inert on the integer spellings, which is the same
+    class of type miss the PASS branch's `examined` clause was already written
+    to avoid. Absence is still tolerated: only a flag that is PRESENT and
+    contradicts the verdict refuses.
+    """
+    value = summary.get(key)
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value is forbidden
+    if isinstance(value, int):          # JSON `1` / `0`
+        return bool(value) is forbidden
+    return False
+
+
+def _si_vacuity_inconsistency(summary: dict, denom) -> str:
+    """Prose naming how a VACUOUS_PASS report contradicts ITSELF, or ``""``.
+
+    The MIRROR of the PASS branch's ``examined <= 0`` refusal, and it exists
+    for the same reason. A PASS is a claim that folds were proved, so a PASS
+    whose denominator says it examined nothing indicts itself. A VACUOUS_PASS
+    is the opposite claim — "the rule was never applied to anything" — so a
+    VACUOUS_PASS whose denominator says work WAS examined indicts itself just
+    as plainly, and it is the more dangerous of the two: VACUOUS is the ONE
+    state this gate lets a waiver through, so an unchecked contradiction there
+    is a route to a waived tapeout, whereas an unchecked one on the PASS side
+    is only a route to a blocked one.
+
+    Every clause below re-derives an invariant the EMITTER guarantees by
+    construction, so none of them can fire on a report it actually produced:
+
+    * ``verdict == "VACUOUS_PASS"`` requires ``denom.is_vacuous``, i.e.
+      ``examined == 0`` exactly (`_gate_denominator.Denominator.is_vacuous`).
+    * ``Denominator.__post_init__`` REFUSES to construct a zero denominator
+      with no ``not_applicable_reason``, so an empty reason proves the object
+      did not come from the emitter.
+    * ``summary.pass`` is ``verdict == "PASS"`` and ``summary.vacuous`` is
+      ``denom.is_vacuous``; both are computed in the same breath as the
+      verdict, so neither can disagree with it.
+
+    Fields that are simply ABSENT are tolerated — older reports predate some of
+    them. Only a field that is PRESENT and contradicts the verdict refuses.
+    """
+    if denom is None:
+        return ("it carries no `summary.denominator` block, so it never says "
+                "that it examined nothing — a vacuity that does not state its "
+                "own zero is indistinguishable from a report that simply "
+                "never disclosed one")
+    examined = denom.get("examined")
+    if isinstance(examined, bool) or not isinstance(examined, int):
+        return (f"`denominator.examined` is {examined!r}, not an integer "
+                f"count — the report does not state what it examined")
+    if examined != 0:
+        return (f"`denominator.examined` is {examined} — the verdict says the "
+                f"fold was never re-derived while the denominator says "
+                f"{examined} victim-net comparison(s) WERE examined. The gate "
+                f"emits VACUOUS_PASS only when that count is exactly 0")
+    reason = denom.get("not_applicable_reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return ("`denominator.not_applicable_reason` is empty — a gate that "
+                "examined 0 units must say why, and the emitter's Denominator "
+                "type refuses to be constructed without it, so this report "
+                "did not come from the gate")
+    if _si_flag_contradicts(summary, "pass", True):
+        return ("`summary.pass` is true while the verdict is VACUOUS_PASS — "
+                "the emitter sets that flag to `verdict == \"PASS\"`, so the "
+                "two cannot legitimately disagree")
+    if _si_flag_contradicts(summary, "vacuous", False):
+        return ("`summary.vacuous` is false while the verdict is "
+                "VACUOUS_PASS — the emitter sets that flag from the same "
+                "`is_vacuous` the verdict is derived from")
+    return ""
+
+
 def _classify_si(project_dir: Path) -> tuple:
     """Return ``(state, detail)`` for this project's SI crosstalk-delay verdict.
 
@@ -656,6 +945,13 @@ def _classify_si(project_dir: Path) -> tuple:
     Fail-closed at every step: an unreadable file, bytes that are not JSON, JSON
     that is not an object, a missing verdict and an unrecognised verdict all
     land in a non-creditable state, never in PROVED.
+
+    The verdict FIELD is never trusted on its own. The report body is read
+    first (`_si_defect_evidence`), and each verdict tier is then checked
+    against its own denominator (`_si_vacuity_inconsistency` for VACUOUS_PASS,
+    the `examined <= 0` clause for PASS), so a report that contradicts itself
+    is refused on EITHER branch rather than only on the branch a waiver
+    cannot reach.
     """
     path = project_dir / _SI_REPORT_REL
     detail = {"report": str(path)}
@@ -687,20 +983,74 @@ def _classify_si(project_dir: Path) -> tuple:
     denom = denom if isinstance(denom, dict) else None
     detail["verdict"] = verdict if isinstance(verdict, str) else ""
 
-    if verdict == "FAIL":
-        detail["why"] = (
-            "the SI crosstalk-delay gate FAILED — a defect was found. A "
-            "vacuity waiver accepts a check that proved nothing; it does not "
-            "accept a check that proved something wrong.")
+    # THE BODY OUTRANKS THE LABEL, and is read before it. `verdict` is one
+    # editable string; the ERROR findings and the error count are the evidence
+    # the emitter DERIVED it from. Checking them first means no reordering of
+    # the verdict branches below can ever make a defect-carrying report
+    # waivable — which is the property that must not depend on branch order,
+    # because VACUOUS is the one state a waiver may pass.
+    defect = _si_defect_evidence(doc, summary)
+    if defect or verdict == "FAIL":
+        if defect and verdict != "FAIL":
+            detail["why"] = (
+                f"the SI crosstalk-delay report carries verdict {verdict!r}, "
+                f"but {defect}. The gate derives FAIL from exactly that "
+                f"evidence, so this report is a FAILURE wearing another "
+                f"label — read as a defect, never as a vacuity to accept.")
+        else:
+            detail["why"] = (
+                "the SI crosstalk-delay gate FAILED — a defect was found. A "
+                "vacuity waiver accepts a check that proved nothing; it does "
+                "not accept a check that proved something wrong."
+                + (f" ({defect})" if defect else ""))
         return SI_VIOLATION, detail
+    # ...and a body that has been reshaped until the defect channel cannot be
+    # read is not "no defect found". Checked for every verdict, so neither
+    # branch can be hardened without the other.
+    malformed = _si_body_malformed(doc, summary)
+    if malformed:
+        detail["why"] = (
+            f"the SI crosstalk-delay report carries verdict {verdict!r}, but "
+            f"{malformed}. A report this consumer cannot audit is not read as "
+            f"a pass or accepted as a vacuity.")
+        return SI_UNDISCLOSED, detail
+    # A report asking to be CREDITED — proved, or accepted as a disclosed
+    # vacuity — must expose the defect channel its verdict was derived from.
+    # Applied to both creditable verdicts and to neither failing one, so the
+    # branches cannot drift and no FAIL is ever softened by it. Without this,
+    # deleting `findings` and `summary.errors_count` from a genuine FAIL turned
+    # it into a waived rc 3 under VACUOUS_PASS and into a clean rc 0 under
+    # PASS, because absence was read as "no defect found".
+    if verdict in ("VACUOUS_PASS", "PASS"):
+        unauditable = _si_defect_channel_unauditable(doc, summary)
+        if unauditable:
+            detail["why"] = (
+                f"the SI crosstalk-delay report carries verdict {verdict!r}, "
+                f"but {unauditable}. A verdict this consumer cannot audit is "
+                f"not credited as a pass and is not accepted as a vacuity a "
+                f"waiver may cover.")
+            return SI_UNDISCLOSED, detail
     if verdict == "VACUOUS_PASS":
+        # THE MIRROR of the PASS branch's internal-consistency refusal below.
+        # A vacuity is the ONLY waivable state, so a VACUOUS_PASS that
+        # contradicts its own body is refused here rather than carried into
+        # the waiver channel. See `_si_vacuity_inconsistency`.
+        bad = _si_vacuity_inconsistency(summary, denom)
+        if bad:
+            detail["why"] = (
+                f"the SI verdict is VACUOUS_PASS but {bad}. A report in that "
+                f"shape is internally inconsistent — it is forged or "
+                f"corrupt, not a disclosed skip — so it is refused rather "
+                f"than accepted or waived.")
+            if isinstance(denom, dict):
+                detail["examined"] = denom.get("examined")
+            return SI_UNDISCLOSED, detail
         code = ""
-        if denom is not None:
-            details = denom.get("details")
-            if isinstance(details, dict):
-                raw = details.get("vacuity_code")
-                if isinstance(raw, str):
-                    code = raw.strip().upper()
+        details = denom.get("details")
+        if isinstance(details, dict):
+            raw = details.get("vacuity_code")
+            if isinstance(raw, str):
+                code = raw.strip().upper()
         if not code:
             detail["why"] = (
                 "the SI verdict is VACUOUS_PASS but the report does not name "
@@ -729,6 +1079,9 @@ def _classify_si(project_dir: Path) -> tuple:
                 f"state what it examined.")
             return SI_UNDISCLOSED, detail
         if examined <= 0:
+            # Mirrored by `_si_vacuity_inconsistency` on the VACUOUS_PASS
+            # branch above. Both branches refuse a report that contradicts its
+            # own denominator; neither may be defended without the other.
             detail["why"] = (
                 "the SI verdict is PASS but `denominator.examined` is 0 — the "
                 "gate signed off over nothing. A report in that shape is "

@@ -50,6 +50,14 @@ def write_proved_si_report(project: Path, folds_proved: int = 12) -> Path:
         "summary": {
             "pass": True,
             "vacuous": False,
+            # `build_report` writes these two in the SAME dict literal as
+            # `findings`, from the same list, in every version of the emitter.
+            # A fixture claiming to be "the shape a genuinely-proved run
+            # produces" has to carry them, or it measures a report no run can
+            # produce — and consumers that audit the defect channel would then
+            # be tuned against a shape that does not exist.
+            "errors_count": 0,
+            "findings_count": 0,
             "denominator": {
                 "unit": "victim-net MCF folds re-derived and PROVED against "
                         "the bounded SPEF",
