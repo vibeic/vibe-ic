@@ -19,7 +19,7 @@ import argparse_help_format_check as AH  # noqa: E402
 def test_phase1_doc_runner_help_exits_zero():
     result = subprocess.run(
         [sys.executable, str(PROG / "phase1_doc_one_shot_runner.py"), "--help"],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stderr[-2000:]
     assert "incomplete format" not in result.stderr

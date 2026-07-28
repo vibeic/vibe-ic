@@ -52,10 +52,19 @@ _RUNNER_SRC = _PROGRAMS / "phase3_one_shot_runner.py"
 
 sys.path.insert(0, str(_PROGRAMS))
 
-#: CI's per-test harness bound (`pytest --timeout=180` in
-#: `.github/workflows/ci.yml`). Named once so the guard below reads against a
-#: label rather than a bare number.
-_CI_HARNESS_TIMEOUT_S = 180
+import ci_harness_timeout_ceiling_check as ceiling_check   # noqa: E402
+
+_CEILING_REPO_ROOT = ceiling_check.find_repo_root()
+
+#: CI's per-test harness bound, READ from the workflows (vibe-ic#542). The
+#: landed version of this line was `= 180`, a second copy of a value this file
+#: cannot see, and it was the wrong shape twice over: the repo declares FOUR
+#: pytest bounds across two workflows and they do not agree, so the binding one
+#: is the minimum. None when no workflow is reachable — the guard below then
+#: SKIPs rather than fall back to a remembered number.
+_CI_HARNESS_TIMEOUT_S = (
+    ceiling_check.ci_harness_timeout_seconds(_CEILING_REPO_ROOT)
+    if _CEILING_REPO_ROOT else None)
 
 #: Inner subprocess bound. MUST stay below CI's harness bound (#542): a test
 #: whose own timeout is at or above it cannot fail as a test — pytest kills the
@@ -544,26 +553,24 @@ def test_the_blast_radius_is_recorded_where_the_change_is():
 
 
 def test_inner_subprocess_bounds_stay_under_the_ci_harness_bound():
-    """#542 — a test whose own subprocess timeout is at or above CI's 180 s
-    bound cannot fail as a test; it kills the whole subset."""
-    import ast
-    assert _INNER_TIMEOUT_S < _CI_HARNESS_TIMEOUT_S
-    tree = ast.parse(Path(__file__).read_text(errors="replace"))
-    # Real call sites only — an AST walk cannot mistake the `--timeout=180`
-    # written in a docstring for a bound this file actually imposes.
-    passed = [kw.value
-              for node in ast.walk(tree) if isinstance(node, ast.Call)
-              for kw in node.keywords if kw.arg == "timeout"]
-    assert passed, "no timeout keyword found — has the scan stopped working?"
-    for value in passed:
-        if isinstance(value, ast.Constant):
-            assert isinstance(value.value, int) \
-                and value.value < _CI_HARNESS_TIMEOUT_S, ast.dump(value)
-        else:
-            # A named bound is the preferred shape: one constant, checked above,
-            # rather than a number copied to each call site (#527/#530/#534).
-            assert isinstance(value, ast.Name) \
-                and value.id == "_INNER_TIMEOUT_S", ast.dump(value)
+    """#542 — a test whose own subprocess timeout is at or above CI's harness
+    bound cannot fail as a test; it kills the whole subset.
+
+    Parsed by the SHARED scanner rather than an inline walk: the bound and the
+    parse now have one implementation each, and this file inherits the two
+    shapes an inline copy did not have (a bound spelled as a module constant,
+    and a wrapper that splats `**kwargs` into a launcher)."""
+    if _CI_HARNESS_TIMEOUT_S is None:
+        pytest.skip("no .github/workflows in reach — the harness bound cannot "
+                    "be resolved, and a remembered copy of it is the defect")
+    ceiling = _CI_HARNESS_TIMEOUT_S // ceiling_check.CEILING_DIVISOR
+    assert _INNER_TIMEOUT_S <= ceiling
+    findings, unresolved, sites = ceiling_check.scan_source(
+        Path(__file__).read_text(errors="replace"), Path(__file__).name,
+        ceiling)
+    assert sites, "no bound was READ at all — has the scan stopped working?"
+    assert not findings and not unresolved, "\n  ".join(
+        str(x) for x in list(findings) + list(unresolved))
 
 
 def test_the_gates_this_file_drives_finish_well_inside_that_bound(tmp_path,

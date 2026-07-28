@@ -38,7 +38,7 @@ def test_reachability_tests_run_not_skip_on_source():
     r = subprocess.run(
         [sys.executable, "-m", "pytest", "-q",
          str(TESTS / "test_program_reachability_check.py")],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=60,
         cwd=str(PT.plugin_root()))
     assert "4 passed" in r.stdout, r.stdout + r.stderr
     assert "skipped" not in r.stdout, r.stdout

@@ -68,7 +68,7 @@ def _cell(name: str) -> Path:
 def _run(gate: str, project: Path):
     proc = subprocess.run(
         [sys.executable, str(_PROGRAMS / gate), str(project)],
-        capture_output=True, text=True, timeout=180)
+        capture_output=True, text=True, timeout=60)
     return proc.returncode, proc.stdout + proc.stderr
 
 

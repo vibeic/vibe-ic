@@ -166,7 +166,7 @@ def test_flow_condition_paths_match_the_programs_discovery_paths(flow):
 def _run(prog, *args, env=None):
     full = dict(os.environ, **(env or {}))
     return subprocess.run([sys.executable, str(prog), *map(str, args)],
-                          capture_output=True, text=True, env=full, timeout=900)
+                          capture_output=True, text=True, env=full, timeout=60)
 
 
 @pytest.mark.parametrize("prog", [ANTENNA_GATE, FILL_GATE])
@@ -267,7 +267,7 @@ def _antenna_project(runner, workdir, name, met1_len, met2_len=0.0,
            "ANT_LEN": str(met1_len), "ANT_MET2_LEN": str(met2_len),
            "ANT_DIODE": "1" if diode else "0",
            "ANT_DIODE_OFFNET": "1" if diode_offnet else "0"}
-    rc, out, err = runner.run(gen, env, path_keys=("ANT_OUT",), timeout=300)
+    rc, out, err = runner.run(gen, env, path_keys=("ANT_OUT",), timeout=60)
     gds = proj / "phase3" / "stage4" / "gds" / "top.gds"
     assert gds.is_file() and gds.stat().st_size > 0, \
         f"fixture generation failed: rc={rc} {err[-400:]}"
@@ -382,7 +382,7 @@ def test_density_fill_raises_a_sparse_layer_to_target(runner, workdir):
     (proj / "signoff" / "cmp_fill_targets.json").write_text(json.dumps(cfg))
     gen = PROGRAMS / "metal_fill" / "gen_fixtures.py"
     gds = proj / "phase3" / "stage4" / "gds" / "top.gds"
-    runner.run(gen, {"FILL_OUT": str(gds)}, path_keys=("FILL_OUT",), timeout=300)
+    runner.run(gen, {"FILL_OUT": str(gds)}, path_keys=("FILL_OUT",), timeout=60)
     assert gds.is_file()
     before = gds.stat().st_size
 

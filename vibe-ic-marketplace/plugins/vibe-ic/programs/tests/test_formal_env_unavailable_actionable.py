@@ -80,7 +80,7 @@ def _run_formal(project: Path, container: str):
         [sys.executable, str(_FORMAL), str(project),
          "--harness", str(harness), "--rtl", str(rtl),
          "--top", "formal_ctr", "--container", container],
-        capture_output=True, text=True, timeout=900,
+        capture_output=True, text=True, timeout=60,
     )
     return r.returncode, r.stdout, r.stderr
 
@@ -191,7 +191,7 @@ def test_absent_env_gate_fails_but_names_the_gap(tmp_path):
     _run_formal(tmp_path, _ABSENT_CONTAINER)
     gate = _PROGRAMS / "formal_proof_evidence_check.py"
     r = subprocess.run([sys.executable, str(gate), str(tmp_path)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     report = json.loads(r.stdout)
 
     assert report["verdict"] == "FAIL"
@@ -275,7 +275,7 @@ def _compliance(project: Path, out_json: Path):
     rc = subprocess.run(
         [sys.executable, str(_COMPLIANCE), str(project), "--strict",
          "--json", str(out_json)],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True, text=True, timeout=60,
     )
     return rc.returncode, json.loads(out_json.read_text())
 

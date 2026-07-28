@@ -133,7 +133,7 @@ def test_install_smoke_bare_cache_layout(tmp_path):
     r = subprocess.run(
         [sys.executable, str(cache / "programs" / "phase1_one_shot_runner.py"),
          str(proj), "--ic-name", "pulse_div"],
-        capture_output=True, text=True, timeout=600, cwd=str(tmp_path),
+        capture_output=True, text=True, timeout=60, cwd=str(tmp_path),
         env=env)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-1500:]
     gd = proj / "phase1" / "generated_docs"

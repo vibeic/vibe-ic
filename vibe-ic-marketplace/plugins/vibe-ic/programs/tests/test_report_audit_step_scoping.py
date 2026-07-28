@@ -80,7 +80,7 @@ _SIGNOFF_DRC = (
 def _run(*args):
     r = subprocess.run(
         [sys.executable, str(_PROGRAMS / "drc_report_check.py"), *args],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     try:
         return r.returncode, json.loads(r.stdout)
     except ValueError:

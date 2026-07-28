@@ -125,7 +125,7 @@ def _project(tmp_path: Path, block: str = "blk1", *, gds: bytes = None,
 
 def _run(prog: Path, project: Path, *extra):
     return subprocess.run([sys.executable, str(prog), str(project), *extra],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=60)
 
 
 # ── the wiring (a declaration is not an implementation) ─────────────────────

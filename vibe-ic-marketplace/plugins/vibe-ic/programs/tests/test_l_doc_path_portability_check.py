@@ -340,7 +340,7 @@ def test_the_gate_speaks_the_cli_the_runner_loop_uses(tmp_path):
     out = tmp_path / "reports" / "phase1" / "l_doc_path_portability.json"
     cp = subprocess.run(
         [sys.executable, str(_CHECK), str(tmp_path), "--json", str(out)],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
     assert cp.returncode == 1, (
         f"the runner treats rc==1 as blocking; got {cp.returncode}")
     assert out.is_file(), "the runner writes the report path it passes in"

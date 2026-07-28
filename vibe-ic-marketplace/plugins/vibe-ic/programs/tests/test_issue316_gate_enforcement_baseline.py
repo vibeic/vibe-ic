@@ -31,7 +31,7 @@ def _run(*extra, baseline=None, flow=None, programs=None):
     if programs is not None:
         cmd += ["--programs", str(programs)]
     return subprocess.run(cmd + list(extra), capture_output=True, text=True,
-                          timeout=300)
+                          timeout=60)
 
 
 def _tree_with_one_contradiction(tmp_path):

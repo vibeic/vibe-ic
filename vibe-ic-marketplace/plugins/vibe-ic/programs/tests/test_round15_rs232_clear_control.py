@@ -177,7 +177,7 @@ def _run_gate(gate: Path, rtl: Path, top: str, event: str, output: str,
     # explicitly add the programs dir so a copied-out gate still imports them).
     env["PYTHONPATH"] = (str(PROGRAMS_DIR) + os.pathsep
                          + env.get("PYTHONPATH", ""))
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=60,
                           env=env)
 
 

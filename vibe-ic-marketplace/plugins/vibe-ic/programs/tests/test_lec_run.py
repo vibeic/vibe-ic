@@ -780,7 +780,7 @@ def _yosys(script_path):
     cmd = (f"export PATH=/foss/tools/yosys/bin:$PATH && "
            f"yosys -s {script_path} 2>&1")
     return subprocess.run(["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
-                          capture_output=True, text=True, timeout=300).stdout or ""
+                          capture_output=True, text=True, timeout=60).stdout or ""
 
 
 # ---------------------------------------------------------------------------

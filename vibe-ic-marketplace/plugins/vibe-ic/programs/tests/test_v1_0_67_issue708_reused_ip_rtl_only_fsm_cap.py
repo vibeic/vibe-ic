@@ -224,7 +224,7 @@ def test_subprocess_endstate_pass_with_waivers(tmp_path):
         [sys.executable, str(_PROGRAMS / "flow_compliance_check.py"), ".",
          "--strict", "--phase", "2", "--strict-structural",
          "--skip-analog", "--skip-hardware"],
-        cwd=proj, capture_output=True, text=True, timeout=300)
+        cwd=proj, capture_output=True, text=True, timeout=60)
     out = r.stdout + r.stderr
     # The cap waiver line must appear with the distinct ticket, and the
     # field-count gate must NOT be listed as a hard structural FAIL.
@@ -838,7 +838,7 @@ def test_chip_agnostic_guard(tmp_path):
     r = subprocess.run(
         [sys.executable, str(_PROGRAMS / "source_chip_agnostic_check.py"),
          str(_PROGRAMS.parent), "--json", str(out)],
-        cwd=_PROGRAMS, capture_output=True, text=True, timeout=300)
+        cwd=_PROGRAMS, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, (r.stdout + r.stderr)[-3000:]
 
     census = json.loads(out.read_text())["scan_census"]

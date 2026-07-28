@@ -54,7 +54,7 @@ ISSUE_496_GATES = (
 def _run(gate: str, rtl_dir: Path):
     return subprocess.run(
         [sys.executable, str(PROGRAMS / f"{gate}.py"), "--rtl-dir", str(rtl_dir)],
-        capture_output=True, text=True, timeout=180)
+        capture_output=True, text=True, timeout=60)
 
 
 def _summary(gate: str, rtl_dir: Path) -> dict:
@@ -70,7 +70,7 @@ def _summary(gate: str, rtl_dir: Path) -> dict:
         r2 = subprocess.run(
             [sys.executable, str(PROGRAMS / f"{gate}.py"),
              "--rtl-dir", str(rtl_dir), "--out-dir", str(out)],
-            capture_output=True, text=True, timeout=180)
+            capture_output=True, text=True, timeout=60)
         assert "Traceback" not in r2.stderr, r2.stderr[-800:]
         return json.loads((out / f"{gate}.json").read_text())
     return json.loads(r.stdout)["summary"]
@@ -455,7 +455,7 @@ def test_l12_reports_a_real_denominator_when_given_its_input(tmp_path):
     r = subprocess.run(
         [sys.executable, str(PROGRAMS / "l12_sequence_implementation_check.py"),
          "--rtl-dir", str(rtl), "--l12-json", str(l12)],
-        capture_output=True, text=True, timeout=180)
+        capture_output=True, text=True, timeout=60)
     d = json.loads(r.stdout)["summary"][GD.DENOMINATOR_KEY]
     assert d["examined"] == 1, r.stdout
     assert d["not_applicable_reason"] == ""

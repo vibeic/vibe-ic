@@ -42,7 +42,7 @@ OPENLANE_CFG = {
 def _run(project: Path):
     proc = subprocess.run(
         [sys.executable, str(GATE), str(project)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     return proc.returncode, (proc.stdout + proc.stderr)
 
 

@@ -560,7 +560,7 @@ def _fcc(project: Path, flow_def: Path) -> Tuple[int, dict]:
     proc = subprocess.run(
         [sys.executable, str(FCC_PY), str(project),
          "--flow-def", str(flow_def), "--strict", "--json", str(rep)],
-        capture_output=True, text=True, timeout=900)
+        capture_output=True, text=True, timeout=60)
     doc = json.loads(rep.read_text())
     doc["_stdout"] = proc.stdout
     return proc.returncode, doc

@@ -156,7 +156,7 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
         # moment a gate label contained one.
         out = subprocess.run(
             ["bash", str(_SCRIPT), "--list", "--summary-json", str(rec)],
-            cwd=str(_REPO), capture_output=True, text=True, timeout=120)
+            cwd=str(_REPO), capture_output=True, text=True, timeout=60)
         assert out.returncode == 0, out.stderr
         doc = json.loads(rec.read_text())
     recorded = {g["label"] for g in doc["gates"]}
@@ -366,7 +366,7 @@ def test_the_cli_offers_no_way_to_skip_the_hygiene_set():
     """
     out = subprocess.run([sys.executable,
                           str(_PROGRAMS / "gatekeeper_review.py"), "--help"],
-                         capture_output=True, text=True, timeout=120)
+                         capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     for forbidden in ("--hygiene", "--skip-hygiene", "--no-hygiene"):
         assert forbidden not in out.stdout, (
@@ -457,7 +457,7 @@ def test_a_new_program_without_a_regenerated_index_is_refused():
 def _run_fixture_script(root: Path, gate_lines: str):
     script = _fixture_script(root, gate_lines)
     return subprocess.run(["bash", str(script)], cwd=str(root),
-                          capture_output=True, text=True, timeout=300)
+                          capture_output=True, text=True, timeout=60)
 
 
 def test_the_rollup_does_not_claim_all_passed_when_a_gate_refused(tmp_path):

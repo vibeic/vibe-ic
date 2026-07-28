@@ -34,7 +34,7 @@ def _run(root: Path, baseline: Path, *extra) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(_PROG), str(root), "--baseline", str(baseline),
          *extra],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
 
 
 def _doc(root: Path, rel: str, body: str) -> Path:
@@ -156,7 +156,7 @@ def test_shipped_baseline_matches_the_shipped_tree():
     loudly there is what keeps this test from being deleted by the first
     person it annoys; CI runs clean and enforces it for real."""
     r = subprocess.run([sys.executable, str(_PROG)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     if r.returncode == 2:
         pytest.skip("no benchmark-data tree in this checkout")
     root = next((b / E._DEFAULT_ROOT_REL for b in Path(_PROG).resolve().parents
@@ -173,7 +173,7 @@ def test_out_of_scope_tree_is_disclosed_not_silently_dropped():
     assert E._DISCLOSED_OUT_OF_SCOPE[0]
     assert "unresolved" in E._DISCLOSED_OUT_OF_SCOPE[1]
     r = subprocess.run([sys.executable, str(_PROG)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     if r.returncode != 2:
         assert "NOT scanned" in r.stdout
 
@@ -205,7 +205,7 @@ def test_baseline_never_stores_the_paths_it_lists(tmp_path):
 
 def _git(root: Path, *args):
     subprocess.run(["git", "-C", str(root), *args],
-                   capture_output=True, check=True, timeout=120)
+                   capture_output=True, check=True, timeout=60)
 
 
 def _repo(tmp_path) -> Path:

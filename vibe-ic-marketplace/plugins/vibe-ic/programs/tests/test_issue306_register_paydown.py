@@ -93,7 +93,7 @@ def test_306_shipped_tree_is_green_against_its_register():
     """An audit that ships red blocks nothing — the failure mode it names."""
     r = subprocess.run([sys.executable,
                         str(_PROGRAMS / "flow_gate_enforcement_audit.py")],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
 
 

@@ -116,7 +116,7 @@ def _project(tmp_path: Path, name: str = "proj", *, constraints=None,
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(PROG)] + args,
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=60)
 
 
 # ── discriminators ───────────────────────────────────────────────────────────

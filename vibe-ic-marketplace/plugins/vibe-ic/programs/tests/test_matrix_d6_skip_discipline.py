@@ -308,7 +308,7 @@ _SAFETY_RTL_FILES: Dict[str, str] = {
 #: whichever steps declare it rather than for a hard-coded step id.
 _RTL_DIR_FLAG = "--rtl-dir"
 
-_SUBPROCESS_TIMEOUT_S = 900
+_SUBPROCESS_TIMEOUT_S = 60
 
 #: Line-start markers by which a gate program self-declares inapplicability in
 #: PROSE on stdout. Used ONLY by leg L3b, and ONLY for a blocking clause that

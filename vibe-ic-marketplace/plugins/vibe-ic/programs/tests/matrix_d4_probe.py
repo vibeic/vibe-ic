@@ -206,7 +206,7 @@ _ARGPARSE_ERROR = re.compile(
 #: argparse exits 2 on a usage error. Required IN ADDITION to the stderr shape.
 ARGPARSE_USAGE_EXIT = 2
 
-PROBE_TIMEOUT_S = 90
+PROBE_TIMEOUT_S = 60
 
 
 @dataclass(frozen=True)

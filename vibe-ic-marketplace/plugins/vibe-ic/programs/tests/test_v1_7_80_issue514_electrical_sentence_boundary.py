@@ -266,7 +266,7 @@ def _project(doc_text: str, l1: dict) -> Path:
 
 def _rc(proj: Path):
     r = subprocess.run([sys.executable, str(_GATE), str(proj)],
-                       capture_output=True, text=True, timeout=600)
+                       capture_output=True, text=True, timeout=60)
     return r.returncode, r.stdout + r.stderr
 
 

@@ -292,7 +292,7 @@ def _run_gate(ds, run):
         [sys.executable, str(GATES), "--prob", "ProbP",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 def _block_rules(run):

@@ -251,7 +251,7 @@ def test_priority_encoder_functional_pass_with_coverage_gate_flagged(tmp_path):
         ["python3", str(SCRIPT), "--project", str(proj),
          "--top", "priority_encoder_8x3",
          "--mount-root", str(require_corpus())],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
     score_json = proj / "reports" / "cocotb_score.json"
     assert score_json.is_file(), r.stdout + r.stderr
     d = json.loads(score_json.read_text())

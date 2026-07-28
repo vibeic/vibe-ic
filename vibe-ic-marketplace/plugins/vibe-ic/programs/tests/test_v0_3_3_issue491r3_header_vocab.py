@@ -97,7 +97,7 @@ def test_e2e_real_vocab_docs_to_l9_gate_pass(tmp_path):
     (rtl / "chip_top.v").write_text(_RTL)
     r1 = subprocess.run(
         [sys.executable, str(PROGRAMS / "phase1_doc_one_shot_runner.py"),
-         str(tmp_path)], capture_output=True, text=True, timeout=300)
+         str(tmp_path)], capture_output=True, text=True, timeout=60)
     assert r1.returncode == 0, r1.stdout[-1500:] + r1.stderr[-500:]
     l9 = json.loads((tmp_path / "phase1" / "generated_docs"
                      / "L9_INTEGRATION_SPEC.json").read_text())

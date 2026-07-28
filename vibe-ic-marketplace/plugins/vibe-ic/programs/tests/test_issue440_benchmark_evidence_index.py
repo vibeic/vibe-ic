@@ -93,7 +93,7 @@ def tree(tmp_path: Path) -> Path:
 def _run(root: Path, *args) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(PROG), "--root", str(root), *args],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 # ─────────────────────────────────────────────────────────────────────

@@ -34,7 +34,7 @@ _REPO = _PROGRAMS.parents[3]
 def _run(prog: str, *args: str):
     r = subprocess.run(
         [sys.executable, str(_PROGRAMS / prog), *args],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=60)
     return r.returncode, (r.stdout + r.stderr)
 
 
@@ -95,7 +95,7 @@ def test_empty_STDIN_is_still_allowed(tmp_path):
     none, and refusing there would fire on legitimate use."""
     r = subprocess.run(
         [sys.executable, str(_PROGRAMS / "nda_diff_scan_check.py"), "--stdin"],
-        input="", capture_output=True, text=True, timeout=300)
+        input="", capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
 
 

@@ -1346,7 +1346,7 @@ def _run_si_gate(project: Path) -> tuple:
     between the producer and the consumer is hand-written."""
     import subprocess
     r = subprocess.run([sys.executable, str(_SI_GATE), str(project)],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=60)
     report = project / _SI_REPORT
     assert report.is_file(), (
         f"the gate wrote no report to {_SI_REPORT}\n{r.stdout}\n{r.stderr}")

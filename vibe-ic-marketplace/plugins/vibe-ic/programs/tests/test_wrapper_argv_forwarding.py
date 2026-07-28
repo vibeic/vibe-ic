@@ -99,7 +99,7 @@ _WRAPPERS = {
 
 def _run(prog: str, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(_PROGRAMS / prog), *args],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=60)
 
 
 def _project(tmp: Path) -> Path:

@@ -125,7 +125,7 @@ def test_no_real_codename_literal_in_plugin_tree():
     try:
         r = subprocess.run(["git", "grep", "-inE", tok, "--", "plugins/vibe-ic"],
                            cwd=str(marketplace_root), capture_output=True,
-                           text=True, timeout=120)
+                           text=True, timeout=60)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         import pytest
         pytest.skip("git not available")

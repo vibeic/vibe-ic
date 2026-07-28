@@ -68,7 +68,7 @@ set_output_delay -clock clk 2 [get_ports dout]
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(PROG)] + args,
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=60)
 
 
 def _write(path: Path, text: str = _GOOD_SDC) -> Path:

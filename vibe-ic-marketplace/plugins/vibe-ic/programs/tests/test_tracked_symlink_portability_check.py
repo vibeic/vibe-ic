@@ -20,7 +20,7 @@ _PROG = _PROGRAMS / "tracked_symlink_portability_check.py"
 
 def _git(root: Path, *a):
     subprocess.run(["git", "-C", str(root), *a], capture_output=True,
-                   check=True, timeout=120)
+                   check=True, timeout=60)
 
 
 def _repo(p: Path) -> Path:
@@ -34,7 +34,7 @@ def _repo(p: Path) -> Path:
 def _run(root: Path, out: Path):
     return subprocess.run([sys.executable, str(_PROG), str(root),
                            "--json", str(out)],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=60)
 
 
 def test_371_absolute_target_fails(tmp_path):
@@ -102,7 +102,7 @@ def test_371_enumeration_comes_from_the_index_not_a_walk(tmp_path):
 def test_371_shipped_tree_is_clean():
     """The gate must be GREEN on main as landed."""
     r = subprocess.run([sys.executable, str(_PROG)], capture_output=True,
-                       text=True, timeout=300)
+                       text=True, timeout=60)
     if r.returncode == 2:
         return
     assert r.returncode == 0, r.stdout + r.stderr

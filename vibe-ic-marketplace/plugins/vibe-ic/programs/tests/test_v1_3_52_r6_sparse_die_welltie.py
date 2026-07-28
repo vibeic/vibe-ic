@@ -267,7 +267,7 @@ def test_live_emitted_block_ties_wells_and_prunes():
     p = subprocess.run(
         ["docker", "exec", "vibeic-eda", "bash", "-lc",
          "cd /tmp && openroad -exit _r6_live.tcl 2>&1"],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=60)
     out = p.stdout
     assert "SPARSE_DIE_TAPCELL_BOUNDED" in out, out[-2000:]
     # placed-cell wells tied

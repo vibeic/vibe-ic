@@ -187,7 +187,7 @@ def test_every_finding_names_the_issue_and_the_range():
 # --------------------------------------------------------------------------
 def _git(root, *args):
     return subprocess.run(["git", "-C", str(root), *args], capture_output=True,
-                          text=True, timeout=120)
+                          text=True, timeout=60)
 
 
 def _seed_repo(root: Path) -> str:
@@ -223,7 +223,7 @@ def _run(root: Path, issue_file: Path, rng: str, extra=()):
         [sys.executable, str(PROG), "--issue-number", "366", "--range", rng,
          "--offline", "--repo-root", str(root), "--issue-file", str(issue_file),
          *extra],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 def test_mutation_control_the_verdict_flips_when_the_artefact_is_repaired(tmp_path):
@@ -305,7 +305,7 @@ def test_a_sweep_without_an_issue_corpus_says_skipped_not_pass(tmp_path):
     _seed_repo(root)
     r = subprocess.run([sys.executable, str(PROG), "--recent", "5", "--offline",
                         "--repo-root", str(root)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0
     assert "[SKIPPED]" in r.stdout and "NOT a PASS" in r.stdout
     assert "[PASS]" not in r.stdout
@@ -413,7 +413,7 @@ def test_real_history_the_sweep_is_quiet_on_this_repo(tmp_path):
     out = subprocess.run(
         [sys.executable, str(PROG), "--recent", "400", "--offline",
          "--repo-root", str(_REPO_ROOT), "--issues-json", str(corpus)],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stdout + out.stderr
     assert "[FAIL]" not in out.stdout
 

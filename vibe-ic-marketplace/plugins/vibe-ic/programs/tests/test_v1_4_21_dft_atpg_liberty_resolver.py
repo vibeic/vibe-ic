@@ -132,7 +132,7 @@ def test_sky130_fault_cut_produces_real_scan_pairs(tmp_path):
     assert cells == "sky130_fd_sc_hd__dfxtp_1"          # the fix detects it
     cut_rel = "phase2/stage2/dft/cut_netlist.v"
     ok, msg = tdf._ensure_cut(tmp_path, "phase2/stage2/synth/spm_synth.v",
-                              cut_rel, "clk", None, None, timeout=300)
+                              cut_rel, "clk", None, None, timeout=60)
     assert ok, msg
     cut_text = (tmp_path / cut_rel).read_text()
     _t, _pi, _po, pairs = tdf.parse_cut_ports(cut_text)

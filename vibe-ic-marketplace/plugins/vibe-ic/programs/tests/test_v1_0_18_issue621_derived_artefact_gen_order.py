@@ -36,7 +36,7 @@ _FOUNDRY_ITEMS = ("foundry_mask_spec", "foundry_wat_plan", "foundry_corner_kit")
 
 def _run(proj, prog, *extra):
     subprocess.run([sys.executable, str(PROGRAMS / prog), str(proj), *extra],
-                   capture_output=True, text=True, timeout=120)
+                   capture_output=True, text=True, timeout=60)
 
 
 def _foundry_present(proj):

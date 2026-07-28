@@ -167,7 +167,7 @@ def test_git_grep_sku_is_zero() -> None:
     try:
         proc = subprocess.run(
             ["git", "grep", "-icE", alt, "--", "plugins/vibe-ic"],
-            cwd=str(repo_root), capture_output=True, text=True, timeout=120)
+            cwd=str(repo_root), capture_output=True, text=True, timeout=60)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pytest.skip("git not available")
     # `git grep -c` prints one `path:count` line per matching file; exit 1 == no

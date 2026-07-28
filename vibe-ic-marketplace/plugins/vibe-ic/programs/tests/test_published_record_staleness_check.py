@@ -109,7 +109,7 @@ def _run(root: Path, *args, programs_dir: Path = None) -> tuple:
     """Drive the real CLI in a subprocess; return (rc, stdout, stderr)."""
     argv = [sys.executable, str(_CLI), str(root),
             "--programs-dir", str(programs_dir or _PROGRAMS), *args]
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=300)
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -470,7 +470,7 @@ def test_re_reviewing_the_rules_clears_the_drift(tmp_path):
     new = subprocess.run(
         [sys.executable, str(_CLI), "--programs-dir", str(altered),
          "--print-decision-digest", "si_mcf_sta_check"],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     assert new.returncode == 0, new.stderr
     digest = new.stdout.strip().split("digest=")[1]
 
@@ -663,7 +663,7 @@ def test_the_shipped_register_is_current(tmp_path):
     if not _CORPUS.is_dir():
         pytest.skip("no published corpus here")
     r = subprocess.run([sys.executable, str(_CLI)],
-                       capture_output=True, text=True, timeout=600)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
 
 
@@ -684,7 +684,7 @@ def test_adjudicator_agrees_with_what_the_real_gate_emits(tmp_path, fixture):
     shutil.copytree(_FIXTURES / fixture, work)
     r = subprocess.run(
         [sys.executable, str(_PROGRAMS / "si_mcf_sta_check.py"), "."],
-        cwd=str(work), capture_output=True, text=True, timeout=300)
+        cwd=str(work), capture_output=True, text=True, timeout=60)
     assert r.returncode in (0, 2), r.stderr
     emitted = json.loads(
         (work / "reports" / "phase3" / "si_mcf_sta_check.json").read_text())
@@ -991,9 +991,9 @@ def test_the_real_corpus_is_not_written_to(tmp_path):
     """READ-ONLY is a property of the program, asserted on the real tree."""
     before = subprocess.run(
         ["git", "-C", str(_REPO), "status", "--porcelain", "--", "benchmark-data"],
-        capture_output=True, text=True, timeout=300).stdout
+        capture_output=True, text=True, timeout=60).stdout
     _rc, _rep, _se = _report(_CORPUS, tmp_path)
     after = subprocess.run(
         ["git", "-C", str(_REPO), "status", "--porcelain", "--", "benchmark-data"],
-        capture_output=True, text=True, timeout=300).stdout
+        capture_output=True, text=True, timeout=60).stdout
     assert after == before

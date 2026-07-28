@@ -44,7 +44,7 @@ def _run(root: Path):
     r = subprocess.run(
         [sys.executable, str(_PROGRAMS / "source_chip_agnostic_check.py"),
          str(root)],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
     return r.returncode, (r.stdout + r.stderr)
 
 

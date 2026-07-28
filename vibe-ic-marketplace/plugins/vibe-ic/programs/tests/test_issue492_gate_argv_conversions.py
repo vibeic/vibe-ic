@@ -90,7 +90,7 @@ def test_every_adapter_produces_an_argv_its_gate_actually_accepts(gate, tmp_path
     (rtl / "m.v").write_text("module m(input a); endmodule\n")
     argv = F._structural_gate_argv(gate, tmp_path, rtl_dir=rtl)
     r = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True,
-                       timeout=120)
+                       timeout=60)
     why = GI.classify_not_invocable(
         r.stdout, r.stderr,
         supplied_flags=[a for a in argv if a.startswith("--")])
@@ -164,7 +164,7 @@ def test_unreadable_rtl_file_is_not_reported_as_a_design_failure(gate, tmp_path)
     rtl = _dangling_symlink_rtl_dir(tmp_path)
     argv = F._structural_gate_argv(gate, tmp_path, rtl_dir=rtl)
     r = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True,
-                       timeout=120)
+                       timeout=60)
     assert "Traceback" not in r.stderr, (
         f"{gate} crashed on an unreadable RTL file:\n{r.stderr[-600:]}")
     assert r.returncode != 1, (
@@ -181,7 +181,7 @@ def test_denominator_excludes_files_the_gate_could_not_read(tmp_path):
     argv = F._structural_gate_argv("timer_freeze_after_state_check", tmp_path,
                                    rtl_dir=rtl)
     r = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True,
-                       timeout=120)
+                       timeout=60)
     summary = _json.loads(r.stdout)["summary"]
     assert summary["files_scanned"] == 1, (
         f"denominator counts unread files: {summary}")
@@ -196,7 +196,7 @@ def test_sibling_denominator_also_counts_only_what_it_read(tmp_path):
     argv = F._structural_gate_argv("sustained_vs_edge_check", tmp_path,
                                    rtl_dir=rtl)
     r = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True,
-                       timeout=120)
+                       timeout=60)
     assert "1 files scanned" in r.stdout, (
         f"denominator still counts a file that does not exist: {r.stdout!r}")
 
@@ -230,7 +230,7 @@ def test_examined_nothing_is_rc2_not_pass(gate, tmp_path):
     rtl = _all_dangling_rtl_dir(tmp_path)
     argv = F._structural_gate_argv(gate, tmp_path, rtl_dir=rtl)
     r = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True,
-                       timeout=120)
+                       timeout=60)
     assert r.returncode == 2, (
         f"{gate} returned rc {r.returncode} having examined nothing; "
         f"stdout={r.stdout[:300]!r}")
@@ -244,7 +244,7 @@ def test_examined_nothing_reads_as_a_genuine_skip_not_a_caller_defect(gate, tmp_
     rtl = _all_dangling_rtl_dir(tmp_path)
     argv = F._structural_gate_argv(gate, tmp_path, rtl_dir=rtl)
     r = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True,
-                       timeout=120)
+                       timeout=60)
     why = GI.classify_not_invocable(
         r.stdout, r.stderr,
         supplied_flags=[a for a in argv if a.startswith("--")])

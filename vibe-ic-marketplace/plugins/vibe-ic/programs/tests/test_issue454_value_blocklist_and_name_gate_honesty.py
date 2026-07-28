@@ -89,7 +89,7 @@ def _run_cov_gate(tmp_path, l3_doc):
     out = proj / "verdict.json"
     cp = subprocess.run(
         [sys.executable, str(COV_GATE), str(proj), "--json", str(out)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     return cp.returncode, json.loads(out.read_text())
 
 

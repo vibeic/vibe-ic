@@ -374,7 +374,7 @@ def _project_with_unreadable_document(tmp_path: Path) -> Path:
 def _run(prog: str, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(_PROGRAMS / prog), *args],
-        capture_output=True, text=True, timeout=1800)
+        capture_output=True, text=True, timeout=60)
 
 
 @pytest.fixture(scope="module")

@@ -154,7 +154,7 @@ def _run_report(project: Path, out: Path):
     env = dict(os.environ, VIBE_IC_COMPLIANCE_WORKERS="1")
     r = subprocess.run(
         [sys.executable, str(FCC), str(project), "--json", str(out)],
-        capture_output=True, text=True, timeout=900, env=env)
+        capture_output=True, text=True, timeout=60, env=env)
     return r, (json.loads(out.read_text()) if out.is_file() else None)
 
 
@@ -497,7 +497,7 @@ def test_the_hygiene_gates_consume_the_entry_and_ignore_its_tier(tmp_path):
         proj.mkdir()
         _project(proj, _entry(verdict_tier=tier))
         r = subprocess.run([sys.executable, str(WSC), str(proj)],
-                           capture_output=True, text=True, timeout=300)
+                           capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, r.stdout + r.stderr
         return r.returncode, r.stdout.replace(str(proj), "<P>")
 

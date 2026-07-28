@@ -282,7 +282,7 @@ def test_end_to_end_real_yosys(tmp_path):
         "tee -o stat.json stat -json; stat"
     )
     proc = subprocess.run(["yosys", "-p", script], cwd=str(sd),
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr[-2000:]
     # the REAL stat line format is asserted via the live log
     log_text = proc.stdout + proc.stderr
@@ -443,7 +443,7 @@ def test_end_to_end_real_yosys_hierarchical(tmp_path):
         "tee -o yosys.log stat -top top"
     )
     proc = subprocess.run(["yosys", "-q", "-p", script], cwd=str(sd),
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr[-2000:]
     log_total = p2._parse_yosys_stat_cells(
         (sd / "yosys.log").read_text(errors="replace"))

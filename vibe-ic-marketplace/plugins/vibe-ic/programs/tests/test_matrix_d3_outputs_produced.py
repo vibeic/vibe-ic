@@ -438,7 +438,7 @@ def tracked_under(root: Path) -> frozenset:
     try:
         proc = subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", "-z", "HEAD"],
-            cwd=str(root), capture_output=True, timeout=120,
+            cwd=str(root), capture_output=True, timeout=60,
         )
     except FileNotFoundError as exc:  # pragma: no cover - git is always present
         raise AssertionError(
@@ -664,7 +664,7 @@ def produce_live(step_id, entry: str, rec: Dict) -> Tuple[bool, str]:
             )
         proc = subprocess.run(
             [sys.executable, str(prog_file), *argv],
-            cwd=dst, capture_output=True, text=True, timeout=900,
+            cwd=dst, capture_output=True, text=True, timeout=60,
         )
         if not target.is_file():
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
@@ -1583,7 +1583,7 @@ def test_d3_the_compliance_audit_does_not_create_declared_outputs():
             before = {p.relative_to(dst) for p in dst.rglob("*") if p.is_file()}
             subprocess.run(
                 [sys.executable, str(fcc_path), str(dst)],
-                capture_output=True, text=True, timeout=1800)
+                capture_output=True, text=True, timeout=60)
             after = {p.relative_to(dst) for p in dst.rglob("*") if p.is_file()}
             created = after - before
             hits = set()

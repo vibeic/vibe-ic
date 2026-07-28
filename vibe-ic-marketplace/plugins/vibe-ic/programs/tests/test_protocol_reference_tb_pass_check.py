@@ -435,7 +435,7 @@ def test_wave35_scenarios_run_on_silent_stub(tmp_path):
                       rtl_files={"chip_top.v": SILENT_STUB_RTL},
                       l3=L3_DEFAULT)
     r = _run([str(proj), "--json", str(tmp_path / "out.json")],
-             timeout=180)
+             timeout=60)
     # Don't assert returncode; we just want to see scenario markers.
     out_text = r.stdout
     json_path = tmp_path / "out.json"

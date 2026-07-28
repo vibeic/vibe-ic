@@ -22,6 +22,9 @@ PROG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG_DIR))
 import fmeda_fault_injection_coverage as fi          # noqa: E402
 import fmeda_coverage_check as gate                  # noqa: E402
+import ci_harness_timeout_ceiling_check as ceiling_check   # noqa: E402
+
+_REPO_ROOT = ceiling_check.find_repo_root()
 
 
 # ── DC math ──────────────────────────────────────────────────────────────
@@ -297,9 +300,18 @@ assign syndrome_err=1'b0; endmodule
 """
 
 
-#: The `--timeout` the CI harness bounds a single test at
-#: (`pytest --timeout=180 --timeout-method=thread`, .github/workflows/ci.yml).
-CI_HARNESS_TIMEOUT_S = 180
+#: The `--timeout` the CI harness bounds a single test at, READ from the
+#: workflows rather than restated here (vibe-ic#542). The landed version of
+#: this line was `= 180`, a second copy of a value this file cannot see — the
+#: drift shape #527/#530/#534 each spent a version removing. It was also
+#: WRONG in a way a copy cannot notice: there are four pytest invocations
+#: across two workflows and they declare two different bounds, so the binding
+#: one is the minimum, which only a resolver can know.
+#: None when no workflow is reachable (a standalone plugin install). The guard
+#: below then SKIPs — it does not fall back to a remembered number, because a
+#: remembered number is the defect.
+CI_HARNESS_TIMEOUT_S = ceiling_check.ci_harness_timeout_seconds(_REPO_ROOT) \
+    if _REPO_ROOT else None
 #: Every inner timeout in this file. MUST stay well under the harness bound: an
 #: inner bound at or above it can never fire, because the harness kills the
 #: whole SESSION first — `--maxfail` stops applying, no per-test diagnostic is
@@ -518,40 +530,37 @@ def test_no_inner_timeout_can_outlast_the_ci_harness(tmp_path):
     printed, and every other file in the subset loses its verdict too. That is
     exactly what this file did — one stalled backend, zero reported results.
 
-    Parsed with `ast`, not grepped, so a number inside a comment or a docstring
-    cannot satisfy it and a real one cannot hide from it.
+    The walk this test used to carry inline now lives in
+    `ci_harness_timeout_ceiling_check` and judges the WHOLE tree (vibe-ic#542).
+    This test keeps its own assertion — the file that produced the defect should
+    fail on its own when it comes back, not only through a repo-wide gate a
+    reader may not run — but it DELEGATES the parsing, so there is one
+    implementation of the scan and one source for the bound. The inline copy
+    could not see the two shapes the shared one has since grown: a bound spelled
+    as a module constant, and a wrapper that forwards `**kwargs` into a
+    launcher.
     """
-    import ast
-    src = Path(__file__).read_text()
-    tree = ast.parse(src, filename=__file__)
-    offenders = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            for kw in node.keywords:
-                if (kw.arg and "timeout" in kw.arg.lower()
-                        and isinstance(kw.value, ast.Constant)
-                        and isinstance(kw.value.value, (int, float))
-                        and kw.value.value >= CI_HARNESS_TIMEOUT_S):
-                    offenders.append(f"line {kw.value.lineno}: "
-                                     f"{kw.arg}={kw.value.value}")
-        if isinstance(node, ast.Assign):
-            for t in node.targets:
-                name = getattr(t, "attr", None) or getattr(t, "id", None)
-                # CI_HARNESS_TIMEOUT_S records the bound; it is not one.
-                if (name and "timeout" in name.lower()
-                        and name != "CI_HARNESS_TIMEOUT_S"
-                        and isinstance(node.value, ast.Constant)
-                        and isinstance(node.value.value, (int, float))
-                        and node.value.value >= CI_HARNESS_TIMEOUT_S):
-                    offenders.append(f"line {node.lineno}: "
-                                     f"{name} = {node.value.value}")
-    assert not offenders, (
-        f"inner timeout >= the CI harness bound ({CI_HARNESS_TIMEOUT_S}s) — it "
-        f"can never fire, and the session dies instead of the test:\n  "
-        + "\n  ".join(offenders))
-    assert INNER_TIMEOUT_S < CI_HARNESS_TIMEOUT_S / 2, (
-        "the inner bound needs real headroom under the harness, not merely to "
-        "be under it — the harness must have room to REPORT")
+    if CI_HARNESS_TIMEOUT_S is None:
+        import pytest
+        pytest.skip("no .github/workflows in reach — the harness bound cannot "
+                    "be resolved, and a remembered copy of it is the defect "
+                    "this test exists to prevent")
+    ceiling = CI_HARNESS_TIMEOUT_S // ceiling_check.CEILING_DIVISOR
+    findings, unresolved, sites = ceiling_check.scan_source(
+        Path(__file__).read_text(), Path(__file__).name, ceiling)
+    assert sites, "no bound was READ at all — has the scan stopped working?"
+    assert not findings, (
+        f"inner bound above the {ceiling}s ceiling (harness "
+        f"{CI_HARNESS_TIMEOUT_S}s) — it cannot fire, and the session dies "
+        "instead of the test:\n  " + "\n  ".join(str(f) for f in findings))
+    assert not unresolved, (
+        "a bound above the ceiling on a callee the scan cannot resolve:\n  "
+        + "\n  ".join(str(u) for u in unresolved))
+    assert INNER_TIMEOUT_S <= ceiling, (
+        f"the inner bound needs real headroom under the harness, not merely to "
+        f"be under it — the harness must have room to REPORT, and a test that "
+        f"makes two bounded calls must fit twice: {INNER_TIMEOUT_S} > "
+        f"{ceiling}")
 
 
 def test_the_skip_guard_is_the_code_paths_own_decision(tmp_path):

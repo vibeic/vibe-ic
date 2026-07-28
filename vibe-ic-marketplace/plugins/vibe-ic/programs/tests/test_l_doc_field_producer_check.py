@@ -40,7 +40,7 @@ def _run(corpus: Path, progs: Path, bl: Path, *extra):
     return subprocess.run(
         [sys.executable, str(_PROG), str(corpus), "--programs", str(progs),
          "--baseline", str(bl), *extra],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 def test_reader_with_no_producer_fails(tmp_path):
@@ -132,7 +132,7 @@ def test_paid_debt_must_leave_the_baseline(tmp_path):
 
 def test_shipped_tree_passes_against_its_recorded_debt():
     r = subprocess.run([sys.executable, str(_PROG)], capture_output=True,
-                       text=True, timeout=600)
+                       text=True, timeout=60)
     if r.returncode == 2:
         return
     assert r.returncode == 0, r.stdout + r.stderr

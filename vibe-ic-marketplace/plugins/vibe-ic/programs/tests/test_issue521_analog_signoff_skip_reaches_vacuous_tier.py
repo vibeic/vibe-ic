@@ -111,7 +111,7 @@ def _run(gate: str, project: Path, report: Path | None = None):
     if report is not None:
         argv += ["--json", str(report)]
     return subprocess.run(argv, capture_output=True, text=True,
-                          cwd=str(_PROGRAMS), timeout=300)
+                          cwd=str(_PROGRAMS), timeout=60)
 
 
 def _report_says_skipped(report: Path):
@@ -537,7 +537,7 @@ def test_lead_pre_awake_silence_reproduces_and_is_now_vacuous(tmp_path):
     p = subprocess.run(
         [sys.executable, str(_PROGRAMS / "pre_awake_silence_check.py"),
          "--rtl-dir", str(rtl)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=180)
+        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=60)
     doc = json.loads(p.stdout)
     assert doc["summary"]["skipped"] is True
     assert p.returncode == _vx.RC_VACUOUS, (p.returncode, p.stderr[-300:])
@@ -565,7 +565,7 @@ def test_lead_pre_awake_silence_still_fails_an_ungated_dispatcher(tmp_path):
     p = subprocess.run(
         [sys.executable, str(_PROGRAMS / "pre_awake_silence_check.py"),
          "--rtl-dir", str(rtl)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=180)
+        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=60)
     assert p.returncode == _vx.RC_FAIL, (p.returncode, p.stdout[-400:])
 
 
@@ -577,7 +577,7 @@ def test_lead_warn_acceptance_policy_reproduces_and_is_now_vacuous(tmp_path):
     p = subprocess.run(
         [sys.executable, str(_PROGRAMS / "warn_acceptance_policy_check.py"),
          "--project-dir", str(proj)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=180)
+        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=60)
     doc = json.loads(p.stdout)
     assert doc["summary"]["skipped"] is True
     assert p.returncode == _vx.RC_VACUOUS, (p.returncode, p.stderr[-300:])
@@ -596,7 +596,7 @@ def test_lead_warn_acceptance_policy_keeps_its_honest_pass(tmp_path):
     p = subprocess.run(
         [sys.executable, str(_PROGRAMS / "warn_acceptance_policy_check.py"),
          "--project-dir", str(proj)],
-        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=180)
+        capture_output=True, text=True, cwd=str(_PROGRAMS), timeout=60)
     assert p.returncode == _vx.RC_PASS, (p.returncode, p.stdout[-400:])
     assert "skipped" not in json.loads(p.stdout)["summary"]
 

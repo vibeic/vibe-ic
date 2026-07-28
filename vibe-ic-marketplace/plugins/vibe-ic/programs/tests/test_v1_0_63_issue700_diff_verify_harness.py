@@ -68,7 +68,7 @@ def _write(tmp_path, name, body):
 
 def _run_cli(args):
     r = subprocess.run([sys.executable, str(_PROG), *args],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -275,7 +275,7 @@ def test_bad_inputs_rc2(tmp_path):
 def test_chip_agnostic_source_guard():
     prog = _PROGRAMS / "source_chip_agnostic_check.py"
     r = subprocess.run([sys.executable, str(prog), str(_PLUGIN_ROOT)],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-500:]
 
 

@@ -250,7 +250,7 @@ def collect_items() -> Tuple[Dict, ...]:
             [sys.executable, "-m", "pytest", *[str(p) for p in paths],
              "--collect-only", "-q", "-p", "no:randomly",
              "-p", "matrix_cell_collector"],
-            cwd=str(PLUGIN_ROOT), capture_output=True, text=True, timeout=1800,
+            cwd=str(PLUGIN_ROOT), capture_output=True, text=True, timeout=60,
             env=env,
         )
         assert out.is_file(), (

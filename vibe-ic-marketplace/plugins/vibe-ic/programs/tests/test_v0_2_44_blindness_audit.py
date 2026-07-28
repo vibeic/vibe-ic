@@ -157,7 +157,7 @@ def test_score_front_door_refuses_on_violation(tmp_path):
     r = subprocess.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode != 0
     assert "blindness audit FAILed" in (r.stdout + r.stderr)
 
@@ -167,7 +167,7 @@ def test_score_front_door_passes_audit_then_proceeds(tmp_path):
     r = subprocess.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     # the audit must PASS and the gate must NOT be the failure reason;
     # the scorer itself then runs (and may fail on the empty synthetic run).
     out = r.stdout + r.stderr

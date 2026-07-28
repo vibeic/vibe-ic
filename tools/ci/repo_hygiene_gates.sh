@@ -220,6 +220,21 @@ run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_
 # discriminating: injecting a throwaway program makes it rc 1, removing it rc 0.
 run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_programs_index.py" --check
 
+# vibe-ic#542 — a test whose own subprocess timeout is at or above the pytest
+# harness bound cannot fail as a TEST. `--timeout-method=thread` takes the
+# whole SESSION down instead: `--maxfail` stops applying, no per-test
+# diagnostic is printed, and every other file in the subset loses its verdict.
+# That is how v1.7.92 went red — the session died at file 18 of 53 and the
+# twelve after it were never run. `run`, not `run_tolerating_uncheckable`: this
+# check reads only the checkout (no network, no container, no clean tree), so
+# its rc 2 means the workflow or the test tree could not be found, which is a
+# broken repo rather than an environment a developer can be forgiven for — and
+# a gate that cannot locate the bound it judges against must not read as clean.
+# Measured at wiring time: 230 bounds above the ceiling in 2010 files, one of
+# them a `_SUBPROCESS_TIMEOUT_S = 900` module constant that the report's own
+# grep could not see.
+run "inner timeouts fit the harness"    "$ROOT" python3 "$PG/ci_harness_timeout_ceiling_check.py" "$ROOT"
+
 # --- plugin scoped ---------------------------------------------------------
 # Each of these was, until this file existed, run by NOTHING but its own unit
 # test — it had never judged the tree it was written to judge. They are wired

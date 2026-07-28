@@ -124,7 +124,7 @@ WELLFORMED_L21 = {
 def _run(project: Path):
     proc = subprocess.run(
         [sys.executable, str(GATE), str(project)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     return proc.returncode, (proc.stdout + proc.stderr)
 
 
@@ -270,7 +270,7 @@ def test_json_report_is_written(tmp_path):
     out_json = tmp_path / "rep.json"
     proc = subprocess.run(
         [sys.executable, str(GATE), str(project), "--json", str(out_json)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     assert proc.returncode == 1
     doc = json.loads(out_json.read_text())
     assert doc["verdict"] == "FAIL"

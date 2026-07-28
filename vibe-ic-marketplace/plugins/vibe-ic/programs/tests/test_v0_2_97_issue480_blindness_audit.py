@@ -245,7 +245,7 @@ def _score(ds, run):
     return subprocess.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
 
 
 def test_dispatch_legit_jsonl_passes_audit_then_proceeds(tmp_path):

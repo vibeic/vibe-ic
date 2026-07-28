@@ -133,7 +133,7 @@ def test_end_to_end_final_l9_emits_two_legal_rails(tmp_path):
     (proj / "input" / "docs" / "L3_external_interface.md").write_text(_TINY_L3)
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
     r = subprocess.run([sys.executable, str(runner), str(proj)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-2000:]
     names = _final_l9_names(proj)
     lower = {n.lower() for n in names}

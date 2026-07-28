@@ -63,7 +63,7 @@ _POWER_RPT = (
 
 def _run(args, cwd=None):
     return subprocess.run([sys.executable, str(PROG)] + list(args),
-                          capture_output=True, text=True, timeout=120, cwd=cwd)
+                          capture_output=True, text=True, timeout=60, cwd=cwd)
 
 
 def _project(tmp_path, *, lvs=True, power=False):

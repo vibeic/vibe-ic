@@ -569,7 +569,7 @@ def _run_cli(tmp_path, spec_text, rtl, suffix=".md"):
     r = subprocess.run(
         [sys.executable, str(PROGRAM), "--spec", str(spec_f),
          "--top", "TopModule", "--json", str(out_json), str(rtl_f)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     findings = json.loads(out_json.read_text()) if out_json.is_file() else []
     return r, findings
 
@@ -630,7 +630,7 @@ def _run_gate(ds, run):
         [sys.executable, str(GATES), "--prob", "ProbP",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 def _block_rules(run):

@@ -173,7 +173,7 @@ def _run(proj: Path):
     out = proj / "gate_out.json"
     r = subprocess.run([sys.executable, str(_PROG), str(proj),
                         "--json", str(out)],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=60)
     return r, json.loads(out.read_text())
 
 

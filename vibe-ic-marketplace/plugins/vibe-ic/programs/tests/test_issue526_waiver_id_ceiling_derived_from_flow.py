@@ -111,7 +111,7 @@ def _rules(findings, severity=None):
 def _run_fcc(project, report):
     return subprocess.run(
         [sys.executable, str(FCC), str(project), "--json", str(report)],
-        capture_output=True, text=True, timeout=1800, cwd=str(project))
+        capture_output=True, text=True, timeout=60, cwd=str(project))
 
 
 def _write_fixture_flow(path, ids):
@@ -288,9 +288,9 @@ def test_id_that_names_no_flow_step_is_reported_but_is_not_fatal(tmp_path, sid):
 def test_strict_ids_restores_the_hard_exit_for_standalone_gate_use(tmp_path):
     p = _project(tmp_path, _entry(999))
     lenient = subprocess.run([sys.executable, str(WSC), str(p)],
-                             capture_output=True, text=True, timeout=300)
+                             capture_output=True, text=True, timeout=60)
     strict = subprocess.run([sys.executable, str(WSC), str(p), "--strict-ids"],
-                            capture_output=True, text=True, timeout=300)
+                            capture_output=True, text=True, timeout=60)
     assert lenient.returncode == 0, lenient.stdout
     assert strict.returncode == 1, strict.stdout
     assert "id-range" in strict.stdout

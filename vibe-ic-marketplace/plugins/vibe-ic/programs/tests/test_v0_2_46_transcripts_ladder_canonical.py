@@ -41,7 +41,7 @@ def _setup_run(tmp_path):
     r = subprocess.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--setup",
          "--dataset", str(ds), "--run", str(run)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     # The 2026-06-28 vibe_ic_entry_guard gates scoring on Vibe-IC Phase-1 evidence
     # (a canonical run carries reports/phase1_one_shot.json). Stamp the marker so
     # this test exercises its actual SUBJECT — the DOWNSTREAM transcripts /
@@ -63,7 +63,7 @@ def _score(ds, run):
     return subprocess.run(
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--score",
          "--run", str(run), "--dataset", str(ds)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
 
 
 def test_empty_transcripts_dir_takes_notice_with_disclosure(tmp_path):

@@ -304,7 +304,7 @@ def test_foreign_tb_not_bound_by_autodiscovery(tmp_path):
 def test_chip_agnostic_guard():
     prog = _PROGRAMS / "source_chip_agnostic_check.py"
     r = subprocess.run([sys.executable, str(prog), str(_PROGRAMS.parent)],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout[-1500:] + r.stderr[-400:]
 
 

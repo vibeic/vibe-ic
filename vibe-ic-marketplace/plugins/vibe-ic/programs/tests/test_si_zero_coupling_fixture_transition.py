@@ -119,7 +119,7 @@ def _run(project_dir: Path, out_json: Path, cwd: Path | None = None):
     handed, and for the shipped fixture that project is tracked."""
     r = subprocess.run([sys.executable, str(_PROG), str(project_dir),
                         "--json", str(out_json)],
-                       capture_output=True, text=True, timeout=180,
+                       capture_output=True, text=True, timeout=60,
                        cwd=str(cwd) if cwd else None)
     return r, json.loads(out_json.read_text())
 
@@ -384,5 +384,5 @@ def test_a_run_that_never_started_is_not_credited_as_a_skip(tmp_path):
     mis-invoked run must not land in it."""
     r = subprocess.run([sys.executable, str(_PROG),
                         str(tmp_path / "does_not_exist")],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 1

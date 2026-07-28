@@ -91,7 +91,7 @@ def test_end_to_end_single_io_in_row_no_phantoms(tmp_path):
     import subprocess
     runner = _PROGRAMS / "phase1_one_shot_runner.py"
     r = subprocess.run([sys.executable, str(runner), str(proj)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr[-2000:]
     names = _final_l9_names(proj)
     import re

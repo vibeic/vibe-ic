@@ -87,7 +87,7 @@ _POWER_RPT = (
 
 def _run(args, cwd=None):
     return subprocess.run([sys.executable, str(PROG)] + [str(a) for a in args],
-                          capture_output=True, text=True, timeout=180, cwd=cwd)
+                          capture_output=True, text=True, timeout=60, cwd=cwd)
 
 
 def _project(tmp_path, *, drc=_CLEAN_DRC, power=False):
@@ -551,7 +551,7 @@ def test_the_docstring_does_not_claim_an_enforcement_tier_it_lacks(tmp_path):
     r = subprocess.run(
         [sys.executable, str(PROGRAMS / "flow_gate_enforcement_audit.py"),
          "--json", str(out)],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout[-800:]
     gates = {g["gate"]: g for g in json.loads(out.read_text())["gates"]}
     assert gates["drc_report_check"]["enforcement"] == "AUDIT_ONLY"

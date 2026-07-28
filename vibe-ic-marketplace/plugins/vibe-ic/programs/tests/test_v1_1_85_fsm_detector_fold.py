@@ -224,7 +224,7 @@ def _host_pass(synmod, design, top):
                             capture_output=True, text=True, cwd=str(d))
         assert ce.returncode == 0, ce.stderr[:300]
         r = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True,
-                           timeout=90, cwd=str(d))
+                           timeout=60, cwd=str(d))
         assert "passed" in (r.stdout + r.stderr).lower(), (r.stdout + r.stderr)[:300]
 
 

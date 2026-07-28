@@ -328,7 +328,7 @@ def _run_track(project: Path, env_extra=None):
         env.update(env_extra)
     cp = subprocess.run(
         [sys.executable, str(_PROGRAMS / "phase1_expert_parse_track.py"),
-         str(project)], capture_output=True, text=True, timeout=180, env=env)
+         str(project)], capture_output=True, text=True, timeout=60, env=env)
     return cp.returncode, cp.stdout, cp.stderr
 
 

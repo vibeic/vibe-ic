@@ -94,7 +94,7 @@ def _make_project(tmp_path: Path, spec: str = _FIXTURE_SPEC) -> Path:
 def _run_phase1(project: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(RUNNER), str(project)],
-        capture_output=True, text=True, timeout=900,
+        capture_output=True, text=True, timeout=60,
     )
 
 
@@ -486,7 +486,7 @@ def test_no_l_document_write_escapes_the_chokepoint(tmp_path):
     env["PYTHONPATH"] = str(site) + os.pathsep + env.get("PYTHONPATH", "")
     env["LDOC_WRITE_LOG"] = str(log)
     cp = subprocess.run([sys.executable, str(RUNNER), str(project)],
-                        capture_output=True, text=True, timeout=900, env=env)
+                        capture_output=True, text=True, timeout=60, env=env)
     assert cp.returncode == 0, cp.stdout[-2000:] + cp.stderr[-2000:]
     assert log.is_file(), (
         "the probe recorded no write at all — it is not observing the "

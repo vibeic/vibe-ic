@@ -162,7 +162,7 @@ def test_facetA_prefix_reproduces_compile_error_pre_fix(tmp_path):
             ["iverilog", "-g2012", "-o", str(binp),
              str(_make(tmp_path, "verbatimA.v", _A_CAND_CORRECT)),
              str(dd / "testbench.v")],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, timeout=60)
     assert r.returncode != 0, "verbatim positional bind should NOT compile"
     # iverilog phrases this positional-bind elaboration failure differently
     # across versions — older builds print "Unable to assign to unresolved
@@ -308,7 +308,7 @@ def test_facetB_prefix_reproduces_param_not_found(tmp_path):
             ["iverilog", "-g2012", "-o", str(binp),
              str(_make(tmp_path, "verbatimB.v", _B_CAND_CORRECT)),
              str(dataset / design / "testbench.v")],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, timeout=60)
     assert r.returncode != 0, "verbatim no-param bind should NOT compile"
     log = r.stdout + r.stderr
     assert PCC.iverilog_param_not_found(log) == ["STG_WIDTH"], log
@@ -427,10 +427,10 @@ def test_facetB_injected_dut_compiles_and_passes():
         tpath = Path(td) / "tb.v"; tpath.write_text(_B_TB)
         binp = Path(td) / "b"
         c = subprocess.run(["iverilog", "-g2012", "-o", str(binp), str(dpath),
-                            str(tpath)], capture_output=True, text=True, timeout=120)
+                            str(tpath)], capture_output=True, text=True, timeout=60)
         assert c.returncode == 0, (c.stdout + c.stderr)
         r = subprocess.run(["vvp", str(binp)], capture_output=True, text=True,
-                           timeout=120)
+                           timeout=60)
     assert "Your Design Passed" in (r.stdout + r.stderr), (r.stdout + r.stderr)
 
 
@@ -438,7 +438,7 @@ def test_facetB_injected_dut_compiles_and_passes():
 def test_chip_agnostic_guard():
     prog = _PROGRAMS / "source_chip_agnostic_check.py"
     r = subprocess.run([sys.executable, str(prog), str(_PLUGIN)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, (r.stdout[-2000:] + r.stderr[-500:])
 
 

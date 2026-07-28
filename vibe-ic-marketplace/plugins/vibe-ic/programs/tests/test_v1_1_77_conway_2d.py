@@ -290,7 +290,7 @@ def test_host_score_prob144_zero_mismatch(tmp_path):
         capture_output=True, text=True)
     assert comp.returncode == 0, f"compile failed:\n{comp.stderr}"
     run = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True,
-                         timeout=300)
+                         timeout=60)
     out = run.stdout + run.stderr
     m = re.search(r"mismatched samples is (\d+)", out)
     assert m is not None, f"no mismatch line in vvp output:\n{out}"
@@ -361,7 +361,7 @@ endmodule
         capture_output=True, text=True)
     assert comp.returncode == 0, f"compile failed:\n{comp.stderr}"
     run = subprocess.run(["vvp", str(vvp)], capture_output=True, text=True,
-                         timeout=120)
+                         timeout=60)
     out = run.stdout + run.stderr
     assert "Total mismatched samples is 0" in out, \
         f"generality 4x4 B3/S23 mismatched:\n{out}"

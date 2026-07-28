@@ -140,7 +140,7 @@ def test_e2e_real_rows_optional_pin_gate_passes(tmp_path):
     (rtl / "chip_top.v").write_text(_RTL)
     r1 = subprocess.run(
         [sys.executable, str(PROGRAMS / "phase1_doc_one_shot_runner.py"),
-         str(tmp_path)], capture_output=True, text=True, timeout=300)
+         str(tmp_path)], capture_output=True, text=True, timeout=60)
     assert r1.returncode == 0, r1.stdout[-1500:] + r1.stderr[-500:]
     l9 = json.loads((tmp_path / "phase1" / "generated_docs"
                      / "L9_INTEGRATION_SPEC.json").read_text())
@@ -165,7 +165,7 @@ def test_e2e_required_pin_missing_still_fails(tmp_path):
         _RTL.replace("  output wire o_sram_we,\n", ""))
     r1 = subprocess.run(
         [sys.executable, str(PROGRAMS / "phase1_doc_one_shot_runner.py"),
-         str(tmp_path)], capture_output=True, text=True, timeout=300)
+         str(tmp_path)], capture_output=True, text=True, timeout=60)
     assert r1.returncode == 0, r1.stdout[-1500:] + r1.stderr[-500:]
     r2 = subprocess.run(
         [sys.executable, str(PROGRAMS / "l9_rtl_pin_consistency_check.py"),

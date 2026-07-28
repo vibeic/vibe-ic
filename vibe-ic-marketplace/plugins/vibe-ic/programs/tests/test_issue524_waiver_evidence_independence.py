@@ -347,7 +347,7 @@ def test_a_run_with_uncorroborated_evidence_still_produces_a_report(tmp_path):
     out = tmp_path / "report.json"
     r = subprocess.run(
         [sys.executable, str(FCC), str(project), "--json", str(out)],
-        capture_output=True, text=True, timeout=900)
+        capture_output=True, text=True, timeout=60)
     assert out.is_file(), (
         "no report at all — the #519 failure mode\n" + r.stdout + r.stderr)
     report = json.loads(out.read_text())
@@ -368,7 +368,7 @@ def test_incomplete_waiver_still_gets_its_216_advisory(tmp_path):
     project = _project(tmp_path, _attestation(evidence=[]))
     out = tmp_path / "report.json"
     subprocess.run([sys.executable, str(FCC), str(project), "--json",
-                    str(out)], capture_output=True, text=True, timeout=900)
+                    str(out)], capture_output=True, text=True, timeout=60)
     assert out.is_file(), "no report at all — the #519 failure mode"
     advisories = json.loads(out.read_text()).get("advisories") or []
 

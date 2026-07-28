@@ -66,7 +66,7 @@ def _run(prog: Path, cwd: Path, *args: str) -> subprocess.CompletedProcess:
     a piped rc is the pipe's, not the gate's."""
     return subprocess.run([sys.executable, str(prog), *args],
                           cwd=str(cwd), capture_output=True, text=True,
-                          timeout=600)
+                          timeout=60)
 
 
 # ── 1. the two measured instances: empty project ───────────────────────────

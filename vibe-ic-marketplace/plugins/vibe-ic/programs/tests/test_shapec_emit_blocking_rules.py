@@ -142,7 +142,7 @@ def _run_gate(ds, run):
         [sys.executable, str(GATES), "--prob", "ProbT",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 def test_gate_blocks_mealy_under_moore_spec(tmp_path):
@@ -228,7 +228,7 @@ def _run_fold_gate(ds, run):
         [sys.executable, str(GATES), "--prob", "ProbF",
          "--workdir", str(run / "work"), "--dataset", str(ds),
          "--prompt-suffix", "_prompt.txt", "--top-module", "TopModule"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 def test_gate_blocks_or_fold_when_prompt_requires_zero_boundary(tmp_path):
