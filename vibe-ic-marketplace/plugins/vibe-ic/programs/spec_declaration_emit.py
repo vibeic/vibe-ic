@@ -33,6 +33,16 @@ IS NOT  an inference engine.  It will not read an ``always`` block and conclude
         stamped ``recovered_from_prose`` in the provenance sidecar so the debt
         is visible rather than laundered.
 
+        "Comment" here means what a Verilog lexer means (see
+        ``_scan_declaration_lines``), not "the line starts with a slash".  A
+        line-prefix test let ``/* lint_off */ localparam bit_order = 1;`` count
+        as a comment and scraped the CODE that followed it — an inference in
+        the costume of a declaration, i.e. the precise failure this program
+        exists to retire.  A declaration line must therefore carry NO code at
+        all, and the ``<field> = <value>`` must begin the comment text, so that
+        neither commented-out code (``// localparam bit_order = 1;``) nor prose
+        that merely mentions a field can satisfy a contract field.
+
 MODES
 -----
 ``--contract``  (advisory, ALWAYS rc=0)
@@ -43,6 +53,16 @@ MODES
     deliberately written OUTSIDE the spec-declared path so it can never be
     mistaken for the declaration itself and can never flip
     ``spec_required_artifact_check`` green.
+
+``--verify``    (assertion, rc 0/1, writes NO declaration)
+    The SUBSTANCE check that a presence-and-size gate cannot make.
+    ``spec_required_artifact_check`` asserts the spec-declared artifact exists
+    and is non-empty; ``{}`` is three bytes, so a declaration that declares
+    NOTHING satisfies it.  ``--verify`` reads the declaration already on disk
+    and asserts it carries a real value for every REQUIRED contract field —
+    the required-ness coming from the spec, which this program did not write.
+    Wire this next to the required-artifact gate; it is a separate program, so
+    the presence gate stays untouched.
 
 ``(default)``   emit
     Resolve every contract field and write the declaration to the
@@ -61,18 +81,52 @@ value nobody chose.  Where required-ness itself cannot be read out of the spec
 table, the field is treated as REQUIRED and the ambiguity is disclosed in
 ``required_marker_recognized`` — an unreadable marker is not a licence to skip.
 
+A supplied value that carries no choice — the empty string, ``TBD``,
+``<fill-me>`` — is NOT a declaration; it is UNDETERMINED with extra steps, and
+is treated exactly as if the field had not been supplied (see
+``_placeholder_reason``).  Otherwise the fail-closed contract would only
+distinguish "a key was supplied" from "no key was supplied", never "a choice
+was made".
+
 An INFORMATIONAL field that is undetermined is simply OMITTED from the
 declaration and recorded as ``status="undetermined"`` in the provenance
 sidecar.  Omission — not a placeholder — is what makes a consumer defer: every
 consumer in this repo resolves a missing key to "cannot pair" already.
 
+If NO contract field at all is determined, the file is NOT written (rc 4).  A
+declaration that declares nothing must not satisfy a requirement to declare:
+writing ``{}`` would hand ``spec_required_artifact_check`` three bytes it
+scores as "present and non-empty", which is a green gate certifying an
+artifact created during the same run to satisfy it.
+
+PROVENANCE IS CARRIED, NOT RECOMPUTED
+-------------------------------------
+The declaration file is a resolution SOURCE for the next run, and it is a file
+this program itself wrote.  Re-deriving each field's provenance from "where did
+I read it this time" therefore relabelled every prose-recovered field
+``existing_declaration`` on the second, byte-identical run and emptied
+``recovered_from_prose`` — one idempotent re-run destroyed the debt marker.  So
+a value read back out of the declaration file inherits the provenance the
+PREVIOUS sidecar recorded for it, as long as the value is unchanged; the field
+is additionally marked ``carried_from_declaration_file``.  The stamp is retired
+only by an author actually declaring the field (``--set``), which is the real
+remediation.  A value present in the file with no recorded provenance (a
+hand-written declaration, or a sidecar that was deleted) is reported with
+``provenance_verified: false`` and listed in
+``existing_without_recorded_provenance`` — it is not silently promoted to a
+clean declaration.
+
 Exit codes
-  0  emitted (or --contract, always)
+  0  emitted (or --contract, always; or --verify passed)
   1  one or more REQUIRED fields undetermined — nothing written
+     (or, under --verify, the declaration on disk fails the contract)
   2  usage / I/O error
   3  NO_CONTRACT / NO_FIELDS — this project's spec declares no machine-readable
      declaration contract, so there was nothing to emit.  Distinct from 0 so a
      caller expecting a file never reads silence as success.
+  4  NOTHING_TO_DECLARE — a contract exists, no REQUIRED field is outstanding,
+     but not one contract field was determined.  Nothing written; an empty
+     declaration is not a declaration.
 
 Chip-agnostic: no design name, no PDK SKU, no field name, no artifact path is
 hard-coded anywhere in this file.
@@ -140,6 +194,120 @@ _SEP_CELL_RE = re.compile(r"^:?-{2,}:?$")
 # How far past the MUST-declare clause the field table may start.  A table that
 # begins many paragraphs later belongs to something else.
 _MAX_LINES_TO_TABLE = 6
+
+
+# --------------------------------------------------------------------------- #
+# "A value was supplied" is not "a choice was made"
+# --------------------------------------------------------------------------- #
+# Tokens whose ONLY meaning is "nobody has filled this in yet".  A REQUIRED
+# field carrying one of these is UNDETERMINED, not declared — otherwise the
+# fail-closed contract degenerates into a key-presence test and `--set
+# bit_order=` turns the required-artifact gate green against no choice at all.
+#
+# Deliberately CONSERVATIVE.  Everything here is meaningless as an interface
+# choice in any design.  Tokens that LOOK empty but are legitimate choices
+# somewhere are NOT listed: `none` (no parity / no flow control), `n/a`, `null`,
+# `unknown`, `0`, `false`, `[]`, and every single punctuation character (a
+# delimiter or fill character is a real declaration) — rejecting those would
+# trade this false-clean for a false alarm on a correct design.
+_PLACEHOLDER_TOKENS = frozenset({
+    "tbd", "t.b.d.", "t.b.d", "tba", "todo", "to-do", "to_do", "to do",
+    "fixme", "fix-me", "fix_me", "fix me",
+    "xxx", "xxxx",
+    "placeholder", "place-holder", "place_holder",
+    "changeme", "change-me", "change_me", "change me",
+    "fillme", "fill-me", "fill_me", "fill me", "fill in", "fill-in",
+    "undetermined", "unspecified", "undecided", "not_set", "notset",
+    "not-set", "not set", "pending",
+})
+# Template forms an author leaves behind: `<fill-me>`, `{{value}}`, `${VALUE}`.
+_TEMPLATE_VALUE_RE = re.compile(r"^(?:<.*>|\{\{.*\}\}|\$\{.*\})$", re.DOTALL)
+
+
+def _placeholder_reason(value: Any) -> Optional[str]:
+    """Why `value` states no choice, or None when it is a real declaration.
+
+    JSON ``null`` is the ONE non-string that states no choice.  It is the same
+    statement ``--set <field>=null`` makes, and that door already resolves to
+    UNDETERMINED; a declaration file carrying ``"bit_order": null`` therefore
+    has to mean the same thing at this door, or the program certifies through
+    one entrance exactly what it refuses at the other.  Leaving it out let an
+    all-``null`` declaration pass emit, the presence gate, AND ``--verify``,
+    which then printed "declared with a real value" about a file in which no
+    value existed.
+
+    Every OTHER non-string is a real choice: ``0``, ``False``, ``[]`` and
+    ``{}`` are all values a designer can legitimately have made (no optional
+    extensions, no parity, count zero), and refusing them would trade this
+    false-clean for a false alarm on a correct design.
+    """
+    if value is None:
+        return ("the value is JSON `null` — the same statement `--set "
+                "<field>=null` makes, which this program resolves to "
+                "UNDETERMINED rather than to a declaration")
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return ("the value is empty — an empty string records that a key was "
+                "supplied, not that a choice was made")
+    if _TEMPLATE_VALUE_RE.match(stripped):
+        return ("the value %r is an unfilled template placeholder"
+                % (value,))
+    if stripped.lower() in _PLACEHOLDER_TOKENS:
+        return ("the value %r means 'not filled in yet', which is exactly the "
+                "undetermined state this program refuses to write" % (value,))
+    return None
+
+
+def _same_declared_value(a: Any, b: Any) -> bool:
+    """Is `a` the SAME declared value as `b` — type included, at every depth?
+
+    Python ``==`` is not the right predicate for "the file still carries the
+    value the sidecar recorded".  ``1 == True``, ``0 == False`` and
+    ``1 == 1.0`` are all true, so editing ``"latency_cycles": 1`` to ``true``
+    slipped past the value-match guard in ONE run and was then stamped
+    ``provenance_verified``, with the boolean written back into the
+    declaration for a consumer that expects an integer.
+
+    Comparing canonical JSON text is exact and type-strict all the way down
+    (``1`` -> ``1``, ``True`` -> ``true``, ``1.0`` -> ``1.0``, ``[1]`` vs
+    ``[true]``), which ``==`` is not even at the top level.
+    """
+    try:
+        return (json.dumps(a, sort_keys=True, default=repr)
+                == json.dumps(b, sort_keys=True, default=repr))
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return type(a) is type(b) and a == b
+
+
+def _contained_artifact_path(project: Path, rel: str) -> Optional[Path]:
+    """The absolute path for a spec-declared artifact, or None if it escapes.
+
+    The artifact path comes out of a DOCUMENT, so it is untrusted input: the
+    only sanitisation upstream is ``strip('/').rstrip(')')``, which turns an
+    absolute path into a relative one but leaves ``../`` intact.  A clause
+    naming ``../../escaped/decl.json`` wrote the declaration and its provenance
+    sidecar two directories above the run.  Nothing this program emits belongs
+    outside the project it was pointed at.
+    """
+    if not rel:
+        return None
+    candidate = Path(rel)
+    if candidate.is_absolute():
+        return None
+    try:
+        base = project.resolve()
+        resolved = (base / candidate).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if resolved == base:
+        return None
+    try:
+        resolved.relative_to(base)
+    except ValueError:
+        return None
+    return resolved
 
 
 def _now() -> str:
@@ -325,13 +493,19 @@ def _iter_doc_texts(project: Path):
                 continue
 
 
-def extract_contracts(project: Path) -> List[Dict[str, Any]]:
+def extract_contracts(project: Path,
+                      rejected: Optional[List[Dict[str, Any]]] = None,
+                      ) -> List[Dict[str, Any]]:
     """Every declaration contract this project's spec declares.
 
     A contract == a MUST-emit/declare clause naming a path-shaped artifact,
     IMMEDIATELY followed by a field table.  A MUST-emit clause with no field
     table is a required artifact but not a declaration contract, and is left to
     ``spec_required_artifact_check``.
+
+    A clause whose artifact path escapes the project root is DROPPED, not
+    honoured, and appended to `rejected` (when supplied) so the narrowing is
+    auditable rather than silent.
     """
     contracts: List[Dict[str, Any]] = []
     seen: set = set()
@@ -354,6 +528,18 @@ def extract_contracts(project: Path) -> List[Dict[str, Any]]:
                 if key in seen:
                     continue
                 seen.add(key)
+                if _contained_artifact_path(project, path) is None:
+                    if rejected is not None:
+                        rejected.append({
+                            "artifact_path": path,
+                            "source": rel,
+                            "clause_text": m.group(0).strip(),
+                            "reason": ("the declared artifact path resolves "
+                                       "outside the project root; this "
+                                       "program writes nothing outside the "
+                                       "run it was pointed at"),
+                        })
+                    continue
                 contracts.append({
                     "artifact_path": path,
                     "source": rel,
@@ -433,27 +619,122 @@ def _stage1_dir(project: Path) -> Path:
     return project / "phase2" / "stage1"
 
 
-# A declaration line inside an RTL COMMENT: `<key> = <value>`, value taken as
-# the FIRST bare token so a trailing parenthetical or a comma-separated aside
-# cannot leak into it.
-#
-# COMMENT LINES ONLY, deliberately.  This reads a DECLARATION the designer
-# wrote in the wrong file format; it does not interpret the design.  Scanning
-# code as well would let a `parameter <name> = N` or a `localparam` satisfy a
-# declared field — that is inference from the artifact, which is the failure
-# mode this program exists to retire, and it would be indistinguishable in the
-# output from a choice the designer actually stated.
-_COMMENT_LINE_RE = re.compile(r"^\s*(?://+|\*+|/\*+)")
+# Leading decoration a comment banner puts in front of its text: box rules,
+# bullets, the `*` column of a `/* ... */` block.  `_` and `.` are NOT stripped
+# because an identifier may legitimately start with `_`.
+_COMMENT_DECORATION_RE = re.compile(r"^[\s*\-=+#|>~]+")
+# Keywords that make a comment's content commented-out CODE rather than a
+# declaration.  Only used to EXPLAIN a rejection: the anchoring rule below has
+# already refused these, because the keyword sits where the field name must be.
+_CODE_LEAD_RE = re.compile(
+    r"^(?:parameter|localparam|defparam|assign|wire|reg|logic|integer|genvar"
+    r"|real|realtime|time|input|output|inout|typedef|`define|`ifdef|`ifndef"
+    r"|initial|always|always_ff|always_comb|generate|module|endmodule)\b")
 
 
-def _rtl_declared(project: Path, names: List[str]) -> Dict[str, Tuple[Any, str]]:
+def _scan_declaration_lines(text: str) -> List[Tuple[int, str]]:
+    """``(line_no, comment_text)`` for every COMMENT-ONLY line in `text`.
+
+    A Verilog lexer, not a line-prefix test.  The predecessor
+    (``^\\s*(?://+|\\*+|/\\*+)``) classified an ENTIRE LINE as a comment when
+    the line merely STARTED with a comment token, and then scraped
+    ``<field> = <value>`` from anywhere on it.  Three realistic idioms
+    therefore fed CODE into the declaration:
+
+        /* verilator lint_off WIDTH */ localparam bit_order = 1;
+        /* synthesis keep */ parameter latency_cycles = 8;
+        */ parameter crc_seed = 4660;
+
+    Every one of those is code, and every one satisfied a REQUIRED free choice
+    stamped ``rtl_header_declaration`` — an inference in the costume of a
+    declaration.
+
+    Two rules, both load-bearing:
+
+      * Only text INSIDE a comment is returned.  Block-comment state and
+        string literals are tracked across the whole file, so a ``//`` inside
+        a string is not a comment and a stray ``*/`` outside a block comment
+        opens nothing.
+      * A line that carries ANY code — before the comment or after it — is not
+        a declaration line at all and contributes nothing.  A DECLARATION
+        BLOCK is code-free by construction; a trailing comment on a code line
+        is an annotation OF that code, which is the inference this program
+        retires.
+    """
+    out: List[Tuple[int, str]] = []
+    in_block = False
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        i, n = 0, len(line)
+        code: List[str] = []
+        comment: List[str] = []
+        in_string = False
+        while i < n:
+            if in_block:
+                if line.startswith("*/", i):
+                    in_block = False
+                    i += 2
+                else:
+                    comment.append(line[i])
+                    i += 1
+                continue
+            if in_string:
+                if line[i] == "\\" and i + 1 < n:
+                    code.append(line[i:i + 2])
+                    i += 2
+                    continue
+                if line[i] == '"':
+                    in_string = False
+                code.append(line[i])
+                i += 1
+                continue
+            if line.startswith("//", i):
+                comment.append(line[i + 2:])
+                i = n
+                continue
+            if line.startswith("/*", i):
+                in_block = True
+                i += 2
+                continue
+            if line[i] == '"':
+                in_string = True
+            code.append(line[i])
+            i += 1
+        # A Verilog string literal does not survive a newline, so an
+        # unterminated quote must not swallow the rest of the file.
+        if "".join(code).strip():
+            continue
+        joined = "".join(comment)
+        if joined.strip():
+            out.append((lineno, joined))
+    return out
+
+
+def _rtl_declared(project: Path, names: List[str],
+                  rejected: Optional[List[Dict[str, Any]]] = None,
+                  ) -> Dict[str, Tuple[Any, str]]:
+    """Opt-in legacy recovery: `<field> = <value>` from an RTL DECLARATION block.
+
+    The match is ANCHORED at the start of the comment text (after banner
+    decoration such as ``*``/``-``/``|``).  Anchoring is what separates a
+    DECLARATION from a mention:
+
+      ``//   bit_order = MSB_first``          -> a declaration
+      ``// localparam bit_order = 1;``        -> commented-out CODE, refused
+      ``// never set bit_order = MSB_first``  -> prose about the field, refused
+
+    Value is the FIRST bare token so a trailing parenthetical cannot leak in.
+    Everything refused is appended to `rejected` (when supplied) so the
+    narrowing is auditable instead of silent.
+    """
     out: Dict[str, Tuple[Any, str]] = {}
     rtl = _rtl_dir(project)
     if not rtl.is_dir():
         return out
     srcs = sorted(rtl.rglob("*.v")) + sorted(rtl.rglob("*.sv"))
-    patterns = {n: re.compile(r"(?<![A-Za-z0-9_])" + re.escape(n)
-                              + r"\s*=\s*([A-Za-z0-9_.+\-]+)") for n in names}
+    patterns = {n: re.compile(r"^" + re.escape(n) + r"\s*=\s*([A-Za-z0-9_.+\-]+)")
+                for n in names}
+    mention = {n: re.compile(r"(?<![A-Za-z0-9_])" + re.escape(n)
+                             + r"\s*=\s*([A-Za-z0-9_.+\-]+)") for n in names}
     for f in srcs:
         try:
             text = f.read_text(errors="replace")
@@ -463,28 +744,105 @@ def _rtl_declared(project: Path, names: List[str]) -> Dict[str, Tuple[Any, str]]
             rel = str(f.relative_to(project))
         except ValueError:
             rel = str(f)
-        for line in text.split("\n"):
-            if not _COMMENT_LINE_RE.match(line):
-                continue
+        for lineno, comment_text in _scan_declaration_lines(text):
+            body = _COMMENT_DECORATION_RE.sub("", comment_text).strip()
             for name, rx in patterns.items():
                 if name in out:
                     continue
-                m = rx.search(line)
-                if m:
-                    value = _coerce(m.group(1))
-                    if value is UNDETERMINED:
-                        # `<field> = null` written in a comment states no
-                        # choice; treat it as if the line were absent rather
-                        # than letting a sentinel reach the JSON writer.
-                        continue
-                    out[name] = (value, rel)
+                m = rx.match(body)
+                if not m:
+                    # Not a declaration.  Say WHY when the field is mentioned
+                    # anyway, so a designer who wrote the block in a form this
+                    # program will not read finds out from the report.
+                    if rejected is not None and mention[name].search(body):
+                        rejected.append({
+                            "field": name,
+                            "file": rel,
+                            "line": lineno,
+                            "text": body[:200],
+                            "reason": (
+                                "commented-out code, not a declaration"
+                                if _CODE_LEAD_RE.match(body) else
+                                "`%s = ...` does not begin the comment text, "
+                                "so this is prose mentioning the field rather "
+                                "than a declaration of it" % name),
+                        })
+                    continue
+                # A Verilog SIZED LITERAL is the natural spelling in an RTL
+                # header, and the bare-token value class stops at the
+                # apostrophe: `1'b0` was read as 1, `3'd5` as 3, `4'h1_F` as 4
+                # — a value that is neither the designer's token nor its
+                # numeric meaning, stamped as a full declaration with nothing
+                # in the report to say it had been misread.  Refuse it: this
+                # program does not produce a value it cannot read faithfully,
+                # and the refusal is named so `--set` is the obvious next step.
+                if body[m.end():m.end() + 1] == "'":
+                    if rejected is not None:
+                        rejected.append({
+                            "field": name, "file": rel, "line": lineno,
+                            "text": body[:200],
+                            "reason": ("the value is a Verilog sized literal, "
+                                       "which this reader cannot transcribe "
+                                       "faithfully — declare it with `--set "
+                                       "%s=<value>`" % name),
+                        })
+                    continue
+                value = _coerce(m.group(1))
+                if value is UNDETERMINED:
+                    # `<field> = null` written in a comment states no choice;
+                    # treat it as if the line were absent rather than letting a
+                    # sentinel reach the JSON writer.
+                    if rejected is not None:
+                        rejected.append({
+                            "field": name, "file": rel, "line": lineno,
+                            "text": body[:200],
+                            "reason": "the comment states `null` — no choice",
+                        })
+                    continue
+                out[name] = (value, rel)
+    return out
+
+
+def _load_prior_provenance(sidecar: Path) -> Dict[str, Dict[str, Any]]:
+    """Per-field records from the PREVIOUS run's provenance sidecar.
+
+    The declaration file is a resolution source AND a file this program wrote,
+    so provenance must be carried forward rather than re-derived from "where
+    did I read it this time" — see the module docstring.
+    """
+    if not sidecar.is_file():
+        return {}
+    try:
+        data = json.loads(sidecar.read_text())
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    fields = data.get("fields")
+    if not isinstance(fields, dict):
+        return {}
+    out = {k: v for k, v in fields.items() if isinstance(v, dict)}
+    # Schema 2 writes `provenance_verified` on EVERY determined field.  A
+    # schema-2 record missing it has been edited, and dropping one key must not
+    # be cheaper than editing the value: treat the omission as the doubt it
+    # erases.  Schema 1 predates the distinction and never encoded doubt at
+    # all, so its records are carried as-is — reading them as unverified would
+    # be a false alarm on every declaration written before this seam existed.
+    try:
+        version = int(data.get("schema_version", 1))
+    except (TypeError, ValueError):
+        version = 1
+    if version >= 2:
+        for rec in out.values():
+            rec.setdefault("provenance_verified", False)
     return out
 
 
 def resolve(contract: Dict[str, Any],
             overrides: Dict[str, Any],
             rtl_declared: Dict[str, Tuple[Any, str]],
-            existing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            existing: Optional[Dict[str, Any]] = None,
+            prior: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Resolve every contract field.  Returns a per-field status map.
 
     Priority, strongest first:
@@ -496,8 +854,17 @@ def resolve(contract: Dict[str, Any],
 
     There is no fifth tier.  A value this program cannot trace to something the
     designer wrote is not produced.
+
+    Tier 2 is a file THIS PROGRAM WROTE, so its provenance is CARRIED from
+    `prior` (the previous run's sidecar) rather than re-derived — see the
+    module docstring.  Re-deriving relabelled every prose-recovered field
+    ``existing_declaration`` on the second, byte-identical run.
+
+    At every tier, a value that states no choice (empty string, ``TBD``,
+    ``<fill-me>``) resolves to UNDETERMINED, not to a declaration.
     """
     existing = existing or {}
+    prior = prior or {}
     status: Dict[str, Any] = {}
     for f in contract["fields"]:
         name = f["name"]
@@ -514,19 +881,97 @@ def resolve(contract: Dict[str, Any],
                         "undetermined (--set %s=null)" % name),
                 recovered_from_prose=False)
         elif name in overrides:
+            # Observed THIS run, from an argument this run was given: verified
+            # by direct observation rather than by a record.  Stated
+            # explicitly so every determined field carries the key and the
+            # sidecar is self-describing.
             entry.update(status="determined", value=overrides[name],
                          provenance="author_declared",
-                         recovered_from_prose=False)
+                         recovered_from_prose=False,
+                         provenance_verified=True)
         elif name in existing:
-            entry.update(status="determined", value=existing[name],
-                         provenance="existing_declaration",
-                         recovered_from_prose=False)
+            record = prior.get(name)
+            value_matches = (isinstance(record, dict)
+                             and record.get("status") == "determined"
+                             and "value" in record
+                             and _same_declared_value(record["value"],
+                                                      existing[name]))
+            # An UNVERIFIED record is not evidence.  The fallback branch below
+            # writes `status: determined` for a value nothing accounts for, so
+            # a record that merely matches the file is satisfied by the record
+            # THIS PROGRAM wrote about its own doubt one run earlier — the
+            # auditor accepting evidence it created.  Deleting the sidecar
+            # therefore only laundered a field for one extra run: re-run 1
+            # printed PROVENANCE UNVERIFIED, re-run 2 carried that record
+            # forward and stamped it verified.  The doubt is STICKY: it is
+            # retired by DECLARING the field (--set), never by re-running.
+            carried = value_matches and record.get(
+                "provenance_verified") is not False
+            if carried:
+                # The value in the file is the one the previous run recorded,
+                # so it keeps that run's provenance and its debt stamp.  The
+                # stamp is retired by DECLARING the field, not by re-running.
+                entry.update(
+                    status="determined", value=existing[name],
+                    provenance=record.get("provenance",
+                                          "existing_declaration"),
+                    recovered_from_prose=bool(
+                        record.get("recovered_from_prose")),
+                    carried_from_declaration_file=True,
+                    provenance_verified=True)
+                if record.get("provenance_detail"):
+                    entry["provenance_detail"] = record["provenance_detail"]
+                if record.get("first_recorded_at"):
+                    entry["first_recorded_at"] = record["first_recorded_at"]
+            else:
+                # Present in the file with nothing that accounts for it: a
+                # hand-written declaration, a value edited since, a deleted
+                # sidecar, or a record this program itself already marked
+                # unverified.  Reported as UNVERIFIED rather than promoted to a
+                # clean declaration — refusing it outright would be a false
+                # alarm on a legitimately hand-authored file.  The mark is
+                # written back UNVERIFIED so it survives the next run.
+                entry.update(
+                    status="determined", value=existing[name],
+                    provenance="existing_declaration",
+                    recovered_from_prose=False,
+                    carried_from_declaration_file=True,
+                    provenance_verified=False,
+                    provenance_note=(
+                        "the declaration file carries this value but no "
+                        "verified provenance record matches it; who chose it, "
+                        "and whether it was recovered from prose, is unknown. "
+                        "Re-running does not clear this — declare the field "
+                        "with `--set %s=<value>`." % name))
+                if isinstance(record, dict) and record.get("first_recorded_at"):
+                    entry["first_recorded_at"] = record["first_recorded_at"]
+            # A carried stamp names a SOURCE.  When that source was re-read
+            # this run and no longer says what the stamp claims, the stamp is
+            # attesting to a file that contradicts it, and the only evidence
+            # for it is the sidecar this program wrote.  Demoted to unverified
+            # and named — not refused, because the declaration file legitimately
+            # outranks the comment block and an author may have edited one
+            # without the other.
+            if (entry.get("provenance") == "rtl_header_declaration"
+                    and name in rtl_declared
+                    and not _same_declared_value(rtl_declared[name][0],
+                                                 existing[name])):
+                entry.update(
+                    provenance_verified=False,
+                    provenance_diverged=True,
+                    provenance_note=(
+                        "this value is stamped as recovered from %s, but that "
+                        "file now declares %r. Nothing verifies which one the "
+                        "designer meant; declare it with `--set %s=<value>`."
+                        % (entry.get("provenance_detail", "an RTL comment"),
+                           rtl_declared[name][0], name)))
         elif name in rtl_declared:
             value, src = rtl_declared[name]
             entry.update(status="determined", value=value,
                          provenance="rtl_header_declaration",
                          provenance_detail=src,
-                         recovered_from_prose=True)
+                         recovered_from_prose=True,
+                         provenance_verified=True)
         else:
             entry.update(
                 status="undetermined",
@@ -534,6 +979,24 @@ def resolve(contract: Dict[str, Any],
                         "in the declaration file, and no `%s = <value>` line in "
                         "an RTL comment block" % name),
                 recovered_from_prose=False)
+
+        if entry["status"] == "determined":
+            why = _placeholder_reason(entry["value"])
+            if why is not None:
+                source = entry.get("provenance", "?")
+                entry = {
+                    k: v for k, v in entry.items()
+                    if k in ("required", "required_marker",
+                             "required_marker_recognized",
+                             "spec_example_values")
+                }
+                entry.update(
+                    status="undetermined",
+                    reason="%s (supplied via %s)" % (why, source),
+                    rejected_placeholder=True,
+                    recovered_from_prose=False)
+            elif "first_recorded_at" not in entry:
+                entry["first_recorded_at"] = _now()
         status[name] = entry
     return status
 
@@ -542,7 +1005,11 @@ def resolve(contract: Dict[str, Any],
 # Reporting
 # --------------------------------------------------------------------------- #
 
-def _print_contract(contracts: List[Dict[str, Any]], out_path: Path) -> None:
+def _print_contract(contracts: List[Dict[str, Any]], out_path: Path,
+                    rejected: Optional[List[Dict[str, Any]]] = None) -> None:
+    for r in (rejected or []):
+        print("  REJECTED CLAUSE %s (from %s): %s"
+              % (r["artifact_path"], r["source"], r["reason"]))
     if not contracts:
         print("spec_declaration_contract: NONE — this project's Phase-1 docs "
               "declare no machine-readable declaration contract (a MUST-declare "
@@ -584,7 +1051,8 @@ def stage_contract(project: Path) -> Tuple[Path, List[Dict[str, Any]]]:
     Always writes, even with zero contracts: "we looked and this spec declares
     none" is a different, useful statement from "nobody looked".
     """
-    contracts = extract_contracts(project)
+    rejected: List[Dict[str, Any]] = []
+    contracts = extract_contracts(project, rejected)
     out_path = _stage1_dir(project) / "declaration_contract.json"
     _write_json(out_path, {
         "schema_version": 1,
@@ -594,8 +1062,123 @@ def stage_contract(project: Path) -> Tuple[Path, List[Dict[str, Any]]]:
         "project": str(project),
         "contract_count": len(contracts),
         "contracts": contracts,
+        "rejected_contract_count": len(rejected),
+        "rejected_contracts": rejected,
     })
     return out_path, contracts
+
+
+# --------------------------------------------------------------------------- #
+# --verify: the SUBSTANCE assertion the presence gate cannot make
+# --------------------------------------------------------------------------- #
+
+def verify_declaration(project: Path, contract: Dict[str, Any],
+                       out_path: Path) -> Dict[str, Any]:
+    """Assert the declaration ON DISK satisfies `contract`.  Writes nothing.
+
+    ``spec_required_artifact_check`` scores the spec-declared artifact on
+    presence and ``st_size > 0``; ``{}`` is three bytes and passes.  The
+    quantity that actually matters is whether every field the SPEC marks
+    REQUIRED carries a real value — and required-ness comes from the spec,
+    an input this program did not write, so this is not a run certifying its
+    own output.
+    """
+    required = [f["name"] for f in contract["fields"] if f["required"]]
+    result: Dict[str, Any] = {
+        "schema_version": 1,
+        "program": "spec_declaration_emit",
+        "mode": "verify",
+        "run_at": _now(),
+        "declaration_path": contract["artifact_path"],
+        "contract_source": contract["source"],
+        "required_fields": sorted(required),
+        "missing_required": [],
+        "placeholder_required": [],
+        "recovered_from_prose": [],
+        "provenance_unverified": [],
+        "provenance_sidecar_present": False,
+    }
+    if not out_path.is_file():
+        result["verdict"] = "FAIL_ABSENT"
+        result["note"] = ("the spec-declared declaration does not exist; the "
+                          "required free choices were never recorded")
+        result["missing_required"] = sorted(required)
+        return result
+
+    try:
+        loaded = json.loads(out_path.read_text())
+    except Exception as exc:
+        result["verdict"] = "FAIL_UNPARSEABLE"
+        result["note"] = "declaration is not readable JSON: %s" % exc
+        return result
+    if not isinstance(loaded, dict):
+        result["verdict"] = "FAIL_UNPARSEABLE"
+        result["note"] = "declaration is not a JSON object"
+        return result
+
+    for name in sorted(required):
+        if name not in loaded:
+            result["missing_required"].append(name)
+            continue
+        why = _placeholder_reason(loaded[name])
+        if why is not None:
+            result["placeholder_required"].append({"field": name, "reason": why})
+
+    sidecar = out_path.with_name(out_path.stem + ".provenance.json")
+    prior = _load_prior_provenance(sidecar)
+    result["provenance_sidecar_present"] = bool(prior)
+    unverified: set = set()
+    for name, rec in sorted(prior.items()):
+        if rec.get("recovered_from_prose"):
+            result["recovered_from_prose"].append(name)
+        if rec.get("status") == "determined" and rec.get(
+                "provenance_verified") is False:
+            unverified.add(name)
+    # A declared field whose provenance record does not MATCH the value on disk
+    # is UNVERIFIED, not clean.  Three cases, all of them the same statement
+    # "nothing here accounts for this value": no record at all (a deleted
+    # sidecar, the laundering route), a record that is not `determined`, and a
+    # record whose value has since been edited in the declaration file.
+    for name in [f["name"] for f in contract["fields"]]:
+        if name not in loaded:
+            continue
+        rec = prior.get(name)
+        if (not isinstance(rec, dict) or rec.get("status") != "determined"
+                or "value" not in rec
+                or not _same_declared_value(rec["value"], loaded[name])):
+            unverified.add(name)
+    result["provenance_unverified"] = sorted(unverified)
+
+    declared_contract_fields = sorted(
+        f["name"] for f in contract["fields"]
+        if f["name"] in loaded and _placeholder_reason(loaded[f["name"]]) is None)
+    result["declared_contract_fields"] = declared_contract_fields
+
+    if result["missing_required"] or result["placeholder_required"]:
+        result["verdict"] = "FAIL"
+        result["note"] = (
+            "%d required field(s) missing, %d carrying a placeholder"
+            % (len(result["missing_required"]),
+               len(result["placeholder_required"])))
+    elif not declared_contract_fields:
+        # Present, non-empty by byte count, and declaring NOTHING the spec's
+        # table asked for.  This is the `{}` case the presence gate scores as
+        # PASS; a declaration that declares nothing does not satisfy a
+        # requirement to declare.
+        result["verdict"] = "FAIL_VACUOUS"
+        result["note"] = ("the declaration exists but carries none of the %d "
+                          "field(s) the spec's declaration table enumerates"
+                          % len(contract["fields"]))
+    elif not required:
+        result["verdict"] = "PASS_INFORMATIONAL"
+        result["note"] = ("the spec's declaration table marks no field "
+                          "REQUIRED; %d informational field(s) declared"
+                          % len(declared_contract_fields))
+    else:
+        result["verdict"] = "PASS"
+        result["note"] = ("all %d spec-REQUIRED free choice(s) declared with a "
+                          "real value" % len(required))
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -634,6 +1217,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--artifact", metavar="PATH",
                     help="Select one contract by its declared artifact path "
                          "when the spec declares more than one.")
+    ap.add_argument("--verify", action="store_true",
+                    help="ASSERT the declaration already on disk carries a "
+                         "real value for every REQUIRED contract field, and "
+                         "exit 1 when it does not. Writes NO declaration. "
+                         "This is the SUBSTANCE check the required-artifact "
+                         "gate cannot make: it scores presence and byte "
+                         "count, and `{}` is 3 bytes.")
     args = ap.parse_args(argv)
 
     project = Path(args.project).resolve()
@@ -641,12 +1231,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("ERROR: project not found: %s" % project, file=sys.stderr)
         return 2
 
+    if args.contract and args.verify:
+        print("ERROR: --contract and --verify are different modes; pick one",
+              file=sys.stderr)
+        return 2
+
+    rejected_contracts: List[Dict[str, Any]] = []
+
     if args.contract:
         out_path, contracts = stage_contract(project)
-        _print_contract(contracts, out_path)
+        try:
+            rejected_contracts = json.loads(
+                out_path.read_text())["rejected_contracts"]
+        except Exception:
+            rejected_contracts = []
+        _print_contract(contracts, out_path, rejected_contracts)
         return 0
 
-    contracts = extract_contracts(project)
+    contracts = extract_contracts(project, rejected_contracts)
+    for r in rejected_contracts:
+        print("spec_declaration_emit: REJECTED CLAUSE %s (from %s) — %s"
+              % (r["artifact_path"], r["source"], r["reason"]), file=sys.stderr)
 
     if not contracts:
         print("spec_declaration_emit: NO_CONTRACT — this project's Phase-1 "
@@ -676,6 +1281,37 @@ def main(argv: Optional[List[str]] = None) -> int:
             if prev is None or (f["required"] and not prev["required"]):
                 merged_fields[f["name"]] = f
     contract = {**contracts[0], "fields": list(merged_fields.values())}
+
+    out_path = _contained_artifact_path(project, contract["artifact_path"])
+    if out_path is None:
+        print("ERROR: the spec-declared declaration path %r resolves outside "
+              "the project root; refusing to write there."
+              % contract["artifact_path"], file=sys.stderr)
+        return 2
+
+    if args.verify:
+        report = verify_declaration(project, contract, out_path)
+        report_path = (project / "reports" / "phase2" / "gates"
+                       / "spec_declaration_verify.json")
+        _write_json(report_path, report)
+        ok = report["verdict"] in ("PASS", "PASS_INFORMATIONAL")
+        stream = sys.stdout if ok else sys.stderr
+        print("spec_declaration_verify: %s — %s"
+              % (report["verdict"], report["note"]), file=stream)
+        for name in report["missing_required"]:
+            print("  - %s: REQUIRED by %s, absent from the declaration"
+                  % (name, contract["source"]), file=stream)
+        for item in report["placeholder_required"]:
+            print("  - %s: %s" % (item["field"], item["reason"]), file=stream)
+        if report["recovered_from_prose"]:
+            print("  RECOVERED FROM PROSE (legacy debt, still outstanding): %s"
+                  % ", ".join(report["recovered_from_prose"]), file=stream)
+        if report["provenance_unverified"]:
+            print("  PROVENANCE UNVERIFIED (declared value with no matching "
+                  "provenance record): %s"
+                  % ", ".join(report["provenance_unverified"]), file=stream)
+        print("  Report: %s" % report_path, file=stream)
+        return 0 if ok else 1
 
     overrides: Dict[str, Any] = {}
     if args.from_json:
@@ -712,10 +1348,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         overrides[k.strip()] = _coerce(v)
 
     names = [f["name"] for f in contract["fields"]]
-    rtl_declared = (_rtl_declared(project, names)
+    rtl_rejected: List[Dict[str, Any]] = []
+    rtl_declared = (_rtl_declared(project, names, rtl_rejected)
                     if args.from_rtl_declaration else {})
 
-    out_path = project / contract["artifact_path"]
     existing: Dict[str, Any] = {}
     if out_path.is_file():
         try:
@@ -724,8 +1360,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 existing = loaded
         except Exception:
             existing = {}
+    sidecar = out_path.with_name(out_path.stem + ".provenance.json")
+    prior = _load_prior_provenance(sidecar)
 
-    status = resolve(contract, overrides, rtl_declared, existing)
+    status = resolve(contract, overrides, rtl_declared, existing, prior)
 
     undetermined_required = sorted(
         n for n, e in status.items()
@@ -752,7 +1390,32 @@ def main(argv: Optional[List[str]] = None) -> int:
               "No declaration written — a default-filled declaration would "
               "turn the required-artifact gate green against a value nobody "
               "chose.", file=sys.stderr)
+        for r in rtl_rejected:
+            print("  NOT read from %s:%d — %s: %s"
+                  % (r["file"], r["line"], r["reason"], r["text"]),
+                  file=sys.stderr)
         return 1
+
+    # A declaration that declares NOTHING must not satisfy a requirement to
+    # declare.  Writing `{}` here handed `spec_required_artifact_check` three
+    # bytes it scores as "present and non-empty" — a green gate certifying an
+    # artifact this run created during the same run to satisfy it.  Nothing is
+    # written and nothing already on disk is touched; the presence gate then
+    # honestly reports the artifact as absent.
+    n_determined = sum(1 for e in status.values() if e["status"] == "determined")
+    if n_determined == 0:
+        print("spec_declaration_emit: NOTHING_TO_DECLARE — the spec's "
+              "declaration table enumerates %d field(s), none of them REQUIRED "
+              "and not one of them determined. No declaration written: an "
+              "empty declaration is not a declaration, and `{}` would turn "
+              "the required-artifact gate green while declaring nothing."
+              % len(status), file=sys.stderr)
+        for n in undetermined_optional:
+            print("  - %s: %s" % (n, status[n]["reason"]), file=sys.stderr)
+        print("  Declare at least one with --set <field>=<value>, or correct "
+              "the spec clause that demands a declaration with no substance.",
+              file=sys.stderr)
+        return 4
 
     # --- write -------------------------------------------------------------
     # `existing` was already loaded above (it is a resolution SOURCE, not just
@@ -769,13 +1432,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             # special-cased by each of them.  A field already present in
             # `existing` reaches this branch ONLY via an explicit
             # `--set <field>=null` — an author deliberately retracting a choice
-            # — so nothing recorded earlier is dropped by accident.
+            # — or by carrying a placeholder that states no choice, so nothing
+            # a designer actually declared is dropped by accident.
             declaration.pop(n, None)
     _write_json(out_path, declaration)
 
-    sidecar = out_path.with_name(out_path.stem + ".provenance.json")
+    unverified = sorted(n for n, e in status.items()
+                        if e["status"] == "determined"
+                        and e.get("provenance_verified") is False)
     _write_json(sidecar, {
-        "schema_version": 1,
+        "schema_version": 2,
         "program": "spec_declaration_emit",
         "generated_at": _now(),
         "declaration_path": contract["artifact_path"],
@@ -786,13 +1452,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         "undetermined_informational": undetermined_optional,
         "recovered_from_prose": sorted(
             n for n, e in status.items() if e.get("recovered_from_prose")),
+        "existing_without_recorded_provenance": unverified,
         "preserved_foreign_keys": sorted(
             k for k in existing if k not in status),
+        "rtl_declaration_scan": {
+            "enabled": bool(args.from_rtl_declaration),
+            "accepted": sorted(rtl_declared),
+            "rejected": rtl_rejected,
+        },
     })
 
-    n_det = sum(1 for e in status.values() if e["status"] == "determined")
     print("spec_declaration_emit: PASS — %d/%d contract field(s) declared -> %s"
-          % (n_det, len(status), out_path))
+          % (n_determined, len(status), out_path))
     if undetermined_optional:
         print("  informational field(s) OMITTED as undetermined (not "
               "defaulted): %s" % ", ".join(undetermined_optional))
@@ -801,6 +1472,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     if recovered:
         print("  RECOVERED FROM PROSE (legacy path — these should have been "
               "declared before the RTL was written): %s" % ", ".join(recovered))
+    if unverified:
+        print("  PROVENANCE UNVERIFIED — the declaration file carries these "
+              "values but no verified provenance record matches them, so who "
+              "chose them is unknown (re-running does not clear this; declare "
+              "them with --set): %s" % ", ".join(unverified))
+        for n in unverified:
+            note = status[n].get("provenance_note")
+            if note:
+                print("    - %s: %s" % (n, note))
+    for r in rtl_rejected:
+        print("  NOT read from %s:%d — %s: %s"
+              % (r["file"], r["line"], r["reason"], r["text"]))
     print("  Provenance: %s" % sidecar)
     return 0
 
