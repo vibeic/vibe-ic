@@ -39,7 +39,14 @@ enforces schema + content rules:
         rationale substantive prose (>= 40 chars at the point of use)
         ticket    tracks the deferred work
         review_required   must be true — deferred, not closed
-        evidence  non-empty list making the deferral auditable
+        evidence  non-empty list making the deferral auditable. #524 —
+                  "non-empty" is a LENGTH test and cannot tell corroboration
+                  from the run pointing at its own report, so each list is
+                  also CLASSIFIED (`_evidence_independence`) and an entry
+                  that no independent artefact corroborates is DISCLOSED as
+                  a warning. Disclosed, not refused: an ENV_UNAVAILABLE
+                  deferral claims a tool was absent, and nothing independent
+                  can corroborate a non-execution.
         approver  OPTIONAL. `flow_compliance_check` supplies the tier approver
                   (`field-agent-attest (ENV_UNAVAILABLE tier)`) when absent, so
                   its absence here is the design, not an omission.
@@ -102,6 +109,7 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _waiver_entries as _we  # noqa: E402  (after sys.path bootstrap)
+import _evidence_independence as _ei  # noqa: E402  (#524)
 
 
 PLACEHOLDER_REASONS = {
@@ -540,6 +548,57 @@ def validate(project: Path, max_step: int = 40,
                              "an attestation rather than an assertion; "
                              "without it the deferral cannot be audited"),
                 ))
+            else:
+                # #524 — "non-empty" is a LENGTH test, and length cannot tell
+                # corroboration from the run pointing at its own report. Over
+                # the 8 tracked attestation entries, 5 cite ONLY the producing
+                # run's orchestrator report and 1 fills the field with
+                # free-text fragments that reference nothing; all 8 satisfy
+                # "non-empty" identically, so the verdict a reader sees is the
+                # same whether the evidence was independent or not.
+                #
+                # WARNING, and the severity is the whole point — same reasoning
+                # as the block above, learnt the hard way in #519: this
+                # program's ERRORS become `SystemExit(1)` inside
+                # `flow_compliance_check._load_waivers`, which would stop the
+                # run emitting ANY report, advisories included. A disclosure
+                # that kills the report discloses nothing.
+                #
+                # And it stays a disclosure rather than a refusal for a
+                # substantive reason, not a timid one: an ENV_UNAVAILABLE
+                # deferral claims a tool was ABSENT, and no independent
+                # artefact can corroborate a non-execution — the artefact whose
+                # absence IS the waiver is the one being asked for. Measured on
+                # the real producer, EVERY ENV_UNAVAILABLE waiver
+                # `phase3_one_shot_runner._autogen_waivers_json` can emit is
+                # uncorroborated, so refusing them would make an honest
+                # tool-less-host deferral impossible to honour. Self-reference
+                # is acceptable ALONGSIDE something else and is never
+                # sufficient ALONE; what was wrong is that it was invisible.
+                _assess = _ei.assess(evidence, project)
+                if not _assess.corroborated:
+                    findings.append(WaiverFinding(
+                        severity="warning", entry_index=i, step_id=sid,
+                        rule="attestation-evidence-uncorroborated",
+                        message=_ei.disclosure(entry.get("step", sid),
+                                               _assess),
+                    ))
+                elif _assess.dangling:
+                    # Corroborated overall, but at least one item cites an
+                    # artefact that is not there. Named separately because a
+                    # dangling citation READS like corroboration — it is
+                    # path-shaped — while a self-reference at least admits
+                    # what it is.
+                    findings.append(WaiverFinding(
+                        severity="warning", entry_index=i, step_id=sid,
+                        rule="attestation-evidence-dangling",
+                        message=(
+                            f"{_assess.dangling} evidence item(s) are "
+                            f"path-shaped but name no artefact present in the "
+                            f"project (or point outside it); they read as "
+                            f"corroboration without being auditable. "
+                            f"{_assess.describe()}"),
+                    ))
 
         # approver — REQUIRED in the `waived_steps` dialect, where a named
         # human is the whole approval. OPTIONAL in the attestation dialect,

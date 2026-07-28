@@ -81,6 +81,7 @@ from concurrent.futures import ThreadPoolExecutor
 import _path_layout as _pl
 import _reused_ip_predicate as _reused_ip
 import _waiver_entries as _we
+import _evidence_independence as _ev_ind  # #524
 import _sim_results_bridge as _srb
 import _gate_invocation
 import fpga_board_capability as _fpga_cap
@@ -5666,6 +5667,18 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
 #: it on entry so repeated calls in one process do not accumulate.
 _ENV_WAIVER_REJECTIONS: List[str] = []
 
+#: #524 — ENV_UNAVAILABLE waivers that WERE honoured but whose `evidence` no
+#: independent artefact corroborates. Surfaced as report advisories next to the
+#: rejections, so a WAIVED step no longer reads identically whether its
+#: deferral rested on an independent artefact or on the producing run pointing
+#: at its own orchestrator report.
+#:
+#: A SEPARATE list from `_ENV_WAIVER_REJECTIONS` on purpose: these waivers are
+#: APPLIED. Filing them as rejections would say the step lost its exemption
+#: when it did not, which is a different lie from the one being fixed.
+#: Populated by `_load_waivers`, which clears it on entry.
+_ENV_WAIVER_EVIDENCE_NOTES: List[str] = []
+
 
 # #519 — the map MOVED to `_waiver_entries`, which is where the waiver
 # vocabulary lives now, and is re-exported here under its historical name so
@@ -5974,6 +5987,7 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
     """Load waivers AFTER validating schema. Returns {} if file missing.
     Raises SystemExit(1) if waivers.json exists but is malformed/rubber-stamped."""
     _ENV_WAIVER_REJECTIONS.clear()  # #216 — fresh per call
+    _ENV_WAIVER_EVIDENCE_NOTES.clear()  # #524 — fresh per call
     wpath = project / "waivers.json"
     if not wpath.exists():
         # v0.2.103 (#496) — even with no waivers.json, the disclosed
@@ -6111,11 +6125,49 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
                 continue
             if sid in out:
                 continue  # explicit waived_steps entry takes precedence
+            # #524 — the attestation quartet stands in for a human signature
+            # (#519), so `evidence` carries the signature's weight. But the
+            # test above is `evidence[] non-empty`, a LENGTH test, and a list
+            # holding one pointer back at the producing run's own orchestrator
+            # report satisfies it exactly as well as a pointer to an
+            # independent artefact. Measured on the real producer:
+            # `phase3_one_shot_runner._autogen_waivers_json` appends that
+            # self-reference UNCONDITIONALLY, and harvests the step's `extras`
+            # values as though every one were a path — so an ENV_UNAVAILABLE
+            # waiver's evidence is typically `["<tool name>", "<self-ref>"]`
+            # and, when extras are empty, the self-reference ALONE.
+            #
+            # The waiver is still HONOURED. Refusing it would be the wrong
+            # repair: this tier's claim is that a tool was ABSENT, and no
+            # independent artefact can corroborate a non-execution — the run's
+            # own probe record is the only witness that can exist. Since every
+            # ENV_UNAVAILABLE waiver the producer can emit is uncorroborated,
+            # refusing them would make an honest, correctly disclosed,
+            # tool-less-host deferral impossible to honour, i.e. would break
+            # "disclosure buys deferral" for precisely the population the tier
+            # was built for.
+            #
+            # So the repair is to stop the report reading IDENTICALLY in the
+            # two cases. The assessment rides on the waiver record and, when
+            # nothing independent corroborates it, is surfaced as a named
+            # advisory. Classification only — never raises, never rejects,
+            # never changes a step verdict. chip-AGNOSTIC (structural path
+            # tests only).
+            _assess = _ev_ind.assess(evidence, project)
+            if not _assess.corroborated:
+                _ENV_WAIVER_EVIDENCE_NOTES.append(
+                    "HONOURED but UNCORROBORATED — " +
+                    _ev_ind.disclosure(step_name, _assess) +
+                    f" The step (flow step {sid}) remains WAIVED-DEFERRED on "
+                    f"ticket {ticket}; review_required stays true.")
             out[sid] = {
                 "id": sid,
                 "reason": (
                     f"ENV_UNAVAILABLE: {rationale[:200]} "
-                    f"[ticket={ticket}, review_required={reviewer_required}]"
+                    f"[ticket={ticket}, review_required={reviewer_required}, "
+                    f"evidence={_assess.describe()}"
+                    + ("" if _assess.corroborated
+                       else ", NO independent corroboration") + "]"
                 ),
                 "approver": w.get("approver",
                                   "field-agent-attest (ENV_UNAVAILABLE tier)"),
@@ -6123,6 +6175,7 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
                 "verdict_tier": tier,
                 "review_required": reviewer_required,
                 "evidence": evidence,
+                "evidence_assessment": _assess.as_dict(),
                 "_env_unavailable": True,
             }
         # v0.2.103 (#496) — auto-synthesise the analog PDK-substitution
@@ -7675,6 +7728,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Without this the step showed a bare MISSING and the reader could not
     # tell that a waiver had been attempted, let alone why it did not apply.
     advisories.extend(_ENV_WAIVER_REJECTIONS)
+    # #524 — an APPLIED ENV_UNAVAILABLE waiver whose evidence nothing
+    # independent corroborates is disclosed here. The step stays WAIVED; what
+    # changes is that the reader can now tell which kind of evidence bought
+    # the deferral, instead of the verdict reading identically either way.
+    advisories.extend(_ENV_WAIVER_EVIDENCE_NOTES)
     step20_pass = any(r.id == 20 and r.status == "PASS" for r in results)
     has_mcorner = bool(
         list(project.glob("sta/mcorner_*.rpt"))
