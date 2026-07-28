@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import _gate_denominator as _gd
+import _published_tree as _pt
 
 # Constructed at runtime so this checker never matches itself.
 RETIRED_PLUGIN_TOKEN = "vibe-ic-" + "d"
@@ -74,16 +75,26 @@ def scan(plugin_root: str) -> Tuple[List[str], Dict[str, int]]:
     files_scanned = 0
     files_considered = 0
     present: List[str] = []
+    # SHIPPED means committed, so the bundle is what the COMMIT carries — not
+    # what this disk holds. A walk answered "what is on this machine", and the
+    # two diverge as soon as anyone runs the suite: measured at the commit that
+    # landed this, 3379 files examined in a working checkout against 3323 in a
+    # fresh worktree OF THE SAME COMMIT. `None` is "not a published tree" and
+    # NEVER "published and empty" — a user's own project publishes nothing, and
+    # there the walk is already the honest answer.
+    published = _pt.published_paths(root)
+    enumeration = "filesystem-walk" if published is None else "git-tracked"
     for sub in _BUNDLE_SUBTREES:
         base = root / sub
         if not base.is_dir():
             continue
         present.append(sub)
-        for p in sorted(base.rglob("*")):
-            if not p.is_file() or p.suffix not in _SCAN_SUFFIXES:
-                continue
-            if any(part in _SKIP_DIRS for part in p.parts):
-                continue
+        candidates = [p for p in sorted(base.rglob("*"))
+                      if p.is_file() and p.suffix in _SCAN_SUFFIXES
+                      and not any(part in _SKIP_DIRS for part in p.parts)]
+        if published is not None:
+            candidates = _pt.filter_to_published(root, candidates)
+        for p in candidates:
             files_considered += 1
             if p.resolve() == me:
                 continue
@@ -103,6 +114,10 @@ def scan(plugin_root: str) -> Tuple[List[str], Dict[str, int]]:
         "subtrees_present": len(present),
         "subtrees_declared": len(_BUNDLE_SUBTREES),
         "subtrees": present,
+        # Reported, not merely recorded: the walk and the tracked set produce
+        # the same sentence, so the only way a reader can tell which one
+        # answered is for the answer to say which one it was.
+        "enumeration": enumeration,
     }
 
 
@@ -145,19 +160,24 @@ def main(argv=None) -> int:
     denom = denominator(stats, args.plugin_root)
     summary: Dict[str, object] = {"hits": len(hits)}
     _gd.attach(summary, denom)
+    # NAMED IN EVERY VERDICT. The tracked set and the walk emit the same
+    # sentence, so a fallback that is only recorded is a fallback nobody can
+    # see — and invisibility is how the host-dependence this fixes survived.
+    how = f" [{stats.get('enumeration', 'unknown')}]"
     for h in hits:
         print(h)
     if hits:
         # A real finding outranks everything: the scan reached files and one
         # of them carries the token. Unchanged rc, unchanged listing.
         print(f"FAIL — {len(hits)} retired-plugin reference(s); "
-              f"{_gd.line_of(summary)}")
+              f"{_gd.line_of(summary)}{how}")
         return RC_FAIL
     if denom.is_vacuous:
-        print(f"[VACUOUS_PASS] dead_plugin_path_check: {_gd.line_of(summary)}")
+        print(f"[VACUOUS_PASS] dead_plugin_path_check: "
+              f"{_gd.line_of(summary)}{how}")
         print(f"VACUOUS_PASS: {denom.not_applicable_reason}", file=sys.stderr)
         return RC_VACUOUS
-    print(f"PASS — 0 retired-plugin reference(s); {_gd.line_of(summary)}")
+    print(f"PASS — 0 retired-plugin reference(s); {_gd.line_of(summary)}{how}")
     return RC_PASS
 
 
