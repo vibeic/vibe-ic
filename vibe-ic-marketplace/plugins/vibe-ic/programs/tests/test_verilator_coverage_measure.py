@@ -233,6 +233,11 @@ def test_check_malformed_json_is_a_defect(tmp_path):
 #       reports/phase2/coverage/coverage_actual.json
 #   [check] artefact not tool-generated: missing totals.line   rc=2
 #   -> Step 4 = VACUOUS-PASS, counted into `35/39 executed PASS`
+# (that last clause is the state AS MEASURED THEN. `flow_compliance_check`
+# has since dropped VACUOUS_PASS from the executed-PASS numerator — the tier
+# now leaves X and stays in Y — so the same run would read `35/39` with the
+# vacuous step outside X. It does not change what this fixture is about: an
+# unmeasured coverage step must not be credited either way.)
 # on a project where `which verilator` is rc=1 and no coverage.dat exists
 # anywhere. The file at the declared coverage path is a FUNCTIONAL verdict
 # payload written by design_one_shot_runner, not a coverage measurement.

@@ -597,3 +597,230 @@ def test_check_program_exit_zero_rc1_still_fails(tmp_path):
         helper.unlink(missing_ok=True)
 
 
+# ─── CRASH vs VERDICT: the distinction must not depend on the path ────
+# `_check_program_exit_zero` returns `passed=False` for BOTH "the gate found
+# a defect" and "the gate blew up", so every consumer that needs to tell them
+# apart used to re-derive the answer from the evidence snippet — a fixed-width
+# tail of each stream. A traceback's frame lines carry the program's absolute
+# path and its exception message routinely carries the project's, so how much
+# of the traceback survived that cut was a function of how deep the checkout
+# lived. MEASURED on this tree, one crashing gate, path length the only
+# variable: 107 characters graded CRASH, 108 graded FAIL — and the dimension-2
+# falsifiability matrix counts FAIL as proof that a gate can fail, so past 108
+# characters a crash was issuing that certificate.
+#
+# The consumer now decides it against the UNTRUNCATED streams and says so with
+# `_CRASH_HINT_PREFIX`, which is the first thing in the string and therefore
+# survives every downstream cut. These tests pin both directions and, above
+# all, the invariant: same gate, same project contents, two path lengths that
+# straddle the evidence window — one answer.
+
+_CRASH_HELPER_SRC = (
+    "import sys\n"
+    "from pathlib import Path\n"
+    "def _f4(p): return {'only': 1}[str(p)]\n"
+    "def _f3(p): return _f4(p)\n"
+    "def _f2(p): return _f3(p)\n"
+    "def _f1(p): return _f2(p)\n"
+    "print('helper: audited 0 files')\n"
+    # The KeyError message is the project's ABSOLUTE path — the shape most
+    # gates in this tree produce, because they open with
+    # `project = Path(args.project_dir).resolve()`.
+    "_f1(Path(sys.argv[1]).resolve() / 'reports' / 'phase2' / 'gates' / 'x.json')\n"
+)
+
+#: A real FAIL whose finding NAMES a Python exception type and quotes absolute
+#: paths — the adversarial input for any crash detector.
+_VERDICT_HELPER_SRC = (
+    "import sys\n"
+    "from pathlib import Path\n"
+    "project = Path(sys.argv[1]).resolve()\n"
+    "print('verdict: FAIL')\n"
+    "print('  [ERROR] corner set incomplete under %s' % project)\n"
+    "print(\"  ValueError: corner name 'ss' is not in the PVT matrix\")\n"
+    "print('  offending file: %s/constraints/pvt_matrix.json' % project)\n"
+    "sys.exit(1)\n"
+)
+
+#: A real FAIL that QUOTES a sub-tool's traceback inside its report and then
+#: keeps writing. The process did not die of it, so it is a verdict.
+_QUOTED_TRACEBACK_HELPER_SRC = (
+    "import sys\n"
+    "print('verdict: FAIL')\n"
+    "print('  the netlist reader rejected the input:')\n"
+    "print('  Traceback (most recent call last):')\n"
+    "print('    File \"/opt/eda/reader.py\", line 42, in parse')\n"
+    "print(\"  SyntaxError: unexpected token at line 12\")\n"
+    "print('  [ERROR] 1 unreadable netlist -> signoff cannot proceed')\n"
+    "sys.exit(1)\n"
+)
+
+
+def _deep_project(tmp_path):
+    """A project dir whose absolute path is far longer than the snippet."""
+    deep = tmp_path.joinpath(*(["d" * 40] * 10))
+    deep.mkdir(parents=True, exist_ok=True)
+    return deep
+
+
+def _run_helper(name, src, project):
+    from programs.flow_compliance_check import (
+        _check_program_exit_zero, PROGRAMS_DIR,
+    )
+    helper = PROGRAMS_DIR / f"{name}.py"
+    helper.write_text(src)
+    try:
+        return _check_program_exit_zero(project, f"{name} .")
+    finally:
+        helper.unlink(missing_ok=True)
+
+
+def test_crash_is_flagged_as_a_crash_at_any_checkout_depth(tmp_path):
+    """An unhandled exception is disclosed as one, short path or deep."""
+    from programs.flow_compliance_check import (
+        _CRASH_HINT_PREFIX, _OUTPUT_SNIPPET_CHARS, looks_like_python_traceback,
+    )
+    shallow = tmp_path / "p"
+    shallow.mkdir()
+    deep = _deep_project(tmp_path)
+    assert len(str(deep)) > _OUTPUT_SNIPPET_CHARS, (
+        f"the deep fixture is {len(str(deep))} chars, which does not exceed "
+        f"the {_OUTPUT_SNIPPET_CHARS}-char evidence window it exists to "
+        f"overflow — this test would prove nothing")
+
+    results = {}
+    for label, project in (("shallow", shallow), ("deep", deep)):
+        passed, snippet = _run_helper("_pytest_crash_helper",
+                                      _CRASH_HELPER_SRC, project)
+        assert passed is False, f"{label}: a crash must not be a PASS"
+        assert snippet.startswith(_CRASH_HINT_PREFIX), (
+            f"{label} (path {len(str(project))} chars): the crash carries no "
+            f"{_CRASH_HINT_PREFIX!r} sentinel, so every consumer downstream "
+            f"must guess from prose again. Snippet:\n{snippet}")
+        # `_evaluate_gate` records `out[:200]`; the exception type has to be
+        # inside that, or the disclosure dies one hop later.
+        assert "KeyError" in snippet[:200], (
+            f"{label}: exception type outside the first 200 chars: "
+            f"{snippet[:200]!r}")
+        results[label] = snippet
+
+    # The point of the sentinel, stated as a measurement: on the deep path the
+    # PROSE channel alone no longer carries the crash. If this ever stops
+    # holding the test still passes above, but it stops proving that the
+    # sentinel — rather than a lucky truncation — is what did the work.
+    body = results["deep"].split("\n", 1)[1]
+    assert not looks_like_python_traceback(body), (
+        "the deep fixture no longer overflows the evidence window, so this "
+        f"test no longer isolates the sentinel. Body:\n{body}")
+
+
+#: A real FAIL whose indented stdout tail lands immediately above a column-0
+#: exception-NAMED summary on stderr, once `output_snippet` glues the two
+#: together. 2026-07-28, adversarial finding (HIGH): for one revision this
+#: shape was graded CRASH at EVERY checkout depth — origin/main graded it
+#: FAIL — because a bare exception tail was allowed to be corroborated by any
+#: 4-space-indented line above it. A working, genuinely falsifiable gate
+#: reported as having blown up, and its demonstration deleted from the
+#: dimension-2 count.
+_INDENTED_THEN_COL0_ERROR_SRC = (
+    "import sys\n"
+    "from pathlib import Path\n"
+    "project = Path(sys.argv[1]).resolve()\n"
+    "print('verdict: FAIL')\n"
+    "print('  [ERROR] 3 corners missing under %s' % project)\n"
+    "print('    ss_125c, ff_m40c, tt_25c')\n"
+    "sys.stderr.write("
+    "'ConstraintError: 3 of 5 PVT corners are undeclared\\n')\n"
+    "sys.exit(1)\n"
+)
+
+
+def test_a_real_verdict_is_not_mistaken_for_a_crash(tmp_path):
+    """rc 1 with a substantive finding is never DISCLOSED as a crash.
+
+    Three helpers, each built to trip a careless crash detector: one prints an
+    exception type as its finding, one quotes a sub-tool traceback inside its
+    report, one puts an indented finding immediately above a column-0
+    exception-named summary.
+
+    WHAT THIS ASSERTS, exactly: no `_CRASH_HINT_PREFIX`. That is the
+    authoritative channel, and it is the one this test owns. It is NOT the
+    same as "dimension 2 grades it RED": for the quoted-traceback helper the
+    consumer stays silent (correctly — it did not die) and D2's prose fallback
+    still calls it a crash, because a verbatim-echoed sub-tool traceback and a
+    corpse are indistinguishable from the text alone. That is origin/main
+    behaviour, unchanged here, and it is stated rather than implied away —
+    an earlier revision of this docstring claimed "both stay FAIL", which was
+    measurably false.
+    """
+    from programs.flow_compliance_check import _CRASH_HINT_PREFIX
+    shallow = tmp_path / "p"
+    shallow.mkdir()
+    deep = _deep_project(tmp_path)
+
+    for name, src, marker in (
+        ("_pytest_verdict_helper", _VERDICT_HELPER_SRC, "verdict: FAIL"),
+        ("_pytest_quoted_tb_helper", _QUOTED_TRACEBACK_HELPER_SRC,
+         "unreadable netlist"),
+        ("_pytest_indented_err_helper", _INDENTED_THEN_COL0_ERROR_SRC,
+         "verdict: FAIL"),
+    ):
+        for label, project in (("shallow", shallow), ("deep", deep)):
+            passed, snippet = _run_helper(name, src, project)
+            assert passed is False, f"{name}/{label}: rc 1 must stay a FAIL"
+            assert not snippet.startswith(_CRASH_HINT_PREFIX), (
+                f"{name}/{label}: a real verdict was disclosed as a CRASH, "
+                f"which would delete it from every falsifiability count. "
+                f"Snippet:\n{snippet}")
+            if label == "shallow":
+                assert marker in snippet, (
+                    f"{name}/{label}: the finding itself is missing from the "
+                    f"evidence snippet:\n{snippet}")
+            # NOT asserted on the deep path, and the omission is the finding.
+            # MEASURED while writing this test: with a 425-character project
+            # path, `_pytest_verdict_helper`'s snippet is the tail of one
+            # absolute path and nothing else — `verdict: FAIL` and the
+            # `[ERROR]` line are both gone. The CLASSIFICATION is still right
+            # (that is what the assertions above pin, and it is right because
+            # it no longer reads this string), but the human-readable EVIDENCE
+            # for a legitimate failure is still destroyed by the same
+            # fixed-width window. Fixing that means changing the snippet's
+            # SHAPE — head+tail instead of one contiguous tail — which is a
+            # separate change with its own blast radius:
+            # `test_matrix_d6_skip_discipline._consumer_snippet` hard-codes a
+            # copy of the current shape. Left open deliberately; asserting a
+            # marker this code does not preserve would be asserting a wish.
+
+
+def test_rc0_and_rc2_are_untouched_by_the_crash_branch(tmp_path):
+    """The crash branch sits AFTER the PASS / vacuous / waiver arms.
+
+    A gate that exits 0 or 2 has reached a verdict; printing traceback-shaped
+    text on the way must not reclassify it.
+    """
+    from programs.flow_compliance_check import (
+        _CRASH_HINT_PREFIX, _VACUOUS_HINT_PREFIX,
+    )
+    noisy_pass = (
+        "import sys\n"
+        "print('Traceback (most recent call last):')\n"
+        "print('  File \"/opt/eda/x.py\", line 9, in run')\n"
+        "print('RuntimeError: sub-tool warning, recovered')\n"
+        "print('[PASS] 12/12 checks clean')\n"
+        "sys.exit(0)\n"
+    )
+    passed, snippet = _run_helper("_pytest_noisy_pass_helper", noisy_pass,
+                                  tmp_path)
+    assert passed is True, "rc 0 must stay a PASS"
+    assert not snippet.startswith(_CRASH_HINT_PREFIX)
+
+    noisy_skip = (
+        "import sys\n"
+        "print('RuntimeError: probe unavailable')\n"
+        "print('verdict: SKIP')\n"
+        "sys.exit(2)\n"
+    )
+    passed, snippet = _run_helper("_pytest_noisy_skip_helper", noisy_skip,
+                                  tmp_path)
+    assert passed is True, "rc 2 must stay a disclosed skip"
+    assert snippet.startswith(_VACUOUS_HINT_PREFIX)

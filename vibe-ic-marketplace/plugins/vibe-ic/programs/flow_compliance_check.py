@@ -2215,7 +2215,7 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
             text=True,
             timeout=gate_budget,
         )
-        snippet = (r.stdout[-300:] + "\n" + r.stderr[-300:]).strip()
+        snippet = output_snippet(r.stdout, r.stderr)
         if r.returncode == 0:
             return True, snippet
         if r.returncode == 2:
@@ -2230,6 +2230,27 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
             # gate. Requires the stdout sentinel too, so a stray rc=3 from an
             # unrelated program is NOT silently waived.
             return True, f"{_WAIVER_HINT_PREFIX}{cmd_str}"
+        # The gate exited non-zero. Decide HERE, while the UNTRUNCATED output
+        # is still in hand, whether that was a verdict or a crash — see
+        # `_CRASH_HINT_PREFIX`. Deciding it downstream from `snippet` makes the
+        # answer a function of the checkout's path length, which is measurably
+        # not a property of the gate.
+        #
+        # `argv[1]` is the gate program's own file: `_resolve_program_cmd`
+        # builds `[sys.executable, <PROGRAMS_DIR>/<gate>.py, ...]`. That path
+        # is what separates "this gate died" from "this gate QUOTED a
+        # sub-tool's traceback in its report" — see `_process_crashed`.
+        if _process_crashed(r.stderr, argv[1]):
+            # The exception line goes FIRST so it survives `out[:200]` in
+            # `_evaluate_gate`; the snippet goes SECOND so the gate's own
+            # output survives it too. The prose sits at the END, where a cut
+            # costs nothing: a reader who lost it still has the sentinel.
+            return False, (f"{_CRASH_HINT_PREFIX}"
+                           f"{python_traceback_summary(r.stderr)}\n"
+                           f"{snippet}\n"
+                           f"— an unhandled exception is NOT a gate verdict "
+                           f"(INCONCLUSIVE: the gate died before reaching "
+                           f"one): {cmd_str}")
         return False, snippet
     except subprocess.TimeoutExpired:
         # #525 — a timeout is NOT a verdict: the gate program was killed
@@ -2282,6 +2303,258 @@ _SELF_SKIP_VERDICTS = frozenset({"SKIP", "SKIPPED", "SKIPPED-CONDITION"})
 _WAIVER_HINT_PREFIX = "__WAIVER_HINT__: "
 _WAIVER_EXIT_CODE = 3
 _WAIVER_STDOUT_SENTINEL = "PASS_WITH_WAIVERS"
+
+# ══════════════════════════════════════════════════════════════════════
+# CRASH — "the gate blew up" is not "the gate found a defect"
+# ══════════════════════════════════════════════════════════════════════
+# An unhandled Python exception exits non-zero, so on the exit code alone
+# `_check_program_exit_zero` cannot tell a crashing gate from one that
+# reached a FAIL verdict. Consumers that need the distinction — the
+# dimension-2 falsifiability matrix is the one that DEPENDS on it, since a
+# crash must never be counted as proof that a gate can fail — used to
+# recover it by looking for a traceback marker in the evidence snippet.
+#
+# That snippet is a fixed-width tail (`_OUTPUT_SNIPPET_CHARS` of each
+# stream), and a traceback's frame lines and its exception message both
+# carry ABSOLUTE paths, so how much of the traceback survives the cut is a
+# function of how deep the checkout lives. MEASURED on this tree, one
+# crashing gate, one project, one variable:
+#
+#     project path 107 chars -> classified CRASH   (refused, correctly)
+#     project path 108 chars -> classified FAIL    (a false certificate)
+#
+# The crash was graded a demonstration of falsifiability at 108 characters
+# and refused at 107. The plugin's own checkout paths are routinely longer
+# than that, so the failure mode was the default, not the corner case.
+#
+# The fix is not a bigger window — that only moves the threshold. The fact
+# is available, exactly and for free, at the moment the subprocess returns:
+# decide it HERE against the UNTRUNCATED streams and hand the answer down
+# as an explicit sentinel that no truncation can remove, because it is the
+# first thing in the string.
+#
+# And it is decided on a FACT, not on the shape of the prose — the traceback
+# must contain a frame in the gate program's OWN file (`_process_crashed`).
+# Deciding it on prose shape reproduces the same class of defect one level
+# down: the first version of this mechanism required the exception line to be
+# the last line of the stream, and an ordinary multi-line exception message,
+# or one atexit line, put it back on the path-length lottery. Both were
+# MEASURED at 80 and 400 character project paths (CRASH / FAIL) before the
+# frame anchor replaced the prose rule.
+_CRASH_HINT_PREFIX = "__CRASH_HINT__: "
+
+#: Per-stream width of the evidence snippet. Named so the one number is
+#: quotable and greppable instead of appearing as a bare 300 at the cut site
+#: (`programs/tests/test_matrix_d6_skip_discipline.py::_consumer_snippet`
+#: currently hard-codes its own copy of it).
+_OUTPUT_SNIPPET_CHARS = 300
+
+_TRACEBACK_HEADER = "Traceback (most recent call last)"
+
+#: A Python traceback FRAME line, whole.
+#:
+#: Anchored with ``, line <n>, in <name>`` because CPython always emits the
+#: function name (``<module>`` at top level); that keeps it from matching an
+#: EDA tool's ``File "top.v", line 12`` diagnostics.
+_TRACEBACK_FRAME_RE = re.compile(
+    r'^\s*File "[^"\n]+", line \d+, in \S', re.MULTILINE)
+
+#: The SAME frame line after a cut landed INSIDE its path. The frame line
+#: begins with an ABSOLUTE path, so on a deep checkout a fixed-offset cut
+#: takes the ``File "`` prefix with it and leaves only the tail. Ending the
+#: pattern at the line end keeps it specific: CPython emits nothing after the
+#: function name, so a tool diagnostic reading ``… "top.v", line 12, in
+#: module top`` carries trailing text and is not matched.
+_TRACEBACK_FRAME_TRUNCATED_RE = re.compile(
+    r'", line \d+, in (?:<[A-Za-z_]\w*>|[A-Za-z_]\w*)[ \t]*$', re.MULTILINE)
+
+#: CPython 3.11+ fine-grained error location, e.g. ``    ~~~~~^^^^^``.
+#: Emitted immediately above the exception line — and NOT emitted at all by
+#: CPython 3.10, which is why it can only ever corroborate, never decide.
+_TRACEBACK_CARET_RE = re.compile(r"^[ \t]*[~^][~^ \t]*$", re.MULTILINE)
+
+#: The source line CPython echoes under each frame, indented 4 spaces. On
+#: 3.10 — where there is no caret row — this is the only thing left between
+#: the frame line and the exception line, so it is the 3.10 counterpart of
+#: the caret corroboration.
+#:
+#: 2026-07-28, adversarial finding (HIGH): used on its own as corroboration
+#: this pattern is a FALSE ALARM generator, because "an indented line" is not
+#: a traceback-specific shape. MEASURED — a gate that exits 1 having printed
+#: an indented finding list on stdout and a column-0 ``ConstraintError: …``
+#: summary on stderr was graded FAIL on origin/main and CRASH once this
+#: pattern corroborated a bare tail, at EVERY checkout depth: a working,
+#: genuinely falsifiable gate reported as having blown up. It is therefore
+#: admitted only inside :func:`_bare_traceback_tail`, which additionally
+#: requires that the text carry NOTHING BUT the tail — no verdict line, no
+#: report content, nothing at column 0 but the exception itself.
+_TRACEBACK_SOURCE_ECHO_RE = re.compile(r"[ \t]{4,}\S")
+
+#: The terminal ``SomeError: message`` line of a traceback, at line start.
+#: Column 0 is load-bearing: a gate that legitimately REPORTS
+#: ``  ValueError: corner name 'ss' is not in the PVT matrix`` as its finding
+#: indents it, and must stay a FAIL.
+_TRACEBACK_TAIL_RE = re.compile(
+    r"^(?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Interrupt|Exit)"
+    r"\s*(?::|$)", re.MULTILINE)
+
+
+def output_snippet(stdout: str, stderr: str) -> str:
+    """The evidence snippet `_check_program_exit_zero` hands to its callers.
+
+    Extracted from the call site so the width is one named constant rather
+    than a literal repeated wherever someone needs to reason about what the
+    consumer kept. Behaviour is unchanged: the last
+    :data:`_OUTPUT_SNIPPET_CHARS` characters of each stream.
+    """
+    n = _OUTPUT_SNIPPET_CHARS
+    return ((stdout or "")[-n:] + "\n" + (stderr or "")[-n:]).strip()
+
+
+def looks_like_python_traceback(text: str) -> bool:
+    """True when *text* carries a Python traceback, header present or not.
+
+    THE SHARED DEFINITION. Consumers that need the crash/verdict distinction
+    import this instead of re-deriving it, so the two cannot drift apart.
+
+    Every branch is required to hold on a TRUNCATED traceback, because a
+    snippet is the only form some callers ever see. The header alone is not
+    enough: it is the first thing a tail cut removes.
+    """
+    if not text:
+        return False
+    if _TRACEBACK_HEADER in text:
+        return True
+    if _TRACEBACK_FRAME_RE.search(text):
+        return True
+    if _TRACEBACK_FRAME_TRUNCATED_RE.search(text):
+        return True
+    # A bare exception tail decides nothing on its own — a gate may print
+    # `ValueError: ...` at column 0 as its finding. It counts only when the
+    # line immediately above it is traceback-shaped: a frame line or a 3.11+
+    # caret row.
+    for m in _TRACEBACK_TAIL_RE.finditer(text):
+        before = text[:m.start()]
+        if re.search(r'^\s*File "', before, re.MULTILINE):
+            return True
+        prior = [ln for ln in before.splitlines() if ln.strip()]
+        if not prior:
+            continue
+        if _TRACEBACK_CARET_RE.match(prior[-1]):
+            return True
+    # CPython 3.10 emits no caret rows, so a cut that lands below the last
+    # frame leaves only `    <source echo>` + `SomeError: msg`. That pair IS a
+    # crash, and it is what `_OUTPUT_SNIPPET_CHARS` produces from a deep
+    # traceback on 3.10 — but "an indented line above an exception line" also
+    # describes an ordinary gate report, so it is accepted ONLY when the text
+    # is nothing else. See :func:`_bare_traceback_tail`.
+    return _bare_traceback_tail(text)
+
+
+def _bare_traceback_tail(text: str) -> bool:
+    """True when *text* is a traceback tail AND NOTHING ELSE.
+
+    The shape: one or more indented lines (CPython's echoed source lines, and
+    on 3.11+ its caret rows), then a column-0 ``SomeError: message`` line, and
+    no other content anywhere. That is what a fixed-width tail cut leaves of a
+    3.10 traceback once the last frame line is gone, and it is the only form
+    in which a bare exception line may be believed without a frame or a caret
+    row to corroborate it.
+
+    Requiring the text to be nothing else is what keeps this from firing on a
+    real verdict. A gate that reached a verdict SAYS SO — `verdict: FAIL`, a
+    `[ERROR]` line, a count — and every one of those sits at column 0 and is
+    not an exception line, so the loop below refuses the whole text.
+    """
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return False
+    if not _TRACEBACK_TAIL_RE.match(lines[-1]):
+        return False
+    for ln in lines[:-1]:
+        if not (_TRACEBACK_SOURCE_ECHO_RE.match(ln)
+                or _TRACEBACK_CARET_RE.match(ln)):
+            return False
+    return True
+
+
+def _process_crashed(stderr: str, program_path: str) -> bool:
+    """True when the gate process DIED of an unhandled Python exception.
+
+    This is the AUTHORITATIVE answer — it is what the sentinel asserts — so it
+    is decided on one fact rather than on the shape of the prose:
+
+        does the traceback in *stderr* contain a frame in the gate program's
+        OWN file, and does an exception line follow that frame?
+
+    `_resolve_program_cmd` runs the gate as ``python3 <program_path> …``, so
+    CPython's outermost frame is always that file when the process dies of an
+    unhandled exception — including the frameless ``SyntaxError`` form, whose
+    ``File "<program_path>", line N`` line names it too. A gate that instead
+    QUOTES a sub-tool's traceback inside its own report names the SUB-TOOL's
+    files, never its own, so it is not mistaken for a corpse. Two live
+    examples of that shape in this tree: `waveform_table_conformance_check`
+    (``print("WTC_COMPILE_FAIL:\\n" + r.stderr)``) and
+    `pdk_yosys_flatten_for_quartus`.
+
+    Only *stderr* is read: CPython writes tracebacks there and nowhere else,
+    so a traceback on stdout was PUT there by the gate and is by construction
+    a quotation.
+
+    2026-07-28, adversarial findings (FATAL x2) against the first version of
+    this function, which required the exception line to TERMINATE the stream.
+    Both were reproduced end to end and both are closed by the rule above:
+
+      * a multi-line exception message (``raise ValueError("…\\n  detail")``)
+        leaves the message's continuation line last, so no sentinel was
+        emitted and the classification fell back to the path-length lottery
+        this whole mechanism exists to remove — MEASURED: still CRASH at an
+        80-character project path and FAIL at 400;
+      * one atexit / logging-shutdown / resource-tracker line printed after
+        the traceback did the same.
+
+    Neither is exotic; both are ordinary Python. The rule below cares only
+    that the frame is there and that an exception line follows it, so what
+    trails the traceback is irrelevant.
+
+    RESIDUAL, stated rather than assumed away: a crash whose stderr does not
+    name the gate program's file — a gate that sets ``sys.tracebacklimit`` low
+    enough to drop its own outermost frame — is not disclosed here. It is not
+    silently accepted either: the snippet still carries the traceback, and the
+    consumer-side heuristic in :func:`looks_like_python_traceback` still reads
+    it exactly as it did before this mechanism existed.
+    """
+    text = stderr or ""
+    if not text.strip():
+        return False
+    frame_re = re.compile(
+        r'^\s*File "' + re.escape(str(program_path)) + r'", line \d+',
+        re.MULTILINE)
+    last = None
+    for m in frame_re.finditer(text):
+        last = m
+    if last is None:
+        return False
+    return bool(_TRACEBACK_TAIL_RE.search(text, last.end()))
+
+
+def python_traceback_summary(stderr: str) -> str:
+    """``ExceptionType: message`` for the crash in *stderr*.
+
+    Placed FIRST in the hint so the exception type survives every downstream
+    cut — including ``out[:200]`` in `_evaluate_gate` — which is the whole
+    point of carrying an explicit signal instead of re-reading prose.
+
+    The LAST column-0 exception line is the one reported: on a chained
+    traceback (``During handling of the above exception…``) that is the
+    exception the process actually died of.
+    """
+    matches = list(_TRACEBACK_TAIL_RE.finditer(stderr or ""))
+    if not matches:
+        return "unhandled exception"
+    m = matches[-1]
+    return (stderr or "")[m.start():].splitlines()[0].strip()[:160]
+
 
 # vibe-ic#306 — the ADVISORY slot. Until this existed, every gate key in the
 # flow definition BLOCKED once it ran: `optional_program_exit_zero` is
@@ -7274,8 +7547,10 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # between is the gate; so every hit the re-probe can get is an artefact
     # THIS AUDIT CREATED. Crediting it silently is self-certification. It is
     # still credited BY DEFAULT, and that is measured rather than assumed. The
-    # shipped flow has 16 entries across 13 steps that are both declared and
-    # their own step's gate `--json` target, and SIX of the 16 appear in ZERO
+    # shipped flow has 17 entries across 14 steps that are both declared and
+    # their own step's gate `--json` target (16 across 13 until 2026-07-28,
+    # when step 27 declared `reports/phase3/si_mcf_sta_check.json`), and SIX
+    # of the 17 appear in ZERO
     # of the 29 tracked run roots that carry a runner marker
     # (sta/pre_pnr_summary.json, sta/post_route_summary.json,
     # ir_drop_signoff.json, em_signoff.json, antenna_signoff.json,
@@ -7315,7 +7590,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             f"produced. "
             + ("Refused: --strict-audit-evidence is set."
                if strict_audit_evidence else
-               "Credited (default) because 6 of the flow's 16 entries of this "
+               "Credited (default) because 6 of the flow's 17 entries of this "
                "shape have no producer at all outside their own gate, so a "
                "blanket refusal would red runs that are not defective. Re-run "
                "with --strict-audit-evidence to see the verdict without "
@@ -7603,7 +7878,7 @@ def main(argv: Optional[List[str]] = None) -> int:
               "entry, any artefact THIS audit created — i.e. a declared "
               "output that is also one of the step's own gate `--json` "
               "targets and was absent when the audit began. Off by default "
-              "because 6 of the flow's 16 such entries appear in NONE of the "
+              "because 6 of the flow's 17 such entries appear in NONE of the "
               "29 tracked run roots, so the strict rule fails runs that are "
               "not defective; the fact is reported as an ADVISORY either way. "
               "MEASURED over those 29 roots: 53 step-verdicts move to MISSING "
@@ -8006,10 +8281,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
 
     # Summary
-    # Wave 93 — VACUOUS_PASS is a first-class verdict tier counted into
-    # `pass_count` for aggregation, displayed separately so reviewers
-    # see how many steps were structurally executed vs. vacuously
-    # satisfied (input not applicable to this project).
+    # Wave 93 — VACUOUS_PASS is a first-class verdict tier, displayed
+    # separately so reviewers see how many steps were structurally
+    # executed vs. vacuously satisfied (the gate ran but found no input to
+    # audit). It is NOT counted into `pass_count`; see the owner ruling
+    # beside `pass_count` below.
     counts = {"PASS": 0, "FAIL": 0, "MISSING": 0, "WAIVED": 0,
               "DEFERRED-BY-UPSTREAM": 0,
               "SKIPPED-CONDITION": 0, "SKIPPED-SETUP-REQUIRED": 0,
@@ -8142,21 +8418,61 @@ def main(argv: Optional[List[str]] = None) -> int:
     # stays IN the denominator: it is a requirement that was not met, so
     # discounting it inflated the X/Y executed-PASS metric by making the
     # unmet requirement disappear from Y as well as from X.
+    # …and a VACUOUS_PASS stays in the denominator for the SAME reason. It
+    # is NOT the "inapplicable to this design" tier — that is
+    # SKIPPED-CONDITION, whose step-level `condition` was evaluated and not
+    # met, and which is subtracted above. VACUOUS_PASS means the gate RAN
+    # and exited 0 having found nothing to audit. That is an unmet
+    # requirement, so it must cost the denominator; subtracting it too would
+    # make an unmeasured step free, which is the `0/-1` shape #235 measured
+    # (a co-located disclosure promoted DT1/DT2/DT3 to SKIPPED-CONDITION and
+    # flipped a flow FAIL -> PASS). X/Y therefore reads "of Y required
+    # steps, X measured something and passed"; Y - X is not all failure, so
+    # the vacuous count is named in the same line rather than left to the
+    # tally below.
+    #
+    # WHAT THAT COSTS, scoped honestly. The answer to "but then a step that is
+    # honestly inapplicable is a permanent debit" is "no — an honestly
+    # inapplicable step is SKIPPED-CONDITION and leaves Y", and that escape
+    # exists only for the steps that DECLARE a step-level `condition`.
+    # MEASURED on the canonical flow: 22 of 63 do (all of A1-A9, M1-M4, DT*,
+    # FS*); the other 41 — D1, 1-39, P0 — have no way to reach
+    # SKIPPED-CONDITION at all, so for them an inapplicable input lands on
+    # VACUOUS_PASS and IS a permanent Y-debit. The cost is narrowed, not
+    # eliminated. Closing it for a specific step means giving that step a
+    # condition, which is a flow change with its own blast radius, not a
+    # numerator change.
     total_required = (len(steps) - counts["WAIVED"]
                       - counts["DEFERRED-BY-UPSTREAM"]
                       - counts.get("SKIPPED-CONDITION", 0)
                       + len(oss_blocked_skipped))
-    # Wave 93 — VACUOUS_PASS rolls into `pass_count` for the X/Y metric
-    # since it represents a step that *did* run cleanly (just on input
-    # that didn't apply); the discrete count is still surfaced below.
-    pass_count = counts["PASS"] + counts["VACUOUS_PASS"]
+    # OWNER RULING (supersedes Wave 93) — VACUOUS_PASS LEAVES the
+    # executed-PASS numerator. Wave 93 rolled it in "since it represents a
+    # step that *did* run cleanly (just on input that didn't apply)", which
+    # made the published X say the step was MEASURED. It was not: a vacuous
+    # gate is one that found no input to audit. Giving the tier its own
+    # label and its own counter while leaving it inside X left the number a
+    # reviewer actually reads unchanged by the disclosure — measuring
+    # something adjacent to the question and reporting it as the answer.
+    # It remains a DISCLOSURE tier, not a failure: it is in none of
+    # `failing` / `missing` / `setup_required_skipped` /
+    # `oss_blocked_skipped`, so it still cannot make a run non-green.
+    pass_count = counts["PASS"]
 
     scope = f"{args.flow}" + (f" stage{args.stage}" if args.stage else "")
     print(f"\n=== Vibe-IC {scope} compliance ===")
     print(f"Project: {project}")
     print(f"Flow def: {flow_path}")
+    # Named INSIDE the headline parenthesis, not only in the tally line, so
+    # a reader cannot mistake the Y - X gap for Y - X failures. Appended
+    # after the two fields every existing parser keys on
+    # (`X/Y executed PASS,` then `W DEFERRED`), and deliberately without an
+    # `=` so it can never be mistaken for the per-verdict tally line that
+    # `final_report_generate._parse_audit_tally` scans for.
+    vacuous_head = (f", {counts['VACUOUS_PASS']} VACUOUS-PASS excluded from "
+                    f"executed" if counts.get("VACUOUS_PASS") else "")
     print(f"Steps: {len(steps)} total ({pass_count}/{total_required} executed PASS, "
-          f"{counts['WAIVED']} DEFERRED via waiver)")
+          f"{counts['WAIVED']} DEFERRED via waiver{vacuous_head})")
     skipped_str = f"  SKIPPED={counts.get('SKIPPED-CONDITION', 0)}" if counts.get("SKIPPED-CONDITION") else ""
     vacuous_str = (f"  VACUOUS-PASS={counts['VACUOUS_PASS']}"
                    if counts.get("VACUOUS_PASS") else "")

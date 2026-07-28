@@ -885,6 +885,14 @@
      "alternative": "reports/phase3/si_crosstalk.json",
      "path": "reports/phase3/si_crosstalk.json",
      "size_bytes": 860
+    },
+    "reports/phase3/si_mcf_sta_check.json": {
+     "status": "PRODUCED_BY_RUN",
+     "provenance_note": "the recorded copy is `si_mcf_sta_check`'s own verdict document ({\"program\": \"si_mcf_sta_check\", \"verdict\": \"PASS\", ...}) and no producer outside step 27's gate writes this path, so the run root carries compliance-gate output committed alongside the run. Admissible for dimension 3 (the root carries a runner marker and the file pre-exists any audit of it) but it is NOT independent of the checker: see flow_compliance_check --strict-audit-evidence. Three of the seven admissible roots carry it (clean_run_v1427_20260715 874 B, v1.5.58_ihp-sg13g2 847 B, v1.5.66_gf180mcuD 853 B); the entry is recorded against the same run as this step's crosstalk entry.",
+     "run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
+     "alternative": "reports/phase3/si_mcf_sta_check.json",
+     "path": "reports/phase3/si_mcf_sta_check.json",
+     "size_bytes": 853
     }
    }
   },

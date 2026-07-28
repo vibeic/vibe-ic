@@ -201,7 +201,7 @@ WHAT THIS MODULE DELIBERATELY DOES NOT DO
 
 FIXTURE ATTESTATION, STATED OUT LOUD — AND NOW UNIFORM
 ======================================================
-**114 of the 133 declared entries are decided live on every host** — 95
+**115 of the 134 declared entries are decided live on every host** — 96
 archived in in-repo run trees, 6 produced on the spot, 13 searched for and
 genuinely absent. The other 19 were only ever proven from run trees outside
 this repository, so
@@ -217,13 +217,17 @@ machine. It is now the ONLY mode: external trees are not consulted anywhere,
 there is no env-var escape hatch, and the live count is the same on the
 campaign host, on CI and on a fresh clone.
 
-2026-07-28: the count moved from 107/126 to 114/133. Every one of the seven
-new entries is a dimension-7 declaration that the in-repo run trees ALREADY
-carry — six archived, one (``reports/phase3/em_signoff.json``) produced on the
-spot by its own declared producer. A8's ``.gds`` did NOT move: it stays in the
-searched-and-absent bucket, waived, because its producer's evidence needs an
-EDA container this dimension may not depend on. The counts above are
-re-measured, not carried forward.
+2026-07-28: the count moved from 107/126 to 114/133, then to 115/134. Every
+one of the seven entries in the first move is a dimension-7 declaration that
+the in-repo run trees ALREADY carry — six archived, one
+(``reports/phase3/em_signoff.json``) produced on the spot by its own declared
+producer. A8's ``.gds`` did NOT move: it stays in the searched-and-absent
+bucket, waived, because its producer's evidence needs an EDA container this
+dimension may not depend on. The eighth entry, later the same day, is step
+27's ``reports/phase3/si_mcf_sta_check.json`` — archived in three of the
+in-repo roots, so it too is decided live and the count stays
+host-independent by the same construction. The counts above are re-measured
+(``check_entry`` over the live yaml + manifest), not carried forward.
 ``test_d3_evidence_is_live_wherever_the_run_root_exists`` forbids the fallback
 whenever an admissible run root actually resolves and holds the live count at
 its floor; ``test_d3_the_verdict_does_not_depend_on_the_host`` plants a
@@ -316,7 +320,14 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 #: EQUALITY, not a floor (#527): while external run trees were consulted the
 #: number ranged with the machine and a ``>=`` permitted the whole spread.
 #: Asserted by ``test_d3_evidence_is_live_wherever_the_run_root_exists``.
-_LIVE_ENTRY_COUNT = 114
+#:
+#: 114 -> 115 when step 27 declared ``reports/phase3/si_mcf_sta_check.json``
+#: (the dimension-7 finding that the tape-out SI blocking condition reads an
+#: artefact no step's list named). The pin RISES only because a NEW entry is
+#: decided live: three of the seven admissible in-repo roots carry that file,
+#: none of them outside this repository, so the number stays host-independent
+#: by the same construction. Nothing moved from fixture-attested to live.
+_LIVE_ENTRY_COUNT = 115
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -1274,11 +1285,12 @@ def test_d3_evidence_is_live_wherever_the_run_root_exists():
         # either direction is a real change: fewer means discovery broke, more
         # means something outside the commit is being counted again.
         #
-        # It moved on 2026-07-28, from 107 to 114, for exactly one reason:
-        # dimension 7 declared seven more artefacts and the in-repo run trees
-        # already carry all seven (six archived, one produced on the spot).
-        # Composition, re-measured: 95 PRODUCED_BY_RUN + 6 PRODUCED_LIVE + 13
-        # UNPROVEN-and-searched = 114 live, 19 fixture, 133 declared.
+        # It moved on 2026-07-28, from 107 to 114 and then to 115, for exactly
+        # one reason: dimension 7 declared eight more artefacts and the
+        # in-repo run trees already carry all eight (seven archived, one
+        # produced on the spot).
+        # Composition, re-measured: 96 PRODUCED_BY_RUN + 6 PRODUCED_LIVE + 13
+        # UNPROVEN-and-searched = 115 live, 19 fixture, 134 declared.
         assert live == _LIVE_ENTRY_COUNT, (
             f"{live} of {live + fixture} declared entries were verified live; "
             f"{_LIVE_ENTRY_COUNT} are backed by run trees committed to this "
@@ -1606,6 +1618,61 @@ def test_d3_the_compliance_audit_does_not_create_declared_outputs():
         f"A gate clause is now producing an artefact the same audit then "
         f"reports as present. Move the producer to the runner that owns the "
         f"step; the audit must measure a tree it did not touch."
+    )
+
+
+#: Entries that are BOTH a step's declared ``required_outputs`` and that same
+#: step's own gate ``--json`` target — the self-certifying-evidence
+#: population. Measured 2026-07-28 with `flow_compliance_check._gate_json_
+#: targets` over the live yaml: 17 entries across 14 steps (2, 8, 10, 11, 23,
+#: 24, 25, 26, 27, 28, 31, 36, 38, M1).
+_SELF_CERTIFYING_POPULATION_AS_MEASURED = (17, 14)
+
+
+def test_d3_the_self_certifying_population_size_is_told_truthfully():
+    """The size of the self-certifying population is QUOTED to the operator.
+
+    `flow_compliance_check` prints it in the ADVISORY it emits at audit time
+    ("6 of the flow's N entries of this shape have no producer at all outside
+    their own gate") and again in ``--help``. Those are published numbers, and
+    nothing measured them: the population grew from 16/13 to 17/14 on
+    2026-07-28 when step 27 declared ``reports/phase3/si_mcf_sta_check.json``,
+    and all three renderings went on saying 16. A number a program tells an
+    operator has to trace to the artefact it describes, so it is measured here
+    against the source that prints it — not carried in a comment.
+    """
+    import flow_compliance_check as _FCC
+
+    entries = 0
+    steps = []
+    for sid in F.step_ids():
+        step = F.step_by_id(sid)
+        declared = set(F.required_outputs(sid))
+        hit = [t for t in _FCC._gate_json_targets(step) if t in declared]
+        if hit:
+            entries += len(hit)
+            steps.append(F.normalize_id(sid))
+    measured = (entries, len(steps))
+    assert measured == _SELF_CERTIFYING_POPULATION_AS_MEASURED, (
+        f"the self-certifying-evidence population is now {measured[0]} "
+        f"entries across {measured[1]} steps ({steps}), not "
+        f"{_SELF_CERTIFYING_POPULATION_AS_MEASURED}. Re-measure and update "
+        f"the pin AND every rendering of the number in "
+        f"flow_compliance_check.py in the same change."
+    )
+
+    src = (F.PROGRAMS_DIR / "flow_compliance_check.py").read_text(
+        encoding="utf-8")
+    quoted = [
+        f"{entries} entries across {len(steps)} steps",
+        f"6 of the flow's {entries} entries of this ",
+        f"6 of the flow's {entries} such entries",
+    ]
+    missing = [q for q in quoted if q not in src]
+    assert not missing, (
+        f"flow_compliance_check.py no longer states the measured population "
+        f"size in {len(missing)} of its {len(quoted)} renderings — two of "
+        f"which it PRINTS to the operator. Missing: {missing}"
     )
 
 

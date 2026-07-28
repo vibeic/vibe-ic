@@ -2303,7 +2303,81 @@ steps:
     programs:
       - si_mcf_sta_check
     required_outputs:
+      # The NOISE/GLITCH axis. Emitted by the runner's SI screen; hard-gated
+      # below by the `files_exist` any_of.
       - "reports/phase3/si_crosstalk.rpt OR reports/phase3/si_crosstalk.json"
+      # The MCF crosstalk-DELAY verdict — and, since the tape-out SI blocking
+      # condition began reading it, a CROSS-STEP fact rather than this gate's
+      # private bookkeeping. `signoff_audit._classify_si` opens exactly this
+      # path (`_SI_REPORT_REL`) and its answer is a VETO, not an evidence
+      # slot: `si_state != SI_PROVED and not si_waived` sets `passed = False`
+      # and the tape-out verdict tier to FAIL whatever the five evidence
+      # pillars said. Absence is not the soft branch — it is `SI_ABSENT`,
+      # whose own message says nothing ran, so there is no disclosure to
+      # accept and no waiver can cover it.
+      #
+      # The read arrived with the SI-vacuity tape-out waiver and NO step's
+      # list was updated: measured at 9dd8b0aab `signoff_audit.py` names this
+      # path 0 times, on current main 1 time. Step 36's comment below names it
+      # in PROSE ("this step refuses to certify unless `reports/phase3/
+      # si_mcf_sta_check.json` PROVED something"). Prose is not a
+      # declaration; nothing verified that the artefact step 27 owes step 36
+      # was ever produced. This entry is the machine-readable half of that
+      # sentence.
+      #
+      # ALL-of-N, DELIBERATELY, and what that costs is measured, not assumed.
+      # `flow_compliance_check.check_step` run on a fresh copy of each of the
+      # 12 run roots in `programs/tests/fixtures/matrix_d3_output_manifest
+      # .json`, with and without this entry: THREE move PASS -> MISSING and
+      # nine are unchanged (4 already carry the file — two FAIL, two
+      # VACUOUS_PASS, all four for reasons this entry does not touch; 2 are
+      # SKIPPED-CONDITION; 3 are already MISSING on the crosstalk entry
+      # alone, carrying no SI report at all). Re-measured through a FULL
+      # `--strict` audit of the same 12 roots rather than `check_step` alone,
+      # the same three move and one of them lands on DEFERRED-BY-UPSTREAM
+      # instead of MISSING — the cascade rule reassigns it to the first
+      # mid-chain FAIL, which also takes that root's denominator from 26 to
+      # 25. Three of 756 per-step verdicts across the corpus; no Overall
+      # verdict moves (all 12 are FAIL before and after). On ALL THREE
+      # that move, step 22 — the SPEF producer this step `blocks_on` — is
+      # ALREADY MISSING on the same tree, and NO root whose step 22 passes
+      # moves. That is structural, not a coincidence of this corpus: the MCF
+      # sub-gate's `condition_files_exist` keys off `reports/phase3/
+      # si_mcf_sta.json`, which the runner writes only when a
+      # `phase3/stage3/extracted/*.spef` and `phase3/stage3/pnr/constraint.sdc`
+      # both exist, so the common shape producing the crosstalk report and not
+      # this one is a run with no usable parasitic extraction — which the flow
+      # already reports as incomplete one step earlier. Across the 12-root
+      # corpus, therefore, a plain second entry reddens no root the flow
+      # currently calls whole.
+      #
+      # It is NOT the only shape, and the claim is scoped to that corpus
+      # because the counterexample was BUILT rather than argued away. The
+      # runner invokes si_mcf_sta.py best-effort, under `subprocess.run(...,
+      # timeout=...)` with NO return-code check, so a missing EDA container,
+      # an OpenSTA error or a timeout all leave si_mcf_sta.json absent while
+      # the SPEF is present. MEASURED on a fresh copy of
+      # benchmark-data/ic/spm/v1.5.58_ihp-sg13g2 with both MCF artefacts
+      # deleted and the SPEF and constraint.sdc left intact: step 22 PASS on
+      # both yamls, step 27 PASS (one entry) -> MISSING (two entries). MISSING
+      # is the honest verdict there — step 36 vetoes such a run with SI_ABSENT
+      # anyway — and making a silently non-producing NONFATAL producer visible
+      # is the point of this dimension, not a regression. But it is a root the
+      # flow would otherwise call whole, so "reddens nothing" is true of the
+      # corpus and not of the flow.
+      #
+      # WHAT THIS ENTRY DOES NOT DO. `si_mcf_sta_check.py` is its ONLY writer
+      # and it is this step's own gate `--json` target, so on a tree where the
+      # MCF condition IS satisfied `check_step` re-probes after the gate and
+      # credits the copy the audit just wrote. MEASURED on a tracked root with
+      # the file deleted: default run -> VACUOUS_PASS, the file recreated by
+      # the audit and NAMED in the SELF-CERTIFIED EVIDENCE advisory;
+      # `--strict-audit-evidence` -> MISSING with nothing left behind. What
+      # would make that absence red by default is a flow-WIRING change giving
+      # the report a producer outside its own gate, as
+      # `phase3_one_shot_runner._DECLARED_SIGNOFF_GATES` did for the four
+      # STA/EM sign-off gates — not a checker change.
+      - "reports/phase3/si_mcf_sta_check.json"
     gate:
       all_of:
         - files_exist: ["reports/phase3/si_crosstalk.rpt", "reports/phase3/si_crosstalk.json"]
