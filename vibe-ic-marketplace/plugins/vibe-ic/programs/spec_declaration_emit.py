@@ -709,6 +709,45 @@ def _scan_declaration_lines(text: str) -> List[Tuple[int, str]]:
     return out
 
 
+#: A comment body that opens the block this plugin's own RTL generator writes.
+_BLOCK_OPEN_RE = re.compile(r"^DECLARED\s+CHOICES\b", re.IGNORECASE)
+#: An ALL-CAPS heading closes it.  Without a closing rule the block would run to
+#: the end of the contiguous comment run and take the prose sections with it.
+_BLOCK_CLOSE_RE = re.compile(r"^[A-Z][A-Z0-9 _/\-]{2,}(?:\s|$)")
+
+
+def _declaration_block_lines(scanned: List[Tuple[int, str]]) -> set:
+    """Line numbers inside a ``DECLARED CHOICES`` block.
+
+    The block is what lets the ALIGNED-COLUMN spelling be read safely.  Outside
+    it, ``<field>   <value>`` is indistinguishable from prose; inside it, with
+    the column gap required below, it is the spelling the generator emits.
+
+    Bounded at both ends: it opens on the header and closes on the next ALL-CAPS
+    heading or when the contiguous comment run ends.  A block that ran to the end
+    of the file would put every prose paragraph back in scope, which is the
+    over-reach this whole reader exists to avoid.
+    """
+    inside: set = set()
+    open_at: Optional[int] = None
+    prev_lineno: Optional[int] = None
+    for lineno, comment_text in scanned:
+        body = _COMMENT_DECORATION_RE.sub("", comment_text).strip()
+        if prev_lineno is not None and lineno - prev_lineno > 1:
+            open_at = None          # the comment run ended; so did the block
+        prev_lineno = lineno
+        if _BLOCK_OPEN_RE.match(body):
+            open_at = lineno
+            continue
+        if open_at is None:
+            continue
+        if _BLOCK_CLOSE_RE.match(body):
+            open_at = None
+            continue
+        inside.add(lineno)
+    return inside
+
+
 def _rtl_declared(project: Path, names: List[str],
                   rejected: Optional[List[Dict[str, Any]]] = None,
                   ) -> Dict[str, Tuple[Any, str]]:
@@ -733,8 +772,22 @@ def _rtl_declared(project: Path, names: List[str],
     srcs = sorted(rtl.rglob("*.v")) + sorted(rtl.rglob("*.sv"))
     patterns = {n: re.compile(r"^" + re.escape(n) + r"\s*=\s*([A-Za-z0-9_.+\-]+)")
                 for n in names}
+    # The SAME generator writes both spellings.  `bit_order = LSB_first` and
+    # `bit_order            LSB_first` are one declaration in two hands, and
+    # reading only the first reported the second as "never declared" — a check
+    # whose failure to parse was published as the design's failure to declare.
+    # The column gap is the discriminator: prose separates words with ONE space,
+    # a column layout with several.  Block-anchored, so the gap alone is never
+    # enough on its own.
+    aligned = {n: re.compile(r"^" + re.escape(n) + r"[ \t]{2,}([A-Za-z0-9_.+\-]+)")
+               for n in names}
     mention = {n: re.compile(r"(?<![A-Za-z0-9_])" + re.escape(n)
                              + r"\s*=\s*([A-Za-z0-9_.+\-]+)") for n in names}
+    # Reported when the field OPENS a comment but yields no declaration: the
+    # near miss is the whole point.  "I did not find it" and "I found it and
+    # could not read it" send a reader to different places.
+    leads = {n: re.compile(r"^" + re.escape(n) + r"(?![A-Za-z0-9_])")
+             for n in names}
     for f in srcs:
         try:
             text = f.read_text(errors="replace")
@@ -744,28 +797,44 @@ def _rtl_declared(project: Path, names: List[str],
             rel = str(f.relative_to(project))
         except ValueError:
             rel = str(f)
-        for lineno, comment_text in _scan_declaration_lines(text):
+        scanned = _scan_declaration_lines(text)
+        in_block = _declaration_block_lines(scanned)
+        for lineno, comment_text in scanned:
             body = _COMMENT_DECORATION_RE.sub("", comment_text).strip()
             for name, rx in patterns.items():
                 if name in out:
                     continue
                 m = rx.match(body)
+                if not m and lineno in in_block:
+                    m = aligned[name].match(body)
                 if not m:
-                    # Not a declaration.  Say WHY when the field is mentioned
-                    # anyway, so a designer who wrote the block in a form this
-                    # program will not read finds out from the report.
-                    if rejected is not None and mention[name].search(body):
+                    # Not a declaration.  Say WHY whenever the field is here at
+                    # all, so a designer who wrote the block in a form this
+                    # program will not read finds out from the report instead of
+                    # being told the declaration does not exist.
+                    if rejected is not None and (mention[name].search(body)
+                                                 or leads[name].match(body)):
+                        if _CODE_LEAD_RE.match(body):
+                            why = "commented-out code, not a declaration"
+                        elif leads[name].match(body):
+                            why = (
+                                "the comment opens with `%s` but no value "
+                                "follows it in a form this reader accepts — "
+                                "write `%s = <value>`, or align the value in a "
+                                "column (two or more spaces) inside a `DECLARED "
+                                "CHOICES` block" % (name, name))
+                        else:
+                            why = (
+                                "`%s = ...` does not begin the comment text, "
+                                "so this is prose mentioning the field rather "
+                                "than a declaration of it" % name)
                         rejected.append({
                             "field": name,
                             "file": rel,
                             "line": lineno,
                             "text": body[:200],
-                            "reason": (
-                                "commented-out code, not a declaration"
-                                if _CODE_LEAD_RE.match(body) else
-                                "`%s = ...` does not begin the comment text, "
-                                "so this is prose mentioning the field rather "
-                                "than a declaration of it" % name),
+                            "in_declared_choices_block": lineno in in_block,
+                            "reason": why,
                         })
                     continue
                 # A Verilog SIZED LITERAL is the natural spelling in an RTL

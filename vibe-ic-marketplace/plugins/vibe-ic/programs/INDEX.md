@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 998
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 998)
+- **Total programs (excluding helpers / shims):** 999
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 999)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 989 |
+| `any` | 990 |
 
 ## Alphabetical listing
 
@@ -378,6 +378,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `functional_state_transition_coverage_check` | any | — | Verify TBs exercise the |
 | `gameable_placeholder_scan` | any | — | deterministic half of the |
 | `gap_reset_granularity_check` | any | — | deterministic compliance check derived from |
+| `gate_cli_mutation_probe` | any | — | Does anything notice when a gate is made unable to fail? |
 | `gate_discloses_denominator_check` | any | — | a PASS must say how much it looked at. |
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
 | `gate_host_independence_check` | any | — | the same commit must give the same verdict. |
@@ -1070,7 +1071,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (989 programs)
+### `any` (990 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1420,6 +1421,7 @@ _(no programs in this group)_
 - `functional_state_transition_coverage_check` — Verify TBs exercise the
 - `gameable_placeholder_scan` — deterministic half of the
 - `gap_reset_granularity_check` — deterministic compliance check derived from
+- `gate_cli_mutation_probe` — Does anything notice when a gate is made unable to fail?
 - `gate_discloses_denominator_check` — a PASS must say how much it looked at.
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_
 - `gate_host_independence_check` — the same commit must give the same verdict.
