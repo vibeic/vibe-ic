@@ -80,6 +80,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import signoff_audit as sa  # noqa: E402
 import _gdsii  # noqa: E402
+import _si_signoff_fixture  # noqa: E402
 
 _DECLARED = "phase3/stage4/gds/top.gds"
 
@@ -116,6 +117,11 @@ def _other_four_slots(proj: Path) -> Path:
            "slack (MET) 0.10\n")
     _write(proj / "drc_signoff.rpt", "Total violations: 0\n")
     _write(proj / "reports" / "phase3" / "lvs.rpt", _LVS_MATCH)
+    # 2026-07-28: tape-out mode gained an SI (crosstalk-delay) blocking
+    # condition. This fixture is about the GDS slot, so it carries a PROVED
+    # SI verdict — without one every case here would collapse onto the
+    # SI refusal and stop discriminating what it exists to pin.
+    _si_signoff_fixture.write_proved_si_report(proj)
     return proj
 
 

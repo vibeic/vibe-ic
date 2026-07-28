@@ -52,6 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import signoff_audit as sa  # noqa: E402
 import _gdsii  # noqa: E402
+import _si_signoff_fixture  # noqa: E402
 
 
 # --- netgen transcripts (shared shape with test_lvs_tapeout_signoff.py) ----
@@ -105,6 +106,11 @@ def _four_slots(proj: Path) -> Path:
     _write(proj / "phase3" / "stage3" / "sta" / "post_route_timing.rpt",
            "slack (MET) 0.10\n")
     _write(proj / "drc_signoff.rpt", "Total violations: 0\n")
+    # 2026-07-28: tape-out mode gained an SI (crosstalk-delay) blocking
+    # condition. This fixture is about slot ranking, so it carries a PROVED
+    # SI verdict — without one every case here would collapse onto the
+    # SI refusal and stop discriminating what it exists to pin.
+    _si_signoff_fixture.write_proved_si_report(proj)
     return proj
 
 

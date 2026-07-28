@@ -2384,6 +2384,24 @@ steps:
     # promotes THIS step to WAIVED-DEFERRED, so a DRC-waived tapeout reports
     # Overall: PASS_WITH_WAIVERS and never collapses onto a bare PASS
     # (CLAUDE.md rule 11).
+    #
+    # SI (crosstalk-delay) BLOCKS HERE, and only here. Step 27's MCF sub-gate
+    # is `optional_program_exit_zero`, and rc 2 (`VACUOUS_PASS` — the SI gate
+    # re-derived NOTHING and says so in writing, ending "Read this as NOT
+    # CHECKED") is credited as a pass repo-wide. That is right during
+    # development and wrong at a mask order: "SI was checked and is clean" and
+    # "SI was never checked" would otherwise be the same green light on the
+    # step that commits the design to a mask set.
+    #
+    # So this step refuses to certify unless `reports/phase3/si_mcf_sta_check
+    # .json` PROVED something, or the SPECIFIC vacuity is accepted through the
+    # governed waiver channel — a `waivers.json` `waived_steps` entry with
+    # `id: 36`, a human `approver`, a reason, and
+    # `si_vacuity_accepted: ["<the report's own vacuity_code>"]`. An accepted
+    # vacuity demotes this step to WAIVED-DEFERRED (rc 3), never a bare PASS.
+    # A waiver can NEVER launder a genuine SI FAIL, an absent or unparseable
+    # report, or a PASS carrying no denominator. See the "Tape-out SI" section
+    # of `programs/signoff_audit.py`.
     gate:
       program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
     blocks_on: [31, 32, 33, 34]

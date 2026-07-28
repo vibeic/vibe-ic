@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _gdsii  # noqa: E402
+import _si_signoff_fixture  # noqa: E402
 
 # 2026-07-27 (review follow-up): the tape-out GDS slot credits ONLY the flow's
 # declared stream-out artefact (phase3/stage4/gds/*.gds), and only when it
@@ -59,6 +60,11 @@ def _tapeout_base(tmp_path):
     (tmp_path / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
     (tmp_path / "reports/phase3/lvs.rpt").write_text(
         "Netlists match uniquely.\nFinal result: Circuits match uniquely.\n")
+    # 2026-07-28: tape-out mode gained an SI (crosstalk-delay) blocking
+    # condition. This fixture is about the DRC slot, so it carries a PROVED
+    # SI verdict — without one every case here would collapse onto the
+    # SI refusal and stop discriminating what it exists to pin.
+    _si_signoff_fixture.write_proved_si_report(tmp_path)
 
 
 def test_tapeout_drc_fails_on_nonzero_signoff_count(tmp_path):
