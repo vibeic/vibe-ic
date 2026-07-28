@@ -21,40 +21,39 @@
 # event-shaped and stay inline in the workflow that has the context.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Resolved to an ABSOLUTE path BEFORE the `cd` below: `${BASH_SOURCE[0]}` may
+# be relative to the invoking cwd, and after `cd "$ROOT"` a relative dirname
+# would resolve somewhere else — which would silently fail to find the sourced
+# dispatch library for any caller that does not happen to start at the root.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
 PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
 PG="$PLUGIN/programs"
 cd "$ROOT"
 
-fail=0
-run() {                                   # run <label> <cwd> <cmd...>
-  local label="$1" wd="$2"; shift 2
-  echo "── $label"
-  if ( cd "$wd" && "$@" ); then :; else
-    echo "   ^^ FAILED: $label" >&2; fail=1
-  fi
-}
-
-# Same as `run`, but rc 2 means "could not check" rather than "found a defect".
-# A probe that needs a CLEAN tree cannot fail the suite for a developer whose
-# tree has untracked scratch in it — that is how a check becomes permanently
-# red and then ignored. rc 1 (a real finding) still fails; rc 2 is LOUD and
-# non-fatal, and CI checks out clean so it genuinely runs there.
-run_tolerating_uncheckable() {            # <label> <cwd> <cmd...>
-  local label="$1" wd="$2"; shift 2
-  echo "── $label"
-  local rc=0
-  # `|| rc=$?` and NOT a bare `( ... ); rc=$?` — this script runs under
-  # `set -e`, where a failing subshell aborts before the next line and the
-  # disclosure below would never print.
-  ( cd "$wd" && "$@" ) || rc=$?
-  if [ "$rc" -eq 0 ]; then :
-  elif [ "$rc" -eq 2 ]; then
-    echo "   ^^ NOT CHECKED (rc 2, non-fatal): $label" >&2
-  else
-    echo "   ^^ FAILED: $label" >&2; fail=1
-  fi
-}
+# --- WHAT RAN, REPORTED FROM HERE (vibe-ic#538) -----------------------------
+# `gatekeeper_review` — the gate a maintainer runs before every push, whose
+# MERGE_OK reads as "this will land green" — carried its own list of FIVE of
+# the gates below and answered MERGE_OK without consulting the other 29.
+# Twice in one day that verdict was wrong: v1.7.89 landed red on
+# `published_record_staleness_check`, and v1.7.92 was refused only because the
+# maintainer had by then taken to running THIS script by hand.
+#
+# The repair is that the merge gate INVOKES this script instead of re-listing
+# it, so the argument setup and the exit-code interpretation below are the ones
+# that actually run — a caller that re-derived `prog .` from the gate NAMES
+# would lose `--recent 60`, `--corpus`, `--check`, `audit-corpus`, `"$PLUGIN"`,
+# the plugin-relative cwd and the rc-2 tolerance, and would be a second list
+# besides.
+#
+# `run` / `run_tolerating_uncheckable` and the coverage record they produce now
+# live in `_gate_dispatch.sh`, sourced below, so that the merge gate's report of
+# what ran comes from the single place each gate is DECLARED. See that file for
+# the state model and the `--list` / `--summary-json` contract; both flags are
+# additive, and with neither this script behaves exactly as it did before, which
+# is how both CI workflows still call it.
+. "$HERE/_gate_dispatch.sh"
+gate_dispatch_init "$@"
 
 # --- repo-root scoped ------------------------------------------------------
 run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnostic_check.py" "$PLUGIN"
@@ -64,10 +63,18 @@ run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnosti
 # wired: 4 non-portable paths, all in a test fixture committed the day before.
 run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_check.py" "$PLUGIN"
 
-# Three more of `gatekeeper_review`'s gates. That program is the PR merge gate
-# and is in NO CI workflow, while this repo lands most work by DIRECT PUSH — so
-# 9 of its 11 gates had never run on a landing. These three are repo-STATE
-# checks (no base/head needed), so they belong here. Measured: 6s, 0s, 52s.
+# Three more of `gatekeeper_review`'s own gates, copied INTO this lane when it
+# was the only direction available. Since #538 the traffic runs the other way
+# as well — that program now invokes THIS script — so these three are executed
+# twice on a landing. That is deliberate and it is not redundancy: this lane
+# runs them against the repo it lives in, and the merge gate runs its own
+# copies against whatever `--plugin-root` it was given, which is not always the
+# same tree. Measured: 6s, 0s, 52s; the overlap is the cheap end of the set.
+#
+# (The count this comment used to carry — "9 of its 11 gates" — was wrong by
+# the time anyone read it: `review()` had grown to 17. Counts of the other
+# side's gate list are exactly what #538 is about, so this one no longer
+# states a number it cannot keep true.)
 run "watchdog compliance"           "$PLUGIN" python3 programs/loop_watchdog_compliance_check.py
 run "marketplace version sync"      "$PLUGIN" python3 programs/marketplace_version_sync_check.py
 run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit.py
@@ -262,8 +269,6 @@ run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary
 # or a gate whose rules changed without re-review — fails.
 run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py"
 
-if [ "$fail" -ne 0 ]; then
-  echo "repo_hygiene_gates: at least one gate FAILED" >&2
-  exit 1
-fi
-echo "repo_hygiene_gates: all gates passed"
+# Writes the coverage record (when asked), prints the roll-up WITH its own
+# denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
+gate_dispatch_finish

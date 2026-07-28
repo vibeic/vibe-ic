@@ -42,6 +42,19 @@ never re-implemented):
                                          was actually issued
   * blindness_audit.py                 — (optional, only when transcripts are
                                          supplied) prompt-only blindness audit
+  * tools/ci/repo_hygiene_gates.sh     — (#538) the ENTIRE repo-hygiene set CI
+                                         runs, INVOKED rather than re-listed,
+                                         so a gate added to CI is covered here
+                                         with no edit to this file. Before it
+                                         was wired, this program's own list
+                                         overlapped CI's in FIVE of 34 and
+                                         MERGE_OK was answered without
+                                         consulting the other 29 — twice
+                                         wrongly in one day (v1.7.89 landed
+                                         red; v1.7.92 was caught only by a
+                                         manual habit). See `repo_hygiene_gate`
+                                         for why the list is INVOKED and not
+                                         derived from the gate names.
 
 THE §4.05 / GENERAL / NO-CHEAT BOUNDARY  (read this — it is load-bearing)
 ========================================================================
@@ -110,6 +123,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -703,6 +717,181 @@ def run_deliverable_gate(repo: Path, files: List[str]) -> GateResult:
 
 
 # --------------------------------------------------------------------------
+# repo_hygiene_gates — the CI hygiene set, INVOKED rather than re-listed (#538).
+#
+# WHAT WAS WRONG
+# --------------
+# This program is what a maintainer runs before every push, and MERGE_OK reads
+# as "this will land green". Measured at v1.7.92: `tools/ci/repo_hygiene_gates.sh`
+# wired 34 gate invocations, this review ran 17 of its own, and the two sets
+# OVERLAPPED IN FIVE — so MERGE_OK was answered without consulting 29 of the
+# checks CI would go on to run. Twice in one day the verdict was wrong:
+#
+#   v1.7.89  MERGE_OK, then main went RED on `published_record_staleness_check`.
+#   v1.7.92  MERGE_OK while INDEX.md was stale; refused only because the
+#            maintainer had by then taken to running the script BY HAND.
+#
+# One of the two was caught by a habit rather than by the tool, and that habit
+# appears in no skill, runbook or agent file — `grep -rn repo_hygiene skills/
+# docs/` was empty. A gate that depends on remembering is the thing this gate
+# exists to replace.
+#
+# WHY IT INVOKES THE SCRIPT INSTEAD OF DERIVING THE GATE LIST
+# ----------------------------------------------------------
+# Two alternatives were rejected on evidence, not taste:
+#
+#   * RE-LISTING the gate names here. A second hand-maintained list of 34 names
+#     is the exact drift shape #527, #530 and #534 each spent a version
+#     removing, and a drifted copy would restore the hole while looking fixed.
+#
+#   * PARSING the script for its program names and running `prog .`. The script
+#     is not a list of names: it passes `--recent 60`, `--corpus <path>`,
+#     `--check`, `--require-remote`, `audit-corpus --root`, `"$PLUGIN"`; it runs
+#     eight gates from the PLUGIN directory and the rest from the repo root; and
+#     its two wrappers interpret exit codes DIFFERENTLY (`run_tolerating_
+#     uncheckable` treats rc 2 as "could not check", `run` as a defect). A
+#     bare-name reproduction loses every one of those, and it would lose them
+#     SILENTLY and in the lenient direction. Six of the 34 do not even end in
+#     `_check`/`_audit` — including the two INDEX.md freshness gates, one of
+#     which is the v1.7.92 incident — so a filename-shaped derivation also
+#     under-counts the population it is meant to cover.
+#
+#   * A THIRD FORM, a shared machine-readable gate table both files read, was
+#     rejected because the argument setup and the rc interpretation still have
+#     to live somewhere, so they would be encoded twice — and the script's ~150
+#     lines of per-gate WHY comments, which are the record of what each gate
+#     cost to learn, have nowhere to go in a data file.
+#
+# Invoking the script keeps ONE definition, and it is the one that actually
+# runs in CI. A gate added to CI is covered here the moment it is added, with
+# no edit to this file.
+#
+# HOW IT REPORTS
+# --------------
+# `--summary-json` is produced BY THE SCRIPT, at the single place each gate is
+# declared, and carries the DENOMINATOR (`declared`) alongside what happened to
+# each gate. Reconstructing that caller-side would be the second list again.
+# The verdict line always states declared/ran/not-checked, so "all gates
+# passed" can never be read over a set that silently shrank — and NOT_CHECKED
+# (a gate that refused, e.g. host-independence on a dirty tree) is reported
+# separately from PASS, never folded into it, which is the `_vacuous_exit`
+# convention applied one level up.
+# --------------------------------------------------------------------------
+_HYGIENE_SCRIPT_REL = "tools/ci/repo_hygiene_gates.sh"
+
+#: Generous ceiling, not a target. Measured on this repo the full set is
+#: minutes, dominated by one gate that runs every other gate twice. A run that
+#: exceeds this is reported as ERROR — never as a pass — because a hygiene set
+#: that did not finish has told us nothing.
+_HYGIENE_TIMEOUT_S = 3600
+
+
+def repo_hygiene_gate(repo: Path,
+                      script: Optional[Path] = None,
+                      timeout: int = _HYGIENE_TIMEOUT_S) -> GateResult:
+    """Run `tools/ci/repo_hygiene_gates.sh` and report its own coverage record.
+
+    `script` is a test seam in the same spirit as `override_files` — it lets a
+    unit test point at a cheap fixture script instead of the real multi-minute
+    set. There is deliberately NO CLI flag for it: a command-line way to skip
+    the hygiene set would be a skip button on the gate whose whole purpose is
+    that it cannot be forgotten.
+    """
+    name = "repo_hygiene_gates"
+    path = Path(script) if script is not None else (repo / _HYGIENE_SCRIPT_REL)
+    if not path.is_file():
+        # An honest SKIP that states its denominator: this tree wires no
+        # hygiene set, so 0 gates were consulted. Never dressed up as a pass
+        # over gates that do not exist.
+        return GateResult(name, -1,
+                          f"skipped — 0 gate(s) consulted: {_HYGIENE_SCRIPT_REL} "
+                          f"not present under {repo}")
+
+    with tempfile.TemporaryDirectory(prefix="hygiene_summary_") as td:
+        summary_path = Path(td) / "summary.json"
+        try:
+            # watchdog-exempt: bounded shell-runner — the call carries an
+            # explicit wall-clock timeout and the TimeoutExpired path below
+            # reports ERROR, never a pass, so work that escapes into the
+            # script cannot outlive this budget nor be mistaken for a clean
+            # result. That bound holds whatever the script launches, which is
+            # what class (c) is protecting against; the set happens to be all
+            # `python3` gates today, but the exemption does not rest on it.
+            proc = subprocess.run(
+                ["bash", str(path), "--summary-json", str(summary_path)],
+                cwd=str(repo), capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return GateResult(name, 2,
+                              f"ERROR — the hygiene set did not finish within "
+                              f"{timeout}s; nothing was concluded")
+        except OSError as exc:
+            return GateResult(name, 2, f"ERROR — could not run {path}: {exc}")
+
+        if not summary_path.is_file():
+            # The script ran but produced no record, so we cannot say what it
+            # covered. "I do not know what ran" is its own state and must not
+            # reach a reader as a pass.
+            tail = ((proc.stderr or proc.stdout or "").strip().splitlines()
+                    or ["(no output)"])[-1][:180]
+            return GateResult(name, 2,
+                              f"ERROR — {_HYGIENE_SCRIPT_REL} exited "
+                              f"{proc.returncode} without writing its coverage "
+                              f"record; coverage unknown. Last line: {tail}")
+        try:
+            doc = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return GateResult(name, 2,
+                              f"ERROR — unreadable coverage record: {exc}")
+
+    return _hygiene_verdict(doc, proc.returncode)
+
+
+def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
+    """Turn the script's own coverage record into a gate result.
+
+    Split out from the subprocess plumbing so a test can drive every verdict
+    branch from a record document without a multi-minute run.
+    """
+    name = "repo_hygiene_gates"
+    declared = int(doc.get("declared") or 0)
+    gates = doc.get("gates") or []
+    by_state = lambda s: [str(g.get("label")) for g in gates
+                          if g.get("state") == s]
+    failed, not_checked = by_state("FAIL"), by_state("NOT_CHECKED")
+    deferred = by_state("LISTED")
+    ran = declared - len(deferred)
+    secs = doc.get("seconds")
+    where = f"{ran}/{declared} gate(s) ran"
+    if secs is not None:
+        where += f" in {secs}s"
+    if not_checked:
+        where += (f"; {len(not_checked)} NOT CHECKED (not a pass): "
+                  + ", ".join(sorted(not_checked)[:4]))
+    if deferred:
+        where += (f"; {len(deferred)} DEFERRED, NOT run here: "
+                  + ", ".join(sorted(deferred)[:6]))
+
+    if declared == 0:
+        # A hygiene script that wires nothing cannot certify anything.
+        return GateResult(name, 2,
+                          "ERROR — the hygiene script declared 0 gates; "
+                          "nothing was checked and this is NOT a pass")
+    if failed:
+        return GateResult(name, 1,
+                          f"{len(failed)} hygiene gate(s) FAILED: "
+                          + ", ".join(sorted(failed)[:6])
+                          + (" …" if len(failed) > 6 else "")
+                          + f" [{where}]")
+    if script_rc != 0:
+        # Red script, no failing gate named: a setup/summary inconsistency we
+        # must not paper over.
+        return GateResult(name, 2,
+                          f"ERROR — {_HYGIENE_SCRIPT_REL} exited {script_rc} "
+                          f"while naming no failing gate [{where}]")
+    return GateResult(name, 0, where)
+
+
+# --------------------------------------------------------------------------
 # subprocess runner for the file-walking gates.
 # --------------------------------------------------------------------------
 def _run_program(prog: Path, args: List[str]) -> Tuple[int, str, str]:
@@ -726,7 +915,8 @@ def review(base: str, head: str, *,
            override_files: Optional[List[str]] = None,
            override_cur: Optional[str] = None,
            override_prev: Optional[str] = None,
-           batch: bool = False) -> Verdict:
+           batch: bool = False,
+           hygiene_script: Optional[Path] = None) -> Verdict:
     """Run the deterministic gatekeeper and return a Verdict.
 
     `version_by_gatekeeper=True` is the AUTHORING-side review of a version-less
@@ -737,7 +927,9 @@ def review(base: str, head: str, *,
     flag, fully enforcing the monotonic+equality bump on the assigned version.
 
     `override_*` let tests inject a synthetic change-set / version pair without
-    a real git history; production callers pass none of them.
+    a real git history; production callers pass none of them. `hygiene_script`
+    is the same kind of seam for the #538 hygiene gate — see `repo_hygiene_gate`
+    for why it is deliberately not reachable from the CLI.
     """
     # 1. change-set.
     if override_files is not None:
@@ -797,6 +989,10 @@ def review(base: str, head: str, *,
     gates.append(test_cadence_gate(pytest_cmd, cadence))
     gates.append(run_deliverable_gate(repo, files))
     gates.append(blindness_gate(transcripts, dataset))
+    # #538 — LAST because it is by far the longest, so every cheap machine gate
+    # has already printed by the time this starts. It is the whole CI hygiene
+    # set, invoked (not re-listed) so that MERGE_OK means what it reads as.
+    gates.append(repo_hygiene_gate(repo, script=hygiene_script))
 
     # 5. verdict.
     blocking = [f"{g.name}: {g.summary}" for g in gates if not g.green]

@@ -424,7 +424,16 @@ The gates that MUST be green before the push are unchanged from the PR era:
    record (run locally — it composes `source_chip_agnostic_check`,
    `git_prohibition_guard`, `marketplace_version_sync_check`,
    `version_bump_monotonic_check`, `agent_checkin_scope_guard --role core-agent`,
-   `plugin_full_audit`, the cadence-correct pytest, blindness/full-suite asserts).
+   `plugin_full_audit`, the cadence-correct pytest, blindness/full-suite asserts,
+   **and — since #538 — the ENTIRE `tools/ci/repo_hygiene_gates.sh` set that CI
+   runs**). Do NOT run that script by hand as a separate step: it is invoked by
+   the review, and its verdict line states its own denominator
+   (`N/M gate(s) ran`, plus any gate that refused). Before #538 the review
+   overlapped CI's hygiene set in 5 of 34 gates, and MERGE_OK twice failed to
+   mean "this will land green" — v1.7.89 landed RED, and v1.7.92 was caught
+   only because a maintainer happened to run the script manually. The gate now
+   costs minutes rather than seconds for exactly that reason; that cost is the
+   coverage, not overhead.
 2. **Step-2.7** adversarial review on any guard/transform/extractor diff.
 3. `gatekeeper_assign_version.py --write` for the strictly-monotonic version bump
    (one push = one version bump — honors `one-version-per-push`).
