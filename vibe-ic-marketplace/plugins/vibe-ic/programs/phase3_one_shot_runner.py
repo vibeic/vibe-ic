@@ -19990,6 +19990,41 @@ _ATPG_COVERAGE_REL = {
     "DT2": "reports/phase2/dft/path_delay_coverage.json",
     "DT3": "reports/phase2/dft/sdd_coverage.json",
 }
+# NEVER WRITTEN — SWEPT ONLY. This is the path a not-run record would occupy
+# if it were CO-LOCATED with the coverage artefact whose absence it discloses.
+# An earlier revision of this file wrote the record there as well as at
+# `_ATPG_NOT_RUN_REL`, reasoning that
+# `flow_compliance_check._declared_sibling_self_skip_for_missing` scans the
+# *missing output's own directory* and so could not see a record filed one
+# directory away. MEASURED, that mirror is a self-certification and a
+# free pass, and it is refused on both counts:
+#
+#   * COST. `_declared_sibling_self_skip_for_missing` promotes an absent
+#     required_output to SKIPPED-CONDITION, and `total_required` SUBTRACTS
+#     SKIPPED-CONDITION (flow_compliance_check.py, the X/Y executed-PASS
+#     denominator). A step that DID NOT RUN would therefore leave the
+#     denominator entirely — cost-free — purely because the runner disclosed
+#     the non-run twice. Measured on a cut-netlist + SPEF + routed-netlist
+#     tree carrying all three records: DT1/DT2/DT3 went MISSING -> SKIPPED-
+#     CONDITION and the flow verdict went FAIL -> PASS with the denominator
+#     reading `0/-1`. Disclosure buys a REASON, never a discount.
+#   * PROVENANCE. `run_at_speed_atpg_producers` runs inside
+#     `step_canonicalize_artefacts`, and the same runner invocation then runs
+#     `flow_compliance_check`. A record written here and honoured there is the
+#     auditor accepting an artefact its own run produced.
+#
+# The primary record at `_ATPG_NOT_RUN_REL` stays: `path_delay_coverage_check`
+# and its DT1/DT3 siblings read it and answer BLOCKED (rc 1) with the recorded
+# reason instead of a bare FAIL, which is a reason WITHOUT a discount. The step
+# itself stays MISSING — red, in the denominator, and loud.
+#
+# `atpg_clear_not_run` still SWEEPS this path so a tree built by that earlier
+# revision cannot keep a stale mirror around and go on buying the free skip.
+_ATPG_NOT_RUN_LEGACY_COLOCATED_REL = {
+    "DT1": "reports/phase2/dft/transition_atpg_not_run.json",
+    "DT2": "reports/phase2/dft/path_delay_atpg_not_run.json",
+    "DT3": "reports/phase2/dft/sdd_atpg_not_run.json",
+}
 _ATPG_CAP_FLAG = "cap:at_speed_timing_graded_atpg"
 _ATPG_CUT_REL = "phase2/stage2/dft/cut_netlist.v"
 _ATPG_SDC_REL = "phase3/stage3/pnr/constraint.sdc"
@@ -20066,6 +20101,15 @@ def atpg_disclose_not_run(project: Path, step: str, reason: str, stage: str,
     SKIPPED-CONDITION instead of a silent MISSING, and so the step's own gate
     can report BLOCKED (with the recorded reason) instead of a bare FAIL that
     cannot say which repair is needed.
+
+    ONE copy, with the DFT working files — deliberately NOT co-located with
+    the coverage artefact. Co-locating it would put it where
+    `_declared_sibling_self_skip_for_missing` looks, and that promoter's
+    SKIPPED-CONDITION is SUBTRACTED from the executed-PASS denominator, so a
+    step that never ran would become cost-free by being disclosed twice. See
+    `_ATPG_NOT_RUN_LEGACY_COLOCATED_REL` for the measurement. The record's job
+    is to give the step's own gate a REASON (BLOCKED, rc 1, quoting it), not
+    to buy the step a discount.
     """
     path = project / _ATPG_NOT_RUN_REL[step]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -20085,22 +20129,40 @@ def atpg_disclose_not_run(project: Path, step: str, reason: str, stage: str,
     if extra:
         payload.update(extra)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    # Defensive: a tree left by the co-located-mirror revision would otherwise
+    # keep a stale copy next to the coverage artefact and go on buying the
+    # cost-free SKIPPED-CONDITION even after this fix lands.
+    _atpg_sweep_legacy_colocated(project, step)
     return path
+
+
+def _atpg_sweep_legacy_colocated(project: Path, step: str) -> bool:
+    """Delete the never-written co-located mirror if a stale one exists."""
+    try:
+        (project / _ATPG_NOT_RUN_LEGACY_COLOCATED_REL[step]).unlink()
+        return True
+    except OSError:
+        return False
 
 
 def atpg_clear_not_run(project: Path, step: str) -> bool:
     """Drop a stale not-run record once a real measurement exists.
 
     A record that outlives the condition it described is a lie on disk: the
-    gate would read a fresh, graded result as BLOCKED. Returns True if a record
-    was removed.
+    gate would read a fresh, graded result as BLOCKED. The stale co-located
+    mirror an earlier revision could have left behind is swept too — it would
+    otherwise keep buying the step a cost-free SKIPPED-CONDITION even though a
+    real grade now exists. Returns True if any record was removed.
     """
-    path = project / _ATPG_NOT_RUN_REL[step]
-    try:
-        path.unlink()
-        return True
-    except OSError:
-        return False
+    removed = False
+    for rel in (_ATPG_NOT_RUN_REL[step],
+                _ATPG_NOT_RUN_LEGACY_COLOCATED_REL[step]):
+        try:
+            (project / rel).unlink()
+            removed = True
+        except OSError:
+            continue
+    return removed
 
 
 def run_at_speed_atpg_producers(project: Path, written: List[str],

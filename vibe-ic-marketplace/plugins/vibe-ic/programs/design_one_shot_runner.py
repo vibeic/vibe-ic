@@ -8107,6 +8107,53 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             # provenance_check will catch the gap in its own step.
             pass
 
+        # The netlist this pass hands on, decided ONCE: the same file is
+        # measured into stats.json and handed to the gate below, so the
+        # accounting and the audit cannot end up describing different files.
+        _audited_v = canon_v if canon_v.is_file() else out_v
+
+        # Step 9 declares `phase2/stage2/synth/area.rpt OR
+        # phase2/stage2/synth/stats.json` as a required output, and NOTHING in
+        # the plugin has ever written either path (every area.rpt is the
+        # phase-3 OpenROAD one). Post-#455 that made step 9 report MISSING on
+        # every run — including this one, where synthesis genuinely succeeded
+        # and yosys `stat` printed the numbers straight into the log we already
+        # keep. Persist the measurement the tool already made.
+        #
+        # ANTI-FABRICATION: `build_stats_payload` returns None when the capture
+        # carries no yosys stat line at all (the docker-fallback path can
+        # return rc=0 with an empty stdout capture). No stat block => NO
+        # artefact, so step 9 stays honestly MISSING rather than gaining a
+        # fabricated zero on an unmeasured synthesis. In that case the emitter
+        # also REMOVES the stats.json a previous pass left beside the netlist
+        # this pass has just regenerated, because the old numbers would
+        # otherwise be read as this pass's accounting for a design nobody
+        # measured.
+        #
+        # ORDERING (this used to sit AFTER the gate below, and that was a
+        # measured self-perpetuating false failure). The netlist is rewritten
+        # unconditionally at the top of every synth pass, so a stats.json
+        # written at the BOTTOM of the pass is, on the next pass, an artefact
+        # that predates the netlist beside it. A cross-check that reads the two
+        # therefore had to judge this pass's netlist against the previous
+        # pass's accounting — and because the gate's FAIL returned before the
+        # emit, the accounting was never refreshed and every later pass failed
+        # identically: measured PASS / FAIL / FAIL on three passes over one
+        # converged tree. Emitting FIRST is what makes "these numbers describe
+        # this netlist" true for the gate to check. It does not make the check
+        # vacuous: the emitter records the netlist's digest, so the gate is
+        # comparing two independently produced facts, and the no-measurement
+        # path above leaves NO artefact for the gate to credit.
+        _ystat.emit_stats_json(
+            synth_dir,
+            out + "\n" + err,
+            netlist_path=_audited_v,
+            log_rel="phase2/stage2/synth/yosys.log",
+            netlist_rel="phase2/stage2/synth/netlist.v",
+            tool="yosys",
+            frontend=synth_frontend,
+        )
+
         # v1.6.190 (#77 P0 prong 1) — gate yosys_synth PASS on
         # synth_netlist_check. Pre-v1.6.190 yosys could emit a
         # cell-less netlist (module + ports + wires, zero cells)
@@ -8120,8 +8167,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             snc = subprocess.run(
                 [sys.executable,
                  str(PROGRAMS_DIR / "synth_netlist_check.py"),
-                 "--netlist", str(canon_v if canon_v.is_file()
-                                   else out_v),
+                 "--netlist", str(_audited_v),
                  # #426/#427: hand the RTL over so the checker can refuse a
                  # stale netlist and let the structure-aware floor vouch for
                  # legitimately tiny designs (register-bit cover).
@@ -8143,27 +8189,6 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                  f"-flatten`. Detail: {tail}"),
                 [str(out_v), str(log)],
                 extras={"synth_frontend": synth_frontend})
-        # Step 9 declares `phase2/stage2/synth/area.rpt OR
-        # phase2/stage2/synth/stats.json` as a required output, and NOTHING in
-        # the plugin has ever written either path (every area.rpt is the
-        # phase-3 OpenROAD one). Post-#455 that made step 9 report MISSING on
-        # every run — including this one, where synthesis genuinely succeeded
-        # and yosys `stat` printed the numbers straight into the log we already
-        # keep. Persist the measurement the tool already made.
-        #
-        # ANTI-FABRICATION: `build_stats_payload` returns None when the capture
-        # carries no yosys stat line at all (the docker-fallback path can
-        # return rc=0 with an empty stdout capture). No stat block => NO
-        # artefact, so step 9 stays honestly MISSING rather than gaining a
-        # fabricated zero on an unmeasured synthesis.
-        _ystat.emit_stats_json(
-            synth_dir,
-            out + "\n" + err,
-            log_rel="phase2/stage2/synth/yosys.log",
-            netlist_rel="phase2/stage2/synth/netlist.v",
-            tool="yosys",
-            frontend=synth_frontend,
-        )
         _pass_extras = {"synth_frontend": synth_frontend}
         if _prune_advisory:  # ORGANIC #778 — surface the over-broad-tail advisory
             _pass_extras["catalog_glue_prune_advisory"] = _prune_advisory

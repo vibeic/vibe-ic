@@ -11,8 +11,8 @@ and takes its "absent" branch, and the run reports PASS.
 One cell per flow step, 63 in all, each ending in exactly one of three
 machine-checkable states:
 
-  ENFORCED  the live predicate runs and passes            53
-  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason   9
+  ENFORCED  the live predicate runs and passes            58
+  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason   4
   NA        the NA precondition is asserted LIVE           1
 
 ====================================================================
@@ -78,10 +78,15 @@ Mutation-proved before landing; each mutation applied to the GUARDED THING
 """
 from __future__ import annotations
 
+import shutil
+import tempfile
 from collections import Counter
+from pathlib import Path
+from typing import Any, Dict, List
 
 import pytest
 
+import flow_compliance_check as FCC
 import matrix_d7_artifact_graph as G
 from matrix_63x8 import flowref as F
 from matrix_63x8 import waivers
@@ -96,170 +101,32 @@ RESOLUTION_LIMITS_AS_MEASURED = 5
 # ──────────────────────────────────────────────────────────────────────
 # Waivers
 # ──────────────────────────────────────────────────────────────────────
-#: Waivers this dimension needs, mirrored locally because
-#: ``matrix_63x8/waivers.py`` is SHARED by eight concurrently-running agents
-#: and its own docstring forbids a sibling editing it ("concurrent edits to a
-#: shared registry lose entries"). These are reported verbatim to the
-#: orchestrator in ``waiver_requests``; once it lands them in
-#: ``waivers.WAIVERS`` this tuple is dead weight and should be deleted —
-#: :func:`_waiver_for` already prefers the central registry, so the migration
-#: is a no-op at the point of use.
+#: The local mirror, now EMPTY. It existed only while ``matrix_63x8/waivers.py``
+#: was being written by eight concurrently-running agents; the entries have
+#: landed centrally and :func:`_waiver_for` prefers the central registry, so
+#: emptying it is a no-op at the point of use. A new waiver goes to
+#: ``waivers.WAIVERS``, not here.
 #:
-#: Each one is a CURRENTLY-REAL, source-verified defect, so the xfail is
-#: ``strict=True``: the moment the yaml declares the artefact, the cell
-#: XPASSes, the suite goes red, and the waiver must be removed. That is the
-#: anti-rot mechanism, not a formality.
-PENDING_WAIVERS = (
-    waivers.Waiver(
-        step_id="D1",
-        dim=DIM,
-        reason=(
-            "D1 emits phase1/generated_docs/L8_RTL_CONSTANTS.json but declares "
-            "only L1-L12 and L13_*; step 2's gate both READS it as an input and "
-            "gates on it via condition_files_exist, so when D1 fails to write "
-            "it the step-2 clause SKIPS silently instead of failing. Declaring "
-            "it is a yaml change nobody has made yet."
-        ),
-        evidence=(
-            "producer programs/phase1_doc_one_shot_runner.py:47845 "
-            "(_pl.generated_docs_dir(project) / 'L8_RTL_CONSTANTS.json'); "
-            "consumer flow/phase1_phase2_phase3.yaml:363-364 "
-            "(threshold_range_contiguity_check + condition_files_exist)"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=7,
-        dim=DIM,
-        reason=(
-            "The runner emits reports/phase3/single_corner_stance.json to "
-            "disclose a single-corner PVT run, and step 7's own gate program "
-            "pvt_matrix_check loads it (both the phase3 and the legacy phase2 "
-            "location) to decide its stance; no step's required_outputs names "
-            "either path, so nothing verifies the disclosure was written."
-        ),
-        evidence=(
-            "producer programs/phase3_one_shot_runner.py:20341 "
-            "(rpt_phase3 / 'single_corner_stance.json'); consumer "
-            "programs/pvt_matrix_check.py:44-45 then :105"
-        ),
-    ),
-    waivers.Waiver(
-        step_id="FS1",
-        dim=DIM,
-        reason=(
-            "FS1 declares no required_outputs key at all while its gate writes "
-            "two real JSON artefacts, so there is no list for the flow's "
-            "presence checks to key off. An absent list cannot be complete; "
-            "adding one is a yaml change nobody has made yet."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml FS1 step has no required_outputs "
-            "key while its gate runs 'fmeda_fault_injection_coverage ... --json "
-            "reports/phase2/safety/fmeda_coverage.json' and 'fmeda_coverage_check "
-            "... --json reports/phase2/safety/fmeda_coverage_gate.json'"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=21,
-        dim=DIM,
-        reason=(
-            "The runner derives reports/phase3/drc_router.rpt from the OpenROAD "
-            "routing log and step 21's own gate command feeds that exact path "
-            "to drc_report_check via --under, yet no step's required_outputs "
-            "names it: if the derivation silently fails the gate loses its "
-            "router-DRC evidence with nothing reporting the loss."
-        ),
-        evidence=(
-            "producer programs/phase3_one_shot_runner.py:21706 "
-            "((rpt_phase3 / 'drc_router.rpt').write_text(body)); consumer is "
-            "step 21's own gate command '--under reports/phase3/drc_router.rpt'"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=23,
-        dim=DIM,
-        reason=(
-            "Thirteen multi-corner / SPEF-based STA artefacts the runner emits "
-            "and step 23's own checkers read (sta_mcorner_ocv.rpt, "
-            "sta_spef_based.rpt, sta_spef_multicorner.rpt and their "
-            "reports/phase3 mirrors, plus the mcorner_ocv and "
-            "multi_corner_spef stance files) appear in no step's "
-            "required_outputs, and two gate-designated outputs of this step are "
-            "read by OTHER programs. Step 23 declares only post_route_timing.rpt "
-            "and post_route_summary.json."
-        ),
-        evidence=(
-            "producers programs/phase3_one_shot_runner.py:20549 and :20638 "
-            "(sta_out / 'sta_spef_based.rpt', sta_out / 'sta_mcorner_ocv.rpt') "
-            "with mirrors at :20555 and :20668; consumers "
-            "programs/sta_corner_record_completeness_check.py:233-234 and "
-            "programs/post_route_signoff_corner_check.py"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=25,
-        dim=DIM,
-        reason=(
-            "Step 25's gate writes reports/phase3/em_signoff.json via "
-            "em_report_check --json and the phase-3 runner reads that exact "
-            "path back in its declared-signoff-gate table, so the artefact is "
-            "cross-program load-bearing rather than self-verifying; step 25's "
-            "required_outputs names only the .rpt."
-        ),
-        evidence=(
-            "consumer programs/phase3_one_shot_runner.py:19674 "
-            "('reports/phase3/em_signoff.json', ('--mode', 'em')); writer is "
-            "em_report_check, whose --json is a proven write via its "
-            "signoff_report_check delegate"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=28,
-        dim=DIM,
-        reason=(
-            "reports/phase2/gates/perc_signoff.json is written by step 28's own "
-            "gate and read by eco_trigger_decision, which uses it as one of the "
-            "inputs to the ECO trigger decision; no step's required_outputs "
-            "names it, so its absence silently changes an ECO decision instead "
-            "of failing a gate."
-        ),
-        evidence=(
-            "consumer programs/eco_trigger_decision.py:96 "
-            "(('perc_signoff', 'reports/phase2/gates/perc_signoff.json'))"
-        ),
-    ),
-    waivers.Waiver(
-        step_id=31,
-        dim=DIM,
-        reason=(
-            "Two gate-designated outputs of step 31, reports/phase3/lvs.json and "
-            "reports/phase2/gates/erc_density.json, are read by "
-            "eco_trigger_decision as ECO-trigger inputs while step 31 declares "
-            "only the three .rpt files; the JSONs carry the machine-readable "
-            "verdict the .rpt does not, and nothing verifies they exist."
-        ),
-        evidence=(
-            "consumer programs/eco_trigger_decision.py:91 and :95 "
-            "(('lvs', 'reports/phase3/lvs.json'), "
-            "('erc_density', 'reports/phase2/gates/erc_density.json'))"
-        ),
-    ),
-    waivers.Waiver(
-        step_id="M1",
-        dim=DIM,
-        reason=(
-            "reports/analog/mixed_signal/top_lvs.json is the artefact that "
-            "substantiates M1's PASS — mixed_signal_top_lvs_run writes it and "
-            "mixed_signal_merge_check's PASS branch is contingent on reading it "
-            "— yet M1's required_outputs names only top_merged.gds and "
-            "merge.json, so nothing independently verifies its presence."
-        ),
-        evidence=(
-            "producer programs/mixed_signal_top_lvs_run.py:19; consumer "
-            "programs/mixed_signal_merge_check.py:89-90 (candidate list "
-            "'reports/analog/mixed_signal/top_lvs.json')"
-        ),
-    ),
+#: Whatever lives there is a CURRENTLY-REAL, source-verified defect, so the
+#: xfail is ``strict=True``: the moment the yaml declares the artefact, the
+#: cell XPASSes, the suite goes red, and the waiver must be removed. That is
+#: the anti-rot mechanism, not a formality — and it is what forced the five
+#: cells closed on 2026-07-28 to be closed in the flow rather than in a table.
+#:
+#: Emptying it also emptied ``test_pending_waivers_meet_the_registry_standard``,
+#: which looped over this tuple alone and so passed having asserted nothing
+#: (2026-07-28 adversarial finding, LOW). That test now takes the LIVE waiver
+#: set — this mirror plus the central dimension-7 entries — and asserts the
+#: population floor first, so a green result means the bar was applied.
+PENDING_WAIVERS: tuple = (
+    # EMPTY, and it stays empty. The nine entries this tuple carried are now in
+    # ``matrix_63x8.waivers.WAIVERS`` — five of them CLOSED (the artefact is
+    # declared; see the flow yaml's per-entry notes), four living centrally
+    # (7, 23, M1 narrowed; FS1 reopened 2026-07-28 with a sharper reason after
+    # its closure turned out to rest on the compliance checker accepting an
+    # artefact it had created itself). :func:`_waiver_for` prefers the central
+    # registry, so the migration is a no-op at the point of use and a new
+    # waiver belongs there, not here.
 )
 
 _PENDING_BY_KEY = {w.key: w for w in PENDING_WAIVERS}
@@ -525,32 +392,64 @@ def test_every_cell_lands_in_exactly_one_state():
 
 
 def test_pending_waivers_meet_the_registry_standard():
-    """The local mirror is held to ``waivers.validate()``, not to a lower bar.
+    """Every dimension-7 waiver is held to ``waivers.validate()``.
 
-    The mirror exists only because the shared registry cannot be edited by a
-    sibling agent (matrix_63x8/waivers.py docstring). It must therefore be
-    indistinguishable in quality from an entry that lands centrally: real
-    step, real dimension, substantive reason, checkable evidence.
+    2026-07-28, adversarial finding (LOW): this test used to loop ONLY over
+    the local mirror ``PENDING_WAIVERS``. When the mirror was emptied — its
+    entries having landed in ``matrix_63x8.waivers.WAIVERS`` — every loop ran
+    zero times, ``problems`` was ``{}``, ``all(...)`` over empty was True and
+    the test passed having evaluated no assertion at all. That is the exact
+    defect the function above records and fixed for itself; the same
+    population-floor guard is applied here.
+
+    The subject is therefore the LIVE dimension-7 waiver set: mirror entries
+    (there for as long as the shared registry is being written by concurrent
+    agents) plus the central ones, which are what ``_waiver_for`` actually
+    applies. It must be indistinguishable in quality from any registry entry:
+    real step, real dimension, substantive reason, checkable evidence.
     """
+    central = tuple(w for w in waivers.WAIVERS if w.dim == DIM)
+    subject = tuple(PENDING_WAIVERS) + central
+    # THE FLOOR. An empty subject means this test measures nothing; a
+    # dimension whose every cell is enforced should delete the test, not keep
+    # a green one that ran no assertion.
+    assert subject, (
+        "no dimension-7 waiver exists in either the local mirror or "
+        "matrix_63x8.waivers.WAIVERS, so every loop below runs zero times and "
+        "this test asserts nothing. If the dimension genuinely has no waivers "
+        "left, delete this test in the same change that removes the last one."
+    )
+    # The cell census must agree that these waivers are the ones in force —
+    # otherwise the subject could be a stale list that no cell consults.
+    applied = {F.normalize_id(c.step_id) for c in cells_for(DIM)
+               if _waiver_for(c.step_id) is not None}
+    assert applied == {F.normalize_id(w.step_id) for w in subject}, (
+        f"the waivers this dimension APPLIES {sorted(applied)} are not the "
+        f"ones validated here "
+        f"{sorted(F.normalize_id(w.step_id) for w in subject)} — one of the "
+        f"two lists is stale and the quality bar is being applied to the "
+        f"wrong entries"
+    )
+
     problems = {}
-    for waiver in PENDING_WAIVERS:
+    for waiver in subject:
         found = waivers.validate(waiver)
         if found:
             problems[waiver.label] = found
     assert not problems, problems
 
-    keys = [w.key for w in PENDING_WAIVERS]
+    keys = [w.key for w in subject]
     assert len(keys) == len(set(keys)), f"duplicate waiver keys: {keys}"
-    assert all(w.dim == DIM for w in PENDING_WAIVERS)
+    assert all(w.dim == DIM for w in subject)
 
-    # A mirrored waiver must name a step that is CURRENTLY failing. A mirror
-    # entry for a healthy step would be dead weight the strict xfail cannot
-    # catch (a waived-but-passing cell XPASSes, but only if the waiver is
-    # actually applied — this catches the case where it is applied to a step
-    # that has no findings and no NA either).
+    # A waiver must name a step that is CURRENTLY failing. An entry for a
+    # healthy step would be dead weight the strict xfail cannot catch (a
+    # waived-but-passing cell XPASSes, but only if the waiver is actually
+    # applied — this catches the case where it is applied to a step that has
+    # no findings and no NA either).
     inert = [
         w.label
-        for w in PENDING_WAIVERS
+        for w in subject
         if not G.findings_for(w.step_id) and G.na_precondition(w.step_id) is None
     ]
     assert not inert, (
@@ -627,3 +526,205 @@ def matrix_cell_state(step_id) -> str:
     if _waiver_for(step_id) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# THE AUDITOR MAY NOT AUTHOR ITS OWN EVIDENCE
+#
+# Dimension 7 closes cells by DECLARING an artefact. That only means anything
+# if the declaration is answered by the run. On 2026-07-28 a change to
+# `flow_compliance_check.check_step` suppressed the early MISSING return for
+# any step ALL of whose declared outputs are its own gate's `--json` targets,
+# so the gate ran, wrote the declared file, and a post-gate probe accepted THAT
+# FILE as the evidence the step was done. MEASURED on a copy of
+# benchmark-data/ic/ibex: step 8 (SDC validation — a step no dimension-7 work
+# touched) went from a correct MISSING to PASS on
+# `reports/phase2/sdc_check.json`, a path the audit itself had just created and
+# which 12 other tracked roots really do carry. No test in the 151-file suite
+# noticed. These two do.
+# ══════════════════════════════════════════════════════════════════════
+_SELF_EVIDENCE_BODY = "d7 self-evidence fixture\n"
+
+
+def _steps_by_self_produced_share():
+    """``(all_self, partial)`` — steps whose declared outputs its OWN gate writes.
+
+    ``all_self``  EVERY declared entry is a `--json` target of this step's gate.
+    ``partial``   at least one is, and at least one is not.
+    Derived live from the yaml through the production `_gate_json_targets`, so
+    a yaml edit moves a step between the buckets instead of rotting a list.
+    """
+    all_self: List[Dict[str, Any]] = []
+    partial: List[Dict[str, Any]] = []
+    for sid in F.step_ids():
+        step = F.step_by_id(sid)
+        outs = list(step.get("required_outputs") or [])
+        if not outs or not step.get("gate"):
+            continue
+        targets = FCC._gate_json_targets(step)
+        self_written = [o for o in outs if o in targets]
+        if not self_written:
+            continue
+        (all_self if len(self_written) == len(outs) else partial).append(step)
+    return all_self, partial
+
+
+def _seed_conditions(project: Path, step: Dict[str, Any]) -> None:
+    """Satisfy the step's ``condition.files_exist`` so check_step reaches outputs.
+
+    An unsatisfied condition returns SKIPPED-CONDITION *before* required_outputs
+    is read, and a fixture that graded that branch would be measuring the
+    condition and calling it a dimension-7 result.
+    """
+    cond = (step.get("condition") or {}).get("files_exist") or []
+    for pat in cond:
+        rel = pat.replace("*", "d7").replace("?", "d")
+        p = project / rel
+        for anc in reversed([p.parent] + list(p.parent.parents)):
+            if anc.is_file():
+                anc.unlink()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if not p.exists():
+            p.write_text(_SELF_EVIDENCE_BODY)
+
+
+def test_a_step_whose_gate_is_its_only_producer_stays_missing():
+    """check_step must not answer "was it produced?" with a file it produced.
+
+    The tree holds the step's conditions and NONE of its declared outputs. The
+    honest verdict is MISSING and the honest side effect is none: the audit has
+    no way to learn that the RUN produced the artefact, so it may not say it
+    did. Reintroducing the withdrawn `_gate_is_sole_producer` exemption makes
+    both assertions fail — the status becomes the gate's own verdict and the
+    declared file appears on disk, written by this test's own audit.
+    """
+    all_self, _partial = _steps_by_self_produced_share()
+    # THE FLOOR. With an empty population every loop below runs zero times and
+    # a green result would mean nothing.
+    assert all_self, (
+        "no step in the flow declares outputs that are ALL its own gate's "
+        "`--json` targets, so this test asserts nothing. If the flow genuinely "
+        "has no such step any more, delete this test in the same change."
+    )
+    for step in all_self:
+        sid = step["id"]
+        outs = list(step["required_outputs"])
+        tmp = Path(tempfile.mkdtemp(prefix="d7_selfevidence_"))
+        try:
+            project = tmp / "proj"
+            project.mkdir()
+            _seed_conditions(project, step)
+            result = FCC.check_step(project, step, {})
+            assert result.status == "MISSING", (
+                f"step {sid} declares {outs}, every one of which only its own "
+                f"gate writes, and NONE of them was on disk when the audit "
+                f"began — yet check_step returned {result.status!r} with "
+                f"evidence {list(result.evidence)!r}. An auditor may not "
+                f"certify a step on an artefact it created during its own run."
+            )
+            left = [o for o in outs if (project / o).exists()]
+            assert not left, (
+                f"step {sid}: the audit created its own declared output(s) "
+                f"{left} in the project it was auditing. Whatever verdict was "
+                f"reached, the next audit of this tree will read them as run "
+                f"evidence."
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_self_certified_evidence_is_named_and_refusable():
+    """The PARTIAL case: credited by default, but never silently.
+
+    A step with some real evidence does not hit the early MISSING return, so
+    its gate runs and writes the declared `--json` output the run never made.
+    That credit is kept — only four of the flow's declared-and-self-written
+    artefacts have any producer outside their own gate, so refusing by default
+    would fail runs that are not defective — but it is now NAMED on the step
+    line, and `--strict-audit-evidence` refuses it. Both directions are
+    asserted here so neither can quietly stop working.
+    """
+    _all_self, partial = _steps_by_self_produced_share()
+    assert partial, (
+        "no step declares a MIX of self-written and externally-written "
+        "outputs, so this test asserts nothing; delete it in the same change "
+        "that removes the last such step."
+    )
+    checked = 0
+    for step in partial:
+        sid = step["id"]
+        outs = list(step["required_outputs"])
+        targets = FCC._gate_json_targets(step)
+        self_written = sorted(o for o in outs if o in targets)
+        others = [o for o in outs if o not in targets]
+        tmp = Path(tempfile.mkdtemp(prefix="d7_selfevidence_partial_"))
+        try:
+            project = tmp / "proj"
+            project.mkdir()
+            _seed_conditions(project, step)
+            for entry in others:
+                for alt in F.split_any_of(entry):
+                    rel = alt.replace("**/", "d7deep/").replace("*", "d7")
+                    p = project / rel
+                    for anc in reversed([p.parent] + list(p.parent.parents)):
+                        if anc.is_file():
+                            anc.unlink()
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(_SELF_EVIDENCE_BODY)
+                    break
+            lenient = FCC.check_step(project, step, {})
+            created = [o for o in self_written if (project / o).exists()]
+            if not created:
+                # This step's gate did not write its declared `--json` target
+                # on this fixture (a conditional clause, or the program
+                # refused). There is nothing self-certified to grade; the next
+                # step may still have something. Never counted as a pass.
+                continue
+            checked += 1
+            named = [r for r in lenient.reasons
+                     if "SELF-CERTIFIED EVIDENCE" in r]
+            assert named, (
+                f"step {sid}: the audit created {created} and the report never "
+                f"said so — reasons were {list(lenient.reasons)!r}"
+            )
+            for rel in created:
+                assert any(rel in r for r in named), (
+                    f"step {sid}: {rel} was created by the audit but the "
+                    f"SELF-CERTIFIED EVIDENCE line does not name it: {named!r}"
+                )
+            # And the strict form must actually refuse it, on a FRESH tree —
+            # the lenient run above left the file behind, which is precisely
+            # what makes the default non-idempotent.
+            shutil.rmtree(project)
+            project.mkdir()
+            _seed_conditions(project, step)
+            for entry in others:
+                for alt in F.split_any_of(entry):
+                    rel = alt.replace("**/", "d7deep/").replace("*", "d7")
+                    p = project / rel
+                    for anc in reversed([p.parent] + list(p.parent.parents)):
+                        if anc.is_file():
+                            anc.unlink()
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(_SELF_EVIDENCE_BODY)
+                    break
+            strict = FCC.check_step(project, step, {},
+                                    strict_audit_evidence=True)
+            assert strict.status not in ("PASS", "VACUOUS_PASS"), (
+                f"step {sid}: --strict-audit-evidence still resolved to "
+                f"{strict.status!r} while its declared output(s) {created} "
+                f"existed only because this audit wrote them"
+            )
+            left = [rel for rel in created if (project / rel).exists()]
+            assert not left, (
+                f"step {sid}: --strict-audit-evidence left its own output "
+                f"{left} in the audited tree, so a second strict audit would "
+                f"read it as run evidence and report PASS"
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    assert checked, (
+        "no partial step's gate wrote its declared `--json` target on the "
+        "synthesized fixture, so neither the advisory nor the strict refusal "
+        "was exercised — this test measured nothing"
+    )

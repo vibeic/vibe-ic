@@ -81,15 +81,51 @@ Two deliberate limits, both measured
 **Import depth is 1** — a gate program plus the local modules it imports
 DIRECTLY. Measured: depth 2 changes nothing (identical miss set); depth 3
 reaches ``_path_layout.py``, the project's single-source-of-truth DIRECTORY
-CATALOGUE, and grounds artefacts the gate demonstrably never opens (step 25's
-``reports/phase3/em.json`` "grounded" by the catalogue while
-``eda_report_audit._check_em`` searches ``*em*.rpt`` only). Depth 3 measured 7
-ungrounded artefacts instead of 9 — the difference bought entirely from a
-catalogue, not from a read.
+CATALOGUE, and grounds artefacts the gate demonstrably never opens. The
+specimen that settled it, quoted as it stood then: step 25's
+``reports/phase3/em.json`` came out "grounded" at depth 3 by the catalogue
+while ``eda_report_audit._check_em`` searched ``*em*.rpt`` only. Depth 3
+measured 7 ungrounded artefacts instead of 9 — the difference bought entirely
+from a catalogue, not from a read. (``_check_em`` now really does open
+``em.json``; the depth-3 objection is unaffected, because what made depth 3
+wrong was that it could not tell the two cases apart.)
 
-Measured channel split on the current tree (122 declared artefacts over the 59
-exec-gated steps that declare any): 103 grounded by program code, 9 grounded
-ONLY by the gate's own declaration, 1 by the prefix table, 9 ungrounded.
+CHANNEL SPLIT — RE-DERIVED 2026-07-28, because the numbers that stood here
+before traced to no artifact. The figures previously written in this paragraph
+("122 declared artefacts ... 112 CODE / 9 GATE / 1 PREFIX / 0 NONE", and
+"103 / 9 / 1 / 9" for the pre-fix tree) reproduce under no definition: they
+understated the weak yaml-vs-yaml GATE channel by roughly four times, which is
+the one number a reader would use to judge how strong these closures are.
+
+Re-measured with this module's own :func:`ground` over every ``required_outputs``
+entry of every step that declares any::
+
+    this tree: 61 steps, 133 artefacts -> CODE 90, GATE 40, PREFIX 1, NONE 2
+    test/matrix-63x8-coverage (241563f66):
+               61 steps, 126 artefacts -> CODE 79, GATE 35, PREFIX 1, NONE 11
+
+Reproduce on either tree with::
+
+    PYTHONPATH=programs:programs/tests python3 -c "
+    import sys; sys.path[:0]=['programs','programs/tests']
+    import matrix_d4_probe as PR
+    from matrix_63x8 import flowref as F
+    from collections import Counter
+    c=Counter()
+    for s in F.step_ids():
+        for e in F.required_outputs(s):
+            g=PR.ground(s,e); c[g.channel if g else 'NONE']+=1
+    print(dict(c))"
+
+The 9 artefacts that were UNGROUNDED when this module was written moved into
+the CODE column by CHANGING THE GATES, not this measurement: each of those
+steps' programs now opens the artefact its step declares. The artefact total
+moved 126 -> 133 because the dimension-7 work DECLARED seven more of them, so
+the two rows are not the same denominator and must not be subtracted.
+
+READ THE **GATE** COLUMN AS THE WEAK ONE. 40 of 133 declared artefacts are
+grounded only by the gate's own yaml declaration — a yaml-vs-yaml agreement,
+not evidence that any program opens the file.
 
 **``_path_layout`` is excluded outright** (:data:`CATALOGUE_MODULES`), because
 50 gate programs import it directly and it carries 163 path literals: at depth
@@ -454,8 +490,31 @@ def gate_declared_paths(step_id) -> Tuple[Tuple[str, str], ...]:
                     )
         for entry in clause.files:
             seen.setdefault(_normalise(entry), "gate files_exist clause")
-        for entry in clause.condition_files:
-            seen.setdefault(_normalise(entry), "gate condition_files_exist")
+        # `condition_files_exist` is DELIBERATELY NOT a grounding source.
+        # WITHDRAWN 2026-07-28 at the convergence merge, with the measurement
+        # that forced it. A `files_exist` clause ASSERTS the artefact; a
+        # `--json` argument is where the gate WRITES it; `json_field_true`
+        # READS it. `condition_files_exist` does none of those: it is a RUN
+        # GUARD on the clause — "only bother running this if X is on disk" —
+        # and it says nothing whatever about any program opening X.
+        #
+        # MEASURED: step 32's declared `phase3/stage3/eco/eco_trigger_decision.json`
+        # gained a `condition_files_exist` entry so that the ECO gate clause
+        # would be REACHABLE on the no-ECO branch (a correct and needed yaml
+        # change). With `condition_files_exist` grounding, the step-32
+        # dimension-4 cell then passed on the flow file alone: restoring the
+        # ORIGINAL defective `programs/eco_loop_audit.py` — in which
+        # `grep -c eco_trigger_decision` is 0, i.e. no program reads the record
+        # at all — left
+        # `test_d4_gate_measures_what_it_claims[step32]` GREEN (`1 passed`).
+        # The cell certified a gate that does not read what it claims to
+        # measure, which is the exact defect the cell exists to catch.
+        #
+        # BLAST RADIUS of the withdrawal, measured on this tree over all 133
+        # declared artefacts of the exec-gated steps: exactly ONE entry was
+        # grounded through this channel (step A9's any-of, via
+        # `phase3/analog/*/hw_measurements.json`). See the A9 row of
+        # `grounding_report` for where it lands now.
         if clause.json_file:
             seen.setdefault(_normalise(clause.json_file), "gate json_field_true")
     return tuple(sorted(seen.items()))

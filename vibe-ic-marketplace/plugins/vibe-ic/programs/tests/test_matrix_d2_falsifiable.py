@@ -104,9 +104,21 @@ RUN
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
 Measured on 2026-07-27: 150 blocking clauses over the 62 gated steps, 120 of
-them driven to a real FAIL, 30 registered in :data:`UNREDDENED`. The suite
+them driven to a real FAIL, 30 registered in :data:`UNREDDENED`. Re-measured
+2026-07-28: 121 reddened, 29 registered — the
+``fmeda_fault_injection_coverage`` entry de-registered because it now reaches
+a real FAIL. **WHICH arm reddens it matters, and the first attempt got this
+wrong.** The entry first de-registered itself on the bare ``EMPTY`` fixture,
+through a brand-new ``--rtl-dir does not exist`` argument-validation exit —
+so the register recorded the clause as falsifiable while the DIAGNOSTIC-
+COVERAGE verdict it exists to police stayed unfalsified by the whole suite.
+It is now assigned :data:`FMEDA_RTL_BLIND`: real RTL declaring an ECC
+mechanism whose detector is tied off, which reaches the measured
+DC-vs-ASIL-floor comparison and fails it. The suite
 shells out once per exec clause and completes in ~5s (the fixtures are a
-handful of stub files, so each gate returns in ~30ms); ``VIBE_IC_GATE_TIMEOUT_S``
+handful of stub files, so each gate returns in ~30ms — plus one iverilog
+injection run for ``FMEDA_RTL_BLIND``, which is the price of measuring the
+verdict instead of the argument parser); ``VIBE_IC_GATE_TIMEOUT_S``
 is pinned low by :func:`_gate_timeout` so one hung gate cannot hang the suite.
 """
 from __future__ import annotations
@@ -324,6 +336,35 @@ def _f_fmeda_bad(p: Path) -> None:
         "detected_faults": 1, "baseline_valid": True})
 
 
+def _f_fmeda_rtl_blind(p: Path) -> None:
+    """RTL that DECLARES an ECC mechanism whose detector is tied off.
+
+    The PRODUCER clause (`fmeda_fault_injection_coverage`) needs RTL, not a
+    report: its subject is the measured diagnostic coverage, and without a
+    declared mechanism it answers NOT_APPLICABLE and exits 0. This is the
+    smallest input that reaches the DC comparison and fails it — a Hamming
+    encoder paired with a decoder whose `syndrome_err` is a constant, so every
+    injected single-bit fault escapes and DC lands far below the ASIL-D floor.
+
+    Reddening this clause on the bare EMPTY fixture instead would exercise
+    only the `--rtl-dir does not exist` argument-validation arm, leaving the
+    diagnostic-coverage verdict — the thing this gate exists to police —
+    unfalsified by the suite while the register recorded it as falsifiable.
+    """
+    _w(p, "phase2/stage1/rtl/enc.v",
+       "module ham_enc(input [3:0] data_in, output [6:0] code_out);\n"
+       "assign code_out[2]=data_in[0]; assign code_out[4]=data_in[1];\n"
+       "assign code_out[5]=data_in[2]; assign code_out[6]=data_in[3];\n"
+       "assign code_out[0]=data_in[0]^data_in[1]^data_in[3];\n"
+       "assign code_out[1]=data_in[0]^data_in[2]^data_in[3];\n"
+       "assign code_out[3]=data_in[1]^data_in[2]^data_in[3]; endmodule\n")
+    _w(p, "phase2/stage1/rtl/dec.v",
+       "module ham_dec(input [6:0] code_in, output [3:0] data_out,"
+       " output syndrome_err);\n"
+       "assign data_out={code_in[6],code_in[5],code_in[4],code_in[2]};\n"
+       "assign syndrome_err=1'b0; endmodule\n")
+
+
 def _f_ms_bad(p: Path) -> None:
     """A merged GDS with no LVS behind it; an unparseable power-domain file."""
     _w(p, "phase3/mixed_signal/top_merged.gds", "not a real gds")
@@ -354,6 +395,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "GDS_BAD": _f_gds_bad,
     "MFG_BAD": _f_mfg_bad,
     "FMEDA_BAD": _f_fmeda_bad,
+    "FMEDA_RTL_BLIND": _f_fmeda_rtl_blind,
     "MS_BAD": _f_ms_bad,
     "TB_BAD": _f_tb_bad,
     "HOLLOW_REPORTS": _f_hollow_reports,
@@ -381,6 +423,9 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     ("8", "sdc_validator_check . --l8 "
           "phase1/generated_docs/L8_TIMING_WAVEFORM.json --json "
           "reports/sdc_validator.json"): "SDC_BAD",
+    ("FS1", "fmeda_fault_injection_coverage . --rtl-dir phase2/stage1/rtl "
+            "--asil D --json reports/phase2/safety/fmeda_coverage.json"):
+        "FMEDA_RTL_BLIND",
     ("FS1", "fmeda_coverage_check . --json "
             "reports/phase2/safety/fmeda_coverage_gate.json"): "FMEDA_BAD",
     ("A1", "analog_a1_spec_extract_check . --json reports/analog/a1_spec.json"):
@@ -548,11 +593,27 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
           "reports/phase2/gates/derived_clock_sdc.json"):
         "PASS: needs RTL that DERIVES a clock (divider/gater) with no matching "
         "create_generated_clock; the fixture derives no clock",
-    ("FS1", "fmeda_fault_injection_coverage . --rtl-dir phase2/stage1/rtl "
-            "--asil D --json reports/phase2/safety/fmeda_coverage.json"):
-        "PASS (NOT_APPLICABLE): fires only when the RTL DECLARES an "
-        "ECC/parity/lockstep mechanism, and reaching its FAIL arm then needs a "
-        "real fault-injection simulation run",
+    # ("FS1", "fmeda_fault_injection_coverage ...") — DE-REGISTERED, on the
+    # SUBSTANTIVE arm. The entry read "PASS (NOT_APPLICABLE): fires only when
+    # the RTL DECLARES an ECC/parity/lockstep mechanism, and reaching its FAIL
+    # arm then needs a real fault-injection simulation run". Both halves were
+    # true, and the fix is to BUILD that run: the clause is now assigned
+    # FMEDA_RTL_BLIND — a Hamming encoder plus a decoder whose syndrome output
+    # is tied to a constant — which reaches the DC-vs-ASIL-floor comparison and
+    # fails it. RE-MEASURED 2026-07-28, because the figure written here before
+    # ("DC=7.14%") reproduces from nothing: driving THIS module's own
+    # FIXTURES['FMEDA_RTL_BLIND'] through the exact clause command gives
+    # `DC=42.86% (48/112) floor=99.0 ASIL-D -> FAIL`, rc 1, deterministically.
+    # The verdict and the exit code were right; the number was not, and a
+    # number in shipped code that traces to no artifact is the defect class
+    # this campaign exists to remove.
+    #
+    # It was FIRST de-registered on the bare EMPTY fixture, reddened by a new
+    # `--rtl-dir does not exist` argument-validation exit. That is a real
+    # non-zero exit and the direction-B anti-rot assertion correctly forced the
+    # entry out — but it would have left this register asserting that the
+    # diagnostic-coverage verdict is falsifiable when only the argument parser
+    # was. Reddening the right arm is the point of the register.
     ("15", "ip_integration_check . --json "
            "reports/phase2/gates/ip_integration.json"):
         "VACUOUS: needs a declared IP catalogue with an integration defect; "

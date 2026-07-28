@@ -437,6 +437,45 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
         "A8_hardmacro_gen":     "analog-hardmacro-gen",
         "A9_hw_verify":         "analog-hw-measure",
     }
+    # A8-d3 — PRODUCE the fourth declared A8 artefact before its gate runs.
+    # A8 declares .lef/.lib/.v/.gds; this runner's stub emitter and the
+    # `analog-hardmacro-gen` skill both write the first three and NEITHER
+    # writes the .gds, and `analog_a8_hardmacro_gen_check` only inspects the
+    # LEF/LIB/V triple — so the declared layout was produced by nothing and
+    # nothing downstream noticed. `analog_hardmacro_gds_emit` streams the A5
+    # layout.mag out with Magic against the technology the layout itself
+    # names. Deliberately NON-BLOCKING and pre-gate, in the same shape as
+    # A4's `analog_real_corner_sweep` fall-through: an unreachable container
+    # is its disclosed rc=2 and must not turn A8 into a FAIL that the gate
+    # below has not itself found. A deterministic-stub layout is skipped by
+    # the producer, so PASS_WITH_STUB is untouched.
+    #
+    # THIS IS THE ONLY PRODUCTION SITE. The producer was briefly also wired
+    # into A8's flow gate; that was withdrawn on 2026-07-28 because
+    # `flow_compliance_check` is the acceptance auditor and an auditor that
+    # writes a declared required_output into the tree it audits certifies its
+    # own output. Producing here — inside the runner that OWNS the step —
+    # keeps the artefact in the run and out of the audit. Guarded by
+    # test_analog_hardmacro_gds_emit
+    # .test_the_analog_runner_invokes_this_producer_at_a8_and_only_there,
+    # which asserts the dispatched argv rather than grepping this file.
+    if step_name == "A8_hardmacro_gen":
+        gds_prog = PROGRAMS_DIR / "analog_hardmacro_gds_emit.py"
+        if gds_prog.is_file():
+            try:
+                subprocess.run(
+                    [sys.executable, str(gds_prog), str(project),
+                     "--block", bname,
+                     "--container",
+                     (getattr(args, "container", None)
+                      or os.environ.get("VIBEIC_ANALOG_CONTAINER",
+                                        "vibeic-eda"))],
+                    capture_output=True, text=True, timeout=1800)
+            except (OSError, subprocess.SubprocessError):
+                # Producing is not a verdict; the A8 gate below still reports
+                # the missing artefact on its own evidence.
+                pass
+
     det = det_progs.get(step_name)
     skill = skill_map.get(step_name, "(no skill mapped)")
     if det and det.is_file():

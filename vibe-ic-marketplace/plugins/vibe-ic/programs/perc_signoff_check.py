@@ -22,13 +22,113 @@ ENFORCED:
 Exit codes: 0 PASS / PASS_WITH_OPEN_ITEMS, 1 FAIL, 2 no
 perc_equivalent.json yet (vacuous — run phase3 sign-off first).
 chip-AGNOSTIC: consumes only the aggregate's structural fields.
+
+THE HUMAN-READABLE HALF (what this gate used to ignore)
+-------------------------------------------------------
+Step 28 declares THREE artefacts::
+
+    reports/phase3/perc_equivalent.json
+    reports/phase3/perc_equivalent.rpt
+    reports/phase3/PERC_SIGNOFF_MEMO.md
+
+`phase3_one_shot_runner._emit_perc_equivalent` writes all three from ONE
+summary, and the memo is the artefact a reviewer actually signs at tapeout
+(the flow's step table lists step 28's outputs as "perc_equivalent.json ·
+PERC memo · gate verdict"). This gate opened the JSON only, so the two
+human-readable projections could say anything at all and the step still
+signed off. Measured: a memo whose `**Overall verdict:** \\`PASS\\`` line was
+edited to contradict a JSON carrying a conclusive ESD `FAIL` produced rc=1 on
+the JSON alone — but a memo that simply DROPPED the failing category's row,
+or a stale memo left over from the previous run stating `PASS`, was invisible.
+
+The three are now cross-checked, CONTRADICTION-first:
+
+  * a projection that states an overall verdict different from the JSON's is
+    an ERROR — the machine record and the signed record disagree;
+  * a category the JSON reports as AUTOMATED/FAIL that is NOT named in a
+    projection is an ERROR — the conclusive defect is missing from the
+    document a human signs;
+  * a projection that is ABSENT is DISCLOSED (a named finding in the report,
+    not a blocking one): step 28's `required_outputs` is ALL-of-N and already
+    reports a missing declared artefact, so this gate states the gap rather
+    than double-failing it.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+#: The human-readable projections step 28 declares, exactly as the flow yaml
+#: spells them, paired with the regex that extracts the verdict each states.
+#: `_emit_perc_equivalent` writes `OVERALL VERDICT: <v>` into the .rpt and
+#: `**Overall verdict:** \`<v>\`` into the memo.
+PROJECTIONS: Tuple[Tuple[str, str], ...] = (
+    ("reports/phase3/perc_equivalent.rpt",
+     r"^OVERALL\s+VERDICT:\s*(\S+)\s*$"),
+    ("reports/phase3/PERC_SIGNOFF_MEMO.md",
+     r"^\*\*Overall verdict:\*\*\s*`([^`]+)`"),
+)
+
+
+def _stated_verdict(text: str, pattern: str) -> Optional[str]:
+    hit = re.search(pattern, text, re.MULTILINE)
+    return hit.group(1).strip() if hit else None
+
+
+def cross_check_projections(project: Path,
+                            summary: Dict[str, Any]) -> Tuple[
+                                List[str], List[str]]:
+    """``(errors, disclosures)`` comparing the two declared projections.
+
+    ``summary`` is the parsed ``perc_equivalent.json``. Only an explicit
+    disagreement is an error; a projection that states no verdict at all is
+    disclosed, never guessed at.
+    """
+    errors: List[str] = []
+    disclosures: List[str] = []
+    json_verdict = summary.get("verdict")
+    conclusive_failed = [
+        str(c.get("category"))
+        for c in (summary.get("categories") or [])
+        if isinstance(c, dict)
+        and c.get("status") == "AUTOMATED" and c.get("result") == "FAIL"
+    ]
+
+    for rel, pattern in PROJECTIONS:
+        path = project / rel
+        if not path.is_file():
+            disclosures.append(
+                f"{rel} (declared by step 28) is absent — the machine verdict "
+                f"in perc_equivalent.json is uncorroborated by the "
+                f"human-readable sign-off record")
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError as exc:
+            errors.append(f"{rel} unreadable: {exc}")
+            continue
+        stated = _stated_verdict(text, pattern)
+        if stated is None:
+            disclosures.append(
+                f"{rel} states no overall verdict line — cannot be compared "
+                f"with perc_equivalent.json's {json_verdict!r}")
+        elif json_verdict is not None and stated != str(json_verdict):
+            errors.append(
+                f"{rel} states overall verdict {stated!r} but "
+                f"perc_equivalent.json states {str(json_verdict)!r} — the "
+                f"signed record contradicts the machine record")
+        for cat in conclusive_failed:
+            if cat and cat not in text:
+                errors.append(
+                    f"{rel} does not name the conclusive AUTOMATED FAIL "
+                    f"{cat!r} that perc_equivalent.json reports — a "
+                    f"reliability defect missing from the document a human "
+                    f"signs")
+    return errors, disclosures
 
 
 def audit(project: Path) -> dict:
@@ -53,19 +153,39 @@ def audit(project: Path) -> dict:
     open_items = ([f"INCOMPLETE: {c.get('category')}" for c in incomplete]
                   + [f"MANUAL_REVIEW: {c.get('category')}" for c in manual])
 
+    proj_errors, proj_disclosures = cross_check_projections(project, data)
+
     rep = {
         "source": "reports/phase3/perc_equivalent.json",
         "source_verdict": data.get("verdict"),
         "automated_total": len(automated),
         "automated_failed": [c.get("category") for c in failed],
         "open_items": open_items,
+        "projections_checked": [rel for rel, _ in PROJECTIONS],
+        "projection_contradictions": proj_errors,
+        "projection_disclosures": proj_disclosures,
     }
+    # A conclusive reliability defect is reported FIRST when both are present:
+    # a contradicted memo is a bookkeeping failure, a failed ESD / latch-up
+    # category is a silicon one. Both appear in the report either way, and
+    # both produce rc=1.
     if failed:
+        reason = ("conclusive PERC reliability defect(s): "
+                  + "; ".join(
+                      f"{c.get('category')}: "
+                      f"{str(c.get('note') or c.get('source_verdict') or '')[:120]}"
+                      for c in failed))
+        if proj_errors:
+            reason += ("; ALSO, the declared human-readable sign-off "
+                       "artefact(s) contradict perc_equivalent.json: "
+                       + "; ".join(proj_errors))
+        rep.update(verdict="FAIL", rc=1, reason=reason)
+    elif proj_errors:
         rep.update(verdict="FAIL", rc=1, reason=(
-            "conclusive PERC reliability defect(s): "
-            + "; ".join(f"{c.get('category')}: "
-                        f"{str(c.get('note') or c.get('source_verdict') or '')[:120]}"
-                        for c in failed)))
+            "no conclusive reliability defect in perc_equivalent.json, but the "
+            "declared human-readable PERC sign-off artefact(s) contradict it, "
+            "so the machine record and the signed record cannot both be "
+            "trusted: " + "; ".join(proj_errors)))
     elif open_items:
         rep.update(verdict="PASS_WITH_OPEN_ITEMS", rc=0, reason=(
             f"no conclusive reliability defect; {len(open_items)} named "

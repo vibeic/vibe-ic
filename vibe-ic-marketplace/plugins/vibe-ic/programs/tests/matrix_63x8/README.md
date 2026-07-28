@@ -252,7 +252,7 @@ single-threaded pytest but would **not** be safe under
 `pytest-xdist --dist loadfile` sharing a process, or if the suite ever gains
 thread-parallel test execution.
 
-## The census, as it stands after the 2026-07-27 close-out
+## The census, as it stands after the 2026-07-28 convergence merge
 
 Reported by `programs/tests/test_matrix_63x8_coverage.py`, which collects the
 eight modules through pytest's own machinery and asks each module the state of
@@ -262,13 +262,92 @@ the cells it owns. **504 / 504 cells present, exactly once.**
 |-----|-------------------------|---------:|-------:|---:|
 | 1   | wiring                  | 63       | 0      | 0  |
 | 2   | runnable / falsifiable  | 62       | 0      | 1  |
-| 3   | outputs produced        | 52       | 4      | 7  |
-| 4   | criteria match          | 53       | 10     | 0  |
-| 5   | deps correct            | 57       | 5      | 1  |
-| 6   | skip discipline         | 60       | 3      | 0  |
-| 7   | outputs list complete   | 53       | 9      | 1  |
+| 3   | outputs produced        | 53       | 1      | 9  |
+| 4   | criteria match          | 63       | 0      | 0  |
+| 5   | deps correct            | 62       | 0      | 1  |
+| 6   | skip discipline         | 58       | 5      | 0  |
+| 7   | outputs list complete   | 58       | 4      | 1  |
 | 8   | missing mechanism       | 61       | 0      | 2  |
-| **total** |                   | **461**  | **31** | **12** |
+| **total** |                   | **480**  | **10** | **14** |
+
+Reproduce (never quote this table without re-running it):
+
+```
+cd vibe-ic-marketplace/plugins/vibe-ic && PYTHONPATH=.:programs:programs/tests \
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -c \
+  "import sys; sys.path[:0]=['programs','programs/tests']; \
+   import test_matrix_63x8_coverage as CV, collections; \
+   print(collections.Counter(CV.state_census().values()))"
+-> Counter({'ENFORCED': 480, 'NA': 14, 'WAIVED': 10})
+```
+
+> **Dimension 6 went DOWN, on purpose.** 60/3/0 -> 58/5/0. Two cells that were
+> ENFORCED are now waived (steps 4 and 14) because a new leg — L3c — measures
+> something the dimension previously only described in prose: a step on the
+> VACUOUS_PASS tier is still inside the published `X/Y executed PASS`
+> numerator, so a skip is counted as a measurement in the number a reviewer
+> reads. DT2 is waived again after its closure was measured to be a
+> regression (see below). A lower honest number beats a higher fake one; that
+> is the whole point of this suite.
+
+> The dimension-3 row moved on **2026-07-28** and the total moves with it
+> (+1 ENFORCED, −3 WAIVED, +2 NA). Three of that dimension's four waivers were
+> retired rather than re-worded:
+>
+> * **A8** is now ENFORCED, as `PRODUCED_LIVE`. Its `.gds` was declared and
+>   produced by nothing — `magic_port_extract_emit.build_gds_write_tcl` had
+>   shipped since v0.1.114 with a unit test and no caller — so no archived run
+>   can have written one, and nothing is committed as evidence. The cell runs
+>   `programs/analog_hardmacro_gds_emit.py` on a throwaway copy of the analog
+>   reference run and requires the artefact to land with real geometry, at the
+>   size and record count the producer's own run record claims, streamed from a
+>   `layout.mag` that already existed in the archived tree. The producer is
+>   invoked by `analog_one_shot_runner`, NOT by A8's gate: `flow_compliance_check`
+>   is the acceptance auditor and must not create the artefact it certifies.
+>   This is the one cell that needs an EDA container; where Magic is
+>   unreachable the producer's rc=2 names the gap and the cell goes RED as
+>   UNMEASURED rather than green.
+> * **6** and **39** are now `NA_TOOLCHAIN_ABSENT`, not waived. Their bitstream
+>   entries are written only by Intel Quartus; the cells ASSERT, with the flow's
+>   own locator, that no reachable host or container advertises it, that no run
+>   root acquired one anyway, and that every entry the toolchain does NOT gate
+>   is still fully enforced. Install Quartus and both cells go red.
+> * **M1** stays WAIVED with a narrower, re-measured reason: the merge producer
+>   ships and is wired; no admissible run root carries both a digital sign-off
+>   GDS and an analog hardmacro GDS, which is the input set it needs.
+>
+> This row is the only one this note touches; other dimensions' rows and the
+> total must be reconciled with whatever the sibling groups landed.
+
+
+> The dimension-5 row moved 5 -> 0 WAIVED on 2026-07-28: all five of that
+> dimension's waivers said "LIVE DEFECT, reproduced" and all five were
+> closed by fixing the defect (two declared edges, one broken A5/A6 cycle,
+> one gate moved off a step that could not declare what it read, one yaml
+> block moved to kill the flow's only forward edge). Breaking the A5/A6 cycle
+> DID drop a defect class on its own — A5 read the PV flags, A6 prefers the
+> PV report, so a project whose flag contradicts its report went from rc 1 to
+> rc 0 at both gates — and that is closed separately by
+> `analog_a6_block_pv_check._witness_disagreements`, measured in both
+> directions and on all 23 tracked analog run roots.
+
+> **Dimension 4 closed all ten**, and one of them nearly closed on the wrong
+> evidence: step 32's cell passed on the flow yaml alone, because
+> `condition_files_exist` was accepted as artefact GROUNDING. Restoring the
+> ORIGINAL defective `programs/eco_loop_audit.py` — in which
+> `grep -c eco_trigger_decision` is 0 — left the cell green. That channel is
+> withdrawn (`matrix_d4_probe.gate_declared_paths`); the cell now reddens on
+> its own defect and passes on the fix.
+
+> **Dimension 6's DT2 cell is waived again.** Its closure re-armed DT2's
+> condition on the producer's own outputs. Measured on a real tracked run
+> root with one mutation — delete the at-speed grade, the artefact DT2 exists
+> to report on — that turns MISSING/rc 1 into SKIPPED-CONDITION/rc 0 and drops
+> the step out of the executed-PASS denominator. The condition is back to the
+> declared ALL-of, the hole is back in
+> `flow/flow_condition_reachability_baseline.json`, and the waiver names the
+> single thing that closes it: a flow-level non-fatal "ran, disclosed, could
+> not measure" verdict that COSTS the denominator.
 
 `ENFORCED` means the cell's live predicate runs and passes. It does **not** mean
 the predicate is strong enough to catch every defect of that kind — read the

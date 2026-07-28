@@ -35,8 +35,10 @@ Two narrower blind spots, both measured rather than guessed:
     ``--json`` audit trail the gate writes rather than reads). For those the
     assertion is yaml-vs-yaml consistency: real, because the two lists are
     written independently and do drift, but weaker than yaml-vs-program. The
-    other 113 are grounded by program code (103) or by a filename-prefix table
-    (1) — plus the 9 waived below.
+    rest are grounded by program code or by a filename-prefix table (1).
+    The 9 that were grounded by NOTHING when this module was written are now
+    grounded by program code: each one's gate was changed to open the artefact
+    its step declares. See the ``LOCAL_WAIVERS`` block for the per-step fix.
   * **Grounding proves the gate is WIRED to the artefact, not that it reads it
     substantively.** ``analog_a8_*`` opening a 500-byte non-GDS file and
     calling it a GDS is grounded here and still a defect. That is dimension
@@ -48,8 +50,10 @@ What this module DOES decide, live, on every run:
      command is run verbatim; if the program's own parser rejects it (argparse
      ``rc=2`` + a ``prog: error:`` usage line), the clause measures nothing —
      and ``flow_compliance_check._check_program_exit_zero`` maps ``rc == 2``
-     onto ``VACUOUS_PASS``, so it measures nothing *and banks a pass*. One live
-     instance (step 2) is waived below with its reproduction.
+     onto ``VACUOUS_PASS``, so it measures nothing *and banks a pass*. The one
+     live instance this module found — step 2, ``rtl_bug_report_schema_check``
+     declaring ``--out`` against a yaml that passes ``--json`` — is fixed in
+     the program; this clause is what keeps the next one from shipping.
   2. **Every artefact the step declares is named somewhere the gate can reach.**
      A step that declares ``reports/phase3/em.json`` while its gate searches
      ``*em*.rpt`` only is measuring something adjacent to its own claim.
@@ -99,179 +103,48 @@ DIM = 4
 # registry the moment the orchestrator lands them, so there is never a double
 # source of truth for one cell.
 #
-# Every entry below was reproduced on this tree on 2026-07-27. Each is a
-# STRICT xfail: the day the gap is closed the suite goes red on XPASS and the
-# waiver must be deleted.
+# EMPTY, and that is the finding. All ten of this dimension's waivers were
+# closed by fixing what they waived, not by relaxing anything here — the ten
+# gates now read the artefacts their steps declare, and every one of the fixes
+# is falsifiable (an input that trips it, with a non-zero rc). ``strict=True``
+# is what made that the only way through: a fix without a deletion reports
+# XPASS -> FAILED, and a deletion without a fix reports FAILED.
+#
+#   step 2   rtl_bug_report_schema_check accepts the flow's own `--json`
+#            (it declared `--out` only, so argparse exited 2 and
+#            flow_compliance_check credited rc==2 as VACUOUS_PASS)
+#   step 9   synth_netlist_check binds stats.json/area.rpt to the netlist
+#            under audit by CONTENT — the emitter records the measured
+#            netlist's digest and the gate hashes the file it was handed —
+#            plus the zeroed-measurement refusal. (Not by mtime and not by
+#            filename: an mtime ordering is created by the runner on every
+#            re-synthesis and a filename cannot tell a byte-identical alias
+#            from a different design. Both proxies were tried and both were
+#            the wrong quantity; see the block comment in the program.)
+#   step 11  dft_signoff_check requires the at-speed plan its ENGINE_LIMITED
+#            tier calls "documented" to exist, at the path the flow declares
+#            when the record names none — the requirement is not opt-in by
+#            the document under audit
+#   step 14  yosys_script_template_check reads the handoff netlist, not only
+#            the recipe that claims to write it; staleness is compared only
+#            against scripts whose own write_verilog names that netlist, so a
+#            later-phase script that merely CONSUMES it is not evidence
+#   step 25  eda_report_audit:em opens em.json and refuses a formatted zero
+#   step 28  perc_signoff_check cross-checks the .rpt and the sign-off memo
+#            against perc_equivalent.json
+#   step 32  eco_loop_audit reads eco_trigger_decision.json before honouring
+#            no_eco_needed.flag, through a path composed FROM the declared
+#            literal; and the step's gate condition was widened so the audit
+#            actually RUNS on the no-ECO branch, which is the only branch the
+#            contradiction can appear on
+#   step 33  eda_report_audit:power opens power.json and corroborates its
+#            source and analysis_mode against the report
+#   step 39  fpga_on_board_attestation_check requires the attested bitstream
+#            to be the FINAL one step 39 declares
+#   P0       cdc_async_input_check is registered in _STRUCTURAL_RTL_GATES, so
+#            P0's prose about the audit's gates[] array is now true
 # ──────────────────────────────────────────────────────────────────────
-LOCAL_WAIVERS: Tuple[W.Waiver, ...] = (
-    W.Waiver(
-        step_id=2,
-        dim=DIM,
-        reason=(
-            "The flow's own gate command passes --json, but the program it names "
-            "declares --out and no --json, so its parser REJECTS the declared "
-            "invocation: argparse exits 2, and flow_compliance_check maps rc==2 "
-            "onto VACUOUS_PASS, so the clause banks a step PASS while auditing "
-            "nothing and never writing the audit trail the yaml names."
-        ),
-        evidence=(
-            "programs/rtl_bug_report_schema_check.py:260 declares --out (no "
-            "--json); running the yaml's exact command in an empty project gives "
-            "rc=2 + 'rtl_bug_report_schema_check.py: error: unrecognized "
-            "arguments: --json reports/phase2/gates/rtl_bug_schema.json' and no "
-            "file written; programs/flow_compliance_check.py:2157 returns "
-            "True for rc==2"
-        ),
-    ),
-    W.Waiver(
-        step_id=9,
-        dim=DIM,
-        reason=(
-            "Step 9 declares 'phase2/stage2/synth/area.rpt OR "
-            "phase2/stage2/synth/stats.json' but neither gate program ever opens "
-            "an area or stats artefact, so the synthesis step's own area claim is "
-            "gated by nothing; the gate measures cell accounting and provenance "
-            "only."
-        ),
-        evidence=(
-            "programs/synth_netlist_check.py:281 reads only the --netlist path; "
-            "programs/provenance_check.py reads provenance.jsonl; grep -n "
-            "'area\\.rpt\\|stats\\.json' over both files and their direct local "
-            "imports yields 0 executable hits (2026-07-27)"
-        ),
-    ),
-    W.Waiver(
-        step_id=11,
-        dim=DIM,
-        reason=(
-            "Step 11 declares 'phase2/stage2/dft/transition_atpg_plan.md' as a "
-            "required output, but none of the three gate programs names that "
-            "artefact anywhere in executable code, so the at-speed transition "
-            "plan the step claims to deliver is unmeasured by the step's gate."
-        ),
-        evidence=(
-            "grep -n transition_atpg_plan "
-            "programs/dft_atpg_coverage_check.py programs/bsdl_emit.py "
-            "programs/dft_signoff_check.py -> 0 hits (2026-07-27); the separate "
-            "DT1 step has its own transition_coverage_check gate"
-        ),
-    ),
-    W.Waiver(
-        step_id=14,
-        dim=DIM,
-        reason=(
-            "Step 14 is the synthesis HANDOFF gate and declares "
-            "'phase2/stage2/synth/netlist.v', but both gate programs audit the "
-            "Yosys *.ys SCRIPT only and never open the netlist that script is "
-            "supposed to have produced — the artefact handed to PnR is not the "
-            "artefact the gate inspects."
-        ),
-        evidence=(
-            "programs/yosys_script_template_check.py:201 ys_globs = "
-            "['phase2/stage2/synth/*.ys', 'phase2/stage2/synth/**/*.ys', ...]; "
-            "programs/yosys_hilomap_required_check.py reads --ys-file / *.ys "
-            "only; 'netlist.v' appears in both files exclusively in prose"
-        ),
-    ),
-    W.Waiver(
-        step_id=25,
-        dim=DIM,
-        reason=(
-            "Step 25 declares 'reports/phase3/em.json' but the EM mode of the "
-            "wrapped auditor discovers report files by .rpt-family globs only, so "
-            "the JSON half of the step's declared electromigration evidence is "
-            "never opened by the gate that signs the step off."
-        ),
-        evidence=(
-            "programs/eda_report_audit.py:848 _check_em -> _discover(project, "
-            "['*em*.rpt', '*electromigration*', '*EM*.rpt', '*ir*.rpt']) — no "
-            ".json pattern; programs/em_report_check.py forwards argv into it"
-        ),
-    ),
-    W.Waiver(
-        step_id=28,
-        dim=DIM,
-        reason=(
-            "Step 28 declares three artefacts but its gate opens exactly one of "
-            "them: the human-readable PERC report and the sign-off memo are "
-            "declared deliverables that no gate program reads, so a step named "
-            "'PERC / Reliability sign-off' verifies a third of what it declares."
-        ),
-        evidence=(
-            "programs/perc_signoff_check.py:35 src = project / 'reports' / "
-            "'phase3' / 'perc_equivalent.json' is the only artefact opened; "
-            "'perc_equivalent.rpt' and 'PERC_SIGNOFF_MEMO.md' appear nowhere in "
-            "that file's executable code (2026-07-27)"
-        ),
-    ),
-    W.Waiver(
-        step_id=32,
-        dim=DIM,
-        reason=(
-            "Step 32 declares 'phase3/stage3/eco/eco_trigger_decision.json' — the "
-            "record of WHY an ECO was or was not run — but the ECO audit gate "
-            "opens the eco log only, so the trigger decision the step exists to "
-            "justify is never cross-checked by the step's own gate."
-        ),
-        evidence=(
-            "programs/eco_loop_audit.py:40 data = json.loads(eco_log.read_text()) "
-            "is its only artefact read; grep -n eco_trigger_decision "
-            "programs/eco_loop_audit.py -> 0 hits (2026-07-27)"
-        ),
-    ),
-    W.Waiver(
-        step_id=33,
-        dim=DIM,
-        reason=(
-            "Step 33 declares 'reports/phase3/power.json' but the power mode of "
-            "the wrapped auditor discovers .rpt/.log only, so the machine-readable "
-            "half of the declared power evidence is never opened; the gate reports "
-            "on power from the text report alone."
-        ),
-        evidence=(
-            "programs/eda_report_audit.py:793 _check_power -> _discover(project, "
-            "['*power*.rpt', '*power*.log', '*Power*.rpt', '*Power*.log']) — no "
-            ".json pattern; programs/power_report_check.py forwards argv into it"
-        ),
-    ),
-    W.Waiver(
-        step_id=39,
-        dim=DIM,
-        reason=(
-            "The gate DOES hash the bitstream, but it reaches it through a report "
-            "key read at runtime — the path comes from the attestation JSON's "
-            "bitstream_path field, not from any literal in the source — so no "
-            "static predicate can bind it to the yaml's declared "
-            "'phase2/stage1/fpga/final/*.sof'. This is a limit of the "
-            "mechanization, not a demonstrated gap in the gate."
-        ),
-        evidence=(
-            "programs/fpga_on_board_attestation_check.py:139 bp = "
-            "data.get('bitstream_path'); :147 disk_sha = _sha256(abs_bp) — the "
-            "only .sof mentions in the file are in its docstring (lines 14-22) "
-            "and a comment (line 271)"
-        ),
-    ),
-    W.Waiver(
-        step_id="P0",
-        dim=DIM,
-        reason=(
-            "P0's own notes name cdc_async_input_check as one of the gate names "
-            "that appear in the audit JSON's gates[] array, but that array is "
-            "built exclusively from the structural-RTL registry and "
-            "cdc_async_input_check is not a member of it — it is a Step-3 gate "
-            "program. The step's prose therefore advertises a checker its "
-            "mechanism cannot emit."
-        ),
-        evidence=(
-            "python3 -c \"import flow_compliance_check as f; "
-            "print('cdc_async_input_check' in f._STRUCTURAL_RTL_GATES)\" -> False "
-            "(241 members; nearest is fpga_async_input_synchronizer_check); "
-            "programs/flow_compliance_check.py:7621 builds per_gate only from the "
-            "P0 result and :7687 stores it as the audit's 'gates' array"
-        ),
-    ),
-)
+LOCAL_WAIVERS: Tuple[W.Waiver, ...] = ()
 
 _LOCAL_BY_KEY = {w.key: w for w in LOCAL_WAIVERS}
 
@@ -590,9 +463,20 @@ def test_d4_selfcheck_catalogue_exclusion_is_justified():
 def test_d4_selfcheck_local_waivers_are_evidence_backed():
     """Every locally-held waiver must satisfy the shared validator.
 
-    ``validate()`` rejects a placeholder reason, a reason under 40 chars, and
-    an empty or trivial evidence string, so a cell cannot be quietly parked
-    behind "flaky" or "not implemented".
+    THIS TEST PASSES VACUOUSLY TODAY, and saying so is the point of this
+    paragraph. ``LOCAL_WAIVERS`` is empty — all ten of this dimension's waivers
+    were closed by fixing the gates — so the comprehension below iterates zero
+    times and ``W.validate`` is never called. Nothing here is currently being
+    validated. The assertion is kept because it is the right guard the moment a
+    waiver is added again, and a reader must not count it as live evidence in
+    the meantime. (Its d8 sibling,
+    ``test_matrix_d8_missing_caught.test_d8_every_waiver_is_evidence_backed``,
+    states the same thing about its own empty registry.)
+
+    What it WOULD check, once there is anything to check: ``validate()``
+    rejects a placeholder reason, a reason under 40 chars, and an empty or
+    trivial evidence string, so a cell cannot be quietly parked behind "flaky"
+    or "not implemented".
 
     If the orchestrator later lands one of these in
     ``matrix_63x8.waivers.WAIVERS``, ``_waiver_for`` prefers the central copy
@@ -634,9 +518,18 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
         f"waived cells {sorted(waived)} do not match the registries this module "
         f"knows about {sorted(known)}"
     )
-    assert len(cells) - len(waived) == 53, (
-        f"{len(cells) - len(waived)} cells are enforced; this module was "
-        f"reported as enforcing 53. Update the report, or explain the change."
+    # WAS 53. The change, explained as the message below demands: the ten
+    # cells this dimension waived were CLOSED by fixing the gates, not by
+    # relaxing the predicate — see the LOCAL_WAIVERS block at the top for the
+    # per-step fix and `git log` for the diff. Nothing in `_assert_*` above
+    # changed, so the same predicate that failed those ten now passes them.
+    # The number stays hard-coded on purpose: deriving it from `waived` would
+    # make this assertion unfalsifiable, and a NEW waiver must force a human
+    # to re-state the census rather than slip in silently.
+    assert len(cells) - len(waived) == 63 and not waived, (
+        f"{len(cells) - len(waived)} cells are enforced and {len(waived)} are "
+        f"waived; this module was reported as enforcing all 63 with no "
+        f"waiver. Update the report, or explain the change."
     )
 
 

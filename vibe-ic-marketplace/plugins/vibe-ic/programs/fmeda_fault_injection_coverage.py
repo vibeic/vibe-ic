@@ -674,6 +674,21 @@ def _report_path(project: Path, override: Optional[str]) -> Path:
     return _pl.reports_phase2_dir(project) / "safety" / "fmeda_coverage.json"
 
 
+#: The consumer reads `stdout[-300:]` and matches `VACUOUS_PASS` at LINE
+#: START. Anything longer than this is not a disclosure — it is a disclosure
+#: the window ate. Kept well under the limit so a longer verdict name still
+#: fits, and shared with `fmeda_coverage_check` so both gates of step FS1
+#: disclose through the same bounded line.
+VACUOUS_TOKEN_MAX_LEN = 200
+
+
+def _vacuous_token_line(verdict: str) -> str:
+    """The bounded, line-start `VACUOUS_PASS:` disclosure line."""
+    line = (f"VACUOUS_PASS: fmeda diagnostic coverage NOT measured "
+            f"(verdict={verdict}); see the --json report for why")
+    return line[:VACUOUS_TOKEN_MAX_LEN]
+
+
 # ──────────────────────────────── main ──────────────────────────────────
 def run(project: Path, args) -> Tuple[int, dict]:
     # 1) resolve the mechanism spec: explicit flags win; else auto-detect.
@@ -692,6 +707,80 @@ def run(project: Path, args) -> Tuple[int, dict]:
         spec_rtl_rel = rtl_files
     else:
         rtl_dir = project / (args.rtl_dir or "phase2/stage1/rtl")
+        # ── UNMEASURED IS NOT ZERO — AND IS NOT THIS STEP'S DEFECT ────────
+        # `detect_safety_mechanism` returns None for TWO different facts: it
+        # read the RTL and found no ECC/parity/lockstep mechanism, and it had
+        # no RTL to read at all. Folding the second into NOT_APPLICABLE emits
+        # "this design declares no safety mechanism" from an input that was
+        # never opened — a design-shape CLAIM derived from an unread file.
+        # They are separated here, and they answer DIFFERENTLY, because the
+        # two failure directions are different:
+        #
+        #   * `--rtl-dir` DOES NOT EXIST -> rc 1. The caller named a path that
+        #     is not there; nothing can be said about the design at all. Not
+        #     reachable through the flow (FS1's own condition is
+        #     `files_exist: [phase2/stage1/rtl]`, so the step does not run
+        #     without it) — this arm exists for the CLI and for any runner
+        #     that passes an explicit --rtl-dir.
+        #   * The directory EXISTS but holds no HDL this tool can read -> rc 0
+        #     with a DISCLOSED vacuous pass. It was tried as an rc-1 FAIL and
+        #     REVERTED: an empty or non-Verilog RTL directory is a
+        #     PRE-CONDITION of the whole flow, owned by the RTL and synthesis
+        #     steps, and making the ISO-26262 SAFETY sign-off the step that
+        #     hard-FAILs on it is a false alarm on every project whose RTL is
+        #     absent, staged elsewhere, or written in VHDL. Measured: an empty
+        #     `phase2/stage1/rtl/` took `STEP FS1 STATUS FAIL` and
+        #     `Overall: FAIL` rc 1 from a one-step FS1 flow.
+        #
+        # What must NOT come back is the original defect: answering
+        # NOT_APPLICABLE — "this design declares no safety mechanism" — from an
+        # input nobody opened. The vacuous branch below says the opposite in
+        # its own verdict (`UNMEASURED_NO_RTL_READ`, `measurable: false`,
+        # `rtl_sources_read: 0`) and on stdout, so the step lands on the
+        # VACUOUS_PASS tier with its own label and counter rather than in the
+        # plain PASS bucket.
+        if not args.dec_module and not args.enc_module:
+            floor_pct = asil_floor(args.asil, args.min_dc)
+            common = {
+                "program": "fmeda_fault_injection_coverage",
+                "measurable": False,
+                "asil": args.asil,
+                "dc_floor_pct": floor_pct,
+                "injected_faults": 0,
+                "detected_faults": 0,
+                "baseline_valid": False,
+                "rtl_dir": str(args.rtl_dir or "phase2/stage1/rtl"),
+                "rtl_sources_read": 0,
+            }
+            if not rtl_dir.is_dir():
+                return 1, dict(common, **{
+                    "applicable": True,
+                    "verdict": "FAIL",
+                    "reason": (
+                        f"--rtl-dir {args.rtl_dir!r} does not exist — the "
+                        f"presence or absence of a safety mechanism could "
+                        f"not be decided from an input that was never "
+                        f"opened. Unmeasured is not zero: this is NOT "
+                        f"NOT_APPLICABLE."),
+                })
+            if not (list(rtl_dir.rglob("*.v")) + list(rtl_dir.rglob("*.sv"))):
+                return 0, dict(common, **{
+                    # `applicable: False` puts this on main()'s vacuous branch,
+                    # which prints the line-start VACUOUS_PASS: token. The
+                    # verdict below is what stops it being read as the
+                    # design-shape claim NOT_APPLICABLE would make.
+                    "applicable": False,
+                    "verdict": "UNMEASURED_NO_RTL_READ",
+                    "reason": (
+                        f"--rtl-dir {args.rtl_dir!r} exists but holds no "
+                        f".v/.sv source, so ZERO RTL files were read and "
+                        f"NOTHING is claimed about this design's safety "
+                        f"mechanisms. This is NOT NOT_APPLICABLE — that "
+                        f"verdict would assert a design shape derived from "
+                        f"an unread input. Missing/foreign-language RTL is "
+                        f"owned by the RTL and synthesis steps, not by the "
+                        f"safety sign-off."),
+                })
         doc = ""
         for cand in (args.doc,):
             if cand and (project / cand).exists():
@@ -787,14 +876,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     out_path.write_text(json.dumps(rep, indent=2) + "\n")
 
     if not rep.get("applicable", False):
-        print(f"fmeda_fault_injection_coverage: {rep['verdict']} — "
-              f"{rep.get('reason', '')}")
-    else:
+        # DISCLOSED SKIP, not a plain PASS. This branch exits 0 on every
+        # non-safety design — the majority — so it IS the default outcome of
+        # the FMEDA step, and until the token below existed the step resolved
+        # to the plain PASS bucket: an unmeasured diagnostic-coverage figure
+        # that read as a measured one. The LINE-START `VACUOUS_PASS:` token is
+        # the rc-0 disclosure channel `flow_compliance_check.
+        # _stdout_signals_vacuous` reads, and the report's own
+        # `verdict=NOT_APPLICABLE` / `applicable=false` remain untouched.
+        #
+        # The reason goes FIRST and the token line LAST, and the token line is
+        # LENGTH-BOUNDED. The consumer's window is `stdout[-300:]` (see
+        # `_check_program_exit_zero`), so a token printed ahead of a long
+        # reason is sliced off mid-line and the disclosure silently reverts to
+        # a plain PASS — measured on the `UNMEASURED_NO_RTL_READ` reason, which
+        # is longer than the window.
+        reason = str(rep.get("reason", ""))
+        if reason:
+            print(f"fmeda_fault_injection_coverage: {rep['verdict']} — {reason}")
+        print(_vacuous_token_line(rep["verdict"]))
+    elif "diagnostic_coverage_pct" in rep:
         print(f"fmeda_fault_injection_coverage: DC="
               f"{rep['diagnostic_coverage_pct']:.2f}% "
               f"({rep['detected_faults']}/{rep['injected_faults']}) "
               f"floor={rep['dc_floor_pct']} ASIL-{rep['asil']} "
               f"→ {rep['verdict']}")
+    else:
+        # Applicable but UNMEASURABLE (e.g. the --rtl-dir input is absent or
+        # holds no source). Never a vacuous pass: there is no DC to print and
+        # the exit code is non-zero.
+        print(f"fmeda_fault_injection_coverage: {rep.get('verdict')} — "
+              f"{rep.get('reason', '')}")
     if exit_code != 0:
         print(f"  (see {out_path})", file=sys.stderr)
     return exit_code

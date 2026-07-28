@@ -271,3 +271,202 @@ def test_gate_zero_injected_fails():
            "detected_faults": 0, "baseline_valid": True, "verdict": "PASS"}
     res = gate.check(rep, None, None)
     assert res["passed"] is False
+
+
+# ── END-TO-END: the DIAGNOSTIC-COVERAGE VERDICT ITSELF ───────────────────
+# Everything above pins helpers. None of it drives `run()`, so the comparison
+# this program exists to make — measured DC against the ASIL floor — was
+# unfalsified by the whole suite: no test built RTL declaring a mechanism and
+# ran the real injection. The three below do, through `run()`, with iverilog.
+# Together they are the both-directions pair the DC verdict needs.
+
+_DEC_OK = """module ham_dec(input [6:0] code_in, output [3:0] data_out, output syndrome_err);
+wire s0=code_in[0]^code_in[2]^code_in[4]^code_in[6];
+wire s1=code_in[1]^code_in[2]^code_in[5]^code_in[6];
+wire s2=code_in[3]^code_in[4]^code_in[5]^code_in[6];
+assign data_out={code_in[6],code_in[5],code_in[4],code_in[2]};
+assign syndrome_err=s0|s1|s2; endmodule
+"""
+#: Same ports, same detection NAME — and the detect flag wired to a constant.
+#: A single-bit flip is neither detected nor corrected, so DC collapses. This
+#: is the defect the ASIL floor exists to catch, and it is invisible to every
+#: structural check: the module still looks like an ECC decoder.
+_DEC_BLIND = """module ham_dec(input [6:0] code_in, output [3:0] data_out, output syndrome_err);
+assign data_out={code_in[6],code_in[5],code_in[4],code_in[2]};
+assign syndrome_err=1'b0; endmodule
+"""
+
+
+class _Args:
+    """The `run()` argument surface, spelled out rather than argparse-parsed."""
+
+    def __init__(self, rtl_dir="phase2/stage1/rtl", asil="D"):
+        self.rtl_dir = rtl_dir
+        self.doc = None
+        self.enc_module = self.dec_module = None
+        self.enc_in = "data_in"
+        self.enc_out = "code_out"
+        self.dec_in = "code_in"
+        self.dec_out = None
+        self.detect_port = None
+        self.data_width = 4
+        self.code_width = 7
+        self.rtl_file = []
+        self.asil = asil
+        self.min_dc = None
+        self.max_vectors = 64
+        self.timeout = 300
+        self.json = None
+
+
+def _ecc_project(tmp_path: Path, dec_body: str) -> Path:
+    rtl = tmp_path / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "enc.v").write_text(_ENC)
+    (rtl / "dec.v").write_text(dec_body)
+    return tmp_path
+
+
+def _iverilog_available() -> bool:
+    import shutil as _sh
+    return _sh.which("iverilog") is not None and _sh.which("vvp") is not None
+
+
+def test_dc_below_the_asil_floor_is_a_real_non_zero_exit(tmp_path):
+    """FALSIFIABILITY. A decoder whose detect port is tied low: every injected
+    single-bit fault escapes, DC lands far below the ASIL-D floor, and `run()`
+    returns a NON-ZERO exit with the measured numbers in its report.
+
+    Without this the FAIL arm of the DC comparison was undriveable by the whole
+    suite, and the only non-zero exit anyone could produce from this program
+    was an argument-validation one.
+    """
+    if not _iverilog_available():
+        import pytest
+        pytest.skip("iverilog/vvp not installed — the injection cannot run")
+    project = _ecc_project(tmp_path, _DEC_BLIND)
+    rc, rep = fi.run(project, _Args())
+    assert rep["applicable"] is True, rep
+    assert rep["baseline_valid"] is True, rep
+    assert rep["injected_faults"] > 0, rep
+    assert rep["diagnostic_coverage_pct"] < rep["dc_floor_pct"], rep
+    assert rep["verdict"] == "FAIL", rep
+    assert rc == 1, rep
+
+
+def test_dc_at_or_above_the_asil_floor_is_a_measured_pass(tmp_path):
+    """NO FALSE ALARM, and the control that stops the test above from being
+    satisfied by "this program always FAILs". The SAME fixture with a WORKING
+    syndrome check measures DC >= the floor and exits 0 — and its report says
+    `applicable: true`, so this is a MEASURED pass, not the vacuous one a
+    non-safety design gets.
+    """
+    if not _iverilog_available():
+        import pytest
+        pytest.skip("iverilog/vvp not installed — the injection cannot run")
+    project = _ecc_project(tmp_path, _DEC_OK)
+    rc, rep = fi.run(project, _Args())
+    assert rep["applicable"] is True, rep
+    assert rep["baseline_valid"] is True, rep
+    assert rep["diagnostic_coverage_pct"] >= rep["dc_floor_pct"], rep
+    assert rep["verdict"] == "PASS", rep
+    assert rc == 0, rep
+
+
+def test_the_floor_itself_is_load_bearing(tmp_path):
+    """The comparison is against the FLOOR, not against a constant. The blind
+    decoder still measures some coverage (a flip in a data bit changes the
+    decoded word even with no syndrome), so relaxing the floor below what it
+    measures must turn the SAME run green — otherwise `dc_floor_pct` is
+    decorative and the verdict is hard-coded.
+    """
+    if not _iverilog_available():
+        import pytest
+        pytest.skip("iverilog/vvp not installed — the injection cannot run")
+    project = _ecc_project(tmp_path, _DEC_BLIND)
+    strict = _Args()
+    rc_strict, rep_strict = fi.run(project, strict)
+    assert rc_strict == 1, rep_strict
+
+    relaxed = _Args()
+    relaxed.min_dc = 0.0
+    rc_relaxed, rep_relaxed = fi.run(project, relaxed)
+    assert rep_relaxed["dc_floor_pct"] == 0.0, rep_relaxed
+    assert (rep_relaxed["diagnostic_coverage_pct"]
+            == rep_strict["diagnostic_coverage_pct"]), (
+        "the same RTL measured a different DC — the measurement is not "
+        "deterministic and neither verdict means anything")
+    assert rep_relaxed["verdict"] == "PASS", rep_relaxed
+    assert rc_relaxed == 0, rep_relaxed
+
+
+# ── the two INPUT-SHAPE arms, kept apart on purpose ─────────────────────
+def test_absent_rtl_dir_is_a_non_zero_exit(tmp_path):
+    """`--rtl-dir` names a path that is not there: nothing was opened, so
+    nothing may be claimed. NOT reachable through the flow (FS1's condition
+    requires the directory), so it never false-alarms a real run.
+    """
+    rc, rep = fi.run(tmp_path, _Args())
+    assert rc == 1, rep
+    assert rep["verdict"] == "FAIL", rep
+    assert rep["measurable"] is False, rep
+    assert "does not exist" in rep["reason"], rep
+
+
+def test_source_free_rtl_dir_is_a_disclosed_vacuous_pass_not_a_fail(tmp_path):
+    """NO FALSE ALARM. The directory exists and holds no Verilog: the safety
+    sign-off must NOT be the step that hard-FAILs on missing RTL — that is a
+    precondition of the whole flow, owned by the RTL and synthesis steps.
+
+    But it must also NOT answer NOT_APPLICABLE, which would assert a design
+    shape read off an unopened input. The verdict is its own, it is not
+    measurable, and it records that zero sources were read.
+    """
+    rtl = tmp_path / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True)
+    rc, rep = fi.run(tmp_path, _Args())
+    assert rc == 0, rep
+    assert rep["verdict"] == "UNMEASURED_NO_RTL_READ", rep
+    assert rep["verdict"] != "NOT_APPLICABLE"
+    assert rep["measurable"] is False, rep
+    assert rep["rtl_sources_read"] == 0, rep
+    assert rep["applicable"] is False, rep
+
+
+def test_rtl_with_no_mechanism_keeps_its_honest_not_applicable(tmp_path):
+    """The control for the test above: RTL that WAS read and declares no
+    safety mechanism still answers NOT_APPLICABLE. The two must not collapse
+    into one verdict, or the disclosure carries no information.
+    """
+    rtl = tmp_path / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "adder.v").write_text(
+        "module adder(input [7:0] a, input [7:0] b, output [8:0] s);"
+        " assign s=a+b; endmodule\n")
+    rc, rep = fi.run(tmp_path, _Args())
+    assert rc == 0, rep
+    assert rep["verdict"] == "NOT_APPLICABLE", rep
+
+
+def test_the_vacuous_token_line_survives_the_consumers_stdout_window(tmp_path):
+    """The disclosure is only a disclosure if the consumer can see it.
+    `flow_compliance_check._check_program_exit_zero` reads `stdout[-300:]` and
+    matches `VACUOUS_PASS` at LINE START, so a token printed AHEAD of a long
+    reason is sliced mid-line and the step silently reverts to the plain PASS
+    bucket. Measured on `UNMEASURED_NO_RTL_READ`, whose reason is longer than
+    the window.
+    """
+    import subprocess
+    rtl = tmp_path / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True)
+    proc = subprocess.run(
+        [sys.executable, str(PROG_DIR / "fmeda_fault_injection_coverage.py"),
+         str(tmp_path), "--rtl-dir", "phase2/stage1/rtl", "--asil", "D",
+         "--json", str(tmp_path / "r.json")],
+        capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    window = (proc.stdout[-300:] + "\n" + proc.stderr[-300:]).strip()
+    assert any(ln.lstrip().startswith("VACUOUS_PASS")
+               for ln in window.splitlines()), (
+        "the VACUOUS_PASS token did not survive the consumer's 300-char "
+        f"window:\n{window}")

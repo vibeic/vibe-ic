@@ -224,6 +224,53 @@ FAIL_GATE: Dict[str, Any] = {"files_exist": [_GATE_ABSENT]}
 _FIXTURE_BODY = "d8 fixture artefact\n"
 _COND_BODY = "d8 condition fixture\n"
 
+
+# ──────────────────────────────────────────────────────────────────────
+# KIND-CORRECT FIXTURE BODIES
+#
+# This module's question is presence vs absence, so for most artefacts any
+# non-empty bytes will do and `_FIXTURE_BODY` is what gets written. But some
+# gates OPEN the artefact their step declares rather than only stat()ing it,
+# and for those a plain-text placeholder is not "a seeded run tree" — it is a
+# corrupt one, and the real gate FAILs on the seeded case for a reason that has
+# nothing to do with the missing-output downgrade this module measures.
+#
+# Measured the day it bit: after step 14's and step 32's gates were changed to
+# read `phase2/stage2/synth/netlist.v` and
+# `phase3/stage3/eco/eco_trigger_decision.json` (dimension 4 — "the gate must
+# read what the step declares"), both dropped out of
+# `REAL_GATE_PASS_TIER_STEPS` because the seeded netlist declared no `module`
+# and the seeded decision record was not JSON.
+#
+# The body is chosen by SUFFIX, so it generalises to the next content-aware
+# gate instead of naming today's two paths. Presence/absence semantics are
+# untouched: every body is non-empty and lands at exactly the same path.
+# ──────────────────────────────────────────────────────────────────────
+_JSON_BODY = '{"d8_fixture": true}\n'
+_JSONL_BODY = '{"d8_fixture": true}\n'
+_VERILOG_BODY = (
+    "// d8 fixture artefact\n"
+    "module d8_fixture_top (input wire clk, output wire q);\n"
+    "  assign q = clk;\n"
+    "endmodule\n"
+)
+
+_KIND_BODIES: Tuple[Tuple[str, str], ...] = (
+    (".jsonl", _JSONL_BODY),
+    (".json", _JSON_BODY),
+    (".sv", _VERILOG_BODY),
+    (".v", _VERILOG_BODY),
+)
+
+
+def fixture_body(rel: str) -> str:
+    """The body to seed ``rel`` with: kind-correct where a gate parses it."""
+    lowered = rel.lower()
+    for suffix, body in _KIND_BODIES:
+        if lowered.endswith(suffix):
+            return body
+    return _FIXTURE_BODY
+
 _GLOB_CHARS = "*?["
 
 
@@ -372,7 +419,7 @@ def _materialize(project: Path, step: Dict[str, Any],
                 if (entry, alt) in drop_alts:
                     continue
                 rel = concretize(alt)
-                _write(project, rel, _FIXTURE_BODY)
+                _write(project, rel, fixture_body(rel))
                 assert FCC._glob_first(project, alt), (
                     f"fixture defect: wrote {rel!r} for pattern {alt!r} but the "
                     f"real _glob_first does not find it — the synthesized tree "
@@ -1063,26 +1110,37 @@ def test_d8_missing_output_outranks_the_stub_backed_waiver(tmp_path):
 def test_d8_fixture_body_is_inert(tmp_path):
     """The synthesized artefact body must trip none of the evidence-integrity
     downgrades, or the positive half would be measuring the wrong mechanism.
+
+    EVERY body `fixture_body` can return is checked, not just the default: a
+    kind-correct body that tripped the stub-tag or self-report scan would flip
+    the positive half of every case that seeds that kind, silently.
     """
-    assert _FIXTURE_BODY.strip(), "fixture body is empty — 0-byte evidence FAILs"
-    assert not FCC._STUB_TAG_RE.search(_FIXTURE_BODY), (
-        f"fixture body {_FIXTURE_BODY!r} matches the stub tag regex — every "
-        f"positive half would come back WAIVED instead of PASS"
-    )
-    assert '"verdict"' not in _FIXTURE_BODY, (
-        "fixture body carries a verdict field — _evidence_integrity_scan would "
-        "read it as a self-report"
-    )
+    bodies = {"_FIXTURE_BODY": _FIXTURE_BODY}
+    bodies.update({suffix: body for suffix, body in _KIND_BODIES})
+    for label, body in bodies.items():
+        assert body.strip(), f"{label} body is empty — 0-byte evidence FAILs"
+        assert not FCC._STUB_TAG_RE.search(body), (
+            f"{label} body {body!r} matches the stub tag regex — every "
+            f"positive half seeding that kind would come back WAIVED "
+            f"instead of PASS"
+        )
+        assert '"verdict"' not in body, (
+            f"{label} body carries a verdict field — _evidence_integrity_scan "
+            f"would read it as a self-report"
+        )
     project = tmp_path / "inert"
     project.mkdir(parents=True, exist_ok=True)
-    _write(project, "probe/artefact.txt", _FIXTURE_BODY)
-    result = FCC.StepResult(id=1, name="probe", stage="stage1", status="PASS")
-    result.evidence.append("probe/artefact.txt")
-    scanned = FCC._evidence_integrity_scan(project, result)
-    assert scanned.status == "PASS", (
-        f"the fixture body was downgraded to {scanned.status!r} by the real "
-        f"evidence-integrity scan — reasons: {_reasons(scanned)}"
-    )
+    for i, (label, body) in enumerate(bodies.items()):
+        rel = f"probe/artefact{i}{label if label.startswith('.') else '.txt'}"
+        _write(project, rel, body)
+        result = FCC.StepResult(id=1, name="probe", stage="stage1",
+                                status="PASS")
+        result.evidence.append(rel)
+        scanned = FCC._evidence_integrity_scan(project, result)
+        assert scanned.status == "PASS", (
+            f"the {label} fixture body was downgraded to {scanned.status!r} by "
+            f"the real evidence-integrity scan — reasons: {_reasons(scanned)}"
+        )
 
 
 def test_d8_cell_census_is_complete():
@@ -1128,12 +1186,31 @@ def test_d8_cell_census_is_complete():
 
 
 #: Steps whose REAL (un-substituted) gate reaches a PASS tier on the seeded
-#: fixture, measured 2026-07-27. See
+#: fixture, measured 2026-07-27, re-measured 2026-07-28. See
 #: ``test_d8_downgrade_is_reachable_through_each_steps_own_real_gate``.
+#:
+#: RE-MEASURED, and it GREW, which is the safe direction. `fixture_body` now
+#: seeds a `.json` artefact with parseable JSON and a `.v`/`.sv` artefact with
+#: a real `module`, because dimension-4 work made several gates OPEN the
+#: artefact their step declares instead of only stat()ing it. Two steps that
+#: could not reach a PASS tier on a plain-text placeholder now can:
+#:
+#:   D1  its Phase-1 gates parse the seeded `generated_docs/L*.json`
+#:   28  `perc_signoff_check` parses the seeded `perc_equivalent.json`
+#:
+#: Nothing was lost (steps 14 and 32 stayed in after the same fixture change;
+#: they had dropped out on the text placeholder alone). The population is
+#: pinned rather than derived so the SHRINKING direction still has to be
+#: explained by a human — see this constant's test.
 REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
-    "1", "2", "12", "A1", "A2", "A4", "A5", "A8", "14", "30", "32", "35",
-    "38", "A6",
+    "D1", "1", "2", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
+    "30", "32", "35", "38",
 )
+# 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
+# compared in flow DECLARATION order, and the dimension-5 fix moved A6's yaml
+# block from after step 39 to between A5 and A7 to remove the flow's only
+# forward edge (A7 declares `blocks_on: [A6]`). Only A6's position in this
+# tuple moved with it.
 
 _PASS_TIER_LABELS = frozenset({"PASS", "VACUOUS_PASS", "VACUOUS-PASS"})
 
@@ -1185,10 +1262,12 @@ def test_d8_downgrade_is_reachable_through_each_steps_own_real_gate():
     This test drives each step's OWN gate, unmodified, and asks the production
     question for every step where it is answerable at all: on a fully seeded
     tree, does the real gate reach a PASS tier, and does removing one declared
-    output then move the step off that tier? 14 steps qualify today. It does
-    NOT close the gap — 47 steps' real gates FAIL on a synthesized tree and
-    need a converged project no CI has — but it converts "2 steps measured with
-    a real gate" into a named, pinned population that cannot shrink silently.
+    output then move the step off that tier? 16 steps qualify today (14 when
+    this was written; `fixture_body` now seeds kind-correct JSON / Verilog, and
+    D1 and 28 joined). It does NOT close the gap — 45 steps' real gates FAIL on
+    a synthesized tree and need a converged project no CI has — but it converts
+    "2 steps measured with a real gate" into a named, pinned population that
+    cannot shrink silently.
     """
     sweep = _real_gate_sweep()
     measured = tuple(sorted(sweep, key=lambda k: list(

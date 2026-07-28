@@ -81,6 +81,13 @@ except ImportError:  # pragma: no cover - direct-script fallback
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import _path_layout as _pl
 
+# The identity binding is SHARED with the other producer of this same declared
+# artefact (`_yosys_stat`, which the phase-2 synth step uses). Both write
+# `<synth>/stats.json`, so a consumer must be able to check the binding without
+# first working out which of them wrote the file — one helper, one field name,
+# no schema drift. The digest algorithm and the field name live there.
+import _yosys_stat as _ystat
+
 SCHEMA = "vibe-ic/synth-stats/1"
 
 # A statistics block header, e.g. "=== some_module ===".
@@ -334,6 +341,18 @@ def corroborate(block: Block, netlist_path: Optional[Path]) -> Dict[str, Any]:
     return out
 
 
+def _project_relative(path: Optional[Path], root: Path) -> Optional[str]:
+    """``path`` spelled relative to ``root`` when it lives under it, else its
+    own string. ``None`` stays ``None`` — an unresolved netlist is recorded as
+    absent, not as an empty path."""
+    if path is None:
+        return None
+    try:
+        return Path(path).resolve().relative_to(Path(root).resolve()).as_posix()
+    except (ValueError, OSError):
+        return str(path)
+
+
 def resolve_netlist(text: str, log_path: Path,
                     explicit: Optional[Path]) -> Optional[Path]:
     """Find the netlist the log's own write pass named.
@@ -386,8 +405,18 @@ def build_report(project: Path, log_path: Path,
             f"it ({', '.join(refuted)}), so it was discarded")
         return None, diag
     mver = _RE_TOOL_VER.search(text)
+    # IDENTITY BINDING. This artefact shares a path with `_yosys_stat`'s, and a
+    # consumer that finds it beside a netlist has no way to tell whether the
+    # figure was measured on THAT netlist or on the one a previous pass wrote
+    # to the same name. The digest of the file R2 corroborated against is what
+    # makes the question answerable; the name alone cannot answer it, and a
+    # byte-identical alias under a second name is not a different design.
+    # `None` when there was no netlist to hash — an absent binding, never a
+    # stand-in value.
     report = {
         "schema": SCHEMA,
+        "netlist": _project_relative(nl, project),
+        _ystat.NETLIST_DIGEST_FIELD: _ystat.netlist_digest(nl),
         "top_module": block.area_module,
         # Unit is whatever the cell library declares; the tool prints the
         # figure in the library's own area unit and does not restate it, so

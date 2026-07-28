@@ -23,16 +23,24 @@ correlate with the STA timing model. Three verification axes:
      (LDO, PLL, OSC, bandgap, ADC, DAC, comparator), verifies that each has
      a corresponding SPICE simulation result.
 
-Self-skips (exit 0 + INFO) when:
+Self-skips when:
   - No extracted parasitics (SPEF) exist (Step 20 not reached)
   - No STA results exist (Step 21 not reached)
+
+A self-skip is DISCLOSED, never folded into a plain PASS: the report carries a
+top-level `verdict: "VACUOUS_PASS"` alongside `summary.skipped=true`, and a
+LINE-START `VACUOUS_PASS:` token is printed on stdout. Those are the two rc-0
+channels `flow_compliance_check` reads (`_stdout_signals_vacuous` + the
+verdict self-report contract), so Step 30 resolves to the VACUOUS_PASS tier —
+its own label, its own counter — rather than certifying post-layout SPICE
+correlation that was never measured.
 
 Usage:
     python3 spice_correlation_check.py <project_dir>
     python3 spice_correlation_check.py <project_dir> --json reports/gates/spice_correlation.json
 
 Exit codes:
-    0 = PASS (or self-skip)
+    0 = PASS, or a DISCLOSED self-skip (VACUOUS_PASS on stdout + in the report)
     1 = FAIL (correlation mismatch or missing analog SPICE)
     2 = IO / parse error
 """
@@ -2105,7 +2113,30 @@ def main(argv: list = None) -> int:
     result = run_audit(args.project_dir, run_spice=not args.no_spice,
                        container=args.container)
 
-    out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
+    doc = asdict(result)
+
+    # ── A SELF-DECLARED SKIP MUST NOT RESOLVE TO A PLAIN PASS ────────────
+    # `run_audit` returns `summary = {"skipped": True, "reason": ...}` when the
+    # post-layout inputs this gate correlates AGAINST are absent (no extracted
+    # SPEF from step 20 / no STA report from step 21). It then exits 0 having
+    # measured no correlation at all. Step 30's only other gate leg is an
+    # any-of `files_exist` over the SPICE DECKS — a DIFFERENT artefact from the
+    # SPEF this audit skips on — so a project that ships decks but never
+    # extracted a SPEF used to certify "Post-Layout SPICE Verification" as a
+    # bare PASS with nothing correlated.
+    #
+    # Disclose it on BOTH channels `flow_compliance_check` reads for an rc-0
+    # `program_exit_zero` gate (flow_compliance_check.py `_stdout_signals_
+    # vacuous` + the documented top-level `verdict` self-report), exactly as
+    # `_analog_a_check_common.vacuous_pass()` does for the A-track gates whose
+    # skip has the same shape. The step then resolves to VACUOUS_PASS — its own
+    # tier and its own counter — instead of the plain PASS bucket.
+    summary = result.summary if isinstance(result.summary, dict) else {}
+    vacuous = bool(summary.get("skipped")) and result.passed
+    if vacuous:
+        doc["verdict"] = "VACUOUS_PASS"
+
+    out = json.dumps(doc, indent=2, ensure_ascii=False)
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
@@ -2117,6 +2148,14 @@ def main(argv: list = None) -> int:
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
+
+    if vacuous:
+        # LINE START, and printed LAST so it survives the consumer's 300-char
+        # stdout window (`_check_program_exit_zero`).
+        print(f"VACUOUS_PASS: spice_correlation_check did NOT measure any "
+              f"post-layout SPICE correlation "
+              f"(reason={summary.get('reason', 'unknown')!r}) — this step "
+              f"certifies nothing about the critical path")
 
     return 0 if result.passed else 1
 

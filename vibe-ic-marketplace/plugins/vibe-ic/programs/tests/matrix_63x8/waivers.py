@@ -121,594 +121,429 @@ MIN_EVIDENCE_LEN = 8
 #: the day either is fixed this suite goes red and the waiver must be removed.
 WAIVERS: Tuple[Waiver, ...] = (
     # ── dimension 3 — are the declared outputs actually produced? ──────
-    Waiver(
-        step_id="6",
-        dim=3,
-        reason=(
-            "Two of the three entries are Intel Quartus outputs — a .sof "
-            "bitstream and a .map.rpt — and Quartus is installed on no host "
-            "this suite can reach, so no run can produce them and no program "
-            "in the plugin synthesises an FPGA bitstream itself."
-        ),
-        evidence=(
-            "`command -v quartus quartus_sh quartus_map quartus_fit "
-            "quartus_asm` -> all absent, and `find ~ -maxdepth 10 -name "
-            "'*.sof'` -> 0 hits across 108 candidate run trees (measured "
-            "2026-07-27); programs/fpga_board_capability.py:8 names 'no "
-            "Quartus on host' as the expected disclosed gap"
-        ),
-    ),
-    Waiver(
-        step_id="39",
-        dim=3,
-        reason=(
-            "The entry phase2/stage1/fpga/final/*.sof is the recompiled Intel "
-            "Quartus bitstream for on-board sign-off; the same tool gap as "
-            "step 6 applies, so this entry has no producer on any reachable "
-            "host while the sibling on_board_pass.json is produced normally."
-        ),
-        evidence=(
-            "`find ~ -maxdepth 10 -name '*.sof'` -> 0 hits (measured "
-            "2026-07-27); the sibling entry "
-            "reports/phase2/fpga/on_board_pass.json resolves in "
-            "benchmark-data/ic/spm/v1.5.66_gf180mcuD"
-        ),
-    ),
-    Waiver(
-        step_id="A8",
-        dim=3,
-        reason=(
-            "Three of A8's four entries (.lef/.lib/.v) are produced by a real "
-            "analog run, so the step demonstrably executes; the .gds entry "
-            "alone is produced by nothing. Every matching file on the host is "
-            "a stub written by a throwaway seeding script into an agent "
-            "scratch tree, and admitting a seeded INPUT as a produced OUTPUT "
-            "is the false pass this campaign removes."
-        ),
-        evidence=(
-            "`find ~ -maxdepth 10 -path '*analog/hardmacro/*' -name '*.gds'` "
-            "-> only backlog_medlow_mixed_scratch/{ba_mixed,ba_pristine,"
-            "m1proj}, all written by backlog_medlow_mixed_scratch/mkgds.py (a "
-            "12-line pya script), none carrying provenance.jsonl or "
-            "reports/orchestrator; the sibling .lef/.lib/.v resolve in "
-            "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e/"
-            "phase3/analog/hardmacro/{ldo,delta_sigma}/; measured 2026-07-27"
-        ),
-    ),
+    # 2026-07-28: three of the four entries here were CLOSED rather than
+    # re-worded. A8's `.gds` had no producer anywhere in the plugin —
+    # `magic_port_extract_emit.build_gds_write_tcl` shipped in v0.1.114 with a
+    # unit test and no caller — so `programs/analog_hardmacro_gds_emit.py` was
+    # written and wired into A8's gate and into `analog_one_shot_runner`, and
+    # the entry is now evidenced by artefacts that producer streamed with Magic
+    # from a published run's own A5 layout. Steps 6 and 39 were RECLASSIFIED
+    # NA_TOOLCHAIN_ABSENT: their bitstream entries are produced only by Intel
+    # Quartus, and the cells now ASSERT — with the flow's own locator,
+    # `design_one_shot_runner._find_host_quartus_sh` — that no reachable host
+    # or container advertises it, that no run root acquired one anyway, and
+    # that every entry the toolchain does NOT gate is still fully enforced. An
+    # NA that self-invalidates the day Quartus appears is a stronger statement
+    # than a standing waiver, not a weaker one.
     Waiver(
         step_id="M1",
         dim=3,
         reason=(
-            "The step's own gate output records that the merge tool which "
-            "would write phase3/mixed_signal/top_merged.gds does not ship, so "
-            "a run that reaches M1 emits merge.json (the sibling entry, which "
-            "IS produced) while the merged GDS is never written. No flow-run "
-            "tree on the host carries one."
+            "NARROWED 2026-07-28. The producer is NOT missing: "
+            "mixed_signal_top_lvs_run.py writes phase3/mixed_signal/"
+            "top_merged.gds (KLayout merge), ships, and is invoked twice — "
+            "M1's own advisory gate clause and vibe_ic_one_shot_runner:813. "
+            "What is unreachable is an INPUT SET: the merge needs a digital "
+            "sign-off GDS and analog hardmacro GDS in the SAME project, and "
+            "no admissible run root is a mixed-signal project that got that "
+            "far, so the producer returns its documented rc=2 'inputs "
+            "missing' skip everywhere it can run. Closing this needs a "
+            "published mixed-signal run tree, not a code change."
         ),
         evidence=(
-            "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e/"
-            "reports/analog/mixed_signal/merge.json -> {\"verdict\": \"SKIP\", "
-            "\"rationale_when_skipped\": \"Top-level GDS merge tool not "
-            "shipped.\", \"missing\": [\"phase3/mixed_signal/top_merged.gds\"]}"
-            " (measured 2026-07-27)"
+            "programs/mixed_signal_top_lvs_run.py:184-199 writes top_merged."
+            "gds; :152-161 returns SKIP rc=2 naming the absent inputs. Asked "
+            "DIRECTLY (mixed_signal_top_lvs_run.run, tool probe stubbed) on "
+            "all 12 admissible run roots, 2026-07-28: 12/12 return 'inputs "
+            "missing'. Three lack only 'hardmacro GDS (A8)' (the spm-class "
+            "digital runs, which have a sign-off GDS and no analog blocks at "
+            "all) and the one root with hardmacro GDS lacks 'digital GDS, "
+            "gate netlist' — intersection empty. The 2026-07-27 evidence for "
+            "this waiver quoted 'Top-level GDS merge tool not shipped.' from "
+            "an ARCHIVED merge.json; that string exists nowhere in the plugin "
+            "today (mixed_signal_merge_check.py:57 now reads 'Top-level "
+            "merge+LVS not runnable in this environment'), so the old reason "
+            "was stale. Re-measured live by "
+            "test_d3_m1_merge_inputs_are_absent_from_every_run_root."
         ),
     ),
 
-    # ── dimension 4 — does the gate measure what its name claims? ──────
-    Waiver(
-        step_id="2",
-        dim=4,
-        reason=(
-            "The flow's own gate command passes --json, but the program it "
-            "names declares --out and no --json, so its parser REJECTS the "
-            "declared invocation: argparse exits 2, and flow_compliance_check "
-            "maps rc==2 onto VACUOUS_PASS, so the clause banks a step PASS "
-            "while auditing nothing and never writing the audit trail the "
-            "yaml names."
-        ),
-        evidence=(
-            "programs/rtl_bug_report_schema_check.py:260 declares --out (no "
-            "--json); running the yaml's exact command in an empty project "
-            "gives rc=2 + 'rtl_bug_report_schema_check.py: error: "
-            "unrecognized arguments: --json "
-            "reports/phase2/gates/rtl_bug_schema.json' and no file written; "
-            "programs/flow_compliance_check.py:2157 returns True for rc==2"
-        ),
-    ),
-    Waiver(
-        step_id="9",
-        dim=4,
-        reason=(
-            "Step 9 declares 'phase2/stage2/synth/area.rpt OR "
-            "phase2/stage2/synth/stats.json' but neither gate program ever "
-            "opens an area or stats artefact, so the synthesis step's own area "
-            "claim is gated by nothing; the gate measures cell accounting and "
-            "provenance only."
-        ),
-        evidence=(
-            "programs/synth_netlist_check.py:281 reads only the --netlist "
-            "path; programs/provenance_check.py reads provenance.jsonl; "
-            "grep -n 'area\\.rpt\\|stats\\.json' over both files and their "
-            "direct local imports yields 0 executable hits (2026-07-27)"
-        ),
-    ),
-    Waiver(
-        step_id="11",
-        dim=4,
-        reason=(
-            "Step 11 declares 'phase2/stage2/dft/transition_atpg_plan.md' as a "
-            "required output, but none of the three gate programs names that "
-            "artefact anywhere in executable code, so the at-speed transition "
-            "plan the step claims to deliver is unmeasured by the step's gate."
-        ),
-        evidence=(
-            "grep -n transition_atpg_plan programs/dft_atpg_coverage_check.py "
-            "programs/bsdl_emit.py programs/dft_signoff_check.py -> 0 hits "
-            "(2026-07-27); the separate DT1 step has its own "
-            "transition_coverage_check gate"
-        ),
-    ),
-    Waiver(
-        step_id="14",
-        dim=4,
-        reason=(
-            "Step 14 is the synthesis HANDOFF gate and declares "
-            "'phase2/stage2/synth/netlist.v', but both gate programs audit the "
-            "Yosys *.ys SCRIPT only and never open the netlist that script is "
-            "supposed to have produced — the artefact handed to PnR is not the "
-            "artefact the gate inspects."
-        ),
-        evidence=(
-            "programs/yosys_script_template_check.py:201 ys_globs = "
-            "['phase2/stage2/synth/*.ys', 'phase2/stage2/synth/**/*.ys', ...]; "
-            "programs/yosys_hilomap_required_check.py reads --ys-file / *.ys "
-            "only; 'netlist.v' appears in both files exclusively in prose"
-        ),
-    ),
-    Waiver(
-        step_id="25",
-        dim=4,
-        reason=(
-            "Step 25 declares 'reports/phase3/em.json' but the EM mode of the "
-            "wrapped auditor discovers report files by .rpt-family globs only, "
-            "so the JSON half of the step's declared electromigration evidence "
-            "is never opened by the gate that signs the step off."
-        ),
-        evidence=(
-            "programs/eda_report_audit.py:848 _check_em -> _discover(project, "
-            "['*em*.rpt', '*electromigration*', '*EM*.rpt', '*ir*.rpt']) — no "
-            ".json pattern; programs/em_report_check.py forwards argv into it"
-        ),
-    ),
-    Waiver(
-        step_id="28",
-        dim=4,
-        reason=(
-            "Step 28 declares three artefacts but its gate opens exactly one "
-            "of them: the human-readable PERC report and the sign-off memo are "
-            "declared deliverables that no gate program reads, so a step named "
-            "'PERC / Reliability sign-off' verifies a third of what it "
-            "declares."
-        ),
-        evidence=(
-            "programs/perc_signoff_check.py:35 src = project / 'reports' / "
-            "'phase3' / 'perc_equivalent.json' is the only artefact opened; "
-            "'perc_equivalent.rpt' and 'PERC_SIGNOFF_MEMO.md' appear nowhere "
-            "in that file's executable code (2026-07-27)"
-        ),
-    ),
-    Waiver(
-        step_id="32",
-        dim=4,
-        reason=(
-            "Step 32 declares 'phase3/stage3/eco/eco_trigger_decision.json' — "
-            "the record of WHY an ECO was or was not run — but the ECO audit "
-            "gate opens the eco log only, so the trigger decision the step "
-            "exists to justify is never cross-checked by the step's own gate."
-        ),
-        evidence=(
-            "programs/eco_loop_audit.py:40 data = "
-            "json.loads(eco_log.read_text()) is its only artefact read; grep "
-            "-n eco_trigger_decision programs/eco_loop_audit.py -> 0 hits "
-            "(2026-07-27)"
-        ),
-    ),
-    Waiver(
-        step_id="33",
-        dim=4,
-        reason=(
-            "Step 33 declares 'reports/phase3/power.json' but the power mode "
-            "of the wrapped auditor discovers .rpt/.log only, so the "
-            "machine-readable half of the declared power evidence is never "
-            "opened; the gate reports on power from the text report alone."
-        ),
-        evidence=(
-            "programs/eda_report_audit.py:793 _check_power -> "
-            "_discover(project, ['*power*.rpt', '*power*.log', '*Power*.rpt', "
-            "'*Power*.log']) — no .json pattern; "
-            "programs/power_report_check.py forwards argv into it"
-        ),
-    ),
-    Waiver(
-        step_id="39",
-        dim=4,
-        reason=(
-            "The gate DOES hash the bitstream, but it reaches it through a "
-            "report key read at runtime — the path comes from the attestation "
-            "JSON's bitstream_path field, not from any literal in the source — "
-            "so no static predicate can bind it to the yaml's declared "
-            "'phase2/stage1/fpga/final/*.sof'. This is a limit of the "
-            "mechanization, not a demonstrated gap in the gate."
-        ),
-        evidence=(
-            "programs/fpga_on_board_attestation_check.py:139 bp = "
-            "data.get('bitstream_path'); :147 disk_sha = _sha256(abs_bp) — the "
-            "only .sof mentions in the file are in its docstring (lines 14-22) "
-            "and a comment (line 271)"
-        ),
-    ),
-    Waiver(
-        step_id="P0",
-        dim=4,
-        reason=(
-            "P0's own notes name cdc_async_input_check as one of the gate "
-            "names that appear in the audit JSON's gates[] array, but that "
-            "array is built exclusively from the structural-RTL registry and "
-            "cdc_async_input_check is not a member of it — it is a Step-3 gate "
-            "program. The step's prose therefore advertises a checker its "
-            "mechanism cannot emit."
-        ),
-        evidence=(
-            "python3 -c \"import flow_compliance_check as f; "
-            "print('cdc_async_input_check' in f._STRUCTURAL_RTL_GATES)\" -> "
-            "False (241 members; nearest is "
-            "fpga_async_input_synchronizer_check); "
-            "programs/flow_compliance_check.py:7621 builds per_gate only from "
-            "the P0 result and :7687 stores it as the audit's 'gates' array"
-        ),
-    ),
-
-    # ── dimension 5 — are the declared dependencies correct? ───────────
-    Waiver(
-        step_id="8",
-        dim=5,
-        reason=(
-            "LIVE DEFECT, reproduced: step 8's gate program "
-            "sdc_exception_correlation_check reads "
-            "reports/phase2/cdc/crossing.json — step 3's declared "
-            "required_output — to decide whether each set_false_path is "
-            "justified, but step 8 declares blocks_on:[7] whose closure is "
-            "{7, 1, D1} and does not reach step 3. The read is wrapped in "
-            "`except (OSError, ValueError): pass`, so a missing or STALE "
-            "crossing.json does not fail the step; it silently empties the "
-            "known-async-pair set and every legitimate CDC false_path is then "
-            "reported SDC_EXCEPTION_UNJUSTIFIED. Step 3 is declared EARLIER in "
-            "the yaml, so this is a plainly addable edge, not a structural "
-            "conflict."
-        ),
-        evidence=(
-            "programs/sdc_exception_correlation_check.py:46 `cdc = project / "
-            "\"reports\" / \"phase2\" / \"cdc\" / \"crossing.json\"`; producer "
-            "flow/phase1_phase2_phase3.yaml:401 (step 3 required_outputs); "
-            "consumer flow/phase1_phase2_phase3.yaml:766 (step 8, blocks_on:[7])"
-        ),
-    ),
-    Waiver(
-        step_id="DT2",
-        dim=5,
-        reason=(
-            "LIVE DEFECT, reproduced: DT2's own condition.files_exist names "
-            "phase3/stage3/extracted/*.spef, which is step 22's declared "
-            "required_output, but DT2 declares blocks_on:[DT1] and step 22 is "
-            "not in its closure. The condition makes DT2 self-skip when the "
-            "SPEF is absent, which prevents a crash but NOT a stale read: on a "
-            "resumed project a SPEF from a previous run makes DT2 run at-speed "
-            "path-delay ATPG against last run's parasitics. The edge cannot "
-            "simply be added — step 22 is declared at yaml index 34 and DT2 at "
-            "index 14, so DT2 -> 22 would be a forward edge; the real fix is a "
-            "flow-ordering decision (DT2 belongs after Phase-3 extraction), "
-            "not a one-line blocks_on edit."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml:1128-1152 (DT2: condition line "
-            "1135 lists phase3/stage3/extracted/*.spef; blocks_on:[DT1]); "
-            "producer flow/phase1_phase2_phase3.yaml:1728,1735 (step 22 "
-            "required_outputs)"
-        ),
-    ),
-    Waiver(
-        step_id="A5",
-        dim=5,
-        reason=(
-            "LIVE DEFECT, reproduced, and CIRCULAR: A5's wired gate program "
-            "analog_a5_layout_check builds and reads <block>/drc_clean.flag "
-            "and <block>/lvs_match.flag and requires both to carry a clean "
-            "verdict before A5 can PASS — but those two are A6's declared "
-            "required_outputs, and A6 declares blocks_on:[A5]. So the true "
-            "data dependency runs A5 -> A6 while the declared ordering runs "
-            "A6 -> A5. No blocks_on edit fixes this: adding A5 -> A6 closes a "
-            "cycle. One of the two sides is wrong and a program cannot decide "
-            "which without the design intent (either A5 must stop requiring PV "
-            "evidence, or the A5/A6 split is misdrawn)."
-        ),
-        evidence=(
-            "programs/analog_a5_layout_check.py:237-238 `drc_flag = bdir / "
-            "\"drc_clean.flag\"` / `lvs_flag = bdir / \"lvs_match.flag\"` "
-            "(gate at flow/phase1_phase2_phase3.yaml:1323, blocks_on:[A4]); "
-            "producer A6 at flow/phase1_phase2_phase3.yaml:2526, blocks_on:[A5]"
-        ),
-    ),
-    Waiver(
-        step_id="18",
-        dim=5,
-        reason=(
-            "LIVE DEFECT, reproduced, and UNSATISFIABLE BY EDGE: step 18's "
-            "gate program spare_cell_preservation_check resolves the DEF it "
-            "audits by preferring phase3/stage3/pnr/filled.def (step 34's "
-            "declared output) and falling back to routed.def (step 21's), "
-            "neither of which is in step 18's closure (blocks_on:[17]). On a "
-            "resumed project both files survive from the previous run, so step "
-            "18 — spare-cell insertion, which runs BEFORE routing and metal "
-            "fill — audits last run's final DEF and reports spare-cell "
-            "survival that this run never established. The dependency cannot "
-            "be declared: 21 and 34 are both downstream of 18, so the edge "
-            "would close a cycle. The fix belongs in the program (the caller "
-            "must name the stage-appropriate DEF), which is why no blocks_on "
-            "value can make this cell green."
-        ),
-        evidence=(
-            "programs/spare_cell_preservation_check.py:314-320 `for fname in "
-            "(\"filled.def\", \"routed.def\")`; producers "
-            "flow/phase1_phase2_phase3.yaml:1673 (step 21 routed.def) and "
-            ":2295 (step 34 filled.def); consumer "
-            "flow/phase1_phase2_phase3.yaml:1582 (step 18, blocks_on:[17])"
-        ),
-    ),
-    Waiver(
-        step_id="A7",
-        dim=5,
-        reason=(
-            "LIVE DEFECT, reproduced: A7 declares blocks_on:[A6] but A6 is "
-            "declared at yaml index 52 — after step 39 — while A7 sits at "
-            "index 23, so this is the flow's only FORWARD edge. "
-            "flow_compliance_check evaluates steps in canonical declaration "
-            "order and its #503 cascade attribution walks each track in that "
-            "same order taking the first FAIL as the cut point, so an A6 FAIL "
-            "is positioned after A7 and can never be attributed as A7's root "
-            "cause; A7 reports an independent gap instead of a downstream "
-            "consequence. Fixing it means MOVING A6's yaml block between A5 "
-            "and A7, an edit to the shared flow document that this module must "
-            "not make."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml:1365 (A7, blocks_on:[A6]) vs :2526 "
-            "(A6) — A6's declaration index is 52, A7's is 23, measured by "
-            "`[str(s['id']) for s in yaml.safe_load(open(flow))['steps']]`; "
-            "consumer flow_compliance_check.py:6672-6690 (`for sid in order:`)"
-        ),
-    ),
-
-    # ── dimension 6 — skip discipline ─────────────────────────────────
+    # ── dimension 6 — skip discipline (the ARITHMETIC half) ───────────
+    # Four cells, ONE pending owner decision, charged by leg L3c in
+    # test_matrix_d6_skip_discipline.py. The LABEL half of dimension 6 is
+    # closed for all four: each lands on the VACUOUS_PASS tier with its own
+    # label and its own counter. What is NOT closed is that
+    # flow_compliance_check folds that tier back into the published
+    # `X/Y executed PASS` numerator. Generated by
+    # test_matrix_d6_skip_discipline._vacuous_aggregation_waiver, so all
+    # four carry the same decision text and the same measurement.
     Waiver(
         step_id="FS1",
         dim=6,
         reason=(
-            "Both mandatory gate programs self-declare inapplicability and the "
-            "step still resolves to a plain PASS. fmeda_fault_injection_"
-            "coverage writes verdict='NOT_APPLICABLE' and fmeda_coverage_check "
-            "writes verdict='VACUOUS_PASS' into their own --json reports, but "
-            "each exits 0 and neither prints a line STARTING with "
-            "'VACUOUS_PASS' (fmeda_coverage_check's line starts '[PASS] "
-            "fmeda_coverage_check: VACUOUS_PASS ...'), which is the only rc=0 "
-            "disclosure channel _check_program_exit_zero reads. "
-            "flow_compliance_check's own comment names a JSON top-level "
-            "verdict of VACUOUS_PASS as a disclosure channel, but no consumer "
-            "ever opens the report file, so the disclosure cannot reach the "
-            "tier. FS1's condition is files_exist ['phase2/stage1/rtl'], "
-            "satisfied by every design, so a plain PASS on an unmeasured FMEDA "
-            "is the DEFAULT outcome for every non-safety chip, not a corner "
-            "case."
+            "Leg L3c: on the SEEDED probe this step resolves to the "
+            "VACUOUS_PASS tier (both FMEDA gate programs disclose an unmeasured "
+            "diagnostic coverage through the line-start VACUOUS_PASS token), "
+            "and the published headline `X/Y executed PASS` still counts it "
+            "inside X — `flow_compliance_check.py` computes `pass_count = "
+            "counts['PASS'] + counts['VACUOUS_PASS']`. The skip has its own "
+            "LABEL and its own COUNTER (leg L3 is satisfied) but not its own "
+            "arithmetic, so the number a reviewer reads is unchanged by the "
+            "disclosure. OWNER DECISION REQUIRED, and it is a one-line change "
+            "either way: does `X/Y executed PASS` mean 'steps that RAN cleanly' "
+            "(status quo — a VACUOUS_PASS ran, exit 0, and counts) or 'steps "
+            "that MEASURED something' (a VACUOUS_PASS measured nothing and must "
+            "leave X)? It is NOT a bug with a right answer, because the "
+            "denominator does NOT move either way: `total_required` subtracts "
+            "SKIPPED-CONDITION, WAIVED and DEFERRED-BY-UPSTREAM but NOT "
+            "VACUOUS_PASS. So dropping VACUOUS_PASS from X alone makes a "
+            "legitimately-inapplicable step a PERMANENT debit — no design with "
+            "an inapplicable step could ever read Y/Y again. The alternative "
+            "repair, subtracting VACUOUS_PASS from `total_required` too, is "
+            "REFUSED here on evidence: it makes an unmeasured step cost-free, "
+            "which is the same defect this campaign measured on the "
+            "at-speed-ATPG not-run mirror (a co-located disclosure promoted "
+            "DT1/DT2/DT3 to SKIPPED-CONDITION, which IS subtracted, and flipped "
+            "a flow FAIL -> PASS with a `0/-1` denominator). Making the change "
+            "without the owner would move 12 of 12 published campaign numbers "
+            "to encode a metric definition nobody has ratified. Until it is "
+            "ratified this cell is WAIVED, not green: leg L3c charges it every "
+            "run and the strict xfail forces this waiver out the moment the "
+            "aggregation changes."
         ),
         evidence=(
-            "programs/flow_compliance_check.py:2182-2196 (the three declared "
-            "disclosure channels) vs :2255-2264 (_stdout_signals_vacuous "
-            "requires the token at LINE START) and :4796-4816 (no report file "
-            "is read). Reproduce: mkdir -p P/phase2/stage1/rtl && python3 "
-            "programs/flow_compliance_check.py P --flow-def <one-step FS1 "
-            "yaml> --json r.json -> step FS1 status 'PASS'; "
-            "P/reports/phase2/safety/fmeda_coverage_gate.json carries "
-            "verdict='VACUOUS_PASS'. Measured 2026-07-27 on v1.7.68."
+            "flow_compliance_check.py `pass_count = counts['PASS'] + "
+            "counts['VACUOUS_PASS']` (the X of the `Steps: N total (X/Y "
+            "executed PASS …)` line). Reproduce: run this module's own probe "
+            "for step FS1 and compare the printed X against `counts['PASS']` "
+            "from the same run's --json report — X exceeds it by exactly the "
+            "VACUOUS_PASS count. MEASURED BLAST RADIUS of dropping VACUOUS_PASS "
+            "out of `pass_count` (flow_compliance_check.py `pass_count = "
+            "counts['PASS'] + counts['VACUOUS_PASS']`), over all 12 tracked run "
+            "roots declared in "
+            "programs/tests/fixtures/matrix_d3_output_manifest.json, each "
+            "COPIED and re-run with the shipped checker, full flow, --strict, "
+            "on 2026-07-28: 12 of 12 roots move their published headline "
+            "numerator; 35 step-instances are on the VACUOUS_PASS tier in "
+            "total; 0 of 12 change their Overall verdict (all 12 are already "
+            "FAIL). Per root, X/Y now -> X/Y after, keyed by the root's 1-based "
+            "position in that manifest's `run_roots` object (chip-agnostic: the "
+            "manifest holds the names): #01 4/7 -> 3/7; #02 3/39 -> 2/39; #03 "
+            "11/26 -> 6/26; #04 18/39 -> 13/39; #05 7/53 -> 4/53; #06 15/30 -> "
+            "12/30; #07 22/43 -> 19/43; #08 21/32 -> 18/32; #09 15/53 -> 11/53; "
+            "#10 4/10 -> 3/10; #11 7/41 -> 4/41; #12 32/42 -> 29/42. Steps "
+            "charged: D1 on 11/12 roots, FS1 on 10/12, step 14 on 7/12, step 24 "
+            "on 3/12, step 4 on 2/12, step 30 on 1/12, step 31 on 1/12."
         ),
     ),
     Waiver(
-        step_id="30",
+        step_id=30,
         dim=6,
         reason=(
-            "spice_correlation_check self-declares summary.skipped=true with "
-            "reason='no_spef' and exits 0 with no stdout at all, so step 30 "
-            "resolves to a plain PASS. The step's only other gate leg is an "
-            "any-of files_exist over SPICE decks (phase3/stage3/spice/*.sp OR "
-            "*.spice OR sim_spice/*.sp) — a DIFFERENT artefact from the SPEF "
-            "the checker skips on — so the T4 hard-gate backstop that "
-            "legitimately protects the structurally identical A3 and A7 skips "
-            "does not apply here. A project that ships SPICE decks but no "
-            "extracted SPEF passes post-layout SPICE correlation with no "
-            "correlation having been measured."
+            "Leg L3c: on the SEEDED probe this step resolves to the "
+            "VACUOUS_PASS tier (spice_correlation_check discloses "
+            "summary.skipped=true as a top-level VACUOUS_PASS verdict plus the "
+            "stdout token), and the published headline `X/Y executed PASS` "
+            "still counts it inside X — `flow_compliance_check.py` computes "
+            "`pass_count = counts['PASS'] + counts['VACUOUS_PASS']`. The skip "
+            "has its own LABEL and its own COUNTER (leg L3 is satisfied) but "
+            "not its own arithmetic, so the number a reviewer reads is "
+            "unchanged by the disclosure. OWNER DECISION REQUIRED, and it is a "
+            "one-line change either way: does `X/Y executed PASS` mean 'steps "
+            "that RAN cleanly' (status quo — a VACUOUS_PASS ran, exit 0, and "
+            "counts) or 'steps that MEASURED something' (a VACUOUS_PASS "
+            "measured nothing and must leave X)? It is NOT a bug with a right "
+            "answer, because the denominator does NOT move either way: "
+            "`total_required` subtracts SKIPPED-CONDITION, WAIVED and "
+            "DEFERRED-BY-UPSTREAM but NOT VACUOUS_PASS. So dropping "
+            "VACUOUS_PASS from X alone makes a legitimately-inapplicable step a "
+            "PERMANENT debit — no design with an inapplicable step could ever "
+            "read Y/Y again. The alternative repair, subtracting VACUOUS_PASS "
+            "from `total_required` too, is REFUSED here on evidence: it makes "
+            "an unmeasured step cost-free, which is the same defect this "
+            "campaign measured on the at-speed-ATPG not-run mirror (a "
+            "co-located disclosure promoted DT1/DT2/DT3 to SKIPPED-CONDITION, "
+            "which IS subtracted, and flipped a flow FAIL -> PASS with a `0/-1` "
+            "denominator). Making the change without the owner would move 12 of "
+            "12 published campaign numbers to encode a metric definition nobody "
+            "has ratified. Until it is ratified this cell is WAIVED, not green: "
+            "leg L3c charges it every run and the strict xfail forces this "
+            "waiver out the moment the aggregation changes."
         ),
         evidence=(
-            "flow/phase1_phase2_phase3.yaml step 30 gate.all_of[0].files_exist "
-            "names the .sp decks, not the .spef. Reproduce: mkdir -p "
-            "P/phase3/stage3/spice && touch P/phase3/stage3/spice/x.sp && "
-            "python3 programs/flow_compliance_check.py P --flow-def <one-step "
-            "30 yaml> --json r.json -> status 'PASS' while "
-            "P/reports/phase2/gates/spice_correlation.json carries "
-            "{'summary': {'skipped': true, 'reason': 'no_spef'}}. Measured "
-            "2026-07-27 on v1.7.68."
+            "flow_compliance_check.py `pass_count = counts['PASS'] + "
+            "counts['VACUOUS_PASS']` (the X of the `Steps: N total (X/Y "
+            "executed PASS …)` line). Reproduce: run this module's own probe "
+            "for step 30 and compare the printed X against `counts['PASS']` "
+            "from the same run's --json report — X exceeds it by exactly the "
+            "VACUOUS_PASS count. MEASURED BLAST RADIUS of dropping VACUOUS_PASS "
+            "out of `pass_count` (flow_compliance_check.py `pass_count = "
+            "counts['PASS'] + counts['VACUOUS_PASS']`), over all 12 tracked run "
+            "roots declared in "
+            "programs/tests/fixtures/matrix_d3_output_manifest.json, each "
+            "COPIED and re-run with the shipped checker, full flow, --strict, "
+            "on 2026-07-28: 12 of 12 roots move their published headline "
+            "numerator; 35 step-instances are on the VACUOUS_PASS tier in "
+            "total; 0 of 12 change their Overall verdict (all 12 are already "
+            "FAIL). Per root, X/Y now -> X/Y after, keyed by the root's 1-based "
+            "position in that manifest's `run_roots` object (chip-agnostic: the "
+            "manifest holds the names): #01 4/7 -> 3/7; #02 3/39 -> 2/39; #03 "
+            "11/26 -> 6/26; #04 18/39 -> 13/39; #05 7/53 -> 4/53; #06 15/30 -> "
+            "12/30; #07 22/43 -> 19/43; #08 21/32 -> 18/32; #09 15/53 -> 11/53; "
+            "#10 4/10 -> 3/10; #11 7/41 -> 4/41; #12 32/42 -> 29/42. Steps "
+            "charged: D1 on 11/12 roots, FS1 on 10/12, step 14 on 7/12, step 24 "
+            "on 3/12, step 4 on 2/12, step 30 on 1/12, step 31 on 1/12."
         ),
     ),
+    Waiver(
+        step_id=4,
+        dim=6,
+        reason=(
+            "Leg L3c: on the SEEDED probe this step resolves to the "
+            "VACUOUS_PASS tier (l10_tb_conformance_check and "
+            "l12_tb_coverage_check both signal VACUOUS_PASS on input that does "
+            "not apply), and the published headline `X/Y executed PASS` still "
+            "counts it inside X — `flow_compliance_check.py` computes "
+            "`pass_count = counts['PASS'] + counts['VACUOUS_PASS']`. The skip "
+            "has its own LABEL and its own COUNTER (leg L3 is satisfied) but "
+            "not its own arithmetic, so the number a reviewer reads is "
+            "unchanged by the disclosure. OWNER DECISION REQUIRED, and it is a "
+            "one-line change either way: does `X/Y executed PASS` mean 'steps "
+            "that RAN cleanly' (status quo — a VACUOUS_PASS ran, exit 0, and "
+            "counts) or 'steps that MEASURED something' (a VACUOUS_PASS "
+            "measured nothing and must leave X)? It is NOT a bug with a right "
+            "answer, because the denominator does NOT move either way: "
+            "`total_required` subtracts SKIPPED-CONDITION, WAIVED and "
+            "DEFERRED-BY-UPSTREAM but NOT VACUOUS_PASS. So dropping "
+            "VACUOUS_PASS from X alone makes a legitimately-inapplicable step a "
+            "PERMANENT debit — no design with an inapplicable step could ever "
+            "read Y/Y again. The alternative repair, subtracting VACUOUS_PASS "
+            "from `total_required` too, is REFUSED here on evidence: it makes "
+            "an unmeasured step cost-free, which is the same defect this "
+            "campaign measured on the at-speed-ATPG not-run mirror (a "
+            "co-located disclosure promoted DT1/DT2/DT3 to SKIPPED-CONDITION, "
+            "which IS subtracted, and flipped a flow FAIL -> PASS with a `0/-1` "
+            "denominator). Making the change without the owner would move 12 of "
+            "12 published campaign numbers to encode a metric definition nobody "
+            "has ratified. Until it is ratified this cell is WAIVED, not green: "
+            "leg L3c charges it every run and the strict xfail forces this "
+            "waiver out the moment the aggregation changes."
+        ),
+        evidence=(
+            "flow_compliance_check.py `pass_count = counts['PASS'] + "
+            "counts['VACUOUS_PASS']` (the X of the `Steps: N total (X/Y "
+            "executed PASS …)` line). Reproduce: run this module's own probe "
+            "for step 4 and compare the printed X against `counts['PASS']` from "
+            "the same run's --json report — X exceeds it by exactly the "
+            "VACUOUS_PASS count. MEASURED BLAST RADIUS of dropping VACUOUS_PASS "
+            "out of `pass_count` (flow_compliance_check.py `pass_count = "
+            "counts['PASS'] + counts['VACUOUS_PASS']`), over all 12 tracked run "
+            "roots declared in "
+            "programs/tests/fixtures/matrix_d3_output_manifest.json, each "
+            "COPIED and re-run with the shipped checker, full flow, --strict, "
+            "on 2026-07-28: 12 of 12 roots move their published headline "
+            "numerator; 35 step-instances are on the VACUOUS_PASS tier in "
+            "total; 0 of 12 change their Overall verdict (all 12 are already "
+            "FAIL). Per root, X/Y now -> X/Y after, keyed by the root's 1-based "
+            "position in that manifest's `run_roots` object (chip-agnostic: the "
+            "manifest holds the names): #01 4/7 -> 3/7; #02 3/39 -> 2/39; #03 "
+            "11/26 -> 6/26; #04 18/39 -> 13/39; #05 7/53 -> 4/53; #06 15/30 -> "
+            "12/30; #07 22/43 -> 19/43; #08 21/32 -> 18/32; #09 15/53 -> 11/53; "
+            "#10 4/10 -> 3/10; #11 7/41 -> 4/41; #12 32/42 -> 29/42. Steps "
+            "charged: D1 on 11/12 roots, FS1 on 10/12, step 14 on 7/12, step 24 "
+            "on 3/12, step 4 on 2/12, step 30 on 1/12, step 31 on 1/12."
+        ),
+    ),
+    Waiver(
+        step_id=14,
+        dim=6,
+        reason=(
+            "Leg L3c: on the SEEDED probe this step resolves to the "
+            "VACUOUS_PASS tier (yosys_hilomap_required_check and "
+            "yosys_script_template_check both signal VACUOUS_PASS with no .ys "
+            "script to audit), and the published headline `X/Y executed PASS` "
+            "still counts it inside X — `flow_compliance_check.py` computes "
+            "`pass_count = counts['PASS'] + counts['VACUOUS_PASS']`. The skip "
+            "has its own LABEL and its own COUNTER (leg L3 is satisfied) but "
+            "not its own arithmetic, so the number a reviewer reads is "
+            "unchanged by the disclosure. OWNER DECISION REQUIRED, and it is a "
+            "one-line change either way: does `X/Y executed PASS` mean 'steps "
+            "that RAN cleanly' (status quo — a VACUOUS_PASS ran, exit 0, and "
+            "counts) or 'steps that MEASURED something' (a VACUOUS_PASS "
+            "measured nothing and must leave X)? It is NOT a bug with a right "
+            "answer, because the denominator does NOT move either way: "
+            "`total_required` subtracts SKIPPED-CONDITION, WAIVED and "
+            "DEFERRED-BY-UPSTREAM but NOT VACUOUS_PASS. So dropping "
+            "VACUOUS_PASS from X alone makes a legitimately-inapplicable step a "
+            "PERMANENT debit — no design with an inapplicable step could ever "
+            "read Y/Y again. The alternative repair, subtracting VACUOUS_PASS "
+            "from `total_required` too, is REFUSED here on evidence: it makes "
+            "an unmeasured step cost-free, which is the same defect this "
+            "campaign measured on the at-speed-ATPG not-run mirror (a "
+            "co-located disclosure promoted DT1/DT2/DT3 to SKIPPED-CONDITION, "
+            "which IS subtracted, and flipped a flow FAIL -> PASS with a `0/-1` "
+            "denominator). Making the change without the owner would move 12 of "
+            "12 published campaign numbers to encode a metric definition nobody "
+            "has ratified. Until it is ratified this cell is WAIVED, not green: "
+            "leg L3c charges it every run and the strict xfail forces this "
+            "waiver out the moment the aggregation changes."
+        ),
+        evidence=(
+            "flow_compliance_check.py `pass_count = counts['PASS'] + "
+            "counts['VACUOUS_PASS']` (the X of the `Steps: N total (X/Y "
+            "executed PASS …)` line). Reproduce: run this module's own probe "
+            "for step 14 and compare the printed X against `counts['PASS']` "
+            "from the same run's --json report — X exceeds it by exactly the "
+            "VACUOUS_PASS count. MEASURED BLAST RADIUS of dropping VACUOUS_PASS "
+            "out of `pass_count` (flow_compliance_check.py `pass_count = "
+            "counts['PASS'] + counts['VACUOUS_PASS']`), over all 12 tracked run "
+            "roots declared in "
+            "programs/tests/fixtures/matrix_d3_output_manifest.json, each "
+            "COPIED and re-run with the shipped checker, full flow, --strict, "
+            "on 2026-07-28: 12 of 12 roots move their published headline "
+            "numerator; 35 step-instances are on the VACUOUS_PASS tier in "
+            "total; 0 of 12 change their Overall verdict (all 12 are already "
+            "FAIL). Per root, X/Y now -> X/Y after, keyed by the root's 1-based "
+            "position in that manifest's `run_roots` object (chip-agnostic: the "
+            "manifest holds the names): #01 4/7 -> 3/7; #02 3/39 -> 2/39; #03 "
+            "11/26 -> 6/26; #04 18/39 -> 13/39; #05 7/53 -> 4/53; #06 15/30 -> "
+            "12/30; #07 22/43 -> 19/43; #08 21/32 -> 18/32; #09 15/53 -> 11/53; "
+            "#10 4/10 -> 3/10; #11 7/41 -> 4/41; #12 32/42 -> 29/42. Steps "
+            "charged: D1 on 11/12 roots, FS1 on 10/12, step 14 on 7/12, step 24 "
+            "on 3/12, step 4 on 2/12, step 30 on 1/12, step 31 on 1/12."
+        ),
+    ),
+
+    # ── dimension 6 — skip discipline (the CONDITION half) ────────────
     Waiver(
         step_id="DT2",
         dim=6,
         reason=(
-            "DT2's step-level condition is ALL-of over three paths, two of "
-            "which (phase2/stage2/dft/cut_netlist.v and "
-            "phase3/stage3/pnr/*_pnr.v) are the very artefacts whose absence "
-            "DT2 exists to detect, so the step disappears in exactly the "
-            "scenario it was written for. The repo AGREES: "
+            "RE-OPENED 2026-07-28 at the convergence merge, with a sharper "
+            "reason than it carried before. DT2's step-level condition is "
+            "ALL-of over three paths, two of which "
+            "(phase2/stage2/dft/cut_netlist.v and phase3/stage3/pnr/*_pnr.v) "
+            "are artefacts whose absence DT2 exists to detect, so the step "
+            "disappears in the scenario it was written for. The repo AGREES: "
             "flow_condition_reachability_check classifies it 'self-disabling' "
             "and it is carried in flow_condition_reachability_baseline.json as "
-            "a known-open hole owned by vibe-ic#235. That baseline is a proper "
-            "machine-readable, owner-attributed disclosure — which is why this "
-            "is a waiver and not a silent gap — but a disclosed self-disabling "
-            "condition is still a skip that hides its own subject, so the cell "
-            "is not enforced-clean."
+            "a known-open hole owned by vibe-ic#235. WHAT IS NEW, and why the "
+            "cell is not enforced-clean by the obvious repair: re-arming the "
+            "condition on the PRODUCER'S OWN OUTPUTS (any-of over "
+            "reports/phase2/dft/path_delay_coverage.json or "
+            "phase2/stage2/dft/path_delay_atpg_not_run.json) was tried, "
+            "measured, and WITHDRAWN — it moves the self-disable from the "
+            "input side to the output side, where it is strictly worse: "
+            "deleting the one artefact DT2 exists to report on turns the step "
+            "from MISSING/rc 1 into SKIPPED-CONDITION/rc 0 and removes it from "
+            "the executed-PASS denominator, because total_required subtracts "
+            "SKIPPED-CONDITION. Closing this cell needs a flow-level non-fatal "
+            "verdict for 'ran, disclosed, could not measure' that COSTS the "
+            "denominator; no spelling of the condition alone can do it."
         ),
         evidence=(
             "flow/flow_condition_reachability_baseline.json (owner: "
-            "vibe-ic#235 — 'PRODUCER + CONSUMER halves LANDED; flow-YAML wire "
-            "BLOCKED'). Reproduce: python3 "
-            "programs/flow_condition_reachability_check.py --json r.json -> "
-            "r.json['known_open_holes'][0]['step'] == 'DT2', verdict "
-            "'self-disabling', detail names cut_netlist.v and *_pnr.v as the "
-            "non-surviving triggers. Measured 2026-07-27 on v1.7.68."
+            "vibe-ic#235). Reproduce the hole: `python3 "
+            "programs/flow_condition_reachability_check.py .` -> 'KNOWN-OPEN: "
+            "1 self-disabling condition(s)' naming step DT2. Reproduce the "
+            "withdrawn repair, on a project holding cut_netlist.v + *.spef + "
+            "*_pnr.v and NO at-speed grade and NO not-run record, with a "
+            "single-step DT2 flow lifted from each yaml: ALL-of condition -> "
+            "'MISSING=1' / 'Overall: FAIL (strict=True)' / rc 1; "
+            "producer-outputs condition -> 'SKIPPED=2' / 'Steps: 1 total "
+            "(0/-1 executed PASS)' / 'Overall: PASS' / rc 0. Measured "
+            "2026-07-28 with programs/flow_compliance_check.py from this tree "
+            "on both flow definitions."
         ),
     ),
 
     # ── dimension 7 — is the required_outputs list complete? ───────────
-    Waiver(
-        step_id="D1",
-        dim=7,
-        reason=(
-            "D1 emits phase1/generated_docs/L8_RTL_CONSTANTS.json but declares "
-            "only L1-L12 and L13_*; step 2's gate both READS it as an input "
-            "and gates on it via condition_files_exist, so when D1 fails to "
-            "write it the step-2 clause SKIPS silently instead of failing. "
-            "Declaring it is a yaml change nobody has made yet."
-        ),
-        evidence=(
-            "producer programs/phase1_doc_one_shot_runner.py:47845 "
-            "(_pl.generated_docs_dir(project) / 'L8_RTL_CONSTANTS.json'); "
-            "consumer flow/phase1_phase2_phase3.yaml:363-364 "
-            "(threshold_range_contiguity_check + condition_files_exist)"
-        ),
-    ),
-    Waiver(
-        step_id="7",
-        dim=7,
-        reason=(
-            "The runner emits reports/phase3/single_corner_stance.json to "
-            "disclose a single-corner PVT run, and step 7's own gate program "
-            "pvt_matrix_check loads it (both the phase3 and the legacy phase2 "
-            "location) to decide its stance; no step's required_outputs names "
-            "either path, so nothing verifies the disclosure was written."
-        ),
-        evidence=(
-            "producer programs/phase3_one_shot_runner.py:20341 (rpt_phase3 / "
-            "'single_corner_stance.json'); consumer "
-            "programs/pvt_matrix_check.py:44-45 then :105"
-        ),
-    ),
+    # Five of the nine original entries were CLOSED on 2026-07-28 by declaring
+    # the artefact (D1, 21, 25, 28, 31). The four below are the residue and
+    # they are blocked on three different things. Two (7, 23) share one:
+    # `required_outputs` is ALL-of-N with no conditional spelling, so an
+    # artefact the flow emits only on one branch of a genuine design/PDK
+    # condition cannot be declared without failing the other branch. M1 is
+    # blocked on evidence: the artefact exists in no published run root, so
+    # declaring it would move the gap from dimension 7 to dimension 3. FS1 is
+    # blocked on WIRING, and its entry below is the one that was briefly closed
+    # and reopened the same day — the closure rested on the compliance checker
+    # accepting an artefact it had created itself.
     Waiver(
         step_id="FS1",
         dim=7,
         reason=(
             "FS1 declares no required_outputs key at all while its gate writes "
             "two real JSON artefacts, so there is no list for the flow's "
-            "presence checks to key off. An absent list cannot be complete; "
-            "adding one is a yaml change nobody has made yet."
+            "presence checks to key off. REOPENED 2026-07-28 with the reason "
+            "sharpened from 'adding one is a yaml change nobody has made yet' "
+            "to the thing that actually blocks it: FS1's artefacts have NO "
+            "producer anywhere in the plugin except the first command of its "
+            "own gate, so a declaration cannot be satisfied by a run — only by "
+            "the auditor. flow_compliance_check returns MISSING before the "
+            "gate runs when every declared entry is absent, so declaring both "
+            "paths makes FS1 a permanent red (MEASURED: two consecutive "
+            "check_step runs on a fixture holding only phase2/stage1/rtl both "
+            "report MISSING and leave no file under reports/). The withdrawn "
+            "closure removed that early return for this step SHAPE so the gate "
+            "would run and a post-gate probe would find what the gate had just "
+            "written; the same suppression turned step 8 from a correct "
+            "MISSING into PASS on benchmark-data/ic/ibex, certifying it on "
+            "reports/phase2/sdc_check.json which the audit itself created and "
+            "12 other tracked roots really do carry. WHAT CLOSES THIS, exactly "
+            "one thing: wire fmeda_fault_injection_coverage into a runner the "
+            "way phase3_one_shot_runner._DECLARED_SIGNOFF_GATES wired the four "
+            "sign-off gates on 2026-07-27, so the artefact exists BEFORE the "
+            "audit looks; then declare both paths."
         ),
         evidence=(
             "flow/phase1_phase2_phase3.yaml FS1 step has no required_outputs "
             "key while its gate runs 'fmeda_fault_injection_coverage ... "
             "--json reports/phase2/safety/fmeda_coverage.json' and "
             "'fmeda_coverage_check ... --json "
-            "reports/phase2/safety/fmeda_coverage_gate.json'"
+            "reports/phase2/safety/fmeda_coverage_gate.json'. NO OTHER "
+            "PRODUCER: `grep -rn fmeda_fault_injection_coverage programs/ "
+            "flow/` reaches only the program itself, fmeda_coverage_check.py:"
+            "3,45 (docstring + library import) and that one yaml gate line. "
+            "All 7 tracked roots carrying reports/phase2/safety/"
+            "fmeda_coverage.json hold the auditor's vacuous-skip document "
+            "({'program': 'fmeda_fault_injection_coverage', 'verdict': "
+            "'NOT_APPLICABLE'}), i.e. compliance-gate output committed "
+            "alongside a run, not a fault-injection measurement."
         ),
     ),
     Waiver(
-        step_id="21",
+        step_id="7",
         dim=7,
         reason=(
-            "The runner derives reports/phase3/drc_router.rpt from the "
-            "OpenROAD routing log and step 21's own gate command feeds that "
-            "exact path to drc_report_check via --under, yet no step's "
-            "required_outputs names it: if the derivation silently fails the "
-            "gate loses its router-DRC evidence with nothing reporting the "
-            "loss."
+            "reports/phase3/single_corner_stance.json is emitted ONLY on the "
+            "single-corner branch — phase3_one_shot_runner writes it under "
+            "`if len(corners) < 2 and not pvt.get('multi_corner')` — and a "
+            "multi-corner run legitimately produces none, so an unconditional "
+            "required_outputs entry converts every honest multi-corner run "
+            "into MISSING. required_outputs is ALL-of-N and its only any-of "
+            "spelling is ' OR ' between paths; every alternative that would "
+            "cover the multi-corner branch (pvt_matrix.json, the gate's own "
+            "reports/phase2/gates/pvt_matrix.json) is present on EVERY run, "
+            "so the entry could never fail and would be a declaration that "
+            "measures nothing. Closing this needs a producer change that "
+            "emits a corner-stance disclosure on BOTH branches, plus a "
+            "re-publish of the affected roots — a flow change with its own "
+            "verification, not a declaration change."
         ),
         evidence=(
-            "producer programs/phase3_one_shot_runner.py:21706 ((rpt_phase3 / "
-            "'drc_router.rpt').write_text(body)); consumer is step 21's own "
-            "gate command '--under reports/phase3/drc_router.rpt'"
-        ),
-    ),
-    Waiver(
-        step_id="23",
-        dim=7,
-        reason=(
-            "Thirteen multi-corner / SPEF-based STA artefacts the runner emits "
-            "and step 23's own checkers read (sta_mcorner_ocv.rpt, "
-            "sta_spef_based.rpt, sta_spef_multicorner.rpt and their "
-            "reports/phase3 mirrors, plus the mcorner_ocv and "
-            "multi_corner_spef stance files) appear in no step's "
-            "required_outputs, and two gate-designated outputs of this step "
-            "are read by OTHER programs. Step 23 declares only "
-            "post_route_timing.rpt and post_route_summary.json."
-        ),
-        evidence=(
-            "producers programs/phase3_one_shot_runner.py:20549 and :20638 "
-            "(sta_out / 'sta_spef_based.rpt', sta_out / "
-            "'sta_mcorner_ocv.rpt') with mirrors at :20555 and :20668; "
-            "consumers programs/sta_corner_record_completeness_check.py:"
-            "233-234 and programs/post_route_signoff_corner_check.py"
-        ),
-    ),
-    Waiver(
-        step_id="25",
-        dim=7,
-        reason=(
-            "Step 25's gate writes reports/phase3/em_signoff.json via "
-            "em_report_check --json and the phase-3 runner reads that exact "
-            "path back in its declared-signoff-gate table, so the artefact is "
-            "cross-program load-bearing rather than self-verifying; step 25's "
-            "required_outputs names only the .rpt."
-        ),
-        evidence=(
-            "consumer programs/phase3_one_shot_runner.py:19674 "
-            "('reports/phase3/em_signoff.json', ('--mode', 'em')); writer is "
-            "em_report_check, whose --json is a proven write via its "
-            "signoff_report_check delegate"
-        ),
-    ),
-    Waiver(
-        step_id="28",
-        dim=7,
-        reason=(
-            "reports/phase2/gates/perc_signoff.json is written by step 28's "
-            "own gate and read by eco_trigger_decision, which uses it as one "
-            "of the inputs to the ECO trigger decision; no step's "
-            "required_outputs names it, so its absence silently changes an ECO "
-            "decision instead of failing a gate."
-        ),
-        evidence=(
-            "consumer programs/eco_trigger_decision.py:96 (('perc_signoff', "
-            "'reports/phase2/gates/perc_signoff.json'))"
-        ),
-    ),
-    Waiver(
-        step_id="31",
-        dim=7,
-        reason=(
-            "Two gate-designated outputs of step 31, reports/phase3/lvs.json "
-            "and reports/phase2/gates/erc_density.json, are read by "
-            "eco_trigger_decision as ECO-trigger inputs while step 31 declares "
-            "only the three .rpt files; the JSONs carry the machine-readable "
-            "verdict the .rpt does not, and nothing verifies they exist."
-        ),
-        evidence=(
-            "consumer programs/eco_trigger_decision.py:91 and :95 (('lvs', "
-            "'reports/phase3/lvs.json'), ('erc_density', "
-            "'reports/phase2/gates/erc_density.json'))"
+            "producer programs/phase3_one_shot_runner.py:20321-20344 (the "
+            "`len(corners) < 2` guard around `rpt_phase3 / "
+            "'single_corner_stance.json'`); consumer "
+            "programs/pvt_matrix_check.py:44-45 then :105. MEASURED "
+            "2026-07-28 with flow_compliance_check.check_step over the nine "
+            "tracked roots holding phase2/stage2/constraints/pvt_matrix.json: "
+            "adding the entry moves benchmark-data/ic/spm/v1.5.58_ihp-sg13g2, "
+            "v1.5.65_sky130A and v1.5.66_gf180mcuD from PASS to MISSING "
+            "('required_outputs missing: "
+            "[reports/phase3/single_corner_stance.json]') — three "
+            "multi-corner runs failed for producing no single-corner "
+            "disclosure. The other six are FAIL/PASS-unchanged."
         ),
     ),
     Waiver(
@@ -719,12 +554,73 @@ WAIVERS: Tuple[Waiver, ...] = (
             "substantiates M1's PASS — mixed_signal_top_lvs_run writes it and "
             "mixed_signal_merge_check's PASS branch is contingent on reading "
             "it — yet M1's required_outputs names only top_merged.gds and "
-            "merge.json, so nothing independently verifies its presence."
+            "merge.json, so nothing independently verifies its presence. "
+            "Declaring it was PREPARED and then withdrawn on evidence: the "
+            "artefact exists in NONE of the twelve admissible run roots and "
+            "its producer needs KLayout + Magic + netgen in a container, so "
+            "it cannot be shown produced live here either. Declaring it would "
+            "add a second UNPROVEN entry to M1's dimension-3 waiver — moving "
+            "the gap between dimensions rather than closing it. What closes "
+            "this: publish one run root in which mixed_signal_top_lvs_run "
+            "actually executed, then declare the artefact and record it."
         ),
         evidence=(
-            "producer programs/mixed_signal_top_lvs_run.py:19; consumer "
-            "programs/mixed_signal_merge_check.py:89-90 (candidate list "
-            "'reports/analog/mixed_signal/top_lvs.json')"
+            "producer programs/mixed_signal_top_lvs_run.py:256 "
+            "((rpt_dir / 'top_lvs.json').write_text(...), in the same block "
+            "as the already-declared merge.json); consumer "
+            "programs/mixed_signal_merge_check.py:88-90 then :107. MEASURED "
+            "2026-07-28 with test_matrix_d3_outputs_produced.resolve_anywhere("
+            "'reports/analog/mixed_signal/top_lvs.json') -> None over all 12 "
+            "run roots, while the sibling merge.json resolves at "
+            "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e "
+            "(497 B). Mutation check that the declaration WOULD be live: with "
+            "mixed_signal_merge_check's MERGE_NOT_LVS_SUBSTANTIATED branch "
+            "flipped to its historical PASS-on-presence stub, M1 reports PASS "
+            "without the declaration and MISSING with it."
+        ),
+    ),
+    Waiver(
+        step_id="23",
+        dim=7,
+        reason=(
+            "Fourteen artefacts remain undeclared after "
+            "reports/phase3/sta/sta_corner_record_completeness.json was "
+            "declared on 2026-07-28 (that one is the step's own unconditional "
+            "gate --json target, so it closed with no verdict change on any "
+            "published root). The residue splits in two and BOTH halves are "
+            "conditional-by-design. (a) The two multi-corner STANCE files are "
+            "written only when the post-route DEF exists, and six of the "
+            "eight tracked roots carrying this step's already-declared "
+            "post_route_timing.rpt predate that emitter; five of them PASS "
+            "today and go MISSING if the stance files are declared. (b) The "
+            "three sign-off .rpt files are each emitted on one branch of a "
+            "real PDK condition — sta_mcorner_ocv.rpt only when the ss and ff "
+            "process libraries genuinely differ, sta_spef_multicorner.rpt "
+            "only with two or more corner SPEFs, sta_spef_based.rpt only with "
+            "a non-empty SPEF — and their absence is DISCLOSED in the stance "
+            "files (`report: null`, `multicorner_sta_report: null`). Pairing "
+            "each .rpt with its stance file via ' OR ' would declare the "
+            "name, but with the stance ALSO declared the pair could never "
+            "fail on its own, so it would be decoration. Closing this needs "
+            "the (a) decision — re-publish the six roots, or add a "
+            "conditional/disclosed-skip spelling to required_outputs — taken "
+            "first; then (b) follows as OR-pairs that can actually fail."
+        ),
+        evidence=(
+            "producers programs/phase3_one_shot_runner.py:20549 and :20638 "
+            "(sta_out / 'sta_spef_based.rpt', sta_out / "
+            "'sta_mcorner_ocv.rpt') with mirrors at :20555 and :20668, and "
+            "the two stance writes at :20567 and :20639 both guarded by "
+            "`if primary_def.is_file() and _signoff_regen(...)`; consumer "
+            "programs/sta_corner_record_completeness_check.py:195-215 "
+            "(_PROCESS_STANCE_CANDIDATES / _RC_STANCE_CANDIDATES / "
+            "_MULTICORNER_CANDIDATES / _MCORNER_OCV_CANDIDATES / "
+            "_NOMINAL_SPEF_CANDIDATES). MEASURED 2026-07-28 with "
+            "flow_compliance_check.check_step over the eight tracked roots "
+            "holding phase3/stage3/sta/post_route_timing.rpt: declaring the "
+            "two stance files moves phase1_parity/{espi,lpc/phase3,mdio,"
+            "sgmii} and benchmark-data/ic/caravel_user_project from PASS to "
+            "MISSING (5 of 8); the other three are FAIL before and after."
         ),
     ),
 )

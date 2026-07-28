@@ -132,16 +132,29 @@ VALID_STATES = ("ENFORCED", "WAIVED", "NA")
 #: acknowledged in the same commit that adds the step.
 GRID_AS_MEASURED: Tuple[int, int, int] = (63, 8, 504)
 
-#: The flow's step ids, in declaration order, as measured 2026-07-27. Pinned
+#: The flow's step ids, in declaration order, as measured 2026-07-28. Pinned
 #: alongside the count so a rename or an add-plus-remove — which leaves the
 #: count at 63 — is caught too.
+#:
+#: RE-MEASURED 2026-07-28 for the dimension-5 waiver closures. The POPULATION is
+#: unchanged — same 63 ids, no add, no remove, no rename; only the DECLARATION
+#: ORDER of three of them moved, and the move IS the fix:
+#:   * A6 was declared at index 52, after step 39, while A7 (`blocks_on: [A6]`)
+#:     sat at 23 — the flow's only FORWARD edge, which #503 cascade attribution
+#:     (`for sid in order:`) can never cut. A6 now sits between A5 and A7.
+#:   * DT2 / DT3 were declared at 14/15 while DT2's own condition names step
+#:     22's SPEF (index 34), so `blocks_on: [DT1, 22]` was unwritable. They now
+#:     sit directly after step 22 and DT2 declares that edge.
+#: Both are verified by `test_matrix_d5_deps_correct.py`'s D5-FORWARD-EDGE and
+#: D5-MISSING-EDGE clauses, and the graph is still acyclic (D5-CYCLE, plus
+#: `test_d5_runtime_ordering_guard_loads_the_same_edges`).
 STEP_IDS_AS_MEASURED: Tuple[str, ...] = (
     'D1', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', 'FS1',
-    'DT1', 'DT2', 'DT3', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5', 'A7',
-    'A8', 'A9', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23',
-    '24', '25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35',
-    '36', '37', '38', '39', 'A6', 'M1', 'M2', 'M3', 'M4', '40', '41', '42',
-    '43', '44', 'P0',
+    'DT1', '12', '13', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8',
+    'A9', '14', '15', '16', '17', '18', '19', '20', '21', '22', 'DT2',
+    'DT3', '23', '24', '25', '26', '27', '28', '29', '30', '31', '32',
+    '33', '34', '35', '36', '37', '38', '39', 'M1', 'M2', 'M3', 'M4',
+    '40', '41', '42', '43', '44', 'P0',
 )
 
 #: Written to a scratch dir and loaded with ``-p``; dumps what pytest really

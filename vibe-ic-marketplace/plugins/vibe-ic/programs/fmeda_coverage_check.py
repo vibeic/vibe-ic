@@ -26,7 +26,10 @@ USAGE
       [--min-dc <pct>] [--require] [--json <out>]
 
 EXIT
-  0 — recomputed PASS or vacuous/soft skip
+  0 — recomputed PASS, or a DISCLOSED vacuous/soft skip. A vacuous exit prints
+      a LINE-START `VACUOUS_PASS:` token — the rc-0 disclosure channel
+      `flow_compliance_check._stdout_signals_vacuous` reads — so the step
+      resolves to the VACUOUS_PASS tier instead of the plain PASS bucket.
   1 — recomputed FAIL (DC < floor, invalid baseline, or fabricated verdict)
   2 — IO / argument error
 """
@@ -124,8 +127,28 @@ def main(argv=None) -> int:
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(json.dumps(res, indent=2) + "\n")
-    tag = "PASS" if res["passed"] else "FAIL"
-    print(f"[{tag}] fmeda_coverage_check: {res['verdict']} — {res['reason']}")
+    if res["verdict"] == "VACUOUS_PASS":
+        # DISCLOSED SKIP. The report already self-declared
+        # `verdict="VACUOUS_PASS"`, but no consumer opens the report file, and
+        # the old line started `[PASS] fmeda_coverage_check: VACUOUS_PASS ...`
+        # — `flow_compliance_check._stdout_signals_vacuous` matches the token
+        # at LINE START only, so the disclosure could never reach the step's
+        # tier and an unmeasured FMEDA was counted as a plain PASS. Put the
+        # token where the consumer looks.
+        #
+        # Reason FIRST, bounded token line LAST: the consumer's window is
+        # `stdout[-300:]`, so a token printed ahead of a long reason is sliced
+        # mid-line and the step silently reverts to the plain PASS bucket.
+        # Measured on the upstream `UNMEASURED_NO_RTL_READ` reason, which this
+        # gate copies verbatim and which is longer than the window.
+        print(f"fmeda_coverage_check: {res['verdict']} — {res['reason']}")
+        print(f"VACUOUS_PASS: fmeda_coverage_check recomputed NOTHING "
+              f"(verdict={res['verdict']}); see the --json report for why"
+              [:fi.VACUOUS_TOKEN_MAX_LEN])
+    else:
+        tag = "PASS" if res["passed"] else "FAIL"
+        print(f"[{tag}] fmeda_coverage_check: {res['verdict']} — "
+              f"{res['reason']}")
     return rc
 
 

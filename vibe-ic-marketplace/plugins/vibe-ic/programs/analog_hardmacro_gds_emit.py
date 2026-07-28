@@ -1,0 +1,456 @@
+#!/usr/bin/env python3
+"""analog_hardmacro_gds_emit.py — the A8 GDS PRODUCER that was missing.
+
+WHAT WAS BROKEN
+===============
+Flow step A8 ("Hardmacro Generation (LEF + Liberty + GDS + Verilog)")
+declares four `required_outputs`, one of which is
+`phase3/analog/hardmacro/*/*.gds`. Three of the four are emitted by the
+`analog-hardmacro-gen` skill. The `.gds` was emitted by NOTHING:
+
+  * `programs/magic_port_extract_emit.build_gds_write_tcl()` has existed,
+    documented and unit-tested, for many releases — and was referenced only
+    by its own unit test and by the skill's prose. No gate, no runner and no
+    MCP tool ever called it. (The emitter's own module docstring dates it.)
+  * `analog_one_shot_runner._emit_deterministic_stub("A8_hardmacro_gen")`
+    writes `<block>.lef`, `<block>.lib` and `<block>.v` — and no `.gds`.
+  * `analog_a8_hardmacro_gen_check` verifies the LEF/LIB/V TRIPLE only, so
+    nothing downstream noticed the fourth declared artefact never appeared.
+
+So A8 declared a physical layout it never produced, and step M1 — whose
+merge consumes `phase3/analog/hardmacro/**/*.gds` — could never find one.
+
+WHAT THIS PROGRAM DOES
+======================
+For every declared analog block it streams the A5 Magic layout out to GDS:
+
+    phase3/analog/<block>/layout.mag   ->   phase3/analog/hardmacro/<block>/<block>.gds
+
+using the flow's own deterministic TCL emitter
+(`magic_port_extract_emit.build_gds_write_tcl`) and the PDK technology the
+LAYOUT ITSELF names on its `tech <name>` line — never a hard-coded PDK. The
+staged copy is named `<block>.mag` so Magic's cell name is the block name,
+which is what the LEF `MACRO <block>` and the Verilog `module <block>` already
+use.
+
+CONTAINER STAGING, AND WHY IT IS NOT A HOST-PATH ASSUMPTION
+===========================================================
+The EDA tools live in a container. Sibling programs pass HOST paths straight
+into `docker exec` (`mixed_signal_top_lvs_run._to_container_path` returns its
+argument unchanged), which silently requires the project to sit under a
+bind-mounted directory: on a checkout anywhere else Magic reports "no such
+file" and the caller reads it as a tool failure. This program instead stages
+through `docker cp` into a container-side temporary directory and copies the
+result back, so it works from ANY host path, mounted or not.
+
+HONEST RC CONTRACT — a skip is never a success and never a failure
+==================================================================
+    rc 0  at least one block produced a real GDS, or every block was
+          skipped for a NAMED, disclosed reason (no layout, stub layout,
+          already present).
+    rc 1  Magic RAN and the result is not a layout: no file, zero bytes, or
+          zero BOUNDARY/PATH/SREF/AREF/BOX records. A hollow GDS is worse
+          than none — `analog_hardmacro_check` used to accept 500 bytes of
+          noise — so it is deleted and reported, never left on disk.
+    rc 2  the capability itself is absent (no container/Magic reachable, or
+          the layout's technology has no magicrc under the PDK root). A
+          disclosed capability gap, reported with the tool and tech names.
+
+DELIBERATE NON-BEHAVIOURS
+=========================
+  * A deterministic-stub `layout.mag` (`_analog_stub_marker.is_stub_text`) is
+    SKIPPED, not streamed. The stub tier ships without a `.gds` on purpose and
+    `analog_lef_gds_outline_check` credits that as `STUB_NOT_PACKAGED`;
+    emitting a geometry-free GDS from stub padding would convert that
+    disclosed skip into a mismatch FAIL.
+  * An existing `<block>.gds` is never overwritten. Re-running the flow must
+    not silently replace a signoff artefact.
+
+ENFORCEMENT: none — this is a PRODUCER, and it is deliberately NOT a gate
+clause. Corrected 2026-07-28; this paragraph previously said the opposite.
+  It is invoked by `analog_one_shot_runner.step_for_block` at
+  `A8_hardmacro_gen` and declared in A8's `programs:` list. It was ALSO wired
+  into A8's gate as `advisory_program_exit_zero` for one day, and that clause
+  was WITHDRAWN: `flow_compliance_check` is the sole phase-2+3 acceptance
+  auditor, `phase3/analog/hardmacro/*/*.gds` is one of A8's declared
+  `required_outputs`, and a gate clause that MAKES a declared output leaves the
+  same audit reporting the artefact it just created. Measured on a copy of the
+  analog reference run: with the clause, an audit that started with 0 `.gds`
+  ended with 2 that it had written itself; without it, 0.
+  Producing is not a verdict either way: the blocking verdicts stay with
+  `analog_hardmacro_check` (presence + real geometry) and
+  `analog_lef_gds_outline_check` (LEF SIZE vs GDS bounding box), both of which
+  READ what this writes — and they must read a tree the audit did not touch.
+
+chip-AGNOSTIC: block names come from `analog_block_list.json`, the technology
+comes from the layout header, and no PDK SKU, vendor or cell literal appears
+below.
+
+Usage:
+    python3 analog_hardmacro_gds_emit.py <project> [--json <out>]
+        [--container vibeic-eda] [--pdk-root /foss/pdks] [--block <name>]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import _path_layout as _pl  # noqa: E402
+from _analog_a_check_common import load_block_list  # noqa: E402
+from _analog_stub_marker import is_stub_text  # noqa: E402
+from magic_port_extract_emit import build_gds_write_tcl  # noqa: E402
+
+# ONE parser for "does this GDS carry geometry", shared with the A5 layout gate
+# and with analog_hardmacro_check so the producer cannot accept a file its own
+# consumers reject.
+from analog_a5_layout_check import _gds_geometry_count  # noqa: E402
+
+PROGRAM = "analog_hardmacro_gds_emit"
+
+DEFAULT_CONTAINER = "vibeic-eda"
+DEFAULT_PDK_ROOT = "/foss/pdks"
+
+#: Magic writes the technology it was built against on the second line of a
+#: `.mag`: `tech <name>`. The magicrc is then
+#: `<pdk_root>/<name>/libs.tech/magic/<name>.magicrc`.
+_MAG_TECH_RE = re.compile(r"^\s*tech\s+(\S+)\s*$", re.MULTILINE)
+_MAGICRC_REL = "{tech}/libs.tech/magic/{tech}.magicrc"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Container plumbing
+# ──────────────────────────────────────────────────────────────────────
+def _run(argv: List[str], timeout: int = 900) -> Tuple[int, str, str]:
+    """Bounded subprocess. Monkeypatch surface for the unit tests."""
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True,
+                           timeout=timeout)
+        return p.returncode, p.stdout, p.stderr
+    except Exception as exc:  # noqa: BLE001 — surfaced to the caller verbatim
+        return 1, "", str(exc)
+
+
+class Stage:
+    """A working directory the EDA tools can actually see.
+
+    ``container`` empty or ``"host"`` runs the tools directly and the stage is
+    a plain host directory. Otherwise the stage lives INSIDE the container and
+    files move across with ``docker cp``, so the project may sit at any host
+    path — mounted, unmounted, or a pytest ``tmp_path``.
+    """
+
+    def __init__(self, container: str, host_tmp: Path):
+        self.container = (container or "").strip()
+        self.in_container = self.container not in ("", "host")
+        self.host_tmp = host_tmp
+        self.path: Optional[str] = None
+
+    def open(self) -> Tuple[bool, str]:
+        if not self.in_container:
+            self.host_tmp.mkdir(parents=True, exist_ok=True)
+            self.path = str(self.host_tmp)
+            return True, ""
+        rc, out, err = _run(
+            ["docker", "exec", self.container, "mktemp", "-d"], timeout=60)
+        if rc != 0 or not out.strip():
+            return False, (f"cannot open a staging dir in container "
+                           f"{self.container!r}: {(err or out).strip()[:200]}")
+        self.path = out.strip()
+        return True, ""
+
+    def put(self, src: Path, name: str) -> Tuple[bool, str]:
+        assert self.path is not None
+        dst = f"{self.path}/{name}"
+        if not self.in_container:
+            try:
+                Path(dst).write_bytes(src.read_bytes())
+                return True, ""
+            except OSError as exc:
+                return False, str(exc)
+        rc, out, err = _run(
+            ["docker", "cp", str(src), f"{self.container}:{dst}"], timeout=120)
+        return (rc == 0), (err or out).strip()[:200]
+
+    def put_text(self, text: str, name: str) -> Tuple[bool, str]:
+        assert self.path is not None
+        tmp = self.host_tmp / f".stage_{name}"
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(text, encoding="utf-8")
+        return self.put(tmp, name)
+
+    def get(self, name: str, dst: Path) -> Tuple[bool, str]:
+        assert self.path is not None
+        src = f"{self.path}/{name}"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not self.in_container:
+            try:
+                dst.write_bytes(Path(src).read_bytes())
+                return True, ""
+            except OSError as exc:
+                return False, str(exc)
+        rc, out, err = _run(
+            ["docker", "cp", f"{self.container}:{src}", str(dst)], timeout=120)
+        return (rc == 0 and dst.is_file()), (err or out).strip()[:200]
+
+    def sh(self, cmd: str, timeout: int = 900) -> Tuple[int, str, str]:
+        if not self.in_container:
+            return _run(["bash", "-lc", cmd], timeout=timeout)
+        return _run(["docker", "exec", self.container, "bash", "-lc", cmd],
+                    timeout=timeout)
+
+    def exists(self, path: str) -> bool:
+        return self.sh(f"test -e {shlex.quote(path)}", timeout=60)[0] == 0
+
+    def close(self) -> None:
+        if self.path and self.in_container:
+            _run(["docker", "exec", self.container, "rm", "-rf", self.path],
+                 timeout=60)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Layout discovery
+# ──────────────────────────────────────────────────────────────────────
+def layout_for(project: Path, block: str) -> Optional[Path]:
+    """The A5 Magic layout for *block*, or None."""
+    for cand in (_pl.analog_dir(project) / block / "layout.mag",
+                 _pl.analog_dir(project) / block / f"{block}.mag"):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def tech_of(layout: Path) -> Optional[str]:
+    """The technology the LAYOUT names, never a default.
+
+    A `.mag` with no `tech` line cannot be streamed reproducibly: guessing one
+    would silently write a GDS against the wrong layer map, which is exactly
+    the kind of plausible-but-wrong artefact this campaign removes.
+    """
+    m = _MAG_TECH_RE.search(layout.read_text(errors="replace"))
+    return m.group(1) if m else None
+
+
+def discover_blocks(project: Path) -> List[str]:
+    declared = load_block_list(project)
+    if declared:
+        return list(declared)
+    root = _pl.analog_dir(project)
+    if not root.is_dir():
+        return []
+    return sorted(p.parent.name for p in root.glob("*/layout.mag"))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The producer
+# ──────────────────────────────────────────────────────────────────────
+def emit_block(project: Path, block: str, stage: Stage,
+               pdk_root: str) -> Dict:
+    """Stream one block's layout to GDS. Returns a per-block record."""
+    out_gds = _pl.hardmacro_dir(project) / block / f"{block}.gds"
+    rec: Dict = {"block": block, "gds": str(out_gds.relative_to(project))}
+
+    if out_gds.is_file() and out_gds.stat().st_size > 0:
+        rec.update(status="SKIP", rule="A8GDS_ALREADY_PRESENT",
+                   detail=f"{out_gds.name} already present "
+                          f"({out_gds.stat().st_size} B); not overwritten")
+        return rec
+
+    layout = layout_for(project, block)
+    if layout is None:
+        rec.update(status="SKIP", rule="A8GDS_NO_LAYOUT",
+                   detail=(f"no A5 Magic layout for block {block!r} "
+                           f"(looked for layout.mag / {block}.mag under "
+                           f"{_pl.analog_dir(project).relative_to(project)}/"
+                           f"{block}/)"))
+        return rec
+
+    text = layout.read_text(errors="replace")
+    if is_stub_text(text):
+        rec.update(status="SKIP", rule="A8GDS_STUB_LAYOUT",
+                   detail=(f"{layout.name} carries the deterministic-stub "
+                           f"marker; the stub tier ships without a .gds on "
+                           f"purpose and streaming padding would turn a "
+                           f"disclosed skip into an outline mismatch"))
+        return rec
+
+    tech = tech_of(layout)
+    if not tech:
+        rec.update(status="SKIP", rule="A8GDS_NO_TECH_LINE",
+                   detail=(f"{layout.name} declares no `tech <name>` line, so "
+                           f"the layer map to stream against is unknown; "
+                           f"guessing one would write a wrong-layer GDS"))
+        return rec
+    rec["tech"] = tech
+
+    magicrc = f"{pdk_root.rstrip('/')}/{_MAGICRC_REL.format(tech=tech)}"
+    if not stage.exists(magicrc):
+        rec.update(status="UNAVAILABLE", rule="A8GDS_NO_TECH",
+                   detail=(f"technology {tech!r} named by {layout.name} has no "
+                           f"magicrc at {magicrc}"))
+        return rec
+
+    ok, why = stage.put(layout, f"{block}.mag")
+    if not ok:
+        rec.update(status="UNAVAILABLE", rule="A8GDS_STAGE_FAILED",
+                   detail=f"could not stage {layout.name}: {why}")
+        return rec
+
+    tcl_name = f"{block}_gds_write.tcl"
+    tcl = build_gds_write_tcl(top_cell=block, layout_mag=block,
+                              out_gds=f"{block}.gds")
+    ok, why = stage.put_text(tcl, tcl_name)
+    if not ok:
+        rec.update(status="UNAVAILABLE", rule="A8GDS_STAGE_FAILED",
+                   detail=f"could not stage {tcl_name}: {why}")
+        return rec
+
+    cmd = (f"export PDK={shlex.quote(tech)} "
+           f"PDK_ROOT={shlex.quote(pdk_root)} && "
+           f"cd {shlex.quote(stage.path or '.')} && "
+           f"magic -noconsole -dnull -rcfile {shlex.quote(magicrc)} "
+           f"{shlex.quote(tcl_name)}")
+    rc, out, err = stage.sh(cmd)
+    tail = ((out or "") + (err or "")).strip().splitlines()[-4:]
+
+    landed = _pl.hardmacro_dir(project) / block / f"{block}.gds"
+    got, why = stage.get(f"{block}.gds", landed)
+    if not got or not landed.is_file() or landed.stat().st_size == 0:
+        if landed.is_file():
+            landed.unlink()
+        rec.update(status="FAIL", rule="A8GDS_NOT_WRITTEN",
+                   detail=(f"magic -rcfile {magicrc} {tcl_name} returned "
+                           f"rc={rc} and no non-empty {block}.gds came back "
+                           f"({why}); last output: {tail}"))
+        return rec
+
+    records = _gds_geometry_count(landed.read_bytes())
+    if records <= 0:
+        landed.unlink()
+        rec.update(status="FAIL", rule="A8GDS_NO_GEOMETRY",
+                   detail=(f"magic wrote {block}.gds but it carries no "
+                           f"BOUNDARY/PATH/SREF/AREF/BOX record — a layout "
+                           f"with no geometry is not a layout; the file was "
+                           f"removed rather than left to read as produced. "
+                           f"last output: {tail}"))
+        return rec
+
+    rec.update(status="PRODUCED", rule="A8GDS_PRODUCED",
+               size_bytes=landed.stat().st_size,
+               geometry_records=records,
+               source=str(layout.relative_to(project)),
+               detail=(f"magic streamed {layout.name} ({tech}) to "
+                       f"{block}.gds: {landed.stat().st_size} B, "
+                       f"{records} geometry records"))
+    return rec
+
+
+def run(project: Path, container: str, pdk_root: str,
+        only: Optional[str], host_tmp: Path) -> Tuple[Dict, int]:
+    blocks = discover_blocks(project)
+    if only:
+        blocks = [b for b in blocks if b == only]
+    # No absolute path and no timestamp on purpose: the record lives INSIDE the
+    # project it describes, and a re-run on the same inputs must be
+    # byte-identical so a reviewer can regenerate it and diff.
+    report: Dict = {
+        "program": PROGRAM,
+        "tool": "magic (gds write) via magic_port_extract_emit"
+                ".build_gds_write_tcl",
+        "container": container,
+        "pdk_root": pdk_root,
+        "blocks": blocks,
+        "results": [],
+    }
+    if not blocks:
+        report["verdict"] = "VACUOUS_PASS"
+        report["reason"] = (
+            "no analog block declares a layout to stream; A8 GDS emission is "
+            "inapplicable to this project")
+        return report, 0
+
+    stage = Stage(container, host_tmp)
+    ok, why = stage.open()
+    if not ok:
+        report["verdict"] = "UNAVAILABLE"
+        report["reason"] = why
+        report["results"] = [
+            {"block": b, "status": "UNAVAILABLE", "rule": "A8GDS_NO_STAGE",
+             "detail": why} for b in blocks]
+        return report, 2
+    try:
+        if stage.sh("command -v magic >/dev/null 2>&1", timeout=60)[0] != 0:
+            report["verdict"] = "UNAVAILABLE"
+            report["reason"] = (
+                f"magic is not on PATH in "
+                f"{container!r}; the A8 GDS streamout has no producer here")
+            report["results"] = [
+                {"block": b, "status": "UNAVAILABLE", "rule": "A8GDS_NO_MAGIC",
+                 "detail": report["reason"]} for b in blocks]
+            return report, 2
+        for block in blocks:
+            report["results"].append(
+                emit_block(project, block, stage, pdk_root))
+    finally:
+        stage.close()
+
+    failed = [r for r in report["results"] if r["status"] == "FAIL"]
+    unavailable = [r for r in report["results"]
+                   if r["status"] == "UNAVAILABLE"]
+    produced = [r for r in report["results"] if r["status"] == "PRODUCED"]
+    report["summary"] = {
+        "produced": len(produced),
+        "skipped": len(report["results"]) - len(produced) - len(failed)
+                   - len(unavailable),
+        "unavailable": len(unavailable),
+        "failed": len(failed),
+    }
+    if failed:
+        report["verdict"] = "FAIL"
+        return report, 1
+    if unavailable and not produced:
+        report["verdict"] = "UNAVAILABLE"
+        return report, 2
+    report["verdict"] = "PASS"
+    return report, 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    ap.add_argument("project", type=Path)
+    ap.add_argument("--json", default=None)
+    ap.add_argument("--container", default=DEFAULT_CONTAINER)
+    ap.add_argument("--pdk-root", default=DEFAULT_PDK_ROOT)
+    ap.add_argument("--block", default=None)
+    args = ap.parse_args(argv)
+
+    if not args.project.is_dir():
+        print(f"ERROR: not a directory: {args.project}", file=sys.stderr)
+        return 2
+
+    project = args.project.resolve()
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="a8gds_") as td:
+        report, rc = run(project, args.container, args.pdk_root,
+                         args.block, Path(td))
+
+    out = json.dumps(report, indent=2, ensure_ascii=False)
+    if args.json:
+        p = Path(args.json)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(out + "\n", encoding="utf-8")
+    print(f"[{report['verdict']}] {PROGRAM}")
+    for r in report["results"]:
+        print(f"  [{r['status']}] {r['rule']}: {r['detail']}")
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

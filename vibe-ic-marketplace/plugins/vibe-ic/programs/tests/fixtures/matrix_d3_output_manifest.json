@@ -147,6 +147,13 @@
      "alternative": "phase1/generated_docs/L13_*.json",
      "path": "phase1/generated_docs/L13_LAB_CALIBRATION.json",
      "size_bytes": 3356
+    },
+    "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
+     "status": "PRODUCED_BY_RUN",
+     "run": "benchmark-data/ic/caravel_user_project",
+     "alternative": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
+     "path": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
+     "size_bytes": 3207
     }
    }
   },
@@ -267,7 +274,7 @@
    }
   },
   "6": {
-   "verdict": "WAIVED",
+   "verdict": "NA_TOOLCHAIN_ABSENT",
    "entries": {
     "phase2/stage1/fpga/output_files/*.sof": {
      "status": "UNPROVEN"
@@ -283,10 +290,15 @@
      "size_bytes": 263
     }
    },
-   "unproven": [
-    "phase2/stage1/fpga/output_files/*.map.rpt",
-    "phase2/stage1/fpga/output_files/*.sof"
-   ]
+   "toolchain": {
+    "label": "Intel Quartus (quartus_sh --flow compile)",
+    "probe": "design_one_shot_runner._find_host_quartus_sh() + design_one_shot_runner._container_has_quartus_sh(<container>)",
+    "container": "vibeic-eda",
+    "gated_entries": [
+     "phase2/stage1/fpga/output_files/*.sof",
+     "phase2/stage1/fpga/output_files/*.map.rpt"
+    ]
+   }
   },
   "7": {
    "verdict": "ENFORCED",
@@ -551,7 +563,7 @@
    }
   },
   "A8": {
-   "verdict": "WAIVED",
+   "verdict": "ENFORCED",
    "entries": {
     "phase3/analog/hardmacro/*/*.lef": {
      "status": "PRODUCED_BY_RUN",
@@ -568,7 +580,20 @@
      "size_bytes": 766
     },
     "phase3/analog/hardmacro/*/*.gds": {
-     "status": "UNPROVEN"
+     "_comment": "PRODUCED_LIVE, not PRODUCED_BY_RUN. No archived run wrote this artefact: until 2026-07-28 the plugin had no producer for it at all, so any .gds sitting in a run tree today would have been put there by an agent or by an auditor, and calling that 'produced by the run' is the seeded-input-as-produced-output false pass this dimension exists to remove. What IS true, and is re-measured on every suite run, is that this checkout's own producer turns the run's OWN A5 layout into one. Nothing is committed: the production happens in a throwaway copy.",
+     "status": "PRODUCED_LIVE",
+     "producer": "analog_hardmacro_gds_emit",
+     "argv": [
+      ".",
+      "--json",
+      "reports/phase2/gates/a8_hardmacro_gds_emit.json"
+     ],
+     "writes": "phase3/analog/hardmacro/delta_sigma/delta_sigma.gds",
+     "production_record": "reports/phase2/gates/a8_hardmacro_gds_emit.json",
+     "base_run": "benchmark-data/ic/u_hawaii_adc",
+     "size_bytes": 2042,
+     "geometry_records": 30,
+     "source_input": "phase3/analog/delta_sigma/layout.mag"
     },
     "phase3/analog/hardmacro/*/*.v": {
      "status": "PRODUCED_BY_RUN",
@@ -577,10 +602,7 @@
      "path": "phase3/analog/hardmacro/delta_sigma/delta_sigma.v",
      "size_bytes": 822
     }
-   },
-   "unproven": [
-    "phase3/analog/hardmacro/*/*.gds"
-   ]
+   }
   },
   "A9": {
    "verdict": "ENFORCED",
@@ -715,6 +737,13 @@
      "alternative": "phase3/stage3/pnr/routed.drc.rpt",
      "path": "phase3/stage3/pnr/routed.drc.rpt",
      "size_bytes": 19045
+    },
+    "reports/phase3/drc_router.rpt": {
+     "status": "PRODUCED_BY_RUN",
+     "run": "benchmark-data/ic/caravel_user_project",
+     "alternative": "reports/phase3/drc_router.rpt",
+     "path": "reports/phase3/drc_router.rpt",
+     "size_bytes": 19208
     }
    }
   },
@@ -753,6 +782,13 @@
      "writes": "reports/phase3/sta/post_route_summary.json",
      "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
      "size_bytes": 955
+    },
+    "reports/phase3/sta/sta_corner_record_completeness.json": {
+     "status": "PRODUCED_BY_RUN",
+     "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
+     "alternative": "reports/phase3/sta/sta_corner_record_completeness.json",
+     "path": "reports/phase3/sta/sta_corner_record_completeness.json",
+     "size_bytes": 3822
     }
    }
   },
@@ -805,6 +841,20 @@
      "alternative": "reports/phase3/em.json",
      "path": "reports/phase3/em.json",
      "size_bytes": 292
+    },
+    "reports/phase3/em_signoff.json": {
+     "status": "PRODUCED_LIVE",
+     "producer": "em_report_check",
+     "argv": [
+      ".",
+      "--mode",
+      "em",
+      "--json",
+      "reports/phase3/em_signoff.json"
+     ],
+     "writes": "reports/phase3/em_signoff.json",
+     "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
+     "size_bytes": 168
     }
    }
   },
@@ -876,6 +926,14 @@
      "alternative": "reports/phase3/PERC_SIGNOFF_MEMO.md",
      "path": "reports/phase3/PERC_SIGNOFF_MEMO.md",
      "size_bytes": 3966
+    },
+    "reports/phase2/gates/perc_signoff.json": {
+     "status": "PRODUCED_BY_RUN",
+     "provenance_note": "the recorded copy is `perc_signoff_check`'s own verdict document ({\"program\": \"perc_signoff_check\", ...}) and no producer outside step 28's gate writes this path, so the run root carries compliance-gate output committed alongside the run. Admissible for dimension 3 (the root carries a runner marker and the file pre-exists any audit of it) but it is NOT independent of the checker: see flow_compliance_check --strict-audit-evidence.",
+     "run": "benchmark-data/ic/caravel_user_project",
+     "alternative": "reports/phase2/gates/perc_signoff.json",
+     "path": "reports/phase2/gates/perc_signoff.json",
+     "size_bytes": 523
     }
    }
   },
@@ -933,6 +991,22 @@
      "alternative": "reports/phase3/erc.rpt",
      "path": "reports/phase3/erc.rpt",
      "size_bytes": 3009
+    },
+    "reports/phase3/lvs.json": {
+     "status": "PRODUCED_BY_RUN",
+     "provenance_note": "the recorded copy is `eda_report_audit:lvs` output (step 31's own gate) — same class as perc_signoff.json above.",
+     "run": "benchmark-data/ic/caravel_user_project",
+     "alternative": "reports/phase3/lvs.json",
+     "path": "reports/phase3/lvs.json",
+     "size_bytes": 225
+    },
+    "reports/phase2/gates/erc_density.json": {
+     "status": "PRODUCED_BY_RUN",
+     "provenance_note": "the recorded copy is `erc_density_check` output (step 31's own gate) — same class as perc_signoff.json above.",
+     "run": "benchmark-data/ic/caravel_user_project",
+     "alternative": "reports/phase2/gates/erc_density.json",
+     "path": "reports/phase2/gates/erc_density.json",
+     "size_bytes": 1188
     }
    }
   },
@@ -1077,7 +1151,7 @@
    }
   },
   "39": {
-   "verdict": "WAIVED",
+   "verdict": "NA_TOOLCHAIN_ABSENT",
    "entries": {
     "phase2/stage1/fpga/final/*.sof": {
      "status": "UNPROVEN"
@@ -1090,9 +1164,14 @@
      "size_bytes": 732
     }
    },
-   "unproven": [
-    "phase2/stage1/fpga/final/*.sof"
-   ]
+   "toolchain": {
+    "label": "Intel Quartus (quartus_sh --flow compile)",
+    "probe": "design_one_shot_runner._find_host_quartus_sh() + design_one_shot_runner._container_has_quartus_sh(<container>)",
+    "container": "vibeic-eda",
+    "gated_entries": [
+     "phase2/stage1/fpga/final/*.sof"
+    ]
+   }
   },
   "A6": {
    "verdict": "ENFORCED",

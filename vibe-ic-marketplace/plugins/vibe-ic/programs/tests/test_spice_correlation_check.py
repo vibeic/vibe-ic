@@ -194,3 +194,33 @@ def test_exit2_bad_dir(tmp_path):
         capture_output=True, text=True,
     )
     assert r.returncode == 2
+
+
+# -- The disclosed self-skip has TWO rc-0 channels, and BOTH are load-bearing --
+
+@pytest.mark.parametrize("setup", ["no_spef", "no_sta"])
+def test_both_vacuous_channels_are_emitted_on_a_disclosed_self_skip(tmp_path, setup):
+    """`flow_compliance_check` reads the tier off a LINE-START stdout token; the
+    JSON `verdict` field is the machine-readable half a report consumer reads.
+    This module's docstring calls both "the two rc-0 channels", and until
+    2026-07-28 only the stdout half was under test: deleting
+    `doc["verdict"] = "VACUOUS_PASS"` left the whole suite green, so half of the
+    disclosure could be dropped silently.
+
+    A self-skip must never look like a measured PASS on EITHER channel.
+    """
+    if setup == "no_sta":
+        _setup_spef(tmp_path)
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rpt = _load_report(tmp_path)
+    assert rpt["summary"]["skipped"] is True, rpt
+    assert rpt["verdict"] == "VACUOUS_PASS", (
+        "the JSON channel lost its VACUOUS_PASS verdict — a report consumer "
+        "now reads an unmeasured self-skip as an ordinary pass")
+    starts = [ln for ln in r.stdout.splitlines()
+              if ln.startswith("VACUOUS_PASS:")]
+    assert starts, (
+        "the stdout channel lost its LINE-START VACUOUS_PASS token — "
+        f"flow_compliance_check resolves the step to a plain PASS tier. "
+        f"stdout was:\n{r.stdout[-400:]}")

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 987
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 987)
+- **Total programs (excluding helpers / shims):** 988
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 988)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 978 |
+| `any` | 979 |
 
 ## Alphabetical listing
 
@@ -45,7 +45,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_a2_topology_select_check` | any | — | A2 deterministic gate (v1.6.35). |
 | `analog_a3_netlist_gen_check` | any | — | A3 deterministic gate (v1.6.35). |
 | `analog_a4_corner_sweep_check` | any | — | A4 deterministic gate (v1.6.35). |
-| `analog_a5_layout_check` | any | — | A5 deterministic gate (v1.6.35). |
+| `analog_a5_layout_check` | any | — | A5 deterministic gate. |
 | `analog_a6_block_pv_check` | any | — | A6 deterministic gate |
 | `analog_a6_native_pv` | any | — | A6 per-block PHYSICAL-VERIFICATION producer |
 | `analog_a7_post_layout_resim_check` | any | — | A7 deterministic gate. |
@@ -64,6 +64,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_digital_interface_check` | any | — | deterministic gate for digital-analog interface validation |
 | `analog_flow_compliance_check` | any | — | analog track compliance gate (A1-A9) |
 | `analog_hardmacro_check` | any | — | deterministic gate for analog hardmacro deliverables |
+| `analog_hardmacro_gds_emit` | any | — | the A8 GDS PRODUCER that was missing. |
 | `analog_hardmacro_pinname_consistency_check` | any | — | deterministic 3-way pin-name gate. |
 | `analog_hil_convergence_log_check` | any | — | verify that at least one analog |
 | `analog_hil_iteration_cap_check` | any | — | deterministic hard-cap on HIL iterations. |
@@ -1059,7 +1060,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (978 programs)
+### `any` (979 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1080,7 +1081,7 @@ _(no programs in this group)_
 - `analog_a2_topology_select_check` — A2 deterministic gate (v1.6.35).
 - `analog_a3_netlist_gen_check` — A3 deterministic gate (v1.6.35).
 - `analog_a4_corner_sweep_check` — A4 deterministic gate (v1.6.35).
-- `analog_a5_layout_check` — A5 deterministic gate (v1.6.35).
+- `analog_a5_layout_check` — A5 deterministic gate.
 - `analog_a6_block_pv_check` — A6 deterministic gate
 - `analog_a6_native_pv` — A6 per-block PHYSICAL-VERIFICATION producer
 - `analog_a7_post_layout_resim_check` — A7 deterministic gate.
@@ -1099,6 +1100,7 @@ _(no programs in this group)_
 - `analog_digital_interface_check` — deterministic gate for digital-analog interface validation
 - `analog_flow_compliance_check` — analog track compliance gate (A1-A9)
 - `analog_hardmacro_check` — deterministic gate for analog hardmacro deliverables
+- `analog_hardmacro_gds_emit` — the A8 GDS PRODUCER that was missing.
 - `analog_hardmacro_pinname_consistency_check` — deterministic 3-way pin-name gate.
 - `analog_hil_convergence_log_check` — verify that at least one analog
 - `analog_hil_iteration_cap_check` — deterministic hard-cap on HIL iterations.

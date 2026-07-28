@@ -432,6 +432,19 @@ class TestDFTSignoffTier:
                                     "reason": "OSS ATPG has no at-speed engine"}})
         _write_json(tmp_path / "reports/phase2/dft/bsdl_plan.json",
                     {"verdict": "N_A", "padded": False})
+        # The at-speed mechanism plan. `fault_atpg_run.run_transition_atpg` —
+        # the only producer of the transition block this fixture stands in for
+        # — writes it on every engine-limited run before it emits the record,
+        # so a fixture without it was describing a state the flow does not
+        # produce. `dft_signoff_check` now requires the document the
+        # ENGINE_LIMITED tier calls "documented"; this is the artefact, not a
+        # relaxation of the check.
+        plan = tmp_path / "phase2/stage2/dft/transition_atpg_plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# At-speed (launch-off-capture) transition ATPG plan\n\n"
+            "Mechanism, clocking, capture window and the engine limitation "
+            "this tier is accepted on.\n" + ("detail line\n" * 20))
 
     def test_absent_evidence_not_run(self, tmp_path):
         assert mod.check_tier_dft_signoff(tmp_path).verdict == "NOT_RUN"
