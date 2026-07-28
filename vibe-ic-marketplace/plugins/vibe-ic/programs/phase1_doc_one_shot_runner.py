@@ -183,6 +183,16 @@ from _code_literal import (  # noqa: E402
     split_sentences as _cl_split_sentences,
     to_binary_pattern as _cl_to_binary_pattern,
 )
+
+# ─── One electrical-mention scan, shared with the L1 gate (#514) ──────
+# `l1_electrical_specs_typed_depth_check` exists to falsify this
+# module's `no_electrical_specs_in_input` claim. If the two carried
+# separate notions of "electrical mention", a disagreement between them
+# would be an artefact of the comparison rather than a finding about
+# the document. See `_electrical_mention`.
+from _electrical_mention import (  # noqa: E402
+    scan_electrical_mentions as _scan_electrical_mentions,
+)
 # ─── `typedef enum` harvester for staged HDL inputs (#499) ────────────
 import _hdl_enum as _hdlenum  # noqa: E402
 # ─── Was the input actually READ? (#499) ──────────────────────────────
@@ -6451,9 +6461,21 @@ def _extract_verilog_blocks(text: str) -> List[str]:
     # on fenced + RST-directive shapes.
     return blocks
 
+# v1.7.80 — for #514. The sibling of `_RE_BULLET_KV_SPEC`, carrying
+# two instances of the same defect class that issue names. `([\d.]+)`
+# accepted a number ending in a full stop, so a sentence boundary
+# could be read into the value exactly as it was in the bullet-KV
+# path; and `\s*` spans NEWLINES, so a symbol at the end of one
+# paragraph and an unrelated quantity at the start of the next could
+# be joined into one specification. Neither fires anywhere in the
+# current corpus (measured: 8 matches, 0 affected), but a rule that
+# is wrong only on documents nobody has fed it yet is still wrong —
+# and the whole point of #514 is that these read as confident output.
+# A number begins and ends with a digit; a specification does not
+# span a line break.
 _ELECTRICAL_SPEC_RE = re.compile(
-    r"\b(VDD|VDDA|VSS|VOH|VOL|VIH|VIL|IDD|TJ|VBG|VREF)\b\s*[:=]?\s*"
-    r"([\d.]+)\s*(V|mV|mA|μA|uA|°C|MHz|kHz)",
+    r"\b(VDD|VDDA|VSS|VOH|VOL|VIH|VIL|IDD|TJ|VBG|VREF)\b[ \t]*[:=]?[ \t]*"
+    r"(\d+(?:\.\d+)?)[ \t]*(V|mV|mA|μA|uA|°C|MHz|kHz)",
     re.IGNORECASE,
 )
 _FREQUENCY_RE = re.compile(
@@ -6487,10 +6509,42 @@ _RE_BULLET_KV_SPEC = re.compile(
     # whose param tokens carry English connectives — kills the
     # `"SRET instruction is executed when V"` false-positive that
     # relaxing lowercase capitalisation would otherwise enable.
+    #
+    # v1.7.80 — for #514. A KV match may not span a sentence boundary.
+    # Three of this pattern's properties combined to read the English
+    # indefinite article as an ampere: the value charset ended in
+    # `[\d.,_]*`, so a sentence-ending full stop was absorbed into the
+    # NUMBER; the unit alternation offers bare single letters; and the
+    # trailing-prose tolerance swallowed the remainder so nothing
+    # downstream could object. On `TSTRB = 1. A normal content byte`
+    # that yields value `1.` unit `A` — a one-ampere specification
+    # minted from a byte-qualifier sentence. Three general repairs,
+    # none of which names a unit:
+    #
+    #   (1) A number begins AND ends with a digit. Trailing `.` `,`
+    #       `_` are punctuation of the surrounding text, never part of
+    #       the literal.
+    #   (2) A unit may not abut an alphanumeric. `1Ampere` does not
+    #       carry the unit `A`, and `204A` in an enumeration is an
+    #       identifier, not a current.
+    #   (3) The tolerated remainder must start at a boundary: either
+    #       whitespace (the pre-existing tolerance — `3.3 V nominal`)
+    #       or a clause terminator that the NUMBER ITSELF runs into.
+    #       The `(?<=[0-9])` lookbehind is what makes that second form
+    #       safe: it can only fire when no unit was matched, so a
+    #       sentence boundary can never be the thing that promotes a
+    #       prose word into a unit. `(?=[ \t]|$)` keeps a decimal
+    #       point (`2.5V`) and a range dot (`0..7`) from being read as
+    #       a clause end and truncating the number.
+    #
+    # Net effect on the sentence above: value `1`, NO unit, remainder
+    # `. A normal content byte` tolerated as prose. The byte-qualifier
+    # value survives — as the unitless design parameter it always was
+    # — and the fabricated ampere is gone.
     r"^[ \t]*[\-\*\+]?[ \t]*"
     r"(?P<param>[A-Za-z][\w ~\-/()²³µΩ°.]{1,60}?)"
     r"[ \t]*[:=][ \t]*"
-    r"(?P<value>[<>≈±]?[ \t]*[+-]?\d[\d.,_]*)"
+    r"(?P<value>[<>≈±]?[ \t]*[+-]?\d(?:[\d.,_]*[\d])?)"
     r"[ \t]*"
     r"(?P<unit>dBFS/Hz|dBFS|dBc|dB|Vpp|mV|µV|uV|kV|V|"
     r"mA|µA|uA|nA|A|"
@@ -6501,11 +6555,11 @@ _RE_BULLET_KV_SPEC = re.compile(
     r"pF|nF|µF|uF|"
     r"µm|nm|um|"
     r"Ω|ohm|"
-    r"%|x)?"
+    r"%|x)?(?![A-Za-z0-9])"
     r"(?:[ \t]*(?:@|at)[ \t]*"
     r"(?P<cond>[\d.]+[ \t]*"
     r"(?:Hz|kHz|MHz|GHz|°C|V|ns|µs|us|ms)))?"
-    r"(?:[ \t]+[^\n]*)?[ \t]*$",
+    r"(?:[ \t]+[^\n]*|(?<=[0-9])[.,;!?](?=[ \t]|$)[^\n]*)?[ \t]*$",
     re.MULTILINE,
 )
 
@@ -7216,6 +7270,93 @@ def _extract_bullet_kv_specs(text: str) -> List[Dict[str, Any]]:
             })
     return out
 
+
+def _collect_electrical_specs_for_doc(
+        fname: str,
+        text: str,
+        e_seen: Set[Tuple[str, str, str]],
+) -> List[Tuple[Dict[str, Any], Dict[str, str]]]:
+    """Yield L1 ``electrical_specs[]`` entries found in ONE input doc.
+
+    Returns ``[(spec_entry, evidence_item), ...]`` in emission order.
+    `e_seen` is the caller's cross-document dedup set and is mutated
+    in place, exactly as when this loop lived inline in
+    ``gen_l1_datasheet``.
+
+    v1.7.80 — for #514. Lifted out of ``gen_l1_datasheet`` so the
+    corpus re-derivation and the regression tests can call the real
+    emission path instead of re-implementing it. Re-implementing it
+    was how the four fabricated ampere entries stayed invisible: the
+    only way to see what the emitter produces was to read what it had
+    already published.
+    """
+    out: List[Tuple[Dict[str, Any], Dict[str, str]]] = []
+    for m in _ELECTRICAL_SPEC_RE.finditer(text):
+        param, val, unit = m.group(1), m.group(2), m.group(3)
+        try:
+            num = float(val)
+        except ValueError:
+            continue
+        key = (param.upper(), str(num), unit)
+        if key in e_seen:
+            continue
+        e_seen.add(key)
+        out.append((
+            {
+                "name": param.upper(),
+                "parameter": param,
+                "min_typ_max": {"typ": num},
+                "unit": unit,
+                "conditions": "VDD=nominal, T=25C unless otherwise stated",
+                "evidence": f"input/docs/{fname}",
+            },
+            {"literal": f"{param}={val}{unit}",
+             "label": "electrical spec"},
+        ))
+    # v1.6.234 — closes #101. Bullet KV-pair spec parser. Captures
+    # `<Phrase>: <value> <unit>` lines that the hardcoded VDD/VOH/...
+    # list above never matched. Routes only electrical-unit entries
+    # to L1.electrical_specs; timing-unit entries go to L2,
+    # unitless ones go to L5.design_parameters via gen_l5_adi_spec.
+    for entry in _extract_bullet_kv_specs(text):
+        unit = entry["unit"]
+        # v1.6.236 — for #101 field-agent feedback. L1 now also
+        # accepts _SAMPLE_RATE_UNITS (kS/s, MS/s, GS/s) since
+        # ADC/DAC sample-rate is an electrical spec, and the
+        # `condition` field (singular) is now emitted alongside
+        # `conditions` (plural, pre-existing) so layer-mirror
+        # consistency check between L1 and L5 passes.
+        if (unit not in _ELECTRICAL_UNITS
+                and unit not in _SAMPLE_RATE_UNITS):
+            continue
+        param = entry["parameter"]
+        value = entry["value"]
+        key = (param.upper(), value, unit)
+        if key in e_seen:
+            continue
+        e_seen.add(key)
+        try:
+            num: Any = float(value.replace(",", ""))
+        except ValueError:
+            num = value
+        out.append((
+            {
+                "name": param,
+                "parameter": param,
+                "min_typ_max": ({"typ": num}
+                                if isinstance(num, float) else None),
+                "value": value,
+                "unit": unit,
+                "condition": entry["condition"],
+                "conditions": (entry["condition"] or
+                               "VDD=nominal, T=25C unless otherwise stated"),
+                "evidence": f"input/docs/{fname}",
+                "extraction_strategy": "bullet_kv_pair_spec",
+            },
+            {"literal": entry["raw"],
+             "label": "electrical spec (bullet KV)"},
+        ))
+    return out
 
 
 # v1.6.9 Fix 4 — schema-level alias normalization map (chip-AGNOSTIC).
@@ -20199,69 +20340,11 @@ def gen_l1_datasheet(project: Path,
     e_seen: Set[Tuple[str, str, str]] = set()
     for fname, text in extracted.items():
         ev = evidence.setdefault(f"input/docs/{fname}", [])
-        for m in _ELECTRICAL_SPEC_RE.finditer(text):
-            param, val, unit = m.group(1), m.group(2), m.group(3)
-            try:
-                num = float(val)
-            except ValueError:
-                continue
-            key = (param.upper(), str(num), unit)
-            if key in e_seen:
-                continue
-            e_seen.add(key)
-            e_specs.append({
-                "name": param.upper(),
-                "parameter": param,
-                "min_typ_max": {"typ": num},
-                "unit": unit,
-                "conditions": "VDD=nominal, T=25C unless otherwise stated",
-                "evidence": f"input/docs/{fname}",
-            })
+        for spec, ev_item in _collect_electrical_specs_for_doc(
+                fname, text, e_seen):
+            e_specs.append(spec)
             if len(ev) < 24:
-                ev.append({"literal": f"{param}={val}{unit}",
-                           "label": "electrical spec"})
-        # v1.6.234 — closes #101. Bullet KV-pair spec parser. Captures
-        # `<Phrase>: <value> <unit>` lines that the hardcoded VDD/VOH/...
-        # list above never matched. Routes only electrical-unit entries
-        # to L1.electrical_specs; timing-unit entries go to L2,
-        # unitless ones go to L5.design_parameters via gen_l5_adi_spec.
-        for entry in _extract_bullet_kv_specs(text):
-            unit = entry["unit"]
-            # v1.6.236 — for #101 field-agent feedback. L1 now also
-            # accepts _SAMPLE_RATE_UNITS (kS/s, MS/s, GS/s) since
-            # ADC/DAC sample-rate is an electrical spec, and the
-            # `condition` field (singular) is now emitted alongside
-            # `conditions` (plural, pre-existing) so layer-mirror
-            # consistency check between L1 and L5 passes.
-            if (unit not in _ELECTRICAL_UNITS
-                    and unit not in _SAMPLE_RATE_UNITS):
-                continue
-            param = entry["parameter"]
-            value = entry["value"]
-            key = (param.upper(), value, unit)
-            if key in e_seen:
-                continue
-            e_seen.add(key)
-            try:
-                num: Any = float(value.replace(",", ""))
-            except ValueError:
-                num = value
-            e_specs.append({
-                "name": param,
-                "parameter": param,
-                "min_typ_max": ({"typ": num}
-                                if isinstance(num, float) else None),
-                "value": value,
-                "unit": unit,
-                "condition": entry["condition"],
-                "conditions": (entry["condition"] or
-                               "VDD=nominal, T=25C unless otherwise stated"),
-                "evidence": f"input/docs/{fname}",
-                "extraction_strategy": "bullet_kv_pair_spec",
-            })
-            if len(ev) < 24:
-                ev.append({"literal": entry["raw"],
-                           "label": "electrical spec (bullet KV)"})
+                ev.append(ev_item)
 
     # Frequency hints.
     for fname, text in extracted.items():
@@ -20323,7 +20406,35 @@ def gen_l1_datasheet(project: Path,
     # pin-topic regex (PinList / Pinout / PinTable / PinMap / Pinmux),
     # the flag must be False even if the structured pin list is empty.
     no_pin_table_in_input = _flag_no_X_in_input(pins, evidence, "pin_table")
-    no_electrical_specs_in_input = not e_specs
+    # v1.7.80 — for #514. `no_electrical_specs_in_input` used to be
+    # `not e_specs`: a statement about the EXTRACTOR emitted as a
+    # statement about the INPUT. A reader — or a downstream program —
+    # is entitled to read "no electrical specs in input" as "this was
+    # checked and there is nothing there", and it meant "I found
+    # nothing". Those are different facts and the document could not
+    # tell them apart.
+    #
+    # The flag now asserts only what an independent scan of the input
+    # corroborates. When the extractor came back empty but the input
+    # DOES carry electrical quantities, the flag is False and the
+    # un-extracted mentions are published with their source lines, so
+    # the honest reading is available to anyone: "the input has these
+    # and I did not type them." Making the flag unconditionally False
+    # was the other available shortcut and it is worse — it trades a
+    # false claim for no information at all.
+    _unextracted_elec: List[Dict[str, str]] = []
+    if not e_specs:
+        for _fname, _text in extracted.items():
+            for _lno, _lit in _scan_electrical_mentions(_text, limit=12):
+                _unextracted_elec.append({
+                    "evidence": f"input/docs/{_fname}:{_lno}",
+                    "literal": _lit,
+                })
+                if len(_unextracted_elec) >= 24:
+                    break
+            if len(_unextracted_elec) >= 24:
+                break
+    no_electrical_specs_in_input = (not e_specs) and not _unextracted_elec
     no_ic_name_in_input = (ic_name == "UNKNOWN_IC")
 
     if not pins:
@@ -20522,6 +20633,13 @@ def gen_l1_datasheet(project: Path,
         "no_pin_table_in_input": no_pin_table_in_input,
         "electrical_specs": e_specs[:64],
         "no_electrical_specs_in_input": no_electrical_specs_in_input,
+        # v1.7.80 — for #514. Present ONLY when the extractor came up
+        # empty on an input that does carry electrical quantities.
+        # This is the field that lets a reader tell "the input has
+        # none" (flag True, this key absent) from "I found none"
+        # (flag False, this key lists what was missed, with lines).
+        "electrical_specs_unextracted_mentions": (
+            _unextracted_elec or None),
         "ordering_info": ordering_info,
         # v1.6.295 — for #186 ORGANIC. Tapeout metadata block.
         # null when no anchor matched in any extracted doc.
