@@ -276,6 +276,82 @@ def _discover(project_dir: Path, patterns: List[str]) -> List[Path]:
     return unique
 
 
+# ---------------------------------------------------------------------------
+# THE MACHINE-READABLE HALF (steps 25 and 33)
+#
+# The flow declares BOTH halves of the same measurement::
+#
+#     step 25  reports/phase3/em.rpt      reports/phase3/em.json
+#     step 33  reports/phase3/power.rpt   reports/phase3/power.json
+#
+# and `phase3_one_shot_runner` writes them together from one PSM / OpenSTA run.
+# `_check_em` / `_check_power` discovered the `.rpt`-family only, so the JSON
+# half — the half that carries the NUMBERS rather than the prose — was never
+# opened by the gate that signs the step off. The text screens are keyword
+# screens, and the emitted prose contains the keyword unconditionally:
+#
+#   em.rpt always ends with
+#       "current density (Jpeak, derived): <max_cur> A per segment width"
+#   which matches `current\s*density` even when em_segments.csv was never
+#   produced, i.e. when `segments_analysed == 0` and `max_cur == 0.0`. The
+#   keyword screen cannot tell a real EM measurement from an empty one; the
+#   companion JSON says so in a field.
+#
+# So the companion is now READ, and read AS JSON — never text-scanned. (A text
+# scan would be worse than nothing here: `re.search("mA", '"max_segment_...',
+# re.I)` matches the substring "ma" in "max_segment_current_A" and would
+# manufacture a density hit out of a field NAME.)
+#
+# CONTRADICTION AND VACUITY ARE FINDINGS; ABSENCE IS DISCLOSED. A project whose
+# producer never wrote the companion keeps exactly the pre-change behaviour and
+# the summary records `machine_readable_found: 0`, so a reader can see the
+# verdict rests on the text alone.
+# ---------------------------------------------------------------------------
+#: ``mode -> (canonical declared path, basename searched project-wide)``.
+#: Spelled as `flow/phase1_phase2_phase3.yaml` spells them.
+_COMPANION_JSON = {
+    "em": ("reports/phase3/em.json", "em.json"),
+    "power": ("reports/phase3/power.json", "power.json"),
+}
+
+
+def _companion_docs(project_dir: Path, mode: str):
+    """``[(path, parsed dict or None), ...]`` for a mode's declared JSON half.
+
+    ``None`` means the file is there and is NOT a readable JSON object — that
+    is a finding, not a reason to look away.
+    """
+    canonical, basename = _COMPANION_JSON[mode]
+    cands: List[Path] = []
+    direct = project_dir / canonical
+    if (direct.is_file()
+            and not _is_backup_path(direct, project_dir)
+            and not _is_own_verdict_document(direct)
+            and _in_scope(direct)):
+        cands.append(direct)
+    # `rglob(<basename>)` matches the exact filename only, so a run tree that
+    # nests its reports one level deeper is still read and nothing else is.
+    for q in _discover(project_dir, [basename]):
+        if q not in cands:
+            cands.append(q)
+    out = []
+    for q in cands:
+        try:
+            doc = json.loads(q.read_text(errors="replace"))
+        except (OSError, ValueError):
+            out.append((q, None))
+            continue
+        out.append((q, doc if isinstance(doc, dict) else None))
+    return out
+
+
+def _rel(path: Path, project_dir: Path) -> str:
+    try:
+        return str(path.relative_to(project_dir))
+    except ValueError:
+        return str(path)
+
+
 # Tool signatures — a real EDA-tool report will contain AT LEAST one of these
 # distinctive strings. Hand-authored stubs rarely reproduce them. Added
 # 2026-04-22 after the <benchmark> v0.47 pilot where <1.5 KB hand-typed stubs
@@ -804,6 +880,12 @@ def _check_power(project_dir: Path) -> AuditResult:
     has_leak = False
     has_dyn = False
     best_file = ""
+    # `phase3_one_shot_runner._emit_power_report` writes the analysis basis
+    # into the report as `POWER_ANALYSIS_MODE: <vector_vcd|vectorless_sdc>`
+    # and power.json mirrors it in `analysis_mode`. Collect what the TEXT says
+    # so the companion's claim can be corroborated rather than believed.
+    mode_re = re.compile(r"^\s*POWER_ANALYSIS_MODE:\s*(\S+)\s*$", re.M)
+    stated_modes = set()
 
     for fp in files:
         try:
@@ -814,6 +896,7 @@ def _check_power(project_dir: Path) -> AuditResult:
             has_leak = True
         if dyn_re.search(text):
             has_dyn = True
+        stated_modes.update(m.strip() for m in mode_re.findall(text))
         if not best_file:
             best_file = str(fp)
 
@@ -829,9 +912,57 @@ def _check_power(project_dir: Path) -> AuditResult:
             file=best_file))
 
     authentic = _check_tool_authenticity(files, "power", result)
-    result.passed = has_leak and has_dyn and authentic
+
+    # The declared machine-readable half (reports/phase3/power.json). It
+    # carries no number of its own, but it does carry two claims ABOUT the
+    # measurement — which report it summarises, and how the switching power
+    # was obtained — and both are checkable against the text half.
+    machine_ok = True
+    companions = []
+    for path, doc in _companion_docs(project_dir, "power"):
+        rel = _rel(path, project_dir)
+        if doc is None:
+            machine_ok = False
+            result.findings.append(Finding(
+                rule="POWER_MEASUREMENT_UNREADABLE", severity="ERROR",
+                message=("the machine-readable power measurement declared "
+                         "alongside the report is not a readable JSON object; "
+                         "the verdict would rest on the text report's keywords "
+                         "alone, and unmeasured is not zero"),
+                file=rel))
+            continue
+        src = doc.get("source")
+        claimed_mode = doc.get("analysis_mode")
+        companions.append({"file": rel, "source": src,
+                           "analysis_mode": claimed_mode})
+        if isinstance(src, str) and src.strip() \
+                and not (project_dir / src.strip()).is_file():
+            machine_ok = False
+            result.findings.append(Finding(
+                rule="POWER_SOURCE_MISSING", severity="ERROR",
+                message=(f"power companion names its source report as "
+                         f"{src!r}, which does not exist — the summary "
+                         f"describes a report nobody can read"),
+                file=rel))
+        if (isinstance(claimed_mode, str) and claimed_mode.strip()
+                and stated_modes and claimed_mode.strip() not in stated_modes):
+            machine_ok = False
+            result.findings.append(Finding(
+                rule="POWER_ANALYSIS_MODE_CONTRADICTED", severity="ERROR",
+                message=(f"power companion claims analysis_mode="
+                         f"{claimed_mode!r} but every discovered power report "
+                         f"states POWER_ANALYSIS_MODE in {sorted(stated_modes)} "
+                         f"— vector-driven and vectorless switching power are "
+                         f"different measurements and the disclosure does not "
+                         f"match the report it summarises"),
+                file=rel))
+
+    result.passed = has_leak and has_dyn and authentic and machine_ok
     result.summary = {"files_found": len(files), "has_leakage": has_leak,
-                      "has_dynamic": has_dyn, "tool_authentic": authentic}
+                      "has_dynamic": has_dyn, "tool_authentic": authentic,
+                      "analysis_modes_in_report": sorted(stated_modes),
+                      "machine_readable_found": len(companions),
+                      "machine_readable": companions}
     return result
 
 
@@ -855,7 +986,16 @@ def _check_em(project_dir: Path) -> AuditResult:
         return result
 
     density_re = re.compile(r"Javg|Jpeak|mA|A/cm|current\s*density", re.I)
+    # A CURRENT MAGNITUDE, not just the words. PSM prints
+    # `Maximum current    : 6.85e-05 A` to stdout and the emitter copies those
+    # lines into em.rpt; that is an independent measurement of the same grid,
+    # separate from the per-segment CSV the companion JSON summarises. Used
+    # below to tell "the CSV half is empty" (still measured) from "nothing was
+    # measured at all" (the false-clean).
+    current_re = re.compile(r"current\s*:?\s*([0-9]+\.?[0-9]*(?:[eE][+-]?\d+)?)"
+                            r"\s*A\b", re.I)
     has_density = False
+    positive_current = False
     best_file = ""
 
     for fp in files:
@@ -865,6 +1005,13 @@ def _check_em(project_dir: Path) -> AuditResult:
             continue
         if density_re.search(text):
             has_density = True
+        for raw in current_re.findall(text):
+            try:
+                if float(raw) > 0.0:
+                    positive_current = True
+                    break
+            except ValueError:
+                continue
         if not best_file:
             best_file = str(fp)
 
@@ -875,9 +1022,64 @@ def _check_em(project_dir: Path) -> AuditResult:
             file=best_file))
 
     authentic = _check_tool_authenticity(files, "em", result)
-    result.passed = has_density and authentic
+
+    # The declared machine-readable half (reports/phase3/em.json). The text
+    # screen above always matches the emitted "current density (Jpeak,
+    # derived): ..." line, including on a run where NO segment was analysed;
+    # the companion states the segment count, so it can tell those apart.
+    machine_ok = True
+    companions = []
+    for path, doc in _companion_docs(project_dir, "em"):
+        rel = _rel(path, project_dir)
+        if doc is None:
+            machine_ok = False
+            result.findings.append(Finding(
+                rule="EM_MEASUREMENT_UNREADABLE", severity="ERROR",
+                message=("the machine-readable EM measurement declared "
+                         "alongside the report is not a readable JSON object; "
+                         "the verdict would rest on the text report's keywords "
+                         "alone, and unmeasured is not zero"),
+                file=rel))
+            continue
+        segs = doc.get("segments_analysed")
+        peak = doc.get("max_segment_current_A")
+        companions.append({"file": rel, "segments_analysed": segs,
+                           "max_segment_current_A": peak})
+        empty_segments = (isinstance(segs, int) and not isinstance(segs, bool)
+                          and segs <= 0)
+        zero_peak = isinstance(peak, (int, float)) and float(peak) == 0.0
+        if not (empty_segments and zero_peak):
+            continue
+        if positive_current:
+            # The per-segment CSV half is empty but PSM's own stdout carried a
+            # non-zero current for this grid: the EM screen DID measure, just
+            # not per segment. Disclose the narrower basis, do not fail it.
+            result.findings.append(Finding(
+                rule="EM_PER_SEGMENT_HALF_EMPTY", severity="INFO",
+                message=("EM companion carries no per-segment data "
+                         "(segments_analysed=0, max_segment_current_A=0.0); "
+                         "the verdict rests on the tool's aggregate current "
+                         "lines in the text report, not on a per-segment "
+                         "current-density screen"),
+                file=rel))
+            continue
+        machine_ok = False
+        result.findings.append(Finding(
+            rule="EM_MEASUREMENT_VACUOUS", severity="ERROR",
+            message=("EM companion reports segments_analysed=0 AND "
+                     "max_segment_current_A=0.0, and no discovered EM report "
+                     "carries a positive current magnitude either — NOTHING "
+                     "was measured, so the 'current density (Jpeak, derived): "
+                     "0.000e+00' line the keyword screen matched is a "
+                     "formatted zero, not an electromigration result"),
+            file=rel))
+
+    result.passed = has_density and authentic and machine_ok
     result.summary = {"files_found": len(files), "has_density": has_density,
-                      "tool_authentic": authentic}
+                      "positive_current_in_report": positive_current,
+                      "tool_authentic": authentic,
+                      "machine_readable_found": len(companions),
+                      "machine_readable": companions}
     return result
 
 

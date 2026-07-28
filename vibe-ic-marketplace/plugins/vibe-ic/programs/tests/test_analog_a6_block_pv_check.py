@@ -232,12 +232,21 @@ def test_skip_empty_block_list(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# WAIVER — evidence + ticket suppresses a genuine failure
+# WAIVER — evidence + ticket suppresses a MEASURED defect, and only that.
+#
+# A waiver is an accepted-RISK statement about something somebody measured.
+# It must still work for that (`test_waiver_suppresses_measured_defect`), and
+# it must NOT work where nothing was measured
+# (`test_waiver_cannot_cover_absent_measurement`) — otherwise a single
+# `waived_steps` entry turns "the tool never ran" into rc 0, which is the
+# unmeasured-as-zero failure this gate exists to refuse. This matters more
+# since A5 stopped reading A6's DRC/LVS outputs (the A5<->A6 cycle fix): A6 is
+# now the only per-block PV gate, so its non-silenceable core carries the
+# whole class, and the old A5 — which had no waiver path at all — rejected
+# exactly this tree with rc=1.
 # ---------------------------------------------------------------------------
 
-def test_waiver_suppresses_fail(tmp_path: Path) -> None:
-    _block_list(tmp_path, ["ldo"])
-    _bdir(tmp_path, "ldo")  # missing evidence → would FAIL
+def _waive_block_pv(tmp_path: Path) -> None:
     (tmp_path / "phase3" / "analog" / "waivers.json").write_text(json.dumps({
         "waived_steps": [{
             "id": "analog_block_pv",
@@ -245,10 +254,75 @@ def test_waiver_suppresses_fail(tmp_path: Path) -> None:
             "reason": "PV deferred to top-level signoff per agreement",
         }]
     }))
+
+
+def test_waiver_suppresses_measured_defect(tmp_path: Path) -> None:
+    """NO FALSE ALARM. DRC measured 3 violations and LVS measured a
+    mismatch — a real, ticketed accepted risk. The waiver still applies."""
+    _block_list(tmp_path, ["ldo"])
+    d = _bdir(tmp_path, "ldo")
+    (d / "drc_clean.flag").write_text("violations: 3\n")
+    (d / "lvs_match.flag").write_text("lvs: mismatch\n")
+    _waive_block_pv(tmp_path)
     r = _run(tmp_path)
     assert r.returncode == 0
     rpt = _report(tmp_path)
     assert rpt["verdict"] == "WAIVED"
+    assert {f["rule"] for f in rpt["suppressed_findings"]} == {
+        "A6_PV_DRC_VIOLATIONS", "A6_PV_LVS_MISMATCH"}
+
+
+def test_waiver_cannot_cover_absent_measurement(tmp_path: Path) -> None:
+    """FALSIFIABILITY. The same waiver over a block with NO drc/lvs artefact
+    at all. There is no measurement, so there is no risk to accept: the
+    findings stay live and the step FAILs, naming what the waiver could not
+    cover."""
+    _block_list(tmp_path, ["ldo"])
+    _bdir(tmp_path, "ldo")  # directory only — the tool never ran
+    _waive_block_pv(tmp_path)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = _report(tmp_path)
+    assert rpt["verdict"] == "FAIL"
+    assert {f["rule"] for f in rpt["findings"]} == {
+        "A6_PV_DRC_NO_EVIDENCE", "A6_PV_LVS_NO_EVIDENCE"}
+    assert {c["rule"] for c in rpt["waiver_cannot_cover"]} == {
+        "A6_PV_DRC_NO_EVIDENCE", "A6_PV_LVS_NO_EVIDENCE"}
+    assert rpt["waiver"]["ticket"] == "ECO-123"
+
+
+def test_waiver_cannot_cover_missing_block_dir(tmp_path: Path) -> None:
+    """FALSIFIABILITY, strongest form: A5 never produced a layout for the
+    block, so PV cannot have run on anything. Not waivable."""
+    _block_list(tmp_path, ["ldo"])  # no block dir on disk
+    (tmp_path / "phase3" / "analog").mkdir(parents=True, exist_ok=True)
+    _waive_block_pv(tmp_path)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = _report(tmp_path)
+    assert rpt["verdict"] == "FAIL"
+    assert {f["rule"] for f in rpt["findings"]} == {"A6_PV_BLOCK_DIR_MISSING"}
+
+
+def test_waiver_mixed_keeps_unmeasured_live_and_suppresses_measured(
+        tmp_path: Path) -> None:
+    """Both classes at once on two blocks: the measured DRC violation is
+    suppressed and disclosed, the absent LVS measurement stays live."""
+    _block_list(tmp_path, ["ldo", "bg"])
+    d1 = _bdir(tmp_path, "ldo")
+    (d1 / "drc_clean.flag").write_text("violations: 2\n")
+    (d1 / "lvs_match.flag").write_text("lvs: match\n")
+    d2 = _bdir(tmp_path, "bg")
+    (d2 / "drc_clean.flag").write_text("violations: 0\n")
+    # bg has no LVS evidence at all
+    _waive_block_pv(tmp_path)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = _report(tmp_path)
+    assert rpt["verdict"] == "FAIL"
+    assert {f["rule"] for f in rpt["findings"]} == {"A6_PV_LVS_NO_EVIDENCE"}
+    assert {f["rule"] for f in rpt["suppressed_findings"]} == {
+        "A6_PV_DRC_VIOLATIONS"}
 
 
 # ---------------------------------------------------------------------------
@@ -270,4 +344,91 @@ def test_per_block_pass(tmp_path: Path) -> None:
     (d / "lvs_match.flag").write_text("lvs: match\n")
     r = _run(tmp_path, "--block", "ldo")
     assert r.returncode == 0
+    assert _report(tmp_path)["verdict"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# TWO WITNESSES THAT CONTRADICT EACH OTHER
+#
+# Added 2026-07-28 at the convergence merge. When A5's PV reads were withdrawn
+# to break the A5/A6 dependency cycle, a defect class went with them: A5 read
+# the FLAGS while A6 prefers the REPORT, so a block whose flag contradicts its
+# report was rejected rc=1 by old A5 and accepted rc=0 by BOTH gates.
+# Measured on that exact input before this rule existed:
+#   test/matrix-63x8-coverage            -> A5 rc=1 (A5_DRC_NOT_CLEAN + A5_LVS_NOT_MATCH)
+#   after the cycle fix, before the rule -> A5 rc=0 AND A6 rc=0, findings []
+# ---------------------------------------------------------------------------
+
+
+def _two_witness_block(project: Path, *, drc_report: str, drc_flag: str,
+                       lvs_report: str, lvs_flag: str) -> None:
+    _block_list(project, ["ldo"])
+    d = _bdir(project, "ldo")
+    (d / "drc.report").write_text(drc_report)
+    (d / "drc_clean.flag").write_text(drc_flag)
+    (d / "lvs.report").write_text(lvs_report)
+    (d / "lvs_match.flag").write_text(lvs_flag)
+
+
+def test_contradicting_pv_witnesses_are_a_blocking_finding(tmp_path: Path) -> None:
+    """THE DEFECT. A stale flag beside a fresh report — the shape a resumed
+    project produces naturally. Neither number can be a sign-off verdict when
+    the two disagree, so the gate must not silently believe the clean one."""
+    _two_witness_block(tmp_path,
+                       drc_report="total violations: 0\n",
+                       drc_flag="violations: 5\n",
+                       lvs_report="netlists match\n",
+                       lvs_flag="lvs: mismatch\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rpt = _report(tmp_path)
+    assert rpt["verdict"] == "FAIL"
+    assert {f["rule"] for f in rpt["findings"]} == {
+        "A6_PV_DRC_WITNESS_DISAGREEMENT", "A6_PV_LVS_WITNESS_DISAGREEMENT"}
+
+
+def test_contradicting_pv_witnesses_are_not_waivable(tmp_path: Path) -> None:
+    """A waiver accepts a MEASURED risk. Here the measurement itself is in
+    dispute, so there is nothing for a waiver to be about."""
+    _two_witness_block(tmp_path,
+                       drc_report="total violations: 0\n",
+                       drc_flag="violations: 5\n",
+                       lvs_report="netlists match\n",
+                       lvs_flag="lvs: mismatch\n")
+    _waive_block_pv(tmp_path)
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rpt = _report(tmp_path)
+    assert rpt["verdict"] == "FAIL"
+    assert {c["rule"] for c in rpt["waiver_cannot_cover"]} == {
+        "A6_PV_DRC_WITNESS_DISAGREEMENT", "A6_PV_LVS_WITNESS_DISAGREEMENT"}
+
+
+def test_agreeing_pv_witnesses_still_pass(tmp_path: Path) -> None:
+    """NO FALSE ALARM. Both witnesses present and agreeing is the ordinary
+    shape of a real run and must stay rc 0."""
+    _two_witness_block(tmp_path,
+                       drc_report="total violations: 0\n",
+                       drc_flag="violations: 0\n",
+                       lvs_report="netlists match\n",
+                       lvs_flag="lvs: match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    assert _report(tmp_path)["verdict"] == "PASS"
+
+
+def test_a_single_pv_witness_is_never_a_disagreement(tmp_path: Path) -> None:
+    """NO FALSE ALARM. The rule needs TWO parseable verdicts; a block with the
+    reports only, or with a bare flag carrying no verdict line, reaches none of
+    its branches."""
+    _block_list(tmp_path, ["ldo"])
+    d = _bdir(tmp_path, "ldo")
+    (d / "drc.report").write_text("total violations: 0\n")
+    (d / "lvs.report").write_text("netlists match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
+    (d / "drc_clean.flag").write_text("generated by the runner\n")   # no count
+    (d / "lvs_match.flag").write_text("see lvs.report\n")            # no verdict
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout
     assert _report(tmp_path)["verdict"] == "PASS"

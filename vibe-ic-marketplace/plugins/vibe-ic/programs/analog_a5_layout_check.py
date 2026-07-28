@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""analog_a5_layout_check.py — A5 deterministic gate (v1.6.35).
+"""analog_a5_layout_check.py — A5 deterministic gate.
 
 Verifies that the upstream `analog-layout` skill has emitted the
-canonical per-block A5 artefacts:
+canonical per-block A5 artefact:
 
     analog/<block>/layout.mag   (Magic source) OR
     analog/<block>/<block>.gds  (streamed GDS)
-    analog/<block>/drc_clean.flag
-    analog/<block>/lvs_match.flag
 
 with substance:
 
@@ -23,26 +21,81 @@ with substance:
     now parses the .mag (paint `rect` / instance `use` lines) or walks
     the .gds record stream (BOUNDARY/PATH/SREF/AREF/BOX records) and
     rejects a geometry-empty or `deterministic_stub`-marked layout.
-  * `drc_clean.flag` present AND carrying an explicit zero-violation
-    verdict (`violations: 0` / `0 errors` / `DRC clean` …). A bare or
-    `touch`-created flag is NOT sign-off evidence — this is exactly the
-    standard `analog_a6_block_pv_check` already enforces one step later.
-  * `lvs_match.flag` present AND carrying an explicit match verdict
-    (`lvs: match` / `netlists match` / `match: true` …). Same rule.
+
+SCOPE — WHY THIS GATE DOES NOT JUDGE DRC/LVS SIGN-OFF
+-----------------------------------------------------
+This gate used to ALSO require `<block>/drc_clean.flag` and
+`<block>/lvs_match.flag` to carry clean verdicts. Those two files are
+step A6's DECLARED required_outputs, and A6 declares `blocks_on: [A5]`,
+so the declared ordering ran A6 -> A5 while the gate's read ran A5 -> A6:
+a literal dependency cycle that no `blocks_on` value can express.
+
+The cycle was broken on the A5 side, and here is how the direction was
+decided rather than guessed:
+
+  * A6 CANNOT run without A5's output. `analog_a6_block_pv_check` reports
+    `A6_PV_BLOCK_DIR_MISSING` ("A5 layout did not run for this block")
+    when the layout dir is absent — DRC and LVS are run ON the layout.
+    A5 -> A6 is a DATA dependency.
+  * A5 does not need PV evidence to PRODUCE a layout. The flag reads were
+    a verification-SCOPE choice, not a data need.
+  * The flags are physically written by the A6 step, not the A5 step:
+    `analog_one_shot_runner._emit_deterministic_stub` writes them under
+    `step_name == "A6_block_pv"`, and writes `layout.mag` under
+    `"A5_layout"`. The runner executes A5_layout BEFORE A6_block_pv, so
+    with the flag rules in place A5 reported FAIL on every correct
+    single-pass run, for a condition A5 itself cannot satisfy.
+
+So the PV verdict now lives ONLY in A6, where a STRICTER version of the
+same rules already ran: `analog_a6_block_pv_check` prefers real DRC/LVS
+REPORTS over the flags, rejects a bare/verdict-less flag, and FAILs
+(never SKIPs) on a block directory with no evidence. See
+`programs/tests/test_analog_a5_layout_check.py`, section "A5 -> A6 PV
+OWNERSHIP", which re-runs the inputs this gate used to reject through the
+A6 gate and asserts rc=1.
+
+WHAT THE HANDOVER DID **NOT** PRESERVE ON ITS OWN, corrected 2026-07-28
+rather than left as an over-broad claim. Old A5 read the FLAGS
+(`drc_clean.flag` / `lvs_match.flag`); A6 prefers the REPORT and only
+falls back to the flag. Two consequences follow, and they are different:
+
+  * A block whose FLAG CONTRADICTS ITS REPORT was rejected rc=1 by old A5
+    and, for a while, accepted rc=0 by BOTH gates. Measured on
+    `drc_clean.flag: "violations: 5"` beside `drc.report: "total
+    violations: 0"`, and `lvs_match.flag: "lvs: mismatch"` beside
+    `lvs.report: "netlists match"`: baseline A5 rc=1; after the cycle fix
+    and before the repair, A5 rc=0 and A6 rc=0 with no findings at all.
+    That is CLOSED — `analog_a6_block_pv_check._witness_disagreements`
+    now FAILs on it (A6_PV_DRC_WITNESS_DISAGREEMENT /
+    A6_PV_LVS_WITNESS_DISAGREEMENT), and it is non-waivable, because a
+    waiver accepts a measured risk and here the measurement is in dispute.
+    Re-measured on all 23 tracked analog run roots: A6's rc is unchanged
+    on 23 of 23, so the rule bought no false alarm.
+  * A block carrying a CLEAN REPORT and NO FLAG is rejected by old A5
+    (A5_DRC_FLAG_MISSING / A5_LVS_FLAG_MISSING) and accepted by A6. That
+    is DELIBERATE and is NOT called a lost defect class: the report is the
+    tool's own output and is richer evidence than a flag file; demanding
+    a flag beside it was A5 over-reaching, not A5 catching anything.
+
+ONE THING DID CHANGE, and it is not "no defect class". This gate never
+had a waiver code path, so it was a second, independently
+NON-SILENCEABLE gate on per-block DRC/LVS; A6 carries the flow-wide
+waiver path, so a project-side `waived_steps: [{id: analog_block_pv}]`
+entry now reaches the class. The asymmetry that matters is closed in A6
+(`_NON_WAIVABLE_RULES`): a waiver may suppress a MEASURED defect
+(DRC count > 0, LVS mismatch) — a ticketed accepted risk, which is what
+the flow's waiver mechanism is for and what waivers_schema_check /
+waiver_legitimacy_check / foundry_signoff_plan_check police — but it can
+never suppress an ABSENT measurement (block dir missing, no parseable
+DRC/LVS result). So the exact claim is: every input this gate used to
+reject is still rejected rc=1 by A6, and for the evidence-ABSENCE
+classes that holds even under a project-side step waiver.
 
 Failure rules:
   A5_LAYOUT_MISSING        — neither layout.mag nor <block>.gds present
   A5_LAYOUT_TOO_SMALL      — layout source < 200 bytes (stub)
   A5_LAYOUT_EMPTY_GEOMETRY — layout source has no placed geometry (empty
                              stream or padded/deterministic stub)
-  A5_DRC_FLAG_MISSING      — drc_clean.flag absent
-  A5_DRC_FLAG_EMPTY        — drc_clean.flag present but empty/whitespace
-  A5_DRC_FLAG_NO_EVIDENCE  — drc_clean.flag carries no violation verdict
-  A5_DRC_NOT_CLEAN         — drc_clean.flag reports > 0 violations
-  A5_LVS_FLAG_MISSING      — lvs_match.flag absent
-  A5_LVS_FLAG_EMPTY        — lvs_match.flag present but empty/whitespace
-  A5_LVS_FLAG_NO_EVIDENCE  — lvs_match.flag carries no match verdict
-  A5_LVS_NOT_MATCH         — lvs_match.flag reports a mismatch
 
 Project-level verdicts (no `--block`):
   VACUOUS_PASS — no `analog_block_list.json` under `phase3/analog/` or
@@ -72,83 +125,6 @@ from _analog_a_check_common import (
 GATE = "analog_a5_layout_check"
 SKILL = "analog-layout"
 MIN_LAYOUT_BYTES = 200
-
-
-# ── sign-off flag CONTENT (d5) ─────────────────────────────────────────────
-# A5 used to accept `drc_clean.flag` / `lvs_match.flag` on `is_file()` alone,
-# so a `touch`-created 0-byte flag certified DRC and LVS sign-off. That is
-# weaker than this module's own docstring ("any non-empty file") AND weaker
-# than the standard the flow already enforces one step later:
-# `analog_a6_block_pv_check` rejects a bare flag with
-# "Bare flag with no count line -> NOT acceptable evidence".
-# Reuse A6's parsers rather than writing a second dialect of the same rule —
-# they are tool-generic (Magic / KLayout / Calibre / Netgen phrasings), so
-# this stays chip-AGNOSTIC.
-def _load_pv_parsers():
-    """Return (parse_drc_count, parse_lvs_match) from the A6 gate, or
-    (None, None) when that module cannot be imported. NEVER fail open and
-    never turn every block red on an import error: the caller degrades to
-    the docstring's stated minimum (a non-empty flag) instead."""
-    try:
-        here = str(Path(__file__).resolve().parent)
-        if here not in sys.path:
-            sys.path.insert(0, here)
-        import analog_a6_block_pv_check as _a6
-        return _a6._parse_drc_count, _a6._parse_lvs_match
-    except Exception:  # nosec — degraded mode is handled by the caller
-        return None, None
-
-
-_PARSE_DRC_COUNT, _PARSE_LVS_MATCH = _load_pv_parsers()
-
-
-def _flag_text(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-
-
-def _drc_flag_defect(path: Path) -> Optional[tuple[str, str]]:
-    """Return (rule, detail) when `drc_clean.flag` is not real DRC sign-off
-    evidence, else None."""
-    text = _flag_text(path)
-    if not text.strip():
-        return ("A5_DRC_FLAG_EMPTY",
-                "drc_clean.flag is empty/whitespace — DRC was not signed "
-                "off, the flag was merely created")
-    if _PARSE_DRC_COUNT is None:
-        return None  # degraded: non-empty is the documented minimum
-    count = _PARSE_DRC_COUNT(text)
-    if count is None:
-        return ("A5_DRC_FLAG_NO_EVIDENCE",
-                "drc_clean.flag carries no DRC verdict; need an explicit "
-                "violation count (e.g. `violations: 0`) as A6 requires")
-    if count > 0:
-        return ("A5_DRC_NOT_CLEAN",
-                f"drc_clean.flag reports {count} violation(s) (must be 0)")
-    return None
-
-
-def _lvs_flag_defect(path: Path) -> Optional[tuple[str, str]]:
-    """Return (rule, detail) when `lvs_match.flag` is not real LVS sign-off
-    evidence, else None."""
-    text = _flag_text(path)
-    if not text.strip():
-        return ("A5_LVS_FLAG_EMPTY",
-                "lvs_match.flag is empty/whitespace — LVS was not signed "
-                "off, the flag was merely created")
-    if _PARSE_LVS_MATCH is None:
-        return None  # degraded: non-empty is the documented minimum
-    matched = _PARSE_LVS_MATCH(text)
-    if matched is None:
-        return ("A5_LVS_FLAG_NO_EVIDENCE",
-                "lvs_match.flag carries no LVS verdict; need an explicit "
-                "match line (e.g. `lvs: match`) as A6 requires")
-    if matched is False:
-        return ("A5_LVS_NOT_MATCH",
-                "lvs_match.flag reports a mismatch (must be a match)")
-    return None
 
 
 # Project-level INCOMPLETE (exit 1) — some declared blocks produced a layout
@@ -234,8 +210,6 @@ def _check_block(project: Path, block: str
     bdir = project / "phase3" / "analog" / block
     mag = bdir / "layout.mag"
     gds = bdir / f"{block}.gds"
-    drc_flag = bdir / "drc_clean.flag"
-    lvs_flag = bdir / "lvs_match.flag"
 
     findings: List[dict] = []
     layout_path: Optional[Path] = None
@@ -273,34 +247,10 @@ def _check_block(project: Path, block: str
                 "rel_path": str(layout_path.relative_to(project)),
                 "detail": f"{size}B but no real placed geometry: {geo_detail}",
             })
-    if not drc_flag.is_file():
-        findings.append({
-            "block": block, "rule": "A5_DRC_FLAG_MISSING",
-            "rel_path": str(drc_flag.relative_to(project)),
-            "detail": "drc_clean.flag absent (DRC not signed off)",
-        })
-    else:
-        defect = _drc_flag_defect(drc_flag)
-        if defect is not None:
-            findings.append({
-                "block": block, "rule": defect[0],
-                "rel_path": str(drc_flag.relative_to(project)),
-                "detail": defect[1],
-            })
-    if not lvs_flag.is_file():
-        findings.append({
-            "block": block, "rule": "A5_LVS_FLAG_MISSING",
-            "rel_path": str(lvs_flag.relative_to(project)),
-            "detail": "lvs_match.flag absent (LVS not signed off)",
-        })
-    else:
-        defect = _lvs_flag_defect(lvs_flag)
-        if defect is not None:
-            findings.append({
-                "block": block, "rule": defect[0],
-                "rel_path": str(lvs_flag.relative_to(project)),
-                "detail": defect[1],
-            })
+    # NOTE: per-block DRC / LVS sign-off is deliberately NOT judged here —
+    # see the module docstring's "SCOPE" section. It is step A6's verdict,
+    # over A6's own (richer) evidence, at the point in the flow where that
+    # evidence exists.
     if findings:
         return "FAIL", findings
     return "PASS", []

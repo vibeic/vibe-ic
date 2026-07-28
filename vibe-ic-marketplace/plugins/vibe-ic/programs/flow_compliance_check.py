@@ -311,6 +311,20 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "bitwidth_consistency_check",
     "periodic_signal_required_check",
     "fpga_async_input_synchronizer_check",
+    # P0's own `notes` in flow/phase1_phase2_phase3.yaml name
+    # `cdc_async_input_check` as one of the gate names that appear in the
+    # audit JSON's `gates:` array. That array is built exclusively from this
+    # tuple (see `_run_structural_rtl_gates` -> the P0 StepResult), and the
+    # checker was NOT in it — so the flow's own documentation advertised a
+    # checker P0's mechanism could not emit. It is a chip-AGNOSTIC structural
+    # RTL screen (>=2-stage synchroniser on asynchronous inputs) of exactly
+    # the kind this registry holds, it ships as `programs/cdc_async_input_check
+    # .py`, and it takes the `<project_dir>` argv shape the umbrella
+    # dispatches. Registering it is what makes P0's prose true; the ASIC-side
+    # twin of `fpga_async_input_synchronizer_check` directly above. It also
+    # remains Step 3's own blocking gate, so this changes WHEN a project with
+    # unsynchronised async inputs is told, not WHETHER.
+    "cdc_async_input_check",
     "bus_turnaround_consumes_spec_constant_check",
     "dead_timing_constant_warn",
     "l9_response_delay_schema_check",
@@ -6780,7 +6794,8 @@ def _gate_json_targets(step: Dict[str, Any]) -> Set[str]:
 
 
 def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
-               skip_analog: bool = False, skip_hardware: bool = False) -> StepResult:
+               skip_analog: bool = False, skip_hardware: bool = False,
+               strict_audit_evidence: bool = False) -> StepResult:
     raw_id = step["id"]
     try:
         sid = int(raw_id)
@@ -6952,6 +6967,30 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # through, and only downgrade a PASS-tier gate verdict afterwards (see
     # `_missing_entries` handling below the gate): a gate may explain an absent
     # output, it may not certify the step as done without one.
+    # ── WITHDRAWN 2026-07-28: the "gate is the sole producer" exemption ────
+    # A previous change suppressed this early return whenever EVERY missing
+    # entry was one of the step's own gate `--json` targets, so the gate would
+    # run and the re-probe below could see what it wrote. That is
+    # self-certification: `check_step` ran the gate, the gate created the
+    # declared output, and the post-gate probe accepted the file THE AUDIT HAD
+    # JUST CREATED as the evidence that the step is done. MEASURED on a copy of
+    # a published run root (benchmark-data/ic/ibex): step 8 went from MISSING
+    # to PASS with `evidence=['reports/phase2/sdc_check.json']` and that same
+    # path in the audit's own created-file list — a step whose declared output
+    # 12 other tracked roots really do carry, certified on a file the auditor
+    # wrote. Same flip on benchmark-data/ic/opentitan_aes and on
+    # benchmark-data/evaluation/cvdp/run_v0153_runner/fixed_priority_arbiter.
+    # The exemption was justified as reaching one step and reached four
+    # (2, 8, 36, FS1) — every step of that SHAPE, not the one it was written
+    # for. An auditor may never accept, as evidence, an artefact it caused to
+    # exist during its own run, so the early return stands UNCONDITIONALLY: a
+    # step ALL of whose declared outputs only its own gate writes stays MISSING
+    # until something other than the audit produces one. That is a flow-WIRING
+    # statement about the step, and answering it by letting the auditor write
+    # the file is answering it with the auditor. The narrower PARTIAL case
+    # (some declared outputs already present, one more written by the gate
+    # during the audit) is disclosed by the SELF-CERTIFIED EVIDENCE advisory
+    # below and refused outright under --strict-audit-evidence.
     if outputs and missing_entries and not result.evidence:
         result.status = "MISSING"
         result.reasons.append(
@@ -7083,6 +7122,19 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 "regression). [ORGANIC-20260606 #470]"
             )
 
+    # ── 2026-07-28: name the evidence this audit authored itself ──────────
+    # A `required_outputs` entry that is ALSO one of this step's own gate
+    # `--json` targets is the one shape where evaluating the step CREATES the
+    # artefact whose presence then decides it. Which entries were absent when
+    # the audit began is recorded HERE, before the gate runs, because that is
+    # the only moment at which the question "did the RUN produce this?" can
+    # still be answered — after the gate it is unanswerable, and the post-gate
+    # probe below has always been answering it with the auditor's own output.
+    # `_audit_produced` (computed after the gate) is that answer, kept.
+    _declared_self_written = sorted(set(outputs) & _gate_json_targets(step))
+    _absent_before_gate = [rel for rel in _declared_self_written
+                           if not (project / rel).exists()]
+    _audit_produced: List[str] = []
     if gate:
         # GAP-B (#789) — thread the run's skip_analog into the gate evaluation
         # so an analog-aware optional/required gate (#773) is invoked WITH
@@ -7091,6 +7143,28 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # closes the per-step optional/required gate wiring gap. No-op when
         # skip_analog is False.
         passed, reasons = _evaluate_gate(project, gate, skip_analog=skip_analog)
+        _audit_produced = [rel for rel in _absent_before_gate
+                           if (project / rel).exists()]
+        if strict_audit_evidence and _audit_produced:
+            # IDEMPOTENCE. Refusing the audit's own output is only a
+            # measurement if the NEXT audit gets the same answer. Left on
+            # disk, the file the gate just wrote is indistinguishable from run
+            # evidence on the second pass, so strict mode would report MISSING
+            # once and PASS forever after — a verdict that depends on how many
+            # times the auditor has run. So under this flag the audit removes
+            # exactly what it created (never a file that was already there,
+            # which is why `_absent_before_gate` is captured BEFORE the gate)
+            # and the tree is left as the run left it.
+            for _rel in list(_audit_produced):
+                try:
+                    (project / _rel).unlink()
+                except OSError as _exc:
+                    # Unmeasured is not zero: say so rather than let a stale
+                    # file quietly become next run's evidence.
+                    result.reasons.append(
+                        f"WARNING: --strict-audit-evidence could not remove "
+                        f"the audit's own {_rel} ({_exc}); a later audit will "
+                        f"read it as run evidence")
         # Wave 93 — VACUOUS_PASS verdict tier promotion. If the gate
         # passed AND every reason carries the __VACUOUS_HINT__ marker
         # (and at least one was emitted), the step ran but every
@@ -7178,7 +7252,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # No gate — just presence of outputs counts
         result.status = "PASS" if result.evidence else "MISSING"
 
-    # ── GATE-PRODUCED declared outputs are probed AFTER the gate ──────────
+    # ── GATE-PRODUCED declared outputs: probed after the gate, and SAID ────
     # `missing_entries` above is computed BEFORE the gate runs, which is right
     # for every artefact an upstream step produced. It is wrong for the one
     # class of artefact the step's OWN GATE writes: the audit-trail file a gate
@@ -7194,11 +7268,37 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # genuinely absent upstream output. When the gate did not run at all (no
     # gate, or an early return above), nothing was written and the re-probe
     # simply finds nothing.
+    #
+    # 2026-07-28 — WHAT THIS CREDIT REALLY IS, now said out loud. An entry that
+    # reaches here was absent before the gate; the only thing that ran in
+    # between is the gate; so every hit the re-probe can get is an artefact
+    # THIS AUDIT CREATED. Crediting it silently is self-certification. It is
+    # still credited BY DEFAULT, and that is measured rather than assumed. The
+    # shipped flow has 16 entries across 13 steps that are both declared and
+    # their own step's gate `--json` target, and SIX of the 16 appear in ZERO
+    # of the 29 tracked run roots that carry a runner marker
+    # (sta/pre_pnr_summary.json, sta/post_route_summary.json,
+    # ir_drop_signoff.json, em_signoff.json, antenna_signoff.json,
+    # analog/mixed_signal/merge.json). Refusing the credit unconditionally
+    # would therefore turn steps 10, 23, 24, 25, 26 and M1 red on every root
+    # that reaches them — a false alarm on every project, not a finding. What
+    # closes that properly is a flow-WIRING change giving those artefacts a
+    # producer, the way `phase3_one_shot_runner._DECLARED_SIGNOFF_GATES` did
+    # for four sign-off gates on 2026-07-27; it is not a checker change.
+    #
+    # So: the credit stands, the FACT is reported on the step line and in the
+    # JSON report, and `--strict-audit-evidence` turns the report into a
+    # verdict for a caller who wants the strict rule today. MEASURED with
+    # check_step over those 29 roots: 53 step-verdicts move PASS/VACUOUS_PASS
+    # -> MISSING under the strict flag (steps 10, 23, 24, 25, 26, 28), none
+    # move under the default, and the files the audit leaves behind in the
+    # tree it is auditing drop from 328 to 256.
     if missing_entries:
         _gate_written = _gate_json_targets(step)
         _still_missing: List[str] = []
         for pat in missing_entries:
-            if pat in _gate_written:
+            if pat in _gate_written and not (
+                    strict_audit_evidence and pat in _audit_produced):
                 hits = [h for sp in (p.strip() for p in pat.split(" OR "))
                         for h in _glob_first(project, sp)]
                 if hits:
@@ -7206,6 +7306,20 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     continue
             _still_missing.append(pat)
         missing_entries = _still_missing
+    if _audit_produced:
+        result.reasons.append(
+            f"ADVISORY (non-blocking, #306): SELF-CERTIFIED EVIDENCE "
+            f"{_audit_produced} — this step's own gate created these declared "
+            f"output(s) during THIS audit; they were absent when it began, so "
+            f"they are evidence the auditor authored, not evidence the run "
+            f"produced. "
+            + ("Refused: --strict-audit-evidence is set."
+               if strict_audit_evidence else
+               "Credited (default) because 6 of the flow's 16 entries of this "
+               "shape have no producer at all outside their own gate, so a "
+               "blanket refusal would red runs that are not defective. Re-run "
+               "with --strict-audit-evidence to see the verdict without "
+               "them."))
 
     # v1.6.269 (#126) — ENV_UNAVAILABLE fallback promotion. If the
     # ── required_outputs is ALL-of-N: a gate may not certify a step done
@@ -7482,6 +7596,19 @@ def main(argv: Optional[List[str]] = None) -> int:
               "SOF, 37 final on-board sign-off) for a headless doc→GDS run "
               "with no physical FPGA attached. Mirrors the runner's "
               "--skip-hardware. GDS/STA/DRC/LVS sign-off is unaffected."),
+    )
+    p.add_argument(
+        "--strict-audit-evidence", action="store_true",
+        help=("2026-07-28: refuse, as evidence for a `required_outputs` "
+              "entry, any artefact THIS audit created — i.e. a declared "
+              "output that is also one of the step's own gate `--json` "
+              "targets and was absent when the audit began. Off by default "
+              "because 6 of the flow's 16 such entries appear in NONE of the "
+              "29 tracked run roots, so the strict rule fails runs that are "
+              "not defective; the fact is reported as an ADVISORY either way. "
+              "MEASURED over those 29 roots: 53 step-verdicts move to MISSING "
+              "with the flag and 0 without it, and the audit leaves 256 files "
+              "behind instead of 328 because it removes what it wrote."),
     )
     p.add_argument(
         "--phase", choices=["2", "3", "all"],
@@ -7799,6 +7926,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         results.append(pre_pnr_result)
     skip_analog = getattr(args, 'skip_analog', False)
     skip_hardware = getattr(args, 'skip_hardware', False)
+    strict_audit_evidence = getattr(args, 'strict_audit_evidence', False)
     # Wave 91 / v1.6.15 — when the in-process pre-PnR Yosys gate emitted
     # a synthetic StepResult for id=14, suppress the YAML-driven Step 14
     # entry so the report doesn't list the same gate twice. The YAML
@@ -7822,7 +7950,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         for step in _eval_steps:
             results.append(check_step(
                 project, step, waivers,
-                skip_analog=skip_analog, skip_hardware=skip_hardware))
+                skip_analog=skip_analog, skip_hardware=skip_hardware,
+                strict_audit_evidence=strict_audit_evidence))
     else:
         # Independent read-only gates → evaluate concurrently; collect the
         # futures in SUBMISSION order so `results` stays byte-for-byte the
@@ -7830,7 +7959,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         with ThreadPoolExecutor(max_workers=_workers) as _ex:
             _futs = [
                 _ex.submit(check_step, project, step, waivers,
-                           skip_analog=skip_analog, skip_hardware=skip_hardware)
+                           skip_analog=skip_analog,
+                           skip_hardware=skip_hardware,
+                           strict_audit_evidence=strict_audit_evidence)
                 for step in _eval_steps
             ]
             for _fut in _futs:

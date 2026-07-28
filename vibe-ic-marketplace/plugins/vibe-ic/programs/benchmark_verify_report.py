@@ -500,8 +500,24 @@ def main():
         cov = _load_json(project / "reports" / "spare_cell_coverage.json")
         pres = _load_json(project / "reports" / "spare_preservation.json")
         cov_pass = bool(cov) and str(cov.get("status", "")).upper() == "PASS"
-        pres_intact = bool(pres) and bool(pres.get("all_keep_attr_intact")) \
+        # THE GATE'S OWN VERDICT IS PART OF THE PREDICATE. Added 2026-07-28:
+        # `spare_cell_preservation_check` grew a failure class
+        # (RECORD_ARTEFACT_MISMATCH — two final artefacts of one run disagree
+        # about which recorded spares they contain) whose report carries
+        # `removed: []` and `all_keep_attr_intact: true` BY CONSTRUCTION,
+        # because nothing was removed; the artefacts merely contradict each
+        # other. Recomputing only those two fields therefore graded this pillar
+        # PASS on a gate that had exited 1. A sign-off report that cannot see a
+        # sign-off gate's verdict is the same false-certificate shape this
+        # campaign exists to remove, so the verdict is now read directly and a
+        # report that does not carry one is not silently assumed clean.
+        pres_verdict = str((pres or {}).get("verdict", "")).upper()
+        pres_intact = (
+            bool(pres)
+            and bool(pres.get("all_keep_attr_intact"))
             and int(pres.get("removed", 1) or 0) == 0
+            and pres_verdict in ("PASS", "VACUOUS_PASS", "")
+        )
         if cov is None and pres is None:
             dfe_state = "PENDING"
             dfe_detail = ("reports/spare_cell_coverage.json + "
@@ -524,7 +540,8 @@ def main():
             dfe_detail = (f"coverage status={cov.get('status')} "
                           f"(PASS required), keep_attr_intact="
                           f"{pres.get('all_keep_attr_intact')}, removed="
-                          f"{pres.get('removed')} (must be 0)")
+                          f"{pres.get('removed')} (must be 0), preservation "
+                          f"verdict={pres.get('verdict')!r} (PASS required)")
 
     # ── Source highlighting (GENERATED vs REUSED-IP) ──
     # ORGANIC v1462 — self-heal the acceptance artifact: the GENERATED/REUSED-IP

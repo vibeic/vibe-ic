@@ -31,11 +31,25 @@ Takes a verified analog block (SPICE corner sweep passed, optionally hardware-ve
 > `programs/analog_hardmacro_pinname_consistency_check.py`.
 
 ### 1. GDS (`hardmacro/<block>/<block>.gds`)
-- Source: Magic layout → `eda_gds` or `eda_run_tcl` with Magic `gds write`
-- The `gds write` / `lef write` Magic TCL is a fixed command template —
-  emitted deterministically alongside the port-extraction TCL in
-  `programs/magic_port_extract_emit.py`.
-- Must include all metal layers, vias, device layers
+- **NOT YOUR JOB — a program does this.** `programs/analog_hardmacro_gds_emit.py`
+  streams `phase3/analog/<block>/layout.mag` out to
+  `phase3/analog/hardmacro/<block>/<block>.gds` with Magic, against the
+  technology the layout's own `tech` line names. `analog_one_shot_runner`
+  invokes it at `A8_hardmacro_gen`, before the A8 checks. It is deliberately
+  NOT wired into A8's flow gate: `flow_compliance_check` is the acceptance
+  auditor, and an auditor that writes a declared `required_output` into the
+  project it audits certifies its own output. Do not hand-author a `.gds`.
+- Its TCL is `magic_port_extract_emit.build_gds_write_tcl` — the same fixed
+  `load / select top cell / gds write` template the extraction path uses.
+  Between v0.1.114 and 2026-07 that emitter had **no caller at all**, which is
+  why A8 declared a layout no run produced.
+- Honest contract: rc=2 when no container/Magic/magicrc for that technology is
+  reachable, rc=1 when Magic runs and the result carries no geometry (the
+  hollow file is deleted, never left where a presence check would count it),
+  and a deterministic-stub `layout.mag` is skipped so the PASS_WITH_STUB tier
+  is untouched.
+- If the block has no `layout.mag` yet, run `eda_analog_layout` (A5) first —
+  the producer names that as its skip reason rather than inventing geometry.
 
 ### 2. LEF abstract (`hardmacro/<block>/<block>.lef`)
 - Generated via Magic `lef write` (see `magic_port_extract_emit.py`)
@@ -77,8 +91,8 @@ Takes a verified analog block (SPICE corner sweep passed, optionally hardware-ve
 
 ## Workflow
 
-1. **GDS**: If `layout.mag` exists, run Magic `gds write` (template via
-   `magic_port_extract_emit.py`); else run `eda_analog_layout` first
+1. **GDS**: nothing to author — `analog_hardmacro_gds_emit` produces it from
+   `layout.mag`; if there is no `layout.mag`, run `eda_analog_layout` (A5) first
 2. **LEF**: Run Magic `lef write` with correct pin definitions
 3. **Liberty**: Pick the SS (worst) corner from `corner_results.json` and
    author the `.lib` with non-zero arcs (modeling judgment per § 3 above);

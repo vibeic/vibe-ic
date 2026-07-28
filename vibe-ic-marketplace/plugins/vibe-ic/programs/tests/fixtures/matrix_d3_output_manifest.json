@@ -147,6 +147,13 @@
      "alternative": "phase1/generated_docs/L13_*.json",
      "path": "phase1/generated_docs/L13_LAB_CALIBRATION.json",
      "size_bytes": 3356
+    },
+    "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
+     "status": "PRODUCED_BY_RUN",
+     "run": "benchmark-data/ic/caravel_user_project",
+     "alternative": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
+     "path": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
+     "size_bytes": 3207
     }
    }
   },
@@ -715,6 +722,13 @@
      "alternative": "phase3/stage3/pnr/routed.drc.rpt",
      "path": "phase3/stage3/pnr/routed.drc.rpt",
      "size_bytes": 19045
+    },
+    "reports/phase3/drc_router.rpt": {
+     "status": "PRODUCED_BY_RUN",
+     "run": "benchmark-data/ic/caravel_user_project",
+     "alternative": "reports/phase3/drc_router.rpt",
+     "path": "reports/phase3/drc_router.rpt",
+     "size_bytes": 19208
     }
    }
   },
@@ -753,6 +767,13 @@
      "writes": "reports/phase3/sta/post_route_summary.json",
      "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
      "size_bytes": 955
+    },
+    "reports/phase3/sta/sta_corner_record_completeness.json": {
+     "status": "PRODUCED_BY_RUN",
+     "run": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2",
+     "alternative": "reports/phase3/sta/sta_corner_record_completeness.json",
+     "path": "reports/phase3/sta/sta_corner_record_completeness.json",
+     "size_bytes": 3822
     }
    }
   },
@@ -805,6 +826,20 @@
      "alternative": "reports/phase3/em.json",
      "path": "reports/phase3/em.json",
      "size_bytes": 292
+    },
+    "reports/phase3/em_signoff.json": {
+     "status": "PRODUCED_LIVE",
+     "producer": "em_report_check",
+     "argv": [
+      ".",
+      "--mode",
+      "em",
+      "--json",
+      "reports/phase3/em_signoff.json"
+     ],
+     "writes": "reports/phase3/em_signoff.json",
+     "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
+     "size_bytes": 168
     }
    }
   },
@@ -876,6 +911,14 @@
      "alternative": "reports/phase3/PERC_SIGNOFF_MEMO.md",
      "path": "reports/phase3/PERC_SIGNOFF_MEMO.md",
      "size_bytes": 3966
+    },
+    "reports/phase2/gates/perc_signoff.json": {
+     "status": "PRODUCED_BY_RUN",
+     "provenance_note": "the recorded copy is `perc_signoff_check`'s own verdict document ({\"program\": \"perc_signoff_check\", ...}) and no producer outside step 28's gate writes this path, so the run root carries compliance-gate output committed alongside the run. Admissible for dimension 3 (the root carries a runner marker and the file pre-exists any audit of it) but it is NOT independent of the checker: see flow_compliance_check --strict-audit-evidence.",
+     "run": "benchmark-data/ic/caravel_user_project",
+     "alternative": "reports/phase2/gates/perc_signoff.json",
+     "path": "reports/phase2/gates/perc_signoff.json",
+     "size_bytes": 523
     }
    }
   },
@@ -933,6 +976,22 @@
      "alternative": "reports/phase3/erc.rpt",
      "path": "reports/phase3/erc.rpt",
      "size_bytes": 3009
+    },
+    "reports/phase3/lvs.json": {
+     "status": "PRODUCED_BY_RUN",
+     "provenance_note": "the recorded copy is `eda_report_audit:lvs` output (step 31's own gate) — same class as perc_signoff.json above.",
+     "run": "benchmark-data/ic/caravel_user_project",
+     "alternative": "reports/phase3/lvs.json",
+     "path": "reports/phase3/lvs.json",
+     "size_bytes": 225
+    },
+    "reports/phase2/gates/erc_density.json": {
+     "status": "PRODUCED_BY_RUN",
+     "provenance_note": "the recorded copy is `erc_density_check` output (step 31's own gate) — same class as perc_signoff.json above.",
+     "run": "benchmark-data/ic/caravel_user_project",
+     "alternative": "reports/phase2/gates/erc_density.json",
+     "path": "reports/phase2/gates/erc_density.json",
+     "size_bytes": 1188
     }
    }
   },

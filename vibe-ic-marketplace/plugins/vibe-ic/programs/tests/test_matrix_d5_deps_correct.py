@@ -43,8 +43,8 @@ prefixing. (Containment was tried and rejected: step 21 scans the directory
 depends on 34", and counting it as one would be exactly the adjacent
 measurement this campaign exists to stamp out.)
 
-The value of a ``--json`` flag is excluded: across all 137 gate commands every
-one of the 107 distinct ``--json`` values is the checker's own report under
+The value of a ``--json`` flag is excluded: across all 136 gate commands every
+one of the distinct ``--json`` values is the checker's own report under
 ``reports/``, and each of the 11 that collides with a declared artefact
 collides with the *same* step's — i.e. it is an OUTPUT, never a read.
 ``provenance_check``'s ``--output`` is deliberately NOT excluded: there
@@ -60,8 +60,10 @@ the exact basename of ``A`` occurs as a **standalone string constant** and:
     wildcard — so ``netlist.v`` (steps 9 and 14), ``results.xml``, ``pass.flag``
     and ``*.sp`` are all out of scope by construction rather than by guesswork;
   * the constant is not a bare-expression **docstring** (``ast.Expr`` whose
-    value is a string) — ``analog_a5_layout_check``'s module docstring names
-    ``drc_clean.flag`` nine times before line 237 constructs the real path;
+    value is a string) — ``analog_a5_layout_check``'s module docstring still
+    names ``drc_clean.flag`` and ``lvs_match.flag`` several times, in the
+    section EXPLAINING why it no longer reads them, and that prose must not be
+    counted as a read;
   * the constant does not occur *only* inside a ``not in`` container — in
     ``spare_cell_preservation_check`` the names ``post_cts.def`` and
     ``post_hold.def`` appear solely in an EXCLUSION list
@@ -75,14 +77,39 @@ Both layers then drop two classes of non-dependency:
     ``phase3/mixed_signal/cosim/mixed_signal_results.json``). A co-producer of X
     does not depend on the *other* producer of X.
 
-Measured on the current tree: **14 of 63 steps have at least one derived
-cross-step data dependency**, carrying 19 distinct (consumer, producer) pairs
-backed by 35 evidence rows.
+Measured on the current tree: **12 of 63 steps have at least one derived
+cross-step data dependency**, carrying 16 distinct (consumer, producer) pairs
+backed by 32 evidence rows.
 That is the honest denominator of the layer-1+2 half of this dimension, and it
 is stated in :func:`test_d5_derived_dependency_denominator_is_disclosed` so it
 can never quietly drift to zero and leave a suite of vacuous passes behind — the
 exact shape of the failure this campaign was convened over (a runtime ordering
 guard that saw 0 violations because it had been starved of its input).
+
+WHY IT FELL FROM 14/19/35 (v1.7.68) TO 12/16/31, stated because a SHRINKING
+denominator is the shape this guard exists to catch. The five dimension-5
+waivers were closed by fixing the defects, and three of the removed pairs were
+themselves the defects — a consumer reading an artefact it must not read:
+
+  * A5 -> A6 (1 pair, 2 artefacts): ``analog_a5_layout_check`` no longer names
+    ``drc_clean.flag`` / ``lvs_match.flag``. That read WAS the cycle; the PV
+    verdict is A6's, over A6's own richer evidence.
+  * 18 -> 21 and 18 -> 34 (2 pairs): ``spare_cell_preservation_check`` is no
+    longer a step-18 gate program, so step 18 no longer reaches forward to
+    ``routed.def`` / ``filled.def``. The gate still runs at step 34.
+
+Steps 8 and DT2 kept their derived dependencies — they were closed by
+DECLARING the edge, not by removing the read, so they still contribute. No
+other pair moved: 14 - 2 = 12 steps and 19 - 3 = 16 pairs. Rows are 35 - 4
++ 1 = 32, not 31: the same change added
+``phase1/generated_docs/L8_RTL_CONSTANTS.json`` to step D1's
+``required_outputs`` (a dimension-7 closure), which turned step 2's
+PRE-EXISTING read of that file into a countable evidence row, taking the
+(2, D1) pair from 7 rows to 8. Corrected here after the floor was measured to
+sit one row BELOW live — exactly the slack the comment on
+``_DERIVED_DEP_ROWS_FLOOR`` claims to have eliminated, and enough to absorb
+one silently deleted read. The removed rows are still exactly the four
+artefacts named above.
 
 ====================================================================
 WHY THAT DENOMINATOR IS NOT THE WHOLE TEST
@@ -131,7 +158,7 @@ It is nonetheless cross-checked, per step, in ``D5-GRAPH-DISAGREE``. One
 plus (``name`` or ``blocks_on``), so it admits 71 nodes where the flow declares
 63 steps — the 8 extra are the stage grouping objects (``stage1`` … ``stage_phase1``).
 They contribute 0 edges today and no stage id collides with a step id, so the
-per-step graphs are identical (91 edges both sides). If a stage object ever took
+per-step graphs are identical (93 edges both sides). If a stage object ever took
 a step's id, the runtime graph's entry for that step would be silently
 overwritten; ``D5-GRAPH-DISAGREE`` is what would notice.
 
@@ -153,9 +180,13 @@ KNOWN GAPS (stated so nobody mistakes a pass here for a proof)
    ``phase3_one_shot_runner`` and friends are not gate programs) is not seen.
 3. "Reads" is not "hard-depends": layer 2 cannot tell a mandatory read from a
    best-effort one inside ``try/except`` — deliberately, because the stale-read
-   hazard is identical either way, and ``sdc_exception_correlation_check``'s
-   swallowed ``except (OSError, ValueError): pass`` is precisely how a missing
-   upstream turns into a silently wrong advisory instead of a loud failure.
+   hazard is identical either way. ``sdc_exception_correlation_check`` was the
+   worked example: its swallowed ``except (OSError, ValueError): pass`` turned a
+   missing upstream into a silently wrong advisory instead of a loud failure.
+   Its step-8 cell has since been closed — the edge is declared and the program
+   reports the per-source read STATUS — but the GAP is unchanged: a best-effort
+   read is still indistinguishable from a mandatory one here, so this dimension
+   goes on treating both as dependencies.
 4. Phantom-edge detection is limited to unresolved / self / duplicate /
    forward-pointing edges. A *semantically* useless but harmless edge (step 11's
    ``blocks_on: [10]`` where the real need is step 9's netlist, or step 24's
@@ -178,6 +209,15 @@ from matrix_63x8 import flowref as F
 from matrix_63x8 import waivers as W
 
 DIM = 5
+
+#: The cells this dimension waives, PINNED as an exact set. EMPTY since
+#: 2026-07-28: all five dimension-5 waivers were closed by declaring the
+#: missing edge (steps 8, DT2), removing a read that was itself the defect
+#: (A5, 18) or reordering the declaration so the flow's only forward edge
+#: disappears (A7). Pinned rather than floored so a waiver-free dimension is a
+#: recorded fact instead of an empty loop reporting green — see
+#: ``test_d5_waivers_meet_the_registry_bar``.
+WAIVED_CELLS_PINNED: frozenset = frozenset()
 
 # ══════════════════════════════════════════════════════════════════════
 # Producers — exact, from the yaml
@@ -628,11 +668,44 @@ def d5_problems(step_id) -> List[str]:
 # rather than re-synchronised: a waiver is a public admission, and it can have
 # exactly one text.
 #
-# Every one of these waivers is a LIVE, REPRODUCED defect, not an
-# un-mechanisable cell: the predicate genuinely fails on the current tree.
-# ``strict=True`` is therefore load-bearing in the strongest way — the day the
-# dependency is fixed, the cell XPASSes, the suite goes red, and the waiver must
-# be deleted.
+# THE REGISTRY NOW HOLDS NO DIMENSION-5 ENTRY AT ALL. All five were labelled
+# "LIVE DEFECT, reproduced" and all five have been CLOSED by fixing the defect,
+# not by relaxing anything here — the predicate above is byte-for-byte the one
+# that failed them:
+#
+#   step 8  — `sdc_exception_correlation_check` reads step 3's
+#             `reports/phase2/cdc/crossing.json`; step 8 now declares
+#             `blocks_on: [7, 3]`, and the program reports the per-source read
+#             STATUS so an unread file can no longer masquerade as "no async
+#             pair found". Each finding cites only the sources actually read
+#             and names the unread ones, so the PARTIAL case (L8 present,
+#             crossing.json absent) can no longer assert "no matching CDC
+#             crossing" about a file that was never opened.
+#   DT2     — its condition names step 22's SPEF while it was declared at yaml
+#             index 14 (step 22 at 34), so the edge would have been FORWARD.
+#             DT2 and DT3 are now declared after step 22 and DT2 declares
+#             `blocks_on: [DT1, 22]`.
+#   A5      — CIRCULAR: A5's gate required A6's `drc_clean.flag` /
+#             `lvs_match.flag` while A6 declares `blocks_on: [A5]`. Broken on
+#             the A5 side (A6 consumes A5's layout, and the A6 STEP is what
+#             writes those flags), with A6's block-list roots fixed first so
+#             nothing went unmeasured. A5 had no waiver path, so A6 — now the
+#             only per-block PV gate — refuses to let a step waiver cover an
+#             ABSENT measurement (`_NON_WAIVABLE_RULES`); a measured DRC/LVS
+#             defect stays waivable, which is the flow-wide mechanism.
+#   18      — UNSATISFIABLE BY EDGE: `spare_cell_preservation_check` at the
+#             spare-INSERTION step resolved forward to steps 21/34's DEFs. The
+#             gate now runs only at step 34, whose closure contains them, and
+#             the program FAILs (RECORD_ARTEFACT_MISMATCH) when the
+#             name-bearing final artefacts disagree about which recorded
+#             spares they contain — a CONTENT test, so a leftover DEF can no
+#             longer vouch for a spare the shipped netlist lost. Not an mtime
+#             test: the runner writes the OpenROAD artefacts BEFORE it
+#             serialises `spare_cells.json`, so "older than the record" is the
+#             shape of every correct run.
+#   A7      — the flow's only FORWARD edge: A6 was declared at index 52 and A7
+#             at 23. A6's block was MOVED between A5 and A7; nothing about A6
+#             itself changed.
 
 
 def dim_waivers() -> Tuple[W.Waiver, ...]:
@@ -779,6 +852,39 @@ def test_d5_state_census_is_exhaustive():
     assert not (waived & na), f"cell in two states at once: {sorted(waived & na)}"
 
 
+# ── the anti-starvation floor, RE-DERIVED after the d5 closures ────────────
+# The closures shrank the denominator (v1.7.68: 14 steps / 19 pairs / 35 rows
+# -> 12 / 16 / 31, itemised in the module docstring), and the floor was left
+# at the pre-closure slack of 10/15. That is the guard's own failure mode: a
+# floor with slack lets the NEXT pair-removing change land inside tolerance,
+# which is precisely the silent shrink it exists to catch.
+#
+# The floor is therefore pinned to the LIVE measurement, not below it. Any
+# downward move — one pair, one row — fails and has to be re-derived
+# deliberately, with the reason written into the docstring the way the last
+# three removals were. Upward moves (a new declared read, a new step) are
+# free: this is a floor, not an equality pin.
+_DERIVED_DEP_STEPS_FLOOR = 12
+_DERIVED_DEP_PAIRS_FLOOR = 16
+_DERIVED_DEP_ROWS_FLOOR = 32
+
+# Cells whose layer-1+2 data-dependency clause is EMPTY BY CONSTRUCTION, and
+# why. Both were closed by DELETING a cross-step read, so for exactly these
+# two the D5-MISSING-EDGE clause measures zero pairs — an honest zero, but one
+# that must be stated rather than left to be discovered. Their cells are
+# carried by the six structural predicates (D5-EDGE-UNRESOLVED / D5-SELF-EDGE
+# / D5-DUP-EDGE / D5-FORWARD-EDGE / D5-CYCLE / D5-ORPHAN / D5-GRAPH-DISAGREE),
+# each of which is per-step falsifiable and each of which goes red under
+# reintroduction.
+_VACUOUS_BY_CLOSURE = {
+    "A5": ("analog_a5_layout_check no longer names drc_clean.flag / "
+           "lvs_match.flag — that read was the A5<->A6 cycle"),
+    "18": ("spare_cell_preservation_check is no longer a step-18 gate "
+           "program, so step 18 no longer reaches forward to routed.def / "
+           "filled.def"),
+}
+
+
 def test_d5_derived_dependency_denominator_is_disclosed():
     """The data-dependency clause must not quietly become vacuous.
 
@@ -786,8 +892,8 @@ def test_d5_derived_dependency_denominator_is_disclosed():
     over is a checker that reported a clean run because its input had been
     emptied; a dimension-5 module whose ``consumer`` relation silently resolved
     to zero pairs would pass all 63 cells and mean nothing. So the measured
-    denominator is asserted to be non-trivial and is printed in the failure
-    message when it moves.
+    denominator is asserted against the live floor and is printed in the
+    failure message when it moves.
     """
     with_deps = [
         F.normalize_id(s) for s in F.step_ids() if derived_dependencies(s)
@@ -797,17 +903,52 @@ def test_d5_derived_dependency_denominator_is_disclosed():
         for s in F.step_ids()
         for p, _art, _ev in derived_dependencies(s)
     }
-    assert len(with_deps) >= 10, (
+    rows = sum(len(derived_dependencies(s)) for s in F.step_ids())
+    assert len(with_deps) >= _DERIVED_DEP_STEPS_FLOOR, (
         f"only {len(with_deps)} of {len(F.step_ids())} steps have any derived "
-        f"cross-step data dependency ({with_deps}); the consumer relation has "
-        f"collapsed and the D5-MISSING-EDGE clause is now vacuous for "
-        f"{len(F.step_ids()) - len(with_deps)} cells"
+        f"cross-step data dependency ({sorted(with_deps)}); the floor is the "
+        f"live baseline {_DERIVED_DEP_STEPS_FLOOR}. The consumer relation "
+        f"shrank: name the removed read and why it is not a dependency, in "
+        f"the module docstring, then re-derive this floor."
     )
-    assert len(pairs) >= 15, (
+    assert len(pairs) >= _DERIVED_DEP_PAIRS_FLOOR, (
         f"only {len(pairs)} distinct (consumer, producer) pairs derived; the "
-        f"v1.7.68 baseline is 19 over 14 steps and the floor is 15. "
+        f"floor is the live baseline {_DERIVED_DEP_PAIRS_FLOOR} over "
+        f"{_DERIVED_DEP_STEPS_FLOOR} steps (v1.7.68 was 19 over 14, shrunk by "
+        f"the d5 closures — see the module docstring). "
         f"Pairs: {sorted(pairs)}"
     )
+    assert rows >= _DERIVED_DEP_ROWS_FLOOR, (
+        f"only {rows} evidence rows back those {len(pairs)} pairs; the floor "
+        f"is the live baseline {_DERIVED_DEP_ROWS_FLOOR}. A pair kept alive "
+        f"by fewer artefacts than before is a shrink the pair count alone "
+        f"cannot see."
+    )
+
+
+def test_d5_cells_with_no_derived_dependency_are_named_not_silent():
+    """The two cells closed by DELETING a read measure ZERO pairs.
+
+    That is an honest zero — neither step reads another step's artefact any
+    more — but an unstated one would let "this clause found nothing" pass for
+    "this clause found nothing wrong". It is asserted here so the vacuity is
+    a documented property with a reason attached, and so that a future change
+    which re-introduces a cross-step read into either gate has to update this
+    table rather than quietly re-populate the denominator.
+    """
+    for sid, why in _VACUOUS_BY_CLOSURE.items():
+        assert derived_dependencies(sid) == (), (
+            f"step {sid} now derives {derived_dependencies(sid)}; the d5 "
+            f"closure removed its only cross-step read ({why}). If the read "
+            f"is back on purpose, update _VACUOUS_BY_CLOSURE and the "
+            f"denominator floors."
+        )
+    # ... and the vacuity is BOUNDED: it is these two and no others beyond the
+    # steps that never had a derived read at all.
+    empty = {F.normalize_id(s) for s in F.step_ids()
+             if not derived_dependencies(s)}
+    assert set(_VACUOUS_BY_CLOSURE) <= empty
+    assert len(F.step_ids()) - len(empty) >= _DERIVED_DEP_STEPS_FLOOR
 
 
 def test_d5_producer_map_is_live_and_non_empty():
@@ -886,8 +1027,28 @@ def test_d5_waivers_meet_the_registry_bar():
     Reads the ONE registry. The module-local ``_LOCAL_WAIVERS`` mirror this
     used to validate was deleted: ``_waiver_for`` had preferred the central
     copy for some time, so validating the mirror graded a table nothing read.
+
+    THE LOOP IS EMPTY TODAY. All five dimension-5 waivers — every one of them
+    labelled "LIVE DEFECT, reproduced" — were closed by fixing the dependency,
+    so ``W.validate`` is never called below. An empty loop must not report
+    green on its own, so the set is PINNED, not floored: #530's
+    ``assert dim_waivers()`` was correct while five entries existed and is a
+    permanent red once none do. The pin reddens the day a waiver is added, and
+    the loop underneath is what grades it.
     """
-    assert dim_waivers(), f"dimension {DIM} declares no waiver at all"
+    live = {w.label for w in dim_waivers()}
+    assert live == WAIVED_CELLS_PINNED, (
+        f"dimension {DIM}'s waiver set changed to {sorted(live)}; it is pinned "
+        f"at {sorted(WAIVED_CELLS_PINNED)}. Adding one is a public admission "
+        f"and must be argued for in the same change that pins it here."
+    )
+    applied = {F.normalize_id(sid) for sid in F.step_ids()
+               if _waiver_for(sid) is not None}
+    assert applied == {F.normalize_id(w.step_id) for w in dim_waivers()}, (
+        f"cells this dimension WAIVES {sorted(applied)} do not match the "
+        f"registry entries "
+        f"{sorted(F.normalize_id(w.step_id) for w in dim_waivers())}"
+    )
     problems = {}
     for waiver in dim_waivers():
         found = W.validate(waiver)

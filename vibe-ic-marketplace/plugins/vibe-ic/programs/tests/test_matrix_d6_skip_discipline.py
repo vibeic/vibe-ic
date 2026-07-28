@@ -43,7 +43,8 @@ Instead every predicate is a **behavioural measurement of the real consumer**:
     repo's documented verdict-self-report contract (§4.05 / #433c), not a
     string heuristic invented here.
 
-Two synthetic projects per step, both built from the step's own declarations:
+Two synthetic projects per step (three where noted), all built from the
+step's own declarations:
 
   EMPTY   nothing on disk at all.
   SEEDED  every path the step's own yaml names — ``condition.files_exist``,
@@ -52,7 +53,16 @@ Two synthetic projects per step, both built from the step's own declarations:
           ``required_outputs`` entry (``" OR "``-split) — materialised, with
           ``*``/``**``/``?``/``[...]`` concretised to the literal ``x``.
 
-Two seeding rules are content-aware, and both read a documented contract
+  SAFETY_RTL  built only for steps whose gate passes ``--rtl-dir`` (read off
+          the live yaml, not a pinned step id): SEEDED plus RTL that DECLARES
+          an ECC safety mechanism. The path-seeder can only materialise
+          ``phase2/stage1/rtl`` as a BARE DIRECTORY, so a gate that reads RTL
+          CONTENT skips on every input it can build — which left FS1 with no
+          non-skipping input for leg L2 to find once an over-eager
+          empty-directory FAIL was removed from the gate. See
+          ``_SAFETY_RTL_FILES``.
+
+Three seeding rules are content-aware, and each reads a documented contract
 rather than guessing a schema:
 
   * ``analog_block_list.json`` is written ``{"blocks": ["x"]}``. The shape is
@@ -63,6 +73,11 @@ rather than guessing a schema:
     ``_analog_a_check_common._BLOCK_LIST_ROOTS`` plus ``analog/``, because
     different A-gates carry different candidate-root lists and seeding only
     one root measures the root mismatch instead of the skip discipline.
+  * The safety-mechanism RTL of the SAFETY_RTL scenario is built from
+    ``fmeda_fault_injection_coverage.detect_safety_mechanism``'s own stated
+    recognition rule (a widest protected input, a narrower corrected-data
+    output, and a paired detection port whose NAME declares detection; an
+    encoder whose output is wider than its input).
   * P0 — the structural-RTL umbrella — declares no paths at all in the yaml
     (its skip lives inside ``flow_compliance_check``, conditioned on an RTL
     directory), so it gets one extra scenario with a real
@@ -70,7 +85,7 @@ rather than guessing a schema:
     conditional and this module would have to report an honest gap.
 
 ====================================================================
-THE FIVE LEGS
+THE LEGS (five numbered, eight measured)
 ====================================================================
 L1  NO UNCONDITIONAL PASS.  status(EMPTY) != "PASS". A step that certifies a
     plain PASS on a project containing nothing has a gate that is satisfied by
@@ -118,6 +133,21 @@ L3b A SELF-DECLARED SKIP IS NEVER FOLDED INTO A PLAIN PASS — for the clauses
     ``VACUOUS_PASS`` / ``PASS_WITH_WAIVERS`` sentinel that
     ``_check_program_exit_zero``'s 300-character stdout window truncated away.
 
+L3c A SELF-DECLARED SKIP IS NOT INSIDE THE EXECUTED-PASS NUMERATOR.  L3 and
+    L3b both stop at the LABEL. They are satisfied the moment a skip is moved
+    off the plain PASS bucket onto its own tier — and ``flow_compliance_check``
+    folds that tier straight back into the published metric
+    (``pass_count = counts["PASS"] + counts["VACUOUS_PASS"]``), so a step can
+    change label without the headline ``X/Y executed PASS`` moving by one.
+    Measured: giving FS1 and step 30 their own tier left
+    ``Steps: 1 total (1/1 executed PASS …)`` byte-identical before and after.
+    L3c reads the PUBLISHED X off the consumer's own stdout and charges a step
+    whose resolved tier is ``VACUOUS_PASS`` while X exceeds the plain-PASS
+    counter from the same run. It charges 4 of the 63 cells today (4, 14, 30,
+    FS1) and every one is WAIVED against a single pending owner decision, with
+    the blast radius measured across all 12 tracked run roots — see
+    ``_VACUOUS_AGGREGATION_DECISION``.
+
 L4  YAML SKIP SURFACES ARE RUNTIME-CONDITIONED AND REACHABLE.
     Every ``optional_program_exit_zero`` declares a non-empty
     ``condition_files_exist`` (an "optional" clause with no condition is an
@@ -139,12 +169,15 @@ WHAT THIS CANNOT SEE
 ====================================================================
 Stated plainly so nobody mistakes a green run for a stronger claim:
 
-  * ``pass_count = counts["PASS"] + counts["VACUOUS_PASS"]``
-    (flow_compliance_check.py, the "executed PASS" X/Y numerator). L3 enforces
-    that a skip gets its own *status label and its own discrete counter*; it
-    does not contest that documented Wave-93 aggregation policy. A VACUOUS_PASS
-    is visible as ``VACUOUS-PASS=n`` and as ``○ [VACUOUS-PASS]`` per step, but
-    it is inside the X of X/Y.
+  * WHY a step is on the VACUOUS_PASS tier. L3c charges the AGGREGATION — the
+    skip being inside the X of X/Y — and takes the tier itself as given. It
+    cannot tell a legitimately-inapplicable step (step 14 with no .ys script)
+    from one that should have measured something and did not. That
+    discrimination is what the pending owner decision on
+    ``_VACUOUS_AGGREGATION_DECISION`` turns on, and this module does not make
+    it. (This entry replaces the previous one, which named the same
+    aggregation and declined to contest it at all; it is now leg L3c, charged
+    on 4 cells and waived, rather than a paragraph.)
   * A skip path that neither EMPTY nor SEEDED reaches is not measured. The
     seeding is derived from the step's own declarations; a gate whose skip
     hinges on an artefact the step never names (step 30's SPEF is one — it is
@@ -223,6 +256,53 @@ _FALLBACK_ANALOG_ROOTS = ("phase3/analog", "phase1/analog", "analog")
 P0_RTL_FILE = "phase2/stage1/rtl/top.v"
 P0_RTL_BODY = "module top; endmodule\n"
 
+#: The probe scenarios whose resolved STATUS the legs read. `W_PROSE` /
+#: `W_FORMED` are L5's own and are deliberately not here.
+_STATUS_SCENARIOS: Tuple[str, ...] = ("EMPTY", "SEEDED", "RTL", "SAFETY_RTL")
+
+#: RTL that DECLARES an ECC safety mechanism — a Hamming(7,4) encoder plus a
+#: decoder with a working syndrome check.
+#:
+#: THIRD content-aware seeding rule, and the same justification as the other
+#: two: it is built from a documented contract, not a guessed schema.
+#: `fmeda_fault_injection_coverage.detect_safety_mechanism`'s docstring states
+#: the positive structure it recognises — "a module with a protected (widest)
+#: input port AND a narrower corrected-DATA output that is PAIRED WITH an
+#: error-detection port whose NAME declares detection", plus an encoder
+#: producing a WIDER output than its input.
+#:
+#: WHY IT IS NEEDED. The path-seeder materialises `phase2/stage1/rtl` as a
+#: BARE DIRECTORY, and every RTL-consuming gate that reads CONTENT then skips
+#: on it. For FS1 that made every constructible input a skip tier, so leg L2 —
+#: the constructive proof that the skip is conditional — had no non-skipping
+#: input to find. That gap was previously MASKED by an over-eager guard in the
+#: gate itself (an empty `--rtl-dir` hard-FAILed, so L2 saw a non-skip tier and
+#: called the skip conditional). Removing the over-reach exposed the gap; this
+#: scenario closes it with a real input under which the step genuinely
+#: measures. chip-AGNOSTIC: generic Hamming SEC, no design name, no cell.
+_SAFETY_RTL_FILES: Dict[str, str] = {
+    "phase2/stage1/rtl/ham_enc.v": (
+        "module ham_enc(input [3:0] data_in, output [6:0] code_out);\n"
+        "assign code_out[2]=data_in[0]; assign code_out[4]=data_in[1];\n"
+        "assign code_out[5]=data_in[2]; assign code_out[6]=data_in[3];\n"
+        "assign code_out[0]=data_in[0]^data_in[1]^data_in[3];\n"
+        "assign code_out[1]=data_in[0]^data_in[2]^data_in[3];\n"
+        "assign code_out[3]=data_in[1]^data_in[2]^data_in[3]; endmodule\n"),
+    "phase2/stage1/rtl/ham_dec.v": (
+        "module ham_dec(input [6:0] code_in, output [3:0] data_out,"
+        " output syndrome_err);\n"
+        "wire s0=code_in[0]^code_in[2]^code_in[4]^code_in[6];\n"
+        "wire s1=code_in[1]^code_in[2]^code_in[5]^code_in[6];\n"
+        "wire s2=code_in[3]^code_in[4]^code_in[5]^code_in[6];\n"
+        "assign data_out={code_in[6],code_in[5],code_in[4],code_in[2]};\n"
+        "assign syndrome_err=s0|s1|s2; endmodule\n"),
+}
+
+#: The gate-command token that says "this step reads an RTL DIRECTORY's
+#: contents". Read off the live yaml, so the SAFETY_RTL scenario is built for
+#: whichever steps declare it rather than for a hard-coded step id.
+_RTL_DIR_FLAG = "--rtl-dir"
+
 _SUBPROCESS_TIMEOUT_S = 900
 
 #: Line-start markers by which a gate program self-declares inapplicability in
@@ -244,6 +324,11 @@ _PROSE_SKIP_RE = re.compile(
     + r"(?![\w-])(?!\s*[:=]?\s*\d)",
     re.IGNORECASE,
 )
+
+#: The headline metric line `flow_compliance_check` prints. Leg L3c reads X
+#: out of it — the published numerator, not a re-derivation of it.
+_HEADLINE_RE = re.compile(r"^Steps: \d+ total \((\d+)/(-?\d+) executed PASS",
+                          re.MULTILINE)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -276,6 +361,155 @@ _PROSE_SKIP_RE = re.compile(
 def dim_waivers() -> Tuple[W.Waiver, ...]:
     """This dimension's waivers, from the one registry that is consumed."""
     return tuple(W.waivers_for_dim(DIM))
+
+
+# The two waivers it used to carry for the LABEL half of the question (FS1 and
+# 30) are gone, together with their central-registry entries, because the
+# defects they named were fixed:
+#   * FS1  — `fmeda_fault_injection_coverage` / `fmeda_coverage_check` now
+#     print a LINE-START `VACUOUS_PASS:` token on their rc-0 inapplicability
+#     branches (the only rc-0 disclosure channel `_check_program_exit_zero`
+#     reads), bounded in length so it survives the consumer's 300-char stdout
+#     window, and the producer no longer answers NOT_APPLICABLE from an
+#     --rtl-dir it never opened.
+#   * 30   — closed independently, and EARLIER, by #521 (v1.7.84): the gate
+#     routes its own `summary["skipped"]` through `_vacuous_exit.exit_code`
+#     and answers rc 2, which is how `flow_compliance_check` decides tier
+#     membership, plus the rc-independent `VACUOUS_PASS:` sentinel. That
+#     waiver was deleted from the central registry there, not here.
+#
+# DT2's LABEL-half waiver is NOT gone. The obvious repair — re-arm the
+# self-disabling ALL-of condition on the PRODUCER'S OWN OUTPUTS — was written,
+# measured and WITHDRAWN at the 2026-07-28 convergence merge: it moves the
+# self-disable from the input side to the output side, where deleting the one
+# artefact DT2 exists to report on turns the step from MISSING/rc 1 into
+# SKIPPED-CONDITION/rc 0 and out of the executed-PASS denominator. The yaml is
+# back to the ALL-of spelling, the `flow_condition_reachability_baseline.json`
+# entry is restored, and DT2 stays waived — for leg L4, not L3c.
+#
+# What this module carries NOW is the ARITHMETIC half, charged by leg L3c, on
+# the four steps that measurably land on the VACUOUS_PASS tier under its own
+# probes. All four are one pending OWNER DECISION, stated identically below.
+#
+# `_mark_for` prefers the central registry, so a waiver applied centrally makes
+# a local copy inert rather than duplicated.
+
+#: Measured 2026-07-28 by running the shipped `flow_compliance_check` over a
+#: COPY of every tracked run root in
+#: `programs/tests/fixtures/matrix_d3_output_manifest.json` that resolves on
+#: this host (12 of 12), full flow, `--strict`. Quoted verbatim by all four
+#: waivers so the decision is costed, not asserted.
+_VACUOUS_AGGREGATION_BLAST_RADIUS = (
+    "MEASURED BLAST RADIUS of dropping VACUOUS_PASS out of `pass_count` "
+    "(flow_compliance_check.py `pass_count = counts['PASS'] + "
+    "counts['VACUOUS_PASS']`), over all 12 tracked run roots declared "
+    "in programs/tests/fixtures/matrix_d3_output_manifest.json, each "
+    "COPIED and re-run with the shipped checker, full flow, --strict, "
+    "on 2026-07-28: 12 of 12 roots move their published headline "
+    "numerator; 35 step-instances are on the VACUOUS_PASS tier in "
+    "total; 0 of 12 change their Overall verdict (all 12 are already "
+    "FAIL). Per root, X/Y now -> X/Y after, keyed by the root's 1-based "
+    "position in that manifest's `run_roots` object (chip-agnostic: the "
+    "manifest holds the names): #01 4/7 -> 3/7; #02 3/39 -> 2/39; #03 "
+    "11/26 -> 6/26; #04 18/39 -> 13/39; #05 7/53 -> 4/53; #06 15/30 -> "
+    "12/30; #07 22/43 -> 19/43; #08 21/32 -> 18/32; #09 15/53 -> 11/53; "
+    "#10 4/10 -> 3/10; #11 7/41 -> 4/41; #12 32/42 -> 29/42. Steps "
+    "charged: D1 on 11/12 roots, FS1 on 10/12, step 14 on 7/12, step 24 "
+    "on 3/12, step 4 on 2/12, step 30 on 1/12, step 31 on 1/12."
+)
+
+#: The single decision that closes all four cells. Written out in full so
+#: nobody has to reconstruct why this is a waiver and not a fix.
+_VACUOUS_AGGREGATION_DECISION = (
+    "OWNER DECISION REQUIRED, and it is a one-line change either way: does "
+    "`X/Y executed PASS` mean 'steps that RAN cleanly' (status quo — a "
+    "VACUOUS_PASS ran, exit 0, and counts) or 'steps that MEASURED something' "
+    "(a VACUOUS_PASS measured nothing and must leave X)? It is NOT a bug with "
+    "a right answer, because the denominator does NOT move either way: "
+    "`total_required` subtracts SKIPPED-CONDITION, WAIVED and "
+    "DEFERRED-BY-UPSTREAM but NOT VACUOUS_PASS. So dropping VACUOUS_PASS from "
+    "X alone makes a legitimately-inapplicable step a PERMANENT debit — no "
+    "design with an inapplicable step could ever read Y/Y again. The "
+    "alternative repair, subtracting VACUOUS_PASS from `total_required` too, "
+    "is REFUSED here on evidence: it makes an unmeasured step cost-free, "
+    "which is the same defect this campaign measured on the at-speed-ATPG "
+    "not-run mirror (a co-located disclosure promoted DT1/DT2/DT3 to "
+    "SKIPPED-CONDITION, which IS subtracted, and flipped a flow FAIL -> PASS "
+    "with a `0/-1` denominator). Making the change without the owner would "
+    "move 12 of 12 published campaign numbers to encode a metric definition "
+    "nobody has ratified. Until it is ratified this cell is WAIVED, not "
+    "green: leg L3c charges it every run and the strict xfail forces this "
+    "waiver out the moment the aggregation changes."
+)
+
+
+def _vacuous_aggregation_waiver(step_id, tier_scenario: str,
+                                what_discloses: str) -> W.Waiver:
+    """One waiver body, four steps — because it is ONE pending decision."""
+    return W.Waiver(
+        step_id=step_id,
+        dim=DIM,
+        reason=(
+            f"Leg L3c: on the {tier_scenario} probe this step resolves to the "
+            f"VACUOUS_PASS tier ({what_discloses}), and the published "
+            f"headline `X/Y executed PASS` still counts it inside X — "
+            f"`flow_compliance_check.py` computes "
+            f"`pass_count = counts['PASS'] + counts['VACUOUS_PASS']`. The "
+            f"skip has its own LABEL and its own COUNTER (leg L3 is "
+            f"satisfied) but not its own arithmetic, so the number a reviewer "
+            f"reads is unchanged by the disclosure. "
+            f"{_VACUOUS_AGGREGATION_DECISION}"
+        ),
+        evidence=(
+            f"flow_compliance_check.py `pass_count = counts['PASS'] + "
+            f"counts['VACUOUS_PASS']` (the X of the `Steps: N total (X/Y "
+            f"executed PASS …)` line). Reproduce: run this module's own probe "
+            f"for step {step_id} and compare the printed X against "
+            f"`counts['PASS']` from the same run's --json report — X exceeds "
+            f"it by exactly the VACUOUS_PASS count. {_VACUOUS_AGGREGATION_BLAST_RADIUS}"
+        ),
+    )
+
+
+#: Which LEG each locally-waived cell is excused for.
+#:
+#: A waiver excuses ONE measured gap; `test_d6_skip_discipline` is
+#: ``xfail(strict=True)`` for the WHOLE cell, so without this map a waived cell
+#: would also stop reporting a NEW defect on a DIFFERENT leg — the waiver would
+#: silently widen from "the aggregation is undecided" to "this step is exempt
+#: from skip discipline". Measured concretely: with FS1 waived for L3c,
+#: reverting the FMEDA disclosure token makes L3 fire again and the cell stays
+#: xfailed, i.e. green. ``test_d6_waived_cells_are_clean_on_every_other_leg``
+#: runs the remaining legs UNWAIVED so that regression is loud.
+#:
+#: DERIVED from the resolved dim-6 waiver set (central registry first, local
+#: request second) rather than re-listed, so a waiver applied centrally cannot
+#: fall out of this map and quietly become a blanket exemption. Every dim-6
+#: waiver that exists today excuses L3c; a waiver for a DIFFERENT leg must add
+#: itself to `_WAIVED_LEG_OVERRIDE` or the guard will run its own leg and fail
+#: honestly.
+_WAIVED_LEG_OVERRIDE: Dict[Tuple[str, int], str] = {
+    # DT2 is the one dim-6 waiver that is NOT about the L3c aggregation. It is
+    # excused for L4 only: its step condition is ALL-of over three paths, two
+    # of which are artefacts whose absence DT2 exists to detect, and that is
+    # carried as a known-open hole in
+    # flow/flow_condition_reachability_baseline.json. Every OTHER leg still
+    # runs unwaived here, so DT2 cannot quietly become exempt from the label,
+    # the counter or the aggregation checks while this one gap is open.
+    ("DT2", DIM): "L4",
+}
+_WAIVED_LEG_DEFAULT = "L3c"
+
+
+def _waived_leg(step_id) -> str:
+    key = (F.normalize_id(step_id), DIM)
+    return _WAIVED_LEG_OVERRIDE.get(key, _WAIVED_LEG_DEFAULT)
+
+
+def _waived_step_ids() -> Tuple[str, ...]:
+    """Every dim-6 cell that carries an xfail mark. One registry, no mirror."""
+    return tuple(sorted(F.normalize_id(sid) for sid in F.step_ids()
+                        if W.xfail_mark(sid, DIM) is not None))
 
 
 def _waiver_for(step_id) -> Optional[W.Waiver]:
@@ -508,6 +742,12 @@ class Scenario:
     stderr: str = ""
     #: Real runs of the BLOCKING clauses that write no report at all (L3b).
     orphan_runs: Tuple[OrphanRun, ...] = ()
+    #: X from the headline ``Steps: N total (X/Y executed PASS …)`` line, read
+    #: off the consumer's own stdout — the number a reviewer reads.
+    numerator: Optional[int] = None
+    #: The report's ``counts`` dict, so X can be compared against the discrete
+    #: per-tier counters instead of being re-derived here.
+    counts: Optional[Dict[str, int]] = None
 
     @property
     def blocking_self_skips(self):
@@ -589,6 +829,7 @@ def _run_targetless_clauses(step_id, project: Path) -> Tuple[OrphanRun, ...]:
 
 
 def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
+                  safety_rtl: bool = False,
                   waiver: Optional[Dict[str, Any]] = None,
                   role: Optional[str] = None) -> Scenario:
     tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_"))
@@ -603,6 +844,11 @@ def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
             rtl_path = project / P0_RTL_FILE
             rtl_path.parent.mkdir(parents=True, exist_ok=True)
             rtl_path.write_text(P0_RTL_BODY, encoding="utf-8")
+        if safety_rtl:
+            for rel, body in _SAFETY_RTL_FILES.items():
+                f = project / rel
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(body, encoding="utf-8")
         if waiver is not None:
             (project / "waivers.json").write_text(
                 json.dumps({"waived_steps": [],
@@ -618,13 +864,24 @@ def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
         status: Optional[str] = None
         reasons: Tuple[str, ...] = ()
         advisories: Tuple[str, ...] = ()
+        counts: Optional[Dict[str, int]] = None
         if report.is_file():
             doc = json.loads(report.read_text(encoding="utf-8"))
             advisories = tuple(str(a) for a in (doc.get("advisories") or []))
+            raw_counts = doc.get("counts")
+            if isinstance(raw_counts, dict):
+                counts = {str(k): int(v) for k, v in raw_counts.items()}
             for entry in doc.get("steps") or []:
                 if str(entry.get("id")) == F.normalize_id(step_id):
                     status = entry.get("status")
                     reasons = tuple(str(r) for r in (entry.get("reasons") or []))
+        # The headline X/Y is printed, not reported: L3c compares the number a
+        # reviewer READS against the discrete per-tier counters, so it has to
+        # come off the same stdout the reviewer sees.
+        numerator: Optional[int] = None
+        _m = _HEADLINE_RE.search(proc.stdout or "")
+        if _m:
+            numerator = int(_m.group(1))
         self_skips: List[Tuple[str, str, str]] = []
         for kind, program, target in _gate_json_targets(step_id):
             if not target:
@@ -648,6 +905,8 @@ def _run_scenario(step_id, name: str, *, seeded: bool, rtl: bool = False,
             self_skips=tuple(self_skips),
             stderr=proc.stderr[-800:],
             orphan_runs=orphan_runs,
+            numerator=numerator,
+            counts=counts,
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -750,11 +1009,31 @@ def roles_for(step_id) -> Tuple[str, ...]:
                         if F.normalize_id(sid) == key))
 
 
+def _reads_an_rtl_directory(step_id) -> bool:
+    """True if any gate clause of this step passes `--rtl-dir`.
+
+    Read off the LIVE yaml rather than pinned to a step id, so a second step
+    that starts consuming an RTL directory gains the scenario without this
+    file changing.
+    """
+    for clause in F.gate_clauses(step_id):
+        if _RTL_DIR_FLAG in (clause.command or ""):
+            return True
+    return False
+
+
 def _probe_step(step_id) -> Probe:
     probe = Probe(step_id=step_id, roles=roles_for(step_id))
     probe.gate_only_empty = _gate_only_on_empty(step_id)
     probe.scenarios["EMPTY"] = _run_scenario(step_id, "EMPTY", seeded=False)
     probe.scenarios["SEEDED"] = _run_scenario(step_id, "SEEDED", seeded=True)
+    if _reads_an_rtl_directory(step_id):
+        # A step that reads RTL CONTENT cannot be shown anything by the
+        # path-seeder, which materialises `phase2/stage1/rtl` as a bare
+        # directory. Give it RTL that declares a safety mechanism, so the
+        # constructive proof leg L2 demands has an input to find.
+        probe.scenarios["SAFETY_RTL"] = _run_scenario(
+            step_id, "SAFETY_RTL", seeded=True, safety_rtl=True)
     if not declared_paths(step_id):
         # P0 and anything else that declares no path of its own: SEEDED is
         # byte-identical to EMPTY, so the conditionality leg would have no
@@ -900,7 +1179,7 @@ def _leg3b_targetless_clause_skip_is_not_folded(probe: Probe) -> List[str]:
         stdout window truncated away — the disclosure was made and lost.
     """
     problems: List[str] = []
-    for name in ("EMPTY", "SEEDED", "RTL"):
+    for name in _STATUS_SCENARIOS:
         sc = probe.scenarios.get(name)
         if sc is None or sc.status != "PASS":
             continue
@@ -935,7 +1214,7 @@ def _leg3b_targetless_clause_skip_is_not_folded(probe: Probe) -> List[str]:
 
 def _leg2_skip_is_conditional(probe: Probe) -> List[str]:
     observed = {name: sc.status for name, sc in probe.scenarios.items()
-                if name in ("EMPTY", "SEEDED", "RTL")}
+                if name in _STATUS_SCENARIOS}
     non_skip = {n: s for n, s in observed.items() if s not in SKIP_TIERS}
     if non_skip:
         return []
@@ -951,7 +1230,7 @@ def _leg2_skip_is_conditional(probe: Probe) -> List[str]:
 
 def _leg3_skip_not_folded_into_pass(probe: Probe) -> List[str]:
     problems = []
-    for name in ("EMPTY", "SEEDED", "RTL"):
+    for name in _STATUS_SCENARIOS:
         sc = probe.scenarios.get(name)
         if sc is None:
             continue
@@ -968,6 +1247,59 @@ def _leg3_skip_not_folded_into_pass(probe: Probe) -> List[str]:
                 f"own machine-readable report: {rendered}. A skip counted as a "
                 f"pass is invisible in the summary line. Step reasons carried: "
                 f"{list(sc.reasons) or '[]'}"
+            )
+    return problems
+
+
+def _leg3c_skip_not_inside_the_executed_pass_numerator(
+        probe: Probe) -> List[str]:
+    """L3c — a step on a skip tier must not be INSIDE the X of ``X/Y``.
+
+    L3 stops at the LABEL: it charges a step that lands in the plain PASS
+    bucket while a blocking gate self-declared inapplicability. It says nothing
+    about the ARITHMETIC, and `flow_compliance_check` folds the VACUOUS_PASS
+    tier straight back into the published numerator
+    (``pass_count = counts["PASS"] + counts["VACUOUS_PASS"]``). So a step could
+    be moved off the PASS label and the headline number a reviewer reads would
+    not move by one — which is exactly what happened when FS1 and step 30 were
+    given their own tier: `Steps: 1 total (1/1 executed PASS …)` was
+    byte-identical before and after.
+
+    This leg measures the PUBLISHED X, off the consumer's own stdout, against
+    the discrete PASS counter from the same run. It charges a step whose own
+    resolved tier is VACUOUS_PASS while X exceeds the number of plain PASSes —
+    i.e. its skip is inside the numerator.
+
+    It is a MEASUREMENT, not a proposal: whether VACUOUS_PASS should leave
+    ``pass_count`` is a flow-wide policy change (see the waiver text on the
+    charged cells for the measured blast radius and the exact owner decision).
+    Until that decision is made the charged cells are WAIVED — but the gap is
+    now charged to a leg instead of living in a prose paragraph.
+    """
+    problems = []
+    for name in _STATUS_SCENARIOS:
+        sc = probe.scenarios.get(name)
+        if sc is None or sc.status != "VACUOUS_PASS":
+            continue
+        if sc.numerator is None or sc.counts is None:
+            problems.append(
+                f"L3c UNMEASURED [{name}]: the step resolved to VACUOUS_PASS "
+                f"but the headline `X/Y executed PASS` line could not be read "
+                f"off the consumer's stdout, so whether the skip is inside X "
+                f"is UNKNOWN. Unmeasured is not zero."
+            )
+            continue
+        plain = int(sc.counts.get("PASS", 0))
+        if sc.numerator > plain:
+            problems.append(
+                f"L3c SKIP INSIDE THE EXECUTED-PASS NUMERATOR [{name}]: the "
+                f"step resolved to VACUOUS_PASS — its own label and its own "
+                f"counter — but the published headline reads "
+                f"{sc.numerator}/… executed PASS while only {plain} step(s) "
+                f"are on the plain PASS tier. The skip is inside the X a "
+                f"reviewer reads: counts={sc.counts}. Moving the label "
+                f"without moving the count leaves the metric saying the step "
+                f"was measured."
             )
     return problems
 
@@ -1065,6 +1397,8 @@ _LEGS = (
     ("L3 skip not folded into PASS", _leg3_skip_not_folded_into_pass),
     ("L3b target-less skip not folded into PASS",
      _leg3b_targetless_clause_skip_is_not_folded),
+    ("L3c skip not inside the executed-PASS numerator",
+     _leg3c_skip_not_inside_the_executed_pass_numerator),
     ("L4 yaml skip surfaces", _leg4_yaml_surfaces),
     ("L5 waiver channel is machine-readable", _leg5_waiver_channel),
 )
@@ -1161,6 +1495,10 @@ def leg_capability(step_id) -> Dict[str, bool]:
         "L3": bool(targets and blocking),
         # L3b needs at least one BLOCKING exec clause that writes none.
         "L3b": bool(_targetless_blocking_clauses(sid)),
+        # L3c needs a probed scenario that actually lands on VACUOUS_PASS —
+        # the only tier whose fold into `pass_count` it can observe.
+        "L3c": any(sc.status == "VACUOUS_PASS"
+                   for sc in probe.scenarios.values()),
         # L4 needs an optional clause or a step-level condition.
         "L4": any(c.kind == F.K_OPTIONAL for c in clauses) or bool(cond),
         # L5 needs an ENV_UNAVAILABLE role binding.
@@ -1261,9 +1599,44 @@ def test_d6_covers_every_step_exactly_once():
     assert set(ids) == {F.normalize_id(s) for s in F.step_ids()}
 
 
+@pytest.mark.parametrize(
+    "step_id", list(_waived_step_ids()) or [None],
+    ids=lambda s: f"waived{s}")
+def test_d6_waived_cells_are_clean_on_every_other_leg(step_id):
+    """A waiver excuses ONE leg. It must not become a blanket exemption.
+
+    ``test_d6_skip_discipline`` carries an ``xfail(strict=True)`` for the whole
+    cell, so a waived step that ALSO starts failing a different leg still
+    reports xfailed — green. Measured: with FS1 waived for L3c, reverting the
+    FMEDA line-start disclosure token makes leg L3 fire again ("SKIP FOLDED
+    INTO PASS") and nothing goes red. This test runs every leg EXCEPT the
+    waived one, unwaived, so that regression is loud.
+    """
+    if step_id is None:
+        pytest.skip("no dimension-6 cell carries a waiver")
+    excused = _waived_leg(step_id)
+    probe = probe_for(step_id)
+    problems: List[str] = []
+    ran: List[str] = []
+    for name, leg in _LEGS:
+        if name.split()[0] == excused:
+            continue
+        ran.append(name.split()[0])
+        problems.extend(leg(probe))
+    assert excused in {n.split()[0] for n, _ in _LEGS}, (
+        f"step {step_id} is waived for leg {excused!r}, which no longer exists "
+        f"in _LEGS — the waiver excuses nothing and must be re-decided"
+    )
+    assert not problems, (
+        f"step {step_id} is WAIVED only for leg {excused}, but it fails "
+        f"{len(problems)} check(s) on the other legs ({', '.join(ran)}):\n"
+        + "\n".join(f"  - {p}" for p in problems)
+    )
+
+
 def test_d6_waivers_are_evidence_backed_and_strict():
-    """Every waiver this module relies on passes the registry's own validator
-    and is consumed through a ``strict=True`` mark.
+    """Every waiver this module relies on — central OR local — passes the
+    registry's own validator and is consumed through a ``strict=True`` mark.
 
     ``strict=True`` is the anti-rot mechanism: when one of these gaps is fixed
     the cell XPASSes and this suite goes red, forcing the waiver's removal.
@@ -1281,6 +1654,17 @@ def test_d6_waivers_are_evidence_backed_and_strict():
         )
     keys = [w.key for w in dim_waivers()]
     assert len(set(keys)) == len(keys), f"duplicate waivers: {keys}"
+    # The marks and the waiver list must agree in BOTH directions: a cell
+    # carrying an xfail mark that no waiver explains is an unexplained
+    # exemption.
+    marked = {F.normalize_id(sid) for sid in F.step_ids()
+              if _mark_for(sid) is not None}
+    explained = {F.normalize_id(w.step_id) for w in dim_waivers()}
+    assert marked == explained, (
+        f"dimension-{DIM} cells carrying an xfail mark: {sorted(marked)}; "
+        f"cells with a resolvable waiver: {sorted(explained)}. Every "
+        f"exemption must name its reason."
+    )
 
 
 def test_d6_probe_flow_yaml_is_not_redirected():

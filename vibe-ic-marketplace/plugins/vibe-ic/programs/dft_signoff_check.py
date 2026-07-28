@@ -150,9 +150,55 @@ def _dft_inputs_absent(project: Path,
 
 # ── sub-check: transition ──────────────────────────────────────────────
 
+#: Step 11's declared at-speed deliverable, spelled as the flow yaml spells it.
+#: `fault_atpg_run.run_transition_atpg` writes it and records the same relative
+#: path in the coverage record's `plan_file` field.
+TRANSITION_PLAN_REL = "phase2/stage2/dft/transition_atpg_plan.md"
+
+#: A plan shorter than this is a placeholder, not a mechanism description.
+#: `fault_atpg_run._TRANSITION_PLAN_TEMPLATE` renders well over a kilobyte.
+_MIN_PLAN_BYTES = 200
+
+
+def _resolve_plan(project: Optional[Path], plan_file: Optional[str]):
+    """``(path, present)`` for the at-speed plan, or ``(None, None)`` when no
+    project root was supplied and nothing can be looked for.
+
+    THE RECORD DOES NOT GET TO OPT OUT. The first cut drove this off the
+    record's own ``plan_file`` field alone and returned ``(None, None)`` when
+    the field was missing, which made the requirement opt-in BY THE VERY
+    DOCUMENT UNDER AUDIT: measured, an ``engine_limited`` record naming
+    ``plan_file`` with the plan absent came back FAIL, and the identical record
+    with that one key deleted — same empty disk — came back ENGINE_LIMITED.
+    Deleting a field from a hand-authored coverage.json defeated the check.
+
+    So the canonical path step 11 declares, :data:`TRANSITION_PLAN_REL`, is the
+    fallback. A record that names its own document is still honoured at the
+    path it names (``fault_atpg_run.build_transition_report`` sets
+    ``plan_file`` on every record it emits, and a project may legitimately keep
+    the document elsewhere); a record that names nothing is held to the path
+    the flow declares, which is exactly where `fault_atpg_run` writes it.
+    """
+    if project is None:
+        return None, None
+    rel = (plan_file or "").strip() or TRANSITION_PLAN_REL
+    path = Path(rel)
+    if not path.is_absolute():
+        path = project / rel
+    try:
+        # `_TRANSITION_PLAN_TEMPLATE` renders well over a kilobyte, so the
+        # floor separates "the document exists" from "a placeholder was
+        # touched at the path the record names".
+        present = path.is_file() and path.stat().st_size >= _MIN_PLAN_BYTES
+    except OSError:
+        present = False
+    return path, present
+
+
 def evaluate_transition(coverage_json: Optional[dict],
                         transition_target: float,
-                        strict: bool = False) -> dict:
+                        strict: bool = False,
+                        project: Optional[Path] = None) -> dict:
     """Evaluate the transition (at-speed) fault-model sub-check from the
     coverage.json `transition` block (or flat mirror fields). Honest:
       * missing transition record          → FAIL (no evidence)
@@ -161,6 +207,27 @@ def evaluate_transition(coverage_json: Optional[dict],
       * supported + number >= target        → PASS
       * supported + number < target         → FAIL
       * supported + no number               → FAIL (claimed but unproven)
+
+    THE DOCUMENT BEHIND "DOCUMENTED" (step 11's third declared artefact).
+    ENGINE_LIMITED is the tier that lets a design ship with NO at-speed
+    coverage number, and the module docstring's own rule for it is "a
+    DOCUMENTED OSS engine limitation ... WITH a reason". The document is
+    ``phase2/stage2/dft/transition_atpg_plan.md`` — step 11 declares it, the
+    fault ATPG runner writes it, and the coverage record names it back in
+    ``transition.plan_file``. Nothing opened it, so the "documented" in
+    ENGINE_LIMITED rested on a free-text ``reason`` string alone and the
+    launch-off-capture mechanism plan the step claims to deliver was never
+    checked to exist.
+
+    Scope of the requirement, kept as narrow as the defect:
+      * the ENGINE_LIMITED tier ONLY — a measured PASS stands on its number,
+        not on a memo;
+      * only when a ``project`` is supplied, so the pure-dict callers are
+        unchanged.
+
+    It is NOT scoped to records that name a ``plan_file``: see
+    :func:`_resolve_plan` for why that made the requirement opt-in by the
+    document under audit.
     """
     reasons = []
     if coverage_json is None:
@@ -204,8 +271,23 @@ def evaluate_transition(coverage_json: Optional[dict],
                                 f"transition ATPG not accepted; a real "
                                 f"at-speed coverage number is required. "
                                 f"({reason})"]}
+        plan_path, plan_present = _resolve_plan(project, block.get("plan_file"))
+        if plan_present is False:
+            return {"status": "FAIL", "target_pct": target,
+                    "plan_file": str(plan_path) if plan_path else None,
+                    "plan_present": False,
+                    "reasons": [
+                        f"transition marked engine_limited and accepted on a "
+                        f"DOCUMENTED limitation, but the at-speed mechanism "
+                        f"plan the record names ({plan_path}) is absent or is "
+                        f"under {_MIN_PLAN_BYTES} B — step 11 declares "
+                        f"{TRANSITION_PLAN_REL} and the launch-off-capture "
+                        f"plan is the whole documentation this tier rests on. "
+                        f"({reason})"]}
         return {"status": "ENGINE_LIMITED", "target_pct": target,
                 "measured_pct": None,
+                "plan_file": str(plan_path) if plan_path else None,
+                "plan_present": plan_present,
                 "reasons": [f"transition ATPG engine-limited (documented): "
                             f"{reason}"]}
 
@@ -282,9 +364,11 @@ def audit(project: Path,
         "reasons": sa.get("reasons", []),
     }
 
-    # 2) transition
+    # 2) transition — `project` is passed so the ENGINE_LIMITED tier can
+    #    require the at-speed plan document step 11 declares.
     transition = evaluate_transition(coverage_json, transition_target,
-                                     strict=strict_transition)
+                                     strict=strict_transition,
+                                     project=project)
     # 3) BSDL
     bsdl = evaluate_bsdl(bsdl_plan)
 

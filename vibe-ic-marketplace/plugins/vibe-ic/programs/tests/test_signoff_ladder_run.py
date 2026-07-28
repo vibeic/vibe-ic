@@ -541,6 +541,19 @@ class TestDFTSignoffTier:
                                     "reason": "OSS ATPG has no at-speed engine"}})
         _write_json(tmp_path / "reports/phase2/dft/bsdl_plan.json",
                     {"verdict": "N_A", "padded": False})
+        # The at-speed mechanism plan. `fault_atpg_run.run_transition_atpg` —
+        # the only producer of the transition block this fixture stands in for
+        # — writes it on every engine-limited run before it emits the record,
+        # so a fixture without it was describing a state the flow does not
+        # produce. `dft_signoff_check` now requires the document the
+        # ENGINE_LIMITED tier calls "documented"; this is the artefact, not a
+        # relaxation of the check.
+        plan = tmp_path / "phase2/stage2/dft/transition_atpg_plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "# At-speed (launch-off-capture) transition ATPG plan\n\n"
+            "Mechanism, clocking, capture window and the engine limitation "
+            "this tier is accepted on.\n" + ("detail line\n" * 20))
 
     def test_absent_evidence_not_run(self, tmp_path):
         assert mod.check_tier_dft_signoff(tmp_path).verdict == "NOT_RUN"
@@ -1019,6 +1032,19 @@ def _build_fully_signed_off(root):
                                 "reason": "OSS ATPG has no at-speed engine"}})
     _write_json(d / "reports/phase2/dft/bsdl_plan.json",
                 {"verdict": "N_A", "padded": False})            # T_DFT_SIGNOFF
+    # The at-speed mechanism plan the ENGINE_LIMITED tier calls "documented".
+    # Added here for the same reason it was added to `TestDFTSignoffTier`'s
+    # builder: `fault_atpg_run.run_transition_atpg` writes it on every
+    # engine-limited run BEFORE it emits the coverage record, so a fixture
+    # that ships the record without the plan describes a state the flow does
+    # not produce. Without it this "fully signed off" project is not fully
+    # signed off and the ladder correctly refuses to release — which is what
+    # six tests in this file measured when `dft_signoff_check` stopped taking
+    # the free-text `reason` string as the documentation.
+    _write(d / "phase2/stage2/dft/transition_atpg_plan.md",
+           "# At-speed (launch-off-capture) transition ATPG plan\n\n"
+           "Mechanism, clocking, capture window and the engine limitation "
+           "this tier is accepted on.\n" + ("detail line\n" * 20))
     _write_json(d / "reports/phase3/lec_post_layout.json",
                 {"verdict": "PROVEN_EQUIVALENT", "total_points": 128,
                  "proven_points": 128, "unproven_points": 0,

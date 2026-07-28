@@ -150,9 +150,23 @@ def test_the_waiver_container_detector_actually_fires():
     Feeds :func:`_waiver_containers` a module object carrying a mirror under a
     name no real module uses, in each container shape a mirror has historically
     taken. A detector that cannot fail is not a guard.
+
+    The probe object is a REAL registry entry, taken from whichever dimension
+    still has one — not from a hard-coded dimension. #530 pinned it to
+    dimension 5; the 2026-07-28 convergence closed all five of that dimension's
+    waivers by fixing the dependencies, and this test then failed on the
+    absence of its own fixture rather than on the property it measures. Which
+    dimension supplies the object is irrelevant to what is being tested (that
+    the detector recognises a ``Waiver`` in a tuple, a dict and a list, and
+    does not fire on a module that merely mentions the names).
     """
-    real = W.waivers_for_dim(5)
-    assert real, "dimension 5 has no waiver to build the probe from"
+    real = W.WAIVERS
+    assert real, (
+        "the central registry is empty, so this test has no real Waiver to "
+        "build its probe from and can no longer show the detector fires. If "
+        "the matrix is genuinely waiver-free, construct the probe from a "
+        "synthetic Waiver here in the same change."
+    )
     probe = real[0]
 
     module = type(sys)("_probe_module_for_the_detector")

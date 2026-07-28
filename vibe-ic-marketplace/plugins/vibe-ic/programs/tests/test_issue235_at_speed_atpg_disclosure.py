@@ -42,6 +42,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional, Tuple
 
 import pytest
 
@@ -513,3 +514,188 @@ def test_an_unparseable_record_is_not_a_deferral(tmp_path, step, mod):
     report = mod.audit(tmp_path)
     assert report["verdict"] == "FAIL", report
     assert report["not_run_record"] is None
+
+
+# ================================================================
+# FLOW LEVEL — what the disclosure is allowed to BUY
+# ================================================================
+# Everything above measures the record and the two gates that read it. None of
+# it looks at the VERDICT `flow_compliance_check` prints, which is the number a
+# reviewer actually reads — and that gap let a change land that flipped the
+# whole flow FAIL -> PASS while every assertion above stayed green. The two
+# tests below close it from both sides: the defect input must stay red, and the
+# legitimate input must stay green.
+
+FLOW_YAML = PROGS.parent / "flow" / "phase1_phase2_phase3.yaml"
+FCC_PY = PROGS / "flow_compliance_check.py"
+
+
+def _dt_subflow(tmp_path: Path) -> Path:
+    """A flow def carrying DT1/DT2/DT3 VERBATIM from the live flow yaml.
+
+    Copied, never hand-written: the point is to measure the shipped step
+    definitions, so an edit to the real `condition` / `required_outputs` is
+    felt here. `blocks_on` is pruned to the ids present so the subset parses.
+    """
+    import yaml  # local: only this leg needs it
+    doc = yaml.safe_load(FLOW_YAML.read_text(encoding="utf-8"))
+    keep = {"DT1", "DT2", "DT3"}
+    steps = [s for s in doc["steps"] if str(s.get("id")) in keep]
+    assert {str(s["id"]) for s in steps} == keep, (
+        f"the live flow yaml no longer declares all of {keep}")
+    for s in steps:
+        s["blocks_on"] = [b for b in (s.get("blocks_on") or [])
+                          if str(b) in keep]
+    out = tmp_path / "dt_subflow.yaml"
+    out.write_text(yaml.safe_dump(
+        {"version": doc.get("version", 2),
+         "flow_name": doc.get("flow_name", "phase1_phase2_phase3"),
+         "steps": steps},
+        sort_keys=False, allow_unicode=True))
+    return out
+
+
+def _fcc(project: Path, flow_def: Path) -> Tuple[int, dict]:
+    rep = project / "_fcc.json"
+    proc = subprocess.run(
+        [sys.executable, str(FCC_PY), str(project),
+         "--flow-def", str(flow_def), "--strict", "--json", str(rep)],
+        capture_output=True, text=True, timeout=900)
+    doc = json.loads(rep.read_text())
+    doc["_stdout"] = proc.stdout
+    return proc.returncode, doc
+
+
+def _status_of(doc: dict, step: str) -> Optional[str]:
+    for s in doc["steps"]:
+        if str(s.get("id")) == step:
+            return s.get("status")
+    return None
+
+
+def test_a_disclosed_not_run_is_never_cost_free_at_the_flow_level(tmp_path):
+    """THE DEFECT INPUT. A tree that has a scan cut, post-layout parasitics and
+    a routed netlist, and NO at-speed grade at all — every one of DT1/DT2/DT3
+    disclosed as not-run by the producer.
+
+    The disclosure must buy a REASON, never a DISCOUNT. Concretely: DT1 and
+    DT2 stay MISSING (their required coverage artefact is absent and nothing
+    produced it), the flow verdict stays FAIL and the exit code stays 1.
+
+    MUTATION THIS CATCHES — and it is the one that shipped: mirroring the
+    not-run record into `reports/phase2/dft/` beside the coverage artefact so
+    `flow_compliance_check._declared_sibling_self_skip_for_missing` promotes
+    MISSING -> SKIPPED-CONDITION. `total_required` SUBTRACTS
+    SKIPPED-CONDITION, so all three steps leave the executed-PASS denominator
+    and this whole tree reports `Overall: PASS`. Measured: with the mirror,
+    MISSING=0 SKIPPED=4 `0/-1 executed PASS` rc 0; without it, MISSING=2 rc 1.
+    """
+    _sdc(tmp_path)
+    _cut(tmp_path)
+    spef = tmp_path / "phase3/stage3/extracted/top.spef"
+    spef.parent.mkdir(parents=True, exist_ok=True)
+    spef.write_text('*SPEF "IEEE 1481-1998"\n')
+    pnr = tmp_path / "phase3/stage3/pnr/top_pnr.v"
+    pnr.parent.mkdir(parents=True, exist_ok=True)
+    pnr.write_text("module top(); endmodule\n")
+    for step in DT_ALL:
+        R.atpg_disclose_not_run(tmp_path, step, "producer wrote no artefact",
+                                "producer_wrote_no_artifact")
+
+    # The record must not be co-located with the artefact whose absence it
+    # discloses — that directory is where the MISSING->SKIPPED-CONDITION
+    # promoter looks, and a promotion there is the discount this test refuses.
+    for step in DT_ALL:
+        mirror = tmp_path / R._ATPG_NOT_RUN_LEGACY_COLOCATED_REL[step]
+        assert not mirror.exists(), (
+            f"{step}'s not-run record was written co-located with its coverage "
+            f"artefact at {mirror.relative_to(tmp_path)}; that is where "
+            f"_declared_sibling_self_skip_for_missing looks, and the "
+            f"SKIPPED-CONDITION it grants is subtracted from the "
+            f"executed-PASS denominator")
+
+    rc, doc = _fcc(tmp_path, _dt_subflow(tmp_path))
+    assert _status_of(doc, "DT1") == "MISSING", doc["_stdout"]
+    assert _status_of(doc, "DT2") == "MISSING", doc["_stdout"]
+    assert doc["overall"] == "FAIL", doc["_stdout"]
+    assert rc == 1, doc["_stdout"]
+    assert doc["counts"]["MISSING"] >= 2, doc["counts"]
+
+
+def test_a_routed_extracted_design_with_no_dft_does_not_arm_dt2(tmp_path):
+    """THE LEGITIMATE INPUT, and the control that stops the test above from
+    being satisfied by an over-eager condition.
+
+    A design that routed and extracted parasitics but carries no DFT at all is
+    the case where DT1 itself legitimately self-skips: there is no scan cut, so
+    no at-speed ATPG was ever asked for. DT2 must self-skip alongside it.
+
+    MUTATION THIS CATCHES: adding `phase3/stage3/extracted/*.spef` to DT2's
+    any-of condition as "DT1's cut_netlist.v analogue". The SPEF alone then
+    arms DT2, its `path_delay_coverage.json` is absent, and this tree takes a
+    hard MISSING and `Overall: FAIL` rc 1 — a false alarm bought with the
+    false clean above. Measured: with the SPEF branch, DT2 MISSING rc 1;
+    without it, DT2 SKIPPED-CONDITION rc 0.
+    """
+    spef = tmp_path / "phase3/stage3/extracted/top.spef"
+    spef.parent.mkdir(parents=True, exist_ok=True)
+    spef.write_text('*SPEF "IEEE 1481-1998"\n')
+    pnr = tmp_path / "phase3/stage3/pnr/top_pnr.v"
+    pnr.parent.mkdir(parents=True, exist_ok=True)
+    pnr.write_text("module top(); endmodule\n")
+
+    rc, doc = _fcc(tmp_path, _dt_subflow(tmp_path))
+    assert _status_of(doc, "DT1") == "SKIPPED-CONDITION", doc["_stdout"]
+    assert _status_of(doc, "DT2") == "SKIPPED-CONDITION", (
+        "a routed+extracted design with NO DFT armed DT2 and took a hard "
+        "MISSING for a grade no producer was ever asked for:\n"
+        + doc["_stdout"])
+    assert doc["counts"]["MISSING"] == 0, doc["_stdout"]
+    assert doc["overall"] == "PASS", doc["_stdout"]
+    assert rc == 0, doc["_stdout"]
+
+
+def test_dt2_arms_and_goes_red_when_its_own_grade_is_absent(tmp_path):
+    """A design that has EVERYTHING DT2 needs and no at-speed grade must go
+    red, and must stay inside the executed-PASS denominator.
+
+    This is the direction that was measured and lost at the 2026-07-28
+    convergence merge, so it is pinned here rather than argued. A dimension-6
+    change had re-armed DT2 on the PRODUCER'S OWN OUTPUTS (any-of over
+    `reports/phase2/dft/path_delay_coverage.json` or
+    `phase2/stage2/dft/path_delay_atpg_not_run.json`) to close the #235
+    self-disabling hole. On THIS tree that spelling gives DT2
+    SKIPPED-CONDITION, `Steps: 1 total (0/-1 executed PASS)` and
+    `Overall: PASS` rc 0 — the step leaves the denominator entirely, because
+    `total_required` subtracts SKIPPED-CONDITION. The ALL-of spelling gives
+    `MISSING=1`, `Overall: FAIL`, rc 1, which is what this asserts.
+
+    MUTATION THIS CATCHES: re-arming DT2's condition on its own producer's
+    outputs (in either the any-of or the mirrored-record form).
+
+    WHAT THIS DOES **NOT** COVER, and it is a waived gap, not an oversight:
+    the mirror case — the producer ran and disclosed, and DT2's INPUTS were
+    then cleaned away. On this ALL-of condition DT2 goes SKIPPED-CONDITION
+    there. That is the vibe-ic#235 self-disabling hole; it is carried in
+    `flow/flow_condition_reachability_baseline.json` and waived at DT2/dim-6,
+    and closing it needs a flow-level non-fatal "ran, disclosed, could not
+    measure" verdict that COSTS the denominator — not another condition.
+    """
+    cut = tmp_path / "phase2/stage2/dft/cut_netlist.v"
+    cut.parent.mkdir(parents=True, exist_ok=True)
+    cut.write_text("module cut(); endmodule\n")
+    spef = tmp_path / "phase3/stage3/extracted/top.spef"
+    spef.parent.mkdir(parents=True, exist_ok=True)
+    spef.write_text('*SPEF "IEEE 1481-1998"\n')
+    pnr = tmp_path / "phase3/stage3/pnr/top_pnr.v"
+    pnr.parent.mkdir(parents=True, exist_ok=True)
+    pnr.write_text("module top(); endmodule\n")
+
+    rc, doc = _fcc(tmp_path, _dt_subflow(tmp_path))
+    assert _status_of(doc, "DT2") == "MISSING", (
+        "a design carrying DT2's scan cut, its SPEF and its routed netlist, "
+        "with NO at-speed grade on disk, did not go red — the step whose only "
+        "job is to report that grade vanished instead:\n" + doc["_stdout"])
+    assert doc["counts"]["MISSING"] >= 1, doc["_stdout"]
+    assert doc["overall"] == "FAIL", doc["_stdout"]
+    assert rc == 1, doc["_stdout"]

@@ -35,8 +35,10 @@ Two narrower blind spots, both measured rather than guessed:
     ``--json`` audit trail the gate writes rather than reads). For those the
     assertion is yaml-vs-yaml consistency: real, because the two lists are
     written independently and do drift, but weaker than yaml-vs-program. The
-    other 113 are grounded by program code (103) or by a filename-prefix table
-    (1) — plus the 9 waived below.
+    rest are grounded by program code or by a filename-prefix table (1).
+    The 9 that were grounded by NOTHING when this module was written are now
+    grounded by program code: each one's gate was changed to open the artefact
+    its step declares. See the ``LOCAL_WAIVERS`` block for the per-step fix.
   * **Grounding proves the gate is WIRED to the artefact, not that it reads it
     substantively.** ``analog_a8_*`` opening a 500-byte non-GDS file and
     calling it a GDS is grounded here and still a defect. That is dimension
@@ -48,8 +50,10 @@ What this module DOES decide, live, on every run:
      command is run verbatim; if the program's own parser rejects it (argparse
      ``rc=2`` + a ``prog: error:`` usage line), the clause measures nothing —
      and ``flow_compliance_check._check_program_exit_zero`` maps ``rc == 2``
-     onto ``VACUOUS_PASS``, so it measures nothing *and banks a pass*. One live
-     instance (step 2) is waived below with its reproduction.
+     onto ``VACUOUS_PASS``, so it measures nothing *and banks a pass*. The one
+     live instance this module found — step 2, ``rtl_bug_report_schema_check``
+     declaring ``--out`` against a yaml that passes ``--json`` — is fixed in
+     the program; this clause is what keeps the next one from shipping.
   2. **Every artefact the step declares is named somewhere the gate can reach.**
      A step that declares ``reports/phase3/em.json`` while its gate searches
      ``*em*.rpt`` only is measuring something adjacent to its own claim.
@@ -87,6 +91,13 @@ from matrix_63x8.cells import cells_for
 
 DIM = 4
 
+#: The cells this dimension waives, PINNED as an exact set. EMPTY since
+#: 2026-07-28: all ten dimension-4 waivers were closed by fixing the gates that
+#: were not reading what their step declares. Pinned rather than floored so a
+#: waiver-free dimension is a recorded fact instead of an empty loop reporting
+#: green — see ``test_d4_selfcheck_waivers_are_evidence_backed``.
+WAIVED_CELLS_PINNED: frozenset = frozenset()
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Waivers — ONE registry, the one that is consumed
@@ -101,6 +112,49 @@ DIM = 4
 # found telling different stories about one accepted gap. The mirror is deleted
 # rather than re-synchronised: a waiver is a public admission, and it can have
 # exactly one text.
+#
+# THE REGISTRY NOW HOLDS NO DIMENSION-4 ENTRY AT ALL, and that is the finding.
+# All ten of this dimension's waivers were
+# closed by fixing what they waived, not by relaxing anything here — the ten
+# gates now read the artefacts their steps declare, and every one of the fixes
+# is falsifiable (an input that trips it, with a non-zero rc). ``strict=True``
+# is what made that the only way through: a fix without a deletion reports
+# XPASS -> FAILED, and a deletion without a fix reports FAILED.
+#
+#   step 2   rtl_bug_report_schema_check accepts the flow's own `--json`
+#            (it declared `--out` only, so argparse exited 2 and
+#            flow_compliance_check credited rc==2 as VACUOUS_PASS)
+#   step 9   synth_netlist_check binds stats.json/area.rpt to the netlist
+#            under audit by CONTENT — the emitter records the measured
+#            netlist's digest and the gate hashes the file it was handed —
+#            plus the zeroed-measurement refusal. (Not by mtime and not by
+#            filename: an mtime ordering is created by the runner on every
+#            re-synthesis and a filename cannot tell a byte-identical alias
+#            from a different design. Both proxies were tried and both were
+#            the wrong quantity; see the block comment in the program.)
+#   step 11  dft_signoff_check requires the at-speed plan its ENGINE_LIMITED
+#            tier calls "documented" to exist, at the path the flow declares
+#            when the record names none — the requirement is not opt-in by
+#            the document under audit
+#   step 14  yosys_script_template_check reads the handoff netlist, not only
+#            the recipe that claims to write it; staleness is compared only
+#            against scripts whose own write_verilog names that netlist, so a
+#            later-phase script that merely CONSUMES it is not evidence
+#   step 25  eda_report_audit:em opens em.json and refuses a formatted zero
+#   step 28  perc_signoff_check cross-checks the .rpt and the sign-off memo
+#            against perc_equivalent.json
+#   step 32  eco_loop_audit reads eco_trigger_decision.json before honouring
+#            no_eco_needed.flag, through a path composed FROM the declared
+#            literal; and the step's gate condition was widened so the audit
+#            actually RUNS on the no-ECO branch, which is the only branch the
+#            contradiction can appear on
+#   step 33  eda_report_audit:power opens power.json and corroborates its
+#            source and analysis_mode against the report
+#   step 39  fpga_on_board_attestation_check requires the attested bitstream
+#            to be the FINAL one step 39 declares
+#   P0       cdc_async_input_check is registered in _STRUCTURAL_RTL_GATES, so
+#            P0's prose about the audit's gates[] array is now true
+# ──────────────────────────────────────────────────────────────────────
 
 
 def dim_waivers() -> Tuple[W.Waiver, ...]:
@@ -420,15 +474,43 @@ def test_d4_selfcheck_catalogue_exclusion_is_justified():
 def test_d4_selfcheck_waivers_are_evidence_backed():
     """Every waiver this dimension relies on must satisfy the shared validator.
 
-    ``validate()`` rejects a placeholder reason, a reason under 40 chars, and
-    an empty or trivial evidence string, so a cell cannot be quietly parked
-    behind "flaky" or "not implemented".
+    THE VALIDATION LOOP IS EMPTY TODAY, and saying so is the point of this
+    paragraph. All ten of this dimension's waivers were closed by fixing the
+    gates, so the comprehension below iterates zero times and ``W.validate``
+    is never called. (Its d8 sibling,
+    ``test_matrix_d8_missing_caught.test_d8_every_waiver_is_evidence_backed``,
+    says the same about its own empty registry.)
+
+    AN EMPTY LOOP MUST NOT REPORT GREEN ON ITS OWN, so the set is PINNED, not
+    floored. #530 guarded this with ``assert dim_waivers()`` — correct while
+    the dimension still had ten entries, and a permanent red the moment it has
+    none. The pin below says the same thing in the direction that survives a
+    dimension being genuinely waiver-free: the day a waiver is added, this line
+    reddens, and the loop underneath is what will grade it.
+
+    What the loop WOULD check: ``validate()`` rejects a placeholder reason, a
+    reason under 40 chars, and an empty or trivial evidence string, so a cell
+    cannot be quietly parked behind "flaky" or "not implemented".
 
     Reads the ONE registry. The module-local ``LOCAL_WAIVERS`` mirror this used
     to validate was deleted: ``_waiver_for`` had preferred the central copy for
     some time, so validating the mirror graded a table nothing read.
     """
-    assert dim_waivers(), f"dimension {DIM} declares no waiver at all"
+    live = {w.label for w in dim_waivers()}
+    assert live == WAIVED_CELLS_PINNED, (
+        f"dimension {DIM}'s waiver set changed to {sorted(live)}; it is pinned "
+        f"at {sorted(WAIVED_CELLS_PINNED)}. Adding one is a public admission "
+        f"and must be argued for in the same change that pins it here; "
+        f"removing one means the gap is closed and the cell is enforced."
+    )
+    # The census must agree the pinned set is the set IN FORCE, so the pin
+    # cannot go stale in the direction of describing waivers nobody applies.
+    applied = {F.normalize_id(c.step_id) for c in cells_for(DIM)
+               if _waiver_for(c.step_id) is not None}
+    assert applied == {F.normalize_id(w.step_id) for w in dim_waivers()}, (
+        f"cells this dimension WAIVES {sorted(applied)} do not match the "
+        f"registry entries {sorted(F.normalize_id(w.step_id) for w in dim_waivers())}"
+    )
     problems = [
         f"{waiver.label}: {issue}"
         for waiver in dim_waivers()
@@ -461,9 +543,18 @@ def test_d4_selfcheck_every_cell_has_exactly_one_disposition():
         f"waived cells {sorted(waived)} do not match the one registry this "
         f"module reads {sorted(known)}"
     )
-    assert len(cells) - len(waived) == 53, (
-        f"{len(cells) - len(waived)} cells are enforced; this module was "
-        f"reported as enforcing 53. Update the report, or explain the change."
+    # WAS 53. The change, explained as the message below demands: the ten
+    # cells this dimension waived were CLOSED by fixing the gates, not by
+    # relaxing the predicate — see the LOCAL_WAIVERS block at the top for the
+    # per-step fix and `git log` for the diff. Nothing in `_assert_*` above
+    # changed, so the same predicate that failed those ten now passes them.
+    # The number stays hard-coded on purpose: deriving it from `waived` would
+    # make this assertion unfalsifiable, and a NEW waiver must force a human
+    # to re-state the census rather than slip in silently.
+    assert len(cells) - len(waived) == 63 and not waived, (
+        f"{len(cells) - len(waived)} cells are enforced and {len(waived)} are "
+        f"waived; this module was reported as enforcing all 63 with no "
+        f"waiver. Update the report, or explain the change."
     )
 
 

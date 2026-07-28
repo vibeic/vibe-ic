@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for flow_compliance_check.py — the sole Phase 2+3 acceptance gate."""
 from __future__ import annotations
-import json, subprocess, sys
+import json, re, subprocess, sys
 from pathlib import Path
 import pytest
 
@@ -438,10 +438,50 @@ def test_wave93_vacuous_pass_step14_no_ys(tmp_path):
     assert "VACUOUS-PASS=" in r.stdout, r.stdout
 
 
+#: The steps that ARE vacuous on the `vac2` fixture below, measured
+#: 2026-07-28. Both are structural facts of the fixture, not incidental:
+#:   * Step 14 — the fixture ships no `.ys` synthesis script, so both yosys
+#:     auditors have nothing to audit.
+#:   * FS1     — the fixture's RTL declares no ECC/parity/lockstep mechanism,
+#:     so the FMEDA pair measures no diagnostic coverage.
+#: Pinned as a SET so that a step JOINING or LEAVING the vacuous tier is a
+#: named, deliberate edit here rather than an invisible drift.
+_VAC2_EXPECTED_VACUOUS_STEPS = {"14", "FS1"}
+
+
+def _labelled_step_ids(stdout: str, label: str) -> set:
+    """Step ids carrying `label` in the per-step listing.
+
+    Lines look like `  ○ [VACUOUS-PASS     ] Step 14: … (stage2)`.
+    """
+    out = set()
+    for ln in stdout.splitlines():
+        if f"[{label}" not in ln:
+            continue
+        m = re.search(r"\]\s*Step\s+(\S+?):", ln)
+        if m:
+            out.add(m.group(1))
+    return out
+
+
 def test_wave93_vacuous_pass_counter_accurate(tmp_path):
-    """The summary line should report VACUOUS-PASS=1 when Step 14 is
-    the only vacuous step. (Step 14 aggregates two gates internally
-    but is reported as one StepResult with status=VACUOUS_PASS.)"""
+    """The summary counter must equal the number of steps LABELLED
+    `[VACUOUS-PASS]` in the per-step listing — AND those steps must be the
+    ones this fixture is built to make vacuous.
+
+    Two properties, deliberately both:
+
+    * ACCURACY. The counter and the listing must agree in either direction,
+      for any number of vacuous steps. This replaces a literal
+      `VACUOUS-PASS=1`, which was a fixture census wearing the name of an
+      accuracy check and went stale the moment a second gate started
+      disclosing its skip honestly.
+    * CENSUS. Accuracy alone is a consistency check between two values
+      computed from `r.status` in the same loop: it no longer pins WHICH or
+      HOW MANY steps land on the vacuous tier, which is precisely the class of
+      drift the original assertion existed to catch. So the SET is pinned too,
+      by step id, with the reason each member is vacuous written down above.
+    """
     proj = tmp_path / "vac2"
     (proj / "phase2" / "stage1" / "rtl").mkdir(parents=True)
     (proj / "phase2" / "stage2" / "synth").mkdir(parents=True)
@@ -454,8 +494,24 @@ def test_wave93_vacuous_pass_counter_accurate(tmp_path):
     counter_lines = [ln for ln in r.stdout.splitlines()
                      if "VACUOUS-PASS=" in ln and "PASS=" in ln]
     assert counter_lines, r.stdout
-    # exactly one VACUOUS-PASS step (Step 14)
-    assert "VACUOUS-PASS=1" in counter_lines[0], counter_lines[0]
+    labelled = [ln for ln in r.stdout.splitlines() if "[VACUOUS-PASS" in ln]
+    assert labelled, (
+        "no step is LABELLED [VACUOUS-PASS] on a fixture that must produce at "
+        f"least Step 14's no-.ys vacuous pass:\n{r.stdout}")
+    m = re.search(r"VACUOUS-PASS=(\d+)", counter_lines[0])
+    assert m, counter_lines[0]
+    assert int(m.group(1)) == len(labelled), (
+        f"summary says VACUOUS-PASS={m.group(1)} but the per-step listing "
+        f"labels {len(labelled)} step(s) [VACUOUS-PASS]: "
+        f"{[ln.strip()[:80] for ln in labelled]}\n{counter_lines[0]}")
+    seen = _labelled_step_ids(r.stdout, "VACUOUS-PASS")
+    assert seen == _VAC2_EXPECTED_VACUOUS_STEPS, (
+        f"the set of steps on the VACUOUS-PASS tier changed: expected "
+        f"{sorted(_VAC2_EXPECTED_VACUOUS_STEPS)}, got {sorted(seen)}. A step "
+        f"joining the vacuous tier means a gate stopped measuring; a step "
+        f"leaving it means a gate started, or stopped disclosing. Either is a "
+        f"deliberate edit — update _VAC2_EXPECTED_VACUOUS_STEPS and say why."
+        f"\n{r.stdout}")
 
 
 # ─── _expand_globs basics (kept after v1.6.21 legacy-fallback removal) ──

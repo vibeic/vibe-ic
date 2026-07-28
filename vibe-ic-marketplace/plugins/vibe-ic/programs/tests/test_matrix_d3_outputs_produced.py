@@ -126,7 +126,70 @@ runner actually wrote. Agent scratch trees are excluded on purpose: the only
 ``phase3/analog/hardmacro/*/*.gds`` files on the campaign host were written by
 a throwaway ``mkgds.py`` seeding INPUTS for a backlog repro, and counting a
 seeded input as a produced output would be precisely the adjacent-measurement
-disease this campaign exists to remove. Step A8 is waived instead.
+disease this campaign exists to remove.
+
+STEP A8: THE PRODUCER LANDED, THE EVIDENCE DID NOT
+==================================================
+A8 declares four artefacts and archived runs carry three. The ``.gds`` had no
+producer anywhere in the plugin (``magic_port_extract_emit
+.build_gds_write_tcl`` shipped in v0.1.114 with a unit test and no caller), so
+by construction no run ever wrote one. ``programs/analog_hardmacro_gds_emit.py``
+is now that producer: declared in A8's ``programs:`` and invoked by
+``analog_one_shot_runner.step_for_block("A8_hardmacro_gen")`` — and
+deliberately NOT by A8's gate, because ``flow_compliance_check`` is the
+acceptance AUDITOR and an auditor that writes a declared ``required_output``
+into the project it audits certifies its own output
+(``test_d3_the_compliance_audit_does_not_create_declared_outputs``).
+
+The cell is nonetheless still WAIVED, with the reason narrowed from "nothing
+produces this" to "nothing can EVIDENCE it here". Magic writes the stream
+inside the EDA container, the producer's documented rc=2 names the gap
+(``A8GDS_NO_STAGE`` / ``A8GDS_NO_MAGIC`` / ``A8GDS_NO_TECH``), and neither CI
+— a plain runner with pytest and no docker — nor a fresh clone has that
+container. Marking the entry ``PRODUCED_LIVE`` would make the cell green on
+hosts with an EDA container and red everywhere else, which is the property
+#527 removed from this module. Committing a produced ``.gds`` into a run tree
+would close it host-independently and is refused for a different reason: it is
+a benchmark-data write made to turn a test green.
+
+What IS asserted, on every host: the producer exists and a FLOW PATH dispatches
+it (``test_d3_a8_producer_is_reachable_from_a_flow_path``, with
+``analog_one_shot_runner.subprocess`` recorded); the emitter behaves
+(``programs/tests/test_analog_hardmacro_gds_emit.py``); and whatever a run root
+does carry at that path must BE a hardmacro layout — real GDSII header, real
+geometry records, defining a structure named after its own block directory
+(``test_d3_a8_gds_in_a_run_root_is_a_real_hardmacro_layout``). That last one
+matters because a 1.18 MB chip-top GDS from a different design and a different
+PDK, dropped under the glob, measurably satisfied every weaker predicate.
+
+BE PRECISE ABOUT WHAT CLOSING THIS WOULD AND WOULD NOT MEAN. This dimension
+asks whether the declared outputs are PRODUCED, not whether they are
+CONSISTENT. Step A8's own gate still FAILs on the analog reference run, and
+once a real run produces the ``.gds`` the failure moves from
+``analog_hardmacro_check`` (``HARDMACRO_INCOMPLETE`` — the layout is missing)
+to ``analog_lef_gds_outline_check`` (``A8_LEF_GDS_OUTLINE_MISMATCH`` — the hand
+authored LEF ``SIZE`` and the streamed bounding box disagree by two orders of
+magnitude). That is a sharper finding, not a softer one, and it belongs to the
+criteria dimension.
+
+TOOLCHAIN-GATED CELLS (steps 6 and 39) STAY WAIVED — AND WHY THE NA WAS WRONG
+=============================================================================
+Both declare an Intel Quartus bitstream that no program in this plugin
+synthesises. A proposal moved them out of the waiver registry and into a new
+``NA_TOOLCHAIN_ABSENT`` state whose precondition was asserted live through the
+flow's own locator (``design_one_shot_runner._find_host_quartus_sh`` plus
+``_container_has_quartus_sh``): a "self-invalidating NA" that would go red the
+day Quartus appeared.
+
+It went red immediately. Re-measured 2026-07-28 on the maintainer host, that
+locator returns a real, executable ``quartus_sh`` under an external mount, so
+both cells failed their own NA assertion. The design of the NA was sound; its
+premise was a property of ONE MACHINE, which is precisely the host-dependence
+#527 took out of this module. The waivers are back, and their premises are
+statements about the COMMIT (``git ls-tree -r HEAD`` finds no tracked ``.sof``
+or ``.map.rpt`` anywhere) that every checkout answers the same way. The NA
+machinery is removed rather than left unused: a pinned set nothing populates
+asserts ``{} == {}``.
 
 WHAT THIS MODULE DELIBERATELY DOES NOT DO
 =========================================
@@ -138,21 +201,29 @@ WHAT THIS MODULE DELIBERATELY DOES NOT DO
 
 FIXTURE ATTESTATION, STATED OUT LOUD — AND NOW UNIFORM
 ======================================================
-**107 of the 126 declared entries are decided live on every host** — 89
-archived in in-repo run trees, 5 produced on the spot, 13 searched for and
+**114 of the 133 declared entries are decided live on every host** — 95
+archived in in-repo run trees, 6 produced on the spot, 13 searched for and
 genuinely absent. The other 19 were only ever proven from run trees outside
-this repository (steps 11, 15, 17, 19, 20, 29, 30, 32, M1, M2, M3, M4), so
+this repository, so
 they fall back to the committed manifest's measured record and every assertion
 message says ``[FIXTURE]`` for that entry. Even then the record is
 cross-checked against the LIVE yaml — the recorded ``alternative`` must still
 be one of the entry's declared alternatives — so a yaml edit reddens the cell
 in fixture mode too.
 
-Before #527 that 107/19 split was the *degraded* mode and the campaign host
-ran at 126/0, which is precisely why the suite's answer depended on the
+Before #527 that split was the *degraded* mode and the campaign host decided
+every entry live, which is precisely why the suite's answer depended on the
 machine. It is now the ONLY mode: external trees are not consulted anywhere,
-there is no env-var escape hatch, and the live count is 107 on the campaign
-host, on CI and on a fresh clone alike.
+there is no env-var escape hatch, and the live count is the same on the
+campaign host, on CI and on a fresh clone.
+
+2026-07-28: the count moved from 107/126 to 114/133. Every one of the seven
+new entries is a dimension-7 declaration that the in-repo run trees ALREADY
+carry — six archived, one (``reports/phase3/em_signoff.json``) produced on the
+spot by its own declared producer. A8's ``.gds`` did NOT move: it stays in the
+searched-and-absent bucket, waived, because its producer's evidence needs an
+EDA container this dimension may not depend on. The counts above are
+re-measured, not carried forward.
 ``test_d3_evidence_is_live_wherever_the_run_root_exists`` forbids the fallback
 whenever an admissible run root actually resolves and holds the live count at
 its floor; ``test_d3_the_verdict_does_not_depend_on_the_host`` plants a
@@ -194,6 +265,17 @@ import flow_compliance_check as _fcc  # noqa: E402
 #: rather than a collection-time ImportError two screens away from the cause.
 _GLOB_FIRST = getattr(_fcc, "_glob_first", None)
 
+# ONE parser for "does this GDS carry geometry", shared with the A5 layout gate,
+# analog_hardmacro_check and the A8 producer, so this module cannot accept a
+# hardmacro layout its own consumers reject.
+from analog_a5_layout_check import _gds_geometry_count  # noqa: E402
+
+# ONE parser for "which cells does this GDS define" — the plugin's own GDSII
+# record walk, imported rather than re-implemented. It is what binds A8's
+# streamed layout to the BLOCK it claims to be: geometry alone cannot tell a
+# hardmacro apart from any other design's chip-top.
+from gds_topcell_name_check import parse_structures  # noqa: E402
+
 DIM = 3
 
 MANIFEST_PATH = Path(__file__).resolve().parent / "fixtures" / "matrix_d3_output_manifest.json"
@@ -229,6 +311,53 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
 EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
     "17", "20", "29", "30", "M2", "M3", "M4",
 )
+
+#: How many of the declared entries are decided LIVE on every host. An
+#: EQUALITY, not a floor (#527): while external run trees were consulted the
+#: number ranged with the machine and a ``>=`` permitted the whole spread.
+#: Asserted by ``test_d3_evidence_is_live_wherever_the_run_root_exists``.
+_LIVE_ENTRY_COUNT = 114
+
+#: Run roots the compliance-audit self-certification probe drives, and the
+#: declared ``required_outputs`` each audit CREATES in the tree it audits.
+#: Both are in this repository, both audit in ~1-2 s, and one is the analog
+#: reference run A8's evidence comes from.
+#:
+#: An auditor may never accept as evidence an artefact it caused to exist
+#: during its own run. Three entries in this pin violate that TODAY and are
+#: recorded rather than endorsed. They are NOT the same kind of violation and
+#: the difference is what a reader needs:
+#:
+#:   * steps 24 and 26 name their own declared ``required_output`` as the
+#:     ``--json`` argument of their blocking gate command, so the audit writes
+#:     the file whose presence it then reports, on EVERY tree. That is a flow
+#:     defect, it predates this dimension, and it is out of this cell's scope.
+#:   * step 25's ``reports/phase3/em_signoff.json`` is a STALE-ROOT artefact,
+#:     not a flow defect. It entered this pin on 2026-07-28 when dimension 7
+#:     declared it, and it appears here only because THIS root predates the
+#:     runner wiring that produces it: ``phase3_one_shot_runner`` carries
+#:     ``("em_signoff", "em_report_check.py",
+#:     "reports/phase3/em_signoff.json", ("--mode","em"))`` in
+#:     ``_DECLARED_SIGNOFF_GATES`` and plans it via
+#:     ``step_declared_signoff_gates(project)``. On a root published after that
+#:     wiring the artefact pre-exists the audit and this entry MUST disappear.
+#:     Re-publishing the root is the one thing that closes it; until then the
+#:     step-25 verdict on this root rests on the audit's own output and
+#:     ``--strict-audit-evidence`` refuses it.
+#:
+#: Pinning all three means the POPULATION cannot grow silently, which is the
+#: part A8 tried to grow.
+SELF_CERTIFYING_AUDIT_PROBE: Dict[str, Tuple[str, ...]] = {
+    # The analog reference run — A8's own base_run. MUST stay empty.
+    "benchmark-data/ic/u_hawaii_adc": (),
+    # A digital run, kept in the probe precisely because it is NOT empty: a
+    # guard that can only ever measure zero cannot be shown to work.
+    "benchmark-data/ic/spm/v1.5.66_gf180mcuD": (
+        "24::reports/phase3/ir_drop_signoff.json",
+        "25::reports/phase3/em_signoff.json",
+        "26::reports/phase3/antenna_signoff.json",
+    ),
+}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -514,6 +643,19 @@ def produce_live(step_id, entry: str, rec: Dict) -> Tuple[bool, str]:
                 f"there is nothing a fresh clone could hand the producer"
             )
         target = dst / writes
+        # A LIVE production must be proved against a tree that does not
+        # already hold the artefact.
+        #
+        # The PR that closed A8 hit this as a false alarm and proposed
+        # unlinking the target from the copy instead. That repair is not
+        # needed here and is strictly weaker: `_copy_tracked` (#527) hands the
+        # producer only what the COMMIT carries, so a local build product left
+        # behind by an earlier run of the producer is never copied in the first
+        # place. What remains reachable is the case the message names — the
+        # artefact is TRACKED AT HEAD — and in that case the entry is not a
+        # live production at all; it should be recorded PRODUCED_BY_RUN.
+        # Unlinking it would let a committed artefact be re-created and
+        # counted as freshly produced.
         if target.exists():
             return False, (
                 f"{writes} is tracked at HEAD in the run root {label!r}; this "
@@ -526,10 +668,20 @@ def produce_live(step_id, entry: str, rec: Dict) -> Tuple[bool, str]:
         )
         if not target.is_file():
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+            # rc=2 is the plugin-wide "the capability itself is absent" code.
+            # Say so in those words: an entry nothing could measure is
+            # UNMEASURED, and reporting it as "not produced" would be as
+            # wrong as reporting it as produced.
+            unmeasured = (
+                " — rc=2 is this plugin's disclosed capability gap, so the "
+                "entry is UNMEASURED here rather than absent; install/start "
+                "the tool the producer names above and re-run"
+                if proc.returncode == 2 else ""
+            )
             return False, (
                 f"ran `{program} {' '.join(argv)}` in a copy of {label!r} "
                 f"(rc={proc.returncode}) and {writes} was NOT written; "
-                f"last output: {tail}"
+                f"last output: {tail}{unmeasured}"
             )
         size = target.stat().st_size
         if size <= 0:
@@ -823,8 +975,10 @@ def test_d3_waived_steps_still_produce_their_unwaived_entries():
     """A waived cell xfails whatever the reason; this keeps the rest honest.
 
     ``xfail(strict=True)`` swallows the reason a waived cell failed, so a
-    regression in one of step A8's three *working* entries would hide behind
-    the .gds waiver. Those entries are asserted here, unwaived.
+    regression in a working entry of a waived step would hide behind the one
+    entry the waiver is about. Those entries are asserted here, unwaived —
+    today that is M1's ``reports/analog/mixed_signal/merge.json``, which IS
+    produced while ``top_merged.gds`` is not.
     """
     problems = []
     for cell in cells_for(DIM):
@@ -1064,9 +1218,16 @@ def test_d3_cell_states_partition_all_63_steps():
     assert (len(enforced), len(waived), len(na)) == (52, 4, 7), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(52, 4, 7) on 2026-07-27. A step moving between states is a real "
-        f"change in what dimension {DIM} enforces and must be re-reviewed, not "
-        f"absorbed."
+        f"(52, 4, 7) on 2026-07-27 and re-confirmed on 2026-07-28. A step "
+        f"moving between states is a real change in what dimension {DIM} "
+        f"enforces and must be re-reviewed, not absorbed.\n"
+        f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
+        f"a new producer, steps 6/39 NA_TOOLCHAIN_ABSENT. Both were measured "
+        f"and reverted. A8's evidence needs Magic in an EDA container that CI "
+        f"does not have, and the 6/39 NA's own self-invalidating assertion "
+        f"fires on a host that HAS Quartus. Neither survives the "
+        f"host-independence rule (#527). The producer landed; the cell state "
+        f"did not move."
     )
 
 
@@ -1105,19 +1266,25 @@ def test_d3_evidence_is_live_wherever_the_run_root_exists():
         # majority of entries must be measured for real. A number here that
         # collapses means discovery broke, not that the repo changed.
         #
-        # #527 — this is now an EQUALITY, not a floor. While external run
-        # trees were consulted the number ranged from 107 (CI) to 126 (the
-        # campaign host) and the ">=" quietly permitted the whole spread; a
+        # #527 — this is an EQUALITY, not a floor. While external run trees
+        # were consulted the number ranged from 107 (CI) to 126 (the campaign
+        # host) and the ">=" quietly permitted the whole spread; a
         # host-dependent count is exactly the property this dimension had to
-        # lose. 107 is now what every host reports, so a deviation in EITHER
-        # direction is a real change: fewer means discovery broke, more means
-        # something outside the commit is being counted again.
-        assert live == 107, (
+        # lose. The number below is what EVERY host reports, so a deviation in
+        # either direction is a real change: fewer means discovery broke, more
+        # means something outside the commit is being counted again.
+        #
+        # It moved on 2026-07-28, from 107 to 114, for exactly one reason:
+        # dimension 7 declared seven more artefacts and the in-repo run trees
+        # already carry all seven (six archived, one produced on the spot).
+        # Composition, re-measured: 95 PRODUCED_BY_RUN + 6 PRODUCED_LIVE + 13
+        # UNPROVEN-and-searched = 114 live, 19 fixture, 133 declared.
+        assert live == _LIVE_ENTRY_COUNT, (
             f"{live} of {live + fixture} declared entries were verified live; "
-            f"107 are backed by run trees committed to this repo (89 archived "
-            f"+ 5 produced on the spot + 13 searched-and-absent) and that "
-            f"number is host-independent by construction (#527). More than 107 "
-            f"means evidence is coming from outside the commit again."
+            f"{_LIVE_ENTRY_COUNT} are backed by run trees committed to this "
+            f"repo and that number is host-independent by construction "
+            f"(#527). More than {_LIVE_ENTRY_COUNT} means evidence is coming "
+            f"from outside the commit again."
         )
 
 
@@ -1234,6 +1401,262 @@ def _probe_run_root(prefix: str):
 
         commit()  # give the repo a HEAD, so `git ls-tree HEAD` is meaningful
         yield root, commit
+
+
+A8_GDS_ENTRY = "phase3/analog/hardmacro/*/*.gds"
+
+#: The program A8's waiver names as the (new) producer of the entry above.
+#: Written down, not read from the manifest, so the assertion below has an
+#: independent statement to check — see that test's docstring.
+A8_GDS_PRODUCER = "analog_hardmacro_gds_emit"
+
+
+def test_d3_a8_gds_in_a_run_root_is_a_real_hardmacro_layout():
+    """Any hardmacro GDS already in a run root must BE one — not junk.
+
+    RE-SCOPED 2026-07-28 at the convergence merge, because the assertion that
+    stood here was a false alarm on the very artefact the flow now produces.
+    It failed outright whenever an admissible run root carried a hardmacro
+    GDS, and the remedy its own message prescribed ("record it as
+    PRODUCED_BY_RUN with the run that wrote it") could not be applied, because
+    the sibling guard opens with a hard ``assert rec["status"] ==
+    "PRODUCED_LIVE"``. Measured: running the producer on the analog reference
+    run exactly as ``analog_one_shot_runner`` does at A8 (rc 0, Magic streamed
+    the run's OWN ``layout.mag``) turned this module ``3 failed``. A dimension
+    called "outputs produced" must not go red because an output was produced.
+
+    What the original assertion was protecting is NOT lost: the auditor's own
+    residue is caught by ``test_d3_the_compliance_audit_does_not_create_
+    declared_outputs``, which pins, per run root, exactly which declared
+    outputs a ``flow_compliance_check`` run creates in the tree it audits, and
+    reddens when that population grows. That guard measures the property
+    directly; this one only ever measured its side effect.
+
+    What remains here, and is the honest form: whatever a run root DOES carry
+    at A8's declared path must be a real GDSII stream, with geometry, defining
+    a structure named after the block directory it sits in. Junk, padding, or
+    another design's chip-top dropped under the glob still fails.
+    """
+    assert A8_GDS_ENTRY in F.required_outputs("A8"), (
+        f"A8 no longer declares {A8_GDS_ENTRY!r}; this guard is stale")
+    found = [
+        (label, rel, rr.path / rel)
+        for label, rr in run_roots().items()
+        for alt in F.split_any_of(A8_GDS_ENTRY)
+        for rel in _GLOB_FIRST(rr.path, alt)
+        if (rr.path / rel).is_file()
+    ]
+    problems = []
+    for label, rel, path in found:
+        raw = path.read_bytes()
+        block = Path(rel).parent.name
+        defined, _referenced, valid_header = parse_structures(raw)
+        if not valid_header:
+            problems.append(
+                f"{label}::{rel} ({len(raw)} B) does not start with a GDSII "
+                f"HEADER record")
+            continue
+        if _gds_geometry_count(raw) <= 0:
+            problems.append(
+                f"{label}::{rel} ({len(raw)} B) carries no "
+                f"BOUNDARY/PATH/SREF/AREF/BOX record — padding or an empty "
+                f"library, not a layout")
+        if block not in defined:
+            problems.append(
+                f"{label}::{rel} defines structures {defined[:6]} and none of "
+                f"them is {block!r}, the block directory it sits in — the "
+                f"bytes filed as this block's hardmacro layout are some other "
+                f"cell's layout")
+    assert not problems, "\n  ".join(problems)
+
+
+def test_d3_a8_producer_is_reachable_from_a_flow_path():
+    """A8's evidence is only evidence if the FLOW produces it.
+
+    ADDED 2026-07-28. A8's waiver now says the producer EXISTS and only its
+    evidence is out of reach, so "the producer exists" has to be worth
+    something. A probe that resolves the program and runs it by hand is not:
+    it stays green with the producer disconnected from every flow path, which
+    is the exact state the waiver used to describe ("declared and produced by
+    nothing"). Measured: patching ``analog_one_shot_runner``'s A8 dispatch to
+    ``if False:`` AND deleting the producer from A8's ``programs:`` left this
+    module green.
+
+    Since the producer clause was deliberately withdrawn from A8's GATE (the
+    acceptance auditor must not create what it certifies), the runner is the
+    SOLE production site, so this asserts the DISPATCH, not the source text:
+    ``analog_one_shot_runner.subprocess`` is replaced with a recorder and the
+    A8 step is driven for one block.
+
+    The name is written down here rather than read out of the manifest,
+    because the manifest records A8's ``.gds`` as ``UNPROVEN`` — it carries no
+    producer field to read, and taking the name from the thing under test
+    would make this assert nothing.
+    """
+    prog_name = A8_GDS_PRODUCER
+    assert prog_name in F.declared_programs("A8"), (
+        f"A8 no longer declares {prog_name!r} in its `programs:` list")
+    assert (F.PROGRAMS_DIR / f"{prog_name}.py").is_file(), (
+        f"A8's waiver states programs/{prog_name}.py exists; it does not")
+
+    runner = pytest.importorskip("analog_one_shot_runner")
+    seen = []
+
+    class _Recorder:
+        def __getattr__(self, name):
+            return getattr(runner.subprocess, name)
+
+        def run(self, argv, *a, **kw):
+            seen.append([str(x) for x in argv])
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+    saved = runner.subprocess
+    with tempfile.TemporaryDirectory(prefix="d3_a8_wire_") as td:
+        proj = Path(td)
+        try:
+            runner.subprocess = _Recorder()
+            runner.step_for_block(proj, {"name": "blk_a"},
+                                  "A8_hardmacro_gen", None)
+        finally:
+            runner.subprocess = saved
+
+    hits = [argv for argv in seen
+            if any(a.endswith(f"{prog_name}.py") for a in argv)]
+    assert len(hits) == 1, (
+        f"analog_one_shot_runner dispatched {prog_name} {len(hits)} time(s) "
+        f"at A8_hardmacro_gen; A8's declared .gds is PRODUCED_LIVE evidence "
+        f"only while a flow path actually runs the producer. Dispatched "
+        f"argv: {seen}")
+
+
+# THE A8 LIVE-PRODUCTION PROOF IS NOT HERE, AND THAT IS THE HONEST PLACE FOR IT.
+# A test that ran `analog_hardmacro_gds_emit` on a throwaway copy of the analog
+# reference run and bound the produced bytes to the producer's own run record
+# was written and is REMOVED: it needs Magic in the EDA container, so it is red
+# on CI and on any fresh clone, and this module's whole contract (#527) is that
+# its answer does not depend on the machine. Measured 2026-07-28: rc=2
+# A8GDS_NO_STAGE, "No such container: vibeic-eda".
+#
+# The bindings that proof carried are not lost. The producer's own behaviour —
+# including that a hollow or foreign GDS is refused — is
+# `programs/tests/test_analog_hardmacro_gds_emit.py`; that a flow path
+# dispatches it is asserted above; and that whatever lands at A8's declared
+# path is a real layout for the right block is asserted by
+# `test_d3_a8_gds_in_a_run_root_is_a_real_hardmacro_layout`. What remains
+# unproven, and is what A8's waiver now names, is that a RUN produced one.
+
+
+def test_d3_the_compliance_audit_does_not_create_declared_outputs():
+    """THE SELF-CERTIFICATION GUARD. An audit must not write its own evidence.
+
+    ``flow_compliance_check`` is the sole phase-2+3 acceptance auditor and it
+    reports, per step, whether the ``required_outputs`` are present. If one of
+    its own gate clauses produces one of those artefacts, the audit has
+    certified its own output — and because dimension 3 resolves entries in
+    exactly the same admissible run roots, whatever the audit leaves behind
+    becomes this dimension's evidence too.
+
+    Measured 2026-07-28 on a copy of the analog reference run: with an
+    ``advisory_program_exit_zero: analog_hardmacro_gds_emit`` clause in A8's
+    gate the audit created ``delta_sigma.gds`` (2042 B) and ``ldo.gds``
+    (1706 B) — the exact files A8's cell was reading. The clause was withdrawn;
+    production now happens in ``analog_one_shot_runner``, and this holds the
+    line.
+
+    The quantity measured is deliberately narrow: not "the audit wrote
+    nothing" (it legitimately writes gate reports) but "the audit created a
+    file that satisfies some step's declared ``required_outputs``", resolved
+    with the flow's OWN resolver against the LIVE yaml.
+    """
+    fcc_path = F.PROGRAMS_DIR / "flow_compliance_check.py"
+    assert fcc_path.is_file(), fcc_path
+
+    measured: Dict[str, Tuple[str, ...]] = {}
+    for label in SELF_CERTIFYING_AUDIT_PROBE:
+        rr = run_roots().get(label)
+        assert rr is not None, (
+            f"the self-certification probe drives {label!r}, which lives in "
+            f"this repository and must resolve; it did not")
+        with tempfile.TemporaryDirectory(prefix="d3_selfcert_") as td:
+            dst = Path(td) / "proj"
+            shutil.copytree(rr.path, dst, symlinks=True)
+            before = {p.relative_to(dst) for p in dst.rglob("*") if p.is_file()}
+            subprocess.run(
+                [sys.executable, str(fcc_path), str(dst)],
+                capture_output=True, text=True, timeout=1800)
+            after = {p.relative_to(dst) for p in dst.rglob("*") if p.is_file()}
+            created = after - before
+            hits = set()
+            for sid in F.step_ids():
+                for entry in F.required_outputs(sid):
+                    for alt in F.split_any_of(entry):
+                        for rel in _GLOB_FIRST(dst, alt):
+                            if Path(rel) in created:
+                                hits.add(f"{F.normalize_id(sid)}::{rel}")
+            measured[label] = tuple(sorted(hits))
+
+    pinned = {k: tuple(sorted(v)) for k, v in SELF_CERTIFYING_AUDIT_PROBE.items()}
+    assert measured == pinned, (
+        f"the set of declared required_outputs that a COMPLIANCE AUDIT "
+        f"creates in the tree it audits changed.\n"
+        f"  measured: {measured}\n"
+        f"  pinned:   {pinned}\n"
+        f"Newly self-certified: "
+        f"{ {k: sorted(set(v) - set(pinned.get(k, ()))) for k, v in measured.items() if set(v) - set(pinned.get(k, ()))} }\n"
+        f"A gate clause is now producing an artefact the same audit then "
+        f"reports as present. Move the producer to the runner that owns the "
+        f"step; the audit must measure a tree it did not touch."
+    )
+
+
+def test_d3_m1_merge_inputs_are_absent_from_every_run_root():
+    """M1's waiver, re-measured live rather than believed.
+
+    The waiver says the merge PRODUCER ships and is wired, and that what is
+    missing is an input SET no reachable run tree has: a digital sign-off GDS
+    and an analog hardmacro GDS in the SAME project. Both halves are asserted
+    here, so the waiver cannot outlive its reason — publish one mixed-signal
+    run tree with both and this test names it and demands the waiver's removal.
+    """
+    prog = F.PROGRAMS_DIR / "mixed_signal_top_lvs_run.py"
+    assert prog.is_file(), (
+        "M1's waiver claims the producer ships; it does not exist")
+    cmds = [c.command for c in F.gate_clauses("M1") if c.command]
+    assert any(c.split()[0] == "mixed_signal_top_lvs_run" for c in cmds), (
+        f"M1's waiver claims the producer is wired into its gate; the gate "
+        f"clauses are {cmds}")
+
+    # ASK THE PRODUCER, do not re-glob its inputs. A local re-implementation
+    # could report "no inputs" on a tree where the producer would find them.
+    # The tool probe is stubbed to "absent" first, purely so this can never
+    # launch KLayout/Magic/netgen from inside a test: with that stub the ONLY
+    # way `run` can still say "inputs missing" is its real input check, and any
+    # root whose inputs ARE satisfied comes back with the tool reason instead
+    # and trips the assertion below.
+    import mixed_signal_top_lvs_run as _ms
+
+    real_exec = _ms._docker_exec
+    _ms._docker_exec = lambda *a, **k: (1, "", "stubbed: tool probe disarmed")
+    try:
+        verdicts = {
+            label: _ms.run(rr.path, "chip_top", "", "")
+            for label, rr in run_roots().items()
+        }
+    finally:
+        _ms._docker_exec = real_exec
+
+    runnable = {
+        label: v for label, v in verdicts.items()
+        if not str(v.get("reason", "")).startswith("inputs missing")
+    }
+    assert not runnable, (
+        f"M1 is waived ONLY because mixed_signal_top_lvs_run's own input "
+        f"precondition is unmet on every admissible run root — asked directly, "
+        f"it returns its documented rc=2 'inputs missing' skip on all "
+        f"{len(verdicts)} of them. These roots got past that check: "
+        f"{runnable}. The producer can run there — run it, and remove the "
+        f"waiver. (per-root reasons: "
+        f"{ {k: v.get('reason') for k, v in verdicts.items()} })")
 
 
 def test_d3_zero_byte_artefacts_are_not_counted_as_produced():

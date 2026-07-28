@@ -56,6 +56,14 @@ EXPECTED_DIMS = 8
 # from the yaml. If the flow legitimately changes, these numbers change with it
 # in ONE place and the reviewer is forced to look.
 CENSUS_GATE_PRESENT = 62
+# UNCHANGED at 61. A 2026-07-28 change gave FS1 a `required_outputs` key and
+# was WITHDRAWN the same day: the only thing that made the declaration
+# satisfiable was `check_step` standing its early MISSING down so FS1's own
+# gate could write the artefact and a post-gate probe could then find it — an
+# auditor certifying its own output. FS1 is still the one step whose declared
+# artefacts have no producer outside its own gate, so dimension 7's W4 rule
+# ("a gate designates outputs on a step with no required_outputs") still fires
+# on it and it stays WAIVED there, with the wiring that would close it named.
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
 CENSUS_BLOCKS_ON_PRESENT = 62
 CENSUS_BLOCKS_ON_NON_EMPTY = 60
@@ -395,8 +403,19 @@ def test_output_entries_classify_into_the_four_kinds():
             kind = F.classify_output(entry)
             assert kind in F.OUTPUT_KINDS
             seen[kind] += 1
-    assert sum(seen.values()) == 126, seen
-    assert seen[F.FILE] == 92
+    # 2026-07-28, RE-REVIEWED: 126 -> 133, all SEVEN new entries are plain FILE
+    # (92 -> 99); the GLOB and ANY_OF populations are untouched. Each one is a
+    # load-bearing artefact the flow already produced and a gate already read
+    # while no step declared it — dimension 7's finding — and each is recorded
+    # in the dimension-3 manifest with the run root, path and byte size it was
+    # measured at: D1 L8_RTL_CONSTANTS.json, 21 reports/phase3/drc_router.rpt,
+    # 23 sta_corner_record_completeness.json, 25 em_signoff.json (PRODUCED_LIVE),
+    # 28 perc_signoff.json, 31 lvs.json + erc_density.json. FS1's two FMEDA
+    # artefacts were part of this count for one day and are NOT here: no
+    # producer outside FS1's own gate writes them, so declaring them could only
+    # be satisfied by the auditor's own output.
+    assert sum(seen.values()) == 133, seen
+    assert seen[F.FILE] == 99
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
