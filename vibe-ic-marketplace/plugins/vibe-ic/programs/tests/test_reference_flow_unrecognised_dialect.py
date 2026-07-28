@@ -135,7 +135,12 @@ class TestRecipeRecognitionPredicates:
         # be trusted. This is the same cross-subsystem blind spot #503 fixed one
         # level up, and it is why `_rf_recipe_line_recognised` is a UNION.
         fastroute = (
-            "set_global_routing_layer_adjustment "
+            # A deprecated ORFS spelling, QUOTED AS INPUT: this fixture
+            # exists to prove our ingest READS that line, and the flow
+            # never emits it. The deprecation gate scans the whole plugin
+            # tree, so without saying so here it reads an input we parse
+            # as an output we produce.
+            "set_global_routing_layer_adjustment "  # deprecated ORFS spelling, quoted as INPUT
             "$::env(MIN_ROUTING_LAYER)-$::env(MAX_ROUTING_LAYER) 0.2\n"
             "set_routing_layers -signal "
             "$::env(MIN_ROUTING_LAYER)-$::env(MAX_ROUTING_LAYER)\n")

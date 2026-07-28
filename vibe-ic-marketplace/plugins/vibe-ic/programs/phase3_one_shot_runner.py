@@ -14952,7 +14952,7 @@ for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
   if {[catch {check_placement} e]} { puts "SHIP_CVG_CP_WARN: $e" }
 __SPARE_SAFE_CLEAR__
   if {[catch {global_route} e]} { puts "SHIP_CVG_GR_NONFATAL: $e" }
-  if {[catch {detailed_route} e]} { puts "SHIP_CVG_DR_NONFATAL: $e" }
+  if {[catch {detailed_route} e]} { puts "SHIP_CVG_DR_NONFATAL: $e"; incr _ship_dr_failed }
 }
 # FINAL honest post-reroute real-SPEF measurement (the number the sign-off
 # independently re-derives, and the one the promotion gate keys on).
@@ -14961,7 +14961,20 @@ catch {extract_parasitics -ext_model_file __CAP__ -corner_cnt 1 -max_res 50 -cou
 catch {write_spef __PNR__/signoff_repair_max.spef}
 catch {read_spef __PNR__/signoff_repair_max.spef}
 catch {estimate_parasitics -detailed_routing}
-catch {puts "SHIP_WNS_POSTROUTE: [sta::worst_slack -max]"}
+# #543 -- NAME THE NUMBER FOR WHAT IT IS. `detailed_route` is wrapped in a
+# `catch` so a routing abort cannot kill the step, and that is right; what was
+# wrong is that the abort then left a slack published as POSTROUTE. MEASURED
+# (ibex x sky130A): DRT-0085 four times, every one swallowed, and the step still
+# emitted SHIP_WNS_POSTROUTE from a design whose reroute never completed --
+# which sign-off went on to record as a process-corner floor. When any reroute
+# failed the value is still emitted (it is real, and useful for triage) but
+# under a name that says the route is not there, and the count is stated.
+if {$_ship_dr_failed > 0} {
+  puts "SHIP_REROUTE_INCOMPLETE: $_ship_dr_failed"
+  catch {puts "SHIP_WNS_UNROUTED: [sta::worst_slack -max]"}
+} else {
+  catch {puts "SHIP_WNS_POSTROUTE: [sta::worst_slack -max]"}
+}
 """
 
 
@@ -15115,8 +15128,11 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # 0-guide -> 2575-guide, detailed_route 437->0 violations, on stock 0.2.28.
         # chip/PDK-AGNOSTIC (keyed on odb net routing state; no chip/vendor literal).
         + _spare_safe_routing_clear_tcl("SHIP")
+        # #543 -- declared before ANY reroute so every swallowed abort is
+        # counted, including the ones inside the convergence loop below.
+        + "set _ship_dr_failed 0\n"
         + "if {[catch {global_route} e]} { puts \"SHIP_GR_NONFATAL: $e\" }\n"
-        "if {[catch {detailed_route} e]} { puts \"SHIP_DR_NONFATAL: $e\" }\n"
+        "if {[catch {detailed_route} e]} { puts \"SHIP_DR_NONFATAL: $e\"; incr _ship_dr_failed }\n"
         # POST-REROUTE real-SPEF convergence (#603): the reroute above lands
         # the pre-reroute repair on the REAL routed parasitics; re-extract and
         # re-repair against them (bounded, DRC-converging) so the SHIPPED route
@@ -15167,6 +15183,18 @@ def _parse_ship_repair_log(log: str) -> dict:
         # #603 — the HONEST post-reroute real-SPEF worst slack (the number
         # the sign-off independently re-derives); None on older/stubbed logs.
         "wns_postroute": _f("SHIP_WNS_POSTROUTE"),
+        # #543 -- how many `detailed_route` aborts the step swallowed. When this
+        # is non-zero `wns_postroute` is absent BY CONSTRUCTION (the Tcl emits
+        # the slack as SHIP_WNS_UNROUTED instead), so no consumer can read an
+        # unrouted design's slack as a post-reroute number. Kept as its own
+        # field rather than folded into `wns_postroute`: "the reroute failed"
+        # and "the marker is missing on an older log" are different facts, and
+        # collapsing them is the shape this issue is about.
+        "reroute_incomplete": (
+            int(_m.group(1))
+            if (_m := _re.search(r"SHIP_REROUTE_INCOMPLETE:\s*(\d+)", log or ""))
+            else 0),
+        "wns_unrouted": _f("SHIP_WNS_UNROUTED"),
         "route_violations": (int(viols[-1]) if viols else None),
         "drv_slew_before": (slew_found[0] if slew_found else None),
         "drv_slew_after": (slew_found[-1] if slew_found else None),
@@ -15198,6 +15226,14 @@ def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
     # sign-off actually judges. Guard is skipped when either marker is
     # absent (older flow / stubbed emit) so existing promote decisions +
     # tests are unchanged; it can only ADD a refusal, never a promotion.
+    # #543 -- a route that did not finish is not a candidate, whatever its slack
+    # says. This sits BEFORE the slack guards on purpose. The measured failure
+    # WAS refused, but by `route_violations != 0` being None -- i.e. because a
+    # number was missing, not because the route was known broken. A refusal that
+    # depends on an absent marker is one log-format change away from becoming a
+    # promotion.
+    if parsed.get("reroute_incomplete"):
+        return False
     wp = parsed.get("wns_postroute")
     wb = parsed.get("wns_before")
     if wp is not None and wb is not None and wp < wb - 0.001:
@@ -21072,6 +21108,46 @@ def run_at_speed_atpg_producers(project: Path, written: List[str],
                          f"{proc.returncode}) → {_ATPG_NOT_RUN_REL[step]}")
 
 
+def _eco_residual_note(project: "Path", residual: bool) -> str:
+    """The note the ECO log publishes about a residual violation.
+
+    #543 — this used to be a string literal asserting "a genuine process-corner
+    floor". It said that for a run whose sign-off repair had aborted
+    `detailed_route` four times on an unroutable probe cell: the floor was a
+    cell in the resizer pool, and the sentence claimed a cause nobody had
+    established. A note that names a cause must read the evidence for it, and
+    when there is none it must say that instead of picking the most final-
+    sounding explanation available.
+
+    So this ASKS the repair log. `SHIP_REROUTE_INCOMPLETE` means the shipped
+    route is not the repaired one, which is a specific and actionable reason for
+    a residual and is not a floor. Anything else leaves the cause OPEN, which is
+    the honest state — a residual can be a real corner limit, but this record
+    has never carried the evidence to say so.
+    """
+    if not residual:
+        return "multi-corner OCV closed after the ECO."
+    log = project / "phase3" / "stage3" / "pnr" / "signoff_spef_repair.log"
+    try:
+        parsed = _parse_ship_repair_log(log.read_text(errors="replace"))
+    except OSError:
+        parsed = None
+    if parsed and parsed.get("reroute_incomplete"):
+        return (
+            "ECO recovered what is recoverable, and the residual has a NAMED "
+            f"upstream cause: the sign-off repair's reroute aborted "
+            f"{parsed['reroute_incomplete']} time(s) "
+            "(SHIP_REROUTE_INCOMPLETE), so the shipped route is the base route, "
+            "not the repaired one. This is NOT a process-corner floor — fix the "
+            "reroute and re-measure before treating the corner as unclosable.")
+    return (
+        "ECO recovered what is recoverable; the corner remains VIOLATED and "
+        "this record does NOT establish why (§4.05 — no fabricated closure, and "
+        "no fabricated cause either). A process-corner floor is one possible "
+        "explanation and is not evidenced here; check the sign-off repair log "
+        "and the worst-path slew profile before recording one.")
+
+
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 container: str) -> StepResult:
     """v1.6.36 — stage runner outputs at the canonical paths the flow YAML expects.
@@ -22470,11 +22546,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     "eco_before": _eco_decision["eco_before"],
                     "eco_after": _eco_after,
                     "residual_violation": _eco_residual,
-                    "residual_note": (
-                        "ECO recovered what is recoverable; a genuine process-"
-                        "corner floor remains VIOLATED (§4.05 — no fabricated "
-                        "closure)." if _eco_residual else
-                        "multi-corner OCV closed after the ECO."),
+                    "residual_note": _eco_residual_note(
+                        project, bool(_eco_residual)),
                 }, indent=2) + "\n")
                 written.append(str(_eco_log))
             except Exception as _eco_log_exc:  # pragma: no cover — defensive
