@@ -80,6 +80,9 @@ if _PROG_DIR not in sys.path:
     sys.path.insert(0, _PROG_DIR)
 
 import _reused_ip_predicate as _reused_ip  # noqa: E402
+# Imported, never re-typed — a local copy of the key silently stops
+# excluding it the day the key is renamed.
+from l_doc_generator_stamp import STAMP_KEY as _GENERATOR_STAMP_KEY  # noqa: E402,E501
 
 # Wave 36 (v0.119.68) — IC class profile lets us drop layer
 # requirements that don't apply (e.g. L3 / L6 on a pure-analog
@@ -104,10 +107,14 @@ _BLOB_FIELD_PREFIXES = ("LX_DUMP", "all_input_literals_", "raw_", "RAW_")
 # the typed-field tally.  schema_version + layer + source_files are
 # bookkeeping; extraction_evidence is structured pointer metadata
 # (legitimate but does not represent extracted design data on its
-# own).
+# own); `_generator` records which plugin release wrote the file, so it
+# is present on EVERY document and carries no extracted design data at
+# all — counting it would lift every layer's tally by exactly one and
+# hand a thin document a floor it did not earn.
 _BOOKKEEPING_FIELDS = frozenset({
     "schema_version", "layer", "source_files",
     "extraction_evidence",
+    _GENERATOR_STAMP_KEY,
 })
 
 

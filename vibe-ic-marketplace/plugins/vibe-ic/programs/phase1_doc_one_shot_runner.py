@@ -113,6 +113,12 @@ import _path_layout as _pl
 import sdc_constraints as _sdc
 import floorplan_contract as _fpc
 from l_doc_consumer_contract import project_relative_source
+# THE L-document write chokepoint. Every path in this file that writes a
+# `generated_docs/*.json` goes through `_stamp.dump`, which records the
+# plugin release and the L-doc taxonomy that produced the file. Before this
+# existed, an L document said nothing about its own vintage and a reader had
+# no way to tell a two-version-family-old artefact from a current one.
+import l_doc_generator_stamp as _stamp
 # One clock name declares exactly one period. Several independent extraction
 # strategies write into L8.clocks[] / L8.clock_domains[] and nothing used to
 # compare what they wrote, so a converged run shipped `clk` at both 100 MHz
@@ -429,9 +435,7 @@ def _v1_6_580_write_failure_stub(
     payload.setdefault("layer", layer_name)
     payload.setdefault("schema_version", 2)
     try:
-        stub_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False)
-            + "\n", encoding="utf-8")
+        _stamp.dump(stub_path, payload)
     except Exception:
         return
 
@@ -8390,7 +8394,7 @@ def _write_l_doc(project: Path, name: str, content: dict,
         ] = str(_e)[:200]
     out = _pl.generated_docs_dir(project) / f"{name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(content, indent=2, ensure_ascii=False) + "\n")
+    _stamp.dump(out, content)
     todo = json.dumps(content).count("__TODO__")
     n_ev = sum(len(v) for v in evidence.values())
     return LDocResult(name=name, path=out,
@@ -19071,10 +19075,7 @@ def _v1_6_295_propagate_class_path_to_layer_docs(
             continue
         data["class_path"] = cp
         try:
-            path.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
+            _stamp.dump(path, data)
             updated += 1
         except Exception:
             continue
@@ -19128,10 +19129,7 @@ def _v1_6_295_post_emit_l8_clock_mhz_back_fill(project: Path) -> bool:
         if data.get("no_clock_mhz_in_input") is True:
             data["no_clock_mhz_in_input"] = False
         try:
-            path.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
+            _stamp.dump(path, data)
             any_updated = True
         except Exception:
             continue
@@ -43174,9 +43172,7 @@ def _v1_6_394_post_emit_finalize_sim_only(l9_path) -> int:
         delta = after - before
         if delta > 0:
             try:
-                p.write_text(
-                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(p, l9)
             except Exception:
                 return 0
         return delta
@@ -45327,9 +45323,7 @@ def _v1_6_403_post_emit_mirror_analog_multiplicity(
         after = len(l9.get("submodules") or []) if isinstance(l9, dict) else 0
         if n > 0 and after > before:
             try:
-                l9p.write_text(
-                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l9p, l9)
             except Exception:
                 return 0
         return n
@@ -46436,11 +46430,7 @@ def gen_l9_integration_spec(project: Path,
                                 )
                                 _v1_6_545_l1[
                                     "no_tapeout_metadata_in_input"] = False
-                                _v1_6_545_l1_path.write_text(
-                                    json.dumps(
-                                        _v1_6_545_l1, indent=2,
-                                        ensure_ascii=False) + "\n",
-                                    encoding="utf-8")
+                                _stamp.dump(_v1_6_545_l1_path, _v1_6_545_l1)
                     except Exception:
                         pass
     if top_module is None:
@@ -46543,11 +46533,7 @@ def gen_l9_integration_spec(project: Path,
                         _v1_6_398_l1["no_tapeout_metadata_in_input"] = (
                             False
                         )
-                        _v1_6_398_l1_path.write_text(
-                            json.dumps(
-                                _v1_6_398_l1, indent=2,
-                                ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+                        _stamp.dump(_v1_6_398_l1_path, _v1_6_398_l1)
             except Exception:
                 pass
     # v1.6.405 — for #294 P2: when v1.6.398 returned None too (or did
@@ -46594,11 +46580,7 @@ def gen_l9_integration_spec(project: Path,
                         _v1_6_405_l1["no_tapeout_metadata_in_input"] = (
                             False
                         )
-                        _v1_6_405_l1_path.write_text(
-                            json.dumps(
-                                _v1_6_405_l1, indent=2,
-                                ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+                        _stamp.dump(_v1_6_405_l1_path, _v1_6_405_l1)
             except Exception:
                 pass
     # v1.6.189 (#76 P1) — fall back to the runner's canonical
@@ -48888,8 +48870,7 @@ def _harvest_vendor_short_literals(project: Path,
     if short_lits:
         d["vendor_short_literals"] = short_lits[:512]
         try:
-            l1.write_text(json.dumps(d, indent=2, ensure_ascii=False)
-                          + "\n", encoding="utf-8")
+            _stamp.dump(l1, d)
         except Exception:
             pass
 
@@ -49012,9 +48993,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                 mutated = True
             if mutated:
                 _ensure_bool_flags(l7)
-                l7_path.write_text(
-                    json.dumps(l7, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l7_path, l7)
 
     # ---- L8 ----
     l8_path = gd / "L8_RTL_CONSTANTS.json"
@@ -49073,9 +49052,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     mutated = True
             if mutated:
                 _ensure_bool_flags(l8)
-                l8_path.write_text(
-                    json.dumps(l8, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l8_path, l8)
 
     # ---- L10 (v1.6.84 #15 Bug A) ----
     # Belt-and-suspenders: even though gen_l10_test_cases() now emits
@@ -49101,9 +49078,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     l10["bring_up_sequence"] = []
                     l10["no_bring_up_sequence_in_input"] = True
                     _ensure_bool_flags(l10)
-                    l10_path.write_text(
-                        json.dumps(l10, indent=2, ensure_ascii=False) + "\n",
-                        encoding="utf-8")
+                    _stamp.dump(l10_path, l10)
 
     # ---- L11 (v1.6.84 #15 Bug B) ----
     # Defensive: flip stale L11.content_hex="" to null when no OTP
@@ -49119,9 +49094,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     l11.get("content_hex") == ""):
                 l11["content_hex"] = None
                 _ensure_bool_flags(l11)
-                l11_path.write_text(
-                    json.dumps(l11, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l11_path, l11)
 
     # ---- L9 ----
     l9_path = gd / "L9_INTEGRATION_SPEC.json"
@@ -49145,9 +49118,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     mutated = True
             if mutated:
                 _ensure_bool_flags(l9)
-                l9_path.write_text(
-                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l9_path, l9)
 
     # ---- L13 ----
     l13_path = gd / "L13_LAB_CALIBRATION.json"
@@ -49192,9 +49163,7 @@ def _purge_aid_scaffold_residue(project: Path) -> None:
                     mutated = True
             if mutated:
                 _ensure_bool_flags(l13)
-                l13_path.write_text(
-                    json.dumps(l13, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l13_path, l13)
 
 
 def _post_fix_l8_rtl_consts_flag(project: Path) -> None:
@@ -49233,7 +49202,7 @@ def _post_fix_l8_rtl_consts_flag(project: Path) -> None:
     # explicitly flip.
     _ensure_bool_flags(rtl)
     out = _pl.generated_docs_dir(project) / "L8_RTL_CONSTANTS.json"
-    out.write_text(json.dumps(rtl, indent=2, ensure_ascii=False) + "\n")
+    _stamp.dump(out, rtl)
 
 
 # v1.6.107: removed _collect_fsm_states_from_rtl (and its helpers
@@ -49744,9 +49713,7 @@ def _post_emit_ic_class_into_L9_L1(project: Path,
                     l1["class_path"] = None
                     l1["no_class_path_in_input"] = True
                 try:
-                    l1_path.write_text(
-                        json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
-                        encoding="utf-8")
+                    _stamp.dump(l1_path, l1)
                 except Exception:
                     pass
 
@@ -49917,9 +49884,7 @@ def _post_emit_ic_class_into_L9_L1(project: Path,
                 l9["chip_top_interfaces"] = []
 
             try:
-                l9_path.write_text(
-                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(l9_path, l9)
             except Exception:
                 pass
 
@@ -50103,9 +50068,7 @@ def _post_emit_l11_fsm_strict_gate(project: Path) -> None:
         needs_write = True
     if needs_write:
         try:
-            l11_path.write_text(
-                json.dumps(l11, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8")
+            _stamp.dump(l11_path, l11)
         except Exception:
             pass
 
@@ -50322,9 +50285,7 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
     if l4.get("no_registers_in_input") and registers:
         l4["no_registers_in_input"] = False
     try:
-        l4_path.write_text(
-            json.dumps(l4, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l4_path, l4)
     except Exception:
         pass
 
@@ -50557,9 +50518,7 @@ def _post_emit_promote_registers_from_readme(project: Path) -> None:
         "register_name_direct_from_readme"
     )
     try:
-        l4_path.write_text(
-            json.dumps(l4, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l4_path, l4)
     except Exception:
         pass
 
@@ -50910,10 +50869,7 @@ def _v1_6_350_post_emit_spice_metadata(project: Path) -> None:
                     l1["pin_table"] = list(merged["pins"])
                     l1["no_pin_table_in_input"] = False
                     try:
-                        l1_path.write_text(
-                            json.dumps(l1, indent=2,
-                                       ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+                        _stamp.dump(l1_path, l1)
                     except Exception:
                         pass
     # Wire subckts → L9.submodules when empty.
@@ -50929,10 +50885,7 @@ def _v1_6_350_post_emit_spice_metadata(project: Path) -> None:
                 if not existing_subs:
                     l9["submodules"] = list(merged["subckts"])
                     try:
-                        l9_path.write_text(
-                            json.dumps(l9, indent=2,
-                                       ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+                        _stamp.dump(l9_path, l9)
                     except Exception:
                         pass
 
@@ -51024,10 +50977,7 @@ def _v1_6_350_post_emit_spice_metadata(project: Path) -> None:
                             es["spice_to_l9_ports_promoted_v1_6_419"] = (
                                 len(promoted_ports))
                         try:
-                            l9_path.write_text(
-                                json.dumps(l9, indent=2,
-                                           ensure_ascii=False) + "\n",
-                                encoding="utf-8")
+                            _stamp.dump(l9_path, l9)
                         except Exception:
                             pass
     # Wire params → L5.design_parameters when empty.
@@ -51043,10 +50993,7 @@ def _v1_6_350_post_emit_spice_metadata(project: Path) -> None:
                 if not existing_params:
                     l5["design_parameters"] = list(merged["params"])
                     try:
-                        l5_path.write_text(
-                            json.dumps(l5, indent=2,
-                                       ensure_ascii=False) + "\n",
-                            encoding="utf-8")
+                        _stamp.dump(l5_path, l5)
                     except Exception:
                         pass
 
@@ -51114,9 +51061,7 @@ def _post_emit_promote_pipe_tables_to_l1(project: Path) -> None:
 
     l1["comparison_tables"] = all_tables
     try:
-        l1_path.write_text(
-            json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l1_path, l1)
     except Exception:
         pass
 
@@ -52227,9 +52172,7 @@ def _post_emit_promote_submodules_from_catalog(project: Path) -> None:
         l9["no_submodules_in_input"] = False
     l9["submodules_extraction_strategy"] = "module_catalog_bullet"
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -52551,9 +52494,7 @@ def _post_emit_promote_submodules_from_file_role_v1_6_307(
         "rst_sphinx_file_role_or_inline_backtick_sv_fallback"
     )
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -52703,9 +52644,7 @@ def _v1_6_351_post_emit_rst_underline_module_section(
     if l9.get("no_submodules_in_input"):
         l9["no_submodules_in_input"] = False
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -52855,9 +52794,7 @@ def _v1_6_354_post_emit_rst_underline_module_section(
     if l9.get("no_submodules_in_input"):
         l9["no_submodules_in_input"] = False
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -52917,9 +52854,7 @@ def _v1_6_435_post_emit_lift_unknown_strategy_lc(
     if not changed:
         return
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -53447,9 +53382,7 @@ def _v1_6_524_post_emit_chip_top_interfaces_groups(
 
     l9["chip_top_interfaces"] = cti
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -54279,9 +54212,7 @@ def _v1_6_526_post_emit_ascii_art_hierarchy(
     if l9.get("no_submodules_in_input"):
         l9["no_submodules_in_input"] = False
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -54348,9 +54279,7 @@ def _v1_6_578_normalize_l9_submodule_evidence(project: Path) -> None:
     if migrated == 0:
         return
     try:
-        l9_path.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l9_path, l9)
     except Exception:
         pass
 
@@ -54550,9 +54479,7 @@ def _post_emit_promote_registers_from_l12(project: Path) -> None:
         "register_name_promotion_from_l12"
     )
     try:
-        l4_path.write_text(
-            json.dumps(l4, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l4_path, l4)
     except Exception:
         pass
 
@@ -54606,9 +54533,7 @@ def _post_emit_crypto_arch_into_L1(project: Path) -> None:
             arch[k] = v
     l1["architecture"] = arch
     try:
-        l1_path.write_text(
-            json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l1_path, l1)
     except Exception:
         pass
 
@@ -54676,7 +54601,7 @@ def _post_emit_typed_clock_domains(project: Path) -> None:
         rtl["no_clock_domains_in_input"] = False
     _ensure_bool_flags(rtl)
     out = _pl.generated_docs_dir(project) / "L8_RTL_CONSTANTS.json"
-    out.write_text(json.dumps(rtl, indent=2, ensure_ascii=False) + "\n")
+    _stamp.dump(out, rtl)
     # v1.6.312 — for #211 P2 ORGANIC. Pre-v1.6.312 the
     # L8_TIMING_WAVEFORM mirror block sat under an outer
     # `if len(clock_domains) != before_count:` guard. The guard
@@ -54703,9 +54628,7 @@ def _post_emit_typed_clock_domains(project: Path) -> None:
             _ensure_bool_flags(wfm)
             wfm_out = (_pl.generated_docs_dir(project)
                        / "L8_TIMING_WAVEFORM.json")
-            wfm_out.write_text(
-                json.dumps(wfm, indent=2, ensure_ascii=False)
-                + "\n")
+            _stamp.dump(wfm_out, wfm)
 
 
 #: L docs that carry the clock contract. Both are checked because a name at
@@ -54744,9 +54667,7 @@ def _post_emit_enforce_clock_contract(project: Path) -> List[str]:
         if after != before:
             try:
                 out = _pl.generated_docs_dir(project) / f"{doc_name}.json"
-                out.write_text(
-                    json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(out, doc)
             except OSError:
                 pass
         messages.extend(_cc.conflict_messages(doc, where=doc_name))
@@ -54793,7 +54714,7 @@ def _post_emit_sdc_constraints(project: Path) -> None:
             fields["sdc_constraints_path"] = project_relative_source(
                 sdc_files[0], project)[0]
         out = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
-        out.write_text(json.dumps(l19, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(out, l19)
 
     primary = _sdc.primary_clock(project)
     if primary is None:
@@ -54839,7 +54760,7 @@ def _post_emit_sdc_constraints(project: Path) -> None:
         if port_name and not target.get("name"):
             target["name"] = port_name
         out = _pl.generated_docs_dir(project) / f"{doc_name}.json"
-        out.write_text(json.dumps(l8, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(out, l8)
 
 
 def _post_emit_l22_coverage_goals(project: Path) -> int:
@@ -54960,7 +54881,7 @@ def _post_emit_floorplan_contract(project: Path) -> None:
                 "label": "die_area_budget_um",
             })
         out = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
-        out.write_text(json.dumps(l19, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(out, l19)
 
 
 # v1.6.369 — for #264 P2 ORGANIC. Structural emitter for
@@ -55343,8 +55264,7 @@ def _post_emit_mirror_clock_resets_to_l9_v1_6_311(
         _ensure_bool_flags(l9)
         out = (_pl.generated_docs_dir(project)
                / "L9_INTEGRATION_SPEC.json")
-        out.write_text(
-            json.dumps(l9, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(out, l9)
 
 
 # v1.6.323 — for #222 P1 ORGANIC. Symmetric clock-port shape regex
@@ -55430,8 +55350,7 @@ def _post_emit_derive_l9_clocks_v1_6_323(project: Path) -> None:
     _ensure_bool_flags(l9)
     out = (_pl.generated_docs_dir(project)
            / "L9_INTEGRATION_SPEC.json")
-    out.write_text(
-        json.dumps(l9, indent=2, ensure_ascii=False) + "\n")
+    _stamp.dump(out, l9)
 
 
 # v1.6.571 — for #389 P3 ORGANIC. Clock-port pattern regex used by
@@ -55577,9 +55496,7 @@ def _post_emit_seed_l8b_clocks_from_l1_v1_6_571(project: Path) -> None:
     _ensure_bool_flags(l8b)
     out = (_pl.generated_docs_dir(project)
            / "L8_TIMING_WAVEFORM.json")
-    out.write_text(
-        json.dumps(l8b, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8")
+    _stamp.dump(out, l8b)
 
 
 def _post_emit_mirror_parameters_to_l9_v1_6_327(
@@ -55638,8 +55555,7 @@ def _post_emit_mirror_parameters_to_l9_v1_6_327(
     _ensure_bool_flags(l9)
     out = (_pl.generated_docs_dir(project)
            / "L9_INTEGRATION_SPEC.json")
-    out.write_text(
-        json.dumps(l9, indent=2, ensure_ascii=False) + "\n")
+    _stamp.dump(out, l9)
 
 
 # v1.6.551 — for #373 P3 ORGANIC. L7.debug_observability cross-walk
@@ -55768,9 +55684,7 @@ def _post_emit_crosswalk_l9_ports_to_l7_debug_v1_6_551(
     _ensure_bool_flags(l7)
     out = (_pl.generated_docs_dir(project)
            / "L7_TEST_DEBUG.json")
-    out.write_text(
-        json.dumps(l7, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8")
+    _stamp.dump(out, l7)
 
 
 # v1.6.555 — for #377 P3 ORGANIC. L1.pin_table cross-walk from
@@ -55989,9 +55903,7 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
             changed = True
     if changed:
         _ensure_bool_flags(l1)
-        (_pl.generated_docs_dir(project) / "L1_DATASHEET.json").write_text(
-            json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(_pl.generated_docs_dir(project) / 'L1_DATASHEET.json', l1)
     # (3) REVERSE mirror L1 → L9 (ORGANIC-20260705). When L9's port slots are
     # ALL empty but L1 now carries real ports, promote them into L9 so the
     # prompt-only design's L9.top_ports is no longer empty. Zero-regression: it
@@ -56013,10 +55925,7 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
                 _es = l9.setdefault("extraction_strategy", {})
                 if isinstance(_es, dict):
                     _es["top_ports"] = "reverse_promote_from_l1_organic_20260705"
-                (_pl.generated_docs_dir(project)
-                 / "L9_INTEGRATION_SPEC.json").write_text(
-                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+                _stamp.dump(_pl.generated_docs_dir(project) / 'L9_INTEGRATION_SPEC.json', l9)
 
 
 def _v1_6_collect_input_docs_text(project: Path) -> str:
@@ -56257,16 +56166,12 @@ def _post_emit_mirror_l2_l8_fmax_v1_6_554(project: Path) -> None:
         _ensure_bool_flags(l8)
         out_l8 = (_pl.generated_docs_dir(project)
                   / "L8_RTL_CONSTANTS.json")
-        out_l8.write_text(
-            json.dumps(l8, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(out_l8, l8)
     if added_l2:
         _ensure_bool_flags(l2)
         out_l2 = (_pl.generated_docs_dir(project)
                   / "L2_FRS.json")
-        out_l2.write_text(
-            json.dumps(l2, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(out_l2, l2)
 
 
 # v1.6.348 — for #245 P3 ORGANIC. URL / image-path context gate for
@@ -56720,8 +56625,7 @@ def _apply_alias_normalization(project: Path,
         if aliases_index:
             data["aliases_index"] = aliases_index
             try:
-                f.write_text(json.dumps(data, indent=2, ensure_ascii=False)
-                             + "\n", encoding="utf-8")
+                _stamp.dump(f, data)
             except Exception:
                 pass
 
@@ -57062,7 +56966,7 @@ def _backfill_auto_literals_into_typed(project: Path,
                 existing = []
             existing.extend(payload)
             d[key] = existing
-            f.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+            _stamp.dump(f, d)
             break
 
     if units:
@@ -57850,7 +57754,7 @@ def main() -> int:
                     "l8_protocol_widths_v0_1_65"] = (
                     f"R19 extractor: width_parameters="
                     f"{len(_widths_payload['width_parameters'])}")
-                _l8_path.write_text(json.dumps(_l8_existing, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l8_path, _l8_existing)
                 print(f"      → L8_RTL_CONSTANTS overlay: "
                       f"width_parameters={len(_widths_payload['width_parameters'])}")
     except Exception as _l8_err:
@@ -57928,7 +57832,7 @@ def main() -> int:
                         "l8_encoding_mirror_v0_1_72"] = (
                         f"R41: mirrored {_l8_mirror_count} L15 encoding "
                         f"tables into L8 canonical concept slots")
-                    _l8_path_r41.write_text(json.dumps(_l8_r41, indent=2, ensure_ascii=False) + "\n")
+                    _stamp.dump(_l8_path_r41, _l8_r41)
                     print(f"      → L8 encoding overlay: {_l8_mirror_count} tables")
     except Exception as _r41_err:
         print(f"      L8 encoding overlay FAILED: {_r41_err}", file=sys.stderr)
@@ -58063,7 +57967,7 @@ def main() -> int:
                     if isinstance(_alock, dict):
                         _alock.setdefault("AXI3", "2 bits")
                         _alock.setdefault("AXI4_AXI5", "1 bit")
-                _l8p_r48.write_text(json.dumps(_l8_r48, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l8p_r48, _l8_r48)
                 print(f"      → L8_RTL_CONSTANTS universal-constants overlay applied")
     except Exception as _r48_err:
         print(f"      R48 overlay FAILED (fail-open): {_r48_err}",
@@ -58158,7 +58062,7 @@ def main() -> int:
                     "l1_protocol_metadata_v0_1_68"] = (
                     f"R23+R44: overlaid {len(_payload_keys)} extractor keys "
                     f"+ sibling-L-doc synth")
-                _l1_path.write_text(json.dumps(_l1_existing, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l1_path, _l1_existing)
                 print(f"      → L1_DATASHEET overlay: {len(_payload_keys)} protocol-doc keys")
     except Exception as _l1_err:
         print(f"      L1 protocol overlay FAILED (fail-open): {_l1_err}",
@@ -58213,7 +58117,7 @@ def main() -> int:
                 _l12_existing.setdefault("extraction_strategy", {})[
                     "l12_behavioral_sequences_v0_1_73"] = (
                     f"R43: overlaid {len(_payload_keys_l12)} L12 sequences")
-                _l12_path.write_text(json.dumps(_l12_existing, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l12_path, _l12_existing)
                 print(f"      → L12 overlay: {len(_payload_keys_l12)} sequences")
     except Exception as _l12_err:
         print(f"      L12 overlay FAILED (fail-open): {_l12_err}",
@@ -58256,7 +58160,7 @@ def main() -> int:
                     "l6_control_logic_v0_1_72"] = (
                     f"R42: overlaid {len(_payload_keys_l6)} L6 concepts "
                     f"(paragraph + L17-channel-synth)")
-                _l6_path.write_text(json.dumps(_l6_existing, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l6_path, _l6_existing)
                 print(f"      → L6 overlay: {len(_payload_keys_l6)} concepts")
     except Exception as _l6_err:
         print(f"      L6 overlay FAILED (fail-open): {_l6_err}",
@@ -58291,7 +58195,7 @@ def main() -> int:
                     "l9_integration_concepts_v0_1_72"] = (
                     f"R40: overlaid {len(_payload_keys_l9)} integration "
                     f"concepts for bus_interconnect_protocol class")
-                _l9_path.write_text(json.dumps(_l9_existing, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l9_path, _l9_existing)
                 print(f"      → L9 overlay: {len(_payload_keys_l9)} concepts")
     except Exception as _l9_err:
         print(f"      L9 overlay FAILED (fail-open): {_l9_err}",
@@ -58330,7 +58234,7 @@ def main() -> int:
                         "l17_handshake_pairs_v0_1_70"] = (
                         f"R27: synthesised {len(_hs_pairs)} handshake_pairs "
                         f"from L17.channels")
-                    _l17p_r27.write_text(json.dumps(_l17_r27, indent=2, ensure_ascii=False) + "\n")
+                    _stamp.dump(_l17p_r27, _l17_r27)
                     print(f"      → L17.handshake_pairs: {len(_hs_pairs)} pairs")
     except Exception as _r27_err:
         print(f"      L17 handshake_pairs FAILED (fail-open): {_r27_err}",
@@ -58500,7 +58404,7 @@ def main() -> int:
                     f"R21+R25+R45: mirrored L17.channels + L17.handshake_pairs "
                     f"+ {_l15_mirror_count} L15 encoding tables + synth-universal "
                     f"L3 facts for bus_interconnect_protocol")
-                _l3p.write_text(json.dumps(_l3, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l3p, _l3)
                 print(f"      → L3 overlay: channels="
                       f"{len(_l17_channels) if isinstance(_l17_channels, list) else 0}, "
                       f"handshakes="
@@ -58534,7 +58438,7 @@ def main() -> int:
                     "Bus-interconnect protocol specification itself has no "
                     "architectural register map; implementation-side "
                     "configuration registers (if any) are integration-defined.")
-                _l4p_r52.write_text(json.dumps(_l4_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l4p_r52, _l4_r52)
             # L5 analog/digital interface presence
             _l5p_r52 = _gd_r52 / "L5_ADI_SPEC.json"
             if _l5p_r52.is_file():
@@ -58542,7 +58446,7 @@ def main() -> int:
                 _l5_r52.setdefault("analog_digital_interface_present", False)
                 _l5_r52.setdefault("signaling_summary",
                     "Pure digital protocol: synchronous CMOS single-ended signals; rising-edge sampling on ACLK; no analog content.")
-                _l5p_r52.write_text(json.dumps(_l5_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l5p_r52, _l5_r52)
             # L10 test cases / compliance
             _l10p_r52 = _gd_r52 / "L10_TEST_CASES.json"
             if _l10p_r52.is_file():
@@ -58561,7 +58465,7 @@ def main() -> int:
                     "Reset behavior (ARESETn assertion holds VALID LOW; rising-edge resumption)",
                     "Write-response ordering (BRESP returned per AWID order)",
                 ])
-                _l10p_r52.write_text(json.dumps(_l10_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l10p_r52, _l10_r52)
             # L14 backward compat traps + version naming.
             # Note: parity wants Claude's shape (list-of-dict trap records);
             # plain list-of-strings stays ABSENT.
@@ -58608,7 +58512,7 @@ def main() -> int:
                     "published before Issue F; AXI5 introduced in Issue G "
                     "(2021).")
                 _l14_r52["fields"] = _l14_f_r52
-                _l14p_r52.write_text(json.dumps(_l14_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l14p_r52, _l14_r52)
             # L15 burst address equations (universal pseudocode)
             _l15p_r52 = _gd_r52 / "L15_ENCODING_TABLES.json"
             if _l15p_r52.is_file():
@@ -58630,7 +58534,7 @@ def main() -> int:
                     "Upper_Byte_Lane_first": "Aligned_Address + (Number_Bytes - 1) - INT(Start_Address / Data_Bus_Bytes) * Data_Bus_Bytes",
                 })
                 _l15_r52["fields"] = _l15_f_r52
-                _l15p_r52.write_text(json.dumps(_l15_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l15p_r52, _l15_r52)
             # L2 out_of_order_completion + protocol_overview wording fixes
             _l2p_r52 = _gd_r52 / "L2_FRS.json"
             if _l2p_r52.is_file():
@@ -58640,7 +58544,7 @@ def main() -> int:
                     _po_r52["burst_based"] = True
                     _po_r52["multiple_outstanding"] = True
                     _po_r52["out_of_order_completion"] = True
-                _l2p_r52.write_text(json.dumps(_l2_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l2p_r52, _l2_r52)
             # L3 burst_length_field.AxLEN_AXI4.range + lock_encodings.note + response 0b11 wording
             _l3p_r52 = _gd_r52 / "L3_CMD_PROTOCOL.json"
             if _l3p_r52.is_file():
@@ -58658,7 +58562,7 @@ def main() -> int:
                     _rresp = _re_r52.get("RRESP[1:0] / BRESP[1:0]")
                     if isinstance(_rresp, dict):
                         _rresp["0b11"] = "DECERR  - decode error (no slave at address)"
-                _l3p_r52.write_text(json.dumps(_l3_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l3p_r52, _l3_r52)
             # L8 width_parameters.WSTRB + exclusive_max_bytes + Wrap_Boundary alias + Upper_Byte_Lane wording
             _l8p_r52 = _gd_r52 / "L8_RTL_CONSTANTS.json"
             if _l8p_r52.is_file():
@@ -58682,7 +58586,7 @@ def main() -> int:
                 _blp_r52 = _l8_r52.setdefault("byte_lane_pseudocode", {})
                 if isinstance(_blp_r52, dict):
                     _blp_r52["Upper_Byte_Lane_subsequent"] = "Lower_Byte_Lane + Number_Bytes - 1"
-                _l8p_r52.write_text(json.dumps(_l8_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l8p_r52, _l8_r52)
             # L9 id_routing + interconnect_ordering wording
             _l9p_r52 = _gd_r52 / "L9_INTEGRATION_SPEC.json"
             if _l9p_r52.is_file():
@@ -58715,7 +58619,7 @@ def main() -> int:
                     "When the interconnect cannot decode a slave access, it "
                     "must return DECERR. Spec recommends routing to a "
                     "default slave that returns DECERR.")
-                _l9p_r52.write_text(json.dumps(_l9_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l9p_r52, _l9_r52)
             # L12 byte_invariance + narrow_transfer + early_response + device_transactions
             _l12p_r52 = _gd_r52 / "L12_BEHAVIORAL_SEQUENCES.json"
             if _l12p_r52.is_file():
@@ -58743,7 +58647,7 @@ def main() -> int:
                     _ors_r52["different_memory_locations"] = (
                         "No ordering guarantee unless made coherent via "
                         "barriers/CMOs in ACE.")
-                _l12p_r52.write_text(json.dumps(_l12_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l12p_r52, _l12_r52)
             # L6 default_ready per-channel wording fix
             _l6p_r52 = _gd_r52 / "L6_CONTROL_LOGIC.json"
             if _l6p_r52.is_file():
@@ -58769,7 +58673,7 @@ def main() -> int:
                         "AXI4/AXI5 add an additional slave dependency on AW "
                         "handshake before BVALID, so slaves take fewer "
                         "buffering decisions independent of the address.")
-                _l6p_r52.write_text(json.dumps(_l6_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l6p_r52, _l6_r52)
             # L17 ordering_rules.response_ordering / write_data_ordering wording
             _l17p_r52 = _gd_r52 / "L17_CHANNEL_SIGNAL_CATALOG.json"
             if _l17p_r52.is_file():
@@ -58787,7 +58691,7 @@ def main() -> int:
                         "transaction addresses. AXI4+ removes WID and "
                         "prohibits write data interleaving.")
                 _l17_r52["fields"] = _l17_f_r52
-                _l17p_r52.write_text(json.dumps(_l17_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l17p_r52, _l17_r52)
             # L18 slave_classification.Peripheral_slave shorten to match Claude
             _l18p_r52 = _gd_r52 / "L18_INTERCONNECT_TOPOLOGY.json"
             if _l18p_r52.is_file():
@@ -58803,7 +58707,7 @@ def main() -> int:
                         "side effects per access; reorder restrictions; may "
                         "support a subset of transaction types.")
                 _l18_r52["fields"] = _l18_f_r52
-                _l18p_r52.write_text(json.dumps(_l18_r52, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l18p_r52, _l18_r52)
             print(f"      → R52 residual cleanup applied")
     except Exception as _r52_err:
         print(f"      R52 residual cleanup FAILED (fail-open): {_r52_err}",
@@ -58911,7 +58815,7 @@ def main() -> int:
                     "Shared address buses and multiple data buses",
                     "Multilayer, with multiple address and data buses",
                 ])
-                _l1p_r50.write_text(json.dumps(_l1_r50, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l1p_r50, _l1_r50)
             # L2 functional requirements + error responses + protocol_overview extras
             _l2p_r50 = _gd_r50 / "L2_FRS.json"
             if _l2p_r50.is_file():
@@ -58944,7 +58848,7 @@ def main() -> int:
                     _wc = _po_r50.get("wire_count")
                     if isinstance(_wc, int) or (isinstance(_wc, str) and len(_wc.strip()) < 5):
                         _po_r50["wire_count"] = "5 independent channels, each with VALID/READY pair"
-                _l2p_r50.write_text(json.dumps(_l2_r50, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l2p_r50, _l2_r50)
             # L6 anti_deadlock_rule (we have an extractor but it sometimes
             # misses; backstop here).
             _l6p_r50 = _gd_r50 / "L6_CONTROL_LOGIC.json"
@@ -58952,7 +58856,7 @@ def main() -> int:
                 _l6_r50 = json.loads(_l6p_r50.read_text())
                 _l6_r50.setdefault("anti_deadlock_rule",
                     "Inside the slave, VALID for an outgoing channel must not be combinationally dependent on the READY of the same channel; this prevents combinational deadlock.")
-                _l6p_r50.write_text(json.dumps(_l6_r50, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l6p_r50, _l6_r50)
             # L7 spec-provided observability + AXI5 features mentioned in TOC
             _l7p_r50 = _gd_r50 / "L7_TEST_DEBUG.json"
             if _l7p_r50.is_file():
@@ -58978,7 +58882,7 @@ def main() -> int:
                     "E2.4 Optional read data parity",
                     "E2.5 Optional write data parity",
                 ])
-                _l7p_r50.write_text(json.dumps(_l7_r50, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l7p_r50, _l7_r50)
             # L9: scrub garbage values from regex-noise extracts (R50b).
             # Several L9 catalog regexes (axi4_lite_subset,
             # interface_categories, interconnect_ordering_requirements,
@@ -59030,7 +58934,7 @@ def main() -> int:
                 for _k, _v_replacement in _L9_REPLACEMENTS_R50.items():
                     if _looks_garbage_r50(_l9_r50b.get(_k)):
                         _l9_r50b[_k] = _v_replacement
-                _l9p_r50b.write_text(json.dumps(_l9_r50b, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l9p_r50b, _l9_r50b)
             # L12 ordering_rules_summary extras
             _l12p_r50 = _gd_r50 / "L12_BEHAVIORAL_SEQUENCES.json"
             if _l12p_r50.is_file():
@@ -59045,7 +58949,7 @@ def main() -> int:
                         "Write after read on the same ID must be observed in issue order.")
                     _ors_r50.setdefault("read_after_write_same_ID",
                         "Read after write on the same ID must be observed in issue order.")
-                _l12p_r50.write_text(json.dumps(_l12_r50, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l12p_r50, _l12_r50)
             print(f"      → R50 universal-doc-fact synth applied")
     except Exception as _r50_err:
         print(f"      R50 universal-doc-fact synth FAILED (fail-open): {_r50_err}",
@@ -59133,7 +59037,7 @@ def main() -> int:
                         "issuing RVALID; RVALID stays asserted until RREADY "
                         "accepted and final RLAST transferred.")
                 _l17_r46b["fields"] = _l17_f_r46b
-                _l17p_r46b.write_text(json.dumps(_l17_r46b, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l17p_r46b, _l17_r46b)
             # L8_TIMING
             _l8tp_r46b = _gd_r46b / "L8_TIMING_WAVEFORM.json"
             if _l8tp_r46b.is_file():
@@ -59187,7 +59091,7 @@ def main() -> int:
                     "AXI4/AXI5: BVALID may only be asserted after BOTH (AW handshake AND W handshake with WLAST=1) complete.",
                     "Same-ID write transactions: BRESP must follow same-AWID order of acceptance.",
                 ])
-                _l8tp_r46b.write_text(json.dumps(_l8t_r46b, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l8tp_r46b, _l8t_r46b)
             # L18
             _l18p_r46b = _gd_r46b / "L18_INTERCONNECT_TOPOLOGY.json"
             if _l18p_r46b.is_file():
@@ -59279,7 +59183,7 @@ def main() -> int:
                         "False": "Not supported (or not declared)",
                     })
                 _l18_r46b["fields"] = _l18_f_r46b
-                _l18p_r46b.write_text(json.dumps(_l18_r46b, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l18p_r46b, _l18_r46b)
             # L9
             _l9p_r46b = _gd_r46b / "L9_INTEGRATION_SPEC.json"
             if _l9p_r46b.is_file():
@@ -59291,7 +59195,7 @@ def main() -> int:
                     _idh_r46b.setdefault("id_routing", "For read data, interconnect uses the appended bits of RID to determine which master port the data is destined for. Interconnect removes these bits before passing RID back to the originating master.")
                 _l9_r46b.setdefault("default_signal_values_when_omitted",
                     "Refer to Tables A9-1..A9-4 for master/slave write/read channel default signal values applied when a signal is omitted from the integration interface.")
-                _l9p_r46b.write_text(json.dumps(_l9_r46b, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l9p_r46b, _l9_r46b)
             print(f"      → batch synth applied to L17/L18/L8_TIMING/L9 (after 14c2)")
     except Exception as _r46b_err:
         print(f"      R46-relocated batch synth FAILED (fail-open): {_r46b_err}",
@@ -61077,9 +60981,7 @@ def main() -> int:
                     ]
                     if len(_kept_sweep) != len(_tc_sweep):
                         _l10_sweep["test_cases"] = _kept_sweep
-                        _l10p_sweep.write_text(
-                            json.dumps(_l10_sweep, indent=2,
-                                       ensure_ascii=False) + "\n")
+                        _stamp.dump(_l10p_sweep, _l10_sweep)
                         print(f"      → stripped "
                               f"{len(_tc_sweep) - len(_kept_sweep)} "
                               f"opcode_hex test_case(s) (L3.opcodes empty → "
@@ -61115,8 +61017,7 @@ def main() -> int:
             _l4_claim = json.loads(_l4p_claim.read_text())
             _claim_changes = reconcile_register_map_claims(_l4_claim)
             if _claim_changes:
-                _l4p_claim.write_text(
-                    json.dumps(_l4_claim, indent=2, ensure_ascii=False) + "\n")
+                _stamp.dump(_l4p_claim, _l4_claim)
                 for _ch in _claim_changes:
                     print(f"      → L4 register-map claim {_ch['rule']}: "
                           f"{_ch['field']} {_ch['action']} — {_ch['why']}")
@@ -61253,6 +61154,18 @@ def main() -> int:
          "phase1/l3_opcode_dispatch_key_actionable.json"),
         ("l_doc_path_portability_check",
          "phase1/l_doc_path_portability.json"),
+        # Sibling of the portability guard, and here for the same reason:
+        # about the documents' FORM, must run after EVERY L document
+        # exists, and must BLOCK. It asserts that every document this run
+        # emitted records the release that produced it. Any writer that
+        # creates an L document without going through
+        # `l_doc_generator_stamp.dump` leaves one unstamped, and this is
+        # what makes that FAIL the run that introduced it instead of being
+        # discovered in the published corpus seventy releases later — which
+        # is exactly how three issues came to be filed in one day against
+        # documents nobody could tell were old.
+        ("l_doc_generator_stamp",
+         "phase1/l_doc_generator_stamp.json"),
     )
     layer_gate_failures: List[str] = []
     for _gate_name, _rel_report in _SEMANTIC_LAYER_GATES:

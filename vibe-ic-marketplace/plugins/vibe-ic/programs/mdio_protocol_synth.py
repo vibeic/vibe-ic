@@ -36,6 +36,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+
 # Generic auto-dispatch opt-in (read by phase1_doc_one_shot_runner [14e2b/15]).
 AUTO_DISPATCH = True
 IC_NAME = "IEEE 802.3 Management Data Input/Output (MDIO)"
@@ -664,7 +666,7 @@ def _purge_ethernet_contamination(gd: Path) -> None:
                 del target[k]
                 changed = True
         if changed:
-            p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+            _stamp.dump(p, d)
 
 
 def apply_mdio_synth(generated_docs_dir, is_mdio_flag: bool,
@@ -683,7 +685,7 @@ def apply_mdio_synth(generated_docs_dir, is_mdio_flag: bool,
         d = json.loads(p.read_text())
         d.update(canon.get(doc, {}))
         d["ic_name"] = name
-        p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(p, d)
     for doc in _FIELDS_DOCS:
         p = gd / f"{doc}.json"
         if not p.is_file():
@@ -695,5 +697,5 @@ def apply_mdio_synth(generated_docs_dir, is_mdio_flag: bool,
         f.update(canon.get(doc, {}))
         d["fields"] = f
         d["ic_name"] = name
-        p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(p, d)
     _purge_ethernet_contamination(gd)

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 996
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 996)
+- **Total programs (excluding helpers / shims):** 997
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 997)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 987 |
+| `any` | 988 |
 
 ## Alphabetical listing
 
@@ -524,6 +524,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_cross_consistency_check` | any | — | D3 program-first capture of the |
 | `l_doc_evidence_util` | any | — | the "evidence path + read-back value" primitive. |
 | `l_doc_field_producer_check` | any | — | a field a checker READS must have a PRODUCER. |
+| `l_doc_generator_stamp` | any | v0.1.51 | every emitted L document records WHICH RELEASE |
 | `l_doc_parity_diff` | any | v0.1.51 | L-doc parity diff (program-extracted vs fresh-agent-extracted). |
 | `l_doc_path_portability_check` | any | — | no emitted L document may carry an |
 | `l_doc_structured_field_count_check` | any | Wave 31 | gate (Wave 31/32, v0.119.64). |
@@ -1068,7 +1069,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (987 programs)
+### `any` (988 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1563,6 +1564,7 @@ _(no programs in this group)_
 - `l_doc_cross_consistency_check` — D3 program-first capture of the
 - `l_doc_evidence_util` — the "evidence path + read-back value" primitive.
 - `l_doc_field_producer_check` — a field a checker READS must have a PRODUCER.
+- `l_doc_generator_stamp` — every emitted L document records WHICH RELEASE  _[v0.1.51]_
 - `l_doc_parity_diff` — L-doc parity diff (program-extracted vs fresh-agent-extracted).  _[v0.1.51]_
 - `l_doc_path_portability_check` — no emitted L document may carry an
 - `l_doc_structured_field_count_check` — gate (Wave 31/32, v0.119.64).  _[Wave 31]_

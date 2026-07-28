@@ -36,6 +36,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+
 # Generic auto-dispatch opt-in (read by phase1_doc_one_shot_runner [14e2b/15]).
 AUTO_DISPATCH = True
 IC_NAME = "Low Pin Count (LPC) Interface"
@@ -463,7 +465,7 @@ def apply_lpc_synth(generated_docs_dir, is_lpc_flag: bool,
         d = json.loads(p.read_text())
         d.update(canon.get(doc, {}))
         d["ic_name"] = name
-        p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(p, d)
     for doc in _FIELDS_DOCS:
         p = gd / f"{doc}.json"
         if not p.is_file():
@@ -475,4 +477,4 @@ def apply_lpc_synth(generated_docs_dir, is_lpc_flag: bool,
         f.update(canon.get(doc, {}))
         d["fields"] = f
         d["ic_name"] = name
-        p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(p, d)

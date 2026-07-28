@@ -28,6 +28,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+
 from _incidental_mention import AnchoredBlob as _AnchoredBlob
 from _incidental_mention import subject_term as _subject_term
 
@@ -51,7 +53,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 # ----------------------------------------------------------------------

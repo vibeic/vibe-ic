@@ -150,6 +150,18 @@ def test_no_identical_non_empty_sibling_fields_between_aes_and_dram(tmp_path_fac
                 # project's own documents declare or describe a machine;
                 # a shared 0 is a property of the input.
                 "fsm_machine_count",
+                # vibe-ic#522 — `_generator` records WHICH RELEASE OF THE
+                # PLUGIN wrote the file (version + L-doc taxonomy digest +
+                # last writer). It is identical across every document of
+                # every design BY CONSTRUCTION, and that is the point of
+                # it: it says nothing whatsoever about the part. This
+                # gate looks for a scaffold leak — content that should
+                # have differed between an AES core and a DRAM controller
+                # and did not — so a field that describes the TOOL rather
+                # than the CHIP is the one shape that can never be
+                # evidence of one. (Contrast `ic_name` below, which is
+                # skipped only for its fallback VALUE.)
+                "_generator",
                 # Empty/null sentinel structurally-shared values are fine.
                 # They're not "identical hardcodes" — they're "neither
                 # had evidence, both null".

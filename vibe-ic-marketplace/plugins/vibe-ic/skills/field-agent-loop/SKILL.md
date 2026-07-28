@@ -758,6 +758,29 @@ verification round) — all are now standing rules for EVERY fix audit:
    `NO_DEFECT_ARTIFACT` warning (the last one points at the flow #487
    snapshot helper) BEFORE `gh issue create`.
 
+4. **A published L document is the output of a PAST run — ask it which
+   one.** (2026-07-28, #522.) On one day three issues were filed against
+   `benchmark-data/**/generated_docs/L*.json` produced ~70 releases
+   earlier and read as the current state of the flow; one was written by
+   someone holding this exact rule in the brief they had just handed out.
+   Discipline was not enough because the documents said nothing about
+   their own vintage. They do now. RULE: before quoting a count from a
+   published L document, calling a gate on it a blocker, or filing an
+   issue whose premise is what it contains, run
+
+   ```bash
+   python3 programs/l_doc_generator_stamp.py <design-or-corpus-dir>
+   ```
+
+   `CURRENT` — same release and same L-doc taxonomy as your checkout;
+   read it as current. `STALE` / `NEWER` — the report gives the version
+   distance. `UNSTAMPED` — produced before the stamp existed, vintage
+   unknown: **re-derive through the canonical entry before concluding
+   anything**, and if you file anyway, say which version you measured.
+   The same applies to your own audit of a `core-closed` fix: a
+   `## 驗收` command run against a stale artefact reproduces the past,
+   not the fix.
+
 ## Reference
 
 - Handoff bundle admission gate: `programs/handoff_bundle_check.py`

@@ -34,6 +34,13 @@ try:
 except ImportError:  # pragma: no cover
     from . import l_doc_taxonomy as _tx  # type: ignore
 
+# THE L-document write chokepoint — records the producing release on the
+# L14-L18 documents this module merges into.
+try:
+    import l_doc_generator_stamp as _stamp
+except ImportError:  # pragma: no cover
+    from . import l_doc_generator_stamp as _stamp  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # Shared utilities
@@ -709,7 +716,7 @@ def fill_skeletons(project_dir: Path, source_text: str) -> Dict[str, str]:
         existing["extracted_by"] = (
             f"phase1_protocol_spec_extract.extract_{code.lower()}_* v0.1.51"
         )
-        path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        _stamp.dump(path, existing)
         status[code] = extracted["extraction_status"]
     return status
 

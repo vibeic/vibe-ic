@@ -106,6 +106,8 @@ from l_doc_evidence_util import (  # noqa: E402
     is_populated,
     load_json,
 )
+# Imported, never re-typed — see _META_KEYS.
+from l_doc_generator_stamp import STAMP_KEY as _GENERATOR_STAMP_KEY  # noqa: E402,E501
 
 _STEM = "L26_MECHANICAL_TRANSDUCTION"
 _CODE = "L26"
@@ -113,10 +115,15 @@ _CODE = "L26"
 _NA_FORMS = ("N/A", "NA", "NOT_APPLICABLE", "NOT APPLICABLE")
 _APPLICABLE_FORMS = ("APPLICABLE", "YES", "TRUE", "REQUIRED")
 
+# `_generator` is on this list for the same reason `emitted_by` is: it
+# describes the FILE (which plugin release wrote it), not the part. Without
+# it an N/A stub — whose whole point is that it carries no content — would
+# report one non-metadata key and stop looking empty.
 _META_KEYS = frozenset({
     "doc_id", "doc_name", "applicability", "ic_class", "rationale",
     "extraction_hints", "extraction_status", "emitted_by",
     "extraction_evidence", "extraction_strategy", "schema_version",
+    _GENERATOR_STAMP_KEY,
 })
 
 # What a MEMS consumer would need if the layer were ever applicable. Derived

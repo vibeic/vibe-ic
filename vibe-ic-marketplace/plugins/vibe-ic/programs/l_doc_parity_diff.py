@@ -43,6 +43,12 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+# Imported, never re-typed — see _IGNORED_ENVELOPE_KEY_PREFIXES.
+from l_doc_generator_stamp import STAMP_KEY as _GENERATOR_STAMP_KEY  # noqa: E402,E501
+
 
 # Canonical L doc list — since v0.1.51, sourced from l_doc_taxonomy
 # (L1..L23 + SoC-aware). Older snapshots can still pass agent-dirs
@@ -157,6 +163,11 @@ _IGNORED_ENVELOPE_KEY_PREFIXES: frozenset[str] = frozenset({
     "doc_class",
     "class_path",
     "emitted_by",
+    # `_generator` says which RELEASE of the plugin wrote the file. It is
+    # emitter bookkeeping by definition, and no agent extractor produces
+    # it, so counting it would report a HALLUCINATED fact on every single
+    # document — the exact over-count this set exists to prevent.
+    _GENERATOR_STAMP_KEY,
     "extraction_evidence",
     "extraction_strategy",
     "vendor_short_literals",

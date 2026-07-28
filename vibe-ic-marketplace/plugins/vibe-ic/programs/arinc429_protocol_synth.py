@@ -34,6 +34,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -44,7 +46,9 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict) -> None:
-    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    # THE L-document write chokepoint: stamps the producing release onto
+    # the document, then serialises it byte-identically to before.
+    _stamp.dump(p, d)
 
 
 def apply_arinc429_synth(generated_docs_dir: Path, is_arinc429: bool,

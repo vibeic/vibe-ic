@@ -128,6 +128,9 @@ from l_doc_consumer_contract import (  # noqa: E402
     project_relative_source,
     signoff_qualifier,
 )
+# THE L-document write chokepoint — records the producing release on the L22
+# this emitter rewrites.
+import l_doc_generator_stamp as _stamp  # noqa: E402
 
 TOOL = "l22_coverage_goal_emit"
 
@@ -298,9 +301,7 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
         # "NOT_YET_EXTRACTED".
         if doc.get("extraction_status") == "NOT_YET_EXTRACTED":
             doc["extraction_status"] = "EXTRACTED"
-        l22_path.write_text(
-            json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8")
+        _stamp.dump(l22_path, doc)
         wrote = True
 
     return {

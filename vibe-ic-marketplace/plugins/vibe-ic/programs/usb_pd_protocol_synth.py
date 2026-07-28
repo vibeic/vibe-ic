@@ -38,6 +38,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+import l_doc_generator_stamp as _stamp
+
 
 def _word(token: str, low: str) -> bool:
     """Whole-word match for short acronyms so a bare 'pdo'/'rdo'/'bmc' does not
@@ -691,7 +693,7 @@ def apply_usb_pd_synth(generated_docs_dir, is_usb_pd_flag: bool,
         d = json.loads(p.read_text())
         d.update(canon.get(doc, {}))
         d["ic_name"] = name
-        p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(p, d)
     for doc in _FIELDS_DOCS:
         p = gd / f"{doc}.json"
         if not p.is_file():
@@ -703,4 +705,4 @@ def apply_usb_pd_synth(generated_docs_dir, is_usb_pd_flag: bool,
         f.update(canon.get(doc, {}))
         d["fields"] = f
         d["ic_name"] = name
-        p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+        _stamp.dump(p, d)

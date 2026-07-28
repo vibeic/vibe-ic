@@ -43,6 +43,9 @@ from .render import (
     render_provenance_report,
     render_fact_index,
 )
+from .render import _stamp  # noqa: F401  — THE L-doc write chokepoint,
+# re-exported from the sibling that already resolves it, so this package
+# has ONE place that puts the plugin's `programs/` on the path.
 from .retrieve import top_k_for_graph
 from .nl_ingest import (
     build_extract_prompt,
@@ -349,7 +352,10 @@ def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path,
         "L13_HARDWARE_OBSERVED.json": {"contract": {}, "evidence": {}},
     }
     for fname, payload in layer_payloads.items():
-        (out_dir / fname).write_text(json.dumps(payload, indent=2) + "\n")
+        # THE L-document write chokepoint. A stub is still an L document —
+        # arguably the one a reader is most likely to mistake for current,
+        # because it is thin enough to look like a fresh scaffold.
+        _stamp.dump(out_dir / fname, payload)
     return len(layer_payloads)
 
 

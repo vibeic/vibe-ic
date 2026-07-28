@@ -59,6 +59,10 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import _path_layout as _pl
+# Imported, never re-typed: the emitter's bookkeeping key must be excluded
+# from every string harvest here, and a local copy of the literal is how the
+# exclusion silently stops matching when the key is renamed.
+from l_doc_generator_stamp import STAMP_KEY as _GENERATOR_STAMP_KEY
 
 
 # Generic single-wire half-duplex protocol nomenclature. Chip-AGNOSTIC.
@@ -971,7 +975,15 @@ def _harvest_strings(obj: Any, sink: List[str], max_strings: int = 4000,
     """Walk nested dict/list and append every string leaf to `sink`. Bounded
     so a 100KB L doc with 5000 keys doesn't blow out. Skips obvious metadata
     fields (`extraction_evidence`, `extraction_strategy`) that contain only
-    snippets re-quoted from the input and would double-count features."""
+    snippets re-quoted from the input and would double-count features.
+
+    `_generator` is on that list for a stronger reason than double-counting:
+    it is the emitter's own bookkeeping (which release wrote this file), so
+    NOTHING in it is a fact about the chip. Measured: when its taxonomy
+    digest was first emitted as `"sha256:<hex>"`, the `algorithm_family`
+    pattern below matched it and nine documents' `ic_class` flipped from
+    `bus_peripheral` to `crypto_accelerator` — the classifier reading its
+    own toolchain's version record as evidence of a cipher core."""
     if len(sink) >= max_strings or max_depth <= 0:
         return
     if isinstance(obj, str):
@@ -980,7 +992,8 @@ def _harvest_strings(obj: Any, sink: List[str], max_strings: int = 4000,
     if isinstance(obj, dict):
         for k, v in obj.items():
             if k in ("extraction_evidence", "extraction_strategy",
-                     "auto_cited_sections", "vendor_short_literals"):
+                     "auto_cited_sections", "vendor_short_literals",
+                     _GENERATOR_STAMP_KEY):
                 continue
             _harvest_strings(v, sink, max_strings, max_depth - 1)
     elif isinstance(obj, list):

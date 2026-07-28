@@ -90,14 +90,21 @@ from l_doc_evidence_util import (  # noqa: E402
     load_json,
     verify_evidence_binding,
 )
+# Imported, never re-typed — see _META_KEYS.
+from l_doc_generator_stamp import STAMP_KEY as _GENERATOR_STAMP_KEY  # noqa: E402,E501
 
 _STEM = "L25_RELIABILITY_MISSION_PROFILE"
 
+# `_generator` is on this list for the same reason `emitted_by` is: it
+# describes the FILE (which plugin release wrote it), not the part. Without
+# it an N/A stub — whose whole point is that it carries no content — would
+# report one non-metadata key and stop looking empty.
 _META_KEYS = frozenset({
     "doc_id", "doc_name", "applicability", "ic_class", "rationale",
     "extraction_hints", "extraction_status", "emitted_by",
     "extraction_evidence", "extraction_strategy", "schema_version",
     "evidence", "evidence_paths",
+    _GENERATOR_STAMP_KEY,
 })
 
 # Field-shape classification by the field's OWN name. Generic engineering

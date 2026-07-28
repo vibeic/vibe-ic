@@ -43,6 +43,9 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 import _path_layout as _pl
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
+# THE L-document write chokepoint — records the producing release on the
+# L1 / L4 / L8 documents this runner back-fills from a prompt.
+import l_doc_generator_stamp as _stamp
 
 # Phase 1 owns the doc-extraction track. The ~47k-line
 # doc-extraction implementation lives in `phase1_doc_one_shot_runner.py`.
@@ -295,7 +298,7 @@ def _seed_structural_ports(project: Path, out_dir: Path) -> int:
             l1 = json.loads(l1p.read_text())
             if not l1.get("pinout"):
                 l1["pinout"] = ports
-                l1p.write_text(json.dumps(l1, indent=2))
+                _stamp.dump(l1p, l1)
         # L8R — structural RTL constants: ports + parameters + reset
         l8r = out_dir / "L8_RTL_CONSTANTS.json"
         d = json.loads(l8r.read_text()) if l8r.is_file() else {}
@@ -307,14 +310,14 @@ def _seed_structural_ports(project: Path, out_dir: Path) -> int:
             d["reset"] = facts["reset"]
         if facts.get("enums") and not d.get("enums"):
             d["enums"] = facts["enums"]
-        l8r.write_text(json.dumps(d, indent=2))
+        _stamp.dump(l8r, d)
         # L4 — register map (markdown register table with an offset column)
         if facts.get("regmap"):
             l4p = out_dir / "L4_REGMAP.json"
             l4 = json.loads(l4p.read_text()) if l4p.is_file() else {}
             if not l4.get("registers") and not l4.get("regmap"):
                 l4["registers"] = facts["regmap"]
-                l4p.write_text(json.dumps(l4, indent=2))
+                _stamp.dump(l4p, l4)
         return len(ports)
     except Exception:
         return 0

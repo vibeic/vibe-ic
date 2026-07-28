@@ -51,6 +51,15 @@ try:
 except ImportError:  # pragma: no cover
     from . import l_doc_taxonomy as _tx  # type: ignore
 
+# THE L-document write chokepoint — records the producing release on every
+# document this module writes (na_stub overwrite, scrub rewrite, skeleton
+# emit). Without it those three paths produced files whose vintage nothing
+# on disk could state.
+try:
+    import l_doc_generator_stamp as _stamp
+except ImportError:  # pragma: no cover
+    from . import l_doc_generator_stamp as _stamp  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # Hallucination patterns (catalog grows as new failure modes surface)
@@ -354,8 +363,7 @@ def restamp_l_doc_skeletons(project_dir: Optional[Path]) -> list[str]:
                     and stamped != authoritative):
                 doc["ic_class"] = authoritative
                 try:
-                    f.write_text(
-                        json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+                    _stamp.dump(f, doc)
                     rewritten.append(str(f.relative_to(project)))
                 except OSError:
                     pass
@@ -636,8 +644,7 @@ def post_process(project_dir: Path, ic_class: str) -> PostProcessResult:
         # Case (a): not_applicable — overwrite with na_stub
         if spec.code in not_applicable:
             stub = _tx.na_stub(ic_class, spec.code)
-            target_path.write_text(
-                json.dumps(stub, indent=2), encoding="utf-8")
+            _stamp.dump(target_path, stub)
             na_stubs.append(spec.code)
             continue
 
@@ -650,16 +657,14 @@ def post_process(project_dir: Path, ic_class: str) -> PostProcessResult:
             entries = scrub_l_doc(content, spec.full_name)
             if entries:
                 scrub_log.extend(entries)
-                target_path.write_text(
-                    json.dumps(content, indent=2), encoding="utf-8")
+                _stamp.dump(target_path, content)
             continue
 
         # Case (c): applicable but missing → emit skeleton
         if spec.code in applicable:
             sk = emit_l_doc_skeleton(spec.code, ic_class,
                                      project_dir=project_dir)
-            target_path.write_text(
-                json.dumps(sk, indent=2), encoding="utf-8")
+            _stamp.dump(target_path, sk)
             skeleton.append(spec.code)
 
     verdict = "WARN" if scrub_log else "PASS"
