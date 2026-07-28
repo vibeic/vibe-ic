@@ -35,11 +35,17 @@ Exit code (`measure`):
 Exit code (`check`) — COVERAGE-CREDIT SPLIT of the two meanings that used to
 share exit 2. `flow_compliance_check._check_program_exit_zero` maps rc=2 onto
 VACUOUS_PASS ("the input this gate audits does not apply to this project"),
-and VACUOUS_PASS is counted into `pass_count`. So every rc=2 this program
+and VACUOUS_PASS was counted into `pass_count`. So every rc=2 this program
 returned bought the enclosing step PASS credit — including for an artefact
 that EXISTS at the declared coverage path but carries no coverage in it.
 An artefact under the coverage path with no `totals.*` is a MISLABELLED
 artefact, not an inapplicable input.
+(State AS MEASURED THEN. `flow_compliance_check` has since dropped
+VACUOUS_PASS from the executed-PASS numerator — the tier leaves X and stays
+in Y — so an rc=2 no longer buys PASS credit. The split below is unaffected:
+a mislabelled artefact must be rc=1 whatever the tier above it counts, and
+this program's own rc=2 was the mechanism by which step 4 was measured
+VACUOUS_PASS on the host that found the numerator defect.)
 
     0 — a real measurement is present and every threshold is met
     1 — a DEFECT: below threshold, OR the artefact at the declared path is

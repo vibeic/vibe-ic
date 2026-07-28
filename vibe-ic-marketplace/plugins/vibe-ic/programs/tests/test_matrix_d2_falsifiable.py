@@ -46,8 +46,9 @@ counted here as a NON-demonstration, exactly like ``PASS``. Three further
 outcomes are also refused as demonstrations, because each would let an
 environment problem masquerade as a working gate:
 
-    CRASH     the snippet carries a Python traceback. An unhandled exception
-              exits non-zero, and ``_check_program_exit_zero`` cannot tell it
+    CRASH     the consumer DISCLOSED an unhandled exception, via
+              ``flow_compliance_check._CRASH_HINT_PREFIX``. An unhandled
+              exception exits non-zero, so the exit code alone cannot tell it
               from a verdict — but "the program blew up" is not "the check
               found a defect". Measured for real while building this file:
               ``rtl_hygiene_lint`` exits 1 with a ``FileNotFoundError`` when
@@ -56,6 +57,16 @@ environment problem masquerade as a working gate:
               (Hence ``_prepare_report_dirs``: the gate's own ``--json``
               parent directories are created before the run, which is
               environment setup, not a weakening of the check.)
+              The consumer decides this against the UNTRUNCATED streams and
+              hands the answer over as a sentinel. It used to be re-derived
+              HERE by pattern-matching the evidence snippet, which is a
+              fixed-width tail — and since both a traceback frame line and a
+              FileNotFoundError message carry ABSOLUTE paths, the answer was
+              a function of how deep the checkout lived: measured on this
+              tree, a crashing gate graded CRASH at a 107-character project
+              path and FAIL at 108. Pattern-matching the snippet survives as
+              a FALLBACK for strings that did not come from the live
+              consumer; it is no longer what decides a real run.
     TIMEOUT   ``_check_program_exit_zero`` returns ``passed=False`` on a
               killed subprocess and says so in the snippet — its own docstring
               calls a timeout INCONCLUSIVE, not a verdict.
@@ -741,8 +752,7 @@ def _materialise_conditions(project: Path, clause) -> None:
                           encoding="utf-8")
 
 
-#: A Python traceback FRAME line. This — not the header — is what survives the
-#: consumer's truncation.
+#: The traceback patterns, RE-EXPORTED FROM THE CONSUMER — not redefined here.
 #:
 #: 2026-07-27, adversarial finding (HIGH): the classifier detected a crash by
 #: looking for the literal ``"Traceback (most recent call last)"``, but the
@@ -755,72 +765,33 @@ def _materialise_conditions(project: Path, clause) -> None:
 #: proof of falsifiability — and ``test_d2_gate_has_a_reachable_fail[step33]``
 #: stayed green. A crash was certifying the gate as falsifiable.
 #:
-#: The frame line is anchored with ``, line <n>, in <name>`` because CPython
-#: always emits the function name (``<module>`` at top level), which keeps it
-#: from matching an EDA tool's ``File "top.v", line 12`` diagnostics.
-_TRACEBACK_FRAME_RE = re.compile(
-    r'^\s*File "[^"\n]+", line \d+, in \S', re.MULTILINE)
-
-#: The SAME frame line, after the truncation landed INSIDE it.
+#: 2026-07-28: patching the PATTERNS could not finish the job, because the
+#: quantity was being computed from the wrong thing. Both a frame line and an
+#: exception message carry ABSOLUTE paths, so what survived the consumer's
+#: fixed-offset cut was a function of where the checkout lived. Measured on
+#: this tree — one crashing gate, one project, path length the only variable —
+#: 107 characters graded ``CRASH`` and 108 graded ``FAIL``. No pattern fixes
+#: that; the consumer now decides it against the untruncated streams and says
+#: so with :data:`flow_compliance_check._CRASH_HINT_PREFIX`, and this module
+#: reads that sentinel first.
 #:
-#: 2026-07-28: :data:`_TRACEBACK_FRAME_RE` is anchored at ``^\s*File "``, so it
-#: only survives a cut that happens to fall on a line boundary. The consumer
-#: cuts at a fixed 300-character offset, which falls wherever it falls — and
-#: the frame line begins with the file's ABSOLUTE path, so on a checkout whose
-#: path is long the cut lands mid-path and takes the ``File "`` prefix with it.
-#: The classifier then saw no frame at all and graded the crash ``FAIL``: the
-#: exact false certificate this tier exists to prevent, and one whose verdict
-#: was a function of how deep the checkout directory happened to be — CRASH on
-#: a short path, "demonstrated FAIL" on a long one. Measured on this tree: a
-#: KeyError raised through three frames arrives as
-#: ``…d2_falsifiable.py", line 1012, in _d2_selfcheck_raise_deep`` and was
-#: graded ``FAIL``.
-#:
-#: What survives that cut is the frame line's TAIL — the path's closing quote,
-#: then ``, line <n>, in <name>``, then end of line. Ending the pattern at the
-#: line end is what keeps it specific: CPython emits nothing after the function
-#: name, so a tool diagnostic that happens to read
-#: ``… "top.v", line 12, in module top`` carries trailing text and is not
-#: matched.
-_TRACEBACK_FRAME_TRUNCATED_RE = re.compile(
-    r'", line \d+, in (?:<[A-Za-z_]\w*>|[A-Za-z_]\w*)[ \t]*$', re.MULTILINE)
-
-#: CPython 3.11+ fine-grained error location, e.g. ``    ~~~~~^^^^^``. It sits
-#: immediately above the exception line, so it is the last frame-ish evidence
-#: left when a very long exception message pushes even the frame tail out of
-#: the 300-character window. Used ONLY to corroborate an exception tail, never
-#: on its own — a bare row of carets is not by itself a crash.
-_TRACEBACK_CARET_RE = re.compile(r"^[ \t]*[~^][~^ \t]*$", re.MULTILINE)
-
-#: The terminal ``SomeError: message`` line of a traceback, at line start.
-#: Also survives truncation, and catches a frameless ``raise`` re-render.
-_TRACEBACK_TAIL_RE = re.compile(
-    r"^(?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Interrupt|Exit)"
-    r"\s*(?::|$)", re.MULTILINE)
+#: The patterns remain as the FALLBACK for a snippet that did not come from
+#: the live consumer, and they are ALIASES of the consumer's own — a second
+#: copy of this logic is what let the two drift in the first place.
+_TRACEBACK_FRAME_RE = FCC._TRACEBACK_FRAME_RE
+_TRACEBACK_FRAME_TRUNCATED_RE = FCC._TRACEBACK_FRAME_TRUNCATED_RE
+_TRACEBACK_CARET_RE = FCC._TRACEBACK_CARET_RE
+_TRACEBACK_TAIL_RE = FCC._TRACEBACK_TAIL_RE
 
 
 def _looks_like_a_traceback(out: str) -> bool:
     """True when *out* carries a Python traceback, header or not.
 
-    Every branch below must hold under the consumer's 300-character tail
-    truncation, because that is the only form this module ever sees. A
-    signal that survives only an untruncated traceback grades real crashes
-    ``FAIL`` and certifies a blown-up gate as falsifiable.
+    Delegates to ``flow_compliance_check.looks_like_python_traceback``: this
+    module measures the consumer, so it must not carry its own opinion about
+    what a crash looks like.
     """
-    if not out:
-        return False
-    if "Traceback (most recent call last)" in out:
-        return True
-    if _TRACEBACK_FRAME_RE.search(out):
-        return True
-    if _TRACEBACK_FRAME_TRUNCATED_RE.search(out):
-        return True
-    # A bare exception tail alone is accepted only alongside frame-ish
-    # evidence, so a gate that legitimately PRINTS "ValueError: bad corner
-    # name" at column 0 as its finding is not mis-graded as a crash.
-    return bool(_TRACEBACK_TAIL_RE.search(out)
-                and (re.search(r'^\s*File "', out, re.MULTILINE)
-                     or _TRACEBACK_CARET_RE.search(out)))
+    return FCC.looks_like_python_traceback(out)
 
 
 def _classify(passed: bool, out: str) -> str:
@@ -829,7 +800,15 @@ def _classify(passed: bool, out: str) -> str:
     Order matters: a crash and a timeout BOTH arrive as ``passed=False`` and
     must be pulled out before the FAIL branch, or an environment problem gets
     counted as a working gate.
+
+    The crash sentinel is read FIRST and is the load-bearing branch: the
+    consumer emits it having seen the whole traceback, so it is the one crash
+    signal that does not depend on what fitted inside the evidence window.
+    ``_looks_like_a_traceback`` stays behind it for snippets that reach this
+    function without passing through the live consumer.
     """
+    if out.startswith(FCC._CRASH_HINT_PREFIX):
+        return CRASH
     if _looks_like_a_traceback(out):
         return CRASH
     if "TIMED OUT" in out:
@@ -1190,6 +1169,119 @@ def test_d2_harness_reports_crash_and_timeout_as_non_demonstrations():
         False, 'Error: in file "top.v", line 12, in module top') == RED
     # The caret row corroborates an exception tail; alone it decides nothing.
     assert _classify(False, "    ~~~~~^^^^^") == RED
+    # An indented finding above a column-0 exception-named summary is an
+    # ordinary gate report, not a traceback tail. 2026-07-28: it was graded
+    # CRASH for one revision, i.e. a working gate reported as having blown up
+    # and its demonstration deleted from this dimension's count.
+    assert _classify(
+        False, "verdict: FAIL\n  [ERROR] 3 corners missing\n"
+               "    ss_125c, ff_m40c, tt_25c\n"
+               "ConstraintError: 3 of 5 PVT corners are undeclared") == RED
+
+
+#: Gate shapes that all END in a real unhandled exception, differing only in
+#: what CPython leaves AFTER the exception line. Each is run for real, so what
+#: is measured is the consumer's answer and not a hand-written guess at it.
+#:
+#: ``overflows`` records whether the shape's own exception MESSAGE carries the
+#: (deliberately deep) project path, and therefore whether the evidence body
+#: is provably unrecognisable without the sentinel. It is False for
+#: ``syntax_error`` for a real reason and not as an escape hatch: a
+#: ``SyntaxError`` names the GATE program's path, which is short, so nothing
+#: pushes the traceback out of the window. That shape still measures the
+#: disclosure — it is the one CPython renders with no header and no ``, in``
+#: frame at all — it just cannot ALSO prove the window overflowed.
+_D2_CRASH_SHAPES = {
+    # the plain case: the traceback is the last thing on stderr
+    "plain": (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "def f(p): return {'only': 1}[str(p)]\n"
+        "print('probe: audited 0 files')\n"
+        "f(Path(sys.argv[1]).resolve() / 'reports' / 'phase2' / 'x.json')\n",
+        True),
+    # the exception MESSAGE spans two lines, so the exception line is not last
+    "multiline_message": (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "print('probe: audited 0 files')\n"
+        "raise ValueError('gate precondition broken under %s\\n"
+        "  expected reports/phase2/gates/x.json'\n"
+        "                 % Path(sys.argv[1]).resolve())\n",
+        True),
+    # one cleanup line printed after the traceback, on the way out
+    "atexit_after_traceback": (
+        "import atexit, sys\n"
+        "from pathlib import Path\n"
+        "atexit.register(lambda: sys.stderr.write('[cleanup] 0 temp files\\n'))\n"
+        "def f(p): return {'only': 1}[str(p)]\n"
+        "print('probe: audited 0 files')\n"
+        "f(Path(sys.argv[1]).resolve() / 'reports' / 'phase2' / 'x.json')\n",
+        True),
+    # a SyntaxError in the gate: no header, and the frame line has no `, in`
+    "syntax_error": ("def broken(:\n    pass\n", False),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_D2_CRASH_SHAPES))
+def test_d2_a_real_crash_is_disclosed_by_the_consumer_not_guessed(
+        shape, tmp_path):
+    """Drive a REALLY crashing gate through the REAL consumer, deep path.
+
+    Everything above classifies STRINGS. That leaves the mechanism this
+    dimension now depends on — ``flow_compliance_check._CRASH_HINT_PREFIX``,
+    emitted by the consumer against the untruncated streams — unmeasured
+    here: deleting the whole emit block left all of dimension 2 green
+    (MEASURED 2026-07-28, 69 passed). A dimension that DEPENDS on a fact must
+    fail when the fact stops being reported, so this cell runs the real
+    subprocess through the real consumer at a project path that provably
+    overflows the evidence window, and asserts BOTH that the tier is CRASH
+    and that the sentinel — not a lucky truncation — is what decided it.
+
+    The four shapes differ only in what follows the exception line. Two of
+    them (a multi-line exception message, one atexit line) defeated the first
+    version of the disclosure, which required the exception line to terminate
+    the stream: MEASURED, both were still CRASH at an 80-character project
+    path and FAIL at 400, i.e. the path-length lottery survived inside the
+    mechanism that was supposed to end it.
+    """
+    project = tmp_path.joinpath(*(["d" * 40] * 10))
+    project.mkdir(parents=True)
+    assert len(str(project)) > FCC._OUTPUT_SNIPPET_CHARS, (
+        f"the fixture path is {len(str(project))} chars and does not overflow "
+        f"the {FCC._OUTPUT_SNIPPET_CHARS}-char evidence window it exists to "
+        f"overflow — this cell would prove nothing")
+    src, overflows = _D2_CRASH_SHAPES[shape]
+    helper = FCC.PROGRAMS_DIR / f"_d2_crash_probe_{shape}.py"
+    helper.write_text(src, encoding="utf-8")
+    try:
+        passed, out = FCC._check_program_exit_zero(
+            project, f"{helper.stem} {project}")
+    finally:
+        helper.unlink(missing_ok=True)
+
+    assert passed is False, f"{shape}: a crash must never be a PASS"
+    assert out.startswith(FCC._CRASH_HINT_PREFIX), (
+        f"{shape}: the consumer disclosed no crash for a gate that really "
+        f"died, so this dimension is back to guessing from prose at a path "
+        f"length where the prose does not survive. Snippet:\n{out}")
+    assert _classify(passed, out) == CRASH, (
+        f"{shape}: graded {_classify(passed, out)!r}, not {CRASH!r} — a "
+        f"crashing gate would be certified as falsifiable.\n{out}")
+    body = out.split("\n", 1)[1]
+    if overflows:
+        # NON-DEGENERACY: without the sentinel this input is NOT recognisable,
+        # so the assertion above is measuring the sentinel and nothing else.
+        assert not FCC.looks_like_python_traceback(body), (
+            f"{shape}: the evidence body still reads as a traceback on its "
+            f"own, so this cell no longer isolates the sentinel:\n{body}")
+    # The evidence must survive `_evaluate_gate`'s `out[:200]` cut — and the
+    # sentence explaining the sentinel must NOT be what fills it, or the
+    # disclosure costs the operator every character of the gate's own output.
+    assert out[:200].startswith(FCC._CRASH_HINT_PREFIX)
+    assert "an unhandled exception is NOT a gate verdict" not in out[:200], (
+        f"{shape}: the boilerplate consumed the 200-character evidence "
+        f"window that `_evaluate_gate` records:\n{out[:200]}")
 
 
 def _d2_selfcheck_raise_deep(depth: int):

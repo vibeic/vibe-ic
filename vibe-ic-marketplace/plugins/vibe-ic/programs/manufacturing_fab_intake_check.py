@@ -16,13 +16,18 @@ Two defects fixed here (both measured on v1.7.36)
    prefix that no producer in the repo has ever written.  Measured on a
    project laid out exactly the way the flow specifies, the gate returned
    ``verdict: SKIP`` rc=2 — which ``flow_compliance_check`` maps to
-   VACUOUS_PASS and counts into ``pass_count``
-   (flow_compliance_check.py:6619), while listing the very files it
+   VACUOUS_PASS and counts into ``pass_count`` (as it then computed
+   it), while listing the very files it
    claimed were "not applicable" in its own ``evidence[]``.  Complete,
    correct fab-intake data was scored as a pass on the grounds that it
    did not exist.  Canonical path is now searched first, with the legacy
    ``manufacturing/`` prefix kept as a fallback so no hand-built project
    layout regresses.
+   (State AS MEASURED THEN.  ``flow_compliance_check`` has since
+   dropped VACUOUS_PASS from the executed-PASS numerator: the tier
+   leaves X and stays in Y, so the same skip no longer inflates the
+   published number.  The defect this section records — the gate
+   answering SKIP on a compliant layout — is unaffected.)
 
 2. NO SUBSTANCE PREDICATE (rc=1 mechanically unreachable).
    The docstring promised ``FAIL (rc=1) — files present but predicate
