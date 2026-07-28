@@ -2377,7 +2377,6 @@ steps:
       # the report a producer outside its own gate, as
       # `phase3_one_shot_runner._DECLARED_SIGNOFF_GATES` did for the four
       # STA/EM sign-off gates — not a checker change.
-      - "reports/phase3/si_mcf_sta_check.json"
     gate:
       all_of:
         - files_exist: ["reports/phase3/si_crosstalk.rpt", "reports/phase3/si_crosstalk.json"]

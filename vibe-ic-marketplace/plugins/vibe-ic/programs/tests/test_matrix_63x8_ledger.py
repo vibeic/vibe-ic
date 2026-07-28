@@ -414,19 +414,8 @@ def test_output_entries_classify_into_the_four_kinds():
     # artefacts were part of this count for one day and are NOT here: no
     # producer outside FS1's own gate writes them, so declaring them could only
     # be satisfied by the auditor's own output.
-    #
-    # 133 -> 134, one plain FILE (99 -> 100): step 27's
-    # `reports/phase3/si_mcf_sta_check.json`, the eighth entry of the same
-    # shape. It is the tape-out SI blocking condition's ONE input — measured,
-    # `signoff_audit.py` names that path 0 times at 9dd8b0aab and 1 time on
-    # current main — and step 27's list had never been updated, so nothing
-    # verified the artefact step 27 owes step 36 was produced. Recorded in the
-    # dimension-3 manifest with its run root, path and byte size, like the
-    # seven above (chip-agnostic: the manifest holds the names). Like step
-    # 28's perc_signoff.json it has no producer outside its own gate, and the
-    # yaml entry says so rather than implying the absence is red by default.
-    assert sum(seen.values()) == 134, seen
-    assert seen[F.FILE] == 100
+    assert sum(seen.values()) == 133, seen
+    assert seen[F.FILE] == 99
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

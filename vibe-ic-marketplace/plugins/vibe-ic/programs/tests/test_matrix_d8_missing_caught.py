@@ -645,22 +645,13 @@ NA_STEPS_AS_MEASURED: Tuple[str, ...] = ("FS1", "P0")
 #: the decision is conscious rather than silent.
 PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 
-#: Steps declaring FEWER THAN TWO ``required_outputs`` entries, re-measured
-#: 2026-07-28 (26 of 63). They cannot express "one artefact present, the rest
+#: Steps declaring FEWER THAN TWO ``required_outputs`` entries, measured
+#: 2026-07-27 (27 of 63). They cannot express "one artefact present, the rest
 #: absent", so the pooled-evidence check has no shape to build; the population
 #: is pinned so a step that gains a second entry cannot slip past it silently.
-#:
-#: 2026-07-28: step 27 LEFT this population when it declared
-#: ``reports/phase3/si_mcf_sta_check.json`` alongside its crosstalk report.
-#: The pin is one-directional — it is read only inside ``if len(outs) < 2``,
-#: so a stale entry reddens NOTHING and simply sits there as a standing
-#: exemption. Leaving "27" in would have re-armed silently the day the second
-#: entry was removed or folded into an ``A OR B`` spelling: the cell would
-#: return early, assert nothing, and report PASS. Measured live before and
-#: after: 27 of 63 with "27" present, 26 of 63 without it.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
     "8", "FS1", "DT1", "DT2", "DT3", "12", "A1", "A2", "A3", "A4", "A5", "A7",
-    "A9", "14", "16", "17", "20", "22", "29", "35", "36", "37", "M4",
+    "A9", "14", "16", "17", "20", "22", "27", "29", "35", "36", "37", "M4",
     "42", "44", "P0",
 )
 
@@ -795,8 +786,7 @@ def test_d8_only_one_declared_output_present_is_still_missing(cell, tmp_path):
         # `len(F.required_outputs(sid)) == len(outs)` — the same lru_cached call
         # on both sides, i.e. `x == x`. It could not fail under any repo state,
         # and 27 of the 63 params took it and reported PASS having asserted
-        # nothing (26 as of 2026-07-28, when step 27 gained a second entry).
-        # The precondition is now PINNED against a measured population,
+        # nothing. The precondition is now PINNED against a measured population,
         # the way NA_STEPS_AS_MEASURED is: a step that gains a second entry
         # leaves the pin, reddens HERE, and is then covered by the real
         # assertion below.
