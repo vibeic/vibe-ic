@@ -121,21 +121,46 @@ MIN_EVIDENCE_LEN = 8
 #: the day either is fixed this suite goes red and the waiver must be removed.
 WAIVERS: Tuple[Waiver, ...] = (
     # ── dimension 3 — are the declared outputs actually produced? ──────
+    #
+    # #527 — ALL FOUR OF THESE WERE PREMISED ON `find ~`.
+    # "`find ~ -maxdepth 10 -name '*.sof'` -> 0 hits (measured 2026-07-27)" is
+    # a count over a directory OUTSIDE the repository. It was true the day it
+    # was written and false a fortnight later — the same command returns 203
+    # today, every hit untracked, one of them in the user's Trash — and nothing
+    # in the repository could notice, because the repository was never what the
+    # claim was about. A waiver whose premise expires on its own is a waiver
+    # nobody can audit.
+    #
+    # Each premise below is now a statement about THIS COMMIT, which
+    # `git ls-tree -r HEAD` answers in milliseconds and answers identically for
+    # everyone who has the commit. Dimension 3's
+    # `test_d3_waived_unproven_entries_have_no_committed_artefact` re-executes
+    # every one of them on every run, so the day a matching artefact is
+    # committed the waiver reddens instead of continuing to assert a stale
+    # count.
     Waiver(
         step_id="6",
         dim=3,
         reason=(
             "Two of the three entries are Intel Quartus outputs — a .sof "
-            "bitstream and a .map.rpt — and Quartus is installed on no host "
-            "this suite can reach, so no run can produce them and no program "
-            "in the plugin synthesises an FPGA bitstream itself."
+            "bitstream and a .map.rpt — and no program in this repository "
+            "synthesises an FPGA bitstream, so nothing here can produce them "
+            "and no archived run tree carries one either. The dimension-3 "
+            "manifest records no producer for either entry, which is the same "
+            "fact from the other side: there is no command this suite could "
+            "run to close the gap."
         ),
         evidence=(
-            "`command -v quartus quartus_sh quartus_map quartus_fit "
-            "quartus_asm` -> all absent, and `find ~ -maxdepth 10 -name "
-            "'*.sof'` -> 0 hits across 108 candidate run trees (measured "
-            "2026-07-27); programs/fpga_board_capability.py:8 names 'no "
-            "Quartus on host' as the expected disclosed gap"
+            "`git ls-tree -r --name-only HEAD` matches ZERO paths against "
+            "either entry — 0 tracked '*.sof' and 0 tracked '*.map.rpt' in the "
+            "whole repository, and 0 under any of the 7 admissible in-repo run "
+            "roots. The sibling entry reports/phase2/fpga/"
+            "quartus_map_audit.json IS produced (263 B in benchmark-data/ic/"
+            "spm/v1.5.66_gf180mcuD), so the step runs and only the bitstream "
+            "half is missing; programs/fpga_board_capability.py:8 names 'no "
+            "Quartus on host' as the expected disclosed gap. Re-executed live "
+            "by programs/tests/test_matrix_d3_outputs_produced.py::"
+            "test_d3_waived_unproven_entries_have_no_committed_artefact"
         ),
     ),
     Waiver(
@@ -143,15 +168,19 @@ WAIVERS: Tuple[Waiver, ...] = (
         dim=3,
         reason=(
             "The entry phase2/stage1/fpga/final/*.sof is the recompiled Intel "
-            "Quartus bitstream for on-board sign-off; the same tool gap as "
-            "step 6 applies, so this entry has no producer on any reachable "
-            "host while the sibling on_board_pass.json is produced normally."
+            "Quartus bitstream for on-board sign-off; the same missing "
+            "producer as step 6 applies, so nothing in this repository can "
+            "write it, while the sibling on_board_pass.json is produced "
+            "normally."
         ),
         evidence=(
-            "`find ~ -maxdepth 10 -name '*.sof'` -> 0 hits (measured "
-            "2026-07-27); the sibling entry "
-            "reports/phase2/fpga/on_board_pass.json resolves in "
-            "benchmark-data/ic/spm/v1.5.66_gf180mcuD"
+            "`git ls-tree -r --name-only HEAD` matches ZERO paths against "
+            "phase2/stage1/fpga/final/*.sof anywhere in the repository or "
+            "under any admissible in-repo run root; the sibling entry "
+            "reports/phase2/fpga/on_board_pass.json resolves at 732 B in "
+            "benchmark-data/ic/spm/v1.5.66_gf180mcuD. Re-executed live by "
+            "programs/tests/test_matrix_d3_outputs_produced.py::"
+            "test_d3_waived_unproven_entries_have_no_committed_artefact"
         ),
     ),
     Waiver(
@@ -160,19 +189,23 @@ WAIVERS: Tuple[Waiver, ...] = (
         reason=(
             "Three of A8's four entries (.lef/.lib/.v) are produced by a real "
             "analog run, so the step demonstrably executes; the .gds entry "
-            "alone is produced by nothing. Every matching file on the host is "
-            "a stub written by a throwaway seeding script into an agent "
-            "scratch tree, and admitting a seeded INPUT as a produced OUTPUT "
-            "is the false pass this campaign removes."
+            "alone is produced by nothing. Admitting a seeded or aliased INPUT "
+            "as a produced OUTPUT is the false pass this campaign removes."
         ),
         evidence=(
-            "`find ~ -maxdepth 10 -path '*analog/hardmacro/*' -name '*.gds'` "
-            "-> only backlog_medlow_mixed_scratch/{ba_mixed,ba_pristine,"
-            "m1proj}, all written by backlog_medlow_mixed_scratch/mkgds.py (a "
-            "12-line pya script), none carrying provenance.jsonl or "
-            "reports/orchestrator; the sibling .lef/.lib/.v resolve in "
-            "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e/"
-            "phase3/analog/hardmacro/{ldo,delta_sigma}/; measured 2026-07-27"
+            "`git ls-tree -r --name-only HEAD` matches ZERO paths against "
+            "phase3/analog/hardmacro/*/*.gds while matching 2 for the sibling "
+            "*.lef (benchmark-data/ic/u_hawaii_adc/phase3/analog/hardmacro/"
+            "{ldo,delta_sigma}/*.lef) — the step ran and only the .gds is "
+            "absent. Every .gds ever found at that path on any machine was "
+            "either a stub written by a throwaway 12-line seeding script into "
+            "a tree carrying neither provenance.jsonl nor reports/orchestrator, "
+            "or a symlink to the design's own input layout under "
+            "design_data/gds/ — which the symlink rule rejects independently "
+            "(test_d3_symlinked_artefacts_are_not_counted_as_produced). "
+            "Re-executed live by programs/tests/"
+            "test_matrix_d3_outputs_produced.py::"
+            "test_d3_waived_unproven_entries_have_no_committed_artefact"
         ),
     ),
     Waiver(
@@ -181,16 +214,23 @@ WAIVERS: Tuple[Waiver, ...] = (
         reason=(
             "The step's own gate output records that the merge tool which "
             "would write phase3/mixed_signal/top_merged.gds does not ship, so "
-            "a run that reaches M1 emits merge.json (the sibling entry, which "
-            "IS produced) while the merged GDS is never written. No flow-run "
-            "tree on the host carries one."
+            "a run that reaches M1 emits merge.json (the sibling entry) while "
+            "the merged GDS is never written, and no run tree this repository "
+            "carries has one."
         ),
         evidence=(
-            "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e/"
-            "reports/analog/mixed_signal/merge.json -> {\"verdict\": \"SKIP\", "
-            "\"rationale_when_skipped\": \"Top-level GDS merge tool not "
-            "shipped.\", \"missing\": [\"phase3/mixed_signal/top_merged.gds\"]}"
-            " (measured 2026-07-27)"
+            "`git ls-tree -r --name-only HEAD` matches ZERO paths against "
+            "phase3/mixed_signal/top_merged.gds anywhere in the repository. "
+            "The sibling reports/analog/mixed_signal/merge.json is recorded at "
+            "497 B from a run tree this repository does NOT carry, so it is "
+            "fixture-attested on every host (#527); its measured content was "
+            "{\"verdict\": \"SKIP\", \"rationale_when_skipped\": \"Top-level "
+            "GDS merge tool not shipped.\", \"missing\": [\"phase3/"
+            "mixed_signal/top_merged.gds\"]} (measured 2026-07-27) — the merge "
+            "tool naming itself as unshipped is why nothing writes the entry. "
+            "Re-executed live by programs/tests/"
+            "test_matrix_d3_outputs_produced.py::"
+            "test_d3_waived_unproven_entries_have_no_committed_artefact"
         ),
     ),
 
