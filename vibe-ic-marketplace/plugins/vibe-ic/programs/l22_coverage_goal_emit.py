@@ -38,6 +38,25 @@ uses) one goal is emitted carrying:
     name        the coverage vocabulary term that matched
     target_pct  the percentage, as a float a gate can compare against
     signoff_gate  whether the design says this target BLOCKS sign-off
+    source      the input document, PROJECT-RELATIVE
+    line        the line in that document
+
+`source` must be relative, and was not. `framed_hits` returns
+`str(path)` off a glob of the resolved project dir, so the emitted goal
+carried an absolute path — `/…/<checkout>/phase1/input_doc/<file>` — into
+an L document. That is right for a gate REPORT, which is a run record
+whose job is to say where the run happened, and wrong for an L document,
+which is a design artefact the flow reads back, diffs across runs and
+compares between designs: the same design emitted from two checkouts
+produced two different L22s and neither was comparable to the other.
+Measured across the tracked corpus, 2550 of 2554 L documents already use
+a project-relative provenance path; this emitter added one absolute path
+per design the moment it ran. Relativisation (and the policy for an
+input that lives OUTSIDE the project, which is recorded as an explicit
+`<outside-project>/<basename>` marker rather than dropped or emitted
+absolute) lives in `l_doc_consumer_contract.project_relative_source`,
+next to the code that produced the absolute path. `line` is untouched: a
+line number is a property of the file, not of the machine.
 
 `signoff_gate` is load-bearing and defaults to True. A design may state
 a measurable target and explicitly mark it informational ("資訊性",
@@ -106,6 +125,7 @@ sys.path.insert(0, str(_HERE))
 from l_doc_consumer_contract import (  # noqa: E402
     framed_hits,
     input_doc_texts,
+    project_relative_source,
     signoff_qualifier,
 )
 
@@ -241,16 +261,32 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
         # row it is written on. `line_text` is present because this call
         # opted into include_non_normative.
         qualifier = signoff_qualifier(h.get("line_text") or "")
+        # PROJECT-RELATIVE, never absolute. `framed_hits` hands back
+        # `str(path)` — right for a gate REPORT (a run record says where the
+        # run happened), wrong here: this value is written INTO an L
+        # document, a design artefact the flow reads back and diffs. An
+        # absolute path makes the same design emit a different L22 from
+        # every checkout. `line` is untouched — it is a property of the
+        # file's contents, not of the machine. See
+        # `l_doc_consumer_contract.project_relative_source`.
+        src, src_outside = project_relative_source(h.get("source"), project)
         goal = {
             "name": name,
             "target_pct": pct,
             "signoff_gate": qualifier is None,
             "signoff_qualifier": qualifier,
-            "source": str(h.get("source") or ""),
+            "source": src,
             "line": h.get("line"),
             "evidence": text[:200],
             "extraction_strategy": TOOL,
         }
+        if src_outside:
+            # Present ONLY when it fires. An always-present `false` would
+            # change the shape of every goal ever emitted to say nothing;
+            # this key exists to be conspicuous on the rare run whose input
+            # lives outside the project, and `source` already carries the
+            # `<outside-project>/` marker for a human reader.
+            goal["source_outside_project"] = True
         goals.append(goal)
         emitted.append(goal)
 

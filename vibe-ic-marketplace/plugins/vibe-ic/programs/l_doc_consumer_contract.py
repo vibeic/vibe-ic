@@ -66,6 +66,8 @@ __all__ = [
     "input_doc_texts",
     "sibling_l_doc_texts",
     "framed_hits",
+    "project_relative_source",
+    "OUTSIDE_PROJECT_PREFIX",
     "signoff_qualifier",
     "waiver_rationale",
     "numeric_target",
@@ -479,6 +481,124 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
             if len(out) >= limit:
                 return out
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Provenance that survives leaving the machine it was produced on
+# ─────────────────────────────────────────────────────────────────────
+
+# Structurally impossible to mistake for a path, and it reuses the
+# angle-bracket convention `shipped_path_portability_check` already
+# treats as "a placeholder, not a value".
+OUTSIDE_PROJECT_PREFIX = "<outside-project>"
+
+
+def project_relative_source(source: Any, project: Path) -> Tuple[str, bool]:
+    """Turn a provenance path into one that means the same thing anywhere.
+
+    Returns ``(source, outside_project)``.
+
+    WHY THIS IS NOT DONE IN ``framed_hits``
+    ---------------------------------------
+    ``framed_hits`` returns ``str(path)`` — an ABSOLUTE path, because
+    ``input_doc_texts`` globs a project directory the caller resolved.
+    That is correct for its GATE callers: a gate writes its hits into a
+    report under ``reports/``, and a report is a RUN RECORD whose job is
+    to say where the run happened. It is wrong for its EMITTER callers,
+    which write the value into an L document — a DESIGN artefact that the
+    flow reads back, diffs across runs and compares between designs. An
+    absolute path there records the checkout and the machine, so two runs
+    of the same design from different directories produce different L
+    documents and neither is comparable to the other.
+
+    Same predicate, two consumers, two policies — the same split
+    ``framed_hits(include_non_normative=...)`` already makes. So the
+    relativisation lives here, next to the code that produced the
+    absolute path, and every emitter opts in; the gates' report JSON
+    keeps exactly the shape it ships today.
+
+    WHAT IS RECORDED WHEN THE PATH CANNOT BE RELATIVISED
+    ----------------------------------------------------
+    An input can legitimately live outside the project root (a shared
+    corpus, a symlink farm, a path handed in by an orchestrator). Three
+    options were on the table:
+
+      * emit the absolute path — the defect itself, just narrower;
+      * emit nothing — the goal keeps its number but loses every trace of
+        where the number came from, and a reader cannot tell a
+        provenance-less goal from a fabricated one. This repo's whole
+        failure class is a value that cannot be traced back;
+      * emit an EXPLICIT MARKER plus the file's own basename.
+
+    The third is chosen. The basename is a property of the DOCUMENT and
+    is identical on every machine; only the directory chain above it is
+    machine-specific, and that is exactly the part dropped. The marker
+    ``<outside-project>/`` makes the degradation impossible to read as a
+    real relative path, and the returned ``outside_project`` flag lets a
+    consumer branch on it without string-sniffing. Provenance is degraded
+    — two different out-of-project files with the same basename become
+    indistinguishable — but it is degraded VISIBLY, which is the whole
+    difference from dropping it.
+
+    That policy is not invented here. ``l_doc_evidence_util
+    .resolve_under_project`` is this function's READ-side counterpart, and
+    it already REFUSES an evidence path that escapes the project root —
+    "a certificate whose proof lives outside the run is not reproducible
+    evidence". An absolute out-of-project path would therefore be silently
+    unresolvable to the reader; an explicit marker at least says so.
+
+    ``line`` is deliberately NOT touched by any of this: a line number is
+    a property of the file's contents, not of the machine it sits on.
+    """
+    if source is None:
+        return "", False
+    raw = str(source).strip()
+    if not raw:
+        return "", False
+
+    p = Path(raw)
+    if not p.is_absolute():
+        # Already relative — normalised through the path flavour so the
+        # emitted separator is always `/` and the value never records which
+        # OS produced it. This does NOT launder backslashes out of a string:
+        # on POSIX a backslash is a legal filename character and rewriting
+        # it would corrupt a real name.
+        return p.as_posix(), False
+
+    for base in _relativisation_bases(project):
+        try:
+            return p.relative_to(base).as_posix(), False
+        except ValueError:
+            continue
+    # A resolved comparison catches a symlinked project root or a path
+    # carrying `..` segments, which the lexical attempt above cannot.
+    try:
+        rp = p.resolve()
+        for base in _relativisation_bases(project):
+            try:
+                return rp.relative_to(base.resolve()).as_posix(), False
+            except (ValueError, OSError):
+                continue
+    except (OSError, RuntimeError):
+        pass
+    return f"{OUTSIDE_PROJECT_PREFIX}/{p.name}", True
+
+
+def _relativisation_bases(project: Path) -> List[Path]:
+    """The project root, lexical form first, resolved form second.
+
+    Two forms because the caller may hand in either: ``main()`` resolves
+    its ``project_dir`` while an in-process caller often does not, and a
+    glob result is prefixed with whichever form was globbed.
+    """
+    bases = [project]
+    try:
+        rp = project.resolve()
+        if rp != project:
+            bases.append(rp)
+    except (OSError, RuntimeError):
+        pass
+    return bases
 
 
 # ─────────────────────────────────────────────────────────────────────

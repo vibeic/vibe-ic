@@ -112,6 +112,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
 import sdc_constraints as _sdc
 import floorplan_contract as _fpc
+from l_doc_consumer_contract import project_relative_source
 # One clock name declares exactly one period. Several independent extraction
 # strategies write into L8.clocks[] / L8.clock_domains[] and nothing used to
 # compare what they wrote, so a converged run shipped `clk` at both 100 MHz
@@ -54784,11 +54785,13 @@ def _post_emit_sdc_constraints(project: Path) -> None:
             l19["fields"] = fields
         fields["constraints_present"] = True
         if not fields.get("sdc_constraints_path"):
-            try:
-                fields["sdc_constraints_path"] = str(
-                    sdc_files[0].relative_to(project))
-            except ValueError:
-                fields["sdc_constraints_path"] = str(sdc_files[0])
+            # The former `except ValueError: str(sdc_files[0])` fallback wrote
+            # an ABSOLUTE path into the L document whenever the SDC sat
+            # outside the project. Unreachable for a file this function
+            # collected, but it is the same defect the shared helper exists
+            # to refuse — so route both branches through it.
+            fields["sdc_constraints_path"] = project_relative_source(
+                sdc_files[0], project)[0]
         out = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
         out.write_text(json.dumps(l19, indent=2, ensure_ascii=False) + "\n")
 
@@ -54819,7 +54822,18 @@ def _post_emit_sdc_constraints(project: Path) -> None:
         target["freq_mhz"] = (freq_hz / 1_000_000.0) if freq_hz else None
         target["period_ns"] = period_ns
         target["source"] = "input/constraints/*.sdc"
-        target["evidence"] = primary["source"]
+        # PROJECT-RELATIVE. `sdc_constraints.collect_create_clocks` stamps
+        # `"source": str(sdc)` off an absolute project glob — correct for its
+        # report-only consumers, wrong here, because this value is written
+        # into L8, a design artefact the flow reads back and diffs. Measured
+        # on a fresh minimal project against current main: this line emitted
+        # `<abs>/input/constraints/clock.sdc` into BOTH L8 documents, so the
+        # four absolute paths in the published corpus are a LIVE defect, not
+        # a stale artefact. Note the sibling `source` two lines up and
+        # `sdc_constraints_path` above were already relative — only this one
+        # value escaped. See l_doc_consumer_contract.project_relative_source.
+        target["evidence"] = project_relative_source(
+            primary["source"], project)[0]
         if port_name and not target.get("source_pin"):
             target["source_pin"] = port_name
         if port_name and not target.get("name"):
@@ -61168,7 +61182,23 @@ def main() -> int:
         print(f"      {_msg}", file=sys.stderr)
 
     # ------------------------------------------------------------------
-    # SEMANTIC LAYER GATES (batch layergate-1)
+    # POST-EMIT L-DOC GATES (batch layergate-1, + portability)
+    #
+    # Three of these are SEMANTIC: they assert that each layer carries what
+    # its CONSUMER needs in an ACTIONABLE form — not that a token appears
+    # somewhere. The fourth, `l_doc_path_portability_check`, is about the
+    # documents' FORM rather than their content: no emitted L document may
+    # carry an absolute filesystem path, because an L document is a design
+    # artefact the flow reads back and diffs, and an absolute path makes the
+    # same design emit a different document from every checkout.
+    #
+    # It belongs in THIS list, and only here, for the same reason the
+    # semantic three do: it must run after EVERY L document exists, since
+    # any emitter in the run can introduce the defect, and it must BLOCK.
+    # The rule was previously enforced only by
+    # `shipped_path_portability_check <plugin-root>` — over plugin SOURCE,
+    # never over the artefacts that actually carry the paths — so two
+    # separate live emitters reintroduced it and nothing noticed.
     #
     # These assert that each layer carries what its CONSUMER needs in an
     # ACTIONABLE form — not that a token appears somewhere. They run HERE,
@@ -61192,6 +61222,8 @@ def main() -> int:
          "phase1/l2_named_constant_resolvable.json"),
         ("l3_opcode_dispatch_key_actionable_check",
          "phase1/l3_opcode_dispatch_key_actionable.json"),
+        ("l_doc_path_portability_check",
+         "phase1/l_doc_path_portability.json"),
     )
     layer_gate_failures: List[str] = []
     for _gate_name, _rel_report in _SEMANTIC_LAYER_GATES:
