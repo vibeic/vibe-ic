@@ -185,13 +185,21 @@ ALLOWLIST: dict[tuple, str] = {
         "PASS. Simulation-only closure stays legal; it is no longer silent.",
     ("27", "si_mcf_sta_check",
      "reports/phase3/si_mcf_sta.json"):
-        "Documented ADVISORY axis. The MCF crosstalk-delay check is a "
-        "conservative BOUND (not PrimeTime-SI's iterative coupled-waveform "
-        "calc), and the flow YAML comment states it validates the emitted "
-        "report rather than hard-failing a negative bounded slack. The "
-        "noise/glitch axis of the same step is hard-gated by the "
-        "`files_exist` any_of on si_crosstalk.rpt/.json, so Step 27 cannot "
-        "pass with no SI evidence at all.",
+        "Documented ADVISORY axis, as a GATE only. The MCF crosstalk-delay "
+        "check is a conservative BOUND (not PrimeTime-SI's iterative "
+        "coupled-waveform calc), and the flow YAML comment states it "
+        "validates the emitted report rather than hard-failing a negative "
+        "bounded slack, so a self-disabling condition here does not silently "
+        "excuse a finding. "
+        "2026-07-28 — the second half of this justification was RETIRED, not "
+        "re-worded: it used to add that the noise/glitch any_of alone means "
+        "'Step 27 cannot pass with no SI evidence at all'. Since step 27 "
+        "declares reports/phase3/si_mcf_sta_check.json in required_outputs, "
+        "the crosstalk axis alone no longer suffices — MEASURED on a fresh "
+        "copy of benchmark-data/ic/spm/v1.5.58_ihp-sg13g2 with the MCF "
+        "artefacts deleted, step 27 resolves MISSING, not PASS. The axis is "
+        "advisory as a gate and MANDATORY as an output, which is what makes "
+        "the self-disabling condition tolerable rather than the old claim.",
 }
 
 

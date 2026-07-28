@@ -698,10 +698,10 @@ def _parse_audit_tally(audit_text: str) -> Optional[Dict[str, int]]:
 
     A candidate line must carry the FULL mandatory quartet the checker
     prints unconditionally. Without that, the report's own prose bullet
-    (`- PASS=31 (+VACUOUS-PASS=3 → executed PASS=34) …`) would match and
-    the reconciliation would end up comparing the roll-up against a
-    restatement of itself — agreement by construction, which is the one
-    outcome this must never be able to produce."""
+    (`- PASS=31 → executed PASS=31 — … VACUOUS-PASS=3 is NOT included …`)
+    would match and the reconciliation would end up comparing the roll-up
+    against a restatement of itself — agreement by construction, which is
+    the one outcome this must never be able to produce."""
     for ln in audit_text.splitlines():
         if "PASS=" not in ln:
             continue
@@ -895,12 +895,24 @@ def _counts_snapshot(
     """#461 symptom (2): derive ALL displayed counts from ONE rollup.
 
     `executed_pass` / `executed_total` match the audit summary line's
-    "X/Y executed PASS" definition (PASS + VACUOUS-PASS over
-    total − waived − skipped, per flow_compliance_check Wave 93), so
-    the headline audit block, the prose bullets, and the resource log
+    "X/Y executed PASS" definition (PASS over total − waived − skipped),
+    so the headline audit block, the prose bullets, and the resource log
     never disagree. `pass_only` is the strict PASS bucket retained for
     the per-verdict roll-up table. chip-AGNOSTIC: pure arithmetic on
     verdict buckets.
+
+    VACUOUS-PASS is NOT in `executed_pass`. It used to be (Wave 93,
+    `executed_pass = pass_only + vacuous`), mirroring
+    `flow_compliance_check`'s `pass_count = counts['PASS'] +
+    counts['VACUOUS_PASS']`. The owner ruled that tier out of the
+    numerator: a vacuous gate ran and found nothing to audit, so counting
+    it as executed made the published number claim a measurement that
+    never happened. It stays in `executed_total` — it is an unmet
+    requirement, not an inapplicable step (that is SKIPPED-CONDITION,
+    which is subtracted) — and it is still surfaced on its own bullet.
+    Both halves must move with `flow_compliance_check`: the two
+    definitions are cross-checked live by
+    ``test_report_executed_pass_equals_the_checkers_own_headline``.
 
     #652 — the SKIPPED-CONDITION total (`skipped`) is ALSO split BY
     STAGE into `skipped_manufacturing` (silicon-dependent steps 40-44 /
@@ -920,7 +932,7 @@ def _counts_snapshot(
     # the roll-up-consistency gate) can tell an unreadable verdict apart
     # from an absent required output.
     no_verdict = rollup.get(NO_VERDICT, 0)
-    executed_pass = pass_only + vacuous
+    executed_pass = pass_only
     executed_total = total_steps - waived - skipped
     if flow is not None and verdicts is not None:
         skipped_manufacturing, skipped_midflow = _split_skipped_by_stage(flow, verdicts)
@@ -1495,11 +1507,11 @@ def _render(project: Path, run_audit: bool = True,
     # `_verdict_rollup` parse of THIS one audit run — never from a
     # second flow_compliance parse and never from a different PASS
     # definition. `executed_pass` matches the audit summary line's
-    # "X/Y executed PASS" semantics (PASS + VACUOUS-PASS rolled in,
-    # per flow_compliance_check Wave 93) so the headline audit block,
-    # the prose, and the resource log all agree. A snapshot marker is
-    # stamped so a reader knows a fresh `--strict` re-run can move the
-    # numbers (e.g. once late artefacts land).
+    # "X/Y executed PASS" semantics (strict PASS only — VACUOUS-PASS was
+    # ruled out of the numerator and stays in the denominator) so the
+    # headline audit block, the prose, and the resource log all agree. A
+    # snapshot marker is stamped so a reader knows a fresh `--strict`
+    # re-run can move the numbers (e.g. once late artefacts land).
     snap = _counts_snapshot(rollup, total_steps, flow=flow, verdicts=verdicts)
     snapshot_marker = _snapshot_marker(audit_text, overall)
 
@@ -1592,9 +1604,10 @@ def _render(project: Path, run_audit: bool = True,
     fail_n = snap["fail"]
     executed_pass = snap["executed_pass"]
     executed_total = snap["executed_total"]
-    md.append(f"- PASS={pass_n} (+VACUOUS-PASS={vacuous_n} → executed PASS="
-              f"{executed_pass}) — every executed canonical step passed "
-              f"deterministically.")
+    md.append(f"- PASS={pass_n} → executed PASS={executed_pass} — every "
+              f"canonical step that MEASURED something passed "
+              f"deterministically. VACUOUS-PASS={vacuous_n} is NOT included: "
+              f"those gates ran and found no input to audit.")
     if waived_n:
         md.append(f"- WAIVED-DEFERRED={waived_n} — deferred via documented waiver "
                   "(human review required before tapeout).")
@@ -1655,7 +1668,11 @@ def _render(project: Path, run_audit: bool = True,
         # the stage breakdown and the roll-up cannot disagree about which
         # bucket an unreadable step lands in.
         per_v = collections.Counter(verdicts.get(str(s["id"]), NO_VERDICT) for s in rows)
-        npass = per_v.get("PASS", 0) + per_v.get("VACUOUS-PASS", 0)
+        # Same numerator definition as `_counts_snapshot` / the checker's
+        # headline: VACUOUS-PASS is NOT a PASS here either, or the stage
+        # table would restate the retired Wave 93 arithmetic one column
+        # over from the corrected total. It still shows in `other_bits`.
+        npass = per_v.get("PASS", 0)
         other_bits = []
         for k in ROLLUP_ORDER:
             if k == "PASS":
@@ -1952,8 +1969,9 @@ def _render(project: Path, run_audit: bool = True,
                           f"{t.get('iterations','?')} iterations, "
                           f"converged={'yes' if t.get('converged') else 'no'}")
     # #461 symptom (2): same snapshot as the headline — executed PASS
-    # (PASS + VACUOUS-PASS) over executed total (steps − waived −
-    # skipped). Identical denominator/numerator to the Verdict block.
+    # (strict PASS only; VACUOUS-PASS left the numerator by owner ruling)
+    # over executed total (steps − waived − skipped; VACUOUS-PASS stays in
+    # it). Identical denominator/numerator to the Verdict block.
     md.append(f"- Canonical step executed PASS: "
               f"**{snap['executed_pass']}/{snap['executed_total']}** "
               f"(strict PASS: {snap['pass_only']}, "

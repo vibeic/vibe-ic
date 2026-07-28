@@ -136,17 +136,23 @@ L3b A SELF-DECLARED SKIP IS NEVER FOLDED INTO A PLAIN PASS — for the clauses
 L3c A SELF-DECLARED SKIP IS NOT INSIDE THE EXECUTED-PASS NUMERATOR.  L3 and
     L3b both stop at the LABEL. They are satisfied the moment a skip is moved
     off the plain PASS bucket onto its own tier — and ``flow_compliance_check``
-    folds that tier straight back into the published metric
-    (``pass_count = counts["PASS"] + counts["VACUOUS_PASS"]``), so a step can
+    used to fold that tier straight back into the published metric
+    (``pass_count = counts["PASS"] + counts["VACUOUS_PASS"]``), so a step could
     change label without the headline ``X/Y executed PASS`` moving by one.
     Measured: giving FS1 and step 30 their own tier left
     ``Steps: 1 total (1/1 executed PASS …)`` byte-identical before and after.
     L3c reads the PUBLISHED X off the consumer's own stdout and charges a step
     whose resolved tier is ``VACUOUS_PASS`` while X exceeds the plain-PASS
-    counter from the same run. It charges 4 of the 63 cells today (4, 14, 30,
-    FS1) and every one is WAIVED against a single pending owner decision, with
-    the blast radius measured across all 12 tracked run roots — see
-    ``_VACUOUS_AGGREGATION_DECISION``.
+    counter from the same run.
+
+    CLOSED 2026-07-28 by the fix, not by a waiver: the owner ruled the tier out
+    of the numerator and ``pass_count = counts["PASS"]``. The tier stays in the
+    DENOMINATOR — a gate that ran and found nothing to audit is an unmet
+    requirement, not an inapplicable step — and it is still not a failure. The
+    leg charged 4 cells (4, 14, 30, FS1) on the host that measured it; three
+    were waived and step 4, waived nowhere, was the red on ``main``. It charges
+    0 today and stays armed: it re-reads the published X every run, so restoring
+    ``+ counts["VACUOUS_PASS"]`` reddens every cell that lands on the tier.
 
 L4  YAML SKIP SURFACES ARE RUNTIME-CONDITIONED AND REACHABLE.
     Every ``optional_program_exit_zero`` declares a non-empty
@@ -172,12 +178,11 @@ Stated plainly so nobody mistakes a green run for a stronger claim:
   * WHY a step is on the VACUOUS_PASS tier. L3c charges the AGGREGATION — the
     skip being inside the X of X/Y — and takes the tier itself as given. It
     cannot tell a legitimately-inapplicable step (step 14 with no .ys script)
-    from one that should have measured something and did not. That
-    discrimination is what the pending owner decision on
-    ``_VACUOUS_AGGREGATION_DECISION`` turns on, and this module does not make
-    it. (This entry replaces the previous one, which named the same
-    aggregation and declined to contest it at all; it is now leg L3c, charged
-    on 4 cells and waived, rather than a paragraph.)
+    from one that should have measured something and did not. The fix does not
+    need that discrimination — both are unmeasured, and neither belongs in a
+    number that says "measured and passed" — but nothing in this module tells
+    the two apart, so a step wrongly parked on the tier still looks the same
+    here as one honestly parked there.
   * A skip path that neither EMPTY nor SEEDED reaches is not measured. The
     seeding is derived from the step's own declarations; a gate whose skip
     hinges on an artefact the step never names (step 30's SPEF is one — it is
@@ -387,88 +392,30 @@ def dim_waivers() -> Tuple[W.Waiver, ...]:
 # back to the ALL-of spelling, the `flow_condition_reachability_baseline.json`
 # entry is restored, and DT2 stays waived — for leg L4, not L3c.
 #
-# What this module carries NOW is the ARITHMETIC half, charged by leg L3c, on
-# the four steps that measurably land on the VACUOUS_PASS tier under its own
-# probes. All four are one pending OWNER DECISION, stated identically below.
+# What this module carried until 2026-07-28 was the ARITHMETIC half, charged by
+# leg L3c, on the steps that measurably land on the VACUOUS_PASS tier under its
+# own probes: FS1, 30 and 14 held waivers against one pending OWNER DECISION,
+# and step 4 was charged on hosts where its gate lands on that tier rather than
+# on FAIL — which is what turned main red, because step 4 had no waiver.
+#
+# THE DECISION IS TAKEN, AND THE DEFECT IS FIXED, so those waivers are gone from
+# the central registry rather than restated here. `flow_compliance_check` now
+# computes `pass_count = counts["PASS"]`: a step on the VACUOUS_PASS tier has
+# left the published `X/Y executed PASS` numerator. It has NOT left the
+# denominator — `total_required` still counts it, because a gate that ran and
+# found nothing to audit is an unmet requirement, not an inapplicable step (that
+# is SKIPPED-CONDITION, which is subtracted). And it has NOT become a failure:
+# the tier appears in none of `failing` / `missing` / `setup_required_skipped` /
+# `oss_blocked_skipped`, so it still cannot make a run non-green.
+#
+# LEG L3c IS NOT RETIRED WITH THE WAIVERS. It is the guard that keeps the
+# arithmetic honest: it re-reads the PUBLISHED X off the consumer's own stdout
+# every run, so re-adding `+ counts["VACUOUS_PASS"]` reddens every cell that
+# lands on the tier.
 #
 # `_mark_for` prefers the central registry, so a waiver applied centrally makes
 # a local copy inert rather than duplicated.
 
-#: Measured 2026-07-28 by running the shipped `flow_compliance_check` over a
-#: COPY of every tracked run root in
-#: `programs/tests/fixtures/matrix_d3_output_manifest.json` that resolves on
-#: this host (12 of 12), full flow, `--strict`. Quoted verbatim by all four
-#: waivers so the decision is costed, not asserted.
-_VACUOUS_AGGREGATION_BLAST_RADIUS = (
-    "MEASURED BLAST RADIUS of dropping VACUOUS_PASS out of `pass_count` "
-    "(flow_compliance_check.py `pass_count = counts['PASS'] + "
-    "counts['VACUOUS_PASS']`), over all 12 tracked run roots declared "
-    "in programs/tests/fixtures/matrix_d3_output_manifest.json, each "
-    "COPIED and re-run with the shipped checker, full flow, --strict, "
-    "on 2026-07-28: 12 of 12 roots move their published headline "
-    "numerator; 35 step-instances are on the VACUOUS_PASS tier in "
-    "total; 0 of 12 change their Overall verdict (all 12 are already "
-    "FAIL). Per root, X/Y now -> X/Y after, keyed by the root's 1-based "
-    "position in that manifest's `run_roots` object (chip-agnostic: the "
-    "manifest holds the names): #01 4/7 -> 3/7; #02 3/39 -> 2/39; #03 "
-    "11/26 -> 6/26; #04 18/39 -> 13/39; #05 7/53 -> 4/53; #06 15/30 -> "
-    "12/30; #07 22/43 -> 19/43; #08 21/32 -> 18/32; #09 15/53 -> 11/53; "
-    "#10 4/10 -> 3/10; #11 7/41 -> 4/41; #12 32/42 -> 29/42. Steps "
-    "charged: D1 on 11/12 roots, FS1 on 10/12, step 14 on 7/12, step 24 "
-    "on 3/12, step 4 on 2/12, step 30 on 1/12, step 31 on 1/12."
-)
-
-#: The single decision that closes all four cells. Written out in full so
-#: nobody has to reconstruct why this is a waiver and not a fix.
-_VACUOUS_AGGREGATION_DECISION = (
-    "OWNER DECISION REQUIRED, and it is a one-line change either way: does "
-    "`X/Y executed PASS` mean 'steps that RAN cleanly' (status quo — a "
-    "VACUOUS_PASS ran, exit 0, and counts) or 'steps that MEASURED something' "
-    "(a VACUOUS_PASS measured nothing and must leave X)? It is NOT a bug with "
-    "a right answer, because the denominator does NOT move either way: "
-    "`total_required` subtracts SKIPPED-CONDITION, WAIVED and "
-    "DEFERRED-BY-UPSTREAM but NOT VACUOUS_PASS. So dropping VACUOUS_PASS from "
-    "X alone makes a legitimately-inapplicable step a PERMANENT debit — no "
-    "design with an inapplicable step could ever read Y/Y again. The "
-    "alternative repair, subtracting VACUOUS_PASS from `total_required` too, "
-    "is REFUSED here on evidence: it makes an unmeasured step cost-free, "
-    "which is the same defect this campaign measured on the at-speed-ATPG "
-    "not-run mirror (a co-located disclosure promoted DT1/DT2/DT3 to "
-    "SKIPPED-CONDITION, which IS subtracted, and flipped a flow FAIL -> PASS "
-    "with a `0/-1` denominator). Making the change without the owner would "
-    "move 12 of 12 published campaign numbers to encode a metric definition "
-    "nobody has ratified. Until it is ratified this cell is WAIVED, not "
-    "green: leg L3c charges it every run and the strict xfail forces this "
-    "waiver out the moment the aggregation changes."
-)
-
-
-def _vacuous_aggregation_waiver(step_id, tier_scenario: str,
-                                what_discloses: str) -> W.Waiver:
-    """One waiver body, four steps — because it is ONE pending decision."""
-    return W.Waiver(
-        step_id=step_id,
-        dim=DIM,
-        reason=(
-            f"Leg L3c: on the {tier_scenario} probe this step resolves to the "
-            f"VACUOUS_PASS tier ({what_discloses}), and the published "
-            f"headline `X/Y executed PASS` still counts it inside X — "
-            f"`flow_compliance_check.py` computes "
-            f"`pass_count = counts['PASS'] + counts['VACUOUS_PASS']`. The "
-            f"skip has its own LABEL and its own COUNTER (leg L3 is "
-            f"satisfied) but not its own arithmetic, so the number a reviewer "
-            f"reads is unchanged by the disclosure. "
-            f"{_VACUOUS_AGGREGATION_DECISION}"
-        ),
-        evidence=(
-            f"flow_compliance_check.py `pass_count = counts['PASS'] + "
-            f"counts['VACUOUS_PASS']` (the X of the `Steps: N total (X/Y "
-            f"executed PASS …)` line). Reproduce: run this module's own probe "
-            f"for step {step_id} and compare the printed X against "
-            f"`counts['PASS']` from the same run's --json report — X exceeds "
-            f"it by exactly the VACUOUS_PASS count. {_VACUOUS_AGGREGATION_BLAST_RADIUS}"
-        ),
-    )
 
 
 #: Which LEG each locally-waived cell is excused for.
@@ -482,12 +429,14 @@ def _vacuous_aggregation_waiver(step_id, tier_scenario: str,
 #: xfailed, i.e. green. ``test_d6_waived_cells_are_clean_on_every_other_leg``
 #: runs the remaining legs UNWAIVED so that regression is loud.
 #:
-#: DERIVED from the resolved dim-6 waiver set (central registry first, local
-#: request second) rather than re-listed, so a waiver applied centrally cannot
-#: fall out of this map and quietly become a blanket exemption. Every dim-6
-#: waiver that exists today excuses L3c; a waiver for a DIFFERENT leg must add
-#: itself to `_WAIVED_LEG_OVERRIDE` or the guard will run its own leg and fail
-#: honestly.
+#: EVERY dim-6 waiver must name its leg HERE. There is deliberately no
+#: fallback any more. Until 2026-07-28 the default was ``"L3c"``, which was
+#: accurate while three of the four dim-6 waivers were L3c aggregation waivers.
+#: With the aggregation FIXED and those three removed, a default of ``"L3c"``
+#: would have silently excused a future waiver from the one leg this change
+#: just armed — a blanket exemption arriving by omission. A waiver whose leg is
+#: not declared here now excuses NOTHING: every leg runs, and
+#: ``test_d6_waived_cells_are_clean_on_every_other_leg`` says so by name.
 _WAIVED_LEG_OVERRIDE: Dict[Tuple[str, int], str] = {
     # DT2 is the one dim-6 waiver that is NOT about the L3c aggregation. It is
     # excused for L4 only: its step condition is ALL-of over three paths, two
@@ -498,12 +447,13 @@ _WAIVED_LEG_OVERRIDE: Dict[Tuple[str, int], str] = {
     # the counter or the aggregation checks while this one gap is open.
     ("DT2", DIM): "L4",
 }
-_WAIVED_LEG_DEFAULT = "L3c"
+#: Not a leg name — the sentinel a cell gets when nobody declared one.
+_WAIVED_LEG_UNDECLARED = "(none declared)"
 
 
 def _waived_leg(step_id) -> str:
     key = (F.normalize_id(step_id), DIM)
-    return _WAIVED_LEG_OVERRIDE.get(key, _WAIVED_LEG_DEFAULT)
+    return _WAIVED_LEG_OVERRIDE.get(key, _WAIVED_LEG_UNDECLARED)
 
 
 def _waived_step_ids() -> Tuple[str, ...]:
@@ -678,11 +628,17 @@ def _prose_skip_line(text: str) -> Optional[str]:
 def _consumer_snippet(stdout: str, stderr: str) -> str:
     """Exactly the snippet ``_check_program_exit_zero`` builds for a gate.
 
-    flow_compliance_check.py: ``(r.stdout[-300:] + "\\n" + r.stderr[-300:])``.
-    Reproduced here so L3b can tell a disclosure the consumer SAW from one the
-    300-character truncation threw away.
+    ASKS THE CONSUMER rather than reproducing its arithmetic. L3b's whole job
+    is to tell a disclosure the consumer SAW from one its window threw away,
+    and a local copy of the window width answers that question about a
+    consumer that no longer exists the day the width or the shape moves. The
+    copy was here until 2026-07-28, when `flow_compliance_check` grew the
+    named `output_snippet` / `_OUTPUT_SNIPPET_CHARS` seam.
     """
-    return ((stdout or "")[-300:] + "\n" + (stderr or "")[-300:]).strip()
+    _ensure_programs_on_path()
+    import flow_compliance_check as _fcc  # type: ignore
+
+    return _fcc.output_snippet(stdout, stderr)
 
 
 @dataclass(frozen=True)
@@ -1270,11 +1226,12 @@ def _leg3c_skip_not_inside_the_executed_pass_numerator(
     resolved tier is VACUOUS_PASS while X exceeds the number of plain PASSes —
     i.e. its skip is inside the numerator.
 
-    It is a MEASUREMENT, not a proposal: whether VACUOUS_PASS should leave
-    ``pass_count`` is a flow-wide policy change (see the waiver text on the
-    charged cells for the measured blast radius and the exact owner decision).
-    Until that decision is made the charged cells are WAIVED — but the gap is
-    now charged to a leg instead of living in a prose paragraph.
+    The owner has since ruled and the consumer has moved:
+    ``pass_count = counts["PASS"]``. This leg is therefore the STANDING guard
+    on that arithmetic rather than a report of an open gap — it charges 0 cells
+    today, and re-adding ``+ counts["VACUOUS_PASS"]`` makes every cell that
+    lands on the tier red again. Falsifiability is measured, both directions,
+    by ``test_d6_l3c_fires_when_the_numerator_folds_the_tier_back_in``.
     """
     problems = []
     for name in _STATUS_SCENARIOS:
@@ -1582,6 +1539,220 @@ def test_d6_targetless_blocking_clause_census_is_live_and_non_empty():
 
 
 # ──────────────────────────────────────────────────────────────────────
+# L3c falsifiability — BOTH directions, on a subject this module builds
+# ──────────────────────────────────────────────────────────────────────
+#: The shipped arithmetic, and the arithmetic it replaced. Both are matched
+#: against the real source; the harness FAILS if either count is not exactly
+#: one, so a rename cannot leave this test silently mutating nothing.
+_PASS_COUNT_NOW = 'pass_count = counts["PASS"]\n'
+_PASS_COUNT_REFOLDED = ('pass_count = counts["PASS"] + '
+                        'counts["VACUOUS_PASS"]\n')
+_PROGRAMS_DIR_SRC = "PROGRAMS_DIR = Path(__file__).parent\n"
+
+#: A real gate program that vacuously passes on a project containing nothing —
+#: rc 2, ``verdict: SKIP``, which is the tier-membership rule. Named as a
+#: CANDIDATE LIST and verified live below, so a program that stops being
+#: vacuous is reported rather than silently making this test inert.
+_VACUOUS_GATE_CANDIDATES: Tuple[str, ...] = (
+    "mixed_signal_merge_check",
+    "foundry_handoff_package_check",
+    "spice_correlation_check",
+)
+
+
+def _first_vacuous_gate_program() -> str:
+    """The first candidate that really answers rc 2 on an empty project."""
+    tried = []
+    for name in _VACUOUS_GATE_CANDIDATES:
+        prog = F.PROGRAMS_DIR / f"{name}.py"
+        if not prog.is_file():
+            tried.append(f"{name}: no such program")
+            continue
+        tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_vacprobe_"))
+        try:
+            proc = subprocess.run([sys.executable, str(prog), "."], cwd=tmp,
+                                  capture_output=True, text=True,
+                                  timeout=_SUBPROCESS_TIMEOUT_S)
+            if proc.returncode == 2:
+                return name
+            tried.append(f"{name}: rc={proc.returncode}")
+        except (OSError, subprocess.SubprocessError) as exc:
+            tried.append(f"{name}: {exc!r}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    raise AssertionError(
+        "no candidate gate program vacuously passes an empty project any "
+        f"more, so leg L3c cannot be given a subject to measure: {tried}. "
+        "Unmeasured is not zero — pick a program that does, or say the tier "
+        "is unreachable."
+    )
+
+
+def _two_step_probe_flow(path: Path, vacuous_program: str) -> None:
+    """A flow of exactly two steps: one plain PASS, one VACUOUS_PASS.
+
+    Built on the LIVE flow's top-level keys so it cannot drift from the
+    schema the consumer parses, and deliberately NOT on any real step: the
+    subject has to exist on every host, not only on one where some particular
+    flow step happens to land on the tier.
+    """
+    doc = F.load_flow()
+    top = {k: v for k, v in doc.items() if k != "steps"}
+    top["steps"] = [
+        {"id": "MD6PASS", "name": "matrix-d6 L3c probe: plain pass",
+         "stage": "stage1", "gate": {"files_exist": ["md6_seed.txt"]}},
+        {"id": "MD6VAC", "name": "matrix-d6 L3c probe: vacuous",
+         "stage": "stage1",
+         "gate": {"program_exit_zero": f"{vacuous_program} ."}},
+    ]
+    with path.open("w", encoding="utf-8") as fh:
+        yaml.safe_dump(top, fh, allow_unicode=True, sort_keys=False)
+
+
+def _refolded_checker(dest_dir: Path) -> Path:
+    """A copy of the SHIPPED checker with the retired arithmetic restored.
+
+    Two substitutions, each asserted to apply exactly once:
+      * ``pass_count`` goes back to ``counts["PASS"] + counts["VACUOUS_PASS"]``
+        — the defect;
+      * ``PROGRAMS_DIR`` is pinned to the real programs directory, because it
+        is derived from ``__file__`` and the copy does not live there. Without
+        it no gate program would resolve and the mutant would measure the
+        harness rather than the arithmetic.
+    """
+    src = FCC_PY.read_text(encoding="utf-8")
+    assert src.count(_PASS_COUNT_NOW) == 1, (
+        f"the shipped numerator line {_PASS_COUNT_NOW!r} occurs "
+        f"{src.count(_PASS_COUNT_NOW)} times in {FCC_PY.name}; this harness "
+        f"would mutate the wrong thing (or nothing) and its green would mean "
+        f"nothing"
+    )
+    assert src.count(_PROGRAMS_DIR_SRC) == 1, (
+        f"cannot pin PROGRAMS_DIR in the mutant: {_PROGRAMS_DIR_SRC!r} occurs "
+        f"{src.count(_PROGRAMS_DIR_SRC)} times"
+    )
+    src = src.replace(_PASS_COUNT_NOW, _PASS_COUNT_REFOLDED)
+    src = src.replace(_PROGRAMS_DIR_SRC,
+                      f"PROGRAMS_DIR = Path({str(F.PROGRAMS_DIR)!r})\n")
+    dest = dest_dir / "flow_compliance_check_refolded.py"
+    dest.write_text(src, encoding="utf-8")
+    return dest
+
+
+def _headline_and_counts(checker: Path, flow: Path, project: Path,
+                         report: Path) -> Tuple[Optional[int], Dict[str, int],
+                                                str]:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = (str(F.PROGRAMS_DIR) + os.pathsep
+                         + env.get("PYTHONPATH", ""))
+    proc = subprocess.run(
+        [sys.executable, str(checker), str(project),
+         "--flow-def", str(flow), "--json", str(report)],
+        capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT_S, env=env)
+    m = _HEADLINE_RE.search(proc.stdout or "")
+    doc = json.loads(report.read_text(encoding="utf-8")) if report.is_file() else {}
+    counts = {str(k): int(v) for k, v in (doc.get("counts") or {}).items()}
+    return (int(m.group(1)) if m else None), counts, proc.stdout or ""
+
+
+def test_d6_l3c_fires_when_the_numerator_folds_the_tier_back_in():
+    """BOTH directions of leg L3c, measured on a subject built here.
+
+    L3c charges 0 of the 63 cells now that ``flow_compliance_check`` computes
+    ``pass_count = counts["PASS"]``. A leg that charges nothing is
+    indistinguishable from a leg that cannot fire, so this test constructs the
+    defect and shows the leg catching it:
+
+      * DEFECT DIRECTION — a copy of the shipped checker with
+        ``+ counts["VACUOUS_PASS"]`` restored publishes a headline X that
+        exceeds the plain-PASS counter from the same run, and L3c's predicate
+        (``numerator > counts["PASS"]``) is TRUE.
+      * LEGITIMATE DIRECTION — the SHIPPED checker, same flow, same project,
+        publishes X equal to the plain-PASS counter, the predicate is FALSE,
+        and the vacuous step is still a VACUOUS_PASS (not a FAIL) with the
+        run's Overall verdict unchanged between the two.
+
+    The second half is what stops the fix being read as "VACUOUS_PASS was made
+    to fail": both runs resolve the same step to the same tier, and both exit
+    the same way.
+    """
+    program = _first_vacuous_gate_program()
+    tmp = Path(tempfile.mkdtemp(prefix="matrix_d6_l3c_"))
+    try:
+        flow = tmp / "flow.yaml"
+        _two_step_probe_flow(flow, program)
+        project = tmp / "proj"
+        project.mkdir()
+        (project / "md6_seed.txt").write_text("stub\n", encoding="utf-8")
+
+        x_now, counts_now, out_now = _headline_and_counts(
+            FCC_PY, flow, project, tmp / "now.json")
+        mutant = _refolded_checker(tmp)
+        x_refold, counts_refold, out_refold = _headline_and_counts(
+            mutant, flow, project, tmp / "refold.json")
+
+        # The subject must exist, or neither direction measures anything.
+        assert counts_now.get("VACUOUS_PASS") == 1, (
+            f"the probe flow did not produce exactly one VACUOUS_PASS "
+            f"(counts={counts_now}); gate program {program!r} no longer "
+            f"vacuously passes and this test measured nothing.\n{out_now}"
+        )
+        assert counts_now.get("PASS") == 1, (
+            f"the probe flow's plain-PASS step did not pass "
+            f"(counts={counts_now}) — the comparison X vs counts['PASS'] "
+            f"would be degenerate.\n{out_now}"
+        )
+        assert counts_refold == counts_now, (
+            f"the mutant changed the per-tier counts as well as the "
+            f"aggregation ({counts_refold} vs {counts_now}); it is no longer "
+            f"an isolated test of the numerator"
+        )
+
+        # DEFECT DIRECTION — the leg's own predicate must be TRUE.
+        assert x_refold is not None and x_now is not None, (
+            f"no headline `X/Y executed PASS` line: now={x_now!r} "
+            f"refold={x_refold!r}"
+        )
+        assert x_refold > counts_refold["PASS"], (
+            f"with `+ counts['VACUOUS_PASS']` restored the published X is "
+            f"{x_refold} and the plain-PASS counter is "
+            f"{counts_refold['PASS']} — leg L3c's predicate does NOT fire on "
+            f"the very defect it exists to catch, so its silence on the "
+            f"shipped tree means nothing.\n{out_refold}"
+        )
+        assert x_refold == counts_refold["PASS"] + counts_refold["VACUOUS_PASS"]
+
+        # LEGITIMATE DIRECTION — same subject, shipped checker, no charge.
+        assert x_now == counts_now["PASS"], (
+            f"the shipped checker published X={x_now} while only "
+            f"{counts_now['PASS']} step(s) are on the plain PASS tier — the "
+            f"skip is back inside the number a reviewer reads.\n{out_now}"
+        )
+        assert x_now == x_refold - 1, (
+            f"the two runs differ by {x_refold - x_now} rather than by the "
+            f"single VACUOUS_PASS step; something other than the aggregation "
+            f"moved"
+        )
+
+        # …and the disclosure tier is still a DISCLOSURE, not a failure.
+        for label, out in (("shipped", out_now), ("refolded", out_refold)):
+            assert "[VACUOUS-PASS     ] Step MD6VAC" in out, (
+                f"{label}: the vacuous step is no longer on the VACUOUS_PASS "
+                f"tier:\n{out}"
+            )
+        assert "Overall: PASS" in out_now and "Overall: PASS" in out_refold, (
+            f"leaving the numerator turned the vacuous step into a blocking "
+            f"failure — it is a disclosure tier and must not gate.\n"
+            f"shipped:\n{out_now}\nrefolded:\n{out_refold}"
+        )
+        assert counts_now["FAIL"] == 0, (
+            f"the vacuous step joined the FAIL bucket: {counts_now}"
+        )
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Meta-guards on this module itself
 # ──────────────────────────────────────────────────────────────────────
 def test_d6_covers_every_step_exactly_once():
@@ -1624,8 +1795,12 @@ def test_d6_waived_cells_are_clean_on_every_other_leg(step_id):
         ran.append(name.split()[0])
         problems.extend(leg(probe))
     assert excused in {n.split()[0] for n, _ in _LEGS}, (
-        f"step {step_id} is waived for leg {excused!r}, which no longer exists "
-        f"in _LEGS — the waiver excuses nothing and must be re-decided"
+        f"step {step_id} is waived for leg {excused!r}, which is not a leg of "
+        f"this dimension — the waiver excuses nothing and must be re-decided. "
+        f"If the leg is {_WAIVED_LEG_UNDECLARED!r}, nobody declared WHICH gap "
+        f"this waiver covers: add the cell to _WAIVED_LEG_OVERRIDE. There is "
+        f"deliberately no default, because a default silently exempts a cell "
+        f"from a leg nobody chose to exempt it from."
     )
     assert not problems, (
         f"step {step_id} is WAIVED only for leg {excused}, but it fails "

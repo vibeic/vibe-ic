@@ -252,7 +252,7 @@ single-threaded pytest but would **not** be safe under
 `pytest-xdist --dist loadfile` sharing a process, or if the suite ever gains
 thread-parallel test execution.
 
-## The census, as it stands after the 2026-07-28 convergence merge
+## The census, as it stands after the VACUOUS_PASS numerator ruling
 
 Reported by `programs/tests/test_matrix_63x8_coverage.py`, which collects the
 eight modules through pytest's own machinery and asks each module the state of
@@ -265,10 +265,10 @@ the cells it owns. **504 / 504 cells present, exactly once.**
 | 3   | outputs produced        | 52       | 4      | 7  |
 | 4   | criteria match          | 63       | 0      | 0  |
 | 5   | deps correct            | 62       | 0      | 1  |
-| 6   | skip discipline         | 59       | 4      | 0  |
+| 6   | skip discipline         | 62       | 1      | 0  |
 | 7   | outputs list complete   | 58       | 4      | 1  |
 | 8   | missing mechanism       | 61       | 0      | 2  |
-| **total** |                   | **480**  | **12** | **12** |
+| **total** |                   | **483**  | **9**  | **12** |
 
 Reproduce (never quote this table without re-running it):
 
@@ -278,25 +278,82 @@ cd vibe-ic-marketplace/plugins/vibe-ic && PYTHONPATH=.:programs:programs/tests \
   "import sys; sys.path[:0]=['programs','programs/tests']; \
    import test_matrix_63x8_coverage as CV, collections; \
    print(collections.Counter(CV.state_census().values()))"
--> Counter({'ENFORCED': 480, 'NA': 12, 'WAIVED': 12})
+-> Counter({'ENFORCED': 483, 'NA': 12, 'WAIVED': 9})
 ```
 
-> **Dimension 6 went DOWN, on purpose.** 60/3/0 -> 59/4/0. Step 14 was
-> ENFORCED and is now waived because a new leg — L3c — measures something the
-> dimension previously only described in prose: a step on the VACUOUS_PASS
-> tier is still inside the published `X/Y executed PASS` numerator, so a skip
-> is counted as a measurement in the number a reviewer reads. Step 30 is
-> charged by the same leg; its earlier LABEL-half waiver had been closed by
-> #521 and it re-enters the registry for the ARITHMETIC half only. DT2 is
-> waived again after its closure was measured to be a regression (below). A
-> lower honest number beats a higher fake one; that is the whole point of this
-> suite.
+> **Dimension 6 went back UP, because the defect it was measuring was
+> fixed.** 59/4/0 -> 62/1/0. Leg L3c measures whether a step on the
+> VACUOUS_PASS tier is still inside the published `X/Y executed PASS`
+> numerator — a skip counted as a measurement in the number a reviewer reads.
+> It charged four cells: 14, 30, FS1 (waived, against one pending owner
+> decision) and step 4, which was waived NOWHERE and is the cell that turned
+> `main` red on hosts where its gate lands on the tier rather than on FAIL.
 >
-> A convergence pass also proposed waiving step 4 on the same leg. Re-measured,
-> step 4's SEEDED probe resolves to FAIL — its gate now runs
-> `verilator_coverage_measure check`, which classifies a seeded coverage
-> artefact as another producer's payload — so L3c has nothing to charge there
-> and the strict xfail XPASSed. The waiver was not carried.
+> The owner ruled: VACUOUS_PASS leaves the numerator.
+> `flow_compliance_check` now computes `pass_count = counts["PASS"]`. The tier
+> keeps its own label and its own counter, does NOT become a failure, and does
+> NOT leave the denominator — a gate that ran and found nothing to audit is an
+> unmet requirement, unlike SKIPPED-CONDITION (the step's own condition was
+> evaluated and not met), which is subtracted. Every rendering of the
+> numerator moved together: the checker headline, which now also names the
+> excluded vacuous count in the same parenthesis, plus
+> `final_report_generate`'s `_counts_snapshot`, its prose bullet, its
+> stage-breakdown PASS column and its resource log. All three are now
+> compared against each other on one audit run by
+> `test_report_executed_pass_equals_the_checkers_own_headline`; before
+> 2026-07-28 the stage column was the third rendering and nothing compared it,
+> so reverting it alone was caught by nothing.
+>
+> The escape hatch this rationale leans on is NARROWER than the sentence
+> above suggests, and the scope is measured rather than implied. An honestly
+> inapplicable step is SKIPPED-CONDITION and leaves Y — but only a step that
+> DECLARES a step-level `condition` can ever reach that tier, and on the
+> canonical flow that is 22 of 63 (all of A1-A9, M1-M4, DT*, FS*). For the
+> other 41 — D1, 1-39, P0 — an inapplicable input lands on VACUOUS_PASS and
+> IS a permanent Y-debit, exactly the cost the withdrawn waivers named. It is
+> narrowed, not eliminated; closing it for a given step means giving that
+> step a condition, which is a flow change, not a numerator change.
+>
+> All three L3c waivers are REMOVED, not re-worded — `strict=True` would turn
+> them into XPASS failures. DT2 stays waived, for leg L4, unrelated to this.
+> Leg L3c stays armed and now charges 0 of 63; `test_d6_l3c_fires_when_the_
+> numerator_folds_the_tier_back_in` restores the old arithmetic in a copy of
+> the checker and shows the leg catching it, so a silent leg is not mistaken
+> for a clean tree.
+>
+> MEASURED cost, on this host, over all 12 tracked run roots of
+> `programs/tests/fixtures/matrix_d3_output_manifest.json`, each COPIED and
+> re-run with the shipped checker, full flow, `--strict`: 12/12 roots move
+> their published numerator, 37 step-instances leave X, 0 of 756 per-step
+> verdicts change, 0 of 12 Overall verdicts change (all 12 were FAIL before
+> and after). #01 4/7->3/7, #02 3/39->2/39, #03 11/26->6/26, #04 18/39->13/39,
+> #05 7/53->4/53, #06 14/30->11/30, #07 20/42->16/42, #08 19/32->16/32,
+> #09 15/53->11/53, #10 5/10->4/10, #11 7/41->4/41, #12 31/42->27/42.
+> That no verdict moves is structural, not a property of this corpus:
+> `pass_count` is assigned once and read once, in the headline `print`, and
+> feeds none of `failing` / `missing` / `setup_required_skipped` /
+> `oss_blocked_skipped` / `ok`.
+> A lower honest number beats a higher fake one; that is the whole point of
+> this suite.
+>
+> **The commit that shipped this also carried the dimension-7 declaration on
+> step 27**, so the AS-SHIPPED sweep over the same 12 roots reads: 12/12
+> headlines move, **40** step-instances leave X (37 vacuous + 3 from step 27),
+> **3 of 756** per-step verdicts change and **0 of 12** Overall verdicts
+> change. The three are all step 27, on the three roots carrying a crosstalk
+> report and no MCF report: #03 PASS -> DEFERRED-BY-UPSTREAM (a cascade, which
+> is also why its denominator moves 26 -> 25), #04 and #09 PASS -> MISSING.
+> Combined headlines for those three: #03 11/26->5/25, #04 18/39->12/39,
+> #09 15/53->10/53.
+>
+> That measurement DISAGREES with the one the withdrawn waivers carried
+> ("35 step-instances", and five different before-headlines). Re-measured
+> here step by step: the earlier count omitted step 27, vacuous on 2 of the 12
+> roots. Per-step instance counts otherwise agree exactly — D1 11/12,
+> FS1 10/12, 14 7/12, 24 3/12, 4 2/12, 30 1/12, 31 1/12, plus 27 2/12 = 37.
+> The before-headline differences (#06, #07, #08, #10, #12) are host state:
+> several gates change tier with local tool availability, which is also why
+> step 4 was clean on the host that removed its waiver and red here.
 
 > **Dimension 3 did not move**, and that is the reconciled answer to a
 > convergence pass that reported 53/1/9. Both of its retirements were measured

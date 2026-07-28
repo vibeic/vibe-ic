@@ -183,7 +183,24 @@ def test_parse_audit_tally_ignores_the_reports_own_prose_bullet():
     """The report restates its own counts as a prose bullet. If the tally
     reader matched THAT, reconciliation would compare the roll-up against
     a restatement of itself and agree by construction — the one outcome a
-    consistency check must never be able to produce."""
+    consistency check must never be able to produce.
+
+    BOTH spellings are pinned. 2026-07-28, adversarial finding (LOW): the
+    bullet was rewritten when VACUOUS-PASS left the numerator, and this guard
+    kept feeding the RETIRED string — so it went on green-lighting a format
+    the renderer no longer emits while the LIVE one went unexercised. A guard
+    against a self-referential match has to be pointed at the string the
+    program actually produces; the historical form is kept beside it because
+    an old report is still a real input to this reader.
+    """
+    # The LIVE bullet — `final_report_generate` ~1607, verified against a
+    # rendered report rather than transcribed from the source.
+    assert F._parse_audit_tally(
+        "- PASS=1 → executed PASS=1 — every canonical step that MEASURED "
+        "something passed deterministically. VACUOUS-PASS=1 is NOT included: "
+        "those gates ran and found no input to audit.\n"
+        "- WAIVED-DEFERRED=2 — deferred via documented waiver.") is None
+    # The RETIRED bullet, as emitted before VACUOUS-PASS left the numerator.
     assert F._parse_audit_tally(
         "- PASS=31 (+VACUOUS-PASS=3 → executed PASS=34) — all passed.\n"
         "- WAIVED-DEFERRED=2 — deferred via documented waiver.") is None
