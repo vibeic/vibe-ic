@@ -61095,6 +61095,35 @@ def main() -> int:
         print(f"      L10↔L3 sweep FAILED (fail-open): {_sweep_err}",
               file=sys.stderr)
 
+    # #516 — LAST word on L4's register-map claims. Runs here, after every
+    # L-doc generator, post-emit walker and protocol-synth overlay has had its
+    # turn, because the false claim this repairs is not written by any of them
+    # in particular: `spi_protocol_synth._apply_universal` is invoked for EVERY
+    # dispatched ic_class (~45 protocols, not just SPI) and unconditionally
+    # `setdefault`s `register_map_present=True`, so a document with an empty
+    # register list ends the run asserting a register map it does not carry.
+    # Placing the reconciler at the tail makes it a chokepoint: whichever
+    # overlay stamps the claim, the published L4 still has to agree with its own
+    # `registers[]`. See `l4_register_map_claim` for the four rules and why an
+    # unsupported True is REMOVED rather than negated (False is the gates' N/A
+    # escape — negating would hand out a pass, removing cannot).
+    # Fail-open: a broken reconcile must not lose an otherwise complete run.
+    try:
+        from l4_register_map_claim import reconcile_register_map_claims
+        _l4p_claim = _pl.generated_docs_dir(project) / "L4_REGMAP.json"
+        if _l4p_claim.is_file():
+            _l4_claim = json.loads(_l4p_claim.read_text())
+            _claim_changes = reconcile_register_map_claims(_l4_claim)
+            if _claim_changes:
+                _l4p_claim.write_text(
+                    json.dumps(_l4_claim, indent=2, ensure_ascii=False) + "\n")
+                for _ch in _claim_changes:
+                    print(f"      → L4 register-map claim {_ch['rule']}: "
+                          f"{_ch['field']} {_ch['action']} — {_ch['why']}")
+    except Exception as _claim_err:
+        print(f"      L4 register-map claim reconcile FAILED (fail-open): "
+              f"{_claim_err}", file=sys.stderr)
+
     # Step 15: coverage report (runs AFTER backfill AND canonical seed so the
     # gate sees the final L docs + explicit pattern set)
     print(f"[15/15] coverage report ...")

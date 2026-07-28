@@ -33,7 +33,7 @@ _DOC = ("+----+----+----+\n| CSR Address | Name | Description |\n"
         "| 0xC00 (0xC80)| cycle | pair |\n+----+----+----+\n")
 
 
-def _run(class_path, doc):
+def _registers(class_path, doc):
     d = Path(tempfile.mkdtemp())
     (d / "phase1/input_doc").mkdir(parents=True)
     (d / "phase1/generated_docs").mkdir(parents=True)
@@ -43,9 +43,34 @@ def _run(class_path, doc):
         json.dumps({"registers": [], "no_registers_in_input": True}))
     (d / "phase1/input_doc/csr.txt").write_text(doc)
     R._post_emit_pdf_regmap_table_rows(d)
-    regs = json.loads(
+    return json.loads(
         (d / "phase1/generated_docs/L4_REGMAP.json").read_text())["registers"]
-    return sorted(r["addr_hex"] for r in regs)
+
+
+def _run(class_path, doc):
+    """Every address the capture landed in L4, whether it became a register's
+    own address or an alias recorded on the register it belongs to.
+
+    #516 changed WHERE the parenthetical high-word address of an UNNAMED pair
+    lands, without changing WHETHER it lands — which is what #800 is about.
+    Before #516 the `| 0xC00 (0xC80) | cycle |` row below emitted TWO registers
+    both called `cycle`, and an L4 shaped that way is rejected by the sibling
+    gate `l4_regmap_phase2_emitter_contract_check`: `emit_regs_v()` declares one
+    `reg` per register, so two registers sharing an identifier are not
+    buildable. Executed on this very fixture, pristine yields
+    "1 Verilog identifier(s) are claimed by 2 different L4 registers" (rc=1).
+    The name cell here says `cycle` and nothing else, so the companion
+    register's NAME is simply not stated; #516 records its address as an alias
+    on the register the document DID name rather than inventing a second name
+    or duplicating the first. This helper therefore asserts #800's actual
+    contract — no address token is lost — instead of the intermediate shape.
+    """
+    out = []
+    for r in _registers(class_path, doc):
+        if r.get("addr_hex"):
+            out.append(r["addr_hex"])
+        out.extend(r.get("alias_addr_hex") or [])
+    return sorted(out)
 
 
 def test_800_processor_cpu_csr_table_captured_with_high_word_alias():
@@ -56,6 +81,13 @@ def test_800_processor_cpu_csr_table_captured_with_high_word_alias():
 
 def test_800_existing_regmap_class_unaffected():
     assert _run("memory_controller", _DOC) == ["0xb00", "0xc00", "0xc80"]
+
+
+def test_800_pair_capture_does_not_duplicate_a_register_name():
+    """#516 regression guard on #800's own fixture: capturing the high-word
+    address must not put two registers with one name into L4."""
+    names = [r.get("name") for r in _registers("processor_cpu", _DOC)]
+    assert len(names) == len(set(names)), names
 
 
 def test_800_noleak_no_address_table_yields_no_rows():

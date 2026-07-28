@@ -268,6 +268,64 @@ def _offset_addrs(cell: str) -> "List[str]":
         if hi != out[0]:
             out.append(hi)
     return out
+
+
+# ---------------------------------------------------------------------------
+# #516 — a `0xLOW (0xHIGH)` offset cell declares TWO registers, and the NAME
+# cell is where the document says what the second one is CALLED.
+#
+# The compact pair notation writes the shared stem once and parenthesises the
+# suffix that distinguishes the companion register:
+#
+#     | ``mcycle(h)``  | 0xB00 (0xB80) |   ->  mcycle @ 0xB00, mcycleh @ 0xB80
+#
+# ORGANIC #800 taught `_offset_addrs` to return BOTH addresses (the high-word
+# alias used to be dropped, one undercounted address token per pair). But the
+# row builders then emitted every address under the SAME base name, so the
+# companion register was published under its sibling's name — `mcycle` at
+# 0xB80, where the design's own CSR table independently states `mcycleh`. That
+# is a false fact, and it also puts two registers with one name at two
+# addresses into L4, which `l4_regmap_phase2_emitter_contract_check` rejects
+# ("give every registers[] entry a distinct, non-empty name").
+#
+# chip-AGNOSTIC: pure `stem(suffix)` typographic grammar. No vendor, no
+# register name, no architecture — a suffix of `h`, `_hi`, `H`, `x` all work
+# the same way because the document, not this program, supplies the letters.
+# ---------------------------------------------------------------------------
+_NAME_PAREN_SUFFIX_RE = re.compile(
+    r"^[`\s]*[A-Za-z_]\w*\(\s*([A-Za-z_]\w{0,7})\s*\)")
+
+
+def _paren_name_suffix(name_cell: str) -> str:
+    """The parenthesised suffix a compact pair-name cell carries (``"h"`` for
+    ``` ``mcycle(h)`` ```), or ``""`` when the cell names a single register."""
+    m = _NAME_PAREN_SUFFIX_RE.match((name_cell or "").strip())
+    return m.group(1) if m else ""
+
+
+def _names_for_addrs(name_cell: str, base: str, n_addrs: int):
+    """One register NAME per address in a multi-address offset cell.
+
+    Returns a list of length ``n_addrs``, or ``None`` when the document does
+    NOT state a name for the companion address. `None` is not a failure — it is
+    the honest answer: the alias address is real (the offset cell prints it) but
+    its name is unstated, and both alternatives are fabrication. Inventing a
+    suffix invents a fact; reusing the base name asserts that two addresses hold
+    the same register. The caller records the address as an alias of the
+    register the document DID name, so the address stays discoverable without a
+    second, wrongly-named record.
+    """
+    if n_addrs <= 1:
+        return [base]
+    suffix = _paren_name_suffix(name_cell)
+    if not suffix:
+        return None
+    # The `stem(suffix)` form expresses exactly a PAIR — one stem, one
+    # companion. A cell that somehow yielded more addresses than that is not
+    # named by this grammar either, so it takes the alias path too.
+    if n_addrs != 2:
+        return None
+    return [base, base + suffix]
 # Strict `0x...` token (underscored hex like `0x0000_0010` tolerated). Used for
 # the weak-role OFFSET headers and the structural fallback so a bare decimal can
 # never be promoted to an address (§4.05 no-leak).
@@ -440,19 +498,34 @@ def _extract_gfm_pipe_table(text: str, source_path: str,
         access_norm = ""
         if "access" in cols and cols["access"] < len(cells):
             access_norm = cells[cols["access"]].strip().lower().replace("/", "_")
-        for addr_hex in addrs:
+        # #516 — name each address of a `0xLOW (0xHIGH)` pair from what the
+        # NAME cell actually says; never publish the companion under the
+        # stem's own name. See `_names_for_addrs`.
+        _names = _names_for_addrs(cells[ni], name, len(addrs))
+        _evidence = {
+            "source": source_path,
+            "line": lineno,
+            "matched_token": line.strip()[:120],
+            "extraction_strategy": "gfm_pipe_table_match",
+        }
+        if _names is None:
             rows.append({
-            "addr_hex": addr_hex,
-            "access": access_norm,
-            "name": name,
-            "description": desc.strip(),
-            "evidence": {
-                "source": source_path,
-                "line": lineno,
-                "matched_token": line.strip()[:120],
-                "extraction_strategy": "gfm_pipe_table_match",
-            },
-        })
+                "addr_hex": addrs[0],
+                "access": access_norm,
+                "name": name,
+                "description": desc.strip(),
+                "alias_addr_hex": list(addrs[1:]),
+                "evidence": dict(_evidence),
+            })
+        else:
+            for addr_hex, _nm in zip(addrs, _names):
+                rows.append({
+                    "addr_hex": addr_hex,
+                    "access": access_norm,
+                    "name": _nm,
+                    "description": desc.strip(),
+                    "evidence": dict(_evidence),
+                })
     _flush_weak_only()   # a table that runs to EOF still discloses
     return rows
 
@@ -681,19 +754,34 @@ def _flush_rst_grid_table(header_cells: List[str],
         access_norm = ""
         if "access" in cols and cols["access"] < len(cells):
             access_norm = cells[cols["access"]].strip().lower().replace("/", "_")
-        for addr_hex in addrs:
+        # #516 — same rule as the GFM path: the companion address of a
+        # `0xLOW (0xHIGH)` pair is named by the NAME cell's parenthesised
+        # suffix, not by repeating the stem. See `_names_for_addrs`.
+        _names = _names_for_addrs(cells[ni], name, len(addrs))
+        _evidence = {
+            "source": source_path,
+            "line": lineno,
+            "matched_token": raw.strip()[:120],
+            "extraction_strategy": "rst_grid_table_match",
+        }
+        if _names is None:
             out.append({
-                "addr_hex": addr_hex,
+                "addr_hex": addrs[0],
                 "access": access_norm,
                 "name": name,
                 "description": desc.strip(),
-                "evidence": {
-                    "source": source_path,
-                    "line": lineno,
-                    "matched_token": raw.strip()[:120],
-                    "extraction_strategy": "rst_grid_table_match",
-                },
+                "alias_addr_hex": list(addrs[1:]),
+                "evidence": dict(_evidence),
             })
+        else:
+            for addr_hex, _nm in zip(addrs, _names):
+                out.append({
+                    "addr_hex": addr_hex,
+                    "access": access_norm,
+                    "name": _nm,
+                    "description": desc.strip(),
+                    "evidence": dict(_evidence),
+                })
     if dropped_unnamed and disclosures is not None:
         # #512 — rows READ and not emitted. Reported even when the table also
         # produced registers, so the record says how many of its rows survived.
