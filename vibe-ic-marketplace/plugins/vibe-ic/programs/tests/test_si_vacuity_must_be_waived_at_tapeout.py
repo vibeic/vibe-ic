@@ -1526,15 +1526,26 @@ def test_a_could_not_run_verdict_is_refused_though_it_names_a_vacuity(
     else here covers it. Its five categories mean THE GATE NEVER GOT TO LOOK,
     which is genuinely the vacuity family — `_vacuity` has branches named for
     exactly those states (`SPEF_UNREADABLE`, `EMITTER_REPORT_UNREADABLE`,
-    `NO_CORNER_RECOUNTED`) — so the emitter DOES publish a code here, and that
-    is the design working, not a leak.
+    `NO_CORNER_RECOUNTED`) — so the emitter still NAMES this state, in the
+    nine-branch vocabulary it always used.
+
+    #535 CHANGED WHICH FIELD THAT NAME GOES IN, and this test was the pin on
+    the old answer. It asserted `details.vacuity_code != ""` here: the name
+    was published in the very field `si_vacuity_accepted` matches against, and
+    the only thing standing between it and a waived tapeout was the two
+    consumer defences below. The name is now published in
+    `details.unwaivable_code` instead, so nothing is silenced and nothing is
+    reachable.
 
     The tape-out consumer refuses it anyway, and must: "an absent or
     unparseable SI report is not vacuity — it is worse", so it takes the
     failing path, not the waivable one.
 
-    TWO INDEPENDENT THINGS HOLD THAT, and both are asserted, because either
-    alone is one edit from being the only one left:
+    THREE INDEPENDENT THINGS HOLD THAT and all three are asserted, because any
+    two are one edit from leaving the third as the only one left. The first
+    two are the defences this test was written for and they are UNCHANGED;
+    #535 added the third, at the producer, where it does not depend on a
+    future reader remembering anything:
 
       1. `_si_defect_evidence` reads the report BODY before any verdict
          branch, and a NOT_RUN carries an ERROR finding by construction. So it
@@ -1545,7 +1556,12 @@ def test_a_could_not_run_verdict_is_refused_though_it_names_a_vacuity(
       2. Even with the body blinded, `NOT_RUN` is not a string the waivable
          branch matches. It falls through to the unrecognised-verdict tier,
          which is also refused. Adding NOT_RUN to that branch as a "missing
-         case" is what the second half catches."""
+         case" is what the second half catches.
+      3. The emitter never offers the name to the waivable channel in the
+         first place: `vacuity_code` is empty and `unwaivable_code` carries
+         the code. This one holds even for a consumer that has neither of the
+         other two — which is every consumer written from now on that reads
+         the code without reading the defect channel."""
     project = _materialise_si_project(tmp_path, "not_run")
     rp = project / "reports" / "phase3" / "si_mcf_sta.json"
     doc = json.loads(rp.read_text())
@@ -1556,10 +1572,17 @@ def test_a_could_not_run_verdict_is_refused_though_it_names_a_vacuity(
     assert (rc, out["verdict"]) == (sic.RC_FAIL, "NOT_RUN")
     assert [f["category"] for f in out["findings"]
             if f["severity"] == "ERROR"] == ["NO_SPEF"]
-    # The producer names it — the could-not-run states ARE vacuity branches.
-    assert out["summary"]["denominator"]["details"]["vacuity_code"] != ""
+    # (3) THE PRODUCER-SIDE LINE (#535). The state is still NAMED — the
+    # could-not-run states ARE vacuity branches and silencing them would lose
+    # a machine-readable name — but the name is published in the channel no
+    # acceptance reads. Before #535 this read `vacuity_code != ""`.
+    det = out["summary"]["denominator"]["details"]
+    assert det["vacuity_code"] == "", (
+        "a could-not-run state is being offered to the waivable channel")
+    assert det["unwaivable_code"] == "SPEF_UNREADABLE", det
 
-    # (1) ...and naming it buys nothing: the body is read first.
+    # (1) ...and even if it were, naming it buys nothing: the body is read
+    # first.
     _waive_every_vacuity(project)
     r = sa._check_tapeout(project)
     assert _si(r)["state"] == sa.SI_VIOLATION
@@ -1592,3 +1615,335 @@ def test_a_could_not_run_verdict_is_refused_though_it_names_a_vacuity(
     assert "NOT_RUN" in detail["why"], detail["why"]
     assert sa._check_tapeout(project).passed is False
     assert sa.main([str(project), "--mode", "tapeout"]) == 1
+
+
+# ===========================================================================
+# THE WAIVABLE CHANNEL IS A FIELD, NOT A CONVENTION (#535)
+# ===========================================================================
+# WHY THIS SECTION EXISTS.
+#
+# The section above pins that TODAY's consumer refuses a could-not-run run by
+# two independent mechanisms. Both are real and both stay. Neither is a
+# property of the REPORT: they are properties of `signoff_audit`, and any
+# consumer written from now on that reads `details.vacuity_code` without first
+# reading the defect channel inherits neither.
+#
+# MEASURED on the tree before this change, driving the real CLI over
+# `fixtures/si_mcf_zero_coupling/grounded_only` with one perturbation each:
+#
+#   (none)                             rc 2  VACUOUS_PASS  SPEF_NO_COUPLING_PAIRS
+#   emitter report absent              rc 1  NOT_RUN       EMITTER_REPORT_UNREADABLE
+#   named SPEF absent                  rc 1  NOT_RUN       SPEF_UNREADABLE
+#   no corner record at all            rc 1  NOT_RUN       NO_CORNER_RECOUNTED
+#   HOLD corner absent, SETUP recounts rc 1  NOT_RUN       SPEF_NO_COUPLING_PAIRS
+#
+# THE LAST ROW IS WHY A PREFIX OR A NARROWED CODE LIST WOULD NOT HAVE DONE.
+# It publishes `SPEF_NO_COUPLING_PAIRS` — byte-identical to the FIRST row, a
+# genuine waivable vacuity — on a run that never obtained its hold corner. The
+# hazard is not that the could-not-run states have names of their own; it is
+# that the SAME name appears in both states, so nothing keyed on the NAME can
+# separate them. The separation is a property of the RUN, and `denominator`
+# already holds the findings list that decides it.
+#
+# EVERY PATH HERE STAYS INSIDE THE REPOSITORY, exactly as the section above:
+# copies of the shipped fixture under pytest's `tmp_path`, driven through the
+# real CLI, with no assertion depending on a file this checkout does not carry.
+
+def _vacuity_branch_codes_from_source() -> list:
+    """The code every `_vacuity` branch can emit, read from the SOURCE.
+
+    NOT from `_VACUITY_BRANCHES`. That table is hand-maintained, and the
+    nine-branch assertion above builds `seen` by ITERATING it — so a TENTH
+    branch added to `_vacuity()` with no table row leaves `len(seen)` at 9 and
+    every table-driven assertion in this file green while the new state goes
+    unclassified. Deriving the population from the function's own AST is what
+    makes "exhaustive over branches" mean branches.
+
+    FAILS LOUD IF IT GOES BLIND. An assignment it cannot read as a literal is
+    reported rather than skipped: a probe that silently sees fewer branches
+    than exist would answer "every branch is classified" for exactly the
+    reason the count assertion answers "there are nine".
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(sic._vacuity)))
+    codes, opaque = [], []
+    for node in ast.walk(tree.body[0]):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "code":
+                value = node.value
+                if isinstance(value, ast.Constant) and isinstance(
+                        value.value, str):
+                    codes.append(value.value)
+                else:
+                    opaque.append(ast.dump(value))
+    assert not opaque, (
+        f"`_vacuity` assigns `code` from something this probe cannot read as "
+        f"a literal ({opaque}); it can no longer enumerate the branch set, so "
+        f"every assertion built on it would pass by seeing too few branches")
+    assert len(codes) >= 2, (
+        "the probe found almost no `code` assignments — `_vacuity` has been "
+        "restructured and this enumeration is measuring nothing")
+    return codes
+
+
+def test_the_branch_set_is_derived_from_the_source_not_from_the_hand_table():
+    """A branch that exists in `_vacuity` but in no table row must be caught.
+
+    `test_vacuity_code_and_prose_come_from_the_same_branch` builds `seen` by
+    iterating `_VACUITY_BRANCHES`, so its `len(seen) == 9` counts TABLE ROWS.
+    Adding a tenth branch to the function and no row to the table leaves it
+    green. This closes that: the source is the population, the table is
+    checked against it, and drift in either direction names itself."""
+    from_source = _vacuity_branch_codes_from_source()
+    assert len(from_source) == len(set(from_source)), (
+        f"two `_vacuity` branches emit the same code: {from_source}")
+
+    from_table = [code for _, code in _VACUITY_BRANCHES]
+    assert set(from_source) == set(from_table), (
+        f"`_vacuity` and `_VACUITY_BRANCHES` disagree about which states "
+        f"exist. Only in the source: "
+        f"{sorted(set(from_source) - set(from_table))}; only in the table: "
+        f"{sorted(set(from_table) - set(from_source))}")
+    assert len(from_source) == len(from_table) == 9
+
+
+def test_the_waivable_list_names_only_branches_that_exist():
+    """A stale entry is a code nobody can publish — and, worse, a name an
+    acceptance could still be written against. Read from the source, so
+    renaming a branch without renaming its entry fails here."""
+    from_source = set(_vacuity_branch_codes_from_source())
+    assert sic.WAIVABLE_VACUITY_CODES <= from_source, (
+        f"`WAIVABLE_VACUITY_CODES` names states `_vacuity` cannot reach: "
+        f"{sorted(sic.WAIVABLE_VACUITY_CODES - from_source)}")
+
+
+def test_every_branch_lands_in_exactly_one_publication_class():
+    """Exhaustive and disjoint, over the branch set read from the source.
+
+    "Exactly one" is asserted per code rather than by counting, so a change
+    that published a code into BOTH fields — which would put an un-waivable
+    state back within reach while leaving every count assertion green — fails
+    here."""
+    from_source = _vacuity_branch_codes_from_source()
+    waivable, unwaivable = [], []
+    for code in from_source:
+        v, u = sic.vacuity_publication(code, not_run=False)
+        assert (bool(v), bool(u)) in ((True, False), (False, True)), (
+            f"{code} does not land in exactly one class: "
+            f"vacuity_code={v!r} unwaivable_code={u!r}")
+        assert v in ("", code) and u in ("", code), (code, v, u)
+        (waivable if v else unwaivable).append(code)
+
+    assert set(waivable) | set(unwaivable) == set(from_source)
+    assert not (set(waivable) & set(unwaivable))
+    # ...and the split is the one the module documents: the three branches
+    # whose predicate is an input the gate never obtained are the un-waivable
+    # ones. Named here so PROMOTING one into the waivable set is a test
+    # failure rather than a silent widening of what a tapeout may accept.
+    assert sorted(unwaivable) == [
+        "EMITTER_REPORT_UNREADABLE", "NO_CORNER_RECOUNTED", "SPEF_UNREADABLE"]
+    assert sorted(waivable) == sorted(sic.WAIVABLE_VACUITY_CODES)
+
+
+def test_a_branch_the_waivable_list_does_not_name_defaults_to_unwaivable(
+        monkeypatch):
+    """THE TENTH BRANCH, simulated end to end through `denominator`.
+
+    The requirement is that adding a branch and forgetting to classify it
+    fails towards BLOCKING a tapeout. Asserted by making `_vacuity` return a
+    state no list names — which is exactly what a tenth branch is on the day
+    it lands — and reading which field `denominator` puts it in."""
+    monkeypatch.setattr(
+        sic, "_vacuity",
+        lambda stats: ("A_TENTH_STATE_NOBODY_CLASSIFIED",
+                       "invented by a test. Read this as NOT CHECKED."))
+    stats = {"report_read": True, "spef_read": True, "spef_net_records": 5,
+             "recount": {"setup": {"nets_checked": 0}}}
+    details = sic.denominator(stats).as_dict()["details"]
+    assert details["vacuity_code"] == "", (
+        "an unclassified branch defaulted INTO the waivable channel — a state "
+        "nobody reviewed became acceptable at a mask order by omission")
+    assert details["unwaivable_code"] == "A_TENTH_STATE_NOBODY_CLASSIFIED"
+    # ...and it is still DISCLOSED: defaulting to un-waivable must not mean
+    # defaulting to silent.
+    assert sic.denominator(stats).not_applicable_reason.strip()
+
+
+def test_a_could_not_run_finding_demotes_even_a_waivable_code():
+    """The second condition, measured on its own.
+
+    Set membership cannot see this state: the code IS on the waivable list and
+    is the same one a genuine vacuity publishes. Only the findings tell the two
+    apart, which is why `vacuity_publication` reads them."""
+    code = "SPEF_NO_COUPLING_PAIRS"
+    assert code in sic.WAIVABLE_VACUITY_CODES        # ...the premise
+    assert sic.vacuity_publication(code, not_run=False) == (code, "")
+    assert sic.vacuity_publication(code, not_run=True) == ("", code)
+
+    # ...and through `denominator`, from a findings list, not a flag.
+    stats = {"report_read": True, "spef_read": True, "spef_net_records": 5,
+             "recount": {"setup": {"nets_checked": 0}}}
+    clean = sic.denominator(stats, []).as_dict()["details"]
+    assert clean["vacuity_code"] == code and clean["unwaivable_code"] == ""
+
+    for category in sorted(sic.NOT_RUN_CATEGORIES):
+        finding = sic.Finding("ERROR", category, "the gate never got to look")
+        details = sic.denominator(stats, [finding]).as_dict()["details"]
+        assert details["vacuity_code"] == "", category
+        assert details["unwaivable_code"] == code, category
+
+
+# ---------------------------------------------------------------------------
+# ...and the same properties, driven through the real CLI
+# ---------------------------------------------------------------------------
+def _not_run_projects(tmp_path: Path) -> list:
+    """One project per could-not-run state reachable from the shipped fixture.
+
+    Each is a copy under `tmp_path` carrying ONE perturbation, so the state a
+    row reaches is the perturbation named beside it and nothing else."""
+    def _report(project: Path) -> Path:
+        return project / "reports" / "phase3" / "si_mcf_sta.json"
+
+    def _edit(project: Path, mutate) -> Path:
+        rp = _report(project)
+        doc = json.loads(rp.read_text())
+        mutate(project, doc)
+        rp.write_text(json.dumps(doc, indent=2))
+        return project
+
+    def _drop_bounded(proj, doc):
+        for corner in doc["corners"].values():
+            corner["bounded_spef"] = str(proj / "a_bounded_spef_never_written")
+
+    out = []
+
+    p = _materialise_si_project(tmp_path, "nr_report_absent")
+    _report(p).unlink()
+    out.append(("emitter report absent", "EMITTER_REPORT_UNREADABLE", p))
+
+    p = _materialise_si_project(tmp_path, "nr_report_unparseable")
+    _report(p).write_text("{{{ not json")
+    out.append(("emitter report unparseable", "EMITTER_REPORT_UNREADABLE", p))
+
+    out.append(("named SPEF absent", "SPEF_UNREADABLE", _edit(
+        _materialise_si_project(tmp_path, "nr_spef_absent"),
+        lambda proj, doc: doc.__setitem__(
+            "spef", str(proj / "a_spef_this_run_never_produced.spef")))))
+
+    out.append(("no corner record at all", "NO_CORNER_RECOUNTED", _edit(
+        _materialise_si_project(tmp_path, "nr_no_corners"),
+        lambda proj, doc: doc.__setitem__("corners", {}))))
+
+    out.append(("bounded SPEF absent on both corners", "NO_CORNER_RECOUNTED",
+                _edit(_materialise_si_project(tmp_path, "nr_no_bounded"),
+                      _drop_bounded)))
+
+    # THE DECISIVE ROW. The SETUP corner recounts to zero coupling pairs — a
+    # genuine, waivable vacuity NAME — while the HOLD corner is never
+    # obtained. Same code as the control, different run.
+    out.append(("hold corner absent, setup recounts", "SPEF_NO_COUPLING_PAIRS",
+                _edit(_materialise_si_project(tmp_path, "nr_hold_absent"),
+                      lambda proj, doc: doc["corners"].pop("hold"))))
+
+    return out
+
+
+def test_a_could_not_run_state_reaches_the_vacuity_branches_at_all(tmp_path):
+    """THE PREMISE, measured before anything is built on it.
+
+    Every row must actually reach `NOT_RUN` with a zero denominator. A row
+    that silently reached some other state would make the guard below assert
+    something about a state that cannot happen."""
+    cases = _not_run_projects(tmp_path)
+    assert len(cases) == 6, "the premise must be measured on every row"
+    for label, _code, project in cases:
+        rc, doc = _run_si_gate(project)
+        errors = [f["category"] for f in doc["findings"]
+                  if f["severity"] == "ERROR"]
+        assert doc["verdict"] == "NOT_RUN", (label, doc["verdict"])
+        assert rc == sic.RC_FAIL, (label, rc)
+        assert doc["summary"]["denominator"]["examined"] == 0, label
+        assert errors, (label, "no ERROR finding — not a could-not-run run")
+        assert set(errors) <= sic.NOT_RUN_CATEGORIES, (label, errors)
+
+
+def test_no_could_not_run_state_publishes_into_the_waivable_channel(tmp_path):
+    """THE GUARD, through the real CLI on the shipped fixture.
+
+    `vacuity_code` is the token an acceptance quotes, so a state that is not a
+    waivable vacuity must publish none — and must still be NAMED, in the other
+    channel, because silencing it would lose the machine-readable name the
+    could-not-run states are entitled to."""
+    for label, code, project in _not_run_projects(tmp_path):
+        _, doc = _run_si_gate(project)
+        details = doc["summary"]["denominator"]["details"]
+        assert details["vacuity_code"] == "", (
+            f"{label}: the gate never obtained its input and still named the "
+            f"state as vacuity {details['vacuity_code']!r} — a code an "
+            f"operator can record in {sa.SI_DISCLOSURE_FIELD}")
+        assert details["unwaivable_code"] == code, (label, details)
+        assert doc["summary"]["denominator"][
+            "not_applicable_reason"].strip(), label
+
+
+def test_a_rejected_artefact_publishes_no_code_in_either_channel(tmp_path):
+    """The #533 guarantee, restated over both channels.
+
+    A rejection is not a vacuity AND not a could-not-run: the artefact WAS
+    obtained, examined, and found wrong. Adding a second channel must not give
+    that state somewhere new to be named — `_rejected_reason` and the findings
+    carry it, and neither code field does."""
+    for category, project in _rejected_projects(tmp_path):
+        _, doc = _run_si_gate(project)
+        details = doc["summary"]["denominator"]["details"]
+        assert details["vacuity_code"] == "", category
+        assert details["unwaivable_code"] == "", (
+            f"{category}: a REJECTED artefact was named in the un-waivable "
+            f"channel as {details['unwaivable_code']!r} — the findings and "
+            f"the rejected reason carry a decided failure, not a code")
+
+
+def test_a_consumer_reading_only_the_waivable_channel_sees_no_unwaivable_state(
+        tmp_path):
+    """THE PROPERTY THE FIELD BUYS, demonstrated by EXECUTING a consumer.
+
+    `_blind` is the future consumer this whole change is for: it reads
+    `details.vacuity_code` and nothing else — no verdict, no findings, no
+    `errors_count` — and treats a non-empty value as an acceptable vacuity.
+    That is the reader who inherits neither of `signoff_audit`'s defences.
+
+    Across every state reachable from the shipped fixture it must accept ONLY
+    runs the gate itself answered `VACUOUS_PASS`. The control at the end is
+    what stops this passing by publishing nothing anywhere."""
+    def _blind(doc: dict) -> bool:
+        return bool(doc["summary"]["denominator"]["details"]["vacuity_code"])
+
+    cases = ([(label, p) for label, _c, p in _not_run_projects(tmp_path)]
+             + [(cat, p) for cat, p in _rejected_projects(tmp_path)]
+             + [("proved", _materialise_si_project(
+                 tmp_path, "blind_proved", case="coupled")),
+                ("genuine vacuity",
+                 _materialise_si_project(tmp_path, "blind_vacuity"))])
+    assert len(cases) == 11, cases
+
+    accepted = []
+    for label, project in cases:
+        _, doc = _run_si_gate(project)
+        details = doc["summary"]["denominator"]["details"]
+        # At most one channel is ever non-empty, whatever the state.
+        assert not (details["vacuity_code"] and details["unwaivable_code"]), (
+            label, details)
+        if _blind(doc):
+            accepted.append(label)
+            assert doc["verdict"] == "VACUOUS_PASS", (
+                f"{label}: a consumer reading ONLY the waivable channel would "
+                f"accept a run the gate answered {doc['verdict']!r}")
+
+    # THE CONTROL. With this list empty the assertion above would hold
+    # vacuously — a gate that published nothing at all would pass it.
+    assert accepted == ["genuine vacuity"], accepted

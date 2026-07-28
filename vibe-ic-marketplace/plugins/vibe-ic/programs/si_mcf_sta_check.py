@@ -222,6 +222,62 @@ still owes the written reason ``_gate_denominator`` requires — it is simply th
 reason a REJECTED artefact gets (``_rejected_reason``) rather than a skip's, so
 the NOT-CHECKED disclaimer never ships beside a decided failure.
 
+A VACUITY A WAIVER MAY ACCEPT IS A SEPARATE FIELD, NOT A SEPARATE CONVENTION
+===========================================================================
+``details.vacuity_code`` is the token a tapeout acceptance must quote
+(``signoff_audit``'s ``si_vacuity_accepted``). ``_vacuity`` has NINE branches
+and that contract is unchanged — every one of them still has its own stable
+UPPER_SNAKE name, and the could-not-run states keep a machine-readable name
+rather than being silenced. What changed in #535 is WHICH FIELD each name is
+published in.
+
+MEASURED, driving this CLI over the shipped fixture
+``tests/fixtures/si_mcf_zero_coupling/grounded_only`` with one perturbation
+each, on the tree before the split::
+
+    perturbation                          rc  verdict       vacuity_code
+    (none)                                 2  VACUOUS_PASS  SPEF_NO_COUPLING_PAIRS
+    emitter report absent                  1  NOT_RUN       EMITTER_REPORT_UNREADABLE
+    emitter report unparseable             1  NOT_RUN       EMITTER_REPORT_UNREADABLE
+    named SPEF absent                      1  NOT_RUN       SPEF_UNREADABLE
+    no corner record at all                1  NOT_RUN       NO_CORNER_RECOUNTED
+    bounded SPEF absent, both corners      1  NOT_RUN       NO_CORNER_RECOUNTED
+    HOLD corner absent, SETUP recounts     1  NOT_RUN       SPEF_NO_COUPLING_PAIRS
+
+THE LAST ROW IS THE ONE THAT DECIDES THE DESIGN. Rows 2-6 publish names a
+reader can at least recognise as could-not-run states. Row 7 publishes
+``SPEF_NO_COUPLING_PAIRS`` — BYTE-IDENTICAL to row 1, the genuine vacuity — on
+a run that never obtained its hold corner. So the hazard is not "the
+could-not-run states have names of their own that a consumer might mistake for
+vacuities". It is that the SAME NAME is published in both states, and no
+scheme keyed on the NAME can tell them apart: narrowing which branches may
+publish would delete row 1's legitimate disclosure along with row 7's, and a
+per-code prefix or namespace would have to prefix row 1 and row 7 identically.
+The distinction is a property of the RUN, so the split has to be made where
+the run is known.
+
+TWO FIELDS, AND A CODE LANDS IN EXACTLY ONE (``vacuity_publication``):
+
+    details.vacuity_code     WAIVABLE. The gate held every input it audits,
+                             looked, and there was nothing to prove.
+    details.unwaivable_code  NOT WAIVABLE. Either an input was never obtained
+                             (an ERROR in ``NOT_RUN_CATEGORIES`` is present),
+                             or the branch is not on ``WAIVABLE_VACUITY_CODES``.
+
+Both are empty when ``examined > 0`` (nothing to explain) and — the guarantee
+landed in #533, unchanged and now stated over both channels — when the
+artefact was REJECTED. A decided FAILURE publishes NO code in EITHER field, so
+there is nothing for an operator to copy into ``si_vacuity_accepted``.
+
+WHY A FIELD RATHER THAN A CONVENTION. The two consumer-side defences in
+``signoff_audit`` (the body-outranks-the-label defect read, and ``NOT_RUN`` not
+being one of the verdicts it credits) are untouched and still pinned; this is a
+third line, not a replacement. The difference is where the guarantee lives. A
+convention — "read the defect channel first" — has to be re-earned by every
+consumer written from now on. A field cannot be: a consumer that reads
+``details["vacuity_code"]`` is structurally incapable of seeing an un-waivable
+state, whether or not its author ever heard the rule.
+
 Exit 0 = PASS (every corner's bound is genuinely applied + reported honestly),
 1 = FAIL **and every refused / mis-invoked run** (including the ``NOT_RUN``
 tier — see above), 2 = VACUOUS_PASS (nothing was re-derived; NOT a sign-off).
@@ -270,6 +326,37 @@ NOT_RUN_CATEGORIES = frozenset({
     "NO_CORNER",         # the report carries no record for a corner
     "NO_BOUNDED_SPEF",   # ... or names a bounded SPEF that is not there
 })
+
+#: The vacuity codes a tapeout acceptance MAY quote (#535). See the
+#: "A VACUITY A WAIVER MAY ACCEPT" section of the module docstring.
+#:
+#: ENUMERATED IN THE OPPOSITE DIRECTION FROM ``NOT_RUN_CATEGORIES``, for the
+#: same fail-safe reason read off a different axis. There the complement is
+#: unlisted, so a NEW ERROR CATEGORY defaults to the LOUD verdict tier. Here
+#: the complement is unlisted, so a NEW VACUITY BRANCH defaults to
+#: UN-WAIVABLE: it is still named, in ``details.unwaivable_code``, where no
+#: acceptance can reach it, until someone deliberately writes it into this set
+#: — a reviewable edit. Both directions make "nobody remembered" fail towards
+#: BLOCKING a tapeout, never towards signing one off.
+#:
+#: Every member is a state the gate reached WITH THE ARTEFACT IN HAND. The
+#: three ``_vacuity`` branches deliberately NOT here — ``EMITTER_REPORT_
+#: UNREADABLE``, ``SPEF_UNREADABLE``, ``NO_CORNER_RECOUNTED`` — are the ones
+#: whose predicate is an input the gate never obtained.
+WAIVABLE_VACUITY_CODES = frozenset({
+    "SPEF_REDUCED_FORMAT_ONLY",      # read; states a lumped RC pi model
+    "SPEF_NO_D_NET_RECORDS",         # read; no *D_NET to attribute a fold to
+    "COUPLING_CAPS_INTRA_NET_ONLY",  # read; every cap resolves within one net
+    "SPEF_NO_COUPLING_PAIRS",        # read; no inter-net coupling exists
+    "NO_VICTIM_NET_RESOLVED",        # read; no victim resolves to a *D_NET
+    "ALL_EXPECTATIONS_ZERO",         # compared; every expectation was 0.0
+})
+
+#: The two ``details`` keys a vacuity code may be published under. Neither is a
+#: substring of the other, so a consumer grepping for the waivable channel
+#: cannot land on the un-waivable one, or the reverse.
+VACUITY_CODE_KEY = "vacuity_code"
+UNWAIVABLE_CODE_KEY = "unwaivable_code"
 
 #: One unit of what this gate measures. Named here so the report, the reason
 #: prose and any consumer sweeping the gate set agree by construction.
@@ -642,6 +729,37 @@ def _vacuity(stats: dict) -> Tuple[str, str]:
     return code, why + _NOT_SAID
 
 
+def vacuity_publication(code: str, not_run: bool) -> Tuple[str, str]:
+    """``(vacuity_code, unwaivable_code)`` — WHICH FIELD may carry ``code`` (#535).
+
+    Exactly one of the two is ``code`` and the other is ``""``. See the
+    "A VACUITY A WAIVER MAY ACCEPT" section of the module docstring for the
+    measurement this exists for.
+
+    TWO CONDITIONS, AND NEITHER SUBSUMES THE OTHER — which is why both are
+    written:
+
+    * ``not_run`` demotes a code that IS on the waivable list. Reachable today:
+      the SETUP corner recounts to zero coupling pairs while the HOLD corner is
+      missing, which publishes ``SPEF_NO_COUPLING_PAIRS`` — a genuinely
+      waivable name — on a run that never obtained an input. Set membership
+      alone cannot see this, because the name is the same one row 1 publishes.
+    * set membership demotes a code that arrives with no ``NOT_RUN`` finding to
+      demote it. Nothing reaches that state through ``audit`` today — all three
+      unlisted branches require an input the gate could not obtain, and every
+      one of those raises a ``NOT_RUN_CATEGORIES`` ERROR. It is the guard for a
+      TENTH BRANCH added later: whatever state it names, and whatever findings
+      accompany it, it is named in ``unwaivable_code`` until someone writes it
+      into ``WAIVABLE_VACUITY_CODES`` on purpose.
+
+    The default direction is the whole point. A branch nobody classified is
+    un-waivable, so forgetting blocks a tapeout instead of signing one off.
+    """
+    if not_run or code not in WAIVABLE_VACUITY_CODES:
+        return "", code
+    return code, ""
+
+
 def _vacuous_reason(stats: dict) -> str:
     """The prose half of :func:`_vacuity`. Kept as the name #496's contract
     refers to; the branch logic lives in one place."""
@@ -694,58 +812,85 @@ def denominator(stats: dict,
     argument keeps the pre-#506 behaviour for direct callers that only have the
     stats dict.
 
-    The same choice governs ``details.vacuity_code``, the machine-citable name
-    a tapeout waiver must quote to accept a vacuity. THREE STATES, and only the
-    third names itself:
+    The same choice governs the machine-citable name a tapeout waiver must
+    quote to accept a vacuity. FOUR STATES, and only the last names itself in
+    the field an acceptance can reach:
 
-        examined > 0              -> no reason, no code (nothing to explain)
-        examined == 0, defect     -> rejected reason, NO CODE (a decided
-                                     FAILURE is not a waivable vacuity)
-        examined == 0, no defect  -> vacuity prose AND its code
+        examined > 0              -> no reason, no code at all
+        examined == 0, defect     -> rejected reason, NO CODE IN EITHER FIELD
+                                     (a decided FAILURE is not a waivable
+                                     vacuity — #533)
+        examined == 0, no defect,
+          could-not-run           -> vacuity prose, code in `unwaivable_code`
+                                     (named for a human and a machine, out of
+                                     reach of `si_vacuity_accepted` — #535)
+        examined == 0, no defect,
+          gate held its inputs    -> vacuity prose AND its `vacuity_code`
 
-    Both halves of the third row come from the same ``_vacuity`` call, so the
-    code can never name a state the prose contradicts."""
+    Every code comes from the same ``_vacuity`` call as the prose beside it, so
+    the code can never name a state the prose contradicts; and
+    ``vacuity_publication`` chooses the FIELD from the same ``findings`` list
+    the ``defect`` split above is read from, so the two cannot disagree about
+    what the run was."""
     recount = stats.get("recount", {}) or {}
     examined = sum(int((v or {}).get("folds_proved", 0) or 0)
                    for v in recount.values())
     considered = sum(int((v or {}).get("nets_checked", 0) or 0)
                      for v in recount.values())
-    _, defect = error_categories(findings or [])
-    vacuity_code, prose = _vacuity(stats)
-    # ONE BRANCH DECIDES BOTH THE PROSE AND THE CODE, and the assignment is
-    # written per-branch rather than as two independent conditions further down.
-    # `not_applicable_reason` and `vacuity_code` describe the SAME state; a
-    # separate `if` for each is a second place to remember, and the two
-    # conditions drifting apart is precisely how the code would come to name a
-    # vacuity the prose says is not one.
+    not_run, defect = error_categories(findings or [])
+    code, prose = _vacuity(stats)
+    vacuity_code = unwaivable_code = ""
+    # ONE BRANCH DECIDES THE PROSE AND THE CODE AND THE FIELD, and the
+    # assignment is written per-branch rather than as independent conditions
+    # further down. `not_applicable_reason`, `vacuity_code` and
+    # `unwaivable_code` describe the SAME state; a separate `if` for each is
+    # another place to remember, and those conditions drifting apart is
+    # precisely how the code would come to name a vacuity the prose says is not
+    # one, or to name it in the field an acceptance can reach.
     if examined:
         # Something was proved. There is no zero to explain and no vacuity to
-        # name.
-        reason, vacuity_code = "", ""
+        # name in either field.
+        reason = ""
     elif defect:
         # #506: the artefact was REJECTED, so the zero is a DECIDED VERDICT,
-        # not a skip. It gets the rejected reason — and NO `vacuity_code`.
-        # Publishing one here would name this failure as a vacuity, which is
-        # the one state `signoff_audit` lets a tapeout waiver through: an
-        # operator could copy the code out of a FAIL report into
+        # not a skip. It gets the rejected reason — and NO code, in EITHER
+        # field. Publishing one in `vacuity_code` would name this failure as a
+        # vacuity, which is the one state `signoff_audit` lets a tapeout waiver
+        # through: an operator could copy the code out of a FAIL report into
         # `si_vacuity_accepted` and hold an acceptance for a genuine SI defect.
-        # A rejection is not waivable, so it publishes nothing to waive.
-        reason, vacuity_code = _rejected_reason(defect), ""
+        # A rejection is not waivable, so it publishes nothing to waive — and
+        # it is not a could-not-run either, so `unwaivable_code` stays empty
+        # too and the #533 guarantee reads the same over both channels.
+        reason = _rejected_reason(defect)
     else:
-        # The gate ran, reached nothing, and says which nothing. The ONLY state
-        # that is a vacuity, and therefore the only one that names itself.
+        # The gate reached nothing and says which nothing. WHICH FIELD that
+        # name is published in is decided by `vacuity_publication` from the
+        # same findings list the `defect` split above came from: a run that
+        # never obtained an input is disclosed by name, in a field no
+        # acceptance reads. See #535.
         reason = prose
+        vacuity_code, unwaivable_code = vacuity_publication(code, bool(not_run))
     return _gd.Denominator(
         unit=DENOMINATOR_UNIT,
         examined=examined,
         considered=considered,
         not_applicable_reason=reason,
         details={
-            # The machine-citable name of THIS vacuity. Empty unless the gate
-            # examined nothing AND rejected nothing — see the branch above. A
-            # consumer that must decide whether a specific vacuity was accepted
-            # cites this, never `not_applicable_reason`.
-            "vacuity_code": vacuity_code,
+            # THE WAIVABLE CHANNEL. The machine-citable name of a vacuity a
+            # tapeout acceptance may quote. Empty unless the gate examined
+            # nothing, rejected nothing, AND held every input it audits — see
+            # `vacuity_publication`. A consumer that must decide whether a
+            # specific vacuity was accepted cites this, never
+            # `not_applicable_reason`, and it may do so WITHOUT first reading
+            # the defect channel: a state this field can name is waivable by
+            # construction, not by the reader remembering a rule (#535).
+            VACUITY_CODE_KEY: vacuity_code,
+            # THE UN-WAIVABLE CHANNEL. The same nine-branch vocabulary, for the
+            # states an acceptance may NOT cover — so a could-not-run run is
+            # still named for a machine instead of being silenced, without
+            # that name being reachable through `si_vacuity_accepted`. At most
+            # one of the two is ever non-empty.
+            UNWAIVABLE_CODE_KEY: unwaivable_code,
             "coupling_pairs": stats.get("coupling_pairs"),
             "coupling_caps": stats.get("coupling_caps"),
             "coupling_nets": stats.get("coupling_nets"),
@@ -908,15 +1053,28 @@ RECORD_ADJUDICATION = _ra.declare(
     # re-reviewing the rules below against the new logic; that is the point,
     # and a fingerprint that stayed quiet through a prose rewrite of a verdict
     # reason would be the wrong kind of quiet.
-    # Re-reviewed at v1.7.90 after #533 reworked this closure: `_vacuity` now
-    # returns (code, prose), and `denominator` assigns `not_applicable_reason`
-    # and `vacuity_code` together per branch so a REJECTED artefact publishes
-    # no vacuity code. None of that changes WHICH verdict a zero-fold run
-    # receives — verified by running the rule below against both corpus
-    # records carrying `summary.coupling_pairs: 0`, which still supersede
-    # PASS -> VACUOUS_PASS. The rule holds unchanged under the new logic.
+    # Re-reviewed TWICE in succession, and the note is kept for both because
+    # each records a different question that was asked of the same rules.
+    #
+    # v1.7.90, after #533 reworked this closure: `_vacuity` returns
+    # (code, prose), and `denominator` assigns `not_applicable_reason` and
+    # `vacuity_code` together per branch so a REJECTED artefact publishes no
+    # vacuity code. The declared digest still named the pre-#533 closure, so
+    # `RECORD_ADJUDICATION.drift()` was non-None and this gate could not
+    # adjudicate its own published records at all — every test in
+    # `test_published_record_staleness_check.py` fails in that state.
+    #
+    # #535, which splits the un-waivable states into `unwaivable_code`, moves
+    # the closure again and this digest is regenerated for it.
+    #
+    # The rule below was re-read against BOTH changes: `zero-fold-is-not-a-
+    # signoff` decides from `summary.coupling_pairs` and `findings` through
+    # `verdict_for`, and neither split touches that path — the codes and the
+    # fields carrying them are disclosure, not verdict. Verified by running the
+    # rule against both corpus records carrying `coupling_pairs: 0`, which
+    # still supersede PASS -> VACUOUS_PASS.
     decision_digest=(
-        "2737122db70ec1c5d0fdd0c7535a2bdcac21c70dcf544989d0f4dcc1877bbf5b"),
+        "bab7cda2e01f1c85cd400009a4beab95dc537219e931d8667b88a7d390e06ce3"),
     rules=(
         _ra.Rule(
             rule_id="si_mcf_sta_check.zero-fold-is-not-a-signoff",
