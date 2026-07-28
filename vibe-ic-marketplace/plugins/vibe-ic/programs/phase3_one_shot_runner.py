@@ -64,6 +64,7 @@ import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helper
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
+import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -19893,6 +19894,24 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
     return declared
 
 
+# vibe-ic#306's gate, in the SAME declaration shape as `_DECLARED_SIGNOFF_GATES`
+# (step name, program, output path relative to <project>, extra argv). It is kept
+# out of that table only because `main()` plans it one slot earlier; it is
+# executed by the SAME helper, so the two cannot drift on what an absent program
+# or a non-verdict exit code means. Before #544 they already had: this gate
+# created `reports/phase3/sta/` unconditionally and so FABRICATED the project
+# directory it was asked to audit — measured on a non-existent project, it
+# reported `PASS  verdict: VACUOUS_PASS  no route promotion this run`, which is
+# exactly the hazard `_run_declared_signoff_gate` documents and guards against.
+_DRV_PROMOTION_GATE = (
+    "drv_promotion_corroboration", "drv_promotion_corroboration_check.py",
+    # Same folder the sign-off STA gate it corroborates writes to
+    # (`reports/phase3/sta/`), stated literally for the same reason that gate
+    # states its own: the two must never drift apart.
+    "reports/phase3/sta/drv_promotion_corroboration.json", (),
+)
+
+
 def step_drv_promotion_corroboration(project: Path) -> StepResult:
     """vibe-ic#306 — a route promoted on its OWN re-measurement must be
     corroborated by the sign-off report it claims to improve (#293).
@@ -19906,37 +19925,12 @@ def step_drv_promotion_corroboration(project: Path) -> StepResult:
       rc 0  PASS (includes VACUOUS_PASS — no promotion happened this run)
       rc 1  FAIL — sign-off contradicts the promotion, or a promotion happened
             with no sign-off report to corroborate it
-      rc 2  the gate could not read its inputs — inconclusive, not a verdict
-            about the design, so it is reported as SKIP rather than failing a
-            run over a checker fault.
+      rc 2+ the gate returned NO verdict. #544: for a gate the flow DECLARES as
+            blocking that is `BLOCKED`, not a neutral skip — see
+            `_signoff_not_checked`.
     """
-    t0 = time.time()
-    prog = PROGRAMS_DIR / "drv_promotion_corroboration_check.py"
-    if not prog.is_file():
-        return StepResult("drv_promotion_corroboration", "SKIP",
-                          time.time() - t0, "gate program not present")
-    # Same folder the sign-off STA gate it corroborates writes to
-    # (`reports/phase3/sta/`), stated literally for the same reason that gate
-    # states its own: the two must never drift apart.
-    out_json = project / "reports" / "phase3" / "sta" / \
-        "drv_promotion_corroboration.json"
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        cp = subprocess.run(
-            [sys.executable, str(prog), str(project), "--json", str(out_json)],
-            timeout=600, check=False, capture_output=True, text=True)
-    except Exception as exc:                              # noqa: BLE001
-        return StepResult("drv_promotion_corroboration", "SKIP",
-                          time.time() - t0, f"gate could not run: {exc}")
-    detail = (cp.stdout or cp.stderr or "").strip()[-600:]
-    if cp.returncode == 0:
-        return StepResult("drv_promotion_corroboration", "PASS",
-                          time.time() - t0, detail, [str(out_json)])
-    if cp.returncode == 1:
-        return StepResult("drv_promotion_corroboration", "FAIL",
-                          time.time() - t0, detail, [str(out_json)])
-    return StepResult("drv_promotion_corroboration", "SKIP",
-                      time.time() - t0, f"inconclusive (rc={cp.returncode}): {detail}")
+    return _run_declared_signoff_gate(project, *_DRV_PROMOTION_GATE,
+                                      timeout=600)
 
 
 def _restamp_provenance_output(project: Path, rel: str, path: Path,
@@ -20157,51 +20151,198 @@ def _gate_detail(out_json: Path, stdout: str, stderr: str) -> str:
             (stdout or stderr or "").strip()[-600:])[:600]
 
 
+# ---------------------------------------------------------------------------
+# #544 — A DECLARED SIGN-OFF GATE THAT RETURNED NO VERDICT IS NOT NEUTRAL.
+#
+# OBSERVED: a phase-3 run reported PASS_WITH_WAIVERS while carrying -72.07 ns of
+# setup violation at the slow sign-off corner, on a real routed DEF with a real
+# max-RC SPEF, DRC 0 and LVS matching uniquely. Five declared sign-off gates
+# reported SKIP — `post_route_signoff_corner_check` among them, the gate whose
+# entire job is to FAIL on a negative sign-off corner — and `_aggregate_verdict`
+# reads SKIP as PASS_WITH_WAIVERS. The run looked clean because the only gate
+# that would have disagreed had not spoken.
+#
+# TWO WAYS IN, AND THE SECOND NEEDS NO BROKEN ENVIRONMENT:
+#   1. the program file is not found (the observed trigger was PROGRAMS_DIR
+#      derived from a `__file__` in a git worktree deleted mid-run — but the
+#      code could not tell that from "this gate is not part of this deployment"
+#      and carried on either way);
+#   2. ANY exit code other than 0 or 1 — including rc 2, this repo's canonical
+#      NOT-CHECKED code (`_vacuous_exit.RC_VACUOUS`, enforced across the gate
+#      population by #528's `gate_skip_routing_check`). A declared sign-off gate
+#      correctly reporting "I could not check this" was recorded as
+#      no-information and the sign-off passed. Reachable today by any sign-off
+#      gate that hits an input it cannot read, and by an argparse rejection
+#      (`_gate_invocation`: rc 2 also means "you called me wrongly").
+#
+# ABSENCE IS NOT INAPPLICABILITY. The repo has TWO declared homes for "this does
+# not apply to this run", and NEITHER of them is file presence:
+#   * the flow's own `condition: files_exist:` in
+#     `flow/phase1_phase2_phase3.yaml` — 25 blocks, one of them this very
+#     table's `post_route_signoff_corner_check` — evaluated by
+#     `flow_compliance_check._check_condition` into `SKIPPED-CONDITION`;
+#   * the gate's own rc-0 NOT_APPLICABLE / VACUOUS_PASS self-report, decided on
+#     the PROJECT's evidence. That is what makes wiring this table
+#     UNCONDITIONALLY strictly stronger than the yaml condition, and it is the
+#     channel an analog-only project, a PDK with no EM rules or a flow variant
+#     already travels (measured: all five programs read reports only — not one
+#     contains a `subprocess`, `docker` or `shutil.which` call — so no
+#     ENV_UNAVAILABLE case arises for them at all).
+# Both are reached only by ASKING the gate. A missing file answers nothing. So
+# absence is an incomplete deployment, and it is an error outright.
+#
+# NO THIRD DECLARATION SURFACE IS ADDED, deliberately. Every entry in
+# `_DECLARED_SIGNOFF_GATES` and `_DRV_PROMOTION_GATE` is release-gating and
+# there is no opt-out column, for the reason `signoff_ladder_run.TierResult`
+# states about `release_gating`: it "is set in code (never from a design
+# artifact, so no project can opt its own gates out)". A column that only ever
+# reads True is a back door waiting for its first user, and a fourth spelling of
+# "could not check" is the drift shape #527, #530 and #534 each spent a version
+# removing. If a genuinely non-gating declared sign-off gate ever appears, the
+# in-repo answer is that flag, set in code, with a test naming the gate.
+#
+# THE VOCABULARY IS REUSED, NOT INVENTED:
+#   * `BLOCKED` is already THIS module's word for a step where "the check could
+#     not be attempted ... so NOTHING is known about the design. Never green"
+#     (`_VERDICT_TIERS`), and `_aggregate_verdict` already puts it in the
+#     non-green bucket by name. It is a STEP status, which is what this returns;
+#     `signoff_ladder_run.NOT_RELEASED_EVIDENCE_ABSENT` is an AGGREGATE ladder
+#     verdict for the same idea one layer up, and borrowing it here would create
+#     the extra spelling rather than remove one.
+#   * the detail carries #538's phrase `NOT CHECKED (not a pass)` verbatim.
+#   * `declared_signoff_rollup` states its denominator the way
+#     `gatekeeper_review._hygiene_verdict` does.
+#
+# BLAST RADIUS, measured the way #306 requires — the five declared sign-off
+# gates invoked exactly as the runner invokes them, over all 14 published
+# phase-3 run-roots under `benchmark-data/ic`, on scratch copies: 70
+# invocations, 47 rc 0 and 23 rc 1, and NOT ONE rc >= 2. No published run
+# changes verdict. The tier this replaces was reachable only through a fault
+# the corpus had not yet hit — which is precisely why it survived.
+# ---------------------------------------------------------------------------
+
+#: #538's phrase for a check that produced no verdict, so the runner's sign-off
+#: rows and the CI hygiene roll-up say "nothing was checked" with one wording.
+_SIGNOFF_NOT_CHECKED = "NOT CHECKED (not a pass)"
+
+
+def _signoff_not_checked(name: str, t0: float, why: str,
+                         outputs: Sequence[str] = ()) -> StepResult:
+    """A DECLARED sign-off gate that returned no verdict, as a BLOCKED step.
+
+    `BLOCKED` rather than `SKIP` is the whole of #544: `_aggregate_verdict`
+    names BLOCKED in the non-green bucket and folds SKIP into
+    PASS_WITH_WAIVERS, so this choice is what decides whether a sign-off the
+    flow declared, and nothing performed, can still release a tapeout.
+
+    It is deliberately NOT `FAIL`: the distinction between "a check ran and the
+    design did not pass" and "nothing is known about the design" is preserved
+    where triage reads it — the step's own status and its detail — exactly as
+    `_aggregate_verdict`'s own comment describes for the BLOCKED tier.
+    """
+    return StepResult(name, "BLOCKED", time.time() - t0,
+                      f"{_SIGNOFF_NOT_CHECKED}: {why}", list(outputs))
+
+
 def _run_declared_signoff_gate(project: Path, name: str, program: str,
                                out_rel: str,
-                               extra_argv: tuple = ()) -> StepResult:
-    """Invoke one flow-declared sign-off gate inline, blocking on its verdict."""
+                               extra_argv: tuple = (),
+                               timeout: int = 900) -> StepResult:
+    """Invoke one flow-declared sign-off gate inline, blocking on its verdict.
+
+    Exactly two exit codes are verdicts about the design — 0 (PASS) and 1
+    (FAIL). Every other outcome, including never reaching the subprocess at
+    all, is routed through `_signoff_not_checked` and is non-green. See the
+    block comment above for why absence is not inapplicability.
+    """
     t0 = time.time()
     prog = PROGRAMS_DIR / program
     if not prog.is_file():
-        return StepResult(name, "SKIP", time.time() - t0,
-                          f"gate program not present: {program}")
+        return _signoff_not_checked(
+            name, t0,
+            f"gate program not present: {program} (looked in {PROGRAMS_DIR}). "
+            f"The flow DECLARES this sign-off gate, so its absence is an "
+            f"incomplete deployment, not an exemption — nothing was examined "
+            f"and this run cannot sign off")
     if not project.is_dir():
         # Do NOT mkdir our way into existence here: creating the report
         # directory would also create the PROJECT directory, and each checker
         # keys its rc-2 "cannot read my inputs" branch on `project.is_dir()`.
         # Fabricating the tree would turn that fault into a NOT_APPLICABLE
         # rc 0, i.e. a green verdict about a project that is not there.
-        return StepResult(name, "SKIP", time.time() - t0,
-                          f"project directory does not exist: {project}")
+        return _signoff_not_checked(
+            name, t0, f"project directory does not exist: {project}")
     out_json = project / out_rel
     try:
         out_json.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        return StepResult(name, "SKIP", time.time() - t0,
-                          f"cannot create {out_json.parent}: {exc}")
+        return _signoff_not_checked(
+            name, t0, f"cannot create {out_json.parent}: {exc}")
     cmd = [sys.executable, str(prog), str(project), *extra_argv,
            "--json", str(out_json)]
     try:
-        cp = subprocess.run(cmd, timeout=900, check=False,
+        cp = subprocess.run(cmd, timeout=timeout, check=False,
                             capture_output=True, text=True)
     except Exception as exc:                                  # noqa: BLE001
-        return StepResult(name, "SKIP", time.time() - t0,
-                          f"gate could not run: {exc}")
+        return _signoff_not_checked(name, t0, f"gate could not run: {exc}")
     detail = _gate_detail(out_json, cp.stdout or "", cp.stderr or "")
     outputs = [str(out_json)] if out_json.is_file() else []
     if cp.returncode == 0:
         return StepResult(name, "PASS", time.time() - t0, detail, outputs)
     if cp.returncode == 1:
         return StepResult(name, "FAIL", time.time() - t0, detail, outputs)
-    return StepResult(name, "SKIP", time.time() - t0,
-                      f"inconclusive (rc={cp.returncode}): {detail}", outputs)
+    # rc 2 carries two meanings and BOTH are non-verdicts (`_gate_invocation`):
+    # the gate could not read its inputs, or the caller invoked it wrongly.
+    # Saying WHICH is the difference between an actionable line and a number.
+    why = _gate_invocation.classify_not_invocable(
+        cp.stdout or "", cp.stderr or "",
+        [a for a in (*extra_argv, "--json") if a.startswith("--")])
+    reason = (f"the runner never validly invoked it — {why}" if why else
+              f"the gate could not check what it audits")
+    return _signoff_not_checked(
+        name, t0, f"{reason} (rc={cp.returncode}): {detail}", outputs)
 
 
 def step_declared_signoff_gates(project: Path) -> List[StepResult]:
     """Every flow-declared step-23/25 sign-off gate, one StepResult each."""
     return [_run_declared_signoff_gate(project, *g) for g in
             _DECLARED_SIGNOFF_GATES]
+
+
+#: Every step name this module plans as a DECLARED sign-off gate, in plan order.
+#: `_DRV_PROMOTION_GATE` first because `main()` appends it first.
+DECLARED_SIGNOFF_STEP_NAMES: Tuple[str, ...] = (
+    (_DRV_PROMOTION_GATE[0],) + tuple(g[0] for g in _DECLARED_SIGNOFF_GATES))
+
+
+def declared_signoff_rollup(plan: List[StepResult]) -> Dict[str, Any]:
+    """State the sign-off population's denominator, #538-style.
+
+    `_aggregate_verdict` computes one word over the WHOLE plan. That word is
+    silent about how much of the sign-off was actually performed, and #544 is
+    what that silence costs: four PASSes and one gate that never ran read
+    identically to five PASSes. This is the honest form — the same shape
+    `gatekeeper_review._hygiene_verdict` prints for the CI hygiene set:
+
+        `4 of 5 declared sign-off gate(s) PASSED; 1 NOT CHECKED (not a pass):
+         sta_corner`
+
+    Reports only what is in `plan`, so a run that did not reach the sign-off
+    steps is described by a smaller denominator rather than by invented rows.
+    """
+    rows = {s.name: s for s in plan if s.name in DECLARED_SIGNOFF_STEP_NAMES}
+    declared = [n for n in DECLARED_SIGNOFF_STEP_NAMES if n in rows]
+    passed = [n for n in declared if rows[n].status == "PASS"]
+    failed = [n for n in declared if rows[n].status == "FAIL"]
+    not_checked = [n for n in declared if rows[n].status not in ("PASS", "FAIL")]
+    line = f"{len(passed)} of {len(declared)} declared sign-off gate(s) PASSED"
+    if failed:
+        line += f"; {len(failed)} FAILED: " + ", ".join(failed)
+    if not_checked:
+        line += (f"; {len(not_checked)} {_SIGNOFF_NOT_CHECKED}: "
+                 + ", ".join(not_checked))
+    return {"declared": len(declared), "passed": passed, "failed": failed,
+            "not_checked": not_checked, "line": line}
 
 
 def _step37_restamp_canon_gds_provenance(project: Path, top: str,
@@ -28038,6 +28179,9 @@ def main() -> int:
     steps_verdict = _aggregate_verdict(plan)
     verdict, audit_verdict, verdict_note = _derive_headline_verdict(
         project, steps_verdict)
+    # #544 — the headline is one word over the whole plan and is silent about
+    # how much of the SIGN-OFF was performed. Publish the denominator beside it.
+    signoff_rollup = declared_signoff_rollup(plan)
     summary = {
         "project": str(project),
         "pdk": pdk.name,
@@ -28048,6 +28192,7 @@ def main() -> int:
         # that says FAIL. `steps_verdict` keeps the own-steps view.
         "steps_verdict": steps_verdict,
         "completion_audit_verdict": audit_verdict,
+        "declared_signoff_gates": signoff_rollup,
         "verdict": verdict,
     }
     if verdict_note:
@@ -28060,6 +28205,8 @@ def main() -> int:
     print(f"verdict: {summary['verdict']}"
           + (f" (steps: {steps_verdict}, completion audit: {audit_verdict})"
              if audit_verdict else ""))
+    if signoff_rollup["declared"]:
+        print(f"sign-off: {signoff_rollup['line']}")
     for s in plan:
         print(f"  {s.status:6} {s.name:8} {s.detail[:120]}")
     print(f"final summary: {'reports/final_summary.md' if fs_ok else 'NOT generated'}")

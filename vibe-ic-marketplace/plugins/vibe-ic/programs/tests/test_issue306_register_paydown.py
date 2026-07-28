@@ -302,7 +302,25 @@ def test_306_drv_promotion_trigger_is_reachable_not_dead_code():
 
 def test_306_drv_promotion_step_does_not_fail_on_a_checker_fault(tmp_path):
     """rc=2 is inconclusive, not a verdict about the design. A blocking gate
-    that fails runs over its own I/O errors is breakage, not enforcement."""
+    that fails runs over its own I/O errors is breakage, not enforcement.
+
+    #544 SPLIT THE ORIGINAL ASSERTION, which was `status in ("PASS", "SKIP")`
+    and passed on the WRONG member of that pair. Measured on the pre-fix tree,
+    a non-existent project returned `PASS  verdict: VACUOUS_PASS  no route
+    promotion this run — gate inapplicable`, because this step created
+    `reports/phase3/sta/` unconditionally and so FABRICATED the project
+    directory it was asked to audit; the checker then found an empty-but-real
+    tree and reported "nothing was promoted". A green verdict about a project
+    that is not there.
+
+    What survives is the real half — a checker fault is not a design FAIL. What
+    replaces the rest is that it is not a pass either.
+    """
     import phase3_one_shot_runner as R
-    r = R.step_drv_promotion_corroboration(tmp_path / "does_not_exist")
-    assert r.status in ("PASS", "SKIP"), r
+    missing = tmp_path / "does_not_exist"
+    r = R.step_drv_promotion_corroboration(missing)
+    assert r.status != "FAIL", (
+        "a checker fault is not a verdict about the design", r)
+    assert r.status == "BLOCKED", r
+    assert not missing.exists(), (
+        "the step created the project directory it was asked to audit")

@@ -102,9 +102,22 @@ _MULTICORNER_VIOLATED = (
 )
 
 
+#: Inner subprocess bound for this file. Every gate driven here is a pure
+#: report reader that returns in well under a second (measured over the whole
+#: published corpus: 70 invocations, none slower than a few hundred ms), so a
+#: small bound is honest. It must stay BELOW CI's `--timeout=180` harness bound
+#: (#542): a test that cannot reach its own timeout kills the whole subset
+#: instead of failing as one test.
+_INNER_TIMEOUT_S = 60
+
+#: The verdicts `phase3_one_shot_runner.main` treats as a releasing run.
+_RELEASING = ("PASS", "PASS_WITH_WAIVERS", "PASS_WITH_OPEN_SOURCE_CONSTRAINTS")
+
+
 def _run(prog: str, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(_PROGRAMS / prog), *args],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True,
+                          timeout=_INNER_TIMEOUT_S)
 
 
 def _project(tmp: Path) -> Path:
@@ -289,18 +302,29 @@ def test_a_blocked_signoff_gate_fails_the_whole_run(tmp_path):
     assert R._aggregate_verdict(plan) == "FAIL"
 
 
-def test_a_checker_fault_is_a_skip_not_a_design_failure(tmp_path):
+def test_a_checker_fault_is_not_a_design_failure_and_is_not_neutral_either(
+        tmp_path):
     """rc 2 means the gate could not read its inputs or was mis-invoked. That
     is inconclusive, not a verdict about the design — a blocking gate that
-    fails runs over its own I/O errors is breakage, not enforcement."""
+    fails runs over its own I/O errors is breakage, not enforcement.
+
+    REVERSED BY #544, deliberately. This test used to assert `SKIP` and
+    `_aggregate_verdict(...) != "FAIL"`, and that second half was the defect:
+    for a gate the flow DECLARES as sign-off, "inconclusive" is not neutral.
+    The distinction the original was protecting is kept — the step is
+    `BLOCKED`, never `FAIL`, so triage can still tell "nothing is known" from
+    "the design did not pass" — but it no longer releases.
+    """
     import phase3_one_shot_runner as R
     # A mis-invocation: argparse exits 2.
     r = R._run_declared_signoff_gate(
         _project(tmp_path), "sta_signoff", "sta_report_check.py",
-        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"))
-    assert r.status == "SKIP", r
+        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"),
+        timeout=_INNER_TIMEOUT_S)
+    assert r.status == "BLOCKED", r
+    assert r.status != "FAIL", "a checker fault is not a verdict on the design"
     assert "rc=2" in r.detail, r.detail
-    assert R._aggregate_verdict([r]) != "FAIL"
+    assert R._aggregate_verdict([r]) not in _RELEASING, r
 
 
 def test_a_missing_project_is_not_fabricated_into_existence(tmp_path):
@@ -312,8 +336,10 @@ def test_a_missing_project_is_not_fabricated_into_existence(tmp_path):
     missing = tmp_path / "does_not_exist"
     r = R._run_declared_signoff_gate(
         missing, "sta_corner", "post_route_signoff_corner_check.py",
-        "reports/phase3/sta/post_route_signoff_corner.json")
-    assert r.status == "SKIP", r
+        "reports/phase3/sta/post_route_signoff_corner.json",
+        timeout=_INNER_TIMEOUT_S)
+    # #544: a project that is not there is not a project that passed.
+    assert r.status == "BLOCKED", r
     assert not missing.exists(), (
         "the gate helper created the project directory it was asked to audit")
 
