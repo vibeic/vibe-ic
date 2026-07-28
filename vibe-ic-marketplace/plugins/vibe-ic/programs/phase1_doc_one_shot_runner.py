@@ -8376,6 +8376,209 @@ def _foundry_match_trustworthy(span: str) -> bool:
     return True
 
 
+# ORGANIC-20260728 #513 — the SECOND evidence source of the SAME
+# extractor. #451/#457 gave the extractor exactly one source: PROSE. A
+# design that does not DESCRIBE its process still STAGES one: liberty /
+# LEF / tech files under its own `input/pdk*/` tree. That enablement is
+# on disk before L19 is emitted, and `l19_pdk_floorplan_contract_check`
+# L19-3 fails precisely on "stages a PDK, declares none".
+#
+# The identifier is NOT read off a name list and NOT keyed to any
+# filename: the staged file's own relative PATH is tokenised on
+# non-alphanumerics and handed to the SAME `_OPEN_PDK_TOKEN_RE` /
+# `_FOUNDRY_CTX_RE` + `_foundry_match_trustworthy` machinery the prose
+# path uses. Tokenisation is required because a PDK identifier inside a
+# cell-library filename is glued to the rest of the name by `_`, and `_`
+# is a word character, so `\b` can never fire on the raw path.
+#
+# PROSE IS UNTOUCHED: this source is consulted only after BOTH prose
+# passes have fallen through. A design whose docs name a process keeps
+# the prose answer, byte for byte, including #457's negation and
+# dual-evidence denies — which apply here unchanged.
+#
+# Roots + enablement suffixes mirror `l19_pdk_floorplan_contract_check`
+# (`_STAGED_PDK_GLOBS` / `_PDK_ENABLEMENT_SUFFIXES`) so the extractor
+# reads exactly the population that gate blocks on. Duplicated rather
+# than imported: that gate imports `phase3_one_shot_runner`, and phase 1
+# must not drag the phase-3 runner into its import graph.
+_STAGED_PDK_GLOBS = ("input/pdk*/**/*",)
+_STAGED_PDK_SUFFIXES = (".lib", ".lef", ".tlef", ".tech", ".techlef",
+                        ".db", ".gds")
+# Same 2000-entry glob cap the gate applies, so the extractor and the
+# gate see the SAME staged population on a large PDK install — a design
+# whose enablement the gate can see must be one the extractor can read.
+_STAGED_PDK_MAX_ENTRIES = 2000
+_STAGED_PDK_MAX_FILES = 64          # enablement files kept + disclosed
+# Path -> word text. Only the PATH is ever read; a staged liberty file is
+# routinely tens of MB and its content is never opened.
+_PATH_WORD_SPLIT_RE = re.compile(r"[^0-9A-Za-z]+")
+
+
+def _staged_pdk_enablement_files(project: Path) -> List[str]:
+    """#513 — project-relative paths of the PDK enablement the design
+    stages under its own `input/pdk*/` tree, sorted (deterministic) and
+    capped. Empty list when the design stages nothing."""
+    out: List[str] = []
+    for pat in _STAGED_PDK_GLOBS:
+        try:
+            entries = sorted(project.glob(pat))[:_STAGED_PDK_MAX_ENTRIES]
+        except OSError:
+            continue
+        for f in entries:
+            try:
+                if not f.is_file():
+                    continue
+            except OSError:
+                continue
+            if f.suffix.lower() not in _STAGED_PDK_SUFFIXES:
+                continue
+            try:
+                out.append(str(f.relative_to(project)))
+            except ValueError:
+                out.append(f.name)
+            if len(out) >= _STAGED_PDK_MAX_FILES:
+                return out
+    return out
+
+
+def _staged_pdk_identifier(project: Path, staged: Optional[List[str]] = None):
+    """#513 — (pdk_target, source_rel) derived from the design's OWN
+    staged PDK enablement paths, or (None, None).
+
+    Same two tiers as the prose path, same regexes, same #457 guards:
+      1. an open-PDK token in the tokenised path, unambiguous bare;
+      2. a commercial-foundry name that clears `_FOUNDRY_CTX_RE` AND
+         `_foundry_match_trustworthy` (negation-free + numeric node).
+
+    Tier 2 is deliberately conservative on shallow layouts: the staged
+    root's own `pdk` component is itself one of the context anchors
+    `_FOUNDRY_CTX_RE` accepts, so on a short path it is consumed as the
+    anchor and the resulting span carries no numeric node — the #457
+    dual-evidence guard then denies the match. Denying is the correct
+    outcome: the alternative is loosening the guard #457 exists to
+    enforce, which would trade a silent null for a silent wrong value.
+    """
+    files = _staged_pdk_enablement_files(project) if staged is None else staged
+    if not files:
+        return None, None
+    texts = [(rel, _PATH_WORD_SPLIT_RE.sub(" ", rel)) for rel in files]
+    for rel, words in texts:
+        m = _OPEN_PDK_TOKEN_RE.search(words)
+        if m:
+            tok = re.sub(r"^ihp[- ]?", "",
+                         m.group(1).lower()).replace(" ", "")
+            return tok, rel
+    for rel, words in texts:
+        for m in _FOUNDRY_CTX_RE.finditer(words):
+            span = words[max(0, m.start() - 24):m.end()]
+            if not _foundry_match_trustworthy(span):
+                continue
+            return (m.group(1) or m.group(2)).lower(), rel
+    return None, None
+
+
+# ORGANIC #513 — where the staged-PDK READ is recorded. Same dual-write
+# shape as `regmap_tables_not_registers.json` (#512): a read that was
+# attempted and produced nothing is information, and silence about it is
+# indistinguishable from never having looked.
+#
+# WHERE IT MAY NOT GO, and why: NOT under `generated_docs/`, and NOT
+# anywhere `l19_pdk_floorplan_contract_check._design_input_corpus`
+# scans (`phase1/input_doc/**`, `input/docs/**`, `input/**/*.{json,tcl,
+# sdc,md,txt,yaml,yml,cfg}`). That corpus is what L19-2 greps to decide
+# whether a declared `pdk_target` is TRACEABLE to the design's own
+# inputs. A disclosure file naming the token, dropped inside that
+# corpus, would make any target self-traceable — the false-certificate
+# shape #512 removed. `phase1/` and `reports/phase1/` are outside every
+# one of those globs.
+PDK_STAGING_READ_FILENAME = "pdk_staging_read.json"
+
+
+def _write_staged_pdk_read_disclosure(
+        project: Path, adopted_target, adopted_source, adopted_line) -> None:
+    """#513 — record what the staged-PDK read saw and what it did with it.
+
+    Written whenever the design HAS a staged-PDK root (i.e. the read was
+    attempted), including the case where the read yielded no usable
+    identifier and the case where PROSE won and the staged evidence was
+    not adopted. Not written when the design stages nothing: there was
+    no read, and a record of a read that never happened is noise, not
+    disclosure.
+    """
+    roots: List[str] = []
+    for pat in _STAGED_PDK_GLOBS:
+        root_pat = pat.split("/**", 1)[0]
+        try:
+            for d in sorted(project.glob(root_pat)):
+                if d.is_dir():
+                    try:
+                        roots.append(str(d.relative_to(project)))
+                    except ValueError:
+                        roots.append(d.name)
+        except OSError:
+            continue
+    if not roots:
+        return                       # nothing staged → no read to disclose
+
+    files = _staged_pdk_enablement_files(project)
+    staged_tok, staged_rel = _staged_pdk_identifier(project, staged=files)
+    adopted_from = None
+    if adopted_target:
+        adopted_from = "input_doc_prose" if adopted_line else "staged_pdk_path"
+
+    if not files:
+        reason = ("a staged-PDK root exists but holds no enablement file "
+                  f"({', '.join(_STAGED_PDK_SUFFIXES)}); nothing to read")
+    elif not staged_tok:
+        reason = ("enablement files were read but no PDK identifier could be "
+                  "derived from their paths: neither the open-PDK token table "
+                  "nor the foundry-context rule (which additionally requires a "
+                  "negation-free span carrying a numeric process node) matched")
+    elif adopted_from == "staged_pdk_path":
+        reason = "the staged path supplied L19.fields.pdk_target"
+    else:
+        reason = ("the design's own prose already declared a target, which "
+                  "takes precedence; the staged read is recorded so a "
+                  "divergence between the two is visible rather than silent")
+
+    payload = {
+        "produced_by": "_emit_l19_to_l23_skeletons",
+        "meaning": (
+            "what the Phase-1 pdk_target extractor read from the PDK "
+            "enablement this design STAGES under its own input tree, and "
+            "what it did with it. The prose evidence source is authoritative "
+            "when it yields anything; this source is consulted only when "
+            "prose is silent."),
+        "staged_pdk_roots": roots,
+        "enablement_files_read": len(files),
+        # A count equal to the cap means the listing is truncated, not
+        # that the design staged exactly this many files.
+        "enablement_files_read_cap": _STAGED_PDK_MAX_FILES,
+        "enablement_files": files,
+        "staged_identifier": staged_tok,
+        "staged_identifier_source": staged_rel,
+        "adopted_pdk_target": adopted_target,
+        "adopted_evidence_source": adopted_source,
+        "adopted_evidence_kind": adopted_from,
+        "reason": reason,
+    }
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    for out_dir in (_pl.phase1_dir(project), _pl.reports_phase1_dir(project)):
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / PDK_STAGING_READ_FILENAME).write_text(
+                text, encoding="utf-8")
+        except Exception:
+            pass
+    if staged_tok is None:
+        try:
+            print(f"WARN: staged PDK enablement read but no identifier "
+                  f"derivable — roots={roots}, files_read={len(files)}: "
+                  f"{reason}", file=sys.stderr)
+        except Exception:
+            pass
+
+
 def _extract_pdk_target_from_inputs(project: Path):
     """(pdk_target, evidence_snippet) from the project's own input docs,
     or (None, None). Deterministic; capped scan (large-doc doctrine).
@@ -8392,7 +8595,18 @@ def _extract_pdk_target_with_provenance(project: Path):
     (relative) + 1-based line number of the match so L19 can carry a
     schema-valid `extraction_evidence` (file + line). Returns
     (pdk_target, snippet, source_rel, line) or (None, None, None, None).
-    Deterministic; capped scan (large-doc doctrine)."""
+    Deterministic; capped scan (large-doc doctrine).
+
+    ORGANIC #513 — two evidence sources, in this order:
+      1. PROSE (#451/#457, unchanged): the design's own input docs.
+         `line` is the 1-based line of the match, always >= 1.
+      2. STAGED PDK ENABLEMENT: the paths of the `.lib`/`.lef`/… the
+         design stages under its own `input/pdk*/`. Reached ONLY when
+         prose yields nothing, so every prose answer is byte-identical
+         to pre-#513. A staged match has no line in the prose sense —
+         the PATH is the evidence — so `line` is None and `source_rel`
+         is the staged file. `line is None` is therefore the caller's
+         discriminator between the two sources."""
     per_file = []           # (rel_path, text)
     total = 0
     for base in (project / "phase1" / "input_doc",
@@ -8415,8 +8629,6 @@ def _extract_pdk_target_with_provenance(project: Path):
             total += len(t)
             if total > 2_000_000:
                 break
-    if not per_file:
-        return None, None, None, None
 
     def _snip(text, lo, hi):
         return text[max(0, lo):hi].replace("\n", " ")[:160]
@@ -8443,6 +8655,14 @@ def _extract_pdk_target_with_provenance(project: Path):
             line = text.count("\n", 0, m.start()) + 1
             return (tok, _snip(text, m.start() - 20, m.end() + 40),
                     rel, line)
+    # #513 — SOURCE 2: the PDK the design stages rather than describes.
+    # Reached only here, i.e. only when prose asserted nothing at all,
+    # so no prose verdict can change. The evidence IS the staged path,
+    # so it is returned as both the snippet and the source, with no
+    # line (see the docstring's discriminator contract).
+    staged_tok, staged_rel = _staged_pdk_identifier(project)
+    if staged_tok:
+        return staged_tok, staged_rel, staged_rel, None
     return None, None, None, None
 
 
@@ -8482,6 +8702,15 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
     # evidence survives into L19.extraction_evidence in schema-valid shape.
     _pdk_tgt, _pdk_ev, _pdk_src, _pdk_line = (
         _extract_pdk_target_with_provenance(project))
+    # ORGANIC #513 — disclose the staged-PDK read (what was seen, what was
+    # adopted, and why) outside generated_docs/. Fail-open: a disclosure
+    # that cannot be written must never take the L-doc emit down.
+    try:
+        _write_staged_pdk_read_disclosure(
+            project, _pdk_tgt, _pdk_src, _pdk_line)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"      staged-PDK read disclosure FAILED (fail-open): {e}",
+              file=sys.stderr)
 
     for code, doc_name in _L19_L23_CODES_AND_NAMES:
         try:
@@ -8508,10 +8737,17 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
                 # `evidence` ARGUMENT (which _write_l_doc honors) in the
                 # canonical {source: [{literal,label}]} schema shape so
                 # it lands in L19.extraction_evidence with file + line.
+                # ORGANIC #513 — a staged-PDK match has no line (the PATH
+                # is the evidence, see `_extract_pdk_target_with_provenance`),
+                # so name the staged file in the label instead. Prose
+                # always carries line >= 1, so its label is unchanged.
                 _src_key = _pdk_src or "input/docs"
                 _label = "pdk_target"
                 if _pdk_line:
                     _label = f"pdk_target ({_src_key}:{_pdk_line})"
+                elif _pdk_src:
+                    _label = (f"pdk_target (staged PDK enablement path: "
+                              f"{_src_key})")
                 evidence.setdefault(_src_key, []).append({
                     "literal": _pdk_ev or _pdk_tgt,
                     "label": _label,
