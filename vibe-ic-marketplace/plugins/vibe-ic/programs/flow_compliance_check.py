@@ -80,6 +80,7 @@ from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import _path_layout as _pl
 import _reused_ip_predicate as _reused_ip
+import _waiver_entries as _we
 import _sim_results_bridge as _srb
 import _gate_invocation
 import fpga_board_capability as _fpga_cap
@@ -5666,57 +5667,13 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
 _ENV_WAIVER_REJECTIONS: List[str] = []
 
 
-_ENV_UNAVAILABLE_STEP_NAME_TO_ID: Dict[str, Any] = {
-    # #216 — the formal (Step 5) role-names. Their ABSENCE was itself the
-    # defect: an ENV_UNAVAILABLE waiver naming `formal` matched nothing here,
-    # hit the `sid is None -> continue` branch, and was dropped WITHOUT A
-    # TRACE — the step then reported a bare MISSING that never mentioned the
-    # formal engine, the waiver, or the ticket. Role names only, never a chip
-    # or vendor literal.
-    "formal":                  5,
-    "formal_verify":           5,
-    "formal_verification":     5,
-    "formal_proof":            5,
-    "formal_property_proof":   5,
-    "fpga_compile":         6,
-    "fpga_early_prototype": 6,
-    "fpga_onboard_test":    39,
-    "fpga_final_signoff":   39,
-    "fpga_signoff":         39,
-    "drc":                  31,
-    "lvs":                  31,
-    "erc":                  31,
-    "physical_verification": 31,
-    "ir_drop":              24,
-    "em":                   25,
-    "antenna":              26,
-    "si":                   27,
-    "signal_integrity":     27,
-    "extraction":           22,
-    "parasitic_extraction": 22,
-    "perc":                 28,
-    "esd":                  28,
-    "latch_up":             28,
-    "reliability_signoff":  28,
-    "post_layout_sim":      29,
-    "post_layout_spice":    30,
-    "metal_fill":           34,
-    "dfm":                  35,
-    "htol":                 44,
-    # v0.2.103 (#496) — analog A-step role-names so a pdk-substitution
-    # ENV_UNAVAILABLE waiver (auto-synthesised in `_load_waivers` under
-    # the disclosed-substitution predicate, or hand-authored) binds to the
-    # canonical A-step ids. The A-step ids are STRING ids ("A3"…) in the
-    # flow YAML; the map values mirror that exactly. chip-AGNOSTIC: role
-    # names only, never chip-class literals.
-    "analog_netlist":          "A3",
-    "analog_netlist_gen":      "A3",
-    "analog_layout":           "A5",
-    "analog_post_layout_resim": "A7",
-    "analog_hardmacro":        "A8",
-    "analog_cosim":            "A9",
-    "mixed_signal_cosim":      "A9",
-}
+# #519 — the map MOVED to `_waiver_entries`, which is where the waiver
+# vocabulary lives now, and is re-exported here under its historical name so
+# this module's existing references keep working against ONE definition.
+# It had to move rather than be imported the other way: `waivers_schema_check`
+# needs it to resolve a `step: "<role-name>"` waiver, and this module already
+# imports `waivers_schema_check.validate`, so importing back would cycle.
+_ENV_UNAVAILABLE_STEP_NAME_TO_ID: Dict[str, Any] = _we.STEP_NAME_TO_ID
 
 
 # ORGANIC #608 — the FPGA-board step ids that --skip-hardware waives, DERIVED

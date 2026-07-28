@@ -35,6 +35,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 import _path_layout as _pl
+import _waiver_entries as _we
 from _analog_stub_marker import is_stub_text  # v1.6.177 (#72 P1-6)
 
 
@@ -218,7 +219,9 @@ def _pdk_mismatch_waived(project: Path) -> bool:
         data = json.loads(wpath.read_text(errors="replace"))
     except (OSError, ValueError):
         return False
-    entries = (data.get("waived_steps") or []) + (data.get("waivers") or [])
+    # #519 — via the ONE shared reader. This site already unioned both keys
+    # by hand; the union now has a single definition all consumers share.
+    entries = _we.entries(data)
     for w in entries:
         if not isinstance(w, dict):
             continue

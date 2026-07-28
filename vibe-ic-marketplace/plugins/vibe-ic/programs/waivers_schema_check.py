@@ -8,19 +8,60 @@ A waiver is the ONLY legitimate way to skip a mandatory step. To prevent
 rubber-stamp waivers ("waived: TODO") from passing through, this program
 enforces schema + content rules:
 
-  Required top-level: {"waived_steps": [ ... ]}
+  Top-level entry list: {"waived_steps": [ ... ]} or {"waivers": [ ... ]}.
+  Both keys are read, via the shared reader `_waiver_entries` — see #519 and
+  that module's docstring. Reading only `waived_steps` meant 6 of 11 tracked
+  waiver files and 8 of 19 entries were never examined, and this program
+  reported that blindness as "Waiver count: 0", exit 0.
 
-  Each entry must have:
-    id        integer in 1..40 (main-track step id), OR
-              "A<n>" with n in 1..16 (analog stage), OR
-              "M<n>" with n in 1..16 (mixed-signal stage), OR
-              "P0" (preflight structural-RTL umbrella, Wave 91), OR
-              "step_<n>_..." (legacy compatible form)
-    reason    non-empty string, ≥ 20 chars, not a placeholder
-    approver  non-empty string; not "agent", "claude", "ai", "self"
+  TWO DIALECTS, TWO APPROVAL MODELS, TWO SEVERITIES (#519)
+  --------------------------------------------------------
+  The keys are not two spellings of one record. Each entry is validated
+  against the dialect it is written in:
+
+  (1) `waived_steps` — A NAMED HUMAN APPROVES.
+        id        integer in 1..40 (main-track step id), OR
+                  "A<n>" with n in 1..16 (analog stage), OR
+                  "M<n>" with n in 1..16 (mixed-signal stage), OR
+                  "P0" (preflight structural-RTL umbrella, Wave 91), OR
+                  "step_<n>_..." (legacy compatible form)
+        reason    non-empty string, ≥ 20 chars, not a placeholder
+                  (`rationale` is an accepted synonym)
+        approver  non-empty string; not "agent", "claude", "ai", "self"
+      `flow_compliance_check` applies these entries with no further gate, so
+      THIS PROGRAM IS THE ONLY GATE and substance failures are ERRORS.
+
+  (2) `waivers` — AN EVIDENCE-GATED ATTESTATION STANDS IN FOR A SIGNATURE.
+      Emitted by `phase3_one_shot_runner` when a step is deferred; no human
+      is present at generation, so the dialect requires disclosure instead:
+        step      role name resolving through `_waiver_entries.STEP_NAME_TO_ID`
+                  (e.g. "lvs" -> 31)
+        rationale substantive prose (>= 40 chars at the point of use)
+        ticket    tracks the deferred work
+        review_required   must be true — deferred, not closed
+        evidence  non-empty list making the deferral auditable
+        approver  OPTIONAL. `flow_compliance_check` supplies the tier approver
+                  (`field-agent-attest (ENV_UNAVAILABLE tier)`) when absent, so
+                  its absence here is the design, not an omission.
+      `flow_compliance_check` re-checks all of the above BEFORE honouring such
+      an entry, refuses it with a named advisory when incomplete, and lets the
+      step fail on its own merits. Because that gate is stricter and fail-SAFE
+      — and because this program's errors become `SystemExit(1)` in that same
+      caller — content findings on this dialect are WARNINGS. Escalating them
+      would replace a self-explaining refusal with a dead report.
+
+  What stays an ERROR in BOTH dialects: an unparseable file, a non-list under
+  either key, a duplicated step, and a self-approving/placeholder `approver`
+  (that field IS applied when present, so nothing else guards it).
 
   Optional:
-    approved_at   ISO-8601 timestamp
+    approved_at   ISO-8601 timestamp — the HUMAN approver's dated signature.
+                  #519 DECIDED it is a signature, never a generation stamp:
+                  nothing writes it automatically and nothing should, because
+                  a machine-written approval date is a self-approval, which
+                  this schema bars in the `approver` field. Its absence is a
+                  WARNING (`approved-at-missing`) so that the un-ageable
+                  waiver is visible rather than silently un-aged.
     review_required  bool (default true)
     ticket        str (e.g. Linear/Jira issue id)
 
@@ -57,6 +98,10 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import _waiver_entries as _we  # noqa: E402  (after sys.path bootstrap)
 
 
 PLACEHOLDER_REASONS = {
@@ -165,27 +210,79 @@ def validate(project: Path, max_step: int = 40,
         ))
         return findings, summary
 
-    # waived_steps is optional. Many projects use ONLY per-gate waiver keys
-    # (e.g. {"frame_end_idle_reset_alternative": "...",
-    #        "otp_field_map_unresolved": [...]}) and never have any flow-step
-    # waivers — those files are perfectly valid and shouldn't be rejected
-    # for lacking an empty waived_steps array. v0.119.21 fix.
-    if "waived_steps" not in data:
-        return findings, summary
-
-    entries = data["waived_steps"]
-    if not isinstance(entries, list):
+    # A key that is PRESENT but holds a non-list is malformed regardless of
+    # what the other key holds — report before considering emptiness, so
+    # {"waived_steps": "oops"} still fails instead of falling through the
+    # no-entries early return below.
+    bad_keys = _we.malformed_keys(data)
+    for _bad_key in bad_keys:
         findings.append(WaiverFinding(
             severity="error", entry_index=-1, step_id=-1,
             rule="waived-steps-type",
-            message='"waived_steps" must be a list',
+            message=f'"{_bad_key}" must be a list',
         ))
+    if bad_keys:
         return findings, summary
 
+    # A flow-step waiver list is optional. Many projects use ONLY per-gate
+    # waiver keys (e.g. {"frame_end_idle_reset_alternative": "...",
+    #        "otp_field_map_unresolved": [...]}) and never have any flow-step
+    # waivers — those files are perfectly valid and shouldn't be rejected
+    # for lacking an empty waived_steps array. v0.119.21 fix.
+    #
+    # #519 — that reasoning is sound and is PRESERVED, but it must be reachable
+    # only when NEITHER key holds entries. It used to key off `"waived_steps"
+    # not in data` alone, so a file whose entries sat under `waivers` — the key
+    # `phase3_one_shot_runner` writes — inherited the genuinely-empty file's
+    # pass. 8 of the corpus's 19 waiver entries were never examined at all.
+    # The emptiness test now asks the shared reader about BOTH keys.
+    by_key = _we.entries_by_key(data)
+    entries = _we.entries(data)
     summary["waiver_count"] = len(entries)
+    summary["waiver_count_by_key"] = {k: len(v) for k, v in by_key.items()}
+    if not _we.has_entries(data):
+        return findings, summary
+
+    # #519 — each entry is validated against THE DIALECT IT IS WRITTEN IN.
+    #
+    # The two keys are not two spellings of one record shape; they are two
+    # schemas with two different approval models, and the codebase already
+    # knew it:
+    #
+    #   `waived_steps`  {"id": 31, "reason": ..., "approver": "<a human>"}
+    #                   A NAMED HUMAN approves. `waivers_schema_check` rejects
+    #                   a machine in that field (SELF_APPROVERS).
+    #
+    #   `waivers`       {"step": "lvs", "rationale": ..., "ticket": ...,
+    #                    "review_required": true, "evidence": [...]}
+    #                   No human is present when the runner emits this, so the
+    #                   dialect substitutes an EVIDENCE-GATED ATTESTATION for a
+    #                   signature: `flow_compliance_check` honours such an entry
+    #                   "IFF every required attestation field is present"
+    #                   (ticket + review_required + non-empty evidence +
+    #                   >= 40-char rationale) and, when it does, SUPPLIES the
+    #                   tier approver itself — `w.get("approver", "field-agent-
+    #                   attest (ENV_UNAVAILABLE tier)")`. The absence of
+    #                   `approver` there is the design, not an omission.
+    #
+    # Validating the second dialect with the first's `approver` rule was tried
+    # and is wrong twice over: it reports `approver-missing` on every waiver the
+    # runner has ever emitted, and because `flow_compliance_check` turns any
+    # schema error into `SystemExit(1)`, it does not merely report — it takes
+    # the whole compliance check down for every project that legitimately
+    # defers a step for a missing tool. Disclosure would stop buying deferral.
+    #
+    # So the attestation dialect is held to the attestation contract, mirrored
+    # from the one already enforced at the point of use: a ticket-less,
+    # evidence-less or hand-wave-rationale entry is REPORTED here and REFUSED
+    # there. Because it is the same contract in both places, a file that this
+    # program passes clean is a file whose waivers will actually be applied —
+    # which the previous silence could never promise.
+    sourced = [(key, e) for key, lst in by_key.items() for e in lst]
 
     seen_ids: set = set()
-    for i, entry in enumerate(entries):
+    for i, (source_key, entry) in enumerate(sourced):
+        attestation_dialect = (source_key == "waivers")
         raw_sid = entry.get("id") if isinstance(entry, dict) else None
 
         if not isinstance(entry, dict):
@@ -208,6 +305,36 @@ def validate(project: Path, max_step: int = 40,
         # v1.6.14 Wave 90 — decimal "<int>.<int>" sub-step ids retired.
         # Wave 88 introduced patch ids that Wave 90 integerised; the
         # decimal pattern is no longer accepted.
+        # #519 — (f) a `waivers`-shaped entry identifies its step by ROLE NAME
+        # (`{"step": "lvs"}`) rather than by canonical id. That spelling is
+        # first-class: `flow_compliance_check` has bound it to canonical ids
+        # for as long as the shape has existed, via the role-name map now
+        # shared in `_waiver_entries`. Resolving it here matters for honesty,
+        # not just tidiness — an unresolved role name falls through to
+        # `id-range`, whose `continue` would skip the approver check, so the
+        # validator would complain that a waiver named its step in the wrong
+        # dialect while saying nothing about the fact that NOBODY APPROVED IT.
+        # The rubber-stamp finding is the one this program exists to make.
+        role_name = None
+        if raw_sid is None and isinstance(entry, dict):
+            _role = entry.get("step")
+            _resolved = _we.resolve_step_name(_role)
+            if _resolved is not None:
+                raw_sid = _resolved
+                role_name = _role.strip().lower()
+            elif isinstance(_role, str) and _role.strip():
+                findings.append(WaiverFinding(
+                    severity="warning", entry_index=i, step_id=-1,
+                    rule="step-name-unknown",
+                    message=(
+                        f"step={_role!r} is not a recognised flow step role "
+                        f"name, so this waiver cannot be bound to a flow step. "
+                        f"Use a canonical `id`, or one of: "
+                        + ", ".join(sorted(_we.STEP_NAME_TO_ID))
+                    ),
+                ))
+                continue
+
         sid = None
         is_analog = False
         is_mixed_signal = False
@@ -232,11 +359,22 @@ def validate(project: Path, max_step: int = 40,
                 elif pm:
                     sid = "P0"
                     is_preflight = True
+        # #519 — an id RESOLVED from a canonical role name is valid by
+        # construction and is not re-range-checked. The map is the source of
+        # truth for which steps a role names, and it legitimately reaches past
+        # `max_step`: `htol` binds to Step 44, while this program's default
+        # max_step is still 40. Range-checking a resolved id therefore rejected
+        # a correct waiver as out-of-range — and since `flow_compliance_check`
+        # turns any schema error into SystemExit(1), that killed the entire
+        # compliance run for every project deferring HTOL. The range check
+        # exists to catch a hand-authored `id: 999`, which this is not.
         digital_ok = isinstance(sid, int) and (1 <= sid <= max_step)
         analog_ok = is_analog and isinstance(sid, str)
         mixed_signal_ok = is_mixed_signal and isinstance(sid, str)
         preflight_ok = is_preflight and isinstance(sid, str)
-        if not (digital_ok or analog_ok or mixed_signal_ok or preflight_ok):
+        role_ok = role_name is not None and sid is not None
+        if not (digital_ok or analog_ok or mixed_signal_ok
+                or preflight_ok or role_ok):
             findings.append(WaiverFinding(
                 severity="error", entry_index=i,
                 step_id=sid if isinstance(sid, int) else -1,
@@ -250,13 +388,24 @@ def validate(project: Path, max_step: int = 40,
             ))
             continue
 
-        if sid in seen_ids:
+        # #519 — deduplicate on the identifier AS WRITTEN, not on the resolved
+        # id. Role names are many-to-one onto flow steps (Step 31 is "Physical
+        # Verification (DRC + LVS + ERC + Density)", so `drc` and `lvs` both
+        # resolve to 31). Keying on the resolved id would report a project that
+        # waives DRC and LVS separately — the shape the runner actually emits —
+        # as having waived one step twice. Entries that supply a canonical `id`
+        # keep the exact previous semantics: they dedupe on the resolved `sid`,
+        # so `39` and `step_39_foo` still collide.
+        dup_key = f"step:{role_name}" if role_name is not None else sid
+        if dup_key in seen_ids:
             findings.append(WaiverFinding(
                 severity="error", entry_index=i, step_id=sid,
                 rule="id-duplicate",
-                message=f"step id {sid} is waived more than once",
+                message=(f"step {role_name!r} is waived more than once"
+                         if role_name is not None
+                         else f"step id {sid} is waived more than once"),
             ))
-        seen_ids.add(sid)
+        seen_ids.add(dup_key)
 
         # v0.112 (BACKLOG-v10 P0.2): cascades_to validation. Optional
         # field — if present, must be a list of valid step ids (digital
@@ -304,37 +453,108 @@ def validate(project: Path, max_step: int = 40,
         # the two interchangeably; rejecting a rationale-keyed entry as
         # "reason-missing" voided VALID waivers (displayed "INVALID (no
         # reason given)", counted WAIVED:0). Same substance bars apply.
+        #
+        # #519 — WHY THE SEVERITY DEPENDS ON THE DIALECT. Not leniency; it
+        # follows from which gate is the LAST one standing:
+        #
+        #   `waived_steps` entries are applied by `flow_compliance_check`
+        #   directly, with no attestation gate of their own — it loads them and
+        #   grants the exemption. This program is therefore the ONLY thing
+        #   between a rubber-stamped entry and a waived step, so a substance
+        #   failure here must be an ERROR and must block.
+        #
+        #   `waivers` entries pass through a STRICTER gate at the point of use:
+        #   `flow_compliance_check` demands a >= 40-char rationale (double this
+        #   program's bar), refuses the waiver outright when it is not met, and
+        #   says which field was missing. The step then fails on its own merits.
+        #   Escalating to an ERROR here would not add a check — it would replace
+        #   a stricter, fail-SAFE, self-explaining refusal with `SystemExit(1)`
+        #   that discards the report the reader needed.
+        #
+        # The severity tracks who else is watching, so no defect loses a gate.
+        substance_sev = "warning" if attestation_dialect else "error"
         reason = entry.get("reason", "")
         if (not isinstance(reason, str) or not reason.strip()) \
                 and isinstance(entry.get("rationale"), str):
             reason = entry["rationale"]
         if not isinstance(reason, str) or not reason.strip():
             findings.append(WaiverFinding(
-                severity="error", entry_index=i, step_id=sid,
+                severity=substance_sev, entry_index=i, step_id=sid,
                 rule="reason-missing",
                 message="reason must be a non-empty string",
             ))
         elif len(reason.strip()) < MIN_REASON_LEN:
             findings.append(WaiverFinding(
-                severity="error", entry_index=i, step_id=sid,
+                severity=substance_sev, entry_index=i, step_id=sid,
                 rule="reason-too-short",
                 message=f"reason is {len(reason.strip())} chars; need >= {MIN_REASON_LEN}",
             ))
         elif _is_placeholder(reason):
             findings.append(WaiverFinding(
-                severity="error", entry_index=i, step_id=sid,
+                severity=substance_sev, entry_index=i, step_id=sid,
                 rule="reason-placeholder",
                 message=f"reason is a placeholder/empty value: {reason!r}",
             ))
 
-        # approver
+        # attestation dialect — the `waivers` shape's substitute for a human
+        # signature. Mirrors the contract `flow_compliance_check` applies before
+        # HONOURING such a waiver, so "validates" and "will be applied" agree.
+        #
+        # WARNING, not error, and the severity is load-bearing. These same
+        # conditions are ALREADY ENFORCED where it matters: `flow_compliance_
+        # check` refuses to honour an incomplete attestation, emits a named
+        # advisory saying exactly which field is missing, and leaves the step
+        # to fail on its own merits (#216 — "makes the report LOUDER, never
+        # greener"). That is fail-SAFE and strictly more informative than what
+        # an error here would produce, because this program's errors are turned
+        # into `SystemExit(1)` by that same caller: an incomplete waiver would
+        # stop killing one step's exemption and start killing the entire
+        # compliance report, advisory and all. So the enforcement stays at the
+        # point of use and this gate REPORTS. The rubber-stamp bar that must
+        # bite — a placeholder or too-short rationale — remains an ERROR below
+        # for both dialects, which is the check this program exists for.
+        if attestation_dialect:
+            if not str(entry.get("ticket") or "").strip():
+                findings.append(WaiverFinding(
+                    severity="warning", entry_index=i, step_id=sid,
+                    rule="attestation-ticket-missing",
+                    message=("a `waivers` entry defers work under an "
+                             "evidence-gated attestation instead of a human "
+                             "signature, so it must carry a `ticket` tracking "
+                             "the deferred work"),
+                ))
+            if entry.get("review_required") is not True:
+                findings.append(WaiverFinding(
+                    severity="warning", entry_index=i, step_id=sid,
+                    rule="attestation-review-not-required",
+                    message=("`review_required` must be exactly true — the "
+                             "attestation defers the step, it does not close "
+                             "it, and a human still owes the review"),
+                ))
+            evidence = entry.get("evidence")
+            if not (isinstance(evidence, list) and evidence):
+                findings.append(WaiverFinding(
+                    severity="warning", entry_index=i, step_id=sid,
+                    rule="attestation-evidence-missing",
+                    message=("a non-empty `evidence` list is what makes this "
+                             "an attestation rather than an assertion; "
+                             "without it the deferral cannot be audited"),
+                ))
+
+        # approver — REQUIRED in the `waived_steps` dialect, where a named
+        # human is the whole approval. OPTIONAL in the attestation dialect,
+        # which has no human at generation time and whose approval is the
+        # evidence gate checked just above; `flow_compliance_check` supplies
+        # the tier approver itself for those. Still validated WHEN PRESENT:
+        # an entry that does name an approver may not name a machine.
         approver = entry.get("approver", "")
         if not isinstance(approver, str) or not approver.strip():
-            findings.append(WaiverFinding(
-                severity="error", entry_index=i, step_id=sid,
-                rule="approver-missing",
-                message="approver must be a non-empty string",
-            ))
+            if not attestation_dialect:
+                findings.append(WaiverFinding(
+                    severity="error", entry_index=i, step_id=sid,
+                    rule="approver-missing",
+                    message="approver must be a non-empty string",
+                ))
         elif _is_self_approver(approver):
             findings.append(WaiverFinding(
                 severity="error", entry_index=i, step_id=sid,
@@ -354,7 +574,9 @@ def validate(project: Path, max_step: int = 40,
         # If field is missing, emit WARN (or ERROR under
         # --strict-review-required). Either way, behavior still
         # defaults to True so existing callers aren't broken.
-        if "review_required" not in entry:
+        # (attestation dialect already ERRORs above on a missing/false
+        # review_required and on a missing ticket — do not double-report)
+        if "review_required" not in entry and not attestation_dialect:
             findings.append(WaiverFinding(
                 severity=("error" if strict_review_required else "warning"),
                 entry_index=i, step_id=sid,
@@ -365,8 +587,53 @@ def validate(project: Path, max_step: int = 40,
                     + ("error." if strict_review_required else "warning.")
                 ),
             ))
+        # approved_at — #519. DECIDED: `approved_at` is a HUMAN APPROVAL
+        # SIGNATURE (the WHEN of the act whose WHO is `approver`), NOT a
+        # generation timestamp. Nothing in the codebase writes it and 0 of the
+        # corpus's 19 entries carry one, so the question was open; it is closed
+        # here, in the direction the rest of this schema already points.
+        #
+        # WHY NOT stamp it at generation, which would make `waiver_staleness_
+        # check` start ageing waivers: because this validator REJECTS a machine
+        # as the `approver` (SELF_APPROVERS), so letting a machine write the
+        # matching timestamp would readmit through the time field exactly the
+        # self-approval the approver field bars — and `waivers_materialize`'s
+        # own documented invariant is "NEVER self-approving". A generated
+        # timestamp would manufacture an approval nobody gave and start an
+        # aging clock on it, which is strictly worse than the current silence:
+        # it would convert an unreviewed waiver into one that merely looks
+        # young. Writers therefore continue NOT to emit it.
+        #
+        # The consequence is made VISIBLE rather than silent. `waiver_staleness_
+        # check` documents that it stays quiet on entries lacking `approved_at`
+        # because "waivers_schema_check already flags it" — a deferral to a
+        # gate that did not exist. This warning is that gate. It is a WARNING,
+        # not an error: a waiver whose human approval is otherwise well-formed
+        # should not be void for want of a date, and the entries with no
+        # approver AT ALL already fail above.
+        # Scoped to the dialect where a human actually signs. An
+        # attestation entry has no human at generation time by design, so
+        # demanding a signature DATE from it would be noise on every waiver
+        # the runner emits; its open work is tracked by `ticket` +
+        # `review_required`, both errors above if absent.
+        if not attestation_dialect and \
+                not str(entry.get("approved_at") or "").strip():
+            findings.append(WaiverFinding(
+                severity="warning", entry_index=i, step_id=sid,
+                rule="approved-at-missing",
+                message=(
+                    "no `approved_at` — this waiver cannot be aged, so "
+                    "`waiver_staleness_check` will never flag it however long "
+                    "it stays open. `approved_at` is the human approver's "
+                    "dated signature (ISO-8601); it is never stamped "
+                    "automatically, because a machine-written approval date "
+                    "would be a self-approval. A human closing this waiver "
+                    "should set it alongside `approver`."
+                ),
+            ))
+
         review_required = entry.get("review_required", True)
-        if review_required and not entry.get("ticket"):
+        if review_required and not entry.get("ticket") and not attestation_dialect:
             findings.append(WaiverFinding(
                 severity="warning", entry_index=i, step_id=sid,
                 rule="ticket-missing",

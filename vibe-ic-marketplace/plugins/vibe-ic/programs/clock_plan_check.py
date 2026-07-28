@@ -70,6 +70,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _path_layout as _pl  # noqa: E402
+import _waiver_entries as _we  # noqa: E402
 
 
 _GATE_NAME = "clock_plan_check"
@@ -111,13 +112,14 @@ _GET_OBJ_RE = re.compile(
 # waiver plumbing (mirrors sibling wafer_sort_yield_check.py)
 # ----------------------------------------------------------------------
 def _load_waivers(project: Path):
-    p = project / "waivers.json"
-    if not p.is_file():
-        return []
-    try:
-        return json.loads(p.read_text()).get("waived_steps") or []
-    except Exception:
-        return []
+    """#519 — via the ONE shared reader, so this gate sees waiver entries under
+    BOTH canonical keys. It read `waived_steps` only, so a waivers.json written
+    by `phase3_one_shot_runner` (which emits `waivers`) looked EMPTY here and
+    every step reported as un-waived. Measured over the corpus this changes no
+    verdict — the `waivers`-shaped entries carry no `id`, and `_step_waived`
+    matches on `id`/`ticket` — so adopting the union grants nothing new; it
+    removes a blind spot rather than relaxing a gate."""
+    return _we.load(project)
 
 
 def _step_waived(project: Path, step_label: str):

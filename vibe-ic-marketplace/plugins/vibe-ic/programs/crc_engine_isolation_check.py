@@ -73,6 +73,10 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import _waiver_entries as _we  # noqa: E402  (after sys.path bootstrap)
+
 
 @dataclass
 class Finding:
@@ -455,7 +459,11 @@ def _load_waiver(project_dir: Path | None) -> bool:
         data = json.loads(wpath.read_text())
     except Exception:
         return False
-    waivers = data.get("waived_steps", []) or data.get("waivers", [])
+    # #519 — via the ONE shared reader. This was `waived_steps or waivers`,
+    # first-NON-EMPTY-wins: a file carrying entries under BOTH keys silently
+    # dropped the `waivers` half. The shared reader returns the union, so no
+    # entry is invisible because another key happened to be populated.
+    waivers = _we.entries(data)
     if not isinstance(waivers, list):
         return False
     for w in waivers:
