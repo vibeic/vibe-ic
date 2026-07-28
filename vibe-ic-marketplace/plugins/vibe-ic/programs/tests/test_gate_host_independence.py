@@ -17,9 +17,30 @@ PROVEN BOTH WAYS BEFORE LANDING, which is what separates it from a guess:
   positive  restoring `cross_layer_reference_check`'s pre-fix disk-walking
             `corpus_cells` makes the checkout report an extra finding while the
             worktree says PASS
+
+WHAT #539 CHANGED, AND THE MEASUREMENT THAT DROVE IT
+====================================================
+The probe needs the two sides to DIFFER: the checkout's leftovers are the
+stimulus, the fresh worktree is the control. It used to refuse on any output
+from `git status --porcelain`, which threw the stimulus away. One toy gate that
+counts files on disk, three trees at one commit, BEFORE:
+
+    checkout w/ an UNTRACKED leftover   DIRTY_CHECKOUT   defect MISSED
+    a fresh worktree of that commit     PASS             defect MISSED
+    checkout w/ an IGNORED leftover     FAIL             defect CAUGHT
+
+Row 2 is the pre-push "run it in a clean worktree instead" habit; it printed
+`[PASS] all N corpus-scanning gate(s) give the same verdict` over a gate that
+demonstrably reads local state. Row 3 caught it only because an ignored file is
+invisible to `git status`, so the refusal never fired on it. AFTER: row 1 is
+FAIL, row 2 is NO_STIMULUS (rc 2, not a pass), row 3 is unchanged.
+
+Every test below that carries a `#539` marker was run against the pre-#539
+module and FAILS there — the mutation control for this file.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -30,9 +51,22 @@ import gate_host_independence_check as G  # noqa: E402
 
 _REPO = _PROGRAMS.parents[3]
 
+#: Every gate these fixtures wire returns instantly, so this bound can never be
+#: reached by a healthy run — it exists so a hung one dies well inside CI's
+#: 180s per-test harness budget (#542) instead of taking the subset with it.
+#: The one test that deliberately drives a slow gate sets its own smaller bound.
+_T = 30
 
-def _repo_with(tmp_path: Path, script_body: str, dirty: bool = False) -> Path:
-    r = tmp_path / "r"
+
+def _repo_with(tmp_path: Path, script_body: str, *,
+               tracked_edit: bool = False, untracked: bool = False,
+               name: str = "r") -> Path:
+    """A throwaway repo wiring `script_body` as its hygiene script.
+
+    `tracked_edit` and `untracked` are SEPARATE because #539 is exactly that
+    distinction: one invalidates the comparison, the other IS the comparison.
+    """
+    r = tmp_path / name
     (r / "tools" / "ci").mkdir(parents=True)
     (r / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(script_body)
     subprocess.run(["git", "init", "-q", str(r)], check=True)
@@ -40,13 +74,50 @@ def _repo_with(tmp_path: Path, script_body: str, dirty: bool = False) -> Path:
         subprocess.run(["git", "-C", str(r), "config", k, v], check=True)
     subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(r), "commit", "-qm", "base"], check=True)
-    if dirty:
+    if tracked_edit:
+        (r / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+            script_body + "# an uncommitted edit to a TRACKED file\n")
+    if untracked:
         (r / "stray.txt").write_text("x\n")
     return r
 
 
-def test_a_dirty_checkout_is_refused_not_reported_as_findings(tmp_path):
-    """THE ONE THAT BIT ME. The worktree is at HEAD, so every uncommitted edit
+def _counter_repo(tmp_path: Path, *, ignore_dat: bool, name: str = "r") -> Path:
+    """A repo whose ONE gate counts `*.dat` files on disk.
+
+    The reduced form of `cross_layer_reference_check`'s 46-cells-against-23:
+    a gate whose verdict is a function of what is lying on this disk rather
+    than of what the commit carries.
+
+    A SCRIPT FILE, not `python3 -c "..."`: the expander splits on whitespace
+    exactly as the real gates need, so a quoted argument containing spaces
+    would be a fixture artefact rather than a property of the subject.
+    """
+    r = _repo_with(tmp_path, 'run "counter" "$ROOT" python3 counter.py\n',
+                   name=name)
+    (r / "counter.py").write_text(
+        "import pathlib\n"
+        "print('PASS', len(list(pathlib.Path('.').glob('*.dat'))))\n")
+    add = ["counter.py"]
+    if ignore_dat:
+        (r / ".gitignore").write_text("*.dat\n")
+        add.append(".gitignore")
+    subprocess.run(["git", "-C", str(r), "add", *add], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "counter"], check=True)
+    return r
+
+
+def _porcelain(p: Path) -> list:
+    out = subprocess.run(["git", "-C", str(p), "status", "--porcelain"],
+                         capture_output=True, text=True).stdout
+    return [x for x in out.splitlines() if x.strip()]
+
+
+# --------------------------------------------------------------------------
+# what invalidates the comparison, and what does not
+# --------------------------------------------------------------------------
+def test_a_modified_TRACKED_file_is_refused_not_reported_as_findings(tmp_path):
+    """THE ONE THAT BIT ME. The worktree is at HEAD, so an uncommitted edit
     reads as a difference — an in-progress version of this very program made
     the chip-agnostic guard report 1241 files against the worktree's 1240 and
     flagged itself as an unwired checker. Reporting those as host-dependence
@@ -55,55 +126,158 @@ def test_a_dirty_checkout_is_refused_not_reported_as_findings(tmp_path):
     Refused, not filtered: "the comparison could not be made" is its own state.
     """
     r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n',
-                   dirty=True)
-    verdict, findings = G.audit(r)
-    assert verdict == "DIRTY_CHECKOUT", (verdict, findings)
-    assert findings and findings[0]["kind"] == "DIRTY_CHECKOUT"
+                   tracked_edit=True)
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "DIRTY_CHECKOUT", res
+    assert res.findings and res.findings[0]["kind"] == "DIRTY_CHECKOUT"
+    assert res.probed == 0, "nothing ran, and the record must say so"
 
 
-def test_a_clean_tree_with_a_stable_gate_passes(tmp_path):
-    r = _repo_with(tmp_path, 'run "stable" "$ROOT" python3 -c "print(\'PASS 1\')"\n')
-    verdict, findings = G.audit(r)
-    assert verdict == "PASS", findings
+def test_539_an_UNTRACKED_leftover_no_longer_blocks_the_probe(tmp_path):
+    """#539. The maintainer's tree is dirty BY CONSTRUCTION — 207 untracked
+    benchmark artefacts, build logs and run directories — so the old refusal
+    made this probe structurally unable to run in the one tree these leftovers
+    accumulate in. It refused the stimulus.
+
+    Untracked paths are not an obstacle to the comparison: they are present
+    here and absent from a worktree at HEAD, which is the condition being
+    probed.
+    """
+    r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n',
+                   untracked=True)
+    assert len(_porcelain(r)) == 1
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "PASS", res
+    assert res.probed == 1
 
 
-def test_a_gate_that_reads_untracked_state_is_caught(tmp_path):
+def test_539_a_gate_reading_an_UNTRACKED_leftover_is_CAUGHT(tmp_path):
+    """#539, the coverage this issue is about. Same defect as the ignored-file
+    positive control below, in the shape the maintainer's tree actually has —
+    and the shape the probe used to refuse to look at."""
+    r = _counter_repo(tmp_path, ignore_dat=False)
+    (r / "leftover.dat").write_text("x\n")          # UNTRACKED, visible
+    assert len(_porcelain(r)) == 1
+
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "FAIL", res
+    assert res.findings[0]["kind"] == "HOST_DEPENDENT_VERDICT"
+    assert "checkout" in res.findings[0] and "worktree" in res.findings[0]
+
+
+def test_a_gate_that_reads_an_IGNORED_leftover_is_caught(tmp_path):
     """THE POSITIVE CONTROL, reduced. A gate that counts files on DISK sees an
     ignored leftover in the checkout and not in the worktree — which is exactly
     what `cross_layer_reference_check` did with 46 cells against 23.
 
-    The leftover is git-IGNORED on purpose, so the dirty-checkout guard does
-    not fire first and mask the very thing being tested.
+    Before #539 this was the ONLY shape the probe could catch, and only because
+    an ignored file is invisible to `git status --porcelain` so the refusal
+    never fired on it. It must keep working.
     """
-    r = _repo_with(tmp_path,
-                   'run "counter" "$ROOT" python3 counter.py\n')
-    # A SCRIPT FILE, not `python3 -c "..."`: the expander splits on whitespace
-    # exactly as the real gates need, so a quoted argument containing spaces
-    # would be a fixture artefact rather than a property of the subject.
-    (r / "counter.py").write_text(
-        "import pathlib\n"
-        "print('PASS', len(list(pathlib.Path('.').glob('*.dat'))))\n")
-    subprocess.run(["git", "-C", str(r), "add", "counter.py"], check=True)
-    subprocess.run(["git", "-C", str(r), "commit", "-qm", "counter"], check=True)
-    (r / ".gitignore").write_text("*.dat\n")
-    subprocess.run(["git", "-C", str(r), "add", ".gitignore"], check=True)
-    subprocess.run(["git", "-C", str(r), "commit", "-qm", "ignore"], check=True)
-    # ignored => the tree is CLEAN, but the file is on this disk only
-    (r / "leftover.dat").write_text("x\n")
-    assert not subprocess.run(["git", "-C", str(r), "status", "--porcelain"],
-                              capture_output=True, text=True).stdout.strip()
+    r = _counter_repo(tmp_path, ignore_dat=True)
+    (r / "leftover.dat").write_text("x\n")          # IGNORED => tree "clean"
+    assert not _porcelain(r)
 
-    verdict, findings = G.audit(r)
-    assert verdict == "FAIL", (verdict, findings)
-    assert findings[0]["kind"] == "HOST_DEPENDENT_VERDICT"
-    assert "checkout" in findings[0] and "worktree" in findings[0]
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "FAIL", res
+    assert res.findings[0]["kind"] == "HOST_DEPENDENT_VERDICT"
 
 
+# --------------------------------------------------------------------------
+# #539 — the comparison must disclose whether it could have detected anything
+# --------------------------------------------------------------------------
+def test_539_two_identical_trees_are_NOT_CHECKED_rather_than_a_pass(tmp_path):
+    """#539. With no leftover on either side the checkout and the worktree hold
+    the same bytes, so every gate agrees BY CONSTRUCTION. That is arithmetic,
+    not evidence, and it used to print the same green sentence as a real run.
+
+    rc 2 / NOT_CHECKED rather than rc 1: nothing is wrong with the tree or the
+    gates, and a permanently red gate is a gate that gets skipped.
+    """
+    r = _counter_repo(tmp_path, ignore_dat=False)
+    assert not _porcelain(r)
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "NO_STIMULUS", res
+    assert res.findings == []
+    assert res.dirt.stimulus == 0
+
+
+def test_539_the_clean_worktree_ROUTE_reports_NOT_CHECKED_not_PASS(tmp_path):
+    """#539, THE ONE THAT OVERTURNS THE WORKAROUND.
+
+    The pre-push habit was `git worktree add --detach <path> HEAD` followed by
+    running this probe against that path — 554s per push — on the reasoning
+    that a clean tree is what the probe wants. It is not: a fresh worktree
+    carries no leftover either, so the probe compares two pristine trees and
+    reports PASS over a gate that demonstrably reads local state. The defect is
+    RIGHT THERE in the checkout the worktree was made from, and this run cannot
+    see it.
+
+    A habit whose absence is indistinguishable from its presence is not
+    coverage. After #539 the route announces itself: NO_STIMULUS, rc 2, NOT
+    CHECKED. The gate that says nothing now says that it says nothing.
+    """
+    r = _counter_repo(tmp_path, ignore_dat=False)
+    (r / "leftover.dat").write_text("x\n")          # the defect is in `r`
+    assert G.audit(r, timeout=_T).verdict == "FAIL", "the defect is real"
+
+    wt = tmp_path / "second_route"
+    subprocess.run(["git", "-C", str(r), "worktree", "add", "-q", "--detach",
+                    str(wt), "HEAD"], check=True)
+    assert not list(wt.glob("*.dat")), "a fresh worktree carries no leftover"
+
+    res = G.audit(wt, timeout=_T)
+    assert res.verdict == "NO_STIMULUS", res
+    assert res.verdict != "PASS", "the route must not certify what it cannot see"
+
+
+def test_539_the_stimulus_is_reported_ON_THE_PASS_LINE(tmp_path, capsys):
+    """A PASS must say how much it looked at (#447), applied to this probe's
+    own input rather than to the gates it drives.
+
+    Driven through `main` and asserted against the PRINTED sentence. A first
+    version asserted `res.dirt.describe()` instead — which passes while the
+    verdict line says nothing at all, and a disclosure a reader never sees is
+    not a disclosure. Deleting `{stim}` from the PASS line survived that test
+    and dies against this one.
+    """
+    r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n',
+                   untracked=True)
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "PASS" and res.dirt.stimulus == 1, res
+
+    assert G.main([str(r)]) == 0
+    line = [ln for ln in capsys.readouterr().err.splitlines()
+            if ln.startswith("[PASS]")]
+    assert len(line) == 1, line
+    assert "1 untracked" in line[0], line
+    assert "1 probed" in line[0] and "1 declared" in line[0], line
+
+
+def test_539_the_cli_says_NOT_CHECKED_and_exits_2_with_no_stimulus(tmp_path,
+                                                                  capsys):
+    """Driven through `main`, not through `audit`: the exit code and the
+    sentence are what a reader and `_gate_dispatch.sh` actually consume, and a
+    verdict that never reaches either is not a verdict."""
+    r = _counter_repo(tmp_path, ignore_dat=False)
+    out = tmp_path / "rec.json"
+    rc = G.main([str(r), "--json", str(out)])
+    err = capsys.readouterr().err
+    assert rc == 2, err
+    assert "NO_STIMULUS" in err and "not a pass" in err
+    doc = json.loads(out.read_text())
+    assert doc["verdict"] == "NO_STIMULUS"
+    assert doc["stimulus"] == {"untracked": 0, "ignored": 0,
+                               "ignored_reported": True}
+
+
+# --------------------------------------------------------------------------
+# denominators: declared vs probed
+# --------------------------------------------------------------------------
 def test_an_empty_gate_list_is_NOT_a_pass(tmp_path):
     """This program's own denominator."""
     r = _repo_with(tmp_path, "# no gates\n")
-    verdict, _ = G.audit(r)
-    assert verdict == "NOTHING_SCANNED"
+    assert G.audit(r, timeout=_T).verdict == "NOTHING_SCANNED"
 
 
 def test_the_cwd_token_is_preserved(tmp_path):
@@ -113,12 +287,41 @@ def test_the_cwd_token_is_preserved(tmp_path):
     subject is worse than no probe."""
     gates = G.corpus_gates(_REPO / "tools" / "ci" / "repo_hygiene_gates.sh")
     assert gates, "no gates parsed from the real CI script"
-    assert all(len(g) == 3 for g in gates), gates[:2]
-    assert {g[1] for g in gates} <= {"$ROOT", "$PLUGIN"}, {g[1] for g in gates}
-    assert any(g[1] == "$PLUGIN" for g in gates), "the $PLUGIN lane is untested"
+    assert {g.cwd_token for g in gates} <= {"$ROOT", "$PLUGIN"}
+    assert any(g.cwd_token == "$PLUGIN" for g in gates), "the $PLUGIN lane is untested"
+    assert all(g.cmd and not g.cmd.lstrip().startswith("#") for g in gates)
 
 
-def test_the_probe_never_probes_ITSELF(tmp_path):
+def test_539_a_gate_that_needs_the_network_is_EXCLUDED_in_the_real_script():
+    """#539. The rule, asserted over the REAL script rather than a fixture: a
+    gate that requires a REMOTE cannot be inside a two-invocation determinism
+    comparison, because its two answers can differ for a reason that is not in
+    the commit. v1.7.92 went red exactly that way.
+
+    Stated as a PROPERTY of the command, not as an expected list of labels — a
+    hand-maintained roster here would be the second list this repo keeps
+    removing, and it would not notice a NEW remote-reaching gate. This is what
+    makes the exclusion by rule rather than by luck.
+
+    A first version only checked "every exclusion states a reason", which
+    passes over a script with no exclusions at all — the vacuous shape this
+    module exists to refuse.
+    """
+    gates = G.corpus_gates(_REPO / "tools" / "ci" / "repo_hygiene_gates.sh")
+    remote = [g for g in gates if "--require-remote" in g.cmd]
+    assert remote, ("no remote-reaching gate found in the real script — this "
+                    "assertion would otherwise pass over nothing")
+    for g in remote:
+        assert g.excluded is not None, (
+            f"{g.label} reaches a remote and is still probed twice", g)
+    for g in gates:
+        if g.excluded is not None:
+            # An exclusion with no reason is a silent one wearing a label.
+            assert len(g.excluded) > 20, g
+            assert "no reason given" not in g.excluded, g
+
+
+def test_539_the_probe_ITSELF_leaves_the_numerator_and_is_NAMED(tmp_path):
     """SHIPPED AND CAUGHT BY CI. The gate list is unfiltered by design, so it
     contains this program — and running it inside the worktree runs it again,
     which creates another worktree, and so on.
@@ -127,6 +330,9 @@ def test_the_probe_never_probes_ITSELF(tmp_path):
     invocation returned DIRTY_CHECKOUT immediately and the recursion never
     happened. CI checks out clean, recursed, and hit the per-gate timeout.
     "It passed on my machine" was true and worthless.
+
+    #539 adds the second half: the skip was a bare `continue` while the verdict
+    line went on to say "all <declared> gate(s)". It is recorded now.
     """
     r = _repo_with(
         tmp_path,
@@ -135,28 +341,109 @@ def test_the_probe_never_probes_ITSELF(tmp_path):
     (r / "counter.py").write_text("print('PASS 0')\n")
     subprocess.run(["git", "-C", str(r), "add", "counter.py"], check=True)
     subprocess.run(["git", "-C", str(r), "commit", "-qm", "c"], check=True)
+    (r / "leftover.txt").write_text("x\n")          # stimulus, so not NO_STIMULUS
 
     # Both are parsed — the skip is at RUN time, so the list stays honest.
     assert len(G.corpus_gates(
         r / "tools" / "ci" / "repo_hygiene_gates.sh")) == 2
-    verdict, findings = G.audit(r, timeout=60)
-    assert verdict == "PASS", findings
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "PASS", res
+    assert res.declared == 2 and res.probed == 1
+    assert [lbl for lbl, _ in res.not_probed] == ["self"]
+    assert "recurse" in res.not_probed[0][1]
 
 
+# --------------------------------------------------------------------------
+# #539 — exclusion BY DECLARATION rather than by luck
+# --------------------------------------------------------------------------
+_EXCLUDE_LINE = ("# host-independence: EXCLUDE — reaches a remote service, so "
+                 "two invocations can differ for a reason not in the commit\n")
+
+
+def test_539_a_declared_gate_leaves_the_numerator_but_not_the_denominator(
+        tmp_path, capsys):
+    """#539. `sync_image_version --check --require-remote` makes an HTTPS call
+    to a registry, and this probe requires two invocations to agree — which is
+    how v1.7.92 went red on a gate whose code is perfectly host-independent and
+    green on the identical commit when re-run.
+
+    The subject here is a gate that would otherwise be caught: excluding it
+    must change the VERDICT, so the test cannot pass by the directive being
+    ignored.
+    """
+    r = _counter_repo(tmp_path, ignore_dat=False)
+    (r / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+        _EXCLUDE_LINE + 'run "counter" "$ROOT" python3 counter.py\n')
+    subprocess.run(["git", "-C", str(r), "commit", "-qam", "declare"],
+                   check=True)
+    (r / "leftover.dat").write_text("x\n")          # would be a finding
+
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "PASS", res
+    assert res.declared == 1, "an exclusion must not shrink the population"
+    assert res.probed == 0
+    assert res.not_probed[0][0] == "counter"
+    assert "EXCLUDED by declaration" in res.not_probed[0][1]
+
+    G.main([str(r)])
+    assert "[NOT PROBED] counter" in capsys.readouterr().err
+
+
+def test_539_a_DETACHED_directive_does_not_exclude(tmp_path):
+    """FAIL-SAFE BY SHAPE. The directive binds to the line immediately below
+    it. If it drifts — a line inserted, the gate moved — the gate is PROBED
+    again. The failure mode is a returning flake, which is visible; a directive
+    that kept excluding from a distance would be a silent hole that reads
+    exactly like a deliberate decision.
+    """
+    r = _counter_repo(tmp_path, ignore_dat=False)
+    (r / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+        _EXCLUDE_LINE + "\n"          # <- one blank line detaches it
+        'run "counter" "$ROOT" python3 counter.py\n')
+    subprocess.run(["git", "-C", str(r), "commit", "-qam", "detached"],
+                   check=True)
+    (r / "leftover.dat").write_text("x\n")
+
+    gates = G.corpus_gates(r / "tools" / "ci" / "repo_hygiene_gates.sh")
+    assert gates[0].excluded is None, gates
+    assert G.audit(r, timeout=_T).verdict == "FAIL"
+
+
+def test_539_the_directive_is_not_passed_to_the_gate_as_argv(tmp_path):
+    """The marker is a standalone line, above the gate, precisely so that the
+    OTHER reader of this script — `gate_discloses_denominator_check`, which
+    carries a verbatim copy of the same regex — cannot pick it up as part of
+    the command and hand it to the gate. Two readers of one script must not
+    disagree about what the script says."""
+    r = _counter_repo(tmp_path, ignore_dat=False)
+    (r / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+        _EXCLUDE_LINE + 'run "counter" "$ROOT" python3 counter.py\n')
+    gates = G.corpus_gates(r / "tools" / "ci" / "repo_hygiene_gates.sh")
+    assert gates[0].cmd == "python3 counter.py", gates
+
+    sys.path.insert(0, str(_PROGRAMS))
+    import gate_discloses_denominator_check as D  # noqa: E402
+    other = D.parse_gates(r / "tools" / "ci" / "repo_hygiene_gates.sh")
+    assert len(other) == 1 and "#" not in str(other[0]), other
+
+
+# --------------------------------------------------------------------------
+# the probe's own failure modes
+# --------------------------------------------------------------------------
 def test_a_gate_that_cannot_be_driven_is_its_own_state_not_a_crash(tmp_path):
-    """The other half of the same CI failure: the per-gate timeout was
-    UNHANDLED, so a slow gate killed the probe with a traceback instead of
-    reporting. A gate that cannot be driven is not host-dependence, and it is
-    not a clean result either."""
+    """The other half of a CI failure: the per-gate timeout was UNHANDLED, so a
+    slow gate killed the probe with a traceback instead of reporting. A gate
+    that cannot be driven is not host-dependence, and it is not a clean result
+    either."""
     r = _repo_with(tmp_path, 'run "slow" "$ROOT" python3 sleeper.py\n')
     (r / "sleeper.py").write_text("import time\ntime.sleep(30)\n")
     subprocess.run(["git", "-C", str(r), "add", "sleeper.py"], check=True)
     subprocess.run(["git", "-C", str(r), "commit", "-qm", "s"], check=True)
 
-    verdict, findings = G.audit(r, timeout=2)
-    assert verdict == "FAIL", (verdict, findings)
-    assert findings[0]["kind"] == "GATE_UNRUNNABLE", findings
-    assert "TimeoutExpired" in findings[0]["detail"], findings
+    res = G.audit(r, timeout=2)
+    assert res.verdict == "FAIL", res
+    assert res.findings[0]["kind"] == "GATE_UNRUNNABLE", res.findings
+    assert "TimeoutExpired" in res.findings[0]["detail"], res.findings
 
 
 def test_a_gate_that_echoes_its_own_root_is_not_host_dependent(tmp_path):
@@ -178,24 +465,18 @@ def test_a_gate_that_echoes_its_own_root_is_not_host_dependent(tmp_path):
         "print('PASS: read', pathlib.Path('.').resolve())\n")
     subprocess.run(["git", "-C", str(r), "add", "echoer.py"], check=True)
     subprocess.run(["git", "-C", str(r), "commit", "-qm", "e"], check=True)
+    (r / "leftover.txt").write_text("x\n")          # stimulus present
 
-    verdict, findings = G.audit(r, timeout=120)
-    assert verdict == "PASS", findings
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "PASS", res
 
 
 def test_a_real_difference_still_survives_normalisation(tmp_path):
     """The paired half. Absorbing the path must not absorb the verdict: a gate
     whose COUNT differs between the trees is still caught."""
-    r = _repo_with(tmp_path, 'run "counter" "$ROOT" python3 counter.py\n')
-    (r / ".gitignore").write_text("*.dat\n")
-    (r / "counter.py").write_text(
-        "import pathlib\n"
-        "print('PASS', len(list(pathlib.Path('.').glob('*.dat'))))\n")
-    subprocess.run(["git", "-C", str(r), "add", "counter.py", ".gitignore"],
-                   check=True)
-    subprocess.run(["git", "-C", str(r), "commit", "-qm", "c"], check=True)
+    r = _counter_repo(tmp_path, ignore_dat=True)
     (r / "leftover.dat").write_text("x\n")     # ignored => tree stays clean
 
-    verdict, findings = G.audit(r, timeout=120)
-    assert verdict == "FAIL", (verdict, findings)
-    assert findings[0]["kind"] == "HOST_DEPENDENT_VERDICT"
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "FAIL", res
+    assert res.findings[0]["kind"] == "HOST_DEPENDENT_VERDICT"

@@ -83,6 +83,18 @@ run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit
 # for six versions (0.2.29 pinned in 13 places, never published) while nothing
 # enforced it. --require-remote: the pinned tag must actually RESOLVE on ghcr;
 # an unreachable registry is a FAIL here, not an UNVERIFIED shrug.
+#
+# vibe-ic#539 — and that remote call is why this gate, alone in the set, is
+# declared out of the host-independence comparison below. That probe runs every
+# gate TWICE and requires the two verdicts to match; a verdict that depends on
+# a network round-trip can differ between the invocations for a reason that is
+# not in the commit. v1.7.92 went RED on this gate, whose code is perfectly
+# host-independent, and GREEN on the identical commit when re-run. The choice
+# is between excluding it deliberately and excluding it by luck. The directive
+# below is read by `gate_host_independence_check` — it must stay on the line
+# IMMEDIATELY above the gate, and if it drifts the gate is probed again (a
+# visible returning flake) rather than silently dropped.
+# host-independence: EXCLUDE — resolves a tag on a remote registry (--require-remote), so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "image-version pins resolve" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --check --require-remote
 
 # vibe-ic#306/#316 — the audit that measures which gates can actually stop a
