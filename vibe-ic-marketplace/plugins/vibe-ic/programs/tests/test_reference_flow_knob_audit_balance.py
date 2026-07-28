@@ -378,6 +378,12 @@ class TestStatusAndHeadlineLockstep:
                 "flow.mk": "REMOVE_ABC_BUFFERS = 1\n"},
             "knobs-rejected": {"flow.mk": "CORE_UTILIZATION = 400\n"},
             "knobs-adopted": {"flow.mk": "CORE_UTILIZATION = 50\n"},
+            # A recipe file this ingest opens, parses, and recognises NOTHING
+            # in — a lowercase-Tcl flow-variable dialect. Distinct from
+            # "no-knobs" (`SOME_FLOW_VAR = 42` above), which IS recognised as
+            # an assignment and merely names a knob nothing honours.
+            "config-dialect-unrecognised": {
+                "flow.tcl": "set flow_clk_period 8000.0\n"},
         }
         seen = set()
         for i, (expect, files) in enumerate(sorted(fixtures.items())):

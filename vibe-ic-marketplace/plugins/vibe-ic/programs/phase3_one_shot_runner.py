@@ -6546,6 +6546,82 @@ _ORFS_SUBSYSTEM_LABEL = {
 _RF_SCANNED_SUFFIXES = _rfb.RECIPE_SUFFIXES
 
 
+# ---------------------------------------------------------------------------
+# A staged recipe file the ingest READ, PARSED, and recognised NOTHING in.
+#
+# The scan already separates three ways of not-reading a staged file:
+# `unreadable` (could not open), `unscanned` (extension not parsed) and
+# `excluded_oracle` (deliberately not read, §4.05). It had no way to state the
+# fourth: the file opened, every line ran through every pattern, and not one
+# matched. A design whose reference flow is written in a DIALECT this ingest
+# does not speak — lowercase Tcl flow variables, a project-local `set_*_var`
+# convention — therefore produced a report byte-identical to one staging an
+# empty file: `declared_total: 0`, `ingest_complete: True`, and the `no-knobs`
+# headline's flat claim "Nothing was silently ignored". Measured on a real
+# staged config, six declarations INCLUDING THE CLOCK PERIOD were discarded
+# with no record anywhere in the report that asserted nothing had been.
+#
+# An ingester that quietly drops what it does not understand is
+# indistinguishable from one that was never wired. The drop is now stated.
+#
+# DERIVED, NOT ENUMERATED (LOAD-BEARING): the signal is "none of THIS module's
+# OWN patterns matched anything in this file", computed from those same
+# patterns. It is deliberately NOT a list of known dialects — such a list would
+# be a second vocabulary to drift from the first, and it would also conflate
+# two separate decisions: RECOGNISING a new dialect is a design change with a
+# mapping to justify, whereas ADMITTING that this one was not recognised is
+# owed to the reader unconditionally and costs no vocabulary at all.
+#
+# HONEST SCOPE (stated because it bounds the claim): this flags a WHOLLY
+# unrecognised file, not an unrecognised LINE inside a file the ingest partly
+# understood. A file with one matching line and fifty it never saw is NOT
+# flagged. Per-line coverage would require a definition of "a line that SHOULD
+# have matched", which is exactly the dialect list this declines to build.
+# ---------------------------------------------------------------------------
+
+
+def _rf_recipe_line_recognised(line: str, is_tcl: bool) -> bool:
+    """True when ANY reference-flow ingest pattern in this module matches
+    ``line`` — the assignment forms `_rf_pnr_scan` reads, or the fastroute
+    routing statement `_reference_flow_qor_knobs` reads.
+
+    The UNION is load-bearing. The two ingests scan the SAME staged files, so
+    judging recognition by only one of them would report a file the other
+    fully understands as unrecognised — the same cross-subsystem blind spot
+    #503 fixed one level up, where a knob honoured by the synth ingest reached
+    no bucket in the PnR audit. Pure / deterministic."""
+    if _RF_FASTROUTE_ADJUST_RE.match(line):
+        return True
+    if is_tcl:
+        return any(rx.match(line) for rx in
+                   (_RF_TCL_ENV_SET_RE, _RF_TCL_SETENV_RE, _RF_TCL_SET_RE))
+    return _RF_MK_ASSIGN_RE.match(line) is not None
+
+
+def _rf_recipe_is_unrecognised(text: str, is_tcl: bool) -> bool:
+    """True when ``text`` carries CONTENT and NOT ONE of its lines is
+    recognised by `_rf_recipe_line_recognised`.
+
+    A line is CONTENT when it is neither blank nor a comment; ``#`` opens a
+    comment in both Make and Tcl, and is already this module's comment token
+    (`_rf_strip_knob_value` strips on it), so no new syntax is introduced here.
+
+    An empty or comments-only file is deliberately NOT flagged: it genuinely
+    declares nothing, and flagging it would make the honest case
+    indistinguishable from the defective one — which is the precise failure
+    this predicate exists to remove, reintroduced with its sign flipped.
+    Pure / deterministic."""
+    has_content = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        has_content = True
+        if _rf_recipe_line_recognised(line, is_tcl):
+            return False
+    return has_content
+
+
 def _rf_pnr_scan(project: Path) -> Dict[str, object]:
     """Scan the design's OWN staged ``input/reference_flow/*.mk`` / ``*.tcl``
     for the documented ORFS floorplan/place/CTS/timing QoR knobs, recording
@@ -6558,6 +6634,8 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
          "config_files": ["<rel path>", ...],   # every *.mk/*.tcl scanned
          "unreadable":   ["<rel path>", ...],   # staged but could not be read
          "unscanned":    ["<rel path>", ...],   # staged, extension not parsed
+         "unrecognised_dialect":                # read + parsed, NOTHING matched
+                         ["<rel path>", ...],
          "all_declared": {NAME: "<rel path>"},  # EVERY assignment seen
          "all_declared_values":                 # winning value + its file
                          {NAME: {"value": "<str>", "source": "<rel path>"}},
@@ -6588,7 +6666,8 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
     rdir = project / "input" / "reference_flow"
     out: Dict[str, object] = {
         "config_dir": None, "config_files": [], "unreadable": [],
-        "unscanned": [], "excluded_oracle": [], "all_declared": {},
+        "unscanned": [], "excluded_oracle": [], "unrecognised_dialect": [],
+        "all_declared": {},
         "all_declared_values": {}, "declared": {}, "rejected": [],
     }
     if not rdir.is_dir():
@@ -6599,6 +6678,8 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
     unscanned: List[str] = out["unscanned"]        # type: ignore[assignment]
     excluded_oracle: List[str] = \
         out["excluded_oracle"]                     # type: ignore[assignment]
+    unrecognised: List[str] = \
+        out["unrecognised_dialect"]                # type: ignore[assignment]
     all_declared: Dict[str, str] = \
         out["all_declared"]                        # type: ignore[assignment]
     all_declared_values: Dict[str, Dict[str, str]] = \
@@ -6646,6 +6727,12 @@ def _rf_pnr_scan(project: Path) -> Dict[str, object]:
             unreadable.append(f"{rel} ({type(exc).__name__})")
             continue
         is_tcl = f.suffix == ".tcl"
+        # READ + PARSED, but not one line matched any ingest pattern. Recorded
+        # BEFORE extraction so a file whose dialect this ingest does not speak
+        # is stated rather than folded into a zero denominator that reads as
+        # "the design declared nothing".
+        if _rf_recipe_is_unrecognised(text, is_tcl):
+            unrecognised.append(rel)
         for line in text.splitlines():
             name = val = None
             if is_tcl:
@@ -7073,15 +7160,26 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
     unscanned: List[str] = scan["unscanned"]       # type: ignore[assignment]
     excluded_oracle: List[str] = \
         scan["excluded_oracle"]                    # type: ignore[assignment]
-    # The ingest saw the whole READABLE RECIPE only when nothing was unreadable
-    # and nothing was left unparsed. Anything else means the verdict below
-    # rests on a partial read and must not be presented as exhaustive.
+    unrecognised_dialect: List[str] = \
+        scan["unrecognised_dialect"]               # type: ignore[assignment]
+    # The ingest saw the whole READABLE RECIPE only when nothing was unreadable,
+    # nothing was left unparsed, and every file it DID parse yielded at least
+    # one recognised line. Anything else means the verdict below rests on a
+    # partial read and must not be presented as exhaustive.
+    #
+    # `unrecognised_dialect` is a completeness term for the same reason
+    # `unscanned` is: in both cases a staged file's content did not reach the
+    # ingest. That it was OPENED rather than skipped changes nothing the reader
+    # cares about — the declarations inside are equally absent from every list
+    # below, and it is strictly WORSE to omit, because an opened file appears
+    # in `config_files` and so reads as successfully consumed.
     #
     # §4.05: `excluded_oracle` is deliberately NOT a term here. Declining to
     # read the known-good result is the rule working, not a shortfall; letting
     # it drag completeness to False would report compliance as a deficiency and
     # push the next reader toward closing it by reading the answer.
-    ingest_complete = not unreadable and not unscanned
+    ingest_complete = (not unreadable and not unscanned
+                       and not unrecognised_dialect)
 
     if scan["config_dir"] is None:
         status = "no-config"
@@ -7091,6 +7189,14 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         # strength of files that were never opened — the ingest-side twin of
         # reading an unanalysed STA report as a met corner.
         status = "config-unreadable"
+    elif not declared and not rejected and unrecognised_dialect:
+        # A config IS staged, opened and parsed — and this ingest recognised
+        # nothing in it. `no-knobs` closes with "Nothing was silently ignored",
+        # which is the one sentence that must never appear here: something was.
+        # Ranked with `config-unreadable` (above `knobs-honoured-elsewhere`,
+        # whose headline likewise asserts the declaration was NOT ignored)
+        # because both describe an ingest that did not see the whole recipe.
+        status = "config-dialect-unrecognised"
     elif not declared and not rejected and honoured_elsewhere:
         # No PnR knob — but the config DID declare knobs another phase-3
         # subsystem honours. `no-knobs` closes with "Nothing was silently
@@ -7111,6 +7217,7 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         "unreadable": unreadable,
         "unscanned": unscanned,
         "excluded_oracle": excluded_oracle,
+        "unrecognised_dialect": unrecognised_dialect,
         "ingest_complete": ingest_complete,
         "declared_total": len(all_declared),
         "not_recognised": not_recognised,
@@ -7142,6 +7249,16 @@ _RF_PNR_STATUS_HEADLINE = {
         "no knobs — the unread files are listed below and may declare some; "
         "the ingest is INCOMPLETE and says so rather than reporting a clean "
         "result it did not earn."),
+    "config-dialect-unrecognised": (
+        "A `input/reference_flow` config IS staged and WAS read, and this "
+        "ingest recognised NOTHING in one or more of its files — not one line "
+        "matched any pattern it knows. Phase-3 used its GENERIC defaults. "
+        "This is NOT a statement that the design declared no knobs: the files "
+        "are listed below and the declarations inside them were discarded "
+        "without being read as declarations, most likely because they are "
+        "written in a flow dialect this ingest does not speak. The ingest is "
+        "INCOMPLETE and says so, rather than reporting the empty result as a "
+        "clean one."),
     "knobs-rejected": (
         "The staged `input/reference_flow` declared knobs but NONE were usable "
         "— every one is listed below with the reason it was dropped. Phase-3 "
@@ -7206,6 +7323,8 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
             audit.get("not_recognised", [])       # type: ignore[assignment]
         unreadable_n = len(audit.get("unreadable", []))   # type: ignore[arg-type]
         unscanned_n = len(audit.get("unscanned", []))     # type: ignore[arg-type]
+        unrecog_n = len(
+            audit.get("unrecognised_dialect", []))        # type: ignore[arg-type]
         honoured = declared_total - len(not_recognised)
         out += [
             "## Ingest coverage", "",
@@ -7215,7 +7334,8 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
             f"- Declared names no phase-3 knob ingest reads: "
             f"**{len(not_recognised)} of {declared_total}**",
             f"- Config files parsed: **{len(cfg_files)}** "
-            f"(unreadable: {unreadable_n}, not examined: {unscanned_n})",
+            f"(unreadable: {unreadable_n}, not examined: {unscanned_n}, "
+            f"read but nothing recognised: {unrecog_n})",
             f"- Ingest complete: **{bool(audit.get('ingest_complete'))}**",
             "",
         ]
@@ -7278,6 +7398,22 @@ def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
                 "skipped and the generic defaults kept — they are listed here "
                 "so the skip is visible rather than silent.", ""]
         out += [f"- `{f}`" for f in unreadable] + [""]
+    unrecognised_dialect: List[str] = \
+        audit.get("unrecognised_dialect", [])     # type: ignore[assignment]
+    if unrecognised_dialect:
+        out += ["## Read, but NOTHING in them was recognised", "",
+                "These files were staged, opened and parsed, and not one of "
+                "their lines matched any pattern this ingest knows. Whatever "
+                "they declare was discarded without ever being read as a "
+                "declaration — most likely they are written in a flow dialect "
+                "this ingest does not speak.", "",
+                "They are listed because they are the one case that would "
+                "otherwise be invisible: an unreadable file at least fails to "
+                "open, whereas these appear under **Config files read** above "
+                "and so read as successfully consumed. The counts in this "
+                "report are therefore a FLOOR — these files may declare knobs "
+                "that appear in no list anywhere in it.", ""]
+        out += [f"- `{f}`" for f in unrecognised_dialect] + [""]
     excluded_oracle: List[str] = \
         audit.get("excluded_oracle", [])          # type: ignore[assignment]
     if excluded_oracle:
