@@ -684,6 +684,50 @@ def blindness_gate(transcripts: Optional[str],
 # run that simply hasn't reached its write step. Imports the pure classifier —
 # no re-implementation.
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# ci_ran_at_all_check — #550. Nothing in this roster asked whether the CI that
+# was supposed to run the tests EXISTS. Actions was disabled account-wide and
+# 561 commits landed with none, while every question about CI came back clean:
+# an empty run listing reads identically to "nothing new since the last green".
+#
+# POLICY, and it is a choice worth stating rather than burying. NEVER_RAN is
+# rc 1 from the checker, but this gate DOWNGRADES it to a loud non-blocking
+# disclosure for ordinary landings and keeps it BLOCKING for a milestone
+# (x.y.0). Reasons, in order:
+#   * a hard refusal everywhere makes the local-only workflow — which is the
+#     situation this repo is in RIGHT NOW, and legitimately so while the
+#     account is blocked — impossible, and a gate people must bypass to work
+#     is a gate that gets bypassed for real reasons too;
+#   * a milestone is the one landing that must not rest on one machine's word.
+# The disclosure is never silent in either case: the summary says NO CI RUN in
+# both, so `git log` and the review record carry it.
+# --------------------------------------------------------------------------
+def ci_ran_gate(repo: Path, head: str, cadence: str) -> GateResult:
+    prog = _PROGRAMS_DIR / "ci_ran_at_all_check.py"
+    if not prog.is_file():
+        return GateResult("ci_ran_at_all_check", -1, "checker not present")
+    rc, out, err = _run_program(prog, [str(repo), "--rev", head,
+                                       "--min-total", "50"])
+    summary = ((out + err).strip().splitlines() or [""])[0][:240]
+    if rc == 1 and "NO CI RUN EXISTS" in (out + err) and cadence != "FULL":
+        # -1 is "not applicable / non-blocking"; the text still says NO CI RUN.
+        return GateResult("ci_ran_at_all_check", -1,
+                          "DISCLOSED (non-blocking for a patch landing): "
+                          + summary)
+    if rc == 2:
+        # NOT CHECKED must not BLOCK. rc 2 is non-blocking everywhere else in
+        # this repo (`run_tolerating_uncheckable` in _gate_dispatch.sh), but
+        # `GateResult.green` counts only 0 and -1, so returning 2 here would
+        # refuse a merge for an offline maintainer, a rate limit, or a review
+        # run over a directory that is not a git repo — which is how the
+        # existing gatekeeper_review tests drive this function, and they caught
+        # it. Mapped to -1 with the reason kept IN THE TEXT: a reader still sees
+        # "could not look", which is the whole point of the state.
+        return GateResult("ci_ran_at_all_check", -1,
+                          "NOT CHECKED (non-blocking): " + summary)
+    return GateResult("ci_ran_at_all_check", rc, summary or "(no output)")
+
+
 def run_deliverable_gate(repo: Path, files: List[str]) -> GateResult:
     results = [f for f in files if Path(f).name == "RESULT.md"]
     if not results:
@@ -987,6 +1031,7 @@ def review(base: str, head: str, *,
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
     gates.append(test_cadence_gate(pytest_cmd, cadence))
+    gates.append(ci_ran_gate(repo, head, cadence))
     gates.append(run_deliverable_gate(repo, files))
     gates.append(blindness_gate(transcripts, dataset))
     # #538 — LAST because it is by far the longest, so every cheap machine gate

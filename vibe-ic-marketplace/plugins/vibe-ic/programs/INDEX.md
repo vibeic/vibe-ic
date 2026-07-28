@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 999
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 999)
+- **Total programs (excluding helpers / shims):** 1000
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1000)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 990 |
+| `any` | 991 |
 
 ## Alphabetical listing
 
@@ -169,6 +169,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `chip_top_gate_wrapper_gen` | any | — | v1.6.232 (merged v229+v231). |
 | `chip_top_open_drain_polarity_check` | any | — | v1.6.225. |
 | `ci_harness_timeout_ceiling_check` | any | — | a test's own subprocess timeout must |
+| `ci_ran_at_all_check` | any | — | Did CI actually run on this commit, or has it not run at all? |
 | `ci_targeted_test_select` | any | — | pick a FAST targeted pytest subset for the |
 | `clause_smoke_tb` | any | — | ORGANIC #740 (G2) [chip-AGNOSTIC] |
 | `clock_cascade_synthesis_check` | any | — | refuse a top-level RTL that ties |
@@ -1071,7 +1072,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (990 programs)
+### `any` (991 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1215,6 +1216,7 @@ _(no programs in this group)_
 - `chip_top_gate_wrapper_gen` — v1.6.232 (merged v229+v231).
 - `chip_top_open_drain_polarity_check` — v1.6.225.
 - `ci_harness_timeout_ceiling_check` — a test's own subprocess timeout must
+- `ci_ran_at_all_check` — Did CI actually run on this commit, or has it not run at all?
 - `ci_targeted_test_select` — pick a FAST targeted pytest subset for the
 - `clause_smoke_tb` — ORGANIC #740 (G2) [chip-AGNOSTIC]
 - `clock_cascade_synthesis_check` — refuse a top-level RTL that ties
