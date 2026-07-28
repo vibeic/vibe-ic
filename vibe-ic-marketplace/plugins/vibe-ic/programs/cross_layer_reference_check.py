@@ -217,10 +217,23 @@ appears in either.
 
 EXIT CODES
 ----------
-    0 = PASS / VACUOUS_PASS
+    0 = PASS — the design's layers carry declared references and they resolve
     1 = FAIL — a finding, or a corpus sweep that LOST REACH
     2 = NOT CHECKED — SKIP, an I/O error, a corpus sweep that found no cell
-        at all, or a baseline carrying no denominator to compare against
+        at all, a baseline carrying no denominator to compare against, or
+        VACUOUS_PASS (per-project mode): the layers carry no declared
+        cross-layer reference, so nothing was examined
+
+    #528 — the VACUOUS_PASS line used to exit 0. Two branches above it (SKIP,
+    ERROR) already exited 2 for the same "nothing to examine" situation, and
+    the printed token was `[VACUOUS_PASS]`, which
+    `flow_compliance_check._stdout_signals_vacuous` does not match (it wants
+    the token at line start, unbracketed). So neither channel the tier-deciding
+    consumer reads was live, and a design carrying no declared reference at all
+    was credited a plain PASS. The `--corpus` regression mode returns before
+    this branch and is UNCHANGED — that is the mode
+    `tools/ci/repo_hygiene_gates.sh` runs through its `run` helper, which
+    treats any non-zero rc as a hard FAILED.
 """
 from __future__ import annotations
 
@@ -232,6 +245,7 @@ import subprocess
 import sys
 
 import _published_tree
+import _vacuous_exit as _vx
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -1095,9 +1109,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[ERROR] {report.get('detail')}", file=sys.stderr)
         return 2
     if verdict == "VACUOUS_PASS":
-        print(f"[VACUOUS_PASS] {GATE}: no declared cross-layer reference "
-              f"is carried by this design's layers.")
-        return 0
+        # #528 — this branch announced the vacuous tier as `[VACUOUS_PASS]`,
+        # and `flow_compliance_check._stdout_signals_vacuous` matches
+        # `line.lstrip().startswith("VACUOUS_PASS")` — the bracket defeats it.
+        # So the gate exited 0 with a disclosure nothing read, over a design
+        # whose layers carry no declared cross-layer reference at all. Its own
+        # two neighbours above (`SKIP`, `ERROR`) are already rc 2. The
+        # `--corpus` regression path returns earlier and is untouched, which is
+        # the mode `tools/ci/repo_hygiene_gates.sh` runs.
+        reason = "no-declared-cross-layer-reference"
+        _vx.announce_vacuous(GATE, reason)
+        print(_vx.verdict_line(GATE, passed=True, skipped=True, reason=reason))
+        return _vx.exit_code(passed=True, skipped=True)
     if verdict == "PASS":
         # BOTH denominators. The record count alone reads as reach this
         # mechanism does not have: on the shipped corpus one port carried by

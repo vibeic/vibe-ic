@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 994
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 994)
+- **Total programs (excluding helpers / shims):** 995
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 995)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 985 |
+| `any` | 986 |
 
 ## Alphabetical listing
 
@@ -382,6 +382,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
+| `gate_skip_routing_check` | any | — | every gate, and whether its skip REACHES the |
 | `gate_utils` | any | v0.117 | Shared helpers for v0.117+ structural-RTL gates. |
 | `gate_verilog_to_spice` | any | — | convert a structural (gate-level) Verilog netlist to SPICE for |
 | `gatekeeper_assign_version` | any | — | v1.1.7 (owner directive 2026-06-17). |
@@ -1066,7 +1067,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (985 programs)
+### `any` (986 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1420,6 +1421,7 @@ _(no programs in this group)_
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
+- `gate_skip_routing_check` — every gate, and whether its skip REACHES the
 - `gate_utils` — Shared helpers for v0.117+ structural-RTL gates.  _[v0.117]_
 - `gate_verilog_to_spice` — convert a structural (gate-level) Verilog netlist to SPICE for
 - `gatekeeper_assign_version` — v1.1.7 (owner directive 2026-06-17).

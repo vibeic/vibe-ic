@@ -19,16 +19,37 @@ files at `reports/` root (`drc_signoff.json`, `lvs.rpt`, `power.rpt`,
 reports/ into a 6-folder phase taxonomy and adds this gate so the
 partition holds.
 
-VACUOUS_PASS: no `reports/` directory at all → vacuous PASS (project
-hasn't run any phase yet).
+VACUOUS: the gate examined ZERO entries — either there is no `reports/`
+directory at all, or there is one and it is empty (both mean the project has
+not run any phase yet). Reported as rc 2.
 
 Usage:
     python3 reports_subfolder_taxonomy_check.py <project_dir> [--json <out>]
 
 Exit codes:
-    0  PASS / VACUOUS_PASS
+    0  PASS — every entry under reports/ matches the taxonomy (and there was
+       at least one entry to match)
     1  one or more stray entries under reports/
-    2  argument or I/O error
+    2  argument or I/O error, OR VACUOUS: zero entries were examined. TWO
+       branches, one per spelling of the same zero:
+         (a) no reports/ directory     -> reason `no reports/ directory`
+         (b) reports/ exists, is empty -> reason `reports/ directory is empty`
+
+    #528 — the vacuous branch used to exit 0 and announce itself as
+    `[VACUOUS_PASS] ...`. `flow_compliance_check._stdout_signals_vacuous`
+    matches `line.lstrip().startswith("VACUOUS_PASS")`, which the leading
+    bracket defeats, so BOTH channels the tier-deciding consumer reads were
+    silent and the run was credited a plain PASS over a project with no
+    reports/ at all. Routed through `_vacuous_exit`, which returns rc 2 AND
+    writes the sentinel in the shape the matcher wants.
+
+    #528 follow-up — branch (b) was added after the neighbour sweep. The
+    vacuous tier was routed from an INPUT SHAPE (`reports.is_dir()`), so an
+    existing-but-empty reports/ answered `[PASS] ... all 0 reports/ entries
+    match the phase-aligned taxonomy` — the same zero, credited. Measured:
+    absent -> VACUOUS, empty -> PASS. `top_level_outputs_in_canonical_check`
+    already routed from its count (`if not entries`), and comparing the two is
+    what made this visible.
 
 chip-AGNOSTIC.
 """
@@ -42,6 +63,7 @@ from pathlib import Path
 from typing import List
 
 import _path_layout as _pl
+import _vacuous_exit as _vx
 
 
 _VALID_TOP_LEVEL_FILES = ("final_summary.md", "chip_specific_summary.md")
@@ -67,6 +89,25 @@ def audit(project: Path) -> Result:
     valid_files = set(_VALID_TOP_LEVEL_FILES)
     entries = sorted(reports.iterdir())
     r.summary["total_entries"] = len(entries)
+    if not entries:
+        # #528 follow-up — ABSENT AND EMPTY ARE THE SAME DENOMINATOR.
+        #
+        # The branch above routes the vacuous tier from an INPUT SHAPE ("is
+        # there a reports/ directory?"). A reports/ that exists and holds
+        # nothing was examined exactly as much — zero entries — and answered a
+        # plain `[PASS] ... all 0 reports/ entries match the phase-aligned
+        # taxonomy`. Measured: absent -> VACUOUS, empty -> PASS, from the same
+        # zero.
+        #
+        # This is the same spelling as `marketplace_version_sync_check`'s
+        # `.get("plugins", [])`, in a different alphabet: there a default
+        # value collapsed absent into empty, here a directory test never asked
+        # about empty at all. `top_level_outputs_in_canonical_check` gets this
+        # right already (`if not entries: vacuous_pass = True`), which is what
+        # made the difference visible.
+        r.summary["vacuous_pass"] = True
+        r.summary["reason"] = "reports/ directory is empty"
+        return r
     for entry in entries:
         name = entry.name
         # Hidden files are housekeeping, not violations
@@ -99,9 +140,18 @@ def main(argv: List[str] | None = None) -> int:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(json.dumps(asdict(r), indent=2) + "\n")
     if r.summary.get("vacuous_pass"):
-        print(f"[VACUOUS_PASS] reports_subfolder_taxonomy_check: "
-              f"{r.summary.get('reason', 'no reports/ yet')}")
-        return 0
+        # #528 — the token was written `[VACUOUS_PASS]`, and the consumer that
+        # decides the tier matches `line.lstrip().startswith("VACUOUS_PASS")`.
+        # A bracketed token does not match, so this branch announced the
+        # vacuous tier in the one form nothing could read, and exited 0: a
+        # plain PASS credited to a run that opened no reports/ directory.
+        # Routed through the shared site, which gives BOTH channels at once —
+        # rc 2, and the sentinel in the exact shape the matcher wants.
+        reason = r.summary.get("reason", "no reports/ yet")
+        _vx.announce_vacuous("reports_subfolder_taxonomy_check", reason)
+        print(_vx.verdict_line("reports_subfolder_taxonomy_check",
+                               passed=True, skipped=True, reason=reason))
+        return _vx.exit_code(passed=True, skipped=True)
     if r.passed:
         n = r.summary.get("total_entries", 0)
         print(f"[PASS] reports_subfolder_taxonomy_check: "

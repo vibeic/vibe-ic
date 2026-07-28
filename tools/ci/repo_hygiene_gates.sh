@@ -211,6 +211,19 @@ run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_program
 # examined nothing. Placed LAST so it probes the full list; ~40s.
 run "gates disclose their denominator" "$ROOT" python3 "$PG/gate_discloses_denominator_check.py" "$ROOT"
 
+# vibe-ic#528 — the OTHER half of the disclosure question, and the reason both
+# are wired: the check above asks whether a HUMAN READER can see that a gate
+# examined nothing, judged from output text. This one asks whether the MACHINE
+# that assigns the verdict tier can, judged from the exit code and the one
+# stdout token `flow_compliance_check._stdout_signals_vacuous` matches. The
+# first passing does not imply the second — `otp_image_nonzero_check` prints a
+# perfectly clear "[SKIP] ... no L11/L4 OTP layout declares payload-class
+# regions" and is invisible to the consumer. Static (it enumerates every
+# module in programs/ and never invokes one), so its denominator is the file
+# list rather than the set of gates a probe happened to be able to drive —
+# which is what #515's and #521's behavioural sweeps could not reach. ~4s.
+run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_check.py" "$PLUGIN"
+
 
 # The other half of #447: a gate that reads the WRONG POPULATION and reports
 # confidently about it. Runs every gate above twice at the same commit —

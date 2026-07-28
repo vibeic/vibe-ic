@@ -24,9 +24,21 @@ def test_help():
 
 
 def test_vacuous_pass_no_reports_dir(tmp_path):
+    """#528 — rc 2, and the disclosure in the form the CONSUMER matches.
+
+    This test used to assert `returncode == 0` and `"VACUOUS_PASS" in stdout`.
+    Both held, and the gate was still credited a plain PASS: the token was
+    written `[VACUOUS_PASS]`, and
+    `flow_compliance_check._stdout_signals_vacuous` matches
+    `line.lstrip().startswith("VACUOUS_PASS")`, which a leading `[` defeats. An
+    `in` test over the whole stream cannot tell those apart — it passes for a
+    token nothing can read. The assertion is now the consumer's own predicate.
+    """
     r = _run(tmp_path)
-    assert r.returncode == 0
-    assert "VACUOUS_PASS" in r.stdout
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    snippet = (r.stdout[-300:] + "\n" + r.stderr[-300:]).strip()
+    assert any(ln.lstrip().startswith("VACUOUS_PASS")
+               for ln in snippet.splitlines()), snippet
 
 
 def test_pass_phase_aligned_subdirs_only(tmp_path):

@@ -24,15 +24,23 @@ even though `_path_layout.py` already defined canonical homes; v1.6.25
 moved every writer to use the helper API and added this gate so the
 discipline doesn't drift again.
 
-VACUOUS_PASS: empty project (no top-level entries at all) → vacuous PASS.
+VACUOUS: empty project (no top-level entries at all) → the gate examined
+nothing, reported as rc 2.
 
 Usage:
     python3 top_level_outputs_in_canonical_check.py <project_dir> [--json <out>]
 
 Exit codes:
-    0  PASS / VACUOUS_PASS
+    0  PASS — every top-level entry is within the canonical whitelist
     1  one or more stray top-level entries
-    2  argument or I/O error
+    2  argument or I/O error, OR VACUOUS: the project is empty, so nothing
+       was examined
+
+    #528 — the vacuous branch used to exit 0 and announce itself as
+    `[VACUOUS_PASS] ...`, which `flow_compliance_check._stdout_signals_vacuous`
+    cannot read (it matches the token at line start, unbracketed). Both
+    consumer channels were therefore silent and an empty project was credited
+    a plain PASS. Routed through `_vacuous_exit`, which gives both.
 
 chip-AGNOSTIC.
 """
@@ -46,6 +54,7 @@ from pathlib import Path
 from typing import List
 
 import _path_layout as _pl
+import _vacuous_exit as _vx
 
 
 @dataclass
@@ -104,8 +113,15 @@ def main(argv: List[str] | None = None) -> int:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(json.dumps(asdict(r), indent=2) + "\n")
     if r.summary.get("vacuous_pass"):
-        print("[VACUOUS_PASS] top_level_outputs_in_canonical_check: empty project")
-        return 0
+        # #528 — see reports_subfolder_taxonomy_check. `[VACUOUS_PASS]` is not
+        # what `_stdout_signals_vacuous` matches (it wants the token at line
+        # start, unbracketed), so this disclosure reached nothing and the run
+        # was credited a plain PASS over an empty project. Both channels now.
+        reason = r.summary.get("reason", "empty project")
+        _vx.announce_vacuous("top_level_outputs_in_canonical_check", reason)
+        print(_vx.verdict_line("top_level_outputs_in_canonical_check",
+                               passed=True, skipped=True, reason=reason))
+        return _vx.exit_code(passed=True, skipped=True)
     if r.passed:
         n = r.summary.get("total_entries", 0)
         print(f"[PASS] top_level_outputs_in_canonical_check: "

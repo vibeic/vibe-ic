@@ -235,9 +235,20 @@ def test_parameter_declared_in_l9_resolves(tmp_path):
 
 # ─────────────────────────── vacuous vs clean
 def test_design_with_no_reference_is_vacuous_not_pass(tmp_path):
+    """#528 — "not pass" has to be true of the EXIT CODE too, not just the
+    report.
+
+    The name of this test was already the right requirement; the assertion was
+    `rc == 0`. `flow_compliance_check._check_program_exit_zero` never opens the
+    JSON report, so `rep["verdict"] == "VACUOUS_PASS"` reached nothing, and the
+    branch printed `[VACUOUS_PASS]` — bracketed, which
+    `_stdout_signals_vacuous` does not match. The gate's own neighbour two
+    lines below (`test_missing_generated_docs_is_skip_not_pass`) has always
+    asserted rc 2 for the same situation.
+    """
     _build(tmp_path, width_symbolic=None, params=())
     rc, rep = _run(tmp_path)
-    assert rc == 0
+    assert rc == 2
     assert rep["verdict"] == "VACUOUS_PASS"
     assert rep["elements_examined"] == 0
 
