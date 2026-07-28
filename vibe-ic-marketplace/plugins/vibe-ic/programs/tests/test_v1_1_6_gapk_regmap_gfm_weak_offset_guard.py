@@ -126,20 +126,37 @@ def test_gapk_neg2_genuine_0x_regmap_fully_captured():
         f"genuine 0x regmap regressed; got {by}")
 
 
-def test_gapk_neg3_weak_value_header_with_real_0x_token_still_extracted():
-    """NEG-no-leak: a WEAK `Value` header that DOES carry a real `0x` token still
-    yields that address — only the bare-decimal promotion is suppressed. The
-    sibling row whose value is bare prose (`6 ch`) is correctly dropped."""
+def test_gapk_neg3_weak_value_header_yields_nothing_even_with_a_real_0x_token():
+    """REVERSED by #512 (was
+    `test_gapk_neg3_weak_value_header_with_real_0x_token_still_extracted`,
+    which asserted `{"0x40": "BASE"}`).
+
+    gapK suppressed only the BARE-DECIMAL promotion out of a weak `Value`
+    column, and this NEG case pinned that a hex one still became a register.
+    #512 measured that residue on a real corpus doc: a `| Value | Name |
+    Description |` enumerated-field table produced seven registers that are
+    one-hot FIELD ENCODINGS (`AES_ECB @ 0x01` … `AES_NONE @ 0x3f`), and three
+    more were welded onto real registers as `also_named`. The base a constant is
+    written in does not make it an address. So the rule is now structural and
+    base-independent: when a table's ONLY address-role column is headed by a
+    VALUE keyword, the table yields no registers — disclosed, not silent.
+
+    gapK's POSITIVE case (the observed `| Field | Value |` datasheet SPEC table
+    fabricating three phantoms) and NEG-1 / NEG-2 are unchanged above.
+    """
     doc = (
         "| Register | Value  | Description       |\n"
         "|----------|--------|-------------------|\n"
         "| BASE     | 0x40   | base address      |\n"
         "| LIMIT    | 6 ch   | not an address    |\n"
     )
-    by = {r["addr_hex"]: r["name"]
-          for r in R.extract_regmap_table(doc, "weak.md")}
-    assert by == {"0x40": "BASE"}, (
-        f"weak Value header with real 0x token regressed; got {by}")
+    disc = []
+    rows = R.extract_regmap_table(doc, "weak.md", disclosures=disc)
+    assert rows == [], f"value-only table still fabricated registers; {rows}"
+    assert [d["reason"] for d in disc] == [
+        R.NOT_REGISTERS_VALUE_COLUMN_ONLY], disc
+    # the dropped hex is NAMED in the disclosure — read, not silently discarded.
+    assert disc[0]["addresses_read_and_dropped"] == ["0x40"], disc
 
 
 if __name__ == "__main__":

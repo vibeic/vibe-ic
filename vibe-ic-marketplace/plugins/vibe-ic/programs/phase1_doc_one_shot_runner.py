@@ -49785,6 +49785,50 @@ _CRYPTO_CLASSES = {
     "crypto_hash",
 }
 
+# #512 — where the "read, and not a register" record lands. Same dual-write
+# shape as `extraction_skipped.json` (the existing precedent for "this input was
+# visited and produced nothing, here is the reason"): one copy beside the phase1
+# artefacts, one under reports/ where the audit tooling looks.
+REGMAP_NOT_REGISTERS_FILENAME = "regmap_tables_not_registers.json"
+
+
+def _write_regmap_tables_not_registers(
+        project: Path, records: "List[Dict[str, Any]]") -> None:
+    """Record every document table the register-table extractor READ and did
+    not turn into registers, with the reason.
+
+    Silence here is the same defect one layer down as the phantom registers
+    #512 removed: a consumer of L4 cannot otherwise tell "the input declares no
+    such register" from "a table was read and thrown away". Written on EVERY
+    run, including the empty case — a file that says `[]` is the statement that
+    nothing was dropped, which an absent file does not make.
+    """
+    payload = {
+        "produced_by": "_post_emit_pdf_regmap_table_rows",
+        "meaning": (
+            "document tables the register-table extractor read and did not "
+            "turn into L4 registers, with the structural reason. An empty "
+            "list means every table read yielded its rows."),
+        "count": len(records),
+        "tables": records,
+    }
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    for out_dir in (_pl.phase1_dir(project), _pl.reports_phase1_dir(project)):
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / REGMAP_NOT_REGISTERS_FILENAME).write_text(
+                text, encoding="utf-8")
+        except Exception:
+            pass
+    for rec in records:
+        try:
+            print(f"WARN: regmap table read but not registers — "
+                  f"{rec.get('source')} (rows_read={rec.get('rows_read')}, "
+                  f"reason={rec.get('reason')}): {rec.get('detail')}",
+                  file=sys.stderr)
+        except Exception:
+            pass
+
 
 def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
     """v1.6.106 (#36 Bug 1 P0) — PDF tabular regmap row scan.
@@ -49871,6 +49915,12 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
 
     appended = 0
     absorbed = 0
+    # #512 — every table the extractor READ and declined to turn into registers
+    # (no name-bearing column; an address role claimed only by a value column;
+    # individual unnamed rows). A dropped row is DISCLOSED, not silently
+    # discarded: without this the flow cannot tell "the documents declare no
+    # such register" from "we read it and threw it away".
+    _not_registers: List[Dict[str, Any]] = []
     # #616 — also re-scan `.md` register docs (e.g. an auto-generated GFM
     # `*_registers.md`), not only `.txt`; the GFM pipe-table parser lives in
     # extract_regmap_table and needs the .md content to reach it.
@@ -49885,7 +49935,7 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
             rel = str(txt_file.relative_to(project))
         except Exception:
             rel = str(txt_file)
-        new_rows = extract_regmap_table(text, rel)
+        new_rows = extract_regmap_table(text, rel, disclosures=_not_registers)
         for row in new_rows:
             # v1.6.108 (#40 Bug 1B) — range rows lack addr_hex; dedup
             # against either single addr or range string.
@@ -49906,6 +49956,8 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
             existing_addrs.add(ah)
             existing_by_addr.setdefault(ah.lower(), row)
             appended += 1
+
+    _write_regmap_tables_not_registers(project, _not_registers)
 
     if appended == 0 and absorbed == 0:
         return

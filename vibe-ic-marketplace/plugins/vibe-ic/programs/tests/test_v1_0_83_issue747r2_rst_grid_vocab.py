@@ -36,6 +36,24 @@ structural fallback uses no vocabulary at all.
 
 Step-2.6 — the discriminating header lines below are quoted VERBATIM from the real
 ibex `.rst` docs under benchmark_run_v0352_0613/ibex/input/docs/.
+
+#512 PARTIALLY REVERSES this fix — read before restoring anything here.
+=======================================================================
+Items (1) and (3) above stand: the broadened NAME keywords and the structural
+fallback both survive, and the Event-Counter / Event-Selector tables still yield
+every address they did. Two of #747-r2's conclusions were wrong and are now
+inverted in place, each with its reason on the test:
+
+  * a hex cell in a *parameters* table's `Default` column was taken as a
+    register address — it is a configuration constant
+    (`test_param_default_column_is_not_an_address_space`);
+  * the 2-column `| mcause | Description |` table was allowed to emit rows with
+    no name at all — a table with no name-bearing column is not a register table
+    (`test_mcause_2col_has_no_name_column_so_yields_no_registers`).
+
+Both were measured on the real ibex documents, where they had put five
+non-registers into L4. They are DISCLOSED now rather than emitted; the addresses
+#747-r2 was chasing are still READ, and named in the disclosure record.
 """
 import sys
 from pathlib import Path
@@ -129,23 +147,55 @@ def test_event_selector_name_header_csr_address_wins(tmp_path):
     assert "0x10" not in by and "0x0000_0010" not in by
 
 
-def test_param_default_column_hex_only(tmp_path):
+def test_param_default_column_is_not_an_address_space(tmp_path):
+    """REVERSED by #512 (was `test_param_default_column_hex_only`, which
+    asserted `"0x1a110000" in addrs`).
+
+    This assertion was the #747-r2 decision that a hex cell in a *parameters*
+    table's `Default` column is a register address. It is not: it is the value
+    the design is configured with. Left standing it put three Debug-Module
+    parameter addresses into a real design's L4 as registers — and they survived
+    every gate purely because this table happens to have a name column, which is
+    not evidence of being a register. What the parser must decide is whether the
+    TABLE describes an address space, and a column headed `Default` says it does
+    not. The half of #747-r2 that is still right — a bare-decimal default never
+    fabricating `0x0` — is asserted below, now by the stronger rule.
+    """
     p = tmp_path / "ibex_integration.rst"
     p.write_text(_PARAM_DEFAULT)
-    addrs = _addrs(p.read_text(), str(p))
-    # the genuine hex default lands ...
-    assert "0x1a110000" in addrs, f"Default-column 0x1A110000 dropped; {addrs}"
-    # ... but the bare-decimal `0` default must NOT fabricate a 0x0 address.
-    assert "0x0" not in addrs, f"§4.05 LEAK: bare-decimal default → phantom; {addrs}"
+    disc = []
+    rows = R.extract_regmap_table(p.read_text(), str(p), disclosures=disc)
+    assert rows == [], f"parameter defaults still became registers; {rows}"
+    # ... and the bare-decimal `0` default still fabricates nothing.
+    assert "0x0" not in {r.get("addr_hex") for r in rows}
+    assert [d["reason"] for d in disc] == [
+        R.NOT_REGISTERS_VALUE_COLUMN_ONLY], disc
+    # DISCLOSED: the hex that was read and dropped is named in the record.
+    assert disc[0]["addresses_read_and_dropped"] == ["0x1a110000"], disc
+    assert disc[0]["rows_read"] == 2 and disc[0]["registers_emitted"] == 0
 
 
-def test_mcause_2col_structural_fallback(tmp_path):
+def test_mcause_2col_has_no_name_column_so_yields_no_registers(tmp_path):
+    """REVERSED by #512 (was `test_mcause_2col_structural_fallback`, which
+    asserted both cause codes landed as addresses).
+
+    The structural fallback was allowed to emit address-only rows for this
+    2-column shape, so the table produced two registers with `name: ""`. Two
+    nameless registers collide on the register-block emitter's single unnamed
+    identifier, which is how the defect surfaced; but the collision is the
+    symptom. `0x8000001F` is a cause code with the interrupt bit set, not an
+    address, and the table says so structurally: it has no name-bearing column,
+    so there is no register for a consumer to name, emit or decode.
+    """
     p = tmp_path / "ibex_exception_interrupts.rst"
     p.write_text(_MCAUSE_2COL)
-    addrs = _addrs(p.read_text(), str(p))
-    # pre-fix: 0 rows (no offset header at all in a 2-column table).
-    assert "0xffffffe0" in addrs and "0x8000001f" in addrs, (
-        f"mcause 2-column structural fallback failed; got {addrs}")
+    disc = []
+    rows = R.extract_regmap_table(p.read_text(), str(p), disclosures=disc)
+    assert rows == [], f"nameless cause codes still became registers; {rows}"
+    assert [d["reason"] for d in disc] == [
+        R.NOT_REGISTERS_NO_NAME_COLUMN], disc
+    assert sorted(disc[0]["addresses_read_and_dropped"]) == [
+        "0x8000001f", "0xffffffe0"], disc
 
 
 # --- §4.05 NO-LEAK guards ------------------------------------------------------
