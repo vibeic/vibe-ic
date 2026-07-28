@@ -87,8 +87,10 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -534,17 +536,27 @@ def build_ecc_injection_tb(spec: MechanismSpec,
 
 
 # ───────────────────────── docker / iverilog ────────────────────────────
+#: Image refs probed, in order, for a locally-present EDA container. ONE list,
+#: shared by `_resolve_docker_image` and `_local_docker_image`, so the pin and
+#: the fallback order cannot drift between the two.
+_IMAGE_CANDIDATES = (
+    "ghcr.io/vibeic/vibeic-eda:0.2.30",
+    "vibeic-eda:0.2.30",
+    "vibeic/vibeic-eda:0.2.30",
+    "hpretl/iic-osic-tools:latest",
+)
+
+
 def _resolve_docker_image() -> str:
+    """The image ref to use, falling back to the pin when none is local.
+
+    NOTE the fallback: this ALWAYS returns a ref, including one the daemon does
+    not have. Use `_local_docker_image` when the answer must distinguish
+    "present" from "would have to be fetched"."""
     env = os.environ.get("VIBEIC_EDA_IMAGE") or os.environ.get("IIC_EDA_IMAGE")
     if env:
         return env
-    candidates = (
-        "ghcr.io/vibeic/vibeic-eda:0.2.30",
-        "vibeic-eda:0.2.30",
-        "vibeic/vibeic-eda:0.2.30",
-        "hpretl/iic-osic-tools:latest",
-    )
-    for img in candidates:
+    for img in _IMAGE_CANDIDATES:
         try:
             r = subprocess.run(["docker", "image", "inspect", img],
                                capture_output=True, timeout=15)
@@ -552,7 +564,7 @@ def _resolve_docker_image() -> str:
                 return img
         except Exception:
             pass
-    return "ghcr.io/vibeic/vibeic-eda:0.2.30"
+    return _IMAGE_CANDIDATES[0]
 
 
 _IVERILOG_ROOT = "/foss/tools/iverilog"
@@ -562,6 +574,114 @@ _ENV_PREAMBLE = (
 )
 
 
+def _local_docker_image() -> Optional[str]:
+    """The container this run can use WITHOUT a registry pull, else None.
+
+    `_resolve_docker_image` returns the pinned default even when NOTHING is
+    present locally, so a caller acting on it hands `docker run` an image the
+    daemon must fetch — 6.68 GB across 84 layers for the pinned tag. That is
+    not a slow run, it is an unbounded one from the caller's point of view,
+    and it is why this backend must be resolved BEFORE it is used.
+
+    An explicit `VIBEIC_EDA_IMAGE` / `IIC_EDA_IMAGE` is honoured as-is: the
+    caller named that image on purpose and may well intend it to be pulled.
+    Without an override, a candidate is offered only when the LOCAL daemon
+    already has it. `docker image inspect` is a daemon-local query that never
+    touches the network, and it is bounded here so the PROBE cannot become the
+    hang it exists to prevent.
+    """
+    env = os.environ.get("VIBEIC_EDA_IMAGE") or os.environ.get("IIC_EDA_IMAGE")
+    if env:
+        return env
+    if not shutil.which("docker"):
+        return None
+    for img in _IMAGE_CANDIDATES:
+        try:
+            r = subprocess.run(["docker", "image", "inspect", img],
+                               capture_output=True, timeout=15)
+            if r.returncode == 0:
+                return img
+        except Exception:
+            return None
+    return None
+
+
+def _host_iverilog() -> bool:
+    """True iff BOTH iverilog and vvp are on the host PATH."""
+    return bool(shutil.which("iverilog") and shutil.which("vvp"))
+
+
+#: Backend tokens returned by :func:`resolve_injection_backend`.
+BACKEND_DOCKER = "docker"
+BACKEND_HOST = "host"
+BACKEND_NONE = "none"
+
+
+def resolve_injection_backend(image: Optional[str] = None
+                              ) -> Tuple[str, Optional[str], str]:
+    """Decide WHERE the injection would run here: (backend, image, reason).
+
+    THE SINGLE SOURCE OF THAT DECISION. `run_injection_iverilog` dispatches on
+    it and callers that need to know whether a real injection is possible ask
+    THIS function rather than restating its conditions — because a guard that
+    restates them drifts from them. The landed guard checked host iverilog/vvp
+    while this path ran `docker run` against an image it never verified was
+    present; on a runner with iverilog installed and no image the guard said GO
+    and the path went to the registry, so the measurement blocked on a resource
+    nobody had checked for. Same function, no drift.
+
+    Order is container-first, matching the canonical containerised config where
+    iverilog lives only in the image (`design_one_shot_runner._iverilog_available`
+    documents the same preference), so no host that already has the image sees
+    any change. The HOST leg exists because requiring a multi-GB container on a
+    host that has a perfectly good iverilog is a host-dependence, not a
+    measurement requirement: the rendered TB is plain Verilog-2012 and the DC it
+    prints does not depend on which of the two compiled it.
+    """
+    img = image or _local_docker_image()
+    if img:
+        return BACKEND_DOCKER, img, f"container {img} usable without a pull"
+    if _host_iverilog():
+        return BACKEND_HOST, None, "host iverilog/vvp"
+    return (BACKEND_NONE, None,
+            "no injection backend: no vibeic-eda image is present locally "
+            "(set VIBEIC_EDA_IMAGE, or `docker pull`, to use a container) and "
+            "the host has no iverilog/vvp on PATH")
+
+
+def _run_injection_host(project: Path,
+                        rtl_rel_files: List[str],
+                        tb_rel: str,
+                        tb_top: str,
+                        timeout: int) -> Tuple[int, str, str]:
+    """Compile + run the injection with the HOST iverilog/vvp.
+
+    Mirrors the container leg's `compile && run` semantics exactly: vvp runs
+    only when the compile succeeded, and the caller sees the CONCATENATED
+    stdout of both stages, because that is where the `GOLDEN`/`FAULT` transcript
+    the parser reads comes from. The single `timeout` is a budget for the pair,
+    not for each, so this leg cannot outlast the container leg's bound.
+    """
+    vvp_out = project / f"{tb_rel}.vvp"
+    vvp_out.parent.mkdir(parents=True, exist_ok=True)
+    srcs = [str(project / s) for s in rtl_rel_files + [tb_rel]]
+    deadline = time.monotonic() + timeout
+    try:
+        c = subprocess.run(
+            ["iverilog", "-g2012", "-o", str(vvp_out), "-s", tb_top] + srcs,
+            capture_output=True, text=True, cwd=str(project), timeout=timeout)
+        if c.returncode != 0:
+            return c.returncode, c.stdout, c.stderr
+        left = max(1, int(deadline - time.monotonic()))
+        r = subprocess.run(["vvp", str(vvp_out)], capture_output=True,
+                           text=True, cwd=str(project), timeout=left)
+        return r.returncode, c.stdout + r.stdout, c.stderr + r.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "", "iverilog/vvp timed out"
+    except FileNotFoundError:
+        return 127, "", "iverilog/vvp not found on the host PATH"
+
+
 def run_injection_iverilog(project: Path,
                            rtl_rel_files: List[str],
                            tb_rel: str,
@@ -569,9 +689,20 @@ def run_injection_iverilog(project: Path,
                            timeout: int = 300,
                            image: Optional[str] = None
                            ) -> Tuple[int, str, str]:
-    """Compile the mechanism RTL + generated TB with iverilog and run vvp inside
-    vibeic-eda. Returns (exit, stdout, stderr). project mounted at /work."""
-    image = image or _resolve_docker_image()
+    """Compile the mechanism RTL + generated TB with iverilog and run vvp —
+    in the vibeic-eda container when one is usable WITHOUT a registry pull,
+    otherwise with the host iverilog/vvp. Returns (exit, stdout, stderr);
+    under the container leg the project is mounted at /work.
+
+    When NEITHER backend is available this returns 127 with the reason naming
+    both, rather than handing `docker run` an absent image and blocking on the
+    registry for a multi-GB fetch."""
+    backend, img, reason = resolve_injection_backend(image)
+    if backend == BACKEND_NONE:
+        return 127, "", reason
+    if backend == BACKEND_HOST:
+        return _run_injection_host(project, rtl_rel_files, tb_rel, tb_top,
+                                   timeout)
     vvp_out = f"{tb_rel}.vvp"
     srcs = " ".join(f"/work/{s}" for s in rtl_rel_files + [tb_rel])
     compile_cmd = (f"iverilog -g2012 -o /work/{vvp_out} -s {tb_top} {srcs}")
@@ -579,7 +710,7 @@ def run_injection_iverilog(project: Path,
     full = _ENV_PREAMBLE + compile_cmd + " && " + run_cmd
     docker_cmd = [
         "docker", "run", "--rm", "--entrypoint", "bash",
-        "-v", f"{project}:/work", image, "-c", full,
+        "-v", f"{project}:/work", img, "-c", full,
     ]
     try:
         r = subprocess.run(docker_cmd, capture_output=True, text=True,

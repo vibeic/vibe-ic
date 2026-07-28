@@ -297,6 +297,20 @@ assign syndrome_err=1'b0; endmodule
 """
 
 
+#: The `--timeout` the CI harness bounds a single test at
+#: (`pytest --timeout=180 --timeout-method=thread`, .github/workflows/ci.yml).
+CI_HARNESS_TIMEOUT_S = 180
+#: Every inner timeout in this file. MUST stay well under the harness bound: an
+#: inner bound at or above it can never fire, because the harness kills the
+#: whole SESSION first — `--maxfail` stops applying, no per-test diagnostic is
+#: printed, and the verdict of every other file in the subset is lost with it.
+#: The landed value was 300 against a harness of 180, so the program's own
+#: timeout was decoration and a stalled backend took the session down instead.
+#: The real injection measures in well under a second; 60 s is ~100x headroom
+#: and still leaves the harness three times the room it needs to report.
+INNER_TIMEOUT_S = 60
+
+
 class _Args:
     """The `run()` argument surface, spelled out rather than argparse-parsed."""
 
@@ -315,7 +329,7 @@ class _Args:
         self.asil = asil
         self.min_dc = None
         self.max_vectors = 64
-        self.timeout = 300
+        self.timeout = INNER_TIMEOUT_S
         self.json = None
 
 
@@ -327,9 +341,23 @@ def _ecc_project(tmp_path: Path, dec_body: str) -> Path:
     return tmp_path
 
 
-def _iverilog_available() -> bool:
-    import shutil as _sh
-    return _sh.which("iverilog") is not None and _sh.which("vvp") is not None
+def _injection_backend_missing() -> str:
+    """Empty string when a real injection can run here; else why it cannot.
+
+    ASKS THE CODE PATH, rather than restating its conditions alongside it.
+    The first version of this guard checked host `iverilog`/`vvp` — binaries
+    `run()` never invoked, because the injection ran `docker run` against an
+    image the guard never looked for. On a CI runner, which installs iverilog
+    from apt and has no such image, the guard therefore said GO and the run
+    went to the registry for 6.68 GB; it was still going when the 180 s harness
+    killed the session, so the whole targeted subset reported nothing.
+
+    `resolve_injection_backend` is the same function `run_injection_iverilog`
+    dispatches on, so this guard cannot come apart from the path again: it
+    skips exactly when the path would have nothing to run on.
+    """
+    backend, _img, reason = fi.resolve_injection_backend()
+    return "" if backend != fi.BACKEND_NONE else reason
 
 
 def test_dc_below_the_asil_floor_is_a_real_non_zero_exit(tmp_path):
@@ -341,9 +369,10 @@ def test_dc_below_the_asil_floor_is_a_real_non_zero_exit(tmp_path):
     suite, and the only non-zero exit anyone could produce from this program
     was an argument-validation one.
     """
-    if not _iverilog_available():
+    missing = _injection_backend_missing()
+    if missing:
         import pytest
-        pytest.skip("iverilog/vvp not installed — the injection cannot run")
+        pytest.skip(missing)
     project = _ecc_project(tmp_path, _DEC_BLIND)
     rc, rep = fi.run(project, _Args())
     assert rep["applicable"] is True, rep
@@ -361,9 +390,10 @@ def test_dc_at_or_above_the_asil_floor_is_a_measured_pass(tmp_path):
     `applicable: true`, so this is a MEASURED pass, not the vacuous one a
     non-safety design gets.
     """
-    if not _iverilog_available():
+    missing = _injection_backend_missing()
+    if missing:
         import pytest
-        pytest.skip("iverilog/vvp not installed — the injection cannot run")
+        pytest.skip(missing)
     project = _ecc_project(tmp_path, _DEC_OK)
     rc, rep = fi.run(project, _Args())
     assert rep["applicable"] is True, rep
@@ -380,9 +410,10 @@ def test_the_floor_itself_is_load_bearing(tmp_path):
     measures must turn the SAME run green — otherwise `dc_floor_pct` is
     decorative and the verdict is hard-coded.
     """
-    if not _iverilog_available():
+    missing = _injection_backend_missing()
+    if missing:
         import pytest
-        pytest.skip("iverilog/vvp not installed — the injection cannot run")
+        pytest.skip(missing)
     project = _ecc_project(tmp_path, _DEC_BLIND)
     strict = _Args()
     rc_strict, rep_strict = fi.run(project, strict)
@@ -463,10 +494,158 @@ def test_the_vacuous_token_line_survives_the_consumers_stdout_window(tmp_path):
         [sys.executable, str(PROG_DIR / "fmeda_fault_injection_coverage.py"),
          str(tmp_path), "--rtl-dir", "phase2/stage1/rtl", "--asil", "D",
          "--json", str(tmp_path / "r.json")],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=INNER_TIMEOUT_S)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     window = (proc.stdout[-300:] + "\n" + proc.stderr[-300:]).strip()
     assert any(ln.lstrip().startswith("VACUOUS_PASS")
                for ln in window.splitlines()), (
         "the VACUOUS_PASS token did not survive the consumer's 300-char "
         f"window:\n{window}")
+
+
+# ── the two defects that made this file kill the CI session ──────────────
+# Both landed together and are independent: the guard checked a resource the
+# code path never consumed, and the inner timeout sat at the harness bound so
+# it could never fire. Either one alone still costs the whole subset's result,
+# so each gets a guard that fails if it comes back.
+
+def test_no_inner_timeout_can_outlast_the_ci_harness(tmp_path):
+    """AN INNER TIMEOUT AT OR ABOVE THE HARNESS BOUND IS DECORATION.
+
+    CI runs `pytest --timeout=180 --timeout-method=thread`. A test that permits
+    a subprocess 300 s cannot ever reach its own timeout: at 180 s pytest-timeout
+    kills the SESSION, `--maxfail` stops applying, no per-test diagnostic is
+    printed, and every other file in the subset loses its verdict too. That is
+    exactly what this file did — one stalled backend, zero reported results.
+
+    Parsed with `ast`, not grepped, so a number inside a comment or a docstring
+    cannot satisfy it and a real one cannot hide from it.
+    """
+    import ast
+    src = Path(__file__).read_text()
+    tree = ast.parse(src, filename=__file__)
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if (kw.arg and "timeout" in kw.arg.lower()
+                        and isinstance(kw.value, ast.Constant)
+                        and isinstance(kw.value.value, (int, float))
+                        and kw.value.value >= CI_HARNESS_TIMEOUT_S):
+                    offenders.append(f"line {kw.value.lineno}: "
+                                     f"{kw.arg}={kw.value.value}")
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                name = getattr(t, "attr", None) or getattr(t, "id", None)
+                # CI_HARNESS_TIMEOUT_S records the bound; it is not one.
+                if (name and "timeout" in name.lower()
+                        and name != "CI_HARNESS_TIMEOUT_S"
+                        and isinstance(node.value, ast.Constant)
+                        and isinstance(node.value.value, (int, float))
+                        and node.value.value >= CI_HARNESS_TIMEOUT_S):
+                    offenders.append(f"line {node.lineno}: "
+                                     f"{name} = {node.value.value}")
+    assert not offenders, (
+        f"inner timeout >= the CI harness bound ({CI_HARNESS_TIMEOUT_S}s) — it "
+        f"can never fire, and the session dies instead of the test:\n  "
+        + "\n  ".join(offenders))
+    assert INNER_TIMEOUT_S < CI_HARNESS_TIMEOUT_S / 2, (
+        "the inner bound needs real headroom under the harness, not merely to "
+        "be under it — the harness must have room to REPORT")
+
+
+def test_the_skip_guard_is_the_code_paths_own_decision(tmp_path):
+    """THE GUARD MUST NOT BE ABLE TO DRIFT FROM THE PATH AGAIN.
+
+    The landed guard asked whether host iverilog/vvp existed while `run()` went
+    to `docker run`. The two answers were free to disagree, and on a CI runner
+    they did: guard GO, path nothing-to-run-on, 6.68 GB of registry traffic
+    inside a 180 s budget.
+
+    So this pins the invariant rather than the implementation: whenever the
+    resolver says there is NO backend, `run_injection_iverilog` must decline
+    immediately — never reach a launcher — and the guard must skip. Driven
+    through the real function with the resolver reporting NONE.
+    """
+    import time as _t
+    calls = []
+    orig = fi.resolve_injection_backend
+    fi.resolve_injection_backend = lambda *a, **k: (
+        fi.BACKEND_NONE, None, "no injection backend: forced for this test")
+    orig_run = fi.subprocess.run
+    fi.subprocess.run = lambda *a, **k: calls.append(a) or orig_run(*a, **k)
+    try:
+        # the guard the three end-to-end tests consult
+        assert _injection_backend_missing() != "", (
+            "resolver says NO backend but the guard would still let the "
+            "injection run — the guard is not reading the path's decision")
+        t0 = _t.monotonic()
+        ec, out, err = fi.run_injection_iverilog(
+            tmp_path, ["a.v"], "tb.v", timeout=INNER_TIMEOUT_S)
+        elapsed = _t.monotonic() - t0
+    finally:
+        fi.resolve_injection_backend = orig
+        fi.subprocess.run = orig_run
+    assert ec == 127, (ec, out, err)
+    assert "no injection backend" in err, err
+    assert not calls, (
+        "with NO backend the path still launched a subprocess — this is the "
+        f"defect: {calls}")
+    assert elapsed < 5, (
+        f"declining took {elapsed:.1f}s — it must be immediate, not a timeout")
+
+
+def test_the_backend_resolver_prefers_a_local_image_and_never_invents_one(
+        monkeypatch):
+    """The resolver's two honest answers, and the one it must not give.
+
+    * an image the daemon already has -> use it (container-first preserved, so
+      no host that works today changes behaviour);
+    * no local image but host iverilog/vvp -> run on the host, which is what
+      lets this file's end-to-end tests actually RUN on the CI runner rather
+      than skip everywhere;
+    * neither -> NONE. It must NOT fall back to the pinned ref the way
+      `_resolve_docker_image` does, because that ref is precisely the 6.68 GB
+      the daemon would have to fetch.
+    """
+    monkeypatch.delenv("VIBEIC_EDA_IMAGE", raising=False)
+    monkeypatch.delenv("IIC_EDA_IMAGE", raising=False)
+
+    monkeypatch.setattr(fi, "_local_docker_image", lambda: "an/image:local")
+    monkeypatch.setattr(fi, "_host_iverilog", lambda: False)
+    assert fi.resolve_injection_backend()[:2] == (fi.BACKEND_DOCKER,
+                                                  "an/image:local")
+
+    monkeypatch.setattr(fi, "_local_docker_image", lambda: None)
+    monkeypatch.setattr(fi, "_host_iverilog", lambda: True)
+    assert fi.resolve_injection_backend()[0] == fi.BACKEND_HOST
+
+    monkeypatch.setattr(fi, "_host_iverilog", lambda: False)
+    backend, img, reason = fi.resolve_injection_backend()
+    assert backend == fi.BACKEND_NONE
+    assert img is None, (
+        f"resolved {img!r} with nothing available — that ref is a multi-GB "
+        f"pull, which is the hang this function exists to prevent")
+    assert "no injection backend" in reason
+
+
+def test_local_image_probe_reports_absence_where_resolve_invents_a_pin(
+        monkeypatch):
+    """The distinction the whole fix rests on, pinned on ONE fake daemon.
+
+    `_resolve_docker_image` answers "which ref would we name" and always names
+    one. `_local_docker_image` answers "which ref can we run WITHOUT a pull"
+    and must answer None when the daemon has nothing. Same host, opposite
+    answers — and it was the first function's answer being read as the second's
+    that sent CI to the registry.
+    """
+    monkeypatch.delenv("VIBEIC_EDA_IMAGE", raising=False)
+    monkeypatch.delenv("IIC_EDA_IMAGE", raising=False)
+    monkeypatch.setattr(fi.shutil, "which", lambda n: "/usr/bin/docker")
+
+    class _Absent:
+        returncode = 1        # `docker image inspect` -> not present locally
+
+    monkeypatch.setattr(fi.subprocess, "run", lambda *a, **k: _Absent())
+    assert fi._resolve_docker_image() == fi._IMAGE_CANDIDATES[0]  # invents one
+    assert fi._local_docker_image() is None                       # honest None
