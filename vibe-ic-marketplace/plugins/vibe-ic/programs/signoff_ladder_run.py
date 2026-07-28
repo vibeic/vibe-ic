@@ -26,14 +26,35 @@ Modes:
   triage  (default) — the diagnostic ladder. The LVS-net tier can still
                       SHOW a POWER_PIN_ONLY / open-source waiver (it is a
                       reasoned triage waiver). Nothing here claims a
-                      tapeout.
+                      tapeout — and so `released` is ALWAYS False in this
+                      mode, whatever the overall verdict reads.
   tapeout           — the RELEASE ladder. POWER_PIN_ONLY no longer
                       releases; STA-rigor / MBIST / (Caravel) precheck +
-                      XOR gates are added. Only this mode tightens.
+                      XOR gates are added. Only this mode tightens, and
+                      only this mode can set `released`.
 
 §4.05 (LOAD-BEARING): a design whose real gate FAILs makes the ladder NOT
 release; a POWER_PIN_ONLY LVS does NOT count as a tapeout pass; a missing
 artifact is an honest SKIP/NOT_RUN, never a silent pass.
+
+The §4.05 "never a silent pass" rule binds the AGGREGATE, not just the tier
+label. Labelling a tier NOT_RUN and then aggregating it to a releasing verdict
+IS the silent pass the rule forbids — the release decision, not the row in the
+table, is what a reader acts on. So:
+
+  * ABSENT evidence never releases. A release-gating tier that produced no
+    artifact aggregates to `NOT_RELEASED_EVIDENCE_ABSENT`, alongside the
+    already-non-releasing `WAIVED_PENDING` / `INCOMPLETE`. The reasoning the
+    module already wrote for INCOMPLETE ("incomplete evidence: NON-releasing")
+    applies more strongly to evidence that does not exist at all.
+  * A REVIEWED WAIVER still releases, and stays distinguishable. `WAIVED` is a
+    decision a human made and documented (an allow-listed blackbox-macro XOR
+    residual, a reasoned triage LVS waiver); `NOT_RUN` is nobody deciding
+    anything. They aggregate to different verdicts — collapsing them is what
+    let an all-NOT_RUN design read as PASS_WITH_WAIVERS.
+  * `released` respects the MODE. `triage` is the diagnostic ladder and its own
+    docstring says "Nothing here claims a tapeout", so triage NEVER sets
+    `released`; only the `tapeout` release ladder can.
 
 Each tier is a deterministic check; the runner does not invoke EDA tools
 itself (that is mcp-eda's job) — it consumes per-tier check artifacts (or
@@ -60,8 +81,23 @@ if str(_PROGRAMS) not in sys.path:
 # Verdict vocabulary
 # ---------------------------------------------------------------------------
 # A ladder overall_verdict is "releasing" iff it is one of these. Everything
-# else (FAIL / WARN / NOT_RELEASED) blocks a tapeout release.
+# else (FAIL / WARN / NOT_RELEASED / NOT_RELEASED_EVIDENCE_ABSENT) blocks a
+# tapeout release.
 RELEASING_VERDICTS = ("PASS", "PASS_WITH_WAIVERS")
+
+# The overall verdict for "nothing was checked": at least one RELEASE-GATING
+# tier produced no evidence at all. NON-releasing, for the reason the module
+# already recorded for INCOMPLETE — evidence that does not exist cannot be a
+# pass. Named with the `NOT_RELEASED` prefix so a consumer that only
+# pattern-matches the blocking family still classifies it as blocking, and it
+# carries no PASS/FAIL substring a text scanner could misread.
+NOT_RELEASED_EVIDENCE_ABSENT = "NOT_RELEASED_EVIDENCE_ABSENT"
+
+# Per-tier verdicts that block a release wherever they appear, gating or not.
+# (`NOT_RUN` blocks too, but only from a release-GATING tier — see
+# `TierResult.release_gating`.) Deliberately conservative: a non-gating tier can
+# still block, it can just never be the SOLE reason a release is withheld.
+BLOCKING_TIER_VERDICTS = ("FAIL", "WAIVED_PENDING", "INCOMPLETE", "WARN")
 
 # TAPEOUT-tier gate defaults (this session's sign-off gates). Each is a
 # permissive, DISCLOSED generic default — never a foundry number — so a gate
@@ -83,6 +119,14 @@ class TierResult:
     details: Dict[str, Any] = field(default_factory=dict)
     artifact_path: Optional[str] = None
     notes: str = ""
+    # True  → a real sign-off gate: its ABSENCE (NOT_RUN) withholds the release,
+    #         because a tapeout cannot be signed off on a check nobody ran.
+    # False → an advisory/diagnostic row that is not part of the sign-off
+    #         evidence set, so its absence alone never withholds a release. This
+    #         is the ONLY way a NOT_RUN can be non-blocking, it is set in code
+    #         (never from a design artifact, so no project can opt its own gates
+    #         out), and a FAIL/WARN on such a tier still blocks.
+    release_gating: bool = True
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -224,13 +268,21 @@ def check_tier_1_drc(project_dir: Path) -> TierResult:
 
 
 def check_tier_1_5_drc_heatmap(project_dir: Path) -> TierResult:
-    """Tier 1.5 — diagnostic only, report presence."""
+    """Tier 1.5 — diagnostic only, report presence.
+
+    NOT a sign-off gate: the heatmap is a where-are-the-violations visual aid
+    over the SAME data tier T1 already signs off, so its absence is a missing
+    convenience, not missing sign-off evidence. Hence `release_gating=False` —
+    a design does not lose its release because nobody drew the picture. T1, the
+    tier that actually judges the DRC result, remains fully gating.
+    """
     art = project_dir / "reports" / "drc" / "geographic_heatmap.json"
     if not art.exists():
         return TierResult("T1.5", "DRC heatmap", "NOT_RUN",
-                            notes="diagnostic only")
+                            notes="diagnostic only (not a release gate)",
+                            release_gating=False)
     return TierResult("T1.5", "DRC heatmap", "PASS",
-                        artifact_path=str(art))
+                        artifact_path=str(art), release_gating=False)
 
 
 _SPECIALNETS_HDR_RE = re.compile(r"^\s*SPECIALNETS\s+(\d+)\s*;", re.M)
@@ -1283,6 +1335,24 @@ class LadderReport:
     mode: str = "triage"
     caravel: bool = False
 
+    @property
+    def released(self) -> bool:
+        """Mode-aware release flag — triage never releases (see `is_released`)."""
+        return is_released(self.overall_verdict, self.mode)
+
+    def release_note(self) -> str:
+        """One line a human can act on: why the ladder is / is not releasing."""
+        if self.released:
+            return "the tapeout release ladder is satisfied"
+        if self.mode != "tapeout":
+            return (f"mode '{self.mode}' is the diagnostic ladder and never "
+                    f"releases — re-run with --mode tapeout to gate a release")
+        blockers = release_blockers(self.tiers)
+        if not blockers:
+            return f"overall verdict {self.overall_verdict} does not release"
+        return (f"{len(blockers)} tier(s) withhold the release: "
+                + ", ".join(f"{t.tier_id}={t.verdict}" for t in blockers))
+
     def as_dict(self) -> Dict[str, Any]:
         return {
             "project_dir": self.project_dir,
@@ -1290,35 +1360,81 @@ class LadderReport:
             "caravel": self.caravel,
             "tiers": [t.as_dict() for t in self.tiers],
             "overall_verdict": self.overall_verdict,
-            "released": self.overall_verdict in RELEASING_VERDICTS,
+            "released": self.released,
+            "release_note": self.release_note(),
+            "release_blockers": [
+                {"tier_id": t.tier_id, "name": t.name, "verdict": t.verdict}
+                for t in release_blockers(self.tiers)],
+            "evidence_absent_tiers": [
+                t.tier_id for t in evidence_absent_tiers(self.tiers)],
             "emitted_by": "signoff_ladder_run v0.1.51 (release-gate-wired)",
         }
+
+
+def evidence_absent_tiers(tiers: List[TierResult]) -> List[TierResult]:
+    """The release-GATING tiers that produced no evidence at all (NOT_RUN).
+
+    Advisory tiers (`release_gating=False`) are excluded — their absence is a
+    missing convenience, not missing sign-off evidence."""
+    return [t for t in tiers
+            if t.verdict == "NOT_RUN" and getattr(t, "release_gating", True)]
+
+
+def release_blockers(tiers: List[TierResult]) -> List[TierResult]:
+    """Every tier that withholds the release, in ladder order — the actionable
+    form of a non-releasing overall verdict."""
+    absent = {id(t) for t in evidence_absent_tiers(tiers)}
+    return [t for t in tiers
+            if t.verdict in BLOCKING_TIER_VERDICTS or id(t) in absent]
 
 
 def aggregate_verdict(tiers: List[TierResult]) -> str:
     """Aggregate per-tier verdicts to overall.
 
-      any FAIL                        → FAIL
+      any FAIL                           → FAIL
       else any WAIVED_PENDING/INCOMPLETE → NOT_RELEASED   (a documented waiver
           pending real closure, or incomplete evidence: NON-releasing, never a
           silent pass — this is the §4.05 tapeout-tier tightening)
-      else any WARN                   → WARN
-      else any WAIVED/NOT_RUN         → PASS_WITH_WAIVERS
-      else (all PASS, N/A ignored)    → PASS
+      else any GATING tier NOT_RUN       → NOT_RELEASED_EVIDENCE_ABSENT
+          (nothing was checked. §4.05 again, and harder: incomplete evidence
+          already refuses to release, so evidence that was never produced
+          cannot release either. This is the branch that used to hand an
+          all-NOT_RUN design a PASS_WITH_WAIVERS.)
+      else any WARN                      → WARN
+      else any WAIVED                    → PASS_WITH_WAIVERS  (a REVIEWED,
+          documented waiver is a decision somebody made and owns; it stays
+          releasing, and it is no longer reachable by a tier nobody ran)
+      else (all PASS, N/A ignored)       → PASS
 
     N/A tiers (e.g. a RAM-less MBIST tier) are neutral — they never demote the
-    verdict and never inflate a PASS.
+    verdict and never inflate a PASS. Advisory tiers (`release_gating=False`)
+    are neutral for ABSENCE only: a FAIL/WARN on one still blocks.
     """
     verdicts = [t.verdict for t in tiers]
     if "FAIL" in verdicts:
         return "FAIL"
     if "WAIVED_PENDING" in verdicts or "INCOMPLETE" in verdicts:
         return "NOT_RELEASED"
+    if evidence_absent_tiers(tiers):
+        return NOT_RELEASED_EVIDENCE_ABSENT
     if "WARN" in verdicts:
         return "WARN"
-    if "WAIVED" in verdicts or "NOT_RUN" in verdicts:
+    if "WAIVED" in verdicts:
         return "PASS_WITH_WAIVERS"
     return "PASS"
+
+
+def is_released(overall_verdict: str, mode: str) -> bool:
+    """Whether the ladder RELEASES — the mode-aware form of the flag.
+
+    `triage` is the diagnostic ladder; its own docstring says "Nothing here
+    claims a tapeout". So triage NEVER releases, however clean it reads: the
+    diagnostic ladder does not run the release-tier gates (LVS genuine-match,
+    STA rigor, MBIST, dynamic-IR, metal density, aging STA, thermal, DFT,
+    post-layout LEC, and — for a shuttle project — precheck + XOR) at all, so a
+    releasing triage verdict was never a statement about those checks. Only
+    `tapeout`, which runs them, can set the flag."""
+    return mode == "tapeout" and overall_verdict in RELEASING_VERDICTS
 
 
 def run_ladder(project_dir: Path,
@@ -1400,7 +1516,7 @@ def report_to_markdown(rep: LadderReport) -> str:
                + "**")
     out.append("")
     out.append(f"**Overall verdict: {rep.overall_verdict}** "
-               f"(released={rep.overall_verdict in RELEASING_VERDICTS})")
+               f"(released={rep.released}) — {rep.release_note()}")
     out.append("")
     out.append("| Tier | Check | Verdict | Notes |")
     out.append("|---|---|---|---|")
@@ -1408,6 +1524,13 @@ def report_to_markdown(rep: LadderReport) -> str:
         notes = t.notes or json.dumps(t.details)[:80]
         out.append(f"| {t.tier_id} | {t.name} | {t.verdict} | {notes} |")
     out.append("")
+    absent = evidence_absent_tiers(rep.tiers)
+    if absent:
+        out.append(f"**{len(absent)} release-gating tier(s) produced no "
+                   f"evidence** — §4.05: a check nobody ran is not a pass, so "
+                   f"the ladder does not release on it: "
+                   + ", ".join(t.tier_id for t in absent) + ".")
+        out.append("")
     return "\n".join(out)
 
 
@@ -1439,8 +1562,11 @@ def _cli() -> int:
     p.add_argument("--out-md", type=Path)
     p.add_argument("--out-json", type=Path)
     p.add_argument("--strict", action="store_true",
-                   help="Exit non-zero unless the overall verdict releases "
-                        "(PASS / PASS_WITH_WAIVERS).")
+                   help="Exit non-zero unless the ladder RELEASES — i.e. "
+                        "--mode tapeout AND a releasing overall verdict "
+                        "(PASS / PASS_WITH_WAIVERS). --mode triage is the "
+                        "diagnostic ladder and never releases, so --strict "
+                        "there always exits non-zero by design.")
     args = p.parse_args()
     rep = run_ladder(args.project_dir, mode=args.mode, caravel=args.caravel,
                      jmax=args.jmax, tech_lef=args.tech_lef,
@@ -1453,7 +1579,10 @@ def _cli() -> int:
     if args.out_json:
         args.out_json.write_text(json.dumps(rep.as_dict(), indent=2),
                                   encoding="utf-8")
-    if args.strict and rep.overall_verdict not in RELEASING_VERDICTS:
+    # `--strict` is the actionable form of the `released` flag, so it obeys the
+    # SAME mode guard — a run that prints released=False must not exit 0 under
+    # --strict, or the contradiction just moves down one level.
+    if args.strict and not rep.released:
         return 1
     return 0
 
