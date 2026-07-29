@@ -133,3 +133,50 @@ def test_the_residual_note_names_the_reroute_when_the_log_shows_one_failed(tmp_p
 def test_a_closed_corner_says_so(tmp_path):
     assert R._eco_residual_note(tmp_path, False) == (
         "multi-corner OCV closed after the ECO.")
+
+
+# --- #552: repair_timing has the same catch and had no counter --------------
+
+def test_a_refused_setup_repair_is_counted_and_disclosed_before_the_number():
+    """MEASURED on ibex x sky130A: five consecutive `repair_timing -setup` calls
+    failed (GRT-0703 x4, GRT-0013), every one swallowed as SHIP_RT_NONFATAL, and
+    `SHIP_WNS_AFTER_REPAIR` was published straight after them. That number is
+    labelled a wire-load estimate so nothing downstream is wrong today, but it
+    reads as though the repairs happened.
+
+    Order is asserted, not just presence: the disclosure has to precede the
+    number it qualifies, or a reader meets the slack first and the caveat after.
+    """
+    tcl = R._ship_signoff_spef_repair_tcl(**_TCL_ARGS)
+    lines = tcl.splitlines()
+
+    def at(tok):
+        return next((n for n, l in enumerate(lines) if tok in l), None)
+
+    decl, incr = at("set _ship_rt_failed 0"), at("incr _ship_rt_failed")
+    assert decl is not None, "no counter for refused setup repairs"
+    assert incr is not None, "the repair_timing catch does not count anything"
+    assert decl < incr, (
+        f"the counter is declared at {decl}, AFTER its first use at {incr} — "
+        f"Tcl would error and the surrounding catch would swallow that too, so "
+        f"the count would read 0 for exactly the runs it exists to count")
+
+    assert tcl.count("incr _ship_rt_failed") == 2, (
+        "both repair_timing sites (pre-reroute and convergence loop) must count")
+
+    refused, after = at("SHIP_SETUP_REPAIR_REFUSED"), at("SHIP_WNS_AFTER_REPAIR")
+    assert refused is not None and after is not None
+    assert refused < after, (
+        "the refusal count is emitted after the slack it qualifies")
+
+
+def test_the_refusal_count_is_parsed_and_an_archived_log_still_means_not_stated():
+    d = R._parse_ship_repair_log("SHIP_SETUP_REPAIR_REFUSED: 5\n"
+                                 "SHIP_WNS_AFTER_REPAIR: -20.16\n")
+    assert d["setup_repair_refused"] == 5
+    assert d["wns_after_repair"] == pytest.approx(-20.16)
+
+    old = R._parse_ship_repair_log("SHIP_WNS_AFTER_REPAIR: -20.16\n")
+    assert old["setup_repair_refused"] == 0, (
+        "an archived log with no marker must mean 'not stated', never "
+        "'none failed' — reinterpreting old runs is the defect one level up")

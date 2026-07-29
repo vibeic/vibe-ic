@@ -14946,7 +14946,7 @@ for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
   set _ship_prev_wns $_cvg_wns
   for {set _ci 0} {$_ci < 5} {incr _ci} {
     if {[catch {repair_design} e]} { puts "SHIP_CVG_RD_NONFATAL: $e"; break }
-    if {[catch {repair_timing -setup} e]} { puts "SHIP_CVG_RT_NONFATAL: $e" }
+    if {[catch {repair_timing -setup} e]} { puts "SHIP_CVG_RT_NONFATAL: $e"; incr _ship_rt_failed }
     if {[catch {detailed_placement} e]} { puts "SHIP_CVG_DP_NONFATAL: $e"; break }
   }
   if {[catch {check_placement} e]} { puts "SHIP_CVG_CP_WARN: $e" }
@@ -15107,15 +15107,32 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # time; each call is cheap (~seconds on a 10k-instance design) so the
         # fixed repeat costs little even once already converged.
         # chip-AGNOSTIC: plain repeated calls to standard OpenROAD APIs.
-        "for {set _drv_i 0} {$_drv_i < 5} {incr _drv_i} {\n"
+        # #543 -> #552. `repair_timing` carries the same `catch` as
+        # `detailed_route` and had no counter. MEASURED on ibex x sky130A: FIVE
+        # consecutive `repair_timing -setup` calls failed (GRT-0703 x4, GRT-0013),
+        # every one swallowed as SHIP_RT_NONFATAL, and SHIP_WNS_AFTER_REPAIR was
+        # published straight after them. That number is already labelled a
+        # wire-load estimate so nothing downstream is wrong today, but it reads as
+        # though the repairs happened. The count separates "repaired to -20.16"
+        # from "did not repair, and -20.16 is what it already was".
+        #
+        # Declared HERE, not beside `_ship_dr_failed`: the first `incr` is in the
+        # loop below, which runs earlier than that declaration. Grouping them
+        # emitted Tcl that incremented an undeclared variable — an error the
+        # surrounding `catch` would have swallowed, leaving the counter reading 0
+        # for the exact runs it exists to count.
+        + "set _ship_rt_failed 0\n"
+        + "for {set _drv_i 0} {$_drv_i < 5} {incr _drv_i} {\n"
         "  if {[catch {repair_design} _drv_rd]} { "
         "puts \"SHIP_RD_NONFATAL: $_drv_rd\"; break }\n"
         "  if {[catch {repair_timing -setup} _drv_rt]} { "
-        "puts \"SHIP_RT_NONFATAL: $_drv_rt\" }\n"
+        "puts \"SHIP_RT_NONFATAL: $_drv_rt\"; incr _ship_rt_failed }\n"
         "  if {[catch {detailed_placement} _drv_dp]} { "
         "puts \"SHIP_DP_NONFATAL: $_drv_dp\"; break }\n"
         "}\n"
         "if {[catch {check_placement} e]} { puts \"SHIP_CP_WARN: $e\" }\n"
+        "if {$_ship_rt_failed > 0} { "
+        "puts \"SHIP_SETUP_REPAIR_REFUSED: $_ship_rt_failed\" }\n"
         "catch {puts \"SHIP_WNS_AFTER_REPAIR: [sta::worst_slack -max]\"}\n"
         # GRT-guide-regen — the base route was read from routed.def, so every
         # signal net still carries committed detailed routing. OpenROAD's
@@ -15180,6 +15197,15 @@ def _parse_ship_repair_log(log: str) -> dict:
     return {
         "wns_before": _f("SHIP_WNS_BEFORE"),
         "wns_after_repair": _f("SHIP_WNS_AFTER_REPAIR"),
+        # #552 — how many `repair_timing -setup` calls were refused before the
+        # number above was taken, so a consumer reading `wns_after_repair` sees
+        # in the same dict whether any repair happened. Absent marker is 0 =
+        # "not stated", never "none failed": an archived log has no counter and
+        # must keep its old meaning.
+        "setup_repair_refused": (
+            int(_m2.group(1))
+            if (_m2 := _re.search(r"SHIP_SETUP_REPAIR_REFUSED:\s*(\d+)", log or ""))
+            else 0),
         # #603 — the HONEST post-reroute real-SPEF worst slack (the number
         # the sign-off independently re-derives); None on older/stubbed logs.
         "wns_postroute": _f("SHIP_WNS_POSTROUTE"),
