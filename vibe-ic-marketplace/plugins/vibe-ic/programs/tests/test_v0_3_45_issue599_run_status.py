@@ -231,3 +231,50 @@ def test_real_completed_run_is_done():
     rep = RS.status(art, "phase3")
     assert rep["state"] == "DONE"
     assert rep["verdict"] is not None
+
+
+# --- the one-line summary rendered "I do not know" as a number
+
+def test_no_heartbeat_is_named_not_rendered_as_a_duration():
+    """`silence_s` is None when there is no heartbeat file AT ALL.
+
+    That is not "silent for N seconds" — it means the run has written nothing
+    yet, which is the state an operator most needs to see. Unguarded, the
+    f-string produced:
+
+        RUNNING — step 'None' (0 done), last output Nones ago
+
+    "Nones" reads as a number that failed to render, so the eye slides past it;
+    the distinct state it stands for disappears. Found by running the watchdog
+    against an empty project while sweeping for gates that pass on nothing.
+
+    The two neighbouring call sites in the same file (the DIED reason and the
+    RUNNING_ON_TIME reason) already guard this exact value. This one was the
+    outlier, which is the usual shape: the guard exists, and one site missed it.
+    """
+    import run_status as RS
+    line = RS.summarize({"state": "RUNNING", "current_step": None,
+                         "steps_completed": 0, "silence_s": None,
+                         "max_silence_s": 600, "eta_hint_s": 1200})
+    assert "Nones" not in line
+    assert "NO OUTPUT YET" in line
+
+
+def test_a_real_silence_still_reads_as_a_duration():
+    """…or the fix is satisfied by never printing the number at all."""
+    import run_status as RS
+    line = RS.summarize({"state": "RUNNING", "current_step": "step07",
+                         "steps_completed": 3, "silence_s": 42.0,
+                         "max_silence_s": 600, "eta_hint_s": 1200})
+    assert "last output 42.0s ago" in line
+    assert "NO OUTPUT YET" not in line
+
+
+def test_a_missing_eta_is_named_too():
+    """Same value, same shape, one field over — `~Nones` for an absent ETA."""
+    import run_status as RS
+    line = RS.summarize({"state": "RUNNING", "current_step": "step07",
+                         "steps_completed": 3, "silence_s": 42.0,
+                         "max_silence_s": 600, "eta_hint_s": None})
+    assert "Nones" not in line
+    assert "no ETA hint" in line

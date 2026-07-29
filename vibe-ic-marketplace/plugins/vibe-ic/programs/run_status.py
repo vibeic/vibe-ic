@@ -350,11 +350,23 @@ def summarize(rep: dict) -> str:
         return (f"STUCK — {rep.get('reason')}; last log: "
                 f"{rep.get('last_log_line') or '(none)'}")
     if st in ("RUNNING_ON_TIME", "RUNNING"):
+        # `silence_s` is None when there is no heartbeat file AT ALL — the run
+        # has produced no output ever, which is a different state from "silent
+        # for N seconds" and the one an operator most wants to see. Unguarded,
+        # the f-string rendered it as `last output Nones ago`: a reader skims
+        # that as a number they cannot parse rather than as "nothing has been
+        # written yet". The two neighbouring call sites (the DIED and
+        # RUNNING_ON_TIME reasons) already guard the same value; this one was
+        # the outlier.
+        sil = rep.get("silence_s")
+        eta = rep.get("eta_hint_s")
         return (f"{st} — step '{step}' "
-                f"({rep.get('steps_completed')} done), last output "
-                f"{rep.get('silence_s')}s ago (silence window "
-                f"{rep.get('max_silence_s')}s; ETA hint "
-                f"~{rep.get('eta_hint_s')}s)")
+                f"({rep.get('steps_completed')} done), "
+                + (f"last output {sil}s ago" if sil is not None
+                   else "NO OUTPUT YET (no heartbeat file)")
+                + f" (silence window {rep.get('max_silence_s')}s"
+                + (f"; ETA hint ~{eta}s)" if eta is not None
+                   else "; no ETA hint — nothing timed yet)"))
     return f"UNKNOWN — {rep.get('reason')}"
 
 
