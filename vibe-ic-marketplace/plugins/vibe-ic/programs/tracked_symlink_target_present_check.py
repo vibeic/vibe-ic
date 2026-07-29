@@ -127,6 +127,23 @@ def broken(root: Path, rels: List[str]) -> List[dict]:
         resolved = os.path.normpath(os.path.join(os.path.dirname(rel), target))
         if resolved in tracked:
             continue                     # target IS committed; nothing to see
+        # A TARGET THE REPOSITORY DELIBERATELY DOES NOT TRACK IS NOT A DEFECT,
+        # and treating it as one nearly cost something real. `.gitignore:138`
+        # excludes `benchmark-data/ic/*/clean_run_*/` with its reason written
+        # beside it: a raw run directory can carry a commercial-PDK identifier
+        # IN ITS NAME, and tracking it is one `git add -A` away from re-leaking
+        # what the 2026-07-19/20 history rewrite removed.
+        #
+        # Measured: 31 of the 44 pointers this check flags resolve into that
+        # ignored tree. My first reading called all 28 "broken everywhere" and
+        # my recommendation to the owner was to delete the pointers — which
+        # would have deleted the index into a deliberately-untracked corpus.
+        # Asking git whether the target is IGNORED separates a decision from a
+        # defect, and only the second is debt.
+        if _is_ignored(root, resolved):
+            found.append({"link": rel, "target": target, "resolved": resolved,
+                          "kind": "TARGET_DELIBERATELY_UNTRACKED"})
+            continue
         if (root / resolved).exists():
             # Resolves here but is untracked — present only because this
             # machine ran the flow. Real, and it is the host-dependence half;
@@ -137,6 +154,19 @@ def broken(root: Path, rels: List[str]) -> List[dict]:
         found.append({"link": rel, "target": target, "resolved": resolved,
                       "kind": "BROKEN_EVERYWHERE"})
     return found
+
+
+def _is_ignored(root: Path, rel: str) -> bool:
+    """Does `.gitignore` deliberately exclude this path?
+
+    One `git check-ignore` per path is a subprocess per pointer, which is fine
+    at this population (172) and is the only answer that respects negations,
+    nested ignore files and precedence. Reimplementing the matching would be a
+    second copy of git's rules, and those two would disagree.
+    """
+    return subprocess.run(
+        ["git", "-C", str(root), "check-ignore", "-q", "--", rel],
+        capture_output=True, timeout=60).returncode == 0
 
 
 def main(argv=None) -> int:
@@ -164,6 +194,8 @@ def main(argv=None) -> int:
     hard = sorted(f["link"] for f in found if f["kind"] == "BROKEN_EVERYWHERE")
     local = sorted(f["link"] for f in found
                    if f["kind"] == "UNTRACKED_TARGET_PRESENT_LOCALLY")
+    ignored = sorted(f["link"] for f in found
+                     if f["kind"] == "TARGET_DELIBERATELY_UNTRACKED")
 
     bl_path = Path(a.baseline)
     recorded = []
@@ -180,12 +212,13 @@ def main(argv=None) -> int:
 
     print(f"tracked_symlink_target_present: {len(rels)} tracked symlink(s) "
           f"under {a.subdir}; {len(hard)} point at a file that exists nowhere, "
-          f"{len(local)} at an untracked file this machine happens to have")
+          f"{len(local)} at an untracked file this machine happens to have, "
+          f"{len(ignored)} into a tree .gitignore deliberately excludes")
     for f in found:
         if f["kind"] == "BROKEN_EVERYWHERE":
             print(f"  BROKEN   {f['link']} -> {f['target']}")
     for f in found:
-        if f["kind"] != "BROKEN_EVERYWHERE":
+        if f["kind"] == "UNTRACKED_TARGET_PRESENT_LOCALLY":
             print(f"  LOCAL    {f['link']} -> {f['target']}  "
                   f"(resolves here only; this is the host-dependence in #555)")
 
@@ -207,6 +240,7 @@ def main(argv=None) -> int:
             {"program": "tracked_symlink_target_present_check",
              "tracked_symlinks": len(rels), "broken_everywhere": hard,
              "untracked_target_present_locally": local,
+             "target_deliberately_untracked": ignored,
              "new": new, "healed": healed}, indent=2) + "\n", encoding="utf-8")
 
     if new:

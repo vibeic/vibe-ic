@@ -115,3 +115,54 @@ def test_a_recorded_entry_that_heals_must_fail(tmp_path, capsys):
     rc = T.main(["--root", str(r), "--subdir", "corpus", "--baseline", str(bl)])
     assert rc == T.RC_FINDING
     assert "MAY ONLY SHRINK" in capsys.readouterr().err
+
+
+def test_a_deliberately_ignored_target_is_not_debt(tmp_path):
+    """The classification that nearly cost something real.
+
+    `.gitignore:138` excludes `benchmark-data/ic/*/clean_run_*/` with its reason
+    written beside it: a raw run directory can carry a commercial-PDK identifier
+    IN ITS NAME, and tracking it is one `git add -A` from re-leaking what the
+    2026-07-19/20 history rewrite removed.
+
+    Measured on the real corpus: 31 of 44 flagged pointers resolve into that
+    ignored tree. My first reading called them broken and my recommendation to
+    the owner was to DELETE the pointers — which would have deleted the index
+    into a deliberately-untracked corpus. A decision is not a defect.
+    """
+    r = _repo(tmp_path)
+    (r / ".gitignore").write_text("corpus/raw_run/\n")
+    (r / "corpus" / "raw_run").mkdir()
+    os.symlink("../raw_run/out.json", r / "corpus" / "steps" / "link.json")
+    _commit(r)
+    found = T.broken(r, ["corpus/steps/link.json"])
+    assert len(found) == 1
+    assert found[0]["kind"] == "TARGET_DELIBERATELY_UNTRACKED", \
+        "an ignored target is a decision the repo recorded, not debt"
+
+
+def test_ignore_is_asked_of_git_not_reimplemented(tmp_path):
+    """Negations, nested ignore files and precedence are git's rules.
+
+    A second implementation of them would disagree with the first, which is the
+    defect class this repo has spent the day removing. Exercised through a
+    negation, the case a naive matcher gets wrong.
+    """
+    r = _repo(tmp_path)
+    (r / ".gitignore").write_text("corpus/raw/\n!corpus/raw/keep.json\n")
+    (r / "corpus" / "raw").mkdir()
+    (r / "corpus" / "raw" / "keep.json").write_text("{}")
+    os.symlink("../raw/keep.json", r / "corpus" / "steps" / "kept.json")
+    _commit(r)
+
+    # MY FIRST EXPECTATION HERE WAS WRONG, AND THAT IS THE POINT. I asserted
+    # the negation put `keep.json` back in, so there would be no finding.
+    # git disagrees: once a DIRECTORY is excluded, a negation for a path inside
+    # it has no effect — `git check-ignore -v` names `corpus/raw/` as the
+    # matching rule, and `git add -A` does not track the file. The program was
+    # right and my model of the rules was not, which is exactly why the answer
+    # is asked of git instead of reimplemented.
+    found = T.broken(r, ["corpus/steps/kept.json"])
+    assert len(found) == 1
+    assert found[0]["kind"] == "TARGET_DELIBERATELY_UNTRACKED"
+    assert T._is_ignored(r, "corpus/raw/keep.json") is True
