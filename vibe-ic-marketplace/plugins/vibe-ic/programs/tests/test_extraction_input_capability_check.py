@@ -57,13 +57,24 @@ _IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.45"
 def _real_tech(tmp_path):
     """Copy the PDK's own tech file out of the image, or skip."""
     import subprocess
+    import pytest
     out = tmp_path / "sky130A.tech"
-    r = subprocess.run(
-        ["docker", "run", "--rm", "--entrypoint", "cat", _IMAGE,
-         _REAL_TECH_IN_IMAGE],
-        capture_output=True, text=True, timeout=300)
+    # 300s here tripped `ci_harness_timeout_ceiling_check`: the CI harness bound
+    # is 180s, so an inner bound above it does not fail the TEST, it outlives the
+    # harness and kills the SESSION — a much worse failure than the skip this
+    # helper already knows how to produce. `cat` out of a LOCAL image takes ~2s;
+    # the only way to need minutes is an image pull, and a machine without the
+    # image is exactly the case this helper skips. So the bound comes down under
+    # the 60s ceiling AND a timeout joins the skip path instead of propagating.
+    try:
+        r = subprocess.run(
+            ["docker", "run", "--rm", "--entrypoint", "cat", _IMAGE,
+             _REAL_TECH_IN_IMAGE],
+            capture_output=True, text=True, timeout=45)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        pytest.skip(f"could not read the tech file out of the image: "
+                    f"{type(exc).__name__}")
     if r.returncode != 0 or len(r.stdout) < 1000:
-        import pytest
         pytest.skip("the EDA image is not available here")
     out.write_text(r.stdout)
     return out

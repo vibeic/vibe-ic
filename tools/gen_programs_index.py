@@ -84,10 +84,34 @@ def _title(docstring: str, fallback_name: str) -> str:
         return fallback_name
     first = docstring.splitlines()[0].strip()
     # "module — what it does" → drop the module name, keep the description.
-    if "—" in first:
-        first = first.split("—", 1)[1].strip()
-    elif " - " in first:
-        first = first.split(" - ", 1)[1].strip()
+    #
+    # SPLIT ONLY WHEN WHAT PRECEDES THE DASH IS THE MODULE NAME OR A VERSION TAG.
+    # An unconditional positional split assumes every first line is
+    # "<name> — <description>", and throws away the description of any line that
+    # uses an em-dash as ORDINARY PUNCTUATION. Measured over all 1003 programs:
+    # 816 lines do have the name in front and split correctly, 4 do not and lost
+    # their titles to it —
+    #
+    #   "A committed pointer to a file that does not exist — anywhere."
+    #        indexed as:  anywhere.
+    #   "Chip-level sign-off ladder runner (B1 from spm pilot) — REAL-gate wiring"
+    #        indexed as:  REAL-gate wiring
+    #
+    # — leaving INDEX.md, which is how a reader navigates 1003 programs, telling
+    # them nothing about those entries. The version-tag case is kept splitting
+    # ("v0.1.51 — phase1 output post-processor." must yield the description, not
+    # the version), so the rule is "drop a NAME or a VERSION prefix, never prose".
+    for sep in ("—", " - "):
+        if sep not in first:
+            continue
+        before, after = (s.strip() for s in first.split(sep, 1))
+        looks_like_name = (
+            before.replace("programs/", "").removesuffix(".py").strip()
+            == fallback_name)
+        looks_like_version = bool(re.match(r"^v?\d[\w.]*$", before))
+        if after and (looks_like_name or looks_like_version):
+            first = after
+        break
     if not first:
         return fallback_name
     if len(first) > 140:

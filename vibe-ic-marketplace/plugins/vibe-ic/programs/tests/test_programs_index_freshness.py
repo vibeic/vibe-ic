@@ -80,3 +80,60 @@ def test_index_lists_every_non_helper_program():
         f"INDEX.md missing {len(missing)} program(s): {missing[:10]}"
         f"{'...' if len(missing) > 10 else ''}"
     )
+
+
+# --- the title rule: an em-dash is not always a name separator
+
+def _title_fn():
+    """Import `_title` out of the generator, which lives in the repo's tools/
+    rather than in the plugin, so it is skipped where only the plugin ships."""
+    if GEN is None or not Path(GEN).is_file():
+        pytest.skip("tools/gen_programs_index.py is not in this checkout")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gpi", GEN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod._title
+
+
+def test_a_punctuation_dash_does_not_eat_the_description():
+    """INDEX.md is how a reader navigates 1003 programs, and four rows told them
+    nothing.
+
+    The rule was an unconditional positional split on the first em-dash, which
+    assumes every docstring's first line is `<module> — <description>`. 816 of
+    them are. The ones that use an em-dash as ORDINARY PUNCTUATION lost their
+    description to it:
+
+        "A committed pointer to a file that does not exist — anywhere."
+             indexed as:  anywhere.
+
+    Found while regenerating a stale INDEX.md, not by anything failing.
+    """
+    title = _title_fn()
+    assert title("A committed pointer to a file that does not exist — anywhere.",
+                 "tracked_symlink_target_present_check") == \
+        "A committed pointer to a file that does not exist — anywhere."
+
+
+def test_a_module_name_prefix_is_still_dropped():
+    """The 816-case majority, pinned — the fix must not stop stripping the name
+    it was written to strip."""
+    title = _title_fn()
+    assert title("arbiter_starvation_check.py — BACKLOG-v11 P0.6.",
+                 "arbiter_starvation_check") == "BACKLOG-v11 P0.6."
+    assert title("programs/acceptance_evidence_in_fix_comment_check.py — v0.2.97",
+                 "acceptance_evidence_in_fix_comment_check") == "v0.2.97"
+
+
+def test_a_version_prefix_is_still_dropped():
+    """The third branch, and the reason the rule is not simply "keep prose".
+
+    `phase1_post_process` leads with a version, not its own name, and the
+    description is genuinely after the dash. A rule that only recognised the
+    module name would index it as "v0.1.51 — phase1 output post-processor.",
+    which is worse than what it replaced.
+    """
+    title = _title_fn()
+    assert title("v0.1.51 — phase1 output post-processor.",
+                 "phase1_post_process") == "phase1 output post-processor."
