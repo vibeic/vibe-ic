@@ -36,8 +36,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
+# ONE `gh` invoker for every polling program in this directory. It was copied
+# into this file and into its sibling, byte for byte — the shape of
+# vibeic-eda#29, where two copies of `branch_is_ours` gave opposite answers
+# about the same pins. The error encoding (127 not-installed / 126 could not
+# run) is the part that must not drift, so it has one home.
+from _gh_cli import gh as _gh  # noqa: E402
 from typing import Dict, List, Optional, Tuple
 
 RC_OK, RC_CANNOT_COUNT = 0, 2
@@ -47,17 +52,6 @@ RC_OK, RC_CANNOT_COUNT = 0, 2
 DEFAULT_REPO_LIMIT = 500
 #: Per-repository listing cap, same reasoning.
 DEFAULT_ITEM_LIMIT = 200
-
-
-def _gh(args: List[str], timeout: int = 60) -> Tuple[int, str, str]:
-    try:
-        r = subprocess.run(["gh", *args], capture_output=True, text=True,
-                           timeout=timeout)
-        return r.returncode, r.stdout, r.stderr
-    except FileNotFoundError:
-        return 127, "", "gh not found"
-    except (OSError, subprocess.SubprocessError) as exc:
-        return 126, "", f"{type(exc).__name__}: {exc}"
 
 
 def _json_len(out: str) -> Optional[int]:
@@ -105,8 +99,11 @@ def poll(org: str, repo_limit: int = DEFAULT_REPO_LIMIT,
             continue
         full = f"{org}/{name}"
 
+        # 60s per repository, not the shared 120s default: this runs once per
+        # repo in a 63-iteration loop, where a slow default compounds.
         rc, out, err = _gh(["pr", "list", "--repo", full, "--state", "open",
-                            "--limit", str(item_limit), "--json", "number"])
+                            "--limit", str(item_limit), "--json", "number"],
+                           timeout=60)
         n = _json_len(out) if rc == 0 else None
         if n is None:
             failures.append(f"{full}: pr list ({(err or out).strip()[:80]})")
@@ -121,7 +118,8 @@ def poll(org: str, repo_limit: int = DEFAULT_REPO_LIMIT,
             issues_disabled.append(full)
             continue
         rc, out, err = _gh(["issue", "list", "--repo", full, "--state", "open",
-                            "--limit", str(item_limit), "--json", "number"])
+                            "--limit", str(item_limit), "--json", "number"],
+                           timeout=60)
         n = _json_len(out) if rc == 0 else None
         if n is None:
             failures.append(f"{full}: issue list ({(err or out).strip()[:80]})")

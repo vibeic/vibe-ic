@@ -49,8 +49,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
+# ONE `gh` invoker for every polling program in this directory. It was copied
+# into this file and into its sibling, byte for byte — the shape of
+# vibeic-eda#29, where two copies of `branch_is_ours` gave opposite answers
+# about the same pins. The error encoding (127 not-installed / 126 could not
+# run) is the part that must not drift, so it has one home.
+from _gh_cli import gh as _gh  # noqa: E402
 from typing import List, Optional, Tuple
 
 RC_OK, RC_CANNOT_COUNT = 0, 2
@@ -58,17 +63,6 @@ RC_OK, RC_CANNOT_COUNT = 0, 2
 #: Deliberately far above any plausible open-issue count for these repos, so
 #: hitting it means something is wrong rather than that the repo is busy.
 DEFAULT_LIMIT = 1000
-
-
-def _gh(args: List[str], timeout: int = 120) -> Tuple[int, str, str]:
-    try:
-        r = subprocess.run(["gh", *args], capture_output=True, text=True,
-                           timeout=timeout)
-        return r.returncode, r.stdout, r.stderr
-    except FileNotFoundError:
-        return 127, "", "gh not found"
-    except (OSError, subprocess.SubprocessError) as exc:
-        return 126, "", f"{type(exc).__name__}: {exc}"
 
 
 def count(marker: str, repo: Optional[str] = None,
