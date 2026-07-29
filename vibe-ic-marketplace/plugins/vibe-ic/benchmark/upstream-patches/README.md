@@ -80,7 +80,23 @@ stock dies of, via a different path) and `drt::FlexGCWorker::Impl::initPA0`
 
 ---
 
-## `openroad-rsz-stitchtrees-null-subtree.patch` — INBOUND
+## `openroad-rsz-stitchtrees-null-subtree.patch` — INBOUND, SUPERSEDED BY THE MERGE
+
+> **This patch is no longer needed and is kept only until the rebuild is
+> re-tested**, per this file's own rule that an inbound row leaves when the fork
+> is rebuilt and the defect re-tested — not when someone reads that it should be.
+>
+> The 2026-07-29 fleet merge (owner ruling: merge ALL new upstream commits) took
+> 773 upstream commits into `vibeic/openroad-integration`, and the pin now names
+> `483d0cb46`. Verified against that exact ref: the `if (!tree1 || !tree2)` guard
+> is present, and our own `allow_pin_access_failure` survived alongside it. So
+> the hand-prepared backport below is redundant — taking all of upstream is what
+> the ruling changed, and this is the first thing it delivered.
+>
+> Delete this entry once a build from that pin has run the vibe-ic#551
+> six-command case.
+
+## Original entry
 
 **Backport of** `The-OpenROAD-Project/OpenROAD` `5b9e0a371` (2026-07-13),
 "rsz: Avoid SIGILL in net tree stitching if subtree can't build",
