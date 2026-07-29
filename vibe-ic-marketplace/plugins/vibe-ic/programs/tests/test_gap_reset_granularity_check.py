@@ -135,3 +135,35 @@ endmodule
     # The unclear case produces a warning (not strictly required to find a *_valid)
     # so either 0 warnings (no gap_cnt reset detected) or 1 warning is acceptable.
     # This test documents that no FALSE ERROR is raised.
+
+
+# --- the exit code is what the caller reads, and no test drove main()
+
+def test_main_exits_non_zero_on_a_finding(tmp_path, monkeypatch):
+    """`gate_cli_mutation_probe` reported this gate SILENT.
+
+    The tests above call `analyze_file()` and assert the FINDINGS; the caller
+    reads the EXIT CODE, and `main()` maps `result.passed` to it. Nothing
+    exercised that mapping.
+    """
+    import gap_reset_granularity_check as G
+    f = tmp_path / "x.v"
+    f.write_text("module m; endmodule\n")
+
+    class _F:
+        severity = "error"
+        rule = "gap-reset-too-coarse"
+        file = str(f)
+        line = 1
+        message = "m"
+    monkeypatch.setattr(G, "analyze_file", lambda p: [_F()])
+    assert G.main([str(f)]) == 1
+
+
+def test_main_exits_zero_when_clean(tmp_path, monkeypatch):
+    """The other direction, or the test above is met by always failing."""
+    import gap_reset_granularity_check as G
+    f = tmp_path / "x.v"
+    f.write_text("module m; endmodule\n")
+    monkeypatch.setattr(G, "analyze_file", lambda p: [])
+    assert G.main([str(f)]) == 0
