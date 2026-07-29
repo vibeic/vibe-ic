@@ -331,7 +331,8 @@ def test_healthy_canonicalize_still_passes(tmp_path, monkeypatch):
 
 def test_source_no_bare_liberty_in_lec_post_layout():
     import inspect
-    src = inspect.getsource(R._emit_lec_post_layout)
+    from _source_pin import code_only
+    src = code_only(inspect.getsource(R._emit_lec_post_layout))
     assert "Path(liberty)" not in src
 
 

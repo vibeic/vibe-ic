@@ -53,3 +53,78 @@ def func_src(src: str, name: str) -> str:
     node = next((n for n in hits if n.col_offset == 0), hits[0])
     lines = src.splitlines()
     return "\n".join(lines[node.lineno - 1:node.end_lineno])
+
+
+def code_only(src: str) -> str:
+    """`src` with comments and docstrings blanked out, line numbering preserved.
+
+    THE OTHER HALF OF THE SAME PROBLEM `func_src` SOLVES. That one fixed the
+    SCOPE of a source-pin assertion; this fixes its CONTENT. A negative pin —
+    `assert "<thing>" not in src` — is asserted over the docstring and every
+    comment too, so documenting the very property the test enforces turns it
+    red. Measured on `mpw_precheck_result_gate`, adding one accurate line:
+
+        # NOTE: this parser must never key on caravel_user_project.
+        -> 1 failed, 16 passed
+
+    The obvious repair for whoever hits that is to delete the sentence, which is
+    the wrong one: the property is real and the explanation is the most useful
+    thing in the file. The same trap in the other direction cost a round on
+    vibe-ic#551, where an ordering check read six step names out of a comment
+    describing what the exclusion governs and reported all six as violations.
+
+    Blanks IN PLACE, on the original text, so line N of the result is line N of
+    the input. My first version tokenized first and then removed docstrings by
+    line index — but tokenizing had already shifted the lines, so the docstring
+    indices pointed at real code and it deleted `x = 1` and `return x`. Caught
+    by printing the two side by side rather than trusting the three assertions
+    that passed.
+
+    `tokenize`, not a `startswith("#")` filter: a `#` inside a string literal is
+    not a comment, and the naive version deletes that line of real code.
+    """
+    import io
+    import tokenize
+
+    lines = src.splitlines()
+    blank = [False] * (len(lines) + 1)          # 1-based, per source line
+
+    # 1. docstrings — located on the ORIGINAL text, so the indices are valid.
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return src
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(node, (ast.Module, ast.FunctionDef,
+                                 ast.AsyncFunctionDef, ast.ClassDef)) or not body:
+            continue
+        first = body[0]
+        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            for n in range(first.lineno, (first.end_lineno or first.lineno) + 1):
+                if n < len(blank):
+                    blank[n] = True
+
+    # 2. comments — cut at the token's own column, so code before a trailing
+    #    `# ...` on the same line survives.
+    cut = {}
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type == tokenize.COMMENT:
+                row, col = tok.start
+                cut[row] = min(cut.get(row, col), col)
+    except (tokenize.TokenError, IndentationError):
+        # Unparseable is NOT clean — an empty haystack makes every negative
+        # assertion pass, which is the failure mode this helper is about.
+        return src
+
+    out = []
+    for n, line in enumerate(lines, 1):
+        if blank[n]:
+            out.append("")
+        elif n in cut:
+            out.append(line[:cut[n]].rstrip())
+        else:
+            out.append(line)
+    return "\n".join(out)
