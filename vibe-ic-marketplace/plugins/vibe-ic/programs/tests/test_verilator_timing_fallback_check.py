@@ -105,5 +105,42 @@ def test_golden_top_rename(tmp_path):
     assert rc == 0, msg
 
 
+# --- the exit code is what the caller reads, and no test drove main()
+
+def test_main_returns_the_adjudication_exit_code(monkeypatch, tmp_path):
+    """`gate_cli_mutation_probe` reported this gate SILENT.
+
+    The file's only `.main(` is `pytest.main`, so nothing ever drove the
+    program's own entry point — every test asserts what `adjudicate()` RETURNS
+    and the caller reads the EXIT CODE. Neutering `main()` reddened nothing.
+    """
+    import verilator_timing_fallback_check as V
+    tb = tmp_path / "tb.sv"; tb.write_text("module tb; endmodule\n")
+    g = tmp_path / "g.v"; g.write_text("module g; endmodule\n")
+    argv = ["--tb", str(tb), "--golden", str(g),
+            "--tb-top", "tb", "--dut-name", "g"]
+
+    monkeypatch.setattr(V, "adjudicate",
+                        lambda *a, **k: (1, "VERILATOR_UNFAITHFUL: x"))
+    assert V.main(argv) == 1
+
+    monkeypatch.setattr(V, "adjudicate",
+                        lambda *a, **k: (0, "VERILATOR_FAITHFUL: x"))
+    assert V.main(argv) == 0, \
+        "a faithful golden must exit 0, or the test above is met by always failing"
+
+
+def test_main_prints_the_verdict_token(monkeypatch, tmp_path, capsys):
+    """The caller greps the token; an exit code with no message is unreadable."""
+    import verilator_timing_fallback_check as V
+    tb = tmp_path / "tb.sv"; tb.write_text("module tb; endmodule\n")
+    g = tmp_path / "g.v"; g.write_text("module g; endmodule\n")
+    monkeypatch.setattr(V, "adjudicate",
+                        lambda *a, **k: (1, "VERILATOR_SIM_TIMEOUT: x"))
+    V.main(["--tb", str(tb), "--golden", str(g),
+            "--tb-top", "tb", "--dut-name", "g"])
+    assert "VERILATOR_SIM_TIMEOUT" in capsys.readouterr().out
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
