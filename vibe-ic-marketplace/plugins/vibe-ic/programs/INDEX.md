@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1000
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1000)
+- **Total programs (excluding helpers / shims):** 1001
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1001)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 991 |
+| `any` | 992 |
 
 ## Alphabetical listing
 
@@ -335,6 +335,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_step_executor_coverage_check` | any | — | "every step has an executor that runs it". |
 | `fmeda_coverage_check` | any | — | independent anti-fabrication gate over the FMEDA |
 | `fmeda_fault_injection_coverage` | any | — | REAL ISO-26262 FMEDA diagnostic-coverage |
+| `fork_downgrade_visibility_check` | any | — | Every abort our EDA fork downgrades to a warning must still be visible to the flow. |
 | `formal_complexity_classify` | any | — | deterministic k-induction feasibility |
 | `formal_harness_gen` | any | — | Step 5 DETERMINISTIC formal-property authoring. |
 | `formal_proof_evidence_check` | any | — | Step 5 formal proof EVIDENCE-CHAIN |
@@ -1072,7 +1073,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (991 programs)
+### `any` (992 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must
@@ -1379,6 +1380,7 @@ _(no programs in this group)_
 - `flow_step_executor_coverage_check` — "every step has an executor that runs it".
 - `fmeda_coverage_check` — independent anti-fabrication gate over the FMEDA
 - `fmeda_fault_injection_coverage` — REAL ISO-26262 FMEDA diagnostic-coverage
+- `fork_downgrade_visibility_check` — Every abort our EDA fork downgrades to a warning must still be visible to the flow.
 - `formal_complexity_classify` — deterministic k-induction feasibility
 - `formal_harness_gen` — Step 5 DETERMINISTIC formal-property authoring.
 - `formal_proof_evidence_check` — Step 5 formal proof EVIDENCE-CHAIN

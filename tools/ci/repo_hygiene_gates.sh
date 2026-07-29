@@ -62,6 +62,11 @@ run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnosti
 # by DIRECT PUSH, so the guard had never run on any of it. Measured when first
 # wired: 4 non-portable paths, all in a test fixture committed the day before.
 run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_check.py" "$PLUGIN"
+# vibe-ic#552 — a warning our EDA fork substitutes for an upstream abort must
+# still be visible to the gate that needs it. Every downgrade moves a
+# condition out of the error-matching sets BY CONSTRUCTION, so the
+# registry has to be checked rather than trusted.
+run "fork downgrades stay visible" "$PLUGIN" python3 programs/fork_downgrade_visibility_check.py .
 
 # Three more of `gatekeeper_review`'s own gates, copied INTO this lane when it
 # was the only direction available. Since #538 the traffic runs the other way

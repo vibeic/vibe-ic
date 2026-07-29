@@ -25572,6 +25572,25 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                 "[ERROR DRT-0305]", "[ERROR DRT-0085]",
                 "ANTENNA_POSTROUTE_CHECK_NONFATAL", "[ERROR ANT-0008]")
             routing_incomplete = any(m in log_txt for m in _route_fail_markers)
+            # #552 — EVERY marker above is an `[ERROR ...]`, and our OpenROAD fork's
+            # standing doctrine is abort -> warn + continue (RSZ-0089, DPL-0033,
+            # DRT-0305, DRT-627). So each downgrade we add moves a condition OUT of
+            # the set this gate can see, by construction: the downgrade exists
+            # precisely to stop the tool erroring.
+            #
+            # DRT-627 is `FlexPA` reporting a pin it could not reach an access point
+            # for, downgraded from the fatal DRT-0073 so a post-route ECO can
+            # continue (vibeic/OpenROAD 8d040d56c). Without this the flow prints
+            # `routing complete: YES` for a design carrying a pin the router never
+            # reached.
+            #
+            # KEPT SEPARATE from `routing_incomplete` deliberately. "the route did
+            # not finish" and "a pin was left unaccessed" are different facts, and
+            # folding the second into the first would lose which one happened —
+            # exactly the collapse this repo keeps undoing. It is its own field and
+            # its own line in the report.
+            _pin_unaccessed_re = re.compile(r"\[WARNING DRT-627\]")
+            pins_unaccessed = len(_pin_unaccessed_re.findall(log_txt))
             nets = re.findall(r"Found\s+(\d+)\s+net violations", log_txt)
             pins = re.findall(r"Found\s+(\d+)\s+pin violations", log_txt)
             have_counts = bool(nets and pins)
@@ -25617,6 +25636,11 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     f"antenna check: {_count_str}\n"
                     f"antenna clean: {'YES' if clean else 'NO'}\n"
                     f"routing complete: {'NO' if routing_incomplete else 'YES'}\n"
+                    + (f"pins left unaccessed: {pins_unaccessed} "
+                       f"(DRT-627 — the router could not reach these pins; the "
+                       f"fork downgrades this from the fatal DRT-0073 so an ECO "
+                       f"can continue, so it is NOT visible as a routing "
+                       f"failure)\n" if pins_unaccessed else "")
                     + _incomplete_note)
                 (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
                     "tool": "openroad",
@@ -25625,6 +25649,8 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     "pin_violations": pin_viol if have_counts else None,
                     "clean": clean,
                     "routing_incomplete": routing_incomplete,
+                    # #552 — its own field, not folded into routing_incomplete.
+                    "pins_unaccessed": pins_unaccessed,
                     "source": "phase3/stage3/pnr/openroad.log",
                     "verdict": verdict,
                 }, indent=2) + "\n")
