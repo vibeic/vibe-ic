@@ -338,6 +338,10 @@ class Discovery:
     unparsable: int = 0
     oversize: int = 0
     not_a_record: int = 0
+    #: tracked by git, not present on disk — a partial checkout, NOT a
+    #: corrupt file. Counted apart so the population is comparable
+    #: across machines (vibe-ic#555).
+    absent_from_disk: int = 0
     enumeration: str = ""
 
 
@@ -371,6 +375,20 @@ def discover(root: Path) -> Discovery:
         if p.suffix != ".json":
             continue
         d.json_files += 1
+        # LISTED BY GIT AND ABSENT FROM DISK IS ITS OWN STATE (vibe-ic#555).
+        # Enumeration comes from `git ls-files` and reading comes from the
+        # filesystem, and those disagree in a sparse or partial checkout: the
+        # path is tracked, `stat` raises, and the record was being counted as
+        # `unparsable` — a bucket meaning "this file's CONTENT is bad".
+        #
+        # Measured, and it is what made this gate host-dependent: a working
+        # checkout adjudicated 225 records and a fresh `--detach` worktree 224,
+        # same commit, because one tracked file had never been materialised
+        # there. Both runs said PASS, from different populations. A denominator
+        # that moves with the machine makes every ratio above it unreadable.
+        if not p.exists():
+            d.absent_from_disk += 1
+            continue
         try:
             if p.stat().st_size > MAX_RECORD_BYTES:
                 d.oversize += 1
@@ -501,9 +519,17 @@ def adjudicate(disc: Discovery, programs_dir: Path) -> Dict[str, Any]:
             "json_not_a_gate_record": disc.not_a_record,
             "json_unparsable": disc.unparsable,
             "json_over_size_cap": disc.oversize,
+            # Tracked by git and not on disk. Non-zero means this run saw a
+            # SMALLER population than a full checkout would, so its ratios
+            # are not comparable with another machine's (vibe-ic#555).
+            "json_tracked_but_absent_from_disk": disc.absent_from_disk,
         },
     )
     summary: Dict[str, Any] = {
+        # Carried into the SUMMARY as well as the denominator block: the
+        # PASS line reads `summary`, and a key present only in the other
+        # dict would have made the disclosure silently always-zero.
+        "json_tracked_but_absent_from_disk": disc.absent_from_disk,
         "records_found": n_total,
         "records_adjudicated": n_adj,
         "records_undecidable": len(undecidable),
@@ -758,10 +784,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"re-reviewed. Never recordable as debt: it is fixable in "
                   f"the commit that caused it.", file=sys.stderr)
         return 1
+    # A population that differs by machine makes every ratio above it
+    # unreadable, so say so on the PASS line rather than only in the JSON.
+    # This gate was reported HOST-DEPENDENT (vibe-ic#555) for exactly one
+    # record: tracked by git, never materialised in a `--detach` worktree.
+    absent = s.get("json_tracked_but_absent_from_disk") or 0
+    absent_note = (f" {absent} tracked record(s) are NOT on disk in this "
+                   f"checkout, so this population is smaller than a full one "
+                   f"and these counts are not comparable across machines."
+                   if absent else "")
     print(f"[PASS] no NEW superseded record "
           f"({len(now)} recorded as debt) — {s['records_adjudicated']} of "
           f"{s['records_found']} published record(s) re-adjudicated, "
-          f"{s['records_undecidable']} could not be and are listed above.",
+          f"{s['records_undecidable']} could not be and are listed above."
+          f"{absent_note}",
           file=sys.stderr)
     return 0
 

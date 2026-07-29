@@ -997,3 +997,48 @@ def test_the_real_corpus_is_not_written_to(tmp_path):
         ["git", "-C", str(_REPO), "status", "--porcelain", "--", "benchmark-data"],
         capture_output=True, text=True, timeout=60).stdout
     assert after == before
+
+
+# --- vibe-ic#555: git lists it, the disk does not have it
+
+def test_a_tracked_file_absent_from_disk_is_not_unparsable(tmp_path, monkeypatch):
+    """Enumeration comes from git; reading comes from the filesystem.
+
+    Those disagree in a sparse or partial checkout, and the missing path was
+    counted as `unparsable` — a bucket meaning the file's CONTENT is bad. That
+    is what made this gate host-dependent: measured on the same commit, a
+    working checkout adjudicated 225 records and a fresh `--detach` worktree
+    224. Both said PASS, from different populations, and a denominator that
+    moves with the machine makes every ratio above it unreadable.
+    """
+    import published_record_staleness_check as P
+
+    root = tmp_path / "corpus"
+    (root / "ic").mkdir(parents=True)
+    real = root / "ic" / "present.json"
+    real.write_text(json.dumps({"program": "x_check", "verdict": "PASS"}))
+    ghost = root / "ic" / "never_materialised.json"      # tracked, not on disk
+
+    monkeypatch.setattr(P, "_tracked_paths",
+                        lambda r: ([real, ghost], "git-tracked"))
+    d = P.discover(root)
+    assert d.absent_from_disk == 1, \
+        "a path git lists and the disk lacks is its own state"
+    assert d.unparsable == 0, \
+        "counted as unparsable — that bucket means the CONTENT is bad"
+    assert len(d.records) == 1
+
+
+def test_the_absent_count_reaches_the_summary():
+    """WIRING, and I got this wrong once already in this file.
+
+    The count was published into the DENOMINATOR block while the PASS line
+    reads `summary` — two different dicts, so the disclosure would have been
+    silently always-zero. Both carry it now.
+    """
+    import inspect
+    import published_record_staleness_check as P
+    src = inspect.getsource(P)
+    assert src.count('"json_tracked_but_absent_from_disk": disc.absent_from_disk') >= 2, \
+        ("the count is published in only one of the two dicts; whichever the "
+         "PASS line does not read reports zero forever")
