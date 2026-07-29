@@ -71,6 +71,63 @@ PROGRAMS_DIR = Path(__file__).resolve().parent
 TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
 
+#: Shell preamble that makes every KLayout invocation use OUR build when the
+#: image has one, and the base image's when it does not.
+#:
+#: WHY BOTH VARIABLES, AND WHY THIS IS NOT COSMETIC (vibeic-eda#17)
+#: ================================================================
+#: The vibeic klayout fork patches the LEF/DEF importer to honour tech-LEF
+#: MANUFACTURINGGRID — the snap that removes the largest OFFGRID false-DRC
+#: population from a streamed-out layout. Measured on the fork's own fixture,
+#: same DEF, same tech LEF, grid 5 nm:
+#:
+#:     base   /foss/tools/klayout/pymod          OFFGRID_VERTICES_TOTAL = 8
+#:     ours   /foss/tools/klayout-vibeic/pymod   OFFGRID_VERTICES_TOTAL = 0
+#:
+#: This flow was loading the BASE pymod by absolute path, so the patch was
+#: compiled, pinned, shipped and loaded by nothing.
+#:
+#: LD_LIBRARY_PATH is the half that is easy to get wrong, and getting it wrong
+#: is invisible. The pymod extension modules link libklayout_db.so by SONAME,
+#: and the image's login shell exports LD_LIBRARY_PATH=/foss/tools/klayout:...
+#: so OUR pymod resolves the BASE's unpatched library and reproduces the base's
+#: result exactly:
+#:
+#:     sys.path=ours, LD_LIBRARY_PATH=base   OFFGRID_VERTICES_TOTAL = 8
+#:     sys.path=ours, LD_LIBRARY_PATH unset  OFFGRID_VERTICES_TOTAL = 0
+#:
+#: A fix that moved only sys.path would look correct, pass review, and change
+#: nothing. It has to be set in the SHELL, before the interpreter starts: glibc
+#: reads LD_LIBRARY_PATH at process start, so setting os.environ from inside
+#: the running Python is too late.
+#:
+#: The flow runs `docker exec ... bash -lc`, i.e. a LOGIN shell, which is
+#: exactly the context where the base path is exported.
+#:
+#: PDK/chip-agnostic: pure path probing, no vendor or design literal. Falls back
+#: to the base build, so a stock iic-osic-tools image still works.
+KLAYOUT_PREFER_FORK_SH = (
+    'for _kd in /foss/tools/klayout-vibeic /foss/tools/klayout; do '
+    'if [ -x "$_kd/klayout" ]; then '
+    'export PATH="$_kd:$PATH"; '
+    'export LD_LIBRARY_PATH="$_kd:${LD_LIBRARY_PATH}"; '
+    'export KLAYOUT_PYMOD="$_kd/pymod"; break; fi; done; '
+)
+
+#: Python preamble for a snippet launched under `KLAYOUT_PREFER_FORK_SH`.
+#: Reads the directory the shell already chose, so the two cannot disagree —
+#: two independent resolutions of "which klayout" is how a binary and its
+#: libraries end up from different builds.
+KLAYOUT_PYMOD_PY = (
+    "import os, sys\n"
+    "_kp = os.environ.get('KLAYOUT_PYMOD') or ''\n"
+    "for _p in ([_kp] if _kp else []) + ['/foss/tools/klayout-vibeic/pymod',\n"
+    "                                    '/foss/tools/klayout/pymod']:\n"
+    "    if _p and os.path.isdir(_p):\n"
+    "        sys.path.insert(0, _p)\n"
+    "        break\n"
+)
+
 
 def _design_identity_fields(project: Path, top_name: str = "") -> dict:
     """ORGANIC-20260606 #484 (MEDIUM) — per-design identity stamp for every
@@ -26529,7 +26586,11 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     out_c = _to_container_path(str(out_json), container)
     script_c = _to_container_path(str(script), container)
     cmd = (
-        f"export PATH=/foss/tools/klayout:{TOOLS_IN_CONTAINER}/bin:$PATH && "
+        # Our build first when the image has one; this used to pin the BASE
+        # klayout directory ahead of everything, which defeated even a wrapper
+        # placed in /foss/tools/bin. See KLAYOUT_PREFER_FORK_SH.
+        f"{KLAYOUT_PREFER_FORK_SH}"
+        f"export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"klayout -b -r {script_c} -rd gds={gds_c} -rd map={map_c} "
         f"-rd pdk={pdk.name} -rd out={out_c} 2>&1 | tee "
         f"{_to_container_path(str(script.parent / 'metal_density.log'), container)}"
@@ -27064,7 +27125,13 @@ def _measure_tap_geometry(project: Path, top: str, pdk: "PdkConfig",
             f"npl=reg({npl[0]},{npl[1]}); ppl=reg({ppl[0]},{ppl[1]})\n")
     script = (
         "import sys, json\n"
-        "sys.path.insert(0,'/foss/tools/klayout/pymod')\n"
+        # Our pymod when the image has one — this read the BASE pymod by
+        # absolute path, which is where the MANUFACTURINGGRID snap was lost.
+        # The matching LD_LIBRARY_PATH is set by KLAYOUT_PREFER_FORK_SH in the
+        # command that launches this script, and it is not optional: with the
+        # base library on the search path our pymod reproduces the base result
+        # exactly.
+        + KLAYOUT_PYMOD_PY +
         "import pya\n"
         f"ly=pya.Layout(); ly.read('{gds_c}')\n"
         "top=ly.top_cell(); dbu=ly.dbu\n"
@@ -27082,7 +27149,13 @@ def _measure_tap_geometry(project: Path, top: str, pdk: "PdkConfig",
     spath.parent.mkdir(parents=True, exist_ok=True)
     spath.write_text(script)
     rc, out, err = _docker_exec(
-        container, f"python3 {_to_container_path(str(spath), container)}",
+        # The preamble is load bearing, not decoration: it is what puts our
+        # klayout libraries ahead of the base's for the interpreter this line
+        # starts. Without it the script above loads our pymod and still gets
+        # the base's unpatched geometry.
+        container,
+        f"{KLAYOUT_PREFER_FORK_SH}"
+        f"python3 {_to_container_path(str(spath), container)}",
         marker=_to_container_path(str(spath), container))
     m = re.search(r"TAP_GEOM\s+(\{.*\})", out or "")
     if not m:

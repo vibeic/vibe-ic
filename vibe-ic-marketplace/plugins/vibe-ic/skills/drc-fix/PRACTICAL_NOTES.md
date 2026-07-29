@@ -103,7 +103,16 @@ This routes successfully but is semantically wrong — the net IS a power connec
 ### Running DRC with official rule deck
 
 ```bash
-export PATH=/foss/tools/klayout:$PATH
+# Prefer the vibeic build when the image has one. It is not a cosmetic choice:
+# the fork honours tech-LEF MANUFACTURINGGRID in the LEF/DEF importer, and on
+# the fork's own fixture the base build leaves 8 off-grid vertices where ours
+# leaves 0. LD_LIBRARY_PATH matters as much as PATH — the pymod links
+# libklayout_db.so by SONAME, so our build on PATH with the base directory on
+# the library search path reproduces the base's geometry exactly.
+for kd in /foss/tools/klayout-vibeic /foss/tools/klayout; do
+  [ -x "$kd/klayout" ] && { export PATH="$kd:$PATH"; \
+    export LD_LIBRARY_PATH="$kd:${LD_LIBRARY_PATH}"; break; }
+done
 python3 /foss/pdks/gf180mcuD/libs.tech/klayout/tech/drc/run_drc.py \
   --path=design.gds \
   --variant=C \
