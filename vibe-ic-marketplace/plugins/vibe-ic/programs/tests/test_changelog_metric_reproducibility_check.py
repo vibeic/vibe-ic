@@ -109,3 +109,35 @@ def test_unit_units_variants_recognised(tmp_path: Path) -> None:
         source_files={"programs/p.py": "x = 0.018"})
     v, findings = audit(root)
     assert v == "PASS"
+
+# --- the exit code is what the flow reads, and no test drove main()
+
+def test_main_exits_non_zero_on_a_finding(tmp_path, monkeypatch):
+    """`gate_cli_mutation_probe` reported this gate SILENT: neutering `main()`
+    reddened nothing in its own test file.
+
+    Every test above drives `audit()` and asserts the VERDICT it returns. The
+    flow reads the EXIT CODE, and nothing exercised the mapping between them —
+    the gate could have started answering 0 to every finding with the suite
+    still green.
+    """
+    import changelog_metric_reproducibility_check as M
+    # Empty findings with a FAIL verdict: the verdict is what main()
+    # maps to the exit code, and constructing this module's own finding
+    # dataclass by guessing its fields tests my guess, not the gate.
+    monkeypatch.setattr(M, "audit", lambda *a, **k: ("FAIL", []))
+    assert M.main([str(tmp_path)]) == 1
+
+
+def test_main_exits_zero_when_clean(tmp_path, monkeypatch):
+    """The other direction, or the test above is met by a gate that always
+    fails."""
+    import changelog_metric_reproducibility_check as M
+    monkeypatch.setattr(M, "audit", lambda *a, **k: ("PASS", []))
+    assert M.main([str(tmp_path)]) == 0
+
+
+def test_main_refuses_on_a_missing_project(tmp_path):
+    """rc 2 — the question could not be asked, which is not a pass."""
+    import changelog_metric_reproducibility_check as M
+    assert M.main([str(tmp_path / "does_not_exist")]) == 2

@@ -105,3 +105,32 @@ none
     assert "deliverables" in matched
     assert "backlog" in matched
     assert "iterations" in matched
+
+# --- the exit code is what the flow reads, and no test drove main()
+
+def test_main_exits_non_zero_on_a_finding(tmp_path, monkeypatch):
+    """`gate_cli_mutation_probe` reported this gate SILENT: neutering `main()`
+    reddened nothing in its own test file.
+
+    Every test above drives `audit()` and asserts the VERDICT it returns. The
+    flow reads the EXIT CODE, and nothing exercised the mapping between them —
+    the gate could have started answering 0 to every finding with the suite
+    still green.
+    """
+    import agent_report_presence_check as M
+    monkeypatch.setattr(M, "audit", lambda *a, **k: ("FAIL", [], []))
+    assert M.main([str(tmp_path)]) == 1
+
+
+def test_main_exits_zero_when_clean(tmp_path, monkeypatch):
+    """The other direction, or the test above is met by a gate that always
+    fails."""
+    import agent_report_presence_check as M
+    monkeypatch.setattr(M, "audit", lambda *a, **k: ("PASS", [], []))
+    assert M.main([str(tmp_path)]) == 0
+
+
+def test_main_refuses_on_a_missing_project(tmp_path):
+    """rc 2 — the question could not be asked, which is not a pass."""
+    import agent_report_presence_check as M
+    assert M.main([str(tmp_path / "does_not_exist")]) == 2
