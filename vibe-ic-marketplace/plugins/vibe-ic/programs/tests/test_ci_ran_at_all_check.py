@@ -254,3 +254,41 @@ def test_the_run_filter_passes_the_path_through():
     src = inspect.getsource(C.evaluate)
     assert '_is_ci_run(r.get("name", ""), r.get("path"))' in src, \
         "evaluate() drops the path, so every run is judged by name alone"
+
+
+def test_never_ran_and_failed_both_produce_a_failing_exit_code(monkeypatch):
+    """The states are distinguished in the REPORT; the caller reads the CODE.
+
+    Measured: replacing the FAIL branch's `return` with the pass value left all
+    seventeen tests green — the gate whose entire subject is "an absence must
+    not render as a pass" could itself return a pass on a finding.
+    """
+    for state in ("NEVER_RAN", "FAILED"):
+        monkeypatch.setattr(C, "evaluate",
+                            lambda slug, sha, min_total=None, _s=state:
+                            {"state": _s, "sha": "a" * 9, "runs": 0,
+                             "workflows": [], "detail": "x"})
+        monkeypatch.setattr(C, "_repo_slug", lambda d: "o/r")
+        monkeypatch.setattr(C, "_head_sha", lambda d, rev: "a" * 40)
+        assert C.main(["."]) == C.RC_FAIL, f"{state} did not exit non-zero"
+
+
+def test_passed_produces_a_passing_exit_code(monkeypatch):
+    """The other direction, or the test above is met by always failing."""
+    monkeypatch.setattr(C, "evaluate", lambda slug, sha, min_total=None:
+                        {"state": "PASSED", "sha": "a" * 9, "runs": 1,
+                         "workflows": ["CI"], "detail": "ok"})
+    monkeypatch.setattr(C, "_repo_slug", lambda d: "o/r")
+    monkeypatch.setattr(C, "_head_sha", lambda d, rev: "a" * 40)
+    assert C.main(["."]) == C.RC_PASS
+
+
+def test_unreachable_is_rc_2_not_rc_0(monkeypatch):
+    """"I could not look" must never share a code with "I looked and it passed"
+    — the whole thesis of #550."""
+    monkeypatch.setattr(C, "evaluate", lambda slug, sha, min_total=None:
+                        {"state": "UNREACHABLE", "sha": "a" * 9,
+                         "detail": "api down"})
+    monkeypatch.setattr(C, "_repo_slug", lambda d: "o/r")
+    monkeypatch.setattr(C, "_head_sha", lambda d, rev: "a" * 40)
+    assert C.main(["."]) == C.RC_NOT_CHECKED

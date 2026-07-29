@@ -166,3 +166,33 @@ def test_ignore_is_asked_of_git_not_reimplemented(tmp_path):
     assert len(found) == 1
     assert found[0]["kind"] == "TARGET_DELIBERATELY_UNTRACKED"
     assert T._is_ignored(r, "corpus/raw/keep.json") is True
+
+
+# --- the exit code is what CI reads, and no test asserted it
+
+def test_a_new_broken_pointer_produces_a_failing_exit_code(tmp_path, capsys):
+    """Every test above asserts what `broken()` RETURNS. None asserted what
+    `main()` EXITS with, and the hygiene suite reads only the exit code.
+
+    Measured: replacing `return RC_FINDING` with `RC_OK` left all eight green.
+    Eight tests over a gate that had stopped gating — the third instance of this
+    shape in two days, each time in tests written to prevent it.
+    """
+    r = _repo(tmp_path)
+    os.symlink("../../nowhere.json", r / "corpus" / "steps" / "link.json")
+    _commit(r)
+    bl = tmp_path / "empty.json"
+    bl.write_text(json.dumps({"known": []}))
+    assert T.main(["--root", str(r), "--subdir", "corpus",
+                   "--baseline", str(bl)]) == T.RC_FINDING
+
+
+def test_a_recorded_pointer_produces_a_passing_exit_code(tmp_path):
+    """The other direction, or the test above is met by always failing."""
+    r = _repo(tmp_path)
+    os.symlink("../../nowhere.json", r / "corpus" / "steps" / "link.json")
+    _commit(r)
+    bl = tmp_path / "bl.json"
+    bl.write_text(json.dumps({"known": ["corpus/steps/link.json"]}))
+    assert T.main(["--root", str(r), "--subdir", "corpus",
+                   "--baseline", str(bl)]) == T.RC_OK
