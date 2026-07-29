@@ -47,8 +47,15 @@ TESTS = PROGRAMS / "tests"
 _ENTRIES: Tuple[Tuple[str, str, str], ...] = (
     (r"^(def main\([^)]*\)[^:]*:\n)", "    return 0  # NEUTERED\n", "main()"),
     (r"^(def run\([^)]*\)[^:]*:\n)", "    return 0  # NEUTERED\n", "run()"),
-    (r"^(if __name__ == [\"']__main__[\"']:\n)",
+    (r"^(def _cli\([^)]*\)[^:]*:\n)", "    return 0  # NEUTERED\n", "_cli()"),
+    (r"^(if __name__ == [\"']__main__[\"'][^\n]*:[^\n]*\n)",
      "    raise SystemExit(0)  # NEUTERED\n", "__main__"),
+    # A CLI named `_cli()` is an entry point too. `xor_layout_check` delegates
+    # `__main__` straight to it, and its guard line carries a trailing
+    # `# pragma: no cover` — which the previous `:\n`-anchored pattern could not
+    # match, so the program reported NO_ENTRY. That is "unmeasured", stated
+    # honestly and still a gate nobody probed, for a reason belonging to this
+    # program rather than to it.
 )
 
 
