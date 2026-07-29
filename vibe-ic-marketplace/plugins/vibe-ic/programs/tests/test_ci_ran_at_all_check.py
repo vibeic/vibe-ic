@@ -194,3 +194,63 @@ def test_not_checked_never_blocks_a_merge(monkeypatch, tmp_path):
         assert g.green is True, f"NOT CHECKED blocked the merge at {cadence}"
         assert "NOT CHECKED" in g.summary, (
             "it went green without saying it could not look")
+
+
+# --- the deny-list left the door open for exactly what this program stops
+
+def test_automation_the_repo_did_not_commit_is_not_ci():
+    """A run's own `path` says whether the repository declared that workflow.
+
+    The name deny-list classified `CodeQL`, `Deploy Pages` and `Greetings` as
+    CI — measured — so ONE green run of any of them would have made this program
+    report CI as passing. That is the substitution it exists to stop, arriving
+    through the door it left open, and a longer list does not fix it: the next
+    workflow nobody thought of is not on that one either.
+
+    The failure directions are not symmetric. An unrecognised name treated as
+    NOT-CI costs a false NEVER_RAN, which is loud. Treated as CI it costs a
+    false PASSED, which is silent and is the whole subject of #550.
+    """
+    for name, path in (("CodeQL", "dynamic/github-code-scanning/codeql"),
+                       ("Deploy Pages", "dynamic/pages/build-deployment"),
+                       ("Dependency Graph", "dynamic/dependabot/update-graph")):
+        assert not C._is_ci_run(name, path), \
+            f"{name} would stand in for the test suite"
+
+    # ISOLATING THE PATH RULE. The three above are ALSO on the fallback name
+    # list now, so removing the path check entirely left this test green — the
+    # list answered for it. A mutation that survives means the test is measuring
+    # the other half of the fix. This name is on no list and never will be,
+    # which is the whole argument for asking the repo instead of keeping one.
+    assert not C._is_ci_run("Nightly Fuzz", "dynamic/some-app/whatever"), \
+        ("a workflow the repository never committed is being treated as its "
+         "CI — the path rule is not in force, and a name list cannot cover a "
+         "name nobody has thought of")
+
+
+def test_a_committed_workflow_is_ci_whatever_it_is_called():
+    """The allow-side. A repo's own workflow counts even under a name this
+    program has never seen — which is the point of asking the repo rather than
+    keeping a list of names someone has to remember to extend."""
+    assert C._is_ci_run("CI", ".github/workflows/ci.yml")
+    assert C._is_ci_run("Gatekeeper CI", ".github/workflows/gatekeeper-ci.yml")
+    assert C._is_ci_run("some-new-suite", ".github/workflows/whatever.yml")
+
+
+def test_the_name_list_still_answers_when_there_is_no_path():
+    """Belt and braces, in that order: an older API shape or a bare-name caller
+    still gets the weaker answer rather than an exception."""
+    assert C._is_ci_run("CI") is True
+    assert C._is_ci_run("Dependency Graph") is False
+    assert C._is_ci_run("CodeQL") is False, \
+        "the fallback list gained the names the probe found"
+
+
+def test_the_run_filter_passes_the_path_through():
+    """WIRING. Classifying correctly and then not passing `path` changes
+    nothing — the defect would be invisible because the fallback still answers.
+    """
+    import inspect
+    src = inspect.getsource(C.evaluate)
+    assert '_is_ci_run(r.get("name", ""), r.get("path"))' in src, \
+        "evaluate() drops the path, so every run is judged by name alone"

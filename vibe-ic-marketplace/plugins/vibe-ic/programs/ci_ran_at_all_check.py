@@ -74,8 +74,23 @@ RC_PASS, RC_FAIL, RC_NOT_CHECKED = 0, 1, 2
 #: (dependency graphs, label bots) whose presence must never be read as the test
 #: suite having run — that is the same substitution this program exists to stop,
 #: one level down. Matched case-insensitively as substrings.
+#:
+#: A DENY-LIST IS THE WRONG SHAPE HERE AND IS KEPT ONLY AS A FALLBACK. Probed:
+#: `CodeQL`, `Deploy Pages` and `Greetings` all classified as CI, so one green
+#: run of any of them would have let this program report CI as passing. That is
+#: precisely the substitution it exists to stop, arriving through the door it
+#: left open — and the fix is not a longer list, because the next workflow
+#: nobody thought of is not on that one either.
 _NON_CI_WORKFLOWS = ("dependency graph", "graph update", "dependabot",
-                     "labeler", "stale")
+                     "labeler", "stale", "codeql", "deploy", "pages",
+                     "greetings", "auto assign", "welcome", "release drafter")
+
+#: Workflow FILES the repository itself declares under `.github/workflows/`.
+#: Anything else — GitHub's dynamic dependabot graph, an org-level workflow, an
+#: app acting on the repo — is automation the repo did not commit, and cannot be
+#: the CI whose absence this program reports. Derived per-run from the API,
+#: which is why it stays correct when a workflow is added tomorrow.
+_WORKFLOW_PATH_PREFIX = ".github/workflows/"
 
 
 def _gh(args: List[str], timeout: int = 60) -> Tuple[int, str, str]:
@@ -111,7 +126,28 @@ def _head_sha(repo_dir: Path, rev: str) -> Optional[str]:
     return r.stdout.strip() if r.returncode == 0 else None
 
 
-def _is_ci_run(name: str) -> bool:
+def _is_ci_run(name: str, path: Optional[str] = None) -> bool:
+    """Does this run count as "the repository's CI ran"?
+
+    PATH FIRST, name second. Each run carries the workflow FILE it came from,
+    and a workflow the repository committed under `.github/workflows/` is the
+    only kind that can be the CI whose absence this program reports. GitHub's
+    dependency graph arrives as `dynamic/dependabot/update-graph`; an org-level
+    or app-injected workflow is likewise not something this repo declared.
+
+    That inverts the shape from deny to allow, which matters because the
+    failure directions are not symmetric. A name this program has never seen
+    being treated as CI is a FALSE GREEN — one successful `CodeQL` or
+    `Deploy Pages` run and it reports CI as passing, which is the exact
+    substitution it exists to stop. Measured before this change: `CodeQL`,
+    `Deploy Pages` and `Greetings` all classified as CI.
+
+    The name list is kept for the case where `path` is absent from the payload
+    — an older API shape, or a caller passing a bare name. Belt and braces, in
+    that order.
+    """
+    if path:
+        return path.startswith(_WORKFLOW_PATH_PREFIX)
     low = (name or "").lower()
     return not any(m in low for m in _NON_CI_WORKFLOWS)
 
@@ -130,7 +166,7 @@ def evaluate(slug: str, sha: str, min_total: Optional[int] = None) -> dict:
                 "detail": f"unparsable API response: {exc}"}
 
     runs = [r for r in doc.get("workflow_runs", [])
-            if _is_ci_run(r.get("name", ""))]
+            if _is_ci_run(r.get("name", ""), r.get("path"))]
     result = {"sha": sha, "runs": len(runs),
               "workflows": sorted({r.get("name", "?") for r in runs})}
 
