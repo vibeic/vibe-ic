@@ -132,13 +132,13 @@ def _l2_pad_drive_mode(project: Path) -> Optional[str]:
     return None
 
 
-def main():
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=(
         "Verify ASIC pad cell class matches protocol pad_drive_mode declared in L2."
     ))
     ap.add_argument("project_dir")
     ap.add_argument("--json", nargs="?", const="-", default=None)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     project = Path(args.project_dir).resolve()
     if not project.is_dir():

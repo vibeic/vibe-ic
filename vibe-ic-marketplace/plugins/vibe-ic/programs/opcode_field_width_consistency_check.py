@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -43,6 +44,12 @@ _BITRANGE_RE = re.compile(r"\[(\d+)\s*:\s*0\]")
 _TYPE_FIELD_RE = re.compile(
     r"(?:message[\s_]*type|command[\s_]*type|cmd[\s_]*type|op[\s_]*code|"
     r"opcode|cmd[\s_]*opcode)", re.I)
+
+
+#: Nothing was examined. Deliberately NOT 0 and NOT 1: a caller must be able to
+#: tell "I looked and it is clean" from "I could not look", and must not read a
+#: path typo as a finding either.
+RC_NOTHING_EXAMINED = 2
 
 
 def _load(gd: Path, name: str):
@@ -186,12 +193,45 @@ def main(argv=None) -> int:
 
     targets = []
     if args.benchmark_dir:
-        targets = [d for d in sorted(args.benchmark_dir.iterdir())
-                   if d.is_dir() and (d / "phase1").is_dir()]
+        if not args.benchmark_dir.is_dir():
+            print(f"[NOT CHECKED] --benchmark-dir does not exist: "
+                  f"{args.benchmark_dir}", file=sys.stderr)
+            return RC_NOTHING_EXAMINED
+        for d in sorted(args.benchmark_dir.iterdir()):
+            # A subdirectory this process cannot stat is not a subdirectory
+            # without a phase1/ tree. Measured: one unreadable entry under the
+            # sweep root (/tmp/snap-private-tmp) took the whole survey down
+            # with a PermissionError traceback, so the other benchmarks were
+            # never examined and the operator saw a crash rather than a
+            # verdict. Skipped loudly, and the sweep continues.
+            try:
+                if d.is_dir() and (d / "phase1").is_dir():
+                    targets.append(d)
+            except OSError as exc:
+                print(f"[SKIPPED] {d}: {exc.__class__.__name__} — not "
+                      f"examined", file=sys.stderr)
     elif args.project_dir:
+        if not args.project_dir.is_dir():
+            # THE SHAPE THIS GATE EXISTS INSIDE: a project that is not there
+            # produced zero findings, and zero findings printed
+            # "checked 1 project(s) — ALL_PASS" and exited 0. A typo in a path
+            # was therefore indistinguishable from a clean chip, and the clean
+            # answer was the one a caller acted on.
+            print(f"[NOT CHECKED] no such project: {args.project_dir} — "
+                  f"nothing was examined, which is not a pass", file=sys.stderr)
+            return RC_NOTHING_EXAMINED
         targets = [args.project_dir]
     else:
         ap.error("give a project_dir or --benchmark-dir")
+
+    if not targets:
+        # The third exit from the same room. Every entry under the sweep root
+        # was unreadable, or none carried a phase1/ tree — either way nothing
+        # was opened, and "checked 0 project(s) — ALL_PASS" is the sentence a
+        # caller would act on.
+        print(f"[NOT CHECKED] no project with a phase1/ tree was found — "
+              f"nothing was examined, which is not a pass", file=sys.stderr)
+        return RC_NOTHING_EXAMINED
 
     all_findings = {}
     for t in targets:

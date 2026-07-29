@@ -145,3 +145,61 @@ def test_short_candidates_filtered(tmp_path):
     # Should FAIL — `em` is too short to match anything reliably.
     assert verdict == "FAIL"
     assert findings[0].rule == "STEP_FAIL_NOT_BUBBLED"
+
+
+# --- the CLI layer: the gate had, one layer up, the defect it exists to catch
+
+def _cli():
+    import step_internal_fail_bubble_up_check as M
+    return M
+
+
+def test_an_unacknowledged_fail_exits_1(tmp_path, monkeypatch):
+    """THE point of this file.
+
+    Every test above drives `audit()` and asserts on the VERDICT. None of them
+    touches `main()`, so the verdict -> exit-code mapping was unmeasured — and
+    the flow reads the exit code, not the verdict. `gate_cli_mutation_probe`
+    neutered the CLI so it could never return non-zero and all nine passed.
+
+    Which makes this gate the plainest example in the repo of a checker
+    exhibiting the defect it checks for: its subject is an inner FAIL that never
+    reaches the outer exit code, and that is exactly what it had.
+    """
+    M = _cli()
+    from dataclasses import dataclass
+
+    @dataclass
+    class F:
+        rule: str = "unacknowledged"
+        report_file: str = "reports/step07/lint.json"
+        verdict: str = "FAIL"
+        detail: str = ""
+    monkeypatch.setattr(M, "audit", lambda proj: ("FAIL", [F()]))
+    assert M.main([str(tmp_path)]) == 1
+
+
+def test_pass_exits_0(tmp_path, monkeypatch):
+    """…or the test above is met by a gate that always returns 1."""
+    M = _cli()
+    monkeypatch.setattr(M, "audit", lambda proj: ("PASS", []))
+    assert M.main([str(tmp_path)]) == 0
+
+
+def test_vacuous_pass_exits_0(tmp_path, monkeypatch):
+    """A third verdict with its own branch, and its own way to go wrong.
+
+    VACUOUS_PASS means nothing was examined. It exits 0 deliberately — a
+    pre-output project has no reports to acknowledge — so the branch is easy to
+    break in the direction of "always 0" without any test noticing.
+    """
+    M = _cli()
+    monkeypatch.setattr(M, "audit", lambda proj: ("VACUOUS_PASS", []))
+    assert M.main([str(tmp_path)]) == 0
+
+
+def test_a_missing_project_dir_is_rc_2_not_rc_0(tmp_path):
+    """"I could not look" must never share an exit code with "I looked and it
+    was clean" — the absence-renders-as-a-pass shape this repo keeps finding."""
+    M = _cli()
+    assert M.main([str(tmp_path / "no-such-project")]) == 2

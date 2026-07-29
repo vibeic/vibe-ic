@@ -271,14 +271,14 @@ def audit(project_dir: str) -> AuditResult:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def main():
+def main(argv=None) -> int:
     p = argparse.ArgumentParser(
         description="Deterministic compliance check for synth-wrapper-gen"
     )
     p.add_argument("project_dir", nargs="?", default=".")
     p.add_argument("--json", action="store_true",
                    help="Output JSON report to stdout")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     result = audit(args.project_dir)
 
