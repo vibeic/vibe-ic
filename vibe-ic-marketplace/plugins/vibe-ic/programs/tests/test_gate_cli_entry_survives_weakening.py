@@ -28,6 +28,13 @@ from pathlib import Path
 import pytest
 
 PROGRAMS_DIR = Path(__file__).resolve().parents[1]
+#: Bound for a probe subprocess. MEASURED on this tree: the two probe-driving
+#: tests take 1.71 s and 1.43 s. The 600 s I first wrote was decoration — it is
+#: above the 60 s ceiling `ci_harness_timeout_ceiling_check` enforces, so it
+#: could never fire: pytest kills the SESSION at 180 s first, taking every
+#: other file in the subset with it. 45 s keeps ~26x headroom over the measured
+#: time and stays under the ceiling.
+_PROBE_TIMEOUT_S = 45
 PLUGIN_ROOT = PROGRAMS_DIR.parent
 FLOW_YAML = PLUGIN_ROOT / "flow" / "phase1_phase2_phase3.yaml"
 
@@ -194,7 +201,8 @@ def test_the_default_run_never_touches_the_shipped_programs_tree(tmp_path):
     before = dirt()
     r = sp.run([sys.executable, str(PROGRAMS_DIR / "gate_cli_mutation_probe.py"),
                 "spec_declaration_emit"],
-               cwd=PLUGIN_ROOT, capture_output=True, text=True, timeout=600)
+               cwd=PLUGIN_ROOT, capture_output=True, text=True,
+               timeout=_PROBE_TIMEOUT_S)
     assert dirt() == before, (
         "the probe modified the shipped programs tree; while a gate is neutered "
         "any concurrent reader of it gets an unearned PASS\n" + dirt())
@@ -220,7 +228,8 @@ def test_the_probe_can_still_report_SILENT(tmp_path):
     assert hit, "no test file names the program — the control is vacuous"
     r = sp.run([sys.executable, str(PROGRAMS_DIR / "gate_cli_mutation_probe.py"),
                 "spec_declaration_emit", "--programs-root", str(root)],
-               cwd=PLUGIN_ROOT, capture_output=True, text=True, timeout=600)
+               cwd=PLUGIN_ROOT, capture_output=True, text=True,
+               timeout=_PROBE_TIMEOUT_S)
     assert "SILENT" in r.stdout, (
         "a gate whose tests cannot see it was neutered still reported CAUGHT — "
         "the probe is asserting, not measuring:\n" + r.stdout + r.stderr)
