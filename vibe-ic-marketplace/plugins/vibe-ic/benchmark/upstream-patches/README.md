@@ -44,12 +44,21 @@ report, mid-ECO.
 the other two already carry `ThreadException`:
 
 ```
-line 167  updateDirtyInsts()   no guard
-line 198  (next function)      ThreadException exception;
-line 306  (next function)      ThreadException exception;
+line 167  updateDirtyInsts()   omp parallel for   NO guard
+line 197  updateDirtyInsts()   omp parallel for   ThreadException + try/catch
+line 306  (a later function)   omp parallel for   ThreadException + try/catch
 ```
 
-Two of three guarded, and the unguarded one is thirty lines from a guarded one.
+Two of three guarded — and the corrected reading makes the case stronger, not
+weaker: **both of the first two are inside `updateDirtyInsts` itself**, thirty
+lines apart, one guarded and one not. This file previously attributed line 198 to
+"the next function"; measured against upstream `master`, `updateDirtyInsts` spans
+122-209 and the next definition (`FlexPA::deleteInst`) begins at 210, so 197 is
+in the same function. The earlier reading came from bounding the function with
+the first `^}` after its opening, which lands past the end.
+
+Re-checked after the 2026-07-29 fleet merge took 19 upstream commits into our
+fork: the region at 167 is still unguarded upstream, so this is still owed.
 Verified against upstream `master` as fetched, not against our fork.
 
 **The patch is the guard only.** Our fork additionally passes
