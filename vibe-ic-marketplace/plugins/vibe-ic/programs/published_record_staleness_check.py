@@ -154,6 +154,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -342,6 +343,9 @@ class Discovery:
     #: corrupt file. Counted apart so the population is comparable
     #: across machines (vibe-ic#555).
     absent_from_disk: int = 0
+    #: symlink into a tree `.gitignore` excludes on purpose — outside
+    #: the population by the repository's own declaration (#555).
+    deliberately_untracked: int = 0
     enumeration: str = ""
 
 
@@ -366,6 +370,25 @@ def _tracked_paths(root: Path) -> Tuple[List[Path], str]:
     return sorted(root.rglob("*.json")), "filesystem-walk"
 
 
+def _target_deliberately_untracked(root: Path, p: Path) -> bool:
+    """Is this symlink's target excluded by the repository's own .gitignore?
+
+    Asked of git, never matched here: negations, nested ignore files and
+    precedence are git's rules, and a second implementation of them disagrees
+    with the first. (Verified the hard way in #555 — my model of what a negation
+    inside an excluded directory does was wrong, and git's answer was right.)
+    """
+    try:
+        rel = str(p.relative_to(root))
+        target = os.path.normpath(os.path.join(os.path.dirname(rel),
+                                               os.readlink(p)))
+    except (OSError, ValueError):
+        return False
+    return subprocess.run(
+        ["git", "-C", str(root), "check-ignore", "-q", "--", target],
+        capture_output=True, timeout=60).returncode == 0
+
+
 def discover(root: Path) -> Discovery:
     """Every published gate record under ``root``, read-only."""
     d = Discovery()
@@ -386,6 +409,24 @@ def discover(root: Path) -> Discovery:
         # same commit, because one tracked file had never been materialised
         # there. Both runs said PASS, from different populations. A denominator
         # that moves with the machine makes every ratio above it unreadable.
+        # A RECORD WHOSE TARGET THE REPO DELIBERATELY DOES NOT TRACK IS NOT
+        # PART OF THE POPULATION. Disclosing the shortfall (the previous fix)
+        # made the difference legible; it did not remove it, and the probe still
+        # reported HOST_DEPENDENT because 225 != 224.
+        #
+        # The cause, once #556's investigation named it: these are symlinks into
+        # `benchmark-data/ic/*/clean_run_*/`, which `.gitignore:138` excludes on
+        # purpose — a raw run directory can carry a commercial-PDK identifier in
+        # its NAME. Whether such a record resolves is a fact about which machine
+        # ran the flow, never about the commit.
+        #
+        # Measured: 11 of the corpus's 114 `.json` symlinks point into that
+        # ignored tree. Excluding them by the repository's OWN declaration makes
+        # the denominator identical on every machine by construction, rather
+        # than by hoping every checkout ran the same things.
+        if p.is_symlink() and _target_deliberately_untracked(root, p):
+            d.deliberately_untracked += 1
+            continue
         if not p.exists():
             d.absent_from_disk += 1
             continue

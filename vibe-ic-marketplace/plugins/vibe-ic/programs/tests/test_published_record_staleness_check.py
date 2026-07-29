@@ -1042,3 +1042,50 @@ def test_the_absent_count_reaches_the_summary():
     assert src.count('"json_tracked_but_absent_from_disk": disc.absent_from_disk') >= 2, \
         ("the count is published in only one of the two dicts; whichever the "
          "PASS line does not read reports zero forever")
+
+
+def test_a_record_in_a_deliberately_ignored_tree_is_outside_the_population(
+        tmp_path, monkeypatch):
+    """Disclosure made the difference legible; it did not remove it.
+
+    The probe still reported HOST_DEPENDENT because 225 != 224. The cause, once
+    #556's investigation named it: these are symlinks into
+    `benchmark-data/ic/*/clean_run_*/`, which `.gitignore:138` excludes on
+    purpose — a raw run directory can carry a commercial-PDK identifier in its
+    NAME. Whether such a record resolves is a fact about which machine ran the
+    flow, never about the commit, so it is outside the population by the
+    repository's own declaration.
+
+    Measured after: checkout and a fresh worktree both report 7 of 224.
+    """
+    import published_record_staleness_check as P
+
+    root = tmp_path / "corpus"
+    (root / "ic").mkdir(parents=True)
+    real = root / "ic" / "kept.json"
+    real.write_text(json.dumps({"program": "x_check", "verdict": "PASS"}))
+    ignored = root / "ic" / "in_ignored_tree.json"
+    ignored.symlink_to("../raw/out.json")
+
+    monkeypatch.setattr(P, "_tracked_paths",
+                        lambda r: ([real, ignored], "git-tracked"))
+    monkeypatch.setattr(P, "_target_deliberately_untracked",
+                        lambda r, p: p.name == "in_ignored_tree.json")
+    d = P.discover(root)
+    assert d.deliberately_untracked == 1
+    assert d.absent_from_disk == 0, \
+        "an excluded record must not also be counted as missing"
+    assert len(d.records) == 1
+
+
+def test_ignore_is_asked_of_git_rather_than_matched_here():
+    """A second implementation of git's ignore rules disagrees with the first.
+
+    Verified the hard way in #555: my model of what a negation inside an
+    excluded directory does was wrong, and git's answer was right.
+    """
+    import inspect
+    import published_record_staleness_check as P
+    src = inspect.getsource(P._target_deliberately_untracked)
+    assert "check-ignore" in src
+    assert "fnmatch" not in src and "re.match" not in src
