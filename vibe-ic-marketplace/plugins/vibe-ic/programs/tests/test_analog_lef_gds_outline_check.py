@@ -258,3 +258,28 @@ def test_edge_micron_unit_scaling(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_an_absent_project_is_not_reported_as_a_digital_one(tmp_path):
+    """The verdict was right and the REASON was a fabricated conclusion.
+
+    Found by sweeping every project-dir gate against a path that does not
+    exist. This one returned:
+
+        VACUOUS_PASS: no analog_block_list.json — digital-only project
+
+    VACUOUS_PASS is correct — nothing was checked and it says so. But the
+    reason is what lands in the sign-off report, and "digital-only project" is
+    a claim about a design nobody opened. A reader records it as an examined
+    fact; the truth was a path that is not there.
+
+    Absence of the manifest supports exactly one statement, so the reason may
+    not assert anything beyond it.
+    """
+    import analog_lef_gds_outline_check as M
+    rc, rep = M.build_report(tmp_path / "no-such-project", None, 10.0)
+    assert rc == 0
+    assert rep["verdict"] == "VACUOUS_PASS"
+    assert "digital-only project" not in rep["reason"], \
+        "the gate is again concluding 'digital-only' from a project it never opened"
+    assert "nothing was examined" in rep["reason"]

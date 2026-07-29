@@ -412,9 +412,22 @@ def build_report(project: Path, block_filter: Optional[str],
                  tol_pct: float) -> Tuple[int, dict]:
     blocks = _load_block_list(project)
     if blocks is None:
+        # A PROJECT THAT IS NOT THERE IS NOT A DIGITAL PROJECT. Measured:
+        #
+        #   $ analog_lef_gds_outline_check /nonexistent/path
+        #   VACUOUS_PASS: no analog_block_list.json — digital-only project
+        #
+        # The VERDICT was right — nothing was checked, and it says so. The
+        # REASON was a conclusion about a design nobody looked at, and it is
+        # the reason that lands in the sign-off report: a reader of that line
+        # records "digital-only", which reads as an examined fact rather than
+        # as a path typo. Absence of the manifest is evidence of exactly one
+        # thing, so that is now all it claims.
         return 0, {
             "gate": GATE, "verdict": "VACUOUS_PASS",
-            "reason": "no analog_block_list.json — digital-only project",
+            "reason": ("no analog_block_list.json under "
+                       f"{project} — nothing was examined; this is not a "
+                       "finding that the design is digital-only"),
             "blocks": [],
         }
     if not blocks:
