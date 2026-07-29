@@ -58,14 +58,36 @@ def audit(root: Path) -> dict:
     tracked_root_scratch = [f for f in tracked
                             if "/" not in f and f.startswith("_")
                             and f.endswith(".js")]
+
+    # AND WHAT IS ACTUALLY SITTING THERE. #720 fixed the extension it happened
+    # to meet (`/_*.js`) and this guard probed that one rule with one synthetic
+    # filename, so it reported rc 0 while four scratch paths sat
+    # untracked-and-unignored in the working tree for 3 to 9 days:
+    # `scratchpad/`, `scratchpad_pr487_msg.txt`, `_gds_closure/`, and
+    # `vibe-ic-marketplace/scratch_geom_signoff_tests/`.
+    #
+    # Untracked-but-not-ignored is the state one `git add -A` turns into a
+    # commit, which is why this repo forbids `-A`. Probing a rule proves the
+    # rule; listing the tree proves the outcome, and only the second notices a
+    # category the rule does not cover.
+    untracked = [ln[3:] for ln in
+                 _git(root, "status", "--porcelain").stdout.splitlines()
+                 if ln.startswith("?? ")]
+    unignored_scratch = sorted(
+        f for f in untracked
+        if any(tok in f.lower() for tok in ("scratch", "_gds_closure",
+                                            "scratchpad")))
+
     ok = (rule_present and root_scratch_ignored
-          and not subdir_registry_ignored and not tracked_root_scratch)
+          and not subdir_registry_ignored and not tracked_root_scratch
+          and not unignored_scratch)
     return {
         "ok": ok,
         "rule_present": rule_present,
         "root_scratch_ignored": root_scratch_ignored,
         "subdir_registry_ignored": subdir_registry_ignored,
         "tracked_root_scratch": tracked_root_scratch,
+        "unignored_scratch_in_tree": unignored_scratch,
     }
 
 

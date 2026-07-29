@@ -126,6 +126,21 @@ simv
 # scratch, never committed (ORGANIC #720). Anchored to root so it does NOT match
 # tracked source like vibe-ic-marketplace/.../mcp-eda/src/devices/_registry.js.
 /_*.js
+# …and the rest of the same category, which #720 did not cover because it fixed
+# the extension it happened to meet. Measured 2026-07-30: four scratch paths
+# sitting untracked-and-unignored in the working tree for 3 to 9 days —
+# `scratchpad/`, `scratchpad_pr487_msg.txt`, `_gds_closure/`, and
+# `vibe-ic-marketplace/scratch_geom_signoff_tests/`.
+#
+# Untracked-but-not-ignored is the state one `git add -A` turns into a commit,
+# which is precisely why this repo forbids `-A` — and a rule nobody has to
+# remember is better than a rule everybody must. Anchored the same way, so a
+# tracked `scratch`-named source file elsewhere is unaffected.
+/scratchpad
+/scratchpad*/
+/scratchpad_*
+/_gds_closure/
+scratch_geom_signoff_tests/
 history.md
 
 # Local benchmark RUN PRODUCTS are never committed wholesale — only a curated,

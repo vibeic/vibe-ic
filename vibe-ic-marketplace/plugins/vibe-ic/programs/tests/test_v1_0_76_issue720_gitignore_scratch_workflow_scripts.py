@@ -112,3 +112,39 @@ def test_end_state_guard_fails_when_rule_absent(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_a_scratch_path_in_the_tree_fails_even_when_the_rule_is_present():
+    """Probing a rule proves the rule; listing the tree proves the outcome.
+
+    #720 fixed the extension it happened to meet (`/_*.js`) and this guard
+    probed that one rule with one synthetic filename. It reported rc 0 while
+    four scratch paths sat untracked-and-unignored in the working tree for
+    three to nine days: `scratchpad/`, `scratchpad_pr487_msg.txt`,
+    `_gds_closure/`, and `vibe-ic-marketplace/scratch_geom_signoff_tests/`.
+
+    Untracked-but-not-ignored is the state one `git add -A` turns into a
+    commit, which is why this repo forbids `-A`. Verified on the real
+    repository: removing the new rules gives rc 1 with `rule_present: true` —
+    the rule is there and the outcome is still wrong, which is the whole point
+    of checking the second thing.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    import gitignore_scratch_guard as G
+
+    with tempfile.TemporaryDirectory() as td:
+        r = Path(td)
+        subprocess.run(["git", "init", "-q", str(r)], check=True)
+        (r / ".gitignore").write_text("/_*.js\n")
+        (r / "scratchpad").mkdir()
+        (r / "scratchpad" / "note.txt").write_text("x")
+        ev = G.audit(r)
+        assert ev["unignored_scratch_in_tree"], \
+            "a scratch directory sitting in the tree was not noticed"
+        assert ev["ok"] is False
+
+        (r / ".gitignore").write_text("/_*.js\n/scratchpad\n")
+        ev = G.audit(r)
+        assert not ev["unignored_scratch_in_tree"]
