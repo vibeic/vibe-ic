@@ -80,12 +80,18 @@ List CLOSED ORGANIC issues authored by me that carry `core-closed`
 and LACK `field-verified` (these are the audit targets):
 
 ```bash
+# Title matched LOCALLY, not via --search (vibe-ic#554): the search index
+# returns 0 for this repository regardless of content, and here that reads as
+# "no audit targets" — the same substitution as the STOP clause below, with a
+# quieter consequence. `--label` and `--state` are server-side FILTERS rather
+# than index queries and are fine.
 gh issue list --repo vibeic/vibe-ic --state closed \
-    --author "@me" --label core-closed \
-    --search "ORGANIC-phase1 in:title" --json number,title,labels \
+    --author "@me" --label core-closed --limit 1000 \
+    --json number,title,labels \
   | python3 -c 'import sys,json; \
 print("\n".join(str(i["number"]) for i in json.load(sys.stdin) \
-  if "field-verified" not in [l["name"] for l in i["labels"]]))'
+  if "ORGANIC-phase1" in i["title"] \
+  and "field-verified" not in [l["name"] for l in i["labels"]]))'
 ```
 
 For each such issue, dispatch a fresh verify agent scoped to it,
@@ -217,8 +223,21 @@ zero OPEN `ORGANIC-phase1-*` issues AND last rotation all-PASS/SKIP) is
 `gh` query to get the open-issue count, then let the program decide:
 
 ```bash
-N=$(gh issue list --search "ORGANIC-phase1 in:title" --state open \
-      --json number -q 'length')
+# NOT `gh issue list --search` (vibe-ic#554). `--search` routes through
+# GitHub's search INDEX, which returns 0 for this repository regardless of
+# content. Positive control, measured:
+#     --search "Actions in:title" --state open  ->  0    WRONG (#550 is open
+#                                                          and has it in the title)
+#     list + filter locally                     ->  1    correct
+# A broken query and a finished job then produce the same number, and that
+# number IS the STOP decision.
+#
+# `|| exit 1` is load bearing: the counter exits 2 when it could not count,
+# and passing an empty or zero N on a FAILED measurement satisfies clause (2)
+# — the exact substitution this is about. CONTINUE is the safe direction; a
+# loop that runs one extra round costs a round, a loop that stops early
+# reports the work as finished.
+N=$(python3 programs/open_organic_issue_count.py "ORGANIC-phase1") || exit 1
 python3 programs/phase1_loop_stop_condition_check.py \
     --state <state.json> --open-organic-issues "$N"
 # exit 0 = STOP, exit 1 = CONTINUE, exit 2 = bad state
