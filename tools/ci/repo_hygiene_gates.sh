@@ -116,6 +116,11 @@ run "L-doc field producer"              "$ROOT" python3 "$PG/l_doc_field_produce
 # only on the machine that wrote it. 159 of 172 were in that state and it made
 # the evidence-citation verdict differ between local and CI on the same commit.
 run "tracked-symlink portability"       "$ROOT" python3 "$PG/tracked_symlink_portability_check.py"
+# The defect the line above deliberately declines. Its subject is whether a
+# pointer is relative and stays inside the repo; a target that exists nowhere
+# is a missing FILE, which its own comment says is different — and for months
+# the count was reported on every run with nothing failing on it (#555, #556).
+run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_target_present_check.py" --root "$ROOT"
 
 # vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log
 # is unverifiable, and the failure is silent.
