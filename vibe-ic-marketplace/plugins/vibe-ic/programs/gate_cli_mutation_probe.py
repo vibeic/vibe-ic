@@ -146,7 +146,13 @@ def probe(program: str, limit: Optional[int] = None, timeout: int = 240,
     if made is None:
         return {"program": program, "state": "NO_ENTRY"}
     mutated, entry = made
-    tests_dir = root / "tests"
+    # `tests/` when there is one, the programs directory itself otherwise.
+    # `--programs-root` exists so this probe can be pointed at another tree, and
+    # that only half worked: vibeic-eda keeps its gates and its tests in the SAME
+    # directory, so all five of its gates came back NO_TEST — reported as "a gap
+    # in the MEASUREMENT, not a verdict", which is honest and still leaves five
+    # gates unprobed for a reason that is this program's, not theirs.
+    tests_dir = root / "tests" if (root / "tests").is_dir() else root
     sel = (naming_tests(program, tests_dir)[:limit] if limit
            else naming_tests(program, tests_dir))
     if not sel:

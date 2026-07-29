@@ -233,3 +233,32 @@ def test_the_probe_can_still_report_SILENT(tmp_path):
     assert "SILENT" in r.stdout, (
         "a gate whose tests cannot see it was neutered still reported CAUGHT — "
         "the probe is asserting, not measuring:\n" + r.stdout + r.stderr)
+
+
+def test_the_probe_finds_tests_when_they_sit_beside_the_programs():
+    """`--programs-root` exists to point this probe at another tree, and it only
+    half worked.
+
+    vibeic-eda keeps its gates and its tests in the SAME directory, so all five
+    of its gates came back NO_TEST — reported honestly as "a gap in the
+    MEASUREMENT, not a verdict", and still five gates unprobed for a reason
+    belonging to this program rather than to them. Pointed properly it found two
+    SILENT gates immediately, one of them real: `check_pins_current` had eleven
+    tests and none drove `main()`.
+    """
+    import gate_cli_mutation_probe as P
+    import inspect
+    src = inspect.getsource(P.probe if hasattr(P, "probe") else P)
+    assert 'root / "tests" if (root / "tests").is_dir() else root' in src, \
+        ("tests_dir is pinned to root/tests, so a tree that keeps its tests "
+         "beside its programs reports NO_TEST for every gate")
+
+
+def test_naming_tests_accepts_an_explicit_directory(tmp_path):
+    """The parameter that makes the fallback usable — asserted by driving it."""
+    import gate_cli_mutation_probe as P
+    t = tmp_path / "test_thing.py"
+    t.write_text("import my_gate as M\n\ndef test_x():\n    M.main([])\n")
+    found = P.naming_tests("my_gate", tmp_path)
+    assert [p.name for p in found] == ["test_thing.py"]
+    assert P.naming_tests("other_gate", tmp_path) == []
