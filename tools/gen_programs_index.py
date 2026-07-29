@@ -79,10 +79,54 @@ def _wave_label(text: str) -> str:
     return ""
 
 
+#: Provenance markers this repo leads docstrings with: a version, a wave, a
+#: backlog id, an analog-phase id (`A6 deterministic gate`). Deliberately
+#: anchored and length-bounded — a real description that merely BEGINS with a
+#: version ("v2 of the width resolver, now separator-insensitive") is long
+#: enough to fall outside and is left alone.
+_BARE_TAG_RE = re.compile(
+    r"^(?:v?\d[\w.]*|Wave\s*\d+[\w\s./-]*|BACKLOG[\w\s./-]*|[A-Z]\d+\s[\w\s./-]*)"
+    r"[.]?$")
+
+
+def _is_a_bare_tag(text: str) -> bool:
+    return len(text) < 30 and bool(_BARE_TAG_RE.match(text.strip()))
+
+
+def _next_prose_line(docstring: str):
+    """The first line after the summary that carries actual prose.
+
+    Skips blanks and underline rules (`====`, `----`), which are section
+    decoration rather than content.
+    """
+    for line in docstring.strip().splitlines()[1:]:
+        s = line.strip()
+        if len(s) > 25 and not set(s) <= set("=-~ "):
+            return s
+    return None
+
+
 def _title(docstring: str, fallback_name: str) -> str:
     if not docstring:
         return fallback_name
-    first = docstring.splitlines()[0].strip()
+    # THE SUMMARY IS THE FIRST PARAGRAPH, NOT THE FIRST LINE. Many docstrings
+    # here wrap it across two or three lines before the first blank, and taking
+    # only line 0 truncated them mid-phrase in the index:
+    #
+    #   "agent_report_sha256_attestation_check.py — verify the project's"
+    #   "final report attests every canonical chip / FPGA artefact with a"
+    #   "SHA256 hash."
+    #        indexed as:  verify the project's
+    #
+    # Joining the paragraph fixes those AND subsumes the wrapped-tag case
+    # ("A6 deterministic gate" + "(Per-Block Physical Verification: DRC + LVS)."),
+    # so no special join rule is needed for it.
+    para = []
+    for line in docstring.strip().splitlines():
+        if not line.strip():
+            break
+        para.append(line.strip())
+    first = " ".join(para)
     # "module — what it does" → drop the module name, keep the description.
     #
     # SPLIT ONLY WHEN WHAT PRECEDES THE DASH IS THE MODULE NAME OR A VERSION TAG.
@@ -114,6 +158,21 @@ def _title(docstring: str, fallback_name: str) -> str:
         break
     if not first:
         return fallback_name
+
+    # A TAG IS NOT A DESCRIPTION. Rows carried `v0.2.97`, `Wave 39 / D3`,
+    # `BACKLOG-v11 P0.6.` — the whole of what their summary says once the module
+    # name is removed, telling a reader nothing about the program.
+    #
+    # Fixing the GENERATOR rather than ~98 docstrings: those docstrings are not
+    # wrong, they lead with a provenance tag by convention. It is the index that
+    # has to present something usable.
+    # …and when the whole first PARAGRAPH is only a tag — the shape where a
+    # blank line separates the provenance marker from the description — the
+    # substance is in the paragraph after it.
+    if _is_a_bare_tag(first):
+        nxt = _next_prose_line(docstring)
+        if nxt:
+            first = nxt
     if len(first) > 140:
         first = first[:137] + "..."
     return first

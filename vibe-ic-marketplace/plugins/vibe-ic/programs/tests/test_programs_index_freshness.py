@@ -137,3 +137,56 @@ def test_a_version_prefix_is_still_dropped():
     title = _title_fn()
     assert title("v0.1.51 — phase1 output post-processor.",
                  "phase1_post_process") == "phase1 output post-processor."
+
+
+def test_a_wrapped_summary_is_joined_not_truncated():
+    """The summary is the first PARAGRAPH; taking line 0 cut it mid-phrase.
+
+        "agent_report_sha256_attestation_check.py — verify the project's"
+        "final report attests every canonical chip / FPGA artefact with a"
+        "SHA256 hash."
+             indexed as:  verify the project's
+
+    Two-thirds of the sentence was in the index's own file and it printed the
+    first third. Found by counting how many of 1003 rows carry a title under 22
+    characters: 102 did.
+    """
+    title = _title_fn()
+    got = title("agent_report_sha256_attestation_check.py — verify the project's\n"
+                "final report attests every canonical chip / FPGA artefact with a\n"
+                "SHA256 hash.",
+                "agent_report_sha256_attestation_check")
+    assert got == ("verify the project's final report attests every canonical "
+                   "chip / FPGA artefact with a SHA256 hash.")
+
+
+def test_the_paragraph_stops_at_the_blank_line():
+    """…or "first paragraph" quietly becomes "the whole docstring"."""
+    title = _title_fn()
+    got = title("A committed pointer to a file that does not exist — anywhere.\n"
+                "\n"
+                "WHY THIS EXISTS\n"
+                "===============\n"
+                "A long explanation that must not reach the index.",
+                "tracked_symlink_target_present_check")
+    assert got == "A committed pointer to a file that does not exist — anywhere."
+
+
+def test_a_tag_only_summary_falls_through_to_the_next_paragraph():
+    """When a blank line separates the provenance marker from the description,
+    joining the paragraph yields only the marker, so the fallback takes over."""
+    title = _title_fn()
+    got = title("programs/acceptance_evidence_in_fix_comment_check.py — v0.2.97\n"
+                "\n"
+                "Deterministic pre-close gate for the core-agent loop (#447).",
+                "acceptance_evidence_in_fix_comment_check")
+    assert got == "Deterministic pre-close gate for the core-agent loop (#447)."
+
+
+def test_a_real_description_beginning_with_a_version_is_left_alone():
+    """The tag test is length-bounded on purpose: a genuine summary that merely
+    STARTS with a version is not a tag, and replacing it would lose it."""
+    title = _title_fn()
+    got = title("v2 of the width resolver, now separator-insensitive across "
+                "underscore and space forms.\n\nMore.", "verilog_width_resolve")
+    assert got.startswith("v2 of the width resolver")
