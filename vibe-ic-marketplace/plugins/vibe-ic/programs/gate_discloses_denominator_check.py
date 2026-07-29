@@ -416,6 +416,116 @@ def _drive_on_empty_project(prog: Path, timeout: int) -> Dict:
                             else "(no output at all)")}
 
 
+#: A path that does not exist, and cannot be made to exist by a gate that
+#: mkdir -p's its own outputs.
+_ABSENT = "/nonexistent/vibeic-absent-project-fixture/no-such-project"
+
+#: Two phrasings the shared `_REASON_RE` does not reach, both measured in this
+#: population: "gate not YET applicable", and "no <noun> directory" with no
+#: trailing found/present verb. Widened HERE rather than in `_REASON_RE`,
+#: because loosening the shared predicate would also loosen the empty-project
+#: fixture, which is not the thing being changed.
+_ABSENT_REASON_RE = re.compile(
+    r"not\s+(?:yet\s+)?applicable"
+    r"|\bno\s+[\w./*-]+(?:\s+[\w./*-]+){0,4}\s+"
+    r"(?:director(?:y|ies)|tree|file|dir)\b", re.IGNORECASE)
+
+
+def _honest_about_an_absent_project(out: str) -> bool:
+    """A reason, OR every count it published is zero.
+
+    THE DISCRIMINATOR IS A NONZERO COUNT, and getting here took two wrong
+    standards, each caught by replaying the real strings.
+
+    `discloses` (the empty-project standard) accepts a bare count, and passed
+    the very program this fixture was built for: "checked 1 project(s) --
+    ALL_PASS" contains a digit. Over a path that is not there, a count of ONE
+    is not a denominator; it asserts that one project was opened when none was.
+
+    `discloses_a_reason` (stricter) then flagged 7, and all 7 were honest:
+    `Files: 0  Errors: 0  Warnings: 0  Result: PASS`, `PASS -- 0 waveform
+    artifact(s)`. A count of ZERO is a true statement about an absent project
+    and a reader can act on it. Rejecting those would have made the fixture
+    fire on correct behaviour, which is how a gate earns being switched off.
+
+    So the line is between a count that is zero and a count that is not:
+
+        "checked 1 project(s) -- ALL_PASS"                -> not honest
+        "Files: 0  Errors: 0  Warnings: 0  Result: PASS"  -> honest
+        "PASS -- 0 waveform artifact(s)"                  -> honest
+        "no hw-debug-loop evidence directory; not yet applicable" -> honest
+        "[NOT CHECKED] no such project ... nothing was examined"  -> honest
+    """
+    if discloses_a_reason(out) or _ABSENT_REASON_RE.search(out):
+        return True
+    ints = [int(m) for m in re.findall(r"\b\d+\b", out)]
+    return bool(ints) and all(i == 0 for i in ints)
+
+
+def _drive_on_absent_project(prog: Path, timeout: int = 120) -> Dict:
+    """The SECOND fixture: a project path that is not there at all.
+
+    The empty-project fixture above creates the directory (``input/docs/`` and
+    ``reports/``), so it asks "what does a gate say when the ARTEFACTS are
+    missing". It never asks what a gate says when the PROJECT is missing, and
+    the two answers are not the same code path — one walks a real tree and
+    finds nothing, the other never gets a tree at all.
+
+    That gap held two real defects, both found in v1.8.29/30 by running gates
+    against a typo'd path rather than by anything failing:
+
+        opcode_field_width_consistency_check  "checked 1 project(s) -- ALL_PASS"
+        analog_lef_gds_outline_check          "no analog_block_list.json --
+                                               digital-only project"
+
+    The first exited 0 having opened nothing; the second exited 0 and stated a
+    conclusion about a design nobody looked at. Both are now fixed, so this
+    fixture finds NOTHING today — it is a ratchet that holds those two and
+    catches the third.
+
+    THE STANDARD IS THE STRONGER ONE, and a positive control is why.
+
+    The empty-project fixture accepts a bare COUNT as disclosure (see
+    `_NUMBER_ONLY_DECISION`) — over a real tree, "scanned 0 files" is a
+    denominator a reader can act on. Replayed here against the pre-fix program
+    that motivated this fixture, that standard PASSES it:
+
+        "checked 1 project(s) -- ALL_PASS"   discloses=True  (the "1")
+
+    The count is not a denominator over a project that is not there; it is a
+    false one, asserting that one project was opened when none was. So this
+    fixture requires `discloses_a_reason` — the gate must say WHY it looked at
+    nothing, not merely how much nothing it looked at.
+
+    Measured on the three real strings:
+
+        "checked 1 project(s) -- ALL_PASS"                  reason=False
+        "[NOT CHECKED] no such project: ... nothing was examined"  reason=True
+        "VACUOUS_PASS: no analog_block_list.json under ..."        reason=True
+
+    Without that control this fixture would have shipped unable to fail, which
+    is the defect it exists to catch.
+
+    The path is passed as an ARGUMENT (not via cwd, which cannot be set to a
+    directory that does not exist), so this drives the gate's argument-handling
+    path — which is exactly where both defects lived.
+    """
+    try:
+        r = subprocess.run([sys.executable, str(prog), _ABSENT],
+                           capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"gate": prog.stem, "rc": None,
+                "unrunnable": f"exceeded the {timeout}s probe budget"}
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"gate": prog.stem, "rc": None,
+                "unrunnable": f"could not be driven: {exc}"}
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    return {"gate": prog.stem, "rc": r.returncode,
+            "disclosed": _honest_about_an_absent_project(out),
+            "output_tail": (out.splitlines()[-1][:200] if out
+                            else "(no output at all)")}
+
+
 def audit_project_gates(programs_dir: Path, timeout: int = 120,
                         workers: int = 0) -> Tuple[str, List[Dict], Dict]:
     """Drive EVERY `*_check.py` against an empty project; ratchet the result.
@@ -482,6 +592,27 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
                 "output_tail": res["output_tail"],
             })
 
+    # --- the SECOND fixture: the same question over a project that is not there
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        absent_results = list(ex.map(
+            lambda p: _drive_on_absent_project(p, timeout), progs))
+    absent_rc0 = absent_silent = 0
+    for res in absent_results:
+        if res.get("unrunnable") or res["rc"] != 0:
+            continue
+        absent_rc0 += 1
+        if res["disclosed"]:
+            continue
+        absent_silent += 1
+        findings.append({
+            "gate": res["gate"], "kind": "PASS_ON_A_PROJECT_THAT_IS_NOT_THERE",
+            "detail": ("answered rc 0 for a path that does not exist, without "
+                       "disclosing that nothing was opened. A caller cannot "
+                       "tell a typo'd path from a clean chip, and the clean "
+                       "answer is the one that gets acted on"),
+            "output_tail": res["output_tail"],
+        })
+
     # The other direction: an inventory entry that no longer describes reality.
     for gate in sorted(_EMPTY_PROJECT_SILENT_PASS):
         if gate not in silent:
@@ -512,6 +643,10 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
         "rc_zero_number_only": len(number_only),
         "rc_zero_number_only_decision": _NUMBER_ONLY_DECISION,
         "rc_zero_silent": len(silent),
+        # The second fixture publishes its own census for the same reason the
+        # first does: "0 findings" and "the fixture never ran" print the same.
+        "absent_rc_zero": absent_rc0,
+        "absent_rc_zero_silent": absent_silent,
         "inventory_size": len(_EMPTY_PROJECT_SILENT_PASS),
         "inventory_measured_on": _MEASURED_ON,
         "undriveable_size": len(_UNDRIVEABLE),
@@ -575,6 +710,9 @@ def _main_project_population(a) -> int:
           f"{stats['rc_zero_reasoned']} / number-only "
           f"{stats['rc_zero_number_only']}) | silent: "
           f"{stats['rc_zero_silent']}", file=sys.stderr)
+    print(f"  …and against a project path that DOES NOT EXIST: rc 0: "
+          f"{stats['absent_rc_zero']} | not disclosing: "
+          f"{stats['absent_rc_zero_silent']}", file=sys.stderr)
     print(f"  NUMBER-ONLY (passes; published, not hidden): "
           f"{_NUMBER_ONLY_DECISION}", file=sys.stderr)
     if stats["rc_outside_convention"]:
