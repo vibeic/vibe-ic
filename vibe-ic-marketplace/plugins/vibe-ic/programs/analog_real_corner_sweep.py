@@ -1047,6 +1047,26 @@ _SPEC_NAME_ALIASES = {
     "dropout": {"dropout", "vdropout", "headroom"},
     "psrr":    {"psrr", "supplyrejection"},
     "iq":      {"iq", "iquiescent", "quiescentcurrent"},
+    # ── generic analog quantities (every block type, not just regulators) ──
+    "vref":    {"vref", "vreference", "referencevoltage"},
+    "vdd":     {"vdd", "vddcore", "vcore", "corevoltage", "vcc"},
+    # ── converter / modulator family ──
+    # Every entry below is standard data-converter spec vocabulary; no design
+    # name appears. Without these the table's whole vocabulary was regulator-
+    # only, so l5_block_specs() returned {} for ANY non-LDO analog block and
+    # l5_analog_block_spec_actionable_check blocked Phase 1 on it.
+    "enob":    {"enob", "effectivebits", "effectivenumberofbits",
+                "effectiveresolution"},
+    "osr":     {"osr", "oversampling", "oversamplingratio"},
+    "order":   {"order", "looporder", "loopfilterorder", "modulatororder"},
+    "fclk":    {"fclk", "fclock", "clockfrequency", "clkfreq", "fs",
+                "fsample", "samplingfrequency", "samplingrate",
+                "modulatorclock"},
+    "vindiff": {"vindiff", "vindifferential", "differentialinput",
+                "inputrange", "vinrange", "fullscale", "vfs"},
+    "sndr":    {"sndr", "sinad", "signaltonoiseanddistortion"},
+    "snr":     {"snr", "signaltonoise"},
+    "resolution": {"resolution", "nbits", "numberofbits", "bits"},
 }
 
 

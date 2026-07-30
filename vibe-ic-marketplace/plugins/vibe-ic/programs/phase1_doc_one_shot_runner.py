@@ -32857,7 +32857,15 @@ def _v455_attach_block_specs(blocks: List[dict],
     if not tables:
         return
     for b in blocks:
-        if not isinstance(b, dict) or b.get("spec"):
+        if not isinstance(b, dict):
+            continue
+        # Skip ONLY when the block already carries the form the consumer
+        # reads (a dict with specs[]). A bare truthiness test here let a
+        # junk STRING scraped by an earlier, cruder pass pre-empt the
+        # structured table parsed right above — the worse value winning
+        # purely by running first.
+        _existing = b.get("spec")
+        if isinstance(_existing, dict) and _existing.get("specs"):
             continue
         cand = {str(b.get("name", "")).lower(),
                 str(b.get("type", "")).lower()}
