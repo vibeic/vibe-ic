@@ -135,6 +135,19 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 #: Where the pytest harness bounds are declared. Relative to the REPO root.
 WORKFLOW_DIR_REL = ".github/workflows"
 
+#: …and where they are declared now that GitHub Actions is retired (#550:
+#: `Actions has been disabled for this user.`, appeal rejected). `ci.yml` and
+#: `gatekeeper-ci.yml` moved to `.github/workflows-disabled/`, and the harness
+#: that actually runs pytest is the local landing script. Resolving from BOTH
+#: keeps this check honest either way: it does not assume CI is dead, and it
+#: does not assume CI is alive. Losing its only source is what surfaced the gap
+#: — it reported CANNOT DETERMINE (rc 2) rather than passing, which is the
+#: behaviour that made the omission visible instead of silent.
+EXTRA_HARNESS_RELS = (
+    "tools/gatekeeper-land.sh",
+    ".github/workflows-disabled",
+)
+
 #: `pytest ... --timeout=N` / `--timeout N`, anywhere in one logical shell
 #: command. Continuation lines are joined before matching so a bound written
 #: on the line after `pytest` is still found.
@@ -211,11 +224,20 @@ def harness_bounds(repo_root: Path) -> List[HarnessBound]:
     and they disagree. A resolver that returned the first match would answer
     with whichever file the glob happened to yield first.
     """
-    wf_dir = Path(repo_root) / WORKFLOW_DIR_REL
     found: List[HarnessBound] = []
-    if not wf_dir.is_dir():
+    sources: List[Path] = []
+    wf_dir = Path(repo_root) / WORKFLOW_DIR_REL
+    if wf_dir.is_dir():
+        sources += sorted(list(wf_dir.glob("*.yml")) + list(wf_dir.glob("*.yaml")))
+    for rel in EXTRA_HARNESS_RELS:
+        q = Path(repo_root) / rel
+        if q.is_file():
+            sources.append(q)
+        elif q.is_dir():
+            sources += sorted(q.glob("*.disabled")) + sorted(q.glob("*.yml"))
+    if not sources:
         return found
-    for wf in sorted(list(wf_dir.glob("*.yml")) + list(wf_dir.glob("*.yaml"))):
+    for wf in sources:
         try:
             text = wf.read_text(errors="replace")
         except OSError:

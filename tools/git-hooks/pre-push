@@ -98,8 +98,37 @@ if [ -n "${PUSH_RANGE:-}" ]; then
            nda_diff_scan_check.py --rev-range "$PUSH_RANGE"
   run_gate "version bumped monotonically vs the remote" \
            version_bump_monotonic_check.py --plugin-json "$PJSON" --base "$PUSH_BASE"
+  run_gate "agent check-in scope" \
+           agent_checkin_scope_guard.py --role core-agent --base "$PUSH_BASE"
+  run_gate "benchmark evidence structure" \
+           benchmark_evidence_structure_check.py --tree benchmark-data --changed-since "$PUSH_BASE"
+  git log --format='%B' "$PUSH_RANGE" > /tmp/gk_push_commit_text.txt 2>/dev/null
+  run_gate "git prohibition guard" \
+           git_prohibition_guard.py /tmp/gk_push_commit_text.txt
 fi
 run_gate "marketplace <-> plugin version sync" marketplace_version_sync_check.py
+
+# --- the expensive tier, enforced by stamp rather than by waiting -------------
+# `repo_hygiene_gates.sh` (37 gates) and `plugin_full_audit.py` take minutes.
+# Running them in a hook would make the hook slow enough to be bypassed, and a
+# bypassed hook enforces nothing. Instead `tools/gatekeeper-land.sh` runs them
+# and writes the verified commit into `.git/gatekeeper-stamp`; this checks the
+# stamp names the commit actually being pushed. Amend or add a commit and the
+# stamp stops matching, so it cannot be reused.
+if [ -n "${PUSH_RANGE:-}" ]; then
+  STAMP="$REPO_ROOT/.git/gatekeeper-stamp"
+  HEAD_SHA="$(git rev-parse HEAD)"
+  if [ ! -f "$STAMP" ]; then
+    echo "pre-push: FAILED — the full suites have not been run for this commit" >&2
+    echo "    run: tools/gatekeeper-land.sh" >&2
+    FAILED=1
+  elif [ "$(cat "$STAMP")" != "$HEAD_SHA" ]; then
+    echo "pre-push: FAILED — the gatekeeper stamp is for a different commit" >&2
+    echo "    stamped: $(cut -c1-9 < "$STAMP")   pushing: ${HEAD_SHA:0:9}" >&2
+    echo "    re-run:  tools/gatekeeper-land.sh" >&2
+    FAILED=1
+  fi
+fi
 
 if [ "$FAILED" -ne 0 ]; then
   echo "pre-push: BLOCKED — see the gate(s) named above." >&2
