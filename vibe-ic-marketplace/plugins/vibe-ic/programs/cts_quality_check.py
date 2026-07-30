@@ -282,14 +282,56 @@ def _target_from_clock_plan(project: Path):
 # ---------------------------------------------------------------------------
 # DEF parsing — count placed clock-buffer instances + UNPLACED detection
 # ---------------------------------------------------------------------------
-def _parse_def(text: str):
+#: Report lines in which OpenROAD NAMES the master(s) it actually used for the
+#: clock tree. Preferred over any cell-name heuristic — see _cts_declared_masters.
+_CTS_MASTER_RES = (
+    re.compile(r"CTS-0050\]\s*Root buffer is\s+(\S+?)\.?\s*$", re.M),
+    re.compile(r"CTS-0051\]\s*Sink buffer is\s+(\S+?)\.?\s*$", re.M),
+    re.compile(r"CTS-0049\]\s*Characterization buffer is\s+(\S+?)\.?\s*$", re.M),
+)
+
+
+def _cts_declared_masters(report_text: str):
+    """The clock-tree buffer MASTERS the CTS tool itself named, lower-cased.
+
+    v1.8.38 — why this exists (spm x gf180mcuD, MEASURED). The DEF count below
+    used to be a pure cell-NAME token match (``clkbuf``/``clkinv``/...). Some
+    PDKs' mapper PREFERS the clk-named family for ORDINARY logic: MEASURED 60
+    ``clkinv_*`` against 19 plain ``inv_*`` in one netlist, so a clk-prefixed cell
+    name carries no clock-tree meaning and 56 logic inverters were counted as
+    clock-tree buffers. (An earlier draft said clkinv was the ONLY inverter family
+    in that PDK. That is false — a plain ``inv_*`` family exists. The corrected
+    mechanism is what makes this fix general to any PDK rather than one quirk.) The DEF "clock buffer" count came out 72
+    against OpenROAD's own "Created 9 clock buffers", tripped
+    BUFFER_COUNT_INCONSISTENT (>6x apart) and FAILED step 19 on a healthy clock
+    tree. Restricted to the masters the tool names (root/sink/characterization
+    buffer), the same DEF counts 12 (9 root + 3 sink) against the report's 9 —
+    consistent.
+
+    "Is this instance part of the clock tree?" is a question about CONNECTIVITY,
+    and a cell name is only ever a proxy for it. When the tool states which
+    masters it used, that statement is better evidence than any naming
+    convention, and it is PDK-agnostic by construction. Empty result -> the
+    caller falls back to the token match, so a report that names nothing behaves
+    exactly as before."""
+    out = set()
+    for rx in _CTS_MASTER_RES:
+        for m in rx.finditer(report_text or ""):
+            name = (m.group(1) or "").strip().strip('."').lower()
+            if name:
+                out.add(name)
+    return out
+
+
+def _parse_def(text: str, masters=None):
     """Return (total_components, clk_buf_instances, unplaced_count,
     declared_components) parsed from a DEF's COMPONENTS section.
 
     declared_components is the integer on the ``COMPONENTS N ;`` header
-    (None if not present). clk_buf_instances counts instances whose
-    cell-name matches a clock-buffer/inverter token. unplaced_count counts
-    instances explicitly marked UNPLACED."""
+    (None if not present). unplaced_count counts instances explicitly marked
+    UNPLACED. clk_buf_instances counts instances of ``masters`` when that
+    tool-declared allow-list is supplied, else instances whose cell-name matches
+    a clock-buffer/inverter token (the pre-v1.8.38 heuristic)."""
     in_comp = False
     declared = None
     total = 0
@@ -303,7 +345,11 @@ def _parse_def(text: str):
             return
         total += 1
         joined = " ".join(record)
-        if _CLK_CELL_RE.search(joined):
+        if masters:
+            low = joined.lower()
+            if any(mst in low for mst in masters):
+                clk += 1
+        elif _CLK_CELL_RE.search(joined):
             clk += 1
         if re.search(r"\bUNPLACED\b", joined):
             unplaced += 1
@@ -428,9 +474,15 @@ def main(argv=None):
         return _emit(args, project, "FAIL", def_rel, rpt_rel, waiver,
                      metrics, findings, 1)
 
-    total_comp, def_clk_bufs, unplaced, declared = _parse_def(def_text)
+    _cts_masters = _cts_declared_masters(rpt_text)
+    total_comp, def_clk_bufs, unplaced, declared = _parse_def(
+        def_text, masters=_cts_masters)
     metrics["def_total_components"] = total_comp
     metrics["def_clock_buffers"] = def_clk_bufs
+    metrics["def_clock_buffer_masters"] = sorted(_cts_masters)
+    metrics["def_clock_buffer_count_basis"] = (
+        "masters named by the CTS report (CTS-0049/0050/0051)" if _cts_masters
+        else "cell-name token heuristic (report named no master)")
     metrics["def_unplaced"] = unplaced
     metrics["def_declared_components"] = declared
     metrics["report_created_buffers"] = r["created_buffers"]
