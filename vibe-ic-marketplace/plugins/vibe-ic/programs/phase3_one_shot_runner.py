@@ -21989,6 +21989,45 @@ def mapped_netlist_available_for_atpg(project: Path) -> Tuple[bool, str]:
         return False, f"mapped-netlist probe unavailable: {exc}"
 
 
+def _clear_superseded_dft_nonmeasurements(dft_dir: Path) -> List[str]:
+    """Remove phase-2 non-measurement records once a real measurement supersedes them.
+
+    Canonical Step 11 used to run in phase 2 against a netlist the phase-3 runner
+    had not written yet (the v1.8.51 ordering defect). It gave up, renamed its
+    artefacts to ``*.unmeasured.*`` and wrote ``dft_atpg_not_run.json`` disclosing
+    a CAPABILITY GAP. Both statements were true at that instant. Once phase 3
+    re-measures they are FALSE, and leaving them is how a later audit -- or a
+    human -- quotes a non-measurement as the result.
+
+    CONSERVATIVE BY CONSTRUCTION, and this is the load-bearing part: a sibling is
+    removed ONLY when its canonical counterpart exists AND is non-empty. An
+    unmeasured record that is still the only evidence SURVIVES, because deleting
+    it would erase a disclosure rather than supersede it -- strictly worse than the
+    stale artefact this exists to clear. A 0-byte canonical file supersedes nothing
+    (an empty artefact is not a passing artefact).
+
+    Returns the names removed, so the caller can say what it did rather than
+    cleaning up silently. Never raises: hygiene must not break a successful run.
+    """
+    cleared: List[str] = []
+    try:
+        for canon, stale in (("atpg_coverage.rpt", "atpg_coverage.unmeasured.rpt"),
+                             ("coverage.json", "coverage.unmeasured.json"),
+                             ("coverage.yml", "coverage.unmeasured.yml")):
+            c, s = dft_dir / canon, dft_dir / stale
+            if c.is_file() and c.stat().st_size > 0 and s.exists():
+                s.unlink()
+                cleared.append(stale)
+        nr = dft_dir / "dft_atpg_not_run.json"
+        cov = dft_dir / "coverage.json"
+        if nr.exists() and cov.is_file() and cov.stat().st_size > 0:
+            nr.unlink()
+            cleared.append("dft_atpg_not_run.json")
+    except OSError:
+        pass
+    return cleared
+
+
 def run_step11_dft_after_synth(project: Path, top: str,
                                container: str) -> List[StepResult]:
     """Run canonical Step 11 (+12, +13) now that the mapped netlist exists.
@@ -22038,10 +22077,16 @@ def run_step11_dft_after_synth(project: Path, top: str,
             f"a real failure of an implemented capability, not a capability "
             f"gap.",
             extras={"exception": f"{type(exc).__name__}: {exc}"})]
+    _stale_cleared = _clear_superseded_dft_nonmeasurements(
+        _pl.dft_dir(project) if hasattr(_pl, "dft_dir")
+        else project / "phase2" / "stage2" / "dft")
+
     out = [StepResult(
         "dft_atpg_order_selfheal", "PASS", time.time() - t0,
         f"canonical Step 11 re-measured after synth: {why_map} "
-        f"[trigger: {why_needs}]",
+        f"[trigger: {why_needs}]"
+        + (f"; cleared {len(_stale_cleared)} superseded non-measurement "
+           f"artefact(s): {', '.join(_stale_cleared)}" if _stale_cleared else ""),
         extras={"reinvoked": "design_one_shot_runner.step_dft_lec_chain",
                 "trigger": why_needs, "netlist_probe": why_map,
                 "rows": [f"{r.status} {r.name}" for r in rows]})]
