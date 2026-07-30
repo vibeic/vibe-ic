@@ -735,6 +735,31 @@ TARGETS = {
     "comparator":  {"key":"vout","target":None, "tol":None,  "label":"latch decision split (V)"},
 }
 
+# R6-FIX-3 — block-type SPELLING aliases: a type name the L5 extractor may emit
+# that denotes a deck this module ALREADY has, under a different word.
+#
+# `TARGETS["trim"]["label"]` is literally `"DAC out (V)"` and `T["trim"]` is the
+# deck that sweeps it — i.e. the trim deck IS the DAC deck. But a Phase-1
+# extractor that reads the word "DAC" in the input emits `type="dac"`, which is
+# in neither `TARGETS` nor `T`, so `l5_analog_block_spec_actionable_check`
+# reported `type='dac' has no deck in the consumer's own table (known: 12
+# types)` and `analog_real_corner_sweep` built no testbench for it. That is a
+# VOCABULARY gap, not a missing capability — so the fix is an alias, NOT a
+# duplicated deck (a second `dac` deck would drift from `trim`'s).
+#
+# chip-AGNOSTIC: circuit-topology synonyms only; no part number, no chip class.
+BLOCK_TYPE_ALIASES = {
+    "dac": "trim",
+}
+
+
+def canonical_block_type(btype):
+    """Resolve a block-type spelling to the one this module decks.
+
+    Identity for a type already in `TARGETS`/`T`. chip-AGNOSTIC."""
+    t = str(btype or "").strip().lower()
+    return BLOCK_TYPE_ALIASES.get(t, t)
+
 # ─────────────────── Helpers ───────────────────
 
 def _docker(container, cmd, timeout=120):
@@ -1000,20 +1025,23 @@ def _run_ngspice(container, sp_in_container, cwd=None):
 def _pick_block_type(block, project):
     """L5-driven type selection — does NOT use topology.md keyword match."""
     # Try analog_block_list.json first
+    # R6-FIX-3: every return goes through canonical_block_type() so a spelling
+    # this module decks under another word (`dac` -> `trim`) resolves instead of
+    # dead-ending at "no deck in the consumer's own table".
     bl = project / "phase3" / "analog" / "analog_block_list.json"
     if bl.is_file():
         d = json.load(open(bl))
         for b in d.get("blocks", []):
             if b.get("name") == block:
-                return b.get("type", block)
+                return canonical_block_type(b.get("type", block))
     # Try L5
     l5 = project / "phase1" / "generated_docs" / "L5_ADI_SPEC.json"
     if l5.is_file():
         d = json.load(open(l5))
         for b in d.get("analog_blocks", []):
             if b.get("name") == block:
-                return b.get("type", block)
-    return block  # fallback: name == type
+                return canonical_block_type(b.get("type", block))
+    return canonical_block_type(block)  # fallback: name == type
 
 def _verdict(meas, target):
     if target["target"] is None or target["key"] not in meas:
@@ -1047,6 +1075,16 @@ _SPEC_NAME_ALIASES = {
     "dropout": {"dropout", "vdropout", "headroom"},
     "psrr":    {"psrr", "supplyrejection"},
     "iq":      {"iq", "iquiescent", "quiescentcurrent"},
+    # R6-FIX-2 (a) — `reff` was MISSING, and it is `TARGETS["pull"]["key"]`.
+    # Every one of the six original canonical keys is an LDO quantity, so a
+    # `pull` block could never inherit an L5 value however well Phase 1
+    # extracted it: `_normalize_spec_name("Reff")` returned None and
+    # `l5_block_specs` dropped the entry, while
+    # `l5_analog_block_spec_actionable_check` simultaneously DEMANDED a
+    # numerically-bounded spec for that block. The gate was unsatisfiable.
+    "reff":    {"reff", "rpull", "rpullup", "rpulldown", "pullresistance",
+                "pullupresistance", "pulldownresistance",
+                "effectiveresistance", "rout", "routput"},
     # ── generic analog quantities (every block type, not just regulators) ──
     "vref":    {"vref", "vreference", "referencevoltage"},
     "vdd":     {"vdd", "vddcore", "vcore", "corevoltage", "vcc"},
@@ -1069,14 +1107,72 @@ _SPEC_NAME_ALIASES = {
     "resolution": {"resolution", "nbits", "numberofbits", "bits"},
 }
 
+# R6-FIX-2 (b) — per-block-TYPE symbol vocabulary.
+#
+# THE INVARIANT THIS RESTORES: for every block type `t`, a spec named with the
+# symbol this module's OWN `TARGETS[t]["label"]` uses must normalize to
+# `TARGETS[t]["key"]`. It did not. The module labels a bandgap's graded
+# quantity `"Vbg (V)"`, an ESD clamp's `"Vfwd (V)"` and a charge pump's
+# `"V_doubled (V)"`, keys all three to `vout`, and then `_SPEC_NAME_ALIASES`
+# accepted none of `VBG`/`Vfwd`/`V_doubled` — so those blocks could not inherit
+# an L5 spec either. Kept per-TYPE rather than folded into the global `vout`
+# set so that, e.g., an LDO does NOT silently accept a bandgap reference
+# voltage as its output target.
+#
+# ADMISSION RULE, and it is the load-bearing constraint: a token goes in here
+# ONLY if it is an unambiguous conventional SYMBOL for the quantity the type's
+# own label names. Generic measurement words that could denote a DIFFERENT
+# quantity in the same document are deliberately EXCLUDED — notably bare
+# `threshold`/`thresholdvoltage`, which in a real input names an over-voltage
+# REGISTER field far more often than a POR trip point. Admitting it is exactly
+# how a spec the design never stated gets manufactured.
+#
+# chip-AGNOSTIC: analog circuit-topology vocabulary; no part number/chip class.
+_TYPE_SPEC_ALIASES = {
+    "ldo":         {"ldovoltage": "vout", "ldoout": "vout",
+                    "ldooutput": "vout", "regulatedvoltage": "vout"},
+    "bandgap":     {"vbg": "vout", "vref": "vout", "bandgapvoltage": "vout",
+                    "bgvoltage": "vout", "referencevoltage": "vout"},
+    "por":         {"vpor": "vout", "portrip": "vout",
+                    "portripvoltage": "vout"},
+    "esd":         {"vfwd": "vout", "vforward": "vout",
+                    "forwardvoltage": "vout", "clampvoltage": "vout"},
+    "charge_pump": {"vdoubled": "vout", "vpump": "vout",
+                    "pumpoutput": "vout", "pumpedvoltage": "vout"},
+    "pull":        {"reff": "reff", "rpull": "reff"},
+    "trim":        {"dacout": "vout", "dacoutput": "vout",
+                    "trimvoltage": "vout"},
+    "oscillator":  {"biasvoltage": "vout"},
+}
 
-def _normalize_spec_name(name):
-    """Map an L5 spec `name` to a canonical key (or None). chip-AGNOSTIC."""
+
+def _normalize_spec_name(name, btype=None):
+    """Map an L5 spec `name` to a canonical key (or None). chip-AGNOSTIC.
+
+    `btype` (optional) additionally admits the block TYPE's own conventional
+    symbols — see `_TYPE_SPEC_ALIASES`. Without it the behaviour is exactly
+    the pre-R6 global-vocabulary lookup, so no existing caller changes."""
     tok = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+    if not tok:
+        return None
     for canon, aliases in _SPEC_NAME_ALIASES.items():
         if tok in aliases:
             return canon
+    if btype:
+        per_type = _TYPE_SPEC_ALIASES.get(canonical_block_type(btype))
+        if per_type and tok in per_type:
+            return per_type[tok]
     return None
+
+
+def normalize_spec_label(label, btype=None):
+    """PUBLIC: the single source of truth for "does this text name a quantity
+    this module can grade?".
+
+    Exported so the Phase-1 PRODUCER can emit spec names in the vocabulary the
+    consumer actually reads, instead of maintaining a second copy of it that
+    drifts. Returns the canonical key or None. chip-AGNOSTIC."""
+    return _normalize_spec_name(label, btype)
 
 
 def _spec_num(entry, *keys):
@@ -1128,7 +1224,7 @@ def l5_block_specs(project, block, btype=None):
     for e in specs:
         if not isinstance(e, dict):
             continue
-        canon = _normalize_spec_name(e.get("name"))
+        canon = _normalize_spec_name(e.get("name"), btype)
         if not canon or canon in out:
             continue
         val, bound = _spec_num(e, "target", "min", "max")
