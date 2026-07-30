@@ -627,6 +627,60 @@ def audit(project: Path) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# vibe-ic#562 — RE-ADJUDICATION RULES for this gate's published records.
+#
+# THE DRIFT THAT MATTERS HERE is `keep_check_applied`. A PASS means "nothing was
+# removed AND every survivor carries its keep attribute" — but the second half is
+# only checked when some artefact CAN carry that attribute. On a run where none
+# could, `all_keep_attr_intact` is vacuously true and the PASS says nothing about
+# preservation intent, while looking identical on paper to a run that checked and
+# found everything tagged.
+#
+# That is the same shape the rest of this project keeps meeting: an absence
+# rendering as a pass. Re-adjudicated to VACUOUS_PASS so a reader can tell the two
+# apart after the fact.
+import _record_adjudication as _ra  # noqa: E402
+
+
+def _keep_check_vacuity(record: dict):
+    """Would this gate still call this a PASS, given what it actually checked?"""
+    if record.get("verdict") != "PASS":
+        return None
+    if record.get("keep_check_applied"):
+        return None                    # the keep half really was exercised
+    return _ra.Supersession(
+        would_issue="VACUOUS_PASS",
+        because=("the record carries verdict PASS with keep_check_applied "
+                 "false, so no artefact in that run could carry a keep "
+                 "attribute and `all_keep_attr_intact` was vacuously true. The "
+                 "PASS establishes only that no spare was REMOVED; it says "
+                 "nothing about whether preservation intent survived, which is "
+                 "the other half of what this gate exists to check"),
+    )
+
+
+RECORD_ADJUDICATION = _ra.declare(
+    __file__,
+    gate="spare_cell_preservation_check",
+    # Where the verdict is decided; the fingerprint follows the module-local call
+    # closure from here, so `_collect_present_and_tagged` and the tag helpers are
+    # covered without being listed.
+    decision_roots=("evaluate_preservation",),
+    decision_digest="3ad46abb059ddf1a1654902fce8da157455b982722aab85ccaf47cfcafd7d1c1",
+    rules=(
+        _ra.Rule(
+            rule_id="spare_cell_preservation_check.keep-check-was-vacuous",
+            landed_in="#562",
+            requires=("verdict", "keep_check_applied"),
+            decide=_keep_check_vacuity,
+            what=("a PASS from a run where no artefact could carry a keep "
+                  "attribute never exercised the keep half of the check"),
+        ),
+    ),
+)
+
+
 def main(argv: Optional[list] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Design-for-ECO spare-cell preservation check")

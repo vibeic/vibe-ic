@@ -992,6 +992,66 @@ def _write_report(formal_dir: Path, results: dict) -> None:
     (formal_dir / f"{results['top']}{suffix}").write_text("\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# vibe-ic#562 — RE-ADJUDICATION RULES for this gate's published records.
+#
+# A published record can describe a state that no longer exists. For a formal
+# run the dangerous drift is the PROOF STRENGTH: `unbounded_proved` means "holds
+# for all reachable states", while a bounded BMC result only means "no
+# counterexample within the bound". A record carrying PASS on the strength of a
+# bounded proof is a record whose verdict a reader will over-trust, and the
+# distinction is exactly what `assert_bound_honesty` guards at run time.
+#
+# `_STRENGTH_HONESTY` re-derives that one question from what the record itself
+# publishes, so an old record is judged by today's rule rather than by the words
+# it was written with.
+import _record_adjudication as _ra  # noqa: E402
+
+
+def _strength_honesty(record: dict):
+    """Would this gate still call this a PASS on the strength it recorded?"""
+    verdict = record.get("verdict")
+    if verdict != "PASS":
+        return None                      # only a PASS can over-claim
+    unbounded = bool(record.get("unbounded_proved"))
+    if unbounded:
+        return None                      # a real unbounded proof still stands
+    return _ra.Supersession(
+        would_issue="PARTIAL",
+        because=("the record carries verdict PASS with unbounded_proved false, "
+                 "so every property it proved was proved BOUNDED — no "
+                 "counterexample within a bound, which is not a proof for all "
+                 "reachable states. Today's rule reserves PASS for a run whose "
+                 "properties all PASSED and discloses a bounded-only result as "
+                 "PARTIAL; a reader taking this PASS as a full proof would be "
+                 "over-trusting it"),
+    )
+
+
+RECORD_ADJUDICATION = _ra.declare(
+    __file__,
+    gate="formal_property_run",
+    # The entry point of the verdict decision; the fingerprint follows the
+    # module-local call closure from here, so `proof_strength` and
+    # `assert_bound_honesty` are covered without being listed.
+    decision_roots=("build_results",),
+    # Regenerate with:
+    #   python3 published_record_staleness_check.py \
+    #       --print-decision-digest formal_property_run
+    decision_digest="bfe3ec44467f0d8bebdabc306902e4a68bfc69592a3ca81b5ec34d355c7575ff",
+    rules=(
+        _ra.Rule(
+            rule_id="formal_property_run.bounded-is-not-a-proof",
+            landed_in="#562",
+            requires=("verdict", "unbounded_proved"),
+            decide=_strength_honesty,
+            what=("a PASS whose properties were all proved BOUNDED claims more "
+                  "than a bounded result supports; PARTIAL is the honest verdict"),
+        ),
+    ),
+)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("project_dir", type=Path)
