@@ -818,13 +818,19 @@ def _detect_ic_class_infer(project_dir: Path) -> Dict[str, Any]:
     if profile["is_mixed_signal"]:
         # Mixed signal w/o OTP collapses to digital_cmd_driven if it has
         # commands; else mixed_signal_otp without otp is rare — fall back.
-        if profile["has_command_protocol"]:
+        # Guard against processor_cpu misfire (ORGANIC #450 idiom, mirrors
+        # the #542 bus_peripheral guard): a CPU's ISA opcode enum harvests
+        # as has_command_protocol but carries no protocol framing, and must
+        # route to the ISA-bearing processor_cpu detector below, not here.
+        if (profile["has_command_protocol"]
+                and not _looks_like_processor_cpu(l1, l2)):
             profile["ic_class"] = "digital_cmd_driven"
             profile["decisive_evidence"] = (
                 "is_mixed_signal (no otp) + has_command_protocol")
             return profile
 
-    if profile["is_pure_digital"] and profile["has_command_protocol"]:
+    if (profile["is_pure_digital"] and profile["has_command_protocol"]
+            and not _looks_like_processor_cpu(l1, l2)):
         profile["ic_class"] = "digital_cmd_driven"
         profile["decisive_evidence"] = (
             "is_pure_digital + has_command_protocol")

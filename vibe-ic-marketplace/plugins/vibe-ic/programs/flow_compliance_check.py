@@ -4091,6 +4091,15 @@ _CLASS_SKIPPABLE_PROTOCOL_GATES: frozenset[str] = frozenset({
     "l1_electrical_specs_typed_depth_check",     # typed electrical spec
     "l12_behavioral_sequences_steps_typed_check",  # protocol behavioral step
     "protocol_ip_simulation_required_check",     # protocol sim required
+    # Command-oracle SVA / byte-protocol gates: single-keyed on
+    # command_protocol_applicable=False (same key as l3_opcode above). For a
+    # class with no SW-visible command protocol (processor_cpu, arithmetic
+    # primitive, bus_interconnect, ...) there are no L3 protocol constraints
+    # to cover with SVA and no single-wire-pad byte oracle to satisfy — these
+    # would false-FAIL. Real command/AID ICs (command_protocol_applicable=True)
+    # keep both gates.
+    "assertion_covers_l3_constraints_check",    # SVA per L3 constraint
+    "bit_level_full_stack_tb_oracle_check",     # byte-protocol golden oracle
 })
 # ORGANIC-20260605-fullstack-byte-oracle-inapplicable-to-datapath-primitive
 # (#419): full-stack byte-protocol ARTEFACT gates. For a registry-matched
