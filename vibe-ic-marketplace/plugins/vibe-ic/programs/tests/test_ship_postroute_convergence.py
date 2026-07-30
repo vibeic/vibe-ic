@@ -165,6 +165,28 @@ def test_convergence_loop_iterates_when_slack_stays_negative(tmp_path):
         "set ::rd 0\n"
         "proc repair_design {args} { incr ::rd }\n"
         "namespace eval sta { proc worst_slack {args} { return -5.0 } }\n"
+        # v1.8.43 — the reroute is now guarded by a design-signature no-op check
+        # (a repair that changes NOTHING must not destroy and re-route 300+ nets
+        # to ship an identical netlist; measured: doing so introduced 13 x m3.6
+        # min-met3-area islands the base route did not have). Under the bare
+        # `unknown`-returns-"" stub the design trivially never changes, so the
+        # guard would correctly skip the loop and this test would be asserting
+        # nothing. Give the stub a design that DOES change, which is the case
+        # this test is about.
+        "set ::ncall 0\n"
+        "namespace eval ord {}\n"
+        "proc ord::get_db_block {} { return ::BLK }\n"
+        "proc ::BLK {m args} {\n"
+        "  if {$m eq \"getInsts\"} {\n"
+        "    incr ::ncall\n"
+        "    if {$::ncall == 1} { return {::I1} } else { return {::I1 ::I2} }\n"
+        "  }\n"
+        "  return {}\n"
+        "}\n"
+        "proc ::I1 {m} { if {$m eq \"getName\"} { return a } else { return ::MA } }\n"
+        "proc ::I2 {m} { if {$m eq \"getName\"} { return b } else { return ::MB } }\n"
+        "proc ::MA {m} { return ma }\n"
+        "proc ::MB {m} { return mb }\n"
     )
     script = tmp_path / "s2.tcl"
     script.write_text(stub + tcl + "\nputs \"RD_CALLS: $::rd\"\n")
@@ -174,3 +196,33 @@ def test_convergence_loop_iterates_when_slack_stays_negative(tmp_path):
     line = [ln for ln in r.stdout.splitlines() if ln.startswith("RD_CALLS:")][0]
     # >5: the pre-reroute loop (5) plus at least one convergence pass (5 more).
     assert int(line.split(":")[1]) > 5, r.stdout
+    assert "SHIP_REPAIR_NOOP" not in r.stdout, (
+        "the design signature changed, so the no-op guard must NOT fire")
+
+
+@needs_tclsh
+def test_noop_guard_skips_the_reroute_when_the_repair_changed_nothing(tmp_path):
+    """v1.8.43 — a repair that resizes/inserts NOTHING must keep the base route.
+
+    MEASURED (spm x sky130A): re-routing a logically identical netlist came back
+    with 13 x `m3.6` min-met3-area islands the base route did not have, every one
+    a met2->via2->met3->via3->met4 stack transition landing (0.1905 um^2 against
+    the PDK's 0.24), and TritonRoute reported `Number of violations = 0` on that
+    same route. A route is not free to re-roll."""
+    tcl = _emit(tmp_path)
+    stub = (
+        _STUB +
+        "set ::rd 0\n"
+        "proc repair_design {args} { incr ::rd }\n"
+        "namespace eval sta { proc worst_slack {args} { return -5.0 } }\n"
+    )
+    script = tmp_path / "s3.tcl"
+    script.write_text(stub + tcl + "\nputs \"RD_CALLS: $::rd\"\n")
+    r = subprocess.run([tclsh, str(script)], capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert "SHIP_REPAIR_NOOP: 1" in r.stdout, r.stdout
+    line = [ln for ln in r.stdout.splitlines() if ln.startswith("RD_CALLS:")][0]
+    assert int(line.split(":")[1]) == 5, (
+        "only the pre-reroute repair loop may run; the convergence loop must be "
+        "skipped entirely when the design did not change")

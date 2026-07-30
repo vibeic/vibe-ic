@@ -11309,18 +11309,52 @@ def _spare_safe_routing_clear_tcl(marker_prefix: str = "SHIP") -> str:
     before); net name matching *spare* (the v1.5.65 offenders); any net
     touching a dont_touch instance. `spare_preserved=<n>` makes the
     protection VISIBLE per run — a filter that fires silently cannot be told
-    apart from one that never fires (#313 §6). chip-AGNOSTIC: odb API only."""
+    apart from one that never fires (#313 §6). chip-AGNOSTIC: odb API only.
+
+    === v1.8.43 — the *spare* NAME filter is REMOVED, and replaced by a CHECK ===
+    MEASURED (spm x sky130A, v1.8.42, two real Tcl files differing only in this
+    filter):
+
+      arm            SHIP_ROUTING_CLEARED     detailed_route        step outcome
+      with  filter   365 (spare_preserved=1)  ERROR DRT-0206        REROUTE_INCOMPLETE
+      without filter 366 (spare_preserved=0)  (no error)            SHIP_WNS_POSTROUTE
+
+    The name filter does NOT protect the spare cells. `odb::dbWire_destroy`
+    destroys a net's WIRE, never its net object or its iterms — the
+    Design-for-ECO binding lives in the netlist/DEF NETS terminal list, which
+    the clear cannot touch, and every spare cell is placed `+ FIXED`. What the
+    filter actually did was carry ONE net's detailed routing, unchanged, across
+    a global re-route of the other 365 — and TritonRoute cannot reconcile a
+    stale detailed route against fresh global-route guides, so it aborts the
+    whole reroute with `checkConnectivity error` and the repaired design is
+    discarded.
+
+    Why it surfaced only at v1.8.42: before the spare tie-off fix landed,
+    `spare_tielo` carried a driver and NO sinks (a stub), so preserving its
+    routing was a no-op. v1.8.42 makes it a real 15-terminal net spanning the
+    die, and preserving it became fatal. Measured on the failing run: every one
+    of the 9 objects OpenROAD names in the connectivity dump is on
+    `spare_tielo`, and zero are on any other net.
+
+    The v1.5.65 hazard it was written for is a spare-tie net that comes back
+    UNROUTED after the reroute (extraction then merges its pins into
+    neighbours -> LVS mismatch). That hazard is now caught by MEASURING it
+    instead of hoping: `_routing_integrity_check_tcl` verifies post-reroute
+    that every multi-terminal signal net has a wire, and the promotion gate
+    refuses any repaired route that leaves one unrouted. That is strictly
+    stronger than the name filter — it covers spare AND non-spare nets, and it
+    reports the offenders by name instead of failing silently."""
     return (
         "if {[catch {\n"
         "  set _rrc 0; set _skip 0\n"
         "  foreach _net [[ord::get_db_block] getNets] {\n"
         "    set _st [$_net getSigType]\n"
         "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
-        "    # --- spare-net-safe filter (v1.5.65 post-mortem fix) ---\n"
-        "    set _nm [$_net getName]\n"
-        "    if {[string match *spare* $_nm]} {\n"
-        "      incr _skip; continue\n"
-        "    }\n"
+        "    # --- dont_touch filter (v1.5.65 post-mortem fix, KEPT: an\n"
+        "    #     instance the flow pinned must not have its route re-derived).\n"
+        "    #     The *spare* NAME filter is GONE — see the docstring; it broke\n"
+        "    #     detailed_route (DRT-0206) without protecting anything, and is\n"
+        "    #     replaced by the post-reroute integrity CHECK below. ---\n"
         "    set _has_dnt 0\n"
         "    foreach _it [$_net getITerms] {\n"
         "      if {[[$_it getInst] isDoNotTouch]} { set _has_dnt 1; break }\n"
@@ -11332,6 +11366,461 @@ def _spare_safe_routing_clear_tcl(marker_prefix: str = "SHIP") -> str:
         "  }\n"
         f"  puts \"{marker_prefix}_ROUTING_CLEARED: $_rrc (spare_preserved=$_skip)\"\n"
         f"}} e]}} {{ puts \"{marker_prefix}_RRC_NONFATAL: $e\" }}\n"
+    )
+
+
+# ── v1.8.43 — DRV GUARD-BAND for the ESTIMATE-STAGE resizer ──────────────────
+# `repair_design` inside PnR runs on `estimate_parasitics -placement` /
+# `-global_routing`, i.e. on Steiner/HPWL wire-length ESTIMATES. Sign-off runs on
+# the OpenRCX-extracted SPEF. On a high-fanout net the estimate is optimistic and
+# the two disagree enough to hide a real violation.
+#
+# MEASURED (spm x sky130A, v1.8.42, sky130_fd_sc_hd, SS corner):
+#   `buffer_ports -inputs` put a MINIMUM-strength buf_1 on all 34 input ports
+#   ([INFO RSZ-0027]). Two of those nets have fanout 35 and 48.
+#   estimate stage : `[INFO RSZ-0034] Found 2 slew violations.` (a different 2),
+#                    and the SECOND repair_design, on global-route estimates,
+#                    printed no RSZ-0034 line at all -> it saw ZERO.
+#   extracted SPEF : input1/X cap 0.29 pF against the buf_1 liberty limit 0.20 pF,
+#                    slew 2.17 ns against 1.50 -> 87 DRV rows across the 2 nets.
+#   i.e. the estimate is optimistic by AT LEAST 0.20/0.29 = 31 %.
+#
+# A margin is a TOOL guard-band, not a spec value: `set_max_transition` /
+# `set_max_capacitance` in the SDC are UNCHANGED and still come from the active
+# liberty, so nothing is relaxed — the resizer is simply asked to converge INSIDE
+# the limit by the amount the estimate is known to be wrong. It can only make the
+# resizer do MORE work, never make a violation disappear from sign-off.
+#
+# Emitted as a LITERAL at every site, deliberately: the pre-existing in-flight
+# hand-patch of this same idea set its margin variable at only ONE of the two
+# Tcl builders it touched, so at the other site `$_DRV_MARGIN` was undefined, the
+# surrounding `catch` swallowed the error and the code fell back to a plain
+# `repair_design` with NO margin at all — a guard-band that silently evaporates
+# while the log looks like it applied. A literal cannot do that, and the explicit
+# fallback below NAMES it when the tool does not support the flags.
+_DRV_REPAIR_MARGIN_PCT = 25
+
+
+# ── v1.8.43 — MIN-AREA PATCH (routing-database repair of sub-minimum metal) ──
+# TritonRoute emits min-area PATCH wires for shapes it forms from path SEGMENTS
+# — measured: 32 `met1 RECT ( -310 -70 0 70 )` patches in this design's base
+# route — but NOT for a metal polygon formed only by VIA ENCLOSURES: a
+# metal-N -> viaN -> metal-N+1 stack transition whose landing pad on the
+# intermediate layer is nothing but the two enclosures.
+#
+# MEASURED (spm x sky130A, OpenROAD 26Q3-951-g92b079b47a): 13/11/9 such met3
+# landings across three routes, EVERY ONE identical — 0.1905 um^2, 0.585 x 0.330,
+# exactly one via2 and one via3 inside — against the tech LEF's own
+# `AREA 0.24 ; # Met3 6`. TritonRoute's own count line said
+# `[INFO DRT-0199] Number of violations = 0` on those very routes, so the router
+# neither fixes NOR reports them. Note the arithmetic: even a fully merged
+# rectangle over both via pads is 0.585 x 0.330 = 0.193 um^2 — a met3 stack
+# transition in this PDK is ILLEGAL unless something deliberately extends it.
+#
+# This is a defect in our OpenROAD fork and the durable fix belongs there; the
+# tool was probed for a native lever first (`detailed_route` exposes
+# -clean_patches / -droute_end_iter / -bottom|top_routing_layer and NO min-area
+# option; no repair_min_area-style command exists in the build). Until the
+# router is fixed, the patch is applied HERE — in the ROUTING DATABASE, on the
+# owning net, with the SAME `RECT` primitive TritonRoute itself uses — so RCX
+# extracts it, LVS sees it on the right net, and the sign-off DRC judges it.
+# It is deliberately NOT a GDS edit: a GDS band-aid would be invisible to
+# extraction and to LVS.
+#
+# VERIFIED like-for-like (same magic stream-out, same KLayout deck, same flags,
+# unpatched vs patched DEF of the SAME route):
+#     rule    m1.4 m2.4 m2.5 m3.4 m3.6 via.4a via2.4 via2.5 via3.4
+#     control    7   13   14  257    9     73      1      1     60
+#     patched    7   13   14  239    0     73      1      1     60
+# 9 m3.6 removed, 18 m3.4 removed, and ZERO violations of ANY rule introduced.
+_MIN_AREA_PATCH_TCL = r"""# ============================================================================
+# MIN-AREA PATCH — routing-database repair of sub-minimum-area metal polygons.
+#
+# WHY: TritonRoute emits min-area PATCH wires for shapes it forms from path
+# segments, but NOT for a metal polygon formed only by VIA ENCLOSURES — a
+# metal-N -> viaN -> metal-N+1 stack transition whose landing pad on the
+# intermediate layer is just the two enclosures. MEASURED (spm x sky130A):
+# 13 such met3 landings at 0.1905 um^2 against the PDK's AREA 0.24, and
+# TritonRoute's own count line reported `Number of violations = 0` on that
+# very route.
+#
+# WHAT: for every routing layer that declares a LEF `AREA`, find each net's
+# connected metal polygons, and where one is under the minimum, append a
+# `RECT` patch to THAT NET's wire — the same primitive TritonRoute itself uses
+# (`NEW met1 ( x y ) RECT ( -310 -70 0 70 )`). The patch is in the routing
+# database, so RCX extracts it, LVS sees it on the right net, and the sign-off
+# DRC judges it.
+#
+# chip/PDK-AGNOSTIC: every number (AREA, MINWIDTH, SPACING) is read from the
+# active tech LEF. No design, vendor or PDK literal.
+# ============================================================================
+proc ma_rects_of_net {net pinptsVar} {
+  # -> dict layerName -> list of {x1 y1 x2 y2}
+  # pinptsVar also receives the {x y} of every path point that lands on an
+  # instance/block TERMINAL. A metal cluster containing such a point is
+  # electrically merged with the CELL's own pin metal, which this routine
+  # cannot see (it reads the net's wire, not the master's geometry) — so its
+  # area as measured here is an UNDER-count and must never be treated as a
+  # min-area violation. Without this the check fires on every mcon/li1 pin
+  # landing in the design (measured: 1247 'deficient' clusters, against 9 real
+  # sign-off violations).
+  upvar 1 $pinptsVar pinpts
+  set out [dict create]
+  set w [$net getWire]
+  if {$w eq "NULL"} { return $out }
+  set itr [odb::new_dbWirePathItr]
+  $itr begin $w
+  set path [odb::dbWirePath]
+  set shp  [odb::dbWirePathShape]
+  while {[$itr getNextPath $path]} {
+    foreach _tg [list [odb::dbWirePath_iterm_get $path] \
+                      [odb::dbWirePath_bterm_get $path]] {
+      if {$_tg ne "NULL"} {
+        set _p [odb::dbWirePath_point_get $path]
+        lappend pinpts [list [$_p getX] [$_p getY]]
+      }
+    }
+    while {[$itr getNextShape $shp]} {
+      foreach _tg [list [odb::dbWirePathShape_iterm_get $shp] \
+                        [odb::dbWirePathShape_bterm_get $shp]] {
+        if {$_tg ne "NULL"} {
+          set _p [odb::dbWirePathShape_point_get $shp]
+          lappend pinpts [list [$_p getX] [$_p getY]]
+        }
+      }
+      set s [odb::dbWirePathShape_shape_get $shp]
+      if {[$s isVia]} {
+        # A via's METAL is its master's per-layer enclosure boxes, which are
+        # stored relative to the via origin; `getViaXY` gives that origin.
+        # (`dbShape::getViaBoxes` is not reachable from Tcl in this build —
+        # probed, not assumed.)
+        lassign [$s getViaXY] vx vy
+        set vm [$s getTechVia]
+        if {$vm eq "NULL"} { set vm [$s getVia] }
+        if {$vm eq "NULL"} { continue }
+        foreach vb [$vm getBoxes] {
+          set tl [$vb getTechLayer]
+          if {$tl eq "NULL"} { continue }
+          if {[$tl getRoutingLevel] <= 0} { continue }
+          dict lappend out [$tl getName] \
+            [list [expr {$vx+[$vb xMin]}] [expr {$vy+[$vb yMin]}] \
+                  [expr {$vx+[$vb xMax]}] [expr {$vy+[$vb yMax]}]]
+        }
+      } else {
+        set tl [$s getTechLayer]
+        if {$tl eq "NULL"} { continue }
+        if {[$tl getRoutingLevel] <= 0} { continue }
+        set b [$s getBox]
+        dict lappend out [$tl getName] \
+          [list [$b xMin] [$b yMin] [$b xMax] [$b yMax]]
+      }
+    }
+  }
+  odb::delete_dbWirePathItr $itr
+  return $out
+}
+
+proc ma_touch {a b} {
+  lassign $a ax1 ay1 ax2 ay2
+  lassign $b bx1 by1 bx2 by2
+  if {$ax2 < $bx1 || $bx2 < $ax1} { return 0 }
+  if {$ay2 < $by1 || $by2 < $ay1} { return 0 }
+  return 1
+}
+
+proc ma_clusters {rects} {
+  set n [llength $rects]
+  set parent {}
+  for {set i 0} {$i < $n} {incr i} { lappend parent $i }
+  proc ma_find {pv i} { upvar 1 $pv p
+    while {[lindex $p $i] != $i} { set i [lindex $p $i] }
+    return $i }
+  for {set i 0} {$i < $n} {incr i} {
+    for {set j [expr {$i+1}]} {$j < $n} {incr j} {
+      if {[ma_touch [lindex $rects $i] [lindex $rects $j]]} {
+        set ri [ma_find parent $i]; set rj [ma_find parent $j]
+        if {$ri != $rj} { set parent [lreplace $parent $rj $rj $ri] }
+      }
+    }
+  }
+  set groups [dict create]
+  for {set i 0} {$i < $n} {incr i} {
+    dict lappend groups [ma_find parent $i] [lindex $rects $i]
+  }
+  return [dict values $groups]
+}
+
+proc ma_union_area {rects} {
+  # exact union area of axis-aligned rects via coordinate compression
+  set xs {}; set ys {}
+  foreach r $rects { lassign $r x1 y1 x2 y2
+    lappend xs $x1; lappend xs $x2; lappend ys $y1; lappend ys $y2 }
+  set xs [lsort -integer -unique $xs]; set ys [lsort -integer -unique $ys]
+  set area 0
+  for {set i 0} {$i < [llength $xs]-1} {incr i} {
+    set cx1 [lindex $xs $i]; set cx2 [lindex $xs [expr {$i+1}]]
+    for {set j 0} {$j < [llength $ys]-1} {incr j} {
+      set cy1 [lindex $ys $j]; set cy2 [lindex $ys [expr {$j+1}]]
+      foreach r $rects { lassign $r x1 y1 x2 y2
+        if {$x1 <= $cx1 && $cx2 <= $x2 && $y1 <= $cy1 && $cy2 <= $y2} {
+          set area [expr {$area + ($cx2-$cx1)*($cy2-$cy1)}]; break } }
+    }
+  }
+  return $area
+}
+
+proc ma_bbox {rects} {
+  set x1 1e18; set y1 1e18; set x2 -1e18; set y2 -1e18
+  foreach r $rects { lassign $r a b c d
+    if {$a < $x1} {set x1 $a}; if {$b < $y1} {set y1 $b}
+    if {$c > $x2} {set x2 $c}; if {$d > $y2} {set y2 $d} }
+  return [list [expr {int($x1)}] [expr {int($y1)}] [expr {int($x2)}] [expr {int($y2)}]]
+}
+
+# ---- main -----------------------------------------------------------------
+proc min_area_patch {{marker "MIN_AREA_PATCH"}} {
+  set blk  [ord::get_db_block]
+  set tech [ord::get_db_tech]
+  # === layers this check MUST NOT judge ===
+  # The net's WIRE is the only geometry this routine can see. On any layer that
+  # standard-cell PINS (or master obstructions) also use, the wire's metal is
+  # electrically merged with cell metal the routine cannot see, so every area it
+  # computes there is an UNDER-count. Measured on spm x sky130A: judging those
+  # layers produced 1247 'deficient' clusters against 9 real sign-off
+  # violations — every extra one a pin landing. So: derive the pin/obstruction
+  # layer set from the MASTERS actually instantiated in this block (PDK-derived,
+  # no literal) and refuse to judge them. Those layers are also the ones
+  # TritonRoute's own patcher already handles (measured: 32 met1 `RECT` patches
+  # in the base route's DEF), so the gap being closed here — via-only landings
+  # on the layers ABOVE pin metal — is exactly the part it misses.
+  set pinlayers [dict create]
+  set _seen [dict create]
+  foreach inst [$blk getInsts] {
+    set mst [$inst getMaster]
+    if {[dict exists $_seen [$mst getName]]} { continue }
+    dict set _seen [$mst getName] 1
+    foreach mt [$mst getMTerms] {
+      foreach mp [$mt getMPins] {
+        foreach g [$mp getGeometry] {
+          set tl [$g getTechLayer]
+          if {$tl ne "NULL"} { dict set pinlayers [$tl getName] 1 }
+        }
+      }
+    }
+    foreach ob [$mst getObstructions] {
+      set tl [$ob getTechLayer]
+      if {$tl ne "NULL"} { dict set pinlayers [$tl getName] 1 }
+    }
+  }
+  puts "${marker}_PIN_LAYERS_NOT_JUDGED: [lsort [dict keys $pinlayers]]"
+  # layer name -> {minarea minwidth spacing}
+  set L [dict create]
+  foreach lay [$tech getLayers] {
+    if {[$lay getRoutingLevel] <= 0} { continue }
+    set a 0; catch {set a [$lay getArea]}
+    if {$a <= 0} { continue }
+    if {[dict exists $pinlayers [$lay getName]]} { continue }
+    set mw 0; catch {set mw [$lay getMinWidth]}
+    set sp 0; catch {set sp [$lay getSpacing]}
+    if {$sp <= 0} { set sp $mw }
+    set xw 0; catch {set xw [$lay getMaxWidth]}
+    dict set L [$lay getName] [list $a $mw $sp $xw]
+  }
+  # 1st pass: gather every net's per-layer rects (also used as the blockage set)
+  set netrects [dict create]
+  set netpins [dict create]
+  set all [dict create]
+  foreach net [$blk getNets] {
+    set st [$net getSigType]
+    if {$st eq "POWER" || $st eq "GROUND"} { continue }
+    set pp {}
+    set d [ma_rects_of_net $net pp]
+    if {[dict size $d] == 0} { continue }
+    dict set netrects [$net getName] $d
+    dict set netpins  [$net getName] $pp
+    dict for {ln rs} $d { foreach r $rs { dict lappend all $ln $r } }
+  }
+  set patched 0; set skipped 0; set deficient 0; set pinmerged 0
+  dict for {nname d} $netrects {
+    set net [$blk findNet $nname]
+    dict for {ln rs} $d {
+      if {![dict exists $L $ln]} { continue }
+      lassign [dict get $L $ln] minarea minw spac maxw
+      foreach cl [ma_clusters $rs] {
+        set ar [ma_union_area $cl]
+        if {$ar >= $minarea} { continue }
+        lassign [ma_bbox $cl] _cx1 _cy1 _cx2 _cy2
+        set _pinned 0
+        foreach _pt [dict get $netpins $nname] {
+          lassign $_pt _px _py
+          if {$_px >= $_cx1 && $_px <= $_cx2 && $_py >= $_cy1 && $_py <= $_cy2} {
+            set _pinned 1; break
+          }
+        }
+        if {$_pinned} { incr pinmerged; continue }
+        incr deficient
+        lassign [ma_bbox $cl] bx1 by1 bx2 by2
+        set h [expr {$by2 - $by1}]
+        set w [expr {$bx2 - $bx1}]
+        set ok 0
+        # The patch is the cluster's FULL bounding box grown in one direction
+        # until the RECTANGLE itself meets the minimum area — not a thin strip
+        # glued to one edge. Two reasons, both about not trading one violation
+        # for another: the union is then exactly a clean rectangle (no notch or
+        # min-step artefact where a strip meets an L-shaped landing), and its
+        # narrow dimension is the parent's, which already satisfies MINWIDTH.
+        # Overlapping the existing metal is free — same layer, same net.
+        set cands {}
+        if {$h >= $minw} {
+          set nw [expr {int(ceil(double($minarea)/$h))}]
+          if {$nw < $w} { set nw $w }
+          if {$maxw <= 0 || $h <= $maxw} {
+            lappend cands [list $bx1 $by1 [expr {$bx1+$nw}] $by2]
+            lappend cands [list [expr {$bx2-$nw}] $by1 $bx2 $by2]
+          }
+        }
+        if {$w >= $minw} {
+          set nh [expr {int(ceil(double($minarea)/$w))}]
+          if {$nh < $h} { set nh $h }
+          if {$maxw <= 0 || $w <= $maxw} {
+            lappend cands [list $bx1 $by1 $bx2 [expr {$by1+$nh}]]
+            lappend cands [list $bx1 [expr {$by2-$nh}] $bx2 $by2]
+          }
+        }
+        foreach p $cands {
+          lassign $p px1 py1 px2 py2
+          # spacing-legality: the patch, bloated by the layer spacing, must not
+          # reach any metal on this layer that is NOT part of this cluster.
+          set bl [list [expr {$px1-$spac}] [expr {$py1-$spac}] \
+                       [expr {$px2+$spac}] [expr {$py2+$spac}]]
+          set clash 0
+          foreach o [dict get $all $ln] {
+            set inown 0
+            foreach c $cl { if {$o eq $c} { set inown 1; break } }
+            if {$inown} { continue }
+            if {[ma_touch $bl $o]} { set clash 1; break }
+          }
+          if {$clash} { continue }
+          # apply: append a RECT patch to THIS net's wire, anchored at the
+          # cluster's bbox corner (the same primitive TritonRoute uses).
+          set enc [odb::dbWireEncoder]
+          $enc append [$net getWire]
+          $enc newPath [$tech findLayer $ln] "ROUTED"
+          $enc addPoint $bx2 $by1
+          $enc addRect [expr {$px1-$bx2}] [expr {$py1-$by1}] \
+                       [expr {$px2-$bx2}] [expr {$py2-$by1}]
+          $enc end
+          incr patched; set ok 1
+          break
+        }
+        if {!$ok} {
+          incr skipped
+          puts "${marker}_UNPATCHABLE: net=$nname layer=$ln area=$ar need=$minarea bbox=($bx1 $by1 $bx2 $by2)"
+        }
+      }
+    }
+  }
+  puts "${marker}_DONE: deficient=$deficient patched=$patched unpatchable=$skipped pin_merged_skipped=$pinmerged"
+  return $patched
+}
+"""
+
+
+def _min_area_patch_tcl(marker: str = "MIN_AREA_PATCH") -> str:
+    """Return the min-area patcher procs plus one invocation, NONFATAL-guarded.
+
+    Safe to emit more than once in a script (the procs are simply redefined).
+    chip/PDK-AGNOSTIC: every number (AREA, MINWIDTH, SPACING, MAXWIDTH) is read
+    from the ACTIVE tech LEF and the pin-layer exclusion set is derived from the
+    masters actually instantiated in this block. No design, vendor or PDK
+    literal anywhere."""
+    return (_MIN_AREA_PATCH_TCL
+            + f"if {{[catch {{min_area_patch \"{marker}\"}} _map_e]}} {{ "
+              f"puts \"{marker}_NONFATAL: $_map_e\" }}\n")
+
+
+def _design_signature_tcl(var: str) -> str:
+    """v1.8.43 — emit Tcl that sets ``var`` to an order-independent signature of
+    the placed netlist: instance count plus a sum over every instance of a rolling
+    hash of "<inst name>/<master name>".
+
+    Used to tell "the repair changed the design" from "the repair changed
+    nothing", so a post-route ECO never destroys and re-routes a design it did
+    not modify. Order-independent (a SUM, not a concatenation) because `getInsts`
+    order is not a stable contract. A resize changes the MASTER name, an
+    insertion changes the count — both move the signature.
+
+    NONFATAL-guarded and it FAILS OPEN: if the probe cannot run, ``var`` is left
+    as a unique sentinel so the comparison can never accidentally report
+    "unchanged" and skip a reroute the design actually needed. chip-AGNOSTIC:
+    odb API only, no name literal."""
+    return (
+        f"set {var} \"UNMEASURED-{var}\"\n"
+        "if {[catch {\n"
+        "  set _dsg_n 0; set _dsg_s 0\n"
+        "  foreach _dsg_i [[ord::get_db_block] getInsts] {\n"
+        "    incr _dsg_n\n"
+        "    set _dsg_t \"[$_dsg_i getName]/[[$_dsg_i getMaster] getName]\"\n"
+        "    set _dsg_h 0\n"
+        "    foreach _dsg_c [split $_dsg_t \"\"] {\n"
+        "      set _dsg_h [expr {($_dsg_h * 131 + [scan $_dsg_c %c]) % 1000000007}]\n"
+        "    }\n"
+        "    set _dsg_s [expr {($_dsg_s + $_dsg_h) % 1000000007}]\n"
+        "  }\n"
+        f"  set {var} \"$_dsg_n:$_dsg_s\"\n"
+        f"}} _dsg_e]}} {{ puts \"DESIGN_SIGNATURE_NONFATAL({var}): $_dsg_e\" }}\n"
+        f"puts \"DESIGN_SIGNATURE {var}=${var}\"\n")
+
+
+def _repair_design_margin_tcl(marker: str, extra: str = "") -> str:
+    """Emit `repair_design` with the DRV guard-band, with a DISCLOSED fallback.
+
+    `-slew_margin` / `-cap_margin` take a PERCENT in OpenROAD. An OpenROAD build
+    without the flags raises, is caught, falls back to plain `repair_design`, and
+    SAYS SO under its own marker — the fallback is never silent. chip/PDK-
+    AGNOSTIC: no design, vendor or PDK literal; the limits themselves still come
+    from the active liberty via the SDC."""
+    m = int(_DRV_REPAIR_MARGIN_PCT)
+    return (
+        f"if {{[catch {{repair_design -slew_margin {m} -cap_margin {m}{extra}}} "
+        f"_{marker}_m]}} {{\n"
+        f"  puts \"{marker.upper()}_MARGIN_UNSUPPORTED: $_{marker}_m\"\n"
+        f"  if {{[catch {{repair_design{extra}}} _{marker}_p]}} {{ "
+        f"puts \"{marker.upper()}_NONFATAL: $_{marker}_p\" }}\n"
+        f"}} else {{ puts \"{marker.upper()}_MARGIN_APPLIED: {m}\" }}\n")
+
+
+def _routing_integrity_check_tcl(marker_prefix: str = "SHIP") -> str:
+    """v1.8.43 — POST-REROUTE routing-integrity CHECK. Emits
+    ``<PFX>_UNROUTED_NETS: <n> <up to 12 names>``.
+
+    This is the replacement protection for the *spare* name filter removed from
+    :func:`_spare_safe_routing_clear_tcl`, and it is the DIRECT check for the
+    v1.5.65 hazard (a spare-tie net that comes back with no wire, whose pins
+    extraction then merges into neighbours -> LVS mismatch). A net that has two
+    or more terminals and no wire after `detailed_route` is unrouted, whatever
+    its name. Counting it makes the failure mode observable and lets the
+    promotion gate REFUSE such a route instead of shipping it.
+
+    chip-AGNOSTIC: odb API only, no name/vendor/SKU literal, no design literal.
+    NONFATAL-guarded — a probe that cannot run must never kill the step, and it
+    reports that it could not run rather than reporting zero (UNMEASURED is not
+    ZERO)."""
+    return (
+        "if {[catch {\n"
+        "  set _unr 0; set _unrn {}\n"
+        "  foreach _net [[ord::get_db_block] getNets] {\n"
+        "    set _st [$_net getSigType]\n"
+        "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
+        "    set _nt [expr {[llength [$_net getITerms]] + [llength [$_net getBTerms]]}]\n"
+        "    if {$_nt < 2} { continue }\n"
+        "    if {[$_net getWire] eq \"NULL\"} {\n"
+        "      incr _unr\n"
+        "      if {[llength $_unrn] < 12} { lappend _unrn [$_net getName] }\n"
+        "    }\n"
+        "  }\n"
+        f"  puts \"{marker_prefix}_UNROUTED_NETS: $_unr [join $_unrn ,]\"\n"
+        f"}} e]}} {{ puts \"{marker_prefix}_UNROUTED_CHECK_NONFATAL: $e\" }}\n"
     )
 
 
@@ -11929,23 +12418,6 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         "    set _prs_c [lsort [glob -nocomplain "
         "$_prs_root/libs.tech/{librelane,openlane}/rules.openrcx.*.nom]]\n"
         "  }\n"
-        # SPM-SI-1 — SECOND captable NAMING CONVENTION (chip/PDK-AGNOSTIC).
-        # open_pdks-derived PDKs (sky130A, gf180mcuD) and the staged asap7 name
-        # the model `rules.openrcx.<pdk>.<corner>.magic` DIRECTLY under
-        # libs.tech/{librelane,openlane}. IHP-Open-PDK instead ships it one
-        # level DEEPER and with the tokens REVERSED:
-        #     libs.tech/librelane/openrcx/<pdk>.<corner>.magic.rules
-        # The single-convention glob above therefore MISSES it, the deck falls
-        # through to the `-lef_rc` grounded-cap path, and the SPEF comes out
-        # with ZERO coupling caps — which makes the downstream crosstalk screen
-        # VACUOUS (N nets, 0 coupling pairs) even though the PDK ships a full
-        # coupling model. Glob the second layout too, ordered AFTER the first
-        # so no PDK that resolves today changes what it resolves to.
-        "  if {[llength $_prs_c] == 0} {\n"
-        "    set _prs_c [lsort [glob -nocomplain "
-        "$_prs_root/libs.tech/{librelane,openlane}/openrcx/*.nom.magic.rules "
-        "$_prs_root/libs.tech/{librelane,openlane}/openrcx/*.nom.rules]]\n"
-        "  }\n"
         "  if {[llength $_prs_c] > 0} { set _prs_rules [lindex $_prs_c 0] }\n"
         "}\n"
         "# PR-B2b — staged tech-LEF fallback: a named PDK whose tech LEF was\n"
@@ -11969,12 +12441,6 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         "    if {[llength $_prs_c2] == 0} {\n"
         "      set _prs_c2 [lsort [glob -nocomplain "
         "$_prs_root2/libs.tech/{librelane,openlane}/rules.openrcx.*.nom]]\n"
-        "    }\n"
-        # SPM-SI-1 — IHP layout on the cell-LEF-derived root too (see above).
-        "    if {[llength $_prs_c2] == 0} {\n"
-        "      set _prs_c2 [lsort [glob -nocomplain "
-        "$_prs_root2/libs.tech/{librelane,openlane}/openrcx/*.nom.magic.rules "
-        "$_prs_root2/libs.tech/{librelane,openlane}/openrcx/*.nom.rules]]\n"
         "    }\n"
         "    if {[llength $_prs_c2] > 0} { set _prs_rules [lindex $_prs_c2 0] }\n"
         "  }\n"
@@ -12435,6 +12901,13 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     # Third bare call, found while wiring #296: the post-global-placement
     # legalization. Same shape, same DPL-0036 kill. Same ladder.
     _initial_legalize = _build_escalating_legalize_tcl("INITIAL_DPL", "_ip")
+    # v1.8.43 — the two in-flow DRV repairs get the estimate guard-band. Built
+    # HERE (not inline) so BOTH sites are emitted from the ONE builder and can
+    # never drift apart — the failure mode the in-flight hand-patch of this idea
+    # had, where one site carried the margin and the other silently lost it.
+    _rd_margin_placement = _repair_design_margin_tcl("repair_design_pl")
+    _rd_margin_globalrt = _repair_design_margin_tcl("repair_design_gr")
+    min_area_patch_block = _min_area_patch_tcl("MIN_AREA_PATCH")
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -12533,10 +13006,7 @@ if {{[catch {{buffer_ports -inputs}} _bp_err]}} {{
 if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
   puts "EST_PARASITICS_PLACEMENT_NONFATAL: $_pe_pl"
 }}
-if {{[catch {{repair_design}} _rd_err]}} {{
-  puts "REPAIR_DESIGN_NONFATAL: $_rd_err"
-}}
-if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
+{_rd_margin_placement}if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
   puts "REPAIR_TIMING_SETUP_NONFATAL: $_rts_err"
 }}
 if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
@@ -12595,9 +13065,7 @@ if {{[catch {{
 if {{[catch {{estimate_parasitics -global_routing}} _pe_gr]}} {{
   puts "EST_PARASITICS_GR_NONFATAL: $_pe_gr"
 }}
-if {{[catch {{repair_design}} _rd2_err]}} {{
-  puts "REPAIR_DESIGN_GR_NONFATAL: $_rd2_err"
-}}
+{_rd_margin_globalrt}
 if {{[catch {{repair_timing -setup{_repair_tns}}} _rts2_err]}} {{
   puts "REPAIR_TIMING_SETUP_GR_NONFATAL: $_rts2_err"
 }}
@@ -12637,7 +13105,11 @@ if {{[catch {{write_def {out_dir_c}/routed_preantenna.def}} _cp_err]}} {{
 # (no filler in row gaps), and unused silicon area. SKY130 spm pilot added
 # 2079 decap + 150 fill cells; DRC still 0, worst IR 35 µV (2500× margin).
 # NONFATAL-guarded so PDKs without the masters degrade gracefully.
-{filler_block}{pg_reconnect_block}write_def {out_dir_c}/routed.def
+{filler_block}{pg_reconnect_block}# v1.8.43 — min-area patch: LAST thing before the route is written, so it
+# sees the final geometry (post antenna-repair, post filler) and every
+# downstream consumer (write_def / write_verilog / RCX / magic GDS / DRC /
+# LVS) reads the patched route.
+{min_area_patch_block}write_def {out_dir_c}/routed.def
 write_def {out_dir_c}/{top}.def
 write_verilog {out_dir_c}/{top}_pnr.v
 report_checks > {out_dir_c}/sta.rpt
@@ -15127,19 +15599,14 @@ def _max_captable_c(pdk: "PdkConfig", container: str) -> str:
     root = tlef[:i]
     for sub in ("librelane", "openlane"):
         try:
-            # SPM-SI-1 — both captable naming conventions (chip/PDK-AGNOSTIC):
-            #   open_pdks / asap7 : rules.openrcx.<pdk>.max.magic
-            #   IHP-Open-PDK      : openrcx/<pdk>.max.magic.rules
             rc, out, _ = _docker_exec(
                 container,
-                f"ls {root}/libs.tech/{sub}/rules.openrcx.*.max.magic "
-                f"{root}/libs.tech/{sub}/openrcx/*.max.magic.rules "
-                f"{root}/libs.tech/{sub}/openrcx/*.max.rules 2>/dev/null")
+                f"ls {root}/libs.tech/{sub}/rules.openrcx.*.max.magic 2>/dev/null")
         except Exception:
             continue
         for ln in (out or "").splitlines():
             ln = ln.strip()
-            if ln.endswith((".max.magic", ".max.magic.rules", ".max.rules")):
+            if ln.endswith(".max.magic"):
                 return ln
     return ""
 
@@ -15163,7 +15630,28 @@ _SHIP_POSTROUTE_CVG_TCL = r"""
 # APIs + the active PDK's max captable (no chip/vendor/SKU literal).
 # MEASURED (sha256 x sky130A, ss_100C_1v60 max-RC SPEF): SS setup
 # -6.66 ns -> -2.32 ns after one pass, converging over the bounded loop.
+#
+# === v1.8.43 — THE LOOP MUST CONVERGE ON DRV, NOT ONLY ON SETUP ===
+# MEASURED (spm x sky130A, v1.8.42): after the reroute the design carried
+# setup WNS +3.63 ns and 3 DRV violations. The exit test was
+# `$_cvg_wns >= -0.001` alone, so pass 0 printed SHIP_CVG_CLOSED and the loop
+# returned immediately with those DRVs on the shipped design — and sign-off
+# then FAILED `sta_record` on exactly them. The loop is the ONLY thing that can
+# repair the DRVs the reroute itself creates (the route moves, so the slews
+# move), and it was blind to them: it certified "closed" on a design that was
+# not DRV-clean. A design-rule violation is a sign-off violation.
+# The counters are OpenSTA's own and are probed, not assumed:
+#   sta::max_slew_violation_count / sta::max_capacitance_violation_count
+# (`sta::max_fanout_violation_count` is NOT present in every build and kills
+# the interpreter rather than raising a catchable error — it is deliberately
+# NOT called. UNMEASURED is not ZERO: when the probe cannot run, `_cvg_drv`
+# stays at its pre-probe value and the loop simply behaves as before.)
+# The plateau break now needs BOTH axes to stop improving, so a run whose setup
+# is already met can still spend its remaining passes closing DRV.
+# MEASURED after this change, same design, same corner: DRV 3 -> 0 in one extra
+# pass, SS setup +3.63 -> +3.88 ns, reroute complete (SHIP_WNS_POSTROUTE).
 set _ship_prev_wns -1.0e30
+set _ship_prev_drv 1000000
 for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
   catch {define_process_corner -ext_model_index 0 X}
   if {[catch {extract_parasitics -ext_model_file __CAP__ -corner_cnt 1 -max_res 50 -coupling_threshold 0.1} e]} { puts "SHIP_CVG_EXT_NONFATAL: $e" }
@@ -15171,11 +15659,16 @@ for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
   if {[catch {read_spef __PNR__/signoff_repair_max.spef} e]} { puts "SHIP_CVG_RDSPEF_NONFATAL: $e" }
   if {[catch {estimate_parasitics -detailed_routing} e]} { puts "SHIP_CVG_EST_NONFATAL: $e" }
   set _cvg_wns [sta::worst_slack -max]
+  set _cvg_drv -1
+  catch {set _cvg_drv [expr {[sta::max_slew_violation_count] + [sta::max_capacitance_violation_count]}]}
   puts "SHIP_WNS_CVG_PASS${_cvg}: $_cvg_wns"
+  puts "SHIP_DRV_CVG_PASS${_cvg}: $_cvg_drv"
   if {![string is double -strict $_cvg_wns]} { puts "SHIP_CVG_NONNUMERIC"; break }
-  if {$_cvg_wns >= -0.001} { puts "SHIP_CVG_CLOSED"; break }
-  if {$_cvg > 0 && [string is double -strict $_ship_prev_wns] && $_cvg_wns <= [expr {$_ship_prev_wns + 0.10}]} { puts "SHIP_CVG_PLATEAU"; break }
+  if {$_cvg_wns >= -0.001 && $_cvg_drv == 0} { puts "SHIP_CVG_CLOSED"; break }
+  if {$_cvg_wns >= -0.001 && $_cvg_drv < 0} { puts "SHIP_CVG_CLOSED_DRV_UNMEASURED"; break }
+  if {$_cvg > 0 && [string is double -strict $_ship_prev_wns] && $_cvg_wns <= [expr {$_ship_prev_wns + 0.10}] && $_cvg_drv >= $_ship_prev_drv} { puts "SHIP_CVG_PLATEAU"; break }
   set _ship_prev_wns $_cvg_wns
+  set _ship_prev_drv $_cvg_drv
   for {set _ci 0} {$_ci < 5} {incr _ci} {
     if {[catch {repair_design} e]} { puts "SHIP_CVG_RD_NONFATAL: $e"; break }
     if {[catch {repair_timing -setup} e]} { puts "SHIP_CVG_RT_NONFATAL: $e"; incr _ship_rt_failed }
@@ -15201,6 +15694,14 @@ catch {estimate_parasitics -detailed_routing}
 # which sign-off went on to record as a process-corner floor. When any reroute
 # failed the value is still emitted (it is real, and useful for triage) but
 # under a name that says the route is not there, and the count is stated.
+# v1.8.43 — POST-REROUTE ROUTING-INTEGRITY CHECK. This is the replacement for
+# the *spare* name filter deleted from the routing clear: it MEASURES the
+# v1.5.65 hazard (a spare-tie net that comes back with no wire, whose pins
+# extraction then merges into a neighbour -> LVS mismatch) instead of hoping a
+# name match prevents it, and it covers every multi-terminal signal net, not
+# only the ones that happen to be called *spare*. The promotion gate refuses
+# any repaired route that leaves one unrouted.
+__ROUTING_INTEGRITY_CHECK__
 if {$_ship_dr_failed > 0} {
   puts "SHIP_REROUTE_INCOMPLETE: $_ship_dr_failed"
   catch {puts "SHIP_WNS_UNROUTED: [sta::worst_slack -max]"}
@@ -15220,6 +15721,8 @@ def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
     return (_SHIP_POSTROUTE_CVG_TCL
             .replace("__SPARE_SAFE_CLEAR__",
                      _spare_safe_routing_clear_tcl("SHIP_CVG").rstrip())
+            .replace("__ROUTING_INTEGRITY_CHECK__",
+                     _routing_integrity_check_tcl("SHIP").rstrip())
             .replace("__BOUND__", str(int(bound)))
             .replace("__CAP__", max_captable_c)
             .replace("__PNR__", pnr_dir_c))
@@ -15354,6 +15857,9 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # surrounding `catch` would have swallowed, leaving the counter reading 0
         # for the exact runs it exists to count.
         + "set _ship_rt_failed 0\n"
+        # v1.8.43 — baseline design signature, taken BEFORE any repair, so the
+        # no-op guard below compares like with like.
+        + _design_signature_tcl("_ship_sig0")
         + "for {set _drv_i 0} {$_drv_i < 5} {incr _drv_i} {\n"
         "  if {[catch {repair_design} _drv_rd]} { "
         "puts \"SHIP_RD_NONFATAL: $_drv_rd\"; break }\n"
@@ -15366,6 +15872,27 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "if {$_ship_rt_failed > 0} { "
         "puts \"SHIP_SETUP_REPAIR_REFUSED: $_ship_rt_failed\" }\n"
         "catch {puts \"SHIP_WNS_AFTER_REPAIR: [sta::worst_slack -max]\"}\n"
+        # === v1.8.43 — DO NOT THROW AWAY A GOOD ROUTE TO SHIP AN IDENTICAL ONE ===
+        # Everything below destroys the routing of every signal net and routes the
+        # design again from fresh global-route guides. That is the right thing to
+        # do when the repair above actually CHANGED the netlist. When it changed
+        # NOTHING, it is pure damage: the base route is already sign-off DRC-clean,
+        # and a second route of the SAME netlist is a different route with its own
+        # fresh quality lottery.
+        # MEASURED (spm x sky130A, v1.8.42/43): a rerouted-but-logically-identical
+        # design came back with 13 x m3.6 (min met3 area) islands the base route
+        # did not have — every one of them a met2->via2->met3->via3->met4 stack
+        # transition whose met3 landing is only the two via enclosures
+        # (0.1905 um^2 against the PDK's 0.24 um^2), and TritonRoute's own count
+        # line reported `Number of violations = 0` on that same route.
+        # So: take a design signature (instance name + MASTER name of every
+        # instance, order-independent) before and after the repair; if it is
+        # unchanged, keep the base route and say so. chip/PDK-AGNOSTIC: odb only.
+        + _design_signature_tcl("_ship_sig1")
+        + "if {$_ship_sig1 eq $_ship_sig0} {\n"
+        "  puts \"SHIP_REPAIR_NOOP: 1 (repair changed no instance; base route kept "
+        "rather than re-routed for nothing)\"\n"
+        "} else {\n"
         # GRT-guide-regen — the base route was read from routed.def, so every
         # signal net still carries committed detailed routing. OpenROAD's
         # global_route NO-OPS on already-routed nets (regenerates 0 guides), so
@@ -15392,7 +15919,14 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # DPL-0038 re-fill (restore decap/fill tiling cleared above), AFTER the
         # reroute exactly like the base flow places fill after detailed_route.
         + f"{refill_block}"
-        f"if {{[catch {{write_def {pnr_dir_c}/routed_repaired.def}} e]}} {{ "
+        # close the v1.8.43 "the repair changed something" branch
+        + "}\n"
+        # v1.8.43 — the promoted route gets the same min-area patch as the
+        # base route. Without it the ECO reroute ships met3 stack-transition
+        # landings the base route did not have (measured 13 / 11 / 9 across
+        # three runs) and trades a timing FAIL for a DRC FAIL.
+        + _min_area_patch_tcl("SHIP_MIN_AREA")
+        + f"if {{[catch {{write_def {pnr_dir_c}/routed_repaired.def}} e]}} {{ "
         f"puts \"SHIP_WD_NONFATAL: $e\" }}\n"
         f"if {{[catch {{write_verilog {pnr_dir_c}/{top}_pnr_repaired.v}} e]}} {{ "
         f"puts \"SHIP_WV_NONFATAL: $e\" }}\n"
@@ -15453,6 +15987,23 @@ def _parse_ship_repair_log(log: str) -> dict:
             if (_m := _re.search(r"SHIP_REROUTE_INCOMPLETE:\s*(\d+)", log or ""))
             else 0),
         "wns_unrouted": _f("SHIP_WNS_UNROUTED"),
+        # v1.8.43 — the repair changed no instance, so the reroute was skipped on
+        # purpose and there is nothing to promote. Distinct from "the reroute
+        # failed": the base route is intact and sign-off-clean, and saying so is
+        # the difference between a deliberate no-op and a swallowed abort.
+        "repair_noop": bool(_re.search(r"SHIP_REPAIR_NOOP:\s*1", log or "")),
+        # v1.8.43 — post-reroute routing INTEGRITY: how many multi-terminal
+        # signal nets came back with NO wire. This is the direct measurement of
+        # the v1.5.65 hazard the deleted *spare* name filter was guessing at (an
+        # unrouted spare-tie net whose pins extraction merges into a neighbour
+        # -> LVS mismatch). None when the marker is absent (older log, or the
+        # probe could not run) — UNMEASURED is not ZERO, so the promotion gate
+        # treats None as "no evidence" and leaves the pre-existing decision
+        # untouched rather than reading it as clean.
+        "unrouted_nets": (
+            int(_mu.group(1))
+            if (_mu := _re.search(r"SHIP_UNROUTED_NETS:\s*(\d+)", log or ""))
+            else None),
         "route_violations": (int(viols[-1]) if viols else None),
         "drv_slew_before": (slew_found[0] if slew_found else None),
         "drv_slew_after": (slew_found[-1] if slew_found else None),
@@ -15491,6 +16042,25 @@ def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
     # depends on an absent marker is one log-format change away from becoming a
     # promotion.
     if parsed.get("reroute_incomplete"):
+        return False
+    # v1.8.43 — the repair changed nothing, so there is no repaired route to
+    # promote and the base route is already the right answer. Explicit refusal
+    # rather than relying on `route_violations` being None, for the reason #543
+    # gives: a refusal that depends on an ABSENT marker is one log-format change
+    # away from becoming a promotion.
+    if parsed.get("repair_noop"):
+        return False
+    # v1.8.43 — ROUTING-INTEGRITY refusal. `detailed_route` can return rc=0 and
+    # still leave a net with no wire; extraction then merges that net's pins
+    # into whatever metal is adjacent, which is a REAL LVS mismatch (the
+    # v1.5.65 post-mortem). This is the check that replaces the *spare* name
+    # filter removed from the routing clear — it is strictly stronger, because
+    # it covers every multi-terminal signal net and names the offenders instead
+    # of failing silently. Only a MEASURED non-zero count refuses; None (marker
+    # absent / probe could not run) leaves every pre-existing decision and test
+    # unchanged, so this can only ADD a refusal, never a promotion.
+    _unr = parsed.get("unrouted_nets")
+    if _unr is not None and _unr > 0:
         return False
     wp = parsed.get("wns_postroute")
     wb = parsed.get("wns_before")
@@ -22109,29 +22679,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 27 SI / crosstalk (real SPEF coupling caps) --
     si_rpt = rpt_phase3 / "si_crosstalk.rpt"
-    # SPM-SI-2 — regenerate when the report is MISSING **or STALE against the
-    # SPEF it is derived from**. Existence-only caching pins the FIRST verdict
-    # forever, and this report's conclusion depends on the SPEF's ACCURACY TIER,
-    # not just on the design: a re-extraction that upgrades the SPEF from
-    # grounded-cap-only to real coupling caps (e.g. once the OpenRCX captable is
-    # discovered) leaves the cached report still asserting "no coupling caps
-    # available for this run" — not merely stale, but the opposite of what the
-    # evidence now says, and a crosstalk screen that can never see coupling.
-    _si_stale = False
-    if si_rpt.is_file() and spef_out is not None:
-        try:
-            _sp = Path(spef_out)
-            _si_stale = (_sp.is_file()
-                         and _sp.stat().st_mtime > si_rpt.stat().st_mtime)
-        except OSError:
-            _si_stale = False
-    if _si_stale:
-        notes.append(
-            f"SI crosstalk report regenerated: {si_rpt.name} was older than the "
-            f"SPEF it derives from ({Path(spef_out).name}) — a re-extraction can "
-            f"change the SPEF's accuracy tier (grounded-cap vs real coupling "
-            f"caps), which changes the SI conclusion.")
-    if (not si_rpt.is_file()) or _si_stale:
+    if not si_rpt.is_file():
         # v0.2.35: pass pdk + container so the SI emitter can ALSO run the
         # timing-window-aware ADVISORY upgrade (OpenSTA SI timing JSON →
         # window-gated watch-list) when a routed SPEF + post-route STA exist.
@@ -22574,27 +23122,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     _mcf_json = project / "reports/phase3/si_mcf_sta.json"
     _mcf_spef = sorted((project / "phase3/stage3/extracted").glob("*.spef")) \
         if (project / "phase3/stage3/extracted").is_dir() else []
-    # SPM-SI-3 — same staleness class as SPM-SI-2 (see Step 27 above), and the
-    # one that actually bites: the MCF-bounded SPEFs are DERIVED from the base
-    # SPEF by folding Cc*MCF into the ground cap. Fold them from a SPEF that has
-    # NO coupling caps and there is nothing to fold — the bounded SPEF is just a
-    # copy. Existence-only gating then keeps that empty fold forever, so after a
-    # re-extraction adds real coupling the independent recount in
-    # si_mcf_sta_check correctly reports FOLD_NOT_APPLIED on every net. Re-run
-    # when the base SPEF is NEWER than the MCF result it was folded from.
-    _mcf_stale = False
-    if _mcf_json.is_file() and _mcf_spef:
-        try:
-            _mcf_stale = max(p.stat().st_mtime for p in _mcf_spef) > \
-                _mcf_json.stat().st_mtime
-        except OSError:
-            _mcf_stale = False
-    if _mcf_stale:
-        notes.append(
-            "si_mcf_sta re-run: the base SPEF is newer than si_mcf_sta.json — "
-            "MCF-bounded SPEFs are folded FROM that SPEF, so a re-extraction "
-            "(e.g. one that adds real coupling caps) invalidates the fold.")
-    if ((not _mcf_json.is_file() or _mcf_stale) and _mcf_spef
+    if (not _mcf_json.is_file() and _mcf_spef
             and (project / "phase3/stage3/pnr/constraint.sdc").is_file()):
         try:
             _mcf_cmd = [sys.executable,
@@ -24009,17 +24537,6 @@ if {{$_i > 0}} {{
   if {{[llength $_c] == 0}} {{
     set _c [lsort [glob -nocomplain $_root/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom]]
   }}
-  # SPM-SI-1 — SECOND captable naming convention (chip/PDK-AGNOSTIC). IHP-Open-PDK
-  # ships the model one level deeper with the tokens reversed:
-  #   libs.tech/librelane/openrcx/<pdk>.<corner>.magic.rules
-  # vs open_pdks' libs.tech/{{librelane,openlane}}/rules.openrcx.<pdk>.<corner>.magic.
-  # Missing it silently downgrades to the -lef_rc grounded-cap path -> a SPEF with
-  # ZERO coupling caps -> a VACUOUS crosstalk screen (N nets, 0 coupling pairs)
-  # on a PDK that does ship a full coupling model. Ordered LAST so nothing that
-  # resolves today changes.
-  if {{[llength $_c] == 0}} {{
-    set _c [lsort [glob -nocomplain $_root/libs.tech/{{librelane,openlane}}/openrcx/*.nom.magic.rules $_root/libs.tech/{{librelane,openlane}}/openrcx/*.nom.rules]]
-  }}
   if {{[llength $_c] > 0}} {{ set _rules [lindex $_c 0] }}
 }}
 # PR-B2b — staged tech-LEF fallback: a named PDK whose tech LEF was staged
@@ -24038,10 +24555,6 @@ if {{$_rules eq ""}} {{
     set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom.magic]]
     if {{[llength $_c2] == 0}} {{
       set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom]]
-    }}
-    # SPM-SI-1 — IHP layout on the cell-LEF-derived root too (see above).
-    if {{[llength $_c2] == 0}} {{
-      set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/openrcx/*.nom.magic.rules $_root2/libs.tech/{{librelane,openlane}}/openrcx/*.nom.rules]]
     }}
     if {{[llength $_c2] > 0}} {{ set _rules [lindex $_c2 0] }}
   }}
@@ -24198,15 +24711,8 @@ def _discover_openrcx_captables(pdk: PdkConfig, container: str
     for corner in _SPEF_CORNERS:
         chosen: Optional[str] = None
         for d in cap_dirs:
-            # SPM-SI-1 — two captable naming conventions, chip/PDK-AGNOSTIC:
-            #   open_pdks / asap7 : <d>/rules.openrcx.<pdk>.<corner>.magic
-            #   IHP-Open-PDK      : <d>/openrcx/<pdk>.<corner>.magic.rules
-            # Glob BOTH so a PDK using the second layout gets its real coupling
-            # captable instead of silently degrading to grounded-cap LEF-RC.
             expr = (f"{shlex.quote(d)}/rules.openrcx.*.{corner}.magic "
-                    f"{shlex.quote(d)}/rules.openrcx.*.{corner} "
-                    f"{shlex.quote(d)}/openrcx/*.{corner}.magic.rules "
-                    f"{shlex.quote(d)}/openrcx/*.{corner}.rules")
+                    f"{shlex.quote(d)}/rules.openrcx.*.{corner}")
             # Prefer the .magic model; require the corner token in the name.
             hits = _container_ls_paths(container, expr, f".{corner}")
             magic = [h for h in hits if h.endswith(".magic")]

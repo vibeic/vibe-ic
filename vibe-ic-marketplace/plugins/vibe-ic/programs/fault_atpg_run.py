@@ -152,7 +152,18 @@ PDK_CONFIG = {
     # ENABLE-flop family edfxtp/sedfxtp (yosys maps $_DFFE_* → edfxtp — the single
     # most common flop on real sky130 synth, e.g. 1024 in subservient; v1.4.21).
     "sky130": {
+        # v1.8.43 — `primitives.v` named EXPLICITLY and FIRST, mirroring the
+        # `ihp-sg13g2` entry below. ATPG already got it implicitly (via
+        # `_cell_model_prep`'s co-located-primitives.v prepend), but Step 29's
+        # consumer `pdk_cell_models.container_model_paths` has no such implicit
+        # step, so on sky130 it handed iverilog a model whose UDPs are undefined:
+        # `67 error(s) during elaboration` / `sky130_fd_sc_hd__udp_dff$P_pp$PG$N
+        # referenced 64 times`, and canonical Step 29 came out MISSING on every
+        # sky130 run. `_cell_model_prep` is now idempotent so naming it here does
+        # not concatenate it twice.
         "cell_model": (
+            "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/verilog/"
+            "primitives.v "
             "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/verilog/"
             "sky130_fd_sc_hd.v"
         ),
@@ -811,101 +822,6 @@ def resolve_mapped_netlist(project: Path, netlist_rel: str) -> tuple[str, str | 
 # verbatim copy (harmless).
 _COMBINED_CELL_MODEL = "phase2/stage2/dft/cell_model_combined.v"
 
-#: SPM-DFT-1 — the name handed to `fault atpg --reset` when NO port may be
-#: bypassed. `fault atpg` has no "do not bypass any reset" switch and its
-#: --reset default is the literal string "rst", so the only way to keep every
-#: data input controllable is to name a port that cannot exist. Deliberately
-#: not a plausible identifier.
-_ATPG_NO_RESET_BYPASS = "__vibeic_atpg_no_reset_bypass__"
-
-
-def _atpg_liberty_container_path(project: "Path", cell_model: str,
-                                 pdk_dir: "Path | None") -> str:
-    """Container path of a std-cell Liberty for the SAME library as
-    `cell_model`, or "" if none resolves.
-
-    chip/PDK-AGNOSTIC: every PDK we ship lays a std-cell library out as
-    ``<lib_root>/verilog/<x>.v`` beside ``<lib_root>/lib/<x>.lib`` (open_pdks
-    sky130A/gf180mcuD and IHP-Open-PDK sg13g2 all do). Swap the leaf directory
-    and glob for a typical corner, then any corner. No cell/vendor literal."""
-    cm = (cell_model or "").split()[0] if cell_model else ""
-    if not cm or "/verilog/" not in cm:
-        return ""
-    root = cm.rsplit("/verilog/", 1)[0]
-    for pat in (f"{root}/lib/*typ*.lib", f"{root}/lib/*tt*.lib",
-                f"{root}/lib/*.lib"):
-        try:
-            # NB: _run_docker " ".join()s argv into ONE string handed to an
-            # outer `bash -c`, so the glob must be left UNQUOTED for that shell
-            # to expand — and an inner `bash -lc` would swallow the arguments.
-            ec, out, _ = _run_docker(project, ["ls", pat, "2>/dev/null"],
-                                     timeout=60, pdk_dir=pdk_dir)
-        except Exception:
-            continue
-        for ln in (out or "").splitlines():
-            ln = ln.strip()
-            if ln.endswith(".lib"):
-                return ln
-    return ""
-
-
-def cut_netlist_load_count(cut_text: str, name: str) -> int:
-    """Number of places `name` is CONSUMED (driven into something) in a cut
-    netlist: instance pin connections ``.PIN(name)`` and continuous-assignment
-    right-hand sides. Port/wire DECLARATIONS are deliberately not counted — a
-    declared-but-unloaded signal is exactly the "no loads" case this feeds.
-
-    chip/PDK-AGNOSTIC: pure structural text analysis, no cell/vendor literal."""
-    if not name:
-        return 0
-    esc = re.escape(name)
-    n = len(re.findall(r"\.\s*[A-Za-z_$][\w$]*\s*\(\s*\\?" + esc + r"\s*\)",
-                       cut_text))
-    for m in re.finditer(r"^\s*assign\b[^=]*=([^;]*);", cut_text, re.M):
-        if re.search(r"(?<![\w$\\.])\\?" + esc + r"(?![\w$.])", m.group(1)):
-            n += 1
-    return n
-
-
-def _atpg_reset_bypass_name(cut_path: "Path", reset: str | None,
-                            clock: str) -> tuple[str, str]:
-    """Decide which name to give ``fault atpg --reset`` — i.e. which port the
-    ATPG engine will BYPASS and hold at a constant for every simulation.
-
-    `fault atpg` bypasses a reset BY NAME and defaults to the literal "rst".
-    A design whose reset port is called `rst` therefore had that input frozen
-    even though nothing asked for it, making its entire fanout cone untestable.
-
-    The cut netlist is a purely COMBINATIONAL full-scan model (every flop became
-    a pseudo-PI/pseudo-PO pair), so each of its primary inputs is scan-
-    controllable and none should be frozen. Decide structurally:
-
-      * candidate HAS loads in the cut netlist -> it is live combinational logic
-        (a SYNCHRONOUS reset, or a reset that also feeds datapath) -> return the
-        sentinel so NOTHING is bypassed and the cone stays testable.
-      * candidate has NO loads -> it only drove flop async pins, which the cut
-        removed -> bypassing is a no-op; keep the caller's/tool's behaviour.
-
-    Returns ``(name_to_pass, human_readable_note)``."""
-    candidate = (reset or "rst").strip()
-    try:
-        cut_text = Path(cut_path).read_text(errors="replace")
-    except Exception as exc:                                   # unreadable cut
-        return _ATPG_NO_RESET_BYPASS, (
-            f"cut netlist unreadable ({exc}); passed sentinel --reset so no "
-            f"data input is frozen by the tool's name-based default")
-    loads = cut_netlist_load_count(cut_text, candidate)
-    if loads > 0:
-        return _ATPG_NO_RESET_BYPASS, (
-            f"reset candidate '{candidate}' has {loads} load(s) in the cut "
-            f"netlist -> SYNCHRONOUS/datapath reset, kept ATPG-CONTROLLABLE "
-            f"(not bypassed); freezing it would make its whole fanout cone "
-            f"untestable")
-    return candidate, (
-        f"reset candidate '{candidate}' has no loads in the cut netlist "
-        f"(async-only: its flop pins were removed by the cut) -> bypassing is "
-        f"a no-op; passed through")
-
 
 def _cell_model_prep(cell_model: str) -> tuple[str, str]:
     """Return (effective_cell_model_container_path, prep_shell_snippet).
@@ -945,6 +861,17 @@ def _cell_model_prep(cell_model: str) -> tuple[str, str]:
     # `cp` cannot merge and would need a directory destination.
     fallback = (f'cp {quoted} "{combined}"' if len(parts) == 1
                 else f'cat {quoted} > "{combined}"')
+    # v1.8.43 — IDEMPOTENT. The implicit "prepend a co-located primitives.v"
+    # is a convenience for configs that do not name it; a config that DOES name
+    # it explicitly must not get it twice, or the combined model redefines every
+    # UDP and iverilog rejects it. This became reachable when the sky130 entry
+    # was made explicit so that `pdk_cell_models` (Step 29's consumer, which has
+    # no such implicit prepend) could see the file at all — the two consumers
+    # are held identical by
+    # test_sdf_gate_sim_oss_pdk_models::test_pdk_model_table_agrees_with_fault_atpg_run,
+    # so making one explicit forces the other.
+    if os.path.normpath(prim) in {os.path.normpath(p) for p in parts}:
+        return combined, (f'mkdir -p "$(dirname {combined})" && {fallback}')
     prep = (
         f'mkdir -p "$(dirname {combined})" && '
         f'if [ -f "{prim}" ]; then cat "{prim}" {quoted} > "{combined}"; '
@@ -1277,83 +1204,20 @@ def run_fault(
             "log_tail": cut_log,
         }
 
-    # Step A2 — SPM-DFT-2: restore OBSERVABILITY of the flops' ASYNCHRONOUS
-    # set/reset inputs. `fault cut` keeps only the D pseudo-PO and DROPS every
-    # other sequential pin, so a net whose only load was a flop's async pin ends
-    # up with ZERO loads and every fault on it is structurally untestable. That
-    # bites hardest on libraries with NO reset-less flop (synthesis then maps
-    # every register to a reset flop and ties the unused async pin off with a
-    # dedicated tie cell — one dangling tie cell, i.e. 2 dead faults, PER FLOP).
-    # See fault_cut_async_observe for the sound liberty-driven next-state model.
-    # The augmented model is written to its OWN file and `cut_netlist.v` is left
-    # BYTE-FOR-BYTE ALONE: the transition/path-delay/SDD ATPG producers all
-    # re-read that same cut netlist, so mutating it in place would silently
-    # change THEIR fault sets and miters (it broke DT1 outright when tried).
-    # One producer must never rewrite a shared upstream artefact.
-    async_obs: dict | None = None
-    try:
-        import fault_cut_async_observe as _fcao      # local import: no cycle
-        lib_ctr = _atpg_liberty_container_path(project, cell_model, pdk_dir)
-        if lib_ctr:
-            ec_l, lib_text, _ = _run_docker(
-                project, ["cat", lib_ctr], timeout=180, pdk_dir=pdk_dir)
-            if ec_l == 0 and lib_text.strip():
-                cut_text = (project / cut_out).read_text(errors="replace")
-                adds, async_obs = _fcao.build_additions(
-                    (project / netlist_rel).read_text(errors="replace"),
-                    cut_text, lib_text)
-                async_obs["liberty"] = lib_ctr
-                if adds:
-                    obs_rel = str(Path(cut_out).with_name(
-                        Path(cut_out).stem + "_asyncobs.v"))
-                    (project / obs_rel).write_text(
-                        _fcao.augment_cut(cut_text, adds))
-                    cut_abs = f"/work/{obs_rel}"      # ATPG reads the augmented one
-                    async_obs["atpg_netlist"] = obs_rel
-                    async_obs["shared_cut_netlist_untouched"] = cut_out
-            else:
-                async_obs = {"skipped": f"liberty unreadable in container: {lib_ctr}"}
-        else:
-            async_obs = {"skipped": "no std-cell liberty resolved from cell model"}
-    except Exception as exc:                          # never fail the ATPG on this
-        async_obs = {"error": f"{type(exc).__name__}: {exc}"}
-
     # Step B: fault atpg. iverilog (which Fault drives to simulate the
     # cell model) cannot resolve the model's UDP primitives on its own, so
     # build a combined model (primitives + cells) first and point atpg at it.
     eff_cell_model, cell_prep = _cell_model_prep(cell_model)
-    # SPM-DFT-1 — do NOT let `fault atpg`'s NAME-BASED --reset default silently
-    # freeze a SYNCHRONOUS reset. `fault atpg --help`: "--reset <reset> ...
-    # during simulations it will always be held low. (default: rst)". Because
-    # this program never passed --reset, ANY design whose reset port happens to
-    # be literally named `rst` had that port BYPASSED — removed from the ATPG
-    # input set and tied to a constant — purely because of a string match.
-    #
-    # In the CUT netlist every flop is replaced by a pseudo-PI/pseudo-PO pair,
-    # so the model handed to ATPG is PURELY COMBINATIONAL and, under full scan,
-    # every one of its primary inputs is scan-controllable. Freezing one of them
-    # is a MODELLING ERROR: it makes the whole fanout cone of that input
-    # untestable and shows up as an unexplained coverage shortfall.
-    #   * A SYNCHRONOUS reset feeds ordinary D-side combinational logic and HAS
-    #     loads in the cut netlist -> it must stay controllable.
-    #   * A purely ASYNCHRONOUS reset drove only the flops' async pins, which the
-    #     cut REMOVED, so it has no loads and bypassing it is a no-op either way.
-    # Decide STRUCTURALLY (loads in the cut netlist), never by name.
-    bypass_name, reset_note = _atpg_reset_bypass_name(
-        project / cut_out, reset, clock)
     atpg_cmd = [
         "fault", "atpg",
         "--cell-model", eff_cell_model,
         "--clock", clock,
-        "--reset", bypass_name,
         "-o", f"/work/{tv_out}",
         "--output-coverage-metadata", f"/work/{cov_out}",
         "-m", str(min_coverage),
         "-v", str(tv_count),
         cut_abs,
     ]
-    if reset and reset_active_low and bypass_name == reset:
-        atpg_cmd.insert(atpg_cmd.index("--reset") + 2, "--reset-active-low")
     atpg_shell = cell_prep + " && " + " ".join(atpg_cmd)
     ec, out, err = _run_docker(project, [atpg_shell], timeout=1800, pdk_dir=pdk_dir)
     atpg_log = (out + "\n" + err)[-2000:]
@@ -1439,14 +1303,6 @@ def run_fault(
         "faults_total_source": faults_total_source,
         "cell_model": cell_model,
         "dff_cells": dff_cells,
-        # SPM-DFT-1 — record WHICH port (if any) the ATPG engine was allowed to
-        # bypass, and why. Never silent: a frozen input caps coverage and the
-        # shortfall is otherwise unexplainable from the report alone.
-        "atpg_reset_bypassed": (None if bypass_name == _ATPG_NO_RESET_BYPASS
-                                else bypass_name),
-        "atpg_reset_decision": reset_note,
-        # SPM-DFT-2 — how many flop async set/reset pins were made observable.
-        "async_pin_observation": async_obs,
         "target_pct": min_coverage,
         "stuck_at_ge_target": coverage_ratio >= min_coverage,
         "atpg_exit": ec,

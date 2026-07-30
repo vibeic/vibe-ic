@@ -53,6 +53,25 @@ PDK_CELL_MODELS: Dict[str, Dict[str, object]] = {
     "sky130": {
         "cell_prefixes": ("sky130_fd_sc_",),
         "container_paths": [
+            # v1.8.43 — `primitives.v` MUST come first, and it was MISSING.
+            # This entry violated the rule stated in this module's own
+            # `container_paths` comment three lines above the table (and that
+            # `ihp-sg13g2` obeys with `sg13g2_udp.v`): sky130's stdcell model
+            # instantiates UDPs it does not define, and they live in a separate
+            # file. MEASURED (spm x sky130A): compiling `sky130_fd_sc_hd.v`
+            # alone gives iverilog
+            #   67 error(s) during elaboration.
+            #   *** These modules were missing:
+            #         sky130_fd_sc_hd__udp_dff$PR_pp$PG$N referenced 1 times.
+            #         sky130_fd_sc_hd__udp_dff$P_pp$PG$N   referenced 64 times.
+            #         sky130_fd_sc_hd__udp_mux_2to1        referenced 1 times.
+            # so `sdf_gate_sim` returned verdict=ERROR reason="compile failed",
+            # `results.log` was never written, and canonical Step 29
+            # (Post-Layout Gate-Level Simulation) came out MISSING on EVERY
+            # sky130 run. `primitives.v` (50512 B) defines 46 primitives
+            # including all three named above — verified in the container.
+            "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/verilog/"
+            "primitives.v",
             "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/verilog/"
             "sky130_fd_sc_hd.v",
         ],
