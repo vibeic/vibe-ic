@@ -35,6 +35,11 @@ def _fake_run(openroad_has, sta_has, *, rc=0, docker_missing=False):
         if docker_missing:
             return 127, "", "docker not found"
         entry = argv[argv.index("--entrypoint") + 1]
+        # The equivalence run is a SECOND question this fixture must answer, or
+        # every test using it fails for a reason unrelated to what it asserts.
+        # Defaults to "the engines agree" so each test isolates its own subject.
+        if any("eq.tcl" in str(x) for x in argv):
+            return 0, "EQ_MAX 1.000000000\nEQ_MIN 2.000000000\n", ""
         have = openroad_has if entry == "openroad" else sta_has
         if have is None:                      # the silent-no-output case
             return rc, "", "container said nothing"
@@ -175,5 +180,62 @@ def test_a_missing_baseline_file_behaves_as_no_recorded_debt(monkeypatch,
         == P.RC_DISAGREE
 
 
+
+# --------------------------------------------------------------------------
+# behaviour, not just names — vibeic-eda#8's second lesson
+# --------------------------------------------------------------------------
+
+def _with_equiv(openroad_has, sta_has, *, or_slack="1.0|2.0", sta_slack="1.0|2.0",
+                equiv_broken=False):
+    """Fake both the command probe and the equivalence run."""
+    base = _fake_run(openroad_has, sta_has)
+
+    def run(argv, timeout=180):
+        entry = argv[argv.index("--entrypoint") + 1]
+        if any("eq.tcl" in str(a) for a in argv):
+            if equiv_broken:
+                return 1, "", "engine died"
+            v = or_slack if entry == "openroad" else sta_slack
+            mx, _, mn = v.partition("|")
+            return 0, f"EQ_MAX {mx}\nEQ_MIN {mn}\n", ""
+        return base(argv, timeout)
+    return run
+
+
+def test_identical_names_with_different_timing_still_fails(monkeypatch, capsys):
+    """THE lesson. 20/20 core commands matched in both engines while
+    `read_verilog` needed a tech LEF in one and not the other — a name that
+    matched with different behaviour behind it. A gate that only counts names
+    would pass an image whose engines compute different numbers."""
+    monkeypatch.setattr(P, "_run", _with_equiv(ALL, ALL,
+                                               or_slack="8.7|0.3",
+                                               sta_slack="4.2|0.1"))
+    rc = P.main([])
+    err = capsys.readouterr().err
+    assert rc == P.RC_DISAGREE, \
+        "matching command names passed while the timing differed"
+    assert "DIFFERENT timing" in err and "8.7" in err and "4.2" in err
+
+
+def test_matching_names_and_matching_timing_passes(monkeypatch, capsys):
+    monkeypatch.setattr(P, "_run", _with_equiv(ALL, ALL))
+    assert P.main([]) == P.RC_AGREE
+    assert "identical timing" in capsys.readouterr().err
+
+
+def test_a_failed_equivalence_run_is_not_parity(monkeypatch, capsys):
+    """The names can all match and the comparison still not have happened."""
+    monkeypatch.setattr(P, "_run", _with_equiv(ALL, ALL, equiv_broken=True))
+    assert P.main([]) == P.RC_CANNOT_CHECK
+    assert "equivalence run did not complete" in capsys.readouterr().err
+
+
+def test_the_baseline_pass_still_reports_the_equivalence(monkeypatch, tmp_path,
+                                                         capsys):
+    """The recorded-debt path must not turn into a clean bill that is silent
+    about behaviour."""
+    monkeypatch.setattr(P, "_run", _with_equiv(ALL, set()))
+    P.main(["--baseline", _baseline(tmp_path, only_openroad=ALL)])
+    assert "identical timing" in capsys.readouterr().err
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

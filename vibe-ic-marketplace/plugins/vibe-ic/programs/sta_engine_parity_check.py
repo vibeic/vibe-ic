@@ -116,7 +116,70 @@ def _probe(image: str, entrypoint: str, commands: Tuple[str, ...],
     return seen, ""
 
 
-def check(image: str, commands: Tuple[str, ...]) -> dict:
+#: A two-flop design through an inverter. Small enough to run in seconds, real
+#: enough that a divergent engine gives different numbers.
+_EQUIV_V = """\
+module top (input clk, input d, output q);
+  wire n1, n2;
+  sky130_fd_sc_hd__dfxtp_1 f1 (.CLK(clk), .D(d),  .Q(n1));
+  sky130_fd_sc_hd__inv_1   i1 (.A(n1),   .Y(n2));
+  sky130_fd_sc_hd__dfxtp_1 f2 (.CLK(clk), .D(n2), .Q(q));
+endmodule
+"""
+
+#: `openroad`'s `read_verilog` goes through OpenROAD's database and needs a tech
+#: LEF; `sta`'s is OpenSTA's own reader and liberty alone suffices. Same command
+#: name, different prerequisite — the discovery that killed the wrapper idea in
+#: vibeic-eda#8. The LEF reads are harmless under `sta`, so one script serves
+#: both.
+_EQUIV_TCL = """\
+set K /foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd
+catch {read_lef $K/techlef/sky130_fd_sc_hd__nom.tlef}
+catch {read_lef $K/lef/sky130_fd_sc_hd.lef}
+read_liberty $K/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+read_verilog /w/top.v
+link_design top
+create_clock -name clk -period 10 [get_ports clk]
+set_input_delay 1.0 -clock clk [get_ports d]
+set_output_delay 1.0 -clock clk [get_ports q]
+puts "EQ_MAX [format %.9f [sta::worst_slack -max]]"
+puts "EQ_MIN [format %.9f [sta::worst_slack -min]]"
+"""
+
+
+def _equivalence(image: str) -> Tuple[Dict[str, str], str]:
+    """{engine: "max|min"} — the same timing question asked of both.
+
+    Command PRESENCE is not equivalence. vibeic-eda#8 measured 20/20 core
+    commands in both engines and then found `read_verilog` requiring a tech LEF
+    in one and not the other — a name that matched while the thing behind it did
+    not. A gate that only counts names would pass an image whose two engines
+    compute different numbers, which is the failure it exists to prevent.
+    """
+    import tempfile
+    from pathlib import Path
+    out: Dict[str, str] = {}
+    with tempfile.TemporaryDirectory() as d:
+        Path(d, "top.v").write_text(_EQUIV_V, encoding="utf-8")
+        Path(d, "eq.tcl").write_text(_EQUIV_TCL, encoding="utf-8")
+        for entry, positional in (("openroad", False), ("sta", True)):
+            args = (["-no_init", "/w/eq.tcl"] if positional
+                    else ["-no_init", "-exit", "/w/eq.tcl"])
+            rc, so, se = _run(["docker", "run", "--rm", "-v", f"{d}:/w",
+                               "--entrypoint", entry, image, *args], timeout=300)
+            vals = {}
+            for line in (so or "").splitlines():
+                pr = line.split()
+                if len(pr) == 2 and pr[0] in ("EQ_MAX", "EQ_MIN"):
+                    vals[pr[0]] = pr[1]
+            if len(vals) != 2:
+                return {}, (f"{entry} did not produce both slack values "
+                            f"(rc={rc}): {(se or so).strip()[:160]}")
+            out[entry] = f"{vals['EQ_MAX']}|{vals['EQ_MIN']}"
+    return out, ""
+
+
+def check(image: str, commands: Tuple[str, ...], *, equivalence: bool = True) -> dict:
     if not commands:
         return {"error": "no commands to probe; a check of zero commands finds "
                          "zero disagreements and cannot report parity"}
@@ -129,6 +192,10 @@ def check(image: str, commands: Tuple[str, ...]) -> dict:
     if err2:
         return {"error": f"sta: {err2}"}
 
+    eq_err, eq_vals = "", {}
+    if equivalence:
+        eq_vals, eq_err = _equivalence(image)
+
     only_openroad = sorted(c for c in commands if ored.get(c) and not sta.get(c))
     only_sta = sorted(c for c in commands if sta.get(c) and not ored.get(c))
     neither = sorted(c for c in commands if not ored.get(c) and not sta.get(c))
@@ -136,7 +203,9 @@ def check(image: str, commands: Tuple[str, ...]) -> dict:
             "openroad_present": sum(1 for c in commands if ored.get(c)),
             "sta_present": sum(1 for c in commands if sta.get(c)),
             "only_openroad": only_openroad, "only_sta": only_sta,
-            "in_neither": neither}
+            "in_neither": neither,
+            "equivalence": eq_vals, "equivalence_error": eq_err,
+            "equivalent": bool(eq_vals) and len(set(eq_vals.values())) == 1}
 
 
 def main(argv=None) -> int:
@@ -161,6 +230,24 @@ def main(argv=None) -> int:
         print(f"[NOT CHECKED] {res['error']}. This is NOT 'the engines agree'.",
               file=sys.stderr)
         return RC_CANNOT_CHECK
+
+    # Behaviour, reported before the name comparison because a name-only PASS is
+    # exactly what this half exists to stop being sufficient.
+    if res.get("equivalence_error"):
+        print(f"[NOT CHECKED] the equivalence run did not complete: "
+              f"{res['equivalence_error']}. Command presence alone is NOT "
+              f"parity — vibeic-eda#8 had 20/20 names matching while one of "
+              f"them behaved differently.", file=sys.stderr)
+        return RC_CANNOT_CHECK
+    if res.get("equivalence") and not res.get("equivalent"):
+        print(f"[FAIL] the two engines computed DIFFERENT timing for the same "
+              f"design in {res['image']}:", file=sys.stderr)
+        for eng, v in sorted(res["equivalence"].items()):
+            mx, _, mn = v.partition("|")
+            print(f"    {eng:9s} worst_slack max={mx} min={mn}", file=sys.stderr)
+        print("  The command surface can still match while this differs; that is "
+              "why it is measured separately.", file=sys.stderr)
+        return RC_DISAGREE
 
     if res["in_neither"]:
         # The probe list has drifted from the fork. Say so rather than letting
@@ -197,8 +284,16 @@ def main(argv=None) -> int:
               f"(vibeic-eda#8): openroad has them, sta does not.",
               file=sys.stderr)
     if a.baseline and not (new_or or new_sta):
+        # The equivalence result belongs here too. Without it this line reads as
+        # a clean bill while saying nothing about the half that actually
+        # compares BEHAVIOUR — which is the half the name comparison cannot
+        # substitute for.
+        eq = ""
+        if res.get("equivalent"):
+            eq = (" Both compute identical timing (worst_slack max="
+                  + next(iter(res["equivalence"].values())).split("|")[0] + ").")
         print(f"[PASS] no NEW divergence between the two engines in "
-              f"{res['image']} ({recorded} recorded).", file=sys.stderr)
+              f"{res['image']} ({recorded} recorded).{eq}", file=sys.stderr)
         return RC_AGREE
     if a.baseline:
         res = {**res, "only_openroad": new_or, "only_sta": new_sta}
@@ -219,8 +314,12 @@ def main(argv=None) -> int:
                   f"{', '.join(res['only_sta'])}", file=sys.stderr)
         return RC_DISAGREE
 
-    print(f"[PASS] both engines expose the same {res['probed']} command(s) "
-          f"in {res['image']}.", file=sys.stderr)
+    eqnote = ""
+    if res.get("equivalent"):
+        mx = next(iter(res["equivalence"].values())).split("|")[0]
+        eqnote = f" and compute identical timing (worst_slack max={mx})"
+    print(f"[PASS] both engines expose the same {res['probed']} command(s)"
+          f"{eqnote} in {res['image']}.", file=sys.stderr)
     return RC_AGREE
 
 
