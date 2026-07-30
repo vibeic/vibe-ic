@@ -13353,12 +13353,33 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     core_w = die_w - 2 * core_pad
     core_h = die_h - 2 * core_pad
 
-    # Pick clock buffer cells: PdkConfig-carried masters win (named open
-    # PDKs — nangate45/sky130A — carry their registry clk_buf_cell/root);
-    # else the legacy heuristic (sky130 default / custom-PDK Liberty scan).
-    clk_buf = pdk.clk_buf or "sky130_fd_sc_hd__clkbuf_4"
-    clk_buf_root = pdk.clk_buf_root or "sky130_fd_sc_hd__clkbuf_16"
-    if pdk.clk_buf is None and pdk.name.startswith("custom"):
+    # Pick clock buffer cells: PdkConfig-carried masters win (every registry
+    # PDK carries clk_buf_cell/root); otherwise DISCOVER them from the PDK's own
+    # Liberty.
+    #
+    # vibe-ic#561 — this block held two instances of that issue's shape (a text
+    # or default proxy standing in for the property being checked), three lines
+    # apart:
+    #
+    #   1. `pdk.clk_buf or "sky130_fd_sc_hd__clkbuf_4"` made a SKY130 cell the
+    #      fallback for every PDK. `clk_buf` comes from `reg.get("clk_buf_cell")`,
+    #      which is None when the key is absent, so a PDK added to the registry
+    #      without it would be handed a cell that exists in no other library —
+    #      and CTS would ask for a master the Liberty does not contain.
+    #   2. The Liberty scan that recovers from exactly that was gated on
+    #      `pdk.name.startswith("custom")`. The NAME was standing in for "this
+    #      PDK's cells are unknown and must be discovered", and those come apart
+    #      for any non-registry PDK not named `custom*`.
+    #
+    # The gate is gone: the scan runs whenever `clk_buf` is unknown, which is
+    # strictly more discovery and never less. The literal survives only as the
+    # last resort AFTER the scan has failed, where it is a disclosed guess rather
+    # than a silent default — and `_clk_buf_note` says so, so a run that used it
+    # is distinguishable from one that resolved a real cell.
+    clk_buf = pdk.clk_buf
+    clk_buf_root = pdk.clk_buf_root
+    _clk_buf_note = ""
+    if clk_buf is None:
         try:
             lib_text = Path(pdk.liberty).read_text(errors="ignore")
             cellnames: List[str] = []
@@ -13376,6 +13397,24 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             clk_buf_root = clk_candidates[-1] if clk_candidates else clk_buf
         except Exception:
             pass
+    if clk_buf is None:
+        # The scan found nothing. Name the guess rather than making it silently:
+        # this cell exists only in sky130, so on any other PDK the note is the
+        # difference between a confusing downstream CTS error and a stated cause.
+        clk_buf = "sky130_fd_sc_hd__clkbuf_4"
+        clk_buf_root = clk_buf_root or "sky130_fd_sc_hd__clkbuf_16"
+        _clk_buf_note = (
+            f"clk_buf UNRESOLVED for pdk={pdk.name!r}: its registry entry "
+            f"declares no clk_buf_cell and its Liberty yielded no CLKBUF/BUF "
+            f"cell, so the sky130 master {clk_buf!r} is being used as a "
+            f"disclosed guess. If this PDK is not sky130, CTS will ask for a "
+            f"cell its library does not contain.")
+        # Same channel the rest of this function discloses through, so the note
+        # lands in the phase3 log beside the run it describes. A note nobody
+        # emits is the shape this fix exists to remove.
+        print(f"[phase3] {_clk_buf_note}", file=sys.stderr)
+    elif clk_buf_root is None:
+        clk_buf_root = clk_buf
 
     pnr_tcl = out_dir / "pnr.tcl"
     # v1.6.18: every path read by openroad must be the container-side
