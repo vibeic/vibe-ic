@@ -239,3 +239,30 @@ def test_the_baseline_pass_still_reports_the_equivalence(monkeypatch, tmp_path,
     assert "identical timing" in capsys.readouterr().err
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_a_register_for_a_FIXED_debt_hides_the_original_bug(monkeypatch,
+                                                            tmp_path):
+    """Why the register was DELETED in 0.2.46 rather than emptied.
+
+    The ten entries described `sta` shipping without the superset. Once the
+    build was fixed, running the gate WITH that register against the still-broken
+    older image returned rc 0 — measured, not argued. A register describing a
+    debt that no longer exists is not a conservative leftover; it is a blind spot
+    the exact size of the bug it used to describe, and it reads as PASS on the
+    very defect it was written for.
+
+    So: a register entry only ever suppresses while the thing it names is still
+    true, and this pins that the suppression is total when it is not removed.
+    """
+    monkeypatch.setattr(P, "_run", _with_equiv(ALL, set()))     # the OLD image
+    stale = _baseline(tmp_path, only_openroad=ALL)              # the fixed debt
+    assert P.main(["--baseline", stale]) == P.RC_AGREE, \
+        "fixture drift: this test documents that a stale register PASSES"
+    # …and without it, the same broken image is caught.
+    assert P.main([]) == P.RC_DISAGREE, \
+        "removing the register must restore the finding"
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-q"]))

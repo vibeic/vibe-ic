@@ -148,24 +148,19 @@ run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_tar
 # Nothing errors when a flow step shells out to the wrong one — an absent Tcl
 # command in a script that does not call it looks like a working install.
 #
-# The current divergence is RECORDED, not ignored: it needs an image rebuild,
-# and a gate that fails every landing until then is a gate someone deletes. A
-# NEW divergence still stops a landing, and the recorded set is printed every
-# run so the debt stays visible.
-# host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
-# vibeic-eda#32 — the fork ledger marks a tool `integrated = False` when the pin
-# resolver finds no ARG for it, and renders that as "not_layered — nothing to
-# assess", which asserts the tool is not shipped. Measured 2026-07-30: five of
-# the six in that state ARE in the image, including `ciel`, whose managed store
-# both sign-off PDKs symlink into. Each is excluded from every upstream
-# assessment while shipping to users.
+# FIXED in vibeic-eda 0.2.46: the build now builds `//src/sta:opensta` and the
+# composing image copies it over the base image's binary. Verified against the
+# published digest — sta went 8934800 bytes/Jun 22 with 0/10 superset commands
+# to 12304560/Jul 30 with 10/10.
 #
-# This does not redefine `integrated` — that flag gates every tool's assessment.
-# It tests the CLAIM. The five are recorded; a NEW one fails.
+# The baseline register that carried those ten is DELETED rather than emptied.
+# Kept, it passed the OLD image too — measured: `--image :0.2.45 --baseline …`
+# returned rc 0 on a `sta` with 0 of 10 commands. A register describing a debt
+# that no longer exists is not conservative, it is a blind spot the exact size
+# of the bug it used to describe.
 # host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
-run_tolerating_uncheckable "fork absence claims hold" "$PLUGIN" python3 programs/fork_presence_claim_check.py --baseline programs/data/fork_presence_claim_baseline.json
 
-run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py --baseline programs/data/sta_engine_parity_baseline.json
+run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py
 
 run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_parses_check.py" --root "$ROOT"
 
