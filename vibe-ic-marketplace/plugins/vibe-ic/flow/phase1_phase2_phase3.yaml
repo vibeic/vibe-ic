@@ -2618,8 +2618,51 @@ steps:
         - program_exit_zero: "erc_density_check . --json reports/phase2/gates/erc_density.json"
     blocks_on: [23, 24, 25, 26, 27, 29, 30]
 
-  # ── Step 32: ECO ─────────────────────────────────────────────
-  # Industry standard: Engineering Change Order repair loop.
+  # ── Step 32: Post-route timing repair pass ───────────────────
+  # RENAMED (owner call). This step was called "ECO (Engineering Change Order)"
+  # and the line here claimed it was industry standard. Both were wrong, and the
+  # name was doing real damage.
+  #
+  # What it MEASURABLY does, read off the OpenROAD script it generates:
+  #   read_def(routed) -> read_liberty(ss/tt/ff) -> estimate_parasitics
+  #   -> repair_design -> repair_timing -setup -> global_route
+  #   -> detailed_route -> write_def/write_verilog
+  #
+  # It RE-ROUTES THE WHOLE DESIGN. An ECO is by definition incremental and
+  # PRESERVES the existing implementation — that preservation is the entire
+  # point, because it is what makes a metal-only mask revision possible. A step
+  # that re-runs detailed_route is not an ECO under any definition; it is a
+  # second optimisation pass. And an "Engineering Change Order" is a change
+  # order against a RELEASED design: this flow has no tapeout, no mask set and
+  # no frozen revision, so there is nothing for an order to change.
+  #
+  # WHY THE NAME MATTERED, not just cosmetics: an ECO is assumed incremental,
+  # safe and improving, so the step inherited that trust. That is why nobody
+  # ever compared its own before/after — `eco_before` and `eco_after` sat
+  # adjacent in one JSON record and were never subtracted, and a pass that made
+  # setup 12x WORSE was recorded as applied (fixed v1.8.62). Same defect family
+  # as naming an ATPG cut netlist a "scan netlist": a name asserting a property
+  # the thing does not have.
+  #
+  # DELIBERATELY UNCHANGED, so this rename breaks no existing run tree:
+  #   - on-disk paths `phase3/stage3/eco/*`, `eco_log.json`,
+  #     `no_eco_needed.flag`, `eco_trigger_decision.json`
+  #   - program/gate identifiers `eco_loop_audit`, `eco_status_gen`,
+  #     `timing_eco_needed`
+  # Renaming those would invalidate every run record already on disk for no
+  # measurement gain. The label is what misleads a reader; the paths do not.
+  #
+  # CORRECTLY named and untouched: Step 18 "Spare-cell + ECO-prep insertion
+  # (Design-for-ECO)" — inserting spares pre-tapeout so a FUTURE ECO is
+  # possible is exactly what Design-for-ECO means; and `metal_eco` /
+  # `base_layer_eco` in yield_fix_cost_rank, which are genuine post-tapeout
+  # remediation classes sitting alongside `respin`.
+  #
+  # KNOWN MISMATCH, recorded not fixed: this step still lists `skills:
+  # [eco-plan]`, and that skill's premise is "minimise disruption to an
+  # already-placed-and-routed netlist, prefer metal-only". The automated path
+  # re-routes everything, which is the opposite. The skill is correctly named
+  # for what it does; the automated step is not the thing the skill plans.
   # If any sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE)
   # fails, ECO applies targeted netlist patches and re-runs the
   # failing checks. If all sign-off steps passed on first attempt,
@@ -2645,7 +2688,7 @@ steps:
   #   VIOLATED, MISMATCH…, or passed/pass/summary.pass == false). Missing,
   #   unparseable, advisory and review-tier artefacts do NOT demand an ECO.
   - id: 32
-    name: "🔁 ECO (Engineering Change Order — repair loop)"
+    name: "🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)"
     stage: stage3
     closed_loop:
       fallback_to: 32

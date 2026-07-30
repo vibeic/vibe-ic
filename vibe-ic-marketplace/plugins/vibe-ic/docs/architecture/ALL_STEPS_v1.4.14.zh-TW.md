@@ -105,7 +105,7 @@
 | 29 | Post-layout gate-level sim | 帶 SDF 延遲的閘級模擬，確認佈局後功能正確（無 SDF 重模擬即誠實 SKIP）。 | 閘級網表・SDF・TB | post-sim 結果 | iverilog + SDF<br>`eda_simulate` | `post_layout_sim_check` |
 | 30 | Post-layout SPICE verification | 電晶體級 ngspice 對 Liberty 時序的比對：單一代表性 cell 加上前 N 條 STA 關鍵路徑（每個相異終點取最差一條；抽出的 subckt 逐級串接、帶真實 net cap；逐路徑 SPICE vs STA 延遲並彙總）。 | SPICE deck・SPEF・STA paths | cell + top-N path SPICE 比對報告 | ngspice + OpenSTA<br>`eda_spice` | `spice_correlation_check`<br>skills：`ams-sim` |
 | 31 | 🔁 Physical verification | DRC / LVS / ERC / 密度實體規則簽核；密度在此屬**規則符合性**（KLayout deck 逐層 CMP 窗；執行驗證歸 Step 34、優化建議歸 Step 35）；LVS 走 Magic 抽取 + netgen 真比對（含 macro 的設計——如 Caravel 類 harness——可對 macro blackbox：Magic 以 `lef write -hide` 將 macro 遮為介面殼、netgen 補充 setup 以同名 blackbox 比對；waiver 依據＝device-level match＋KLayout 交叉驗證，由 `signoff_waiver_emit` 寫入專案 `waivers.json`，Step 36 checklist 以 open_waivers 交叉引用為 reviewer to-do）。 | GDS・閘級網表・PDK deck | 簽核 DRC・LVS・ERC 報告 | KLayout DRC・Magic ext2spice + netgen LVS・OpenROAD ERC<br>`eda_drc_klayout`・`eda_lvs` | `erc_density_check`<br>skills：`drc-fix`・`lvs-triage`・`perc-check` |
-| 32 | 🔁 ECO | 簽核發現問題時的工程變更修復迴圈（優先取用 Step 18 預置的 spare cells，達成 metal-only 修復）。 | 簽核報告 | ECO log 或 no-ECO flag | OpenROAD ECO | `eco_loop_audit`<br>skills：`eco-plan` |
+| 32 | 🔁 繞線後時序修復 pass | 多角落 `repair_design` + `repair_timing -setup`，接著對已繞線的 DEF 跑**完整的** `global_route` + `detailed_route`。**這不是 ECO**：它重繞整顆設計而非保留既有實作，而且我們沒有已發行的版本可供變更。**它並沒有取用 Step 18 的 spare cells** —— 實測：180 行的產生器裡 spare 出現 0 次，也沒有 `dont_touch`/`preserve`。2026-07-31 更名。| 簽核報告 | 修復 log 或 no-repair flag | OpenROAD | `eco_loop_audit`<br>skills：`eco-plan` |
 
 ### Stage 4 — 輸出與 Tapeout
 

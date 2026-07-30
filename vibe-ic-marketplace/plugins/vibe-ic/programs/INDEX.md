@@ -279,7 +279,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dual_track_select` | any | — | deterministic DUAL-TRACK convergence selector. |
 | `dynamic_ir_drop_check` | any | — | transient (dynamic) IR-drop budget gate for tapeout. |
 | `dynamic_ir_vectored_emit` | any | — | TRANSIENT (dynamic) IR-drop EMITTER (real PSM). |
-| `eco_loop_audit` | any | — | Audit ECO (Engineering Change Order) log for completeness. |
+| `eco_loop_audit` | any | — | Audit the post-route timing repair pass log for completeness (not an ECO — the step re-routes). |
 | `eco_status_gen` | any | — | emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json). |
 | `eco_trigger_decision` | any | — | the SHARED ECO auto-trigger decision. |
 | `eda_log_check` | any | — | Deterministic EDA tool log/report checker. |
@@ -1332,7 +1332,7 @@ _(no programs in this group)_
 - `dual_track_select` — deterministic DUAL-TRACK convergence selector.
 - `dynamic_ir_drop_check` — transient (dynamic) IR-drop budget gate for tapeout.
 - `dynamic_ir_vectored_emit` — TRANSIENT (dynamic) IR-drop EMITTER (real PSM).
-- `eco_loop_audit` — Audit ECO (Engineering Change Order) log for completeness.
+- `eco_loop_audit` — Audit the post-route timing repair pass log for completeness (not an ECO — the step re-routes).
 - `eco_status_gen` — emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json).
 - `eco_trigger_decision` — the SHARED ECO auto-trigger decision.
 - `eda_log_check` — Deterministic EDA tool log/report checker.

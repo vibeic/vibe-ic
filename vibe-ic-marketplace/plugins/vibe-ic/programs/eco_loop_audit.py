@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Audit ECO (Engineering Change Order) log for completeness.
+"""Audit the post-route timing repair pass's log for completeness.
+
+The step this audits is NOT an Engineering Change Order — it re-runs
+detailed_route on the whole design, and there is no released revision for
+an order to change. The `eco_*` filenames are kept for compatibility with
+run trees already on disk; the misleading part was the LABEL.
 
 Step 32 declares TWO artefacts:
 
