@@ -4532,6 +4532,39 @@ def _digital_backend_is_na(project: Path) -> Tuple[bool, str]:
 # The full table, and the rule that licenses a conversion, are pinned in
 # `tests/test_issue492_gate_argv_conversions.py` so a future conversion has to
 # re-derive the measurement rather than assume it.
+# vibe-ic#559 — THE #492 MEASUREMENT, moved here from the test that owned it.
+#
+# The prose above names three of the eleven gates it describes; the other eight
+# were only ever named in `tests/test_issue492_gate_argv_conversions.py`. A test
+# file is not an importable decision record for the code under test, so nothing
+# in this module could answer "is this gate deliberately unwired, or did nobody
+# look?" — and that question is what separates a licensed silence from an
+# accidental one (the remaining half of #559).
+#
+# The numbers are UNCHANGED. `test_issue492_gate_argv_conversions` still owns the
+# RULE they license (convert iff 0 new FAILs AND a non-empty denominator on every
+# project) and now asserts it against this table rather than its own copy.
+#
+#   gate                              new FAIL/107   projects w/ denominator>0
+P0_CORPUS_DENOMINATOR = 107
+P0_RTL_DIR_GROUP_MEASUREMENT = {
+    "sustained_vs_edge_check":          (0, 107),   # CONVERTED
+    "timer_freeze_after_state_check":   (0, 107),   # CONVERTED
+    "cmd_arg_range_validation_check":   (0, 4),     # examines 4/107 only
+    "bit_count_modulo_check":           (0, 0),     # `checked: 0` everywhere
+    "l12_sequence_implementation_check": (0, 0),    # `sequences_checked: 0`
+    "otp_write_lock_gate_check":        (0, 0),     # `write_enable_sites: 0`
+    "pulse_decoder_edge_check":         (0, 0),     # `files_checked: 0`
+    "response_payload_template_check":  (0, 0),     # `total_assignments: 0`
+    "tristate_self_rx_mask_check":      (0, 0),     # `inout_ports: []`
+    "transient_signal_latch_check":     (0, None),  # discloses NO denominator
+    "testbench_exists_check":           (102, 107),  # the l9-shaped trap
+    "rtl_precheck_gate":                (3, 107),
+    "packet_length_check_present":      (3, 107),
+    "pre_awake_silence_check":          (1, 107),
+}
+
+
 _STRUCTURAL_GATE_ARGV_ADAPTERS: Dict[str, tuple[str, ...]] = {
     "sustained_vs_edge_check": ("--rtl-dir",),
     "timer_freeze_after_state_check": ("--rtl-dir",),

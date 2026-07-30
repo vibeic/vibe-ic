@@ -56,6 +56,15 @@ def _load_flow():
 
 F = _load_flow()
 
+# vibe-ic#559 — the measurement now lives BESIDE the umbrella that needs it
+# (`flow_compliance_check`), not here. A test file is not an importable decision
+# record for the code under test: nothing in the umbrella could ask "is this gate
+# deliberately unwired, or did nobody look?" while the answer was only in a test,
+# and that question is what separates a licensed silence from an accidental one.
+# The numbers are unchanged; this file still owns the RULE they license.
+_CORPUS_DENOMINATOR = F.P0_CORPUS_DENOMINATOR
+_RTL_DIR_GROUP_MEASUREMENT = F.P0_RTL_DIR_GROUP_MEASUREMENT
+
 
 def _project_with_rtl(tmp_path):
     rtl = tmp_path / "phase2" / "stage1" / "rtl"
@@ -118,23 +127,6 @@ def test_converted_gates_are_no_longer_reported_as_skipped(tmp_path):
 # is a false PASS and is worse than the skip it replaces.
 #
 #   gate                              new FAIL/107   projects w/ denominator>0
-_CORPUS_DENOMINATOR = 107
-_RTL_DIR_GROUP_MEASUREMENT = {
-    "sustained_vs_edge_check":          (0, 107),   # CONVERTED
-    "timer_freeze_after_state_check":   (0, 107),   # CONVERTED
-    "cmd_arg_range_validation_check":   (0, 4),     # examines 4/107 only
-    "bit_count_modulo_check":           (0, 0),     # `checked: 0` everywhere
-    "l12_sequence_implementation_check": (0, 0),    # `sequences_checked: 0`
-    "otp_write_lock_gate_check":        (0, 0),     # `write_enable_sites: 0`
-    "pulse_decoder_edge_check":         (0, 0),     # `files_checked: 0`
-    "response_payload_template_check":  (0, 0),     # `total_assignments: 0`
-    "tristate_self_rx_mask_check":      (0, 0),     # `inout_ports: []`
-    "transient_signal_latch_check":     (0, None),  # discloses NO denominator
-    "testbench_exists_check":           (102, 107),  # the l9-shaped trap
-    "rtl_precheck_gate":                (3, 107),
-    "packet_length_check_present":      (3, 107),
-    "pre_awake_silence_check":          (1, 107),
-}
 
 
 def _dangling_symlink_rtl_dir(tmp_path):

@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -73,6 +74,11 @@ RC_OK, RC_DRIFT, RC_CANNOT_MEASURE = 0, 1, 2
 #: work, so it is not a rejection — the timeout is a measurement floor, not a
 #: verdict.
 GATE_TIMEOUT_S = 25
+
+#: What `_required_flags` returns when argparse named no flag (a rejected
+#: positional, an unrecognised argument). Its own token so it can be a member
+#: of UMBRELLA_SUPPLIABLE rather than a special case at every use.
+POSITIONAL_MARKER = "<positional/unrecognized>"
 
 #: The 33 measured on 2026-07-30 at v1.8.58. Of these, exactly 8 carry a recorded
 #: decision in `_ZERO_DENOMINATOR_CLASSIFICATION`; four more are decided in the
@@ -169,6 +175,74 @@ def measure(jobs: int = 8) -> Dict[str, object]:
     return {"registered": len(gates), "measured": sorted(measured)}
 
 
+#: Flags the umbrella ALREADY computes — a project path, an RTL directory, an
+#: output directory, a top-module name. A gate needing only these is an ordinary
+#: wiring gap. A gate needing a design-specific SEMANTIC value (a CRC signal
+#: name, a tristate bus's drivers) cannot be driven by any generic umbrella, and
+#: handing it a placeholder would turn an honest NOT_INVOCABLE into a WRONG
+#: verdict — strictly worse than the silence (vibe-ic#559).
+UMBRELLA_SUPPLIABLE: frozenset = frozenset({
+    "--rtl-dir", "--rtl-files", "--out-dir", "--project-dir", "--base-dir",
+    "--top-module", "--json-file", "--l9-file", "--config", "--qsf-file",
+    "reference_dir", POSITIONAL_MARKER,
+})
+
+
+def _required_flags(argv: List[str]) -> List[str]:
+    """What argparse says this gate requires, or the positional marker."""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True,
+                           timeout=GATE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return [POSITIONAL_MARKER]
+    m = re.search(r"required:\s*(.+)", r.stderr or "")
+    if not m:
+        return [POSITIONAL_MARKER]
+    return [s.strip() for s in m.group(1).split(",") if s.strip()]
+
+
+def _licensed_gates() -> Set[str]:
+    """Gates whose silence carries a RECORDED measurement.
+
+    An absent record is NOT a licence — a failed import yields the empty set, so
+    every gate reads as undecided rather than as quietly approved. That is the
+    fail-safe direction: over-reporting work to do, never under-reporting it."""
+    try:
+        import flow_compliance_check as _F   # noqa: PLC0415
+    except Exception:                        # noqa: BLE001
+        return set()
+    return (set(getattr(_F, "P0_RTL_DIR_GROUP_MEASUREMENT", ()))
+            | set(getattr(_F, "_ZERO_DENOMINATOR_CLASSIFICATION", ()))
+            | set(getattr(_F, "_STRUCTURAL_GATE_ARGV_ADAPTERS", ())))
+
+
+def _split_undecided(gates: List[str]) -> Dict[str, List[str]]:
+    """Undecided gates split into wiring gaps and undrivable-by-design.
+
+    The argv comes from the umbrella's own builder, so a gate that rejects it
+    here rejects it in production too."""
+    if not gates:
+        return {"wiring_gap": [], "needs_design_value": []}
+    programs = Path(__file__).resolve().parent
+    if str(programs) not in sys.path:
+        sys.path.insert(0, str(programs))
+    try:
+        import flow_compliance_check as _F   # noqa: PLC0415
+    except Exception:                        # noqa: BLE001
+        # Cannot build the argv, so cannot classify. Everything reads as a
+        # wiring gap: it over-states the mechanical pile rather than quietly
+        # shrinking the one that needs a human decision.
+        return {"wiring_gap": list(gates), "needs_design_value": []}
+    wiring, design = [], []
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp)
+        for g in gates:
+            need = _required_flags(
+                _F._structural_gate_argv(g, probe, rtl_dir=probe))
+            (wiring if set(need) <= UMBRELLA_SUPPLIABLE else design).append(g)
+    return {"wiring_gap": wiring, "needs_design_value": design}
+
+
 def check(jobs: int = 8) -> Dict[str, object]:
     res = measure(jobs=jobs)
     if "error" in res:
@@ -180,6 +254,24 @@ def check(jobs: int = 8) -> Dict[str, object]:
         "recorded": sorted(recorded),
         "new": sorted(measured - recorded),
         "now_invocable": sorted(recorded - measured),
+            # vibe-ic#559 — WHICH silences are licensed. Until the #492
+            # measurement moved into `flow_compliance_check`, this program could
+            # only COUNT un-invocable gates; it could not tell a silence somebody
+            # measured and decided to keep from one nobody ever looked at. Those
+            # are different facts and only the second is a defect.
+            #
+            # Reported, never failed on: the first count is legitimately non-zero,
+            # and failing on it would make licensed decisions look like debt. The
+            # subset predicate above still decides rc.
+            "licensed_silence": sorted(measured & _licensed_gates()),
+            "undecided_silence": sorted(measured - _licensed_gates()),
+            # The undecided pile split by whether the umbrella COULD drive the
+            # gate. Measured per gate from its own argparse output, not judged:
+            # 17 of the 21 need only paths the umbrella already computes, and 4
+            # need a design-specific semantic value no umbrella can synthesise.
+            # Those two piles have different fixes, so counting them together
+            # hides which work is mechanical and which is a de-registration.
+            **_split_undecided(sorted(measured - _licensed_gates())),
     }
 
 
@@ -225,6 +317,11 @@ def main(argv: List[str] = None) -> int:
     print(f"[PASS] {len(res['measured'])} of {res['registered']} registered P0 "
           f"gates reject the umbrella's argv; all are recorded. No new silent "
           f"gate.", file=sys.stderr)
+    und = res.get("undecided_silence") or []
+    lic = res.get("licensed_silence") or []
+    print(f"       of those, {len(lic)} carry a recorded #492/#496 measurement "
+          f"and {len(und)} carry no decision anywhere — the second number is "
+          f"what #559 has left to triage.", file=sys.stderr)
     return RC_OK
 
 

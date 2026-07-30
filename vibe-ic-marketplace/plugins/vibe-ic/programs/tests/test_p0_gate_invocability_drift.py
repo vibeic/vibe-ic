@@ -154,5 +154,107 @@ def test_the_recorded_set_has_no_duplicates_and_is_sorted():
     assert rec == sorted(rec)
 
 
+
+# ---------------------------------------------------------------------------
+# vibe-ic#559 — WHICH silences are licensed
+# ---------------------------------------------------------------------------
+
+def test_a_recorded_measurement_makes_a_silence_licensed(monkeypatch):
+    """The distinction the #492 table move exists to enable: a gate somebody
+    measured and decided to keep silent is a different fact from one nobody
+    looked at, and only the second is work to do."""
+    import flow_compliance_check as F
+    monkeypatch.setattr(F, "P0_RTL_DIR_GROUP_MEASUREMENT", {"a": (0, 0)})
+    monkeypatch.setattr(F, "_ZERO_DENOMINATOR_CLASSIFICATION", {"b": {}})
+    monkeypatch.setattr(F, "_STRUCTURAL_GATE_ARGV_ADAPTERS", {})
+    monkeypatch.setattr(D, "KNOWN_NOT_INVOCABLE", ("a", "b", "c"))
+    monkeypatch.setattr(D, "measure", _fake_measure({"a", "b", "c"}))
+    res = D.check()
+    assert res["licensed_silence"] == ["a", "b"]
+    assert res["undecided_silence"] == ["c"]
+
+
+def test_an_absent_record_is_not_a_licence(monkeypatch):
+    """FAIL-SAFE DIRECTION. If the record cannot be read, every gate must read as
+    undecided rather than as quietly approved — over-reporting work to do, never
+    under-reporting it. Without this, a rename of the table would silently mark
+    all 33 as licensed and #559's remainder would read as zero."""
+    import builtins
+    real = builtins.__import__
+
+    def boom(name, *a, **k):
+        if name == "flow_compliance_check":
+            raise ImportError("simulated")
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", boom)
+    monkeypatch.setattr(D, "KNOWN_NOT_INVOCABLE", ("a", "b"))
+    monkeypatch.setattr(D, "measure", _fake_measure({"a", "b"}))
+    res = D.check()
+    assert res["licensed_silence"] == []
+    assert res["undecided_silence"] == ["a", "b"]
+
+
+def test_the_licence_split_does_not_change_the_verdict(monkeypatch, capsys):
+    """Reported, never failed on. The licensed count is legitimately non-zero and
+    failing on it would make measured decisions look like debt; the subset
+    predicate is what decides rc."""
+    import flow_compliance_check as F
+    monkeypatch.setattr(F, "P0_RTL_DIR_GROUP_MEASUREMENT", {})
+    monkeypatch.setattr(F, "_ZERO_DENOMINATOR_CLASSIFICATION", {})
+    monkeypatch.setattr(F, "_STRUCTURAL_GATE_ARGV_ADAPTERS", {})
+    monkeypatch.setattr(D, "KNOWN_NOT_INVOCABLE", ("a", "b"))
+    monkeypatch.setattr(D, "measure", _fake_measure({"a", "b"}))
+    assert D.main([]) == D.RC_OK          # all undecided, still rc 0
+    assert "2 carry no decision anywhere" in capsys.readouterr().err
+
+
+def test_a_gate_needing_only_paths_is_a_wiring_gap():
+    """17 of the 21 need a project path, an RTL dir, an out dir or a top-module —
+    all things the umbrella already computes. That is mechanical work."""
+    assert {"--rtl-dir"} <= D.UMBRELLA_SUPPLIABLE
+    assert {"--out-dir", "--project-dir", "--top-module"} <= D.UMBRELLA_SUPPLIABLE
+    assert D.POSITIONAL_MARKER in D.UMBRELLA_SUPPLIABLE
+
+
+def test_a_design_specific_value_is_NOT_umbrella_suppliable():
+    """No umbrella can synthesise a design's CRC signal name or a tristate bus's
+    drivers. Handing them a placeholder turns an honest NOT_INVOCABLE into a WRONG
+    verdict, which is strictly worse than the silence."""
+    for flag in ("--crc-signal", "--bus-name", "--drivers", "--end-signal",
+                 "--vectors-json", "--min-cycles"):
+        assert flag not in D.UMBRELLA_SUPPLIABLE, flag
+
+
+def test_the_split_is_reported_and_sums_to_the_undecided_pile(monkeypatch):
+    """Counting the two piles together hides which work is mechanical and which is
+    a de-registration, so they are separate keys — and they must account for every
+    undecided gate."""
+    res = D.check(jobs=8)
+    if "error" in res:
+        import pytest as _p
+        _p.skip("cannot measure here")
+    und = set(res["undecided_silence"])
+    assert set(res["wiring_gap"]) | set(res["needs_design_value"]) == und
+    assert not (set(res["wiring_gap"]) & set(res["needs_design_value"]))
+
+
+def test_an_unclassifiable_gate_reads_as_a_wiring_gap(monkeypatch):
+    """FAIL-SAFE. If the argv builder cannot be imported the split cannot be made;
+    everything lands in the mechanical pile, over-stating it rather than quietly
+    shrinking the one that needs a human decision."""
+    import builtins
+    real = builtins.__import__
+
+    def boom(name, *a, **k):
+        if name == "flow_compliance_check":
+            raise ImportError("simulated")
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", boom)
+    out = D._split_undecided(["x", "y"])
+    assert out["wiring_gap"] == ["x", "y"]
+    assert out["needs_design_value"] == []
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
