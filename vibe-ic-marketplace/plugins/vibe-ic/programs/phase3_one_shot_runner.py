@@ -21865,6 +21865,195 @@ def atpg_clear_not_run(project: Path, step: str) -> bool:
     return removed
 
 
+# ---------------------------------------------------------------------------
+# Canonical Step 11 (DFT insertion / stuck-at ATPG) — the phase-2/phase-3
+# ORDERING repair.
+#
+# MEASURED DEFECT (spm x sky130A, stock v1.8.50, and independently on
+# spm x ihp-sg13g2). Canonical Step 9 is "Synthesis (Yosys -> MAPPED netlist)"
+# and lives in stage2, but the flow implements it in TWO HALVES on OPPOSITE
+# SIDES of the phase boundary:
+#
+#   phase 2  design_one_shot_runner.step_yosys_synth  -> netlist.v
+#            technology-GENERIC on purpose ("techmap; opt; dffunmap;
+#            abc -g cmos2" -> $_NAND_ / $_DFF_P_ primitives)
+#   phase 3  phase3_one_shot_runner.step_synth        -> <top>_synth.v
+#            the technology MAPPING, written into _pl.synth_dir(project),
+#            which IS phase2/stage2/synth
+#
+# Canonical Step 11 sits BETWEEN the halves and needs the second one. On a
+# clean first run it therefore asks for a file that does not exist yet:
+#
+#   19:36:13.437  phase2/stage2/synth/netlist.v            GENERIC
+#   19:36:15.958  phase2/stage2/dft/dft_atpg_not_run.json  <- Step 11 gives up
+#   19:36:25.349  phase2/stage2/synth/spm_synth.v          sky130-MAPPED
+#
+# i.e. the mapped netlist lands 9.391 s AFTER the step already gave up on it.
+# `fault_atpg_run.resolve_mapped_netlist` ALREADY contains the correct
+# self-heal and is ALREADY placed before the PDK check -- it simply cannot
+# reach a file that does not exist yet, so ON A CLEAN FIRST RUN IT IS DEAD
+# CODE. The step then disclosed "Sign-off ATPG coverage is a disclosed OSS
+# capability gap", which is FALSE: `sky130` is in `fault_atpg_run.PDK_CONFIG`,
+# and re-invoking the SAME stock chain once the mapped sibling exists measures
+# `coverage=97.04% (rc=0, clock=clk, pdk=sky130)`. A FLOW-ORDERING DEFECT
+# WEARING A CAPABILITY-GAP LABEL.
+#
+# Blast radius of the one defect, all measured with flow_compliance_check:
+#   Step 11  MISSING     (false capability-gap disclosure)
+#   Step DT1 MISSING     cut_netlist.v absent
+#   Step DT2 SKIPPED     cut_netlist.v absent -- in its own disclosure's words
+#   Step DT3 SKIPPED     blocked behind DT1+DT2
+#   ~20 later steps flagged "dependency [11] = MISSING"
+#
+# WHY THE REPAIR BELONGS HERE, AND WHY IT IS NOT A STRUCTURAL CHANGE. A
+# `stage2` canonical step produced by the PHASE-3 runner is this flow's
+# EXISTING, GATE-APPROVED pattern, already in force for Step 11's own
+# neighbours:
+#   Step 9  provenance   phase3_one_shot_runner (see "--- Step 9: yosys synth
+#                        provenance ---" below)
+#   Step 10 Pre-layout STA (stage2) -> phase3/stage3/sta/pre_pnr_timing.rpt,
+#                        whose ONLY producer in the plugin is this file, and
+#                        which flow_compliance_check scores PASS
+#   Step 14 netlist.v canonical alias -> this file
+# and the DT1/DT2/DT3 producers in THIS module already declare the intent
+# outright: `atpg_needs_regrade` exists to re-grade a placeholder left "by a
+# pass that ran before the tech-mapped netlist existed". The phase-3 half of
+# this repair was already written; only Step 11 was missing.
+#
+# WHAT THIS DOES *NOT* DO. It does not move a step, loosen a gate, relax a
+# threshold, or fabricate an artefact. It re-invokes the UNMODIFIED canonical
+# producer (`design_one_shot_runner.step_dft_lec_chain`) at the first moment
+# its declared input exists, and only when the step is still unmeasured. Every
+# number comes from a real Fault ATPG run on a real library-mapped netlist. If
+# the producer still cannot measure, its own honest disclosure stands verbatim.
+# chip-AGNOSTIC and PDK-AGNOSTIC: canonical paths only, no chip or PDK literal.
+# ---------------------------------------------------------------------------
+
+_STEP11_REQUIRED_REL = ("phase2/stage2/dft/scan_netlist.v",
+                        "phase2/stage2/dft/atpg_coverage.rpt")
+_STEP11_NOT_RUN_REL = "phase2/stage2/dft/dft_atpg_not_run.json"
+
+
+def step11_needs_rerun(project: Path) -> Tuple[bool, str]:
+    """Is canonical Step 11 still UNMEASURED in this tree?
+
+    True only when the step has left no real measurement -- either a declared
+    required_output is absent, or the producer's own `dft_atpg_not_run.json`
+    disclosure is on disk. A tree that already carries a genuine measurement is
+    left ALONE, which is what makes this idempotent: the already-phase-3'd
+    second-pass tree (the manual workaround) reaches the same state and is not
+    re-measured, and re-running this runner never overwrites a real result.
+
+    PURE: reads the tree, writes nothing. Returns (needs_rerun, reason).
+    """
+    missing = [r for r in _STEP11_REQUIRED_REL if not (project / r).is_file()]
+    if missing:
+        return True, ("canonical Step-11 required output(s) absent: "
+                      + ", ".join(missing))
+    if (project / _STEP11_NOT_RUN_REL).is_file():
+        return True, (f"{_STEP11_NOT_RUN_REL} present -- the producer disclosed "
+                      f"a NON-measurement, so there is no coverage to keep")
+    return False, ("Step 11 already carries a real measurement "
+                   "(required outputs present, no not-run record)")
+
+
+def mapped_netlist_available_for_atpg(project: Path) -> Tuple[bool, str]:
+    """Does a technology-MAPPED netlist now exist for ATPG to run on?
+
+    Asks the SAME resolver the ATPG producer uses
+    (`fault_atpg_run.resolve_mapped_netlist`), so this predicate cannot
+    disagree with what the producer will actually pick up. That is the point:
+    the guard and the consumer read one implementation, not two.
+
+    Returns (available, reason). Never raises.
+    """
+    canonical_rel = "phase2/stage2/synth/netlist.v"
+    if not (project / canonical_rel).is_file():
+        return False, f"{canonical_rel} absent -- synth produced no netlist"
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import fault_atpg_run as _fatpg
+        text = (project / canonical_rel).read_text(errors="replace")
+        if not _fatpg.is_generic_unmapped(text):
+            return True, f"{canonical_rel} is itself technology-mapped"
+        resolved_rel, note = _fatpg.resolve_mapped_netlist(
+            project, canonical_rel)
+        if note:
+            return True, (f"tech-mapped netlist now resolvable: {resolved_rel} "
+                          f"(the file Step 11 could not see in phase 2)")
+        return False, (f"{canonical_rel} is generic-unmapped and no "
+                       f"tech-mapped sibling exists yet")
+    except Exception as exc:      # nosec — a guard must never break the flow
+        return False, f"mapped-netlist probe unavailable: {exc}"
+
+
+def run_step11_dft_after_synth(project: Path, top: str,
+                               container: str) -> List[StepResult]:
+    """Run canonical Step 11 (+12, +13) now that the mapped netlist exists.
+
+    Invoked from main() immediately after `step_synth` PASSes and BEFORE PnR --
+    which is also the canonical order (Step 11 precedes Step 15 Floorplan), and
+    is correct on the merits: stuck-at ATPG reads a gate netlist and has no
+    dependency on layout. DT1/DT2/DT3 are deliberately NOT forced here; the
+    existing `run_at_speed_atpg_producers` grades them post-PnR against the
+    routed SDC and the extracted SPEF, which is the only place those inputs
+    exist.
+
+    Returns [] when there is nothing to do, so a tree that already measured
+    Step 11 is byte-unchanged by this function.
+    """
+    t0 = time.time()
+    needs, why_needs = step11_needs_rerun(project)
+    if not needs:
+        return []
+    have_map, why_map = mapped_netlist_available_for_atpg(project)
+    if not have_map:
+        # The producer's own phase-2 disclosure is the honest record here and
+        # it already exists on disk. Adding a second, weaker claim on top of it
+        # would be noise, so this reports the probe and changes nothing.
+        return [StepResult(
+            "dft_atpg_order_selfheal", "SKIP", time.time() - t0,
+            f"canonical Step 11 is unmeasured ({why_needs}) but no "
+            f"tech-mapped netlist is available to re-measure it on: {why_map}. "
+            f"The phase-2 producer's own disclosure stands.",
+            extras={"step11_needs_rerun": True,
+                    "mapped_netlist_available": False,
+                    "probe": why_map})]
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        from ic_class_profile import detect_ic_class as _detect
+        import design_one_shot_runner as _d2
+        ic_class = str((_detect(project) or {}).get("ic_class") or "unknown")
+        rows = _d2.step_dft_lec_chain(project, top, container, ic_class,
+                                      full_chip=True)
+    except Exception as exc:
+        return [StepResult(
+            "dft_atpg_order_selfheal", "FAIL", time.time() - t0,
+            f"canonical Step 11 re-measurement raised {type(exc).__name__}: "
+            f"{exc}. The mapped netlist WAS available ({why_map}), so this is "
+            f"a real failure of an implemented capability, not a capability "
+            f"gap.",
+            extras={"exception": f"{type(exc).__name__}: {exc}"})]
+    out = [StepResult(
+        "dft_atpg_order_selfheal", "PASS", time.time() - t0,
+        f"canonical Step 11 re-measured after synth: {why_map} "
+        f"[trigger: {why_needs}]",
+        extras={"reinvoked": "design_one_shot_runner.step_dft_lec_chain",
+                "trigger": why_needs, "netlist_probe": why_map,
+                "rows": [f"{r.status} {r.name}" for r in rows]})]
+    # Re-publish the producer's OWN verdicts as phase-3 rows, verbatim. A
+    # sub-step that fails must stay visible as a failure -- the self-heal
+    # reports what the producer said, it does not re-grade it.
+    for r in rows:
+        out.append(StepResult(f"step11_{r.name}", r.status, r.duration_s,
+                              r.detail, list(r.output_files), dict(r.extras)))
+    return out
+
+
 def run_at_speed_atpg_producers(project: Path, written: List[str],
                                 notes: List[str]) -> None:
     """Produce DT1/DT2/DT3 at-speed coverage, disclosing every non-production.
@@ -29156,6 +29345,26 @@ def main() -> int:
         else:
             plan.append(step_synth(project, effective_top, pdk, args.container))
         if plan[-1].status == "PASS":
+            # ── canonical Step 11 (DFT / stuck-at ATPG) ────────────────────
+            # The phase-2/phase-3 ORDERING repair. Placed HERE because this is
+            # the first instant at which Step 11's declared input (the
+            # technology-mapped netlist) exists, and because canonical Step 11
+            # precedes canonical Step 15 (Floorplan) — so running it before PnR
+            # is the flow's own order, not a convenience.
+            #
+            # SAFE W.R.T. THE `plan[-1]` IDIOM the surrounding block depends on:
+            # the `if plan[-1].status == "PASS"` test above has ALREADY been
+            # evaluated, and every consumer AFTER this point locates its row BY
+            # NAME (`_pnr_row = next(s for s in reversed(plan) if s.name ==
+            # "pnr")`), for exactly the reason spelled out in the provenance
+            # comment below. Appending here therefore cannot shift any
+            # downstream decision. Emits NOTHING when Step 11 already carries a
+            # real measurement, so an already-measured tree is untouched.
+            for _s11 in run_step11_dft_after_synth(
+                    project, effective_top, args.container):
+                plan.append(_s11)
+                print(f"[dft] {_s11.status:5s} {_s11.name}: {_s11.detail}",
+                      flush=True)
             # ORGANIC #593 — geometry-aware cache: a DEF that exists may
             # only be reused when the requested --die-um/--util match the
             # cached run's geometry (pnr_args.json). A congestion-recovery

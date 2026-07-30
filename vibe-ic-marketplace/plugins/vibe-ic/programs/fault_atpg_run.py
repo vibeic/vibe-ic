@@ -1219,8 +1219,59 @@ def run_fault(
         cut_abs,
     ]
     atpg_shell = cell_prep + " && " + " ".join(atpg_cmd)
-    ec, out, err = _run_docker(project, [atpg_shell], timeout=1800, pdk_dir=pdk_dir)
+    # ── A SIGNAL-DEATH EXIT IS A CRASH, NOT A CAPABILITY LIMIT ─────────────
+    #
+    # MEASURED (spm x sky130A, plugin v1.8.50, image 0.2.45). On a clean
+    # single-pass run `fault atpg` came back `exit 139` (= 128 + SIGSEGV 11)
+    # with `faults_total=0`, and the step disclosed "OSS Fault ATPG could not
+    # measure ... Sign-off ATPG coverage is a disclosed OSS capability gap".
+    # The input was not at fault and the failure is not deterministic:
+    #
+    #   md5 spm_synth.v (the ATPG input) IDENTICAL to the tree where it worked
+    #     a703d073d3305951f63869adec55c3a0   both trees
+    #   cut_netlist.v differed ONLY in its "Generated on:" timestamp comment
+    #   3 retries of the identical call on the identical tree:
+    #     rc=0 atpg_exit=0 cov=96.7129647731781 faults=1080   (x3, byte-equal)
+    #   host had 113 GB free and load 3.84 -- not a resource shortage
+    #
+    # So the engine intermittently dies of a signal on work it otherwise
+    # completes deterministically. Two consequences, both handled here:
+    #
+    #  1. RETRY. A signal death is transient by the measurement above, so it is
+    #     retried rather than converted into a permanent verdict on the first
+    #     sample. Bounded, and only on signal death (>= 128): a clean non-zero
+    #     exit is the engine's own considered answer and is NEVER retried, so a
+    #     design that genuinely fails its coverage target still fails on the
+    #     first try, at the same speed, with the same number.
+    #  2. NAME IT. The exit code and the retry history are recorded so a
+    #     consumer can tell a crash from a capability limit instead of having
+    #     both collapse into "the artefact is absent". Reporting a SIGSEGV as
+    #     "the OSS tool cannot do this" is a false capability gap.
+    #
+    # chip-AGNOSTIC and PDK-AGNOSTIC: keyed only on the POSIX convention that
+    # 128+N means death by signal N.
+    _ATPG_SIGNAL_DEATH_FLOOR = 128
+    _ATPG_MAX_ATTEMPTS = 3
+    atpg_attempts: list[int] = []
+    ec, out, err = -1, "", ""
+    for _attempt in range(1, _ATPG_MAX_ATTEMPTS + 1):
+        # Clear the metadata BEFORE each attempt so its presence afterwards is
+        # evidence about THIS attempt. Without this, a partial file left by a
+        # crashed attempt would be read as that attempt's result and suppress
+        # the retry — the exact "stale artefact read as fresh" failure mode.
+        try:
+            (project / cov_out).unlink()
+        except OSError:
+            pass
+        ec, out, err = _run_docker(project, [atpg_shell], timeout=1800,
+                                   pdk_dir=pdk_dir)
+        atpg_attempts.append(ec)
+        if ec < _ATPG_SIGNAL_DEATH_FLOOR:
+            break            # clean exit (0 or a considered non-zero) — done
+        if (project / cov_out).exists():
+            break            # died late but the metadata landed — keep it
     atpg_log = (out + "\n" + err)[-2000:]
+    atpg_signal_death = ec >= _ATPG_SIGNAL_DEATH_FLOOR
 
     cov_file = project / cov_out
     cov_text = cov_file.read_text() if cov_file.exists() else ""
@@ -1306,6 +1357,14 @@ def run_fault(
         "target_pct": min_coverage,
         "stuck_at_ge_target": coverage_ratio >= min_coverage,
         "atpg_exit": ec,
+        # The retry history and the crash classification, so a consumer can
+        # tell "the engine crashed" from "the engine answered". Before this,
+        # both collapsed into an absent coverage artefact and the step reported
+        # a SIGSEGV as a disclosed OSS capability gap. `atpg_attempt_exits`
+        # names every attempt; a single-element list is the unchanged
+        # first-try-succeeded case.
+        "atpg_attempt_exits": atpg_attempts,
+        "atpg_signal_death": atpg_signal_death,
         "log_tail": atpg_log[-500:],
     }
     if transition is not None:

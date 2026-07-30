@@ -9612,6 +9612,49 @@ def _dft_retain_unmeasured(project: Path, dft_dir: Path,
     return retained
 
 
+def _dft_atpg_crash_reason(pdk: Optional[str], exit_code: int,
+                           attempts: Optional[List[int]] = None) -> str:
+    """Prose reason for a step-11 ATPG death BY SIGNAL — a CRASH, not a gap.
+
+    MEASURED (spm x sky130A, plugin v1.8.50, image 0.2.45): on a clean
+    single-pass run `fault atpg` returned `exit 139` (= 128 + SIGSEGV 11) with
+    `faults_total=0`, and the step emitted `_dft_atpg_gap_reason`'s
+    "Sign-off ATPG coverage is a disclosed OSS capability gap". It is not:
+
+      * the ATPG input was byte-identical (md5 a703d073d33059...) to a tree on
+        which the same call measured coverage successfully;
+      * three retries of the identical call on the identical tree returned
+        rc=0 / coverage=96.7129647731781 / faults=1080, byte-equal each time;
+      * the host had 113 GB free and load 3.84 — no resource shortage.
+
+    A process killed by a signal has demonstrated a CRASH, and the crash is
+    transient. Calling that a capability limit of the open-source engine is a
+    false capability gap: it tells a reader the tool cannot do something it
+    demonstrably can, and it closes an investigation that should stay open.
+
+    `fault_atpg_run` now retries a signal death before giving up, so reaching
+    this string means EVERY attempt died by signal — which is a real, reportable
+    engine defect to be fixed in the tool, and it is named as such.
+    chip-AGNOSTIC / PDK-AGNOSTIC.
+    """
+    detected = pdk or "generic_unmapped"
+    sig = exit_code - 128 if exit_code and exit_code >= 128 else None
+    tried = (f" across {len(attempts)} attempt(s) (exits {attempts})"
+             if attempts else "")
+    return (
+        f"OSS Fault ATPG CRASHED on a library-mapped {detected} netlist: the "
+        f"engine process was killed by a signal (exit {exit_code}"
+        + (f" = 128 + SIG{sig}" if sig is not None else "")
+        + f"){tried}, so no coverage was produced. This is NOT a capability "
+        f"gap and must not be recorded as one: the netlist is library-mapped, "
+        f"{detected} IS in fault_atpg_run.PDK_CONFIG, and the identical call "
+        f"on the identical input has been measured to succeed on retry "
+        f"(coverage measured, faults_total > 0). It is a REAL DEFECT OF AN "
+        f"IMPLEMENTED CAPABILITY — an engine crash to be fixed in the Fault "
+        f"fork — and the run must be re-driven, not waived."
+    )
+
+
 def _dft_atpg_gap_reason(pdk: Optional[str]) -> str:
     """Prose reason for the step-11 ATPG disclosed-skip, naming THIS run's PDK.
 
@@ -9826,6 +9869,31 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             # missing scan netlist is then reported by the step-11 sub-gates
             # that require it, which is where that gap belongs.
             if measured:
+                # A REAL MEASUREMENT SUPERSEDES ANY STALE NON-MEASUREMENT
+                # RECORD. This mirrors, verbatim, what the DT1 producer a few
+                # dozen lines below already does for its own sentinel ("A real
+                # measurement supersedes any stale record from a prior attempt,
+                # so the gate does not read a fresh result as blocked") —
+                # Step 11's producer was the one that did NOT do it.
+                #
+                # MEASURED (spm × sky130A, stock v1.8.50): the phase-2 pass
+                # discloses `dft_atpg_not_run.json` at 19:36:15 because the
+                # tech-mapped netlist does not exist yet; a later pass measures
+                # coverage=97.04% for real, and the 19:36:15 disclosure was
+                # STILL on disk afterwards, asserting "OSS Fault ATPG could not
+                # measure … disclosed OSS capability gap" beside a real
+                # measurement that contradicts it. Two artefacts, opposite
+                # claims, no way for a reader to tell which is current.
+                #
+                # Removed ONLY on the `measured` branch — i.e. only when
+                # `_dft_atpg_measured(cov)` is True — so a non-measurement can
+                # never delete its own disclosure. chip-AGNOSTIC.
+                _stale_not_run = dft_dir / "dft_atpg_not_run.json"
+                if _stale_not_run.is_file():
+                    try:
+                        _stale_not_run.unlink()
+                    except OSError:
+                        pass
                 # real coverage measurement → let the coverage gate judge
                 # PASS/FAIL honestly. Also emit the BSDL plan.
                 try:
@@ -9883,10 +9951,30 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                 # and NAME every retained file in the sentinel. No gate can
                 # mistake them for a measurement, and nothing is destroyed.
                 retained = _dft_retain_unmeasured(project, dft_dir, cov_json)
+                # A DEATH BY SIGNAL IS A CRASH AND MUST NOT WEAR THE
+                # CAPABILITY-GAP LABEL. `fault_atpg_run` records the exit and
+                # (v1.8.51+) the per-attempt history; when every attempt died by
+                # signal, the honest reason names the crash and says the run must
+                # be re-driven rather than waived. `capability_flag` is dropped
+                # on that branch for the same reason: a crash must not be
+                # bookkept against a capability the engine HAS.
+                _atpg_ec = cov.get("atpg_exit")
+                _atpg_sig_death = bool(cov.get("atpg_signal_death")) or (
+                    isinstance(_atpg_ec, int) and _atpg_ec >= 128)
+                if _atpg_sig_death:
+                    _reason = _dft_atpg_crash_reason(
+                        pdk, _atpg_ec, cov.get("atpg_attempt_exits"))
+                    _extra_flag = {"engine_crash": True,
+                                   "atpg_attempt_exits":
+                                       cov.get("atpg_attempt_exits")}
+                else:
+                    _reason = _dft_atpg_gap_reason(pdk)
+                    _extra_flag = {
+                        "capability_flag": "cap:atpg_signoff_coverage"}
                 _dft_disclose_skip(
                     dft_dir / "dft_atpg_not_run.json",
-                    _dft_atpg_gap_reason(pdk),
-                    {"capability_flag": "cap:atpg_signoff_coverage",
+                    _reason,
+                    {**_extra_flag,
                      "pdk_detected": pdk or "generic_unmapped",
                      "atpg_exit": cov.get("atpg_exit"),
                      "faults_total": cov.get("faults_total"),
