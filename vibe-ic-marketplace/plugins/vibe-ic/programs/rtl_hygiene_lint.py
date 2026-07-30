@@ -1071,6 +1071,343 @@ def rule_case_coverage(src: str, path: str) -> List[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# Rule 3b: an `if` with no `else` in a COMBINATIONAL block (vibe-ic#563)
+# ---------------------------------------------------------------------------
+# `rule_case_coverage` above answers "is every path assigning this signal?" for
+# the `case` form, with real care: it excludes clocked blocks (#770 r4), proves
+# exhaustiveness before warning (#764), and resolves symbolic localparams (#770
+# r2). None of that machinery had an `if` counterpart, so the SAME defect in the
+# more common spelling passed silently — measured on four one-module files at
+# v1.8.61:
+#
+#     always @(*)        if   -> 0 errors, 0 warnings, 0 info
+#     always_comb        if   -> 0 errors, 0 warnings, 0 info
+#     always @(en or d)  if   -> 0 errors, 0 warnings, 0 info
+#     always @(*)        case -> 1 warning            <- the positive control
+#
+# `q` assigned only when `en` is high inside a combinational block holds its
+# value otherwise: a level-sensitive latch, combinational feedback in a design
+# that will be timed as if it were not. The three silent spellings are the three
+# a person writes by accident; the `case` form usually comes from a deliberate
+# FSM where coverage is already on the author's mind.
+#
+# WHY THE ASSIGNED-SET AND NOT THE `else`
+# The question is not "does this `if` have an `else`". A signal assigned in BOTH
+# arms is latch-free, and a signal assigned unconditionally before the `if` has a
+# default that holds — the same "latch-free fallthrough" `_case_body_defaulted`
+# already models. What infers a latch is a signal assigned in SOME arm and not in
+# all of them, with no prior unconditional default. So the predicate is over
+# assigned SETS, reusing `_procedural_assigned_lhs`, and an `if`/`else` pair
+# whose arms assign the same set produces nothing.
+#
+# CONSERVATIVE IN THE SAME PLACES, deliberately: a subscripted LHS (`q[3] = …`)
+# cannot be proven to cover the whole vector by base name, so `_lhs_has_subscript`
+# suppresses exactly as it does for `case`; a clocked block cannot infer a latch
+# at all (the register HOLDS), so `_clocked_always_spans` excludes it. Both were
+# the hard-won parts of the `case` rule and are reused rather than re-derived.
+_IF_KW_RE = re.compile(r'(?<![\w$])if\s*\(')
+
+# A `function`/`task` body cannot infer a latch: its locals are re-evaluated on
+# every call, so a variable assigned on only one path holds nothing between
+# calls. MEASURED — both hits over 331 synthesisable corpus files were inside
+# functions, and both were the same idiom: an unconditional seed followed by a
+# conditional update (`crc16_step = {crc[14:0],1'b0}; if (fb) crc16_step ^= …`,
+# `c = CRC_INIT; for (…) if (k < n) c = crc16_byte(…)`). The unconditional-default
+# suppression below missed them because it searches back to the nearest `always`,
+# and inside a function there is none.
+_FUNC_TASK_RE = re.compile(
+    r'(?<![\w$])(function|task)(?![\w$])(.*?)(?<![\w$])end\1(?![\w$])', re.S)
+
+
+# A GENERATE `if`/`else if` selects which hardware EXISTS; it is elaborated away
+# and cannot infer a latch. MEASURED on the tapeout ICs (`benchmark-data/ic/**`,
+# where the first corpus — generated benchmark RTL — had none): 11 of 18 hits
+# were this, all in SERV, all the same line shape:
+#
+#     end else if (W == 4) begin : gen_lsb_w_4
+#
+# `_IF_KW_RE` matched it, `_statement_after` read the generate block as the "then"
+# arm, and every reg declared inside was reported as latched.
+#
+# Two signals, both structural rather than textual (a `generate` keyword is
+# optional in SystemVerilog, so keying on it alone would miss exactly this file):
+#   * the arm opens a NAMED block — `begin : label` — which procedural `if`
+#     statements essentially never do and generate arms conventionally always do;
+#   * the condition is elaboration-time constant: only identifiers, integers and
+#     operators, with no signal that a simulator could change.
+# The named-block test is the load-bearing one; the constant-condition test keeps
+# it from swallowing a labelled procedural block.
+_GENERATE_ARM_RE = re.compile(r'\s*begin\s*:\s*\w+')
+
+# An EXPLICIT `generate` … `endgenerate` region. The named-block signal above
+# catches the SERV `end else if (W == 4) begin : gen_lsb_w_4` form, but an
+# unlabelled arm inside an explicit generate slips past it — MEASURED on
+# `servile_mux.v:62`:
+#
+#     generate
+#        if (sim) begin
+#           integer f = 0;
+#
+# so both signals are needed and neither subsumes the other. `generate` is
+# optional in SystemVerilog, which is why this cannot be the only test.
+_GENERATE_REGION_RE = re.compile(
+    r'(?<![\w$])generate(?![\w$]).*?(?:(?<![\w$])endgenerate(?![\w$])|\Z)', re.S)
+
+
+def _generate_spans(src: str) -> List[tuple]:
+    return [(m.start(), m.end()) for m in _GENERATE_REGION_RE.finditer(src)]
+
+# An `initial` block runs once at time 0 and models power-up state, not hardware
+# that holds between evaluations. MEASURED on the tapeout ICs: `serv_ctrl.v:101`
+# is `initial if (RESET_STRATEGY == "NONE") o_ibus_adr = RESET_PC;` — a reset-
+# strategy default — and `servile_mux.v:73` is an `initial if ($value$plusargs(...))`
+# testbench hook. Neither can infer a latch, and both are idioms a real core uses.
+_INITIAL_RE = re.compile(r'(?<![\w$])initial(?![\w$])')
+
+
+def _initial_spans(src: str) -> List[tuple]:
+    """(start, end) of every `initial` construct: a begin/end block, or the
+    single statement that follows when there is no `begin`."""
+    spans = []
+    for m in _INITIAL_RE.finditer(src):
+        body, end = _statement_after(src, m.end())
+        spans.append((m.start(), end if body else m.end()))
+    return spans
+
+
+def _is_generate_arm(src: str, cond: str, then_start: int,
+                     gen_spans: Optional[List[tuple]] = None,
+                     off: int = -1) -> bool:
+    """True when this `if` selects hardware rather than driving a signal.
+
+    Two independent entry signals, because neither covers the other:
+      * a NAMED arm (`begin : label`) — SERV's `end else if (W == 4) begin :
+        gen_lsb_w_4`, where no `generate` keyword appears at all;
+      * sitting directly inside an explicit `generate` region — `servile_mux.v:62`
+        `generate / if (sim) begin`, whose arm is unlabelled.
+
+    Excluding the whole generate REGION was tried and is wrong: an `always @(*)`
+    inside a generate block can infer a real latch, and a region-wide exclusion
+    swallows it (verified with a fixture before this shape replaced it).
+    """
+    named = bool(_GENERATE_ARM_RE.match(src[then_start:then_start + 64]))
+    in_gen = (gen_spans is not None and off >= 0
+              and any(lo <= off < hi for lo, hi in gen_spans))
+    if not (named or in_gen):
+        return False
+    # An elaboration-time condition mentions no signal the design can change at
+    # run time. Conservative: any comparison against a plain identifier is
+    # allowed only when the identifier is a declared parameter/localparam.
+    params = set(re.findall(
+        r'(?<![\w$])(?:parameter|localparam)\b[^;]*?(\w+)\s*=', src))
+    idents = set(re.findall(r'(?<![\w$])([A-Za-z_]\w*)', cond))
+    return idents <= params | {"and", "or", "not"}
+
+
+def _function_spans(src: str) -> List[tuple]:
+    """(start, end) char offsets of every function/task body."""
+    return [(m.start(), m.end()) for m in _FUNC_TASK_RE.finditer(src)]
+
+
+def _matching_paren(text: str, open_idx: int) -> int:
+    """Index just past the `)` matching the `(` at `open_idx`, or -1."""
+    depth = 0
+    for i in range(open_idx, len(text)):
+        if text[i] == '(':
+            depth += 1
+        elif text[i] == ')':
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return -1
+
+
+def _statement_after(text: str, pos: int) -> tuple:
+    """(body_text, end_index) of the statement starting at `pos`.
+
+    A `begin`…`end` block (depth-tracked, so a nested `begin` does not end it)
+    or a single statement up to its `;`. Returns ("", pos) when neither is
+    found, which the caller treats as "cannot analyse" rather than as "empty".
+    """
+    m = re.compile(r'\S').search(text, pos)
+    if not m:
+        return "", pos
+    start = m.start()
+    if text.startswith("begin", start) and not re.match(r'\w', text[start + 5:start + 6] or " "):
+        depth = 0
+        for km in re.finditer(r'(?<![\w$])(begin|end)(?![\w$])', text[start:]):
+            if km.group(1) == "begin":
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    return text[start:start + km.end()], start + km.end()
+        return text[start:], len(text)
+    semi = text.find(';', start)
+    if semi == -1:
+        return "", pos
+    return text[start:semi + 1], semi + 1
+
+
+def _strip_conditional_bodies(text: str) -> str:
+    """`text` with the body of every `if`/`case` removed, leaving statement-level
+    code. Used to find the unconditional assignments that make a later `if`
+    latch-free."""
+    out = text
+    for _ in range(24):                       # bounded: nesting is not deep
+        m = re.search(r'(?<![\w$])(if|case[szx]?)\s*\(', out)
+        if not m:
+            break
+        close = _matching_paren(out, m.end() - 1)
+        if close == -1:
+            out = out[:m.start()]
+            break
+        body, end = _statement_after(out, close)
+        if not body:
+            out = out[:m.start()]
+            break
+        rest = out[end:]
+        em = re.match(r'\s*else(?![\w$])', rest)
+        if em:
+            _eb, end = _statement_after(out, end + em.end())
+        out = out[:m.start()] + " " + out[end:]
+    return out
+
+def _is_clock_gater(src: str, cond: str, sym: str) -> bool:
+    """True when this latch IS an integrated clock-gating cell.
+
+    The behavioural model of an ICG is a latch by construction, and flagging
+    every clock gater in a design gets the whole rule waived — taking the real
+    findings with it. MEASURED on Ibex (`prim_clock_gating.v`, 3 copies in the
+    corpus):
+
+        always @* begin
+          if (!clk_i) en_latch = en_i | test_en_i;
+        end
+        assign clk_o = en_latch & clk_i;
+
+    Recognised STRUCTURALLY, never by the `_latch` in the name — matching that
+    suffix would be exactly the text-proxy defect vibe-ic#561 catalogues, and a
+    hand-written gater called `q` would slip through it.
+
+    Three signals, all required:
+      1. the condition is a single identifier, optionally inverted;
+      2. that identifier is used as a CLOCK elsewhere (`@(posedge/negedge X)`)
+         or the assignment's own output is ANDed with it;
+      3. the latched signal is ANDed with that same identifier in a continuous
+         assignment — the gating itself.
+    (3) is the load-bearing one: an ordinary latch never feeds an AND with its
+    own enable condition.
+    """
+    m = re.fullmatch(r'\s*(!|~)?\s*([A-Za-z_]\w*)\s*', cond)
+    if not m:
+        return False
+    clk = m.group(2)
+    gated = re.compile(
+        r'assign\s+\w+\s*=\s*(?:' + re.escape(sym) + r'\s*&\s*' + re.escape(clk)
+        + r'|' + re.escape(clk) + r'\s*&\s*' + re.escape(sym) + r')\b')
+    return bool(gated.search(src))
+
+def rule_if_no_else_latch(src: str, path: str) -> List[Finding]:
+    """A combinational `if` whose arms do not assign the same set (vibe-ic#563)."""
+    findings: List[Finding] = []
+    clocked = _clocked_always_spans(src)
+    funcs = _function_spans(src) + _initial_spans(src)
+    gen_spans = _generate_spans(src)
+
+    def _is_clocked(off: int) -> bool:
+        return any(lo <= off < hi for lo, hi in clocked)
+
+    def _in_function(off: int) -> bool:
+        return any(lo <= off < hi for lo, hi in funcs)
+
+    line_starts = [0]
+    for ln in src.split('\n'):
+        line_starts.append(line_starts[-1] + len(ln) + 1)
+
+    def _line_of(off: int) -> int:
+        lo, hi = 0, len(line_starts) - 1
+        while lo < hi - 1:
+            mid = (lo + hi) // 2
+            if line_starts[mid] <= off:
+                lo = mid
+            else:
+                hi = mid
+        return lo + 1
+
+    for m in _IF_KW_RE.finditer(src):
+        off = m.start()
+        if _in_function(off):
+            # No latch is possible in a function/task body — see _FUNC_TASK_RE.
+            continue
+        if _is_clocked(off):
+            # A register HOLDS on the untaken arm — the canonical enabled-flop
+            # idiom, not a latch. This is the #770 r4 exclusion, reused.
+            continue
+        cond_end = _matching_paren(src, m.end() - 1)
+        if cond_end == -1:
+            continue
+        then_body, then_end = _statement_after(src, cond_end)
+        if not then_body:
+            continue
+        if _is_generate_arm(src, src[m.end():cond_end - 1], cond_end,
+                            gen_spans, off):
+            # Selects which hardware exists; elaborated away, never a latch.
+            continue
+        # `else if` chains: treat the whole chain as one construct by letting the
+        # inner `if` be visited on its own; here only the immediate else matters.
+        rest = src[then_end:]
+        em = re.match(r'\s*else(?![\w$])', rest)
+        else_body = ""
+        if em:
+            else_body, _ = _statement_after(src, then_end + em.end())
+
+        then_lhs = _procedural_assigned_lhs(then_body)
+        if not then_lhs:
+            continue
+        else_lhs = _procedural_assigned_lhs(else_body) if else_body else set()
+        uncovered = then_lhs - else_lhs
+        if not uncovered:
+            continue
+        # A base-name assigned set cannot prove coverage of a sliced write.
+        if _lhs_has_subscript(then_body) or _lhs_has_subscript(else_body):
+            continue
+        # An unconditional pre-assignment before the `if`, inside the same block,
+        # is a default that holds — latch-free fallthrough, the same reasoning
+        # `_case_body_defaulted` applies to `case`.
+        blk_start = max((lo for lo, _ in
+                         [(mm.start(), 0) for mm in
+                          re.finditer(r'(?<![\w$])always(?:_ff|_comb|_latch)?(?![\w$])', src)]
+                        if lo < off), default=None)
+        if blk_start is not None:
+            # Everything in this block BEFORE the `if`, with each earlier
+            # conditional construct's own body removed. What survives is the
+            # statement-level, unconditional assignments — the defaults that hold
+            # on the untaken path.
+            #
+            # The earlier version bailed out whenever the prefix contained ANY
+            # `if`/`case`, which discards the single most common latch-free
+            # idiom: a default followed by a chain of conditional updates.
+            # MEASURED on Ibex's bit-manipulation unit (chip_top_sv2v.v:566-616),
+            # where `rev_result = operand_a_i;` precedes five `if
+            # (zbp_shift_amt[n])` updates — 14 false findings from one block.
+            prefix = _strip_conditional_bodies(src[blk_start:off])
+            if uncovered <= _procedural_assigned_lhs(prefix):
+                continue
+        cond_txt = src[m.end():cond_end - 1]
+        uncovered = {s for s in uncovered
+                     if not _is_clock_gater(src, cond_txt, s)}
+        for sym in sorted(uncovered):
+            findings.append(Finding(
+                path, _line_of(off), 'WARN', 'if-no-else-latch', sym,
+                f"'{sym}' is assigned inside a combinational `if` but not on "
+                f"every path — it holds its value otherwise, inferring a "
+                f"level-sensitive latch. Assign it in an `else`, or give it an "
+                f"unconditional default before the `if`."))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Rule 4: Pulse signal consumed only under a state gate (pulse-swallow risk)
 # ---------------------------------------------------------------------------
 def rule_pulse_swallow(src: str, path: str) -> List[Finding]:
@@ -5339,6 +5676,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_input_port_reg(src, str(path))
     results += rule_undriven_and_unread(src, str(path))
     results += rule_case_coverage(src, str(path))
+    results += rule_if_no_else_latch(src, str(path))
     results += rule_pulse_swallow(src, str(path))
     results += rule_uninit_registered_output(src, str(path))
     results += rule_incomplete_sensitivity(src, str(path))
