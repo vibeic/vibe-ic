@@ -434,9 +434,22 @@ def build_assertions(project: Path, shape: dict) -> Tuple[str, dict]:
         pid = f"A_{o}_known"
         lines.append(
             f"  // {o} must be known (no X) when not in reset")
-        lines.append(
-            f"  {pid}: assert property (@(posedge {clk}) "
-            f"disable iff ({rst_expr}) !$isunknown({o}));")
+        # NAMED property + `endproperty`, which is the shape this plugin's
+        # OTHER SVA emitter (formal_harness_gen) already produces. The inline
+        # form this used to emit —
+        #     {pid}: assert property (@(posedge clk) disable iff (r) ...);
+        # — is legal SystemVerilog, but `assertion_property_check` looks for a
+        # declaration with `\bproperty\s+\w+`, and in `assert property (` the
+        # token after `property` is `(`. So the checker could never match this
+        # generator's output: EVERY design it wrote assertions for failed
+        # NO_PROPERTY_DECL, at any port count, while the same file's
+        # ASSERT_COUNT happily reported the assertions it had just refused to
+        # see. Two emitters, two shapes, one checker that only knew one.
+        lines.append(f"  property {pid}_p;")
+        lines.append(f"    @(posedge {clk}) disable iff ({rst_expr}) "
+                     f"!$isunknown({o});")
+        lines.append(f"  endproperty")
+        lines.append(f"  {pid}: assert property ({pid}_p);")
         props.append({"id": pid, "kind": "SVA", "english":
                       f"{o} is known (no X) out of reset",
                       "spec_ref": "L9.reset"})

@@ -162,16 +162,37 @@ def audit(project_dir: str) -> AuditResult:
             ))
             continue
 
-        # Check: not a stub (>10 non-empty lines)
+        # Check: not a stub.
+        #
+        # This used to be `len(non_empty_lines) <= 10` and nothing else. For a
+        # GENERATED assertions file the line count is a function of the design:
+        # professional_tb_gen emitted 2 lines per output port, so
+        # non_empty_lines = 2 + n_outputs, and any design with fewer than 9
+        # outputs was failed as a "stub/incomplete" file. It was reporting a
+        # property of the DESIGN (how many outputs it has) as a property of the
+        # FILE (whether anyone bothered to write it). A 5-output design got
+        # STUB_FILE for being a 5-output design.
+        #
+        # So ask the actual question. An assertions file is a stub when it does
+        # not ASSERT anything; that is what "stub" means here, and this program
+        # already counts assertions two checks below. Line count survives only
+        # as the fallback for the case it can still speak to — a file with no
+        # assertions at all, where there is nothing better to measure.
+        #
+        # This is NOT a relaxation: a file with zero assertions still fails, and
+        # it now fails at any length instead of only under 11 lines.
         non_empty_lines = [
             l for l in text.split("\n")
             if l.strip() and not l.strip().startswith("//")
         ]
-        if len(non_empty_lines) <= 10:
+        n_assertions = len(ASSERT_PROPERTY_RE.findall(text))
+        if n_assertions == 0:
             findings.append(Finding(
                 rule="STUB_FILE",
                 severity="ERROR",
-                message=f"File has only {len(non_empty_lines)} non-empty lines (stub/incomplete)",
+                message=(f"File asserts nothing: 0 'assert property' statements "
+                         f"in {len(non_empty_lines)} non-empty lines "
+                         f"(stub/incomplete)"),
                 file=rel,
             ))
             file_errors += 1
