@@ -116,6 +116,48 @@ def _lef_layer_blocks(text: str) -> "OrderedDict[str, str]":
     return blocks
 
 
+def derive_metal_prefix(techlef_text: str) -> Optional[str]:
+    """The PDK's OWN routing-metal naming stem, read from its tech LEF.
+
+    WHY THIS EXISTS (measured defect, chip-AGNOSTIC).
+    `_metal_re` matches `^<prefix>(\\d+|top)$`, so the prefix must equal the PDK's
+    stem EXACTLY (case-insensitively). There is no literal that works everywhere:
+
+        prefix "metal"  matches Metal1  (gf180mcuD)      -- and NOTHING else
+                        does NOT match met1   (sky130A)
+                        does NOT match MET1   (this campaign's process)
+
+    The caller's fallback default was the literal ``"metal"``, so on ANY PDK whose
+    routing layers are named ``met<n>`` / ``MET<n>`` the layermap and tech-LEF
+    parses both returned {}, ``layers`` came out EMPTY, and the caller treated an
+    empty config as "this PDK declares no fill config" and skipped metal fill
+    silently. The die then FAILs the foundry min-metal-density rule with no
+    diagnostic pointing at a name mismatch. That is a one-word default deciding a
+    sign-off outcome for two of the three PDKs the module's own docstring claims
+    to serve.
+
+    Deriving the stem removes the guess: take every ``TYPE ROUTING`` layer the
+    tech LEF declares, strip a trailing number or ``top``, and return the stem
+    that the most routing layers agree on. Nothing is assumed about spelling or
+    case, and a PDK that names its layers anything self-consistent works.
+    Returns None when the tech LEF declares no usable routing-layer name, so the
+    caller can DISCLOSE that rather than fill on a guess.
+    """
+    stems: Dict[str, int] = {}
+    for name, body in _lef_layer_blocks(techlef_text).items():
+        if not re.search(r"TYPE\s+ROUTING", body, re.I):
+            continue
+        m = re.match(r"^(.*?)(\d+|top)$", name, re.I)
+        if not m or not m.group(1):
+            continue
+        stems[m.group(1)] = stems.get(m.group(1), 0) + 1
+    if not stems:
+        return None
+    # Most-agreed stem wins; ties break on the longer stem, then alphabetically,
+    # so the choice is deterministic and never depends on dict order.
+    return sorted(stems.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))[0][0]
+
+
 def parse_techlef_routing(text: str, prefix: str) -> Dict[str, Tuple[float, float]]:
     """metal base name (lower) -> (min_width_um, max_space_um). max SPACING (incl. the
     wide-metal RANGE rule) is used as keep-out so fill next to a wide PDN strap is safe."""
@@ -212,10 +254,22 @@ def parse_density_floor_pct(text: str) -> Optional[float]:
 
 
 def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: str,
-                            metal_prefix: str = "metal",
+                            metal_prefix: Optional[str] = None,
                             margin: float = _DEFAULT_MARGIN,
                             window_um: Optional[float] = None,
                             max_passes: int = 8) -> Optional[dict]:
+    # `metal_prefix=None` (the new default) means DERIVE IT FROM THE PDK. The old
+    # default was the literal "metal", which matches gf180mcuD's `Metal1` and
+    # neither sky130A's `met1` nor a `MET1`-style process — on those the parses
+    # returned {} and metal fill was skipped with no diagnostic. See
+    # `derive_metal_prefix`. An explicit prefix is still honoured verbatim so a
+    # bridge can override the derivation.
+    prefix_derived = False
+    if not metal_prefix:
+        metal_prefix = derive_metal_prefix(techlef_text)
+        prefix_derived = True
+        if not metal_prefix:
+            return None
     gds = parse_streamout_layermap(layermap_text, metal_prefix)
     ws = parse_techlef_routing(techlef_text, metal_prefix)
     table = parse_layer_table(deck_text)
@@ -269,6 +323,9 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
         "_derivation": {
             "source": "metal_fill_config_gen (chip-AGNOSTIC; PDK-declared files)",
             "metal_prefix": metal_prefix,
+            # Which of the two produced the prefix, so a reader can tell a
+            # PDK-derived stem from a bridge-supplied override.
+            "metal_prefix_derived_from_techlef": prefix_derived,
             "density_floor_pct": floor_pct,
             "target_density": target,
             "mfg_grid_um": grid_um,
@@ -293,7 +350,11 @@ def main(argv=None) -> int:
     ap.add_argument("--techlef", required=True, help="tech LEF (routing WIDTH/SPACING)")
     ap.add_argument("--deck", required=True,
                     help="DRC deck text (concatenate the deck + its rule modules)")
-    ap.add_argument("--metal-prefix", default="metal")
+    # Default None = derive the stem from the tech LEF. The old default was the
+    # literal "metal", which silently matched no layer on any met<n>/MET<n> process.
+    ap.add_argument("--metal-prefix", default=None,
+                    help="routing-metal name stem; omit to derive it from the "
+                         "tech LEF's own TYPE ROUTING layer names")
     ap.add_argument("--window-um", type=float, default=None)
     ap.add_argument("--max-passes", type=int, default=8)
     ap.add_argument("--margin", type=float, default=_DEFAULT_MARGIN)
