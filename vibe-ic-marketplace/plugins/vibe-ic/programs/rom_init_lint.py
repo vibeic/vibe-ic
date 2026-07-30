@@ -65,6 +65,11 @@ _MEM_DECL = re.compile(
 # initial block body
 _INITIAL = re.compile(r"\binitial\b\s*begin(.*?)\bend\b", re.DOTALL)
 
+# `$readmemh("file", mem)` / `$readmemb(...)`. The FIRST argument is deliberately
+# unconstrained — in real designs it is often a parameter or a macro, not a literal —
+# because what decides the question is the TARGET MEMORY, not where the data lives.
+_READMEM = re.compile(r"\$readmem[hb]\s*\(\s*[^,]+,\s*([A-Za-z_]\w*)")
+
 
 def scan_file(path: Path) -> List[Finding]:
     try:
@@ -133,6 +138,21 @@ def scan_file(path: Path) -> List[Finding]:
             continue
 
         mem_name, ass_match = hit
+
+        # NOT A DEFECT when this same initial body then loads the SAME memory from an
+        # external file: the zeroing loop is a benign prologue and the array's real
+        # contents come from `$readmem*`, which IS remediation (B) that this program's
+        # own fix_hint recommends. Measured on a real design: the flagged code already
+        # did exactly what the hint asks for, and the gate failed the whole cell for it.
+        #
+        # Deliberately narrow — keyed on the SAME memory, not on the mere PRESENCE of a
+        # `$readmem*` call. A body that zeroes `mem` and loads `other` is still the
+        # defect and must still fire; so is a body with no `$readmem*` at all. Both are
+        # regression-pinned in programs/tests/test_rom_init_lint.py.
+        loaded = {m.group(1) for m in _READMEM.finditer(body)}
+        if mem_name in loaded:
+            continue
+
         # Compute line number of the offending assignment
         off_line = body_start_line + body[: ass_match.start()].count("\n")
 
