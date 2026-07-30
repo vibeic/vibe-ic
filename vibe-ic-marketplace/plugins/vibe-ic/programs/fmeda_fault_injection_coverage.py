@@ -723,6 +723,63 @@ def run_injection_iverilog(project: Path,
 
 
 # ─────────────────────────── report emit ────────────────────────────────
+# ---------------------------------------------------------------------------
+# vibe-ic#562 — RE-ADJUDICATION RULES for this gate's published records.
+#
+# THE DRIFT. `dc_verdict(dc, floor)` returns True unconditionally when `floor is
+# None` — the ASIL-A / QM case, which states no quantitative DC floor. That is
+# right as a gating decision: inventing a floor the standard does not state would
+# be fabrication. But it means a run that injected NOTHING, or injected and
+# detected nothing, publishes `verdict: PASS` with `diagnostic_coverage_pct: 0`.
+#
+# `compute_dc` is explicit that "injected==0 -> 0.0 (no evidence is NOT full
+# coverage)", and the `reason` string does say "advisory". The VERDICT FIELD does
+# not, and that is the field a reader and every machine consumer take.
+import _record_adjudication as _ra  # noqa: E402
+
+
+def _advisory_zero_dc(record: dict):
+    """Would this gate still call this a PASS on the coverage it measured?"""
+    if record.get("verdict") != "PASS":
+        return None
+    try:
+        dc = float(record.get("diagnostic_coverage_pct") or 0.0)
+        injected = int(record.get("injected_faults") or 0)
+    except (TypeError, ValueError):
+        return None                      # unreadable -> UNDECIDABLE, not a guess
+    if injected > 0 and dc > 0.0:
+        return None                      # real coverage was measured
+    what = ("injected no fault at all" if injected <= 0
+            else "detected none of the faults it injected")
+    return _ra.Supersession(
+        would_issue="VACUOUS_PASS",
+        because=(f"the record carries PASS with diagnostic_coverage_pct {dc:g} "
+                 f"and injected_faults {injected} — the run {what}. The PASS "
+                 f"comes from the ASIL-A/QM branch, which states no quantitative "
+                 f"floor and therefore passes any number including zero; the "
+                 f"`reason` field says 'advisory' but the verdict does not, and "
+                 f"the verdict is what a consumer reads"),
+    )
+
+
+RECORD_ADJUDICATION = _ra.declare(
+    __file__,
+    gate="fmeda_fault_injection_coverage",
+    decision_roots=("build_report",),
+    decision_digest="fac75ae7e208beac653e19a7abd55d44e24884496dd8965059804d81c0f14216",
+    rules=(
+        _ra.Rule(
+            rule_id="fmeda_fault_injection_coverage.advisory-zero-dc",
+            landed_in="#562",
+            requires=("verdict", "diagnostic_coverage_pct", "injected_faults"),
+            decide=_advisory_zero_dc,
+            what=("a PASS at 0% diagnostic coverage measured no fault detection "
+                  "at all; the ASIL-A/QM branch passes any number"),
+        ),
+    ),
+)
+
+
 def build_report(spec: Optional[MechanismSpec],
                  results: Optional[InjectionResults],
                  asil: str,
