@@ -33564,9 +33564,40 @@ def gen_l5_adi_spec(project: Path,
     return _write_l_doc(project, "L5_ADI_SPEC", content, evidence)
 
 
+# Reject-rule trigger vocabulary for `gen_l6_control_logic`. Every entry is
+# an `re.search` PATTERN, not a plain substring, so a pattern that can land
+# INSIDE a longer token must say so explicitly.
+#
+# v1.8.55 — `9.?bit` carried NO LEFT BOUNDARY and therefore fired inside any
+# multi-digit width whose last digit is 9. MEASURED on edge_llm_accel (whose
+# host datapath is BDW=39, so "39 bit" is written throughout its docs): three
+# lines of `input/docs/L4_command_protocol.md` matched `9 bit` / `9-bit`
+# INSIDE `39 bit` / `39-bit`, and each minted a phantom reject rule whose
+# condition was the raw markdown line (one of them a table row) and whose
+# action was the hardcoded `DROP_FRAME_AND_RETURN_TO_IDLE` — on a design with
+# no framing protocol at all (its own L3 emits `L3.opcodes empty`).
+# `l6_fsm_scaffold_actionable_check` then correctly refused those three rules
+# as non-actionable and BLOCKED phase 1. That gate's docstring already cites
+# this exact "39-bit host write yields the keyword `9 bit`" case, i.e. the
+# symptom was known and the DETECTOR was landed while the FABRICATOR here was
+# left in place. This is the producer fix.
+#
+# Same defect shape as v1.8.50 (CTS counted clock buffers by cell-NAME
+# substring) and v1.8.48 (the `*spare*` name filter): a NAME/SUBSTRING match
+# with no token boundary. Chip-AGNOSTIC — any design mentioning a
+# 9/19/29/39/49/…-bit width in a doc whose filename matches
+# `event|reject|rx_event|protocol` was affected.
+#
+# MUTATION-TESTED so de-noising does not blind the rule (the li.5 lesson):
+# `9-bit` / `9 bit` / `9bit` / `9-BIT MODE` / "the 9th bit … 9 bit marker"
+# all still match; `39 bit`, `39-bit`, `19 bit`, `29-bit`, `49 bit`,
+# `129-bit`, `9999 bit` all correctly stop matching. Swept over all 9
+# published cells under `benchmark-data/ic/*/input/docs/`: this keyword fires
+# 3 times corpus-wide, all 3 in edge_llm_accel, all 3 phantom, and 0 genuine
+# 9-bit reject rules exist to lose.
 _REJECT_RULE_KEYWORDS = (
     "discard", "reject", "ignore", "drop", "abort", "silent",
-    "unwoken", "pre.?wake", "9.?bit", "crc.?fail",
+    "unwoken", "pre.?wake", r"(?<![0-9])9.?bit", "crc.?fail",
 )
 
 
