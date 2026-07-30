@@ -31,6 +31,20 @@ run() {                              # run <label> <cmd…>
     printf '  PASS  %s\n' "$label"
   else
     printf '  FAIL  %s\n' "$label"
+    # The FAILING lines first, then the tail — not the tail alone.
+    #
+    # A gate that aggregates others puts its failure in the middle and its
+    # summary at the end, so `tail` shows the wrong thing by construction. On
+    # 2026-07-30 this reported `FAIL repo hygiene gates` (37 sub-gates) with
+    # five lines of a DIFFERENT sub-gate's PASS output underneath it. The
+    # failure was real, it was named nowhere, and the whole 17-minute run had
+    # to be repeated just to find out which gate it was.
+    #
+    # The tail is kept because the summary line usually lives there and is
+    # worth having; it is no longer the ONLY thing kept.
+    printf '%s\n' "$out" \
+      | grep -aE '^[[:space:]]*(FAIL|ERROR)|\[FAIL\]|\[ERROR\]|FAILED' \
+      | head -12 | sed 's/^/          /'
     printf '%s\n' "$out" | tail -5 | sed 's/^/          /'
     FAILED=1
   fi
@@ -73,6 +87,34 @@ if [ "$CHEAP_ONLY" = "1" ]; then
 fi
 
 echo "--- full tier (minutes; stamps the tree on success) ---"
+
+# The TARGETED TEST RUN, carried over verbatim from the retired ci.yml:130-132.
+# Omitted from the first version of this script, which covered the governance
+# gates and quietly dropped the tests — the gap surfaced when
+# `ci_harness_timeout_ceiling_check` lost its input and reported CANNOT
+# DETERMINE rather than passing.
+#
+# `--timeout=180` is load-bearing beyond this run: that check resolves the
+# harness bound from this line and fails any inner subprocess timeout above it,
+# because an inner bound larger than the harness does not fail a test — it
+# outlives the harness and takes the session down.
+run_pytest() {
+  local sel=/tmp/gk_sel.txt out
+  ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE" > "$sel" ) 2>/dev/null
+  if [ ! -s "$sel" ]; then
+    echo "  FAIL  targeted test selection produced no files — not a clean result"
+    FAILED=1; return
+  fi
+  if out="$( cd "$PLUGIN" && xargs -a "$sel" pytest -q --maxfail=10 --timeout=180 --timeout-method=thread 2>&1 )"; then
+    printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
+  else
+    printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
+    printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    FAILED=1
+  fi
+}
+run_pytest
+
 run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh"
 run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
 

@@ -102,6 +102,19 @@ run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit
 # host-independence: EXCLUDE — resolves a tag on a remote registry (--require-remote), so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "image-version pins resolve" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --check --require-remote
 
+# On 2026-07-28 a retried `gh repo fork` created 25 forks of one upstream in six
+# minutes — the command is not idempotent and invents a numbered name instead of
+# failing. Two days later GitHub flagged the account as spammy, and the org's
+# issues and pull requests left the search index, which is what renders the
+# `/issues` and `/pulls` pages. A repo with 205 issues and 353 PRs displayed as
+# empty to every visitor, and Actions began returning 422.
+#
+# Cheap when clean: one `gh repo list`, and the per-branch comparison only runs
+# for an upstream that actually appears twice. rc 2 when it cannot ask, so an
+# offline run is NOT_CHECKED rather than a verdict.
+# host-independence: EXCLUDE — reads live org state over the network, so two invocations can differ for a reason that is not in the commit
+run_tolerating_uncheckable "no upstream forked twice" "$PLUGIN" python3 programs/org_duplicate_fork_check.py vibeic
+
 # vibe-ic#306/#316 — the audit that measures which gates can actually stop a
 # run was itself wired into nothing while exiting 1. Recorded debt does not
 # fail; anything NEW does.
@@ -121,6 +134,14 @@ run "tracked-symlink portability"       "$ROOT" python3 "$PG/tracked_symlink_por
 # is a missing FILE, which its own comment says is different — and for months
 # the count was reported on every run with nothing failing on it (#555, #556).
 run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_target_present_check.py" --root "$ROOT"
+
+# `ci.yml` and `gatekeeper-ci.yml` both ran "Validate all JSON + YAML". When
+# Actions was disabled in v1.8.40 and gatekeeper-land.sh took over, that step
+# was not carried across — and nothing noticed, because the tree was clean and
+# a check that does not exist looks exactly like one that passes. Measured
+# 2026-07-30: CAPTURE_ROUTING.json truncated mid-string, all eight cheap-tier
+# gates PASS. The flow dispatcher's routing table could land unparseable.
+run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_parses_check.py" --root "$ROOT"
 
 # vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log
 # is unverifiable, and the failure is silent.

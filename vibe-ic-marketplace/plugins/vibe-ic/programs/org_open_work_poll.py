@@ -62,10 +62,52 @@ def _json_len(out: str) -> Optional[int]:
     return len(v) if isinstance(v, list) else None
 
 
+#: GitHub says this in plain words when an account is restricted, and it is the
+#: only place it says it. Matched case-insensitively on a substring because the
+#: surrounding JSON shape is not contractual.
+_SPAM_FLAG = "flagged as spammy"
+
+
+def search_index_health(org: str) -> dict:
+    """Is this org's work VISIBLE to anyone but us?
+
+    Every listing in this program goes through GraphQL, which keeps working for
+    a restricted account. GitHub's own web UI does not: `/issues` and `/pulls`
+    are rendered from the SEARCH index, and for a flagged account that index
+    returns HTTP 200 with `total_count: 0` — a success, an empty set, and no
+    indication anywhere that anything is being withheld.
+
+    On 2026-07-30 vibeic/vibe-ic had 205 issues and 353 pull requests and both
+    pages rendered empty. The poll was unaffected and would have reported a
+    healthy queue every round while the repository looked abandoned to every
+    visitor. Nothing in a listing can reveal that, because the listing is right.
+
+    So it is asked directly. Two endpoints name the condition outright; the
+    issue/PR endpoint only goes quiet, which is why the loud one is the probe.
+    """
+    rc, out, err = _gh(["api", f"search/repositories?q=user:{org}&per_page=1"],
+                       timeout=60)
+    blob = f"{out}{err}"
+    if _SPAM_FLAG in blob.lower():
+        return {"searchable": False,
+                "reason": "GitHub reports the account as flagged; issues and "
+                          "PRs are absent from the search index, so the repo's "
+                          "/issues and /pulls pages render EMPTY to everyone "
+                          "even though the data is intact over GraphQL"}
+    if rc != 0:
+        # Not a verdict — a probe that could not run. Reported, never inferred
+        # from, because "I could not ask" is not "the answer is yes".
+        return {"searchable": None,
+                "reason": f"probe failed (rc={rc}): {(err or out).strip()[:120]}"}
+    return {"searchable": True, "reason": ""}
+
+
 def repos(org: str, limit: int = DEFAULT_REPO_LIMIT) -> dict:
     """Every repository in the org, or an error — never a truncated list."""
+    # `issues.totalCount` rides along on the SAME call — free, and it is the
+    # second opinion the zero-check below needs.
     rc, out, err = _gh(["repo", "list", org, "--limit", str(limit),
-                        "--json", "name,hasIssuesEnabled"], timeout=120)
+                        "--json", "name,hasIssuesEnabled,issues"], timeout=120)
     if rc != 0:
         return {"error": f"gh repo list failed (rc={rc}): "
                          f"{(err or out).strip()[:200]}"}
@@ -83,6 +125,7 @@ def repos(org: str, limit: int = DEFAULT_REPO_LIMIT) -> dict:
 
 def poll(org: str, repo_limit: int = DEFAULT_REPO_LIMIT,
          item_limit: int = DEFAULT_ITEM_LIMIT) -> dict:
+    visibility = search_index_health(org)
     got = repos(org, repo_limit)
     if "error" in got:
         return got
@@ -127,8 +170,30 @@ def poll(org: str, repo_limit: int = DEFAULT_REPO_LIMIT,
             failures.append(f"{full}: issue list hit the {item_limit} cap")
         elif n:
             open_issues[full] = n
+        else:
+            # A LISTING THAT CONFIDENTLY RETURNS ZERO IS THE ONE CASE THIS
+            # PROGRAM COULD NOT REFUSE. It already rejects a capped listing and
+            # a failed query; a healthy-looking empty result was the remaining
+            # hole, and on 2026-07-30 that hole was live: GitHub's REST issue
+            # enumeration and `open_issues_count` both returned 0 for
+            # vibeic/vibe-ic while #551 was open, and the web UI rendered
+            # empty. The poll only kept working because `gh issue list` is
+            # GraphQL — luck, not design.
+            #
+            # So a zero now needs a SECOND SOURCE to agree. Cross-checked only
+            # when the answer is "nothing", which costs nothing on a quiet org
+            # and is exactly where a false zero does its damage. Two sources
+            # agreeing is weak evidence; two sources DISAGREEING proves one is
+            # wrong, and that is what gets reported.
+            declared = (row.get("issues") or {}).get("totalCount")
+            if isinstance(declared, int) and declared > 0:
+                failures.append(
+                    f"{full}: issue listing returned 0 but the repository "
+                    f"declares {declared} open — one of these is wrong, so the "
+                    f"queue state is UNKNOWN, not empty")
 
     return {"org": org, "repos_scanned": len(rows),
+            "visibility": visibility,
             "issues_disabled": sorted(issues_disabled),
             "open_prs": open_prs, "open_issues": open_issues,
             "open_pr_total": sum(open_prs.values()),
@@ -169,6 +234,16 @@ def main(argv=None) -> int:
                       "open_issue_total": res["open_issue_total"],
                       "open_prs": res["open_prs"],
                       "open_issues": res["open_issues"]}, indent=1))
+    vis = res.get("visibility") or {}
+    if vis.get("searchable") is False:
+        # NOT a failure of the poll: the enumeration above is correct and the
+        # round can proceed. It is reported because the round is the only place
+        # anyone would notice, and nobody browsing the org can see it at all.
+        print(f"[VISIBILITY] {res['org']}: {vis['reason']}.", file=sys.stderr)
+    elif vis.get("searchable") is None:
+        print(f"[VISIBILITY] {res['org']}: could not check whether this org is "
+              f"publicly searchable — {vis.get('reason', '')}", file=sys.stderr)
+
     print(f"[OK] {res['repos_scanned']} repositor(ies) in {res['org']} — "
           f"{res['open_pr_total']} open PR(s), {res['open_issue_total']} open "
           f"issue(s). {len(res['issues_disabled'])} have no issue TRACKER, which "

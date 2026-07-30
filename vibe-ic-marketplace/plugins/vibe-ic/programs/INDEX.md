@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1004
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1004)
+- **Total programs (excluding helpers / shims):** 1006
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1006)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 995 |
+| `any` | 997 |
 
 ## Alphabetical listing
 
@@ -632,6 +632,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `oracle_table_synth` | any | — | deterministic SOLVER from a prompt-disclosed oracle. |
 | `oracle_tb_gen` | any | — | deterministic per-IC oracle testbench generator (ORGANIC-20260606 #439). |
 | `oracle_vector_gen` | any | v0.114 | v0.114 (BACKLOG-v6 C1 closure). |
+| `org_duplicate_fork_check` | any | — | Duplicate forks of one upstream — the shape that got this account flagged. |
 | `org_open_work_poll` | any | — | Every open PR and issue across a GitHub ORG, with the cap refused. |
 | `organic_issue_body_lint` | any | — | deterministic FILING-TIME lint for ORGANIC-form backlog issue bodies (flow #489, the #485 coverage gap). |
 | `otp_field_map_check` | any | — | gate that catches L11_OTP_CONTENT.json missing a byte-address-indexed `field_map` for symbolic names referenced in L3. |
@@ -960,6 +961,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `top_level_outputs_in_canonical_check` | any | — | enforce that the project root contains ONLY the canonical Phase/Stage/Step folders + 3 cross-phase metadata files (v1.6.25 hygiene gate). |
 | `tpm_protocol_synth` | any | v0.1.84 | TPM 2.0 trusted-platform-module protocol synth helper. |
 | `tracked_blob_size_guard` | any | — | the size guard `.gitignore` already promised. |
+| `tracked_json_yaml_parses_check` | any | — | Every tracked .json / .yaml parses — read from the INDEX, never from disk. |
 | `tracked_symlink_portability_check` | any | — | a tracked symlink must resolve for everyone, not just for the machine that created it. |
 | `tracked_symlink_target_present_check` | any | — | A committed pointer to a file that does not exist — anywhere. |
 | `trailing_delimiter_completeness_check` | any | v0.99 | Verify each cmd packet stimulus in a testbench drives the protocol's trailing delimiter, not just idle padding. |
@@ -1076,7 +1078,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (995 programs)
+### `any` (997 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1679,6 +1681,7 @@ _(no programs in this group)_
 - `oracle_table_synth` — deterministic SOLVER from a prompt-disclosed oracle.
 - `oracle_tb_gen` — deterministic per-IC oracle testbench generator (ORGANIC-20260606 #439).
 - `oracle_vector_gen` — v0.114 (BACKLOG-v6 C1 closure).  _[v0.114]_
+- `org_duplicate_fork_check` — Duplicate forks of one upstream — the shape that got this account flagged.
 - `org_open_work_poll` — Every open PR and issue across a GitHub ORG, with the cap refused.
 - `organic_issue_body_lint` — deterministic FILING-TIME lint for ORGANIC-form backlog issue bodies (flow #489, the #485 coverage gap).
 - `otp_field_map_check` — gate that catches L11_OTP_CONTENT.json missing a byte-address-indexed `field_map` for symbolic names referenced in L3.
@@ -2005,6 +2008,7 @@ _(no programs in this group)_
 - `top_level_outputs_in_canonical_check` — enforce that the project root contains ONLY the canonical Phase/Stage/Step folders + 3 cross-phase metadata files (v1.6.25 hygiene gate).
 - `tpm_protocol_synth` — TPM 2.0 trusted-platform-module protocol synth helper.  _[v0.1.84]_
 - `tracked_blob_size_guard` — the size guard `.gitignore` already promised.
+- `tracked_json_yaml_parses_check` — Every tracked .json / .yaml parses — read from the INDEX, never from disk.
 - `tracked_symlink_portability_check` — a tracked symlink must resolve for everyone, not just for the machine that created it.
 - `tracked_symlink_target_present_check` — A committed pointer to a file that does not exist — anywhere.
 - `trailing_delimiter_completeness_check` — Verify each cmd packet stimulus in a testbench drives the protocol's trailing delimiter, not just idle padding.  _[v0.99]_
