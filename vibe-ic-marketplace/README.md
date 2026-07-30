@@ -170,7 +170,7 @@ End-of-stage gate: `stage3_compliance` (`stage3_compliance.py`)
 | `29` | Post-layout gate-level simulation (post-sim + SDF) | program |
 | `30` | Post-layout SPICE verification (critical-path correlation + analog) | program |
 | `31` | ↻ Physical verification (DRC + LVS + ERC + density) | program |
-| `32` | ↻ ECO (engineering change order — repair loop) | program |
+| `32` | ↻ Post-route timing repair pass (multi-corner `repair_design` + `repair_timing` + reroute) | program |
 
 #### `stage_mixed_signal` — Mixed-Signal Integration — 4 steps *(conditional)*
 

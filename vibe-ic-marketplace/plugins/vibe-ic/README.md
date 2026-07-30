@@ -20,7 +20,7 @@ That single runner drives the whole chain:
 | Phase | What runs |
 |-------|-----------|
 | **Phase 1** | NL prompt *or* vendor docs → `generated_docs/L*.json` (`L1-L23` emitted; the taxonomy in `programs/l_doc_taxonomy.py` extends to `L27`, with `L26`/`L27` opt-in only) |
-| **Phase 2** (`2a` + `2b`) | RTL gen → hygiene lint → testbench gen → yosys synth → SDC/QSF → spec conformance → ECO loop → final audit |
+| **Phase 2** (`2a` + `2b`) | RTL gen → hygiene lint → testbench gen → yosys synth → SDC/QSF → spec conformance → RTL-regeneration loop (`eco_loop` in code — it re-generates RTL, not an ECO) → final audit |
 | **Analog** | `A1..A8` from the top-level runner; `programs/analog_one_shot_runner.py` implements the full `A1-A9` (through `A9_hw_verify`) |
 | **Phase 3** | synth → PnR → CTS → GDS → DRC / LVS / STA / IR-drop |
 
