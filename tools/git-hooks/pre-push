@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
-# pre-push — last line of defence: scan the MESSAGES of every commit about to be
-# pushed for an NDA foundry / SKU / process token.
+# pre-push — the ONLY enforced gate on what reaches `main`, by necessity.
+#
+# WHY THIS CARRIES MORE THAN THE NDA MESSAGE SCAN (vibe-ic#550)
+# =============================================================
+# `gatekeeper-ci.yml` exists to run the governance programs as REQUIRED status
+# checks. It has never run once. Actions is disabled at the ACCOUNT level —
+# `HTTP 422: Actions has been disabled for this user.` — the appeal to GitHub
+# Support was rejected, and twelve pushes to `main` produced zero runs. A
+# self-hosted runner does not help: SCHEDULING is the blocked layer, not
+# execution.
+#
+# Measured scope of the block, so nobody re-derives it: push, issues, PRs,
+# merges, releases and ghcr.io packages all work. Only Actions is refused.
+#
+# So the checks CI would enforce are enforced HERE or nowhere. Running them by
+# hand before each push is discipline, not enforcement — it holds until the one
+# time someone forgets, which is the case a gate exists for.
+#
+# Mirrors gatekeeper-ci.yml's cheap deterministic gates. The expensive suites
+# (plugin_full_audit, repo_hygiene_gates ~11 min) stay OUT: a hook slow enough
+# to be bypassed is a hook that gets bypassed.
 #
 # The commit-msg hook blocks the leak at authoring time, but a message can still
 # reach a push via `--no-verify`, a rebase/amend that reuses an old message, a
@@ -33,14 +52,57 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     RANGE="${remote_sha}..${local_sha}"
   fi
 
+  # A push publishing NO new commit has nothing to scan, and the checkers
+  # correctly REFUSE an empty range ("a clean result over an empty range is not
+  # a clean result"). That refusal is right; turning it into a blocked push
+  # would fail every re-push of an already-published tip. Skip the no-op here
+  # rather than weaken the checker.
+  #
+  # Latent since this hook was written — never hit, because the hooks had never
+  # been installed. `.git/hooks/` is untracked, so shipping a hook file does
+  # nothing until `tools/install-git-hooks.sh` runs.
+  if [ "$(git rev-list --count $RANGE 2>/dev/null || echo 0)" = "0" ]; then
+    continue
+  fi
+
   # The checker splits RANGE on whitespace into git-log arguments.
   if ! python3 "$CHECKER" --repo "$REPO_ROOT" --rev-range "$RANGE"; then
     FAILED=1
   fi
+
+  PUSH_RANGE="$RANGE"
+  PUSH_BASE="$remote_sha"
+  [ "$remote_sha" = "$ZERO" ] && PUSH_BASE="origin/main"
 done
 
+# --- the gates gatekeeper-ci.yml would have run as required status checks -----
+PROGRAMS="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs"
+PJSON="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
+
+run_gate() {                       # run_gate <label> <program> [args…]
+  label="$1"; prog="$2"; shift 2
+  if [ ! -f "$PROGRAMS/$prog" ]; then
+    # A gate that is not there has NOT passed. Say so; never skip quietly.
+    echo "pre-push: NOT CHECKED — $label ($prog absent)" >&2
+    FAILED=1; return
+  fi
+  if ! out="$(python3 "$PROGRAMS/$prog" "$@" 2>&1)"; then
+    echo "pre-push: FAILED — $label" >&2
+    printf '%s\n' "$out" | tail -3 | sed 's/^/    /' >&2
+    FAILED=1
+  fi
+}
+
+if [ -n "${PUSH_RANGE:-}" ]; then
+  run_gate "NDA tokens in added content or paths" \
+           nda_diff_scan_check.py --rev-range "$PUSH_RANGE"
+  run_gate "version bumped monotonically vs the remote" \
+           version_bump_monotonic_check.py --plugin-json "$PJSON" --base "$PUSH_BASE"
+fi
+run_gate "marketplace <-> plugin version sync" marketplace_version_sync_check.py
+
 if [ "$FAILED" -ne 0 ]; then
-  echo "pre-push: BLOCKED — NDA token(s) in the commit message(s) being pushed." >&2
+  echo "pre-push: BLOCKED — see the gate(s) named above." >&2
   cat >&2 <<'EOF'
 Reword the offending commit message(s) before pushing:
     git rebase -i <base>      # mark the offending commit(s) `reword`
