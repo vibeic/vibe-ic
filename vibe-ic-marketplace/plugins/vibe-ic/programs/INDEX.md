@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1009
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1009)
+- **Total programs (excluding helpers / shims):** 1011
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1011)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1000 |
+| `any` | 1002 |
 
 ## Alphabetical listing
 
@@ -279,7 +279,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dual_track_select` | any | — | deterministic DUAL-TRACK convergence selector. |
 | `dynamic_ir_drop_check` | any | — | transient (dynamic) IR-drop budget gate for tapeout. |
 | `dynamic_ir_vectored_emit` | any | — | TRANSIENT (dynamic) IR-drop EMITTER (real PSM). |
-| `eco_loop_audit` | any | — | Audit the post-route timing repair pass log for completeness (not an ECO — the step re-routes). |
+| `eco_loop_audit` | any | — | Audit the post-route timing repair pass's log for completeness. |
 | `eco_status_gen` | any | — | emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json). |
 | `eco_trigger_decision` | any | — | the SHARED ECO auto-trigger decision. |
 | `eda_log_check` | any | — | Deterministic EDA tool log/report checker. |
@@ -308,6 +308,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fastercap_extract` | any | — | Real 3D field-solved coupling extraction via FasterCap on the routed geometry. |
 | `fault_atpg_run` | any | — | Open-source ATPG via Fault (cloudv-io/fault). |
 | `fault_cut_async_observe` | any | — | restore OBSERVABILITY of a sequential cell's ASYNCHRONOUS set/reset inputs in a `fault cut` full-scan ATPG model. |
+| `fault_scan_chain_insert` | any | — | REAL scan-chain insertion via `fault chain`. |
 | `fetch_round_trip_sentinel_check` | any | — | P0.1 deterministic gate |
 | `ff_truth_table_synth` | any | — | deterministic SOLVER for a flip-flop truth table. |
 | `fibonacci_synth` | any | — | DETERMINISTIC solver for the CVDP Fibonacci generator. |
@@ -645,6 +646,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `otp_write_lock_gate_check` | any | — | Static heuristic audit for OTP / fuse / NVM write-enable assertions being gated by a lock-bit signal. |
 | `output_artifact_check` | any | — | Deterministic output artifact existence checker. |
 | `output_latency_advisor` | any | — | output sampling/latency advisor. |
+| `p0_gate_invocability_drift_check` | any | — | A gate registered in the P0 umbrella that the umbrella cannot invoke. |
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3.... |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity checks in any module that dispatches on a received command. |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
@@ -1081,7 +1083,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1000 programs)
+### `any` (1002 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1332,7 +1334,7 @@ _(no programs in this group)_
 - `dual_track_select` — deterministic DUAL-TRACK convergence selector.
 - `dynamic_ir_drop_check` — transient (dynamic) IR-drop budget gate for tapeout.
 - `dynamic_ir_vectored_emit` — TRANSIENT (dynamic) IR-drop EMITTER (real PSM).
-- `eco_loop_audit` — Audit the post-route timing repair pass log for completeness (not an ECO — the step re-routes).
+- `eco_loop_audit` — Audit the post-route timing repair pass's log for completeness.
 - `eco_status_gen` — emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json).
 - `eco_trigger_decision` — the SHARED ECO auto-trigger decision.
 - `eda_log_check` — Deterministic EDA tool log/report checker.
@@ -1361,6 +1363,7 @@ _(no programs in this group)_
 - `fastercap_extract` — Real 3D field-solved coupling extraction via FasterCap on the routed geometry.
 - `fault_atpg_run` — Open-source ATPG via Fault (cloudv-io/fault).
 - `fault_cut_async_observe` — restore OBSERVABILITY of a sequential cell's ASYNCHRONOUS set/reset inputs in a `fault cut` full-scan ATPG model.
+- `fault_scan_chain_insert` — REAL scan-chain insertion via `fault chain`.
 - `fetch_round_trip_sentinel_check` — P0.1 deterministic gate
 - `ff_truth_table_synth` — deterministic SOLVER for a flip-flop truth table.
 - `fibonacci_synth` — DETERMINISTIC solver for the CVDP Fibonacci generator.
@@ -1697,6 +1700,7 @@ _(no programs in this group)_
 - `otp_write_lock_gate_check` — Static heuristic audit for OTP / fuse / NVM write-enable assertions being gated by a lock-bit signal.
 - `output_artifact_check` — Deterministic output artifact existence checker.
 - `output_latency_advisor` — output sampling/latency advisor.
+- `p0_gate_invocability_drift_check` — A gate registered in the P0 umbrella that the umbrella cannot invoke.
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3....  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity checks in any module that dispatches on a received command.
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_

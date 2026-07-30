@@ -162,6 +162,15 @@ run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_tar
 
 run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py
 
+# vibe-ic#559 — 33 of the P0 umbrella's 243 registered gates reject the argv it
+# builds, so they return no verdict, and `_p0_buckets_from_records` folds
+# NOT_INVOCABLE in with SKIP while the umbrella's pass flag is `len(fails) == 0`
+# — P0 reports PASS over 33 checks that never ran. Fixing that is blocked on
+# triaging the 33 (only 8 carry a recorded decision). This stops a 34th arriving
+# while that happens: the predicate is `measured ⊆ recorded`, so a fix passes and
+# a new silent gate does not. ~4s.
+run "P0 gate invocability drift"        "$PLUGIN" python3 programs/p0_gate_invocability_drift_check.py
+
 run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_parses_check.py" --root "$ROOT"
 
 # vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log

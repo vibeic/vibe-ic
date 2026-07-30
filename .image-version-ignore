@@ -53,3 +53,11 @@ benchmark-data/ic/spm/v1.5.66_gf180mcuD/reports/phase3/DYNAMIC_IR_REGENERATED.md
 # (the `--require-image` usage example) carries no ghcr prefix and is not a
 # pointer this net scans, so ignoring the file costs no live coverage today.
 vibe-ic-marketplace/plugins/vibe-ic/programs/container_image_provenance.py
+
+# The verbatim stdout of a REAL `fault chain` run, kept as the fixture the scan-
+# chain parser is tested against. The tag names the image that produced those
+# exact lines (spm x sky130A). Advancing it would claim the fixture came from an
+# image that never emitted it — the same measurement-honesty violation as the
+# entries above, and here it would also quietly invite someone to "refresh" the
+# log itself. The run is history; the parser under test is not.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_scan_chain_insert.py
