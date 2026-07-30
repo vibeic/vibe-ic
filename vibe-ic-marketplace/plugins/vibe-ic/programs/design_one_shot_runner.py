@@ -9565,30 +9565,56 @@ def _dft_atpg_sniff_pdk(project: Path, netlist_rel: str) -> Tuple[Path, str]:
             sniff = project / resolved_rel
     except Exception:
         sniff = nl
+    # The library question is answered by `fault_atpg_run`'s CONFIG-DERIVED
+    # scan over the WHOLE file. Two defects went away with that one call:
+    #
+    #  (a) THE SECOND TABLE. The hand-written ladder that used to live here
+    #      (`sky130_fd_sc_hd__` / `gf180mcu` / `sg13g2_*`) was the very thing
+    #      #410's comment below already diagnosed: "`fault_atpg_run.PDK_CONFIG`
+    #      has carried an `ihp-sg13g2` entry all along; only this sniff could
+    #      not reach it." #410 fixed that by ADDING A ROW to the second table
+    #      instead of deleting the table, so the next PDK would have needed a
+    #      third edit in a third place. Deriving from PDK_CONFIG means adding a
+    #      PDK teaches every sniff at once and the two can never drift.
+    #
+    #  (b) THE 20 KB HEAD. This classified a whole netlist from
+    #      `read_text()[:20000]`. A design that emits hard macros and generic
+    #      primitives before its standard cells pushes the first library token
+    #      past that window — and the BIGGER the design, the likelier that is,
+    #      so it failed hardest on the designs it mattered most for. It then
+    #      failed silently: "" is also what a genuinely generic netlist
+    #      returns, so the caller could not tell "unmapped" from "we stopped
+    #      reading", and downstream published it as an OSS capability gap.
     try:
-        head = sniff.read_text(errors="ignore")[:20000]
+        import fault_atpg_run as _fatpg2   # may be unbound above if that import failed
+        _name = _fatpg2.sniff_pdk_over_whole_netlist(
+            project, _rel_or_name(project, sniff))
+        if _name:
+            return sniff, _name
     except Exception:
-        head = ""
-    if "sky130_fd_sc_hd__" in head:
-        return sniff, "sky130"
-    if "gf180mcu" in head:
-        return sniff, "gf180"
-    if re.search(r"\bsg13g2_[a-z0-9_]+\b", head):
-        # ORGANIC #410 — an IHP-mapped netlist names its cells `sg13g2_*`,
-        # which matched none of the branches above, so `pdk` stayed "" and the
-        # `--pdk` flag was OMITTED. `fault_atpg_run` then applied its OWN
-        # default and resolved a DIFFERENT PDK's Verilog cell model, while the
-        # artefact recorded `generic_unmapped` — neither the PDK the design was
-        # built on nor the one actually used appeared anywhere. That is #389's
-        # sentence reached through a second table. `fault_atpg_run.PDK_CONFIG`
-        # has carried an `ihp-sg13g2` entry all along; only this sniff could
-        # not reach it.
-        return sniff, "ihp-sg13g2"
+        pass
+    # The commercial 180nm PDK is not in the OSS PDK_CONFIG (its SKU comes from
+    # a private config, empty in public installs), so it keeps its own branch —
+    # but scanned over the whole file, for the same reason as above.
+    head = _whole_file_text(sniff)
     if re.search(r"\bDFFHQD\d|\bAOI211D1\b", head):
         # v1.3.94 — commercial 180nm PDK. Its SKU is resolved from the private
         # config (empty in public installs -> generic behaviour).
         return sniff, _cpdk.COMMERCIAL_PDK_ID
     return sniff, ""   # generic / unmapped netlist
+
+
+def _whole_file_text(p: Path) -> str:
+    """Full text of `p`, or "" if unreadable.
+
+    Exists so a WHOLE-FILE classification is never made from a head slice.
+    Netlists are large but bounded; the cost of reading one is far below the
+    cost of mis-classifying it and publishing that as a tool limitation.
+    """
+    try:
+        return p.read_text(errors="ignore")
+    except OSError:
+        return ""
 
 
 def _rel_or_name(project: Path, p: Path) -> str:

@@ -29,22 +29,39 @@ _RUNNER = (_PROGRAMS / "design_one_shot_runner.py").read_text()
 
 
 def _sniff(head: str) -> str:
-    """The runner's own branch chain, read out of its source so this test
-    cannot drift from what actually ships."""
-    import _commercial_pdk as _cpdk
-    if "sky130_fd_sc_hd__" in head:
-        return "sky130"
-    if "gf180mcu" in head:
-        return "gf180"
-    if re.search(r"\bsg13g2_[a-z0-9_]+\b", head):
-        return "ihp-sg13g2"
-    if re.search(r"\bDFFHQD\d|\bAOI211D1\b", head):
-        return _cpdk.COMMERCIAL_PDK_ID
-    return ""
-
+    """Call the SHIPPED sniff. This used to RE-IMPLEMENT the runner's branch
+    chain inside the test, under a docstring claiming it was "read out of its
+    source so this test cannot drift from what actually ships" — it was not
+    read out of the source, it was a hand-copied duplicate, so every test
+    below would have passed with the real sniff deleted entirely. A control
+    that cannot fail when the thing it guards is removed is not a control."""
+    import tempfile
+    import design_one_shot_runner as _R
+    d = Path(tempfile.mkdtemp())
+    (d / "n.v").write_text(head)
+    return _R._dft_atpg_sniff_pdk(d, "n.v")[1]
 
 def test_the_ihp_branch_is_in_the_shipped_sniff():
-    assert r'\bsg13g2_[a-z0-9_]+\b' in _RUNNER
+    """EXPECTATION CHANGED, deliberately, and this is the record of it.
+
+    This used to assert a REGEX LITERAL was present in the runner's source:
+        assert r'\\bsg13g2_[a-z0-9_]+\\b' in _RUNNER
+    That pins an IMPLEMENTATION, not the property #410 is about. The sniff no
+    longer carries a hand-written branch per PDK; it derives the libraries
+    from `fault_atpg_run.PDK_CONFIG` and scans the WHOLE netlist — which is
+    what this file's own docstring already said was right: "the support
+    existed; only the sniff could not reach it". #410 answered that by adding
+    a row to the second table; deriving from the config deletes the table.
+
+    So this now asserts the PROPERTY: an IHP netlist resolves to a supported
+    entry, wherever in the file its cells appear. It fails if IHP support
+    regresses, and it does NOT fail merely because the code was rewritten."""
+    assert _sniff("module t; sg13g2_dfrbp_1 u1(.D(d));") == "ihp-sg13g2"
+    # ...and at an offset the old 20 KB head could never have reached.
+    late = ("module t;\n" + "  MY_MACRO u(.a(x));\n" * 12000
+            + "  sg13g2_dfrbp_1 ff(.D(d));\nendmodule\n")
+    assert len(late) > 200_000
+    assert _sniff(late) == "ihp-sg13g2"
 
 
 def test_an_ihp_netlist_resolves_to_a_supported_entry():

@@ -604,6 +604,59 @@ def _read_netlist_text(project: Path, netlist_rel: str, limit: int = 200000) -> 
         return ""
 
 
+def sniff_pdk_over_whole_netlist(project: Path, netlist_rel: str) -> str | None:
+    """Which configured PDK this netlist is mapped to, scanned over ALL of it.
+
+    Its only caller used to hand `sniff_pdk_from_netlist` a `[:200000]` head,
+    which made a WHOLE-FILE classification out of a fixed-size window. A
+    netlist's first standard-cell token can sit anywhere: a design that emits
+    its hard macros and generic primitives first pushes that token past any
+    fixed window, and the LARGER the design the likelier that is. So the
+    truncation failed hardest on exactly the designs it matters most for, and
+    it failed SILENTLY — `sniff_pdk_from_netlist` returns None both for a
+    genuinely unmapped netlist and for one we simply stopped reading, and its
+    own docstring tells the caller to "surface the honest error" on that None.
+    Downstream that None became `pdk=generic`, which the run then published as
+    "OSS ATPG coverage engine-limited" — blaming the open-source engine for a
+    read that stopped early.
+
+    Reproduced on two synthetic netlists identical but for token position:
+    first std-cell token at 61,689 resolved sky130; at 430,005 resolved
+    nothing.
+
+    Read in chunks with an overlap, so a very large netlist is never resident
+    and a prefix straddling a chunk boundary is still found. All matches are
+    collected before choosing, so the PDK precedence stays exactly what it was
+    on untruncated text (first in `pdk_cell_prefixes()` order) rather than
+    becoming "whichever chunk happened to match first".
+    """
+    prefixes = pdk_cell_prefixes()
+    if not prefixes:
+        return None
+    longest = max(len(p) for ps in prefixes.values() for p in ps)
+    found: set = set()
+    try:
+        with (project / netlist_rel).open("r", errors="ignore") as fh:
+            tail = ""
+            while True:
+                chunk = fh.read(1 << 20)
+                if not chunk:
+                    break
+                window = tail + chunk
+                for name, ps in prefixes.items():
+                    if name not in found and any(p in window for p in ps):
+                        found.add(name)
+                if len(found) == len(prefixes):
+                    break
+                tail = window[-(longest - 1):] if longest > 1 else ""
+    except OSError:
+        return None
+    for name in prefixes:                      # config order decides, as before
+        if name in found:
+            return name
+    return None
+
+
 def pdk_cell_prefixes() -> dict:
     """Library prefix(es) each CONFIGURED PDK's flop cells carry.
 
@@ -1137,7 +1190,7 @@ def run_fault(
         # removed — nothing is assumed; the library is read off the cell names
         # in the resolved artefact, and if they name no configured library the
         # honest error below still stands.
-        sniffed = sniff_pdk_from_netlist(_read_netlist_text(project, netlist_rel))
+        sniffed = sniff_pdk_over_whole_netlist(project, netlist_rel)
         if sniffed:
             pdk_sniff_note = (
                 f"caller passed unsupported pdk {pdk!r}; derived {sniffed!r} "
