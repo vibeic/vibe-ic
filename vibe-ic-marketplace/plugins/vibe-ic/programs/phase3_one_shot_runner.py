@@ -22246,8 +22246,20 @@ def run_at_speed_atpg_producers(project: Path, written: List[str],
                          f"{proc.returncode}) → {_ATPG_NOT_RUN_REL[step]}")
 
 
-def _eco_residual_note(project: "Path", residual: bool) -> str:
+def _eco_residual_note(project: "Path", residual: bool,
+                       delta_ns: "float | None" = None) -> str:
     """The note the ECO log publishes about a residual violation.
+
+    `delta_ns` is `eco_after - eco_before` on setup WNS: positive means the ECO
+    gained slack, negative means it LOST slack. It is optional so the older
+    two-argument call sites keep working, but when it IS supplied and negative
+    it OVERRIDES every branch below — because all of them open with "ECO
+    recovered what is recoverable", and that sentence is false on a run where
+    the measurement says the ECO went backwards. The note used to say it
+    anyway: the residual path was chosen on `violated_corners` alone, which is
+    equally true of an ECO that gained 8 ns and one that lost 8 ns. Same defect
+    shape as the #543 fix in this very docstring — a sentence asserting
+    something the record next to it contradicts.
 
     #543 — this used to be a string literal asserting "a genuine process-corner
     floor". It said that for a run whose sign-off repair had aborted
@@ -22263,6 +22275,14 @@ def _eco_residual_note(project: "Path", residual: bool) -> str:
     the honest state — a residual can be a real corner limit, but this record
     has never carried the evidence to say so.
     """
+    if isinstance(delta_ns, (int, float)) and delta_ns < -1e-9:
+        return (
+            f"ECO REGRESSED the design: setup WNS moved {delta_ns:+.3f} ns "
+            "(after minus before). Nothing was recovered — the pre-ECO "
+            "artefacts are the better ones and are what this run retains. Do "
+            "NOT read the residual violation as a process-corner floor; the "
+            "ECO itself made the number worse, so the floor has not been "
+            "reached, let alone established.")
     if not residual:
         return "multi-corner OCV closed after the ECO."
     log = project / "phase3" / "stage3" / "pnr" / "signoff_spef_repair.log"
@@ -23688,11 +23708,41 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             # step's audit (eco_loop_audit: changes + re_verified + affected_steps)
             # reflects the REAL ECO that ran — eco_status_gen preserves it (#564).
             _eco_residual = bool(_eco_after.get("violated_corners")) if _ran else True
+            # ── REGRESSION GUARD ────────────────────────────────────────────
+            # `eco_before` and `eco_after` were already both measured, sat
+            # adjacent in the record below, and were never SUBTRACTED. So an
+            # ECO that made timing measurably WORSE was written down as
+            # ECO_APPLIED / step status `pass`, and the artefacts it produced
+            # were adopted over the better pre-ECO ones. Measured on a real
+            # cell: setup went -0.68 -> -8.92 ns (a 12x regression) and the
+            # record said `pass`.
+            #
+            # A repair step is the one place where "it ran without erroring"
+            # and "it helped" are DIFFERENT questions, and only the first was
+            # being asked.
+            _eco_b = (_eco_decision.get("eco_before") or {}).get(
+                "setup_worst_slack_ns")
+            _eco_a = _eco_after.get("setup_worst_slack_ns")
+            _eco_delta = (_eco_a - _eco_b
+                          if isinstance(_eco_b, (int, float))
+                          and isinstance(_eco_a, (int, float)) else None)
+            _eco_regressed = bool(_eco_delta is not None
+                                  and _eco_delta < -1e-9)
+            if _eco_regressed:
+                # The ECO outputs stay on disk under their own names for
+                # debug; they are NOT adopted as the shipped artefacts.
+                _eco_decision["action"] = "eco_fired_reverted_regression"
+                notes.append(
+                    f"ECO REVERTED: setup {_eco_b:+.3f} -> {_eco_a:+.3f} ns "
+                    f"({_eco_delta:+.3f}) is a REGRESSION; the pre-ECO "
+                    "artefacts are retained and this step does NOT pass.")
             _eco_log = eco_out / "eco_log.json"
             try:
                 _eco_log.write_text(json.dumps({
                     "program": "phase3_one_shot_runner.eco_auto_trigger",
-                    "verdict": "ECO_APPLIED" if _ran else "ECO_ATTEMPTED",
+                    "verdict": (("ECO_REVERTED_REGRESSION" if _eco_regressed
+                                 else "ECO_APPLIED") if _ran
+                                else "ECO_ATTEMPTED"),
                     "trigger_basis": "multi_corner_ocv",
                     "trigger_violated_corners": _eco_decision["violated_corners"],
                     "changes": [{
@@ -23712,8 +23762,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     "eco_before": _eco_decision["eco_before"],
                     "eco_after": _eco_after,
                     "residual_violation": _eco_residual,
+                    "eco_setup_delta_ns": _eco_delta,
+                    "eco_regressed": _eco_regressed,
                     "residual_note": _eco_residual_note(
-                        project, bool(_eco_residual)),
+                        project, bool(_eco_residual), _eco_delta),
                 }, indent=2) + "\n")
                 written.append(str(_eco_log))
             except Exception as _eco_log_exc:  # pragma: no cover — defensive

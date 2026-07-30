@@ -241,6 +241,27 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         findings.append(Finding("WARNING", "NO_AFFECTED_STEPS",
                                 "eco_log.json missing 'affected_steps' array"))
 
+    # The question this audit never asked: DID THE ECO HELP?
+    # `changes`, `re_verified` and `affected_steps` are all structural — an ECO
+    # that measurably made timing WORSE satisfies every one of them and passed.
+    # An ECO is a REPAIR step, so "it ran and was re-verified" and "it improved
+    # the design" are different questions, and only the first was being asked.
+    #
+    # Keyed on the record's own measured delta, so this fires ONLY when the
+    # runner itself measured a regression; an ECO that gained slack, or one
+    # whose before/after was never measured, is untouched.
+    _delta = data.get("eco_setup_delta_ns")
+    if data.get("eco_regressed") or (
+            isinstance(_delta, (int, float)) and _delta < -1e-9):
+        _d = (f" (setup {_delta:+.3f} ns)"
+              if isinstance(_delta, (int, float)) else "")
+        findings.append(Finding(
+            "ERROR", "ECO_REGRESSED",
+            "the ECO made timing measurably WORSE" + _d
+            + " — a repair that regresses the design must not be recorded as "
+              "applied; the pre-ECO artefacts are the better ones"))
+    stats["eco_setup_delta_ns"] = _delta
+
     return findings, stats
 
 
