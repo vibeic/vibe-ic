@@ -10613,27 +10613,88 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
             f"{tie_lo_pin} pin — leaving spare inputs untouched\"",
             "    } else {",
             "      odb::dbITerm_connect $_tit $_tlnet",
+            "      set _tie_n 0",
+            "      set _tie_tot 0",
             f"      foreach _sn [list {_names_tcl}] {{",
             "        set _si [$_blk findInst $_sn]",
             "        if {$_si ne \"NULL\" && $_si ne \"\"} {",
+            # THE #563 DEFECT (measured, sky130A/ihp-sg13g2/gf180mcuD):
+            # `_build_spare_protection_tcl` applies `set_dont_touch` to every
+            # spare, and odb REFUSES to connect an iterm of a dont_touch
+            # instance — `[ERROR ODB-0369] Attempt to connect iterm of
+            # dont_touch instance <spare>` — which RAISES. So this loop threw
+            # on the FIRST spare on every run, the tie-off connected NOTHING
+            # (net `spare_tielo` carried the driver and zero sinks), and the
+            # throw unwound past the legalization below.
+            # Reproduced in OpenROAD 26Q3 and fixed here: lift dont_touch for
+            # ONE spare, connect, restore it immediately. The protection window
+            # stays minimal (never more than one spare unprotected, and only
+            # across odb calls that move nothing), and dont_touch exists to
+            # stop opt/resize touching spares — never to block the flow's OWN
+            # deliberate tie-off.
+            "          set _dt_lifted 0",
+            "          if {![catch {unset_dont_touch $_sn}]} {",
+            "            set _dt_lifted 1",
+            "          }",
             "          foreach _it [$_si getITerms] {",
             "            set _mt [$_it getMTerm]",
             "            if {[$_mt getIoType] eq \"INPUT\"} {",
             "              set _nn [$_it getNet]",
             "              if {$_nn eq \"NULL\" || $_nn eq \"\"} {",
-            "                odb::dbITerm_connect $_it $_tlnet",
+            "                incr _tie_tot",
+            # Per-iterm catch: one refusal must not skip the remaining spares.
+            # The pre-fix shape had a single catch around the whole loop, so
+            # the first failure silently cost every later spare as well.
+            "                if {[catch {odb::dbITerm_connect $_it $_tlnet} "
+            "_ce]} {",
+            "                  puts \"SPARE_TIEOFF_ITERM_NONFATAL $_sn: "
+            "$_ce\"",
+            "                } else {",
+            "                  incr _tie_n",
+            "                }",
             "              }",
+            "            }",
+            "          }",
+            # Restore protection for this spare before moving to the next.
+            "          if {$_dt_lifted} {",
+            "            if {[catch {set_dont_touch $_sn} _re]} {",
+            "              puts \"SPARE_DONTTOUCH_RESTORE_NONFATAL $_sn: "
+            "$_re\"",
             "            }",
             "          }",
             "        }",
             "      }",
-            "      if {[catch {detailed_placement} _tdp_err]} {",
-            "        puts \"SPARE_TIEOFF_LEGALIZE_NONFATAL: $_tdp_err\"",
-            "      }",
+            # COUNTED, not claimed. `SPARE_TIEOFF_DONE` alone asserted
+            # done-ness with no number behind it, so a run that tied off
+            # nothing printed the same line as one that tied off everything —
+            # and `tied_off: true` was then written from the mere EXISTENCE of
+            # a tie cell. The runner parses this count and records the measured
+            # value instead (see `_spare_tieoff_measured_from_log`).
+            "      puts \"SPARE_TIEOFF_CONNECTED $_tie_n of $_tie_tot\"",
             "      puts \"SPARE_TIEOFF_DONE: net spare_tielo\"",
             "    }",
             "  }",
             "} _tie_err]} { puts \"SPARE_TIEOFF_NONFATAL: $_tie_err\" }",
+            # === #563 r3: tie-driver legalization — ITS OWN catch, ALWAYS runs
+            # This MUST NOT share the catch above. It used to sit immediately
+            # after the connect loop INSIDE it, so the ODB-0369 throw skipped
+            # it on every run: `spare_tielo_drv` is placed at the FIRST SPARE'S
+            # PRE-SNAP coordinates, so with no legalization it kept its raw
+            # integer-micron location — measured off the site grid AND below
+            # row 0, i.e. outside the core. That single illegal instance is
+            # what `check_placement` then reported as DPL-0006 -> DPL-0033, and
+            # on one PDK it cascaded to DRT-0073 (no access point), RCX-0134
+            # (no extraction data), zero SPEF, and a post-route STA that fell
+            # back to netlist-only and reported the whole thing as a setup
+            # violation.
+            # THE GENERAL LESSON, which outlives this bug: a recovery step
+            # placed downstream of a fragile step inside ONE catch is a
+            # recovery that does not run precisely when it is needed.
+            "if {[catch {detailed_placement} _tdp_err]} {",
+            "  puts \"SPARE_TIEOFF_LEGALIZE_NONFATAL: $_tdp_err\"",
+            "} else {",
+            "  puts \"SPARE_TIEOFF_LEGALIZED: detailed_placement ok\"",
+            "}",
         ]
     else:
         lines.append(
@@ -10665,6 +10726,74 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
         "}",
     ]
     return "\n".join(lines) + "\n"
+
+
+# `SPARE_TIEOFF_CONNECTED <connected> of <candidates>` — emitted by
+# `_build_spare_postfix_tcl` after the tie-off loop.
+_SPARE_TIEOFF_COUNT_RE = re.compile(
+    r"SPARE_TIEOFF_CONNECTED\s+(\d+)\s+of\s+(\d+)")
+
+
+def _spare_tieoff_measured_from_log(log_path: Path) -> Dict[str, Any]:
+    """MEASURE the spare tie-off from OpenROAD's own log instead of asserting it.
+
+    `tied_off` used to be computed BEFORE OpenROAD ran, as
+    `bool(tie_cell_discovered and instances)` — the mere EXISTENCE of a tie cell
+    in the PDK liberty. `spare_cell_coverage_check` then FAILs unless
+    `tied_off == true`, so that gate was reading an intention, not an outcome.
+    Measured on spm x {sky130A, ihp-sg13g2, gf180mcuD}: the tie-off connected
+    ZERO sinks on every run (ODB-0369 — see `_build_spare_postfix_tcl`) while
+    `tied_off: true` was published and the coverage gate PASSed.
+
+    §4.05 — this TIGHTENS the gate, and it is fail-closed in both directions:
+      * no count marker in the log (the tie-off block never reached its end, or
+        an older log) => `measured: False`, `tied_off: False`. NOT MEASURED is
+        never reported as measured-success.
+      * `candidates == 0` (every spare input was already connected) => honestly
+        tied off, because there was nothing to tie.
+      * otherwise `tied_off` requires connected == candidates, so a PARTIAL
+        tie-off can no longer publish itself as complete.
+    Reading the log FILE rather than the captured stdout keeps this correct
+    across the PnR retry loop, whose per-iteration output is not in scope here.
+    Chip-AGNOSTIC: parses our own marker, no PDK/design specifics.
+    """
+    out: Dict[str, Any] = {"measured": False, "connected": None,
+                           "candidates": None, "tied_off": False,
+                           "reason": ""}
+    try:
+        text = log_path.read_text(errors="replace") if log_path.is_file() else ""
+    except OSError as exc:
+        out["reason"] = f"tie-off log unreadable: {exc}"
+        return out
+    if not text:
+        out["reason"] = ("no PnR log to measure the tie-off from — tied_off "
+                         "cannot be claimed")
+        return out
+    # LAST occurrence: the PnR retry loop can run the fragment more than once,
+    # and the final attempt is the one whose DEF ships.
+    hits = _SPARE_TIEOFF_COUNT_RE.findall(text)
+    if not hits:
+        _skipped = "SPARE_TIEOFF_SKIPPED" in text
+        _threw = "SPARE_TIEOFF_NONFATAL" in text
+        out["reason"] = (
+            "no SPARE_TIEOFF_CONNECTED count in the PnR log — the tie-off "
+            "block did not reach its end"
+            + (" (SPARE_TIEOFF_NONFATAL: it raised)" if _threw else "")
+            + (" (SPARE_TIEOFF_SKIPPED)" if _skipped else ""))
+        return out
+    connected, candidates = int(hits[-1][0]), int(hits[-1][1])
+    out.update(measured=True, connected=connected, candidates=candidates)
+    if candidates == 0:
+        out["tied_off"] = True
+        out["reason"] = ("no unconnected spare inputs to tie — vacuously tied "
+                         "off, measured")
+        return out
+    out["tied_off"] = connected == candidates
+    out["reason"] = (
+        f"measured {connected}/{candidates} spare input(s) tied to spare_tielo"
+        + ("" if out["tied_off"] else " — INCOMPLETE, spare inputs left "
+                                      "floating"))
+    return out
 
 
 def _dont_use_family_fallback_tcl() -> str:
@@ -13383,6 +13512,17 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     try:
         actual_dens = _spare_actual_density(spare_plan, placed_cells_est)
         spare_payload = dict(spare_plan)
+        # `tied_off` is MEASURED from OpenROAD's own log, replacing the
+        # pre-run claim `bool(tie_cell_discovered and instances)`. That claim
+        # said a tie cell EXISTS, not that anything was tied off, and
+        # `spare_cell_coverage_check` gates on it — so the gate was reading an
+        # intention. Measured on three PDKs: zero sinks connected on every run
+        # while `tied_off: true` shipped. The evidence goes in beside it so a
+        # reader sees the count, not just the verdict.
+        _tie_measured = _spare_tieoff_measured_from_log(_pnr_logp)
+        spare_payload["tie_off"] = _tie_measured
+        if spare_plan.get("instances"):
+            spare_payload["tied_off"] = bool(_tie_measured["tied_off"])
         spare_payload["placed_cells_est"] = placed_cells_est
         spare_payload["target_density"] = round(spare_dens, 6)
         spare_payload["actual_density"] = actual_dens
@@ -13403,9 +13543,13 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                        for i in spare_plan.get("instances", [])}
         distribution_ok = (spare_plan.get("count", 0) <= 1
                            or len(distinct_xy) > 1)
+        # Same MEASURED tie-off value the spare_cells.json carries — never the
+        # pre-run claim, so this convenience summary cannot disagree with the
+        # artefact the dedicated checker recomputes from.
+        _cov_tie_ok = bool(spare_payload.get("tied_off"))
         cov_verdict = ("PASS" if (actual_dens >= spare_dens
                                   and distribution_ok
-                                  and spare_plan.get("tied_off"))
+                                  and _cov_tie_ok)
                        else "FAIL")
         coverage_payload = {
             "program": "spare_cell_coverage (runner-emit)",
@@ -13414,7 +13558,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "count": spare_plan.get("count", 0),
             "placed_cells_est": placed_cells_est,
             "distribution_ok": distribution_ok,
-            "tie_off_ok": bool(spare_plan.get("tied_off")),
+            "tie_off_ok": _cov_tie_ok,
+            # The measurement behind `tie_off_ok`, so a FAIL says which of
+            # "raised", "never ran" or "partial" happened.
+            "tie_off": _tie_measured,
             "verdict": cov_verdict,
             # `status` mirrors `verdict` for the documented Pillar-6 schema.
             "status": cov_verdict,
@@ -21672,13 +21819,41 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             # indistinguishable from N corner sections over N libraries — the
             # silence that let a degraded run read as multi-corner sign-off.
             "corner_library_resolution": mc_lib_resolution,
+            # §4.05 — this disclosure used to ASSERT A CAUSE it never checked.
+            # The `else` fired on `len(corner_spefs) < 2` and blamed the PDK
+            # ("this PDK did not ship the min/max OpenRCX captables"), but a
+            # short corner list has several causes and only one of them is the
+            # PDK's: the captables can be present and `extract_parasitics` can
+            # still yield nothing (RCX-0134), typically because the route did
+            # not complete. Measured on spm x gf180mcuD: the run's own log
+            # NAMES all three captables it read (max/min/nom) and a sibling
+            # version extracted all three from the same PDK, yet this file
+            # published the PDK-blaming sentence.
+            # It also fired on corner_count == 0 while claiming "setup and hold
+            # share the nominal-RC SPEF" — asserting a nominal SPEF that did
+            # not exist (zero SPEF files were written).
+            # So: state WHAT WAS OBSERVED and stop naming a cause. A disclosure
+            # phrased as candour ("HONEST limitation") is read as MORE
+            # trustworthy, which is exactly why it must not attribute our own
+            # upstream failure to the environment.
             "disclosure": (
-                "Multi-corner SPEF signed off: setup at the slow/max-RC corner, "
-                "hold at the fast/min-RC corner."
+                "Multi-corner SPEF signed off: setup at the slow/max-RC "
+                "corner, hold at the fast/min-RC corner."
                 if _multi else
-                "SINGLE-CORNER (nom) only — this PDK did not ship the min/max "
-                "OpenRCX captables, so setup and hold share the nominal-RC "
-                "SPEF. HONEST limitation, not a claim of corner coverage."),
+                "NO SPEF EXTRACTED — 0 corners produced a SPEF, so this run "
+                "has NO parasitic data at all and any post-route STA beside it "
+                "is netlist-only, NOT an RC-annotated sign-off. This states "
+                "the observation only: the cause is not determined here and is "
+                "NOT attributed to the PDK — a missing captable and a "
+                "completed-route-less extraction (RCX-0134) both land here. "
+                "Check the PnR log for which captables were read."
+                if len(_corners) == 0 else
+                f"SINGLE-CORNER only (extracted: {', '.join(_corners)}) — "
+                "setup and hold therefore share one RC corner, which is NOT "
+                "min/max corner coverage. This states the observation only: "
+                "the cause is not determined here and is NOT attributed to "
+                "the PDK. Check the PnR log for which captables were read and "
+                "whether extraction succeeded for the missing corner(s)."),
         }, indent=2) + "\n")
         written.append(str(mc_stance))
 

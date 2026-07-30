@@ -12,6 +12,14 @@ Fixes (both reopen-suggested paths):
     LVS-match like functional cells even in the all-variants-used case;
     the plan's tied_off flag is now an honest claim (was constant True
     with no backing TCL).
+
+#563 r3 CORRECTION to that last sentence: it was still not honest. The flag
+went from constant True to `bool(tie_cell_discovered and instances)` — the mere
+EXISTENCE of a tie cell in the PDK liberty, computed BEFORE OpenROAD ran. The
+backing TCL existed but RAISED on every run (ODB-0369, dont_touch), so zero
+sinks were ever connected while `tied_off: true` shipped and the coverage gate
+PASSed. It is measured from the run's own log as of r3 — see
+`test_issue563r3_spare_tieoff_measured_and_legalized.py`.
 """
 import subprocess
 import sys

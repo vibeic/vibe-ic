@@ -120,6 +120,21 @@ line and every instance is listed in the `--json` report. "PASS" on
 this gate has never meant "every claim was exercised", and after #434
 it says so in words.
 
+There is a SECOND DISCLOSED outcome, added for #365:
+
+    PROVENANCE_INVOCATION_NO_DECLARED_OUTPUT, severity DISCLOSED
+
+a per-invocation COMMAND-AUDIT row (`record == "invocation"`, written by
+`phase3_one_shot_runner._log_invocation`) whose call site declared no
+output. Such a row makes no artefact claim, so there is nothing to
+verify — but it is recorded rather than skipped, for the same reason as
+above. `--require-outputs-present` does NOT promote this one: that flag
+asks whether a DECLARED output is present on disk, and a row that
+declared nothing is outside the question. Promoting it would simply
+restore the FAIL that #365 was filed for. The narrowness that keeps it
+honest is at the check itself: the row must also carry the probe fields
+that writer always emits, so asserting the class alone buys nothing.
+
 WHY THIS GATE STILL RUNS ON A PUBLISHED DELIVERABLE
 ---------------------------------------------------
 #432 established that the run directory is the right population for
@@ -654,6 +669,55 @@ def audit_counted(project: Path, strict_timing: bool = False,
             # attests the pulled file set; per-path on-disk verification is not
             # possible without paths (that is what the v1.0.74 `outputs` dict
             # adds, verified above when present).
+            continue
+        # #365 — a per-invocation COMMAND-AUDIT record (record == "invocation",
+        # written by phase3_one_shot_runner._log_invocation) whose call site
+        # DECLARED no output legitimately carries none. The writer's own
+        # contract: "Declared by the CALL SITE, hashed here. Absent when the
+        # caller declared nothing or nothing it declared was produced — empty is
+        # honest." Such a row makes NO artefact claim, so it cannot hide an
+        # unverified artefact. Regression fixed: the #365 invocation records
+        # POST-DATE this gate, which was written for the one-row-per-artefact
+        # model, so every phase-3 run with report/probe tool invocations (sta
+        # report runs, yosys lib-probe / post-layout LEC, klayout grid-snap,
+        # tap-geometry measurement) FAILed the completion audit even with clean
+        # sign-off.
+        #
+        # §4.05 — this is a guard RELAXATION, so it is narrow in BOTH axes:
+        #   * The class must be EXPLICITLY DECLARED (`record == "invocation"`),
+        #     never inferred from which keys happen to be present — that
+        #     inference is what charged the probe row in the first place, and
+        #     `record` exists precisely so "a consumer can tell the two writers
+        #     apart" (the writer's own docstring).
+        #   * The row must ALSO carry the probe fields `_log_invocation` ALWAYS
+        #     emits (`command`, `exit_code`, `version_capture`), so a bare
+        #     `{"record": "invocation"}` — hand-written, truncated, or forged —
+        #     CANNOT buy an exemption. Verified against the writer: all three
+        #     are unconditional in its entry dict, `outputs` alone is
+        #     conditional.
+        #   * A row that DOES carry a usable `outputs` dict falls THROUGH to the
+        #     normal on-disk + hash verification below, so the exemption never
+        #     suppresses verification of outputs that were actually declared.
+        #   * An ARTEFACT-declaration row (no `record`, or any other class) with
+        #     empty outputs still FAILs PROVENANCE_OUTPUTS_MISSING.
+        # And it is NOT SILENT: skipping the row without saying so would be a
+        # hidden decision, the thing this file's DISCLOSED severity exists to
+        # prevent, so the exemption is RECORDED (and counted in
+        # `disclosed_count` on the verdict line) rather than dropped.
+        if (e.get("record") == "invocation"
+                and not (isinstance(outputs, dict) and outputs)
+                and "command" in e and "exit_code" in e
+                and "version_capture" in e):
+            _mk = e.get("marker")
+            _mk = _ellipsis(str(_mk), 80) if _mk else "-"
+            findings.append(ProvenanceFinding(
+                entry_index=i, tool=tool,
+                rule="PROVENANCE_INVOCATION_NO_DECLARED_OUTPUT",
+                severity="DISCLOSED",
+                detail=("command-audit invocation record declared no output "
+                        f"(marker={_mk}) — empty is honest per the "
+                        "_log_invocation writer contract; the row makes no "
+                        "artefact claim to verify")))
             continue
         if not outputs or not isinstance(outputs, dict):
             findings.append(ProvenanceFinding(
