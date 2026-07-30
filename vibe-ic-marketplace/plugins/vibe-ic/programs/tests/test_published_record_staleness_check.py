@@ -982,7 +982,17 @@ def test_runs_on_the_real_published_corpus_and_stays_decisive(tmp_path):
             continue
         rec = json.loads((_CORPUS / f["record"]).read_text())
         assert rec["verdict"] == f["carried_verdict"]
-        assert rec["summary"]["coupling_pairs"] == 0
+        # The gate-SPECIFIC substance, keyed on which gate declared the rule.
+        # This line used to run for EVERY stale record — a si_mcf_sta_check
+        # field written into a gate-agnostic loop. It held only while that gate
+        # was the sole declarer; the first other declaration (dfm_screen_check,
+        # #562) raised KeyError: 'summary' on a record with no such field.
+        if f["gate"] == "si_mcf_sta_check":
+            assert rec["summary"]["coupling_pairs"] == 0
+        elif f["gate"] == "dfm_screen_check":
+            _cats = {str(x.get("category", ""))
+                     for x in rec.get("findings") or [] if isinstance(x, dict)}
+            assert _cats & {"VIA_DEFS_NOT_FOUND", "VIA_USES_NOT_FOUND"}, _cats
         assert f["would_issue"] != f["carried_verdict"]
 
 
