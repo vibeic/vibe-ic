@@ -212,10 +212,22 @@ def _self_exempt(path_str: str) -> bool:
     )
 
 
-def scan(search_dir: Path) -> List[Finding]:
-    """Walk search_dir and collect every deprecation hit. Non-recoverable
-    read errors on a single file are logged but do not abort the walk."""
+def scan(search_dir: Path) -> Tuple[List[Finding], int]:
+    """Walk search_dir and collect every deprecation hit, WITH the file count.
+
+    The count is returned, not derived by the caller, because a clean scan and
+    a scan of nothing produced the same sentence and the same exit code:
+
+        $ openroad_tcl_deprecation_check.py --search-dir <empty dir>
+        ok: no OpenROAD TCL deprecations found.          rc=0
+
+    identical to the answer over the whole plugin tree.  Nothing in the output
+    let a reader tell "I looked and it is clean" from "I looked at nothing".
+
+    Non-recoverable read errors on a single file are logged but do not abort
+    the walk; a file that could not be read is NOT counted as examined."""
     findings: List[Finding] = []
+    examined = 0
     search_dir_abs = search_dir.resolve()
     for fpath in _iter_scan_files(search_dir_abs):
         if _self_exempt(str(fpath)):
@@ -227,6 +239,7 @@ def scan(search_dir: Path) -> List[Finding]:
             print(f"[openroad_tcl_deprecation_check] WARN: cannot read "
                   f"{fpath}: {exc}", file=sys.stderr)
             continue
+        examined += 1
         suffix = fpath.suffix.lower()
         for idx, raw in enumerate(lines, start=1):
             line = raw.rstrip("\n")
@@ -246,12 +259,18 @@ def scan(search_dir: Path) -> List[Finding]:
                         replacement=dep.replacement,
                         excerpt=line.strip()[:200],
                     ))
-    return findings
+    return findings, examined
 
 
-def _format_report(findings: List[Finding]) -> str:
+def _format_report(findings: List[Finding], examined: int = -1) -> str:
     if not findings:
-        return "ok: no OpenROAD TCL deprecations found."
+        if examined == 0:
+            # Not "ok". Zero files examined means the search directory was
+            # empty, filtered away by SCANNED_SUFFIXES/SKIP_DIRS, or wrong.
+            return ("NOTHING EXAMINED: 0 files matched under the search "
+                    "directory, so this is not a clean result")
+        return (f"ok: no OpenROAD TCL deprecations found "
+                f"(examined {examined} file(s))")
     out = [f"FAIL: {len(findings)} OpenROAD TCL deprecation hit(s):"]
     for f in findings:
         out.append(
@@ -298,13 +317,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     try:
-        findings = scan(search_dir)
+        findings, examined = scan(search_dir)
     except OSError as exc:
         print(f"error: scan failed: {exc}", file=sys.stderr)
         return 2
 
-    report = _format_report(findings)
-    if findings:
+    report = _format_report(findings, examined)
+    if findings or examined == 0:
         print(report, file=sys.stderr)
     else:
         print(report)
@@ -316,12 +335,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "deprecations_scanned": [d.token for d in _DEPRECATIONS],
                 "findings": [asdict(f) for f in findings],
                 "total": len(findings),
+                # A consumer reading `total: 0` has no way to tell a clean
+                # scan from a scan of nothing without this.
+                "files_examined": examined,
             }, indent=2))
         except OSError as exc:
             print(f"error: cannot write JSON report: {exc}", file=sys.stderr)
             return 2
 
-    return 1 if findings else 0
+    # `examined == 0` is not clean. The message already says so; leaving rc=0
+    # would let every caller that reads the exit code — which is most of
+    # them — record a scan of nothing as a pass, which is the whole defect
+    # this disclosure was added for, surviving one layer down.
+    return 1 if (findings or examined == 0) else 0
 
 
 if __name__ == "__main__":
