@@ -153,6 +153,18 @@ run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_tar
 # NEW divergence still stops a landing, and the recorded set is printed every
 # run so the debt stays visible.
 # host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
+# vibeic-eda#32 — the fork ledger marks a tool `integrated = False` when the pin
+# resolver finds no ARG for it, and renders that as "not_layered — nothing to
+# assess", which asserts the tool is not shipped. Measured 2026-07-30: five of
+# the six in that state ARE in the image, including `ciel`, whose managed store
+# both sign-off PDKs symlink into. Each is excluded from every upstream
+# assessment while shipping to users.
+#
+# This does not redefine `integrated` — that flag gates every tool's assessment.
+# It tests the CLAIM. The five are recorded; a NEW one fails.
+# host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
+run_tolerating_uncheckable "fork absence claims hold" "$PLUGIN" python3 programs/fork_presence_claim_check.py --baseline programs/data/fork_presence_claim_baseline.json
+
 run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py --baseline programs/data/sta_engine_parity_baseline.json
 
 run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_parses_check.py" --root "$ROOT"
