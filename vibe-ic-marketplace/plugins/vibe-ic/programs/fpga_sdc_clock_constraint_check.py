@@ -198,6 +198,61 @@ def find_rtl_clock_period_ns(project: Path) -> Optional[float]:
     if inp_dir.is_dir():
         candidates.extend(inp_dir.rglob("L8*.json"))
 
+    # PASS 1 — STRUCTURED, AUTHORITATIVE. L8/L9 JSON carries a structured
+    # `clock_domains` array whose PRIMARY entry states the period the design
+    # actually committed to, with `evidence`/`source` pointing at the staged
+    # `input/constraints/*.sdc` timing contract (e.g. period_ns=24.0,
+    # freq_mhz=41.67). The loose top-level `clock_mhz` SCALAR in the same file
+    # is a summary that can go STALE against that domain — MEASURED on
+    # spm×gf180mcuD: clock_mhz=100.0 (a sky130 doc default) sat beside
+    # clock_domains[0].period_ns=24.0, and the scalar-regex pass below matched
+    # `clock_mhz` first → 10 ns → a phantom FPGA_SDC_PERIOD_MISMATCH against a
+    # 24 ns FPGA SDC that in fact AGREES with the design's real clock. The
+    # per-domain period is strictly more authoritative than a loose scalar, so
+    # read it first; the scalar scan remains as the fallback for files with no
+    # structured clock_domains. This does NOT blind the check: a genuinely
+    # wrong FPGA SDC still mismatches the (SDC-derived) primary-domain period.
+    def _primary_period_ns(text: str) -> Optional[float]:
+        try:
+            data = json.loads(text)
+        except Exception:
+            return None
+        doms = data.get("clock_domains") if isinstance(data, dict) else None
+        if not isinstance(doms, list) or not doms:
+            return None
+        primary = None
+        for d in doms:
+            if not isinstance(d, dict):
+                continue
+            if str(d.get("role", "")) == "primary" or \
+               str(d.get("domain_kind", "")) == "primary":
+                primary = d
+                break
+        if primary is None and isinstance(doms[0], dict):
+            primary = doms[0]
+        if not isinstance(primary, dict):
+            return None
+        for key, conv in (("period_ns", lambda v: float(v)),
+                          ("freq_mhz", lambda v: 1000.0 / float(v)),
+                          ("freq_hz", lambda v: 1e9 / float(v))):
+            v = primary.get(key)
+            try:
+                if v is not None and float(v) > 0:
+                    return conv(v)
+            except (ValueError, TypeError, ZeroDivisionError):
+                continue
+        return None
+
+    for f in candidates:
+        if f.suffix.lower() != ".json":
+            continue
+        try:
+            p = _primary_period_ns(f.read_text(errors="replace"))
+        except Exception:
+            p = None
+        if p is not None:
+            return p
+
     for f in candidates:
         try:
             txt = f.read_text(errors="replace")
