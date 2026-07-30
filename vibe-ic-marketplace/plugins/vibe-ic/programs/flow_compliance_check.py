@@ -4572,6 +4572,86 @@ _STRUCTURAL_GATE_ARGV_ADAPTERS: Dict[str, tuple[str, ...]] = {
 
 
 # ---------------------------------------------------------------------------
+# #559 — GATES NO GENERIC UMBRELLA CAN DRIVE, AND WHY THAT IS THE RIGHT ANSWER.
+#
+# #559 measured 33 registered gates that reject the umbrella's argv, and split
+# them by whether the umbrella could supply what they ask for.  Seventeen want a
+# project path, an RTL directory, an output directory or a top-module name —
+# things the umbrella already computes, so their silence is an unfinished wiring
+# job and each still has to clear #492's bar before conversion.
+#
+# The four below are a different kind.  Every one of them requires a value that
+# is a fact ABOUT THE DESIGN and nowhere else: which signal carries the CRC,
+# what the tristate bus is called, which drivers contend for it, which signal
+# ends the frame.  No umbrella can synthesise those, and handing them a
+# placeholder would convert an honest NOT_INVOCABLE into a verdict about a
+# signal that does not exist — strictly worse than the silence, because a wrong
+# PASS is indistinguishable from a real one.
+#
+# So this is not a to-do.  It is the decision, recorded: these four are driven
+# explicitly with real values by whoever knows them, or they gain a discovery
+# mode that derives the value and can say when it failed to.  What #559 found
+# missing was never the wiring — it was this table saying so, which is why they
+# read as "undecided" while being correctly configured.
+#
+# Recorded here rather than de-registered: removing them from
+# `_STRUCTURAL_RTL_GATES` would shrink the denominator and delete the evidence
+# that the check exists at all, which is the same disappearance by a tidier
+# route.  Asserted by `tests/test_issue559_semantic_argv_gates.py`.
+# ---------------------------------------------------------------------------
+_SEMANTIC_ARGV_UNDRIVABLE: Dict[str, Dict[str, str]] = {
+    "crc_bitorder_check": {
+        "requires": "--rtl-files --crc-signal --out-dir",
+        "design_value": "--crc-signal",
+        "why_no_umbrella": (
+            "The name of the signal carrying the CRC is a design fact. A "
+            "corpus scan for `crc`-like identifiers returns candidates, not "
+            "an answer: a design may compute a CRC into a differently-named "
+            "register, or carry an unrelated signal whose name contains crc."),
+        "disposition": (
+            "KEEP registered, driven explicitly. NOT_INVOCABLE under the "
+            "umbrella is the correct verdict and now has a reason attached."),
+    },
+    "crc_seed_consistency_check": {
+        "requires": "--vectors-json",
+        "design_value": "--vectors-json",
+        "why_no_umbrella": (
+            "Consumes generated test vectors, not RTL. There is nothing in an "
+            "`rtl` directory for the umbrella to point it at, so this is not a "
+            "structural-RTL check that happens to be unwired — it belongs to a "
+            "different input class entirely."),
+        "disposition": (
+            "KEEP registered, driven from the vector-generation step that "
+            "produces its input."),
+    },
+    "protocol_gap_check": {
+        "requires": "--name --end-signal --bus-idle --min-cycles --out-dir",
+        "design_value": "--end-signal, --bus-idle, --min-cycles",
+        "why_no_umbrella": (
+            "Needs the protocol's own timing contract: which signal ends a "
+            "frame, what idle looks like on that bus, and how many cycles of "
+            "it the spec requires. The third is a number no scan can recover — "
+            "it lives in the datasheet, not the RTL."),
+        "disposition": (
+            "KEEP registered, driven per-protocol from the L-layer spec that "
+            "states the inter-frame gap."),
+    },
+    "tristate_bus_check": {
+        "requires": "--bus-name --drivers --out-dir",
+        "design_value": "--bus-name, --drivers",
+        "why_no_umbrella": (
+            "The driver set is the whole question. Enumerating it from a scan "
+            "is what the check exists to verify, so deriving the argument from "
+            "the same source would make the check confirm its own input."),
+        "disposition": (
+            "KEEP registered, driven explicitly. A discovery mode is possible "
+            "but must report when enumeration was incomplete, or it recreates "
+            "the silence at one remove."),
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # #496 — WHY EACH ZERO-DENOMINATOR GATE IS STILL REGISTERED AND STILL UNWIRED.
 #
 # #492 disqualified eight gates for reporting an empty (or unstated)

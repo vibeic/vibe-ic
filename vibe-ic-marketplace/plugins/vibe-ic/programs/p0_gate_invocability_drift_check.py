@@ -213,7 +213,10 @@ def _licensed_gates() -> Set[str]:
         return set()
     return (set(getattr(_F, "P0_RTL_DIR_GROUP_MEASUREMENT", ()))
             | set(getattr(_F, "_ZERO_DENOMINATOR_CLASSIFICATION", ()))
-            | set(getattr(_F, "_STRUCTURAL_GATE_ARGV_ADAPTERS", ())))
+            | set(getattr(_F, "_STRUCTURAL_GATE_ARGV_ADAPTERS", ()))
+            # #559: gates whose missing argument is a fact about the DESIGN, so
+            # no umbrella can supply it. Their silence is decided, not pending.
+            | set(getattr(_F, "_SEMANTIC_ARGV_UNDRIVABLE", ())))
 
 
 def _split_undecided(gates: List[str]) -> Dict[str, List[str]]:
