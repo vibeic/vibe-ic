@@ -11929,23 +11929,6 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         "    set _prs_c [lsort [glob -nocomplain "
         "$_prs_root/libs.tech/{librelane,openlane}/rules.openrcx.*.nom]]\n"
         "  }\n"
-        # SPM-SI-1 — SECOND captable NAMING CONVENTION (chip/PDK-AGNOSTIC).
-        # open_pdks-derived PDKs (sky130A, gf180mcuD) and the staged asap7 name
-        # the model `rules.openrcx.<pdk>.<corner>.magic` DIRECTLY under
-        # libs.tech/{librelane,openlane}. IHP-Open-PDK instead ships it one
-        # level DEEPER and with the tokens REVERSED:
-        #     libs.tech/librelane/openrcx/<pdk>.<corner>.magic.rules
-        # The single-convention glob above therefore MISSES it, the deck falls
-        # through to the `-lef_rc` grounded-cap path, and the SPEF comes out
-        # with ZERO coupling caps — which makes the downstream crosstalk screen
-        # VACUOUS (N nets, 0 coupling pairs) even though the PDK ships a full
-        # coupling model. Glob the second layout too, ordered AFTER the first
-        # so no PDK that resolves today changes what it resolves to.
-        "  if {[llength $_prs_c] == 0} {\n"
-        "    set _prs_c [lsort [glob -nocomplain "
-        "$_prs_root/libs.tech/{librelane,openlane}/openrcx/*.nom.magic.rules "
-        "$_prs_root/libs.tech/{librelane,openlane}/openrcx/*.nom.rules]]\n"
-        "  }\n"
         "  if {[llength $_prs_c] > 0} { set _prs_rules [lindex $_prs_c 0] }\n"
         "}\n"
         "# PR-B2b — staged tech-LEF fallback: a named PDK whose tech LEF was\n"
@@ -11969,12 +11952,6 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         "    if {[llength $_prs_c2] == 0} {\n"
         "      set _prs_c2 [lsort [glob -nocomplain "
         "$_prs_root2/libs.tech/{librelane,openlane}/rules.openrcx.*.nom]]\n"
-        "    }\n"
-        # SPM-SI-1 — IHP layout on the cell-LEF-derived root too (see above).
-        "    if {[llength $_prs_c2] == 0} {\n"
-        "      set _prs_c2 [lsort [glob -nocomplain "
-        "$_prs_root2/libs.tech/{librelane,openlane}/openrcx/*.nom.magic.rules "
-        "$_prs_root2/libs.tech/{librelane,openlane}/openrcx/*.nom.rules]]\n"
         "    }\n"
         "    if {[llength $_prs_c2] > 0} { set _prs_rules [lindex $_prs_c2 0] }\n"
         "  }\n"
@@ -15127,19 +15104,14 @@ def _max_captable_c(pdk: "PdkConfig", container: str) -> str:
     root = tlef[:i]
     for sub in ("librelane", "openlane"):
         try:
-            # SPM-SI-1 — both captable naming conventions (chip/PDK-AGNOSTIC):
-            #   open_pdks / asap7 : rules.openrcx.<pdk>.max.magic
-            #   IHP-Open-PDK      : openrcx/<pdk>.max.magic.rules
             rc, out, _ = _docker_exec(
                 container,
-                f"ls {root}/libs.tech/{sub}/rules.openrcx.*.max.magic "
-                f"{root}/libs.tech/{sub}/openrcx/*.max.magic.rules "
-                f"{root}/libs.tech/{sub}/openrcx/*.max.rules 2>/dev/null")
+                f"ls {root}/libs.tech/{sub}/rules.openrcx.*.max.magic 2>/dev/null")
         except Exception:
             continue
         for ln in (out or "").splitlines():
             ln = ln.strip()
-            if ln.endswith((".max.magic", ".max.magic.rules", ".max.rules")):
+            if ln.endswith(".max.magic"):
                 return ln
     return ""
 
@@ -22109,29 +22081,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 27 SI / crosstalk (real SPEF coupling caps) --
     si_rpt = rpt_phase3 / "si_crosstalk.rpt"
-    # SPM-SI-2 — regenerate when the report is MISSING **or STALE against the
-    # SPEF it is derived from**. Existence-only caching pins the FIRST verdict
-    # forever, and this report's conclusion depends on the SPEF's ACCURACY TIER,
-    # not just on the design: a re-extraction that upgrades the SPEF from
-    # grounded-cap-only to real coupling caps (e.g. once the OpenRCX captable is
-    # discovered) leaves the cached report still asserting "no coupling caps
-    # available for this run" — not merely stale, but the opposite of what the
-    # evidence now says, and a crosstalk screen that can never see coupling.
-    _si_stale = False
-    if si_rpt.is_file() and spef_out is not None:
-        try:
-            _sp = Path(spef_out)
-            _si_stale = (_sp.is_file()
-                         and _sp.stat().st_mtime > si_rpt.stat().st_mtime)
-        except OSError:
-            _si_stale = False
-    if _si_stale:
-        notes.append(
-            f"SI crosstalk report regenerated: {si_rpt.name} was older than the "
-            f"SPEF it derives from ({Path(spef_out).name}) — a re-extraction can "
-            f"change the SPEF's accuracy tier (grounded-cap vs real coupling "
-            f"caps), which changes the SI conclusion.")
-    if (not si_rpt.is_file()) or _si_stale:
+    if not si_rpt.is_file():
         # v0.2.35: pass pdk + container so the SI emitter can ALSO run the
         # timing-window-aware ADVISORY upgrade (OpenSTA SI timing JSON →
         # window-gated watch-list) when a routed SPEF + post-route STA exist.
@@ -22574,27 +22524,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     _mcf_json = project / "reports/phase3/si_mcf_sta.json"
     _mcf_spef = sorted((project / "phase3/stage3/extracted").glob("*.spef")) \
         if (project / "phase3/stage3/extracted").is_dir() else []
-    # SPM-SI-3 — same staleness class as SPM-SI-2 (see Step 27 above), and the
-    # one that actually bites: the MCF-bounded SPEFs are DERIVED from the base
-    # SPEF by folding Cc*MCF into the ground cap. Fold them from a SPEF that has
-    # NO coupling caps and there is nothing to fold — the bounded SPEF is just a
-    # copy. Existence-only gating then keeps that empty fold forever, so after a
-    # re-extraction adds real coupling the independent recount in
-    # si_mcf_sta_check correctly reports FOLD_NOT_APPLIED on every net. Re-run
-    # when the base SPEF is NEWER than the MCF result it was folded from.
-    _mcf_stale = False
-    if _mcf_json.is_file() and _mcf_spef:
-        try:
-            _mcf_stale = max(p.stat().st_mtime for p in _mcf_spef) > \
-                _mcf_json.stat().st_mtime
-        except OSError:
-            _mcf_stale = False
-    if _mcf_stale:
-        notes.append(
-            "si_mcf_sta re-run: the base SPEF is newer than si_mcf_sta.json — "
-            "MCF-bounded SPEFs are folded FROM that SPEF, so a re-extraction "
-            "(e.g. one that adds real coupling caps) invalidates the fold.")
-    if ((not _mcf_json.is_file() or _mcf_stale) and _mcf_spef
+    if (not _mcf_json.is_file() and _mcf_spef
             and (project / "phase3/stage3/pnr/constraint.sdc").is_file()):
         try:
             _mcf_cmd = [sys.executable,
@@ -24009,17 +23939,6 @@ if {{$_i > 0}} {{
   if {{[llength $_c] == 0}} {{
     set _c [lsort [glob -nocomplain $_root/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom]]
   }}
-  # SPM-SI-1 — SECOND captable naming convention (chip/PDK-AGNOSTIC). IHP-Open-PDK
-  # ships the model one level deeper with the tokens reversed:
-  #   libs.tech/librelane/openrcx/<pdk>.<corner>.magic.rules
-  # vs open_pdks' libs.tech/{{librelane,openlane}}/rules.openrcx.<pdk>.<corner>.magic.
-  # Missing it silently downgrades to the -lef_rc grounded-cap path -> a SPEF with
-  # ZERO coupling caps -> a VACUOUS crosstalk screen (N nets, 0 coupling pairs)
-  # on a PDK that does ship a full coupling model. Ordered LAST so nothing that
-  # resolves today changes.
-  if {{[llength $_c] == 0}} {{
-    set _c [lsort [glob -nocomplain $_root/libs.tech/{{librelane,openlane}}/openrcx/*.nom.magic.rules $_root/libs.tech/{{librelane,openlane}}/openrcx/*.nom.rules]]
-  }}
   if {{[llength $_c] > 0}} {{ set _rules [lindex $_c 0] }}
 }}
 # PR-B2b — staged tech-LEF fallback: a named PDK whose tech LEF was staged
@@ -24038,10 +23957,6 @@ if {{$_rules eq ""}} {{
     set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom.magic]]
     if {{[llength $_c2] == 0}} {{
       set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom]]
-    }}
-    # SPM-SI-1 — IHP layout on the cell-LEF-derived root too (see above).
-    if {{[llength $_c2] == 0}} {{
-      set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/openrcx/*.nom.magic.rules $_root2/libs.tech/{{librelane,openlane}}/openrcx/*.nom.rules]]
     }}
     if {{[llength $_c2] > 0}} {{ set _rules [lindex $_c2 0] }}
   }}
@@ -24198,15 +24113,8 @@ def _discover_openrcx_captables(pdk: PdkConfig, container: str
     for corner in _SPEF_CORNERS:
         chosen: Optional[str] = None
         for d in cap_dirs:
-            # SPM-SI-1 — two captable naming conventions, chip/PDK-AGNOSTIC:
-            #   open_pdks / asap7 : <d>/rules.openrcx.<pdk>.<corner>.magic
-            #   IHP-Open-PDK      : <d>/openrcx/<pdk>.<corner>.magic.rules
-            # Glob BOTH so a PDK using the second layout gets its real coupling
-            # captable instead of silently degrading to grounded-cap LEF-RC.
             expr = (f"{shlex.quote(d)}/rules.openrcx.*.{corner}.magic "
-                    f"{shlex.quote(d)}/rules.openrcx.*.{corner} "
-                    f"{shlex.quote(d)}/openrcx/*.{corner}.magic.rules "
-                    f"{shlex.quote(d)}/openrcx/*.{corner}.rules")
+                    f"{shlex.quote(d)}/rules.openrcx.*.{corner}")
             # Prefer the .magic model; require the corner token in the name.
             hits = _container_ls_paths(container, expr, f".{corner}")
             magic = [h for h in hits if h.endswith(".magic")]
