@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1008
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1008)
+- **Total programs (excluding helpers / shims):** 1009
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1009)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 999 |
+| `any` | 1000 |
 
 ## Alphabetical listing
 
@@ -404,6 +404,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gen_skill_inventory` | any | — | single source of truth for the AI-skill count. |
 | `general_synth` | any | — | GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har... |
 | `gf_synth` | any | — | a DETERMINISTIC solver for the CVDP Galois-field / carry-less multiplication family. |
+| `gh_enumerate_all` | any | — | Enumerate a GitHub collection COMPLETELY, or refuse — never a partial page. |
 | `git_prohibition_guard` | any | — | deterministic guard for the core-agent loop (extracted from vibe-ic:core-agent-loop §Hard prohibitions). |
 | `gitignore_scratch_guard` | any | — | ORGANIC #720 |
 | `graycode_parity_synth` | any | — | a DETERMINISTIC solver for the CVDP gray-code and parity families. |
@@ -1080,7 +1081,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (999 programs)
+### `any` (1000 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1456,6 +1457,7 @@ _(no programs in this group)_
 - `gen_skill_inventory` — single source of truth for the AI-skill count.
 - `general_synth` — GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har...
 - `gf_synth` — a DETERMINISTIC solver for the CVDP Galois-field / carry-less multiplication family.
+- `gh_enumerate_all` — Enumerate a GitHub collection COMPLETELY, or refuse — never a partial page.
 - `git_prohibition_guard` — deterministic guard for the core-agent loop (extracted from vibe-ic:core-agent-loop §Hard prohibitions).
 - `gitignore_scratch_guard` — ORGANIC #720
 - `graycode_parity_synth` — a DETERMINISTIC solver for the CVDP gray-code and parity families.
