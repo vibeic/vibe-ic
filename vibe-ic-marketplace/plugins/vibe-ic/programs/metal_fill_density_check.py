@@ -8,6 +8,14 @@ emitter's own reports/density.{json,rpt}, and it substantiates that the fill
 achieved SOMETHING (fillers placed, or the DEF grew, or rows were already
 full, or an attested sparse-die skip).
 
+A BYTE-IDENTICAL filled.def is judged separately and more strictly, ABOVE that
+ladder (#364): nothing was emitted, so no signal from the ladder may excuse it.
+The only two exemptions are an ATTESTED sparse-die skip (#684) and fill that was
+already inserted at PnR — and the second requires fill cells MEASURED PRESENT in
+the routed.def baseline, not merely a high row utilization, because row-util
+counts logic and fill together and so cannot tell "already filled" from "never
+filled". See the §4.05 note at the check itself.
+
 The foundry's per-LAYER CMP density window is a different measurement, and
 this gate applies it only when the density artefact actually carries per-layer
 numbers. The OpenROAD filler_placement report normally does NOT: it carries
@@ -32,10 +40,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import _path_layout as _pl
 
 
@@ -49,6 +58,54 @@ class Finding:
 
 _MIN_DENSITY = 20.0
 _MAX_DENSITY = 80.0
+
+# A physical ROW-FILL cell master. chip-AGNOSTIC by construction: it matches
+# the LEF/DEF physical-cell NAMING CONVENTION (a `fill`/`filler`/`decap`/`dcap`
+# token), never a vendor, PDK, SKU or chip literal. Every open PDK names its
+# row fillers this way — `<prefix>_fill_1`, `<prefix>__fill_2`, `FILLER_4`,
+# `DECAP8` all match on the same generic token, and no PDK name appears in
+# this program. `filler_placement` is what inserts both fill and decap into
+# row gaps, so both are counted. Same convention already used by
+# `decap_route_short_guard._DECAP_RE`.
+# Longest alternatives first so `FILLER`/`FILLCAP` are not cut short at `FILL`.
+_FILL_MASTER_RE = re.compile(r"(?:^|[^A-Za-z])(filler|fillcap|fill|decap|dcap)"
+                             r"(?:[^A-Za-z]|$)", re.I)
+
+# `- <instName> <masterName> ...` inside the DEF COMPONENTS section.
+_DEF_COMPONENT_RE = re.compile(r"^\s*-\s+(\S+)\s+(\S+)")
+
+
+def baseline_fill_instance_count(routed_def: Path) -> Optional[int]:
+    """Count ROW-FILL cell instances already present in the PnR baseline DEF.
+
+    Returns None when the DEF cannot be read or carries no COMPONENTS section —
+    "not measured" and "measured zero" must never look alike (§4.05), because
+    the byte-identical exemption below is granted ONLY on a measured non-zero
+    count. Streams the file and stops at `END COMPONENTS`, so a multi-hundred-MB
+    routed DEF is never read into memory.
+    """
+    if not routed_def.is_file():
+        return None
+    n = 0
+    in_components = False
+    saw_components = False
+    try:
+        with routed_def.open("r", errors="replace") as fh:
+            for line in fh:
+                s = line.strip()
+                if not in_components:
+                    if s.startswith("COMPONENTS"):
+                        in_components = True
+                        saw_components = True
+                    continue
+                if s.startswith("END COMPONENTS"):
+                    break
+                m = _DEF_COMPONENT_RE.match(line)
+                if m and _FILL_MASTER_RE.search(m.group(2)):
+                    n += 1
+    except OSError:
+        return None
+    return n if saw_components else None
 
 
 def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
@@ -217,10 +274,48 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     stats["sparse_die_fill_skip_attested"] = sparse_fill_attested
     # #364 — checked BEFORE the substance ladder and outside it: a byte
     # identical filled.def is not a weak signal to be weighed against others,
-    # it is proof that nothing was emitted. The one exemption is the ATTESTED
-    # sparse-die skip (#684), where producing no fill is the recorded
-    # engineering decision rather than a silent failure.
-    if stats.get("filled_byte_identical") and not sparse_fill_attested:
+    # it is proof that THIS STEP emitted nothing. The exemptions are (a) the
+    # ATTESTED sparse-die skip (#684), where producing no fill is the recorded
+    # engineering decision, and (b) FILL ALREADY DONE AT PnR — when the
+    # standard-cell filler ran DURING PnR (filler_placement runs after
+    # detailed_route) the routed.def baseline ALREADY CARRIES the fill cells, so
+    # a LATER standalone fill step correctly places 0 and emits a
+    # byte-identical filled.def. Without (b), every design whose fill is
+    # inserted at PnR-time (the common open-flow shape) FAILs the completion
+    # audit despite being fully filled.
+    #
+    # §4.05 NO-LEAK — exemption (b) is a RELAXATION, so its evidence must be
+    # the thing it claims, measured, and it is deliberately a CONJUNCTION:
+    #
+    #   * `rows_already_full` ALONE CANNOT CARRY IT. row_utilization_pct is
+    #     computed by the runner as sum(area of every CORE*-class instance) /
+    #     row area — LOGIC cells and FILL cells TOGETHER (phase3_one_shot_
+    #     runner's odb block: `if {[string match "CORE*" [$_m getType]]}`).
+    #     A densely-placed design with ZERO fill cells therefore also reads
+    #     >= 95, so keying the exemption on row-util alone lets the one design
+    #     class that most needs FILL_NOOP — dense rows, no fill ever inserted —
+    #     pass while the gate ASSERTS "fill is present in the baseline". That
+    #     is a claim the gate would never have checked. Reproduced as a
+    #     negative control in test_v0_2_75_metal_fill_substance.
+    #   * So the exemption ALSO requires fill cells to be MEASURED PRESENT in
+    #     the routed.def baseline (baseline_fill_instance_count > 0), which is
+    #     the direct evidence for "already filled" rather than a proxy for it.
+    #   * NOT MEASURABLE IS NOT EXEMPT (fail-closed): an unreadable DEF or one
+    #     with no COMPONENTS section returns None, not 0, and no exemption is
+    #     granted.
+    # Measured ONLY on the byte-identical path: the scan streams the DEF's
+    # COMPONENTS section, and that path is the only one whose verdict depends on
+    # the count. A normal (grown) filled.def never pays for the scan.
+    baseline_fill_n = (baseline_fill_instance_count(routed_def)
+                       if stats.get("filled_byte_identical") else None)
+    stats["baseline_fill_instances"] = baseline_fill_n
+    fill_present_in_baseline = (isinstance(baseline_fill_n, int)
+                                and baseline_fill_n > 0)
+    stats["fill_present_in_baseline"] = fill_present_in_baseline
+    fill_done_at_pnr = rows_already_full and fill_present_in_baseline
+    stats["fill_done_at_pnr"] = fill_done_at_pnr
+    if (stats.get("filled_byte_identical") and not sparse_fill_attested
+            and not fill_done_at_pnr):
         findings.append(Finding(
             "ERROR", "FILL_NOOP",
             "metal fill emitted NOTHING: filled.def is BYTE-IDENTICAL to "
@@ -228,6 +323,22 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
             "density reading cannot substantiate a fill that produced not "
             "one byte — the deck's floor is per-layer over the whole die "
             "(#364)"))
+    elif (stats.get("filled_byte_identical") and fill_done_at_pnr
+            and not sparse_fill_attested):
+        # Transparent disclosure: byte-identical is EXPECTED here (fill already
+        # placed at PnR); recorded so a reader is not left to infer it. The
+        # MEASURED instance count is stated, so the "fill is present" claim is
+        # backed by the number that was actually counted rather than asserted.
+        findings.append(Finding(
+            "INFO", "FILL_DONE_AT_PNR",
+            f"filled.def is byte-identical to routed.def, rows are already "
+            f"full (row_utilization_pct={row_util}) AND the routed.def "
+            f"baseline already carries {baseline_fill_n} row-fill cell "
+            f"instance(s) — the standard-cell fill was inserted during PnR "
+            f"(filler_placement after detailed_route), so the standalone fill "
+            f"step correctly added nothing. Fill is present in the routed.def "
+            f"baseline, not missing.",
+            details=f"baseline_fill_instances={baseline_fill_n}"))
     if placed_fillers and stats["filled_larger"] is False:
         # contradiction: claims fillers but the DEF didn't grow
         findings.append(Finding(
@@ -300,6 +411,13 @@ def build_report(findings: List[Finding], stats: dict,
             "per_layer_density_verified": stats["per_layer_density_verified"],
             "layers_ok": stats["layers_ok"],
             "layers_bad": stats["layers_bad"],
+            # #364 — the evidence the byte-identical exemption was granted on,
+            # in a MACHINE-READABLE field rather than only inside a finding's
+            # prose. `.get` because the NO_FILL early return never measures
+            # them. `baseline_fill_instances: null` means NOT MEASURED, which is
+            # not the same as 0 and never buys the exemption.
+            "baseline_fill_instances": stats.get("baseline_fill_instances"),
+            "fill_done_at_pnr": stats.get("fill_done_at_pnr", False),
             "findings_count": len(findings),
             "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
             "pass": all(f.severity != "ERROR" for f in findings),

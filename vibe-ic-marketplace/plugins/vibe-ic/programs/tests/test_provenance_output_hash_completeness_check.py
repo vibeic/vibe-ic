@@ -283,3 +283,111 @@ def test_regular_cadence_pattern_warns(tmp_path: Path) -> None:
     susp = [f for f in findings if f.rule == "ATTEST_TIMING_SUSPICIOUS"]
     assert susp, [(f.rule, f.detail) for f in findings]
     assert "300" in susp[0].detail or "60" in susp[0].detail
+
+
+# ---------------------------------------------------------------------------
+# #365 per-invocation command-audit records (regression: the completion audit
+# FAILed every phase-3 run whose report/probe tool invocations declared no
+# output, even with clean DRC/LVS/STA sign-off). The `_log_invocation` writer
+# contract is "empty is honest" for a call site that declared nothing; the gate
+# must DISCLOSE such a row, not FAIL it — while still verifying any invocation
+# row that DOES declare outputs, and still FAILing a NON-invocation artefact row
+# with empty outputs.
+# ---------------------------------------------------------------------------
+def _invocation_row(**over) -> dict:
+    """A command-audit row in the shape `_log_invocation` ACTUALLY writes.
+
+    The fixture mirrors the PRODUCER on purpose: `record`, `command`,
+    `exit_code` and `version_capture` are UNCONDITIONAL in the writer's entry
+    dict and `outputs` is the only conditional key, so a fixture that omits the
+    probe fields would prove the exemption on a row shape that never occurs.
+    """
+    row = {"record": "invocation", "timestamp": "2026-05-08T03:14:23Z",
+           "tool": "sta", "version": "OpenSTA 2.5.0",
+           "version_capture": "probed",
+           "command": "sta -no_init -exit power.tcl > power.rpt",
+           "exit_code": 0, "duration_ms": 4120, "duration_s": 4.12,
+           "measured": True,
+           "marker": "phase3/stage3/sta/power.tcl"}
+    row.update(over)
+    return row
+
+
+def test_invocation_record_no_declared_output_is_disclosed_not_fatal(
+        tmp_path: Path) -> None:
+    p = tmp_path / "proj"
+    _make_provenance(p, [_invocation_row()])          # no outputs declared
+    verdict, findings = audit(p)
+    assert verdict == "PASS", [(f.rule, f.detail) for f in findings]
+    disc = [f for f in findings
+            if f.rule == "PROVENANCE_INVOCATION_NO_DECLARED_OUTPUT"]
+    assert disc, [(f.rule, f.severity) for f in findings]
+    assert disc[0].severity == "DISCLOSED"
+    assert not any(f.rule == "PROVENANCE_OUTPUTS_MISSING" for f in findings)
+
+
+@pytest.mark.parametrize("missing", ["command", "exit_code",
+                                     "version_capture"])
+def test_bare_invocation_claim_cannot_buy_the_exemption(
+        tmp_path: Path, missing: str) -> None:
+    """§4.05 NEGATIVE CONTROL — the exemption must not be purchasable by
+    asserting the class alone.
+
+    `_log_invocation` emits `command`, `exit_code` and `version_capture`
+    UNCONDITIONALLY, so a row that declares `record: invocation` while lacking
+    any of them did not come from that writer. Such a row is hand-written,
+    truncated or forged and must still FAIL — otherwise adding one line to a
+    ledger would exempt any artefact-producing tool run from hash verification.
+    """
+    row = _invocation_row()
+    row.pop(missing)
+    p = tmp_path / "proj"
+    _make_provenance(p, [row])
+    verdict, findings = audit(p)
+    assert verdict == "FAIL", [(f.rule, f.detail) for f in findings]
+    assert any(f.rule == "PROVENANCE_OUTPUTS_MISSING" for f in findings)
+    assert not any(f.rule == "PROVENANCE_INVOCATION_NO_DECLARED_OUTPUT"
+                   for f in findings)
+
+
+def test_invocation_record_that_declares_outputs_is_still_verified(
+        tmp_path: Path) -> None:
+    """An invocation row that DECLARES an output is NOT exempt — a wrong hash
+    still FAILs (the exemption is scoped to EMPTY outputs only)."""
+    p = tmp_path / "proj"
+    _write_real_output(p, "phase3/stage3/pnr/top.gds", b"real gds bytes\n" * 9)
+    _make_provenance(p, [
+        _invocation_row(tool="magic", command="magic ... stream out",
+                        outputs={"phase3/stage3/pnr/top.gds":
+                                 "sha256:" + "0" * 64}),
+    ])
+    verdict, findings = audit(p)
+    assert verdict == "FAIL"
+    assert any(f.rule == "PROVENANCE_HASH_MISMATCH" for f in findings)
+
+
+def test_invocation_exemption_is_counted_in_the_disclosure_census(
+        tmp_path: Path) -> None:
+    """The exemption must be VISIBLE, not silent: a skipped row that no reader
+    can see is the hidden decision this file's DISCLOSED severity exists to
+    prevent. It must land in `disclosed_count` on the verdict line."""
+    from programs.provenance_output_hash_completeness_check import audit_counted
+    p = tmp_path / "proj"
+    _make_provenance(p, [_invocation_row(), _invocation_row(tool="yosys")])
+    verdict, findings, _counts = audit_counted(p)
+    assert verdict == "PASS"
+    assert sum(1 for f in findings if f.severity == "DISCLOSED") == 2
+
+
+def test_non_invocation_record_with_empty_outputs_still_fails(
+        tmp_path: Path) -> None:
+    """The exemption is scoped to record=="invocation"; an artefact-declaration
+    row (no `record`, or any other value) with empty outputs still FAILs."""
+    p = tmp_path / "proj"
+    _make_provenance(p, [
+        {"timestamp": "2026-05-08T03:14:23Z", "tool": "yosys",
+         "command": "yosys synth", "outputs": {}},   # empty dict, no record
+    ])
+    verdict, findings = audit(p)
+    assert verdict == "FAIL"
+    assert any(f.rule == "PROVENANCE_OUTPUTS_MISSING" for f in findings)
