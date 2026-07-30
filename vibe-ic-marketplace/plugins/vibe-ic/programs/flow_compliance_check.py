@@ -5019,6 +5019,21 @@ def _p0_buckets_from_records(
     return fails, skips, waivers
 
 
+def _p0_verdict_count(records: List[Dict[str, Any]]) -> int:
+    """How many registered gates actually RETURNED a verdict (vibe-ic#559).
+
+    `NOT_INVOCABLE` is not a verdict about the design — it says the gate never
+    ran, because argparse rejected the argv the umbrella built. Every other
+    outcome in `P0_GATE_VERDICTS` is a statement about what was audited, including
+    `SKIP` (the input was absent) and `WAIVED`.
+
+    Counted off the RECORDS rather than `registry - fails - skips - waivers`,
+    which is what made the old passed-count unrecoverable: a bucket a passing gate
+    contributes nothing to cannot be counted backwards from.
+    """
+    return sum(1 for r in records if r.get("verdict") != "NOT_INVOCABLE")
+
+
 def _p0_passed_count(records: List[Dict[str, Any]]) -> int:
     """How many registered gates ran and PASSED.
 
@@ -8187,9 +8202,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         # the umbrella reports SKIPPED-CONDITION, never PASS; a
         # pure-analog project's strict verdict is decided by the
         # A-track gates, not by 0/226 skipped digital checkers.
+        # vibe-ic#559 — the headline said `N checkers` where N is the number
+        # REGISTERED, which is not the number that produced a verdict. 33 of the
+        # 243 reject the argv the umbrella builds (argparse exits 2 before the
+        # check runs), so they return NOT_INVOCABLE and what they audit is
+        # UNAUDITED. The per-gate disclosure below the headline has always been
+        # complete; the headline is the part a reader takes at face value, and it
+        # reads as 243 audits where 210 happened.
+        #
+        # BOTH numbers, ALWAYS — not `N checkers` when they agree and something
+        # longer when they do not. A line that only changes shape in the bad case
+        # is a line nobody has read in the good case, so nobody recognises the
+        # bad one either.
+        #
+        # Safe to reword: nothing parses this string. Checked before changing it,
+        # because this session has repeatedly found consumers that scrape prose —
+        # `final_report_generate` writes its own P0 heading, and
+        # `checker_execution_wiring_audit`'s `checkers` field is its own JSON.
+        _n_registered = len(_STRUCTURAL_RTL_GATES)
+        _n_verdict = _p0_verdict_count(structural_gate_records)
         structural_result = StepResult(
             id="P0",
-            name=f"Structural-RTL gates (P0 umbrella, {len(_STRUCTURAL_RTL_GATES)} checkers)",
+            name=(f"Structural-RTL gates (P0 umbrella, {_n_verdict} of "
+                  f"{_n_registered} checkers returned a verdict)"),
             stage="stage1",
             status=("SKIPPED-CONDITION" if s_passed is None
                     else "PASS" if s_passed else "FAIL"),

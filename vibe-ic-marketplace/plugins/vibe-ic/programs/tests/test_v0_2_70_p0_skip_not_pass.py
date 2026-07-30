@@ -27,11 +27,20 @@ def test_no_rtl_returns_none_not_true(tmp_path):
 
 
 def test_p0_source_renders_skipped_condition():
-    src = (Path(F.__file__)).read_text()
-    i = src.index('id="P0"')
-    window = src[i - 900:i + 900]
-    assert '"SKIPPED-CONDITION" if s_passed is None' in window
-    assert "#447" in window
+    """The P0 StepResult must render SKIPPED-CONDITION when nothing executed,
+    and the #447 rationale must be documented at that site.
+
+    Keyed on the ENCLOSING FUNCTION rather than a fixed byte window around
+    `id="P0"`. The window was 900 chars and #447 now sits 1538 away, because
+    vibe-ic#559 added a comment block explaining the headline count between them
+    — a documentation change the old assertion read as a regression. Function
+    scope is also strictly stronger: a byte window can be satisfied by a `#447`
+    that happens to be nearby, function scope cannot."""
+    import inspect
+    fn = inspect.getsource(F.main)
+    assert 'id="P0"' in fn
+    assert '"SKIPPED-CONDITION" if s_passed is None' in fn
+    assert "#447" in fn
 
 
 def test_rtl_present_still_executes(tmp_path):
