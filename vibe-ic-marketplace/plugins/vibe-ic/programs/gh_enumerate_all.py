@@ -54,8 +54,14 @@ PAGE = 100
 #: `<owner>/<repo>` + the collection. Each maps to the GraphQL connection and the
 #: fields worth carrying; the caller filters the result.
 COLLECTIONS: Dict[str, Tuple[str, str]] = {
-    "issues": ("issues", "number state title createdAt url"),
-    "pullRequests": ("pullRequests", "number state title createdAt url"),
+    # `body` is carried because a title-only search is a search of titles, not
+    # of the tracker. Found the hard way: `--grep FlexPA` reported "2303
+    # enumerated, 0 match", which reads as proof upstream never mentions the
+    # frame this project's crash dies in — while saying nothing about the 2303
+    # bodies. The issue that mattered most (#6065) has neither "crash" nor
+    # "segfault" in its title either.
+    "issues": ("issues", "number state title body createdAt url"),
+    "pullRequests": ("pullRequests", "number state title body createdAt url"),
     "refs/tags": ("refs(refPrefix:\"refs/tags/\")", "name"),
     "refs/heads": ("refs(refPrefix:\"refs/heads/\")", "name"),
 }
@@ -130,8 +136,13 @@ def main(argv=None) -> int:
     ap.add_argument("repo", help="owner/name, e.g. The-OpenROAD-Project/OpenROAD")
     ap.add_argument("collection", choices=sorted(COLLECTIONS))
     ap.add_argument("--grep", default=None,
-                    help="case-insensitive substring filter over the title/name; "
-                         "applied AFTER complete enumeration, never instead of it")
+                    help="case-insensitive substring filter over title AND body "
+                         "(name, for refs); applied AFTER complete enumeration, "
+                         "never instead of it")
+    ap.add_argument("--titles-only", action="store_true",
+                    help="restrict --grep to titles. The verdict says so, because "
+                         "a title search that reads as a tracker search is how a "
+                         "zero becomes false reassurance.")
     ap.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES)
     ap.add_argument("--json", default=None)
     a = ap.parse_args(argv)
@@ -158,11 +169,13 @@ def main(argv=None) -> int:
     out = res["nodes"]
     if a.grep:
         needle = a.grep.lower()
+        fields = ("title", "name") if a.titles_only else ("title", "name", "body")
         out = [n for n in out
-               if needle in str(n.get("title") or n.get("name") or "").lower()]
+               if any(needle in str(n.get(f) or "").lower() for f in fields)]
+        where = "titles only" if a.titles_only else "title and body"
         print(f"[OK] {res['count']} {a.collection} enumerated in {a.repo}; "
-              f"{len(out)} match {a.grep!r}. The denominator is the whole "
-              f"collection, not a page.", file=sys.stderr)
+              f"{len(out)} match {a.grep!r} in {where}. The denominator is the "
+              f"whole collection, not a page.", file=sys.stderr)
     else:
         print(f"[OK] {res['count']} {a.collection} in {a.repo} "
               f"(declared {res['declared_total']}).", file=sys.stderr)
