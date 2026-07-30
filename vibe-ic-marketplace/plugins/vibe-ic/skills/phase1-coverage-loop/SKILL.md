@@ -255,6 +255,27 @@ Set `state.step = "STOPPED"` and exit.
 
 ## Constraints (non-negotiable)
 
+- **KEEP YOUR TURN ALIVE TO COMPLETION.** Run any long tool through the
+  BLOCKING call (e.g. `_watchdog.run_supervised`, which returns only on exit or
+  stall), never a detached `timeout … &` fire-and-forget followed by yielding.
+
+  This skill had neither this rule nor the fact below, and it is a LOOP skill —
+  the shape most likely to invite "I'll yield and pick it up next round"
+  (vibe-ic#558). An agent did exactly that on a still-running Phase-3 flow,
+  saying it would "yield until the harness re-invokes me". Nothing did.
+  `claude -p` is one-shot, so all three of its justifications are impossible:
+
+  * *"the harness will re-invoke me when the background job exits"* — nothing
+    re-invokes a finished turn. There is no such mechanism.
+  * *"a background waiter is armed to fire"* — a waiter can only wake a turn
+    that is STILL ALIVE. It cannot start a new one.
+  * *"the monitor will fire"* — a monitor notifies the DISPATCHER, not you. It
+    cannot resume you. Step 3 of this loop arms exactly such a monitor, which
+    is precisely why the belief is available here.
+
+  Yielding does not pause your turn; it ENDS it, and your "then write the
+  result" step never runs.
+
 - **NO RTL ORACLE**: never inspect `<ic>/rtl/` when scoring Phase 1
   coverage. The Phase 1 ingester must derive structure from the
   prompt alone.

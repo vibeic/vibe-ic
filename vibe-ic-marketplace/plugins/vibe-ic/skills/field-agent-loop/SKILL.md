@@ -635,6 +635,10 @@ host lessons for keeping that hand-off clean:
   "then write RESULT.md" step never runs. The runner's OWN outputs
   (`reports/final_summary.md` / orchestrator `*_one_shot.json` verdict /
   GDS/SPEF artifacts) exist, but the synthesis deliverable is never
+  written. All three beliefs that make yielding feel safe are impossible
+  (vibe-ic#558): the harness does not **re-invoke** a finished turn; a
+  background waiter can only wake a turn that is **still alive**; and a monitor
+  **notifies the DISPATCHER**, not the agent, so it cannot resume you.
   written — observed 3× in one session (two idled pre-write; one flow
   finished but RESULT.md had to be hand-authored from artifacts). Rules:
   1. **Run the long tool through the BLOCKING `_watchdog.run_supervised`**

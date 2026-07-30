@@ -162,6 +162,23 @@ binding rules make the run captureable:
 - **Keep your turn alive to completion.** Run the long tool through the
   BLOCKING `_watchdog.run_supervised` (returns only on exit/stall; kills only
   a non-progressing job), never a raw detached `timeout &` fire-and-forget.
+
+  **Why the instruction alone loses to a plausible model (vibe-ic#558).** An
+  agent ended its turn on a still-running Phase-3 flow, saying "I'll yield until
+  the harness re-invokes me when Phase 3 exits". Nothing did. `claude -p` is
+  one-shot, so the three beliefs that justified it are all impossible:
+
+  * *"the harness will re-invoke me when the background job exits"* — nothing
+    re-invokes a finished turn. There is no such mechanism.
+  * *"a background waiter is armed to fire"* — a waiter can only wake a turn
+    that is STILL ALIVE. It cannot start a new one.
+  * *"the monitor will fire"* — a monitor notifies the DISPATCHER, not you. It
+    cannot resume you.
+
+  Yielding does not pause your turn; it ENDS it, and your "then write the
+  result" step never runs. The rule above is not a preference about style — it
+  is the only way the deliverable gets written.
+
 - **Self-verify the deliverable as your FINAL act**: run
   `python3 programs/run_output_completeness_check.py <run_dir>` on your own
   run_dir; only `COMPLETE` (exit 0) counts as done. **NO RESULT / empty

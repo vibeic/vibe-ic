@@ -726,6 +726,22 @@ prompts genuinely name no module → correct `chip_top` degrade).
 > `_watchdog.run_supervised` (returns only on exit/stall), not a detached
 > fire-and-forget. On FAIL the gate emits a capture candidate — feed it to
 > `enhancement_emit.py`.
+>
+> **Why the instruction alone loses to a plausible model (vibe-ic#558).** An
+> agent ended its turn on a still-running Phase-3 flow, saying "I'll yield until
+> the harness re-invokes me when Phase 3 exits". Nothing did. `claude -p` is
+> one-shot, so the three beliefs that justified it are all impossible:
+>
+> * *"the harness will re-invoke me when the background job exits"* — nothing
+>   re-invokes a finished turn. There is no such mechanism.
+> * *"a background waiter is armed to fire"* — a waiter can only wake a turn
+>   that is STILL ALIVE. It cannot start a new one.
+> * *"the monitor will fire"* — a monitor notifies the DISPATCHER, not you. It
+>   cannot resume you.
+>
+> Yielding does not pause your turn; it ENDS it, and your "then write the
+> result" step never runs. The rule above is not a preference about style — it
+> is the only way the deliverable gets written.
 
 > **Section-presence enforced by `programs/benchmark_result_md_lint.py <RESULT.md>`** — fails the
 > run if any of the seven mandatory sections below is missing. (It checks *presence* of each
