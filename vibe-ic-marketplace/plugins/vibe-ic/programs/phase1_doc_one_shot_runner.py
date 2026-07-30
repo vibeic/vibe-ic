@@ -9710,6 +9710,34 @@ def _v455_dir_from_line(line: str) -> str:
     return "unspecified"
 
 
+#: Clause separators for the prose-bullet interface shape. A datasheet bullet
+#: routinely declares two DIFFERENT port roles in one sentence:
+#:     "- Digital serial outputs `OUT1..OUT6` (+ `dout` serial),
+#:        modulator clocks `CK4/CK5/CK6`."
+#: `_v455_dir_from_line` already knows that "clocks" means input — but it scans
+#: the WHOLE line with a fixed precedence, so the leading "outputs" wins and
+#: every token on the line, including the clocks in the trailing clause, is
+#: emitted mode=output. Resolving the SAME precedence per clause fixes it
+#: without inventing any new vocabulary. chip-AGNOSTIC: punctuation only.
+_RE_V455_CLAUSE_SPLIT = re.compile(r"[,;]|，|；")
+
+
+def _v455_dir_for_span(line: str, pos: int, line_dir: str) -> str:
+    """Direction for the token at `pos`, resolved from ITS OWN clause.
+
+    Falls back to the whole-line answer when the token's clause states no
+    direction of its own, so a single-clause line behaves exactly as before.
+    """
+    start = 0
+    for sep in _RE_V455_CLAUSE_SPLIT.finditer(line):
+        if sep.start() > pos:
+            clause_dir = _v455_dir_from_line(line[start:sep.start()])
+            return clause_dir if clause_dir != "unspecified" else line_dir
+        start = sep.end()
+    clause_dir = _v455_dir_from_line(line[start:])
+    return clause_dir if clause_dir != "unspecified" else line_dir
+
+
 def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
     """Backticked pin tokens (ranges expanded) found inside port-context
     heading ranges — the bullet-list interface shape analog datasheets
@@ -9780,12 +9808,19 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                             _leading_cell_toks = set(
                                 _RE_BACKTICK_TOKEN.findall(_cell))
                             break
-                for tok in _RE_BACKTICK_TOKEN.findall(line):
+                for _tm in _RE_BACKTICK_TOKEN.finditer(line):
+                    tok = _tm.group(1)
                     # #627 — in a port-table row, ONLY the leading name-cell
                     # token is a port (a later-cell width/parameter token is
                     # not promoted).
                     if _is_port_table_row and tok not in _leading_cell_toks:
                         continue
+                    # A pipe-table row's direction lives in its own cell and is
+                    # already row-scoped; only the PROSE bullet shape needs the
+                    # per-clause resolution.
+                    tok_dir = (direction if _is_port_table_row
+                               else _v455_dir_for_span(line, _tm.start(),
+                                                       direction))
                     expanded = _v455_expand_pin_token(tok)
                     # aliases attach only to a single (non-banked) canonical tok
                     tok_aliases = (alias_for.get(tok, [])
@@ -9825,7 +9860,7 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                         seen.add(name)
                         out.append({
                             "name": name,
-                            "mode": direction,
+                            "mode": tok_dir,
                             "aliases": list(tok_aliases),
                             "rtl_name": name.lower(),
                             "board_name": name,
