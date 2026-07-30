@@ -5568,6 +5568,38 @@ def _sibling_declares_module(sib_path: Path) -> bool:
     Delegates to `_rtl_include_hub`, the single source of truth now shared with
     the LEC gold read and phase-3 synth."""
     return _hub.sibling_declares_module(sib_path)
+_V_COND_DIRECTIVE_RE = re.compile(
+    r'(?<![\w$])`(ifdef|ifndef|elsif|else|endif)(?![\w$])')
+
+
+def _mask_conditional_arms(body: str) -> str:
+    """Blank text inside `ifdef/`ifndef…`endif regions, preserving length.
+
+    Unbalanced directives fail SAFE in the conservative direction: a stray
+    `endif at depth 0 is ignored, and an unterminated `ifdef masks to end of
+    file (so a primitive inside it stays non-evidence)."""
+    out = list(body)
+    depth = 0
+    pos = 0
+    for m in _V_COND_DIRECTIVE_RE.finditer(body):
+        kind = m.group(1)
+        if depth > 0:
+            for i in range(pos, m.start()):
+                if out[i] != "\n":
+                    out[i] = " "
+        if kind in ("ifdef", "ifndef"):
+            depth += 1
+        elif kind == "endif":
+            depth = max(0, depth - 1)
+        # `elsif / `else keep the current depth
+        pos = m.end()
+    if depth > 0:
+        for i in range(pos, len(body)):
+            if out[i] != "\n":
+                out[i] = " "
+    return "".join(out)
+
+
 
 
 def _is_fpga_board_wrapper(p: Path, sibling_basenames: Optional[set] = None) -> bool:
@@ -5595,7 +5627,7 @@ def _is_fpga_board_wrapper(p: Path, sibling_basenames: Optional[set] = None) -> 
     if _hub.is_include_hub(p, sibling_basenames):
         return True
     # Signal 2: FPGA-vendor primitive instantiation (uncommented body).
-    body = _strip_v_comments(raw)
+    body = _mask_conditional_arms(_strip_v_comments(raw))
     for prim in _FPGA_VENDOR_PRIMS:
         # instantiation form: `<prim> [#(...)] [inst] (`  — token-bounded
         if re.search(r'(?<![\w$])' + re.escape(prim) +
