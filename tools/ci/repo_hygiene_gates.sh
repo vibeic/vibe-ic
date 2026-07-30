@@ -141,6 +141,20 @@ run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_tar
 # a check that does not exist looks exactly like one that passes. Measured
 # 2026-07-30: CAPTURE_ROUTING.json truncated mid-string, all eight cheap-tier
 # gates PASS. The flow dispatcher's routing table could land unparseable.
+# vibeic-eda#8 — the image ships two ways to run STA and they disagree about
+# what the toolchain can do. `openroad`'s built-in engine carries our
+# timing-ECO superset (10/10 commands); the standalone `sta` is the base
+# image's June binary and has none of them, because no COPY line ever names it.
+# Nothing errors when a flow step shells out to the wrong one — an absent Tcl
+# command in a script that does not call it looks like a working install.
+#
+# The current divergence is RECORDED, not ignored: it needs an image rebuild,
+# and a gate that fails every landing until then is a gate someone deletes. A
+# NEW divergence still stops a landing, and the recorded set is printed every
+# run so the debt stays visible.
+# host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
+run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py --baseline programs/data/sta_engine_parity_baseline.json
+
 run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_parses_check.py" --root "$ROOT"
 
 # vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log

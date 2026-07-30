@@ -1,0 +1,11 @@
+{
+  "_why": "vibeic-eda#8 — the standalone `sta` executable is never copied out of the openroad build, so the base image's June binary survives and carries none of the vibeic timing-ECO superset. Measured 2026-07-30: openroad 10/10, sta 0/10. Recorded so a NEW divergence still fails a landing while this one, which cannot be fixed without an image rebuild, does not block every commit.",
+  "_remove_when": "tools/openroad/Dockerfile and the root Dockerfile copy bin/sta alongside bin/openroad, and this check reports 10/10 on both engines.",
+  "_measured": "2026-07-30 against ghcr.io/vibeic/vibeic-eda:0.2.45",
+  "only_openroad": [
+    "crosstalk_delta_delay", "crosstalk_eco", "multi_scenario_merge",
+    "noise_glitch_peak", "propagate_activity", "propagated_noise",
+    "report_pba", "timing_window_overlap", "useful_skew", "whatif_eco"
+  ],
+  "only_sta": []
+}

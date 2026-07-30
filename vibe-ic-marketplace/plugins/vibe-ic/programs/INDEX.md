@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1006
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1006)
+- **Total programs (excluding helpers / shims):** 1008
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1008)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 997 |
+| `any` | 999 |
 
 ## Alphabetical listing
 
@@ -307,6 +307,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `extraction_input_capability_check` | any | — | precondition gate on the EXTRACTION INPUTS, so "the tool could not verify" is never reported as "the design is wrong" (or, worse, as noth... |
 | `fastercap_extract` | any | — | Real 3D field-solved coupling extraction via FasterCap on the routed geometry. |
 | `fault_atpg_run` | any | — | Open-source ATPG via Fault (cloudv-io/fault). |
+| `fault_cut_async_observe` | any | — | restore OBSERVABILITY of a sequential cell's ASYNCHRONOUS set/reset inputs in a `fault cut` full-scan ATPG model. |
 | `fetch_round_trip_sentinel_check` | any | — | P0.1 deterministic gate |
 | `ff_truth_table_synth` | any | — | deterministic SOLVER for a flip-flop truth table. |
 | `fibonacci_synth` | any | — | DETERMINISTIC solver for the CVDP Fibonacci generator. |
@@ -918,6 +919,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spice_correlation_check` | any | — | canonical Step-30 post-layout SPICE correlation |
 | `sta_achievable_fmax_report` | any | — | honest achievable-Fmax measurement (Step 23 STA). |
 | `sta_corner_record_completeness_check` | any | — | the timing RECORD-completeness gate. |
+| `sta_engine_parity_check` | any | — | `sta` and `openroad` must offer the same timing engine. |
 | `sta_report_check` | any | — | STA report check — wrapper for eda_report_audit --mode sta. |
 | `sta_signoff_rigor_check` | any | — | sign-off STA rigor gate for tapeout sign-off. |
 | `sta_triage_classify` | any | v0.1.50 | STA endpoint triage (Pattern-B → program). |
@@ -1078,7 +1080,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (997 programs)
+### `any` (999 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1357,6 +1359,7 @@ _(no programs in this group)_
 - `extraction_input_capability_check` — precondition gate on the EXTRACTION INPUTS, so "the tool could not verify" is never reported as "the design is wrong" (or, worse, as noth...
 - `fastercap_extract` — Real 3D field-solved coupling extraction via FasterCap on the routed geometry.
 - `fault_atpg_run` — Open-source ATPG via Fault (cloudv-io/fault).
+- `fault_cut_async_observe` — restore OBSERVABILITY of a sequential cell's ASYNCHRONOUS set/reset inputs in a `fault cut` full-scan ATPG model.
 - `fetch_round_trip_sentinel_check` — P0.1 deterministic gate
 - `ff_truth_table_synth` — deterministic SOLVER for a flip-flop truth table.
 - `fibonacci_synth` — DETERMINISTIC solver for the CVDP Fibonacci generator.
@@ -1965,6 +1968,7 @@ _(no programs in this group)_
 - `spice_correlation_check` — canonical Step-30 post-layout SPICE correlation
 - `sta_achievable_fmax_report` — honest achievable-Fmax measurement (Step 23 STA).
 - `sta_corner_record_completeness_check` — the timing RECORD-completeness gate.
+- `sta_engine_parity_check` — `sta` and `openroad` must offer the same timing engine.
 - `sta_report_check` — STA report check — wrapper for eda_report_audit --mode sta.
 - `sta_signoff_rigor_check` — sign-off STA rigor gate for tapeout sign-off.
 - `sta_triage_classify` — STA endpoint triage (Pattern-B → program).  _[v0.1.50]_
