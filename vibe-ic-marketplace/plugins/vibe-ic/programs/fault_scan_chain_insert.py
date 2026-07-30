@@ -1,0 +1,475 @@
+#!/usr/bin/env python3
+"""
+fault_scan_chain_insert.py — REAL scan-chain insertion via `fault chain`.
+
+Produces the IMPLEMENTATION netlist that carries the scan chain:
+
+  <project>/phase2/stage2/dft/scan_netlist.v        (scan-inserted netlist)
+  <project>/reports/phase2/dft/scan_chain.json      (MEASURED chain metadata)
+
+WHY THIS PROGRAM EXISTS
+-----------------------
+Before it, `scan_netlist.v` was a BYTE COPY of `cut_netlist.v` — Fault's ATPG
+*cut* view, in which every flip-flop has been replaced by a `<inst>.d`
+pseudo-PI/PO pair.  That is a combinational transform for fault simulation; it
+is not a netlist anyone can build.  Two things followed from it:
+
+  * step 12 `opt_clean`ed the cut view into `post_dft_netlist.v`, so the
+    artefact the flow calls "the post-DFT netlist" had ZERO flip-flops, and
+    step 13 (`RTL == post-DFT netlist`) could not compare anything — a cut
+    netlist is combinationally unequal to its RTL BY CONSTRUCTION;
+  * place-and-route read `<top>_synth.v`, the PRE-DFT netlist, so the routed,
+    tape-out-bound design carried NO SCAN CHAIN at all while ATPG reported
+    stuck-at coverage on a netlist that never becomes silicon.
+
+Standard ASIC practice is scan insertion BEFORE place-and-route: the routed
+design carries the chain and the tape-out is production-testable, and the ATPG
+cut view is DERIVED from the scan netlist rather than substituted for it.
+
+WHAT IS MEASURED, NEVER ASSERTED
+--------------------------------
+`fault chain` prints its own chain counts, AND embeds a machine-readable
+`/* FAULT METADATA: {...} */` header in the output netlist naming every chain
+element in order.  This program reads BOTH and cross-checks them against the
+flop count it counts in the INPUT netlist.  `chain_length_matches_flop_count`
+is a MEASUREMENT — the run is not called good because the tool exited 0.
+
+Exit 0 = a scan netlist was produced AND the chain covers every input flop.
+Exit 1 = `fault chain` ran but the result does not measure clean (the JSON
+         says exactly which check failed; no artefact is silently accepted).
+Exit 2 = usage / IO / Docker error, or no Liberty resolvable for this PDK.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from collections import Counter
+from pathlib import Path
+
+import _path_layout as _pl
+import fault_atpg_run as _fatpg
+
+
+# ---------------------------------------------------------------------------
+# Liberty resolution — `fault chain` REQUIRES --liberty (unlike `fault cut`)
+# ---------------------------------------------------------------------------
+# Container-absolute typical-corner Liberty per PDK, keyed by the SAME PDK ids
+# `fault_atpg_run.PDK_CONFIG` uses, so a design can never resolve its cell
+# MODEL from one library and its Liberty from another (the exact two-table
+# defect ORGANIC #410 removed for the cell model).  A PDK absent from this
+# table resolves nothing and the run REFUSES — it never substitutes another
+# foundry's Liberty.
+SCAN_LIBERTY = {
+    "sky130": ("/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
+               "sky130_fd_sc_hd__tt_025C_1v80.lib"),
+    "gf180": ("/foss/pdks/ciel/gf180mcu/versions/"
+              "8f2d1529c86235d726979eb9ecb7e9628108590b"
+              "/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/"
+              "gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib"),
+    "ihp-sg13g2": ("/foss/pdks/ihp-sg13g2/libs.ref/sg13g2_stdcell/lib/"
+                   "sg13g2_stdcell_typ_1p20V_25C.lib"),
+}
+
+# `fault chain`'s DFT port option names.  These are OPTION NAMES we pass, so
+# the resulting port names are KNOWN, never sniffed out of the netlist.  The
+# value is what functional mode drives them to (`sout` is an OUTPUT and is
+# left dangling — it has no RTL counterpart).
+FUNCTIONAL_MODE_TIEOFF = {"sin": 0, "shift": 0, "test": 0, "tck": 0}
+SCAN_OUT_PORT = "sout"
+DFT_PORTS = (*FUNCTIONAL_MODE_TIEOFF, SCAN_OUT_PORT)
+
+SCAN_NETLIST_REL = "phase2/stage2/dft/scan_netlist.v"
+SCAN_JSON_REL = "reports/phase2/dft/scan_chain.json"
+
+
+# ---------------------------------------------------------------------------
+# PURE parsers / measurers — unit-tested directly, no Docker, no filesystem
+# ---------------------------------------------------------------------------
+
+# `fault chain` stdout, verbatim shape:
+#   Internal scan chain successfully constructed. Length: 64
+#   Boundary scan cells successfully chained. Length:  34
+#   Total scan-chain length:  98
+_INTERNAL_RE = re.compile(r"Internal scan chain[^\n]*?Length:\s*(\d+)", re.I)
+_BOUNDARY_RE = re.compile(r"Boundary scan cells[^\n]*?Length:\s*(\d+)", re.I)
+_TOTAL_RE = re.compile(r"Total scan-chain length:\s*(\d+)", re.I)
+
+_FAULT_META_RE = re.compile(
+    r"/\*\s*FAULT METADATA:\s*'(?P<json>.*?)'\s*END FAULT METADATA\s*\*/",
+    re.S)
+
+
+def parse_chain_log(text: str) -> dict:
+    """Chain counts scraped from `fault chain`'s OWN stdout.  PURE.
+
+    Missing keys stay None — an absent count is never defaulted to 0, because
+    0 is a meaningful (and disastrous) chain length and must not be
+    manufacturable by a parse miss.
+    """
+    def _one(rx):
+        m = rx.search(text or "")
+        return int(m.group(1)) if m else None
+    return {"internal": _one(_INTERNAL_RE),
+            "boundary": _one(_BOUNDARY_RE),
+            "total": _one(_TOTAL_RE)}
+
+
+def parse_chain_metadata(netlist_text: str) -> dict | None:
+    """The `/* FAULT METADATA: {...} END FAULT METADATA */` block `fault chain`
+    embeds in its own output.  Returns the decoded dict, or None when absent or
+    unparseable.  PURE.
+
+    This is the ARTEFACT's own account of the chain — independent of the
+    stdout scrape, which is why both are recorded and cross-checked.
+    """
+    m = _FAULT_META_RE.search(netlist_text or "")
+    if not m:
+        return None
+    try:
+        return json.loads(m.group("json"))
+    except (ValueError, TypeError):
+        return None
+
+
+def chain_order_counts(meta: dict | None) -> dict:
+    """Per-`kind` tally of the metadata's ordered chain element list.  PURE."""
+    if not isinstance(meta, dict):
+        return {}
+    order = meta.get("order")
+    if not isinstance(order, list):
+        return {}
+    return dict(Counter(str(e.get("kind")) for e in order
+                        if isinstance(e, dict)))
+
+
+def count_flops(netlist_text: str) -> int:
+    """Flip-flop INSTANCE count in a technology-mapped netlist.  PURE.
+
+    Reuses `fault_atpg_run`'s flop-instantiation regex and its
+    already-PDK-agnostic flop-cell detector, so this program and the ATPG
+    producer can never disagree about what a flop is.
+    """
+    cells = _fatpg.detect_dff_cells(netlist_text or "")
+    wanted = {c.strip() for c in cells.split(",") if c.strip()}
+    if not wanted:
+        return 0
+    n = 0
+    for line in (netlist_text or "").splitlines():
+        m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_$]*)\s+\\?\S+\s*\(", line)
+        if m and m.group(1) in wanted:
+            n += 1
+    return n
+
+
+# `fault chain` re-synthesises after inserting the chain and, in doing so,
+# wraps the original module in an instance of its own.  Every internal wire
+# therefore comes out renamed `\<instance>.<original name>`.  That prefix is
+# what breaks yosys `equiv_make`'s BY-NAME gold/gate matching in step 13, so
+# LEC has to reproduce it on the gold side.  It is MEASURED here, from the
+# artefact, and recorded — never hard-coded into the LEC script.
+def measure_internal_prefix(netlist_text: str,
+                            dominance: int = 4) -> str | None:
+    """The dotted prefix `fault chain` put on every internal wire name, or None.
+
+    Returns the leading segment of escaped identifiers of the form
+    `\\<seg>.<rest>` ONLY when one segment dominates the next-most-common by
+    at least `dominance`x.  A netlist with no clear single wrapper instance
+    yields None and the caller must then NOT claim a prefix — a wrong prefix
+    would silently lower the number of compared LEC points rather than error.
+    PURE.
+    """
+    ids = re.findall(r"\\([^\s;,()\[\]]+)", netlist_text or "")
+    segs = Counter(i.split(".")[0] for i in ids if "." in i)
+    if not segs:
+        return None
+    ranked = segs.most_common(2)
+    top, top_n = ranked[0]
+    if len(ranked) > 1 and top_n < ranked[1][1] * dominance:
+        return None
+    return top
+
+
+def assess(chain_log: dict, meta: dict | None, input_flops: int) -> dict:
+    """Turn the three independent measurements into a verdict.  PURE.
+
+    The ONE thing this must never do is call a run good because the tool
+    exited 0.  `ok` is True only when a chain length was actually measured and
+    it accounts for every flop in the input netlist.
+    """
+    meta_internal = (meta or {}).get("internalCount")
+    meta_boundary = (meta or {}).get("boundaryCount")
+    log_internal = chain_log.get("internal")
+    # Prefer the artefact's own metadata; fall back to the stdout scrape.
+    internal = meta_internal if isinstance(meta_internal, int) else log_internal
+    boundary = meta_boundary if isinstance(meta_boundary, int) else \
+        chain_log.get("boundary")
+
+    problems: list[str] = []
+    if internal is None:
+        problems.append(
+            "no internal scan-chain length could be measured — neither the "
+            "`fault chain` stdout count line nor the output netlist's FAULT "
+            "METADATA header yielded one")
+    if (isinstance(meta_internal, int) and isinstance(log_internal, int)
+            and meta_internal != log_internal):
+        problems.append(
+            f"chain length disagrees between the tool's stdout "
+            f"({log_internal}) and the netlist's own FAULT METADATA "
+            f"({meta_internal})")
+    if isinstance(internal, int):
+        if input_flops <= 0:
+            problems.append(
+                "no flip-flops were counted in the INPUT netlist, so the "
+                "chain length cannot be validated against anything")
+        elif internal != input_flops:
+            problems.append(
+                f"scan chain covers {internal} flop(s) but the input netlist "
+                f"instantiates {input_flops} — {input_flops - internal} "
+                f"flip-flop(s) are NOT on the chain and are untestable")
+    return {
+        "internal_chain_length": internal,
+        "boundary_chain_length": boundary,
+        "input_flop_count": input_flops,
+        "chain_length_matches_flop_count": (
+            isinstance(internal, int) and input_flops > 0
+            and internal == input_flops),
+        "chain_log_counts": chain_log,
+        "metadata_counts": {"internalCount": meta_internal,
+                            "boundaryCount": meta_boundary},
+        "metadata_order_kinds": chain_order_counts(meta),
+        "problems": problems,
+        "ok": not problems,
+    }
+
+
+def cell_histogram(netlist_text: str) -> dict:
+    """`{cell_name: instance_count}` for a mapped netlist.  PURE.
+
+    Used to record the AREA COST of scan insertion as an instance-count delta,
+    so a reader can see what the chain actually costs without re-running
+    anything.
+    """
+    hist: Counter = Counter()
+    for line in (netlist_text or "").splitlines():
+        m = re.match(r"\s*([A-Za-z][A-Za-z0-9_$]*__?[A-Za-z0-9_$]+)\s+\\?\S+\s*\(",
+                     line)
+        if m:
+            hist[m.group(1)] += 1
+    return dict(hist)
+
+
+def resolve_liberty(pdk: str, override: str | None) -> tuple[str | None, str]:
+    """(container-absolute Liberty path, provenance note).  PURE.
+
+    An explicit `--liberty` always wins.  Otherwise the PDK id indexes
+    SCAN_LIBERTY.  An unknown PDK resolves NOTHING — see the table comment.
+    """
+    if override:
+        return override, "explicit --liberty"
+    lib = SCAN_LIBERTY.get(pdk)
+    if lib:
+        return lib, f"SCAN_LIBERTY[{pdk!r}]"
+    return None, (f"no Liberty configured for pdk {pdk!r} "
+                  f"(known: {sorted(SCAN_LIBERTY)}) — pass --liberty")
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
+
+def run_chain(project: Path, netlist_rel: str, clock: str,
+              pdk: str, reset: str | None = None,
+              reset_active_low: bool = False,
+              liberty_override: str | None = None,
+              dff_cells_override: str | None = None,
+              pdk_dir: Path | None = None,
+              timeout: int = 900) -> tuple[int, dict]:
+    """Insert a real scan chain.  Returns (exit_code, report_dict).
+
+    Never raises for a tool failure: every outcome comes back as a report the
+    caller can write verbatim, so an absent artefact is never silence.
+    """
+    # Same resolver the ATPG producer uses — `fault chain` needs a
+    # library-mapped netlist for exactly the reason `fault cut` does, so the
+    # two must never pick different files.
+    netlist_rel, switch_note = _fatpg.resolve_mapped_netlist(project,
+                                                             netlist_rel)
+    src = project / netlist_rel
+    if not src.is_file():
+        return 2, {"stage": "input", "error": f"netlist not found: {netlist_rel}"}
+    netlist_text = src.read_text(encoding="utf-8", errors="replace")
+
+    if _fatpg.is_generic_unmapped(netlist_text):
+        return 2, {
+            "stage": "input",
+            "netlist": netlist_rel,
+            "error": "netlist is a technology-GENERIC yosys netlist "
+                     "($_DFF_/$_NAND_ …).  `fault chain` needs Liberty cell "
+                     "names to build the chain; scan insertion must run after "
+                     "technology mapping.",
+        }
+
+    pdk_cfg = _fatpg.PDK_CONFIG.get(pdk)
+    if pdk_cfg is None:
+        sniffed = _fatpg.sniff_pdk_from_netlist(netlist_text)
+        if sniffed:
+            pdk, pdk_cfg = sniffed, _fatpg.PDK_CONFIG[sniffed]
+
+    liberty, lib_note = resolve_liberty(pdk, liberty_override)
+    if not liberty:
+        return 2, {"stage": "liberty", "netlist": netlist_rel, "pdk": pdk,
+                   "error": lib_note}
+
+    # Flop cells: explicit override, else auto-detect from THIS netlist unioned
+    # with the PDK seed — identical policy to `fault cut`, one implementation.
+    if dff_cells_override:
+        dff_cells = dff_cells_override
+    else:
+        detected = _fatpg.detect_dff_cells(netlist_text)
+        seed = pdk_cfg.get("dff_cells") if pdk_cfg else None
+        dff_cells = _fatpg.merge_dff_cells(seed, detected) or (seed or "DFF")
+
+    dft_dir = _pl.dft_dir(project)
+    dft_dir.mkdir(parents=True, exist_ok=True)
+    # `fault chain` drops `<out>+attrs` and `<out>.chain-intermediate.v`
+    # alongside its output.  Keep them out of the canonical dft dir by writing
+    # into a scratch subdir, then publish only the netlist itself.
+    work_rel = "phase2/stage2/dft/scan_chain_work"
+    (project / work_rel).mkdir(parents=True, exist_ok=True)
+    out_rel = f"{work_rel}/chained.v"
+
+    cmd = ["fault", "chain",
+           "--liberty", liberty,
+           "--clock", clock,
+           "--dff", dff_cells,
+           "-o", f"/work/{out_rel}"]
+    if reset:
+        cmd += ["--reset", reset]
+        if reset_active_low:
+            cmd += ["--reset-active-low"]
+    cmd.append(f"/work/{netlist_rel}")
+
+    ec, out, err = _fatpg._run_docker(project, cmd, timeout=timeout,
+                                      pdk_dir=pdk_dir)
+    log = (out + "\n" + err)
+    produced = project / out_rel
+    if ec != 0 or not produced.is_file():
+        return 1, {"stage": "chain", "exit": ec, "netlist": netlist_rel,
+                   "pdk": pdk, "liberty": liberty, "dff_cells": dff_cells,
+                   "log_tail": log[-1500:],
+                   "error": "`fault chain` produced no scan netlist"}
+
+    chained_text = produced.read_text(encoding="utf-8", errors="replace")
+    meta = parse_chain_metadata(chained_text)
+    verdict = assess(parse_chain_log(log), meta, count_flops(netlist_text))
+
+    before, after = cell_histogram(netlist_text), cell_histogram(chained_text)
+    n_before, n_after = sum(before.values()), sum(after.values())
+
+    report = {
+        "tool": "fault chain",
+        "image": _fatpg.DOCKER_IMAGE,
+        "input_netlist": netlist_rel,
+        "input_netlist_switch_note": switch_note,
+        "output_netlist": SCAN_NETLIST_REL,
+        "pdk": pdk,
+        "liberty": liberty,
+        "liberty_source": lib_note,
+        "dff_cells": dff_cells,
+        "clock": clock,
+        "reset": reset,
+        "chain_exit": ec,
+        # The five ports `fault chain` adds.  KNOWN because they are the
+        # option names this program passes, not sniffed from the netlist.
+        "dft_ports": list(DFT_PORTS),
+        "functional_mode_tieoff": dict(FUNCTIONAL_MODE_TIEOFF),
+        "scan_out_port": SCAN_OUT_PORT,
+        # MEASURED from the artefact — LEC needs it to restore gold/gate name
+        # correspondence (see fault_scan_chain_insert.measure_internal_prefix).
+        "internal_wire_prefix": measure_internal_prefix(chained_text),
+        "area_instances_before": n_before,
+        "area_instances_after": n_after,
+        "area_instances_delta": n_after - n_before,
+        "area_instances_delta_pct": (
+            round(100.0 * (n_after - n_before) / n_before, 2)
+            if n_before else None),
+        "cells_added": {k: after[k] - before.get(k, 0)
+                        for k in after if after[k] != before.get(k, 0)},
+        "log_tail": log[-1500:],
+        **verdict,
+    }
+    if not verdict["ok"]:
+        # A chain that does not account for every flop is NOT published as the
+        # implementation netlist — publishing it would put an untestable
+        # design into PnR under a name that says it is testable.
+        report["published"] = False
+        return 1, report
+
+    (project / SCAN_NETLIST_REL).write_bytes(produced.read_bytes())
+    report["published"] = True
+    return 0, report
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    p.add_argument("project_dir")
+    p.add_argument("--netlist", default="phase2/stage2/synth/netlist.v",
+                   help="Synth netlist, relative to project_dir.  A generic "
+                        "netlist is self-healed to its tech-mapped sibling by "
+                        "fault_atpg_run.resolve_mapped_netlist.")
+    p.add_argument("--clock", required=True)
+    p.add_argument("--reset")
+    p.add_argument("--reset-active-low", action="store_true")
+    p.add_argument("--pdk", default="unmapped",
+                   help="PDK id (same vocabulary as fault_atpg_run).  An "
+                        "unknown id is re-derived from the netlist's cell "
+                        "names; if that fails the run REFUSES rather than "
+                        "substituting another library's Liberty.")
+    p.add_argument("--liberty", default=None,
+                   help="Container-absolute .lib path.  Wins over SCAN_LIBERTY.")
+    p.add_argument("--dff-cells", default=None)
+    p.add_argument("--pdk-dir", default=None)
+    p.add_argument("--json", default=SCAN_JSON_REL,
+                   help=f"Report JSON path relative to project "
+                        f"(default {SCAN_JSON_REL})")
+    p.add_argument("--timeout", type=int, default=900)
+    args = p.parse_args(argv)
+
+    project = Path(args.project_dir).resolve()
+    if not project.is_dir():
+        print(f"fault_scan_chain_insert: not a directory: {project}",
+              file=sys.stderr)
+        return 2
+
+    ec, report = run_chain(
+        project, args.netlist, args.clock, args.pdk,
+        reset=args.reset, reset_active_low=args.reset_active_low,
+        liberty_override=args.liberty, dff_cells_override=args.dff_cells,
+        pdk_dir=Path(args.pdk_dir).resolve() if args.pdk_dir else None,
+        timeout=args.timeout)
+
+    out = project / args.json
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+    if ec == 0:
+        print(f"fault_scan_chain_insert: chain length="
+              f"{report['internal_chain_length']} internal + "
+              f"{report['boundary_chain_length']} boundary; input flops="
+              f"{report['input_flop_count']}; "
+              f"matches={report['chain_length_matches_flop_count']}; "
+              f"area {report['area_instances_before']} -> "
+              f"{report['area_instances_after']} instances "
+              f"({report['area_instances_delta_pct']}%)")
+    else:
+        for pr in report.get("problems") or [report.get("error", "failed")]:
+            print(f"fault_scan_chain_insert: {pr}", file=sys.stderr)
+        print(f"  (see: {out})", file=sys.stderr)
+    return ec
+
+
+if __name__ == "__main__":
+    sys.exit(main())

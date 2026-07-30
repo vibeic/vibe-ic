@@ -6,9 +6,12 @@ Runs Fault's `cut` + `atpg` subcommands on a synthesized netlist to produce
 stuck-at test vectors and a coverage metric, then emits the artefacts
 required by flow Step 11 (DFT insertion):
 
-  <project>/dft/scan_netlist.v          (copy of cut netlist; Fault's cut DFF
-                                         replacement is the moral equivalent
-                                         of scan insertion for open flow)
+  <project>/dft/cut_netlist.v          (Fault's COMBINATIONAL ATPG cut view —
+                                        every flop replaced by a `<inst>.d`
+                                        pseudo-PI/PO pair.  NOT a scan netlist
+                                        and never published as one; the real
+                                        scan-inserted implementation netlist is
+                                        produced by fault_scan_chain_insert.py)
   <project>/dft/atpg_coverage.rpt       (human-readable coverage ratio + count)
   <project>/dft/transition_atpg_plan.md (launch-off-capture / at-speed
                                          two-pattern mechanism plan +
@@ -1327,17 +1330,43 @@ def run_fault(
         f"(test vectors    : {tv_out})\n"
     )
 
-    # Also drop a copy as scan_netlist.v (Fault's cut output is the scan-ready
-    # netlist in the open flow)
-    scan_netlist = _pl.dft_dir(project) / "scan_netlist.v"
-    if not scan_netlist.exists() and (project / cut_out).exists():
-        scan_netlist.write_bytes((project / cut_out).read_bytes())
+    # ── `scan_netlist.v` IS NOT THIS PROGRAM'S TO WRITE ────────────────────
+    # This used to be:
+    #     scan_netlist = _pl.dft_dir(project) / "scan_netlist.v"
+    #     if not scan_netlist.exists() and (project / cut_out).exists():
+    #         scan_netlist.write_bytes((project / cut_out).read_bytes())
+    # under the comment "Fault's cut output is the scan-ready netlist in the
+    # open flow". That claim was FALSE and it was the root of the scan-chain
+    # defect: `cut_netlist.v` is the ATPG *cut* view — every flip-flop replaced
+    # by a `<inst>.d` pseudo-PI/PO pair, a combinational transform for fault
+    # simulation. It has zero flops and cannot be built. Because step 12
+    # `opt_clean`ed it into `post_dft_netlist.v`, the artefact the flow calls
+    # the post-DFT netlist had no sequential elements and step 13 (RTL ==
+    # post-DFT netlist) could not compare anything; and because place-and-route
+    # read `<top>_synth.v` instead, the tape-out-bound design carried no chain
+    # at all while this program reported coverage on a netlist that never
+    # becomes silicon.
+    #
+    # A REAL scan netlist is produced by `fault_scan_chain_insert.py` (`fault
+    # chain`), which stitches the flops sin→sout and publishes only after
+    # MEASURING that the chain covers every flop in the input. This program now
+    # writes only the ATPG artefacts it actually measures, and DECLARES what
+    # its own view is so no consumer has to infer it.
+    scan_netlist_rel = "phase2/stage2/dft/scan_netlist.v"
+    scan_netlist_present = (project / scan_netlist_rel).is_file()
 
     report = {
         "tool": "fault",
         "clock": clock,
         "pdk": pdk,
         "netlist": netlist_rel,
+        # DECLARED, so no consumer has to infer what this program's outputs are.
+        # `cut_netlist.v` is the combinational ATPG view; the scan-INSERTED
+        # implementation netlist is a different artefact with a different owner.
+        "cut_netlist": cut_out,
+        "writes_scan_netlist": False,
+        "scan_netlist_present": scan_netlist_present,
+        "scan_netlist_owner": "fault_scan_chain_insert.py (`fault chain`)",
         "netlist_switch_note": netlist_switch_note,
         # Disclosed so a reader can see the PDK was DERIVED, and from what,
         # rather than taken from the caller. None when the caller's PDK stood.

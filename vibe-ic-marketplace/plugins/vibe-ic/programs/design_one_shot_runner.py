@@ -9445,6 +9445,35 @@ _POST_DFT_SKIP_OWN = {
     "skips_required_output": "phase2/stage2/synth/post_dft_netlist.v",
 }
 
+SCAN_CHAIN_JSON_REL = "reports/phase2/dft/scan_chain.json"
+
+
+def _read_scan_chain_meta(project: Path) -> Optional[dict]:
+    """The scan-insertion producer's OWN report, or None.
+
+    Read rather than inferred: whether a run has a real scan chain is decided
+    by `fault_scan_chain_insert.py`'s measured `published` flag, never by the
+    mere presence of a `scan_netlist.v` on disk — which is exactly the mistake
+    that let a byte-copy of the ATPG cut view be treated as a scan netlist for
+    the whole life of the flow.
+    """
+    try:
+        return json.loads((project / SCAN_CHAIN_JSON_REL).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def scan_netlist_is_real_chain(project: Path) -> bool:
+    """True only when a MEASURED, published scan chain backs `scan_netlist.v`.
+
+    Both halves are required — the producer must have published, and the
+    artefact must still be on disk. PURE apart from the two reads.
+    """
+    meta = _read_scan_chain_meta(project)
+    return bool(meta and meta.get("published")
+                and meta.get("chain_length_matches_flop_count")
+                and (project / "phase2/stage2/dft/scan_netlist.v").is_file())
+
 
 def lec_producer_yosys_timeout_s() -> int:
     """lec_run's PER-YOSYS-INVOCATION budget, read from the producer itself.
@@ -9847,6 +9876,73 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         # mapped sibling was right there and sniffs cleanly to ihp-sg13g2.
         sniff_netlist, pdk = _dft_atpg_sniff_pdk(
             project, "phase2/stage2/synth/netlist.v")
+        # ── Step 11a — REAL SCAN INSERTION, before ATPG ────────────────────
+        # `fault chain` builds an actual scan chain: the flops are stitched
+        # sin→sout and the module gains the DFT ports, so the netlist that goes
+        # to place-and-route is production-testable. This REPLACES the old
+        # `scan_netlist.v = byte-copy of cut_netlist.v`, which was Fault's ATPG
+        # *cut* view — flops replaced by `<inst>.d` pseudo-PI/PO pairs, a
+        # combinational transform nobody can build, and the reason step 13
+        # could never compare anything.
+        #
+        # ADDITIVE AND FAIL-SAFE. It runs BEFORE ATPG and does not gate it: if
+        # scan insertion cannot run (generic netlist, no Liberty for this PDK,
+        # `fault chain` failure) the producer writes its own honest report,
+        # NOTHING is published, and step 11 continues to the same ATPG it
+        # always ran. A design that gets no chain therefore gets exactly the
+        # behaviour it had before — never a fabricated scan artefact.
+        _scan_json = reports_dir / "phase2/dft/scan_chain.json"
+        _scan_json.parent.mkdir(parents=True, exist_ok=True)
+        _scan_cmd = [sys.executable,
+                     str(PROGRAMS_DIR / "fault_scan_chain_insert.py"),
+                     str(project), "--netlist",
+                     "phase2/stage2/synth/netlist.v",
+                     "--clock", clk, "--json",
+                     str(_scan_json.relative_to(project))]
+        if pdk:
+            _scan_cmd += ["--pdk", pdk]
+        if pdk and pdk == _cpdk.COMMERCIAL_PDK_ID:
+            _scan_cmd += ["--pdk-dir",
+                          str((project / "input" / "pdk").resolve())]
+        _scan_t0 = time.time()
+        try:
+            _sc = subprocess.run(_scan_cmd, capture_output=True, text=True,
+                                 timeout=1800)
+            _scan_rc = _sc.returncode
+            _scan_tail = (_sc.stderr or _sc.stdout or "")[-300:]
+        except Exception as exc:                       # noqa: BLE001
+            _scan_rc, _scan_tail = -1, f"execution error: {exc}"
+        _scan_meta = _read_scan_chain_meta(project)
+        if _scan_rc == 0 and (_scan_meta or {}).get("published"):
+            results.append(StepResult(
+                "dft_scan_insertion", "PASS", time.time() - _scan_t0,
+                f"fault chain: {_scan_meta.get('internal_chain_length')} "
+                f"internal + {_scan_meta.get('boundary_chain_length')} boundary "
+                f"scan cells; input flops="
+                f"{_scan_meta.get('input_flop_count')}; chain covers every flop"
+                f"={_scan_meta.get('chain_length_matches_flop_count')}; area "
+                f"{_scan_meta.get('area_instances_before')}→"
+                f"{_scan_meta.get('area_instances_after')} instances "
+                f"({_scan_meta.get('area_instances_delta_pct')}%)",
+                output_files=["phase2/stage2/dft/scan_netlist.v",
+                              "reports/phase2/dft/scan_chain.json"]))
+        else:
+            # NO scan_netlist.v is published on this path. Downstream reads the
+            # ABSENCE, exactly as it did before scan insertion existed.
+            _dft_disclose_skip(
+                dft_dir / "scan_insertion_not_run.json",
+                f"real scan-chain insertion did not produce a publishable "
+                f"netlist (rc={_scan_rc}): "
+                + "; ".join((_scan_meta or {}).get("problems") or
+                            [(_scan_meta or {}).get("error") or _scan_tail
+                             or "no report"]),
+                {"skips_required_output": "phase2/stage2/dft/scan_netlist.v",
+                 "scan_chain_report": "reports/phase2/dft/scan_chain.json"})
+            results.append(StepResult(
+                "dft_scan_insertion", "SKIP", time.time() - _scan_t0,
+                f"scan insertion produced no publishable netlist "
+                f"(rc={_scan_rc}) → disclosed-skip; ATPG continues on the "
+                f"pre-scan netlist"))
         cov_json = reports_dir / "phase2/dft/coverage.json"
         cov_json.parent.mkdir(parents=True, exist_ok=True)
         cmd = [sys.executable, str(PROGRAMS_DIR / "fault_atpg_run.py"),
@@ -9961,7 +10057,17 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                 # SKIPPED-CONDITION via the sibling skip-note (mirrors the
                 # formal / GLS / SPICE disclosed-skips).
                 log_tail = (cov.get("log_tail") or r.stderr or r.stdout or "")[-400:]
-                if scan_nl.is_file():
+                # A REAL SCAN CHAIN IS NOT ATPG EVIDENCE AND MUST NOT BE MOVED
+                # ASIDE WITH IT. This rename exists to withdraw the CUT-view
+                # artefact when the ATPG engine measured nothing, so the step-11
+                # gate resolves to SKIPPED-CONDITION instead of a 0%-coverage
+                # FAIL. Since step 11a, `scan_netlist.v` may instead be the
+                # scan-INSERTED implementation netlist — an artefact whose
+                # validity is measured by the chain producer and has nothing to
+                # do with whether coverage was gradeable. Renaming it here would
+                # delete the netlist place-and-route is supposed to build, on
+                # account of an unrelated coverage gap.
+                if scan_nl.is_file() and not scan_netlist_is_real_chain(project):
                     try:
                         scan_nl.replace(dft_dir / "scan_netlist_prelim.v")
                     except Exception:
@@ -10177,6 +10283,22 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                "--gold-rtl-dir", "phase2/stage1/rtl",
                "--gate-netlist", gate_netlist, "--top", top_name,
                "--container", container, "--json", "reports/lec.json"]
+        # FUNCTIONAL-MODE CONSTRAINTS — only when this run really has a scan
+        # chain. The gate netlist then carries `sin`/`shift`/`test`/`tck`/`sout`,
+        # which the RTL gold does not have, and yosys `equiv_make` hard-errors
+        # on the port match ("Can't match gate port `test_gate' to a gold
+        # port") — so an unconstrained comparison of a scan netlist compares
+        # NOTHING. lec_run ties the DFT controls to their functional values,
+        # drops the scan output, and mirrors the gate's internal-wire prefix
+        # onto the gold so points still match by name.
+        #
+        # THE SELECTED NETLIST IS UNCHANGED. This adds constraints to the
+        # comparison of `gate_netlist`; it never swaps in a different file.
+        # lec_run re-checks that the gate really carries the declared DFT
+        # ports and refuses to wrap otherwise, so passing the flag on a
+        # non-scan netlist cannot alter that run's verdict.
+        if scan_netlist_is_real_chain(project):
+            cmd += ["--scan-meta", SCAN_CHAIN_JSON_REL]
         # The outer timeout MUST exceed the producer's own worst case, else the
         # runner kills lec_run before it can write a truthful report and the
         # verdict falls through to a disclosed-skip. lec_run budgets 1800s PER

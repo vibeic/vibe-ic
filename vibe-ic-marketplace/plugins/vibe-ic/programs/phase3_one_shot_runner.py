@@ -13122,11 +13122,78 @@ report_design_area > {out_dir_c}/area.rpt
 """
 
 
+# ---------------------------------------------------------------------------
+# WHICH NETLIST PLACE-AND-ROUTE BUILDS
+# ---------------------------------------------------------------------------
+# Standard ASIC practice is scan insertion BEFORE place-and-route: the routed
+# design carries the chain, so the tape-out is production-testable and the
+# ATPG coverage number describes the netlist that actually becomes silicon.
+#
+# This flow did the opposite. PnR read `<top>_synth.v`, the PRE-DFT netlist, so
+# the implemented design had NO scan chain — MEASURED on a cell that PASSED:
+# `phase3/stage3/pnr/spm_pnr.v` ports were `clk, p, rst, y, x`, with `sin`,
+# `sout`, `shift`, `tck`, `test` all absent — while step 11 reported 97 %
+# stuck-at coverage on a netlist that never becomes silicon.
+#
+# The selection is now: `post_dft_netlist.v` when a MEASURED scan chain backs
+# it, else `<top>_synth.v` exactly as before. Every condition is a measurement:
+#   * the scan producer must have PUBLISHED (`scan_chain.json.published`) and
+#     measured that the chain covers every flop;
+#   * `post_dft_netlist.v` must exist AND still carry the DFT ports the chain
+#     metadata declares — a `post_dft_netlist.v` left over from the old
+#     cut-view path has none, and must never reach the router.
+# Any one of them missing → the pre-change netlist, unchanged. A design with no
+# scan chain therefore routes byte-identically to before.
+def pnr_input_netlist(project: Path, top: str) -> Tuple[Path, str, bool]:
+    """(netlist path, provenance note, is_scan_inserted).
+
+    Reads only; never writes and never falls back silently — the note is put
+    into the PnR step record either way, so a run that routed a chainless
+    netlist says so instead of looking like an ordinary run.
+    """
+    synth = _pl.synth_dir(project)
+    pre_dft = synth / f"{top}_synth.v"
+    post_dft = synth / "post_dft_netlist.v"
+    try:
+        meta = json.loads(
+            (project / "reports/phase2/dft/scan_chain.json").read_text())
+    except (OSError, ValueError):
+        meta = None
+    if not (isinstance(meta, dict) and meta.get("published")
+            and meta.get("chain_length_matches_flop_count")):
+        return pre_dft, (
+            f"{pre_dft.name} (pre-DFT) — no measured scan chain for this run; "
+            f"the implemented design carries NO scan chain"), False
+    if not post_dft.is_file():
+        return pre_dft, (
+            f"{pre_dft.name} (pre-DFT) — a scan chain WAS inserted but step 12 "
+            f"left no post_dft_netlist.v to route"), False
+    try:
+        text = post_dft.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        text = ""
+    declared = [p for p in (meta.get("dft_ports") or [])
+                if not re.search(rf"^\s*(input|output)\s+(?:wire\s+)?\\?{re.escape(str(p))}\s*;",
+                                 text, re.M)]
+    if declared:
+        return pre_dft, (
+            f"{pre_dft.name} (pre-DFT) — post_dft_netlist.v does not carry the "
+            f"DFT port(s) {declared} the scan chain declares, so it is not the "
+            f"scan netlist and must not be routed"), False
+    return post_dft, (
+        f"{post_dft.name} (POST-DFT) — routing the scan-inserted netlist: "
+        f"{meta.get('internal_chain_length')} internal + "
+        f"{meta.get('boundary_chain_length')} boundary scan cells, "
+        f"+{meta.get('area_instances_delta')} instances "
+        f"({meta.get('area_instances_delta_pct')}%) vs pre-DFT"), True
+
+
 def step_pnr(project: Path, top: str, pdk: PdkConfig,
              container: str, die_um: str, util: float,
              spare_density=None) -> StepResult:
     t0 = time.time()
-    netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    netlist, _nl_note, _nl_is_scan = pnr_input_netlist(project, top)
+    print(f"[pnr] netlist: {_nl_note}", flush=True)
     if not netlist.is_file():
         return StepResult("pnr", "FAIL", time.time() - t0,
                           f"synth netlist missing: {netlist}")
@@ -14145,6 +14212,14 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             pnr_outputs,
             extras={"pdn_status": _pdn_mk, **spare_extras})
     detail += f" | pdn: {_pdn_mk}"
+    # Which netlist was actually built, in the step record itself. A run that
+    # routed a chainless netlist must say so rather than look like any other
+    # PASS — that ambiguity is what let a scan-free tape-out sit behind a 97 %
+    # ATPG number for the whole life of the flow.
+    detail += f" | netlist: {_nl_note}"
+    _nl_extras = {"pnr_input_netlist": netlist.name,
+                  "pnr_input_netlist_note": _nl_note,
+                  "pnr_netlist_scan_inserted": _nl_is_scan}
     if resize_history:
         return StepResult("pnr", "PASS", time.time() - t0,
                           detail,
@@ -14152,11 +14227,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                           extras={"resize_history": resize_history,
                                  "loosen_declines": loosen_declines,
                                   "pdn_status": _pdn_mk,
-                                  **spare_extras})
+                                  **_nl_extras, **spare_extras})
     return StepResult("pnr", "PASS", time.time() - t0,
                       detail,
                       pnr_outputs,
-                      extras={"pdn_status": _pdn_mk, **spare_extras})
+                      extras={"pdn_status": _pdn_mk,
+                              **_nl_extras, **spare_extras})
 
 
 def _decap_route_short_guard(project: Path, top: str,
