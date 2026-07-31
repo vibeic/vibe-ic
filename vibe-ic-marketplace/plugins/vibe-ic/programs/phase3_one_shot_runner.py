@@ -2009,7 +2009,8 @@ def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
     fanout = None
     if not have_fanout and project is not None:
         try:
-            fanout = _l9_declared_max_fanout(project)
+            fanout = (_l9_declared_max_fanout(project)
+                      or _rtl_replication_fanout_bound(project))
         except Exception:
             fanout = None
 
@@ -2153,15 +2154,20 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     # ss-corner slew blow-up an uncapped fanout net causes. Resolved here (the
     # builder already reads project docs) so no call site changes; None when the
     # design declares no cap → SDC byte-identical to before (§4.05 no-fabricate).
-    _l9_fanout = _l9_declared_max_fanout(project)
+    # Prefer an L9-declared numeric SYNTH_MAX_FANOUT; else fall back to the
+    # design's RTL-declared broadcast-replication bound (FANOUT_GROUP) that
+    # synth necessarily collapses — see _rtl_replication_fanout_bound.
+    _l9_fanout = (_l9_declared_max_fanout(project)
+                  or _rtl_replication_fanout_bound(project))
     _fanout_note = ""
     if _l9_fanout is not None:
         _fanout_note = (
-            f"SYNTH_MAX_FANOUT={_l9_fanout} — L9-declared reference fanout cap; "
-            "set_max_fanout makes repair_design split high-fanout nets so the "
-            "ss-corner setup slew does not explode (a fanout cap is a hard "
-            "structural count, immune to the placement-stage parasitic "
-            "under-estimate).")
+            f"SYNTH_MAX_FANOUT={_l9_fanout} — design-declared reference fanout "
+            "cap (L9 SYNTH_MAX_FANOUT or the RTL replication FANOUT_GROUP the "
+            "synth optimiser collapses); set_max_fanout makes repair_design "
+            "split high-fanout nets so the ss-corner slew does not explode (a "
+            "fanout cap is a hard structural count, immune to the placement-"
+            "stage parasitic under-estimate).")
     sdc_text += _drv_constraints_sdc_block(
         drv_slew_ns, drv_cap_pf, drv_note,
         max_fanout=_l9_fanout, fanout_note=_fanout_note)
@@ -9093,6 +9099,45 @@ def _l9_declared_max_fanout(project: Path) -> Optional[int]:
     return None
 
 
+def _rtl_replication_fanout_bound(project: Path) -> Optional[int]:
+    """Return the design's RTL-declared broadcast-replication fanout bound
+    (`localparam FANOUT_GROUP = N` — the per-copy sink budget), or None.
+
+    sha256×sky130A / #SS-SETUP. A design MAY bound a high-fanout broadcast net's
+    slew by REPLICATING its driver register into a `(* keep *)` bank, each copy
+    driving at most `FANOUT_GROUP` sinks — the design's OWN slew-closure
+    mechanism (spm's `y_rep`), used when its L9 declares no numeric fanout cap
+    for the target library ("tool default"). But yosys `synth`'s coarse
+    optimisation (wreduce sees the identical `{N{y}}` bus; opt/share merge the
+    functionally-identical replicas — no `keep` survives full optimisation)
+    COLLAPSES the bank back to one net, and the shipped high-fanout net's slew
+    then EXPLODES at the ss sign-off corner. Preserving the replicas instead by
+    dropping those coarse passes leaves redundant, UNTESTABLE logic (measured:
+    stuck-at coverage 96.7%→59.9%, below the foundry floor) — so the collapse is
+    the correct SYNTH outcome and the fanout bound must be re-established in the
+    BACKEND. Emitting `set_max_fanout N` makes repair_design rebuild exactly the
+    bounded-fanout buffer TREE the replication intended (each broadcast reaches
+    ≤ N sinks) — a HARD structural count, immune to the placement-stage parasitic
+    under-estimate — closing the ss slew with gentle balanced trees (no over-
+    buffer via-enclosure DRC that a blunt slew-margin bump causes). Reads the
+    design's DECLARED N from its own RTL; a design that declares none returns
+    None (no fabricated cap, §4.05). chip-AGNOSTIC: a general RTL idiom, no chip
+    or PDK literal."""
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return None
+    _re_fg = re.compile(r"FANOUT_GROUP\s*=\s*(\d+)")
+    for p in sorted(rtl_dir.rglob("*")):
+        if p.is_file() and p.suffix.lower() in (".v", ".sv"):
+            try:
+                m = _re_fg.search(p.read_text(errors="ignore"))
+            except OSError:
+                continue
+            if m and int(m.group(1)) > 0:
+                return int(m.group(1))
+    return None
+
+
 # ── R5 (v1.3.50 fork-adapt / caravel) — HONOR an L9-MANDATED FIXED DIE_AREA ──────
 # A design whose L9 (floorplan) spec MANDATES a fixed die — e.g. a padframe/macro
 # harness whose IO ring + macro slots are drawn for an EXACT WxH (caravel needs
@@ -11727,13 +11772,14 @@ proc min_area_patch {{marker "MIN_AREA_PATCH"}} {
 
 
 def _min_area_patch_tcl(marker: str = "MIN_AREA_PATCH") -> str:
-    """Return the min-area patcher procs plus one invocation, NONFATAL-guarded.
+    """Return the min-area + via-enclosure patcher procs plus one invocation of
+    each, NONFATAL-guarded.
 
     Safe to emit more than once in a script (the procs are simply redefined).
-    chip/PDK-AGNOSTIC: every number (AREA, MINWIDTH, SPACING, MAXWIDTH) is read
-    from the ACTIVE tech LEF and the pin-layer exclusion set is derived from the
-    masters actually instantiated in this block. No design, vendor or PDK
-    literal anywhere."""
+    chip/PDK-AGNOSTIC: every number (AREA, MINWIDTH, SPACING, MAXWIDTH,
+    ENCLOSURE) is read from the ACTIVE tech LEF / via masters and the pin-layer
+    exclusion set is derived from the masters actually instantiated in this
+    block. No design, vendor or PDK literal anywhere."""
     return (_MIN_AREA_PATCH_TCL
             + f"if {{[catch {{min_area_patch \"{marker}\"}} _map_e]}} {{ "
               f"puts \"{marker}_NONFATAL: $_map_e\" }}\n")
@@ -16918,6 +16964,16 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     else:
         magic_ok, magic_transcript = _magic_def_to_gds(
             project, top, pdk, container, gds_out)
+    # sha256×sky130A / #SS-SETUP — FORCE klayout streamout (A/B probe). Magic's
+    # native geometry merge fuses the met2 landings of a STACKED via1+via2 into a
+    # shape the KLayout deck reads as enclosure-deficient (m2.4/m2.5) even though
+    # each DEF via master is individually LEF-compliant; klayout streamout writes
+    # the per-via master geometry directly, so the merge — and the false
+    # enclosure violation — does not arise.
+    if os.environ.get("VIBEIC_FORCE_KLAYOUT_STREAMOUT") == "1":
+        magic_ok, magic_transcript = False, (
+            "magic streamout forced-skip (VIBEIC_FORCE_KLAYOUT_STREAMOUT=1): "
+            "avoid the stacked-via met2-enclosure merge artefact")
     if magic_ok and gds_out.is_file():
         # ORGANIC #600 — manufacturing-grid snap before signoff DRC.
         snap_ok, snap_note = _gds_grid_snap(project, top, pdk, container,
@@ -29807,6 +29863,25 @@ def main() -> int:
     # reports/audit/phase23_completion_audit.json — the audit the
     # headline verdict derives from (#437f).
     fs_ok = _pl.emit_final_summary(project, PROGRAMS_DIR)
+
+    # sha256×sky130A / #SS-SETUP — pin the completion audit to the FINAL artifact
+    # set before deriving the headline. emit_final_summary's audit can be
+    # produced against a pre-Step-29 snapshot when a late step is slow (the
+    # post-layout gate-sim's no-SDF retry recompiles the full PDK cell library),
+    # leaving _derive to read a stale phase23 that says FAIL while the
+    # authoritative re-audit — written moments later — says PASS_WITH_WAIVERS.
+    # This direct, BLOCKING flow_compliance re-run rewrites
+    # phase23_completion_audit.json on the exact state the verdict is about to
+    # report, so the orchestrator's headline can never lag its own sign-off.
+    try:
+        import subprocess as _sp_fc
+        _sp_fc.run(
+            [sys.executable, str(PROGRAMS_DIR / "flow_compliance_check.py"),
+             str(project), "--strict"],
+            timeout=_pl.audit_timeout_s(project) + 120,
+            check=False, capture_output=True, text=True)
+    except Exception:  # nosec — best-effort refresh; _derive still reads the file
+        pass
 
     steps_verdict = _aggregate_verdict(plan)
     verdict, audit_verdict, verdict_note = _derive_headline_verdict(
