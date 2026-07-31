@@ -163,3 +163,24 @@ def test_dft_clock_derivation_variants():
     assert derive("input logic clk_edn_i,\ninput logic clk_i,") == "clk_i"
     assert derive("/* input clock */ input logic clk_i;") == "clk_i"  # block cmt
     assert derive("input logic rst_ni;") == ""              # no clock
+
+
+# ── DFT clock-derivation regression (caravel user_project_wrapper × sky130A) ─
+# The fallback branch used to accept only names that START with `clk` or contain
+# the literal `clock`, which EXCLUDED the ubiquitous suffix form `wb_clk_i` and
+# then let a secondary `user_clock2` (contains `clock`) win. Measured: all 33
+# flops in the wrapper clock off wb_clk_i, yet the old rule derived user_clock2.
+def test_dft_clock_wrapper_suffix_beats_secondary_clock():
+    derive = _load_derive_clock()
+    # the exact competing pair, in a wrapper header
+    wrapper = ("module user_project_wrapper(\n"
+               "  input wb_clk_i,\n"
+               "  input wb_rst_i,\n"
+               "  input user_clock2\n"
+               ");\nendmodule\n")
+    assert derive(wrapper) == "wb_clk_i"          # not user_clock2
+    # other suffix/infix clock names are now reachable in the fallback
+    assert derive("input sys_clk;\ninput ready;") == "sys_clk"
+    assert derive("input core_clk;\ninput data;") == "core_clk"
+    # allow-list names are unaffected (first branch), still exact
+    assert derive("input i_clk;\ninput user_clock2;") == "i_clk"

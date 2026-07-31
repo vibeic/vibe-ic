@@ -277,6 +277,19 @@ def resolve_liberty(pdk: str, override: str | None) -> tuple[str | None, str]:
 
 
 # ---------------------------------------------------------------------------
+# `inout` port handling — `fault chain` cannot parse a bidirectional port
+# ---------------------------------------------------------------------------
+# The pure netlist port helpers (find_inout_ports / port_is_connected /
+# port_list_successor / strip_inout_ports / restore_inout_ports) live in
+# `_dft_netlist_ports.py`, shared with `fault_atpg_run.py`'s ATPG cut — both
+# fault entry points abort on an inout port.  Re-exported here so this module's
+# callers and its tests keep referring to them unqualified.
+from _dft_netlist_ports import (  # noqa: E402,F401
+    find_inout_ports, port_is_connected, port_list_successor,
+    strip_inout_ports, restore_inout_ports)
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 
@@ -341,6 +354,31 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
     (project / work_rel).mkdir(parents=True, exist_ok=True)
     out_rel = f"{work_rel}/chained.v"
 
+    # `fault chain` aborts on any `inout` port (see find_inout_ports).  Strip
+    # UNCONNECTED inout ports from the netlist fault reads; connected ones stay
+    # (and are reported).  The stripped ports are restored into fault's output.
+    inout_ports = find_inout_ports(netlist_text)
+    stripped_inout: dict = {}
+    stripped_successors: dict = {}
+    connected_inout: list = []
+    fault_input_rel = netlist_rel
+    for _name, _decl in inout_ports.items():
+        if port_is_connected(netlist_text, _name):
+            connected_inout.append(_name)
+        else:
+            stripped_inout[_name] = _decl
+            stripped_successors[_name] = port_list_successor(netlist_text, _name)
+    if stripped_inout:
+        stripped_text = strip_inout_ports(netlist_text, list(stripped_inout))
+        # Redirect ONLY if every targeted port actually left the netlist —
+        # otherwise leave fault to fail honestly on the original.
+        if not (set(find_inout_ports(stripped_text)) & set(stripped_inout)):
+            fault_input_rel = f"{work_rel}/fault_input.v"
+            (project / fault_input_rel).write_text(stripped_text,
+                                                   encoding="utf-8")
+        else:
+            stripped_inout.clear()
+
     cmd = ["fault", "chain",
            "--liberty", liberty,
            "--clock", clock,
@@ -350,19 +388,46 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         cmd += ["--reset", reset]
         if reset_active_low:
             cmd += ["--reset-active-low"]
-    cmd.append(f"/work/{netlist_rel}")
+    cmd.append(f"/work/{fault_input_rel}")
 
     ec, out, err = _fatpg._run_docker(project, cmd, timeout=timeout,
                                       pdk_dir=pdk_dir)
     log = (out + "\n" + err)
     produced = project / out_rel
     if ec != 0 or not produced.is_file():
-        return 1, {"stage": "chain", "exit": ec, "netlist": netlist_rel,
-                   "pdk": pdk, "liberty": liberty, "dff_cells": dff_cells,
-                   "log_tail": log[-1500:],
-                   "error": "`fault chain` produced no scan netlist"}
+        err_report = {"stage": "chain", "exit": ec, "netlist": netlist_rel,
+                      "pdk": pdk, "liberty": liberty, "dff_cells": dff_cells,
+                      "log_tail": log[-1500:],
+                      "error": "`fault chain` produced no scan netlist"}
+        if connected_inout:
+            # A CONNECTED bidirectional port cannot be stripped losslessly and
+            # `fault chain` cannot represent it — name it, do not hide it.
+            err_report["connected_inout_ports_unhandled"] = connected_inout
+            err_report["error"] += (
+                f" — netlist has CONNECTED inout port(s) {connected_inout} that "
+                f"`fault chain` cannot classify and this program cannot strip "
+                f"losslessly (they carry real nets). Scan insertion on a design "
+                f"with a driven bidirectional top-level port is an open backlog "
+                f"item (bidirectional boundary-scan cell).")
+        return 1, err_report
 
     chained_text = produced.read_text(encoding="utf-8", errors="replace")
+    if stripped_inout:
+        # Restore the stripped inout port(s) into fault's published netlist, at
+        # their original position, with their exact original declaration.
+        chained_text = restore_inout_ports(chained_text, stripped_inout,
+                                           stripped_successors)
+        missing = [n for n in stripped_inout
+                   if n not in find_inout_ports(chained_text)]
+        if missing:
+            # A published netlist MUST carry every original design port — never
+            # ship one silently missing a pin.
+            return 1, {"stage": "restore", "exit": ec, "netlist": netlist_rel,
+                       "inout_ports_stripped": list(stripped_inout),
+                       "error": f"failed to restore inout port(s) {missing} "
+                                f"into the scan netlist — refusing to publish a "
+                                f"netlist missing a design port"}
+        produced.write_text(chained_text, encoding="utf-8")
     meta = parse_chain_metadata(chained_text)
     verdict = assess(parse_chain_log(log), meta, count_flops(netlist_text))
 
@@ -382,6 +447,12 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         "clock": clock,
         "reset": reset,
         "chain_exit": ec,
+        # `inout` port handling (see find_inout_ports): which bidirectional
+        # ports were stripped for `fault chain` and restored into its output,
+        # and which connected ones could not be handled.
+        "inout_ports_stripped_and_restored": list(stripped_inout),
+        "inout_ports_connected_unhandled": connected_inout,
+        "fault_input_netlist": fault_input_rel,
         # The five ports `fault chain` adds.  KNOWN because they are the
         # option names this program passes, not sniffed from the netlist.
         "dft_ports": list(DFT_PORTS),

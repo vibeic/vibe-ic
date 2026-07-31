@@ -1329,6 +1329,33 @@ def run_fault(
     netlist_abs = f"/work/{netlist_rel}"
     cut_abs = f"/work/{cut_out}"
 
+    # `fault cut`/`fault atpg` abort on any `inout` port — AUCOHL/Fault's
+    # Module.Port.extract has no bidirectional polarity (see _dft_netlist_ports).
+    # `fault cut` sometimes SURVIVES an inout and passes it through into the cut
+    # netlist, and then `fault atpg` dies on it with exit 70 / faults_total=0 —
+    # which reads exactly like an "engine-limited" coverage gap. Measured on
+    # caravel_user_project x sky130A: `inout [28:0] analog_io;` made ATPG exit 70
+    # while the engine measures 60.5% once it is gone. Strip UNCONNECTED inout
+    # ports from the netlist the cut reads; the cut netlist is a fault-sim
+    # intermediate that is never built, so no restore is needed (an inout with no
+    # scannable logic — an analog pass-through / unbonded pad — contributes no
+    # fault the coverage number depends on, and is not part of the testable
+    # logic). A CONNECTED inout is left in place (it carries real nets) and the
+    # honest failure is reported rather than a wrong netlist produced.
+    try:
+        import _dft_netlist_ports as _dnp        # sibling module; no import cycle
+        _nl_txt = (project / netlist_rel).read_text(errors="replace")
+        _unconn = [n for n in _dnp.find_inout_ports(_nl_txt)
+                   if not _dnp.port_is_connected(_nl_txt, n)]
+        if _unconn:
+            _stripped = _dnp.strip_inout_ports(_nl_txt, _unconn)
+            if not (set(_dnp.find_inout_ports(_stripped)) & set(_unconn)):
+                _atpg_in_rel = "phase2/stage2/dft/atpg_input.v"
+                (project / _atpg_in_rel).write_text(_stripped, encoding="utf-8")
+                netlist_abs = f"/work/{_atpg_in_rel}"
+    except Exception:
+        pass    # fall back to the original netlist; fault then reports honestly
+
     # Step A: fault cut (DFF-flattening). Note: fault cut does NOT take --top.
     cut_cmd = [
         "fault", "cut",
