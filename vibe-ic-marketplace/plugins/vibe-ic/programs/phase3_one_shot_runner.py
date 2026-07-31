@@ -51,6 +51,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import _path_layout as _pl
 import _reference_flow_boundary as _rfb
+import floorplan_contract as _fpc  # design-declared fixed floorplan + DRV limits
 from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
@@ -9476,6 +9477,38 @@ def _l9_declared_die_util(project: Path,
 _LAST_FANOUT_SOURCE: Dict[str, str] = {}
 
 
+_RE_LIBS_REF_STDCELL = re.compile(r"libs\.ref/([A-Za-z0-9_]+)/(?:lib|techlef|lef)/")
+
+
+def _active_std_cell_library(project: Path, pdk: str = "") -> str:
+    """Best-effort name of the standard-cell library THIS run builds against
+    (e.g. the `<name>` in `<pdk>/libs.ref/<name>/lib/...`), or "" when it
+    cannot be resolved yet.
+
+    Used only to scope a design-declared DRV limit to the right cell library.
+    Returning "" is the SAFE answer, not a degraded one: an unknown library
+    matches no `scl::` block, so only unscoped declarations apply and a
+    foreign library's cap can never leak in.
+
+    chip-AGNOSTIC: reads the PDK path SHAPE out of this run's own artefacts;
+    no library, PDK or chip name is written here."""
+    del pdk  # the library is read from the resolved paths, not guessed from the PDK
+    try:
+        for rel in ("phase3/stage3/pnr/pnr.tcl",
+                    "phase3/stage3/extracted/extract_" "*.tcl",
+                    "reports/phase3/*.json"):
+            for p in sorted(Path(project).glob(rel)):
+                if not p.is_file():
+                    continue
+                m = _RE_LIBS_REF_STDCELL.search(
+                    p.read_text(errors="ignore")[:200_000])
+                if m:
+                    return m.group(1)
+    except Exception:                                        # noqa: BLE001
+        pass
+    return ""
+
+
 def _l9_declared_max_fanout(project: Path,
                             pdk: str = "") -> Optional[int]:
     """Return the design's L9-declared `SYNTH_MAX_FANOUT` cap as a positive int,
@@ -9512,7 +9545,33 @@ def _l9_declared_max_fanout(project: Path,
                     _LAST_FANOUT_SOURCE["note"] = (
                         "L9 declares SYNTH_MAX_FANOUT explicitly")
                     return fo
-    # No NUMBER in L9 — but the design may have declared the cap BY REFERENCE
+    # No NUMBER in the L-docs — but a fixed-floorplan design routinely states
+    # its cap in its OWN staged flow config (`MAX_FANOUT_CONSTRAINT` /
+    # `SYNTH_MAX_FANOUT` in the same OpenLane-style config.json this flow
+    # ALREADY reads for DIE_AREA / FP_SIZING / FP_PIN_ORDER_CFG). The L9 regex
+    # above is shaped for a markdown TABLE ROW, so such a design read as
+    # "declares no cap": no `set_max_fanout` was emitted, `repair_design` never
+    # split the high-fanout nets, and the sign-off max-fanout table came back
+    # empty BY CONSTRUCTION — UNMEASURED, which is not the claim "zero".
+    #
+    # Scoped per PDK **and** per standard-cell library, because that config
+    # carries caps for PDKs/libraries this run is not building for; reading the
+    # cap without the PDK is exactly how a foreign library's cap reaches the
+    # wrong run. §4.05: a declaration is READ, never fabricated — no config,
+    # no matching scope, or a non-positive value all leave this None.
+    try:
+        _drv = _fpc.declared_drv_limits(project, pdk or "",
+                                        _active_std_cell_library(project, pdk))
+        _fo_cfg = _drv.get("max_fanout")
+        if isinstance(_fo_cfg, int) and _fo_cfg > 0:
+            _LAST_FANOUT_SOURCE["note"] = (
+                "the design's own staged flow config declares the cap "
+                f"({_drv.get('max_fanout_source')})")
+            return _fo_cfg
+    except Exception:                                        # noqa: BLE001
+        pass  # a bad/absent config must never break SDC generation
+
+    # Still no number — but the design may have declared the cap BY REFERENCE
     # ("fanout is handled by the OpenLane/PDK default; no override"). That is a
     # declaration, and honouring it is the difference between a MEASURED
     # max-fanout sign-off table and one that is empty by construction. The value
@@ -11071,9 +11130,22 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
     # requirement the plan previously only CLAIMED. NONFATAL-guarded.
     tie_lo_cell = tie_lo_cell or None
     if tie_lo_cell:
-        _first = instances[0] if instances else {}
-        _tx = _first.get("llx", 0)
-        _ty = _first.get("lly", 0)
+        # v1.8.100 — the tie driver goes at the MEDIAN of the spares it feeds,
+        # not at the FIRST one. MEASURED (iter2, caravel_user_project x sky130A):
+        # placed at instances[0] the driver landed at x=154 um on a 2920 um die
+        # while its ~33 loads (7 spares + the antenna diodes that later attach to
+        # the same net) spread from x=155 to x=2891 — one conb_1 driving a 2.7 mm
+        # RC tree. That net is `dont_touch` by design (a dont_touch LOAD pin makes
+        # repair_design raise RSZ-3006 and abort the whole pass), so NO repair
+        # stage may buffer it, and it was the ONLY remaining source of sign-off
+        # max_slew violations: all 12, at -0.00 to -0.10 ns.
+        # A tie-off is a placement problem, not a repair problem. The median load
+        # position is the point that minimises total distance to the loads along
+        # each axis. chip-AGNOSTIC: reads only the spare plan's own coordinates.
+        _lx = sorted(i.get("llx", 0) for i in instances) if instances else [0]
+        _ly = sorted(i.get("lly", 0) for i in instances) if instances else [0]
+        _tx = _lx[len(_lx) // 2]
+        _ty = _ly[len(_ly) // 2]
         lines += [
             "# === ORGANIC #563 r2: tie off floating spare inputs ===",
             "if {[catch {",
@@ -12094,6 +12166,204 @@ proc ma_bbox {rects} {
   return [list [expr {int($x1)}] [expr {int($y1)}] [expr {int($x2)}] [expr {int($y2)}]]
 }
 
+
+# ── R8 (v1.9.3) — VIA-ENCLOSURE PATCH ───────────────────────────────────────
+# The docstring of `_min_area_patch_tcl` has always claimed it returns "the
+# min-area + VIA-ENCLOSURE patcher procs plus one invocation of EACH" and lists
+# ENCLOSURE among the numbers it reads from the tech LEF. MEASURED on the
+# pristine tree: `grep -rn "via_enclosure_patch|VIA_ENCL|encl_patch" programs/`
+# returns ZERO hits — the via-enclosure half never existed. This is that half.
+#
+# WHY IT IS NEEDED (measured, caravel_user_project x sky130A): the sign-off
+# klayout deck's via-enclosure rules are EXACTLY the tech LEF's own per-axis
+# ENCLOSURE numbers —
+#     VIARULE M1M2_PR  LAYER met2 ; ENCLOSURE 0.055 0.085   <-> m2.4 / m2.5
+#     VIARULE M2M3_PR  LAYER met3 ; ENCLOSURE 0.065 0.065   <-> m3.4
+# and the PDK's own DEFAULT via masters land on those numbers with ZERO margin
+# (M2M3_PR's met3 pad is 0.330 over a 0.200 cut = exactly 0.065). So any routing
+# solution that leaves a notch beside a via is illegal by 15-20 nm, and
+# TritonRoute's own count line still says `Number of violations = 0`.
+#
+# WHAT: for every via on a signal net, require that the net's OWN metal on each
+# adjacent routing layer covers the cut grown by the PDK's least-generous
+# master enclosure — (lo,hi) on one axis pair OR (hi,lo) on the other, which is
+# precisely how the deck states it ("min enclosure" on every edge PLUS the
+# larger value on 2 opposite edges). Where it does not, append a RECT patch to
+# THAT net's wire, subject to the same spacing-legality test the min-area
+# patcher uses. On a healthy via the master's own pad already satisfies one of
+# the two candidates, so this patches NOTHING — it is a no-op by construction
+# and only fires on the geometry the sign-off deck actually rejects.
+#
+# chip/PDK-AGNOSTIC: every number is (pad_halfsize - cut_halfsize) read off the
+# ACTIVE tech LEF's via masters. No design, vendor or PDK literal.
+proc vep_cover_ok {rects rx1 ry1 rx2 ry2} {
+  # exact cover test of one rect by a union of axis-aligned rects
+  set xs [list $rx1 $rx2]; set ys [list $ry1 $ry2]
+  foreach r $rects { lassign $r a b c d
+    if {$a > $rx1 && $a < $rx2} { lappend xs $a }
+    if {$c > $rx1 && $c < $rx2} { lappend xs $c }
+    if {$b > $ry1 && $b < $ry2} { lappend ys $b }
+    if {$d > $ry1 && $d < $ry2} { lappend ys $d } }
+  set xs [lsort -integer -unique $xs]; set ys [lsort -integer -unique $ys]
+  for {set i 0} {$i < [llength $xs]-1} {incr i} {
+    set cx1 [lindex $xs $i]; set cx2 [lindex $xs [expr {$i+1}]]
+    for {set j 0} {$j < [llength $ys]-1} {incr j} {
+      set cy1 [lindex $ys $j]; set cy2 [lindex $ys [expr {$j+1}]]
+      set cov 0
+      foreach r $rects { lassign $r a b c d
+        if {$a <= $cx1 && $cx2 <= $c && $b <= $cy1 && $cy2 <= $d} { set cov 1; break } }
+      if {!$cov} { return 0 }
+    }
+  }
+  return 1
+}
+
+proc vep_vias_of_net {net} {
+  # -> list of {cutLayer routingLayer cx1 cy1 cx2 cy2}
+  set out {}
+  set w [$net getWire]
+  if {$w eq "NULL"} { return $out }
+  set itr [odb::new_dbWirePathItr]
+  $itr begin $w
+  set path [odb::dbWirePath]
+  set shp  [odb::dbWirePathShape]
+  while {[$itr getNextPath $path]} {
+    while {[$itr getNextShape $shp]} {
+      set s [odb::dbWirePathShape_shape_get $shp]
+      if {![$s isVia]} { continue }
+      lassign [$s getViaXY] vx vy
+      set vm [$s getTechVia]
+      if {$vm eq "NULL"} { set vm [$s getVia] }
+      if {$vm eq "NULL"} { continue }
+      set cutn ""; set c {}
+      set rl {}
+      foreach vb [$vm getBoxes] {
+        set tl [$vb getTechLayer]
+        if {$tl eq "NULL"} { continue }
+        if {[$tl getRoutingLevel] <= 0} {
+          set cutn [$tl getName]
+          set c [list [expr {$vx+[$vb xMin]}] [expr {$vy+[$vb yMin]}] \
+                      [expr {$vx+[$vb xMax]}] [expr {$vy+[$vb yMax]}]]
+        } else { lappend rl [$tl getName] }
+      }
+      if {$cutn eq "" || [llength $c] == 0} { continue }
+      foreach ln $rl { lappend out [concat [list $cutn $ln] $c] }
+    }
+  }
+  odb::delete_dbWirePathItr $itr
+  return $out
+}
+
+proc via_enclosure_patch {{marker "VIA_ENCL_PATCH"}} {
+  set blk  [ord::get_db_block]
+  set tech [ord::get_db_tech]
+  # required enclosure per (cut,routing) pair = the LEAST any of the PDK's OWN
+  # via masters for that cut declares, per axis, as {lo hi}
+  set REQ [dict create]
+  foreach v [$tech getVias] {
+    set cutn ""; set cw 0; set ch 0; set pads [dict create]
+    foreach b [$v getBoxes] {
+      set tl [$b getTechLayer]
+      if {$tl eq "NULL"} { continue }
+      set bw [expr {[$b xMax]-[$b xMin]}]; set bh [expr {[$b yMax]-[$b yMin]}]
+      if {[$tl getRoutingLevel] <= 0} {
+        set cutn [$tl getName]; set cw $bw; set ch $bh
+      } else { dict set pads [$tl getName] [list $bw $bh] }
+    }
+    if {$cutn eq "" || $cw <= 0 || $ch <= 0} { continue }
+    dict for {ln wh} $pads {
+      lassign $wh pw ph
+      set ex [expr {($pw-$cw)/2}]; set ey [expr {($ph-$ch)/2}]
+      if {$ex < 0} { set ex 0 }
+      if {$ey < 0} { set ey 0 }
+      set lo [expr {$ex < $ey ? $ex : $ey}]
+      set hi [expr {$ex > $ey ? $ex : $ey}]
+      set key "$cutn|$ln"
+      if {[dict exists $REQ $key]} {
+        lassign [dict get $REQ $key] olo ohi
+        if {$olo < $lo} { set lo $olo }
+        if {$ohi < $hi} { set hi $ohi }
+      }
+      dict set REQ $key [list $lo $hi]
+    }
+  }
+  puts "${marker}_REQ: $REQ"
+  # per-layer spacing (for the clash test) and every net's metal, tagged by net
+  set SP [dict create]
+  foreach lay [$tech getLayers] {
+    if {[$lay getRoutingLevel] <= 0} { continue }
+    set sp 0; catch {set sp [$lay getSpacing]}
+    if {$sp <= 0} { catch {set sp [$lay getMinWidth]} }
+    dict set SP [$lay getName] $sp
+  }
+  set netrects [dict create]; set netvias [dict create]; set allnet [dict create]
+  foreach net [$blk getNets] {
+    set st [$net getSigType]
+    if {$st eq "POWER" || $st eq "GROUND"} { continue }
+    set pp {}
+    set d [ma_rects_of_net $net pp]
+    set vs [vep_vias_of_net $net]
+    if {[llength $vs] == 0} { continue }
+    set nn [$net getName]
+    dict set netrects $nn $d
+    dict set netvias  $nn $vs
+    dict for {ln rs} $d { foreach r $rs { dict lappend allnet $ln [concat [list $nn] $r] } }
+  }
+  set deficient 0; set patched 0; set skipped 0
+  dict for {nn vs} $netvias {
+    set net [$blk findNet $nn]
+    set d [dict get $netrects $nn]
+    foreach vrec $vs {
+      lassign $vrec cutn ln cx1 cy1 cx2 cy2
+      set key "$cutn|$ln"
+      if {![dict exists $REQ $key]} { continue }
+      lassign [dict get $REQ $key] lo hi
+      if {$hi <= 0} { continue }
+      set rs {}
+      if {[dict exists $d $ln]} { set rs [dict get $d $ln] }
+      set cands [list \
+        [list [expr {$cx1-$hi}] [expr {$cy1-$lo}] [expr {$cx2+$hi}] [expr {$cy2+$lo}]] \
+        [list [expr {$cx1-$lo}] [expr {$cy1-$hi}] [expr {$cx2+$lo}] [expr {$cy2+$hi}]]]
+      set ok 0
+      foreach cnd $cands {
+        lassign $cnd a b c e
+        if {[vep_cover_ok $rs $a $b $c $e]} { set ok 1; break }
+      }
+      if {$ok} { continue }
+      incr deficient
+      set spac 0
+      if {[dict exists $SP $ln]} { set spac [dict get $SP $ln] }
+      set done 0
+      foreach cnd $cands {
+        lassign $cnd a b c e
+        set bl [list [expr {$a-$spac}] [expr {$b-$spac}] [expr {$c+$spac}] [expr {$e+$spac}]]
+        set clash 0
+        if {[dict exists $allnet $ln]} {
+          foreach o [dict get $allnet $ln] {
+            if {[lindex $o 0] eq $nn} { continue }
+            if {[ma_touch $bl [lrange $o 1 4]]} { set clash 1; break }
+          }
+        }
+        if {$clash} { continue }
+        set enc [odb::dbWireEncoder]
+        $enc append [$net getWire]
+        $enc newPath [$tech findLayer $ln] "ROUTED"
+        $enc addPoint $cx1 $cy1
+        $enc addRect [expr {$a-$cx1}] [expr {$b-$cy1}] [expr {$c-$cx1}] [expr {$e-$cy1}]
+        $enc end
+        incr patched; set done 1
+        break
+      }
+      if {!$done} {
+        incr skipped
+        puts "${marker}_UNPATCHABLE: net=$nn layer=$ln cut=$cutn box=($cx1 $cy1 $cx2 $cy2)"
+      }
+    }
+  }
+  puts "${marker}_DONE: deficient=$deficient patched=$patched unpatchable=$skipped"
+  return $patched
+}
+
 # ---- main -----------------------------------------------------------------
 proc min_area_patch {{marker "MIN_AREA_PATCH"}} {
   set blk  [ord::get_db_block]
@@ -12254,7 +12524,9 @@ def _min_area_patch_tcl(marker: str = "MIN_AREA_PATCH") -> str:
     block. No design, vendor or PDK literal anywhere."""
     return (_MIN_AREA_PATCH_TCL
             + f"if {{[catch {{min_area_patch \"{marker}\"}} _map_e]}} {{ "
-              f"puts \"{marker}_NONFATAL: $_map_e\" }}\n")
+              f"puts \"{marker}_NONFATAL: $_map_e\" }}\n"
+            + f"if {{[catch {{via_enclosure_patch \"{marker}_VIAENCL\"}} _vep_e]}} {{ "
+              f"puts \"{marker}_VIAENCL_NONFATAL: $_vep_e\" }}\n")
 
 
 def _design_signature_tcl(var: str) -> str:
@@ -12641,6 +12913,72 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         return ("puts \"ANTENNA_REPAIR_SKIPPED: no diode cell for this PDK; "
                 "antenna violations need manual diode ECO\"\n")
     return (
+        # The design-for-ECO spare tie nets are `setDoNotTouch true` so the
+        # RESIZER SKIPS them instead of erroring on a dont_touch load pin
+        # (see `_build_spare_postfix_tcl`). ANTENNA repair is not the resizer:
+        # `repair_antennas` only ADDS a diode instance and re-routes, and odb
+        # refuses that too —
+        #     [ERROR ODB-0373] Attempt to connect iterm to dont_touch net
+        #                      spare_tielo
+        # — which trips the catch on BOTH the `-reroute` call and its fallback,
+        # so the loop `break`s at iteration 0. Measured (caravel_user_project x
+        # sky130A): the run then ships 40 diodes PLACED but only 38 WIRED (two
+        # `diode_2 ANTENNA_n ()` instances with a FLOATING gate) and 15 net /
+        # 18 pin antenna violations unrepaired, failing Step 26 and — through
+        # `perc_equivalent` — Step 28 as well.
+        #
+        # So lift the protection from the TIE NETS for the antenna window only,
+        # and restore it immediately after. Exactly the #563 precedent one layer
+        # down (there: an instance, for the flow's own deliberate tie-off; here:
+        # a net, for the flow's own deliberate diode attach). The spare
+        # INSTANCES stay `set_dont_touch` throughout and `repair_antennas`
+        # cannot delete or resize a cell, so the spare-preservation invariant is
+        # untouched — `spare_preservation` / `spare_cell_coverage` still measure
+        # it independently. NONFATAL-guarded; a PDK with no tie cell has no such
+        # net and this is a no-op. chip-AGNOSTIC.
+        "set _ant_unprot {}\n"
+        "foreach _astn [list spare_tielo spare_tiehi] {\n"
+        "  if {[catch {\n"
+        "    set _astnet [[ord::get_db_block] findNet $_astn]\n"
+        "    if {$_astnet ne \"NULL\" && $_astnet ne \"\" && "
+        "[$_astnet isDoNotTouch]} {\n"
+        "      $_astnet setDoNotTouch false\n"
+        "      lappend _ant_unprot $_astn\n"
+        "    }\n"
+        "  } _astn_e]} { puts \"ANTENNA_SPARE_TIE_UNPROTECT_NONFATAL: "
+        "$_astn -- $_astn_e\" }\n"
+        "}\n"
+        "puts \"ANTENNA_SPARE_TIE_UNPROTECTED: $_ant_unprot\"\n"
+        # OpenROAD's antenna repair legalizes the diodes it inserts by putting
+        # the WHOLE block back to PLACED and then re-firming only the cells it
+        # owns — so every FIRM lock the flow set for its OWN reasons is
+        # collateral. Design-for-ECO spares are FIRM-locked exactly so router
+        # and filler cannot move them (`SPARE_FIRM_LOCKED`), and the DEF `+
+        # FIXED` that lock produces is what `spare_cell_preservation_check`
+        # reads as the keep tag. MEASURED (caravel_user_project x sky130A): the
+        # moment the repair actually ran, 7 of 8 spares came back `+ PLACED`
+        # and the post-fill preservation gate FAILed with
+        # `all_keep_attr_intact: false`, 6 spares `untagged` — while
+        # `survived: 7, removed: []`, i.e. nothing was lost, only the LOCK.
+        #
+        # So snapshot the placement status of the protected instances before
+        # the repair and restore it after. Keyed on `isDoNotTouch` — a
+        # PROPERTY, not a name — so it covers whatever the flow protected
+        # without knowing why, and costs one pass over the instance list.
+        # NONFATAL-guarded throughout. chip-AGNOSTIC.
+        "set _ant_firm {}\n"
+        "if {![catch {set _ablk [ord::get_db_block]} _abe]} {\n"
+        "  foreach _ai [$_ablk getInsts] {\n"
+        "    if {[catch {set _adt [$_ai isDoNotTouch]}]} { continue }\n"
+        "    if {!$_adt} { continue }\n"
+        "    if {[catch {set _ast [$_ai getPlacementStatus]}]} { continue }\n"
+        "    if {$_ast eq \"FIRM\" || $_ast eq \"LOCKED\"} {\n"
+        "      lappend _ant_firm [list [$_ai getName] $_ast]\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+        "puts \"ANTENNA_FIRM_SNAPSHOT: [llength $_ant_firm] protected "
+        "instance(s)\"\n"
         "# Cheap read-only precheck on the realized main route (no global_route):\n"
         "set _ant_pre -1\n"
         "if {[catch {set _ant_pre [check_antennas]} _ape]} { puts "
@@ -12711,6 +13049,37 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         "  if {[catch {check_antennas} _ra_chk]} { puts "
         "\"ANTENNA_POSTROUTE_CHECK_NONFATAL: $_ra_chk\" }\n"
         "}\n"
+        # Restore the tie-net protection unconditionally — OUTSIDE the
+        # if/else and after every `break` path above, so no exit from the
+        # repair loop can leave a spare tie net unprotected for the resizer
+        # passes that follow.
+        "foreach _astn $_ant_unprot {\n"
+        "  if {[catch {\n"
+        "    set _astnet [[ord::get_db_block] findNet $_astn]\n"
+        "    if {$_astnet ne \"NULL\" && $_astnet ne \"\"} {\n"
+        "      $_astnet setDoNotTouch true\n"
+        "    }\n"
+        "  } _astr_e]} { puts \"ANTENNA_SPARE_TIE_REPROTECT_NONFATAL: "
+        "$_astn -- $_astr_e\" }\n"
+        "}\n"
+        "puts \"ANTENNA_SPARE_TIE_REPROTECTED: $_ant_unprot\"\n"
+        # Restore the FIRM/LOCKED status the repair's block-wide legalization
+        # dropped — see the snapshot note above. Restores each instance to the
+        # status IT had, never a status it did not.
+        "set _ant_firm_n 0\n"
+        "foreach _ap $_ant_firm {\n"
+        "  if {[catch {\n"
+        "    set _ai [[ord::get_db_block] findInst [lindex $_ap 0]]\n"
+        "    if {$_ai ne \"NULL\" && $_ai ne \"\"} {\n"
+        "      if {[$_ai getPlacementStatus] ne [lindex $_ap 1]} {\n"
+        "        $_ai setPlacementStatus [lindex $_ap 1]\n"
+        "        incr _ant_firm_n\n"
+        "      }\n"
+        "    }\n"
+        "  } _afe]} { puts \"ANTENNA_FIRM_RESTORE_NONFATAL: [lindex $_ap 0] "
+        "-- $_afe\" }\n"
+        "}\n"
+        "puts \"ANTENNA_FIRM_RESTORED: $_ant_firm_n of [llength $_ant_firm]\"\n"
         "puts \"ANTENNA_POSTROUTE_DONE\"\n")
 
 
@@ -12974,6 +13343,14 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
         # WNS_AFTER printed the same number to the digit, which reads as
         # "ran, nothing to gain". `-detailed_routing` is re-issued after the
         # re-annotation so the fork's proven recipe survives the reseed.
+        # R9 — this block runs after min-area patching and PG reroute, both of
+        # which edit the netlist/odb, so the estimator arrives here with a
+        # non-empty parasitics-invalid set and BOTH repairs below were being
+        # refused EST-0104 on every run (measured in R7's, R8's and my own
+        # logs). The estimate was therefore never actually being made — the
+        # WNS_BEFORE and WNS_AFTER lines were identical to the digit. Same
+        # recovery as the DRV loop; `-detailed_routing` is re-issued after the
+        # re-annotation so the fork's proven recipe is preserved.
         "  if {[catch {repair_design} _prr_rd2]} {\n"
         + _est0104_recovery_tcl(
             spef_c, "_prr_rd2", "repair_design", "SPEF_REPAIR_DESIGN",
@@ -13006,8 +13383,143 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
     )
 
 
+# ---------------------------------------------------------------------------
+# v1.8.100 — where a SIGNAL net is allowed to run
+# ---------------------------------------------------------------------------
+# MEASURED on caravel_user_project x sky130A. `pnr.tcl` emitted a bare
+# `global_route`. At 0.2 % utilization there is no congestion, so the global
+# router's cost function (congestion + via count) put 82 % of all wire — and
+# every one of the 2 mm nets whose slew fails sign-off — on the BOTTOM metal.
+# In sky130_fd_sc_hd that layer carries 903 INOUT VPWR/VGND ports: it is the
+# CELL POWER-RAIL layer, and it is the worst layer in the stack on both R and
+# C. Taking it out of the SIGNAL range (not merely de-rating it) took the
+# sign-off max_slew population from 400 violated pins to 304 with detailed
+# route still converging; de-rating it to 1 % of capacity instead only reached
+# 372, and putting it back with the repair loop on measured 56 against 21.
+#
+# The floor is DERIVED, not chosen: a routing layer is refused to signals when
+# the standard cells' OWN pins occupy it, because that capacity is already
+# spent on pin access and on the rails. The ceiling is the design's declared
+# `RT_MAX_LAYER` when it declares one, else the top routing layer in the tech
+# LEF. chip/PDK-AGNOSTIC: every input is read from the LEFs and the design's
+# own flow config; no layer name, PDK name or design literal is written here.
+
+_PIN_LAYER_RE = re.compile(
+    r"^\s*PIN\s+(\S+)(.*?)^\s*END\s+\1\s*$", re.S | re.M)
+
+
+def _v1_8_100_cell_pin_layer_counts(cell_lef_text: str) -> Dict[str, int]:
+    """How many standard-cell PORTs sit on each LAYER, lower-cased.
+
+    PRESENCE IS NOT THE TEST, and getting that wrong is how this derivation
+    first returned nothing: measured on sky130_fd_sc_hd, li1 carries 1711
+    ports and met1 959, but met2..met5 each carry between 1 and 4 (a handful
+    of special cells route a pin up). A set-membership rule therefore marks
+    EVERY routing layer as pin-occupied and leaves no legal range. The share
+    of the library's ports is the discriminating quantity, so the counts are
+    returned and the caller applies a share threshold.
+    """
+    from collections import Counter                    # noqa: PLC0415
+    cnt: "Counter" = Counter()
+    for m in _PIN_LAYER_RE.finditer(cell_lef_text):
+        for n in re.findall(r"^\s*LAYER\s+(\S+)\s*;", m.group(2), re.M):
+            cnt[n.lower()] += 1
+    return cnt
+
+
+def _v1_8_100_routing_layers(tech_lef_text: str) -> List[str]:
+    """Ordered list of TYPE ROUTING layer names, bottom first, from a tech LEF."""
+    out: List[str] = []
+    for m in re.finditer(r"^\s*LAYER\s+(\S+)\s*$(.*?)^\s*END\s+\1\s*$",
+                         tech_lef_text, re.S | re.M):
+        if re.search(r"^\s*TYPE\s+ROUTING\s*;", m.group(2), re.M | re.I):
+            out.append(m.group(1))
+    return out
+
+
+def _v1_8_100_routing_layer_range(pdk, project, container
+                                  ) -> Optional[Tuple[str, str, str, str]]:
+    """(signal_floor, clock_floor, ceiling, why) or None when underivable.
+
+    Refuses to emit anything unless the derivation leaves at least two usable
+    signal layers — a one-layer routing range cannot route, and a constraint
+    that makes the design unroutable is worse than no constraint at all.
+    """
+    tlef = _v1_6_604_read_text_or_container_cat(str(pdk.tech_lef), container)
+    if not tlef:
+        return None
+    order = _v1_8_100_routing_layers(tlef)
+    if len(order) < 3:
+        return None
+    lower = [n.lower() for n in order]
+
+    # --- floor: the first routing layer the std cells' own pins do NOT use ---
+    clef = ""
+    for cand in (getattr(pdk, "cell_lef", None), getattr(pdk, "std_cell_lef", None)):
+        if cand:
+            clef = _v1_6_604_read_text_or_container_cat(str(cand), container) or ""
+            if clef:
+                break
+    floor_i = 0
+    why_floor = "no cell LEF read; floor = bottom routing layer"
+    if clef:
+        cnt = _v1_8_100_cell_pin_layer_counts(clef)
+        total = sum(cnt.values())
+        # A layer is CONSUMED BY PIN ACCESS when it carries a real share of
+        # the library's ports (>=5 %), not merely one of them. Walk up from
+        # the bottom and stop at the first layer that is not.
+        thresh = max(1.0, 0.05 * total)
+        dominated = [n for n in lower if cnt.get(n, 0) >= thresh]
+        while floor_i < len(order) and cnt.get(lower[floor_i], 0) >= thresh:
+            floor_i += 1
+        if floor_i >= len(order):               # every layer is pin-dominated
+            return None
+        why_floor = (f"cell ports/layer {[(n, cnt.get(n, 0)) for n in lower]} "
+                     f"of {total}; pin-access layers {dominated}; "
+                     f"signal floor = {order[floor_i]}")
+
+    # --- ceiling: the design's own declared RT_MAX_LAYER, else the top layer ---
+    ceil_i = len(order) - 1
+    why_ceil = f"ceiling = top routing layer {order[ceil_i]}"
+    try:
+        import floorplan_contract as _fpc                     # noqa: PLC0415
+        _d = _fpc.declared_drv_limits(project, getattr(pdk, "name", "") or "",
+                                      _active_std_cell_library(
+                                          project, getattr(pdk, "name", "") or ""))
+        _dec = _d.get("route_max_layer")
+        if _dec and _dec.lower() in lower:
+            ceil_i = lower.index(_dec.lower())
+            why_ceil = (f"ceiling = design-declared {order[ceil_i]} "
+                        f"({_d.get('route_max_layer_source')})")
+        # a declared MIN wins over the derived floor: it is design INPUT
+        _decmin = _d.get("route_min_layer")
+        if _decmin and _decmin.lower() in lower:
+            floor_i = lower.index(_decmin.lower())
+            why_floor = (f"signal floor = design-declared {order[floor_i]} "
+                         f"({_d.get('route_min_layer_source')})")
+    except Exception:                                         # nosec
+        pass
+
+    if floor_i >= ceil_i:                       # nothing left to route on
+        return None
+    clk_i = min(floor_i + 1, ceil_i)            # keep the clock off the layer
+    try:                                        # the signal net-count floods
+        import floorplan_contract as _fpc2                    # noqa: PLC0415
+        _d2 = _fpc2.declared_drv_limits(project, getattr(pdk, "name", "") or "",
+                                        _active_std_cell_library(
+                                            project, getattr(pdk, "name", "") or ""))
+        _dc = _d2.get("route_clock_min_layer")
+        if _dc and _dc.lower() in lower and lower.index(_dc.lower()) <= ceil_i:
+            clk_i = lower.index(_dc.lower())
+    except Exception:                                         # nosec
+        pass
+    return (order[floor_i], order[clk_i], order[ceil_i],
+            f"{why_floor}; {why_ceil}")
+
+
 def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
-                                cell_lef_c: str = "") -> str:
+                                cell_lef_c: str = "",
+                                fork_repair_capable: bool = False) -> str:
     """ORGANIC #557 / #581 — emit the OpenROAD Tcl for the
     post-detailed-route SPEF extraction (MEASURE-ONLY).
 
@@ -13118,9 +13630,37 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         "    if {[llength $_prs_c2] > 0} { set _prs_rules [lindex $_prs_c2 0] }\n"
         "  }\n"
         "}\n"
+        # v1.8.100 — the SIGN-OFF deck, discovered beside the nom one. The DRV
+        # the flow is judged on is measured with `rules.openrcx.*.max.*`
+        # (signoff_spef_repair.tcl, and the multi-corner STA); repairing
+        # against `nom` while signing off on `max` leaves ~2x of the
+        # capacitance unrepaired (measured: nom 46.90 pF vs max 93.16 pF on the
+        # identical routed DEF). Falls back to the nom deck when no max deck
+        # ships, so a PDK with only one deck behaves exactly as before.
+        "set _prs_max \"\"\n"
+        "foreach _prs_r [list $_prs_rules] {\n"
+        "  if {$_prs_r eq \"\"} { continue }\n"
+        "  set _prs_cand [string map {.nom. .max.} $_prs_r]\n"
+        "  if {$_prs_cand ne $_prs_r && [file exists $_prs_cand]} "
+        "{ set _prs_max $_prs_cand }\n"
+        "}\n"
+        "if {$_prs_max eq \"\"} { set _prs_max $_prs_rules }\n"
         "if {$_prs_rules ne \"\"} {\n"
         "  puts \"SPEF_REPAIR_CAPTABLE: $_prs_rules\"\n"
-        "  catch {define_process_corner -ext_model_index 0 X}\n"
+        "  puts \"SPEF_REPAIR_SIGNOFF_CAPTABLE: $_prs_max\"\n"
+        # R9 — the sign-off-domain DRV repair loop is emitted ONLY on an
+        # OpenROAD that carries the fork's post-detailed-route SPEF-repair fix.
+        # It calls `repair_design`/`repair_timing` on a SPEF-annotated
+        # post-detailed-route design, which is precisely what the stock RSZ
+        # repair-move family SEGFAULTS on (#581 r3) — and a Tcl `catch` cannot
+        # contain a Signal 11, so on stock OpenROAD it would kill the process
+        # and the GDS would never be written. Probe-negative → this block is
+        # byte-identical to the measure-only extraction it always was.
+        + (_v1_8_100_signoff_drv_repair_tcl(out_dir_c)
+           if fork_repair_capable else
+           "  puts \"SDR_SKIP_STOCK_OPENROAD: post-route SPEF DRV repair needs "
+           "the fork post-detailed-route repair fix; extraction only\"\n")
+        + "  catch {define_process_corner -ext_model_index 0 X}\n"
         "  if {[catch {extract_parasitics -ext_model_file $_prs_rules "
         "-corner_cnt 1 -max_res 50 -coupling_threshold 0.1} _prs_ext]} {\n"
         "    puts \"SPEF_REPAIR_NONFATAL: extract_parasitics: $_prs_ext\"\n"
@@ -13132,6 +13672,258 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         "} else {\n"
         "  puts \"SPEF_REPAIR_SKIP: no captable found; post-route SPEF extract skipped\"\n"
         "}\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# v1.8.100 — post-route DRV repair against the SIGN-OFF parasitics
+# ---------------------------------------------------------------------------
+# MEASURED on caravel_user_project x sky130A, iter5's own OpenROAD log:
+#   RSZ-0034 Found 15 slew violations   (pre-route, estimated parasitics)
+#   RSZ-0034 Found 23 slew violations   (after buffer_ports)
+#   RSZ-0034 Found  1 slew violations   (after estimate_parasitics -global_routing)
+# and the sign-off report the Step-23 gate reads: 454 max_slew violations.
+# The repair engine saw ONE where sign-off found 454, because it never read an
+# extracted SPEF: it optimised a tech-LEF wire model that measures ~0.09 fF/um
+# where the sign-off RCX deck measures ~1.0 fF/um on the same wire. No amount
+# of buffering fixes a violation the buffering engine cannot see.
+#
+# This block hands it the sign-off parasitics and lets it converge. Measured,
+# end to end, on the real post_hold.def with `set_max_transition 1.5`
+# UNCHANGED and the sign-off max deck (`_c_car7_findings.md` §3):
+#   layer range only                                 400 max_slew pins
+#   + repair on sign-off SPEF, no repeaters            52
+#   + `-max_wire_length` (repeaters)                   21
+#   + repair-target margin                              0
+#
+# THREE THINGS ARE LOAD-BEARING and each was isolated by an A/B:
+#  1. `-max_wire_length`. Without it the resizer inserts ZERO buffers — it only
+#     resizes, and on a 2 mm net already driven by the library's largest buffer
+#     there is nothing left to resize (52 vs 21 violated pins, same everything
+#     else).
+#  2. Clearing the signal routing before re-routing. Without it every reroute
+#     died `DRT-1231 Pin <x> does not have access point` and the "repaired"
+#     design measured clean only because the touched nets were UNROUTED. The
+#     clear is the plugin's own `_spare_safe_routing_clear_tcl` behaviour,
+#     already proven in the SHIP signoff path.
+#  3. A repair-target margin. The in-flow repair runs on the typical liberty
+#     while sign-off also runs the SLOW process corner, where the same net's
+#     slew is ~2.5x. Repairing exactly to the limit leaves eight pins violating
+#     by -0.00 ns. `-slew_margin`/`-cap_margin` tighten the REPAIR TARGET; the
+#     SDC limit is untouched, so this is head-room, not a relaxed spec.
+#
+# The loop EXITS THE MOMENT the sign-off DRV count reaches zero, and halves the
+# repeater spacing on each pass that does not, so no single number here is
+# load-bearing — the convergence is. chip/PDK-AGNOSTIC: the spacing seed is the
+# die's own short side, the deck is discovered, the margin is a percentage.
+
+_V1_8_100_DRV_REPAIR_PASSES = 6
+_V1_8_100_DRV_REPAIR_MARGIN_PCT = 50
+_V1_8_100_DRV_MIN_WIRE_LEN_UM = 150
+
+
+# ---------------------------------------------------------------------------
+# R9 — EST-0104 "inconsistent parasitics state" recovery
+# ---------------------------------------------------------------------------
+# WHAT IT IS, from OpenROAD's own source (src/est/src/EstimateParasitics.cpp,
+# IncrementalParasiticsGuard's constructor):
+#
+#     if (estimate_parasitics_->hasParasiticsInvalid()) {
+#         logger_->error(EST, 104, "inconsistent parasitics state");
+#     }
+#
+# So EST-0104 is NOT about which parasitics SOURCE is selected. It fires iff the
+# estimator's `parasitics_invalid_` SET is non-empty when repair_design /
+# repair_timing opens its incremental guard. That set is filled by odb callbacks
+# (src/est/src/OdbCallBack.cpp: inDbInstCreate, inDbNetCreate, inDbNetDestroy,
+# inDbITermPostConnect, inDbITermPostDisconnect, inDbInstSwapMasterAfter) —
+# i.e. by NETLIST edits, not by wire edits — and it is cleared in exactly two
+# places: `updateParasitics()` (callable only inside incremental mode, else
+# EST-0109) and `estimateWireParasitics()`, which is what
+# `estimate_parasitics -placement` runs.
+#
+# WHY THE FLOW HITS IT: antenna repair inserts diodes ("[INFO GRT-0015] Inserted
+# 28 diodes"), each a created instance with a connected iterm. Nothing between
+# there and the next repair flushes the estimator, so every repair attempted
+# after antenna repair is refused. MEASURED on caravel_user_project x sky130A:
+# the post-antenna DRV re-convergence loop reported `SDR_DRV_PASS1_BEFORE: 4`
+# and then `SDR_REPAIR_NONFATAL: EST-0104` — it could see the four violations
+# and was not allowed to repair them.
+#
+# WHY -placement AND NOT -global_routing / -detailed_routing: measured, RUN not
+# asserted, on the real design in a session with REAL global routes present, so
+# every flag was a legal call (`_c_car9_scratch/exp1/est_G.tcl`, est_D.tcl):
+#     arm=none                 -> EST-0104   (reproduces)
+#     arm=-global_routing      -> EST-0104   (the command SUCCEEDS; no clear)
+#     arm=-detailed_routing    -> EST-0104   (the command SUCCEEDS; no clear)
+#     arm=-placement           -> repair OK
+# which is exactly what the source says: `estimateGlobalRouteRC()` has no
+# `parasitics_invalid_.clear()`, and the kDetailedRouting case only sets the
+# enum ("TODO: call rcx …").
+#
+# WHY THE re-read_spef IS LOAD-BEARING: `estimate_parasitics -placement` calls
+# `sta_->deleteParasitics()` and re-estimates every net from the tech-LEF wire
+# model, DESTROYING the sign-off SPEF annotation. Measured on the same design,
+# counting the tool's own `(VIOLATED)` lines: 3 on the SPEF -> 0 after the
+# reseed -> 3 after re-reading it. Repairing between those two would optimise
+# the ~10x-optimistic model — the precise defect the sign-off-domain repair
+# loop exists to avoid. So: reseed, RE-ANNOTATE, then retry.
+#
+# BLAST RADIUS: this is emitted INSIDE the caller's existing failure `catch`, so
+# on any run that never raises EST-0104 not one command of it executes, and if
+# any step of the recovery itself fails the caller falls through to its original
+# NONFATAL-and-stop path. chip/PDK-AGNOSTIC: no design or PDK literal.
+def _est0104_recovery_tcl(spef_c: str, err_var: str, retry_cmd: str,
+                          tag: str, indent: str = "",
+                          after_spef: str = "") -> str:
+    """Emit the EST-0104 recovery for one guarded repair call.
+
+    `err_var` is the caller's `catch` result variable, `retry_cmd` the exact
+    command to re-attempt, `spef_c` the SPEF to re-annotate with (skipped when
+    absent, e.g. a PDK with no extraction deck), `tag` the log prefix. Sets
+    `_<tag>_est_rec` to 1 iff the retry succeeded; the caller MUST branch on it.
+
+    `after_spef` is an optional command run between the re-annotation and the
+    retry — for a caller whose proven recipe marks the parasitics source itself
+    (the #147 fork block's `estimate_parasitics -detailed_routing`), which the
+    `-placement` reseed necessarily overwrote. It only sets the source enum, so
+    it cannot re-dirty what the reseed just cleared.
+    """
+    v = f"_{tag.lower()}_est_rec"
+    e = f"_{tag.lower()}_est_e"
+    i = indent
+    _after = f"{retry_cmd}" if not after_spef else f"{after_spef}; {retry_cmd}"
+    return (
+        f"{i}# --- R9 EST-0104 recovery (see _est0104_recovery_tcl) ---\n"
+        f"{i}set {v} 0\n"
+        f"{i}if {{[string first \"EST-0104\" ${err_var}] >= 0}} {{\n"
+        f"{i}  puts \"{tag}_EST0104_DETECTED\"\n"
+        # -placement is the ONLY estimate_parasitics flag that clears the
+        # estimator's parasitics-invalid set (measured; see the block comment).
+        f"{i}  if {{[catch {{estimate_parasitics -placement}} {e}]}} {{\n"
+        f"{i}    puts \"{tag}_EST0104_RESEED_NONFATAL: ${e}\"\n"
+        # The reseed wiped the sign-off annotation. Put it back BEFORE the
+        # retry or the repair optimises the optimistic tech-LEF model.
+        f"{i}  }} elseif {{![file exists {spef_c}]}} {{\n"
+        f"{i}    puts \"{tag}_EST0104_NOSPEF: {spef_c}\"\n"
+        f"{i}  }} elseif {{[catch {{read_spef {spef_c}}} {e}]}} {{\n"
+        f"{i}    puts \"{tag}_EST0104_SPEFR_NONFATAL: ${e}\"\n"
+        f"{i}  }} elseif {{[catch {{{_after}}} {e}]}} {{\n"
+        f"{i}    puts \"{tag}_EST0104_RETRY_NONFATAL: ${e}\"\n"
+        f"{i}  }} else {{\n"
+        f"{i}    set {v} 1\n"
+        f"{i}    puts \"{tag}_EST0104_RECOVERED\"\n"
+        f"{i}  }}\n"
+        f"{i}}}\n"
+    )
+
+
+def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
+    """Bounded repair-until-clean loop on the sign-off-deck SPEF.
+
+    Every step NONFATAL-guarded; any failure leaves the routing as it was and
+    the surrounding measure-only extraction still runs, so a PDK/tool that
+    cannot do this degrades to exactly the previous behaviour.
+    """
+    n = _V1_8_100_DRV_REPAIR_PASSES
+    m = _V1_8_100_DRV_REPAIR_MARGIN_PCT
+    lo = _V1_8_100_DRV_MIN_WIRE_LEN_UM
+    return (
+        "  # --- v1.8.100 sign-off-domain DRV repair ---\n"
+        "  set _sdr_ok 1\n"
+        "  set _sdr_mwl 0\n"
+        "  if {[catch {\n"
+        "    set _sdr_blk [ord::get_db_block]\n"
+        "    set _sdr_dbu [$_sdr_blk getDefUnits]\n"
+        "    set _sdr_da [$_sdr_blk getDieArea]\n"
+        "    set _sdr_w [expr {double([$_sdr_da dx])/$_sdr_dbu}]\n"
+        "    set _sdr_h [expr {double([$_sdr_da dy])/$_sdr_dbu}]\n"
+        # Seed the repeater spacing at an eighth of the die's SHORT side: the
+        # longest net a fixed die can force is its own diagonal, and an eighth
+        # of the short side is the coarsest spacing that still breaks that net
+        # into segments shorter than the span the measurement showed failing.
+        # It is only a SEED — the loop halves it whenever a pass does not clear.
+        "    set _sdr_mwl [expr {int(min($_sdr_w,$_sdr_h)/8.0)}]\n"
+        "  } _sdr_e]} { puts \"SDR_DIE_NONFATAL: $_sdr_e\"; set _sdr_ok 0 }\n"
+        f"  if {{$_sdr_mwl < {lo}}} {{ set _sdr_mwl {lo} }}\n"
+        "  if {$_sdr_ok} {\n"
+        f"  for {{set _sdr_p 1}} {{$_sdr_p <= {n}}} {{incr _sdr_p}} {{\n"
+        "    catch {define_process_corner -ext_model_index 0 X}\n"
+        "    if {[catch {extract_parasitics -ext_model_file $_prs_max "
+        "-corner_cnt 1 -max_res 50 -coupling_threshold 0.1} _sdr_ex]} {\n"
+        "      puts \"SDR_EXTRACT_NONFATAL: $_sdr_ex\"; break\n"
+        "    }\n"
+        f"    if {{[catch {{write_spef {out_dir_c}/sdr_pass.spef}} _sdr_sw]}} "
+        "{ puts \"SDR_SPEFW_NONFATAL: $_sdr_sw\"; break }\n"
+        f"    if {{[catch {{read_spef {out_dir_c}/sdr_pass.spef}} _sdr_sr]}} "
+        "{ puts \"SDR_SPEFR_NONFATAL: $_sdr_sr\"; break }\n"
+        # Count the sign-off DRV the same way the Step-23 gate does: the
+        # tool's own violator report, not a proxy.
+        f"    catch {{report_check_types -max_slew -max_capacitance -max_fanout "
+        f"-violators > {out_dir_c}/sdr_drv.rpt}}\n"
+        "    set _sdr_n 0\n"
+        "    if {[catch {\n"
+        f"      set _sdr_fh [open {out_dir_c}/sdr_drv.rpt r]\n"
+        "      while {[gets $_sdr_fh _sdr_ln] >= 0} {\n"
+        "        if {[string first \"(VIOLATED)\" $_sdr_ln] >= 0} { incr _sdr_n }\n"
+        "      }\n"
+        "      close $_sdr_fh\n"
+        "    } _sdr_ce]} { puts \"SDR_COUNT_NONFATAL: $_sdr_ce\" }\n"
+        "    puts \"SDR_DRV_PASS${_sdr_p}_BEFORE: $_sdr_n (max_wire_length=$_sdr_mwl)\"\n"
+        "    if {$_sdr_n == 0} { puts \"SDR_CONVERGED: pass $_sdr_p\"; break }\n"
+        f"    if {{[catch {{repair_design -max_wire_length $_sdr_mwl "
+        f"-slew_margin {m} -cap_margin {m}}} _sdr_rd]}} {{\n"
+        + _est0104_recovery_tcl(
+            f"{out_dir_c}/sdr_pass.spef",
+            "_sdr_rd",
+            f"repair_design -max_wire_length $_sdr_mwl "
+            f"-slew_margin {m} -cap_margin {m}",
+            "SDR",
+            indent="      ")
+        + "      if {!$_sdr_est_rec} { puts \"SDR_REPAIR_NONFATAL: $_sdr_rd\"; "
+        "break }\n"
+        "    }\n"
+        # v1.8.100 r2 — MEASURED: without this, closing DRV on the max-RC
+        # deck traded the SLOW-corner setup from +1.02 ns to -4.68 ns
+        # (iter1). Every repeater the line above inserts adds a stage
+        # delay, and nothing re-timed the paths they sit on. This is the
+        # same `repair_timing -setup` the flow already runs post-global-
+        # route; it belongs after any buffer insertion, not only that one.
+        "    if {[catch {repair_timing -setup} _sdr_rt]} "
+        "{ puts \"SDR_REPAIR_TIMING_NONFATAL: $_sdr_rt\" }\n"
+        "    if {[catch {detailed_placement} _sdr_dp]} "
+        "{ puts \"SDR_DPL_NONFATAL: $_sdr_dp\" }\n"
+        # The routing clear. Without it `global_route` no-ops on already-routed
+        # nets, the follow-on detailed_route aborts, and the design measures
+        # clean because it is UNROUTED. PG and dont_touch nets are preserved.
+        "    if {[catch {\n"
+        "      set _sdr_rrc 0; set _sdr_skip 0\n"
+        "      foreach _sdr_net [[ord::get_db_block] getNets] {\n"
+        "        set _sdr_st [$_sdr_net getSigType]\n"
+        "        if {$_sdr_st eq \"POWER\" || $_sdr_st eq \"GROUND\"} { continue }\n"
+        "        set _sdr_dnt 0\n"
+        "        foreach _sdr_it [$_sdr_net getITerms] {\n"
+        "          if {[[$_sdr_it getInst] isDoNotTouch]} { set _sdr_dnt 1; break }\n"
+        "        }\n"
+        "        if {$_sdr_dnt} { incr _sdr_skip; continue }\n"
+        "        set _sdr_wire [$_sdr_net getWire]\n"
+        "        if {$_sdr_wire ne \"NULL\"} "
+        "{ odb::dbWire_destroy $_sdr_wire; incr _sdr_rrc }\n"
+        "      }\n"
+        "      puts \"SDR_ROUTING_CLEARED: $_sdr_rrc (dont_touch_preserved=$_sdr_skip)\"\n"
+        "    } _sdr_rce]} { puts \"SDR_CLEAR_NONFATAL: $_sdr_rce\" }\n"
+        "    if {[catch {global_route} _sdr_gr]} "
+        "{ puts \"SDR_GR_NONFATAL: $_sdr_gr\"; break }\n"
+        "    if {[catch {detailed_route} _sdr_dr]} "
+        "{ puts \"SDR_DR_NONFATAL: $_sdr_dr\"; break }\n"
+        # v1.8.100 r2 — the seed is HELD, not halved. MEASURED (iter1): halving
+        # the repeater spacing each pass drove the count 314 -> 747 -> 647 -> 70
+        # — over-splitting creates short nets whose OWN pins then violate, the
+        # exact effect R6 measured with `-max_wire_length 500`. Holding the
+        # seed is the configuration exp5/Z3 measured converging to zero.
+        "  }\n"
+        "  }\n"
+        "  puts \"SDR_DONE\"\n"
     )
 
 
@@ -13443,6 +14235,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         pg_cleanup_block: str, spef_repair_block: str,
                         antenna_repair_block: str,
                         filler_block: str,
+                        drv_reconverge_block: str = "",
                         tapcell_prune_block: str = "",
                         pg_reconnect_block: str = "",
                         hardmacro_supply_gc_block: str = "",
@@ -13771,7 +14564,7 @@ if {{[catch {{write_def {out_dir_c}/routed_preantenna.def}} _cp_err]}} {{
 # repair_timing → detailed_placement → incremental reroute.  Best-effort:
 # any exception leaves the routing unchanged and issues a NONFATAL marker.
 {spef_repair_block}# === v0.2.14 — antenna repair (diode insertion) after detailed_route ===
-{antenna_repair_block}# === v0.1.48 — decap + filler insertion ===
+{antenna_repair_block}{drv_reconverge_block}# === v0.1.48 — decap + filler insertion ===
 # spm pilot Tier 2 EM/decap finding: prior runs (v0.1.25 → v0.1.47) emitted
 # ZERO decap or filler cells. Empty std-cell-row gaps left an MPW-rejecting
 # combination: no dynamic IR margin (no decap), open density-fill rules
@@ -14153,6 +14946,37 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                 )
     except Exception as _e:  # nosec — analyzer is best-effort
         routing_audit_note = f"via-analyzer skipped: {_e}"
+    # === v1.8.100 — SIGNAL ROUTING FLOOR / CEILING ===================
+    # Emitted whenever the via-analyzer above did NOT already constrain the
+    # route (that path is a defensive narrowing for PDKs with missing
+    # single-cut vias; on a healthy PDK it produces nothing, so `global_route`
+    # went out BARE). A bare `global_route` optimises congestion and via count
+    # only. On a low-utilization die there IS no congestion, so nothing pushes
+    # the router off the bottom metal — and the bottom metal is the layer the
+    # standard cells' own power rails occupy. See
+    # `_v1_8_100_pin_access_floor` for how the floor is DERIVED (std-cell LEF
+    # pin layers), and `declared_drv_limits` for the ceiling (the design's own
+    # `RT_MAX_LAYER`). No constant, no PDK literal: both ends are read.
+    if not routing_constraint_tcl:
+        try:
+            _rl = _v1_8_100_routing_layer_range(pdk, project, container)
+        except Exception as _rle:                            # nosec
+            _rl = None
+            routing_audit_note = (routing_audit_note
+                                  or f"routing-range derivation skipped: {_rle}")
+        if _rl:
+            _sig_lo, _clk_lo, _hi, _why = _rl
+            routing_constraint_tcl = (
+                f"# v1.8.100 — signal routing floor/ceiling. {_why}\n"
+                f"if {{[catch {{set_routing_layers -signal {_sig_lo}-{_hi} "
+                f"-clock {_clk_lo}-{_hi}}} _rl_err]}} {{\n"
+                f"  puts \"SET_ROUTING_LAYERS_NONFATAL: $_rl_err\"\n"
+                f"}} else {{\n"
+                f"  puts \"ROUTING_LAYERS_SET: signal={_sig_lo}-{_hi} "
+                f"clock={_clk_lo}-{_hi}\"\n"
+                f"}}\n"
+            )
+            routing_audit_note = routing_audit_note or _why
     # make_tracks emits routing track grid for layers that don't have
     # TRACKS in the LEF (custom PDKs frequently omit these). chip-AGNOSTIC.
     macro_lefs_tcl = "\n".join(
@@ -14304,26 +15128,51 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     antenna_repair_block = _antenna_repair_tcl(pdk)
     pg_cleanup_block = _pg_net_cleanup_tcl()
     dont_use_block = _dont_use_tcl(pdk)
-    # ORGANIC #557 — post-route SPEF EXTRACTION (measure-only; pure helper so it
-    # is unit-tested + the emitter/checker drift gate applies). Runs BEFORE
-    # write_def so it MUST NOT modify the design.
-    spef_repair_block = _post_route_spef_repair_tcl(out_dir_c, tech_lef_c,
-                                                    cell_lef_c)
     # #147 — PROBE the running OpenROAD once (cached) for the fork's post-route
     # repair fix (`estimate_parasitics -detailed_routing`, vibeic/OpenROAD
-    # cf06074139 — LIVE in vibeic-eda:0.2.17). Capable → append an ESTIMATE-ONLY
-    # setup-repair block at the END of pnr.tcl (after every shipped artifact +
-    # the clean sta.rpt, so it never corrupts routed.def/GDS/netlist); stock
-    # upstream OpenROAD → empty block (never reaches a command it would segfault).
+    # cf06074139 — LIVE in vibeic-eda:0.2.17). R9 moved the probe UP to here:
+    # the sign-off-domain DRV repair loop below drives the same RSZ repair-move
+    # family on the same post-detailed-route SPEF-annotated design, so it needs
+    # the same gate. On stock OpenROAD those moves SEGFAULT and a Tcl `catch`
+    # cannot contain a Signal 11 — the process dies and no GDS is written.
     _fork_repair_capable = _openroad_supports_postroute_spef_repair(container)
     if _fork_repair_capable:
         print("[phase3] OpenROAD carries the fork post-route SPEF-repair fix "
               "(cf06074139, live in 0.2.17) → post-route setup-repair ESTIMATE "
-              "at end-of-flow (shipped GDS unchanged).", file=sys.stderr)
+              "at end-of-flow (shipped GDS unchanged) + sign-off-domain DRV "
+              "repair enabled.", file=sys.stderr)
     else:
         print("[phase3] OpenROAD lacks the fork post-route SPEF-repair fix "
-              "(stock upstream) → MEASURE-ONLY SPEF extract (no segfault).",
-              file=sys.stderr)
+              "(stock upstream) → MEASURE-ONLY SPEF extract, no post-route DRV "
+              "repair (no segfault).", file=sys.stderr)
+    # ORGANIC #557 — post-route SPEF EXTRACTION (measure-only; pure helper so it
+    # is unit-tested + the emitter/checker drift gate applies). Runs BEFORE
+    # write_def so it MUST NOT modify the design.
+    spef_repair_block = _post_route_spef_repair_tcl(
+        out_dir_c, tech_lef_c, cell_lef_c,
+        fork_repair_capable=_fork_repair_capable)
+
+    # === R8 (v1.9.3) — DRV RE-CONVERGENCE AFTER ANTENNA REPAIR ===
+    # MEASURED (R7 iter3): the sign-off DRV loop reported `SDR_CONVERGED: pass 6`
+    # (its own count 0) and the Step-23 gate still found 3 — because
+    # `repair_antennas` runs AFTER it and does an INCREMENTAL REROUTE, which
+    # lengthens nets it did not add a diode to. net195 (wire207<-wire208, both
+    # `+ SOURCE TIMING` repeaters the loop itself inserted) came out 289.3 um
+    # long: 0.20 pF against the 0.18 pF limit and 1.67 ns against 1.50.
+    # The flow's LAST word on DRV was spoken before its LAST word on routing.
+    # Fix: re-run the same bounded loop after antenna repair, then re-run
+    # antenna repair on whatever it re-routed. Both halves already break out
+    # the moment their own count is zero, so on a design that does not need it
+    # this costs ONE extraction and nothing else.
+    # R9 — same probe gate as the first loop: this one, too, drives
+    # repair_design/repair_timing on a post-detailed-route SPEF-annotated
+    # design. Probe-negative → SDR2 collapses to nothing but the (already
+    # probe-gated) antenna repair, i.e. exactly the pre-R8 behaviour.
+    drv_reconverge_block = (('puts "SDR2_BEGIN"\n'
+                             + _v1_8_100_signoff_drv_repair_tcl(out_dir_c)
+                             + 'puts "SDR2_END"\n'
+                             if _fork_repair_capable else "")
+                            + antenna_repair_block)
     spef_repair_estimate_block = _postroute_repair_estimate_tcl(
         out_dir_c, _fork_repair_capable)
 
@@ -14450,6 +15299,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         routing_constraint_tcl=routing_constraint_tcl,
         pg_cleanup_block=pg_cleanup_block,
         spef_repair_block=spef_repair_block,
+        drv_reconverge_block=drv_reconverge_block,
         antenna_repair_block=antenna_repair_block,
         filler_block=filler_block,
         tapcell_prune_block=tapcell_prune_block,

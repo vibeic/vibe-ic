@@ -1,4 +1,4 @@
-"""The end-of-flow repair must RECOVER from EST-0104, not report a non-measurement.
+"""R9 — the post-antenna DRV repair must RECOVER from EST-0104, not surrender.
 
 WHAT THIS DEFENDS
 -----------------
@@ -12,21 +12,11 @@ inDbITermPostDisconnect / inDbInstSwapMasterAfter) and is cleared in exactly two
 places: `updateParasitics()` (incremental mode only) and
 `estimateWireParasitics()` — i.e. `estimate_parasitics -placement`.
 
-The #147 end-of-flow estimate block runs after the min-area patch and the PG
-reroute, both of which edit the netlist/odb, so it reached its two repairs with
-a dirty estimator and both were refused. Measured on caravel_user_project x
-sky130A, in that order in one log:
-
-    SPEF_REPAIR_WNS_BEFORE: 14.41737614545876
-    [ERROR EST-0104] inconsistent parasitics state
-    SPEF_REPAIR_DESIGN_NONFATAL: EST-0104
-    [ERROR EST-0104] inconsistent parasitics state
-    SPEF_REPAIR_SETUP_NONFATAL: EST-0104
-    SPEF_REPAIR_WNS_AFTER: 14.41737614545876
-
-A before/after pair identical to the digit reads as "the repair ran and found
-nothing to gain". It means the repair never ran at all — the block exists to
-MEASURE recoverable setup and had been measuring nothing on every round.
+Antenna repair inserts diodes ("[INFO GRT-0015] Inserted 28 diodes"), so every
+repair the flow attempts AFTER antenna repair is refused. Measured on
+caravel_user_project x sky130A: the post-antenna loop saw
+`SDR_DRV_PASS1_BEFORE: 4` and then `SDR_REPAIR_NONFATAL: EST-0104` — it could
+see the violations and was not permitted to fix them.
 
 Measured, RUN not asserted, on the real design with REAL global routes present
 so every flag was a legal call:
@@ -184,8 +174,62 @@ def test_the_repair_is_never_retried_without_a_reannotated_spef():
 
 
 # --------------------------------------------------------------------------
-# WIRED IN: the #147 end-of-flow estimate block must actually carry it
+# WIRED IN: the shipped repair loop must actually carry it
 # --------------------------------------------------------------------------
+
+def test_signoff_drv_repair_loop_recovers_instead_of_breaking_out():
+    """The loop's repair_design failure branch must try the recovery before it
+    gives up, and must still give up when the recovery did not take."""
+    tcl = p3._v1_8_100_signoff_drv_repair_tcl("/OUT")
+    i_repair = tcl.index("repair_design -max_wire_length")
+    i_detect = tcl.index("SDR_EST0104_DETECTED")
+    i_giveup = tcl.index('SDR_REPAIR_NONFATAL: $_sdr_rd"; break')
+    assert i_repair < i_detect < i_giveup, (i_repair, i_detect, i_giveup)
+    # the give-up is now conditional on the recovery having failed
+    assert "if {!$_sdr_est_rec} { puts \"SDR_REPAIR_NONFATAL" in tcl
+    # and the retry re-issues the SAME command, margins included
+    head = tcl[i_detect:i_giveup]
+    assert "repair_design -max_wire_length $_sdr_mwl" in head
+    assert "-slew_margin" in head and "-cap_margin" in head
+
+
+# --------------------------------------------------------------------------
+# The loop that carries the recovery must itself be probe-gated
+# --------------------------------------------------------------------------
+
+def _cmd_lines(tcl):
+    return "\n".join(ln for ln in tcl.splitlines()
+                     if not ln.lstrip().startswith("#"))
+
+
+def test_postroute_drv_repair_is_only_emitted_on_the_fork_openroad():
+    """The loop drives repair_design / repair_timing on a post-detailed-route
+    SPEF-annotated design. On STOCK OpenROAD the RSZ repair-move family
+    segfaults there (#581 r3) and a Tcl `catch` cannot contain a Signal 11 —
+    the process dies and no GDS is written. So it must be emitted only when the
+    fork-capability probe says yes, exactly like the end-of-flow estimate
+    block it shares a hazard with."""
+    stock = _cmd_lines(p3._post_route_spef_repair_tcl("/out", "/t.lef", "/c.lef"))
+    for banned in ("repair_design", "repair_timing",
+                   "detailed_route", "global_route"):
+        assert banned not in stock, banned
+    # …and the extraction it wraps is still there, so a stock user keeps the
+    # sign-off SPEF the multi-corner STA reads.
+    assert "extract_parasitics" in stock and "write_spef" in stock
+    assert "SPEF_MEASURE_COMPLETE" in stock
+
+    fork = _cmd_lines(p3._post_route_spef_repair_tcl(
+        "/out", "/t.lef", "/c.lef", fork_repair_capable=True))
+    assert "repair_design" in fork
+    assert "SDR_EST0104_DETECTED" in fork
+
+
+def test_the_probe_negative_path_says_why_it_skipped():
+    """An empty block and a skipped block are different claims; the log must
+    carry the second one."""
+    stock = p3._post_route_spef_repair_tcl("/out", "/t.lef", "/c.lef")
+    assert "SDR_SKIP_STOCK_OPENROAD" in stock
+
 
 def test_end_of_flow_estimate_block_also_recovers():
     """The #147 end-of-flow estimate ran AFTER the min-area patch and the PG
