@@ -597,6 +597,97 @@ def _first_module_name(netlist_text: str) -> str | None:
     return m.group(1) if m else None
 
 
+_ATPG_NO_RESET_BYPASS = "__vibeic_atpg_no_reset_bypass__"
+
+
+def _atpg_liberty_container_path(project: "Path", cell_model: str,
+                                 pdk_dir: "Path | None") -> str:
+    """Container path of a std-cell Liberty for the SAME library as
+    `cell_model`, or "" if none resolves.
+
+    chip/PDK-AGNOSTIC: every PDK we ship lays a std-cell library out as
+    ``<lib_root>/verilog/<x>.v`` beside ``<lib_root>/lib/<x>.lib`` (open_pdks
+    sky130A/gf180mcuD and IHP-Open-PDK sg13g2 all do). Swap the leaf directory
+    and glob for a typical corner, then any corner. No cell/vendor literal."""
+    cm = (cell_model or "").split()[0] if cell_model else ""
+    if not cm or "/verilog/" not in cm:
+        return ""
+    root = cm.rsplit("/verilog/", 1)[0]
+    for pat in (f"{root}/lib/*typ*.lib", f"{root}/lib/*tt*.lib",
+                f"{root}/lib/*.lib"):
+        try:
+            # NB: _run_docker " ".join()s argv into ONE string handed to an
+            # outer `bash -c`, so the glob must be left UNQUOTED for that shell
+            # to expand — and an inner `bash -lc` would swallow the arguments.
+            ec, out, _ = _run_docker(project, ["ls", pat, "2>/dev/null"],
+                                     timeout=60, pdk_dir=pdk_dir)
+        except Exception:
+            continue
+        for ln in (out or "").splitlines():
+            ln = ln.strip()
+            if ln.endswith(".lib"):
+                return ln
+    return ""
+
+
+def cut_netlist_load_count(cut_text: str, name: str) -> int:
+    """Number of places `name` is CONSUMED (driven into something) in a cut
+    netlist: instance pin connections ``.PIN(name)`` and continuous-assignment
+    right-hand sides. Port/wire DECLARATIONS are deliberately not counted — a
+    declared-but-unloaded signal is exactly the "no loads" case this feeds.
+
+    chip/PDK-AGNOSTIC: pure structural text analysis, no cell/vendor literal."""
+    if not name:
+        return 0
+    esc = re.escape(name)
+    n = len(re.findall(r"\.\s*[A-Za-z_$][\w$]*\s*\(\s*\\?" + esc + r"\s*\)",
+                       cut_text))
+    for m in re.finditer(r"^\s*assign\b[^=]*=([^;]*);", cut_text, re.M):
+        if re.search(r"(?<![\w$\\.])\\?" + esc + r"(?![\w$.])", m.group(1)):
+            n += 1
+    return n
+
+
+def _atpg_reset_bypass_name(cut_path: "Path", reset: str | None,
+                            clock: str) -> tuple[str, str]:
+    """Decide which name to give ``fault atpg --reset`` — i.e. which port the
+    ATPG engine will BYPASS and hold at a constant for every simulation.
+
+    `fault atpg` bypasses a reset BY NAME and defaults to the literal "rst".
+    A design whose reset port is called `rst` therefore had that input frozen
+    even though nothing asked for it, making its entire fanout cone untestable.
+
+    The cut netlist is a purely COMBINATIONAL full-scan model (every flop became
+    a pseudo-PI/pseudo-PO pair), so each of its primary inputs is scan-
+    controllable and none should be frozen. Decide structurally:
+
+      * candidate HAS loads in the cut netlist -> it is live combinational logic
+        (a SYNCHRONOUS reset, or a reset that also feeds datapath) -> return the
+        sentinel so NOTHING is bypassed and the cone stays testable.
+      * candidate has NO loads -> it only drove flop async pins, which the cut
+        removed -> bypassing is a no-op; keep the caller's/tool's behaviour.
+
+    Returns ``(name_to_pass, human_readable_note)``."""
+    candidate = (reset or "rst").strip()
+    try:
+        cut_text = Path(cut_path).read_text(errors="replace")
+    except Exception as exc:                                   # unreadable cut
+        return _ATPG_NO_RESET_BYPASS, (
+            f"cut netlist unreadable ({exc}); passed sentinel --reset so no "
+            f"data input is frozen by the tool's name-based default")
+    loads = cut_netlist_load_count(cut_text, candidate)
+    if loads > 0:
+        return _ATPG_NO_RESET_BYPASS, (
+            f"reset candidate '{candidate}' has {loads} load(s) in the cut "
+            f"netlist -> SYNCHRONOUS/datapath reset, kept ATPG-CONTROLLABLE "
+            f"(not bypassed); freezing it would make its whole fanout cone "
+            f"untestable")
+    return candidate, (
+        f"reset candidate '{candidate}' has no loads in the cut netlist "
+        f"(async-only: its flop pins were removed by the cut) -> bypassing is "
+        f"a no-op; passed through")
+
+
 def _read_netlist_text(project: Path, netlist_rel: str, limit: int = 200000) -> str:
     try:
         return (project / netlist_rel).read_text(errors="ignore")[:limit]
@@ -1264,6 +1355,44 @@ def run_fault(
     # cell model) cannot resolve the model's UDP primitives on its own, so
     # build a combined model (primitives + cells) first and point atpg at it.
     eff_cell_model, cell_prep = _cell_model_prep(cell_model)
+    # RESTORED 2026-07-31. v1.8.48 — a commit whose message is entirely about a
+    # spare-net filter in signoff_spef_repair.tcl and mentions ATPG zero times —
+    # deleted 166 lines from this file as collateral: the reset-bypass decision,
+    # its load counter, the --reset flags, and this async set/reset observability
+    # integration. Nine tests named for those properties went red and stayed red.
+    # The augmented model is written to its OWN file and `cut_netlist.v` is left
+    # BYTE-FOR-BYTE ALONE: the transition/path-delay/SDD ATPG producers all
+    # re-read that same cut netlist, so mutating it in place would silently
+    # change THEIR fault sets and miters (it broke DT1 outright when tried).
+    # One producer must never rewrite a shared upstream artefact.
+    async_obs: dict | None = None
+    try:
+        import fault_cut_async_observe as _fcao      # local import: no cycle
+        lib_ctr = _atpg_liberty_container_path(project, cell_model, pdk_dir)
+        if lib_ctr:
+            ec_l, lib_text, _ = _run_docker(
+                project, ["cat", lib_ctr], timeout=180, pdk_dir=pdk_dir)
+            if ec_l == 0 and lib_text.strip():
+                cut_text = (project / cut_out).read_text(errors="replace")
+                adds, async_obs = _fcao.build_additions(
+                    (project / netlist_rel).read_text(errors="replace"),
+                    cut_text, lib_text)
+                async_obs["liberty"] = lib_ctr
+                if adds:
+                    obs_rel = str(Path(cut_out).with_name(
+                        Path(cut_out).stem + "_asyncobs.v"))
+                    (project / obs_rel).write_text(
+                        _fcao.augment_cut(cut_text, adds))
+                    cut_abs = f"/work/{obs_rel}"      # ATPG reads the augmented one
+                    async_obs["atpg_netlist"] = obs_rel
+                    async_obs["shared_cut_netlist_untouched"] = cut_out
+            else:
+                async_obs = {"skipped": f"liberty unreadable in container: {lib_ctr}"}
+        else:
+            async_obs = {"skipped": "no std-cell liberty resolved from cell model"}
+    except Exception as exc:                          # never fail the ATPG on this
+        async_obs = {"error": f"{type(exc).__name__}: {exc}"}
+
     atpg_cmd = [
         "fault", "atpg",
         "--cell-model", eff_cell_model,
@@ -1282,10 +1411,23 @@ def run_fault(
     # not. Restored 2026-07-31 — the guard test named for exactly this property
     # (test_atpg_always_passes_reset_explicitly) had been RED at origin/main and
     # was reporting it correctly the whole time; nobody was reading it.
-    if reset:
-        atpg_cmd += ["--reset", reset]
-        if reset_active_low:
-            atpg_cmd += ["--reset-active-low"]
+    # WHICH name to pass is a structural question, not a config one. The cut
+    # netlist is a purely COMBINATIONAL full-scan model — every flop became a
+    # pseudo-PI/pseudo-PO pair — so every primary input is scan-controllable and
+    # none should be frozen. `_atpg_reset_bypass_name` decides by counting loads:
+    # a candidate WITH loads is live combinational logic (a synchronous reset, or
+    # one that also feeds datapath), and bypassing it would freeze its whole
+    # fanout cone and make a testable design read as untestable; a candidate with
+    # NO loads only drove flop async pins the cut already removed, so bypassing
+    # is a no-op.
+    #
+    # v1.8.91 passed `reset` unconditionally. That restored the flag but not this
+    # decision, and unconditional is WRONG in the synchronous case — it is the
+    # exact defect v1.8.43 fixed. Corrected here.
+    _bypass_name, _bypass_note = _atpg_reset_bypass_name(Path(cut_abs), reset, clock)
+    atpg_cmd += ["--reset", _bypass_name]
+    if reset_active_low and _bypass_name != _ATPG_NO_RESET_BYPASS:
+        atpg_cmd += ["--reset-active-low"]
     atpg_cmd += [
         "-o", f"/work/{tv_out}",
         "--output-coverage-metadata", f"/work/{cov_out}",
