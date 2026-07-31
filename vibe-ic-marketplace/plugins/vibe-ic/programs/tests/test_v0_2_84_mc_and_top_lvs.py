@@ -264,9 +264,20 @@ def _fake_ms_docker(lvs_text):
             return 0, "MAGIC_EXT2SPICE_DONE", ""
         if "netgen" in cmd:
             import re as _re
-            m = _re.search(r"(\S+/top_lvs\.rpt)", cmd)
-            Path(m.group(1)).parent.mkdir(parents=True, exist_ok=True)
-            Path(m.group(1)).write_text("Netgen 1.5\n" + lvs_text)
+            # The report path moved off the command line and into the Tcl the
+            # program tells netgen to `source`: netgen's `lvs` takes a two-
+            # element {file cell} list per side, and the schematic side is
+            # always several files, so they must be read into one netlist first
+            # -- which needs a script. Read what the program actually wrote,
+            # exactly as netgen would.
+            m = _re.search(r"source\s+(\S+\.tcl)", cmd)
+            assert m, f"netgen invoked without a script to source: {cmd}"
+            tcl = Path(m.group(1)).read_text()
+            rpt = _re.search(r"(\S+/top_lvs\.rpt)",
+                             tcl.replace("{", " ").replace("}", " "))
+            assert rpt, f"the netgen script names no report file:\n{tcl}"
+            Path(rpt.group(1)).parent.mkdir(parents=True, exist_ok=True)
+            Path(rpt.group(1)).write_text("Netgen 1.5\n" + lvs_text)
             return 0, lvs_text, ""
         return 0, "", ""
     return fake

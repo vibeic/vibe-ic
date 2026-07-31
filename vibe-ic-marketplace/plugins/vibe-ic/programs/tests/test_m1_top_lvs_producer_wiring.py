@@ -119,9 +119,20 @@ def _fake_toolchain(lvs_text: str):
             Path(m.group(1)).write_text(".subckt chip_top a b\n.ends\n")
             return 0, "MAGIC_EXT2SPICE_DONE", ""
         if "netgen" in cmd:
-            m = re.search(r"(\S+/top_lvs\.rpt)", cmd)
-            Path(m.group(1)).parent.mkdir(parents=True, exist_ok=True)
-            Path(m.group(1)).write_text("Netgen 1.5\n" + lvs_text)
+            # The report path used to sit on the command line. It now lives in
+            # the Tcl script netgen is told to `source`, because netgen's `lvs`
+            # takes a two-element {file cell} list per side and the schematic
+            # side is always several files -- they have to be read into one
+            # netlist first, which needs a script. So the fake reads the script
+            # the program actually wrote, exactly as netgen would.
+            m = re.search(r"source\s+(\S+\.tcl)", cmd)
+            assert m, f"netgen invoked without a script to source: {cmd}"
+            tcl = Path(m.group(1)).read_text()
+            rpt = re.search(r"(\S+/top_lvs\.rpt)", tcl.replace("{", " ")
+                            .replace("}", " "))
+            assert rpt, f"the netgen script names no report file:\n{tcl}"
+            Path(rpt.group(1)).parent.mkdir(parents=True, exist_ok=True)
+            Path(rpt.group(1)).write_text("Netgen 1.5\n" + lvs_text)
             return 0, lvs_text, ""
         return 0, "", ""
     return fake

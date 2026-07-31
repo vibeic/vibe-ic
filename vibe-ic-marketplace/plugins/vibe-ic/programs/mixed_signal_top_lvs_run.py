@@ -130,6 +130,76 @@ def _tool_ok(container, tool):
     return rc == 0
 
 
+def netgen_lvs_script(sch_paths, layout_path, layout_top, sch_top,
+                      setup_path, report_path) -> str:
+    """The Tcl netgen actually consumes, built so it can be tested without one.
+
+    netgen's `lvs` takes a TWO-element `{filename cellname}` list per side; its
+    own source falls back to treating the whole string as ONE filename when the
+    list length is not 2. The schematic side here is always the gate netlist
+    plus one `.v` per analog hardmacro, i.e. always >= 2 files, so it can never
+    be expressed as that pair directly.
+
+    netgen's answer is to read the files into ONE netlist first --
+    `readnet <format> <file> <fnum>` forces a file into the netlist already held
+    in `fnum` -- and then identify that netlist's top cell as `{<fnum> <cell>}`,
+    which `CommonParseCell` accepts precisely because the first element is an
+    integer file number.
+
+    The schematic side is `{$fnum <top>}` and NOT a bare cell name. A bare name
+    is ambiguous exactly when LVS is doing its job: both sides normally hold a
+    cell of the same name, and `lay_top` defaults to `top` whenever the layout
+    has no `_flat` subckt. Measured against netgen 1.5.323: the bare name
+    resolved to the layout's copy and netgen refused with "Both cells are in the
+    same netlist: Cannot compare!" -- while still exiting cleanly and writing no
+    report, which is the second reason the caller judges on the report's
+    existence rather than on an exit code.
+
+    Words are wrapped in Tcl braces, not shell-quoted: this is a Tcl script, and
+    shell quoting would reach netgen verbatim. The layout pair is braced too --
+    `lvs` runs `llength` on it, and Tcl's list parser raises "unmatched open
+    quote in list" on a word carrying a stray quote.
+    """
+    def _tcl(word) -> str:
+        return "{" + str(word) + "}"
+
+    lines = [f"set fnum [readnet verilog {_tcl(sch_paths[0])}]"]
+    lines += [f"readnet verilog {_tcl(p)} $fnum" for p in sch_paths[1:]]
+    lines.append(
+        f"lvs {_tcl(str(layout_path) + ' ' + str(layout_top))} "
+        f"[list $fnum {_tcl(sch_top)}] {_tcl(setup_path)} {_tcl(report_path)}")
+    return "\n".join(lines) + "\n"
+
+
+def lvs_failure_verdict(report_written: bool, rc: int, transcript: str) -> dict:
+    """Distinguish "netgen compared and found a mismatch" from "netgen never
+    compared anything".
+
+    Both used to return the same sentence: "real compare ran on the merged GDS;
+    design/extraction defect". That attributed to the DESIGN a comparison that
+    had not happened -- netgen was aborting in ReadNetlist, before either side
+    was loaded -- and it pointed the reader at an LVS report the run had never
+    written.
+
+    netgen writes its report only after loading both sides and comparing them,
+    so the report's existence is the evidence of whether a comparison occurred.
+    Either way the verdict stays FAIL: an LVS that cannot run is not a pass.
+    What changes is what is claimed about the design, and whether the reader is
+    handed the tool output they need instead of a dangling report path.
+    """
+    if report_written:
+        return {"verdict": "FAIL", "rc": 1, "compared": True,
+                "reason": ("netgen top-level LVS did not match — real compare "
+                           "ran on the merged GDS; design/extraction defect")}
+    return {"verdict": "FAIL", "rc": 1, "compared": False,
+            "reason": (f"netgen produced NO comparison (rc={rc}): it wrote no "
+                       f"report, so neither side was compared. This is a "
+                       f"tool/invocation failure, NOT a design or extraction "
+                       f"defect — read the transcript before attributing "
+                       f"anything to the design."),
+            "transcript_tail": (transcript or "")[-800:]}
+
+
 def run(project: Path, top: str, container: str, pdk: str) -> dict:
     ms_dir = project / "phase3" / "mixed_signal"
     rpt_dir = project / "reports" / "analog" / "mixed_signal"
@@ -222,15 +292,34 @@ def run(project: Path, top: str, container: str, pdk: str) -> dict:
         lay_top = f"{top}_flat"
 
     # 3) netgen LVS — schematic side = gate netlist + hardmacro .v stubs
+    #
+    # netgen's `lvs` takes a TWO-element `{filename cellname}` list per side. It
+    # says so in its own source: if `llength` is not 2 it falls back to treating
+    # the WHOLE string as one filename. This site used to join every schematic
+    # file into one space-separated string and append the top cell, handing
+    # netgen four or more elements, so netgen dutifully looked for a file
+    # literally named "<netlist>.v <macro1>.v <macro2>.v <top>", failed to open
+    # it, and never loaded the schematic side at all.
+    #
+    # That made M1 unpassable for EVERY design with an analog hardmacro — the
+    # only kind of design M1 exists for — because the schematic side is always
+    # the gate netlist plus one `.v` per macro, i.e. always >= 2 files.
+    #
+    # netgen's documented way to compare against several files is to read them
+    # into ONE netlist first (`readnet <format> <file> <fnum>` forces a file
+    # into the netlist already held in `fnum`) and then name the CELL, which
+    # `lvs` resolves through `canonical` because it has already been read:
+    # "A single <filename>, or any valid_cellname form if the file has already
+    # been read."
     lvs_rpt = rpt_dir / "top_lvs.rpt"
-    sch_files = " ".join(
-        _to_container_path(f, container) for f in [netlist] + macro_v)
+    sch_paths = [_to_container_path(f, container) for f in [netlist] + macro_v]
+    lvs_tcl = ms_dir / "top_lvs.tcl"
+    lvs_tcl.write_text(netgen_lvs_script(
+        sch_paths, _to_container_path(spice_out, container), lay_top, top,
+        netgen_setup, _to_container_path(lvs_rpt, container)))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-           f"netgen -batch lvs "
-           f"\"{_to_container_path(spice_out, container)} {lay_top}\" "
-           f"\"{sch_files} {top}\" {shlex.quote(netgen_setup)} "
-           f"{_to_container_path(lvs_rpt, container)}")
+           f"netgen -batch source {_to_container_path(lvs_tcl, container)}")
     rc, out, err = _docker_exec(
         container, cmd, marker=_to_container_path(spice_out, container))
     blob = (out or "") + "\n" + (err or "") + "\n" + (
@@ -268,10 +357,9 @@ def run(project: Path, top: str, container: str, pdk: str) -> dict:
 
     if lvs_pass:
         return {"verdict": "PASS", "rc": 0, **top_lvs}
-    return {"verdict": "FAIL", "rc": 1,
-            "reason": ("netgen top-level LVS did not match — real compare "
-                       "ran on the merged GDS; design/extraction defect"),
-            **top_lvs}
+    return {**lvs_failure_verdict(
+        report_written=lvs_rpt.is_file() and lvs_rpt.stat().st_size > 0,
+        rc=rc, transcript=(out or "") + (err or "")), **top_lvs}
 
 
 def main(argv=None) -> int:
