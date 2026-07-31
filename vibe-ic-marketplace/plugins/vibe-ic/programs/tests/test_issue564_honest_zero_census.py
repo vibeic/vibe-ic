@@ -49,6 +49,18 @@ def _load():
 
 G = _load()
 
+#: Per-gate probe budget. 45s, not the 120s this started at: the CI harness
+#: ceiling is harness//3 = 60s, and an inner bound above it can outlive the
+#: harness and kill the SESSION instead of failing the test. Measured cost of a
+#: full `audit_project_gates` run over 493 gates is 3.1s, so 45 is fifteen
+#: times the whole sweep for what is a PER-GATE budget.
+#:
+#: Caught by `test_the_advisory_residual_does_not_grow_unreviewed`, which is a
+#: ratchet on exactly this — the third time I have written an over-wide inner
+#: timeout this session, and the first time a gate caught it rather than a
+#: landing run.
+_PROBE_BUDGET_S = 45
+
 
 def test_the_honest_zero_predicate_accepts_the_shapes_that_were_fixed():
     """The two rc-0 defects were HONEST by the existing standard.
@@ -84,7 +96,7 @@ def test_census_is_reported_and_does_not_move_the_verdict():
     and a verdict that moved would mean this landed as an enforcement change
     while its docstring says otherwise.
     """
-    verdict, findings, stats = G.audit_project_gates(_PROGRAMS, timeout=120)
+    verdict, findings, stats = G.audit_project_gates(_PROGRAMS, timeout=_PROBE_BUDGET_S)
     assert verdict == "PASS", [f.get("gate") for f in findings]
     assert not findings, findings
     census = stats.get("absent_rc_zero_honest_but_passing", 0)
@@ -98,7 +110,7 @@ def test_census_is_reported_and_does_not_move_the_verdict():
 
 def test_each_census_entry_carries_its_evidence():
     """A name with no output is a list nobody can act on."""
-    _, _, stats = G.audit_project_gates(_PROGRAMS, timeout=120)
+    _, _, stats = G.audit_project_gates(_PROGRAMS, timeout=_PROBE_BUDGET_S)
     for entry in stats.get("absent_rc_zero_honest_but_passing_gates", []):
         assert entry["gate"], entry
         assert entry["kind"] == "HONEST_ZERO_BUT_EXIT_ZERO", entry
@@ -113,7 +125,7 @@ def test_the_three_fixed_gates_are_no_longer_in_the_census():
     absent-project loop skips them before the census is reached. If one comes
     back, its fix regressed.
     """
-    _, _, stats = G.audit_project_gates(_PROGRAMS, timeout=120)
+    _, _, stats = G.audit_project_gates(_PROGRAMS, timeout=_PROBE_BUDGET_S)
     named = {e["gate"] for e in
              stats.get("absent_rc_zero_honest_but_passing_gates", [])}
     for gate in ("interface_encoding_audit", "oe_pattern_check",

@@ -380,9 +380,63 @@ def _clock_ports_from_rtl(rtl_files: List[Path], surface: set) -> List[str]:
         for sig in _EDGE_SIG_RE.findall(txt):
             if surface and sig not in surface:
                 continue
+            if sig in _async_reset_signals(txt):
+                # An asynchronous reset is edge-sensitive and is NOT a clock.
+                #
+                # The caller takes `_derived[0]`, so ORDER inside the event
+                # control decided the answer:
+                #   always @(posedge CK4 or negedge rst_n)  -> CK4    correct
+                #   always @(negedge rst_n or posedge CK4)  -> rst_n  WRONG
+                # Both spellings are legal and both are common, so the SDC got
+                # a create_clock on the reset whenever the reset happened to be
+                # written first — and a create_clock on a reset is worse than
+                # the vacuous SDC this derivation exists to prevent.
+                #
+                # Recognised STRUCTURALLY, not by name: a signal that shares an
+                # event control with at least one other edge-sensitive signal
+                # AND is not the one the always-block's body is clocked on is
+                # the async set/reset by the shape of the construct. Naming
+                # (`rst`/`reset`) is the proxy this whole derivation replaced.
+                continue
             if sig not in seen:
                 seen.append(sig)
     return seen
+
+
+def _async_reset_signals(txt: str) -> set:
+    """Edge-sensitive signals that the block's own body TESTS — the async reset.
+
+    In a multi-edge event control exactly one signal is the clock and the rest
+    are async set/reset, and the body says which:
+
+        always @(posedge CK4 or negedge rst_n)
+          if (!rst_n) q <= 0; else q <= ~q;     <- rst_n is TESTED, CK4 is not
+
+    The reset is the signal the reset branch is conditioned on. The clock never
+    appears in that condition, because a clocked block does not ask whether its
+    clock is high.
+
+    POSITION IS NOT THE DISCRIMINATOR, which is what my first version used.
+    `always @(negedge rst_n or posedge CK4)` is legal and common, and there the
+    reset is written FIRST — a position rule picks the reset as the clock in
+    exactly the case that motivated this fix.
+
+    A single-edge control contributes nothing: there is no reset to identify.
+    `negedge` alone is not it either — `always @(negedge clk)` is a legitimate
+    falling-edge clock and must keep clk.
+    """
+    out: set = set()
+    for m in re.finditer(r"@\s*\(([^)]*)\)([^;]*)", txt):
+        edges = re.findall(r"\b(?:posedge|negedge)\s+([A-Za-z_]\w*)", m.group(1))
+        if len(edges) < 2:
+            continue
+        # The first `if (...)` after the event control is the reset branch.
+        cond = re.search(r"\bif\s*\(([^)]*)\)", m.group(2))
+        tested = set(re.findall(r"[A-Za-z_]\w*", cond.group(1))) if cond else set()
+        for e in edges:
+            if e in tested:
+                out.add(e)
+    return out
 
 
 def _collect_all_module_ports(rtl_files: List[Path]) -> set:
