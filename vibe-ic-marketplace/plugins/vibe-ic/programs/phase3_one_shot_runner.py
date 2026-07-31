@@ -5779,6 +5779,22 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 metal_prefix=reg.get("metal_prefix") or "M",
                 clk_buf=reg.get("clk_buf_cell"),
                 clk_buf_root=reg.get("clk_buf_root_cell"),
+                # This branch built a PdkConfig without it, so `tapcell_master`
+                # fell to the None default — the SAME value that means "this PDK
+                # ships no tapcell master". ASAP7 does ship one
+                # (`MACRO TAPCELL_ASAP7_75t_R`, `CLASS CORE WELLTAP`,
+                # `SITE asap7sc7p5t` — the site this entry declares), so the
+                # tapcell step self-skipped with TAPCELL_SKIPPED and the PERC
+                # latch-up gate then read the 0-tap DEF as a TAPLESS-cell PDK
+                # and returned INCOMPLETE. A real latch-up exposure reported as
+                # a non-blocking indeterminate — the "strictly worse" direction
+                # the tapless carve-out was written to avoid (#586).
+                tapcell_master=reg.get("tapcell_master"),
+                # Absent for this entry, so the generic 14.0 um default applies.
+                # That is CONSERVATIVE at 7nm (more taps than needed), not
+                # unsafe, and it is not an ASAP7-specific number — declare one
+                # in the registry when a foundry max-tap-distance rule is known.
+                tapcell_distance_um=float(reg.get("tapcell_distance_um") or 14.0),
                 macro_libs=_mlibs, macro_lefs=_mlefs,
                 macro_gds=_mgds, macro_v=_mv,
             )

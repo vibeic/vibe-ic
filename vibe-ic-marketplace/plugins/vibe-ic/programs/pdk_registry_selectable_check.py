@@ -196,6 +196,38 @@ def audit(registry: Path, container: str) -> dict:
                            "and unselectable.",
             })
 
+    # A THIRD name-half invariant: `tapcell_master` must be EXPLICIT.
+    #
+    # The resolver reads it with `reg.get("tapcell_master")`, so an OMITTED key
+    # and an explicit `null` arrive identically as None — and None is a load-
+    # bearing value: it means "this PDK ships no tapcell master", which routes
+    # the PERC latch-up gate down the tapless-cell path. That path is correct
+    # for a genuinely tapless PDK (ihp-sg13g2, ties inside every std cell) and
+    # WRONG for a tapcell-methodology PDK, where it downgrades a skipped tapcell
+    # step from a conclusive FAIL to a non-blocking INCOMPLETE — a real latch-up
+    # exposure reported as an indeterminate (#586).
+    #
+    # Found live on `asap7`, whose branch built its PdkConfig without the field
+    # while the image ships `MACRO TAPCELL_ASAP7_75t_R`. Requiring the key makes
+    # "tapless" something an entry has to SAY, never something it can forget.
+    #
+    # `custom_auto_detect` declares no container_path — it is a sentinel, not a
+    # PDK, and is exempt for the same reason the name check skips it.
+    implicit_tapless = []
+    for e in entries:
+        name, cp = e.get("name"), e.get("container_path")
+        if not name or not cp:
+            continue
+        if "tapcell_master" not in e:
+            implicit_tapless.append({
+                "name": name,
+                "problem": "no `tapcell_master` key. The resolver cannot tell "
+                           "that from an explicit null, which means the PDK "
+                           "ships no tapcell master and sends the latch-up "
+                           "gate down the tapless-cell path. State it: the "
+                           "master's cell name, or null if genuinely tapless.",
+            })
+
     assets_checked = 0
     unresolved = []
     have_image = _container_alive(container)
@@ -230,6 +262,7 @@ def audit(registry: Path, container: str) -> dict:
                 shipped_unregistered.append({"path": rp, "basename": base})
     return {"readable": True, "entries": len(entries),
             "unselectable": unselectable,
+            "implicit_tapless": implicit_tapless,
             "asset_check": "ran" if have_image else "SKIPPED",
             "container": container, "assets_checked": assets_checked,
             "unresolved": unresolved,
@@ -312,8 +345,10 @@ def main(argv=None) -> int:
         print(f"[FAIL] {b} is no longer shipped-but-unregistered — shrink the "
               f"baseline so it cannot become standing permission.")
 
-    bad = rep["unselectable"] + rep["unresolved"] + su_new + [
-        {"paid": b} for b in su_paid]
+    bad = (rep["unselectable"] + rep["unresolved"] + su_new
+           + rep.get("implicit_tapless", []) + [{"paid": b} for b in su_paid])
+    for u in rep.get("implicit_tapless", []):
+        print(f"[FAIL] {u['name']}: {u['problem']}")
     for u in rep["unselectable"]:
         print(f"[FAIL] unselectable PDK: name={u['name']!r} but the image "
               f"ships {u['basename']!r} ({u['container_path']}). "
@@ -326,7 +361,8 @@ def main(argv=None) -> int:
               f"moves the failure from argument validation to a later, "
               f"harder-to-read death.")
         return 1
-    print("[PASS] every registry entry is selectable by its own name"
+    print("[PASS] every registry entry is selectable by its own name and "
+          "states its tapcell_master explicitly"
           + ("; every declared asset resolves." if rep["asset_check"] == "ran"
              else " (asset half not checked)."))
     return 0
