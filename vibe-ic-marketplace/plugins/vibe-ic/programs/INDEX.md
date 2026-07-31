@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1015
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1015)
+- **Total programs (excluding helpers / shims):** 1016
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1016)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1006 |
+| `any` | 1007 |
 
 ## Alphabetical listing
 
@@ -854,6 +854,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sequential_waveform_synth` | any | — | DETERMINISTIC multi-bit / sequential waveform → RTL. |
 | `serdes_decode_synth` | any | — | a DETERMINISTIC solver for two ATOMIC CVDP "code generation" families the shipped solvers MISS: |
 | `serdes_width_synth` | any | — | deterministic SOLVER for the serial<->parallel / data-width-conversion family (parallel-to-serial, serial-to-parallel, N-to-2N width conv... |
+| `serial_parallel_mul_synth` | any | — | deterministic SOLVER for the SERIAL-PARALLEL integer-multiplier subset of ``digital_arithmetic_primitive`` (spec -> RTL). |
 | `serial_protocol_fsm_synth` | any | — | deterministic SOLVER for serial / protocol receiver FSMs whose behaviour is a PRECISE, mechanically-buildable protocol stated in PROSE (n... |
 | `sgmii_protocol_synth` | any | — | Serial-GMII (SGMII) protocol synth helper. |
 | `shape_b_sample_export` | any | — | deterministic Shape-B sample-export (ORGANIC #678). |
@@ -1087,7 +1088,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1006 programs)
+### `any` (1007 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1910,6 +1911,7 @@ _(no programs in this group)_
 - `sequential_waveform_synth` — DETERMINISTIC multi-bit / sequential waveform → RTL.
 - `serdes_decode_synth` — a DETERMINISTIC solver for two ATOMIC CVDP "code generation" families the shipped solvers MISS:
 - `serdes_width_synth` — deterministic SOLVER for the serial<->parallel / data-width-conversion family (parallel-to-serial, serial-to-parallel, N-to-2N width conv...
+- `serial_parallel_mul_synth` — deterministic SOLVER for the SERIAL-PARALLEL integer-multiplier subset of ``digital_arithmetic_primitive`` (spec -> RTL).
 - `serial_protocol_fsm_synth` — deterministic SOLVER for serial / protocol receiver FSMs whose behaviour is a PRECISE, mechanically-buildable protocol stated in PROSE (n...
 - `sgmii_protocol_synth` — Serial-GMII (SGMII) protocol synth helper.
 - `shape_b_sample_export` — deterministic Shape-B sample-export (ORGANIC #678).
