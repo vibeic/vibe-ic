@@ -50,6 +50,7 @@ from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
+import _rtl_include_hub as _hub  # noqa: E402  (include-hub aggregator predicate)
 
 # ── SBY transcript signatures (tool-output shapes, not chip literals) ──────
 # A multi-task run tags every line with `[<sby>_<task>]`; a single-task run
@@ -813,6 +814,26 @@ def run(project: Path, harness: Optional[Path] = None,
             if r.resolve() != dst.resolve():
                 shutil.copy2(r, dst)
             staged_rtl.append(r.name)
+        # An INCLUDE-HUB AGGREGATOR (a source whose body `include`s SIBLING
+        # sources that are ALSO staged standalone) must not be handed to
+        # `read_verilog` next to the files it includes: every included module
+        # is then elaborated twice and yosys ABORTS with
+        #     ERROR: Re-definition of module `\<name>'
+        # before any engine starts. sby reports rc=16 / "did not return a
+        # status" for every task, the step finds no clean proof and
+        # self-reports a FORMAL capability gap it does not actually have.
+        # Measured on caravel_user_project: `uprj_netlists.v` includes
+        # `user_project_wrapper.v` and `user_proj_example.v`, which the file
+        # list also carries standalone.
+        # Same predicate `_rtl_include_hub` that phase-2 synth, the LEC gold
+        # read and phase-3 synth already apply, so the selectors cannot drift.
+        # FAIL-OPEN in both directions: an unreadable file is not a hub, and
+        # if the filter would empty the list the unfiltered list is kept.
+        _sibs = {r.name for r in rtl}
+        _hubs = {r.name for r in rtl if _hub.is_include_hub(r, _sibs)}
+        _kept = [n for n in staged_rtl if n not in _hubs]
+        if _kept:
+            staged_rtl = _kept
         hdst = formal_dir / harness.name
         if harness.resolve() != hdst.resolve():
             shutil.copy2(harness, hdst)
