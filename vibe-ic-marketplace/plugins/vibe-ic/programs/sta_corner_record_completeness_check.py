@@ -530,10 +530,34 @@ def extract_drv(text: str) -> Dict[str, object]:
             counts[kind] = counts.get(kind, 0) + 1
 
     violations = {k: v for k, v in counts.items() if v > 0}
+    # vibe-ic#573 — a check type the run ASKED FOR whose table never appeared.
+    #
+    # `kinds_seen` is what the emitter's marker says was queried; `counts` gets a
+    # key only when a table with that title is actually PRINTED. The difference is
+    # a check that was requested and produced no table at all, which is NOT the
+    # same fact as a table with zero violator rows:
+    #
+    #   table present, no rows   the check ran over a real population and found
+    #                            nothing  ->  a genuine zero
+    #   no table at all          the check had nothing to report ON  ->  UNMEASURED
+    #
+    # Measured on caravel_user_project x sky130A: `set_max_fanout 16` IS declared
+    # in the sign-off SDC, and `report_check_types -max_fanout -violators` prints
+    # no fanout table whatsoever, because OpenSTA excludes constant-driven pins
+    # (`CheckFanouts::checkPin` -> `!sim()->isConstant(pin)`) and every tie cell
+    # present at link time is one. The design's tie-off net carries 30 loads
+    # against that limit of 16 and is silently outside the check.
+    #
+    # The pre-existing `SIGNOFF_MAX_FANOUT_SEMANTICS` note covers only the case
+    # where the SDC declares NO limit. This is the other one: a limit IS declared
+    # and the table is still empty by construction, which that note cannot
+    # distinguish and a reader would take for a clean result.
+    silent = [k for k in kinds_seen if k not in counts]
     return {
         "queried": queried,
         "query_error": query_error,
         "kinds_queried": kinds_seen,
+        "kinds_without_table": silent,
         "violations": violations,
         "total": sum(violations.values()),
     }
@@ -1216,6 +1240,31 @@ def evaluate(project: Path,
                 f"from a met one, so this record cannot show a slew violation "
                 f"even if every net has one")
             continue
+        # vibe-ic#573 — a check type that was ASKED FOR and printed no table.
+        # Reported BEFORE the violation branch because the two are independent:
+        # a record can carry real max_slew violations AND a silently absent
+        # max_fanout table, and reporting only the former would let the reader
+        # conclude the rest was checked and clean.
+        #
+        # DISCLOSED, NOT BLOCKING, and that is a deliberate split rather than
+        # timidity. The cause is in OpenSTA (`CheckFanouts::checkPin` excludes
+        # constant-driven pins, and every tie cell linked in from disk is one), so
+        # EVERY design with a tie-off would fail this the moment it blocked —
+        # which is a gate people switch off, not a gate that gets answered. The
+        # fix belongs in the fork; until it lands, the honest record is that the
+        # limit was declared, the check was requested, and nothing was measured.
+        silent = drv.get("kinds_without_table") or []
+        if silent:
+            rules.append("R5_DRV_KIND_UNMEASURED")
+            findings.append(
+                f"R5 {rpt} ({axis} axis) requested {', '.join(sorted(silent))} "
+                f"and OpenSTA printed no table for it. An ABSENT table is not a "
+                f"table with zero rows: the check reported on nothing, so this "
+                f"record cannot show a violation of that kind even if the design "
+                f"has one. On max_fanout this is reproducible — a declared "
+                f"set_max_fanout with every tie cell excluded as constant-driven "
+                f"(vibe-ic#573). DISCLOSED, not blocking.")
+
         viol: Dict[str, int] = drv.get("violations") or {}   # type: ignore[assignment]
         if viol:
             rules.append("R5_DRV_VIOLATION")
