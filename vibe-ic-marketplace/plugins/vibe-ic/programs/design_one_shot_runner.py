@@ -9815,6 +9815,60 @@ def _derive_dft_clock_name(blob: str) -> str:
     return clk
 
 
+def _derive_dft_reset_name(blob: str) -> Tuple[str, bool]:
+    """Derive ``(reset_port_name, active_low)`` from an RTL/netlist source blob
+    for ``fault chain``'s ``--reset`` argument. Chip-AGNOSTIC: pure string scan,
+    the same discipline as :func:`_derive_dft_clock_name`.
+
+    WHY THIS EXISTS. ``fault chain``'s boundary-scan cells take a reset, and its
+    ``--reset`` DEFAULTS TO THE LITERAL NAME ``rst`` (``fault chain --help``).
+    When the design's reset is called anything else, fault emits ``input rst;``
+    into the chained netlist BODY without adding ``rst`` to the module header,
+    and its own yosys resynthesis step dies with::
+
+        ERROR: Module port `\\rst' is not declared in module header.
+
+    The chain itself was built correctly — only the resynthesis fails — so the
+    run degrades to "scan insertion produced no publishable netlist", place and
+    route falls back to the PRE-DFT netlist, and the tape-out design ships with
+    NO scan chain while every gate still reads PASS-shaped. Measured A/B on
+    subservient x sky130A, identical except for this one flag:
+    ``--clock i_clk --reset i_rst`` -> rc=0, 272 internal + 29 boundary cells
+    published; ``--clock i_clk`` alone -> rc=65, no netlist.
+
+    Returns ``("", False)`` when no reset port is found, which preserves the
+    previous behaviour exactly (the caller then passes no ``--reset``).
+    """
+    blob = re.sub(r"/\*.*?\*/", " ", blob, flags=re.S)   # block comments
+    blob = re.sub(r"//[^\n]*", " ", blob)                # line comments
+    rst_ports = set(re.findall(
+        r"\binput\b[^;,\)\n]*?\b((?:[A-Za-z_]\w*?)?(?:rst|reset|Rst|Reset|RST|RESET)\w*)\b",
+        blob))
+    # A clock-ish name that merely contains "rst"/"reset" as a substring of some
+    # other word is excluded by requiring the token to be a real name part.
+    rst = next((r for r in sorted(rst_ports) if r.lower() in
+                ("rst", "reset", "rst_n", "resetn", "reset_n", "rst_ni",
+                 "i_rst", "i_rst_n", "rst_i", "reset_i", "arst", "arst_n",
+                 "areset", "areset_n", "nrst", "nreset")), "")
+    if not rst and rst_ports:
+        # Prefer a genuinely reset-like name over an incidental match, shortest.
+        _resetty = [r for r in rst_ports
+                    if r.lower().startswith(("rst", "reset", "i_rst",
+                                             "arst", "nrst", "areset"))
+                    or r.lower().endswith(("rst", "reset", "rst_n", "reset_n",
+                                           "rst_ni", "rstn", "resetn"))]
+        rst = sorted(_resetty or rst_ports, key=len)[0]
+    if not rst:
+        return "", False
+    low = rst.lower()
+    active_low = (low.endswith(("_n", "_ni", "n"))
+                  and not low.endswith(("_in", "in")))
+    # `rst`/`reset`/`i_rst` end in no polarity marker -> active-high.
+    if low in ("rst", "reset", "i_rst", "rst_i", "reset_i", "arst", "areset"):
+        active_low = False
+    return rst, active_low
+
+
 def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        ic_class: str, full_chip: bool = True
                        ) -> List[StepResult]:
@@ -9858,12 +9912,29 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
     # input. (Deliberately not _cdc_top_clock_ports — that helper's signature
     # is CDC-analysis-specific; a clock-port regex is all DFT needs.)
     clk = ""
+    # `fault chain` also needs the RESET name (its --reset default is the
+    # literal `rst`); derived from the SAME blob so the two can never disagree.
+    dft_rst, dft_rst_active_low = "", False
     try:
-        rtl_files = sorted([*rtl_dir.glob("*.v"), *rtl_dir.glob("*.sv")])
-        blob = "\n".join(f.read_text(errors="ignore") for f in rtl_files)
+        # DERIVE FROM THE TOP'S OWN PORTS, NOT FROM EVERY FILE IN rtl/.
+        # The old blob was the concatenation of every RTL file, so on any
+        # multi-module design a SUBMODULE's port name could win. Measured on
+        # subservient x sky130A: the blob yields `clk` — serv_top's port — while
+        # the chip top's clock is `i_clk`, and `fault chain --clock clk` then
+        # dies with "Module port `\clk' is not declared in module header",
+        # losing the scan chain exactly like the missing --reset did.
+        # The mapped netlist is flattened and contains ONLY the top's ports, and
+        # it is the very file `fault chain` is about to read, so it is the
+        # authoritative source here. Fall back to the RTL blob if unreadable.
+        blob = netlist.read_text(errors="ignore")
+        if not _derive_dft_clock_name(blob):
+            rtl_files = sorted([*rtl_dir.glob("*.v"), *rtl_dir.glob("*.sv")])
+            blob = "\n".join(f.read_text(errors="ignore") for f in rtl_files)
         clk = _derive_dft_clock_name(blob)
+        dft_rst, dft_rst_active_low = _derive_dft_reset_name(blob)
     except Exception:
         clk = ""
+        dft_rst, dft_rst_active_low = "", False
 
     # ================= Step 11 — DFT insertion (Fault ATPG) =================
     t0 = time.time()
@@ -9925,6 +9996,18 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                      "phase2/stage2/synth/netlist.v",
                      "--clock", clk, "--json",
                      str(_scan_json.relative_to(project))]
+        # `fault chain --reset` DEFAULTS TO THE LITERAL NAME `rst`. Leaving it
+        # unset makes fault declare `input rst;` in the chained netlist's body
+        # without adding it to the module header, and fault's own yosys
+        # resynthesis then refuses the file — so EVERY design whose reset is not
+        # literally named `rst` (i_rst, rst_n, rst_ni, resetn, arst_n, …) loses
+        # its scan chain, as a *disclosed skip* that still reads PASS-shaped
+        # while place-and-route silently falls back to the pre-DFT netlist.
+        # Derive it from the same blob the clock came from. Empty -> unchanged.
+        if dft_rst:
+            _scan_cmd += ["--reset", dft_rst]
+            if dft_rst_active_low:
+                _scan_cmd.append("--reset-active-low")
         if pdk:
             _scan_cmd += ["--pdk", pdk]
         if pdk and pdk == _cpdk.COMMERCIAL_PDK_ID:

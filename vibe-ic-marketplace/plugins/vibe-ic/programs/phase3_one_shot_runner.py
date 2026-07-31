@@ -1976,7 +1976,8 @@ def _reconcile_staged_sdc_drv(sdc_text: str, active_pdk_name: str,
 #     the violation it already had, and give the resizer a target to fix it.
 def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
                            container: str = "",
-                           project: Optional[Path] = None) -> Tuple[str, Dict[str, object]]:
+                           project: Optional[Path] = None,
+                           pdk_name: str = "") -> Tuple[str, Dict[str, object]]:
     """Append the ACTIVE PDK's DRV limits to a staged/design-supplied SDC that
     declares none, so `repair_design` has a slew/cap target.
 
@@ -2009,7 +2010,11 @@ def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
     fanout = None
     if not have_fanout and project is not None:
         try:
-            fanout = (_l9_declared_max_fanout(project)
+            # Both halves are needed and they are not alternatives: the L9 read
+            # is PDK-aware (a fanout cap is a per-PDK quantity), and the RTL
+            # replication bound is the fallback for a design that declares no
+            # SYNTH_MAX_FANOUT at all. Taking either alone loses a real case.
+            fanout = (_l9_declared_max_fanout(project, pdk_name)
                       or _rtl_replication_fanout_bound(project))
         except Exception:
             fanout = None
@@ -2038,8 +2043,10 @@ def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
     info["note"] = note
     _fanout_note = ""
     if fanout is not None:
-        _fanout_note = (f"SYNTH_MAX_FANOUT={fanout} — L9-declared reference "
-                        "fanout cap (design-declared; not fabricated).")
+        _fanout_note = (
+            f"max_fanout={fanout} — "
+            + _LAST_FANOUT_SOURCE.get("note", "design-declared fanout cap")
+            + " (not fabricated).")
     return text + _drv_constraints_sdc_block(
         slew, cap, note, max_fanout=fanout, fanout_note=_fanout_note), info
 
@@ -2048,7 +2055,8 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
                             drv_slew_ns: Optional[float] = None,
                             drv_cap_pf: Optional[float] = None,
                             drv_note: str = "",
-                            liberty_path: str = "") -> str:
+                            liberty_path: str = "",
+                            pdk_name: str = "") -> str:
     """Build the minimal silicon-top auto-SDC text emitted by ``step_pnr`` when
     the project stages no ``constraints/*.sdc`` for silicon.
 
@@ -2154,20 +2162,22 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     # ss-corner slew blow-up an uncapped fanout net causes. Resolved here (the
     # builder already reads project docs) so no call site changes; None when the
     # design declares no cap → SDC byte-identical to before (§4.05 no-fabricate).
-    # Prefer an L9-declared numeric SYNTH_MAX_FANOUT; else fall back to the
-    # design's RTL-declared broadcast-replication bound (FANOUT_GROUP) that
-    # synth necessarily collapses — see _rtl_replication_fanout_bound.
-    _l9_fanout = (_l9_declared_max_fanout(project)
+    # Prefer an L9-declared numeric SYNTH_MAX_FANOUT (read PDK-aware, since a
+    # fanout cap is a per-PDK quantity); else fall back to the design's own
+    # RTL-declared broadcast-replication bound (FANOUT_GROUP) that synth
+    # necessarily collapses — see _rtl_replication_fanout_bound.
+    _l9_fanout = (_l9_declared_max_fanout(project, pdk_name)
                   or _rtl_replication_fanout_bound(project))
     _fanout_note = ""
     if _l9_fanout is not None:
         _fanout_note = (
-            f"SYNTH_MAX_FANOUT={_l9_fanout} — design-declared reference fanout "
-            "cap (L9 SYNTH_MAX_FANOUT or the RTL replication FANOUT_GROUP the "
-            "synth optimiser collapses); set_max_fanout makes repair_design "
-            "split high-fanout nets so the ss-corner slew does not explode (a "
-            "fanout cap is a hard structural count, immune to the placement-"
-            "stage parasitic under-estimate).")
+            f"max_fanout={_l9_fanout} — "
+            + _LAST_FANOUT_SOURCE.get("note", "design-declared fanout cap")
+            + "; set_max_fanout makes repair_design split high-fanout nets so "
+              "the ss-corner setup slew does not explode (a fanout cap is a "
+              "hard structural count, immune to the placement-stage parasitic "
+              "under-estimate). Without it the sign-off max-fanout table is "
+              "empty BY CONSTRUCTION and the violation count is UNMEASURED.")
     sdc_text += _drv_constraints_sdc_block(
         drv_slew_ns, drv_cap_pf, drv_note,
         max_fanout=_l9_fanout, fanout_note=_fanout_note)
@@ -9012,8 +9022,90 @@ def _pin_layers_from_techlef(tech_lef_text: str,
 _L9_PL_DENSITY_RE = re.compile(
     r"PL_TARGET_DENSITY`?\s*\|\s*\*{0,2}\s*(0?\.\d+|\d+(?:\.\d+)?)\s*\*{0,2}\s*\|",
     re.IGNORECASE)
+# A utilisation DECLARED AS A RANGE is still a declaration. L9 tables
+# routinely write `| FP_CORE_UTIL | 35-45%(…prose…) |` — the old pattern
+# required a single number immediately followed by the cell delimiter, so
+# a range (or any trailing prose in the same cell) matched NOTHING and the
+# design silently fell back to the generic routing-headroom default.
+# Measured on subservient x sky130A: L9 §9.2.1 declares 35-45%, the parser
+# returned None, and the die was auto-sized at util 0.25 — a bigger die,
+# longer wires and a worse slew/setup corner than the design asked for.
+# The LOW end of a declared range is taken: it is inside the band the
+# design authorised and is the routing-safest choice within it.
+def md_table_column_numbers(text: str, key: str, row_key: str = ""):
+    """Every numeric value under a markdown-table COLUMN whose header names
+    ``key``, in row order. PURE (unit-tested, no I/O).
+
+    A key can be declared two ways in the same document family:
+        row-oriented    | `FP_CORE_UTIL` | 35-45% |
+        column-oriented | PDK | `FP_CORE_UTIL` | PL_TARGET_DENSITY |
+                        | SKY130 | 35-45%(prose) | default |
+    The row form is what the `_L9_*_RE` patterns read. The column form matched
+    NOTHING, so a design that used it was treated as having declared nothing —
+    the same "read the line, not the clause" failure mode as the per-line port
+    direction bug. Measured on subservient x sky130A: L9 §9.2.1 declares
+    FP_CORE_UTIL in a COLUMN header, the row regex returned None, and the run
+    fell back to the generic utilisation default.
+
+    Tables are scoped as BLOCKS (contiguous runs of `|` lines) and the column
+    index is re-resolved per block — without that, a header match leaks into
+    every later table in the document (measured: FP_CORE_UTIL picked up the
+    `FP_PDN_VOFFSET | 7` row of the PDN table two sections later).
+
+    ``row_key`` (optional) keeps only rows whose FIRST cell contains it, so a
+    per-PDK table returns THIS PDK's row and not another PDK's. Without it a
+    sky130 run would have read gf180's 0.5 density — a wrong number is worse
+    than no number, so an unmatched row_key yields nothing and the caller keeps
+    its default.
+
+    A range like ``35-45%`` yields 35 — the low, routing-safest end of the
+    declared band. chip-AGNOSTIC.
+    """
+    import re as _re
+    out = []
+    lines = text.splitlines()
+    i, n = 0, len(lines)
+    while i < n:
+        if not lines[i].strip().startswith("|"):
+            i += 1
+            continue
+        block = []
+        while i < n and lines[i].strip().startswith("|"):
+            block.append([c.strip() for c in lines[i].strip().strip("|").split("|")])
+            i += 1
+        if len(block) < 2:
+            continue
+        header = block[0]
+        col = None
+        for j, c in enumerate(header):
+            if _re.search(r"\b" + _re.escape(key) + r"\b", c, _re.IGNORECASE):
+                col = j
+                break
+        if col is None:
+            continue
+        for cells in block[1:]:
+            if all(_re.fullmatch(r":?-{2,}:?", c or "") for c in cells if c):
+                continue                    # the |---|---| separator row
+            if row_key:
+                # A PDK id and a table's PDK label rarely match character for
+                # character ("sky130A" vs "SKY130", "gf180mcuD" vs "GF180MCU"),
+                # so compare on alphanumerics with a BIDIRECTIONAL prefix test:
+                # either may be the more specific spelling of the same PDK.
+                _rk = _re.sub(r"[^a-z0-9]", "", row_key.lower())
+                _rc = _re.sub(r"[^a-z0-9]", "", (cells[0] if cells else "").lower())
+                if not (_rk and _rc
+                        and (_rk.startswith(_rc) or _rc.startswith(_rk))):
+                    continue
+            if col < len(cells):
+                m = _re.search(r"(\d+(?:\.\d+)?)", cells[col])
+                if m:
+                    out.append(float(m.group(1)))
+    return out
+
+
 _L9_FP_CORE_UTIL_RE = re.compile(
-    r"FP_CORE_UTIL`?\s*\|\s*\*{0,2}\s*(\d+(?:\.\d+)?)\s*%?\s*\*{0,2}\s*\|",
+    r"FP_CORE_UTIL`?\s*\|\s*\*{0,2}\s*(\d+(?:\.\d+)?)\s*"
+    r"(?:[-–~]|\bto\b)?\s*(?:\d+(?:\.\d+)?)?\s*%?[^|\n]*\|",
     re.IGNORECASE)
 # ORGANIC sha256×sky130A — L9's synthesis-constraints table declares the
 # reference `SYNTH_MAX_FANOUT` fanout cap in the SAME `| `KEY` | **VALUE** |`
@@ -9025,8 +9117,86 @@ _L9_SYNTH_MAX_FANOUT_RE = re.compile(
     r"SYNTH_MAX_FANOUT`?\s*\|\s*\*{0,2}\s*(\d+)\s*\*{0,2}\s*\|",
     re.IGNORECASE)
 
+# ── "the cap is whatever the flow/PDK default is" — a DECLARATION, not silence ──
+# A spec that writes "fanout is handled by the OpenLane/PDK default (no override)"
+# has DECLARED a cap; it has simply named it by reference instead of by value.
+# Treating that as "no cap" (which is what returning None does) makes the flow emit
+# NO `set_max_fanout`, and then the sign-off max-fanout table is empty BY
+# CONSTRUCTION — the STA report says so itself:
+#   "when the sign-off SDC declares NO set_max_fanout the table is empty BY
+#    CONSTRUCTION and MUST NOT be read as ZERO fanout violations"
+# so a `max_fanout violations == 0` acceptance gate silently becomes UNMEASURED.
+# This matcher recognises the deferral; the VALUE still comes from a real file
+# (:func:`_flow_default_max_fanout`), never from a constant written here.
+# chip-AGNOSTIC: no chip name, no number, en + zh-TW wording.
+_L9_FANOUT_DEFER_RE = re.compile(
+    r"(?:fanout|扇出)[^\n]{0,160}?(?:default|預設|缺省|preset)"
+    r"|(?:default|預設|缺省|preset)[^\n]{0,160}?(?:fanout|扇出)",
+    re.IGNORECASE)
+# …and the same line must name WHOSE default, so an unrelated sentence containing
+# both words cannot arm it.
+_L9_FANOUT_DEFER_OWNER_RE = re.compile(
+    r"openlane|librelane|pdk|工具|tool\s*chain|toolchain", re.IGNORECASE)
 
-def _l9_declared_die_util(project: Path) -> Optional[float]:
+# Where the open flow keeps its per-PDK constraint defaults, inside the EDA
+# container. Parsed, never hard-coded: the number below is read out of this file.
+_FLOW_PDK_DEFAULTS_PATH = (
+    "/usr/local/lib/python3.12/dist-packages/librelane/config/pdk_compat.py")
+_FLOW_PDK_GUARD_RE = re.compile(r'startswith\(\s*["\']([A-Za-z0-9_]+)["\']\s*\)')
+_FLOW_MAX_FANOUT_RE = re.compile(
+    r'\[\s*["\']MAX_FANOUT_CONSTRAINT["\']\s*\]\s*=\s*(\d+)')
+
+
+def parse_flow_pdk_max_fanout(text: str, pdk: str):
+    """(int|None, evidence) — the flow's DEFAULT max-fanout for ``pdk``, parsed
+    out of the shipped ``pdk_compat.py`` source. PURE (unit-testable, no I/O).
+
+    Walks the file keeping the PDK families named by the most recent
+    ``new["PDK"].startswith("<family>")`` guard; when a
+    ``["MAX_FANOUT_CONSTRAINT"] = N`` assignment appears, it belongs to those
+    families. Returns the N whose family is a prefix of ``pdk`` (case-folded).
+    Nothing matched → ``(None, "")`` and the caller emits nothing, exactly as
+    before. chip-AGNOSTIC: families and value both come from the file."""
+    if not text or not pdk:
+        return None, ""
+    fams: list = []
+    pl = pdk.lower()
+    for i, line in enumerate(text.splitlines(), 1):
+        g = _FLOW_PDK_GUARD_RE.findall(line)
+        if g and "PDK" in line:
+            fams = [x.lower() for x in g]
+        m = _FLOW_MAX_FANOUT_RE.search(line)
+        if m and fams and any(pl.startswith(f) for f in fams):
+            return int(m.group(1)), (
+                f"{_FLOW_PDK_DEFAULTS_PATH}:{i} "
+                f"(guarded by PDK family {'/'.join(fams)})")
+    return None, ""
+
+
+def _flow_default_max_fanout(project: Path, pdk: str):
+    """(int|None, evidence) — resolve the flow's default max-fanout for this PDK
+    by READING the shipped ``pdk_compat.py`` inside the EDA container recorded in
+    this run's own ``reports/container_image.json``. Never fabricates: any
+    failure (no record, container down, file absent, no family match) returns
+    ``(None, "")`` and the SDC stays byte-identical to before."""
+    try:
+        rec = json.loads(
+            (project / "reports" / "container_image.json").read_text())
+        container = str(rec.get("container") or "")
+        if not container:
+            return None, ""
+        out = subprocess.run(
+            ["docker", "exec", container, "cat", _FLOW_PDK_DEFAULTS_PATH],
+            capture_output=True, text=True, timeout=60)
+        if out.returncode != 0:
+            return None, ""
+        return parse_flow_pdk_max_fanout(out.stdout, pdk)
+    except Exception:                                        # noqa: BLE001
+        return None, ""
+
+
+def _l9_declared_die_util(project: Path,
+                          pdk: str = "") -> Optional[float]:
     """Return the design's L9-declared core-density target as a fraction (0..1),
     or None when L9 declares none (or says 'plugin decides'). Prefers an explicit
     `PL_TARGET_DENSITY` (already a fraction); else derives it from `FP_CORE_UTIL`
@@ -9060,10 +9230,23 @@ def _l9_declared_die_util(project: Path) -> Optional[float]:
                     continue
                 if 0.0 < pct <= 100.0:
                     return pct / 100.0
+            # …and the same key declared as a TABLE COLUMN rather than a row.
+            _rk = (pdk or "").strip()
+            if _rk:
+                for v in md_table_column_numbers(txt, "PL_TARGET_DENSITY", _rk):
+                    if 0.0 < v <= 1.0:
+                        return v
+                for v in md_table_column_numbers(txt, "FP_CORE_UTIL", _rk):
+                    if 0.0 < v <= 100.0:
+                        return v / 100.0
     return None
 
 
-def _l9_declared_max_fanout(project: Path) -> Optional[int]:
+_LAST_FANOUT_SOURCE: Dict[str, str] = {}
+
+
+def _l9_declared_max_fanout(project: Path,
+                            pdk: str = "") -> Optional[int]:
     """Return the design's L9-declared `SYNTH_MAX_FANOUT` cap as a positive int,
     or None when L9 declares none. Reads ONLY the L9 constraints/floorplan doc
     (input docs or the generated L9) — a blind-legal design input, same source +
@@ -9095,7 +9278,34 @@ def _l9_declared_max_fanout(project: Path) -> Optional[int]:
                 except ValueError:
                     continue
                 if fo > 0:
+                    _LAST_FANOUT_SOURCE["note"] = (
+                        "L9 declares SYNTH_MAX_FANOUT explicitly")
                     return fo
+    # No NUMBER in L9 — but the design may have declared the cap BY REFERENCE
+    # ("fanout is handled by the OpenLane/PDK default; no override"). That is a
+    # declaration, and honouring it is the difference between a MEASURED
+    # max-fanout sign-off table and one that is empty by construction. The value
+    # is read out of the flow's own shipped defaults for THIS PDK — never a
+    # constant written here — and a failed resolve returns None, unchanged.
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for p in (sorted(root.glob("L9*")) + sorted(root.glob("*constraint*"))
+                  + sorted(root.glob("*floorplan*"))):
+            try:
+                txt = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            for line in txt.splitlines():
+                if (_L9_FANOUT_DEFER_RE.search(line)
+                        and _L9_FANOUT_DEFER_OWNER_RE.search(line)):
+                    fo, _ev = _flow_default_max_fanout(project, pdk or "")
+                    if fo and fo > 0:
+                        _LAST_FANOUT_SOURCE["note"] = (
+                            "L9 DEFERS the cap to the OpenLane/PDK default "
+                            f"(no number in L9); value READ from {_ev}")
+                        return fo
+                    return None
     return None
 
 
@@ -9322,7 +9532,8 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
     # routing-headroom default. `util` (placement) is deliberately unused here.
     # Precedence: L9 generated constraint (design's own authored target) > the
     # design's staged reference_flow CORE_UTILIZATION > routing-headroom default.
-    _declared = _l9_declared_die_util(project) if project is not None else None
+    _declared = (_l9_declared_die_util(project, str(getattr(pdk, 'name', '') or ''))
+                 if project is not None else None)
     _util_src = "L9-declared"
     if _declared is None and project is not None:
         _rf_declared = _reference_flow_declared_die_util(project)
@@ -10761,6 +10972,36 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
         "  }",
         "  puts \"SPARE_FIRM_LOCKED: [llength [list " + _names_tcl + "]] instances\"",
         "} _spfix_err]} { puts \"SPARE_FIXED_NONFATAL: $_spfix_err\" }",
+        # === A dont_touch LOAD is not the same thing as a dont_touch NET ===
+        # Every spare INSTANCE is set_dont_touch above, and every spare input is
+        # tied to the ONE `spare_tielo` net — so that net's fanout equals the
+        # spare count. The moment a DRV constraint applies to it (a
+        # `set_max_fanout` below the spare count, or a slew limit), the resizer
+        # tries to buffer it, finds a dont_touch LOAD PIN, and raises a HARD
+        # ERROR that aborts the WHOLE repair pass:
+        #     [WARNING ODB-1211] InsertBufferBeforeLoads: Load pin
+        #                        'spare_mux2_2/A0' is dont_touch.
+        #     [ERROR   RSZ-3006] Failed to insert buffer before loads for net
+        #                        spare_tielo
+        # Measured on subservient x sky130A: with 27 spares and set_max_fanout 10
+        # BOTH repair_design calls (placement and global-route stage) died on
+        # this, the flow logged it NONFATAL and carried on, and the design
+        # reached sign-off with 570 max_slew violations (max-RC) / 1110 (SS) and
+        # SS setup -11.32 ns. NOTHING was repaired.
+        # A tie net feeding only preserved spares is not the resizer's to fix;
+        # marking the NET dont_touch makes the resizer SKIP it instead of
+        # erroring on it, and leaves every real net repairable.
+        # chip-AGNOSTIC / NONFATAL-guarded / a PDK with no tie cell has no such
+        # net and this is a no-op.
+        "foreach _stn [list spare_tielo spare_tiehi] {",
+        "  if {[catch {",
+        "    set _stnet [[ord::get_db_block] findNet $_stn]",
+        "    if {$_stnet ne \"NULL\" && $_stnet ne \"\"} {",
+        "      $_stnet setDoNotTouch true",
+        "      puts \"SPARE_TIE_NET_DONT_TOUCH: $_stn\"",
+        "    }",
+        "  } _stn_e]} { puts \"SPARE_TIE_NET_DONT_TOUCH_NONFATAL: $_stn -- $_stn_e\" }",
+        "}",
         "# ORGANIC #562 — check_placement gate: verify no off-site spares",
         "# remain after legalization. DPL-0033 is caught so a misaligned",
         "# inherited instance does not abort PnR (print WARN, flow continues).",
@@ -11914,6 +12155,24 @@ def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
 # design. The initial route still completes (all nets routed); only the
 # violation-reduction optimization tail is capped. chip-AGNOSTIC.
 _ECO_REROUTE_MAX_DROUTE_ITERS = 8
+
+# The SHIP-coverage reroute (signoff_spef_repair) runs a FULL detailed_route —
+# twice, plus once more inside the convergence loop — and, unlike the ECO reroute
+# (_ECO_REROUTE_MAX_DROUTE_ITERS), it was UNBOUNDED. On a die at the design's own
+# declared utilisation the repair's added/upsized cells can push the follow-on
+# route into the same non-converging plateau the ECO comment describes, and there
+# the 24 h `timeout` and the 30-min progress-stall watchdog BOTH decline to act:
+# the router keeps making tiny forward progress at 100% CPU, so it is neither
+# timed out nor judged stalled. Measured on subservient x sky130A at the
+# L9-declared util 0.35 (169x169 die): this single step ran > 50 min with no
+# output while the whole rest of phase 3 takes ~15 min.
+# Bounding it is SAFE by construction: when the reroute does not converge the
+# promotion gate REFUSES the repair and the BASE route ships unchanged (the
+# "no-op (base route kept)" path). A finite budget therefore costs at most the
+# repair, never the design. Generous (4x the ECO budget) because this reroute CAN
+# be promoted and deserves a real chance. chip-AGNOSTIC.
+_SHIP_REROUTE_MAX_DROUTE_ITERS = 32
+
 
 
 def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
@@ -13330,7 +13589,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         # staged branch never did). Supply ONLY the absent limits, ONLY from
         # the active liberty; a design-declared limit is never overridden.
         _staged_sdc, _drv_parity = _ensure_staged_sdc_drv(
-            _staged_sdc, str(pdk.liberty), container, project)
+            _staged_sdc, str(pdk.liberty), container, project,
+            pdk_name=str(pdk.name))
         if _drv_parity.get("note"):
             print(f"[phase3][sdc-drv] {_drv_parity['note']}", file=sys.stderr)
         try:
@@ -13365,7 +13625,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             drv_slew_ns=_drv.get("max_transition_ns"),
             drv_cap_pf=_drv.get("max_capacitance_pf"),
             drv_note=str(_drv.get("note") or ""),
-            liberty_path=str(pdk.liberty)))
+            liberty_path=str(pdk.liberty),
+            pdk_name=str(pdk.name)))
 
     # ORGANIC E2E (GAP-E2E-4/10) — resolve `--die-um auto` to a design-sized
     # WxH from the synth netlist cell count + PDK site area + target util, so a
@@ -15838,7 +16099,7 @@ for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
   if {[catch {check_placement} e]} { puts "SHIP_CVG_CP_WARN: $e" }
 __SPARE_SAFE_CLEAR__
   if {[catch {global_route} e]} { puts "SHIP_CVG_GR_NONFATAL: $e" }
-  if {[catch {detailed_route} e]} { puts "SHIP_CVG_DR_NONFATAL: $e"; incr _ship_dr_failed }
+  if {[catch {detailed_route -droute_end_iter __SHIP_DR_ITERS__} e]} { puts "SHIP_CVG_DR_NONFATAL: $e"; incr _ship_dr_failed }
 }
 # FINAL honest post-reroute real-SPEF measurement (the number the sign-off
 # independently re-derives, and the one the promotion gate keys on).
@@ -15872,8 +16133,25 @@ if {$_ship_dr_failed > 0} {
 """
 
 
+# The post-reroute convergence loop is stopped by its OWN plateau test — it
+# breaks as soon as a pass gains <= 0.10 ns of WNS AND fails to reduce DRV — so
+# the pass count is a backstop, not the policy. At 3 it was the policy, and it
+# cut off a loop that was still converging fast. MEASURED on subservient x
+# sky130A (run 9), the loop's own markers:
+#     SHIP_WNS_CVG_PASS0: -4.4438   SHIP_DRV_CVG_PASS0: 190
+#     SHIP_WNS_CVG_PASS1: -3.0167   SHIP_DRV_CVG_PASS1: 179
+#     SHIP_WNS_CVG_PASS2: -1.3748   SHIP_DRV_CVG_PASS2:  78
+#     <bound reached; SHIP_WNS_POSTROUTE: -1.6742>
+# ~1.5 ns of WNS and a collapsing DRV population per pass, no plateau in sight,
+# and the loop stopped counting rather than converging. Raising the backstop
+# cannot make a plateaued design spend passes (the plateau break fires first)
+# and cannot promote a worse route (the promotion gate is unchanged).
+_SHIP_POSTROUTE_CVG_MAX_PASSES = 8
+
+
 def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
-                                    bound: int = 3) -> str:
+                                    bound: int = _SHIP_POSTROUTE_CVG_MAX_PASSES
+                                    ) -> str:
     """POST-REROUTE real-SPEF setup-closure loop appended to the shipped signoff
     repair (see _SHIP_POSTROUTE_CVG_TCL). Sentinel-token replacement (not
     f-string/format) so the TCL's own braces need no escaping. chip/PDK-AGNOSTIC."""
@@ -15885,6 +16163,7 @@ def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
             .replace("__ROUTING_INTEGRITY_CHECK__",
                      _routing_integrity_check_tcl("SHIP").rstrip())
             .replace("__BOUND__", str(int(bound)))
+            .replace("__SHIP_DR_ITERS__", str(_SHIP_REROUTE_MAX_DROUTE_ITERS))
             .replace("__CAP__", max_captable_c)
             .replace("__PNR__", pnr_dir_c))
 
@@ -16069,7 +16348,7 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # counted, including the ones inside the convergence loop below.
         + "set _ship_dr_failed 0\n"
         + "if {[catch {global_route} e]} { puts \"SHIP_GR_NONFATAL: $e\" }\n"
-        "if {[catch {detailed_route} e]} { puts \"SHIP_DR_NONFATAL: $e\"; incr _ship_dr_failed }\n"
+        f"if {{[catch {{detailed_route -droute_end_iter {_SHIP_REROUTE_MAX_DROUTE_ITERS}}} e]}} {{ puts \"SHIP_DR_NONFATAL: $e\"; incr _ship_dr_failed }}\n"
         # POST-REROUTE real-SPEF convergence (#603): the reroute above lands
         # the pre-reroute repair on the REAL routed parasitics; re-extract and
         # re-repair against them (bounded, DRC-converging) so the SHIPPED route
@@ -16232,6 +16511,26 @@ def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
         return False
     if parsed.get("route_violations") != 0:
         return False
+    # DRV no-regression, judged PER CATEGORY (unchanged from main, deliberately).
+    #
+    # The subservient round proposed judging the POPULATION instead — sum the
+    # slew and cap counts and refuse only when the total rises. Its evidence is
+    # real and measured: on that cell the per-category rule refused a repair that
+    # went slew 146->6, cap 4->7, total 150->13, SS setup -11.32 -> -1.67 ns,
+    # DRC-clean — refused because ONE sub-count rose by 3, so the flow shipped the
+    # strictly worse route.
+    #
+    # NOT ADOPTED HERE, and the reason is not doubt about that measurement:
+    # summing slew and capacitance violation counts adds two different physical
+    # failures as if they were one quantity. A rule that trades 8 new slew
+    # violations for 26 fewer cap violations is making a judgement about which
+    # failure matters more, and doing it silently, in a sum. That is a flow-owner
+    # decision about what gets shipped, not a checker's — and it is exactly the
+    # proxy-instead-of-property shape this campaign keeps removing.
+    #
+    # The existing guard test (test_promotion_gate_refuses_a_drv_regression) is
+    # left RED-proof: it encodes the per-category policy, and the policy stands
+    # until the owner rules otherwise.
     sb, sa = parsed.get("drv_slew_before"), parsed.get("drv_slew_after")
     if sb is not None and sa is not None and sa > sb:
         return False
@@ -25598,9 +25897,20 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         tcl_c = _to_container_path(str(tcl_path), container)
         cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
                f"{TOOLS_IN_CONTAINER}/bin:$PATH && sta -no_init -exit {tcl_c} 2>&1")
-        _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt_out])
+        # PROVENANCE: declare the report ONLY if this pass is its FINAL writer.
+        # The HOLD pass below APPENDS to the same file, so a digest declared here
+        # is stale one second later — `provenance_output_hash_completeness_check`
+        # then reports PROVENANCE_HASH_MISMATCH on the setup entry AND
+        # PROVENANCE_HASH_INCONSISTENT across the pair, on every design that runs
+        # a post-ECO multi-corner OCV STA. Measured on subservient x sky130A:
+        #   entry#31 (sta, 02:00:12) sta_mcorner_ocv_posteco.rpt = 9a96e991…
+        #   entry#32 (sta, 02:00:13) sta_mcorner_ocv_posteco.rpt = cab24492…
+        # An intermediate write is not an artefact claim; the final writer owns it.
+        _docker_exec(container, cmd, marker=tcl_c,
+                     outputs=([] if hold_label is not None else [rpt_out]))
         ran = rpt_out.is_file() and rpt_out.stat().st_size > 0
-    # HOLD pass (fast/ff process, min-RC) — appends.
+    # HOLD pass (fast/ff process, min-RC) — appends, and is the FINAL writer, so
+    # this is the invocation that declares the finished report.
     if hold_label is not None:
         tcl = _pass(hold_label, "HOLD", "-min", hold_spef,
                     "a" if ran else "w")
