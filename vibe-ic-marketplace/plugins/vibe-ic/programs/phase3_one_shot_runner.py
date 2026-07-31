@@ -12954,6 +12954,19 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         "    set _prs_c [lsort [glob -nocomplain "
         "$_prs_root/libs.tech/{librelane,openlane}/rules.openrcx.*.nom]]\n"
         "  }\n"
+        # SPM-SI-1 — SECOND captable NAMING CONVENTION (chip/PDK-AGNOSTIC).
+        #     libs.tech/librelane/openrcx/<pdk>.<corner>.magic.rules
+        # A PDK shipping only this layout resolved NOTHING here and fell through
+        # to the `-lef_rc` branch, producing a SPEF with ZERO coupling caps —
+        # which makes the downstream crosstalk screen VACUOUS (N nets, 0 coupling
+        # pairs) even though the PDK ships a full coupling model. Glob the second
+        # layout too, ordered AFTER the first so no PDK that resolves today
+        # changes what it resolves to.
+        "  if {[llength $_prs_c] == 0} {\n"
+        "    set _prs_c [lsort [glob -nocomplain "
+        "$_prs_root/libs.tech/{librelane,openlane}/openrcx/*.nom.magic.rules "
+        "$_prs_root/libs.tech/{librelane,openlane}/openrcx/*.nom.rules]]\n"
+        "  }\n"
         "  if {[llength $_prs_c] > 0} { set _prs_rules [lindex $_prs_c 0] }\n"
         "}\n"
         "# PR-B2b — staged tech-LEF fallback: a named PDK whose tech LEF was\n"
@@ -12977,6 +12990,14 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         "    if {[llength $_prs_c2] == 0} {\n"
         "      set _prs_c2 [lsort [glob -nocomplain "
         "$_prs_root2/libs.tech/{librelane,openlane}/rules.openrcx.*.nom]]\n"
+        "    }\n"
+        # SPM-SI-1 — second convention on the cell-LEF-derived root too. Both
+        # roots must glob the same set, or a staged-tech-LEF PDK keeps the
+        # vacuous-by-construction crosstalk screen the first site just fixed.
+        "    if {[llength $_prs_c2] == 0} {\n"
+        "      set _prs_c2 [lsort [glob -nocomplain "
+        "$_prs_root2/libs.tech/{librelane,openlane}/openrcx/*.nom.magic.rules "
+        "$_prs_root2/libs.tech/{librelane,openlane}/openrcx/*.nom.rules]]\n"
         "    }\n"
         "    if {[llength $_prs_c2] > 0} { set _prs_rules [lindex $_prs_c2 0] }\n"
         "  }\n"
@@ -16263,14 +16284,19 @@ def _max_captable_c(pdk: "PdkConfig", container: str) -> str:
     root = tlef[:i]
     for sub in ("librelane", "openlane"):
         try:
+            # SPM-SI-1 — both captable naming conventions (chip/PDK-AGNOSTIC):
+            #   open_pdks / asap7 : rules.openrcx.<pdk>.max.magic
+            #   IHP-Open-PDK      : openrcx/<pdk>.max.magic.rules
             rc, out, _ = _docker_exec(
                 container,
-                f"ls {root}/libs.tech/{sub}/rules.openrcx.*.max.magic 2>/dev/null")
+                f"ls {root}/libs.tech/{sub}/rules.openrcx.*.max.magic "
+                f"{root}/libs.tech/{sub}/openrcx/*.max.magic.rules "
+                f"{root}/libs.tech/{sub}/openrcx/*.max.rules 2>/dev/null")
         except Exception:
             continue
         for ln in (out or "").splitlines():
             ln = ln.strip()
-            if ln.endswith(".max.magic"):
+            if ln.endswith((".max.magic", ".max.magic.rules", ".max.rules")):
                 return ln
     return ""
 
@@ -25535,6 +25561,16 @@ if {{$_i > 0}} {{
   if {{[llength $_c] == 0}} {{
     set _c [lsort [glob -nocomplain $_root/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom]]
   }}
+  # SPM-SI-1 — SECOND captable naming convention (chip/PDK-AGNOSTIC). IHP-Open-PDK
+  # ships it one level deeper with the tokens reversed:
+  #   libs.tech/librelane/openrcx/<pdk>.<corner>.magic.rules
+  # Missing it silently downgrades to the -lef_rc grounded-cap path -> a SPEF with
+  # ZERO coupling caps -> a VACUOUS crosstalk screen (N nets, 0 coupling pairs)
+  # on a PDK that does ship a full coupling model. Ordered LAST so nothing that
+  # resolves today changes.
+  if {{[llength $_c] == 0}} {{
+    set _c [lsort [glob -nocomplain $_root/libs.tech/{{librelane,openlane}}/openrcx/*.nom.magic.rules $_root/libs.tech/{{librelane,openlane}}/openrcx/*.nom.rules]]
+  }}
   if {{[llength $_c] > 0}} {{ set _rules [lindex $_c 0] }}
 }}
 # PR-B2b — staged tech-LEF fallback: a named PDK whose tech LEF was staged
@@ -25553,6 +25589,10 @@ if {{$_rules eq ""}} {{
     set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom.magic]]
     if {{[llength $_c2] == 0}} {{
       set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom]]
+    }}
+    # SPM-SI-1 — second convention on the cell-LEF-derived root too.
+    if {{[llength $_c2] == 0}} {{
+      set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/openrcx/*.nom.magic.rules $_root2/libs.tech/{{librelane,openlane}}/openrcx/*.nom.rules]]
     }}
     if {{[llength $_c2] > 0}} {{ set _rules [lindex $_c2 0] }}
   }}
@@ -25709,8 +25749,15 @@ def _discover_openrcx_captables(pdk: PdkConfig, container: str
     for corner in _SPEF_CORNERS:
         chosen: Optional[str] = None
         for d in cap_dirs:
+            # SPM-SI-1 — two captable naming conventions, chip/PDK-AGNOSTIC:
+            #   open_pdks / asap7 : <d>/rules.openrcx.<pdk>.<corner>.magic
+            #   IHP-Open-PDK      : <d>/openrcx/<pdk>.<corner>.magic.rules
+            # Glob BOTH so a PDK using the second layout gets its real coupling
+            # captable instead of silently degrading to grounded-cap LEF-RC.
             expr = (f"{shlex.quote(d)}/rules.openrcx.*.{corner}.magic "
-                    f"{shlex.quote(d)}/rules.openrcx.*.{corner}")
+                    f"{shlex.quote(d)}/rules.openrcx.*.{corner} "
+                    f"{shlex.quote(d)}/openrcx/*.{corner}.magic.rules "
+                    f"{shlex.quote(d)}/openrcx/*.{corner}.rules")
             # Prefer the .magic model; require the corner token in the name.
             hits = _container_ls_paths(container, expr, f".{corner}")
             magic = [h for h in hits if h.endswith(".magic")]
