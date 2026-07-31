@@ -8522,6 +8522,166 @@ def _foundry_match_trustworthy(span: str) -> bool:
     return True
 
 
+# ORGANIC-20260801 — the THIRD evidence source: a LABELLED DECLARATION.
+#
+# #451/#457 read prose and #513 read staged PATHS, and both decide "is
+# this a PDK identifier?" by testing the token against a CLOSED NAME
+# LIST: `_OPEN_PDK_TOKEN_RE` (the open PDKs) or `_FOUNDRY_CTX_RE` (six
+# commercial foundries). That model can only ever extract a PDK the
+# extractor already knows the name of. A design that stages its OWN
+# commercial enablement — the case `analog_pdk_availability.resolve_pdk`
+# rung 1 exists for, and calls "the commercial / NDA-node case" — is
+# exactly the design whose foundry is NOT on a six-entry list, so
+# `pdk_target` stays null however plainly the design declares it, and
+# `l19_pdk_floorplan_contract_check` L19-3 blocks on that null.
+#
+# WIDENING THE NAME LIST IS NOT THE FIX. It would be one more reactive
+# entry per foundry encountered, and the next design would fail the same
+# way. Read the DECLARATION instead of recognising the NAME.
+#
+# WHAT MAKES THIS SAFE — a LABEL, not a mention. The distinction is the
+# whole point, and it is what separates this from the naive "run the
+# same regexes over file CONTENT" repair, which adopts sentences like
+#
+#     "Structural shape modelled on the <open-pdk> technology files
+#      shipped in the eda image"                        <- a MENTION
+#
+# and would set a design's pdk_target to a PDK it does not tape out on.
+# A mention carries no field label. A declaration does:
+#
+#     "**PDK source**: <foundry> <process> (180nm ...)"  <- a DECLARATION
+#
+# so this tier fires only on `^<label> :` — a labelled field at the
+# start of a line — and never on running prose.
+#
+# EVERY #457 GUARD IS KEPT: the declared VALUE must be negation-free and
+# must carry a numeric process node (`_foundry_match_trustworthy`), so a
+# line like "Process: not yet selected" or "PDK: TBD" still denies.
+#
+# Chip-AGNOSTIC: the vocabulary is FIELD LABELS ("pdk", "process",
+# "technology", "foundry"), which are properties of documents, not of
+# any vendor, foundry, SKU or part. No design literal appears here.
+_PDK_DECL_LABEL = (
+    r"pdk(?:[ \t]*(?:source|target|name|version|kit))?|"
+    r"process(?:[ \t]*(?:node|technology|name|kit))?|"
+    r"technology(?:[ \t]*node)?|"
+    r"foundry(?:[ \t]*process)?|"
+    r"(?:target|silicon)[ \t]*process|"
+    r"design[ \t]*kit"
+)
+# A labelled field at the START of a line. Leading markdown/list
+# decoration (`**`, `#`, `>`, `-`, `*`, bullets) is allowed and so is a
+# trailing `**`/`__` closing the bold label, because that is how such a
+# field is written in a README/datasheet — but the label must still be
+# the first thing on its line, which running prose never is.
+_PDK_DECL_RE = re.compile(
+    r"(?im)^[ \t]*[*_#>\-•·]*[ \t]*"
+    r"(?:\*\*|__)?[ \t]*(?:" + _PDK_DECL_LABEL + r")[ \t]*(?:\*\*|__)?"
+    r"[ \t]*[:=][ \t]*(\S[^\n]{0,200})")
+# Where a declared value stops being the identifier and starts being
+# commentary: a bracket, a list separator, or a clause break.
+_PDK_DECL_VALUE_STOP_RE = re.compile(r"[(\[{,;/|]|\s[-–—]\s")
+# Documents that live inside the design's own staged PDK tree. The prose
+# reader does not descend into `input/pdk*/` and the #513 staged reader
+# keeps only enablement SUFFIXES (.lib/.lef/.tech/.db/.gds), so a PDK
+# README/bridge document under that root is read by NEITHER today.
+_PDK_DECL_DOC_GLOBS = ("input/pdk*/**/*.md", "input/pdk*/**/*.txt",
+                       "input/pdk*/**/*.rst")
+_PDK_DECL_MAX_FILES = 64
+_PDK_DECL_MAX_BYTES = 200_000
+_PDK_DECL_MAX_TOKEN = 64
+
+
+def _pdk_declared_value_token(value: str) -> Optional[str]:
+    """The identifier part of a declared PDK value, or None.
+
+    Keeps the value up to its first structural delimiter — the point at
+    which a declaration stops naming the process and starts describing
+    it — then collapses whitespace and caps the length. Returns None
+    when the remainder carries no letter (a bare number is not an
+    identifier) or fails the #457 guards.
+    """
+    if not isinstance(value, str):
+        return None
+    # #457 guards apply to the WHOLE declared value, so "Process: not
+    # yet chosen (was 180nm)" is denied by the negation and a value with
+    # no numeric node is denied by dual-evidence.
+    if not _foundry_match_trustworthy(value):
+        return None
+    stop = _PDK_DECL_VALUE_STOP_RE.search(value)
+    head = value[:stop.start()] if stop else value
+    head = re.sub(r"\s+", " ", head).strip().strip("*_`\"'.:=- ")
+    if not head:
+        return None
+    # The value must name something, not merely restate the node. With
+    # every `<n>nm` token removed there has to be an identifier LEFT:
+    # "Process: 180nm" declares a geometry, not a target, and adopting
+    # it would hand the foundry pack a node where a process belongs —
+    # the "silent wrong value" #457 exists to refuse.
+    residue = _FOUNDRY_NUMERIC_NODE_RE.sub(" ", head)
+    if not re.search(r"[A-Za-z]", residue):
+        return None
+    return head[:_PDK_DECL_MAX_TOKEN].strip()
+
+
+def _labelled_pdk_declaration(project: Path):
+    """(pdk_target, snippet, source_rel, line) from a LABELLED PDK
+    declaration in the design's own inputs, or (None, None, None, None).
+
+    Scans the same input-doc roots the prose reader uses PLUS the
+    documents inside the design's own staged PDK tree, which is where a
+    PDK bridge/README naturally lives and which no current reader opens.
+    Deterministic: files sorted, per-file read capped, file count capped.
+    """
+    seen: set = set()
+    per_file: List[Tuple[str, str]] = []
+
+    def _add(f: Path) -> None:
+        try:
+            rp = f.resolve()
+        except OSError:
+            return
+        if rp in seen or not f.is_file():
+            return
+        seen.add(rp)
+        try:
+            t = f.read_text(errors="replace")[:_PDK_DECL_MAX_BYTES]
+        except OSError:
+            return
+        try:
+            rel = str(f.relative_to(project))
+        except ValueError:
+            rel = f.name
+        per_file.append((rel, t))
+
+    for base in (project / "phase1" / "input_doc",
+                 project / "input" / "docs", project / "input_doc"):
+        if not base.is_dir():
+            continue
+        for f in sorted(base.rglob("*")):
+            if f.suffix.lower() in (".png", ".jpg", ".pdf", ".gds", ".zip"):
+                continue
+            _add(f)
+            if len(per_file) >= _PDK_DECL_MAX_FILES:
+                break
+    for pat in _PDK_DECL_DOC_GLOBS:
+        for f in sorted(project.glob(pat)):
+            _add(f)
+            if len(per_file) >= _PDK_DECL_MAX_FILES:
+                break
+
+    for rel, text in per_file:
+        for m in _PDK_DECL_RE.finditer(text):
+            tok = _pdk_declared_value_token(m.group(1))
+            if not tok:
+                continue
+            line = text.count("\n", 0, m.start()) + 1
+            snippet = text[max(0, m.start()):m.end()].replace(
+                "\n", " ")[:160]
+            return tok, snippet, rel, line
+    return None, None, None, None
+
+
 # ORGANIC-20260728 #513 — the SECOND evidence source of the SAME
 # extractor. #451/#457 gave the extractor exactly one source: PROSE. A
 # design that does not DESCRIBE its process still STAGES one: liberty /
@@ -8801,6 +8961,18 @@ def _extract_pdk_target_with_provenance(project: Path):
             line = text.count("\n", 0, m.start()) + 1
             return (tok, _snip(text, m.start() - 20, m.end() + 40),
                     rel, line)
+    # ORGANIC-20260801 — SOURCE 1b: a LABELLED PDK DECLARATION.
+    # Reached only after BOTH name-list prose tiers above have yielded
+    # nothing, so every answer they can produce is byte-identical to
+    # pre-fix; this tier can only turn a null into a value. It reads a
+    # declaration (`^<label>: <value>`) rather than recognising a name,
+    # so it extends to any foundry instead of the six in
+    # `_FOUNDRY_CTX_RE`, and it keeps the #457 negation + numeric-node
+    # guards on the declared value.
+    decl_tok, decl_snip, decl_rel, decl_line = _labelled_pdk_declaration(
+        project)
+    if decl_tok:
+        return decl_tok, decl_snip, decl_rel, decl_line
     # #513 — SOURCE 2: the PDK the design stages rather than describes.
     # Reached only here, i.e. only when prose asserted nothing at all,
     # so no prose verdict can change. The evidence IS the staged path,
