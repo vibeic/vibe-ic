@@ -2,7 +2,7 @@
 
 `reports/phase3/analog_one_shot.json` carried
 
-    "project": "/home/reyerchu/AI_IC_design/_c2_adc_run/proj"
+    "project": "<another operator's home>/AI_IC_design/_c2_adc_run/proj"
     "verdict": "FAIL"
 
 while sitting inside a DIFFERENT project tree. The report was carried forward

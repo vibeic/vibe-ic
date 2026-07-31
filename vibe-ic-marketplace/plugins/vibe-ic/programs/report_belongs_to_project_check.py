@@ -7,7 +7,7 @@ THE DEFECT (vibe-ic#587)
 Runner reports record the project they were produced for::
 
     reports/phase3/analog_one_shot.json
-      "project": "/home/reyerchu/AI_IC_design/_c2_adc_run/proj"
+      "project": "<another operator's home>/AI_IC_design/_c2_adc_run/proj"
       "verdict": "FAIL"
 
 sitting inside a DIFFERENT project tree. The report was carried forward — copied

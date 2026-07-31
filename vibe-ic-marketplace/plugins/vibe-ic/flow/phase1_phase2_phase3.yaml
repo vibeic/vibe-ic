@@ -2936,8 +2936,33 @@ steps:
     # A waiver can NEVER launder a genuine SI FAIL, an absent or unparseable
     # report, or a PASS carrying no denominator. See the "Tape-out SI" section
     # of `programs/signoff_audit.py`.
+    #
+    # #587 — a runner report must be ABOUT the project it sits in. A carried-
+    # forward `*_one_shot.json` keeps the `project` path AND the verdict of the
+    # run it came from, and this is the step where that contaminates the answer
+    # that matters. Wired HERE because it is the first point at which every
+    # runner report exists.
+    #
+    # ADVISORY, not blocking. Measured over the tracked corpus: 364 reports
+    # found, 303 attributed, 61 FOREIGN — 20%. Wiring a 20%-red gate as
+    # blocking fails #492's bar and would make it a gate people route around.
+    # Advisory publishes the count on every real run, which is what its own
+    # unit test could never do: before this the checker had NOTHING but that
+    # test running it, so it had zero coverage of production artefacts and was
+    # a fix cited for #587 that never saw one.
+    #
+    # `all_of`, NOT two keys on one mapping. `_evaluate_gate` returns inside the
+    # `program_exit_zero` branch, so a sibling `advisory_program_exit_zero` on
+    # the same mapping is unreachable — declared, never executed, and the wiring
+    # audit (which reads the flow, not the run) would have called it wired.
+    # Measured: with both keys on one mapping, a real project's step 36 FAILed
+    # and `reports/audit/report_belongs_to_project.json` was never written.
+    # `all_of` evaluates each sub-gate, and deliberately keeps running the
+    # advisory ones after a failure (#306/#297).
     gate:
-      program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
+      all_of:
+        - program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
+        - advisory_program_exit_zero: "report_belongs_to_project_check . --json reports/audit/report_belongs_to_project.json"
     blocks_on: [31, 32, 33, 34]
 
   - id: 37

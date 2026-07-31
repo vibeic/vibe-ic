@@ -62,6 +62,17 @@ run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnosti
 # by DIRECT PUSH, so the guard had never run on any of it. Measured when first
 # wired: 4 non-portable paths, all in a test fixture committed the day before.
 run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_check.py" "$PLUGIN"
+# vibe-ic#585 — `docker exec ... timeout=N` bounds the local CLIENT; the tool
+# inside the container keeps running as an orphan. The checker that finds those
+# call sites shipped with nothing but its own test running it, which
+# `checker_execution_wiring_audit` reports as zero coverage of real inputs — a
+# checker cited as a fix that never sees a production file. Wired here, over the
+# whole shipped plugin, which is the input it is about.
+#
+# NOT `--strict`: 54 findings stand today and failing a pre-existing pile on day
+# one makes a gate people route around. It runs ADVISORY (rc 0) so the count is
+# published every run and cannot drift unseen.
+run "container exec deadlines"  "$ROOT" python3 "$PG/container_exec_deadline_check.py" "$PLUGIN"
 # vibe-ic#552 — a warning our EDA fork substitutes for an upstream abort must
 # still be visible to the gate that needs it. Every downgrade moves a
 # condition out of the error-matching sets BY CONSTRUCTION, so the

@@ -88,10 +88,19 @@ def test_the_one_null_is_a_stated_null():
 
 # ── the gate blocks on an omission ───────────────────────────────────────────
 def _run_gate(registry_path):
+    """The NAME half only, which is the half this invariant lives in.
+
+    `VIBEIC_EDA_IMAGE` is pointed at a tag that cannot resolve, so the gate's
+    asset half reports SKIPPED instead of shelling into docker. That is not a
+    convenience: with the image reachable this call took minutes, and a test
+    whose inner bound outlives the 180s harness kills the SESSION rather than
+    failing. Measured at 0.06s image-free, so 30s is a ceiling, not a budget.
+    """
+    env = dict(os.environ, VIBEIC_EDA_IMAGE="ghcr.io/vibeic/no-such-image:0")
     return subprocess.run(
         [sys.executable, str(_GATE), "--registry", str(registry_path),
          "--container", "__no_such_container__"],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=30, env=env)
 
 
 def test_the_gate_passes_on_the_shipped_registry():
@@ -218,7 +227,7 @@ def test_the_declared_master_exists_in_that_pdks_own_lef(entry):
     r = subprocess.run(
         ["docker", "run", "--rm", "--entrypoint", "bash", img, "-lc",
          f"grep -rl 'MACRO {cell}' {entry['container_path']} 2>/dev/null | head -1"],
-        capture_output=True, text=True, timeout=900)
+        capture_output=True, text=True, timeout=60)
     assert r.stdout.strip(), (
         f"{entry['name']} declares tapcell_master={cell!r}, which is not a "
         f"MACRO anywhere under {entry['container_path']}")
