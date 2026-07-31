@@ -453,8 +453,29 @@ def test_every_flow_declared_invocation_produces_the_file_it_names(tmp_path,
     assert passed is True
 
 
+def _scopes_exclude_the_fixture_report(cmd: str) -> bool:
+    """True when `_project`'s only report lies OUTSIDE this command's scopes.
+
+    vibe-ic#584 added a scoped DRC gate at step 31, whose declared artefact IS
+    `reports/phase3/drc_signoff.rpt` — the one file `_project` builds. For that
+    command the fixture is IN scope by definition, so the out-of-scope premise
+    below cannot hold and the case is not applicable rather than failing.
+
+    Derived from the command's own `--under` tokens, not from a step id, so a
+    future scoped gate is classified by what it actually scopes to.
+    """
+    return not any(_FIXTURE_REPORT == u or _FIXTURE_REPORT.startswith(u.rstrip("/") + "/")
+                   for u in _under_scopes(cmd))
+
+
+#: The single report `_project` writes. Named once so the two helpers that
+#: reason about it cannot drift apart.
+_FIXTURE_REPORT = "reports/phase3/drc_signoff.rpt"
+
+
 @pytest.mark.parametrize("cmd", [c for c in _flow_declared_drc_commands()
-                                 if _under_scopes(c)])
+                                 if _under_scopes(c)
+                                 and _scopes_exclude_the_fixture_report(c)])
 def test_a_scoped_invocation_is_not_carried_by_an_out_of_scope_report(tmp_path,
                                                                       cmd):
     """The other direction, and the reason the fixture above had to change: a

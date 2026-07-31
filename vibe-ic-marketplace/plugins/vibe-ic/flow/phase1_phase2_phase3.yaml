@@ -2550,7 +2550,26 @@ steps:
       - "reports/phase2/gates/erc_density.json"
     gate:
       all_of:
-        - program_exit_zero: "drc_report_check . --mode drc --json reports/phase3/drc_signoff.json"
+        # vibe-ic#584 — SCOPED to the subtree this step DECLARES.
+        #
+        # Discovery in `eda_report_audit` is a project-wide `rglob` and
+        # `real_violation_total` is SUMMED across every hit. A run tree holding
+        # three byte-identical copies of this step's own report — the ordinary
+        # case once snapshot directories exist — therefore reported 3x the
+        # physical violation count, and step 36 (`tapeout_signoff_check`, which
+        # reads ONE named file) disagreed with this gate about the same GDS:
+        # 3 vs 1, physical truth 1.
+        #
+        # The `--under` mechanism already existed for exactly this, and step 21
+        # already uses it; step 31 is the sibling that never got it. The `seen`
+        # set in discovery de-duplicates by PATH, and three copies at three
+        # paths are three distinct paths — it cannot help here.
+        # Scoped to the FILE, not to `reports/phase3`. Step 21's router DRC
+        # (`reports/phase3/drc_router.rpt`) lives in that same directory, so a
+        # directory scope would hand step 21's evidence to step 31 — the very
+        # cross-step confusion `--under` exists to end, pointing the other way.
+        # Step 21 scopes by directory AND names its file for the same reason.
+        - program_exit_zero: "drc_report_check . --mode drc --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
         - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
         # 每一條宣告的電源/地軌都必須至少帶一段佈線幾何。MEASURED on a real
         # tapeout run with a third-party hard macro on a second supply: the DEF
