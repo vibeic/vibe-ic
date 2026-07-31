@@ -157,6 +157,11 @@ def eval_width_expr(expr: str) -> int:
 # ---------------------------------------------------------------------------
 # Verilog parser (regex-based, general purpose)
 # ---------------------------------------------------------------------------
+#: A module-level package import. Its `;` must not be read as the end of the
+#: module header — see the comment at the header scan.
+_IMPORT_LINE_RE = re.compile(r'\s*import\s+[\w:]+\s*(?:::\s*\*)?\s*;')
+
+
 def parse_port_list_ansi(header: str, file_path: str, base_line: int) -> Dict[str, PortDecl]:
     """
     Parse ANSI-style port declarations from a module header.
@@ -219,6 +224,16 @@ def parse_port_list_ansi(header: str, file_path: str, base_line: int) -> Dict[st
     # Split by commas but respect nested brackets
     parts = _split_by_comma(port_text)
 
+    # NOTE: `header` is expected to be comment-free. Both production entry
+    # points (`scan_rtl_directory`, `scan_rtl_files`) call `strip_comments` on
+    # the whole file first, so a comment never reaches the comma split here.
+    #
+    # I added a second comment strip at this point and measured its effect by
+    # ablation: ibex 1 -> 1, opentitan_aes 241 -> 241. Zero. It was duplicating
+    # work already done upstream, and the story I had attached to it — that
+    # ibex_core lost 8 ports to comments — was an artifact of my probe calling
+    # this function on RAW text. Removed rather than kept as defence in depth,
+    # because a fix that changes nothing still has to be read by everyone after.
     for part in parts:
         part_stripped = part.strip()
         if not part_stripped:
@@ -231,8 +246,19 @@ def parse_port_list_ansi(header: str, file_path: str, base_line: int) -> Dict[st
         m = re.match(
             r'(?:(?P<dir>input|output|inout)\s+)?'
             r'(?:(?:wire|reg|logic|signed|unsigned)\s+)*'
+            # A user-defined or package-qualified type, e.g.
+            # `input ibex_pkg::pc_sel_e pc_mux_i`. Optional and non-greedy by
+            # construction: on `input clk` there is no space-separated word
+            # after it, so this group does not participate and `clk` is the
+            # name. Without it ibex dropped 43 ports whose types come from a
+            # package, and every instantiation of them read as a mismatch.
+            r'(?:(?P<type>[A-Za-z_]\w*(?:::\w+)+|[A-Za-z_]\w*_[te])\s+)?'
             r'(?P<width>\[[^\]]+\]\s*)?'
-            r'(?P<name>\w+)\s*$',
+            r'(?P<name>\w+)'
+            # An unpacked dimension after the name, e.g.
+            # `input logic [33:0] imd_val_d_ex_i[2]`. Legal SystemVerilog, and
+            # without it the anchored match fails and the port disappears.
+            r'(?:\s*\[[^\]]+\])*\s*$',
             part_stripped
         )
         if m:
@@ -520,12 +546,25 @@ def parse_modules(src: str, file_path: str) -> List[ModuleDef]:
         if m:
             mod_name = m.group(1)
             start_line = i
-            # Find the end of module header (first ;)
+            # Find the end of module header (first ; that is not an import)
+            #
+            # SystemVerilog allows a package import list between the module name
+            # and the parameter list:
+            #
+            #     module aes_core
+            #       import aes_pkg::*;        <- the first `;` in the file
+            #       import aes_reg_pkg::*;
+            #     #( ... ) ( input logic clk_i, ... );
+            #
+            # Stopping at the first `;` made the header those two lines, which
+            # contain no ports at all — so every instantiated port "did not
+            # exist in the module". Measured on the corpus: 920 errors on
+            # opentitan_aes alone, every one of them false (#559).
             header_lines = []
             j = i
             while j < len(lines):
                 header_lines.append(lines[j])
-                if ';' in lines[j]:
+                if ';' in lines[j] and not _IMPORT_LINE_RE.match(lines[j]):
                     break
                 j += 1
             header_end = j
@@ -545,7 +584,7 @@ def parse_modules(src: str, file_path: str) -> List[ModuleDef]:
         header_lines = []
         for j in range(start_line, min(end_line + 1, len(lines))):
             header_lines.append(lines[j])
-            if ';' in lines[j]:
+            if ';' in lines[j] and not _IMPORT_LINE_RE.match(lines[j]):
                 break
         header = '\n'.join(header_lines)
 
