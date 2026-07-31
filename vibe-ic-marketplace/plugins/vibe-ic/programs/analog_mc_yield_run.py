@@ -213,9 +213,10 @@ def _resolve_native_mc(project: Path, container: str):
         import analog_netlist_pdk_check as _npc
     except Exception:
         return None
+    # vibe-ic#576 — see `analog_one_shot_runner._try_native_a6_pv`: the
+    # resolver tries the project-staged rung before it needs a target, so an
+    # undeclared but fully staged project must be allowed to reach it.
     declared = _npc._declared_pdk_target(Path(project))
-    if not declared:
-        return None
     try:
         res = _apa.resolve_pdk(declared, project=str(project),
                                container=container)

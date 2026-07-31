@@ -201,9 +201,16 @@ def _try_native_a6_pv(project: Path, block: str, container: str):
         import analog_pdk_availability as _apa
     except Exception:
         return None
+    # vibe-ic#576 — NO `if not declared: return None` here.
+    #
+    # `resolve_pdk` now tries rung 1 (project-staged custom PDK, detected by
+    # GLOB over `input/pdk/`) BEFORE it needs a target, so a project that
+    # stages its own sign-off decks reaches native per-block PV without an L19
+    # declaration. Guarding here would re-close the door the resolver just
+    # opened — and silently: this function returns None, which the caller reads
+    # as "the native path does not apply", so the design's own staged decks
+    # were never run and no tool was ever named.
     declared = _declared_l19_target(project)
-    if not declared:
-        return None
     try:
         res = _apa.resolve_pdk(declared, project=str(project),
                                container=container)
