@@ -88,6 +88,31 @@ _SECTION_ROLE_OFFSET = {"slow": -0.03, "typ": 0.0, "fast": +0.03}
 
 _SUBCKT_RE = re.compile(r"(?im)^\s*\.subckt\s+(\S+)\s+(.*)$")
 _MODEL_RE = re.compile(r"(?im)^\s*\.model\s+(\S+)\s+(\w+)")
+# ── geometry-UNIT convention of a foundry's OWN device subckt ──────────────
+# Two conventions exist in the wild and they are NOT interchangeable:
+#   METRIC   — the subckt declares metric defaults (`+ w=0.35u l=0.34u ...`)
+#              and its junction expressions mix the CALLER's `w` with
+#              HARD-CODED metric constants, e.g. IHP sg13g2:
+#                  as='max(w/ng,wmin)*(z1+((ng-1)/2)*z2)'
+#                  z1=0.34e-6  z2=0.38e-6  wmin=0.15e-6
+#              so `w` MUST arrive in metres. (gf180 is metric too: `w=10u`.)
+#   UNITLESS — no metric default on the header; the deck passes bare numbers
+#              and `.option scale` converts them. This is the sky130 idiom the
+#              corner templates are AUTHORED in.
+# `.option scale` is applied by ngspice to PRIMITIVE device geometry; it does
+# NOT rescale a bare number handed to a SUBCKT before that subckt's own
+# arithmetic consumes it. So a bare `w=8` under `.option scale=1u` reaching a
+# METRIC subckt makes `as/ad/ps/pd` come out ~1e6x wrong, and the junction
+# leakage they imply swamps the circuit at high temperature (measured on the
+# u_hawaii_adc LDO: every -40C/27C corner regulated, every 125C corner did not,
+# at EVERY pass-device size). Detected from the PDK's OWN text — structural,
+# no vendor/SKU literal, and a PDK with no metric default is left UNITLESS so
+# the sky130 path stays byte-identical.
+_GEOM_DEFAULT_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])([wl])\s*=\s*([0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?)"
+    r"\s*([a-zA-Z]*)")
+# SPICE engineering suffixes that denote a sub-millimetre magnitude.
+_SI_SUB_MM = ("u", "n", "p", "f", "a", "meg")  # 'm' is ambiguous (milli/metre)
 # section DEFINITION form: `.lib <bare-identifier>` alone (NOT the include form
 # `.lib "path" section`, which carries a path/quote after `.lib`).
 _LIB_SECTION_RE = re.compile(r"(?im)^\s*\.lib\s+([A-Za-z_]\w*)\s*$")
@@ -178,6 +203,12 @@ class DeckContext:
     # parameters for subcircuit". The deck emitter reads this to inject the
     # missing substrate/well ties (see render_deck). chip-AGNOSTIC.
     device_terminals: Dict[str, int] = field(default_factory=dict)
+    # {role: "metric"|"unitless"} — the geometry-UNIT convention each resolved
+    # device subckt declares for ITSELF (see _GEOM_DEFAULT_RE). The deck emitter
+    # reads this to decide whether the templates' `.option scale=1u` + bare
+    # `w=`/`l=` idiom is valid for the resolved family, or whether the geometry
+    # must be emitted in explicit metres (see render_deck). chip-AGNOSTIC.
+    device_geometry_units: Dict[str, str] = field(default_factory=dict)
     unresolved_roles: List[str] = field(default_factory=list)
     work_items: List[str] = field(default_factory=list)
     disclosure: str = ""
@@ -203,6 +234,7 @@ class DeckContext:
             "process_corners": [list(pc) for pc in self.process_corners],
             "device_map": self.device_map,
             "device_terminals": self.device_terminals,
+            "device_geometry_units": self.device_geometry_units,
             "unresolved_roles": self.unresolved_roles,
             "work_items": self.work_items, "disclosure": self.disclosure,
             "primary_policy": self.primary_policy,
@@ -330,7 +362,53 @@ def parse_devices(text: str) -> Dict[str, Any]:
     models: Dict[str, str] = {}
     for m in _MODEL_RE.finditer(text or ""):
         models[m.group(1)] = m.group(2).lower()
-    return {"subckts": subckts, "models": models}
+    return {"subckts": subckts, "models": models,
+            "geometry_units": parse_subckt_geometry_units(text)}
+
+
+def _geom_default_is_metric(value: str, suffix: str) -> bool:
+    """True when a `.subckt` default w=/l= states a METRIC length.
+
+    Metric either explicitly (an SI sub-millimetre suffix: `0.35u`) or by bare
+    magnitude (`3.5e-7` — no transistor is 3.5e-7 *scaled* units). A bare
+    number of ordinary transistor magnitude (`0.35`, `8`) is the scaled
+    (sky130) idiom."""
+    suf = (suffix or "").lower()
+    if suf:
+        return any(suf.startswith(s) for s in _SI_SUB_MM)
+    try:
+        return 0.0 < float(value) < 1e-3
+    except (TypeError, ValueError):
+        return False
+
+
+def parse_subckt_geometry_units(text: str) -> Dict[str, str]:
+    """{subckt_name: "metric"|"unitless"} from each `.subckt`'s OWN declared
+    default `w=`/`l=`, following `+` continuation lines (IHP declares its
+    defaults on the continuation, not the header). A subckt that declares no
+    w/l default at all is reported "unitless" — the historical assumption, so
+    an unparseable PDK degrades to today's behaviour rather than to a guess.
+    Pure; chip-AGNOSTIC (SPICE syntax only)."""
+    out: Dict[str, str] = {}
+    lines = (text or "").splitlines()
+    for i, ln in enumerate(lines):
+        m = _SUBCKT_RE.match(ln)
+        if not m:
+            continue
+        decl = m.group(2)
+        # absorb `+` continuation lines — the declaration's real parameter list
+        for nxt in lines[i + 1:]:
+            s = nxt.lstrip()
+            if not s.startswith("+"):
+                break
+            decl += " " + s[1:]
+        verdict = "unitless"
+        for _key, val, suf in _GEOM_DEFAULT_RE.findall(decl):
+            if _geom_default_is_metric(val, suf):
+                verdict = "metric"
+                break
+        out[m.group(1)] = verdict
+    return out
 
 
 # Directives that pull another model file into a lib's parse scope. A PDK
@@ -388,6 +466,36 @@ def transitive_subckts(lib_path: str, text: str,
             continue
         subckts.update(transitive_subckts(tgt, itxt, reader, seen, _depth + 1))
     return subckts
+
+
+def transitive_geometry_units(lib_path: str, text: str,
+                              reader: Optional[Callable[[str], Optional[str]]],
+                              _seen: Optional[set] = None, _depth: int = 0,
+                              ) -> Dict[str, str]:
+    """`transitive_subckts`'s sibling for the geometry-UNIT convention: union of
+    {subckt: "metric"|"unitless"} reachable by following the same
+    `.include`/`.lib <path> <section>` graph. Separate walk (not folded into
+    `transitive_subckts`) so that function's return contract is unchanged.
+    A foundry commonly DEFINES devices in an included file while the corner lib
+    only selects sections (confirmed: IHP cornerMOShv.lib -> sg13g2_moshv_mod.lib),
+    so following includes is required, not optional."""
+    units = dict(parse_subckt_geometry_units(text))
+    if reader is None or _depth >= 8:
+        return units
+    seen = _seen if _seen is not None else set()
+    base = posixpath.dirname(str(lib_path))
+    for inc in _iter_includes(text):
+        tgt = inc if posixpath.isabs(inc) else posixpath.normpath(
+            posixpath.join(base, inc))
+        if tgt in seen:
+            continue
+        seen.add(tgt)
+        itxt = reader(tgt)
+        if itxt is None:
+            continue
+        units.update(transitive_geometry_units(tgt, itxt, reader, seen,
+                                               _depth + 1))
+    return units
 
 
 def map_device_roles(subckts: Dict[str, int],
@@ -549,6 +657,7 @@ def custom_family_context(res: Dict[str, Any],
     unread: List[str] = []
     union_subckts: Dict[str, int] = {}
     union_models: Dict[str, str] = {}
+    union_geom_units: Dict[str, str] = {}
     per_lib_sections: Dict[str, List[str]] = {}
     per_lib_subckts: Dict[str, Dict[str, int]] = {}
     per_lib_composed: Dict[str, List[str]] = {}
@@ -567,6 +676,7 @@ def custom_family_context(res: Dict[str, Any],
         tsub = transitive_subckts(lib, txt, reader)
         union_subckts.update(tsub)
         union_models.update(dev["models"])
+        union_geom_units.update(transitive_geometry_units(lib, txt, reader))
         per_lib_sections[lib] = parse_sections(txt)
         per_lib_subckts[lib] = tsub
         # cross-file COMPOSED corner sections (a foundry corner ENTRY-POINT lib
@@ -653,6 +763,15 @@ def custom_family_context(res: Dict[str, Any],
         if isinstance(nterm, int):
             device_terminals[role] = nterm
 
+    # {role: unit-convention} for the RESOLVED devices, mirroring
+    # device_terminals above. A role whose subckt was never parsed is OMITTED
+    # (absent -> the emitter keeps today's scaled idiom), never guessed.
+    device_geometry_units: Dict[str, str] = {}
+    for role, dname in device_map.items():
+        u = union_geom_units.get(dname)
+        if u:
+            device_geometry_units[role] = u
+
     sections = per_lib_sections.get(primary, []) if primary else []
     # union sections across libs is what's "available"; primary drives the deck.
     all_sections: List[str] = []
@@ -708,6 +827,10 @@ def custom_family_context(res: Dict[str, Any],
                      if primary_composed else "")
     term_note = (f"; device_terminals={device_terminals}"
                  if any(v > 4 for v in device_terminals.values()) else "")
+    geom_note = (f"; device_geometry_units={device_geometry_units} "
+                 f"(deck emits explicit metres, not `.option scale`)"
+                 if any(v == "metric"
+                        for v in device_geometry_units.values()) else "")
     # vibe-ic#193 — name the electing strategy in the human-readable disclosure
     # too, so an artefact carrying only the prose still states its policy. With
     # one strategy left this is a positive record rather than a disambiguator:
@@ -716,7 +839,7 @@ def custom_family_context(res: Dict[str, Any],
     disclosure = (
         f"custom PDK family '{family}' ({source}) — device map + corner "
         f"sections parsed from {len(readable)} resolved model lib(s); "
-        f"devices={device_map}, sections={corner_pool}{composed_note}{term_note}."
+        f"devices={device_map}, sections={corner_pool}{composed_note}{term_note}{geom_note}."
         + (f" (note: {unread_note})" if unread_note else "")
         if status == "OK" else
         f"custom PDK family '{family}' ({source}) NOT natively emittable: "
@@ -727,6 +850,7 @@ def custom_family_context(res: Dict[str, Any],
         corner_sections=corner_pool,
         typ_section=typ, process_corners=process,
         device_map=device_map, device_terminals=device_terminals,
+        device_geometry_units=device_geometry_units,
         unresolved_roles=unresolved,
         work_items=work_items, disclosure=disclosure,
         primary_policy=primary_policy)

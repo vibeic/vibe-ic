@@ -1324,9 +1324,48 @@ def resolve_spec(project, block, btype):
     return res
 
 
+# ── geometry-unit normalisation for METRIC-declaring PDK device subckts ──────
+# `.option scale=1u` + bare `w=8 l=1` is the sky130 idiom the corner templates
+# are authored in. It is WRONG for a foundry whose MOS `.subckt` declares metric
+# defaults and computes `as/ad/ps/pd` from the caller's `w` against hard-coded
+# metric constants. Rewrite the geometry of the affected instantiation lines
+# into explicit metres and drop the now-meaningless scale card.
+#
+# Touches `w=` / `l=` ONLY. `m=` is a device MULTIPLIER, not a length, and must
+# never be scaled (`m='m_pass'` is the LDO sweep knob). Both literal values
+# (`w=8`) and quoted expressions (`w='0.5 + 0.5*code'`) are handled.
+_SCALE_CARD_RE = re.compile(r"(?im)^[ \t]*\.option[ \t]+scale[ \t]*=[ \t]*1u[ \t]*\r?\n")
+_WL_LITERAL_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])([wl])=([0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?)(?![\w.])")
+_WL_EXPR_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])([wl])='([^']*)'")
+
+
+def _emit_metric_geometry(deck: str, metric_devs) -> str:
+    """Convert `w=`/`l=` on every device line instantiating one of
+    `metric_devs` from scaled-micron to explicit metres, and remove the
+    `.option scale=1u` card. Pure text; chip-AGNOSTIC.
+
+    NO metric device -> the deck is returned UNCHANGED, scale card included.
+    The caller already guards on this, but a converter that strips the scale
+    card while converting no geometry would silently reinterpret every
+    dimension in the deck as metres; that must not depend on the caller."""
+    if not metric_devs:
+        return deck
+    out = []
+    for ln in deck.splitlines(keepends=True):
+        body = ln.lstrip()
+        if body[:1].lower() == "x" and any(d in ln for d in metric_devs):
+            ln = _WL_EXPR_RE.sub(lambda m: f"{m.group(1)}='({m.group(2)})*1u'", ln)
+            ln = _WL_LITERAL_RE.sub(lambda m: f"{m.group(1)}={m.group(2)}u", ln)
+        out.append(ln)
+    deck = "".join(out)
+    # Only drop the card once the geometry it governed has been converted.
+    return _SCALE_CARD_RE.sub("", deck)
+
+
 def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
                 deck_overrides=None, temp_c=None, devices=None,
-                device_terminals=None):
+                device_terminals=None, device_geometry_units=None):
     """Render T[btype] for one sweep point, then apply the L5 deck overrides
     (GAP-ANALOG-2) and a REAL per-corner temperature card (GAP-ANALOG-3).
 
@@ -1378,6 +1417,26 @@ def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
                 deck = re.sub(
                     rf"(?im)^(\s*x\w+(?:\s+\S+){{4}})\s+({re.escape(fam)})\b",
                     rf"\1 {extra} \2", deck)
+        # GEOMETRY UNITS — the templates are authored in the sky130 idiom
+        # (`.option scale=1u` + bare `w=8 l=1`). ngspice applies `.option scale`
+        # to PRIMITIVE device geometry; it does NOT rescale a bare number handed
+        # to a SUBCKT before that subckt's own arithmetic consumes it. A foundry
+        # whose MOS subckt declares METRIC defaults computes its junction
+        # `as/ad/ps/pd` from the caller's `w` mixed with hard-coded metric
+        # constants, so a bare `w=8` arrives ~1e6x too large there. Measured on
+        # IHP sg13g2: an OFF pass device conducted 843 uA at 125 C and the LDO
+        # loop opened at every 125 C corner and every pass size. When the
+        # resolved family declares metric geometry, emit explicit metres and
+        # drop the scale card. chip-AGNOSTIC: keyed on the PDK's OWN declared
+        # convention, not on a family name; a family with no metric device (incl.
+        # sky130, whose ctx takes the known-family fast path and passes None
+        # here) is a NO-OP and its deck stays byte-identical.
+        if device_geometry_units:
+            metric_devs = {devices.get(r) for r, u in
+                           device_geometry_units.items()
+                           if u == "metric" and devices.get(r)}
+            if metric_devs:
+                deck = _emit_metric_geometry(deck, metric_devs)
     ov = deck_overrides or {}
     applied = {}
     if "vref" in ov:
@@ -1489,7 +1548,7 @@ def _pdk_has_section(container, pdk_lib, section):
 def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                      pdk_lib, knob, val, deck_overrides, subst_header, base_tt,
                      process_corners=None, devices=None, typ_section="tt",
-                     device_terminals=None):
+                     device_terminals=None, device_geometry_units=None):
     """Attempt a REAL ngspice sim at each PVT corner (real .lib section + real
     .temp) for the sized sweep point. Returns a real_sims dict for the corners
     that genuinely converged; a corner whose model section is absent or whose
@@ -1515,7 +1574,8 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
             deck, _ = render_deck(btype, block, pdk, pdk_lib, proc, knob, val,
                                   deck_overrides=deck_overrides, temp_c=temp_c,
                                   devices=devices,
-                                  device_terminals=device_terminals)
+                                  device_terminals=device_terminals,
+                                  device_geometry_units=device_geometry_units)
             sp = sl_dir / f"pvt_{proc}_{tlbl}.sp"
             sp.write_text((subst_header or "") + deck)
             ok, meas, raw, _ss = _run_ngspice(
@@ -1741,6 +1801,7 @@ def run_block(project, block, container, pdk, topology_override):
         pdk_lib = PDK_LIB.get(pdk)
         devices = None
         device_terminals = None
+        device_geometry_units = None
         typ_section = (ctx.typ_section if ctx else None) or "tt"
         grid_corners = None                        # → PVT_PROCESS (ss/tt/ff)
     else:
@@ -1763,6 +1824,7 @@ def run_block(project, block, container, pdk, topology_override):
         pdk_lib = _container_path(container, host_root, model_lib_host)
         devices = ctx.device_map
         device_terminals = ctx.device_terminals
+        device_geometry_units = ctx.device_geometry_units
         typ_section = ctx.typ_section
         grid_corners = ctx.process_corners
 
@@ -1801,7 +1863,8 @@ def run_block(project, block, container, pdk, topology_override):
         tb, _applied = render_deck(btype, block, pdk, pdk_lib, typ_section,
                                    knob, val, deck_overrides=deck_overrides,
                                    temp_c=None, devices=devices,
-                                   device_terminals=device_terminals)
+                                   device_terminals=device_terminals,
+                                   device_geometry_units=device_geometry_units)
         # #496 (round-2): structured PDK-substitution disclosure goes FIRST so
         # it lands in the deck head (the gate scans the first 24 lines).
         tb = subst_header + tb
@@ -1878,7 +1941,8 @@ def run_block(project, block, container, pdk, topology_override):
         best.get("knob", "__noop__"), best.get("val", 0),
         deck_overrides, subst_header, base_tt,
         process_corners=grid_corners, devices=devices, typ_section=typ_section,
-        device_terminals=device_terminals)
+        device_terminals=device_terminals,
+        device_geometry_units=device_geometry_units)
     pvt_grid, corners_executed = build_pvt_grid(
         base, base_log, real_sims, target.get("tol"),
         process_corners=grid_corners)
