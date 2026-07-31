@@ -130,6 +130,92 @@ def _tool_ok(container, tool):
     return rc == 0
 
 
+# ── C5 — RESOLVE THE TOP CELL AND THE PDK FROM THE PROJECT, NEVER FROM A
+#    DESIGN-SPECIFIC LITERAL. ───────────────────────────────────────────────
+# MEASURED DEFECT (2026-07-31): `--top` defaulted to the literal `chip_top` and
+# `--pdk` to the literal `sky130A`, and M1's ONLY call site
+# (`flow/phase1_phase2_phase3.yaml` advisory_program_exit_zero) passes NEITHER.
+# On a design whose top is `u_hawaii_adc` on `ihp-sg13g2` this made Magic run
+# `load chip_top` against a merged GDS that does not contain that cell —
+#   Reading "u_hawaii_adc". / Cell chip_top couldn't be read / Creating new cell
+#   / Warning: There is nothing here to extract.
+# — and the program blamed the extraction ("produced no netlist"). Worse, the
+# `--pdk` literal survived the tech SKIP-guard because sky130A really IS
+# installed in the container, so Magic would have extracted an IHP SG13G2
+# layout with SKY130 layer definitions had the top name been right: a presence
+# check standing in for a correctness check.
+#
+# Both are now DERIVED FROM THE DESIGN'S OWN ARTEFACTS, and when they cannot be
+# derived the program SKIPs saying so instead of guessing. chip/PDK-AGNOSTIC:
+# no design name, cell name or PDK name appears below.
+_DEF_DESIGN_RE = re.compile(r"^\s*DESIGN\s+(\S+)\s*;", re.MULTILINE)
+_PDK_ROOT_RE = re.compile(re.escape(PDKS_IN_CONTAINER) + r"/([^/\s\"']+)/")
+
+
+def resolve_top(project: Path, requested: "str | None" = None):
+    """Return (top_cell, source). chip-AGNOSTIC.
+
+    The DEF's own `DESIGN <name> ;` line is the authoritative answer: it names
+    the cell that was actually floorplanned, placed, routed and streamed out,
+    and the merged GDS this program extracts is built from that stream-out. An
+    EXPLICIT `--top` still wins (a caller that names one has asserted it), but
+    it is reported with its source so a wrong one is visible in the report.
+    Returns (None, reason) when nothing in the project answers.
+    """
+    if requested:
+        return requested, "explicit --top"
+    for d in sorted(_pl.pnr_dir(project).glob("*.def")):
+        try:
+            m = _DEF_DESIGN_RE.search(d.read_text(errors="replace"))
+        except OSError:
+            continue
+        if m:
+            return m.group(1), f"DEF DESIGN line ({d.name})"
+    # Second lane: the synthesis product is named after the top by construction.
+    for v in sorted(_pl.synth_dir(project).glob("*_synth.v")):
+        return v.stem[: -len("_synth")], f"synth netlist stem ({v.name})"
+    return None, ("no DEF carries a DESIGN line and no *_synth.v exists — the "
+                  "project does not state its top cell")
+
+
+def resolve_pdk(project: Path, requested: "str | None" = None):
+    """Return (pdk_name, source). chip/PDK-AGNOSTIC.
+
+    The PDK is read back off the design's OWN back-end artefacts — the PnR /
+    extraction scripts and logs name their PDK root explicitly in every
+    `read_lef` / `-rcfile` path. That is the PDK the layout under test was
+    actually built with, so it is the only one whose layer definitions can
+    correctly extract it. Returns (None, reason) when nothing answers, and the
+    caller SKIPs — it must never fall back to some other design's PDK.
+    """
+    if requested:
+        return requested, "explicit --pdk"
+    counts: "dict[str, int]" = {}
+    roots = [_pl.pnr_dir(project), _pl.extracted_dir(project),
+             project / "phase3" / "stage3", project / "reports" / "phase3"]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for f in sorted(root.rglob("*")):
+            if not f.is_file() or f.suffix.lower() not in (
+                    ".tcl", ".log", ".json", ".rpt", ".sh"):
+                continue
+            try:
+                txt = f.read_text(errors="replace")
+            except OSError:
+                continue
+            for name in _PDK_ROOT_RE.findall(txt):
+                counts[name] = counts.get(name, 0) + 1
+    if not counts:
+        return None, (f"no back-end artefact under this project names a "
+                      f"{PDKS_IN_CONTAINER}/<pdk> root — the PDK this layout "
+                      f"was built with is not recoverable from the project")
+    # Most-cited root wins; ties broken by name so the choice is deterministic.
+    best = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+    return best, (f"back-end artefacts ({counts[best]} reference(s) to "
+                  f"{PDKS_IN_CONTAINER}/{best}/)")
+
+
 def netgen_lvs_script(sch_paths, layout_path, layout_top, sch_top,
                       setup_path, report_path) -> str:
     """The Tcl netgen actually consumes, built so it can be tested without one.
@@ -200,7 +286,11 @@ def lvs_failure_verdict(report_written: bool, rc: int, transcript: str) -> dict:
             "transcript_tail": (transcript or "")[-800:]}
 
 
-def run(project: Path, top: str, container: str, pdk: str) -> dict:
+def run(project: Path, top: str, container: str, pdk: str,
+        *, pdk_source: str = "", top_source: str = "") -> dict:
+    # C5: `top`/`pdk` may be None when the project does not state them. That is
+    # reported at the tech rung of the SKIP ladder below, NOT by refusing to
+    # run — M1's wiring contract requires this producer to stay dispatchable.
     ms_dir = project / "phase3" / "mixed_signal"
     rpt_dir = project / "reports" / "analog" / "mixed_signal"
     merged = ms_dir / "top_merged.gds"
@@ -236,6 +326,22 @@ def run(project: Path, top: str, container: str, pdk: str) -> dict:
         return {"verdict": "SKIP", "rc": 2,
                 "reason": ("tools missing in container: "
                            + ", ".join(missing_tools))}
+    # ── C5: the tech rung. An unresolved top/PDK SKIPs HERE, naming which one
+    # and why — it never falls back to some other design's PDK or cell name.
+    # This is the rung "PDK tech missing" already occupies, so the SKIP ladder
+    # keeps its shape and the producer stays dispatchable (M1's wiring
+    # contract; guarded by tests/test_m1_top_lvs_producer_wiring.py).
+    if not pdk or not top:
+        unresolved = []
+        if not top:
+            unresolved.append(f"top cell ({top_source})")
+        if not pdk:
+            unresolved.append(f"PDK ({pdk_source})")
+        return {"verdict": "SKIP", "rc": 2,
+                "reason": ("cannot identify what to extract — "
+                           + "; ".join(unresolved)),
+                "top": top, "top_source": top_source,
+                "pdk": pdk, "pdk_source": pdk_source}
     magicrc = f"{PDKS_IN_CONTAINER}/{pdk}/libs.tech/magic/{pdk}.magicrc"
     netgen_setup = (f"{PDKS_IN_CONTAINER}/{pdk}/libs.tech/netgen/"
                     f"{pdk}_setup.tcl")
@@ -257,7 +363,10 @@ def run(project: Path, top: str, container: str, pdk: str) -> dict:
         env = (f"export DIGITAL_GDS={_to_container_path(digital_gds, container)} "
                f"MACRO_GDS=\"{';'.join(_to_container_path(g, container) for g in macro_gds)}\" "
                f"MERGED_OUT={_to_container_path(merged, container)} && ")
-        cmd = (env + f"klayout -b -r "
+        # C5 pipefail — see the note at the Magic site below. Without it the rc
+        # this branch reports is `tee`'s, so a KLayout that died mid-merge is
+        # indistinguishable from one that merged nothing.
+        cmd = (env + "set -o pipefail && " + f"klayout -b -r "
                f"{_to_container_path(merge_py, container)} 2>&1 | "
                f"tee {_to_container_path(ms_dir, container)}/merge.log")
         rc, out, err = _docker_exec(
@@ -272,7 +381,16 @@ def run(project: Path, top: str, container: str, pdk: str) -> dict:
     spice_out = ms_dir / f"{top}_merged_extracted.sp"
     tcl = ms_dir / "ext2spice_merged.tcl"
     tcl.write_text(_MAGIC_EXT_TCL)
-    cmd = (f"export GDS={_to_container_path(merged, container)} TOP={top} "
+    # ── C5 pipefail — MEASURED, in this container, on 2026-07-31: ───────────
+    #   $ bash -lc 'bash -c "exit 137" 2>&1 | tee /tmp/x; echo $?'          -> 0
+    #   $ bash -lc 'set -o pipefail; bash -c "exit 137" 2>&1 | tee /tmp/x; echo $?' -> 137
+    # `<tool> 2>&1 | tee <log>` reports TEE's exit status, so a tool that was
+    # KILLED comes back rc=0 and every "was it killed or did it just produce
+    # nothing?" branch downstream is unreachable. This is the exact mechanism
+    # that made Step 31's sibling report `produced no extracted netlist (rc=0)`
+    # about a Magic run that had been killed mid-DEF-read.
+    cmd = ("set -o pipefail && "
+           f"export GDS={_to_container_path(merged, container)} TOP={top} "
            f"SPICE_OUT={_to_container_path(spice_out, container)} && "
            f"cd {_to_container_path(ms_dir, container)} && "
            f"magic -dnull -noconsole -rcfile {shlex.quote(magicrc)} "
@@ -365,15 +483,54 @@ def run(project: Path, top: str, container: str, pdk: str) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("project", type=Path)
-    ap.add_argument("--top", default="chip_top")
+    # C5: default None, NOT a design-specific literal. An omitted value is
+    # resolved from the project; an unresolvable one SKIPs saying so.
+    ap.add_argument("--top", default=None)
     ap.add_argument("--container", default="vibeic-eda")
-    ap.add_argument("--pdk", default="sky130A")
+    ap.add_argument("--pdk", default=None)
     ap.add_argument("--json", default=None)
     args = ap.parse_args(argv)
     if not args.project.is_dir():
         print(f"ERROR: not a directory: {args.project}", file=sys.stderr)
         return 1
-    rep = run(args.project.resolve(), args.top, args.container, args.pdk)
+    project = args.project.resolve()
+    top, top_src = resolve_top(project, args.top)
+    pdk, pdk_src = resolve_pdk(project, args.pdk)
+    # Degrade loudly, never silently: say WHERE these came from, so a wrong one
+    # is visible in the transcript instead of surfacing 40 lines later as
+    # "Magic produced no netlist".
+    #
+    # An UNRESOLVED top or PDK must NOT short-circuit here. `run()` owns the
+    # SKIP ladder (inputs → tools → tech), and M1's wiring contract is that this
+    # producer is always dispatchable and always reports its own state; a
+    # pre-emptive return would make it unreachable on a fresh project and break
+    # that contract (caught by tests/test_m1_top_lvs_producer_wiring.py). The
+    # unresolved case is therefore reported at the tech rung inside `run()`,
+    # where "PDK tech missing" already lives — see `_UNRESOLVED_PDK`.
+    print(f"TOP_RESOLVED {top or '<unresolved>'} (source: {top_src})")
+    print(f"PDK_RESOLVED {pdk or '<unresolved>'} (source: {pdk_src})")
+    rep = run(project, top, args.container, pdk, pdk_source=pdk_src,
+              top_source=top_src)
+    # ── C5: a SKIP is a VERDICT and must leave verdict evidence. ────────────
+    # `run()` writes reports/analog/mixed_signal/top_lvs.json only on the
+    # completed-compare path, so every SKIP rung (inputs / tools / tech /
+    # unresolved-top-or-PDK) previously wrote NOTHING — and M1's gate, which
+    # reads that file, then cannot tell "the producer skipped, and here is why"
+    # from "the producer never ran at all". Those are different claims. Writing
+    # the SKIP verdict here keeps M1's evidence contract intact for every exit
+    # (guarded by tests/test_m1_top_lvs_producer_wiring.py, which proves the
+    # declared producer really writes its verdict evidence) WITHOUT restoring
+    # any guess about which PDK or which top cell the design uses.
+    if rep.get("verdict") == "SKIP":
+        _ev = project / "reports" / "analog" / "mixed_signal" / "top_lvs.json"
+        _ev.parent.mkdir(parents=True, exist_ok=True)
+        _ev.write_text(json.dumps(
+            {k: v for k, v in rep.items() if k != "rc"},
+            indent=2, ensure_ascii=False) + "\n")
+    rep.setdefault("top", top)
+    rep.setdefault("top_source", top_src)
+    rep.setdefault("pdk", pdk)
+    rep.setdefault("pdk_source", pdk_src)
     rc = rep.pop("rc")
     out = json.dumps(rep, indent=2, ensure_ascii=False)
     if args.json:

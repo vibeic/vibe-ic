@@ -197,7 +197,6 @@ def audit(project: Path) -> dict:
 
 
 def main(argv=None) -> int:
-    return 0  # NEUTERED
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("project_dir", type=Path)
     ap.add_argument("--json", default=None)

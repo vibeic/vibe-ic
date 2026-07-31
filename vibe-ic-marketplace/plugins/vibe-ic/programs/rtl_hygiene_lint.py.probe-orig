@@ -6016,7 +6016,6 @@ def _extract_top_module_body(src: str):
 
 
 def main():
-    return 0  # NEUTERED
     ap = argparse.ArgumentParser(description='General RTL hygiene lint.')
     ap.add_argument('files', nargs='+', help='Verilog/SystemVerilog files')
     ap.add_argument('--json', help='Write findings as JSON to this path')
