@@ -4568,6 +4568,32 @@ P0_RTL_DIR_GROUP_MEASUREMENT = {
 _STRUCTURAL_GATE_ARGV_ADAPTERS: Dict[str, tuple[str, ...]] = {
     "sustained_vs_edge_check": ("--rtl-dir",),
     "timer_freeze_after_state_check": ("--rtl-dir",),
+    # #559 — converted after re-deriving the #492 bar over the 107 tracked rtl
+    # directories, on a scratch mirror. Both halves cleared, and a third
+    # question had to be answered before the conversion was safe:
+    #
+    #   no new FAIL            rc=0 on 107/107, with --strict
+    #   non-empty denominator  "Files scanned" is 1..102, never 0, on all 107
+    #   CAN it fail at all?    an injected three-inout AND wrapper exits 1
+    #
+    # The third is why `--strict` is in _STRUCTURAL_GATE_BARE_FLAGS below.
+    # Without it the gate DETECTS the polluter and still exits 0 (measured:
+    # "Warnings: 1 ... PASS"), so wiring it plain would have added a checker
+    # that cannot fail for the reason it exists — clearing the bar precisely
+    # BECAUSE it is incapable of failing.
+    "fpga_wrapper_input_polluter_check": ("--rtl",),
+}
+
+
+#: Flags a gate takes WITHOUT a value, appended after the valued ones.
+#:
+#: The adapter above pairs every flag with the same target, which cannot express
+#: a store_true: `--strict <path>` is a different argv, and argparse would read
+#: the path as a positional. Kept as a separate table rather than a sentinel
+#: inside the first one so both stay plain data — a test can read them and
+#: neither needs a decoder.
+_STRUCTURAL_GATE_BARE_FLAGS: Dict[str, tuple[str, ...]] = {
+    "fpga_wrapper_input_polluter_check": ("--strict",),
 }
 
 
@@ -4918,6 +4944,7 @@ def _structural_gate_argv(gate_name: str,
         argv = [sys.executable, str(prog)]
         for flag in adapter:
             argv += [flag, target]
+        argv += list(_STRUCTURAL_GATE_BARE_FLAGS.get(gate_name, ()))
     else:
         # v0.118 fix: pass `project` (not `rtl_dir`) so gates can access
         # project-level artefacts (generated_docs/L*.json, waivers.json,

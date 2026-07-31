@@ -80,7 +80,11 @@ GATE_TIMEOUT_S = 25
 #: of UMBRELLA_SUPPLIABLE rather than a special case at every use.
 POSITIONAL_MARKER = "<positional/unrecognized>"
 
-#: The 33 measured on 2026-07-30 at v1.8.58. Of these, exactly 8 carry a recorded
+#: Measured 33 on 2026-07-30 at v1.8.58; 32 after #559 converted
+#: `fpga_wrapper_input_polluter_check` (v1.8.82). The name is DELETED here
+#: rather than kept with a note: the predicate is `measured ⊆ recorded`, so
+#: a fixed gate left in the list would let a newly-silent one take its place
+#: without changing the total. Of these, exactly 8 carry a recorded
 #: decision in `_ZERO_DENOMINATOR_CLASSIFICATION`; four more are decided in the
 #: prose above `_STRUCTURAL_GATE_ARGV_ADAPTERS` (`testbench_exists_check` would
 #: redden the corpus 102/107) and are invisible to any program because that
@@ -95,7 +99,6 @@ KNOWN_NOT_INVOCABLE: Tuple[str, ...] = (
     "crc_seed_consistency_check",
     "cross_constant_invariant_check",
     "fpga_qsf_lint",
-    "fpga_wrapper_input_polluter_check",
     "fresh_agent_provenance_check",
     "interface_encoding_audit",
     "json_schema_check",
