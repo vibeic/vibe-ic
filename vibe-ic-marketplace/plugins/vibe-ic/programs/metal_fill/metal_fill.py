@@ -178,12 +178,33 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
     drawn = pya.Region(top.begin_shapes_rec(lidx)).merged()  # circuit metal (constant)
     drawn_block = drawn.sized(spm)                     # keep-out from real metal
 
+    #: Shapes already on the drawn layer before any fill. In the SHARED-datatype
+    #: case the fill is indistinguishable from circuit metal afterwards, so the
+    #: fill count is only recoverable as a difference against this.
+    n_drawn0 = sum(1 for _ in top.begin_shapes_rec(lidx))
+
     def _fill_now():
-        return pya.Region(top.begin_shapes_rec(fill_lidx)).merged() if separate \
-            else drawn
+        """Current contents of the fill layer, RE-READ from the layout.
+
+        When `fill_datatype` equals the drawn datatype, `fill_lidx is lidx` and
+        this returns drawn+fill — which is exactly what the density target is
+        stated against.
+
+        This used to return the `drawn` SNAPSHOT in that case. `drawn` is
+        captured once and never changes, so the engine could not observe its own
+        fill: `_measure()` returned the same object before and after, the
+        in-loop `worst` never rose, `reached_target` never became True, and
+        every layer reported `density_after == density_before`. The gate then
+        FAILed a fill that had worked — measured on the 50x50um fixture, where
+        the emitted GDS reaches 0.675 against a 0.3 target while the report said
+        0.0368. A check that cannot pass is the same defect as one that cannot
+        fail, and it hid here because the fill and the verdict disagreed only in
+        a file nobody re-opened.
+        """
+        return pya.Region(top.begin_shapes_rec(fill_lidx)).merged()
 
     def _measure():
-        return (drawn + _fill_now()).merged() if separate else drawn
+        return (drawn + _fill_now()).merged() if separate else _fill_now()
 
     boundary = spec.get("_bbox")
     metal0 = _measure()
@@ -208,7 +229,10 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
         fcbox = pya.Box(0, 0, cur_fwd, cur_fwd)
         for _pass in range(max_passes):
             fill_r = _fill_now()
-            metal = (drawn + fill_r).merged() if separate else drawn
+            # Non-separate: `fill_r` IS the re-read layer, so it already
+            # carries the fill this loop placed. Reading `drawn` here made
+            # the convergence test blind to its own progress.
+            metal = (drawn + fill_r).merged() if separate else fill_r
             fill_zone = pya.Region()
             worst = 1.0
             for wb in _windows(bbox, wd):
@@ -223,7 +247,9 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
                 reached_target = True
                 break
             fill_zone.merge()
-            blocked = drawn_block + (fill_r.sized(sp) if separate else drawn.sized(sp))
+            # Keep out of ALREADY-PLACED fill too, not just circuit metal:
+            # in the shared-datatype case `fill_r` now includes it.
+            blocked = drawn_block + fill_r.sized(sp)
             fillable = fill_zone - blocked
             if fillable.is_empty():
                 break                                   # this size cannot fit -> smaller
@@ -247,7 +273,11 @@ def fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu):
     metal_after = _measure()
     d_after = metal_after.area() / float(bbox.area())
     worst_after = _worst_window_density(metal_after, bbox, wd)
-    fill_shapes = sum(1 for _ in top.begin_shapes_rec(fill_lidx)) if separate else None
+    # Shared-datatype fill is not separable by layer, but it IS countable as a
+    # difference against the pre-fill census — so this reports a number rather
+    # than `null`, which read as "not measured" for the case that needs it most.
+    fill_shapes = (sum(1 for _ in top.begin_shapes_rec(fill_lidx)) if separate
+                   else sum(1 for _ in top.begin_shapes_rec(lidx)) - n_drawn0)
     return {
         "name": spec["name"],
         "target": target, "max": maxd,
