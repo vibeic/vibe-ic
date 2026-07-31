@@ -476,6 +476,50 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                 # the missing artefact on its own evidence.
                 pass
 
+        # A8 is also the moment the design's OWN macro LEFs first EXIST, and
+        # that is the missing half of v1.8.95.
+        #
+        # `l21_macro_supply_rail_synth` derives the power-intent rails from
+        # hard-macro LEFs. v1.8.79 landed it with no caller; v1.8.95 gave it
+        # one and widened its search to all five roots the consumer harvests
+        # from. Both are correct and both are real. But the single call site is
+        # in `phase1_doc_one_shot_runner` — and for a design whose hard macros
+        # are its OWN analog blocks, those LEFs are written HERE, at A8, in
+        # Phase 3. At Phase-1 time there is nothing to read. Measured on a real
+        # mixed-signal cell, same program, same project, two moments:
+        #
+        #   at Phase 1 (blind run)   verdict: NOT_APPLICABLE
+        #                            0 hard macro(s) with PG pins across
+        #                            0 LEF file(s), 0 master(s)
+        #   after A8 (LEFs present)  2 macro(s) in scope, 1 power pin(s),
+        #                            1 ground pin(s), 2 rail(s) ADDED
+        #                            -> all 3 macro PG pins classify
+        #                               `declared_rail` instead of `undeclared`
+        #
+        # So the producer fires exactly once, in the one phase where the
+        # evidence it needs cannot exist for this class of design, and never
+        # again. A vendor macro staged into `input/pdk_local/` before the run
+        # is covered; a design that GENERATES its macros is not.
+        #
+        # The existing wiring test cannot see this and is not wrong to miss it:
+        # every one of its fixtures stages the LEF before invoking the synth,
+        # which is the vendor case. The gap is TEMPORAL, not locational, so
+        # only a second call site at the moment of production closes it.
+        #
+        # Idempotent by construction (it only ADDS rails not already declared,
+        # tested against the consumer-visible key set), so running it once per
+        # A8 block is safe and the last block sees every LEF. Fail-open in the
+        # same shape as the GDS producer above: deriving rails must never turn
+        # A8 into a FAIL the gate has not itself found.
+        rail_prog = PROGRAMS_DIR / "l21_macro_supply_rail_synth.py"
+        if rail_prog.is_file():
+            try:
+                subprocess.run(
+                    [sys.executable, str(rail_prog), str(project), "--apply"],
+                    capture_output=True, text=True, timeout=300)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
     det = det_progs.get(step_name)
     skill = skill_map.get(step_name, "(no skill mapped)")
     if det and det.is_file():

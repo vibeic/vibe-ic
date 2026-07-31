@@ -8917,6 +8917,28 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
     # Fail-open like every other post-emit hook — deriving rails must never take
     # the L-doc emit down. NOT_APPLICABLE (rc 0, no hard macro with PG pins) and
     # a missing L21 (rc 2) are both ordinary outcomes, not errors.
+    #
+    # The DOC-TABLE producer runs FIRST, and it is a second evidence source for
+    # the same layer, not a duplicate of the LEF one. Measured on a real
+    # mixed-signal cell: the LEF producer reports
+    #     verdict: NOT_APPLICABLE
+    #     count: 0 hard macro(s) with PG pins across 0 LEF file(s)
+    # not because it looks in the wrong places (v1.8.95 fixed that) but because
+    # the design's macros are its OWN analog blocks, whose LEFs are generated at
+    # A8 in PHASE 3 — they do not exist yet when this Phase-1 hook runs. The
+    # same design states its rails outright, in a two-row markdown table under a
+    # heading called "Supplies / levels". A rail the design WROTE DOWN is the
+    # earliest and most direct evidence there is, so it is read first; the LEF
+    # producer then adds only what the documents did not state, because both
+    # test "already declared" against the same consumer-visible key set.
+    try:
+        from l21_doc_supply_rail_synth import main as _l21_doc_synth
+        _rc = _l21_doc_synth([str(project), "--apply"])
+        if _rc not in (0, 2):
+            print(f"      L21 doc supply-rail synth rc={_rc}", file=sys.stderr)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"      L21 doc supply-rail synth FAILED (fail-open): {e}",
+              file=sys.stderr)
     try:
         from l21_macro_supply_rail_synth import main as _l21_rail_synth
         _rc = _l21_rail_synth([str(project), "--apply"])
@@ -48850,7 +48872,31 @@ def emit_coverage_report(project: Path,
     if _unread_docs:
         _status = "FAIL_INPUT_NOT_FULLY_READ"
 
+    # The SAME defect shape as #499 above, one level down: that fix taught the
+    # ratio to notice a document it never read; this one teaches it to notice a
+    # LAYER it never filled. The percentage credits a literal when it appears
+    # ANYWHERE in the union of the L docs, so a fact that landed in three prose
+    # layers and missed the layer that CONSUMES it scores exactly the same as a
+    # fact that landed correctly. Measured on a real mixed-signal cell:
+    # `100.0% PASS`, `input_documents_unread = 0`, and `L21_POWER_INTENT` empty
+    # — while the design stated its supply rails outright in a two-row table
+    # under a heading called "Supplies / levels". That empty layer is what later
+    # FAILed the l21 pre-route gate and cost the run its DEF and its GDS.
+    #
+    # Same remedy as #499, deliberately: the percentage is NOT touched, and the
+    # miss is disclosed in `overall.status` rather than averaged away. A layer
+    # speaks only on POSITIVE evidence that the input stated something for it,
+    # so the 14-of-28 layers that are correctly empty stay silent.
+    try:
+        from phase1_layer_demand_probe import evaluate as _layer_demand_eval
+        _layer_demand = _layer_demand_eval(project)
+    except Exception:                                       # noqa: BLE001
+        _layer_demand = {"probes_run": 0, "layers": [], "silent_empty": []}
+    if _layer_demand.get("silent_empty") and _status == "PASS":
+        _status = "FAIL_LAYER_DEMANDED_BUT_EMPTY"
+
     report = {
+        "layer_demand": _layer_demand,
         "overall": {
             "denominator": denom,
             # `total` is the audit-gate-readable field (vendor-token
@@ -48865,10 +48911,17 @@ def emit_coverage_report(project: Path,
             "input_documents_visited": _visited,
             "input_documents_extracted": _extracted_n,
             "input_documents_unread": len(_unread_docs),
+            "layers_demanded_but_empty": list(
+                _layer_demand.get("silent_empty") or []),
             "measures": ("coverage of literals found in documents that "
                          "EXTRACTED; a document that did not extract "
                          "contributes to neither numerator nor "
-                         "denominator"),
+                         "denominator; a literal is credited when it appears "
+                         "ANYWHERE in the union of the L docs, so this ratio "
+                         "cannot by itself tell a fact that reached its "
+                         "consuming layer from one that only reached a prose "
+                         "layer — see `layer_demand` and "
+                         "`layers_demanded_but_empty` for that"),
         },
         # v1.7.72 (#499) — named, not just counted, so a reader does not
         # have to open a second report to learn WHICH document is
@@ -61381,6 +61434,29 @@ def main() -> int:
               "documents — they cannot lower a coverage ratio:")
         for _d in (report.get("unread_input_documents") or [])[:10]:
             print(f"     UNREAD {_d.get('path')} — {_d.get('reason')}")
+    # Same reason as the census above, one level down: the percentages credit a
+    # literal that reached ANY layer, so they cannot tell a fact that reached
+    # its CONSUMING layer from one that only reached a prose layer. Printed
+    # here so the two are never read apart.
+    _ld = report.get("layer_demand") or {}
+    try:
+        from phase1_layer_demand_probe import summary_line as _ld_summary
+        if _ld.get("probes_run"):
+            print(_ld_summary(_ld))
+    except Exception:                                       # noqa: BLE001
+        pass
+    for _l in (_ld.get("layers") or []):
+        if _l.get("status") != "SILENT_EMPTY":
+            continue
+        print(f"  !! the input states {_l['input_states']} {_l['fact']}(s) "
+              f"and {_l['layer']} holds NONE — the percentages above cannot "
+              f"see this, because the same literals were credited from other "
+              f"layers.")
+        print(f"     consumer left starved: {_l['consumer']}")
+        for _it in (_l.get("stated_items") or [])[:10]:
+            _ev = _it["evidence"]
+            print(f"     STATED {_it['name']} ({_it['use']}, "
+                  f"{_it['voltage_v']} V) at {_ev['file']}:{_ev['line']}")
     print()
     print("=== AI deep-review handoff ===")
     print("After this runner completes, AI MUST invoke the "

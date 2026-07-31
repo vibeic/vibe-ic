@@ -43,9 +43,27 @@ import _vacuous_exit as _vx
 # documented "comparison", singular; this gate has only ever read
 # "comparisons"/"specs"), which made a result authored exactly per the skill's
 # own example FAIL as if it contained no data.
+#
+# The CONTAINER key names were widened once for exactly that reason. The VALUE
+# key names were not given the same treatment, and the identical defect was
+# still live one level down: `analog_a7_post_layout_resim_check` reads the SAME
+# `phase3/analog/<block>/pre_vs_post.json` and its documented schema spells the
+# values `pre_value` / `post_value`. The two vocabularies were DISJOINT, so an
+# author could satisfy at most one of the two gates. Measured on a file
+# authored exactly to the A7 gate's own documented schema:
+#
+#   analog_a7_post_layout_resim_check   rc=0  PASS — 1/1 block(s) clean
+#   analog_pre_vs_post_layout_check     rc=1  PRE_VS_POST_ZERO_COMPARED:
+#       pre_vs_post.json present but 0 specs were compared
+#
+# Two gates reading one artefact must read it with one vocabulary, or the
+# artefact has no satisfiable schema at all. `pre_value`/`post_value` are
+# appended rather than substituted, so every file that satisfied this gate
+# before still satisfies it byte-for-byte, and the earlier spellings keep
+# priority.
 _CONTAINER_KEYS: tuple = ("comparisons", "specs")
-_PRE_KEYS: tuple = ("pre_layout", "pre")
-_POST_KEYS: tuple = ("post_layout", "post")
+_PRE_KEYS: tuple = ("pre_layout", "pre", "pre_value")
+_POST_KEYS: tuple = ("post_layout", "post", "post_value")
 
 
 def _first_key(item: dict, keys: tuple):
