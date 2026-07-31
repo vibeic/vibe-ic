@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1016
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1016)
+- **Total programs (excluding helpers / shims):** 1018
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1018)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1007 |
+| `any` | 1009 |
 
 ## Alphabetical listing
 
@@ -193,6 +193,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `compose_synth` | any | — | a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine. |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
+| `container_exec_deadline_check` | any | — | A `docker exec` whose deadline bounds the CLIENT and not the tool. |
 | `container_image_provenance` | any | — | record, and on request enforce, which IMAGE the run's `--container` actually executes. |
 | `conv_encoder_synth` | any | — | DETERMINISTIC solver for the CVDP convolutional encoder family (rate-1/n, constraint length K, generator polynomials stated as binary tap... |
 | `convergence_doctrine_present_check` | any | — | ORGANIC #716 |
@@ -784,6 +785,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `regression_issue_intake_check` | any | — | Issue-#5 lesson-learned enforcement: before a debug agent attempts a |
 | `regression_report_aggregate` | any | — | Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 1 + Output format. |
 | `regression_severity_classify` | any | — | Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 3. |
+| `report_belongs_to_project_check` | any | — | a runner report must be ABOUT the project it sits in. |
 | `reported_figure_artifact_backing_check` | any | — | the ARTIFACT-BACKING gate. |
 | `reports_subfolder_taxonomy_check` | any | — | enforce that `<project>/reports/` contains ONLY the 6 phase-aligned subfolders + 2 top-level summary markdown files (v1.6.25 hygiene gate). |
 | `reset_clock_variant_alias` | any | v0.3.18 | v0.3.18 (ORGANIC #518). |
@@ -1088,7 +1090,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1007 programs)
+### `any` (1009 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1255,6 +1257,7 @@ _(no programs in this group)_
 - `compose_synth` — a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine.
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
+- `container_exec_deadline_check` — A `docker exec` whose deadline bounds the CLIENT and not the tool.
 - `container_image_provenance` — record, and on request enforce, which IMAGE the run's `--container` actually executes.
 - `conv_encoder_synth` — DETERMINISTIC solver for the CVDP convolutional encoder family (rate-1/n, constraint length K, generator polynomials stated as binary tap...
 - `convergence_doctrine_present_check` — ORGANIC #716
@@ -1843,6 +1846,7 @@ _(no programs in this group)_
 - `regression_issue_intake_check` — Issue-#5 lesson-learned enforcement: before a debug agent attempts a
 - `regression_report_aggregate` — Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 1 + Output format.
 - `regression_severity_classify` — Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 3.
+- `report_belongs_to_project_check` — a runner report must be ABOUT the project it sits in.
 - `reported_figure_artifact_backing_check` — the ARTIFACT-BACKING gate.
 - `reports_subfolder_taxonomy_check` — enforce that `<project>/reports/` contains ONLY the 6 phase-aligned subfolders + 2 top-level summary markdown files (v1.6.25 hygiene gate).
 - `reset_clock_variant_alias` — v0.3.18 (ORGANIC #518).  _[v0.3.18]_
