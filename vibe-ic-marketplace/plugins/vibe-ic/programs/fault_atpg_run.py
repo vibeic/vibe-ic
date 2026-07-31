@@ -1268,6 +1268,25 @@ def run_fault(
         "fault", "atpg",
         "--cell-model", eff_cell_model,
         "--clock", clock,
+    ]
+    # `fault atpg` takes the SAME BypassOptions group as `fault cut`
+    # (Entries/atpg.swift `@OptionGroup var bypass: BypassOptions`), and that
+    # group declares `var resetName: String = "rst"`. So omitting --reset does
+    # not mean "this design has no reset" — it means the tool silently adopts
+    # the name `rst`. On a design whose reset is called anything else, the real
+    # reset is never bypassed, stays ASSERTED through the ATPG simulation, and
+    # the flops it drives are frozen: the coverage number that comes back is
+    # measured on a design held in reset.
+    #
+    # `fault cut` was already passing it; the pattern-generating invocation was
+    # not. Restored 2026-07-31 — the guard test named for exactly this property
+    # (test_atpg_always_passes_reset_explicitly) had been RED at origin/main and
+    # was reporting it correctly the whole time; nobody was reading it.
+    if reset:
+        atpg_cmd += ["--reset", reset]
+        if reset_active_low:
+            atpg_cmd += ["--reset-active-low"]
+    atpg_cmd += [
         "-o", f"/work/{tv_out}",
         "--output-coverage-metadata", f"/work/{cov_out}",
         "-m", str(min_coverage),

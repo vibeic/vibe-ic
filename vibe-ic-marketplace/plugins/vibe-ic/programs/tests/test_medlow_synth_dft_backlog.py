@@ -568,18 +568,33 @@ def test_step11_tv_json_is_not_implied_by_the_declared_artefacts(tmp_path,
     assert (dft / "atpg_coverage.rpt").is_file(), (
         "atpg_coverage.rpt is written unconditionally after the subprocess; "
         "if that changed, re-derive whether tv.json can be declared")
-    assert (dft / "scan_netlist.v").is_file()
+    # scan_netlist.v is NOT written here any more, and that is the point of the
+    # scan-chain fix: `fault_atpg_run` used to copy the ATPG *cut* netlist to
+    # that name — a combinational transform with zero flops, which no LEC can
+    # pair and no design can be built from. It now declares
+    # `writes_scan_netlist: False` and `fault_scan_chain_insert` owns the file.
+    #
+    # UPDATED 2026-07-31: this line used to assert the file EXISTS, i.e. exactly
+    # the behaviour that fix removed, so it went red the moment the fix landed
+    # and stayed red. The fix landed; its guard test did not follow. The test's
+    # ARGUMENT is untouched — tv.json is still not implied by the declared
+    # artefacts — it now rests on atpg_coverage.rpt alone, which is enough,
+    # because one unconditionally-written declared artefact already proves a
+    # shape where the declared set is complete and tv.json is absent.
+    assert not (dft / "scan_netlist.v").exists(), (
+        "fault_atpg_run must not write scan_netlist.v — that was the ATPG cut "
+        "netlist masquerading as a scan netlist")
     # Which is exactly the state the withdrawn declaration would call MISSING.
     import flow_dashboard_data as fdd
     _o, n_present, n_total = fdd._resolve_outputs(
-        tmp_path, ["phase2/stage2/dft/scan_netlist.v",
-                   "phase2/stage2/dft/atpg_coverage.rpt"])
-    assert n_present == n_total == 2, (n_present, n_total)
+        tmp_path, ["phase2/stage2/dft/atpg_coverage.rpt"])
+    assert n_present == n_total == 1, (n_present, n_total)
+    # Adding tv.json to the declared set turns a complete run into an
+    # incomplete one: the declared artefact is present, tv.json is not.
     _o, n_present, n_total = fdd._resolve_outputs(
-        tmp_path, ["phase2/stage2/dft/scan_netlist.v",
-                   "phase2/stage2/dft/atpg_coverage.rpt",
+        tmp_path, ["phase2/stage2/dft/atpg_coverage.rpt",
                    "phase2/stage2/dft/tv.json"])
-    assert n_present == 2 and n_total == 3, (n_present, n_total, ec, report)
+    assert n_present == 1 and n_total == 2, (n_present, n_total, ec, report)
 
 
 def test_step11_tv_json_population_is_zero_so_it_stays_undeclared():

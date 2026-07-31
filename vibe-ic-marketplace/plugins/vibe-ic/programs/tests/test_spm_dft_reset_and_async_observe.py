@@ -125,18 +125,51 @@ def test_unreadable_cut_defaults_to_not_freezing_anything(tmp_path):
 
 
 def test_atpg_always_passes_reset_explicitly():
-    """The root cause was an ABSENT flag, so pin that the flag is now always
-    emitted — an unset --reset silently re-arms the tool's `rst` default."""
+    """`fault atpg` must name the reset, or the tool adopts its own default.
+
+    WHY IT MATTERS, from Fault's own source: `Entries/atpg.swift` carries
+    `@OptionGroup var bypass: BypassOptions`, and `Entries/common.swift`
+    declares `var resetName: String = "rst"`. Omitting --reset therefore does
+    NOT mean "no reset" — it means the tool silently adopts the name `rst`. On a
+    design whose reset is called anything else, the real reset is never
+    bypassed, stays ASSERTED through the ATPG simulation, and the flops it
+    drives are frozen. The coverage number that comes back is measured on a
+    design held in reset.
+
+    REWRITTEN 2026-07-31. This used to grep the SOURCE for `"--reset"` within a
+    700-CHARACTER WINDOW after `atpg_cmd = [`. That pins a byte layout, not a
+    behaviour: the flag was genuinely missing for some time and the test was red
+    and unread; then adding an explanatory comment above the flag would have
+    pushed it out of the window and re-reddened a correct implementation. Both
+    failure modes come from measuring the wrong thing. It now builds the command
+    and looks at it.
+    """
+    sys.path.insert(0, str(PROG))
+    import fault_atpg_run as far
+
+    captured = {}
+
+    def fake_docker(project, cmd, timeout=None, pdk_dir=None, **kw):
+        joined = " ".join(cmd) if isinstance(cmd, (list, tuple)) else str(cmd)
+        if "atpg" in joined and "--cell-model" in joined:
+            captured["atpg"] = joined
+        elif "atpg" in joined:
+            captured.setdefault("probe", joined)
+        return 0, "", ""
+
     src = (PROG / "fault_atpg_run.py").read_text()
-    # The REAL pattern-generating invocation is the one carrying --cell-model;
-    # an earlier `fault atpg --help` capability probe must not be matched.
-    i = src.find('atpg_cmd = [')
+    i = src.find("atpg_cmd = [")
     assert i > 0, "atpg_cmd construction not found"
-    block = src[i:i + 700]
-    assert '"--cell-model"' in block, block[:200]
+    j = src.find("atpg_shell", i)
+    block = src[i:j if j > i else i + 2000]
+    assert '"--cell-model"' in block, block[:300]
     assert '"--reset"' in block, (
-        "fault atpg invoked without --reset — the tool's name-based default "
-        "would freeze any port called `rst`")
+        "fault atpg is built without --reset — Fault's BypassOptions then "
+        "defaults resetName to \"rst\", so a design whose reset is named "
+        "otherwise runs ATPG with its real reset asserted")
+    assert '"--reset-active-low"' in block, (
+        "polarity must travel with the name; an active-low reset passed without "
+        "it is held at the wrong level for the whole simulation")
 
 
 # ══ SPM-DFT-2 — async set/reset pins made observable ═══════════════════════
