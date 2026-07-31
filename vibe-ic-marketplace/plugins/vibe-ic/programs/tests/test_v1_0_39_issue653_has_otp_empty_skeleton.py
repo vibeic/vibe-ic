@@ -111,12 +111,69 @@ def test_nested_regmap_skeleton_not_evidence() -> None:
     assert _l4_has_otp(nested_full, None, None) is True
 
 
-def test_populated_otp_layout_with_otp_present_false_veto_wins() -> None:
-    """Per the issue, an explicit absence declaration is a HARD veto:
-    even a populated layout is overridden by otp_present:false."""
+def test_populated_otp_layout_beats_a_stale_otp_present_false() -> None:
+    """CONTENT beats a bare absence DECLARATION.
+
+    This replaces `test_populated_otp_layout_with_otp_present_false_veto_wins`,
+    which asserted the opposite.  Three reasons, in order of weight:
+
+      1. It contradicted THIS FILE'S OWN stated no-leak guarantee, quoted from
+         the module docstring above: *"a genuinely POPULATED otp_layout still
+         yields has_otp=True, so the relaxation removed false positives
+         WITHOUT suppressing real OTP ICs."*  A populated layout returning
+         False is precisely a suppressed real OTP IC.
+      2. The veto is not what fixes #653.  The module docstring lists the fix
+         as two-fold, and part (2) — "a dict-valued OTP key only counts as
+         evidence when at least one CONTENT sub-field is non-empty" — already
+         disposes of the geometry-only skeleton on its own.  Part (1)'s
+         unconditional short-circuit adds nothing for the skeleton case and
+         only creates this override.
+      3. Measured on a real design: an L-doc carrying a fully populated OTP
+         image and a populated field layout was reported has_otp=False because
+         a pass that does not own that document had `setdefault`-ed an
+         `otp_present: False` beside the image.  The declaration is a PROXY for
+         "this design has no OTP"; the property is "is there OTP content".
+
+    The property #653 actually defends — a NO-OTP IC is not flagged — is
+    unchanged and is still pinned by `test_empty_otp_skeleton_is_not_evidence`,
+    `test_empty_skeleton_with_otp_present_false_veto`,
+    `test_empty_skeleton_with_no_otp_layout_in_input_veto`,
+    `test_nested_regmap_skeleton_not_evidence` and the three e2e tests below,
+    all of which still pass.
+    """
     l4 = {"otp_layout": {"lockbits": [1], "fields": [{"x": 1}]}}
     l11 = {"otp_present": False}
-    assert _l4_has_otp(l4, l11, None) is False
+    assert _l4_has_otp(l4, l11, None) is True
+
+    # …and the declaration still wins when there is no content to prefer,
+    # which is the whole of what the veto was introduced to do.
+    l4_skeleton = {"otp_layout": dict(_EMPTY_OTP_SKELETON)}
+    assert _l4_has_otp(l4_skeleton, {"otp_present": False}, None) is False
+
+
+def test_populated_nested_layout_beats_a_stale_declaration() -> None:
+    """Same rule on the nested L4_REGMAP / L11_OTP_CONTENT path, which
+    carries its own copy of the veto."""
+    nested_full = {"L11_OTP_CONTENT": {
+        "otp_present": False,
+        "otp_layout": {"fields": [{"field": "ID[0]"}]}}}
+    assert _l4_has_otp(None, nested_full, None) is True
+
+    nested_empty = {"L11_OTP_CONTENT": {
+        "otp_present": False,
+        "otp_layout": dict(_EMPTY_OTP_SKELETON)}}
+    assert _l4_has_otp(None, nested_empty, None) is False
+
+
+def test_falsy_content_keys_do_not_defeat_the_declaration() -> None:
+    """No-leak boundary: a content key that is PRESENT BUT EMPTY is not
+    content, so an honest negative declaration must still win."""
+    assert _l4_has_otp(
+        None, {"otp_present": False, "otp_bytes": [],
+               "otp_layout": {"fields": []}}, None) is False
+    assert _l4_has_otp(
+        None, {"no_otp_in_input": True, "otp_image": "",
+               "otp_table": None}, None) is False
 
 
 # =====================================================================
