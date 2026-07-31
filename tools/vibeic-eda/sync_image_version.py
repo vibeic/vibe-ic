@@ -87,6 +87,16 @@ INSTALL_DOC_CANDIDATES = [
     # probe is a live pointer too — it must track VERSION or the skip guard checks
     # for a stale image that is never present (v1.4.40: registered so it syncs).
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1_4_21_dft_atpg_liberty_resolver.py",
+    # Two more live pointers, found by grepping the anchor version across the
+    # tree while advancing 0.2.46 -> 0.2.47 and comparing the hits against what
+    # --set would rewrite. Both are `ghcr.io/vibeic/vibeic-eda:<v>` defaults
+    # that decide which image actually runs:
+    #   sta_engine_parity_check.py            DEFAULT_IMAGE
+    #   test_extraction_input_capability_check.py  _IMAGE
+    # An unregistered live pointer is invisible in exactly the direction that
+    # matters: --check passes while the code keeps pulling the old image.
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/sta_engine_parity_check.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_extraction_input_capability_check.py",
 ]
 
 # Files that legitimately carry OLD versions — never checked, never rewritten.

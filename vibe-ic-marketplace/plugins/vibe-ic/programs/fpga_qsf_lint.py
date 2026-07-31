@@ -205,11 +205,23 @@ def check_io_standards(
 # Main
 # ---------------------------------------------------------------------------
 
-def lint_qsf(qsf_path: Path, rtl_dir: Path) -> List[dict]:
-    """Run all QSF checks and return findings list."""
+def lint_qsf(qsf_path: Path, rtl_dir: Path) -> Tuple[List[dict], dict]:
+    """Run all QSF checks; return (findings, what was examined).
+
+    The counts are returned rather than left for the caller to re-derive,
+    because `PASS: QSF lint clean` said nothing about how much was linted — a
+    QSF with no assignments at all produced the same sentence and the same rc
+    as a fully populated one that checked out (#559).
+    """
     parsed = parse_qsf(qsf_path)
     qsf_dir = qsf_path.parent
     rtl_modules = find_module_names(rtl_dir)
+    examined = {
+        "verilog_files": len(parsed["verilog_files"]),
+        "pin_assignments": len(parsed["pin_assignments"]),
+        "io_standards": len(parsed["io_standards"]),
+        "rtl_modules": len(rtl_modules),
+    }
 
     findings: List[dict] = []
     findings.extend(check_verilog_files_exist(
@@ -220,7 +232,7 @@ def lint_qsf(qsf_path: Path, rtl_dir: Path) -> List[dict]:
     findings.extend(check_io_standards(
         parsed["pin_assignments"], parsed["io_standards"],
     ))
-    return findings
+    return findings, examined
 
 
 def main(argv: list | None = None) -> int:
@@ -237,12 +249,18 @@ def main(argv: list | None = None) -> int:
     out_dir = Path(args.out_dir)
 
     if not qsf_path.exists():
-        print(f"ERROR: QSF file not found: {qsf_path}", file=sys.stderr)
-        return 1
+        # rc 2, not 1: a QSF that is not there is "could not check", not "found
+        # a violation". rc 1 is a defect verdict, and the P0 umbrella reads the
+        # exit code — a missing input would have been recorded as a real QSF
+        # lint failure against the design (#559).
+        print(f"VACUOUS_PASS: fpga_qsf_lint examined nothing "
+              f"(reason: QSF file not found: {qsf_path}) — not a clean lint",
+              file=sys.stderr)
+        return 2
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    findings = lint_qsf(qsf_path, rtl_dir)
+    findings, examined = lint_qsf(qsf_path, rtl_dir)
 
     # Write JSON report
     report_path = out_dir / "fpga_qsf_lint.json"
@@ -251,6 +269,7 @@ def main(argv: list | None = None) -> int:
         "qsf_file": str(qsf_path),
         "rtl_dir": str(rtl_dir),
         "total_findings": len(findings),
+        "examined": examined,
         "status": "FAIL" if findings else "PASS",
         "findings": findings,
     }
@@ -262,7 +281,10 @@ def main(argv: list | None = None) -> int:
         for f in findings:
             print(f"  [{f['severity']}] {f['rule']}: {f['message']}")
     else:
-        print("PASS: QSF lint clean")
+        print(f"PASS: QSF lint clean "
+              f"(examined {examined['verilog_files']} verilog file(s), "
+              f"{examined['pin_assignments']} pin assignment(s), "
+              f"{examined['rtl_modules']} RTL module(s))")
 
     return 1 if findings else 0
 
