@@ -529,6 +529,58 @@ def _is_clock(name: str) -> bool:
     return ("clk" in n) or ("clock" in n)
 
 
+def _l8_declared_clocks(l8: dict) -> List[Tuple[str, Optional[float]]]:
+    """Clocks L8 DECLARES, as ``[(canonical_name, period_ns|None), ...]``.
+
+    C4/2026-07-31 — measured defect. ``_is_clock`` is a NAME-SHAPE GUESS
+    (``"clk" in n or "clock" in n``). On a design whose clock ports are
+    ``CK4/CK5/CK6`` it matches nothing, so all three were classified as
+    synchronous DATA inputs, ``clock_port`` fell back to the literal
+    ``"clk"`` — a port the design does not have — and the emitted SDC
+    constrained a non-existent port while leaving every real clock
+    unconstrained. Step 8's ``sdc_validator_check`` caught it exactly:
+    *"L8 declares clock 'CK4' but no SDC constrains it"*.
+
+    L8 is not a guess: it is the layer that DECLARES the design's clock
+    contract, with extraction evidence. When it names a clock, that
+    declaration outranks a substring test on the port name. This helper is
+    the property; ``_is_clock`` stays as the fallback for designs whose L8
+    declares nothing.
+
+    Purely ADDITIVE: returns ``[]`` when L8 declares no clock record, and
+    every call site below is guarded on a non-empty result, so a design
+    that constrains correctly today cannot change.
+    """
+    out: List[Tuple[str, Optional[float]]] = []
+    seen: set = set()
+    if not isinstance(l8, dict):
+        return out
+    for key in ("clock_domains", "clocks"):
+        for rec in (l8.get(key) or []):
+            if not isinstance(rec, dict):
+                continue
+            name = (rec.get("name") or rec.get("source_pin") or "").strip()
+            if not name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            period: Optional[float] = None
+            for k, conv in (("period_ns", lambda v: float(v)),
+                            ("freq_mhz", lambda v: 1000.0 / float(v)),
+                            ("freq_hz", lambda v: 1.0e9 / float(v))):
+                v = rec.get(k)
+                if v in (None, "", 0):
+                    continue
+                try:
+                    cand = conv(v)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    continue
+                if cand > 0:
+                    period = cand
+                    break
+            out.append((name, period))
+    return out
+
+
 def _is_reset(name: str) -> bool:
     n = name.lower()
     return ("reset" in n) or ("rst" in n)
@@ -555,7 +607,9 @@ def _is_output(name: str, direction: str) -> bool:
 def _render_sdc(top: str, clock_port: str, period_ns: float,
                 inputs: List[str], outputs: List[str],
                 async_ports: List[str],
-                gen_clocks: Optional[List[Tuple[str, str]]] = None) -> str:
+                gen_clocks: Optional[List[Tuple[str, str]]] = None,
+                l8_clocks: Optional[
+                    List[Tuple[str, str, float]]] = None) -> str:
     period_str = f"{period_ns:.3f}".rstrip("0").rstrip(".") or "20"
     lines: List[str] = []
     lines.append("# =========================================================================")
@@ -571,8 +625,24 @@ def _render_sdc(top: str, clock_port: str, period_ns: float,
         clock_label = "clk_50"
     elif "100" in clock_port:
         clock_label = "clk_100"
-    lines.append(f"create_clock -name {clock_label} -period {period_str} "
-                 f"[get_ports {{{clock_port}}}]")
+    if l8_clocks:
+        # C4/2026-07-31 — L8 DECLARES this design's clocks by name. Emit one
+        # create_clock per declared clock, named as L8 names it, on the port
+        # L8 binds it to, at the period L8 carries. The former single
+        # create_clock left every additional declared clock unconstrained,
+        # which is exactly what Step 8 reports. The first declared clock
+        # supplies the label the I/O delays reference, so a design with one
+        # clock renders as before apart from that clock's real name.
+        lines.append("# Clocks DECLARED by L8 (name + port + period from the "
+                     "design's own layer, not from a port-name guess)")
+        for c_name, c_port, c_period in l8_clocks:
+            p_str = f"{c_period:.3f}".rstrip("0").rstrip(".") or period_str
+            lines.append(f"create_clock -name {c_name} -period {p_str} "
+                         f"[get_ports {{{c_port}}}]")
+        clock_label = l8_clocks[0][0]
+    else:
+        lines.append(f"create_clock -name {clock_label} -period {period_str} "
+                     f"[get_ports {{{clock_port}}}]")
     lines.append("derive_pll_clocks")
     lines.append("derive_clock_uncertainty")
     lines.append("")
@@ -715,13 +785,42 @@ def main(argv: Optional[List[str]] = None) -> int:
     dropped_pins: List[str] = []
     rtl_ports: set = set()  # synthesizable RTL surface used to filter (#619/#207)
 
+    # C4/2026-07-31 — L8's DECLARED clock contract. Ports named here are
+    # clocks by DECLARATION, not by a substring test on their name; see
+    # _l8_declared_clocks. Empty for a design whose L8 declares nothing,
+    # in which case every use below is inert.
+    # Both L8 docs carry the clock contract — the runner's own
+    # `_CLOCK_CONTRACT_DOCS = ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM")`
+    # says so, and the Phase-1 `clocks[]` seeder writes the TIMING_WAVEFORM
+    # one. Reading only RTL_CONSTANTS is why a declared clock could be
+    # invisible here while a sibling gate saw it.
+    _l8_wave = _load_json(
+        _pl.generated_docs_dir(project) / "L8_TIMING_WAVEFORM.json") or {}
+    _l8_clocks = _l8_declared_clocks(l8)
+    _seen_l8 = {n.lower() for n, _ in _l8_clocks}
+    for _n, _p in _l8_declared_clocks(_l8_wave):
+        if _n.lower() not in _seen_l8:
+            _seen_l8.add(_n.lower())
+            _l8_clocks.append((_n, _p))
+    _l8_clock_names = {n.lower() for n, _ in _l8_clocks}
+    _l8_period_by_name = {n.lower(): p for n, p in _l8_clocks}
+    _l8_canonical = {n.lower(): n for n, _ in _l8_clocks}
+    _l8_clock_ports: List[str] = []
+
+    def _port_is_clock(nm: str) -> bool:
+        if nm and nm.lower() in _l8_clock_names:
+            return True
+        return _is_clock(nm)
+
     if wrapper and top == wrapper[0]:
         ports = _parse_module_ports(wrapper[1])
         for name, direction, width in ports:
             sigs = ([name] if width == 1
                     else [f"{name}[{i}]" for i in range(width)])
-            if _is_clock(name):
+            if _port_is_clock(name):
                 clock_port = name if width == 1 else f"{name}[0]"
+                if name.lower() in _l8_clock_names:
+                    _l8_clock_ports.append(name)
                 continue
             if _is_reset(name) or _is_async_io(name):
                 async_ports.extend(sigs)
@@ -755,8 +854,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 dropped_pins.append(name)
                 continue
             mode = (port.get("mode") or "").lower()
-            if _is_clock(name):
+            if _port_is_clock(name):
                 clock_port = name
+                if name.lower() in _l8_clock_names:
+                    _l8_clock_ports.append(name)
                 continue
             if _is_reset(name) or "inout" in mode or _is_async_io(name):
                 async_ports.append(name)
@@ -813,8 +914,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     gen_clocks = _find_register_divided_clocks(rtl_files)
+
+    # C4/2026-07-31 — assemble the per-clock create_clock set from L8's own
+    # declaration. Each entry is (name-as-L8-spells-it, port-as-the-design
+    # -spells-it, period_ns). A clock whose period L8 does not carry falls
+    # back to the period resolved above rather than being dropped, so a
+    # partially-specified L8 still constrains every port it declares.
+    # `_l8_clock_ports` is only ever appended to for a port that is BOTH on
+    # the design's surface AND named by L8, so this cannot constrain a port
+    # that does not exist.
+    l8_clock_set: List[Tuple[str, str, float]] = []
+    for _p in _l8_clock_ports:
+        _key = _p.lower()
+        _per = _l8_period_by_name.get(_key) or period_ns
+        l8_clock_set.append((_l8_canonical.get(_key, _p), _p, _per))
+    if l8_clock_set:
+        clock_port = l8_clock_set[0][1]
+        period_ns = l8_clock_set[0][2]
+        print("NOTE: clock port(s) taken from L8's DECLARED clock contract: "
+              + ", ".join(f"{n}@{p:g}ns on '{pt}'"
+                          for n, pt, p in l8_clock_set))
+
     text = _render_sdc(top, clock_port, period_ns, inputs, outputs,
-                       async_ports, gen_clocks)
+                       async_ports, gen_clocks, l8_clock_set or None)
     out.write_text(text, encoding="utf-8")
 
     # #207 — VALIDATE the generated SDC against the netlist it constrains. A

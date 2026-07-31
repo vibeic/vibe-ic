@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1014
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1014)
+- **Total programs (excluding helpers / shims):** 1015
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1015)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1005 |
+| `any` | 1006 |
 
 ## Alphabetical listing
 
@@ -521,6 +521,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l7_debug_access_grounding_check` | any | — | L7 SEMANTIC gate (ADVISORY). |
 | `l8_clock_domains_typed_check` | any | Wave 38 | Audit-driven typed sub-field depth gate. Multi-clock designs need |
 | `l8_clock_period_actionability_check` | any | — | L8 SEMANTIC consumer-contract gate. |
+| `l8_doc_clock_freq_synth` | any | — | bind a clock frequency the design STATES in a document table to the L8 clock records the SAME ROW names. |
 | `l8_frame_end_gap_derivation_check` | any | — | LL-3. |
 | `l8_sta_clock_period_design_owned_check` | any | — | L8 SEMANTIC completeness gate. |
 | `l9_completeness_check` | any | — | Deterministic L9 Integration Spec completeness checker. |
@@ -1086,7 +1087,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1005 programs)
+### `any` (1006 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1578,6 +1579,7 @@ _(no programs in this group)_
 - `l7_debug_access_grounding_check` — L7 SEMANTIC gate (ADVISORY).
 - `l8_clock_domains_typed_check` — Audit-driven typed sub-field depth gate. Multi-clock designs need  _[Wave 38]_
 - `l8_clock_period_actionability_check` — L8 SEMANTIC consumer-contract gate.
+- `l8_doc_clock_freq_synth` — bind a clock frequency the design STATES in a document table to the L8 clock records the SAME ROW names.
 - `l8_frame_end_gap_derivation_check` — LL-3.
 - `l8_sta_clock_period_design_owned_check` — L8 SEMANTIC completeness gate.
 - `l9_completeness_check` — Deterministic L9 Integration Spec completeness checker.

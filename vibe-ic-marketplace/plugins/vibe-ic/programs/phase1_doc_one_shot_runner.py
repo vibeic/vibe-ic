@@ -37642,6 +37642,11 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     if not isinstance(top_ports, list):
         return
     clk_pins = []
+    #: Ports admitted ONLY by the C4 reach fix below — i.e. ports that on the
+    #: pre-fix code produce NO clock_domains record at all. Labelling changes
+    #: are confined to these, which is what keeps the fix strictly ADDITIVE:
+    #: no record that exists today can change its domain_kind/role/freq.
+    _c4_widened_pins: Set[str] = set()
     for p in top_ports:
         if not isinstance(p, dict):
             continue
@@ -37659,6 +37664,23 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
         nm_base = _v1_6_434_normalize_port_basename(nm_l)
         if nm_base == "clk" or nm_base.endswith("_clk") or nm_base == "clock":
             clk_pins.append(nm)
+        elif _V1_6_574_CLOCK_PORT_RE.match(nm):
+            _c4_widened_pins.add(nm)
+            # C4/2026-07-31 — REACH fix, purely ADDITIVE. v1.6.574 widened
+            # the clock-port matcher "so analog multiphase ports (`CK1`..
+            # `CK6`) seed" — but the widening was applied ONLY to the
+            # sibling that fills `L8.clocks[]`. This function fills
+            # `L8.clock_domains[]`, which is the list `sdc_gen` and
+            # `l8_sta_clock_period_design_owned_check` actually read, and it
+            # kept the pre-v1.6.574 three-way string test. Measured
+            # consequence on a real cell: L9.top_ports held `ck4/ck5/ck6`,
+            # the sibling accepted all three, this test accepted none,
+            # `clock_domains` stayed `[]`, `_derive_primary_clk_freq_hz`
+            # (which resolves the design's own stated 1.0 MHz correctly) was
+            # never reached, and the emitted SDC carried the plugin's 50 MHz
+            # default — a 50x wrong period. Reusing the SIBLING'S predicate
+            # rather than restating it is what stops the two drifting again.
+            clk_pins.append(nm)
     if not clk_pins:
         return
     # Try to derive primary frequency from timing_constants (look for
@@ -37672,12 +37694,31 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
         # / `i_clk` / `clk_in` are recognised as primary domains.
         _pin_base = _v1_6_434_normalize_port_basename(pin.lower())
         is_primary = (_pin_base == "clk" or _pin_base == "clock")
+        # Frequency stays gated on the CANONICAL name test: handing
+        # `primary_freq_hz` to every clock port would assert that they all run
+        # at the one timing constant the layer happens to carry, which is a
+        # fabrication on any genuinely multi-rate design. Evidence-bound
+        # frequencies arrive from `l8_doc_clock_freq_synth`, per document row.
         freq_hz = primary_freq_hz if is_primary else None
+        # C4/2026-07-31 — domain_kind/role by PROPERTY, for widened pins only.
+        # `primary`/`master` vs `secondary`/`derived` was decided by whether
+        # the port is spelled `clk` — a PROXY. The property is: this loop
+        # synthesises domains from TOP-LEVEL PORTS, and a top-level clock port
+        # is not derived from anything; `derived` means generated from another
+        # clock (PLL / divider), which the code marks with `derived_from`.
+        # This matters concretely: `clock_contract.entry_is_derived` treats
+        # `role: derived` as OUT of the one-name-one-period contract, so
+        # `sdc_validator_check` skipped all three of this design's clocks and
+        # reported `1 SDC file(s) OK` having cross-checked ZERO of them — a
+        # VACUOUS PASS I produced myself and caught by reading its own count
+        # line. Confined to `_c4_widened_pins` so no record that exists on the
+        # pre-fix code can change label.
+        _c4_property_primary = (is_primary or pin in _c4_widened_pins)
         entry = {
             "name": pin,
             "source_pin": pin,
-            "domain_kind": "primary" if is_primary else "secondary",
-            "role": "master" if is_primary else "derived",
+            "domain_kind": "primary" if _c4_property_primary else "secondary",
+            "role": "master" if _c4_property_primary else "derived",
             "source": "synthesised-from-L9.top_ports",
             "evidence": "L9.top_ports",
             "reset_strategy": "unspecified",
@@ -55836,9 +55877,32 @@ def _post_emit_seed_l8b_clocks_from_l1_v1_6_571(project: Path) -> None:
                 (_cd for _cd in (l8b.get("clock_domains") or [])
                  if isinstance(_cd, dict) and _cd.get("name") == name),
                 None)
+        if _cd_src is None:
+            # C4/2026-07-31 — the same PHYSICAL clock reaches the two lists
+            # under two spellings: `clocks[]` is seeded from L1.pin_table
+            # (the DATASHEET spelling, e.g. `CK4`) and `clock_domains[]`
+            # from L9.top_ports (the SYNTHESIZABLE PORT spelling, e.g.
+            # `ck4` — verified against this design's own RTL, which
+            # declares `input wire ck4`). The exact-match lookup above
+            # therefore missed, `clocks[]` inherited nothing, and
+            # `sdc_validator_check` then saw TWO clocks where the design
+            # has ONE and reported the datasheet-spelled one as
+            # unconstrained. Match case-insensitively so the two views
+            # rejoin. Nothing is renamed: both spellings are preserved and
+            # `source_pin` below records which PORT the clock lives on.
+            _nl = name.lower()
+            _cd_src = next(
+                (_cd for _cd in (l8b.get("clock_domains") or [])
+                 if isinstance(_cd, dict)
+                 and (_cd.get("name") or "").lower() == _nl),
+                None)
         if isinstance(_cd_src, dict):
+            # `source_pin` added to the inherited set: it is the field that
+            # says WHICH PORT this clock is on, and it is what lets a
+            # consumer match a create_clock by target port when the names
+            # differ only in case.
             for _k in ("freq_hz", "freq_mhz", "period_ns",
-                       "role", "source", "domain_kind"):
+                       "role", "source", "domain_kind", "source_pin"):
                 if _cd_src.get(_k) is not None and entry.get(_k) is None:
                     entry[_k] = _cd_src[_k]
         seeded.append(entry)
@@ -57776,6 +57840,23 @@ def main() -> int:
     # clocks can carry a freq value. Chip-AGNOSTIC: pure RTL
     # naming convention + numeric aggregation.
     _post_emit_seed_l8b_clocks_from_l1_v1_6_571(project)
+
+    # C4/2026-07-31 — bind a clock frequency the design STATES in a
+    # document table to the L8 clock records the SAME ROW names.
+    # Runs HERE, after BOTH clock producers above (`clock_domains[]`
+    # from _post_emit_typed_clock_domains, `clocks[]` from the
+    # v1.6.571 seeder), because it only ever fills records that
+    # already exist — it never invents a clock — so it must see the
+    # final record set. Fail-open and non-verdict, exactly like the
+    # sibling `l21_doc_supply_rail_synth` call site: a producer that
+    # cannot run must not take Phase 1 down with it, and the
+    # `l8_clock_period_actionability_check` gate remains the thing
+    # that BLOCKS on an unresolvable clock.
+    try:
+        from l8_doc_clock_freq_synth import main as _l8_clk_synth
+        _l8_clk_synth([str(project), "--apply"])
+    except Exception as _e:      # pragma: no cover - fail-open
+        print(f"      l8_doc_clock_freq_synth skipped (non-fatal): {_e}")
 
     # v1.6.96 (issue #28 Bug 1a) — propagate detect_ic_class verdict
     # into L9.interface_type + L1.class_path so sdc_gen._is_aid_class()

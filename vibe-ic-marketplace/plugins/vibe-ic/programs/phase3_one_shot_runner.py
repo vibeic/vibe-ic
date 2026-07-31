@@ -1334,6 +1334,81 @@ def _v1_6_623_extract_clock_port_from_netlist(project: Path, top: str = ""):
     return None
 
 
+_C4_MODULE_HEADER_RE = re.compile(
+    r"\bmodule\s+(?P<name>[A-Za-z_]\w*)\s*(?:#\s*\([^;]*?\))?\s*\((?P<ports>[^;]*?)\)\s*;",
+    re.S)
+_C4_PORT_DECL_RE = re.compile(
+    r"\b(?:input|output|inout)\b[^,;)]*?(?P<name>[A-Za-z_]\w*)\s*(?=,|$)")
+
+
+def _c4_top_module_ports(project: Path, top: str) -> set:
+    """The port names declared on the TOP module's OWN header.
+
+    C4/2026-07-31. Returns an empty set when the top module cannot be found
+    or parsed, so every caller degrades to its previous behaviour rather than
+    to a wrong answer.
+    """
+    ports: set = set()
+    if not top:
+        return ports
+    rtl_dir = project / "phase2" / "stage1" / "rtl"
+    if not rtl_dir.is_dir():
+        return ports
+    for f in sorted(rtl_dir.rglob("*.v")) + sorted(rtl_dir.rglob("*.sv")):
+        try:
+            txt = f.read_text(errors="ignore")
+        except Exception:
+            continue
+        txt = re.sub(r"//[^\n]*", "", txt)
+        txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
+        for m in _C4_MODULE_HEADER_RE.finditer(txt):
+            if m.group("name") != top:
+                continue
+            body = m.group("ports")
+            for line in body.split(","):
+                pm = _C4_PORT_DECL_RE.search(line + ",")
+                if pm:
+                    ports.add(pm.group("name"))
+                else:
+                    bare = line.strip()
+                    if re.fullmatch(r"[A-Za-z_]\w*", bare):
+                        ports.add(bare)
+    return ports
+
+
+def _c4_l8_clock_port_on_top_surface(project: Path, top: str = ""):
+    """An L8-DECLARED clock name that is genuinely a port of the TOP module.
+
+    C4/2026-07-31. L8 declares the design's clock contract; the top module
+    header says which of those names is a real chip pin. Requiring BOTH is
+    what stops a `create_clock` landing on an inner-module net. Returns None
+    unless the two agree — never a guess.
+    """
+    surface = _c4_top_module_ports(project, top)
+    if not surface:
+        return None
+    lower = {p.lower(): p for p in surface}
+    for doc in ("L8_TIMING_WAVEFORM", "L8_RTL_CONSTANTS"):
+        p = project / "phase1" / "generated_docs" / f"{doc}.json"
+        if not p.is_file():
+            continue
+        try:
+            d = json.loads(p.read_text())
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        for key in ("clock_domains", "clocks"):
+            for rec in (d.get(key) or []):
+                if not isinstance(rec, dict):
+                    continue
+                for field in ("source_pin", "name", "port_name"):
+                    nm = (rec.get(field) or "").strip()
+                    if nm and nm.lower() in lower:
+                        return lower[nm.lower()]
+    return None
+
+
 def _v1_6_595_resolve_clock_port_name(project: Path, top: str = "",
                                        config_port: str = "clk") -> tuple:
     """v1.6.595 — for #403 P2 ORGANIC. Resolve the chip's clock-port
@@ -1372,6 +1447,25 @@ def _v1_6_595_resolve_clock_port_name(project: Path, top: str = "",
         v = _v1_6_595_extract_clock_port_from_l9(l9)
         if v:
             return (v, "L9.top_ports[]")
+    # b2. C4/2026-07-31 — an L8-DECLARED clock that is an actual TOP port.
+    # Ranked after the netlist/L8-regex/L9 branches and BEFORE the RTL module
+    # header scan, because that scan is the step that goes wrong: it accepts a
+    # `clk` port belonging to ANY module in rtl/, including a hard-macro
+    # submodule. Measured on a real cell: the top declares `ck4/ck5/ck6` and
+    # instantiates `delta_sigma u_ds1 (.clk(ck4), ...)`, so the scan returned
+    # the MACRO's `clk` and the auto-SDC emitted
+    # `create_clock -name clk -period 20.0 [get_ports clk]` against a top that
+    # has no such port. `sdc_gen` already learned this lesson under #207 —
+    # *"the AUTHORITATIVE surface STA constrains is the TOP module's OWN
+    # ports ... what stops a create_clock landing on an inner-module net"* —
+    # and the lesson was never applied to this resolver. Same defect class as
+    # the L8 clock-frequency miss: a correct rule whose REACH was wrong.
+    # Additive: fires only when L8 declares a clock that IS a top port, i.e.
+    # exactly where the old path would have picked an inner-module net or the
+    # bare `clk` fallback.
+    v = _c4_l8_clock_port_on_top_surface(project, top=top)
+    if v:
+        return (v, "L8_declared_clock_on_top_surface")
     # c. RTL top module
     v = _v1_6_595_extract_clock_port_from_rtl(project, top=top)
     if v:
@@ -1503,6 +1597,75 @@ def _staged_timing_exceptions(project: Path) -> List[str]:
     return out
 
 
+def _c4_l8_declared_period_ns(project: Path,
+                              port_name: str = "") -> Optional[float]:
+    """The clock period L8 DECLARES, in ns, or None if L8 does not say.
+
+    C4/2026-07-31. Resolution, in order:
+      1. the record that OWNS ``port_name`` (by ``name`` or ``source_pin``,
+         case-insensitively — the two L8 clock views legitimately spell the
+         same physical clock in datasheet case and port case);
+      2. otherwise, the single period every resolvable record agrees on.
+
+    Returns None when L8 declares nothing resolvable OR when its records
+    disagree. Disagreement is deliberately NOT resolved here: picking one of
+    two contradictory periods by list order is the defect
+    ``l8_clock_period_actionability_check`` exists to report, and this helper
+    must not launder it into a sign-off constraint.
+
+    Chip-AGNOSTIC: reads the project's own L8; no design/PDK literal.
+    """
+    periods: List[float] = []
+    owned: Optional[float] = None
+    want = (port_name or "").strip().lower()
+    for doc in ("L8_TIMING_WAVEFORM", "L8_RTL_CONSTANTS"):
+        p = project / "phase1" / "generated_docs" / f"{doc}.json"
+        if not p.is_file():
+            continue
+        try:
+            d = json.loads(p.read_text())
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        for key in ("clock_domains", "clocks"):
+            for rec in (d.get(key) or []):
+                if not isinstance(rec, dict):
+                    continue
+                val: Optional[float] = None
+                for k, conv in (("period_ns", lambda v: float(v)),
+                                ("freq_mhz", lambda v: 1000.0 / float(v)),
+                                ("freq_hz", lambda v: 1.0e9 / float(v))):
+                    raw = rec.get(k)
+                    if raw in (None, "", 0):
+                        continue
+                    try:
+                        cand = conv(raw)
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        continue
+                    if cand > 0:
+                        val = cand
+                        break
+                if val is None:
+                    continue
+                periods.append(val)
+                if want and owned is None:
+                    for field in ("name", "source_pin"):
+                        nm = (rec.get(field) or "").strip().lower()
+                        if nm and nm == want:
+                            owned = val
+                            break
+    if owned is not None:
+        return owned
+    if not periods:
+        return None
+    lo, hi = min(periods), max(periods)
+    # 1% tolerance, the same agreement window the L8 gates use.
+    if hi <= 0 or (hi - lo) / hi > 0.01:
+        return None
+    return periods[0]
+
+
 def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
     """v1.6.560 sub-defect B fix. Derive (clock_period_ns, clock_port_name)
     from project sources in priority order — **L9 spec wins over baseline
@@ -1608,6 +1771,23 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
     _p2_period = _phase2_emitted_period_ns(project, top=top)
     if _p2_period is not None:
         return (_p2_period, port_name)
+
+    # --- C4/2026-07-31 — L8's DECLARED clock period. ---
+    # L8 is the layer that DECLARES the design's clock contract;
+    # `l8_clock_period_actionability_check` calls it "the ONLY source the SDC
+    # generator has for the constraint that pins the entire backend". This
+    # chain consulted L8 for the PORT NAME (v1.6.595) and never for the
+    # PERIOD, so on a design whose period lives in L8 — not in an L9/L1 prose
+    # `-period` token and not in a config.json — resolution fell straight
+    # through to the 20.0 ns fallback and PnR/STA signed off against a period
+    # the design never stated. Ranked BELOW the design's own staged SDC and
+    # below Phase-2's emitted SDC (both upstream-verified ground truth) and
+    # ABOVE the doc-prose regex, which is the fragile signal this replaces.
+    # Returns None unless L8 is unambiguous, so a contradictory layer still
+    # falls through rather than having one of its answers picked by order.
+    _l8_period = _c4_l8_declared_period_ns(project, port_name)
+    if _l8_period is not None:
+        return (_l8_period, port_name)
 
     # --- Period from L9 / L1 docs (highest priority) ---
     docs_dir = project / "input" / "docs"
@@ -4666,6 +4846,57 @@ def _discover_local_macros(project: Path) -> Tuple[
                         or "_t." in f.lower()]
             if typ_only:
                 macro_libs = typ_only
+
+    # --- C4/2026-07-31 — the flow's OWN A8-generated hard macros. ---
+    # Everything above harvests `input/pdk_local/` ONLY, i.e. VENDOR IP staged
+    # into the project BEFORE the run. A design whose macros are its own
+    # analog blocks — which is every design the analog A1-A9 track exists for
+    # — writes its LEF/lib/GDS/Verilog to `phase3/analog/hardmacro/<block>/`
+    # at step A8, and nothing here ever looked there.
+    #
+    # MEASURED consequence on a real mixed-signal cell (2026-07-31): the tree
+    # holds `phase3/analog/hardmacro/{delta_sigma,ldo}/*.{lef,lib,gds,v}`, the
+    # harvester returned four empty lists, the generated `pnr.tcl` carried no
+    # `read_lef` for either macro, and OpenROAD aborted with
+    #     [ERROR ORD-2013] instance u_ds1 LEF master delta_sigma not found.
+    # -> no routed DEF -> no GDS -> Steps 31/32/36/37 and M1 all FAIL. The
+    # prior round reached PnR only because the macro `read_lef` lines had been
+    # inserted by hand; neither that tree nor this one has `input/pdk_local/`
+    # at all, so on a blind run this path could never have worked.
+    #
+    # This is the same structural shape recorded for the L21 rail synth: the
+    # VENDOR-IP ordering is covered and the GENERATE-YOUR-OWN-MACRO ordering
+    # is not. Strictly ADDITIVE — appends only files that exist, and only
+    # for a macro not already supplied by `input/pdk_local/`, so a project
+    # that stages vendor IP keeps exactly today's behaviour.
+    hm_root = project / "phase3" / "analog" / "hardmacro"
+    if hm_root.is_dir():
+        _have = {Path(p).stem for p in macro_lefs}
+        for blk in sorted(hm_root.iterdir()):
+            if not blk.is_dir() or blk.name in _have:
+                continue
+            _lef = blk / f"{blk.name}.lef"
+            if not _lef.is_file():
+                _cands = sorted(blk.glob("*.lef"))
+                _lef = _cands[0] if _cands else None
+            if _lef is None or not _lef.is_file():
+                # No abstract -> the macro cannot be placed. Say so rather
+                # than silently emitting a PnR script that will abort.
+                print(f"[phase3] A8 hardmacro '{blk.name}' has no .lef — "
+                      f"it cannot be read into PnR; skipping (this WILL fail "
+                      f"link if the netlist instantiates it)")
+                continue
+            macro_lefs.append(str(_lef))
+            for _ext, _sink in ((".lib", macro_libs), (".gds", macro_gds),
+                                (".v", macro_v)):
+                _f = blk / f"{blk.name}{_ext}"
+                if _f.is_file():
+                    _sink.append(str(_f))
+        if macro_lefs:
+            print(f"[phase3] hard macros for PnR: "
+                  f"{[Path(p).stem for p in macro_lefs]} "
+                  f"({len(macro_libs)} lib, {len(macro_gds)} gds, "
+                  f"{len(macro_v)} v)")
     return macro_libs, macro_lefs, macro_gds, macro_v
 # ---------------------------------------------------------------------------
 # Silent wrong-PDK fallback guard (chip-AGNOSTIC)
@@ -13257,7 +13488,7 @@ write_def {out_dir_c}/floorplan.def
 # `sky130_fd_sc_hd__tapvpwrvgnd_1` at 14 µm spacing (SKY130 standard);
 # WNS improved +11.61 → +11.89 ns MET on spm pilot, DRC still 0.
 # NONFATAL-guarded — falls back if PDK has no tapcell master configured.
-{tapcell_block}{pdn_block}{hardmacro_supply_gc_block}# === Phase-3 CONGESTION-DRIVEN (routability-driven) global placement ===
+{tapcell_block}{hardmacro_supply_gc_block}{pdn_block}# === Phase-3 CONGESTION-DRIVEN (routability-driven) global placement ===
 # `global_placement -routability_driven` enables OpenROAD / RePlAce routability
 # mode: it estimates routing congestion during placement and spreads / inflates
 # cells in congested regions so a high-fanout datapath (wide-XOR trees, key-
@@ -13852,7 +14083,18 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         if _si.get("cell")]
     tapcell_prune_block = _build_tapcell_prune_tcl(pdk, _spare_pts_um)
     pdn_block = _build_pdn_tcl(pdk)
-    # === hard-macro supply-pin auto global-connect (before detailed routing) ===
+    # === hard-macro supply-pin auto global-connect ===
+    # C4/2026-07-31 — this block is now emitted BEFORE `pdngen`, not
+    # after it. Its purpose is to bind each hard macro's POWER/GROUND
+    # pins to the design's supply rails; `pdngen` is the step that must
+    # SEE those bindings in order to strap the pins into the grid.
+    # Emitted after pdngen, OpenROAD generated the grid with every macro
+    # PG pin still floating and said so, once per pin:
+    #     [WARNING PDN-0189] Supply pin u_ds1/vdd is not connected to any net.
+    #     ... x13 (6 macros x vdd/vss, plus ldo/vss)
+    #     [ERROR PDN-0179] Unable to repair all channels.
+    # The block's own comment already said 'before detailed routing',
+    # which was true and not the constraint that mattered.
     # A hard macro types its supply pins USE POWER/GROUND in its own LEF; when the
     # RTL constant-ties them, synthesis drives them with TIEHI/TIELO SIGNAL nets
     # and TritonRoute then refuses the whole design (signal-net-on-a-power-pin),
@@ -13991,7 +14233,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if pdk.macro_lefs:
         macro_place_block = (
             "# === hard-macro placement (local IP macros present) ===\n"
-            "if {[catch {rtl_macro_placer -halo_width 5 -halo_height 5} "
+            "if {[catch {rtl_macro_placer -halo_width 20 -halo_height 20} "
             "_mpl_err]} {\n"
             "  puts \"MACRO_PLACE_NONFATAL: $_mpl_err\"\n"
             "}\n"
