@@ -1248,16 +1248,33 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
 
 
 def run_yosys_equiv(container: str, ys_path_in_container: str,
-                    timeout: int = DEFAULT_YOSYS_TIMEOUT_S):
+                    timeout: int = DEFAULT_YOSYS_TIMEOUT_S,
+                    workdir: Optional[str] = None):
     """Run `yosys -s <ys>` in the container. Returns (launched, raw_output).
 
     launched=False means Docker/Yosys could not run at all (the caller then
     returns 1 for a disclosed-skip). launched=True means Yosys emitted output
-    (any outcome), which the parser then classifies."""
+    (any outcome), which the parser then classifies.
+
+    `workdir` runs the gold+gate read from a chosen directory. This is the
+    plugin's own `cwd=design_dir` rule (the one `benchmark_score_cwd_guard.py`
+    enforces for testbench runs) applied to the LEC read, and it is REQUIRED
+    for correctness rather than convenience: a design's memory-initialisation
+    and include references (`$readmemh`/`$readmemb`/`` `include ``) are
+    ORDINARILY written as RELATIVE paths, and the synthesis that produced the
+    gate netlist resolved them because it ran beside the resources the runner
+    staged for it. Reading the gold from a DIFFERENT directory makes those same
+    relative paths unresolvable, which aborts the gold elaboration and yields a
+    zero-point miter — reported downstream as a non-equivalence verdict about a
+    design that was never compared. Passing None preserves the previous
+    behaviour exactly."""
+    cmd = f"yosys -s {shlex.quote(ys_path_in_container)} 2>&1"
+    if workdir:
+        cmd = f"cd {shlex.quote(workdir)} && " + cmd
     try:
         r = _docker(
             container,
-            f"yosys -s {shlex.quote(ys_path_in_container)} 2>&1",
+            cmd,
             timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         out = exc.stdout or ""
@@ -1440,24 +1457,154 @@ def _gold_modules(gold_files: List[str]) -> "tuple[set, set]":
     return decls, insts
 
 
-def _resolve_gold_top(gold_files: List[str], top: str) -> "tuple[str, str]":
-    """Ensure the LEC gold top is a module that actually exists in the RTL.
+_MODULE_BODY_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)\b(.*?)\bendmodule\b",
+                             re.S)
+
+
+def _gold_child_map(gold_files: List[str], decls: set) -> "dict":
+    """{module: set(modules it instantiates)} across the gold RTL.
+
+    Same conservative instantiation shape `_gold_modules` uses, but scoped to
+    each module BODY so the hierarchy — not just the flat instantiated set —
+    is available."""
+    children: dict = {}
+    for f in gold_files:
+        try:
+            text = Path(f).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for m in _MODULE_BODY_RE.finditer(text):
+            name, body = m.group(1), m.group(2)
+            kids = children.setdefault(name, set())
+            for d in decls:
+                if d == name:
+                    continue
+                if re.search(r"(?<![\w.])" + re.escape(d)
+                             + r"\s+(?:#\s*\([\s\S]*?\)\s*)?[A-Za-z_]\w*\s*\(",
+                             body):
+                    kids.add(d)
+    return children
+
+
+def _descendants(children: dict, root: str) -> set:
+    """Every module reachable BELOW `root` in the gold hierarchy."""
+    seen: set = set()
+    stack = [root]
+    while stack:
+        for child in children.get(stack.pop(), ()):
+            if child not in seen:
+                seen.add(child)
+                stack.append(child)
+    return seen
+
+
+def _gate_modules(gate_netlist: Optional[str]) -> "tuple[set, set]":
+    """(declared_modules, instantiated_module_names) in the GATE netlist.
+
+    The exact mirror of `_gold_modules` for the other side of the comparison.
+    An equivalence miter needs the top to exist on BOTH sides; a gate netlist
+    is usually flattened to a single root, so its declared set is small and
+    decisive."""
+    if not gate_netlist:
+        return set(), set()
+    try:
+        text = Path(gate_netlist).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return set(), set()
+    decls: set = set(_MODULE_DECL_RE.findall(text))
+    insts: set = set()
+    for d in decls:
+        if re.search(r"(?<![\w.])" + re.escape(d)
+                     + r"\s+(?:#\s*\([\s\S]*?\)\s*)?[A-Za-z_]\w*\s*\(", text):
+            insts.add(d)
+    return decls, insts
+
+
+def _top_is_comparable(gold_files: List[str], gate_netlist: Optional[str],
+                       top: str) -> bool:
+    """Is `top` declared on BOTH sides, so a miter can actually be built?
+
+    This is the PROPERTY the top guard exists to defend. A side whose module
+    set cannot be read at all (empty) is not evidence of absence and does not
+    veto — only a side that demonstrably declares other modules does."""
+    gold_decls, _ = _gold_modules(gold_files)
+    gate_decls, _ = _gate_modules(gate_netlist)
+    if gold_decls and top not in gold_decls:
+        return False
+    if gate_decls and top not in gate_decls:
+        return False
+    return True
+
+
+def _resolve_gold_top(gold_files: List[str], top: str,
+                      gate_netlist: Optional[str] = None) -> "tuple[str, str]":
+    """Ensure the LEC top is a module that actually exists on BOTH sides.
 
     A wrong top (e.g. the default 'chip_top' on a standalone 'spm' design) makes
     Yosys build 0 $equiv cells → a MISLEADING 'may genuinely differ' FAIL that
     proved nothing. If `top` is not declared, auto-correct to the sole ROOT
     module; if the choice is ambiguous, return top unchanged with a diagnostic
     note so the caller can emit an honest 'top not found' verdict instead of a
-    fake mismatch. Returns (resolved_top, note)."""
+    fake mismatch. Returns (resolved_top, note).
+
+    THE GATE SIDE COUNTS TOO. Checking only the gold made "the top exists in
+    the RTL" a PROXY for the property above, and the two come apart on any
+    design whose RTL declares more than one root — e.g. an RTL set carrying
+    both an ASIC top and a board/FPGA top, where synthesis builds the gate from
+    one of them. The gold then declares the caller's top, this guard passes it
+    through, and `hierarchy -check -top <top>` aborts on a gate netlist that
+    has no such module: zero compared points, reported as a verdict about the
+    design. A gate netlist we cannot read yields an empty set and vetoes
+    nothing, so a design that resolves today cannot be moved by this."""
     decls, insts = _gold_modules(gold_files)
-    if not decls or top in decls:
-        return top, ""
-    roots = sorted(m for m in decls if m not in insts)
-    if len(roots) == 1:
-        return roots[0], (f"gold top '{top}' not found in RTL; auto-corrected to "
-                          f"sole root module '{roots[0]}'")
-    return top, (f"gold top '{top}' not found in RTL modules "
-                 f"{sorted(decls)[:8]} and no unique root — cannot select a top")
+    resolved, note = top, ""
+    if decls and top not in decls:
+        roots = sorted(m for m in decls if m not in insts)
+        if len(roots) != 1:
+            return top, (f"gold top '{top}' not found in RTL modules "
+                         f"{sorted(decls)[:8]} and no unique root — cannot "
+                         "select a top")
+        resolved = roots[0]
+        note = (f"gold top '{top}' not found in RTL; auto-corrected to sole "
+                f"root module '{roots[0]}'")
+
+    gate_decls, gate_insts = _gate_modules(gate_netlist)
+    if gate_decls and resolved not in gate_decls:
+        # The candidate must be the gate netlist's SOLE ROOT (what the gate
+        # actually IS) and must be DECLARED BY THE GOLD (so there is something
+        # to compare it against). An unreadable gold is never enough on its own
+        # to let the gate pick a top, and an ambiguous or empty intersection
+        # returns a note so the caller emits an honest SKIPPED-CONDITION —
+        # never a fabricated mismatch and never a fabricated agreement.
+        shared = (decls & gate_decls) if decls else set()
+        cands = sorted(m for m in shared if m not in gate_insts)
+        if len(cands) == 1:
+            # NO-LEAK BAR: never silently substitute a PROPER PART of the
+            # design the caller asked about. A candidate that is a DESCENDANT
+            # of the requested top would shrink the comparison's scope while
+            # still reporting a verdict in the caller's name — the exact
+            # proxy-for-the-property shape this fix exists to remove. A
+            # SIBLING top (an RTL set carrying an ASIC top and a board top,
+            # each instantiating the same blocks) is a naming mismatch and is
+            # the case worth correcting; a descendant is a scope reduction and
+            # is refused.
+            below = _descendants(_gold_child_map(gold_files, decls), resolved) \
+                if decls else set()
+            if cands[0] in below:
+                return resolved, (
+                    f"the gate netlist holds '{cands[0]}', which is a SUBMODULE "
+                    f"of the requested top '{resolved}' — refusing to compare a "
+                    "proper part of the design under the top's name")
+            return cands[0], (
+                f"top '{resolved}' is declared by the RTL but is not a module "
+                f"of the gate netlist {sorted(gate_decls)[:8]}; auto-corrected "
+                f"to '{cands[0]}', the gate's sole root and a sibling top the "
+                "RTL also declares")
+        return resolved, (
+            f"top '{resolved}' is not a module of the gate netlist "
+            f"{sorted(gate_decls)[:8]} and no unique comparable top exists "
+            "— cannot select a top")
+    return resolved, note
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1543,15 +1690,22 @@ def main(argv: Optional[List[str]] = None) -> int:
               "— proceeding without it.", file=sys.stderr)
         liberty = None
 
-    # Defense-in-depth: make sure the gold top actually exists in the RTL. A
+    # Defense-in-depth: make sure the top actually exists on BOTH sides. A
     # wrong top (default 'chip_top' on a standalone 'spm') builds 0 $equiv cells
     # → a MISLEADING 'may genuinely differ' FAIL that proved nothing. Auto-correct
     # to the sole root, or emit an honest 'top not found' SKIPPED-CONDITION.
-    resolved_top, top_note = _resolve_gold_top(gold_files, args.top)
+    # The GATE netlist is consulted as well: a top the gold declares but the
+    # gate does not is exactly as un-comparable as one the gold lacks, and
+    # aborts `hierarchy -check` before a single $equiv point is built.
+    _gate_for_top = str(gate_netlist.resolve()) if gate_netlist else None
+    resolved_top, top_note = _resolve_gold_top(gold_files, args.top,
+                                               _gate_for_top)
     if top_note:
         print(f"[lec_run] {top_note}", file=sys.stderr)
-    gold_decls, _ = _gold_modules(gold_files)
-    if gold_decls and resolved_top not in gold_decls:
+    if not _top_is_comparable(gold_files, _gate_for_top, resolved_top):
+        top_note = top_note or (
+            f"top '{resolved_top}' is not declared on both the RTL and the "
+            "gate netlist, so no equivalence miter can be built")
         parsed = {
             "proven": None, "unproven": None, "total": None,
             "sat_model_unsupported_cells": [], "unproven_cells": [],
@@ -1585,6 +1739,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     # yosys read the RTL/netlist by their host absolute paths).
     ys_host = rpt_out.parent / "lec_equiv.ys"
     ys_in_container = str(ys_host.resolve())
+    # CWD: read the gold from the GATE NETLIST'S OWN DIRECTORY — the directory
+    # the flow stages the gate's companion resources into (memory-init images,
+    # `include headers). A design's `$readmemh`/`$readmemb`/`` `include ``
+    # arguments are ordinarily written as RELATIVE paths, so a read performed
+    # from anywhere else cannot resolve them; the gold elaboration then aborts
+    # and the miter is empty, which is reported downstream as a non-equivalence
+    # verdict about a design that was never compared. This is the plugin's own
+    # `cwd=design_dir` rule (the one `benchmark_score_cwd_guard.py` enforces for
+    # testbench runs) applied to the LEC read. Falls back to the gold RTL dir,
+    # then to None (the previous behaviour) when neither directory exists, so
+    # no design that resolves today can be moved by this.
+    equiv_workdir: Optional[str] = None
+    for _cand in (Path(gate_abs).parent,
+                  Path(gold_files[0]).parent if gold_files else None):
+        if _cand is not None and _cand.is_dir():
+            equiv_workdir = str(_cand.resolve())
+            break
+    if equiv_workdir:
+        print(f"[lec_run] gold+gate read cwd = {equiv_workdir} "
+              "(mirrors the synth cwd so relative $readmemh/`include resolve)",
+              file=sys.stderr)
     gold_frontend = "verilog"
     gold_defines = "-DSIMULATION -DYOSYS"   # synth PRIMARY define set (mirrored)
 
@@ -1675,7 +1850,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                     gold_wrapper_v=gold_wrapper_v)
         ys_host.write_text(script, encoding="utf-8")
         return run_yosys_equiv(container, ys_in_container,
-                               timeout=args.timeout)
+                               timeout=args.timeout,
+                               workdir=equiv_workdir)
 
     t0 = time.time()
     launched, raw = _run("verilog")
