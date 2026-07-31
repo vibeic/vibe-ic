@@ -564,6 +564,18 @@ def main():
     print()
     print(f"Report written to: {report_path}")
 
+    # Nothing was read, so "found 0 OE signals" is not a result about any
+    # design. Every path that skips a file already WARNs (`file not found`),
+    # but the verdict was `1 if high_count > 0 else 0`, so a run whose entire
+    # --rtl-files list was missing exited 0 with `analyzed 0 file(s)` — the
+    # same rc as a real scan that found nothing. rc 2 is "could not check",
+    # which the CI dispatcher separates from a finding (#559).
+    if not analyzed_files:
+        print("VACUOUS_PASS: oe_pattern_check examined nothing "
+              f"(reason: none of the {len(args.rtl_files)} path(s) given could "
+              f"be read) — this is not a clean result", file=sys.stderr)
+        return 2
+
     # Return non-zero if any HIGH risk signals found
     high_count = report.summary.get('COMBINATIONAL', 0)
     return 1 if high_count > 0 else 0
