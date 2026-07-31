@@ -37,6 +37,12 @@ from __future__ import annotations
 import argparse, json, os, re, shlex, subprocess, sys, time
 from pathlib import Path
 
+try:
+    from . import _container_exec                            # type: ignore
+except ImportError:                                          # standalone gate
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _container_exec                                   # type: ignore
+
 _MEAS_LINE_RE = re.compile(r"^.*MEAS\b(.*)$", re.MULTILINE)
 _KV_RE = re.compile(r"(\w+)=\s*([\-+]?[0-9]*\.?[0-9]+(?:[eE][\-+]?\d+)?)")
 # v0.2.55 — ngspice prints every `.meas`/`meas` result on its own line as
@@ -768,9 +774,17 @@ def _docker(container, cmd, timeout=120):
     # UnicodeDecodeError inside the container `cat` reader, which then reported
     # the (perfectly valid) lib as UNREADABLE and dead-ended a native PDK deck
     # at NEEDS_NATIVE_TEMPLATE. chip-AGNOSTIC: byte-decoding policy only.
-    return subprocess.run(["docker","exec",container,"bash","-lc",cmd],
-                           capture_output=True,text=True,errors="replace",
-                           timeout=timeout)
+    #
+    # The deadline is enforced INSIDE the container (_container_exec). The
+    # previous `subprocess.run(["docker","exec",...], timeout=)` bounded only
+    # the local docker CLIENT: on expiry Python killed the client and the tool
+    # kept running in the container, unsignalled, holding its cores and never
+    # finishing its output file. Measured on vibeic-eda with `sleep 600` and
+    # timeout=5 — client raised TimeoutExpired at 5.0s, container-side
+    # survivors = 2; with the deadline inside, rc=124 at 5.1s and survivors =
+    # 0. That orphan is why a sizing-loop point can consume CPU-hours and
+    # never create its `.measure.json`. chip-AGNOSTIC: process lifetime only.
+    return _container_exec.run_in_container(container, cmd, deadline_s=timeout)
 
 
 # v1.6.218 (#95) — iic-osic-tools ships ngspice under
