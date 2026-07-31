@@ -9719,12 +9719,56 @@ _RE_PIN_RANGE = re.compile(
 _RE_PIN_BRACKET_RANGE = re.compile(r"^([A-Za-z_]+)\[(\d+):(\d+)\]$")
 
 
+def _v455_slash_group_is_parallel(parts: List[str]) -> bool:
+    """Is a `a/b/c` backtick group an ENUMERATION of pins, or one pin written
+    with a suffix ABBREVIATION?
+
+    The `/` split exists for the banked / differential idiom — `CK4/CK5/CK6`,
+    `CK_t/CK_c` — where every part spells a COMPLETE pin name. Vendor docs use
+    the same punctuation for the opposite thing: `la_data_in/out/oenb` means
+    la_data_in, la_data_**out**, la_**oenb** — the parts after the first are
+    SUFFIX FRAGMENTS, and splitting them emits `out` / `oenb`, pins of nothing.
+
+    The two are separated by whether the parts are structurally PARALLEL:
+
+      * they share a common alphabetic prefix  (`CK`4/`CK`5, `CK_`t/`CK_`c,
+        `v`ccd1/`v`ssd1, `data_`in/`data_`out); or
+      * they are uniformly compound / uniformly simple — every part contains
+        `_`, or none does (`clk/rst`, `wb_clk_i/wb_rst_i`).
+
+    An abbreviation is neither: `la_data_in/out/oenb` shares no prefix, and its
+    first part is compound while the rest are bare.
+
+    chip-AGNOSTIC: pure token shape — no design, vendor, PDK or IC-class
+    literal participates.
+    """
+    if len(parts) < 2 or not all(parts):
+        return False
+    first = parts[0]
+    n = 0
+    while n < len(first) and all(len(p) > n and p[n] == first[n] for p in parts):
+        n += 1
+    if n and first[0].isalpha():
+        return True
+    compound = [("_" in p) for p in parts]
+    return all(compound) or not any(compound)
+
+
 def _v455_expand_pin_token(tok: str) -> List[str]:
-    """`IN1..IN6` → [IN1..IN6]; `CK4/CK5/CK6` → split; plain → [tok]."""
+    """`IN1..IN6` → [IN1..IN6]; `CK4/CK5/CK6` → split; plain → [tok].
+
+    A NON-parallel slash group is a suffix abbreviation, not an enumeration
+    (see `_v455_slash_group_is_parallel`): only its first part is a
+    fully-spelled name, so only that part is expanded. RESTRICTION — this can
+    only ever emit fewer names, never more.
+    """
     tok = tok.strip()
     if "/" in tok:
+        parts = [p.strip() for p in tok.split("/")]
+        if not _v455_slash_group_is_parallel(parts):
+            return _v455_expand_pin_token(parts[0]) if parts[0] else []
         out: List[str] = []
-        for part in tok.split("/"):
+        for part in parts:
             out.extend(_v455_expand_pin_token(part))
         return out
     m = _RE_PIN_BRACKET_RANGE.match(tok)
@@ -9843,11 +9887,33 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                 # row here can only ever remove a promotion, never add
                 # one: the direction cell and the type cell of a port
                 # table stop being emitted as ports of the chip.
+                # The leading-name-cell RESTRICTION is a property of the ROW
+                # STRUCTURE, not of whether the row's prose happens to sniff as
+                # a direction. Gating it on `direction` (as it was) means a
+                # port-MAPPING table — `| wrapper signal | example port |
+                # notes |`, which states no direction in any row — never
+                # engages it, so EVERY backticked token in EVERY cell is
+                # promoted as a pin of the CHIP: a row `| `user_irq` | `irq` |
+                # 3-bit |` makes the SUBMODULE's port name `irq` a top-level
+                # chip pin, and L1.pin_table then carries a pin no design
+                # declares. `_v0_3_2_classify_pin_header` already knows such a
+                # table is not a port table; this walker never asked it.
+                #
+                # So the restriction keys on the pipe-row structure alone,
+                # while `_is_port_table_row` — which RELAXES the short-name
+                # drop and pins the row's direction — keeps its direction
+                # requirement unchanged. Splitting them keeps this edit a pure
+                # RESTRICTION: it can only ever remove a promotion (#627's own
+                # note), never admit a new one.
+                #
+                # chip-AGNOSTIC: pure table-row structure, no IC-class literal.
+                _is_pipe_row = (_is_pipe_table_row(line)
+                                or _line_i in _gfm_rows)
                 _is_port_table_row = (
-                    (_is_pipe_table_row(line) or _line_i in _gfm_rows)
+                    _is_pipe_row
                     and direction in ("input", "output", "inout"))
                 _leading_cell_toks: set = set()
-                if _is_port_table_row:
+                if _is_pipe_row:
                     for _cell in line.split("|"):
                         if _cell.strip():
                             _leading_cell_toks = set(
@@ -9855,10 +9921,10 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                             break
                 for _tm in _RE_BACKTICK_TOKEN.finditer(line):
                     tok = _tm.group(1)
-                    # #627 — in a port-table row, ONLY the leading name-cell
-                    # token is a port (a later-cell width/parameter token is
-                    # not promoted).
-                    if _is_port_table_row and tok not in _leading_cell_toks:
+                    # #627 — in ANY pipe-table row, ONLY the leading name-cell
+                    # token is a port (a later-cell width / parameter / mapped
+                    # submodule-port token is not promoted).
+                    if _is_pipe_row and tok not in _leading_cell_toks:
                         continue
                     # A pipe-table row's direction lives in its own cell and is
                     # already row-scoped; only the PROSE bullet shape needs the

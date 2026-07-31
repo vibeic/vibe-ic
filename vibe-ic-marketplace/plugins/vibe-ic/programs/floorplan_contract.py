@@ -27,6 +27,7 @@ read the same contract so they cannot drift.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 from pathlib import Path
@@ -464,3 +465,190 @@ def extract_floorplan_contract(project: Path,
     result["floorplan_hints"] = deduped
     result["constraints_present"] = bool(die_wxh or deduped)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Design-declared DRV limits (max-fanout / max-transition)
+# ---------------------------------------------------------------------------
+# A fixed-floorplan design ships an OpenLane-style config, and this module
+# already reads it for DIE_AREA / FP_SIZING / FP_DEF_TEMPLATE /
+# FP_PIN_ORDER_CFG. The SAME file routinely also states the design's DRV
+# limits — `MAX_FANOUT_CONSTRAINT`, `SYNTH_MAX_FANOUT`,
+# `MAX_TRANSITION_CONSTRAINT` — and the phase-3 SDC builder looked for them
+# ONLY in the L9 markdown, with a regex shaped for a markdown TABLE ROW. A
+# design that declares its cap in JSON therefore read as "declares no cap",
+# no `set_max_fanout` was emitted, `repair_design` never split the
+# high-fanout nets, and the sign-off max-fanout table came back empty BY
+# CONSTRUCTION — UNMEASURED, which is not the same claim as zero.
+#
+# PER-PDK / PER-SCL SCOPING IS LOAD-BEARING, not a nicety. An OpenLane
+# config carries caps for PDKs and cell libraries a given run is NOT
+# building for, under `pdk::<glob>` / `scl::<name>` blocks. Reading the cap
+# WITHOUT the PDK is precisely how a foreign library's tighter cap gets
+# applied to the wrong run. Resolution order, most specific last:
+#     top-level keys
+#       -> `pdk::<glob>` block whose glob matches the active PDK
+#         -> `scl::<name>` block whose name matches the active cell library
+# A block that matches neither contributes NOTHING.
+#
+# §4.05 / no-fabricate: only a real positive numeric declaration counts; a
+# missing, zero or non-numeric value yields None so the caller keeps its own
+# default. Off-limits (golden / oracle / reference-flow) trees are skipped by
+# `_iter_input_files`, so a cap that only exists in one is never read.
+#
+# chip-AGNOSTIC: pure OpenLane config-key grammar. The PDK and cell-library
+# names are supplied BY THE CALLER; no chip, PDK or design literal appears.
+
+_DRV_FANOUT_KEYS = ("MAX_FANOUT_CONSTRAINT", "SYNTH_MAX_FANOUT")
+_DRV_SLEW_KEYS = ("MAX_TRANSITION_CONSTRAINT",)
+# The SAME config states the design's routing-layer envelope. OpenLane names
+# them `RT_MAX_LAYER` / `RT_MIN_LAYER` (v1 spelled them `GLB_RT_MAXLAYER` /
+# `GLB_RT_MINLAYER`, and `RT_CLOCK_MIN_LAYER` scopes the clock separately).
+# They are DESIGN INPUT — a declared ceiling on where this design may route —
+# and the phase-3 `global_route` was emitted bare, so the declaration reached
+# no tool. Same per-(pdk, scl) scoping as the caps above: a routing ceiling
+# stated under `pdk::sky130*` must not be applied to a gf180 run.
+_DRV_ROUTE_MAX_LAYER_KEYS = ("RT_MAX_LAYER", "GLB_RT_MAXLAYER")
+_DRV_ROUTE_MIN_LAYER_KEYS = ("RT_MIN_LAYER", "GLB_RT_MINLAYER")
+_DRV_ROUTE_CLK_MIN_LAYER_KEYS = ("RT_CLOCK_MIN_LAYER", "GLB_RT_CLOCK_MINLAYER")
+
+
+def _scope_matches(prefix: str, spec: str, actual: str) -> bool:
+    """Does an OpenLane `<prefix>::<spec>` block apply to `actual`?
+
+    `spec` is an fnmatch glob (`sky130*`), matched case-insensitively. An
+    empty `actual` matches nothing — an unknown PDK must not inherit a
+    scoped cap.
+    """
+    if not actual:
+        return False
+    del prefix  # the caller has already split on it; kept for call-site clarity
+    return fnmatch.fnmatchcase(actual.lower(), spec.strip().lower())
+
+
+def _collect_scoped(cfg: Dict[str, Any], pdk: str, scl: str
+                    ) -> List[Dict[str, Any]]:
+    """Config dicts that apply to (pdk, scl), least specific first."""
+    layers: List[Dict[str, Any]] = [cfg]
+    for key, val in cfg.items():
+        if not isinstance(key, str) or not isinstance(val, dict):
+            continue
+        low = key.lower()
+        if low.startswith("pdk::"):
+            if _scope_matches("pdk", key[5:], pdk):
+                layers.append(val)
+                for k2, v2 in val.items():
+                    if (isinstance(k2, str) and isinstance(v2, dict)
+                            and k2.lower().startswith("scl::")
+                            and _scope_matches("scl", k2[5:], scl)):
+                        layers.append(v2)
+        elif low.startswith("scl::"):
+            if _scope_matches("scl", key[5:], scl):
+                layers.append(val)
+    return layers
+
+
+def _positive_int(v: Any) -> Optional[int]:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if v > 0 else None
+    if isinstance(v, float) and float(v).is_integer():
+        return int(v) if v > 0 else None
+    if isinstance(v, str):
+        try:
+            n = int(v.strip())
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
+    return None
+
+
+def _positive_float(v: Any) -> Optional[float]:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v) if float(v) > 0 else None
+    if isinstance(v, str):
+        try:
+            n = float(v.strip())
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
+    return None
+
+
+def _layer_name(v: Any) -> Optional[str]:
+    """A LEF routing-layer NAME as declared in a flow config, or None.
+
+    Accepts only a bare identifier (`met4`, `Metal4`, `M4`) — the shape a LEF
+    `LAYER <name>` carries. A number, a list, an empty string or anything with
+    whitespace/punctuation is refused, so a mis-typed key can never be spliced
+    into a `set_routing_layers` argument.
+    """
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    if not s or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", s):
+        return None
+    return s
+
+
+def declared_drv_limits(project: Path, pdk: str = "", scl: str = ""
+                        ) -> Dict[str, Any]:
+    """The design's OWN DRV limits, read from its staged flow config(s).
+
+    Returns ``{"max_fanout": int|None, "max_fanout_source": rel|None,
+    "max_transition_ns": float|None, "max_transition_source": rel|None}``.
+
+    Scoped per (``pdk``, ``scl``) — see the module note above. Never raises;
+    a project that declares nothing yields all-None so the caller's own
+    default stands unchanged.
+    """
+    out: Dict[str, Any] = {"max_fanout": None, "max_fanout_source": None,
+                           "max_transition_ns": None,
+                           "max_transition_source": None,
+                           "route_max_layer": None,
+                           "route_max_layer_source": None,
+                           "route_min_layer": None,
+                           "route_min_layer_source": None,
+                           "route_clock_min_layer": None,
+                           "route_clock_min_layer_source": None}
+    if not project or not Path(project).is_dir():
+        return out
+    try:
+        files = _iter_input_files(Path(project))
+    except Exception:                                        # noqa: BLE001
+        return out
+    for rel, _abs, text in files:
+        if not _looks_like_openlane_config(Path(rel).name, text):
+            continue
+        if not text.lstrip().startswith("{"):
+            continue
+        try:
+            cfg = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        for layer in _collect_scoped(cfg, pdk, scl):
+            for key in _DRV_FANOUT_KEYS:
+                n = _positive_int(_ci_get(layer, key))
+                if n is not None:
+                    out["max_fanout"] = n
+                    out["max_fanout_source"] = f"{rel}:{key}"
+            for key in _DRV_SLEW_KEYS:
+                f = _positive_float(_ci_get(layer, key))
+                if f is not None:
+                    out["max_transition_ns"] = f
+                    out["max_transition_source"] = f"{rel}:{key}"
+            for field, keys in (("route_max_layer", _DRV_ROUTE_MAX_LAYER_KEYS),
+                                ("route_min_layer", _DRV_ROUTE_MIN_LAYER_KEYS),
+                                ("route_clock_min_layer",
+                                 _DRV_ROUTE_CLK_MIN_LAYER_KEYS)):
+                for key in keys:
+                    name = _layer_name(_ci_get(layer, key))
+                    if name is not None:
+                        out[field] = name
+                        out[f"{field}_source"] = f"{rel}:{key}"
+    return out
