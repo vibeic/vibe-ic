@@ -12243,20 +12243,34 @@ def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
             continue
         spec = blk.get("spec")
         # A STRUCTURED block-spec TABLE (dict) is itself L5 block-layer
-        # evidence — keep unconditionally. A paragraph-HARVESTED string
-        # spec is NOT block-layer evidence (it is just numbers near a
-        # prose mention), so a candidate grounded only in product
-        # narrative is still tested below.
-        if isinstance(spec, dict) and spec:
+        # evidence — keep unconditionally. A paragraph-HARVESTED spec is
+        # NOT block-layer evidence (it is just numbers near a prose
+        # mention), so a candidate grounded only in product narrative is
+        # still tested below.
+        #
+        # KEY ON PROVENANCE, NOT ON THE PYTHON TYPE. This used to read
+        # `isinstance(spec, dict)`, which worked only for as long as dicts
+        # came exclusively from spec tables. When paragraph harvesting was
+        # restructured to emit the same `{"specs": [...]}` payload the
+        # consumer reads, every harvested spec silently inherited the
+        # table's exemption and a product-narrative candidate came back —
+        # measured: the #466 pin re-emitted a converter block from an
+        # acronym that appears only in the L1 product narrative. The
+        # harvester stamps its own origin, so ask for that instead.
+        harvested = (isinstance(spec, dict)
+                     and str(spec.get("spec_extraction", ""))
+                     .startswith("paragraph"))
+        if isinstance(spec, dict) and spec and not harvested:
             survivors.append(blk)
             continue
-        # For a string spec we only drop when L5 declares the strong
-        # ``## Block`` heading enumeration — that lets us reliably tell a
-        # real block (it has a heading) from a product-narrative
-        # hallucination (it does not). With only a bare count statement
-        # we keep the legacy behaviour for string-spec blocks (the
-        # ambiguous prose-only enumeration is owned by the skill prose).
-        spec_is_string = isinstance(spec, str) and spec.strip() != ""
+        # For a paragraph-harvested spec we only drop when L5 declares the
+        # strong ``## Block`` heading enumeration — that lets us reliably
+        # tell a real block (it has a heading) from a product-narrative
+        # hallucination (it does not). With only a bare count statement we
+        # keep the legacy behaviour (the ambiguous prose-only enumeration
+        # is owned by the skill prose).
+        spec_is_string = (isinstance(spec, str) and spec.strip() != "") \
+            or harvested
         if spec_is_string and not has_headers:
             survivors.append(blk)
             continue
