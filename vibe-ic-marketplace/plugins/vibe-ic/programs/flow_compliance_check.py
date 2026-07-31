@@ -3065,20 +3065,59 @@ _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS: Dict[Any, str] = {
     # signoff artefacts. OpenRCX / OpenSTA-IR / antenna_checker /
     # OpenROAD-fill / klayout-LVS work for development but not for
     # tapeout-grade signoff precision.
-    21: "Parasitic Extraction → SPEF (Calibre xRC / StarRC; OpenRCX "
-        "lacks signoff-grade precision)",
-    23: "IR Drop static+dynamic (RedHawk / Voltus; OpenSTA+PDNGEN "
+    # ── THE KEYS DRIFTED AWAY FROM THE LABELS, AND THE KEYS ARE WHAT RUNS ──
+    #
+    # Consumed as `r.id in _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS`, so the step
+    # ID decides what gets promoted to PASS_WITH_OPEN_SOURCE_CONSTRAINTS and
+    # the prose is decoration. Every label from here down named a step ONE OR
+    # TWO LATER than its key — two steps were inserted into the flow yaml (one
+    # before Parasitic Extraction, one before Post-Layout SPICE) and this table
+    # was never re-keyed. Measured against the yaml, by name:
+    #
+    #   key 21 "Parasitic Extraction"  -> yaml 21 is Routing
+    #   key 23 "IR Drop"               -> yaml 23 is Post-route STA
+    #   key 24 "EM check"              -> yaml 24 is IR Drop
+    #   key 25 "Antenna check"         -> yaml 25 is EM check
+    #   key 26 "Signal Integrity"      -> yaml 26 is Antenna check
+    #   key 28 "Post-Layout SPICE PV"  -> yaml 28 is PERC / Reliability
+    #   key 29 "PV ERC + Density"      -> yaml 29 is Post-Layout Gate-Level Sim
+    #   key 32 "Metal Fill"            -> yaml 32 is Post-route timing repair
+    #
+    # So the flow was quietly deferring ROUTING, POST-ROUTE STA, GATE-LEVEL
+    # SIMULATION and POST-ROUTE TIMING REPAIR — four steps the open-source
+    # container performs perfectly well (TritonRoute, OpenSTA multi-corner,
+    # iverilog+SDF, OpenROAD repair_design/repair_timing) — under labels that
+    # describe entirely different, genuinely commercial-only work. A FAIL on
+    # any of them could be promoted to a machine-attested deferral. That is a
+    # false PASS, and it is the exact failure the deferral tier exists to avoid
+    # producing: the tier's premise is "the OSS container CANNOT do this", and
+    # for those four steps the premise is simply untrue.
+    #
+    # Corroborated inside this same tree: test_step23_25_signoff_gates_wired.py
+    # exists to insist that step 23's sign-off checkers must actually RUN,
+    # while this table let step 23's FAIL be promoted away.
+    #
+    # FIXED IN THE TIGHTENING DIRECTION ONLY. Keys 21 / 23 / 29 / 32 are
+    # removed, and the entries that already sat on a genuinely commercial-only
+    # step keep their deferral and get a label naming the step they defer.
+    #
+    # DELIBERATELY NOT DONE — this is a flow-owner decision, not a drift fix:
+    # the removed labels also imply that yaml 22 (Parasitic Extraction), 27
+    # (Signal Integrity), 30 (Post-Layout SPICE) and 34 (Metal Fill) were meant
+    # to be deferrable and currently are not. Adding them would let MORE
+    # failures be promoted, so it is left to the owner rather than smuggled in
+    # under a bug fix. Likewise yaml 31 (Physical Verification): the old key-29
+    # label defers only "ERC + density signoff variants" and says in its own
+    # words that klayout/magic DRC/LVS cover the topology, so re-keying 29 to
+    # 31 would defer DRC and LVS too. That needs a sub-gate, not a whole-step
+    # deferral, so key 29 is dropped rather than moved.
+    24: "IR Drop static+dynamic (RedHawk / Voltus; OpenSTA+PDNGEN "
         "only handles static average IR)",
-    24: "EM check (RedHawk-EM / Totem)",
-    25: "Antenna check (Calibre PERC antenna rules; OpenROAD "
+    25: "EM check (RedHawk-EM / Totem)",
+    26: "Antenna check (Calibre PERC antenna rules; OpenROAD "
         "antenna_checker only catches a subset)",
-    26: "Signal Integrity (Sigrity / Cadence SI)",
-    28: "Post-Layout SPICE PV (HSPICE / Spectre)",
-    29: "Physical Verification ERC + Density signoff (Calibre PERC + "
-        "DRC density; klayout/magic DRC/LVS cover topology but not "
-        "ERC/density signoff variants)",
-    32: "Metal Fill (Calibre YieldEnhancer / ICC2 metalfill; "
-        "OpenROAD fill produces non-signoff geometry)",
+    28: "PERC / Reliability sign-off — ESD + latch-up + cross-domain "
+        "(Calibre PERC; no open-source equivalent)",
     "M1": "Mixed-signal top-level merge (Cadence AMS)",
     "M2": "Mixed-signal AMS co-sim (Xcelium AMS)",
     "M3": "Mixed-signal final PV (Calibre AMS)",
@@ -3093,7 +3132,7 @@ _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS: Dict[Any, str] = {
     # status=FAIL with proxy testbench misses (Brokaw bandgap, multi-
     # phase charge-pump, pull-device topology) outside any deferral
     # pathway. Routing A4 through the OS-constraints top-
-    # level map matches how Steps 5/11/12/13/21/23/25/29/32 and the
+    # level map matches how Steps 5/11/12/13/24/25/26/28 and the
     # mixed-signal M1-M4 entries handle the same shape of gap.
     # chip-AGNOSTIC: rationale is tool-availability, not chip-class.
     "A4": ("Analog corner sweep spec convergence (Cadence Virtuoso "
