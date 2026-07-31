@@ -28457,15 +28457,87 @@ def _emit_aging_sta_report(project: Path, top: str, pdk: PdkConfig,
     `aging_derate_sta_check`. The worst-slack number IS tool-produced (under the
     derate); the report carries an aging-evidence marker + the disclosure.
     §4.05: honest — a documented margin, never an invented aging corner. Returns
-    True when a worst-slack value is produced."""
-    netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    True when a worst-slack value is produced.
+
+    TIMES THE NETLIST BEING SIGNED OFF. This emitter read
+    ``<synth>/<top>_synth.v`` — the PRE-PnR synthesis netlist — and issued NO
+    ``read_spef``, while running from the TAPEOUT-SIGNOFF block whose own guard
+    is ``primary_def.is_file()``: by the time it fires, the routed netlist AND
+    the extracted per-corner SPEFs are already on disk. It reported a verdict
+    about a netlist that is not the one being signed off.
+
+    MEASURED, sha256 x sky130A: the aging corner reported
+    ``worst slack max -100.49`` on a design whose multi-corner sign-off
+    (routed netlist + max-RC SPEF, same liberty) closes at ``+3.33`` — an
+    inversion, not a margin. `reports/phase3/sta/pre_pnr_summary.json` names
+    this report, so Step 10 failed on it.
+
+    This is the SAME defect :func:`_multi_corner_sta_inputs` was written to
+    close for :func:`_emit_multi_corner_sta` (see its docstring: *"the code read
+    the PRE-PnR synthesis netlist and read NO SPEF"*) — a sibling emitter that
+    was never moved onto the shared resolver. It is now, so the precedence
+    (routed+SPEF -> routed -> synth) and the basis disclosure are common to
+    both, and the aging report stamps ``STA_BASIS:`` exactly like the
+    per-corner reports.
+
+    An aging derate slows LATE (data) paths, so this is a SETUP analysis and it
+    pairs with the MAX-RC extraction, matching the SS/max pairing the
+    multi-corner sign-off uses."""
+    netlist, spef_map, basis, basis_note = _multi_corner_sta_inputs(project, top)
     sdc_path = _pl.pnr_dir(project) / "constraint.sdc"
-    if not (netlist.is_file() and sdc_path.is_file()):
+    if not (netlist is not None and netlist.is_file() and sdc_path.is_file()):
         notes.append("aging STA skipped: netlist / constraint.sdc missing")
         return False
+    # Aging is a LATE-path (setup) analysis -> max-RC corner, then nominal.
+    aging_spef: Optional[Path] = None
+    for _k in ("SS", "*", "TT"):
+        cand = spef_map.get(_k)
+        if cand is not None and Path(cand).is_file():
+            aging_spef = Path(cand)
+            break
+    read_spef_tcl = ""
+    if aging_spef is not None:
+        read_spef_tcl = (
+            f"if {{[catch {{read_spef "
+            f"{_to_container_path(str(aging_spef), container)}}} _sp]}} "
+            f"{{ puts \"SPEF_ERR: $_sp\" }}\n")
+        spef_disc = f"{aging_spef.name} (max-RC / late-path corner)"
+    else:
+        spef_disc = "NO SPEF found — interconnect RC is UNCOUNTED"
     netlist_c = _to_container_path(str(netlist), container)
     sdc_c = _to_container_path(str(sdc_path), container)
-    lib_c = _to_container_path(str(pdk.liberty), container)
+    # GRADE AGING ON THE CORNER BEING SIGNED OFF. `pdk.liberty` is the NOMINAL
+    # (typical) library, and an aging setup analysis belongs on the SLOW corner
+    # — the one the multi-corner sign-off grades setup at.
+    #
+    # MEASURED, same routed netlist + same max-RC SPEF + same 1.1000 derate,
+    # only the liberty varying:
+    #     design            tt_025C_1v80      ss_100C_1v60
+    #     round-D shipped     +11.29 MET        +2.45 MET
+    #     failing control     +10.44 MET        -3.46 VIOLATED
+    # The control arm MISSES setup at the slow corner (its sign-off SS WNS is
+    # -2.14 ns) and the nominal-liberty aging report certified it MET. A verdict
+    # that inverts with the library is not an aging margin.
+    #
+    # Falls back to TT, then to `pdk.liberty`, and the report SAYS which it
+    # used, so a PDK that ships no distinct process corners degrades loudly.
+    _corner_libs = {}
+    try:
+        _corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    except Exception:                                   # discovery is best-effort
+        _corner_libs = {}
+    lib_c = None
+    for _lbl in ("SS", "TT"):
+        if _corner_libs.get(_lbl):
+            lib_c, lib_label = _corner_libs[_lbl], _lbl
+            break
+    if lib_c is None:
+        lib_c, lib_label = _to_container_path(str(pdk.liberty), container), "PDK_DEFAULT"
+    lib_disc = f"{Path(lib_c).name} ({lib_label})"
+    if lib_label != "SS":
+        lib_disc += (" — NO slow-process liberty was resolvable, so this aging "
+                     "margin is graded on a FASTER corner than setup sign-off "
+                     "and is OPTIMISTIC")
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
         for f in pdk.macro_libs)
@@ -28481,6 +28553,10 @@ read_liberty {lib_c}
 read_verilog {netlist_c}
 link_design {top}
 read_sdc {sdc_c}
+{read_spef_tcl}puts "STA_BASIS: {basis}"
+puts "STA_BASIS_NETLIST: {netlist.name}"
+puts "STA_BASIS_SPEF: {spef_disc}"
+puts "STA_BASIS_LIBERTY: {lib_disc}"
 # AGING derate (generic, disclosed): late-path (data) paths slowed to model
 # NBTI/PBTI/HCI Vt-drift over lifetime, BEYOND the fresh-silicon OCV.
 set_timing_derate -late {aging_late_derate:.4f}
@@ -28516,6 +28592,14 @@ exit
         "derate is a\n"
         "# DOCUMENTED GENERIC MARGIN (a disclosed assumption), NOT a foundry "
         "aging-corner number.\n"
+        # WHICH NETLIST THIS VERDICT IS ABOUT. Stamped into the report itself,
+        # the same way the per-corner reports carry it, so no summary can quote
+        # a pre-layout aging number as post-route sign-off.
+        f"# STA_BASIS: {basis}\n"
+        f"# STA_BASIS_NETLIST: {netlist.name}\n"
+        f"# STA_BASIS_SPEF: {spef_disc}\n"
+        f"# STA_BASIS_LIBERTY: {lib_disc}\n"
+        f"# {basis_note}\n"
         "# aging nbti pbti hci lifetime end-of-life eol degradation vt-shift "
         "(evidence tokens)\n#\n")
     out_rpt.write_text(header + body)
@@ -28526,6 +28610,11 @@ exit
                          "Vt-drift margin, no foundry aging Liberty)"),
         "aging_corner": "generic_aging_late_derate",
         "worst_slack_ns": worst,
+        "sta_basis": basis,
+        "sta_basis_netlist": netlist.name,
+        "sta_basis_spef": spef_disc,
+        "sta_basis_liberty": lib_disc,
+        "sta_basis_note": basis_note,
         "report": str(out_rpt.relative_to(project)),
         "disclosure": ("REAL OpenSTA slack under a DISCLOSED generic aging late "
                        "derate beyond fresh OCV; not a foundry aging-Liberty "
@@ -28537,7 +28626,9 @@ exit
                      "with disclosure (gate will read it)")
         return out_json.is_file()
     notes.append(f"aging STA: worst slack {worst} ns under generic aging derate "
-                 f"late={aging_late_derate:.2f} (disclosed margin)")
+                 f"late={aging_late_derate:.2f} (disclosed margin); basis="
+                 f"{basis} netlist={netlist.name} spef={spef_disc} "
+                 f"liberty={lib_disc}")
     return True
 
 
