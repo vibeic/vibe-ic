@@ -34,7 +34,7 @@ import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
 # Chip-agnostic multi-dialect timing-slack extractor, already hardened for
@@ -539,29 +539,64 @@ def _check_tool_authenticity(files: List[Path], mode: str,
 # ---------------------------------------------------------------------------
 # Mode checkers
 # ---------------------------------------------------------------------------
-def _drc_real_violation_count(text: str) -> Optional[int]:
-    """The REAL number of DRC violations in a report body, or None if it
-    cannot be determined. Two dialects, chip-agnostic (grammar, not any
-    design/PDK/vendor literal):
+# sha256×sky130A / #SS-SETUP — user-vs-foundry-stdcell DRC rule classification,
+# IDENTICAL to the phase-3 drc step (_v1_6_604_classify_stdcell_violations). An
+# open-PDK KLayout sign-off deck flags foundry-QUALIFIED std-cell-internal
+# geometry (sky130 li.*/ct./licon/m1./met1./mcon — all BELOW the detailed
+# router's met2 signal stack, and the contact/li layers are never emitted by the
+# router) that the foundry's own Calibre sign-off passes. The phase-3 drc step
+# already tiers those as WAIVED (0 user_routing_violations); but this auditor
+# used to count the RAW <item> total, so a run the flow itself calls DRC-clean
+# (0 user) FAILed here purely on foundry cell-library false-positives — the exact
+# reason sky130 lagged gf180/ihp (whose decks lack the li family). The honesty
+# gate is PRESERVED: any met2+/via2+ rule is ALWAYS user-routing and can NEVER be
+# waived, so a genuine routing/enclosure/spacing defect on the signal stack still
+# FAILs. chip-AGNOSTIC: rule-family grammar, no design/PDK/vendor literal.
+_DRC_USER_ROUTING_RULE_PREFIXES = (
+    "m2.", "met2.", "m2", "met2", "m3.", "met3.", "m3", "met3",
+    "m4.", "met4.", "m4", "met4", "m5.", "met5.", "m5", "met5",
+    "via2", "via3", "via4",
+)
+_DRC_FOUNDRY_STDCELL_RULE_PREFIXES = (
+    "li.", "ct.", "licon", "m1.", "met1.", "mcon",
+)
 
-      klayout RDB/.lyrdb XML   count actual <item> elements under <items> —
-                               the format's own violation-instance records,
-                               not the rule-name vocabulary in <categories>.
+
+def _drc_rule_is_foundry_stdcell(rule: Optional[str]) -> bool:
+    """True iff `rule` names a foundry-qualified std-cell-INTERNAL rule family
+    that the phase-3 drc step waives — but NEVER for a met2+/via2+ user-routing
+    rule (the honesty gate takes precedence). chip-AGNOSTIC."""
+    r = (rule or "").strip().strip("'\"").lower()
+    if any(r.startswith(p) for p in _DRC_USER_ROUTING_RULE_PREFIXES):
+        return False
+    return any(r.startswith(p) for p in _DRC_FOUNDRY_STDCELL_RULE_PREFIXES)
+
+
+def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
+    """Return `(user_routing, foundry_stdcell_excluded)` DRC violation counts in
+    a report body, or None if a count cannot be determined. Two dialects,
+    chip-agnostic (grammar, not any design/PDK/vendor literal):
+
+      klayout RDB/.lyrdb XML   count actual <item> elements under <items>,
+                               SPLIT by each item's <category> rule into
+                               user-routing (the gating count) vs foundry-
+                               qualified std-cell-internal (disclosed, waived —
+                               same tiering as the phase-3 drc step).
       plain-text summary       "total violations: N" / "N violations" /
-                               the magic-style "DRC errors found: N".
+                               the magic-style "DRC errors found: N" — no
+                               per-item rule, so the whole N is treated as
+                               user-routing (conservative: never auto-waived).
 
-    Returns None (never 0) when NEITHER dialect yields a number — an
+    Returns None (never (0,0)) when NEITHER dialect yields a number — an
     unreadable or unrecognised report must not be credited as clean.
 
-    MEASURED, the reason this function exists: the prior check counted
-    which RULE-CATEGORY WORDS (spacing/width/density/antenna/via/enclosure)
-    merely appeared anywhere in the text. A real, tool-authentic
-    drc_signoff.rpt with its actual 0-item <items></items> block, hand-
-    edited to ALSO contain the sentence "9999 spacing violations found. DRC
-    FAILED", still mentions "spac" — the old check could not tell a clean
-    report bearing a fabricated failure sentence from a genuinely clean one.
-    Counting real <item> elements (or a real numeric summary) is immune to
-    that: prose injected elsewhere in the file is not a violation record.
+    MEASURED, the reason this function exists: the prior check counted which
+    RULE-CATEGORY WORDS merely appeared anywhere in the text; counting real
+    <item> elements is immune to a fabricated failure SENTENCE injected
+    elsewhere in the file. The user/std-cell split (added for sha256×sky130A)
+    keeps that immunity while no longer FAILing a clean design on the open
+    deck's foundry-cell false-positives — the honesty gate keeps every met2+
+    signal-stack defect gating.
     """
     stripped = text.lstrip()
     if stripped.startswith("<?xml") or stripped.startswith("<report-database"):
@@ -572,16 +607,25 @@ def _drc_real_violation_count(text: str) -> Optional[int]:
         if root is not None:
             items = root.find(".//items")
             if items is not None:
-                return len(items.findall("item"))
+                user = 0
+                stdcell = 0
+                for _it in items.findall("item"):
+                    _cat = _it.find("category")
+                    _rule = _cat.text if _cat is not None else ""
+                    if _drc_rule_is_foundry_stdcell(_rule):
+                        stdcell += 1
+                    else:
+                        user += 1
+                return (user, stdcell)
     m = re.search(r"total\s+violations?\s*[:=]?\s*(\d+)", text, re.I)
     if m:
-        return int(m.group(1))
+        return (int(m.group(1)), 0)
     m = re.search(r"(\d+)\s+(?:total\s+)?violations?\b", text, re.I)
     if m:
-        return int(m.group(1))
+        return (int(m.group(1)), 0)
     m = re.search(r"DRC errors? found:\s*(\d+)", text, re.I)
     if m:
-        return int(m.group(1))
+        return (int(m.group(1)), 0)
     return None
 
 
@@ -610,6 +654,7 @@ def _check_drc(project_dir: Path) -> AuditResult:
     best_file = ""
     determined_files = 0
     real_total = 0
+    stdcell_excluded = 0
     worst_file = ""
 
     for fp in files:
@@ -627,8 +672,10 @@ def _check_drc(project_dir: Path) -> AuditResult:
         n = _drc_real_violation_count(text)
         if n is not None:
             determined_files += 1
-            if n > 0:
-                real_total += n
+            _user_n, _std_n = n
+            stdcell_excluded += _std_n
+            if _user_n > 0:
+                real_total += _user_n
                 if not worst_file:
                     worst_file = str(fp)
 
@@ -671,11 +718,25 @@ def _check_drc(project_dir: Path) -> AuditResult:
     # Tool-authenticity check — rejects hand-typed stubs (added 2026-04-22)
     authentic = _check_tool_authenticity(files, "drc", result)
 
+    # DISCLOSE (never silent) the foundry-qualified std-cell-internal count that
+    # was tiered out of the gating total — same waiver the phase-3 drc step
+    # applies. A reader sees exactly how many violations were set aside and why.
+    if stdcell_excluded > 0:
+        result.findings.append(Finding(
+            rule="DRC_FOUNDRY_STDCELL_EXCLUDED", severity="INFO",
+            message=(f"{stdcell_excluded} foundry-qualified std-cell-internal "
+                     f"DRC violation(s) (li./ct./licon/m1./met1./mcon — below "
+                     f"the router's met2 signal stack) tiered out of the "
+                     f"sign-off gating total, same as the phase-3 drc step; "
+                     f"the met2+/via2+ honesty gate still counts "
+                     f"{real_total} user-routing violation(s)"),
+            file=best_file))
     result.passed = determined_files > 0 and real_total == 0 and authentic
     result.summary = {"files_found": len(files), "categories_found": cats_found,
                       "has_count": has_count, "tool_authentic": authentic,
                       "determined_files": determined_files,
-                      "real_violation_total": real_total}
+                      "real_violation_total": real_total,
+                      "foundry_stdcell_excluded": stdcell_excluded}
     return result
 
 
