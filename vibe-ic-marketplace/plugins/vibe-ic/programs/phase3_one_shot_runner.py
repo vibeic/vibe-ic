@@ -23934,6 +23934,151 @@ def _eco_residual_note(project: "Path", residual: bool,
         "and the worst-path slew profile before recording one.")
 
 
+def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
+                           container: str) -> StepResult:
+    """Steps 7 + 10 (pre-layout, stage-2) — emitted RIGHT AFTER synth, BEFORE PnR.
+
+    ORGANIC (opentitan_aes r7). Steps 7 (SDC + PVT matrix), 8 (SDC validation)
+    and 10 (pre-layout multi-corner STA) are STAGE-2, PRE-LAYOUT steps whose
+    only inputs are the technology-mapped synth netlist + the SDC + the PDK
+    liberty corners — none needs a routed design. Yet their ONLY producer was
+    ``step_canonicalize_artefacts``, which runs at the TAIL of phase-3 AFTER
+    step_pnr / step_gds / step_drc / step_lvs. A backend whose route does not
+    converge (or is killed on a wall-clock cap) therefore left these three
+    pre-layout artefacts UNWRITTEN, and the flow reported Steps 7/8/10 MISSING
+    — three "backend-blocked" failures that were really ONE upstream producer
+    gated behind the wrong stage (measured on opentitan_aes: a 4 h route was
+    killed, `step_canonicalize_artefacts` never ran, so `phase2/stage2/
+    constraints/*.sdc`, `pvt_matrix.json` and `phase3/stage3/sta/
+    pre_pnr_timing.rpt` were all absent and Steps 7/8/10 scored MISSING while
+    the real cause was that they were never emitted pre-layout).
+
+    A second defect compounded it: step 10's ``pre_pnr_timing.rpt`` in
+    ``step_canonicalize_artefacts`` is a VERBATIM COPY of the POST-route
+    ``pnr/sta.rpt`` (and only emitted if the full route wrote it), so even a
+    completed backend produced a "pre-layout" report that is actually
+    post-layout. This step instead composes it from a GENUINE pre-layout
+    OpenSTA run (``_emit_multi_corner_sta`` selects the synth netlist and
+    stamps ``STA_BASIS: PRE_LAYOUT_ESTIMATE`` into the body).
+
+    Placed at the first instant its inputs exist (immediately after synth —
+    the flow's own order, since Steps 7/10 precede Step 15 Floorplan), exactly
+    as ``run_step11_dft_after_synth`` is. PURELY ADDITIVE: fires only when the
+    design STAGES its own >=2 corner libs under ``input/pdk/liberty`` (the
+    measured opentitan_aes case). Projects that rely on the container built-in
+    PDK are a no-op here and keep the existing post-route canonicalize path
+    unchanged — zero regression. ``step_canonicalize_artefacts`` keeps its
+    ``if not <file>.is_file()`` guards, so it now no-ops on the three files
+    this step already wrote and every post-route artefact is untouched.
+    chip/PDK-AGNOSTIC.
+    """
+    t0 = time.time()
+    written: List[str] = []
+    notes: List[str] = []
+
+    staged_lib_dir = project / "input" / "pdk" / "liberty"
+    staged_libs = (sorted(staged_lib_dir.glob("*.lib"))
+                   if staged_lib_dir.is_dir() else [])
+    if len(staged_libs) < 2:
+        # Container-built-in-PDK project (or single staged corner): leave the
+        # pre-layout emit to the existing post-route canonicalize path so this
+        # change cannot regress a project that does not stage its own corners.
+        return StepResult(
+            "prelayout_signoff", "SKIP", time.time() - t0,
+            "no >=2 staged corner libs under input/pdk/liberty — pre-layout "
+            "stage-2 sign-off deferred to step_canonicalize_artefacts "
+            "(no-op; no regression)", [])
+
+    constraints_out = _pl.constraints_dir(project)
+    sta_out = _pl.sta_dir(project)
+    pnr_out = _pl.pnr_dir(project)
+    for d in (constraints_out, sta_out, pnr_out):
+        d.mkdir(parents=True, exist_ok=True)
+
+    # --- Step 7a: SDC (pnr/constraint.sdc is what the STA helpers read) ---
+    # step_pnr overwrites this later with byte-identical content, so writing
+    # it early is safe and is what lets the pre-layout STA run before PnR.
+    runner_sdc = pnr_out / "constraint.sdc"
+    if not runner_sdc.is_file():
+        staged_sdc = (
+            next(iter(sorted(constraints_out.glob("*.sdc"))), None)
+            or next(iter(sorted(project.glob("constraints/*.sdc"))), None))
+        if staged_sdc and staged_sdc.is_file():
+            runner_sdc.write_text(staged_sdc.read_text())
+        else:
+            _drv = _liberty_drv_limits(str(pdk.liberty), container)
+            runner_sdc.write_text(_build_auto_silicon_sdc(
+                project, top=top,
+                drv_slew_ns=_drv.get("max_transition_ns"),
+                drv_cap_pf=_drv.get("max_capacitance_pf"),
+                drv_note=str(_drv.get("note") or ""),
+                liberty_path=str(pdk.liberty),
+                pdk_name=str(pdk.name)))
+        written.append(str(runner_sdc))
+
+    # --- Step 7b: canonical staged SDC copy (constraints/<top>.sdc) -------
+    canon_sdc = constraints_out / f"{top}.sdc"
+    if runner_sdc.is_file() and not canon_sdc.is_file():
+        canon_sdc.write_text(
+            _stamp_sdc_provenance(runner_sdc.read_text(), pdk.name))
+        written.append(str(canon_sdc))
+
+    # --- Step 7c: pvt_matrix.json (design-staged Liberty corners) --------
+    pvt_path = constraints_out / "pvt_matrix.json"
+    if not pvt_path.is_file():
+        corners = [
+            {"name": lib.stem,
+             "label": _classify_corner_from_name(lib.name),
+             "liberty": str(lib.relative_to(project))}
+            for lib in staged_libs
+        ]
+        pvt = dict(_PVT_MATRIX_TEMPLATE)
+        pvt["corners"] = corners
+        pvt["primary_corner"] = "TT"
+        pvt["corner_count"] = len(corners)
+        pvt["multi_corner"] = len(corners) >= 2
+        pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
+        written.append(str(pvt_path))
+
+    # --- Step 10: GENUINE pre-layout multi-corner STA --------------------
+    per_corner = sta_out / "per_corner"
+    if runner_sdc.is_file():
+        per_corner.mkdir(parents=True, exist_ok=True)
+        if _emit_multi_corner_sta(project, top, pdk, container,
+                                  staged_libs, per_corner, notes):
+            written.append(str(per_corner))
+    # Compose pre_pnr_timing.rpt from a GENUINE per-corner report (setup-worst
+    # SS preferred, else TT/FF/any) — NOT a copy of the post-route sta.rpt.
+    pre_pnr = sta_out / "pre_pnr_timing.rpt"
+    if not pre_pnr.is_file():
+        src = None
+        for cand in ("sta_SS.rpt", "sta_TT.rpt", "sta_FF.rpt"):
+            if (per_corner / cand).is_file():
+                src = per_corner / cand
+                break
+        if src is None and per_corner.is_dir():
+            _any = sorted(per_corner.glob("sta_*.rpt"))
+            src = _any[0] if _any else None
+        if src is not None:
+            pre_pnr.write_text(
+                "# PRE-LAYOUT STA (Step 10) — genuine OpenSTA on the synth\n"
+                "# netlist + SDC, emitted BEFORE PnR. STA_BASIS is stamped in\n"
+                "# the report body; interconnect is a pre-floorplan estimate.\n"
+                f"# corner source: {src.name}\n"
+                + src.read_text())
+            written.append(str(pre_pnr))
+        else:
+            notes.append("pre-layout STA produced no corner report — "
+                         "pre_pnr_timing.rpt deferred (sta tool unavailable?)")
+
+    ok = canon_sdc.is_file() and pvt_path.is_file()
+    detail = (f"pre-layout stage-2 sign-off emitted BEFORE PnR: "
+              f"{len(written)} artefact(s)"
+              + ("; " + "; ".join(notes[-2:]) if notes else ""))
+    return StepResult("prelayout_signoff", "PASS" if ok else "WARN",
+                      time.time() - t0, detail, written)
+
+
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 container: str) -> StepResult:
     """v1.6.36 — stage runner outputs at the canonical paths the flow YAML expects.
@@ -31289,6 +31434,21 @@ def main() -> int:
                 plan.append(_s11)
                 print(f"[dft] {_s11.status:5s} {_s11.name}: {_s11.detail}",
                       flush=True)
+            # ── canonical Steps 7 + 10 (pre-layout stage-2 sign-off) ───────
+            # Emitted HERE, right after synth and BEFORE step_pnr, for the same
+            # reason as the Step-11 DFT block above: this is the first instant
+            # the mapped netlist + SDC exist, and Steps 7/10 precede Step 15
+            # (Floorplan) in the flow's own order. Previously their ONLY
+            # producer was step_canonicalize_artefacts at the TAIL of phase-3,
+            # so a route that did not converge left Steps 7/8/10 MISSING even
+            # though nothing they need is post-layout. Located-by-name like the
+            # rows above, so it cannot shift any downstream plan[-1] decision.
+            # No-op (SKIP) unless the design stages >=2 corner libs.
+            _pls = step_prelayout_signoff(
+                project, effective_top, pdk, args.container)
+            plan.append(_pls)
+            print(f"[prelayout] {_pls.status:5s} {_pls.name}: {_pls.detail}",
+                  flush=True)
             # ORGANIC #593 — geometry-aware cache: a DEF that exists may
             # only be reused when the requested --die-um/--util match the
             # cached run's geometry (pnr_args.json). A congestion-recovery
