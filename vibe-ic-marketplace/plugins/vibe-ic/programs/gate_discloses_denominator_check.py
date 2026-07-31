@@ -596,12 +596,59 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         absent_results = list(ex.map(
             lambda p: _drive_on_absent_project(p, timeout), progs))
-    absent_rc0 = absent_silent = 0
+    absent_rc0 = absent_silent = absent_honest_pass = 0
+    #: #564 — REPORTED, NOT ENFORCED, and the count is why.
+    #:
+    #: The predicate finds 17 gates today. Some are certainly right: a gate
+    #: whose output is `PASS -- no L4_REGMAP.json (gate not applicable)` is
+    #: saying the project has no register map, which is a true statement a
+    #: reader can act on. Others are the shape that was fixed by hand in
+    #: v1.8.85/86/88. Telling them apart needs one measurement per gate, not a
+    #: regex over the wording — a text proxy standing in for the property is
+    #: the defect family this program exists for.
+    #:
+    #: Turning all 17 into FAIL today would block every landing on an unmade
+    #: judgement, and a gate that blocks every landing gets switched off rather
+    #: than answered. So the census is published and the verdict is not moved.
+    #: Promoting these to findings is #564's remaining work, gate by gate.
+    absent_honest_gates: List[Dict] = []
     for res in absent_results:
         if res.get("unrunnable") or res["rc"] != 0:
             continue
         absent_rc0 += 1
         if res["disclosed"]:
+            # HONEST AND STILL WRONG (#564).
+            #
+            # This branch used to `continue`, and that is precisely how three
+            # gates shipped a success verdict over an input that was not there:
+            #
+            #   interface_encoding_audit  "0 interfaces analyzed"      rc 0
+            #   oe_pattern_check          "analyzed 0 file(s)"         rc 0
+            #   fpga_qsf_lint             (no scope at all)            rc 1
+            #
+            # The first two are honest by the standard above — they state a
+            # zero, a reader can act on it, and `_honest_about_an_absent_project`
+            # returns True for both. They were still fixed, because the message
+            # is not what aggregates. The P0 umbrella reads the EXIT CODE, so a
+            # gate that says "0" in prose and returns 0 in rc contributes a
+            # silent pass to a project-level verdict.
+            #
+            # Disclosing a zero denominator and REFUSING on one are two
+            # different properties. The first has been enforced here since
+            # v1.8.29; the second was enforced nowhere, and each of the three
+            # was found by hand, one gate at a time.
+            absent_honest_pass += 1
+            absent_honest_gates.append({
+                "gate": res["gate"],
+                "kind": "HONEST_ZERO_BUT_EXIT_ZERO",
+                "detail": ("disclosed that it examined nothing and still "
+                           "returned rc 0 over a path that does not exist. The "
+                           "disclosure is in the output; the aggregation reads "
+                           "the exit code, so this is a silent pass one layer "
+                           "up. rc 2 means 'could not check' and the CI "
+                           "dispatcher already separates it from a finding"),
+                "output_tail": res["output_tail"],
+            })
             continue
         absent_silent += 1
         findings.append({
@@ -647,6 +694,13 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
         # first does: "0 findings" and "the fixture never ran" print the same.
         "absent_rc_zero": absent_rc0,
         "absent_rc_zero_silent": absent_silent,
+        # #564: the honest ones that still passed. Split out from
+        # `absent_rc_zero_silent` because the remedy differs — a silent gate
+        # needs to start disclosing, this one already discloses and needs to
+        # stop returning success.
+        "absent_rc_zero_honest_but_passing": absent_honest_pass,
+        "absent_rc_zero_honest_but_passing_gates": sorted(
+            absent_honest_gates, key=lambda d: d["gate"]),
         "inventory_size": len(_EMPTY_PROJECT_SILENT_PASS),
         "inventory_measured_on": _MEASURED_ON,
         "undriveable_size": len(_UNDRIVEABLE),
@@ -669,6 +723,17 @@ def _print_inventory(stats: Dict) -> None:
         meta = _EMPTY_PROJECT_SILENT_PASS[gate]
         print(f"    {meta['measured']}  {gate}: {meta['reason']}",
               file=sys.stderr)
+    honest = stats.get("absent_rc_zero_honest_but_passing", 0)
+    if honest:
+        # On stderr and in the headline path, not only in --json. A census that
+        # lives solely in a file a human has to ask for is the same silence
+        # this program exists to catch, one tool further out (#564).
+        print(f"  HONEST ZERO BUT rc 0 (#564, reported not enforced): {honest} "
+              f"gate(s) disclosed they examined nothing over an absent project "
+              f"and still returned success", file=sys.stderr)
+        for entry in stats.get("absent_rc_zero_honest_but_passing_gates", []):
+            print(f"    {entry['gate']}: {entry['output_tail'][:96]}",
+                  file=sys.stderr)
     print(f"  UNDRIVEABLE: {stats.get('undriveable_size', 0)} gate(s)",
           file=sys.stderr)
     for gate in sorted(_UNDRIVEABLE):
