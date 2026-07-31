@@ -272,11 +272,74 @@ def _is_detect_port(name: str) -> bool:
 
 # Prose/L23 cues that a safety mechanism is DECLARED (used to gate auto-detect
 # so a non-safety design skips as NOT_APPLICABLE rather than false-firing).
-_SAFETY_DECL_RE = re.compile(
-    r"(?i)\b(diagnostic\s+coverage|safety\s+mechanism|iso[-\s]?26262|"
-    r"functional\s+safety|fmeda|asil[-\s]?[abcd]|lockstep|"
+#
+# SPLIT BY WHETHER THE TOKEN HAS AN ORDINARY-ENGLISH READING, because the
+# single flat pattern below used to be matched against the RAW bytes of every
+# .v/.sv file — COMMENTS INCLUDED — and two of its alternatives are ordinary
+# English words.
+#
+# MEASURED, sha256 crypto accelerator: the ONLY match of the whole pattern in
+# the entire design was `lockstep`, inside
+#     `reg [5:0] round1;   // t+1, kept in lockstep for K[t+1]`
+# — a comment saying two round counters advance together. That one word
+# admitted a design which declares no ASIL, no safety goal and no safety
+# mechanism anywhere in L1..L9 into an ASIL-D FMEDA graded against a 99 %
+# diagnostic-coverage floor, which it then FAILed. A safety mechanism is
+# DECLARED, not mentioned.
+#
+# STRONG — terms of art nobody writes by accident. `ISO-26262`, `ASIL-D`,
+# `FMEDA`, `SEC-DED`, `error correcting code`, `functional safety`,
+# `diagnostic coverage`, `safety mechanism`, `parity protect`. Their presence
+# IS a declaration, so they are honoured ANYWHERE — RTL comments included. This
+# is what a real ECC block's header comment says, and it keeps firing.
+_SAFETY_DECL_STRONG_RE = re.compile(
+    r"\b(diagnostic\s+coverage|safety\s+mechanism|iso[-\s]?26262|"
+    r"functional\s+safety|fmeda|asil[-\s]?[abcd]|"
     r"single[-\s]?error\s+correct|sec[-\s]?ded|error\s+correcting\s+code|"
-    r"\becc\b|parity\s+protect)")
+    r"parity\s+protect)", re.I)
+
+# WEAK — real safety vocabulary that ALSO has an incidental reading. "kept in
+# lockstep" is ordinary English for "in step"; a bare `ecc` is three letters
+# that can be an identifier or somebody's initials. These are honoured from the
+# design's DECLARATIVE prose (the L-doc / L23 text passed as `doc_text`, where
+# a declaration legitimately lives) and from RTL CODE, but NOT from RTL
+# commentary — the one place where the incidental reading actually occurs.
+_SAFETY_DECL_WEAK_RE = re.compile(r"\b(lockstep|ecc)\b", re.I)
+
+# Union — kept as the historical name for any external reader of this module.
+_SAFETY_DECL_RE = re.compile(
+    _SAFETY_DECL_STRONG_RE.pattern + "|" + _SAFETY_DECL_WEAK_RE.pattern, re.I)
+
+# A SAFETY MECHANISM IS DECLARED, NEVER MENTIONED. `_SAFETY_DECL_RE` is applied
+# to the design's DOC prose (where a declaration legitimately lives) plus the
+# RTL — and until this strip existed, "the RTL" meant its raw bytes, COMMENTS
+# INCLUDED. An ordinary English comment is not a declaration.
+#
+# MEASURED, sha256 crypto accelerator: the ONLY match of `_SAFETY_DECL_RE` in
+# the entire design was the word `lockstep` inside
+#     `reg [5:0] round1;   // t+1, kept in lockstep for K[t+1]`
+# — a comment describing a pipeline register that carries round t+1 alongside
+# round t. That one word admitted a design which declares no ASIL, no safety
+# goal and no safety mechanism anywhere in L1..L9 into an ASIL-D FMEDA graded
+# against a 99 % diagnostic-coverage floor, which it then FAILed.
+#
+# Stripping comments is the CONSERVATIVE direction: a design whose only safety
+# statement is a comment now lands on the DISCLOSED `NOT_APPLICABLE` vacuous
+# skip (its own tier, its own counter) instead of a false ASIL-D FAIL, and the
+# two arms that carry a real declaration are untouched — the POSITIVE STRUCTURE
+# arm (corrected-data output PAIRED WITH a syndrome/detect port) still fires
+# with no prose at all, and the doc/L23 prose arm is deliberately NOT stripped.
+_HDL_COMMENT_RE = re.compile(r'"(?:\\.|[^"\\\n])*"|//[^\n]*|/\*.*?\*/',
+                             re.DOTALL)
+
+
+def _strip_hdl_comments(text: str) -> str:
+    """Blank out `//` and `/* */` comments in Verilog/SystemVerilog source,
+    leaving string literals intact (a `//` inside a string is not a comment).
+    Replacement is a space, so token boundaries survive. Pure."""
+    return _HDL_COMMENT_RE.sub(
+        lambda m: m.group(0) if m.group(0).startswith('"') else " ", text)
+
 
 _MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)\s*", re.MULTILINE)
 
@@ -330,6 +393,7 @@ def detect_safety_mechanism(rtl_dir: Path,
         return None
 
     combined = doc_text + "\n"
+    combined_code = doc_text + "\n"
     per_file: List[Tuple[Path, str]] = []
     for f in vfiles:
         try:
@@ -337,7 +401,13 @@ def detect_safety_mechanism(rtl_dir: Path,
         except OSError:
             continue
         per_file.append((f, t))
+        # Two views feed the declaration arm below: `combined` keeps the RTL
+        # verbatim (STRONG terms of art count wherever they appear, including a
+        # module header comment), `combined_code` drops the commentary (so a
+        # WEAK token's incidental reading in a comment cannot declare safety).
+        # `t` — raw — remains what the port/module parsing uses.
         combined += t + "\n"
+        combined_code += _strip_hdl_comments(t) + "\n"
 
     # Collect all modules and their ports across files.
     mods: Dict[str, Tuple[Path, List[Tuple[str, str, int]]]] = {}
@@ -354,7 +424,7 @@ def detect_safety_mechanism(rtl_dir: Path,
         if not ins or not outs:
             continue
         detect_outs = [n for n, _ in outs if _is_detect_port(n)]
-        data_ins = [(n, w) for n, w in ins if n.lower() not in _CLK_RST]
+        data_ins = [(n, w) for n, w in ins if not _is_clk_rst(n)]
         if not data_ins:
             continue
         widest_in = max(data_ins, key=lambda x: x[1])
@@ -401,8 +471,12 @@ def detect_safety_mechanism(rtl_dir: Path,
     # `error` STATUS flag likewise remains insufficient on its own (#145 —
     # sha256 crypto accelerator). A genuine SEC-only ECC with no detect flag
     # still fires whenever the design DECLARES safety (the _SAFETY_DECL_RE arm).
+    # A STRONG term of art declares safety wherever it appears (comments too); a
+    # WEAK one only from declarative prose or RTL code, never from commentary.
+    declared = (_SAFETY_DECL_STRONG_RE.search(combined)
+                or _SAFETY_DECL_WEAK_RE.search(combined_code))
     if not ((dec["out"] is not None and dec["detect"] is not None)
-            or _SAFETY_DECL_RE.search(combined)):
+            or declared):
         return None
 
     # Find an encoder: input == decoder data_width, output == code_width.
@@ -415,7 +489,8 @@ def detect_safety_mechanism(rtl_dir: Path,
         # which is NOT an encoder/decoder pair.
         if _rcvar_base(mod) == _rcvar_base(dec["module"]):
             continue
-        ins = [(n, w) for n, d, w in ports if d == "input" and n.lower() not in _CLK_RST]
+        ins = [(n, w) for n, d, w in ports
+               if d == "input" and not _is_clk_rst(n)]
         outs = [(n, w) for n, d, w in ports if d == "output"]
         if not ins or not outs:
             continue
@@ -447,6 +522,61 @@ def detect_safety_mechanism(rtl_dir: Path,
 
 _CLK_RST = {"clk", "clock", "clk_i", "rst", "reset", "rst_n", "rstn",
             "rst_i", "resetn", "arst", "arst_n", "en", "enable"}
+
+# A CLOCK/RESET PIN IS NEVER THE PROTECTED DATA PATH. The literal set above is
+# an enumeration of spellings, and an enumeration of spellings is a proxy for
+# the property "this pin is a clock or a reset". It held `rst_n` and `resetn`
+# and MISSED `reset_n` — one of the commonest reset names in Verilog.
+#
+# MEASURED, sha256: the design's L3 port contract names the pin `reset_n`, so
+# the encoder search kept it, `min(ins, key=width)` picked it as the narrowest
+# input, and the emitted mechanism was
+#     enc_in='reset_n', data_width=1
+# — the gate injected stuck-at faults into the RESET PIN and called it the
+# protected data path. The generated TB then wired a 32-bit vector to a 256-bit
+# `digest` port (`fmeda_fi_tb.v:9: warning: Port 8 (digest) ... expects 256
+# bit(s), given 32`), every injection came back `DETECT x`, and no golden
+# baseline was ever established.
+#
+# Replaced with a decomposition: split the name into components, require at
+# least one clock/reset ROOT, and allow only polarity/direction decorations
+# alongside it. `data_in`, `write_data`, `code_in`, `interrupt` and `sense`
+# are all rejected; `reset_n`, `rst_ni`, `n_reset`, `clk_i`, `arst_n`,
+# `resetb`, `areset` are all recognised. chip-AGNOSTIC.
+_CLK_RST_ROOTS = {"clk", "clock", "clks", "rst", "reset", "arst", "areset",
+                  "en", "enable", "ena", "clken", "clkin", "sclk", "aclk"}
+# Decorations that may accompany a root without changing what the pin IS.
+_CLK_RST_DECOR = {"n", "b", "i", "o", "p", "a", "x", "in", "not", "neg", "inv",
+                  "async", "asynch", "sync", "l", "h", "g", "gated", "bar"}
+# Glued polarity suffixes: `rstn`, `resetn`, `resetb`, `rst_ni` -> root + tail.
+_GLUED_POLARITY = ("ni", "no", "n", "b", "l")
+
+
+def _is_clk_rst(name: str) -> bool:
+    """True iff `name` reads as a clock, reset or enable pin — i.e. something
+    that can never be an ECC codeword / protected data bus. Component-aware, so
+    it survives spellings the old literal set did not enumerate. Pure."""
+    toks = [t for t in re.split(r"[_\W]+", (name or "").lower()) if t]
+    if not toks:
+        return False
+    saw_root = False
+    for t in toks:
+        if t in _CLK_RST_ROOTS:
+            saw_root = True
+            continue
+        if t in _CLK_RST_DECOR:
+            continue
+        # a glued polarity suffix: `rstn` -> `rst`+`n`, `resetb` -> `reset`+`b`
+        stripped = None
+        for suf in _GLUED_POLARITY:
+            if t.endswith(suf) and t[:-len(suf)] in _CLK_RST_ROOTS:
+                stripped = t[:-len(suf)]
+                break
+        if stripped is not None:
+            saw_root = True
+            continue
+        return False          # a component that is neither root nor decoration
+    return saw_root
 
 
 # ─────────────────────── testbench rendering ────────────────────────────
@@ -797,9 +927,23 @@ def build_report(spec: Optional[MechanismSpec],
             "asil": asil,
         }
     site_cov, site_tot = (results.per_site() if results else (0, 0))
-    dc = results.dc_pct if results else 0.0
+    # UNMEASURED IS NOT ZERO PERCENT. `dc = ... if results else 0.0` published
+    # `diagnostic_coverage_pct: 0.0` for a run that injected NO faults, and
+    # `main()` printed `DC=0.00% (0/0) floor=99.0 ASIL-D -> FAIL` — a coverage
+    # MEASUREMENT — beside this same object's own `reason` field reading
+    # "cannot measure DC". A run that measured nothing and a run that measured
+    # zero detections are different claims; 0.00 % asserts the second.
+    # `None` is the only honest value, and `measured` names which case it is.
+    measured = results is not None
+    dc = results.dc_pct if results else None
     baseline_ok = bool(results and results.golden_ok)
-    if not baseline_ok:
+    if not measured:
+        passed, reason = False, ("injection produced NO result to read — "
+                                 "diagnostic coverage is UNMEASURED, not 0 %. "
+                                 "Reported as null; FAIL because an applicable "
+                                 "safety design must not sign off on an "
+                                 "unmeasured DC")
+    elif not baseline_ok:
         passed, reason = False, ("harness baseline INVALID (false-alarm or "
                                  "non-inverse encode/decode) — DC not "
                                  "trustworthy; FAIL rather than report a bogus "
@@ -825,12 +969,15 @@ def build_report(spec: Optional[MechanismSpec],
         "dc_floor_pct": floor,
         "fault_model": "single stuck-at (bit-flip) on protected data path",
         "detection_criterion": "detect_flag_asserted OR corrected_output_matches",
+        "measured": measured,
         "injected_faults": results.injected if results else 0,
         "detected_faults": results.detected if results else 0,
-        "diagnostic_coverage_pct": round(dc, 4),
+        # null, not 0.0, when nothing was measured — see `measured` above.
+        "diagnostic_coverage_pct": (round(dc, 4) if measured else None),
         "per_site_covered": site_cov,
         "per_site_total": site_tot,
-        "per_site_dc_pct": round(compute_dc(site_cov, site_tot), 4),
+        "per_site_dc_pct": (round(compute_dc(site_cov, site_tot), 4)
+                            if measured else None),
         "baseline_valid": baseline_ok,
         "baseline_golden_count": results.golden_count if results else 0,
         "baseline_notes": results.baseline_notes if results else [],
@@ -1012,9 +1159,26 @@ def run(project: Path, args) -> Tuple[int, dict]:
     if ec not in (0,) or not _GOLDEN_RE.search(out):
         rep = build_report(spec, None, args.asil, floor, tool_log=log)
         rep["verdict"] = "FAIL"
-        rep["reason"] = (f"iverilog/vvp injection run failed (exit={ec}) or "
-                         f"produced no baseline — cannot measure DC")
+        # SAY WHICH OF THE TWO HAPPENED. The old text — "injection run failed
+        # (exit={ec}) or produced no baseline" — was emitted verbatim with
+        # `exit=0` in it, i.e. it reported a FAILED run for a tool that had
+        # exited zero. They are different faults and they point at different
+        # code: a non-zero rc is the simulator; rc 0 with no GOLDEN line is the
+        # generated testbench.
+        if ec != 0:
+            rep["reason"] = (
+                f"iverilog/vvp injection run FAILED (exit={ec}) — no result "
+                f"was produced, so diagnostic coverage is UNMEASURED (null), "
+                f"not 0 %")
+        else:
+            rep["reason"] = (
+                "iverilog/vvp injection ran and exited 0 but emitted NO golden "
+                "baseline line, so no fault result could be read — the "
+                "generated testbench, not the simulator. Diagnostic coverage "
+                "is UNMEASURED (null), not 0 %")
         rep["baseline_valid"] = False
+        rep["measured"] = False
+        rep["injection_exit_code"] = ec
         return 1, rep
 
     results = parse_injection_results(out)
@@ -1083,12 +1247,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         if reason:
             print(f"fmeda_fault_injection_coverage: {rep['verdict']} — {reason}")
         print(_vacuous_token_line(rep["verdict"]))
-    elif "diagnostic_coverage_pct" in rep:
+    elif rep.get("diagnostic_coverage_pct") is not None:
         print(f"fmeda_fault_injection_coverage: DC="
               f"{rep['diagnostic_coverage_pct']:.2f}% "
               f"({rep['detected_faults']}/{rep['injected_faults']}) "
               f"floor={rep['dc_floor_pct']} ASIL-{rep['asil']} "
               f"→ {rep['verdict']}")
+    elif rep.get("measured") is False and "mechanism" in rep:
+        # Applicable safety design, injection produced nothing. The number is
+        # UNMEASURED and must print as such — `DC=0.00% (0/0)` read as a
+        # measured coverage of zero on every downstream eye, human or machine.
+        print(f"fmeda_fault_injection_coverage: DC=UNMEASURED "
+              f"(0 faults injected) floor={rep['dc_floor_pct']} "
+              f"ASIL-{rep['asil']} → {rep['verdict']} — "
+              f"{rep.get('reason', '')}")
     else:
         # Applicable but UNMEASURABLE (e.g. the --rtl-dir input is absent or
         # holds no source). Never a vacuous pass: there is no DC to print and
