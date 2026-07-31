@@ -10415,6 +10415,47 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                     _tdf_not_run.unlink()
                 except OSError:
                     pass
+        except subprocess.TimeoutExpired as exc:
+            # vibe-ic#581 (extended to the AT-SPEED path) — A TIMEOUT IS A BUDGET
+            # OUTCOME, NOT A CAPABILITY GAP.
+            #
+            # #581 split the stuck-at dispatch's timeout out of its blanket
+            # `except Exception` (see the sibling handler above at
+            # "Fault ATPG exceeded its wall budget"), but the transition/at-speed
+            # dispatch here was left with only `except Exception`, so a wall-clock
+            # expiry still lands in `_TDF_CAP` and is recorded with
+            # `capability_flag: cap:at_speed_timing_graded_atpg` — a machine-
+            # readable assertion that the ENGINE cannot do at-speed TDF ATPG.
+            #
+            # MEASURED on opentitan_aes x sky130A (fault 0.9.4, vibeic/yosys `sat`):
+            # the LOC miter builds and the SAT solver returns real per-fault STR/STF
+            # verdicts (cal_run.log: "VIBEICTDF _42764__A2 STR", 617 620 cells
+            # imported to the SAT DB, model FOUND) — the engine ran fine. What blew
+            # was OUR wall clock: ~57 s of kissat per fault x --max-faults 400 on a
+            # 2922-flop flattened AES cannot finish in 1800 s. Nothing about the
+            # engine's capability is in question; the remedy is "raise the budget
+            # or lower --max-faults", which the capability flag actively hides.
+            #
+            # A crash/RuntimeError/FileNotFoundError IS a capability gap and keeps
+            # the flag on the `except Exception` arm below — this is a split, not a
+            # deletion. TimeoutExpired subclasses SubprocessError (not OSError), so
+            # handler ORDER is the fix: this arm must precede `except Exception`.
+            #
+            # The wall budget is still a size-independent constant; scaling it (the
+            # other half of #581) needs a measured cells-per-second and is
+            # deliberately NOT attempted here — an invented formula would replace a
+            # wrong constant with an unmeasured one.
+            _to = getattr(exc, "timeout", None)
+            _dft_disclose_skip(
+                _tdf_not_run,
+                f"transition-delay-fault ATPG exceeded its wall budget of {_to}s — "
+                f"the SAT engine was running, not unable. This is a BUDGET outcome, "
+                f"not a capability gap (vibe-ic#581).",
+                {"budget_exceeded": True,
+                 "wall_budget_s": _to,
+                 "skips_required_output":
+                     "reports/phase2/dft/transition_coverage.json",
+                 "not_run_stage": "producer_wall_budget_exceeded"})
         except Exception as exc:
             _dft_disclose_skip(
                 _tdf_not_run,
