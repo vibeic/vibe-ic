@@ -11207,29 +11207,204 @@ _RE_NUMERIC_WITH_UNIT = re.compile(
 )
 
 
-def _analog_spec_from_paragraph(paragraph: str) -> Optional[str]:
-    """Assemble an L5.analog_blocks spec string from the numeric+unit
-    tokens actually present in `paragraph`. Returns None when no
-    numeric evidence is found — caller must mark the block
-    low_confidence=True and emit `spec: null`.
+# ── R6-FIX-1 — a spec value must be ATTRIBUTED, not merely nearby ──────────
+#
+# WHAT WAS WRONG. The previous implementation took `matches[:6]` — the first six
+# numeric+unit tokens anywhere in the keyword's paragraph, in document order —
+# and joined them into a prose string. Nothing tied a number to the QUANTITY it
+# measures, so on a real input it emitted, measured verbatim:
+#
+#   block of type X   "<t1>, <t2>, <t3>, <t4>, <v1>, <v2>"
+#   block of type Y   "<t1>, <t2>, <t3>, <t4>, <v1>, <v2>"   <- BYTE-IDENTICAL
+#
+# Two blocks of DIFFERENT types matched a keyword in the same table row, so both
+# were handed the same six numbers — which were a debounce-time enumeration and
+# a protection-threshold REGISTER FIELD enumeration. Neither number is a property
+# of either block. Other blocks were given numbers that do not appear in their
+# own stored `evidence_paragraph` at all, so the entry could not even be audited
+# against its own provenance.
+#
+# WHY NOT "JUST MAKE IT STRUCTURED". `l5_analog_block_spec_actionable_check`
+# FAILs this shape because `analog_real_corner_sweep.l5_block_specs()` cannot
+# parse it. Type-casting the same six numbers into `specs[]` would clear the
+# gate and make things WORSE: A4 would then grade one block against another
+# quantity's over-voltage register threshold and stamp a real PASS/FAIL instead
+# of the current visible `PASS_INFORMATIONAL` fallback. That is a fabricated
+# measurement, which is worse than an unparseable one.
+#
+# THE FIX. Emit a spec value ONLY for a number the text ASSOCIATES with a named
+# quantity, and name it in the CONSUMER'S OWN vocabulary (imported, so there is
+# one copy of that vocabulary, not two that drift). A number with no adjacent
+# quantity label is not emitted at all — the block then carries `spec: null` +
+# `low_confidence: True`, which is this function's already-documented contract
+# and the honest description of the extraction. Nothing is fabricated and no
+# threshold is relaxed.
+#
+# chip-AGNOSTIC: unit algebra + adjacency + the consumer's vocabulary. No chip
+# class, no part number, no canned spec value.
 
-    v1.6.240 (#102): replaces the v1.6.66 hardcoded `DEFAULTS` map.
-    The map fabricated specs on keyword-only prose mentions, which
-    the field agent flagged on 3 of 8 benchmark ICs. chip-AGNOSTIC:
-    pure structural pattern matching on numeric+unit pairs; no
-    chip-class literal or canned spec string in detection.
-    """
+# Unit token (as matched by _RE_NUMERIC_WITH_UNIT) -> (dimension, SI scale).
+# The dimension is what makes an association FALSIFIABLE: a label naming a
+# voltage may only bind a volt-dimensioned number.
+_UNIT_DIMENSION_SCALE = {
+    "v": ("voltage", 1.0), "vpp": ("voltage", 1.0), "mv": ("voltage", 1e-3),
+    # `Vdd` is emitted by `_RE_NUMERIC_WITH_UNIT` as a unit spelling. Without a
+    # dimension entry the token is matched and then silently DROPPED, which is
+    # the same unattributed-and-unreported failure this function exists to end.
+    "vdd": ("voltage", 1.0),
+    "µv": ("voltage", 1e-6), "uv": ("voltage", 1e-6), "kv": ("voltage", 1e3),
+    "a": ("current", 1.0), "ma": ("current", 1e-3),
+    "µa": ("current", 1e-6), "ua": ("current", 1e-6), "na": ("current", 1e-9),
+    "hz": ("frequency", 1.0), "khz": ("frequency", 1e3),
+    "mhz": ("frequency", 1e6), "ghz": ("frequency", 1e9),
+    "s": ("time", 1.0), "ms": ("time", 1e-3),
+    "µs": ("time", 1e-6), "us": ("time", 1e-6), "ns": ("time", 1e-9),
+    "ω": ("resistance", 1.0), "ohm": ("resistance", 1.0),
+    "kω": ("resistance", 1e3), "mω": ("resistance", 1e6),
+    "pf": ("capacitance", 1e-12), "nf": ("capacitance", 1e-9),
+    "µf": ("capacitance", 1e-6), "uf": ("capacitance", 1e-6),
+    "°c": ("temperature", 1.0),
+    "db": ("ratio_db", 1.0), "dbc": ("ratio_db", 1.0), "dbfs": ("ratio_db", 1.0),
+    "%": ("percent", 1.0), "ppm": ("ppm", 1.0), "ppm/°c": ("ppm_per_c", 1.0),
+}
+
+# Canonical consumer key -> the dimension it must be measured in. A label/number
+# pair whose dimensions disagree is REJECTED rather than coerced.
+_KEY_DIMENSION = {
+    "vout": "voltage", "vin": "voltage", "dropout": "voltage",
+    "iout": "current", "iq": "current",
+    "reff": "resistance",
+    "psrr": "ratio_db",
+}
+
+# Characters a quantity LABEL may be built from. Deliberately excludes digits
+# and every separator (`:` `,` `;` `|` `.` newline), so a label is only accepted
+# when it is IMMEDIATELY adjacent to the number with nothing but label text in
+# between. This adjacency requirement is what rejects
+# `over-voltage threshold 00: <v>V` — the `00:` between the words and the number
+# breaks the run, so that value is correctly left unattributed.
+_LABEL_CHARS = re.compile(r"[A-Za-z_\-()/\s]+")
+_LABEL_WORD = re.compile(r"[A-Za-z][A-Za-z_]*")
+_MAX_LABEL_WORDS = 3
+
+
+def _label_candidates(text: str, before: bool) -> List[str]:
+    """Label phrases immediately adjacent to a number, longest first.
+
+    `before=True` -> suffixes of the run that ENDS at the number.
+    `before=False` -> prefixes of the run that STARTS at the number."""
+    m = (_LABEL_CHARS.search(text[::-1]) if before else _LABEL_CHARS.match(text))
+    if not m or m.start() != 0:
+        return []
+    run = m.group(0)[::-1] if before else m.group(0)
+    words = _LABEL_WORD.findall(run)
+    if not words:
+        return []
+    out = []
+    for n in range(min(_MAX_LABEL_WORDS, len(words)), 0, -1):
+        grp = words[-n:] if before else words[:n]
+        out.append("".join(grp))
+    return out
+
+
+def _analog_spec_associations(paragraph: str,
+                             block_type: Optional[str] = None,
+                             max_specs: int = 6) -> List[Dict[str, Any]]:
+    """Numeric+unit tokens the paragraph ATTRIBUTES to a named quantity.
+
+    Returns [] when nothing is attributable — an unattributed number is NEVER
+    emitted. chip-AGNOSTIC."""
     if not paragraph:
+        return []
+    try:
+        from analog_real_corner_sweep import normalize_spec_label
+    except Exception:
+        # Consumer vocabulary unavailable: we cannot name anything in the form
+        # the consumer reads, so we attribute NOTHING rather than guess. The
+        # caller marks the block low_confidence — honest degradation.
+        return []
+
+    out: List[Dict[str, Any]] = []
+    seen_keys = set()
+    for m in _RE_NUMERIC_WITH_UNIT.finditer(paragraph):
+        unit_raw = m.group("unit")
+        dim_scale = _UNIT_DIMENSION_SCALE.get(unit_raw.strip().lower())
+        if dim_scale is None:
+            continue
+        dimension, scale = dim_scale
+        try:
+            value_si = float(m.group("num")) * scale
+        except (TypeError, ValueError):
+            continue
+        # after-label first ("<v>V regulator voltage"), then before ("Reff <r>").
+        hit = None
+        for before in (False, True):
+            side = (paragraph[:m.start()] if before
+                    else paragraph[m.end():])
+            for cand in _label_candidates(side, before):
+                key = normalize_spec_label(cand, block_type)
+                if not key or key in seen_keys:
+                    continue
+                # Dimensional falsifiability: a voltage label may not bind a
+                # frequency. An unknown key carries no dimension claim, so it
+                # is admitted on the label alone.
+                want = _KEY_DIMENSION.get(key)
+                if want is not None and want != dimension:
+                    continue
+                hit = (key, cand, before)
+                break
+            if hit:
+                break
+        if hit is None:
+            continue
+        key, cand, before = hit
+        seen_keys.add(key)
+        lo = max(0, m.start() - 60)
+        out.append({
+            "name": key,
+            "target": value_si,
+            "unit": {"voltage": "V", "current": "A",
+                     "resistance": "ohm", "ratio_db": "dB"}.get(
+                         dimension, unit_raw),
+            "label": cand,
+            "raw": f"{m.group('num')} {unit_raw}",
+            "evidence_text": paragraph[lo:m.end() + 60].strip(),
+            "attribution": ("label_before_value" if before
+                            else "label_after_value"),
+        })
+        if len(out) >= max_specs:
+            break
+    return out
+
+
+def _analog_spec_from_paragraph(
+        paragraph: str,
+        block_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Assemble a STRUCTURED L5.analog_blocks spec from the numeric+unit tokens
+    the paragraph ATTRIBUTES to a named quantity. Returns None when nothing is
+    attributable — caller must mark the block low_confidence=True and emit
+    `spec: null`.
+
+    Shape matches the already-sanctioned structured payload that
+    `_v455_attach_block_specs` writes (`{"specs": [...]}`), which is the shape
+    `analog_real_corner_sweep.l5_block_specs()` reads and which the v466
+    spurious-block guard already treats as real block-layer evidence — its own
+    comment states a paragraph-harvested STRING spec "is NOT block-layer
+    evidence (it is just numbers near a prose mention)".
+
+    v1.6.240 (#102) replaced a hardcoded DEFAULTS map that fabricated specs on
+    keyword-only prose mentions; R6-FIX-1 closes the weaker form of the same
+    defect that replacement left behind — attributing numbers to a block merely
+    because they share a paragraph with its keyword. chip-AGNOSTIC.
+    """
+    specs = _analog_spec_associations(paragraph, block_type)
+    if not specs:
         return None
-    matches = list(_RE_NUMERIC_WITH_UNIT.finditer(paragraph))
-    if not matches:
-        return None
-    # Cap to first 6 numeric+unit pairs; longer assemblies become
-    # noisy. Preserve token order from source paragraph.
-    tokens = []
-    for m in matches[:6]:
-        tokens.append(f"{m.group('num')} {m.group('unit')}")
-    return ", ".join(tokens)
+    return {
+        "specs": specs,
+        "spec_extraction": "paragraph_attributed_r6",
+        "summary": ", ".join(f"{s['raw']} ({s['name']})" for s in specs),
+    }
 
 
 # v1.6.402 — for #292 P3: parse quantifier preceding analog block
@@ -33041,7 +33216,11 @@ def gen_l5_adi_spec(project: Path,
             if p_end < 0:
                 p_end = len(text)
             paragraph = text[p_start:p_end]
-            spec_str = _analog_spec_from_paragraph(paragraph)
+            # R6-FIX-1: `spec` is now the STRUCTURED payload (or None), and it
+            # is scoped to the block TYPE so the consumer's per-type symbol
+            # vocabulary applies. `cls` is the detected block class, which is
+            # what the entry's own `type` field is set to two lines below.
+            spec_str = _analog_spec_from_paragraph(paragraph, cls)
             entry: Dict[str, Any] = {
                 # v1.6.66 — closes issue #7 Bug Y. The previous
                 # `cls + "_default"` literal self-declared every
@@ -33054,6 +33233,15 @@ def gen_l5_adi_spec(project: Path,
                 "low_confidence": (spec_str is None),
                 "evidence": f"input/docs/{fname} ({m.group(0)})",
                 "evidence_paragraph": paragraph.strip()[:240],
+                # R6-FIX-1 (provenance): the 240-char cut can drop the very
+                # text a spec value came from, which is how two blocks shipped
+                # numbers that appear nowhere in their own stored evidence.
+                # Disclose the cut instead of leaving the reader to infer that
+                # the stored paragraph is the whole basis. Each attributed spec
+                # additionally carries its OWN `evidence_text` window, so a
+                # value is auditable even when this field is truncated.
+                "evidence_paragraph_truncated":
+                    len(paragraph.strip()) > 240,
                 # ORGANIC #466 R2 — private bookkeeping for the
                 # emitter-side spurious-block guard. Stripped before
                 # serialisation by `_v466_strip_internal_fields`.
