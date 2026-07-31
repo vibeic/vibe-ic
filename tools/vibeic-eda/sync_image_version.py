@@ -287,6 +287,61 @@ def newest_published_tag(repo: str = GHCR_REPO):
     return max(tags, key=_semver_key), src
 
 
+def check_anchor_no_regress(root: Path, vf: Path, version: str) -> int:
+    """The anchor must never move BACKWARDS from what this repo already shipped.
+
+    vibe-ic#566 relaxed "behind the newest published tag" from FAIL to WARNING,
+    because that comparison is against a value another repository mutates while
+    this repo's landing gate runs. This check is what keeps that relaxation
+    honest, and it compares against something the OTHER REPO CANNOT MOVE: the
+    anchor recorded in this repo's own committed history.
+
+    Being one release behind is a currency question (WARNING). Rolling the
+    anchor from 0.2.51 back to 0.2.40 is a REGRESSION, and it reintroduces
+    exactly the state vibe-ic#215 was opened for — every pointer internally
+    consistent and consistently pointing at the wrong image. Without this, the
+    #566 relaxation would have opened that door from the other side.
+
+    Compares against `git show HEAD:<VERSION path>`, not against the registry:
+    the committed value is a fact about this repository, so the check has a
+    fixed point and cannot flap. rc 2 (NOT CHECKED) when git cannot answer — an
+    unavailable baseline is not a pass.
+    """
+    if vf is None:
+        print("[NOT CHECKED] no-regress: no VERSION file located")
+        return 2
+    try:
+        rel = str(vf.relative_to(root))
+    except ValueError:
+        print(f"[NOT CHECKED] no-regress: {vf} is outside {root}")
+        return 2
+    try:
+        prev = subprocess.run(
+            ["git", "-C", str(root), "show", f"HEAD:{rel}"],
+            capture_output=True, text=True, timeout=30)
+    except Exception as e:                                   # noqa: BLE001
+        print(f"[NOT CHECKED] no-regress: git unavailable ({e.__class__.__name__})")
+        return 2
+    if prev.returncode != 0:
+        # New file, or not a git tree. Nothing to regress FROM.
+        print("  anchor-no-regress        : OK (no committed baseline yet)")
+        return 0
+    base = prev.stdout.strip()
+    if not SEMVER_RE.match(base):
+        print(f"[NOT CHECKED] no-regress: committed baseline {base!r} is not X.Y.Z")
+        return 2
+    if _semver_key(version) < _semver_key(base):
+        print(f"[FAIL] ANCHOR REGRESSED: VERSION={version} is BELOW the committed "
+              f"{base}.")
+        print(f"       Moving the anchor backwards makes every pointer "
+              f"consistently wrong (vibe-ic#215) — the state the anchor-vs-"
+              f"reality check exists to prevent, reached from the other side.")
+        print(f"       Fix: --set {base} or newer, or explain the rollback.")
+        return 1
+    print(f"  anchor-no-regress        : OK ({version} >= committed {base})")
+    return 0
+
+
 def check_anchor_vs_reality(version: str, require_remote: bool = False) -> int:
     """Verify the VERSION anchor names a tag that EXISTS on the registry and
     is not STALE relative to the newest published one. Prints one status
@@ -311,13 +366,48 @@ def check_anchor_vs_reality(version: str, require_remote: bool = False) -> int:
               f"consistency only; set {PUBLISHED_TAG_ENV}=X.Y.Z or enable network")
         return 0
     pub = max(tags, key=_semver_key)
-    if _semver_key(version) < _semver_key(pub):
+    if _semver_key(version) < _semver_key(pub) and version not in tags:
         print(f"[FAIL] STALE ANCHOR: VERSION={version} is OLDER than the newest "
               f"published image tag {pub} (source={src}).")
         print(f"       Internal consistency is not correctness — every pointer "
               f"equal to VERSION is *consistently wrong*.")
         print(f"       Fix: python3 {Path(__file__).name} --set {pub}")
         return 1
+    if _semver_key(version) < _semver_key(pub):
+        # BEHIND, but the anchor still RESOLVES — vibe-ic#566.
+        #
+        # This was a FAIL, and it made this repo's ~35-minute landing gate
+        # depend on a value ANOTHER repository mutates on a cadence this one
+        # does not control and cannot see coming. Measured on the 2026-07-31
+        # landing: vibeic-eda published 0.2.47 -> .48 -> .49 -> .50 -> .51 at
+        # 60-140 minute intervals, so four consecutive gate runs were
+        # invalidated mid-flight and the tip commit was amended four times, for
+        # a batch of eight commits that touch no image pin at all. Fixing the
+        # anchor rewrites the tip, which voids the gate stamp, which restarts
+        # the 35 minutes — against a target that moves every ~2 hours. That
+        # race has no fixed point, and while it ran, NOBODY could land here.
+        #
+        # KEPT, because #215 and #354 are both still true:
+        #   * an anchor the registry cannot resolve is a FAIL — the branch
+        #     above (older AND absent) and UNRESOLVABLE PIN below. 0.2.29 stayed
+        #     pinned in 13 places for six versions while every clean-room
+        #     install failed; that must never pass again.
+        #   * an anchor rolled BACKWARDS below what this repo already shipped is
+        #     a FAIL (`--check-no-regress`), so the "consistently wrong" state
+        #     #215 found cannot be reintroduced from the other direction.
+        #
+        # CHANGED: being behind a tag that was published WHILE THE GATE RAN is a
+        # WARNING. Every pointer still names an image that exists and pulls,
+        # which is the property a consumer actually needs. Whether we have
+        # adopted the newest release is a currency question, and answering it
+        # inside a landing gate meant answering it against a moving target.
+        print(f"  anchor-vs-reality        : BEHIND (VERSION={version}, newest "
+              f"published {pub}; source={src}) — resolvable, not stale-broken")
+        print(f"       WARNING: a newer image exists. Not a landing blocker "
+              f"(vibe-ic#566) — {version} resolves on the registry, so every "
+              f"pointer directs a clean-room install at a real image.")
+        print(f"       To adopt it: python3 {Path(__file__).name} --set {pub}")
+        return 0
     if version not in tags:
         print(f"[FAIL] UNRESOLVABLE PIN: VERSION={version} does not exist on the "
               f"registry (newest published: {pub}; source={src}).")
@@ -383,7 +473,7 @@ def ghcr_hits(root: Path, ignore):
 
 
 def do_check(root: Path, version: str, ignore,
-             require_remote: bool = False) -> int:
+             require_remote: bool = False, vf: Path | None = None) -> int:
     strict = install_doc_refs(root)
     net = ghcr_hits(root, ignore)
     install_set = set(INSTALL_DOC_CANDIDATES)
@@ -399,6 +489,15 @@ def do_check(root: Path, version: str, ignore,
     # relative to the newest published image tag, or the whole tree is consistently
     # wrong. This is a SEPARATE failure axis from pointer drift; either fails --check.
     anchor_rc = check_anchor_vs_reality(version, require_remote)
+    # vibe-ic#566 — the guard that keeps the relaxation above honest. Being
+    # BEHIND the newest published tag is a WARNING (another repo moves that
+    # value while this gate runs); moving BELOW what this repo already
+    # committed is a FAIL, because that is #215's "consistently wrong" state
+    # reached from the other direction. Compares against git, which the other
+    # repo cannot move, so it has a fixed point.
+    regress_rc = check_anchor_no_regress(root, vf, version)
+    if regress_rc == 1:
+        anchor_rc = 1
     # vibe-ic#423 — a THIRD failure axis. The two above compare our pointers
     # against the anchor and the anchor against the registry; both passed
     # while `:latest` sat on 0.2.28 and 0.2.30 was current. Nobody was
@@ -451,7 +550,7 @@ def do_set(root: Path, vf: Path, new: str, ignore, dry: bool) -> int:
     if dry:
         return 0
     print("--- re-checking ---")
-    return do_check(root, new, ignore)
+    return do_check(root, new, ignore, vf=vf)
 
 
 def main(argv=None) -> int:
@@ -483,7 +582,7 @@ def main(argv=None) -> int:
         return do_set(root, vf, args.set, ignore, args.dry_run)
     if args.bump:
         return do_set(root, vf, next_version(version, args.bump), ignore, args.dry_run)
-    return do_check(root, version, ignore, args.require_remote)
+    return do_check(root, version, ignore, args.require_remote, vf)
 
 
 if __name__ == "__main__":
