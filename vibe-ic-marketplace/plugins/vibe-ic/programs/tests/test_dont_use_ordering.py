@@ -35,8 +35,32 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import phase3_one_shot_runner as P                            # noqa: E402
 
 
+#: The marker substituted for the exclusion block, so its position is found by
+#: identity rather than by matching a command the emitted TCL also contains.
+_MARKER = "SET_DONT_USE_MARKER"
+
+#: A complete argument set for the builder. Every block-valued parameter is
+#: empty: the ordering asserted here is a property of the TEMPLATE, and a
+#: fixture that filled them would be asserting the fixture's own layout.
+_KW = dict(
+    tech_lef_c="/t.lef", cell_lef_c="/c.lef", macro_lefs_tcl="",
+    liberty_c="/l.lib", macro_libs_tcl="", netlist_c="/n.v", top="foo",
+    sdc_c="/s.sdc", dont_use_block=_MARKER + "\n", metal_prefix="met",
+    die_w=100, die_h=100, core_pad=10, core_w=80, core_h=80, site="unit",
+    out_dir_c="/out", tapcell_block="", pdn_block="", util=0.45,
+    spare_protection_tcl="", spare_postfix_tcl="", clk_buf="", clk_buf_root="",
+    routing_constraint_tcl="", pg_cleanup_block="", spef_repair_block="",
+    antenna_repair_block="", filler_block="", spef_repair_estimate_block="",
+)
+
+#: The steps that can insert a cell. `set_dont_use` governs the optimizer's
+#: future pool, so each must run AFTER the exclusion is in force.
+_INSERTERS = ("clock_tree_synthesis", "repair_design", "repair_timing",
+              "global_route", "detailed_route", "detailed_placement")
+
+
 def _pnr_template() -> str:
-    """The PnR TCL template as the runner writes it, with the block in place.
+    """The TCL the runner actually emits, comments stripped.
 
     COMMENTS STRIPPED. Every one of the six step names appears in the prose
     around this block — `# … governs global_route / detailed_route / the
@@ -47,15 +71,32 @@ def _pnr_template() -> str:
 
     A check that cannot tell documentation from code has to be weakened the
     first time someone documents something, and then it means nothing.
+
+    v1.9.0 — this used to read a 4000-character WINDOW of the source file
+    around the `{dont_use_block}` placeholder. That proxy was wrong in BOTH
+    directions and the two errors hid each other:
+
+      false FAIL   the window reaches back above `return f\"\"\"` into the
+                   Python that BUILDS the template, where a line such as
+                   `_repair_design_margin_tcl("repair_design_pl")` is a
+                   builder call, not an emitted step. The suite went red on
+                   it with the emitted order entirely correct.
+      false PASS   `repair_design` is not in the f-string at all — it is
+                   injected through `{_rd_margin_placement}`. Anchoring the
+                   window to the template instead would have made that name
+                   absent, and `find(...) == -1` is what this test calls a
+                   pass. The strictest-looking of the six assertions would
+                   have been the emptiest.
+
+    So the template is now BUILT, not scanned, and `_INSERTERS` is asserted
+    present as well as late — an ordering test whose subject is missing
+    proves nothing about ordering.
     """
-    src = pathlib.Path(P.__file__).read_text()
-    i = src.index("{dont_use_block}")
-    win = src[max(0, i - 4000):i + 20000]
+    tcl = P._build_pnr_tcl_text(**_KW)
     kept = []
-    for ln in win.splitlines():
+    for ln in tcl.splitlines():
         s = ln.lstrip()
-        # Python comments and TCL comments alike: the emitted template carries
-        # `#` comment lines of its own, and those are not executed either.
+        # TCL comment lines are not executed and must not be read as steps.
         kept.append("" if s.startswith("#") else ln)
     return "\n".join(kept)
 
@@ -68,9 +109,8 @@ def test_the_exclusion_precedes_every_step_that_can_insert_a_cell():
     and a test reading prose would not notice.
     """
     t = _pnr_template()
-    here = t.index("{dont_use_block}")
-    for later in ("clock_tree_synthesis", "repair_design", "repair_timing",
-                  "global_route", "detailed_route", "detailed_placement"):
+    here = t.index(_MARKER)
+    for later in _INSERTERS:
         pos = t.find(later, 0, here)
         assert pos == -1, (
             f"`{later}` appears BEFORE the cell exclusion. set_dont_use only "
@@ -79,10 +119,28 @@ def test_the_exclusion_precedes_every_step_that_can_insert_a_cell():
             f"it (vibe-ic#551: 61 probe cells, DRT-0085, route never finishes)")
 
 
+def test_every_step_this_orders_is_actually_in_the_emitted_tcl():
+    """The positive control for the assertion above.
+
+    `find(step, 0, here) == -1` is satisfied by a step that never appears, so
+    without this the ordering test grades an emitter that emits nothing. It is
+    not hypothetical: `repair_design` reaches the TCL only through
+    `{_rd_margin_placement}`, so it IS absent from the raw f-string, and the
+    earlier source-scanning version of this file would have passed vacuously
+    on it the moment its window was tightened.
+    """
+    t = _pnr_template()
+    here = t.index(_MARKER)
+    for step in _INSERTERS:
+        assert t.find(step, here) != -1, (
+            f"`{step}` is not in the emitted TCL at all, so ordering it "
+            f"against the exclusion asserts nothing")
+
+
 def test_the_exclusion_follows_link_design():
     """Before `link_design` there is no library for `set_dont_use` to act on."""
     t = _pnr_template()
-    assert t.index("link_design") < t.index("{dont_use_block}")
+    assert t.index("link_design") < t.index(_MARKER)
 
 
 def test_the_exclusion_reaches_the_template_at_all():
