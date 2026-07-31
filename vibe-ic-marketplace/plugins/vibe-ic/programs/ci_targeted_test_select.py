@@ -212,12 +212,45 @@ import subprocess
 import sys
 from pathlib import Path
 
+#: `spec_from_file_location("<stem>", <path>)` — an EXPLICIT loader edge.
+#: Matched on the module NAME argument, which is the stem the test binds,
+#: rather than on the path, because the path is often built from `Path`
+#: arithmetic that a regex cannot follow.
+_LOADER_NAME_RE = re.compile(
+    r"spec_from_file_location\(\s*[\"\']([A-Za-z_]\w*)[\"\']")
+
 # Selection modes. `ownership` is the DEFAULT and the shipped behaviour; the
 # other two are opt-in and measured in the module docstring (vibe-ic#452).
 MODE_OWNERSHIP = "ownership"
 MODE_REFERENCE = "reference"
 MODE_REFERENCE_CAPPED = "reference-capped"
-MODES = (MODE_OWNERSHIP, MODE_REFERENCE, MODE_REFERENCE_CAPPED)
+#: vibe-ic#565 — select by the DEPENDENCY a test states, not by its filename and
+#: not by a lexical mention.
+#:
+#: `2a632bcfe` changed 734 lines of `phase3_one_shot_runner.py` and removed all
+#: 11 lines of the IHP OpenRCX captable discovery landed hours earlier. The four
+#: tests that pin it are in `test_spm_ihp_openrcx_captable_layout.py`, which
+#: `import phase3_one_shot_runner` directly. `ownership` keys on the test
+#: FILENAME, so it selected none of them; the revert survived three releases.
+#:
+#: MEASURED on that exact commit, driving the real selector:
+#:
+#:     ownership          16 files    misses the IHP test
+#:     reference-capped   16 files    misses it too — the cap ZEROES a stem
+#:                                    named by more than `ref_max_tests`, and
+#:                                    `phase3_one_shot_runner` is named by 198,
+#:                                    so the cheap middle option gives no
+#:                                    protection for the largest module in the
+#:                                    tree, which is where the risk is
+#:     reference         251 files    catches it, on a LEXICAL mention
+#:     import-edge       155 files    catches it, on a STATED dependency
+#:
+#: Cheaper than `reference` AND more precise: every file it selects has an
+#: import or an explicit loader pointing at the changed module, rather than a
+#: name that happens to appear in it.
+MODE_IMPORT_EDGE = "import-edge"
+MODES = (MODE_OWNERSHIP, MODE_REFERENCE, MODE_REFERENCE_CAPPED,
+         MODE_IMPORT_EDGE)
 
 # `reference-capped` default: a source stem NAMED BY more than this many test
 # files contributes nothing through the reference rule (its own owned tests
@@ -356,6 +389,52 @@ def _build_test_index(plugin_root: Path, source_stems: set[str]) -> dict[str, se
 
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _build_import_edge_index(
+    plugin_root: Path, source_stems: set[str],
+) -> dict[str, set[str]]:
+    """Map each source stem -> plugin-rel test paths that DEPEND ON it.
+
+    vibe-ic#565. Two edge kinds, because this tree uses both and either alone
+    is a hole:
+
+      import       `import phase3_one_shot_runner`, `from x import y` — parsed
+                   with `ast` via the same `_imported_module_names` rule 4 uses,
+                   so the two selectors cannot drift.
+      explicit     `spec_from_file_location("<stem>", ...)`. MEASURED over 2081
+      loader       test files: 1866 import edges, 86 loader edges, and 77 test
+                   files carry a loader edge with NO import of the same name.
+                   An `ast`-only scan misses those 77 entirely — which is the
+                   shape this mode exists to stop, one level down.
+
+    Fail-open, matching rule 4: a file that cannot be read or parsed contributes
+    no edges rather than aborting the selection. A selector that dies on one bad
+    file selects nothing, and selecting nothing is the defect.
+    """
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return {}
+
+    idx: dict[str, set[str]] = {}
+    for tp in sorted(tests_dir.rglob("test_*.py")):
+        try:
+            text = tp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = tp.relative_to(plugin_root).as_posix()
+
+        names: set[str] = set()
+        imported = _imported_module_names(text, _own_package(rel))
+        if imported:
+            names |= {n for n in imported if n in source_stems}
+        for m in _LOADER_NAME_RE.finditer(text):
+            if m.group(1) in source_stems:
+                names.add(m.group(1))
+
+        for n in names:
+            idx.setdefault(n, set()).add(rel)
+    return idx
 
 
 def _build_reference_index(
@@ -631,8 +710,13 @@ def select_tests(
     source_stems = _source_stems(plugin_root)
     index = _build_test_index(plugin_root, source_stems)
     ref_index: dict[str, set[str]] = {}
-    if mode != MODE_OWNERSHIP:
+    if mode in (MODE_REFERENCE, MODE_REFERENCE_CAPPED):
         ref_index = _build_reference_index(plugin_root, source_stems)
+    # vibe-ic#565 — built ONLY for import-edge mode, and only when something was
+    # actually changed, so the default lane pays nothing for it.
+    edge_index: dict[str, set[str]] = {}
+    if mode == MODE_IMPORT_EDGE:
+        edge_index = _build_import_edge_index(plugin_root, source_stems)
 
     selected: set[str] = set(_smoke_set(plugin_root))
     changed_helpers: list[str] = []
@@ -655,10 +739,22 @@ def select_tests(
         if rp.parent.as_posix() in _SOURCE_DIRS and not rp.name.startswith("test_"):
             selected |= index.get(rp.stem, set())
             # (4, opt-in) every test file that NAMES the changed module.
-            if mode != MODE_OWNERSHIP:
+            if mode in (MODE_REFERENCE, MODE_REFERENCE_CAPPED):
                 refs = ref_index.get(rp.stem, set())
                 if mode == MODE_REFERENCE or len(refs) <= ref_max_tests:
                     selected |= refs
+            # (5, opt-in) every test file that DEPENDS ON the changed module —
+            # an import, or an explicit `spec_from_file_location` loader.
+            #
+            # vibe-ic#565. NOT capped, deliberately: the cap is what makes
+            # `reference-capped` useless for this defect, because it zeroes
+            # exactly the large, frequently-changed modules where a silent
+            # revert is most likely (`phase3_one_shot_runner` is named by 198
+            # test files, well over the 50 default). A STATED dependency is not
+            # noise that needs bounding — every file selected here carries an
+            # edge pointing at the module that changed.
+            elif mode == MODE_IMPORT_EDGE:
+                selected |= edge_index.get(rp.stem, set())
 
     # (4) Built LAZILY — only when a shared test-helper module actually changed,
     # so the common case never reads the tree.
