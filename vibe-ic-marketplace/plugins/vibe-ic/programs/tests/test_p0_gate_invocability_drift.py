@@ -90,7 +90,11 @@ def test_a_new_un_invocable_gate_fails(monkeypatch, capsys):
 def test_fixing_a_gate_does_not_fail(monkeypatch, capsys):
     """Subset, not equality: shrinking the set is the goal, so it must not be an
     error. Equality would make every fix a red build and the check would be
-    deleted rather than obeyed."""
+    deleted rather than obeyed. The remaining gate `a` is LICENSED here so this
+    exercises the KNOWN-subset ratchet in isolation, not the #559 round-6
+    undecided-silence ratchet (which has its own test below)."""
+    import flow_compliance_check as F
+    monkeypatch.setattr(F, "_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA", {"a": {}})
     monkeypatch.setattr(D, "KNOWN_NOT_INVOCABLE", ("a", "b"))
     monkeypatch.setattr(D, "measure", _fake_measure({"a"}))
     assert D.main([]) == D.RC_OK
@@ -195,18 +199,31 @@ def test_an_absent_record_is_not_a_licence(monkeypatch):
     assert res["undecided_silence"] == ["a", "b"]
 
 
-def test_the_licence_split_does_not_change_the_verdict(monkeypatch, capsys):
-    """Reported, never failed on. The licensed count is legitimately non-zero and
-    failing on it would make measured decisions look like debt; the subset
-    predicate is what decides rc."""
+def test_undecided_silence_is_now_a_hard_error(monkeypatch, capsys):
+    """vibe-ic#559 (round 6) — THE INVARIANT REVERSAL, made explicit.
+
+    Before round 6 an un-invocable gate with no recorded decision was REPORTED
+    and never failed on: the undecided count was legitimately non-zero because
+    the last 12 had not yet been measured, and failing on it would have made
+    unavoidable debt read as a red build. Round 6 measured and recorded all 12
+    (`_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA`), so the real undecided count reaches
+    0 — and a check that CAN reach 0 must fail when it does not, or it is the
+    exact 'silence reads as benign' defect the whole file exists to kill.
+
+    Here `a` and `b` reject the argv and are in NO licensed table, so they are
+    undecided and the gate now FAILs on them. This is the negative control for
+    the round-6 ratchet."""
     import flow_compliance_check as F
     monkeypatch.setattr(F, "P0_RTL_DIR_GROUP_MEASUREMENT", {})
     monkeypatch.setattr(F, "_ZERO_DENOMINATOR_CLASSIFICATION", {})
     monkeypatch.setattr(F, "_STRUCTURAL_GATE_ARGV_ADAPTERS", {})
+    monkeypatch.setattr(F, "_SEMANTIC_ARGV_UNDRIVABLE", {})
+    monkeypatch.setattr(F, "_NOT_A_PROJECT_GATE", {})
+    monkeypatch.setattr(F, "_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA", {})
     monkeypatch.setattr(D, "KNOWN_NOT_INVOCABLE", ("a", "b"))
     monkeypatch.setattr(D, "measure", _fake_measure({"a", "b"}))
-    assert D.main([]) == D.RC_OK          # all undecided, still rc 0
-    assert "2 carry no decision anywhere" in capsys.readouterr().err
+    assert D.main([]) == D.RC_DRIFT       # undecided -> HARD ERROR
+    assert "NO recorded decision" in capsys.readouterr().err
 
 
 def test_a_gate_needing_only_paths_is_a_wiring_gap():
