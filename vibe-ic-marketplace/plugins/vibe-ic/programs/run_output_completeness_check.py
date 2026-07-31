@@ -72,6 +72,43 @@ exactly one state, each with the evidence it judged on:
                                     the verdict the deliverable reports is
                                     backed by nothing. FAIL (rc 1).
 
+  DELIVERABLE_SELF_DECLARED_INTERIM
+                                  — the deliverable READS as complete, but SAYS
+                                    OF ITSELF that it is not final: it carries an
+                                    INTERIM/PROVISIONAL banner, or its headline
+                                    verdict/score slot holds a placeholder
+                                    (``PENDING``) instead of a measurement. The
+                                    document is the authority on its own status
+                                    and it states it is unfinished. FAIL (rc 1),
+                                    or RUN_STILL_IN_PROGRESS (rc 3) when a runner
+                                    is genuinely still live.
+
+                                    Added 2026-08-01 from a MEASURED escape
+                                    (sha256 × sky130A, round E). The runner was
+                                    killed 9 minutes in by a 10-minute harness
+                                    timeout (``Exit code 143``); Phase 3 never
+                                    started and the LEC produced no verdict. The
+                                    agent had honestly written a RESULT.md
+                                    stamped ``⚠️ INTERIM`` with four ``PENDING``
+                                    numbers and a promise to fill them "from the
+                                    run's own artefacts when it finishes". THIS
+                                    gate — the one the operating brief names as
+                                    the final act, "only exit 0 / COMPLETE
+                                    counts" — returned:
+
+                                        [PASS] COMPLETE — deliverable RESULT.md
+                                        present (14023 B, 148 content lines)
+
+                                    rc 0. Because ``_is_all_placeholder``
+                                    requires EVERY content line to be a
+                                    placeholder, a 14 kB report with 4 unfilled
+                                    numbers is nowhere near it, and the verdict
+                                    reduced to "RESULT.md is >= 400 B". The gate
+                                    written to catch the launch-and-idle abandon
+                                    bug (see ROOT CAUSE above) was cleared by the
+                                    abandoned run's own interim file. Length is
+                                    not doneness.
+
   DELIVERABLE_CONTRADICTS_ORCHESTRATOR
                                   — the deliverable READS as complete, but its
                                     own HEADLINE VERDICT claims a PASS while the
@@ -164,6 +201,45 @@ _PLACEHOLDER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── Self-declared-INTERIM detection (the "length is not doneness" rule) ──────
+# TWO independent, deliberately NARROW signals. Each was calibrated against the
+# whole published RESULT.md corpus in this repo (see
+# test_selfdeclared_interim_corpus_sweep) and fires on ZERO of them.
+#
+# S1 — the DOCUMENT declares itself provisional. Recognised only when the token
+#      is ALL-CAPS *and* either emphasised (`**INTERIM**`) or opening a
+#      blockquote/callout line (`> ⚠️ INTERIM …`). Caps+emphasis is a deliberate
+#      self-declaration; lowercase "a draft of the spec" in prose is not, and
+#      does not match. Fenced code blocks are excluded — a report that QUOTES a
+#      tool banner is not declaring itself interim.
+_INTERIM_WORDS = ("INTERIM", "PROVISIONAL", "PRELIMINARY", "DRAFT", "WIP")
+_INTERIM_EMPH_RE = re.compile(
+    r"(?:\*\*|__)\s*(" + "|".join(_INTERIM_WORDS) + r")\b")
+_INTERIM_CALLOUT_RE = re.compile(
+    r"^\s{0,3}>[\s>]*[^\w\s]{0,4}\s*(" + "|".join(_INTERIM_WORDS) + r")\b")
+
+# S2 — the deliverable's HEADLINE verdict/score slot holds a PLACEHOLDER rather
+#      than a measurement, i.e. the document reached for a verdict and wrote
+#      "PENDING". Distinct from `deliverable_verdict_consistency_check`, which
+#      compares a STATED verdict against the orchestrator and returns
+#      NOT_APPLICABLE when none is stated: this asks whether the slot was filled
+#      at all. Deliberately NOT "any PENDING anywhere" — a FINAL report may
+#      legitimately mark an unreachable sub-row (the corpus has one that marks
+#      two of six pillars PENDING beside a fully-written headline and an
+#      explicit "no tapeout claim"); that is honest reporting, not an unfinished
+#      document, and it must not fail.
+_UNFILLED_TOKEN_RE = re.compile(
+    r"^(PENDING|TBD|TO_BE_FILLED|TO_BE_DETERMINED|TO_BE_WRITTEN|UNMEASURED|"
+    r"UNFILLED|TODO|FIXME|XXX|PLACEHOLDER|\?{1,})$")
+_HEADLINE_SLOT_LABEL_RE = re.compile(
+    r"^(?:final|overall|headline|run|top[- ]?level|sign[- ]?off)?\s*"
+    r"(?:verdict|score|result|outcome)$", re.IGNORECASE)
+_SLOT_LIST_PREFIX_RE = re.compile(r"^\s{0,8}(?:[-*+>]\s+|\d+[.)]\s+)?")
+_SLOT_DECO_CHARS = "`*_~\"' \t"
+# An emphasised run whose ENTIRE text is a placeholder, e.g. `**PENDING**`.
+_EMPH_RUN_RE = re.compile(r"(?:\*\*|__)([^*_\n]{1,48}?)(?:\*\*|__)")
+_FENCE_RE = re.compile(r"^\s{0,3}(```|~~~)")
+
 _RUN_PID_FILE = "run.pid"
 _LOCK_FILE = ".runner.lock"
 
@@ -215,6 +291,7 @@ _EXIT = {
     "DECLARED_ARTIFACT_MISSING": 1,
     "NO_OUTPUTS_ONLY_INPUTS": 1,
     "DELIVERABLE_CONTRADICTS_ORCHESTRATOR": 1,
+    "DELIVERABLE_SELF_DECLARED_INTERIM": 1,
 }
 
 # The run-dir subtree that holds a run's INPUTS. A run whose every file lives
@@ -328,6 +405,131 @@ def _assess_deliverable(path: Path) -> Dict[str, object]:
                 and not all_ph)
     return {"exists": True, "bytes": nbytes, "content_lines": len(content),
             "all_placeholder": all_ph, "complete": complete}
+
+
+# ---------------------------------------------------------------------------
+# Self-declared-INTERIM probes (PURE — the tests call these directly).
+# ---------------------------------------------------------------------------
+def _prose_lines(text: str) -> List[tuple]:
+    """(1-based lineno, line) for every line OUTSIDE a fenced code block.
+
+    A deliverable routinely quotes a tool's own banner inside a fence. Quoting
+    someone else's "INTERIM" is not declaring yourself interim, so fences are
+    excluded from every signal below.
+    """
+    out: List[tuple] = []
+    in_fence = False
+    for i, ln in enumerate(text.splitlines(), start=1):
+        if _FENCE_RE.match(ln):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            out.append((i, ln))
+    return out
+
+
+def _slot_strip(s: str) -> str:
+    """Strip markdown decoration from both ends until stable."""
+    prev, cur = None, s.strip()
+    while cur != prev:
+        prev, cur = cur, cur.strip(_SLOT_DECO_CHARS)
+    return cur
+
+
+def _is_unfilled(raw: str) -> bool:
+    """True iff `raw` reduces to a bare placeholder token (`**PENDING**`,
+    `TBD`, `_UNMEASURED_`). Prose that merely CONTAINS the word does not."""
+    t = _slot_strip(raw)
+    if not t:
+        return False
+    return bool(_UNFILLED_TOKEN_RE.match(
+        re.sub(r"[\s\-]+", "_", t).upper().strip("_")))
+
+
+def find_interim_banner(text: str) -> List[tuple]:
+    """S1 — every line on which the document declares ITSELF provisional.
+    Returns [(lineno, matched_word, line_excerpt)]."""
+    hits: List[tuple] = []
+    for lineno, ln in _prose_lines(text):
+        m = _INTERIM_CALLOUT_RE.search(ln) or _INTERIM_EMPH_RE.search(ln)
+        if m:
+            hits.append((lineno, m.group(1), ln.strip()[:120]))
+    return hits
+
+
+def find_placeholder_headline(text: str) -> Optional[tuple]:
+    """S2 — the headline verdict/score slot holds a placeholder instead of a
+    measurement. Returns (lineno, label, raw_value) or None.
+
+    Matches a LABELLED line only (`**Score: PENDING — …**`, `Overall verdict:
+    TBD`). A body opening with a backtick is a quotation of some other file's
+    field, not this deliverable's own headline — rejected, mirroring
+    `deliverable_verdict_consistency_check._r_labelled_line`.
+    """
+    for lineno, ln in _prose_lines(text):
+        body = _SLOT_LIST_PREFIX_RE.sub("", ln, count=1).strip()
+        body = body.strip("*_ \t")
+        if not body or body.startswith("`"):
+            continue
+        m = re.match(r"^(.{1,40}?)\s*(?::|=|—|--)\s*(.+)$", body)
+        if not m:
+            continue
+        if not _HEADLINE_SLOT_LABEL_RE.match(_slot_strip(m.group(1))):
+            continue
+        # The value up to the first annotation separator — a real headline
+        # annotates on the same line ("PENDING — filled on completion").
+        value = re.split(r"\s+[—–]\s+|\s+--?\s+|\s*[(,;]", m.group(2),
+                         maxsplit=1)[0]
+        if _is_unfilled(value):
+            return (lineno, _slot_strip(m.group(1)), _slot_strip(value))
+    return None
+
+
+def find_unfilled_slots(text: str) -> List[tuple]:
+    """ADVISORY (never gating) — every placeholder standing ALONE in a slot:
+    the whole of an emphasised run, or the whole of a table cell. Reported so a
+    FAIL names exactly what still has to be filled. Non-gating by construction,
+    so it can never turn an honest final report into a false FAIL."""
+    hits: List[tuple] = []
+    for lineno, ln in _prose_lines(text):
+        s = ln.strip()
+        if s.startswith("|") and s.endswith("|") and s.count("|") >= 2:
+            for cell in s.strip("|").split("|"):
+                if _is_unfilled(cell):
+                    hits.append((lineno, _slot_strip(cell), s[:120]))
+        for run in _EMPH_RUN_RE.findall(ln):
+            if _is_unfilled(run):
+                hits.append((lineno, _slot_strip(run), s[:120]))
+    # de-duplicate (lineno, token) while preserving order
+    seen = set()
+    out = []
+    for h in hits:
+        k = (h[0], h[1])
+        if k not in seen:
+            seen.add(k)
+            out.append(h)
+    return out
+
+
+def assess_self_declared_interim(path: Path) -> Dict[str, object]:
+    """Read `path` and evaluate S1 + S2 + the advisory slot census."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {"readable": False, "banner": [], "headline_placeholder": None,
+                "unfilled_slots": [], "self_declared_interim": False}
+    banner = find_interim_banner(text)
+    headline = find_placeholder_headline(text)
+    return {
+        "readable": True,
+        "banner": [{"line": n, "word": w, "text": t} for n, w, t in banner],
+        "headline_placeholder": (
+            {"line": headline[0], "label": headline[1], "value": headline[2]}
+            if headline else None),
+        "unfilled_slots": [{"line": n, "token": tok, "text": t}
+                           for n, tok, t in find_unfilled_slots(text)],
+        "self_declared_interim": bool(banner or headline),
+    }
 
 
 def _newest_nonempty(run_dir: Path, globs: List[str]) -> Optional[Path]:
@@ -479,6 +681,9 @@ def check(run_dir: Path, *,
         ao_ok = True
     live = _liveness(run_dir, pid)
     census = _output_census(run_dir, deliverable)
+    interim = assess_self_declared_interim(deliverable) if dl["exists"] else {
+        "readable": False, "banner": [], "headline_placeholder": None,
+        "unfilled_slots": [], "self_declared_interim": False}
 
     compute_done = bool(fs is not None or orch["verdict"] or arts["any_present"])
 
@@ -500,6 +705,10 @@ def check(run_dir: Path, *,
         "compute_done": compute_done,
         "liveness": live,
         "output_census": census,
+        "self_declared_interim": interim["self_declared_interim"],
+        "interim_banner": interim["banner"],
+        "headline_placeholder": interim["headline_placeholder"],
+        "unfilled_slots": interim["unfilled_slots"],
     }
 
     artifacts_ok = not arts["missing"]
@@ -536,6 +745,42 @@ def check(run_dir: Path, *,
     if deliverable_complete and contradiction is not None:
         state, verdict, reason = (
             "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", "FAIL", contradiction.reason)
+    elif deliverable_complete and interim["self_declared_interim"]:
+        # LENGTH IS NOT DONENESS. Every other signal here reads green — the file
+        # is large, has hundreds of content lines, is nowhere near all-
+        # placeholder — and the document itself says it is not finished. The
+        # document is the authority on its own status.
+        why = []
+        if interim["banner"]:
+            b = interim["banner"][0]
+            why.append(f"declares itself {b['word']} at line {b['line']}")
+        if interim["headline_placeholder"]:
+            h = interim["headline_placeholder"]
+            why.append(f"its headline '{h['label']}' slot holds the placeholder "
+                       f"'{h['value']}' at line {h['line']} instead of a "
+                       f"measurement")
+        n_slots = len(interim["unfilled_slots"])
+        if live["live"]:
+            # A runner is genuinely still going: this is honestly IN PROGRESS,
+            # not a failure — but it is NOT COMPLETE, and rc 3 != 0 so an
+            # "only exit 0 counts" caller still refuses to sign it off.
+            who = (f"pid {live['pid']} alive" if live["pid_alive"]
+                   else f"live lock {live['lock']}")
+            state, verdict, reason = "RUN_STILL_IN_PROGRESS", "IN_PROGRESS", (
+                f"{deliverable.name} is present but {'; '.join(why)}, and a "
+                f"runner is LIVE ({who}) — the deliverable is an interim "
+                f"snapshot, not the finished report"
+                + (f"; {n_slots} unfilled slot(s) remain" if n_slots else ""))
+        else:
+            state, verdict, reason = (
+                "DELIVERABLE_SELF_DECLARED_INTERIM", "FAIL", (
+                    f"{deliverable.name} reads as complete ({dl['bytes']} B, "
+                    f"{dl['content_lines']} content lines) but {'; '.join(why)}"
+                    + (f"; {n_slots} placeholder slot(s) are still unfilled"
+                       if n_slots else "")
+                    + f". No runner is live, so nothing is going to fill them: "
+                      f"this is an ABANDONED interim report, not a result. "
+                      f"Length is not doneness."))
     elif deliverable_complete and census["input_only"] and not live["live"]:
         state, verdict, reason = "NO_OUTPUTS_ONLY_INPUTS", "FAIL", (
             f"{deliverable.name} reads as complete ({dl['bytes']} B) but the run "
@@ -639,6 +884,16 @@ def _highlight(rep: CompletenessReport) -> str:
         f"live={ev['liveness']['live']}")
     if ev["missing_artifacts"]:
         lines.append(f"!! missing artifacts: {ev['missing_artifacts']}")
+    for b in ev.get("interim_banner") or []:
+        lines.append(f"!! self-declared {b['word']} @ line {b['line']}: "
+                     f"{b['text']}")
+    hp = ev.get("headline_placeholder")
+    if hp:
+        lines.append(f"!! headline '{hp['label']}' @ line {hp['line']} = "
+                     f"'{hp['value']}' — the deliverable states NO verdict")
+    for s in (ev.get("unfilled_slots") or []):
+        lines.append(f"!! UNFILLED @ line {s['line']}: {s['token']} — "
+                     f"{s['text']}")
     for b in rep.blocking:
         lines.append(f"!! {b}")
     lines.append("!! ACTION      : write the deliverable from the artifacts, "
