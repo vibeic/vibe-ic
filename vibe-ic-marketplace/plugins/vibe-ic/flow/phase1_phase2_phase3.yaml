@@ -2658,11 +2658,20 @@ steps:
   # `base_layer_eco` in yield_fix_cost_rank, which are genuine post-tapeout
   # remediation classes sitting alongside `respin`.
   #
-  # KNOWN MISMATCH, recorded not fixed: this step still lists `skills:
-  # [eco-plan]`, and that skill's premise is "minimise disruption to an
-  # already-placed-and-routed netlist, prefer metal-only". The automated path
-  # re-routes everything, which is the opposite. The skill is correctly named
-  # for what it does; the automated step is not the thing the skill plans.
+  # FIXED 2026-07-31 (was: KNOWN MISMATCH, recorded not fixed). This step used
+  # to list `skills: [eco-plan]`, whose premise is "minimise disruption to an
+  # already-placed-and-routed netlist, prefer metal-only" — the exact opposite of
+  # what the automated path does, which is re-route everything. `eco-plan` is
+  # correctly named for what IT does; it was simply not the thing this step needs.
+  #
+  # It now lists `sta-review`, which reads STA reports, triages setup/hold/
+  # recovery/removal violations and proposes fixes. That IS the question a human
+  # or agent faces when this repair pass fails to close: not "how do I plan a
+  # change order against a released design" (there is no released design) but
+  # "which paths did not close, and what would close them".
+  #
+  # `eco-plan` and `design-for-eco` remain, unchanged, for the case they were
+  # written for: a real post-tapeout change against a frozen revision.
   # If any sign-off step (STA, PV, IR Drop, EM, SI, Post-Sim, SPICE)
   # fails, ECO applies targeted netlist patches and re-runs the
   # failing checks. If all sign-off steps passed on first attempt,
@@ -2680,7 +2689,7 @@ steps:
   #     reports/phase2/gates/{erc_density,perc_signoff}.json) and REFUSES to
   #     write `no_eco_needed.flag` while any of them reports a HARD failure.
   #     It does NOT auto-repair those domains: the flag is withheld, this
-  #     step's gate goes red (NO_ECO_ARTIFACT), and the `eco-plan` skill owns
+  #     step's gate goes red (NO_ECO_ARTIFACT), and `sta-review` owns
   #     the repair. Before v1.7.64 the decision read STA alone, so a run with
   #     a failed IR-drop / EM / SI / PV sign-off still certified "no ECO
   #     needed" and `eco_loop_audit` short-circuited to PASS.
@@ -2693,7 +2702,7 @@ steps:
     closed_loop:
       fallback_to: 32
       trigger: "Aggregator: re-run #21-#28 after ECO"
-    skills: [eco-plan]
+    skills: [sta-review]
     required_outputs:
       - "phase3/stage3/eco/eco_log.json OR phase3/stage3/eco/no_eco_needed.flag"
       # The trigger DECISION itself is a durable §4.05 audit-trail artefact and
