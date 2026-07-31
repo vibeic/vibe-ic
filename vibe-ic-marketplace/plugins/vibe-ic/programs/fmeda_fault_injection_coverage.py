@@ -896,7 +896,24 @@ RECORD_ADJUDICATION = _ra.declare(
     __file__,
     gate="fmeda_fault_injection_coverage",
     decision_roots=("build_report",),
-    decision_digest="fac75ae7e208beac653e19a7abd55d44e24884496dd8965059804d81c0f14216",
+    # RE-REVIEWED at the safety-declaration split (this commit), not re-stamped.
+    # The digest moved because `build_report`'s reachable logic changed twice:
+    # the STRONG/WEAK declaration split, and `diagnostic_coverage_pct` becoming
+    # None when nothing was measured instead of a literal 0.0.
+    #
+    # The rule below reads verdict / diagnostic_coverage_pct / injected_faults,
+    # so the second change touches its inputs directly. Re-checked by RUNNING it
+    # against both record shapes rather than by reasoning about it:
+    #
+    #   PASS, dc 0.0,  injected 0     -> VACUOUS_PASS   (old shape)
+    #   PASS, dc None, injected 0     -> VACUOUS_PASS   (new shape, via `or 0.0`)
+    #   PASS, dc 99.2, injected 500   -> unchanged (no supersession)
+    #   FAIL, dc None, injected 0     -> unchanged (no supersession)
+    #
+    # Identical verdicts across the change, so no published record is
+    # re-adjudicated differently. Bumping this constant without running those
+    # four is exactly what `published_record_staleness_check` exists to stop.
+    decision_digest="ff18dc57a97f43103102d08829175402b0cd05378c130a3779438405a7bf7a27",
     rules=(
         _ra.Rule(
             rule_id="fmeda_fault_injection_coverage.advisory-zero-dc",
