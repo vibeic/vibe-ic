@@ -1273,6 +1273,49 @@ def _strip_conditional_bodies(text: str) -> str:
         out = out[:m.start()] + " " + out[end:]
     return out
 
+def _is_edge_triggered_block(src: str, blk_start: int, off: int) -> bool:
+    """True when the `always` at `blk_start` is sequential, not combinational.
+
+    A latch is inferred only when a COMBINATIONAL block leaves a path
+    unassigned. In an edge-triggered block the same shape is an enabled
+    flip-flop: the value holds until the next edge because that is what a
+    register does, and no level-sensitive element appears.
+
+    Sequential by DECLARATION (`always_ff`, and `always_latch`, which is a latch
+    the designer asked for) or by EVENT CONTROL (`posedge`/`negedge` in the
+    sensitivity list). `always @*`, `always @(*)`, `always_comb` and a plain
+    level-sensitive list are combinational and return False.
+
+    Only the header is examined — the region from the keyword up to the end of
+    the event control — so a `posedge` appearing in the BODY (a nested block, a
+    string, a comment) cannot silence the rule for the whole enclosing block.
+    """
+    head = src[blk_start:off]
+    kw = re.match(r'always(_ff|_comb|_latch)?', head)
+    if kw and kw.group(1) in ("_ff", "_latch"):
+        return True
+    if kw and kw.group(1) == "_comb":
+        return False
+    at = head.find("@")
+    if at < 0:
+        return False
+    rest = head[at + 1:].lstrip()
+    if not rest.startswith("("):
+        return False        # `always @*`
+    depth, end = 0, -1
+    for k, ch in enumerate(rest):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                end = k
+                break
+    if end < 0:
+        return False        # unbalanced — do not silence on a parse failure
+    return re.search(r'(?<![\w$])(?:pos|neg)edge(?![\w$])', rest[:end]) is not None
+
+
 def _is_clock_gater(src: str, cond: str, sym: str) -> bool:
     """True when this latch IS an integrated clock-gating cell.
 
@@ -1379,6 +1422,21 @@ def rule_if_no_else_latch(src: str, path: str) -> List[Finding]:
                          [(mm.start(), 0) for mm in
                           re.finditer(r'(?<![\w$])always(?:_ff|_comb|_latch)?(?![\w$])', src)]
                         if lo < off), default=None)
+        # The enclosing block must actually be COMBINATIONAL. Nothing above
+        # establishes that, and the finding's own text asserts it ("assigned
+        # inside a combinational `if`"), so on an edge-triggered block this
+        # reported a latch for the most ordinary construct in synchronous RTL:
+        #
+        #     always @(posedge clk or negedge rst_n)
+        #       if (!rst_n) cnt <= 0; else if (en) cnt <= cnt + 1;
+        #
+        # `cnt` is uncovered on the untaken path and HOLDS — which is what an
+        # enabled flip-flop does. No latch is inferred, because the hold is the
+        # register's, not a level-sensitive one. `always_ff` says the same thing
+        # by declaration, and `always_latch` is a latch the designer asked for,
+        # so neither is news either.
+        if blk_start is not None and _is_edge_triggered_block(src, blk_start, off):
+            continue
         if blk_start is not None:
             # Everything in this block BEFORE the `if`, with each earlier
             # conditional construct's own body removed. What survives is the
