@@ -216,7 +216,11 @@ def _licensed_gates() -> Set[str]:
             | set(getattr(_F, "_STRUCTURAL_GATE_ARGV_ADAPTERS", ()))
             # #559: gates whose missing argument is a fact about the DESIGN, so
             # no umbrella can supply it. Their silence is decided, not pending.
-            | set(getattr(_F, "_SEMANTIC_ARGV_UNDRIVABLE", ())))
+            | set(getattr(_F, "_SEMANTIC_ARGV_UNDRIVABLE", ()))
+            # #559: gates registered in the per-project umbrella that examine
+            # the plugin itself, or need a bench instrument. Wrong umbrella,
+            # not missing wiring.
+            | set(getattr(_F, "_NOT_A_PROJECT_GATE", ())))
 
 
 def _split_undecided(gates: List[str]) -> Dict[str, List[str]]:

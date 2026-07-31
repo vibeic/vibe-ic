@@ -4572,6 +4572,69 @@ _STRUCTURAL_GATE_ARGV_ADAPTERS: Dict[str, tuple[str, ...]] = {
 
 
 # ---------------------------------------------------------------------------
+# #559 — GATES REGISTERED IN THE WRONG UMBRELLA.
+#
+# `_STRUCTURAL_RTL_GATES` is driven once per project over the corpus.  Four of
+# the gates in it do not take a project, and reading them as "unwired" was my
+# own mis-triage: three examine THIS PLUGIN's source, and one needs a physical
+# instrument.  Driving a plugin-wide check per project would run it 107 times
+# for 107 identical answers.
+#
+# Each disposition below is measured, not judged — the two marked READY were
+# checked for an honest denominator first, because a gate that cannot tell a
+# clean scan from a scan of nothing is worse wired than unwired.
+# ---------------------------------------------------------------------------
+_NOT_A_PROJECT_GATE: Dict[str, Dict[str, str]] = {
+    "openroad_tcl_deprecation_check": {
+        "scope": "plugin-self-check",
+        "measured": (
+            "Default --search-dir is the plugin tree containing the program; "
+            "examines 3592 files, cwd-independent."),
+        "disposition": (
+            "READY — wired into tools/ci/repo_hygiene_gates.sh. v1.8.80 first "
+            "made it state its denominator: before that an empty search "
+            "directory and the whole plugin tree produced the same sentence "
+            "and the same rc=0."),
+    },
+    "practical_notes_specificity_check": {
+        "scope": "plugin-self-check",
+        "measured": (
+            "Scans every PRACTICAL_NOTES.md under skills/ — 16 files, matching "
+            "the on-disk count exactly. An empty path set is rc=2 with a named "
+            "reason, not a pass."),
+        "disposition": (
+            "READY — wired into tools/ci/repo_hygiene_gates.sh. It already "
+            "refuses a zero denominator, which is why it needed no repair."),
+    },
+    "phase1_gate_contract_check": {
+        "scope": "plugin-self-check",
+        "measured": (
+            "Its docstring says EVERY Phase 1 gate under programs/ must satisfy "
+            "the contract; DEFAULT_GATES names 7, from v0.74. The flow YAML's "
+            "stage1 now references 29 programs, and running the contract over "
+            "all 29 gives 22 errors / 45 warnings, rc=1."),
+        "disposition": (
+            "NOT READY. Wiring it at the current scope buys a green over 7 of "
+            "29; widening it to the population its own docstring claims turns "
+            "every landing red. Which of the 29 the contract is meant to bind "
+            "has to be decided, and the errors fixed, before it is a gate "
+            "rather than a report."),
+    },
+    "scope_periodic_pulse_check": {
+        "scope": "hardware-instrument",
+        "measured": (
+            "With no arguments: `ERROR: cannot open scope (vid=0x2a8d "
+            "pid=0x1768): Device not found`. It drives a bench oscilloscope."),
+        "disposition": (
+            "KEEP registered, driven only where the instrument is attached. No "
+            "CI runner and no per-project umbrella can satisfy it, and a "
+            "synthetic capture would make it assert about a trace nobody "
+            "measured."),
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # #559 — GATES NO GENERIC UMBRELLA CAN DRIVE, AND WHY THAT IS THE RIGHT ANSWER.
 #
 # #559 measured 33 registered gates that reject the umbrella's argv, and split

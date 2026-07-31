@@ -84,6 +84,28 @@ run "watchdog compliance"           "$PLUGIN" python3 programs/loop_watchdog_com
 run "marketplace version sync"      "$PLUGIN" python3 programs/marketplace_version_sync_check.py
 run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit.py
 
+# vibe-ic#559 — two PLUGIN-scoped self-checks that were registered in the
+# per-project P0 umbrella, which cannot invoke them: they take no project, so
+# they returned NOT_INVOCABLE on all 107 corpus projects and therefore ran
+# nowhere at all. Driving a plugin-wide check per project would have produced
+# 107 identical answers; this is where one answer belongs.
+#
+# Both were checked for an honest denominator before being wired, because a
+# gate that cannot distinguish a clean scan from a scan of nothing is worse
+# here than absent — it would report green hardest when pointed somewhere
+# wrong. `openroad_tcl_deprecation_check` now states `examined N file(s)` and
+# exits 1 on zero (v1.8.80); `practical_notes_specificity_check` already
+# refused an empty path set with rc=2.
+#
+# A third, `phase1_gate_contract_check`, is deliberately NOT here. Its
+# docstring binds every Phase 1 gate under programs/, its DEFAULT_GATES names
+# 7 from v0.74, and stage1 of the flow now references 29 — running the contract
+# over all 29 gives 22 errors. Wiring it at the current scope buys a green over
+# 7 of 29; widening it reddens every landing. See `_NOT_A_PROJECT_GATE` in
+# flow_compliance_check.py for the measurement.
+run "openroad TCL deprecations"     "$PLUGIN" python3 programs/openroad_tcl_deprecation_check.py
+run "practical notes specificity"   "$PLUGIN" python3 programs/practical_notes_specificity_check.py
+
 # vibe-ic#354 — the image-version gate is BLOCKING. It failed loudly on main
 # for six versions (0.2.29 pinned in 13 places, never published) while nothing
 # enforced it. --require-remote: the pinned tag must actually RESOLVE on ghcr;
