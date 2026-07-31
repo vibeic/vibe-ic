@@ -206,6 +206,66 @@ def _check_block(project: Path, block: str
     # chip-class.
     spec_results = data.get("spec_results")
     if isinstance(spec_results, list) and spec_results:
+        # ── R10-FIX-2 — restore THIS GATE'S OWN STATED PREMISE ─────────────
+        # The v1.6.223 rationale immediately above says PASS_INFORMATIONAL is
+        # accepted because it means "real sim ran, THE BLOCK HAS NO FIXED
+        # NUMERIC TARGET BY DESIGN … no target to compare against".
+        #
+        # That premise is FALSE about the artefacts this gate's own producer
+        # writes. `analog_real_corner_sweep._verdict()` is three-valued
+        # (PASS / PASS_INFORMATIONAL / FAIL), but the record it emits is
+        # two-valued:
+        #
+        #     spec_status = verdict if verdict in ("PASS","PASS_INFORMATIONAL") \
+        #                             else "PASS_INFORMATIONAL"
+        #
+        # — every FAIL is rewritten, unconditionally, BEFORE reaching disk.
+        # So `status: PASS_INFORMATIONAL` conflates two structurally different
+        # records: the no-target one the premise describes (`target: null`),
+        # and a REAL MISS against a REAL number. The truth of the second is
+        # preserved in `raw_sim_verdict` — a field NO consumer read, which is
+        # why the `status == "FAIL"` branch below is unreachable against any
+        # artefact the producer writes.
+        #
+        # Discriminate on the PROPERTY the premise actually names (is there a
+        # concrete numeric target?) instead of on the LABEL. A record with
+        # `target: null` still passes — that is the case v1.6.223 exists for
+        # and it is untouched. A record whose own preserved verdict is FAIL
+        # against a concrete target is not clean, and must not be reported as
+        # clean.
+        #
+        # This does NOT relax or restate any target: the number stands exactly
+        # as the producer computed it. What changes is that missing it stops
+        # being laundered into a pass. A block whose miss is an accepted
+        # environmental/modelling gap is disclosed through the project's
+        # waiver file, where a reader can see it — not by a silent rewrite in
+        # the producer.
+        #
+        # chip-AGNOSTIC: keyed on record shape (`target is None`) and on the
+        # producer's own preserved verdict; no chip, block, vendor or PDK
+        # literal.
+        masked = [s for s in spec_results
+                  if isinstance(s, dict)
+                  and s.get("raw_sim_verdict") == "FAIL"
+                  and s.get("target") is not None
+                  and s.get("status") != "FAIL"]
+        if masked:
+            m = masked[0]
+            return "FAIL", [{
+                "block": block, "rule": "A4_RAW_SIM_FAIL_MASKED",
+                "rel_path": rel,
+                "detail": (
+                    f"{len(masked)} spec(s) record raw_sim_verdict='FAIL' "
+                    f"against a concrete target while status was rewritten to "
+                    f"{m.get('status')!r} — e.g. {m.get('name','?')}: measured "
+                    f"{m.get('value')} vs target {m.get('target')} "
+                    f"(tolerance {m.get('tolerance_pct')}, target_source "
+                    f"{m.get('target_source')!r}). PASS_INFORMATIONAL means "
+                    f"'no target to compare against'; this record HAS a "
+                    f"target and missed it. Fix the block or disclose the "
+                    f"miss in waivers.json — do not report it as clean."),
+            }]
+
         def _is_pass(s):
             return (isinstance(s, dict)
                     and (s.get("status") in ("PASS", "PASS_INFORMATIONAL")
