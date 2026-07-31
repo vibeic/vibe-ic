@@ -8903,6 +8903,29 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
         except Exception as e:
             print(f"      L19-L23 skeleton emit {doc_name} crashed: {e}",
                   file=sys.stderr)
+
+    # v1.8.79 landed `l21_macro_supply_rail_synth` — the PRODUCER that derives
+    # the rail set from the design's OWN hard-macro LEFs — but landed it with
+    # NO CALL SITE anywhere in the tree. Its consumer,
+    # `l21_macro_supply_rail_declared_check`, runs as an advisory in THIS step
+    # (D1), so the gate kept finding no declared rails and kept failing, while
+    # the program that exists to declare them ran only when a human invoked it
+    # by hand. A producer whose only caller is a human is not wired.
+    #
+    # Producer and consumer belong to the SAME step, so the producer goes here:
+    # after the L19-L23 loop, which is what puts L21_POWER_INTENT.json on disk.
+    # Fail-open like every other post-emit hook — deriving rails must never take
+    # the L-doc emit down. NOT_APPLICABLE (rc 0, no hard macro with PG pins) and
+    # a missing L21 (rc 2) are both ordinary outcomes, not errors.
+    try:
+        from l21_macro_supply_rail_synth import main as _l21_rail_synth
+        _rc = _l21_rail_synth([str(project), "--apply"])
+        if _rc not in (0, 2):
+            print(f"      L21 macro supply-rail synth rc={_rc}",
+                  file=sys.stderr)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"      L21 macro supply-rail synth FAILED (fail-open): {e}",
+              file=sys.stderr)
     return out
 
 

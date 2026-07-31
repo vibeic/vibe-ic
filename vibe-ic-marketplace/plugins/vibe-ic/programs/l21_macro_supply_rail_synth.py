@@ -203,6 +203,44 @@ def _voltage_evidence(pin: str, doc_dir: Optional[Path],
     return None
 
 
+def _default_lef_roots(proj: Path) -> List[Path]:
+    """Where to look for macro LEFs when the caller names no `--lef`.
+
+    This MUST cover every root the CONSUMER searches. The default used to be
+    just `input/pdk` + `input/pdk_local`, while
+    `l21_macro_supply_rail_declared_check` harvests macros from FIVE roots
+    (`input/pdk_local`, `input/macros`, `input/hardmacro`, and the analog
+    `phase2/phase3 .../hardmacro` trees). On any design whose hard macros live
+    in one of the four roots the producer did not search, the gate saw a macro
+    with unmatched PG pins and failed, while this program looked in the wrong
+    places and reported NOT_APPLICABLE — a producer measuring something
+    ADJACENT to what its consumer measures, which is the same defect shape as
+    running with no call site at all.
+
+    So the consumer's own glob list is the single source of truth, imported
+    rather than copied: a root added there can never silently go unsearched
+    here. `input/pdk` is retained on top of it — the full PDK is a legitimate
+    place to find a hard macro, and `_hard_macros_with_pg` already filters
+    std cells out by CLASS, not by path.
+    """
+    roots: List[Path] = [proj / "input" / "pdk"]
+    try:
+        from l21_macro_supply_rail_declared_check import (
+            _MACRO_LEF_GLOBS as _consumer_globs)
+    except Exception:                                       # noqa: BLE001
+        # Never let the producer die because the consumer moved; fall back to
+        # the historical default rather than searching nothing.
+        return roots + [proj / "input" / "pdk_local"]
+    for pat in _consumer_globs:
+        # "input/macros/**/*.lef" -> the "input/macros" root; rglob in
+        # _collect_macros already supplies the recursion.
+        head = pat.split("/**", 1)[0]
+        root = proj / head
+        if root not in roots:
+            roots.append(root)
+    return roots
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Derive power_domains[] from the design's own macro LEFs.")
@@ -223,8 +261,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     proj = Path(args.project).resolve()
     l21 = Path(args.l21) if args.l21 else \
         proj / "phase1" / "generated_docs" / "L21_POWER_INTENT.json"
-    lefs = [Path(p) for p in args.lef] if args.lef else \
-        [proj / "input" / "pdk", proj / "input" / "pdk_local"]
+    lefs = [Path(p) for p in args.lef] if args.lef else _default_lef_roots(proj)
     doc_dir = Path(args.doc_dir) if args.doc_dir else proj / "phase1" / "input_doc"
 
     if not l21.is_file():
