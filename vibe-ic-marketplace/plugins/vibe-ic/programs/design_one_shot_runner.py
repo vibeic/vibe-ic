@@ -10300,6 +10300,44 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                                f"DFT scan inserted; OSS ATPG coverage "
                                f"engine-limited (pdk={pdk or 'generic'}) → "
                                f"disclosed capability-gap"))
+        except subprocess.TimeoutExpired as exc:
+            # vibe-ic#581 — A TIMEOUT IS A BUDGET OUTCOME, NOT A CAPABILITY GAP.
+            #
+            # This used to fall into the blanket `except Exception` below and be
+            # recorded with `capability_flag: cap:atpg_signoff_coverage`, which
+            # asserts the ENGINE cannot measure this design. The engine measured
+            # it fine — it ran out of OUR wall clock.
+            #
+            # MEASURED, a controlled A/B on one design (sha256 x sky130A) whose
+            # only variable is netlist size:
+            #      8 730 comb cells  -> finished, Stuck-at 95.05 % published
+            #     11 627 comb cells  -> timed out, recorded as a capability gap
+            # Nothing about the engine's ability changed between those arms.
+            #
+            # The distinction already exists one branch up, where a signal death
+            # is bookkept as `engine_crash` rather than against a capability the
+            # engine HAS. A timeout gets the same treatment: its own flag, the
+            # budget it blew, and the size that blew it — so a reader can tell
+            # "raise the budget" from "the tool cannot do this", which the
+            # capability flag actively prevented.
+            #
+            # The budget is still a size-independent constant. That is the OTHER
+            # half of #581 and it is deliberately NOT fixed here: scaling it needs
+            # a measured cells-per-second, and inventing a formula would replace a
+            # wrong constant with an unmeasured one.
+            _to = getattr(exc, "timeout", None)
+            _dft_disclose_skip(
+                dft_dir / "dft_atpg_not_run.json",
+                f"Fault ATPG exceeded its wall budget of {_to}s — the engine was "
+                f"running, not unable. This is a BUDGET outcome, not a capability "
+                f"gap (vibe-ic#581).",
+                {"budget_exceeded": True,
+                 "wall_budget_s": _to,
+                 "pdk_detected": pdk or "generic_unmapped"})
+            results.append(StepResult(
+                "dft_insertion", "SKIP", time.time() - t0,
+                f"Fault ATPG exceeded its {_to}s wall budget → disclosed-skip "
+                f"(budget, not capability)"))
         except Exception as exc:
             _dft_disclose_skip(dft_dir / "dft_atpg_not_run.json",
                                f"Fault ATPG execution error: {exc}",
