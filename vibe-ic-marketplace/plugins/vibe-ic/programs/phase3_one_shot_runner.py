@@ -12877,13 +12877,37 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
         "  if {[catch {estimate_parasitics -detailed_routing} _prr_ep]} { "
         "puts \"SPEF_REPAIR_EP_NONFATAL: $_prr_ep\" }\n"
         "  catch {puts \"SPEF_REPAIR_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
+        # vibe-ic#569 — COUNT the repairs that were REFUSED, and let the verdict
+        # depend on it. Both `repair_design` and `repair_timing` can be declined
+        # with `[ERROR EST-0104] inconsistent parasitics state`: this block runs
+        # after min-area patching and PG reroute, both of which edit the odb, so
+        # the estimator arrives with a non-empty invalidation set. When both are
+        # refused, NOTHING is repaired — and `WNS_AFTER` then prints the same
+        # number as `WNS_BEFORE`, to the digit, which reads as "the repair ran
+        # and there was nothing to gain".
+        #
+        # The two `catch`es were already correct in NOT aborting the deck. What
+        # was missing is that a swallowed refusal left no trace in the verdict:
+        # `SPEF_REPAIR_APPLIED_ON_ESTIMATE` was printed unconditionally, so the
+        # log asserted the repair had been applied on every round it declined.
+        # Same family as the identical-WNS pair — an absence rendering as a pass.
+        "  set _prr_refused 0\n"
         "  if {[catch {repair_design} _prr_rd2]} { "
-        "puts \"SPEF_REPAIR_DESIGN_NONFATAL: $_prr_rd2\" }\n"
+        "puts \"SPEF_REPAIR_DESIGN_NONFATAL: $_prr_rd2\" ; incr _prr_refused }\n"
         "  if {[catch {repair_timing -setup} _prr_rt]} { "
-        "puts \"SPEF_REPAIR_SETUP_NONFATAL: $_prr_rt\" }\n"
+        "puts \"SPEF_REPAIR_SETUP_NONFATAL: $_prr_rt\" ; incr _prr_refused }\n"
         "  catch {puts \"SPEF_REPAIR_WNS_AFTER: [sta::worst_slack -max]\"}\n"
         f"  catch {{report_checks > {out_dir_c}/sta_spef_repaired.rpt}}\n"
-        "  puts \"SPEF_REPAIR_APPLIED_ON_ESTIMATE\"\n"
+        "  if {$_prr_refused >= 2} {\n"
+        "    puts \"SPEF_REPAIR_NOT_APPLIED: both repairs refused "
+        "($_prr_refused/2) — WNS_BEFORE and WNS_AFTER describe the SAME "
+        "design and their equality is not evidence of convergence\"\n"
+        "  } elseif {$_prr_refused > 0} {\n"
+        "    puts \"SPEF_REPAIR_PARTIAL: $_prr_refused of 2 repairs refused\"\n"
+        "    puts \"SPEF_REPAIR_APPLIED_ON_ESTIMATE\"\n"
+        "  } else {\n"
+        "    puts \"SPEF_REPAIR_APPLIED_ON_ESTIMATE\"\n"
+        "  }\n"
         "} else {\n"
         "  puts \"SPEF_REPAIR_ESTIMATE_SKIP: no post_route_repair.spef extracted\"\n"
         "}\n"
