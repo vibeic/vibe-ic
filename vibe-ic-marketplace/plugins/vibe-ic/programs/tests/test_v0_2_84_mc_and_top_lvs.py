@@ -248,19 +248,31 @@ def _ms_project(tmp_path):
 
 
 def _fake_ms_docker(lvs_text):
+    """The real commands end in `... 2>&1 | tee <log>`, so the tool's own log
+    IS written on every real run. The fake must write it too: the program now
+    requires each tool's log to have been (re)written by THIS invocation and
+    to carry the tool's completion marker, because file PRESENCE alone was
+    satisfied by outputs carried forward from another run entirely."""
     def fake(container, cmd, timeout=600, **_):
-        if cmd.startswith("command -v") or cmd.startswith("test -f"):
+        if cmd.startswith("command -v") or cmd.startswith("test -f") \
+                or cmd.startswith("test -d"):
             return 0, "", ""
         if "klayout" in cmd:
             import re as _re
             m = _re.search(r"MERGED_OUT=(\S+)", cmd)
             Path(m.group(1)).parent.mkdir(parents=True, exist_ok=True)
             Path(m.group(1)).write_bytes(b"\x00\x06merged")
+            t = _re.search(r"tee (\S+/merge\.log)", cmd)
+            if t:
+                Path(t.group(1)).write_text("KLAYOUT_MERGE_DONE\n")
             return 0, "KLAYOUT_MERGE_DONE", ""
         if "magic" in cmd:
             import re as _re
             m = _re.search(r"SPICE_OUT=(\S+)", cmd)
             Path(m.group(1)).write_text(".subckt chip_top a b\n.ends\n")
+            t = _re.search(r"tee (\S+/ext2spice_merged\.log)", cmd)
+            if t:
+                Path(t.group(1)).write_text("MAGIC_EXT2SPICE_DONE\n")
             return 0, "MAGIC_EXT2SPICE_DONE", ""
         if "netgen" in cmd:
             import re as _re

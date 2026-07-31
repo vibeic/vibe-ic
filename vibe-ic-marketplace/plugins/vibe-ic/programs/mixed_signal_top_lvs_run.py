@@ -18,9 +18,29 @@ What it does (chip-AGNOSTIC; PDK paths derived from --pdk):
      M4 rollup artifact) with verdict from the LVS result, plus
      `reports/analog/mixed_signal/top_lvs.json` + the netgen report.
 
-Honesty rules: missing tool/tech → SKIP rc 2 with the named gap (the
-M1 gate then reports the merge as NOT LVS-verified — it never PASSes
-on presence again); a real netgen mismatch → FAIL rc 1.
+Honesty rules: missing tool/tech/unreachable-project → SKIP rc 2 with
+the named gap (the M1 gate then reports the merge as NOT LVS-verified
+— it never PASSes on presence again); a real netgen mismatch → FAIL
+rc 1.
+
+FRESHNESS, NOT PRESENCE (2026-08-01). Every step's success test used to
+be "does the output file exist on the HOST". Those files survive a
+`cp -a` from another run in another directory, so an invocation in
+which NO tool executed emitted, verbatim:
+
+    "verdict": "FAIL", "compared": true,
+    "reason": "netgen top-level LVS did not match — real compare ran
+               on the merged GDS; design/extraction defect"
+
+while `ext2spice_merged.log` and `top_lvs.rpt` kept mtimes from two
+runs earlier. `mixed_signal_merge_check` — M1's BLOCKING gate — reads
+that file. Here the stale verdict happened to be FAIL, so the cost was
+a wasted round; a stale PASS carried the same way is a false clean by
+the identical mechanism. Each tool step now requires its OWN log to
+have been (re)written by THIS invocation and to carry the completion
+marker the tool prints on success, and `compared` is set from that
+rather than assumed. A reused `top_merged.gds` is reported by name in
+`merge_provenance` instead of passing as this run's own work.
 
 ENFORCEMENT: advisory
   This is a PRODUCER, not a verdict. It is invoked in M1's
@@ -122,6 +142,60 @@ def _docker_exec(container, cmd, timeout=600, *, marker=None, log_path=None):
 
 def _to_container_path(p, container):
     return str(p)
+
+
+def _project_reachable(container, project):
+    """True when `project` resolves to a directory INSIDE the container.
+
+    `_to_container_path` hands the tool the HOST path verbatim. When the run
+    root is outside the container's mounted tree every `docker exec` below
+    fails to find its inputs — and, because each step's success test was
+    "does the output file exist on the HOST", a run in which no tool executed
+    was indistinguishable from one in which they all did (see the
+    `_ran_fresh` note). Ask once, up front, and SKIP by name instead."""
+    if container in ("", "host"):
+        return True
+    rc, _, _ = _docker_exec(
+        container, f"test -d {shlex.quote(str(project))}", timeout=15)
+    return rc == 0
+
+
+def _ran_fresh(log_path, marker, before):
+    """True when `log_path` was (re)written by THIS invocation AND carries the
+    tool's own completion marker.
+
+    MEASURED DEFECT (2026-08-01). One invocation rewrote its own TCL scripts at
+    04:37:16 and emitted `"compared": true, "reason": "... real compare ran on
+    the merged GDS"`, while `ext2spice_merged.log` kept its 01:53:56 mtime and
+    `top_lvs.rpt` its 00:21:37 — magic and netgen never executed. The success
+    test was `spice_out.is_file()`, and those files had been carried forward by
+    `cp -a` from a run in a DIFFERENT directory. Presence of an output is
+    evidence that A run once happened, never that THIS run happened.
+
+    `before` is the mtime captured before the call (None when absent). A log
+    that did not advance, or that advanced without the marker the tool prints
+    on success, means the tool did not complete here."""
+    try:
+        st = log_path.stat()
+    except OSError:
+        return False
+    if before is not None and st.st_mtime <= before:
+        return False
+    if st.st_size == 0:
+        return False
+    if not marker:
+        return True
+    try:
+        return marker in log_path.read_text(errors="replace")
+    except OSError:  # pragma: no cover - unreadable right after writing it
+        return False
+
+
+def _mtime_or_none(path):
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
 
 
 def _tool_ok(container, tool):
@@ -326,6 +400,14 @@ def run(project: Path, top: str, container: str, pdk: str,
         return {"verdict": "SKIP", "rc": 2,
                 "reason": ("tools missing in container: "
                            + ", ".join(missing_tools))}
+    # A tool that exists but cannot see the design is not a tool that ran.
+    if not _project_reachable(container, project):
+        return {"verdict": "SKIP", "rc": 2,
+                "reason": (f"project dir is not reachable inside container "
+                           f"'{container}': {project} — the tools would run "
+                           f"against paths that do not exist there and every "
+                           f"output would be a carried-forward file, not a "
+                           f"result of this run")}
     # ── C5: the tech rung. An unresolved top/PDK SKIPs HERE, naming which one
     # and why — it never falls back to some other design's PDK or cell name.
     # This is the rung "PDK tech missing" already occupies, so the SKIP ladder
@@ -357,7 +439,14 @@ def run(project: Path, top: str, container: str, pdk: str,
     rpt_dir.mkdir(parents=True, exist_ok=True)
 
     # 1) merge ------------------------------------------------------------
+    # A pre-existing top_merged.gds is REUSED, not re-derived — that is
+    # deliberate (the merge is expensive) but it must be SAID, because a merged
+    # GDS produced by something other than this program, in another directory,
+    # is exactly what two rounds of M1 were judged on.
+    merge_log = ms_dir / "merge.log"
+    merge_provenance = "reused: top_merged.gds already present, merge not re-run"
     if not merged.is_file():
+        merge_log_before = _mtime_or_none(merge_log)
         merge_py = ms_dir / "klayout_merge.py"
         merge_py.write_text(_KLAYOUT_MERGE_PY)
         env = (f"export DIGITAL_GDS={_to_container_path(digital_gds, container)} "
@@ -371,11 +460,14 @@ def run(project: Path, top: str, container: str, pdk: str,
                f"tee {_to_container_path(ms_dir, container)}/merge.log")
         rc, out, err = _docker_exec(
             container, cmd, marker=_to_container_path(merge_py, container))
-        if not merged.is_file() or merged.stat().st_size == 0:
+        if not merged.is_file() or merged.stat().st_size == 0 \
+                or not _ran_fresh(merge_log, "KLAYOUT_MERGE_DONE",
+                                  merge_log_before):
             return {"verdict": "FAIL", "rc": 1,
-                    "reason": (f"KLayout merge produced no top_merged.gds "
+                    "reason": (f"KLayout merge did not complete in THIS run "
                                f"(rc={rc}); see phase3/mixed_signal/merge.log"),
                     "transcript_tail": (out + err)[-600:]}
+        merge_provenance = "produced by this invocation"
 
     # 2) extract ----------------------------------------------------------
     spice_out = ms_dir / f"{top}_merged_extracted.sp"
@@ -396,12 +488,22 @@ def run(project: Path, top: str, container: str, pdk: str,
            f"magic -dnull -noconsole -rcfile {shlex.quote(magicrc)} "
            f"{_to_container_path(tcl, container)} 2>&1 | "
            f"tee {_to_container_path(ms_dir, container)}/ext2spice_merged.log")
+    ext_log = ms_dir / "ext2spice_merged.log"
+    ext_log_before = _mtime_or_none(ext_log)
     rc, out, err = _docker_exec(
         container, cmd, marker=_to_container_path(tcl, container))
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
         return {"verdict": "FAIL", "rc": 1,
                 "reason": (f"Magic ext2spice on the MERGED GDS produced no "
                            f"netlist (rc={rc})"),
+                "transcript_tail": (out + err)[-600:]}
+    if not _ran_fresh(ext_log, "MAGIC_EXT2SPICE_DONE", ext_log_before):
+        return {"verdict": "FAIL", "rc": 1,
+                "reason": (f"Magic ext2spice did not complete in THIS run "
+                           f"(rc={rc}): {ext_log.name} carries no "
+                           f"MAGIC_EXT2SPICE_DONE from this invocation. The "
+                           f"extracted netlist on disk is a carried-forward "
+                           f"file and is NOT evidence about this run"),
                 "transcript_tail": (out + err)[-600:]}
     lay_top = top
     sub_txt = spice_out.read_text(errors="replace")
@@ -438,8 +540,19 @@ def run(project: Path, top: str, container: str, pdk: str,
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"netgen -batch source {_to_container_path(lvs_tcl, container)}")
+    lvs_rpt_before = _mtime_or_none(lvs_rpt)
     rc, out, err = _docker_exec(
         container, cmd, marker=_to_container_path(spice_out, container))
+    # netgen prints no completion token of its own; the report IT writes is the
+    # marker, so freshness alone carries the claim here.
+    if not _ran_fresh(lvs_rpt, "", lvs_rpt_before):
+        return {"verdict": "FAIL", "rc": 1, "compared": False,
+                "reason": (f"netgen did not write a top-level LVS report in "
+                           f"THIS run (rc={rc}): {lvs_rpt.name} was not "
+                           f"(re)written by this invocation. Nothing was "
+                           f"compared — this is NOT an LVS mismatch"),
+                "merge_provenance": merge_provenance,
+                "transcript_tail": ((out or "") + (err or ""))[-600:]}
     blob = (out or "") + "\n" + (err or "") + "\n" + (
         lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else "")
     # #524 — shared verdict classifier (adds 'failed pin matching', the netgen
@@ -459,6 +572,7 @@ def run(project: Path, top: str, container: str, pdk: str,
         "extracted_netlist": str(spice_out.relative_to(project)),
         "lvs_report": str(lvs_rpt.relative_to(project)),
         "tool": "magic ext2spice + netgen (PDK setup)",
+        "merge_provenance": merge_provenance,
     }
     (rpt_dir / "top_lvs.json").write_text(
         json.dumps(top_lvs, indent=2) + "\n")
