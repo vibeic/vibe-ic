@@ -699,6 +699,19 @@ def build_interface_map(
 # ---------------------------------------------------------------------------
 # Main audit logic
 # ---------------------------------------------------------------------------
+#: Set by `run_audit` when it examined no RTL at all. Read by `main` so the
+#: exit code cannot contradict the message.
+#:
+#: Before this, a missing RTL directory printed
+#:     ERROR: RTL directory not found: /nope
+#: and then exited 0, because the error path returned an empty list and the
+#: verdict was `1 if mismatches > 0 else 0`. Zero files scanned and zero
+#: mismatches found produced the same rc, so the P0 umbrella — which reads the
+#: exit code — recorded "no encoding mismatch here" for a directory that does
+#: not exist (#559).
+_NOTHING_EXAMINED: List[str] = []
+
+
 def run_audit(
     rtl_dir: str,
     top_module: str
@@ -707,15 +720,18 @@ def run_audit(
     Run the full encoding audit on an RTL directory.
     Returns list of audit results for each cross-module interface.
     """
+    _NOTHING_EXAMINED.clear()
     rtl_path = Path(rtl_dir)
     if not rtl_path.exists():
         print(f"ERROR: RTL directory not found: {rtl_dir}", file=sys.stderr)
+        _NOTHING_EXAMINED.append(f"RTL directory not found: {rtl_dir}")
         return []
 
     # Collect all .v and .sv files
     vfiles = sorted(rtl_path.glob('*.v')) + sorted(rtl_path.glob('*.sv'))
     if not vfiles:
         print(f"WARNING: no .v/.sv files found in {rtl_dir}", file=sys.stderr)
+        _NOTHING_EXAMINED.append(f"no .v/.sv files in {rtl_dir}")
         return []
 
     # Parse all modules
@@ -841,6 +857,11 @@ def main():
     report_file.write_text(json.dumps(report, indent=2))
     print(f"\nJSON report written to: {report_file}")
 
+    if _NOTHING_EXAMINED:
+        print(f"VACUOUS_PASS: interface_encoding_audit examined nothing "
+              f"(reason: {_NOTHING_EXAMINED[0]}) — this is not a clean audit",
+              file=sys.stderr)
+        return 2
     return 1 if mismatches > 0 else 0
 
 
