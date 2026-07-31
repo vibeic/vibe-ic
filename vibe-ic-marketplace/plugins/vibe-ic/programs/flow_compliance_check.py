@@ -4992,6 +4992,214 @@ _ZERO_DENOMINATOR_CLASSIFICATION: Dict[str, Dict[str, str]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# vibe-ic#559 (round 6) — THE LAST-12 UNDECIDED SILENCES, NOW MEASURED.
+#
+# `p0_gate_invocability_drift_check` split the un-invocable gates into
+# `licensed_silence` (a recorded decision exists) and `undecided_silence`
+# (measured to reject the umbrella's argv, but nobody had decided WHY). At
+# v1.9.8 the undecided pile stood at 12 — every one of them classified by the
+# drift check as a `wiring_gap` (the umbrella supplies the flags they name), so
+# each looked mechanically fixable. It is not: a gate that "wants only --rtl-dir"
+# still has to clear #492's two bars (0 new FAIL AND a non-empty *decidable*
+# denominator over the corpus) before wiring is honest, and none of these 12
+# clears them. Each row below is the MEASUREMENT that decides it, driven with the
+# umbrella's own `_structural_gate_argv` over the 107 tracked `rtl` dirs (and, for
+# the L9 gate, over the 196 tracked L9 docs) on a scratch MIRROR — never the
+# tracked tree. This table is what turns "nobody looked" into "looked, measured,
+# decided", which is the whole point of the licensed/undecided split; the drift
+# check unions it into `_licensed_gates()` so the undecided count reaches 0 and
+# `undecided_silence > 0` can finally become a HARD ERROR rather than a report.
+#
+# `category` is one of:
+#   reddens-corpus          wiring adds >=1 new FAIL over the corpus (#492 bar 1)
+#   zero-decidable-denom    0 new FAIL but the subject it decides is empty (bar 2)
+#   cross-layer-contract    reddens 100% on a schema question that must be settled
+#   semantic-design-value   needs a value that is a fact ABOUT THE DESIGN
+#   later-flow-artifact     needs an input a LATER flow step produces
+#   post-gate-policy         reads the reports the rest of the flow emits
+#   utility-caller-supplied a library invoked by a caller with its own argument
+#   plugin-governance       audits a non-project governance artifact
+# Asserted by `tests/test_issue559_undecided_silence_last12.py`.
+# ---------------------------------------------------------------------------
+_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA: Dict[str, Dict[str, str]] = {
+    "interface_encoding_audit": {
+        "category": "zero-decidable-denom",
+        "requires": "--rtl-dir --top-module --out-dir (all umbrella-suppliable)",
+        "measured": (
+            "Umbrella argv over 107 tracked rtl dirs: 0 new FAIL, but the "
+            "decidable denominator (matches+mismatches) is 0. On opentitan_aes "
+            "all 21 module-boundary crossings resolve to encoding=UNKNOWN "
+            "('encoding could not be determined'): total_interfaces=21, "
+            "matches=0, mismatches=0. It discloses a non-zero interface count "
+            "while its actual subject — gray-vs-binary mismatches it can DECIDE "
+            "— is empty, so a PASS certifies a comparison that examined nothing."),
+        "disposition": (
+            "KEEP registered, unwired. Its decidable denominator must become "
+            "non-empty (encoding inference improved beyond UNKNOWN) before it "
+            "is a gate rather than a report."),
+    },
+    "module_port_audit": {
+        "category": "zero-decidable-denom",
+        "requires": "--rtl-dir --top-module --out-dir (all umbrella-suppliable)",
+        "measured": (
+            "SUPERSEDED by measurement. This entry recorded rc=1 on 7/107 as a "
+            "blackbox/external-stub false-positive class. That diagnosis was "
+            "wrong, and `Available ports: []` was the tell: not a stub the scan "
+            "cannot see, but a header the parser truncated to ZERO ports. Five "
+            "parse shapes, fixed in v1.9.10 — width bound to the net type, an "
+            "`ifdef` inside the port list, an import on the module line (the "
+            "`Available ports: []` case, 81 corpus files), multi-dimensional "
+            "packed ranges, and a single-index select called 1 bit "
+            "unconditionally. Re-measured over the SAME 101 directories, the "
+            "pre-fix arm from `git show origin/main:` rather than by editing "
+            "the tree: rc=1 8 -> 0, ERROR findings 715 -> 0, and 0/101 with "
+            "the umbrella's own argv too. Proven not to be an accept-everything "
+            "parser: renaming the declaration of the now-visible "
+            "`aes_sub_bytes.data_i` in a COPY of the corpus takes it back to "
+            "rc=1 on exactly that port. #492 bar 1 (no new FAIL) is CLEARED, "
+            "and so is bar 3 (it can still fail for the reason it exists).\n"
+            "What is NOT cleared is an honest denominator. `Parsed N modules` "
+            "is 1 on many CVDP directories, where there is no instantiation to "
+            "compare against a declaration — the gate's actual subject — so a "
+            "PASS there certifies nothing. Same shape as "
+            "`interface_encoding_audit` above."),
+        "disposition": (
+            "KEEP registered, unwired — but for the denominator, NOT for the "
+            "corpus. Wiring needs the report to publish the number of "
+            "instantiation-port comparisons it actually made, and to refuse "
+            "when that is zero. See vibe-ic#559."),
+    },
+    "oe_pattern_check": {
+        "category": "reddens-corpus",
+        "requires": "--rtl-files --out-dir (both umbrella-suppliable)",
+        "measured": (
+            "Umbrella argv over 107 tracked rtl dirs: rc=1 on 3/107 (ahb_apb, "
+            "mdio, subservient — real tristate designs it flags). On "
+            "opentitan_aes it finds 0 OE signals across 96 files (trigger "
+            "absent). A new FAIL over the corpus excludes it under #492's bar 1; "
+            "the FAILs may well be real, which is exactly why wiring is a "
+            "decision about those 3 designs, not about the gate."),
+        "disposition": (
+            "KEEP registered, unwired. Resolve whether the 3 FAILs are real "
+            "before wiring."),
+    },
+    "l9_completeness_check": {
+        "category": "cross-layer-contract",
+        "requires": "--l9-file (umbrella-suppliable when generated_docs/L9*.json exists)",
+        "measured": (
+            "Umbrella argv over the 196 tracked L9 docs: rc=1 on 196/196. "
+            "Cause: the gate requires a 'registers' section in L9, but phase1 "
+            "emits the register map in L4, not L9, so every L9 doc lacks it "
+            "(opentitan_aes L9: sections_present=3/4, MISSING_SECTION 'registers' "
+            "ERROR). Wiring turns every landing red on a cross-layer schema "
+            "question — does the L9 integration spec own the register map, or "
+            "L4? — that must be settled first. This is the #492 docstring's own "
+            "named poster child ('never examined an L9 document'); the reason it "
+            "stays unexamined is now measured, not asserted."),
+        "disposition": (
+            "DISCLOSURE ONLY — plumbing deliberately not connected. Settle the "
+            "L4/L9 register-map contract before wiring, else it is a loud wrong "
+            "gate on every project."),
+    },
+    "cross_constant_invariant_check": {
+        "category": "semantic-design-value",
+        "requires": "--rtl plus --constants/--invariants/--inv",
+        "measured": (
+            "The ordering invariants ('A must be >= B') are a spec fact. The "
+            "umbrella supplies --rtl but has no invariant set, and a scan of RTL "
+            "parameters cannot recover which orderings the datasheet requires. "
+            "Same undrivable class as crc_bitorder_check / protocol_gap_check."),
+        "disposition": (
+            "KEEP registered, driven explicitly from the L-layer spec that "
+            "states the timing/protocol ordering invariant."),
+    },
+    "tester_oracle_health_check": {
+        "category": "semantic-design-value",
+        "requires": "--config (oracle.json)",
+        "measured": (
+            "Needs a design-specific tester-oracle config (burn target + "
+            "bytewise oracle) describing a protocol tester. A pure-digital "
+            "design like opentitan_aes ships none, and the config's contents are "
+            "a design fact no generic umbrella can synthesise."),
+        "disposition": (
+            "KEEP registered, driven from the tester/oracle step that produces "
+            "oracle.json."),
+    },
+    "fpga_qsf_lint": {
+        "category": "later-flow-artifact",
+        "requires": "--qsf-file --rtl-dir",
+        "measured": (
+            "Needs a Quartus .qsf, which is an FPGA-compile OUTPUT. At the RTL "
+            "structural stage no .qsf exists in any of the 107 tracked rtl dirs, "
+            "so the umbrella has nothing to point --qsf-file at."),
+        "disposition": (
+            "KEEP registered, driven from the FPGA-compile step that emits the "
+            ".qsf."),
+    },
+    "fresh_agent_provenance_check": {
+        "category": "later-flow-artifact",
+        "requires": "rtl_dir reference_dir (positional)",
+        "measured": (
+            "Compares generated RTL against a plugin reference-template library. "
+            "No 'references/' directory ships at a discoverable path in the "
+            "plugin tree (find -type d -name references over the plugin returns "
+            "nothing), so the umbrella cannot supply reference_dir; under the "
+            "bare argv the gate argparse-rejects (rc=2)."),
+        "disposition": (
+            "KEEP registered, driven from the rtl-gen step that knows its "
+            "reference-template directory."),
+    },
+    "warn_acceptance_policy_check": {
+        "category": "post-gate-policy",
+        "requires": "--project-dir --reports-dir",
+        "measured": (
+            "Reads the reports/ that the REST of the flow produces, to enforce "
+            "that every WARN finding is addressed. Running it INSIDE the "
+            "structural-RTL umbrella — before those downstream reports exist — "
+            "is a stage inversion: it has no reports to read at P0."),
+        "disposition": (
+            "KEEP registered, driven at the final acceptance gate, after the "
+            "report-producing steps have run."),
+    },
+    "output_artifact_check": {
+        "category": "utility-caller-supplied",
+        "requires": "--artifacts/--pattern --base-dir",
+        "measured": (
+            "Verifies that artifacts a caller CLAIMED to produce exist on disk. "
+            "With no claim it has no subject; it is a library the "
+            "artifact-producing steps call with their own --pattern, not a "
+            "standalone per-project structural gate."),
+        "disposition": (
+            "KEEP registered, driven by the step that makes the artifact "
+            "claim."),
+    },
+    "json_schema_check": {
+        "category": "utility-caller-supplied",
+        "requires": "--json-file --required-keys",
+        "measured": (
+            "A generic JSON-key checker; without a --json-file AND a "
+            "--required-keys schema it has nothing to check. It is invoked by "
+            "specific L-doc validators with their own schema, not standalone."),
+        "disposition": (
+            "KEEP registered, driven by the L-doc validators that supply the "
+            "schema."),
+    },
+    "backlog_sanitize_check": {
+        "category": "plugin-governance",
+        "requires": "--file/--dir (a backlog YAML)",
+        "measured": (
+            "Validates that a community-backlog YAML submission is IC-agnostic "
+            "and carries no vendor/confidential data. A design project ships no "
+            "backlog YAML; its input class is a governance artifact, not project "
+            "RTL/docs."),
+        "disposition": (
+            "KEEP registered, driven at backlog-submission time, not per "
+            "project."),
+    },
+}
+
+
 def _structural_gate_argv(gate_name: str,
                           project: Path,
                           rtl_dir: Optional[Path] = None,
