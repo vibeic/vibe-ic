@@ -223,7 +223,14 @@ def _licensed_gates() -> Set[str]:
             # #559: gates registered in the per-project umbrella that examine
             # the plugin itself, or need a bench instrument. Wrong umbrella,
             # not missing wiring.
-            | set(getattr(_F, "_NOT_A_PROJECT_GATE", ())))
+            | set(getattr(_F, "_NOT_A_PROJECT_GATE", ()))
+            # #559 (round 6): the last 12 undecided silences, each measured with
+            # the umbrella's own argv over the corpus and decided (reddens the
+            # corpus / zero decidable denominator / design-value / later-flow
+            # artifact / post-gate policy / caller-supplied utility / governance).
+            # This is what lets `undecided_silence` reach 0 and become a HARD
+            # ERROR instead of a report.
+            | set(getattr(_F, "_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA", ())))
 
 
 def _split_undecided(gates: List[str]) -> Dict[str, List[str]]:
@@ -322,6 +329,25 @@ def main(argv: List[str] = None) -> int:
               f"They return no verdict, and P0 still reports PASS (vibe-ic#559), "
               f"so what they audit is UNAUDITED. Wire the gate, de-register it, "
               f"or record the #492 measurement that licenses its silence.",
+              file=sys.stderr)
+        return RC_DRIFT
+    # #559 (round 6) — UNDECIDED SILENCE IS NOW A HARD ERROR, not a report.
+    # Until every un-invocable gate carried a recorded decision, this count was
+    # legitimately non-zero and could only be printed (the licensed pile and the
+    # nobody-looked pile were not yet separable to zero). Round 6 measured and
+    # recorded the last 12, so undecided_silence reaches 0 — and a check that can
+    # reach 0 must FAIL when it does not, or it is the very "silence reads as
+    # benign" defect #492/#559 exist to kill. A newly-registered gate that
+    # rejects the umbrella's argv with NO recorded decision now fails HERE
+    # instead of returning nothing while P0 reports PASS. BLOCKING.
+    undecided = res.get("undecided_silence") or []
+    if undecided:
+        print(f"[FAIL] {len(undecided)} gate(s) reject the umbrella's argv with "
+              f"NO recorded decision anywhere: {', '.join(undecided)}. Each "
+              f"returns no verdict while P0 reports PASS, so what it audits is "
+              f"UNAUDITED and the silence reads as benign. Wire it (clearing "
+              f"#492's bar), de-register it, or record why it cannot be driven "
+              f"in one of the licensed-silence tables in flow_compliance_check.",
               file=sys.stderr)
         return RC_DRIFT
     print(f"[PASS] {len(res['measured'])} of {res['registered']} registered P0 "
