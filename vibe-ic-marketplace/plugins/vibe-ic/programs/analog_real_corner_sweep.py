@@ -1363,6 +1363,107 @@ def _emit_metric_geometry(deck: str, metric_devs) -> str:
     return _SCALE_CARD_RE.sub("", deck)
 
 
+def _deck_card_head(line):
+    """The dot-card token the SIMULATOR would read on this deck line, or None.
+
+    Faithful to ngspice's own tokenisation, because that is what decides
+    whether a card fires:
+      * a line whose first non-blank character is `*` is a COMMENT — it is not
+        a card however many times it spells one;
+      * everything after `;` is an inline comment;
+      * otherwise the leading whitespace-delimited token is the card.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("*"):
+        return None
+    code = stripped.split(";", 1)[0].strip()
+    if not code:
+        return None
+    return code.split()[0]
+
+
+def stamp_temp_card(deck_text, temp_c):
+    """Place the per-corner `.temp` card so the SIMULATOR actually reads it.
+
+    Returns `(deck_text, applied)` where `applied` records the temperature and
+    WHICH anchor was used, so a caller can tell a placed card from a dropped
+    one instead of having to trust that one happened.
+
+    WHY THIS IS NOT A SUBSTRING REPLACE. This card used to be stamped with
+
+        deck.replace(".control", f".temp {temp_c}\\n.control", 1)
+
+    `str.replace(..., 1)` takes the first occurrence ANYWHERE in the file, and
+    a deck comment that *explains* control-mode behaviour contains the token
+    `.control` as prose. When such a comment precedes the real card the single
+    edit produces two distinct faults:
+
+      (1) SILENT — the `.temp <T>` text lands inside a line that still begins
+          with `*`, so the card is never read and the corner temperature is
+          never applied: a PVT sweep that is not swept in T, and nothing says
+          so;
+      (2) FATAL — the comment's tail then starts at column 1 with `.control`,
+          so the simulator reads a SECOND control block and aborts
+          ("Nesting of .control statements is not allowed").
+
+    (1) is the dangerous one — it does not announce itself. The two sibling
+    override substitutions in `render_deck` were already line-anchored
+    (`re.subn(r"(?m)^(v_vref\\s+…)")`); only this one was not.
+
+    A writer must know whether a token is being USED or DISCUSSED. Anchoring
+    on the card POSITION rather than on the string does that.
+
+    chip-AGNOSTIC: generic ngspice deck syntax and a numeric temperature; no
+    design, block, vendor or PDK literal anywhere.
+    """
+    applied = {}
+    if temp_c is None:
+        return deck_text, applied
+
+    lines = deck_text.split("\n")
+
+    # Idempotence — a real `.temp` card already present is UPDATED, never
+    # duplicated. Two `.temp` cards would leave which one wins up to the
+    # simulator, which is the same class of silent defect this fixes.
+    for idx, line in enumerate(lines):
+        if _deck_card_head(line) == ".temp":
+            lines[idx] = f".temp {temp_c}"
+            applied["temp_c"] = temp_c
+            applied["temp_c_anchor"] = "existing"
+            return "\n".join(lines), applied
+
+    # Preferred anchor: immediately before the real `.control` card. `.temp` is
+    # a NETLIST directive, so it must sit outside the control block.
+    for idx, line in enumerate(lines):
+        head = _deck_card_head(line)
+        if head is not None and head.startswith(".control"):
+            lines.insert(idx, f".temp {temp_c}")
+            applied["temp_c"] = temp_c
+            applied["temp_c_anchor"] = "control"
+            return "\n".join(lines), applied
+
+    # No control block. The card still has to be READ, so place it before the
+    # netlist terminator. Matched by EQUALITY, not prefix: `.endc`/`.ends` also
+    # begin with `.end` and are not the terminator.
+    for idx, line in enumerate(lines):
+        if _deck_card_head(line) == ".end":
+            lines.insert(idx, f".temp {temp_c}")
+            applied["temp_c"] = temp_c
+            applied["temp_c_anchor"] = "end"
+            return "\n".join(lines), applied
+
+    # Neither anchor exists. Append rather than drop — a silently dropped
+    # temperature is the very fault this function exists to remove — and say
+    # through `applied` which path was taken.
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines.append(f".temp {temp_c}")
+    lines.append("")
+    applied["temp_c"] = temp_c
+    applied["temp_c_anchor"] = "append"
+    return "\n".join(lines), applied
+
+
 def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
                 deck_overrides=None, temp_c=None, devices=None,
                 device_terminals=None, device_geometry_units=None):
@@ -1449,12 +1550,13 @@ def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
                           rf"\g<1>{ov['vdd']}", deck)
         if n:
             applied["vdd"] = ov["vdd"]
-    # GAP-ANALOG-3 — stamp a REAL operating temperature for the corner. ngspice
-    # treats deck line 1 as the (ignored) title, so the .temp card is injected
-    # just before the `.control` block (present in every template), never as
-    # the title line. chip-AGNOSTIC: a numeric temperature, no chip literal.
+    # GAP-ANALOG-3 — stamp a REAL operating temperature for the corner, anchored
+    # to a real `.control` CARD rather than to the first occurrence of that
+    # string (a comment may MENTION the card before the card appears; see
+    # `stamp_temp_card`). chip-AGNOSTIC: a numeric temperature, no chip literal.
     if temp_c is not None:
-        deck = deck.replace(".control", f".temp {temp_c}\n.control", 1)
+        deck, _temp_applied = stamp_temp_card(deck, temp_c)
+        applied.update(_temp_applied)
     return deck, applied
 
 
