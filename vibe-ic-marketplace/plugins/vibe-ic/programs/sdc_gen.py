@@ -348,6 +348,43 @@ def _parse_module_ports(txt: str) -> List[Tuple[str, str, int]]:
     return out
 
 
+_EDGE_EVENT_RE = re.compile(
+    r"@\s*\(([^)]*)\)|@\s*(posedge|negedge)\s+([A-Za-z_]\w*)")
+_EDGE_SIG_RE = re.compile(r"\b(?:posedge|negedge)\s+([A-Za-z_]\w*)")
+
+
+def _clock_ports_from_rtl(rtl_files: List[Path], surface: set) -> List[str]:
+    """Clock ports derived from the RTL's OWN edge-sensitive event controls.
+
+    ORGANIC — `_is_clock()` is a NAME heuristic (`clk`/`clock`). A design whose
+    datasheet names its clocks otherwise has NO matching port, the selection
+    falls through to the bare "clk" literal, that port does not exist, and the
+    emitted SDC is VACUOUS — no create_clock lands and STA has no clock at all.
+    Measured on a converter whose own L1 pin table names the modulator clocks
+    `CK4/CK5/CK6`: zero ports matched and sdc_gen failed
+    `vacuous SDC — 1 SDC port(s) do not exist on top: ['clk']`.
+
+    A signal appearing after `posedge`/`negedge` in an event control IS a clock
+    by the definition of the language — a PROPERTY of the design, not a guess
+    about its naming convention. Intersected with the synthesizable port
+    surface so an internal generated clock is never emitted as a `get_ports`.
+
+    Returned in first-appearance order (deterministic). Empty when the RTL is
+    unreadable/unparseable — the caller then keeps its existing behaviour."""
+    seen: List[str] = []
+    for f in rtl_files:
+        try:
+            txt = f.read_text(errors="ignore")
+        except Exception:
+            continue
+        for sig in _EDGE_SIG_RE.findall(txt):
+            if surface and sig not in surface:
+                continue
+            if sig not in seen:
+                seen.append(sig)
+    return seen
+
+
 def _collect_all_module_ports(rtl_files: List[Path]) -> set:
     """ORGANIC #619 — return the UNION of every port NAME declared by any
     module in the synthesizable RTL (rtl/). This is the design's actual
@@ -698,6 +735,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                     if _is_clock(pname):
                         clock_port = pname
                         break
+
+    # Last resort BEFORE emitting a vacuous SDC: if everything above settled on
+    # a port that does not exist on the design's surface, derive the clock from
+    # the RTL's own `posedge`/`negedge` event controls (a PROPERTY, not a naming
+    # convention). Purely ADDITIVE — it can only fire in the case that currently
+    # produces `vacuous SDC ... do not exist on top`, i.e. a FAIL, so no design
+    # that constrains correctly today can change.
+    _surface = rtl_ports or (top_ports or set())
+    if _surface and clock_port not in _surface:
+        _derived = _clock_ports_from_rtl(rtl_files, _surface)
+        if _derived:
+            clock_port = _derived[0]
+            print(f"NOTE: clock port derived from RTL edge-sensitive event "
+                  f"controls: {_derived} -> using '{clock_port}' "
+                  f"(no name-matched clock port on the top surface)")
 
     fpga_dir = _pl.fpga_early_dir(project)
     fpga_dir.mkdir(parents=True, exist_ok=True)

@@ -65,6 +65,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import math
 import struct
 import sys
 from pathlib import Path
@@ -157,78 +158,186 @@ def parse_lef_size(lef_text: str) -> Optional[Tuple[float, float]]:
 
 # ───────────────────────── GDS bbox parse ──────────────────────────
 
-def parse_gds_bbox(raw: bytes) -> Optional[Tuple[float, float]]:
-    """Return (width_um, height_um) of the bounding box of all
-    BOUNDARY / PATH / BOX polygons in a binary GDSII stream, or None
-    when the stream is not a parseable GDS with at least one geometry
-    record.
+# Structure / reference records needed to resolve a HIERARCHICAL stream.
+_GDS_BGNSTR = 0x0502
+_GDS_STRNAME = 0x0606
+_GDS_ENDSTR = 0x0700
+_GDS_SREF = 0x0A00
+_GDS_AREF = 0x0B00
+_GDS_BOX = 0x2D00
+_GDS_TEXT = 0x0C00
+_GDS_ENDEL = 0x1100
+_GDS_SNAME = 0x1206
+_GDS_STRANS = 0x1A01
+_GDS_MAG = 0x1B05
+_GDS_ANGLE = 0x1C05
+_GDS_COLROW = 0x1302
 
-    GDSII coordinates are stored in *database units*; the physical
-    size of one user unit (in metres) and the database-unit size are
-    in the UNITS record:
-        UNITS: [user_unit_per_dbu_in_user, dbu_size_in_metres]
-    We convert dbu → microns via  meters_per_dbu * 1e6.
-    """
-    if len(raw) < 4 or raw[:1] == b"":
-        return None
 
-    meters_per_dbu: Optional[float] = None
+def _xy_points(data: bytes):
+    cnt = len(data) // 4
+    cnt -= cnt % 2
+    return [(struct.unpack(">i", data[i * 4:(i + 1) * 4])[0],
+             struct.unpack(">i", data[(i + 1) * 4:(i + 2) * 4])[0])
+            for i in range(0, cnt, 2)]
+
+
+def _parse_structures(raw: bytes):
+    """{struct_name: {"geom": [pts...], "refs": [(sname, placement)]}} plus the
+    dbu size in metres. Pure GDSII record walk."""
+    structs = {}
+    meters_per_dbu = None
     seen_header = False
-    min_x = min_y = float("inf")
-    max_x = max_y = float("-inf")
-    saw_geometry = False
-
-    pos = 0
-    n = len(raw)
+    cur = None
+    el = None          # current element context
+    pos, n = 0, len(raw)
     while pos + 4 <= n:
         rec_len = (raw[pos] << 8) | raw[pos + 1]
         rec_type = (raw[pos + 2] << 8) | raw[pos + 3]
         if rec_len < 4 or pos + rec_len > n:
-            # malformed length → not a clean GDS
             break
         data = raw[pos + 4: pos + rec_len]
         pos += rec_len
-
         if rec_type == _GDS_HEADER:
             seen_header = True
         elif rec_type == _GDS_UNITS:
-            # 2 × 8-byte GDS-real; second = size of dbu in metres.
             if len(data) >= 16:
                 meters_per_dbu = _gds_real8(data[8:16])
-        elif rec_type == _GDS_XY:
-            # array of signed 32-bit ints, pairs (x, y).
-            cnt = len(data) // 4
-            cnt -= cnt % 2
-            for i in range(0, cnt, 2):
-                x = struct.unpack(">i", data[i * 4:(i + 1) * 4])[0]
-                y = struct.unpack(">i", data[(i + 1) * 4:(i + 2) * 4])[0]
-                if x < min_x:
-                    min_x = x
-                if x > max_x:
-                    max_x = x
-                if y < min_y:
-                    min_y = y
-                if y > max_y:
-                    max_y = y
-                saw_geometry = True
-        # BOUNDARY/PATH/BOX records themselves carry no coords (the
-        # following XY record does); we accept any of them as a hint
-        # but the XY harvest above is what actually grows the bbox.
+        elif rec_type == _GDS_BGNSTR:
+            cur = None
+        elif rec_type == _GDS_STRNAME:
+            cur = data.split(b"\x00")[0].decode("ascii", "replace")
+            structs.setdefault(cur, {"geom": [], "refs": []})
+        elif rec_type == _GDS_ENDSTR:
+            cur = None
+        elif rec_type in (_GDS_BOUNDARY, _GDS_PATH, _GDS_BOX):
+            el = {"kind": "geom"}
+        elif rec_type in (_GDS_SREF, _GDS_AREF):
+            el = {"kind": "ref", "aref": rec_type == _GDS_AREF,
+                  "sname": None, "mag": 1.0, "angle": 0.0, "reflect": False,
+                  "cols": 1, "rows": 1}
+        elif rec_type == _GDS_TEXT:
+            el = {"kind": "text"}          # TEXT XY is a label origin, not extent
+        elif rec_type == _GDS_SNAME and el is not None:
+            el["sname"] = data.split(b"\x00")[0].decode("ascii", "replace")
+        elif rec_type == _GDS_STRANS and el is not None and len(data) >= 2:
+            el["reflect"] = bool(data[0] & 0x80)
+        elif rec_type == _GDS_MAG and el is not None and len(data) >= 8:
+            el["mag"] = _gds_real8(data[0:8])
+        elif rec_type == _GDS_ANGLE and el is not None and len(data) >= 8:
+            el["angle"] = _gds_real8(data[0:8])
+        elif rec_type == _GDS_COLROW and el is not None and len(data) >= 4:
+            el["cols"] = struct.unpack(">h", data[0:2])[0] or 1
+            el["rows"] = struct.unpack(">h", data[2:4])[0] or 1
+        elif rec_type == _GDS_XY and el is not None and cur is not None:
+            pts = _xy_points(data)
+            if el["kind"] == "geom":
+                structs[cur]["geom"].extend(pts)
+            elif el["kind"] == "ref" and el.get("sname") and pts:
+                el["pts"] = pts
+                structs[cur]["refs"].append((el["sname"], dict(el)))
+        elif rec_type == _GDS_ENDEL:
+            el = None
+    return structs, meters_per_dbu, seen_header
 
-    if not seen_header or not saw_geometry:
+
+def _struct_bbox(name, structs, memo, stack):
+    """(minx, miny, maxx, maxy) of a structure in ITS OWN coordinates, with all
+    references resolved through their placement transforms. Cycle-guarded."""
+    if name in memo:
+        return memo[name]
+    if name in stack or name not in structs:
         return None
-    if max_x < min_x or max_y < min_y:
+    stack.add(name)
+    xs, ys = [], []
+    st = structs[name]
+    for (x, y) in st["geom"]:
+        xs.append(x)
+        ys.append(y)
+    for sname, ref in st["refs"]:
+        child = _struct_bbox(sname, structs, memo, stack)
+        if child is None:
+            continue
+        cx0, cy0, cx1, cy1 = child
+        mag = ref.get("mag") or 1.0
+        ang = math.radians(ref.get("angle") or 0.0)
+        refl = ref.get("reflect")
+        ca, sa = math.cos(ang), math.sin(ang)
+        corners = [(cx0, cy0), (cx1, cy0), (cx0, cy1), (cx1, cy1)]
+        origins = list(ref.get("pts") or [])
+        if ref.get("aref") and len(origins) >= 3:
+            # AREF: origin + column-ref + row-ref define the lattice.
+            (ox, oy), (colx, coly), (rowx, rowy) = origins[0], origins[1], origins[2]
+            cols = max(1, ref.get("cols", 1))
+            rows = max(1, ref.get("rows", 1))
+            dcx, dcy = (colx - ox) / cols, (coly - oy) / cols
+            drx, dry = (rowx - ox) / rows, (rowy - oy) / rows
+            origins = [(ox + dcx * i + drx * j, oy + dcy * i + dry * j)
+                       for i in (0, cols - 1) for j in (0, rows - 1)]
+        else:
+            origins = origins[:1]
+        for (ox, oy) in origins:
+            for (px, py) in corners:
+                sx, sy = px * mag, py * mag
+                if refl:
+                    sy = -sy
+                rx = sx * ca - sy * sa
+                ry = sx * sa + sy * ca
+                xs.append(ox + rx)
+                ys.append(oy + ry)
+    stack.discard(name)
+    bb = (min(xs), min(ys), max(xs), max(ys)) if xs else None
+    memo[name] = bb
+    return bb
+
+
+def parse_gds_bbox(raw: bytes) -> Optional[Tuple[float, float]]:
+    """Return (width_um, height_um) of the TOP-LEVEL bounding box of a GDSII
+    stream, resolving cell references through their placement transforms.
+
+    A GDS layout is a CELL HIERARCHY. The previous implementation unioned every
+    XY record in the whole file into ONE flat coordinate space, which mixes a
+    child's LOCAL coordinates with its parent's PLACEMENT coordinates and also
+    swallows SREF/AREF placement origins as if they were geometry. That is
+    exactly right for a single flat structure and wrong for everything else.
+    Measured on one layout streamed both ways:
+        FLAT         gate 123.260 x 34.000 um   klayout 123.260 x 34.000 um  (0.00%)
+        HIERARCHICAL gate 132.650 x 30.000 um   klayout 123.260 x 34.000 um  (7.6% / 11.8%)
+    So the outline gate silently published a wrong number for any hierarchical
+    macro -- and hierarchy is how real analog layouts express matched/arrayed
+    devices.
+
+    Resolves BOUNDARY/PATH/BOX geometry plus SREF/AREF references with
+    STRANS reflection, MAG and ANGLE. TEXT origins are excluded (a label is not
+    physical extent). The top cell is the structure no other structure
+    references; several tops union. Returns None when the stream is not a
+    parseable GDS with at least one geometry record."""
+    if len(raw) < 4:
         return None
+    structs, meters_per_dbu, seen_header = _parse_structures(raw)
+    if not seen_header or not structs:
+        return None
+    referenced = {sn for st in structs.values() for sn, _ in st["refs"]}
+    tops = [n for n in structs if n not in referenced] or list(structs)
+    memo, boxes = {}, []
+    for t in tops:
+        bb = _struct_bbox(t, structs, memo, set())
+        if bb:
+            boxes.append(bb)
+    if not boxes:
+        return None
+    min_x = min(b[0] for b in boxes)
+    min_y = min(b[1] for b in boxes)
+    max_x = max(b[2] for b in boxes)
+    max_y = max(b[3] for b in boxes)
     if meters_per_dbu is None or meters_per_dbu <= 0:
         return None
-
     um_per_dbu = meters_per_dbu * 1e6
     width = (max_x - min_x) * um_per_dbu
     height = (max_y - min_y) * um_per_dbu
     if width <= 0 or height <= 0:
         return None
     return (width, height)
-
 
 def _gds_real8(b: bytes) -> float:
     """Decode an 8-byte GDSII real (excess-64 hex exponent)."""

@@ -128,6 +128,64 @@ _MAGICRC_REL = "{tech}/libs.tech/magic/{tech}.magicrc"
 # ──────────────────────────────────────────────────────────────────────
 # Container plumbing
 # ──────────────────────────────────────────────────────────────────────
+
+# `use <cellname> <instance-id>` — a Magic .mag subcell reference.
+_MAG_USE_RE = re.compile(r"(?im)^\s*use\s+(\S+)")
+
+
+def _stage_layout_subtree(stage, layout: Path, block: str):
+    """Stage `layout` as `<block>.mag` PLUS every `.mag` it references,
+    transitively, from the layout's own directory.
+
+    A Magic layout is a CELL HIERARCHY: the top `.mag` carries `use <cell>`
+    lines and each of those cells lives in its own sibling `.mag`. Staging only
+    the top file leaves Magic unable to resolve them, and `gds write` then
+    reports `Failure to read entire subtree of the cell` / `I/O error in writing
+    file` and produces NOTHING. Measured on a real device-level layout: the
+    write failed on the last referenced device cell and no GDS came back at all.
+    Only a single flat cell ever worked, and essentially no real analog layout
+    is flat (hierarchy is how matched/arrayed devices are expressed).
+
+    The top cell is staged under `<block>.mag` so Magic's cell name is the block
+    name; subcells keep their own names because that is what the `use` lines
+    reference. Bounded depth + visited set. Returns (ok, detail)."""
+    ok, why = stage.put(layout, f"{block}.mag")
+    if not ok:
+        return False, f"could not stage {layout.name}: {why}"
+    src_dir = layout.parent
+    seen = set()
+    pending = [layout]
+    staged = []
+    depth = 0
+    while pending and depth < 16:
+        nxt = []
+        for f in pending:
+            try:
+                text = f.read_text(errors="ignore")
+            except OSError:
+                continue
+            for cell in _MAG_USE_RE.findall(text):
+                if cell in seen:
+                    continue
+                seen.add(cell)
+                child = src_dir / f"{cell}.mag"
+                if not child.is_file():
+                    # Not an error here: the cell may come from a PDK library on
+                    # Magic's own search path. Magic reports it if it cannot be
+                    # resolved, and that surfaces in the FAIL detail.
+                    continue
+                cok, cwhy = stage.put(child, child.name)
+                if not cok:
+                    return False, f"could not stage subcell {child.name}: {cwhy}"
+                staged.append(cell)
+                nxt.append(child)
+        pending = nxt
+        depth += 1
+    return True, (f"staged {len(staged)} subcell(s): {sorted(staged)}"
+                  if staged else "flat layout (no subcells)")
+
+
+
 def _run(argv: List[str], timeout: int = 900) -> Tuple[int, str, str]:
     """Bounded subprocess. Monkeypatch surface for the unit tests."""
     try:
@@ -297,11 +355,12 @@ def emit_block(project: Path, block: str, stage: Stage,
                            f"magicrc at {magicrc}"))
         return rec
 
-    ok, why = stage.put(layout, f"{block}.mag")
+    ok, why = _stage_layout_subtree(stage, layout, block)
     if not ok:
         rec.update(status="UNAVAILABLE", rule="A8GDS_STAGE_FAILED",
-                   detail=f"could not stage {layout.name}: {why}")
+                   detail=why)
         return rec
+    rec["staged_subtree"] = why
 
     tcl_name = f"{block}_gds_write.tcl"
     tcl = build_gds_write_tcl(top_cell=block, layout_mag=block,
