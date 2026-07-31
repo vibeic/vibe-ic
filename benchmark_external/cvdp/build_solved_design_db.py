@@ -20,8 +20,20 @@ from __future__ import annotations
 import json, os, re, sys
 from pathlib import Path
 
-DS = "/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl"
-OUT_DIR = Path("/home/reyerchu/vibe-ic/benchmark_external/cvdp/solved_design_db")
+# Both were absolute personal-home paths, which the shipped-path
+# portability gate rejects. A hard-coded home is one machine's layout, not a
+# default: on any other checkout this reads a dataset that is not there and
+# writes a database somewhere that does not exist.
+#
+# DS has no anchor inside the repo — the CVDP dataset is an EXTERNAL corpus
+# that lives wherever the operator unpacked it — so it comes from an env var
+# and there is no fallback. Guessing would make the script fail by reading the
+# wrong corpus rather than by saying what it needs.
+#
+# OUT_DIR is derived from this file's own location: the database it builds
+# belongs beside the script, in the repo, wherever the repo is cloned.
+DS = os.environ.get("CVDP_DATASET_JSONL")
+OUT_DIR = Path(__file__).resolve().parent / "solved_design_db"
 
 _MODRE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)")
 _PORTRE = re.compile(r"\b(input|output|inout)\b[^;]*?\b([A-Za-z_]\w*)\s*(?:,|;|\)|=)")
@@ -75,6 +87,13 @@ def _keywords(prompt: str) -> list:
     return out[:40]
 
 def build():
+    # Say what is missing, rather than letting `open(None)` raise a TypeError
+    # that names neither the variable nor the reason.
+    if not DS:
+        sys.exit("CVDP_DATASET_JSONL is not set — point it at the CVDP "
+                 "non-agentic code-generation .jsonl. There is no default: the "
+                 "dataset is an external corpus and its location is a property "
+                 "of the machine, not of this repo.")
     recs = {json.loads(l)["id"]: json.loads(l) for l in open(DS) if l.strip()}
     # solved corpus: the converged responses (id+completion). Path passed as argv[1].
     solved_path = sys.argv[1] if len(sys.argv) > 1 else None

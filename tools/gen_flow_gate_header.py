@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -87,11 +88,26 @@ def run_suite(cmd: str, cwd: Path) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # Both defaults were absolute personal-home paths, which the
+    # shipped-path portability gate rejects — correctly. A hard-coded home is
+    # not a default, it is one machine's layout: on any other checkout the tool
+    # silently writes to, or reads from, somewhere that does not exist.
+    #
+    # `--plugin-root` is DERIVED from this file's own location, so it is right
+    # by construction wherever the repo is cloned. `--page` has no such anchor
+    # (the site tree is a sibling of the repo, not inside it), so it comes from
+    # an env var and is otherwise REQUIRED rather than guessed: a default that
+    # points at a path this machine happens to have would fail on someone
+    # else's checkout by writing the wrong file, which is worse than asking.
+    _repo_root = Path(__file__).resolve().parents[1]
+    _page_env = os.environ.get("VIBEIC_FLOW_GATE_PAGE")
     ap.add_argument("--page", type=Path,
-                    default=Path("/home/reyerchu/vibeic.ai/flow-gate.html"))
+                    default=Path(_page_env) if _page_env else None,
+                    required=not _page_env,
+                    help="output HTML page (or set VIBEIC_FLOW_GATE_PAGE)")
     ap.add_argument("--plugin-root", type=Path,
-                    default=Path("/home/reyerchu/vibe-ic/vibe-ic-marketplace/"
-                                 "plugins/vibe-ic"))
+                    default=_repo_root / "vibe-ic-marketplace"
+                                       / "plugins" / "vibe-ic")
     ap.add_argument("--suite-cmd", default=None,
                     help="test selection to run; its NAME is published with the "
                          "number. Omit to carry the previous figure forward "
