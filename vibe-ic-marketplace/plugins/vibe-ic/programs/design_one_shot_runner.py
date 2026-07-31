@@ -9868,8 +9868,19 @@ def _derive_dft_clock_name(blob: str) -> str:
                  "clk_in", "clkin")), "")
     if not clk and clk_ports:
         # Prefer a genuinely clock-like name over an incidental match, shortest.
+        # A clock token may appear as a PREFIX (clk_en_i), a SUFFIX (wb_clk_i,
+        # sys_clk, core_clk) or the whole word — so recognise `clk`/`clock`
+        # ANYWHERE in the name, not only at the start. The old filter required a
+        # `clk`-PREFIX or the literal substring `clock`, which EXCLUDED the very
+        # common suffix form `wb_clk_i` and then let a secondary `user_clock2`
+        # (which merely contains the longer token `clock`) win. Measured on
+        # caravel user_project_wrapper x sky130A: clock ports {wb_clk_i,
+        # user_clock2}; the 33 flops all clock off wb_clk_i, yet the old rule
+        # derived `user_clock2`. Every member of clk_ports already matched the
+        # clock regex above, so this only breaks ties toward the shortest
+        # genuinely-clock name.
         _clocky = [c for c in clk_ports
-                   if c.lower().startswith("clk") or "clock" in c.lower()]
+                   if "clk" in c.lower() or "clock" in c.lower()]
         clk = sorted(_clocky or clk_ports, key=len)[0]
     return clk
 
