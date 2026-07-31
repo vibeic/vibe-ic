@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1018
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1018)
+- **Total programs (excluding helpers / shims):** 1019
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1019)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1009 |
+| `any` | 1010 |
 
 ## Alphabetical listing
 
@@ -543,6 +543,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_todo_stub_count_check` | any | — | D3 program-first capture of the ``phase1-output-verify`` skill's "Completeness" checklist (item 1). |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `landing_is_one_commit_check` | any | — | a landing is ONE commit, not two. |
+| `landing_worktree_is_clean_check` | any | — | the gate verifies COMMITS; a tracked file still modified in the worktree means what was verified is not what the author has. |
 | `latchup_esd_spacing_check` | any | v0.2.30 | the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN... |
 | `latency_conformance_check` | any | — | v1.0 plugin gate (ORGANIC #705). |
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
@@ -1090,7 +1091,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1009 programs)
+### `any` (1010 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1604,6 +1605,7 @@ _(no programs in this group)_
 - `l_doc_todo_stub_count_check` — D3 program-first capture of the ``phase1-output-verify`` skill's "Completeness" checklist (item 1).
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `landing_is_one_commit_check` — a landing is ONE commit, not two.
+- `landing_worktree_is_clean_check` — the gate verifies COMMITS; a tracked file still modified in the worktree means what was verified is not what the author has.
 - `latchup_esd_spacing_check` — the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN...  _[v0.2.30]_
 - `latency_conformance_check` — v1.0 plugin gate (ORGANIC #705).
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_

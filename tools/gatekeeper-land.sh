@@ -81,6 +81,21 @@ else
       python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE"
 fi
 
+# Everything above reasons about COMMITS. A tracked file still modified in the
+# worktree means the tree they verified is not the tree the author has.
+#
+# v1.9.12 landed HALF of #591 this way: `git stash pop` does not restore
+# staged-ness, and the explicit `git add` that followed named two of the four
+# files. The commit message asserted "undecided silence is a hard error" and the
+# hard error was in one of the two left behind. Every gate here passed, because
+# the test file was left behind WITH the code it tests — the landed repository
+# was self-consistent, which is exactly what a suite measures.
+#
+# Cheap tier: it is one `git status`, and it is the last thing that can tell a
+# complete landing from a coherent fragment of one.
+run "worktree carries no uncommitted change" \
+    python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT"
+
 if [ "$CHEAP_ONLY" = "1" ]; then
   echo "--- full tier SKIPPED (--cheap-only) — no stamp will be written ---"
   exit "$FAILED"
