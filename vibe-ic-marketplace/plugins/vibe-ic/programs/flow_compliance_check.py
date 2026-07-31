@@ -4584,11 +4584,38 @@ def _digital_backend_is_na(project: Path) -> Tuple[bool, str]:
 # RULE they license (convert iff 0 new FAILs AND a non-empty denominator on every
 # project) and now asserts it against this table rather than its own copy.
 #
+# vibe-ic v1.9.0 — `fpga_wrapper_input_polluter_check` was CONVERTED in v1.8.82 and
+# the row below was not written. The conversion was measured (the commit records
+# 0 FAIL and a "Files scanned" of 1..102, never 0, over all 107); what was missing
+# is the RECORD, and `test_only_gates_that_cleared_both_bars_were_converted` derives
+# the licensed set from this table, so the adapters held a gate the table did not
+# license. That test went red at the next minor-milestone full suite and stayed red
+# through four patch releases, because patch cadence does not run it. A measurement
+# that lives only in a commit message is not available to the code that has to honour
+# it. Re-derived here before writing the row rather than copied from that message:
+# same mirror, same `_structural_gate_argv`, rc=0 on 107/107, denominator >0 on 107/107.
+#
+# v1.8.82 also added a THIRD bar this table cannot express: can the gate FAIL at all?
+# Without `--strict` a detected polluter is a WARNING and rc stays 0, so the gate
+# would have cleared both columns below BY BEING INCAPABLE OF FAILING. That is why
+# `_STRUCTURAL_GATE_BARE_FLAGS` exists and why the row above is only true of the
+# `--strict` argv the umbrella actually builds.
+#
+# One honest limit on the second column, worth stating because it is not visible in
+# the number: this gate's disclosed denominator counts FILES, while its subject is
+# modules carrying >=2 inout ports — measured at 8 modules across 4 of the 107. The
+# column means "the gate disclosed a non-zero denominator", which is the property the
+# rule was written against and which `sustained_vs_edge_check` is also judged on, so
+# the row is (0, 107) and not (0, 4). A gate disclosing a count whose subject is
+# absent is the #564 family, not the #492 one; recorded here so the next conversion
+# reads it instead of re-deriving it from the corpus a second time.
+#
 #   gate                              new FAIL/107   projects w/ denominator>0
 P0_CORPUS_DENOMINATOR = 107
 P0_RTL_DIR_GROUP_MEASUREMENT = {
     "sustained_vs_edge_check":          (0, 107),   # CONVERTED
     "timer_freeze_after_state_check":   (0, 107),   # CONVERTED
+    "fpga_wrapper_input_polluter_check": (0, 107),  # CONVERTED v1.8.82
     "cmd_arg_range_validation_check":   (0, 4),     # examines 4/107 only
     "bit_count_modulo_check":           (0, 0),     # `checked: 0` everywhere
     "l12_sequence_implementation_check": (0, 0),    # `sequences_checked: 0`
