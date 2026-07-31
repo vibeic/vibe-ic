@@ -709,11 +709,40 @@ def ci_ran_gate(repo: Path, head: str, cadence: str) -> GateResult:
     rc, out, err = _run_program(prog, [str(repo), "--rev", head,
                                        "--min-total", "50"])
     summary = ((out + err).strip().splitlines() or [""])[0][:240]
-    if rc == 1 and "NO CI RUN EXISTS" in (out + err) and cadence != "FULL":
-        # -1 is "not applicable / non-blocking"; the text still says NO CI RUN.
+    if rc == 1 and "NO CI RUN EXISTS" in (out + err):
+        # vibe-ic#570 — the MILESTONE BLOCK is retired; the disclosure is not.
+        #
+        # It used to block at FULL cadence, reasoning that "a milestone is the one
+        # landing that must not rest on one machine's word". That reasoning is
+        # still right. What changed is that the evidence it named is evidence we
+        # have decided not to produce — owner directive 2026-08-01: GitHub is repo
+        # storage only, CI is ours. The clause therefore blocked every future
+        # x.y.0 on a run that is never coming, and a gate that must be bypassed to
+        # work is a gate that gets bypassed for real reasons too.
+        #
+        # WHY NOT simply re-point it at our own gate. `gatekeeper-land.sh` DOES
+        # write a per-SHA record — `.git/gatekeeper-stamp`, enforced by the
+        # pre-push hook, invalidated by an amend, so it is neither forgeable by
+        # accident nor reusable. But it lives in `.git/`, which is not
+        # version-controlled and does not travel with a push: it IS one machine's
+        # word. Pointing the milestone clause at it would turn every milestone
+        # green while satisfying none of the clause's stated reason — the #550
+        # shape again, our own empty record standing in for GitHub's empty
+        # listing. A gate asserting a property it no longer checks is worse than
+        # one that admits the property is unmet.
+        #
+        # So: disclose at EVERY cadence, block at none, and name the unmet
+        # property in the milestone summary so it reaches the review record. When
+        # a durable, shareable record exists the block can return and point at
+        # something that means what it says.
+        #
+        # UNCHANGED: a CI run that EXISTS and FAILED still blocks everywhere — rc
+        # 1 without NO CI RUN EXISTS falls through to the return at the bottom.
+        # This downgrade is scoped to NEVER_RAN, which is the whole point.
+        scope = ("patch landing" if cadence != "FULL"
+                 else "MILESTONE — independent-evidence property NOT met (#570)")
         return GateResult("ci_ran_at_all_check", -1,
-                          "DISCLOSED (non-blocking for a patch landing): "
-                          + summary)
+                          f"DISCLOSED (non-blocking for a {scope}): " + summary)
     if rc == 2:
         # NOT CHECKED must not BLOCK. rc 2 is non-blocking everywhere else in
         # this repo (`run_tolerating_uncheckable` in _gate_dispatch.sh), but

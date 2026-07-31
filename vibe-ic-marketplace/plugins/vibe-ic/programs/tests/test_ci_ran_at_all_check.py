@@ -129,16 +129,30 @@ def test_the_implausibility_check_is_off_unless_asked(monkeypatch):
 
 # --- the merge-gate policy, pinned -----------------------------------------
 
-def test_the_merge_gate_discloses_on_a_patch_and_blocks_a_milestone(monkeypatch,
-                                                                    tmp_path):
-    """A missing CI run must never be SILENT, and must never be fatal for the
-    ordinary landing — the situation this repo is legitimately in while the
-    account is blocked. A milestone is the one landing that must not rest on a
-    single machine's word.
+def test_the_merge_gate_discloses_at_every_cadence_and_blocks_at_none(
+        monkeypatch, tmp_path):
+    """A missing CI run must never be SILENT, and is no longer fatal anywhere.
 
-    Asserted on both halves: `green` (does it block) AND the summary text (does
-    a reader see it). A gate that blocks without saying why, or says it without
-    blocking on the milestone, fails half its job.
+    HISTORY, because this test used to assert the opposite half and the change
+    is a policy decision rather than a bug fix. It required a milestone (FULL
+    cadence) to have a GitHub Actions run, reasoning that "a milestone is the
+    one landing that must not rest on a single machine's word".
+
+    That reasoning still holds. What changed is the evidence it named: owner
+    directive 2026-08-01 — GitHub is repo storage only, CI is ours. Actions is
+    disabled account-wide (vibe-ic#550), so the clause blocked every future
+    x.y.0 on a run that is never coming.
+
+    Re-pointing it at our own record was considered and rejected in #570:
+    `gatekeeper-land.sh` writes `.git/gatekeeper-stamp` per SHA and the pre-push
+    hook enforces it, but `.git/` does not travel with a push, so that record IS
+    one machine's word. Aiming the clause at it would go green on every
+    milestone while satisfying none of its reason.
+
+    So the disclosure runs at every cadence and blocks at neither, and the
+    milestone summary NAMES the property that is currently unmet — a reader of
+    the review record has to be able to see that the guarantee is absent, which
+    is the half that must not be lost.
     """
     import gatekeeper_review as G
 
@@ -154,8 +168,43 @@ def test_the_merge_gate_discloses_on_a_patch_and_blocks_a_milestone(monkeypatch,
         "one outcome this whole issue is about")
 
     milestone_gate = G.ci_ran_gate(tmp_path, "HEAD", "FULL")
-    assert milestone_gate.green is False, (
-        "a milestone landed with no CI run at all")
+    assert milestone_gate.green is True, (
+        "the milestone block is retired (#570) — it required evidence we have "
+        "decided not to produce")
+    assert "NO CI RUN" in milestone_gate.summary
+    assert "NOT met" in milestone_gate.summary, (
+        "a milestone went green without recording that the independent-evidence "
+        "property is unmet — going quiet is how the guarantee gets forgotten")
+    assert "#570" in milestone_gate.summary, (
+        "the summary must name where the decision is recorded, or the next "
+        "reader re-derives it")
+
+
+def test_the_milestone_gate_does_not_read_the_local_stamp():
+    """The trap #570 names, pinned as a property of the source.
+
+    `.git/gatekeeper-stamp` is a per-SHA record that exists TODAY and would make
+    this gate green on every milestone. Using it would look like the fix and
+    mean less than the disclosure it replaced: the stamp is local, so it is
+    exactly the "one machine's word" the retired clause existed to require
+    something stronger than.
+    """
+    src = (Path(__file__).resolve().parents[1]
+           / "gatekeeper_review.py").read_text(encoding="utf-8")
+    body = src.split("def ci_ran_gate", 1)[1].split("\ndef ", 1)[0]
+    # COMMENTS STRIPPED. The function's own comment EXPLAINS why it must not read
+    # the stamp, and names it to do so. A scan that cannot tell documentation
+    # from code has to be weakened the first time someone documents something —
+    # the same mistake this repo made in `test_dont_use_ordering` (v1.9.6), where
+    # six step names in prose read as six steps in the wrong order.
+    code = "\n".join(ln for ln in body.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "gatekeeper-stamp" not in code, (
+        "ci_ran_gate reads the local stamp — that satisfies the gate without "
+        "satisfying its reason (#570)")
+    assert "gatekeeper-stamp" in body, (
+        "the function no longer explains why it does not use the stamp; without "
+        "that, the next reader wires it in as an obvious improvement")
 
 
 def test_a_real_ci_failure_blocks_at_every_cadence(monkeypatch, tmp_path):
