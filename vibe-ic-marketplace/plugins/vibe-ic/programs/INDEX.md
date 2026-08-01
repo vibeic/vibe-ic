@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1023
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1023)
+- **Total programs (excluding helpers / shims):** 1024
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1024)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1014 |
+| `any` | 1015 |
 
 ## Alphabetical listing
 
@@ -697,6 +697,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_expert_parse_track` | any | — | the SECOND track of Phase 1. |
 | `phase1_expert_track_evidence_check` | any | — | did the Phase-1 EXPERT track actually run, or is its zero the zero of never having been asked? (#312) |
 | `phase1_gate_contract_check` | any | v0.74 | Meta-checker for Phase 1 deterministic gates. |
+| `phase1_input_corpus_purity_check` | any | — | did Phase-1 specify the DESIGN, or the TOOL? |
 | `phase1_input_vs_generated_completeness_check` | any | v0.60 | Phase 1 coverage gate ======================================================================== |
 | `phase1_json_converge` | any | — | deterministic comparator for the Phase-1 DIALOGUE dual-track convergence (program-first + AI-backup, ORGANIC #716). |
 | `phase1_k5_quality_check` | any | — | catch the K5 issues found by real Phase-2 synth. |
@@ -1095,7 +1096,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1014 programs)
+### `any` (1015 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1763,6 +1764,7 @@ _(no programs in this group)_
 - `phase1_expert_parse_track` — the SECOND track of Phase 1.
 - `phase1_expert_track_evidence_check` — did the Phase-1 EXPERT track actually run, or is its zero the zero of never having been asked? (#312)
 - `phase1_gate_contract_check` — Meta-checker for Phase 1 deterministic gates.  _[v0.74]_
+- `phase1_input_corpus_purity_check` — did Phase-1 specify the DESIGN, or the TOOL?
 - `phase1_input_vs_generated_completeness_check` — Phase 1 coverage gate ========================================================================  _[v0.60]_
 - `phase1_json_converge` — deterministic comparator for the Phase-1 DIALOGUE dual-track convergence (program-first + AI-backup, ORGANIC #716).
 - `phase1_k5_quality_check` — catch the K5 issues found by real Phase-2 synth.

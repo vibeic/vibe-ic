@@ -7909,6 +7909,35 @@ def extract_text_pipeline(project: Path,
                                           # reads INPUT docs only.
                                           "phase2", "phase3", "reports",
                                           "extracted_docs"})
+            # ORGANIC — the ingester must never read its OWN documentation as
+            # the design's specification. The skip set above excludes the
+            # runner's own OUTPUT (phase1/phase2/phase3/reports); nothing
+            # excluded the runner's own SOURCE. When the plugin is checked out
+            # INSIDE the run root (run root holds `input/` and a plugin
+            # checkout side by side — a normal deployment) this rglob walked
+            # the plugin tree and ingested 9 plugin READMEs as design input:
+            # 97.2% of the corpus by bytes on a run whose real input was ONE
+            # natural-language request. L1 then described the TOOL (a pin named
+            # `Verb` from a docs table of verbs; the plugin README's vendor and
+            # process node), and ic_class was decided from that text — the
+            # crypto detector matched the literal `SHA` in the plugin's
+            # artifact-ATTESTATION section, classifying the design
+            # `crypto_accelerator`, whose registry declares rtl_gen=null, so
+            # RTL was WAIVED and Phase-2 FAILed with `rtl/ missing`.
+            # Identified by STRUCTURE (plugin manifest / programs+flow+skills
+            # triple), never by directory name. See _input_corpus_scope.py.
+            _tooling_roots = []
+            _tooling_excluded: List[str] = []
+            try:
+                if str(Path(__file__).resolve().parent) not in sys.path:
+                    sys.path.insert(
+                        0, str(Path(__file__).resolve().parent))
+                import _input_corpus_scope as _ics
+                _tooling_roots = _ics.find_tooling_roots(project)
+            except Exception:
+                # DEGRADE LOUDLY: recorded as NOT_RUN below, never silently
+                # treated as "no tooling present".
+                _ics = None  # type: ignore[assignment]
             if not _v1_6_343_any_doc_dir:
                 _v1_6_343_cap = 30
                 _v1_6_343_count = 0
@@ -7935,6 +7964,14 @@ def extract_text_pipeline(project: Path,
                     if any(seg in _v1_6_343_skip_segments
                            for seg in rel.parts):
                         continue
+                    # ORGANIC — tooling subtree: the plugin's own checkout is
+                    # not design input. Recorded, never dropped silently.
+                    if _tooling_roots and _ics is not None:
+                        _hit = _ics.path_is_tooling(rel.as_posix(),
+                                                    _tooling_roots)
+                        if _hit is not None:
+                            _tooling_excluded.append(rel.as_posix())
+                            continue
                     if readme.suffix.lower() not in {
                             ".md", ".rst", ".txt", ".adoc",
                             ".asciidoc"}:
@@ -8001,6 +8038,35 @@ def extract_text_pipeline(project: Path,
                 "extraction_strategy: "
                 "rglob_readme_fallback_v1_6_343\n"
             )
+        # ORGANIC — DEGRADE LOUDLY (flow-change-acceptance §6). Excluding input
+        # is an action with consequences, so it is never silent. `status=RAN`
+        # with an empty excluded_roots positively means "no tooling subtree
+        # present"; `NOT_RUN` means the rule never applied. The two are never
+        # conflated into "nothing was excluded".
+        try:
+            if _ics is not None:
+                _scope = _ics.scope_record(
+                    project, _tooling_roots, _tooling_excluded, status="RAN")
+            else:
+                _scope = {"_schema_version": "1", "status": "NOT_RUN",
+                          "rule": "programs/_input_corpus_scope.py",
+                          "_comment": ("the input-corpus scope rule could not "
+                                       "be loaded; tooling subtrees were NOT "
+                                       "excluded on this run"),
+                          "excluded_roots": [], "excluded_files": [],
+                          "excluded_file_count": 0}
+            _scope_p = project / "phase1" / "input_corpus_scope.json"
+            _scope_p.parent.mkdir(parents=True, exist_ok=True)
+            _scope_p.write_text(json.dumps(_scope, indent=2) + "\n",
+                                encoding="utf-8")
+            if _tooling_excluded:
+                print(f"      input_corpus_scope: excluded "
+                      f"{len(_tooling_excluded)} tooling document(s) from "
+                      f"{len(_tooling_roots)} tooling subtree(s) — the "
+                      f"plugin's own checkout is not design input "
+                      f"(→ phase1/input_corpus_scope.json)")
+        except Exception:
+            pass
 
     # v1.6.291 — for #166 + #168 round-2 ORGANIC (Option A).
     # Persist every `__chip_root_docs__/<rel_path>` in-memory entry
@@ -61980,6 +62046,62 @@ def main() -> int:
             layer_gate_failures.append(_gate_name)
             for _line in _out[1:6]:
                 print(f"        {_line}", file=sys.stderr)
+
+    # ------------------------------------------------------------------
+    # ADVISORY POST-CHECKS — these REPORT and CONTINUE. They are kept out
+    # of _SEMANTIC_LAYER_GATES above deliberately: that table BLOCKS, and
+    # silently adding a non-blocking member to it would make the table's
+    # own contract a lie.
+    #
+    # ORGANIC — `phase1_sufficiency_check.py` is the DECLARED sufficiency
+    # gate of the Phase-1 dual-track convergence, and it was wired into
+    # NOTHING: not this runner, not phase1_one_shot_runner, not
+    # flow/phase1_phase2_phase3.yaml. It was referenced only by its own
+    # tests, so `flow_gate_enforcement_audit` could not even classify it as
+    # orphaned — the audit walks the flow definition, and this gate was
+    # not in it. Measured consequence: a natural-language-only Phase-1
+    # emitted all 27 layers with ZERO ports and reported PASS, while the
+    # unwired gate — run by hand over the very same generated_docs — said
+    # `insufficient / MISSING required: ['ports']`. Phase-2 then failed
+    # with `rtl/ missing`, because there was no interface to build to.
+    # Wiring it ADVISORY makes the next blind run NAME that, instead of
+    # reporting a green Phase-1 into a Phase-2 that cannot succeed.
+    #
+    # ADVISORY, not BLOCKING, and deliberately so: promoting it would need
+    # the corpus sweep flow-change-acceptance §2/§3 require (evidence that
+    # it fires on no legitimately-complete design, and a prove-by-run of a
+    # stopped flow). That evidence is NOT claimed here.
+    # ------------------------------------------------------------------
+    _ADVISORY_POST_CHECKS = (
+        ("phase1_input_corpus_purity_check",
+         [str(project)], "phase1/input_corpus_purity.json"),
+        ("phase1_sufficiency_check",
+         [str(_pl.generated_docs_dir(project))],
+         "phase1/phase1_sufficiency.json"),
+    )
+    for _chk_name, _chk_args, _rel_report in _ADVISORY_POST_CHECKS:
+        _chk_path = Path(__file__).resolve().parent / f"{_chk_name}.py"
+        if not _chk_path.is_file():
+            # DEGRADE LOUDLY: an absent check is stated, never assumed clean.
+            print(f"      {_chk_name}: SKIPPED (program not present) "
+                  f"[ADVISORY]")
+            continue
+        try:
+            _rp = _pl.report_path(project, _rel_report)
+            _rp.parent.mkdir(parents=True, exist_ok=True)
+            _cp = subprocess.run(
+                [sys.executable, str(_chk_path), *_chk_args,
+                 "--json", str(_rp)],
+                capture_output=True, text=True, timeout=300,
+            )
+        except Exception as _exc:      # never let an advisory crash the run
+            print(f"      {_chk_name}: SKIPPED ({_exc}) [ADVISORY]")
+            continue
+        _out = (_cp.stdout or _cp.stderr or "").strip().splitlines()
+        print(f"      {_chk_name}: "
+              f"{_out[0] if _out else '(no output)'} [ADVISORY]")
+        for _line in _out[1:6]:
+            print(f"        {_line}")
 
     # v1.6.134 (#51 Fix 9c) — coverage gate FAIL hard-blocks the
     # runner exit, regardless of `--strict`. Pre-v1.6.134 the gate
