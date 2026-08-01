@@ -104,6 +104,7 @@ import synth_frontend as _sf
 import lec_gate_netlist_select as _lec_gns  # ATPG-cut predicate (diagnosis only)
 import _yosys_stat as _ystat  # shared yosys `stat` parser (step 9 stats.json)
 import quartus_map_audit as _qma  # step 6 .map.rpt silent-failure scanner
+import _hardmacro_stage as _hms  # staged SRAM/IP macro discovery + blackbox
 
 # Path inside the iic-osic-tools container where the EDA tools live (yosys
 # + the slang plugin, sv2v, verilator). Mirrors phase3_one_shot_runner.
@@ -5460,6 +5461,12 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         # ORGANIC-20260531: exclude FPGA / board-integration wrappers
         # (sibling-include or vendor-primitive) from the ASIC source list.
         rtl_files = _select_asic_rtl_sources(rtl_dir)
+        # ORGANIC-20260801 — stream staged hard-macro behavioral models (L8
+        # `.v`) into the sim compile set so an instantiated SRAM/IP macro is
+        # not `Unknown module type` at iverilog elaboration.
+        for _m in _staged_hardmacro_models(project, rtl_files):
+            if _m["v"] is not None:
+                rtl_files.append(_m["v"])
         run_dir = sim_dir / "generic_full_stack_run"
         run_dir.mkdir(parents=True, exist_ok=True)
         vvp = run_dir / "full_stack.vvp"
@@ -5895,6 +5902,16 @@ def _select_asic_rtl_sources(rtl_dir: Path):
                       if "pkg" not in p.name and _keep(p))
     other_v = sorted(p for p in rtl_dir.glob("*.v") if _keep(p))
     return pkg_files + other_sv + other_v
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC-20260801-staged-hardmacro-model-not-injected-into-sim-or-synth
+# Staged hard-macro (SRAM/IP) model discovery + blackbox staging lives in the
+# shared `_hardmacro_stage` module so the Phase-2 sim/synth path here and the
+# `lec_run` equiv gold/gate build resolve an instantiated-but-staged macro the
+# SAME way. See that module's docstring for the full rationale.
+_staged_hardmacro_models = _hms.staged_hardmacro_models
+_emit_hardmacro_blackbox_stub = _hms.emit_blackbox_stub
 
 
 # ---------------------------------------------------------------------------
@@ -7774,6 +7791,16 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             rtl_files = _select_asic_rtl_sources(rtl_dir)  # re-glob staged deps
     except Exception:  # pragma: no cover — robustness aid must never crash synth
         _v662_dep = {}
+    # ORGANIC-20260801 — feed a `(* blackbox *)`-attributed copy of every
+    # instantiated staged hard-macro model (L8 `.v`) so the generic sanity
+    # synth resolves the macro as an interface blackbox instead of failing
+    # `Unknown module type`. Appended to rtl_files AFTER the #662 re-glob so
+    # it survives; flows through the primary, docker, and SV synth paths (all
+    # iterate rtl_files). No-op for designs without staged hard-macros.
+    for _m in _staged_hardmacro_models(project, rtl_files):
+        if _m["v"] is not None:
+            rtl_files.append(_emit_hardmacro_blackbox_stub(
+                _m["v"], _m["name"], synth_dir / "_hardmacro_bb"))
     # v1.6.191 (#78 P0) — prefer ASIC-core top when both an FPGA
     # wrapper (`chip_top`) and an ASIC core (`chip_top_asic`) are
     # present in rtl/. The FPGA wrapper has tristate I/O whose
