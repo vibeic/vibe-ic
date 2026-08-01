@@ -111,6 +111,20 @@ SHIPPED_PATHS = (
     "vibe-ic-marketplace",
     "tools",
     ".claude-plugin",
+    # v1.9.35 — the repo-root install docs, added because leaving them out cost
+    # exactly what this check exists to prevent. `sync_image_version --check`
+    # validates 24 image pointers across 9 files and reads them FROM THE
+    # WORKTREE; two of those files (`README.md`, `docs/INSTALL.md`) live outside
+    # the three roots above. A landing advanced the image anchor to 0.2.53,
+    # `--check` passed on the worktree, and the doc edits were never committed —
+    # so main went on telling users to pull an image tag one release stale while
+    # every gate said the pointers were consistent.
+    #
+    # THE RULE THIS ENCODES: a path that any landing gate READS must be a path
+    # this check GUARDS, or the gate is certifying a tree the commit does not
+    # contain. `test_landing_worktree_is_clean` pins the two lists together.
+    "README.md",
+    "docs",
 )
 
 RC_OK, RC_DIRTY, RC_CANNOT_MEASURE = 0, 1, 2

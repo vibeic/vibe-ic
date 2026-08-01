@@ -96,6 +96,7 @@ import argparse
 import json
 import re
 import shlex
+import struct as _struct
 import subprocess
 import sys
 from pathlib import Path
@@ -112,6 +113,21 @@ from magic_port_extract_emit import build_gds_write_tcl  # noqa: E402
 # and with analog_hardmacro_check so the producer cannot accept a file its own
 # consumers reject.
 from analog_a5_layout_check import _gds_geometry_count  # noqa: E402
+
+# vibe-ic#595. The SAME parsers the A8 outline GATE judges this file with, so
+# the producer cannot align to a frame its own gate measures differently. If
+# these ever disagree the gate is right by construction and the producer is
+# broken — importing them makes that impossible rather than unlikely.
+from analog_lef_gds_outline_check import (  # noqa: E402
+    DEFAULT_TOL_UM,
+    offset_on_grid,
+    parse_gds_bbox_extent,
+    parse_lef_frame_ll,
+    _parse_structures,
+    _GDS_ENDSTR,
+    _GDS_STRNAME,
+    _GDS_XY,
+)
 
 PROGRAM = "analog_hardmacro_gds_emit"
 
@@ -309,6 +325,224 @@ def discover_blocks(project: Path) -> List[str]:
 # ──────────────────────────────────────────────────────────────────────
 # The producer
 # ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────
+# vibe-ic#595 — the abstract and the body must leave A8 in ONE frame
+# ──────────────────────────────────────────────────────────────────────
+#
+# A8 ships two views of the same block, written by two different Magic
+# writers: `lef write` NORMALISES the abstract to the cell bounding box, and
+# `gds write` PRESERVES the `.mag`'s own coordinates. Any A5 layout whose
+# bounding box does not already start at the origin therefore leaves A8 with
+# its outline and its metal in DIFFERENT coordinate frames — the LEF reserves
+# the area where the body is not, and every PIN rect names metal that is not
+# there. Measured on this repo's own analog reference blocks: every Metal3
+# signal pin hit 0 shapes at its stated LEF coordinate and exactly 1 when
+# shifted by the GDS bounding box lower-left, on both blocks.
+#
+# #594 made that VISIBLE (the outline gate had been comparing width and
+# height — the two numbers a misregistered pair agrees on). This closes it at
+# the PRODUCER, which is the only place it can be closed without a human:
+# downstream every consumer has already inherited the wrong frame.
+#
+# WHICH REMEDY, AND WHY IT IS NOT A CHOICE MADE HERE
+# ---------------------------------------------------
+# #595 named two remedies and was right that they are NOT equivalent:
+#
+#   * translate the stream into the LEF's frame — a RIGID move. DRC and LVS
+#     are translation-invariant, so it cannot change either verdict. What it
+#     CAN do is put every coordinate off the manufacturing grid, and this
+#     repo has already paid for an off-grid streamout once.
+#   * declare `FOREIGN <cell> <llx> <lly> ;` — moves nothing, but depends on a
+#     sign convention and OpenROAD's stream-out does not honour FOREIGN
+#     uniformly.
+#
+# v1.9.21 measured the fact that separates them — WHETHER THE OFFSET IS A
+# WHOLE NUMBER OF GRID STEPS — and deliberately stopped there. It is measured
+# again here, from the PDK the layout's own `tech` line names, and the
+# translation is applied ONLY when it is provably grid-preserving. When the
+# offset is not an exact multiple, or the grid cannot be read, or the grid is
+# contradictory, or the stream has no single top structure, NOTHING is
+# touched: the file is left exactly as Magic wrote it and the record says so,
+# so the outline gate still FAILs and a human picks FOREIGN. A guessed grid
+# would decide the question, so it is never guessed and there is no default.
+#
+# The translation itself is exact INTEGER database-unit arithmetic on the
+# GDSII XY records — no floating point reaches the coordinates, so a
+# grid-preserving move cannot introduce a grid error of its own.
+
+
+def top_structure_name(raw: bytes) -> Optional[str]:
+    """The one structure no other structure references, or None.
+
+    None when the stream is unparseable, has no structures, or has SEVERAL
+    tops — a multi-top stream has no single body to move and guessing which
+    one the abstract describes would move the wrong geometry."""
+    structs, _meters, seen_header = _parse_structures(raw)
+    if not seen_header or not structs:
+        return None
+    referenced = {sn for st in structs.values() for sn, _ in st["refs"]}
+    tops = [n for n in structs if n not in referenced]
+    return tops[0] if len(tops) == 1 else None
+
+
+def um_per_dbu(raw: bytes) -> Optional[float]:
+    """The stream's own database unit in um, or None when it declares none."""
+    _structs, meters_per_dbu, seen_header = _parse_structures(raw)
+    if not seen_header or not meters_per_dbu or meters_per_dbu <= 0:
+        return None
+    return meters_per_dbu * 1e6
+
+
+def translate_structure(raw: bytes, sname: str, dx: int, dy: int) -> bytes:
+    """Rigidly move ONE structure by (dx, dy) DATABASE UNITS.
+
+    Only the named structure's own records are rewritten. Its geometry XY
+    records move the shapes; its SREF/AREF XY records are PLACEMENT origins,
+    so moving those moves the referenced children with it. Child structures
+    keep their local coordinates untouched — translating those too would move
+    every instanced cell twice.
+
+    Byte-exact everywhere else: record lengths and types are preserved and
+    every non-XY record is copied verbatim, so this cannot perturb layers,
+    datatypes, properties or the cell hierarchy."""
+    out = bytearray()
+    pos, n = 0, len(raw)
+    cur = None
+    while pos + 4 <= n:
+        rec_len = (raw[pos] << 8) | raw[pos + 1]
+        rec_type = (raw[pos + 2] << 8) | raw[pos + 3]
+        if rec_len < 4 or pos + rec_len > n:
+            out += raw[pos:]          # truncated tail — copied, never guessed
+            return bytes(out)
+        rec = raw[pos:pos + rec_len]
+        data = raw[pos + 4:pos + rec_len]
+        if rec_type == _GDS_STRNAME:
+            cur = data.split(b"\0")[0].decode("ascii", "replace")
+        elif rec_type == _GDS_ENDSTR:
+            cur = None
+        elif rec_type == _GDS_XY and cur == sname:
+            cnt = (len(data) // 4) & ~1        # whole (x, y) pairs only
+            if cnt:
+                vals = list(_struct.unpack(f">{cnt}i", data[:cnt * 4]))
+                for i in range(0, cnt, 2):
+                    vals[i] += dx
+                    vals[i + 1] += dy
+                rec = (rec[:4] + _struct.pack(f">{cnt}i", *vals)
+                       + data[cnt * 4:])
+        out += rec
+        pos += rec_len
+    return bytes(out)
+
+
+def pdk_manufacturing_grid_um(stage: "Stage", pdk_root: str,
+                              tech: str) -> Optional[float]:
+    """MANUFACTURINGGRID (um) declared by the PDK the layout's own `tech` line
+    names, or None.
+
+    Read from the real PDK, container-side, where the PDK actually is — the
+    outline GATE runs on the host, where the PDK root does not exist, which is
+    exactly why it reports the grid as unknown and can recommend neither
+    remedy. There is NO fallback and NO default: absent, unreadable and
+    CONTRADICTORY (two different values under one PDK) all return None, and
+    None never authorises a translation."""
+    root = f"{pdk_root.rstrip('/')}/{tech}"
+    rc, out, _err = stage.sh(
+        f"grep -rhoiE 'MANUFACTURINGGRID[[:space:]]+[0-9.]+' "
+        f"{shlex.quote(root)} 2>/dev/null | head -32", timeout=120)
+    vals = {float(m.group(1)) for m in
+            re.finditer(r"MANUFACTURINGGRID\s+([0-9.]+)", out or "", re.I)}
+    return vals.pop() if len(vals) == 1 else None
+
+
+def align_to_lef_frame(project: Path, block: str, gds_path: Path,
+                       stage: "Stage", pdk_root: str, tech: str) -> Dict:
+    """Put the streamed body into the frame the sibling LEF abstract declares,
+    when — and only when — that move is provably grid-preserving."""
+    lef = _pl.hardmacro_dir(project) / block / f"{block}.lef"
+    if not lef.is_file():
+        return {"status": "NO_LEF", "rule": "A8GDS_FRAME_NO_LEF",
+                "detail": (f"no sibling {block}.lef, so there is no declared "
+                           f"abstract frame to align the body to")}
+
+    fx, fy, src = parse_lef_frame_ll(lef.read_text(errors="replace"))
+    raw = gds_path.read_bytes()
+    ext = parse_gds_bbox_extent(raw)
+    upd = um_per_dbu(raw)
+    if ext is None or upd is None:
+        return {"status": "UNMEASURED", "rule": "A8GDS_FRAME_UNMEASURED",
+                "detail": (f"{gds_path.name} carries geometry but its "
+                           f"top-level bounding box / database unit could not "
+                           f"be parsed, so the frame offset is unknown")}
+
+    llx, lly = ext[0], ext[1]
+    dx_um, dy_um = fx - llx, fy - lly
+    base = {"lef_frame_ll_um": [fx, fy], "lef_frame_source": src,
+            "gds_bbox_ll_um": [round(llx, 6), round(lly, 6)],
+            "offset_um": [round(dx_um, 6), round(dy_um, 6)]}
+
+    if abs(dx_um) <= DEFAULT_TOL_UM and abs(dy_um) <= DEFAULT_TOL_UM:
+        return {**base, "status": "ALREADY_ALIGNED",
+                "rule": "A8GDS_FRAME_ALREADY_ALIGNED",
+                "detail": (f"body lower-left ({llx:.3f},{lly:.3f})um already "
+                           f"sits on the {src} frame ({fx:.3f},{fy:.3f})um "
+                           f"within {DEFAULT_TOL_UM}um; nothing moved")}
+
+    grid = pdk_manufacturing_grid_um(stage, pdk_root, tech)
+    on_grid, grid_detail = offset_on_grid(dx_um, dy_um, grid)
+    base["manufacturing_grid_um"] = grid
+    base["offset_is_grid_multiple"] = on_grid
+    if on_grid is not True:
+        return {**base, "status": "NOT_ALIGNED",
+                "rule": "A8GDS_FRAME_NOT_ALIGNED",
+                "detail": (
+                    f"body lower-left ({llx:.3f},{lly:.3f})um is "
+                    f"({dx_um:.3f},{dy_um:.3f})um off the {src} frame "
+                    f"({fx:.3f},{fy:.3f})um, but {grid_detail} — translating "
+                    f"would trade a registration defect for an off-grid "
+                    f"streamout, so NOTHING was moved and the file is exactly "
+                    f"as Magic wrote it. `FOREIGN {block} {llx:g} {lly:g} ;` "
+                    f"is the remedy that moves nothing, and choosing it is an "
+                    f"owner decision this producer does not make.")}
+
+    sname = top_structure_name(raw)
+    if sname is None:
+        return {**base, "status": "NOT_ALIGNED",
+                "rule": "A8GDS_FRAME_NO_SINGLE_TOP",
+                "detail": (f"{gds_path.name} has no single top structure, so "
+                           f"there is no one body the abstract describes; "
+                           f"nothing was moved")}
+
+    dx_dbu = int(round(dx_um / upd))
+    dy_dbu = int(round(dy_um / upd))
+    moved = translate_structure(raw, sname, dx_dbu, dy_dbu)
+
+    # Re-MEASURE rather than assume. A translation that did not land on the
+    # declared frame is not a fix, and the unmoved file is better than a file
+    # moved somewhere nobody predicted.
+    ext2 = parse_gds_bbox_extent(moved)
+    if ext2 is None or abs(ext2[0] - fx) > DEFAULT_TOL_UM \
+            or abs(ext2[1] - fy) > DEFAULT_TOL_UM:
+        return {**base, "status": "NOT_ALIGNED",
+                "rule": "A8GDS_FRAME_MOVE_DID_NOT_LAND",
+                "detail": (f"translating top structure {sname!r} by "
+                           f"({dx_dbu},{dy_dbu}) dbu did not land the bounding "
+                           f"box on the {src} frame; the original stream was "
+                           f"kept unmodified")}
+
+    gds_path.write_bytes(moved)
+    return {**base, "status": "ALIGNED", "rule": "A8GDS_FRAME_ALIGNED",
+            "top_structure": sname, "moved_dbu": [dx_dbu, dy_dbu],
+            "gds_bbox_ll_um_after": [round(ext2[0], 6), round(ext2[1], 6)],
+            "detail": (
+                f"body lower-left was ({llx:.3f},{lly:.3f})um against a {src} "
+                f"frame of ({fx:.3f},{fy:.3f})um; {grid_detail}, so top "
+                f"structure {sname!r} was rigidly moved by ({dx_dbu},{dy_dbu}) "
+                f"dbu = ({dx_um:.3f},{dy_um:.3f})um and now starts at "
+                f"({ext2[0]:.3f},{ext2[1]:.3f})um. DRC and LVS are invariant "
+                f"under a rigid translation and the move is a whole number of "
+                f"grid steps, so neither verdict can change.")}
+
+
 def emit_block(project: Path, block: str, stage: Stage,
                pdk_root: str) -> Dict:
     """Stream one block's layout to GDS. Returns a per-block record."""
@@ -401,13 +635,20 @@ def emit_block(project: Path, block: str, stage: Stage,
                            f"last output: {tail}"))
         return rec
 
+    # vibe-ic#595 — the abstract and the body must leave A8 in ONE frame.
+    # Done HERE, before the record is finalised, so the reported size is the
+    # size of the file that actually ships.
+    frame = align_to_lef_frame(project, block, landed, stage, pdk_root, tech)
+
     rec.update(status="PRODUCED", rule="A8GDS_PRODUCED",
                size_bytes=landed.stat().st_size,
                geometry_records=records,
                source=str(layout.relative_to(project)),
+               frame=frame,
                detail=(f"magic streamed {layout.name} ({tech}) to "
                        f"{block}.gds: {landed.stat().st_size} B, "
-                       f"{records} geometry records"))
+                       f"{records} geometry records; "
+                       f"frame {frame['status']}: {frame['detail']}"))
     return rec
 
 

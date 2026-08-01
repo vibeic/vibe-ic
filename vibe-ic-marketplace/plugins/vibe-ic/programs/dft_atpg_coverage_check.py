@@ -105,6 +105,15 @@ except Exception:  # pragma: no cover - path fallback
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import dft_signoff_common  # type: ignore
 
+try:
+    import l_doc_consumer_contract as _l20c
+except Exception:  # pragma: no cover - path fallback
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import l_doc_consumer_contract as _l20c  # type: ignore
+    except Exception:
+        _l20c = None
+
 
 _PROGRAM = "dft_atpg_coverage_check"
 _VERSION = "1.1.0"
@@ -114,10 +123,24 @@ _VERSION = "1.1.0"
 FOUNDRY_FLOOR_DEFAULT = 95.0
 
 # Field names that may hold the REAL measured stuck-at coverage (%) — in
-# priority order. fault_atpg_run writes `coverage_pct`; the runner/skill
-# JSON writes `stuck_at_coverage_percent`. We never read
-# `stuck_at_ge_target` for the number.
+# priority order. vibe-ic#603: `test_coverage_pct` (detected / (total −
+# ATPG-untestable)) is the sign-off number and is preferred when present; a
+# design wrapped in an unused pad frame whose TESTABLE logic is covered would
+# otherwise FAIL on the raw ratio alone. fault_atpg_run writes `coverage_pct`
+# (raw) + `test_coverage_pct`; the runner/skill JSON writes
+# `stuck_at_coverage_percent`. We never read `stuck_at_ge_target` for the number.
 _MEASURED_FIELDS = (
+    "test_coverage_pct",
+    "coverage_pct",
+    "stuck_at_coverage_percent",
+    "stuck_at_coverage_pct",
+    "coverage_percent",
+    "stuck_at_pct",
+)
+
+# The RAW fault-coverage field(s), reported ALONGSIDE the (possibly test-based)
+# measured number so the two never collapse into one — the core of #603.
+_RAW_FIELDS = (
     "coverage_pct",
     "stuck_at_coverage_percent",
     "stuck_at_coverage_pct",
@@ -227,9 +250,12 @@ def evaluate(coverage_json: Optional[dict],
     target: Optional[float] = None
     target_src: Optional[str] = None
 
+    raw_measured: Optional[float] = None
+    raw_src: Optional[str] = None
     if coverage_json is not None:
         measured, measured_src = _extract_number(coverage_json, _MEASURED_FIELDS)
         target, target_src = _extract_number(coverage_json, _TARGET_FIELDS)
+        raw_measured, raw_src = _extract_number(coverage_json, _RAW_FIELDS)
 
     # Fall back to the human-readable report for whatever is still missing.
     if rpt_text and (measured is None or target is None):
@@ -301,6 +327,13 @@ def evaluate(coverage_json: Optional[dict],
         "measured_coverage_pct": (round(measured, 4)
                                   if measured is not None else None),
         "measured_source": measured_src,
+        # RAW fault coverage, reported alongside so the sign-off (test) number
+        # never silently stands in for it — vibe-ic#603. `measured_is_test`
+        # tells a reader which number the verdict was computed on.
+        "raw_coverage_pct": (round(raw_measured, 4)
+                             if raw_measured is not None else None),
+        "raw_source": raw_src,
+        "measured_is_test_coverage": measured_src == "test_coverage_pct",
         "target_pct": round(target, 4) if target is not None else None,
         "target_source": target_src,
         "foundry_floor_pct": round(foundry_floor, 4),
@@ -314,6 +347,81 @@ def evaluate(coverage_json: Optional[dict],
         "status": verdict,
         "reasons": reasons,
     }
+
+
+# ── L20 gate applicability (vibe-ic#603 item 3) ────────────────────────
+# The 95 % foundry floor is a SIGN-OFF requirement for a design that DECLARES a
+# DFT topology. A design whose own inputs declare NO DFT requirement
+# (L20 dft_present=false, no scan chains / tap / compression / bist) should have
+# its ATPG coverage reported as INFORMATIONAL, not FAILed against the floor —
+# otherwise the flow's auto-inserted scan chain produces a coverage number that
+# a design that never asked for DFT is then punished by. This reads the design's
+# OWN L20; a design that DOES declare DFT keeps the floor (this only ever
+# downgrades a FAIL to informational, never the reverse — §4.05).
+_L20_PRESENT_KEYS = ("dft_present", "dft_required", "scan_required",
+                     "standard_scan_chain_present")
+_L20_CHAIN_KEYS = ("scan_chains", "scan_chain", "chains", "scan_chain_topology")
+_L20_TAP_KEYS = ("jtag_tap", "tap", "jtag", "test_access_port")
+_L20_COMPRESSION_KEYS = ("test_compression", "compression", "edt")
+_L20_BIST_KEYS = ("bist_mbist", "bist", "mbist")
+
+
+def _truthy(v: Any) -> bool:
+    if v is None or v is False:
+        return False
+    if isinstance(v, (list, dict, str)):
+        return len(v) > 0
+    return bool(v)
+
+
+def l20_dft_applicability(project: Path) -> dict:
+    """Read the design's OWN L20 and report whether it DECLARES DFT.
+
+    Returns ``{l20_present, applicable, asserts_dft, reason}``. When L20 is
+    absent or unparseable the floor stands (``asserts_dft`` conservatively True-
+    equivalent: we return asserts_dft=None and the caller keeps the floor)."""
+    out = {"l20_present": False, "applicable": None, "asserts_dft": None,
+           "reason": None}
+    if _l20c is None:
+        out["reason"] = "l_doc_consumer_contract unavailable — floor stands"
+        return out
+    try:
+        path, doc = _l20c.load_l_doc(project, "L20")
+    except Exception:
+        path, doc = None, None
+    if path is None:
+        out["reason"] = "no L20 doc — floor stands"
+        return out
+    out["l20_present"] = True
+    if doc is None:
+        out["reason"] = "L20 unparseable — floor stands"
+        return out
+    applic = _l20c.applicability_of(doc)
+    out["applicable"] = applic
+    if applic in ("NOT_APPLICABLE", "N/A", "NA"):
+        out["reason"] = f"L20 applicability={applic}"
+        out["asserts_dft"] = False
+        return out
+    fields = _l20c.l_doc_fields(doc)
+
+    def _get(keys):
+        for k in keys:
+            if k in fields:
+                return fields[k]
+        return None
+    asserts = (
+        _truthy(_get(_L20_PRESENT_KEYS))
+        or _truthy(_get(_L20_TAP_KEYS))
+        or _truthy(_get(_L20_COMPRESSION_KEYS))
+        or _truthy(_get(_L20_BIST_KEYS))
+        or _truthy(_get(_L20_CHAIN_KEYS))
+        or _l20c.is_extraction_claimed(doc)
+    )
+    out["asserts_dft"] = bool(asserts)
+    out["reason"] = ("L20 declares a DFT topology" if asserts
+                     else "L20 declares NO DFT requirement "
+                          "(dft_present false, no chains/tap/compression/bist)")
+    return out
 
 
 def _resolve_paths(project: Path,
@@ -426,6 +534,27 @@ def audit(project: Path,
     if base.get("reasons_prefix"):
         result["reasons"] = base.pop("reasons_prefix") + result.get("reasons", [])
     result.update(base)
+
+    # ── L20 gate applicability (vibe-ic#603 item 3) ───────────────────────
+    # Only ever DOWNGRADES a FAIL to INFORMATIONAL, and only when the design's
+    # OWN L20 declares no DFT requirement. A design that declares DFT keeps the
+    # floor; a real MEASUREMENT is still reported either way (degrade loudly).
+    l20 = l20_dft_applicability(project)
+    result["l20_applicability"] = l20
+    if result.get("verdict") == "FAIL" and l20.get("asserts_dft") is False:
+        result["verdict"] = "INFORMATIONAL"
+        result["status"] = "INFORMATIONAL"
+        result["floor_enforced"] = False
+        result.setdefault("reasons", []).insert(
+            0,
+            f"{l20.get('reason')}, so ATPG coverage is INFORMATIONAL, not "
+            f"gated at the {foundry_floor:.0f}% foundry floor. Measured test "
+            f"coverage {result.get('measured_coverage_pct')}% "
+            f"(raw fault coverage {result.get('raw_coverage_pct')}%) is "
+            f"reported for the record; a design that DECLARES DFT would be "
+            f"held to the floor.")
+    else:
+        result["floor_enforced"] = True
     return result
 
 
@@ -495,11 +624,14 @@ def main(argv: Optional[list] = None) -> int:
 
     verdict = report.get("verdict")
     meas = report.get("measured_coverage_pct")
+    raw = report.get("raw_coverage_pct")
     tgt = report.get("target_pct")
     eff = report.get("effective_target_pct")
-    print(f"{_PROGRAM}: measured={meas} written_target={tgt} "
+    print(f"{_PROGRAM}: measured={meas} raw={raw} written_target={tgt} "
           f"effective_target={eff} verdict={verdict}", file=sys.stderr)
-    return 0 if verdict == "PASS" else 1
+    # PASS and the L20-INFORMATIONAL downgrade (design declares no DFT) both
+    # resolve to rc=0; only a floor-enforced FAIL is rc=1.
+    return 0 if verdict in ("PASS", "INFORMATIONAL") else 1
 
 
 if __name__ == "__main__":
