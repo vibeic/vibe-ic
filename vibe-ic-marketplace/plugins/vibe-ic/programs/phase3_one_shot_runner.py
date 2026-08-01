@@ -11693,7 +11693,8 @@ def _pg_net_cleanup_tcl() -> str:
 _DPL_ESCALATION_SITES = (5, 20, 100)
 
 
-def _build_escalating_legalize_tcl(marker: str, var_tag: str = "") -> str:
+def _build_escalating_legalize_tcl(marker: str, var_tag: str = "",
+                                   clk_sink_buf: str = "") -> str:
     """Legalize with an ESCALATING displacement window, then PROVE it worked.
 
     #295: `repair_design` inserts timing buffers (measured: 564 buffers in 155
@@ -11730,10 +11731,78 @@ def _build_escalating_legalize_tcl(marker: str, var_tag: str = "") -> str:
     the rung is skipped and the ladder degrades to exactly the prior
     behaviour.
 
-    Chip-AGNOSTIC: standard OpenROAD commands, no design or PDK literals.
+    Final rung (clock-buffer downsize, measured on subservient x gf180mcuD):
+    when EVERY displacement rung above still fails `check_placement`, the
+    residual is not a search-window problem — it is a set of clock-tree
+    buffers so WIDE they have no contiguous free-site run anywhere (GF180's
+    `clkbuf_16` is 28 um = 50 sites; CTS/`repair_timing` inserted 257 of them,
+    of which 468 clock instances legalize NOWHERE, so `detailed_route` then
+    aborts with 1001x `DRT-0073 No access point` — signal routing is written to
+    NO net and DRC/LVS/STA sign-off runs on an unrouted DEF). This rung swaps
+    every clock-tree buffer WIDER than the CTS sink buffer down to the sink
+    master (pin-compatible I/Z, so connectivity is preserved) and re-legalizes;
+    a drive-4 clock buffer is 14 sites and legalizes where a 50-site one cannot.
+    It is emitted ONLY when the caller passes `clk_sink_buf` (i.e. POST-CTS,
+    where clock buffers exist), and it is GATED on every prior rung having
+    failed — so on any design that legalizes normally (e.g. the sky130A sibling,
+    whose `clkbuf_16` is only 20 sites and places fine) the swap loop is never
+    entered and the emitted-and-executed behaviour is byte-for-byte unchanged.
+    A drive downshift on the clock root is a measured timing residual reported
+    by the post-route STA; an unrouted design is not a design at all, so the
+    swap is strictly the better of the two outcomes it chooses between.
+
+    Chip-AGNOSTIC: standard OpenROAD commands, no design or PDK literals; the
+    only PDK-specific token (`clk_sink_buf`) is passed in by the caller from the
+    same PDK registry that already drives `-buf_list`.
     """
     v = var_tag
     rungs = " ".join(str(d) for d in _DPL_ESCALATION_SITES)
+    # Clock-buffer downsize recovery — emitted only post-CTS (clk_sink_buf set)
+    # and executed only when every displacement rung above failed. odb-guarded
+    # so a stub OpenROAD without odb degrades to the prior FAILED verdict.
+    _clkswap = ""
+    if clk_sink_buf:
+        _clkswap = (
+            f"if {{$_dplok{v} == 0}} {{\n"
+            f"  if {{![catch {{\n"
+            f"    set _rblk{v} [ord::get_db_block]\n"
+            f"    set _rtgt{v} [[ord::get_db] findMaster {clk_sink_buf}]\n"
+            f"    if {{$_rtgt{v} ne \"NULL\" && $_rtgt{v} ne \"\"}} {{\n"
+            f"      set _rtw{v} [$_rtgt{v} getWidth]\n"
+            f"      set _rn{v} 0\n"
+            f"      foreach _rin{v} [$_rblk{v} getInsts] {{\n"
+            f"        set _rm{v} [$_rin{v} getMaster]\n"
+            f"        if {{[string match {{*__clkbuf_*}} [$_rm{v} getName]] && "
+            f"[$_rm{v} getWidth] > $_rtw{v}}} {{\n"
+            f"          $_rin{v} swapMaster $_rtgt{v}; incr _rn{v}\n"
+            f"        }}\n"
+            f"      }}\n"
+            f"      puts \"{marker}_CLKBUF_DOWNSIZE swapped=$_rn{v} -> "
+            f"{clk_sink_buf}\"\n"
+            f"    }}\n"
+            f"  }} _rec{v}]}} {{ puts \"{marker}_CLKBUF_DOWNSIZE_NONFATAL: "
+            f"$_rec{v}\" }}\n"
+            # re-legalize: default, then the LIVE full-die window
+            f"  if {{![catch {{detailed_placement}} _dpl{v}]}} {{\n"
+            f"    if {{![catch {{check_placement}} _cpk{v}]}} {{ set _dplok{v} 1"
+            f" ; puts \"{marker}_LEGALIZE_OK disp=clkswap\" }}\n"
+            f"  }}\n"
+            f"  if {{$_dplok{v} == 0 && ![catch {{ord::get_die_area}} "
+            f"_da2{v}]}} {{\n"
+            f"    set _fw2{v} [expr {{int(ceil([lindex $_da2{v} 2] - "
+            f"[lindex $_da2{v} 0]))}}]\n"
+            f"    set _fh2{v} [expr {{int(ceil([lindex $_da2{v} 3] - "
+            f"[lindex $_da2{v} 1]))}}]\n"
+            f"    if {{$_fw2{v} > 0 && $_fh2{v} > 0 && ![catch "
+            f"{{detailed_placement -max_displacement [list $_fw2{v} $_fh2{v}]}}"
+            f" _dpl{v}]}} {{\n"
+            f"      if {{![catch {{check_placement}} _cpk{v}]}} {{ set "
+            f"_dplok{v} 1 ; puts \"{marker}_LEGALIZE_OK "
+            f"disp=clkswap-full-die\" }}\n"
+            f"    }}\n"
+            f"  }}\n"
+            f"}}\n"
+        )
     return (
         f"set _dplok{v} 0\n"
         # rung 0: the default window, which is right for almost every design.
@@ -11765,6 +11834,7 @@ def _build_escalating_legalize_tcl(marker: str, var_tag: str = "") -> str:
         f"${{_fdw{v}}}x${{_fdh{v}}}\" }}\n"
         f"  }}\n"
         f"}}\n"
+        f"{_clkswap}"
         f"if {{$_dplok{v} == 0}} {{ puts \"{marker}_LEGALIZE_FAILED\" }}\n"
     )
 
@@ -14374,12 +14444,20 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     # #296: the post-hold detailed_placement was BARE — no catch, no
     # escalation. 87 clustered clkbuf_16 (50 sites each) fail the default
     # window and DPL-0036 then kills the whole OpenROAD process. Same
-    # failure mode as #295, so reuse the SAME escalation ladder. This
-    # deliberately does NOT touch the CTS buffer list or root buffer:
-    # narrowing the root moves clock skew / insertion delay and would
-    # need multi-corner clock sign-off evidence first.
+    # failure mode as #295, so reuse the SAME escalation ladder.
+    #
+    # subservient x gf180mcuD follow-up: the displacement ladder above is NOT
+    # enough on its own — a 28 um (50-site) clkbuf_16 has no contiguous free-
+    # site run at ANY displacement, so 468 clock buffers stayed off-grid,
+    # POST_HOLD_LEGALIZE_FAILED, and detailed_route then aborted with 1001x
+    # DRT-0073, shipping an UNROUTED DEF that DRC/LVS/STA then measured (268k
+    # user-DRC, LVS "no signal routing" abort, meaningless SS setup). So the
+    # ladder now gets a final clock-buffer-downsize rung, fed the CTS sink
+    # buffer; it fires ONLY after every displacement rung failed (a no-op on
+    # designs that legalize, e.g. the sky130A sibling) and swaps over-wide
+    # clock buffers down to the sink so they legalize and the design routes.
     _post_hold_legalize = _build_escalating_legalize_tcl(
-        "POST_HOLD", "_ph")
+        "POST_HOLD", "_ph", clk_sink_buf=clk_buf)
     # Third bare call, found while wiring #296: the post-global-placement
     # legalization. Same shape, same DPL-0036 kill. Same ladder.
     _initial_legalize = _build_escalating_legalize_tcl("INITIAL_DPL", "_ip")
