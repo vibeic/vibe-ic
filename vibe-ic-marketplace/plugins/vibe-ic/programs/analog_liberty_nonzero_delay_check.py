@@ -112,7 +112,18 @@ import _analog_a_check_common as _acc
 # ASKED LAST, after every value rule (missing / unreadable / no cell / no
 # timing / all-zero), each of which already `continue`s. Those name a deeper
 # cause and answer this one as a side effect; the reverse is not true.
-_CONTENT_CHAIN = ("corner_results.json",)
+#
+# THE SITE MOVED, THE BEHAVIOUR DID NOT. This gate was the first to get the
+# rule right, and it kept the rule in a PRIVATE constant. Two other gates over
+# the same package (`analog_hardmacro_check`, which is the one the FLOW
+# declares for A8, and `analog_a8_hardmacro_gen_check`) then answered
+# PASS / PASS / PASS on the three trees this one reads
+# PASS / PASS_STRUCTURE_ONLY / FAIL over. A private constant is how that
+# happened, so the rule now lives at ONE site,
+# `_analog_a_check_common.hardmacro_content`, and every gate over the package
+# calls it. This name is kept, pointing at the shared constant, so a reader of
+# this file still sees what is read.
+_CONTENT_CHAIN = (_acc.CONTENT_GATE_OF_RECORD_ARTEFACT,)
 
 
 # Timing-bearing scalar attributes (single `attr : value ;`).
@@ -309,8 +320,8 @@ def run_audit(project: Path) -> Result:
         # ── the certification question, asked LAST ────────────────────────
         # `provenance` above says the numbers came out of a simulator.
         # `content` says what the simulator was pointed at.
-        content, content_src = _acc.content_class_inherited(
-            [an_dir / block / n for n in _CONTENT_CHAIN])
+        _bounded = _acc.hardmacro_content(an_dir / block)
+        content, content_src = _bounded.klass, _bounded.source
         cited = (str(content_src.relative_to(project))
                  if content_src is not None else None)
 

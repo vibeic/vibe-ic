@@ -219,6 +219,15 @@ def test_pre_vs_post_zero_compared_fails(tmp_path):
 def test_pre_vs_post_with_items_still_passes(tmp_path):
     a = tmp_path / "phase3" / "analog" / "blk"
     a.mkdir(parents=True)
+    # The pre-layout baseline this comparison is measured AGAINST, carrying
+    # the record of what circuit it is. Added when this gate — the one the
+    # FLOW declares for the post-layout step — stopped certifying a
+    # comparison whose subject nothing on the tree names. This test is about
+    # the ZERO-COMPARED rule, so its fixture has to clear every other one.
+    (a / "corner_results.json").write_text(json.dumps(
+        {"block": "blk", "_provenance": "real_ngspice",
+         "corners": [{"name": "tt_27c_1v8", "simulator_run": True}],
+         "design_content": "structure_and_geometry"}))
     (a / "pre_vs_post.json").write_text(json.dumps(
         {"comparisons": {"vout": {"pre_layout": 1.80, "post_layout": 1.79}}}))
     r = PVP.run_audit(tmp_path)

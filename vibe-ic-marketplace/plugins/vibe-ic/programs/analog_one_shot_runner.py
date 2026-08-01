@@ -495,6 +495,9 @@ _STRUCTURE_ONLY_SENTINEL = "STRUCTURE_ONLY:"
 #: recorded a PASS_STRUCTURE_ONLY A7 step with EMPTY extras: it read the
 #: gate's sentinel and then had nothing to say about what the step contained,
 #: which is the same defect one layer down.
+#:
+#: ORDER IS NOT ENOUGH FOR A7, and `_CONTENT_CEILINGS` below is why. Its
+#: nearest link is AI-authored; being nearest must not make it AUTHORITATIVE.
 _CONTENT_SOURCES: Dict[str, tuple] = {
     "A3_netlist_gen": (("netlist_provenance.json", ("_provenance",
                                                     "design_content")),),
@@ -522,17 +525,34 @@ def _structure_only_disclosure(cp) -> Optional[str]:
     return None
 
 
-def _content_extras(project: Path, block: str,
-                    step_name: str) -> Dict[str, Any]:
-    """`design_content` for a step's own artefact, READ from that artefact.
+# ── AND WHERE A CHAIN IS CAPPED ───────────────────────────────────────────
+# THE RULE, with no tool, step or block name in it, and it is the gates' rule
+# applied to the RUN RECORD:
+#
+#   A derived artefact may CONFIRM or LOWER the content its baseline records.
+#   It may never RAISE it.
+#
+# WHY THE RUN RECORD NEEDS IT SEPARATELY. The chain above is ordered
+# nearest-first, and for A7 the nearest link is `pre_vs_post.json` — a file the
+# `analog-extraction-resim` SKILL authors and no deterministic producer writes
+# the field into. The GATE was measured certifying a design-bound pass off that
+# token over a silent baseline; this function reads the same two files in the
+# same order, so it would have recorded `design_content: structure_and_geometry`
+# beside a step the gate had just refused, or beside a PASS_STRUCTURE_ONLY
+# status — a run record contradicting itself in two adjacent fields.
+#
+# Only the ceiling ARTEFACT is named here. The ranking itself is imported from
+# the gates' own module, for the reason `_CONTENT_DISCLOSED` is: a second copy
+# is free to drift, and then the runner records a tier the gate refuses.
+_CONTENT_CEILINGS: Dict[str, tuple] = {
+    "A7_post_layout_resim": (("corner_results.json", ("design_content",)),),
+}
 
-    Empty for a step that has no such record — this must never assert an
-    answer the producer did not write down, which is the whole point of the
-    field.
-    """
-    chain = _CONTENT_SOURCES.get(step_name)
-    if not chain:
-        return {}
+
+def _first_disclosed(project: Path, block: str, chain: tuple) -> tuple:
+    """``(token, path)`` of the first artefact in *chain* whose record NAMES a
+    content, or ``(None, None)``. A link that names nothing is skipped, not
+    accepted, so a chain can only ever find an answer a producer wrote down."""
     for name, keys in chain:
         path = _pl.analog_dir(project) / block / name
         if not path.is_file():
@@ -547,10 +567,39 @@ def _content_extras(project: Path, block: str,
                 break
             doc = doc.get(k)
         if doc in _CONTENT_DISCLOSED:
-            return {"design_content": doc,
-                    "structure_only": doc == "structure_only",
-                    "design_content_source": str(path.relative_to(project))}
-    return {}
+            return doc, path
+    return None, None
+
+
+def _content_extras(project: Path, block: str,
+                    step_name: str) -> Dict[str, Any]:
+    """`design_content` for a step's own artefact, READ from that artefact and
+    BOUNDED by what the gate of record's own subject supports.
+
+    Empty for a step that has no such record — this must never assert an
+    answer the producer did not write down, which is the whole point of the
+    field.
+    """
+    chain = _CONTENT_SOURCES.get(step_name)
+    if not chain:
+        return {}
+    token, path = _first_disclosed(project, block, chain)
+
+    ceiling_chain = _CONTENT_CEILINGS.get(step_name)
+    if ceiling_chain is not None:
+        c_token, c_path = _first_disclosed(project, block, ceiling_chain)
+        if (_acc.content_rank(_acc.classify_design_content(token))
+                > _acc.content_rank(_acc.classify_design_content(c_token))):
+            # The derived artefact out-claimed its own baseline. The baseline's
+            # answer is the record — including when the baseline named nothing,
+            # in which case there IS no record and the extras stay empty.
+            token, path = c_token, c_path
+
+    if token is None or path is None:
+        return {}
+    return {"design_content": token,
+            "structure_only": token == "structure_only",
+            "design_content_source": str(path.relative_to(project))}
 
 
 def _producer_gap(project: Path, block: str,

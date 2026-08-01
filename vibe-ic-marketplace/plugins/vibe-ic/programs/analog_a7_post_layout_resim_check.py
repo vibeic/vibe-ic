@@ -52,9 +52,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from _analog_a_check_common import (
-    BLOCK_LIST_ABSENT_REASON, CONTENT_STRUCTURE_ONLY,
-    CONTENT_UNDISCLOSED, STRUCTURE_ONLY_TOKEN,
-    content_class_inherited,
+    BLOCK_LIST_ABSENT_REASON, CONTENT_GATE_OF_RECORD_ARTEFACT,
+    CONTENT_STRUCTURE_ONLY,
+    CONTENT_UNDISCLOSED, PRE_VS_POST_DERIVED_ARTEFACT, STRUCTURE_ONLY_TOKEN,
+    pre_vs_post_content,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail,
     emit_incomplete,
@@ -78,16 +79,34 @@ DEFAULT_MAX_DELTA_PCT = 10.0
 # design's. This gate is LOAD-BEARING — it is a step of the A-track runner —
 # so that certification is what the run record inherits.
 #
-# WHERE THE ANSWER IS READ, ordered nearest-first:
-#   1. `pre_vs_post.json` itself, if its producer ever republishes the record.
-#      An artefact's OWN statement about what it contains outranks anything it
-#      inherits, and only its producer can make it.
-#   2. `corner_results.json` — the PRE-LAYOUT BASELINE this comparison is
-#      against, which this gate ALREADY opens to decide whether SPICE ran at
-#      all. Its record is the one `analog_a4_corner_sweep_check` reads, so
-#      this gate can never certify a tree its own gate of record refuses.
-# The chain stops there, deliberately: extending it further would make this
-# gate more lenient than the gate of record for the same content.
+# WHERE THE ANSWER IS READ — and this is the half the previous round got
+# WRONG. It read `pre_vs_post.json` FIRST and `corner_results.json` second,
+# "ordered nearest-first", on the reasoning that an artefact's own statement
+# about itself outranks anything it inherits. That reasoning does not hold for
+# THIS artefact, for two independent reasons:
+#
+#   * NOTHING DETERMINISTIC WRITES THE FIELD INTO IT. `pre_vs_post.json` is
+#     authored by the `analog-extraction-resim` SKILL — an AI step. Ordering it
+#     first put an AI-authored claim ABOVE the record a deterministic producer
+#     wrote, which is the inversion this whole track exists to remove.
+#   * IT IS SEMANTICALLY IMPOSSIBLE. This file is a COMPARISON against the
+#     pre-layout corner result. If the corner sweep simulated a library
+#     topology, the baseline half of every row in this file IS that library
+#     topology's. A comparison cannot be more design-bound than the thing it is
+#     compared against.
+#
+# So the corner artefact is not the second link in an ordered chain — it is the
+# CEILING. `pre_vs_post.json`'s own record may CONFIRM it or LOWER it and can
+# never RAISE it. MEASURED, with the corner artefact SILENT and this artefact
+# carrying the design-bound token: `analog_a4_corner_sweep_check` rc 1 FAIL
+# while this gate read rc 0 plain PASS with no sentinel — this gate certifying
+# a tree its own gate of record refuses, which is exactly what the nearest-first
+# comment claimed was impossible. Stopping at the gate of record's artefact is
+# not the same as being bounded by it.
+#
+# The rule itself lives at ONE site, `_analog_a_check_common.pre_vs_post_content`
+# — shared with the gate the FLOW declares for this step, so the two cannot
+# drift into disagreeing about this one file again.
 #
 # THREE OUTCOMES, ranked so that disclosure is never the expensive answer:
 #   design-bound   -> PASS, unchanged.
@@ -116,7 +135,13 @@ DEFAULT_MAX_DELTA_PCT = 10.0
 # delegation is a change to the matrix's meaning for one step out of nine,
 # with its own blast radius on real per-block counts and its own evidence
 # obligation — it is filed as itself, not smuggled in beside this one.
-_CONTENT_CHAIN = ("pre_vs_post.json", "corner_results.json")
+#
+# The two artefact names are re-exported here only so a reader of THIS file can
+# see what the rule reads without opening the shared one. They are the shared
+# module's constants, not copies of them — a copy is how the last drift
+# started.
+_CONTENT_BASELINE = CONTENT_GATE_OF_RECORD_ARTEFACT   # the ceiling
+_CONTENT_DERIVED = PRE_VS_POST_DERIVED_ARTEFACT       # may lower it, never raise
 
 
 def _a4_simulator_ran(project: Path, block: str) -> Optional[bool]:
@@ -253,17 +278,33 @@ def _check_block(project: Path, block: str, max_delta_pct: float
         }]
 
     # ── the certification question, asked LAST ────────────────────────────
-    content, src = content_class_inherited(
-        [path.parent / n for n in _CONTENT_CHAIN])
+    bounded = pre_vs_post_content(path.parent)
+    content, src = bounded.klass, bounded.source
     if content == CONTENT_UNDISCLOSED:
+        if bounded.refused is not None:
+            # The derived artefact DID answer, and its answer outranks what its
+            # own baseline supports. Say that, rather than "nothing records an
+            # answer" — a reader who can see the token on disk would read the
+            # generic message as a bug in the gate and go looking in the wrong
+            # place.
+            said = (f"this artefact claims `{bounded.refused}` while the "
+                    f"pre-layout corner result it is compared against records "
+                    f"no answer at all. The comparison cannot be more "
+                    f"design-bound than its own baseline: if the baseline is "
+                    f"undeclared, so is the comparison. Nothing deterministic "
+                    f"writes this field into `{_CONTENT_DERIVED}` — the record "
+                    f"belongs to `{_CONTENT_BASELINE}`, and that is where the "
+                    f"fix belongs")
+        else:
+            said = ("neither this artefact nor the pre-layout corner result "
+                    "it is compared against records any answer to what "
+                    "circuit was re-simulated (`design_content`)")
         return "FAIL", [{
             "block": block, "rule": "A7_DESIGN_CONTENT_UNDECLARED",
             "rel_path": rel,
             "detail": ("every declared spec drifts within "
-                       f"{max_delta_pct}% post-layout, and neither this "
-                       "artefact nor the pre-layout corner result it is "
-                       "compared against records any answer to what circuit "
-                       "was re-simulated (`design_content`). A post-layout "
+                       f"{max_delta_pct}% post-layout, and {said}. A "
+                       "post-layout "
                        "comparison of a library topology and one of a design "
                        "sized to its spec are indistinguishable in every "
                        "other field of this file. Declaring "
@@ -273,6 +314,12 @@ def _check_block(project: Path, block: str, max_delta_pct: float
                        "than saying so."),
         }]
     if content == CONTENT_STRUCTURE_ONLY:
+        extra = ""
+        if bounded.refused is not None:
+            extra = (f"; this artefact's own record claims "
+                     f"`{bounded.refused}` and is BOUNDED to its baseline's "
+                     f"answer — a comparison cannot be more design-bound than "
+                     f"the pre-layout result it is compared against")
         return "PASS_STRUCTURE_ONLY", [{
             "block": block, "rule": "A7_POSTSIM_STRUCTURE_ONLY",
             "rel_path": rel,
@@ -282,7 +329,7 @@ def _check_block(project: Path, block: str, max_delta_pct: float
                        "the re-simulated circuit came from a topology "
                        "library with no bound input reaching any device "
                        "parameter — the comparison is real and it is the "
-                       "default's, not this design's"),
+                       "default's, not this design's" + extra),
         }]
     return "PASS", []
 

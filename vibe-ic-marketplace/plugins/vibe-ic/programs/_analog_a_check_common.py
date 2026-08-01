@@ -42,7 +42,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, NamedTuple, Optional, Sequence, Tuple
 
 
 # ── where the block list actually lives ───────────────────────────────────
@@ -471,6 +471,154 @@ def content_class_inherited(paths) -> tuple:
         if klass != CONTENT_UNDISCLOSED:
             return klass, p
     return CONTENT_UNDISCLOSED, None
+
+
+# ── WHY "NEAREST-FIRST" WAS NOT ENOUGH, AND WHAT REPLACES IT ──────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   A DERIVED artefact may CONFIRM or LOWER the content its baseline records.
+#   It may never RAISE it. What a comparison is a comparison OF is decided by
+#   the thing it is compared against, not by the file that reports the
+#   comparison.
+#
+# WHAT THE PREVIOUS ROUND CLAIMED, AND THE MEASUREMENT THAT REFUTED IT. The
+# chain above was documented as ordered nearest-first "so this gate can never
+# certify a tree its own gate of record refuses". Stopping at the gate of
+# record's artefact is not the same as being BOUNDED BY it. Measured, on a
+# tree whose corner artefact was SILENT and whose derived artefact carried the
+# design-bound token:
+#
+#   analog_a4_corner_sweep_check        rc 1 FAIL  (A4_DESIGN_CONTENT_UNDECLARED)
+#   analog_a7_post_layout_resim_check   rc 0 PASS  — a bare design-bound pass,
+#                                                    no disclosure sentinel
+#
+# because :func:`content_class_inherited` SKIPS a link that names nothing and
+# takes the first link that names something — so the nearer link decides even
+# when it outranks the farther one. The nearer link is the one an AI step
+# authors; the farther one is the one a deterministic producer writes. Ordering
+# alone therefore put the AI-authored file ABOVE the gate of record, which is
+# the exact inversion this whole track exists to remove.
+#
+# RE-ORDERING THE CHAIN DOES NOT FIX IT EITHER, and that is worth stating so
+# the cheap fix is not tried again: with the baseline first, a SILENT baseline
+# is still skipped and the derived claim still decides. The fix has to be a
+# CEILING, not an order.
+#
+# WHY LOWERING IS STILL ALLOWED. `structure_only` under a design-bound
+# baseline is a producer disclosing something WEAKER than it was entitled to
+# claim. Refusing that would make honesty cost again, which is the inverted
+# incentive one level up.
+CONTENT_RANK = {
+    CONTENT_UNDISCLOSED: 0,
+    CONTENT_STRUCTURE_ONLY: 1,
+    CONTENT_DESIGN_BOUND: 2,
+}
+
+
+def content_rank(klass: str) -> int:
+    """Where *klass* sits in the one ordering every consumer shares:
+    design-bound > structure-only (disclosed) > undisclosed."""
+    return CONTENT_RANK.get(klass, 0)
+
+
+class BoundedContent(NamedTuple):
+    """What a consumer of a DERIVED artefact may certify, and why.
+
+    ``klass``          the content class the consumer may certify at.
+    ``source``         the artefact whose record ``klass`` came from, or
+                       ``None`` when nothing named a content.
+    ``ceiling``        the class the BASELINE — the gate of record's own
+                       subject — supports.
+    ``ceiling_source`` the baseline artefact that said so, or ``None`` when no
+                       baseline artefact exists or none named a content.
+    ``refused``        the derived artefact's own claim when it EXCEEDED the
+                       ceiling and was refused, else ``None``. Carried so the
+                       finding can name the disagreement instead of reporting a
+                       bare silence the reader can see is contradicted on disk.
+    """
+    klass: str
+    source: Optional[Path]
+    ceiling: str
+    ceiling_source: Optional[Path]
+    refused: Optional[str]
+
+
+def content_class_bounded(baseline_paths: Sequence,
+                          derived_paths: Sequence = ()) -> BoundedContent:
+    """The content class a derived artefact may certify at.
+
+    *baseline_paths* is the chain the GATE OF RECORD for this content reads;
+    its record is the CEILING. *derived_paths* are artefacts whose own producer
+    may republish the record; theirs may confirm or lower the ceiling and can
+    never raise it.
+
+    Both chains are read through :func:`content_class_inherited`, i.e. through
+    the same whitelist the gate of record uses, so neither can find an answer a
+    producer did not actually write down.
+    """
+    ceiling, ceiling_src = content_class_inherited(baseline_paths)
+    claim, claim_src = content_class_inherited(derived_paths)
+
+    if claim == CONTENT_UNDISCLOSED:
+        # The ordinary case: nothing deterministic writes the field into the
+        # derived artefact, so it inherits, exactly as before.
+        return BoundedContent(ceiling, ceiling_src, ceiling, ceiling_src, None)
+    if content_rank(claim) > content_rank(ceiling):
+        return BoundedContent(ceiling, ceiling_src, ceiling, ceiling_src,
+                              claim)
+    # Confirms, or discloses something weaker than it was entitled to claim.
+    return BoundedContent(claim, claim_src, ceiling, ceiling_src, None)
+
+
+# ── ONE RULE PER ARTEFACT, NOT ONE PER GATE ──────────────────────────────
+# THE INVARIANT, with no tool, step or block name in it:
+#
+#   Two gates that certify ONE artefact must not disagree about it. Whatever
+#   else they check, they answer the content question through ONE site.
+#
+# WHY THIS IS A SHARED CONSTANT AND NOT A COPIED ONE. Measured: the FLOW
+# declares one program as the gate for the post-layout step and the A-track
+# runner runs another over the same file. One had the content rule and the
+# other did not, so the flow-declared gate returned rc 0 PASS with a
+# BYTE-IDENTICAL console and `--json` artefact on the design-bound, the
+# structure-only AND the silent tree, while the runner's gate read
+# PASS / PASS_STRUCTURE_ONLY / FAIL over those same three. On the silent tree
+# they disagreed outright. A per-gate constant is how that happened; a shared
+# one is why it cannot happen again silently, and
+# `test_two_gates_over_one_artefact_agree` is why it cannot happen again
+# quietly.
+
+#: The gate of record for design content is the corner sweep. EVERY consumer's
+#: baseline chain ends at its artefact — that is what makes the ceiling the
+#: same ceiling everywhere.
+CONTENT_GATE_OF_RECORD_ARTEFACT = "corner_results.json"
+
+#: The derived artefact of the post-layout comparison step. Nothing
+#: deterministic writes `design_content` into it — it is authored by an AI
+#: skill — which is precisely why its claim is bounded rather than trusted.
+PRE_VS_POST_DERIVED_ARTEFACT = "pre_vs_post.json"
+
+
+def pre_vs_post_content(block_dir) -> BoundedContent:
+    """THE content rule for `pre_vs_post.json`, for every gate that certifies
+    it. *block_dir* is the per-block analog directory holding both artefacts.
+    """
+    d = Path(block_dir)
+    return content_class_bounded(
+        [d / CONTENT_GATE_OF_RECORD_ARTEFACT],
+        [d / PRE_VS_POST_DERIVED_ARTEFACT])
+
+
+def hardmacro_content(block_dir) -> BoundedContent:
+    """THE content rule for the packaged hardmacro (LEF / Liberty / GDS /
+    Verilog), for every gate that certifies it. *block_dir* is the per-block
+    ANALOG directory — not the hardmacro directory: nothing in the package
+    carries `design_content`, so the whole answer is the baseline's, and asking
+    the package its own question would classify every tree undisclosed and fail
+    the honest one too.
+    """
+    return content_class_bounded(
+        [Path(block_dir) / CONTENT_GATE_OF_RECORD_ARTEFACT])
 
 
 def structure_only_disclosure(gate_name: str, blocks: list,
