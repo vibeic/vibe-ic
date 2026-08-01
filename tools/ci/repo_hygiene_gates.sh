@@ -62,6 +62,12 @@ run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnosti
 # by DIRECT PUSH, so the guard had never run on any of it. Measured when first
 # wired: 4 non-portable paths, all in a test fixture committed the day before.
 run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_check.py" "$PLUGIN"
+# vibe-ic#621 — the JSON manifests were guarded and the PROSE was not: the three
+# READMEs a reader meets first advertised v1.5.12 / v1.4.72 / v1.4.61 against a
+# shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one
+# file type over. Narrow by construction — only the forms that assert THIS
+# plugin's version, so the MCP-EDA badge and the EDA image tag are untouched.
+run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"
 # vibe-ic#585 — `docker exec ... timeout=N` bounds the local CLIENT; the tool
 # inside the container keeps running as an orphan. The checker that finds those
 # call sites shipped with nothing but its own test running it, which

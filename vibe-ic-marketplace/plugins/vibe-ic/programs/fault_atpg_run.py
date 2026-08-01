@@ -72,6 +72,7 @@ import sys
 from pathlib import Path
 import _path_layout as _pl
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
+import _container_exec as _CE  # vibe-ic#623 — the deadline goes INSIDE the container
 
 
 def _resolve_docker_image() -> str:
@@ -96,9 +97,9 @@ def _resolve_docker_image() -> str:
     if env:
         return env
     candidates = (
-        "ghcr.io/vibeic/vibeic-eda:0.2.53",
-        "vibeic-eda:0.2.53",
-        "vibeic/vibeic-eda:0.2.53",
+        "ghcr.io/vibeic/vibeic-eda:0.2.54",
+        "vibeic-eda:0.2.54",
+        "vibeic/vibeic-eda:0.2.54",
         "hpretl/iic-osic-tools:latest",
     )
     for img in candidates:
@@ -112,7 +113,7 @@ def _resolve_docker_image() -> str:
     # nothing found locally — return the fork's pinned canonical name; the
     # caller's `docker run` then pulls exactly the verified image (or surfaces
     # a clear pull error) rather than running a stale floating tag.
-    return "ghcr.io/vibeic/vibeic-eda:0.2.53"
+    return "ghcr.io/vibeic/vibeic-eda:0.2.54"
 
 
 DOCKER_IMAGE = _resolve_docker_image()
@@ -1040,16 +1041,90 @@ ENV_PREAMBLE = (
 )
 
 
+#: vibe-ic#623 — how much longer than the caller's budget the CONTAINER-SIDE
+#: deadline allows, so an engine that is nearly finished can flush its result
+#: instead of having it thrown away.
+#:
+#: A CAP ON FLUSH TIME, NOT AN ESTIMATE OF HOW LONG ATPG NEEDS — #581 declined
+#: to invent the latter and that stands. MEASURED overshoots, same design, two
+#: plugin versions and two images, off artefact mtimes alone:
+#:
+#:     v1.9.27 / 0.2.51   not_run.json 18:58:49   coverage.yml 19:04:20   +331 s
+#:     v1.9.8  / 0.2.48   not_run.json 06:28:45   coverage.yml 06:33:57   +312 s
+#:
+#: both carrying a byte-identical `ratio: 9.16633307933807e-1`. 600 covers both
+#: with headroom. The cost is paid ONLY when the engine is still working, and it
+#: is bounded: at budget + this, the container kills its own process.
+ATPG_FLUSH_GRACE_S = 600
+
+
+def atpg_container_deadline(timeout: int,
+                            flush_grace_s: int = ATPG_FLUSH_GRACE_S) -> int:
+    """Seconds the CONTAINER-SIDE deadline allows: the caller's budget plus the
+    bounded flush grace, never below 1.
+
+    A pure function so the arithmetic is testable without handing a
+    production-sized budget to a launcher — `timeout=1800` in a test is a
+    1800-second bound the harness can outlive, and asserting on the number is
+    what the test is actually for.
+
+    NEVER 0: coreutils `timeout 0` means NO deadline, which is precisely the
+    state this change exists to remove, so it is the one value the arithmetic
+    must not be able to produce.
+    """
+    return max(1, int(timeout) + max(0, int(flush_grace_s)))
+
+
 def _run_docker(
     project: Path,
     cmd: list[str],
     timeout: int = 600,
     pdk_dir: Path | None = None,
+    flush_grace_s: int = ATPG_FLUSH_GRACE_S,
 ) -> tuple[int, str, str]:
     """Run a command inside iic-osic-tools.
     - project mounted at /work
     - pdk_dir (shared_pdk) mounted at /pdk (optional, for custom PDKs)
+
+    THE DEADLINE IS ENFORCED INSIDE THE CONTAINER (vibe-ic#623), which is this
+    repo's own landed doctrine — see `_container_exec`. The client-side
+    `timeout=` used to be the only bound, and it bounds the docker CLIENT: on
+    expiry Python killed the client while the container carried on, because the
+    engine is not a child of the client and no signal crosses the boundary. Two
+    separate harms followed from that one fact:
+
+      * THE COMPLETED MEASUREMENT WAS DISCARDED. The engine kept running,
+        finished, wrote `coverage.yml` into the mounted project — 331 s and
+        312 s after the caller had already recorded "no measurement" — and
+        nothing ever looked again. `--rm` then removed the evidence that it had
+        run at all.
+      * THE CONTAINER WAS NEVER REAPED. It self-removes only when the engine
+        finishes on its own; one was recorded still burning a core after the
+        flow had ended. `--rm` makes it look self-cleaning, which is why this
+        stayed invisible.
+
+    Both are the same defect and coreutils `timeout`, running INSIDE the
+    container as the engine's own parent, fixes both: the engine is signalled
+    where it lives, so nothing orphans, and expiry becomes an ordinary rc 124
+    rather than an exception thrown past callers.
+
+    The container-side deadline is `timeout + flush_grace_s` on purpose. Killing
+    an engine that is minutes from finishing, because a size-independent
+    constant expired, discards work the run exists to produce; the grace is a
+    bounded extension for exactly that, and the caller's own budget still
+    governs when the extension starts. `-k` escalates to SIGKILL for an engine
+    that ignores SIGTERM while writing.
+
+    The client-side wait is RETAINED, strictly larger, as a backstop for the
+    container itself being wedged — which no container-side deadline can cover.
+    Because it is larger the container-side deadline always fires first in the
+    normal case.
+
+    DEGRADES LOUDLY: an image without `timeout` returns 127 from the shell, so
+    the caller learns the deadline could NOT be enforced instead of running
+    unbounded behind a deadline that exists only in the caller's belief.
     """
+    deadline = atpg_container_deadline(timeout, flush_grace_s)
     docker_cmd = [
         "docker", "run", "--rm",
         "--entrypoint", "bash",
@@ -1059,13 +1134,22 @@ def _run_docker(
         docker_cmd += ["-v", f"{pdk_dir}:/pdk"]
     docker_cmd += [
         DOCKER_IMAGE,
-        "-c", ENV_PREAMBLE + " ".join(cmd),
+        "-c", (f"timeout -k {_CE.DEFAULT_KILL_GRACE_S} {deadline} bash -c "
+               + shlex.quote(ENV_PREAMBLE + " ".join(cmd))),
     ]
     try:
-        r = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(docker_cmd, capture_output=True, text=True,
+                           timeout=deadline + _CE.CLIENT_GRACE_S)
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
-        return 124, "", "docker command timed out"
+        # The BACKSTOP fired, which now means the container itself is wedged —
+        # the container-side deadline is strictly earlier, so a merely-slow
+        # engine can no longer reach this branch.
+        return 124, "", (
+            f"docker client backstop fired after "
+            f"{deadline + _CE.CLIENT_GRACE_S}s: the container-side deadline "
+            f"({deadline}s) did not fire first, so the container — not the "
+            f"engine — is unresponsive")
     except FileNotFoundError:
         return 127, "", "docker binary not found in PATH"
 

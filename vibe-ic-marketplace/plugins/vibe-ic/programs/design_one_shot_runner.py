@@ -104,6 +104,7 @@ import synth_frontend as _sf
 import lec_gate_netlist_select as _lec_gns  # ATPG-cut predicate (diagnosis only)
 import _yosys_stat as _ystat  # shared yosys `stat` parser (step 9 stats.json)
 import quartus_map_audit as _qma  # step 6 .map.rpt silent-failure scanner
+import _hardmacro_stage as _hms  # staged SRAM/IP macro discovery + blackbox
 
 # Path inside the iic-osic-tools container where the EDA tools live (yosys
 # + the slang plugin, sv2v, verilator). Mirrors phase3_one_shot_runner.
@@ -5460,6 +5461,12 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         # ORGANIC-20260531: exclude FPGA / board-integration wrappers
         # (sibling-include or vendor-primitive) from the ASIC source list.
         rtl_files = _select_asic_rtl_sources(rtl_dir)
+        # ORGANIC-20260801 — stream staged hard-macro behavioral models (L8
+        # `.v`) into the sim compile set so an instantiated SRAM/IP macro is
+        # not `Unknown module type` at iverilog elaboration.
+        for _m in _staged_hardmacro_models(project, rtl_files):
+            if _m["v"] is not None:
+                rtl_files.append(_m["v"])
         run_dir = sim_dir / "generic_full_stack_run"
         run_dir.mkdir(parents=True, exist_ok=True)
         vvp = run_dir / "full_stack.vvp"
@@ -5895,6 +5902,16 @@ def _select_asic_rtl_sources(rtl_dir: Path):
                       if "pkg" not in p.name and _keep(p))
     other_v = sorted(p for p in rtl_dir.glob("*.v") if _keep(p))
     return pkg_files + other_sv + other_v
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC-20260801-staged-hardmacro-model-not-injected-into-sim-or-synth
+# Staged hard-macro (SRAM/IP) model discovery + blackbox staging lives in the
+# shared `_hardmacro_stage` module so the Phase-2 sim/synth path here and the
+# `lec_run` equiv gold/gate build resolve an instantiated-but-staged macro the
+# SAME way. See that module's docstring for the full rationale.
+_staged_hardmacro_models = _hms.staged_hardmacro_models
+_emit_hardmacro_blackbox_stub = _hms.emit_blackbox_stub
 
 
 # ---------------------------------------------------------------------------
@@ -7774,6 +7791,16 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             rtl_files = _select_asic_rtl_sources(rtl_dir)  # re-glob staged deps
     except Exception:  # pragma: no cover — robustness aid must never crash synth
         _v662_dep = {}
+    # ORGANIC-20260801 — feed a `(* blackbox *)`-attributed copy of every
+    # instantiated staged hard-macro model (L8 `.v`) so the generic sanity
+    # synth resolves the macro as an interface blackbox instead of failing
+    # `Unknown module type`. Appended to rtl_files AFTER the #662 re-glob so
+    # it survives; flows through the primary, docker, and SV synth paths (all
+    # iterate rtl_files). No-op for designs without staged hard-macros.
+    for _m in _staged_hardmacro_models(project, rtl_files):
+        if _m["v"] is not None:
+            rtl_files.append(_emit_hardmacro_blackbox_stub(
+                _m["v"], _m["name"], synth_dir / "_hardmacro_bb"))
     # v1.6.191 (#78 P0) — prefer ASIC-core top when both an FPGA
     # wrapper (`chip_top`) and an ASIC core (`chip_top_asic`) are
     # present in rtl/. The FPGA wrapper has tristate I/O whose
@@ -9832,6 +9859,66 @@ def _dft_atpg_gap_reason(pdk: Optional[str]) -> str:
     )
 
 
+# The mapped netlist Fault ATPG needs, and the step that writes it. Named as a
+# GLOB, not a path: `<top>` is the run's own top name, so no design literal
+# enters the program. `_dft_atpg_sniff_pdk` resolves the same sibling.
+_ATPG_MAPPED_NETLIST_GLOB = "phase2/stage2/synth/*_synth.v"
+
+
+def _dft_atpg_precondition_reason(sniffed_from: str) -> str:
+    """Prose for the step-11 ATPG not-run when the engine was handed a netlist
+    with NO library-mapped cells at all — a PRECONDITION, not a capability.
+
+    The third member of the same family as `_dft_atpg_crash_reason` (a signal
+    death) and vibe-ic#581 (a wall-clock expiry). All three used to fall into
+    the blanket arm and be recorded with
+    ``capability_flag: cap:atpg_signoff_coverage`` — a machine-readable
+    assertion that the OSS engine CANNOT measure sign-off stuck-at coverage.
+    A crash, a budget and a missing input each need a different remedy, and
+    none of them is "the tool is the wrong tool".
+
+    MEASURED inside ONE run (sha256 x sky130A, plugin v1.9.27, image 0.2.51).
+    Same engine, same design, same container; the only variable is whether the
+    mapped netlist existed yet:
+
+      * 16:37:33 — this flow's Phase-2 synth writes
+        ``phase2/stage2/synth/netlist.v`` technology-GENERIC by construction
+        (``dffunmap; abc -g cmos2``, no Liberty): 28 397 cells, all
+        ``$_NAND_`` / ``$_NOR_`` / ``$_NOT_`` / ``$_DFF_P_``, ZERO library
+        cells. That is a property of the flow, not of the design — every run
+        of this shape gets it.
+      * 16:37:33 — step 11 runs against exactly that and the engine reports
+        ``unsupported pdk: unmapped``, ``atpg_exit: null``,
+        ``faults_total: null``. It never got a runnable input, and the record
+        called it a capability gap closed by "a commercial ATPG path".
+      * 18:28:35 — Phase 3 writes the tech-mapped sibling ``<top>_synth.v``:
+        13 247 library cells.
+      * 18:28:48 — THIRTEEN SECONDS LATER the SAME `fault` binary builds a
+        real scan chain on it: ``reports/phase2/dft/scan_chain.json`` →
+        ``"chain_exit": 0``, ``"pdk": "sky130"``, 13 247 -> 14 225 instances,
+        DFT ports added. 18:28:55 — ``cut_netlist.v`` appears, which is the
+        very precondition DT1 had reported absent.
+
+    So the engine HAS the capability; step 11's Phase-2 pass simply runs
+    before the artefact it needs is produced. Recording that as a capability
+    gap points the reader at a commercial-tool remedy for a problem that is
+    ordering, and closes an investigation that should stay open. The record
+    now names the missing artefact instead. chip-AGNOSTIC / PDK-AGNOSTIC.
+    """
+    return (
+        "Fault ATPG NEVER RAN — precondition unmet: the netlist it was given "
+        f"({sniffed_from}) carries no library-mapped cells, so the engine had "
+        "no runnable input and reported `unsupported pdk: unmapped` without "
+        "attempting a measurement. This is NOT a capability gap and must not "
+        "be recorded as one: the mapped netlist the engine needs "
+        f"({_ATPG_MAPPED_NETLIST_GLOB}) is produced LATER by this same flow, "
+        "and the identical engine on the identical design has been measured "
+        "to build a scan chain and run ATPG as soon as it exists. The remedy "
+        "is to run stuck-at ATPG after technology mapping — not a different "
+        "ATPG tool."
+    )
+
+
 def _derive_dft_clock_name(blob: str) -> str:
     """Derive the primary functional clock port name from an RTL source blob
     for Fault ATPG's ``--clock`` argument. Chip-AGNOSTIC: pure string scan.
@@ -10066,6 +10153,29 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                      "phase2/stage2/synth/netlist.v",
                      "--clock", clk, "--json",
                      str(_scan_json.relative_to(project))]
+        # `fault chain` DEFAULTS to inserting a top-level boundary-scan
+        # register wrapping every port. On a FIXED-PINOUT WRAPPER — a design
+        # whose die outline and pin placement are fixed by a parent's DEF
+        # template (FP_DEF_TEMPLATE), so its ports connect to that parent, not
+        # to chip pads — that register is wrong DFT AND a timing/area hazard
+        # (#604: on caravel_user_project × sky130A the 606-cell register routed
+        # across the fixed 2920×3520 µm die at 25 ns gave an SS-corner setup
+        # violation of −0.73 ns and a +707% area blow-up). The producer decides
+        # `--skip-boundary` DETERMINISTICALLY from the fixed-pinout contract in
+        # its default `auto` mode; passing `--top-module` lets it match the DEF
+        # template to THIS top rather than a sub-macro's.
+        if top_name:
+            _scan_cmd += ["--top-module", top_name]
+        # Operator override of the boundary-scan decision. The DEFAULT is
+        # `auto` (the deterministic fixed-pinout selector above); an operator
+        # may force `on`/`off` via VIBEIC_DFT_SKIP_BOUNDARY. `off` restores the
+        # legacy always-insert-boundary behaviour — this is what the #604
+        # control run uses to reproduce the SS-corner violation as a
+        # ONE-VARIABLE experiment (same die, netlist, pins, image; only the
+        # boundary register differs). An unset/unknown value leaves `auto`.
+        _sb_env = (os.environ.get("VIBEIC_DFT_SKIP_BOUNDARY") or "").strip().lower()
+        if _sb_env in ("auto", "on", "off"):
+            _scan_cmd += ["--skip-boundary", _sb_env]
         # `fault chain --reset` DEFAULTS TO THE LITERAL NAME `rst`. Leaving it
         # unset makes fault declare `input rst;` in the chained netlist's body
         # without adding it to the module header, and fault's own yosys
@@ -10284,6 +10394,19 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                     _extra_flag = {"engine_crash": True,
                                    "atpg_attempt_exits":
                                        cov.get("atpg_attempt_exits")}
+                elif not pdk:
+                    # A MISSING INPUT IS A PRECONDITION, NOT A CAPABILITY.
+                    # The sniff found no library-mapped cells in any candidate
+                    # netlist, so the engine was never handed something it
+                    # could run — see `_dft_atpg_precondition_reason` for the
+                    # two-run measurement. `capability_flag` is dropped here
+                    # for the same reason it is dropped on the crash and the
+                    # budget arms: the engine's capability is not what failed.
+                    _reason = _dft_atpg_precondition_reason(
+                        _rel_or_name(project, sniff_netlist))
+                    _extra_flag = {
+                        "not_run_stage": "precondition_unmet",
+                        "missing_precondition": _ATPG_MAPPED_NETLIST_GLOB}
                 else:
                     _reason = _dft_atpg_gap_reason(pdk)
                     _extra_flag = {
@@ -10306,11 +10429,20 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                                                               sniff_netlist),
                      "retained_evidence": retained,
                      "log_excerpt": log_tail})
-                results.append(StepResult("dft_insertion", "SKIP",
-                               time.time() - t0,
-                               f"DFT scan inserted; OSS ATPG coverage "
-                               f"engine-limited (pdk={pdk or 'generic'}) → "
-                               f"disclosed capability-gap"))
+                # The one-line step summary must carry the SAME distinction the
+                # record does: "engine-limited" on a run where the engine was
+                # never given a mapped netlist is the capability claim leaking
+                # back out through the console.
+                results.append(StepResult(
+                    "dft_insertion", "SKIP", time.time() - t0,
+                    (f"DFT scan inserted; stuck-at ATPG NEVER RAN — no "
+                     f"library-mapped netlist yet "
+                     f"({_ATPG_MAPPED_NETLIST_GLOB} is written later) → "
+                     f"precondition unmet, NOT a capability gap")
+                    if not pdk else
+                    (f"DFT scan inserted; OSS ATPG coverage "
+                     f"engine-limited (pdk={pdk}) → "
+                     f"disclosed capability-gap")))
         except subprocess.TimeoutExpired as exc:
             # vibe-ic#581 — A TIMEOUT IS A BUDGET OUTCOME, NOT A CAPABILITY GAP.
             #
@@ -10385,11 +10517,27 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                             "Step-11 scan cut produced no cut netlist to run "
                             "at-speed ATPG on")
     if _tdf_missing:
+        # A PRECONDITION IS NOT A CAPABILITY — the DT1 arm of the same split
+        # #581 made for the budget and `_dft_atpg_crash_reason` made for the
+        # crash. This record already SAYS `not_run_stage: precondition_unmet`
+        # ("cut_netlist.v absent"), and used to say
+        # `capability_flag: cap:at_speed_timing_graded_atpg` in the same
+        # breath — asserting the engine cannot do at-speed TDF ATPG on a run
+        # where the engine was never invoked. The ownership claim
+        # (`skips_required_output`) is kept: it says WHICH absent output this
+        # marker explains, which is true and is a different claim.
+        #
+        # DIRECTION OF THE CHANGE, stated: dropping the flag can only make a
+        # step's status the SAME or STRICTER (a capability-AWARE deferral
+        # MISSING->SKIPPED-CONDITION is refused), never looser. Measured on
+        # the published sha256 x sky130A tree, removing both DFT capability
+        # flags left `flow_compliance_check --strict` byte-identical.
         _dft_disclose_skip(
             _tdf_not_run,
             "transition-delay-fault ATPG NEVER RAN — precondition unmet: "
             + "; ".join(_tdf_missing),
-            dict(_TDF_CAP, not_run_stage="precondition_unmet"))
+            {"skips_required_output": _TDF_CAP["skips_required_output"],
+             "not_run_stage": "precondition_unmet"})
     else:
         tdf_json.parent.mkdir(parents=True, exist_ok=True)
         tdf_cmd = [sys.executable,
