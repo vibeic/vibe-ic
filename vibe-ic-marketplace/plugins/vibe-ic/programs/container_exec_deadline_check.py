@@ -170,6 +170,16 @@ def main(argv=None) -> int:
 
     if findings and args.strict:
         return FAIL
+    # vibe-ic#564 — THE COMMENT ABOVE ALREADY SAYS THIS: "a clean result over
+    # zero files is not a clean result". It printed the zero and returned PASS
+    # anyway, so the P0 umbrella — which reads exit codes, not prose — recorded
+    # a silent pass. rc 2 is this repo's disclosed-skip convention and promotes
+    # the step to VACUOUS-PASS instead.
+    if scanned == 0:
+        print("VACUOUS_PASS: container_exec_deadline_check scanned 0 file(s) — "
+              "nothing was examined, which is not a clean result",
+              file=sys.stderr)
+        return 2
     return PASS
 
 

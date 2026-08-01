@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1021
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1021)
+- **Total programs (excluding helpers / shims):** 1022
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1022)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1012 |
+| `any` | 1013 |
 
 ## Alphabetical listing
 
@@ -394,6 +394,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_skip_routing_check` | any | — | every gate, and whether its skip REACHES the machine that reads the verdict (#528). |
 | `gate_utils` | any | v0.117 | Shared helpers for v0.117+ structural-RTL gates. |
 | `gate_verilog_to_spice` | any | — | convert a structural (gate-level) Verilog netlist to SPICE for netgen LVS against a KLayout-extracted layout netlist. |
+| `gate_zero_denominator_refuses_check` | any | — | a gate that read NOTHING must not exit 0. |
 | `gatekeeper_assign_version` | any | — | v1.1.7 (owner directive 2026-06-17). |
 | `gatekeeper_review` | any | — | the DETERMINISTIC half of the single PR gatekeeper. |
 | `gatekeeper_stale_branch_check` | any | — | the STALE-BRANCH / phantom-revert guard. |
@@ -1093,7 +1094,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1012 programs)
+### `any` (1013 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1459,6 +1460,7 @@ _(no programs in this group)_
 - `gate_skip_routing_check` — every gate, and whether its skip REACHES the machine that reads the verdict (#528).
 - `gate_utils` — Shared helpers for v0.117+ structural-RTL gates.  _[v0.117]_
 - `gate_verilog_to_spice` — convert a structural (gate-level) Verilog netlist to SPICE for netgen LVS against a KLayout-extracted layout netlist.
+- `gate_zero_denominator_refuses_check` — a gate that read NOTHING must not exit 0.
 - `gatekeeper_assign_version` — v1.1.7 (owner directive 2026-06-17).
 - `gatekeeper_review` — the DETERMINISTIC half of the single PR gatekeeper.
 - `gatekeeper_stale_branch_check` — the STALE-BRANCH / phantom-revert guard.
