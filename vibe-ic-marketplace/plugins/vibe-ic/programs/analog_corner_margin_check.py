@@ -44,8 +44,14 @@ Usage:
 
 Exit codes:
     0 = PASS: at least one block's A4 corner artefact was read and every
-        corner it declares meets the floor
-    1 = FAIL (insufficient corners or a corner below the margin floor)
+        corner it declares meets the floor. The verdict WORD carries the
+        tier: `PASS_STRUCTURE_ONLY` when every certified block's artefact
+        records that its circuit came from a library default (a disclosed
+        honest ceiling — it certifies, in its own tier, and never as a
+        design-bound pass).
+    1 = FAIL (insufficient corners, a corner below the margin floor, or an
+        artefact that declines to say what circuit it measured —
+        MARGIN_SUBJECT_UNDECLARED)
     2 = VACUOUS: nothing was examined — no analog/ directory, or no block
         carries a readable A4 corner artefact (a deterministic stub reads as
         no data). #521: both used to be rc 0, so a margin gate that read no
@@ -63,7 +69,46 @@ from typing import List, Optional
 
 import _path_layout as _pl
 import _vacuous_exit as _vx
+import _analog_a_check_common as _acc
 from _analog_stub_marker import is_stub_json
+
+# ── THE STRICTEST CLAIM IN THE REPO IS STILL A CLAIM ABOUT SOMETHING ──────
+# THE RULE, with no tool, step or block name in it:
+#
+#   A gate that re-derives a verdict from an artefact's own numbers is making
+#   a claim about the circuit those numbers describe. It must read what that
+#   circuit is, and it must not report a measurement of a library default as a
+#   measurement of the design — nor certify at all from an artefact that will
+#   not say which of the two it holds.
+#
+# MEASURED, on three synthetic trees identical in every artefact except the
+# one recorded `design_content` value: this gate re-derived the strictest PVT
+# claim in the repo — 27 corners, every corner ≥ 10 % margin — and answered
+# `[PASS]` rc 0 with a BYTE-IDENTICAL `--json` summary on the design-bound
+# tree, the structure-only tree and the silent one. 27 corners on a library
+# nominal is a self-test of the topology library; the spec it satisfied is the
+# design's, and the circuit that satisfied it is not.
+#
+# THREE OUTCOMES, ranked so that disclosure is never the expensive answer,
+# exactly as the sibling corner gates rank them:
+#   design-bound   -> PASS, unchanged.
+#   structure-only -> PASS_STRUCTURE_ONLY. It certifies, in its own tier, and
+#                     leaves the design-bound pass count. Not a FAIL: the
+#                     bounded inputs did not determine the content, and
+#                     failing an honest ceiling teaches the next run to stop
+#                     being honest.
+#   undisclosed    -> does not certify. The gate cannot say what it graded.
+#
+# ASKED LAST, after the corner-count rule and after the margin rule, so a
+# reader is never sent to fix the wrong thing first: "your 14th corner is 5 %
+# below the floor" names a deeper cause and answers "what did you measure?" as
+# a side effect; the reverse is not true.
+#
+# READ FROM THE ARTEFACT THIS GATE GRADES, with no fallback — the corner
+# artefact IS what this gate reads, so it is the artefact whose own record
+# decides, identically to `analog_a4_corner_sweep_check`, the gate of record
+# for that file. A consumer that resolved it more leniently than its own gate
+# of record would re-open the gap by another door.
 
 # Thresholds — verbatim from skills/analog-output-verify/SKILL.md (A4):
 #   "A4_corners.json covers ≥27 corners" (3 process × 3 temp × 3 voltage)
@@ -184,7 +229,12 @@ def _check_block(project: Path, block_dir: Path,
                      f"data — strict margin gate skipped"),
             file=rel,
         ))
-        return {"block": block_name, "pass": True, "stub": True, "file": rel}
+        # Returned BEFORE the certification question on purpose: the stub tier
+        # is its own disclosure, decided earlier, and it already says the
+        # numbers here are not this design's. Same ordering the sibling
+        # yield-vs-spec gate uses for the same branch.
+        return {"block": block_name, "pass": True, "stub": True, "file": rel,
+                "content": _acc.CONTENT_UNDISCLOSED}
 
     corners = data.get("corners")
     if not isinstance(corners, list):
@@ -254,9 +304,13 @@ def _check_block(project: Path, block_dir: Path,
             file=rel,
         ))
 
+    # READ here, beside the numbers it describes; ACTED ON below, LAST.
+    content = _acc.classify_design_content(data.get("design_content"))
+
     detail = {
         "block": block_name,
         "pass": block_ok,
+        "content": content,
         "file": rel,
         "total_corners": total,
         "margins_read": margins_read,
@@ -265,7 +319,44 @@ def _check_block(project: Path, block_dir: Path,
     }
     if reasons:
         detail["reasons"] = reasons
-    if block_ok:
+
+    # ── the certification question, asked LAST ────────────────────────────
+    if block_ok and content == _acc.CONTENT_UNDISCLOSED:
+        detail["pass"] = False
+        detail.setdefault("reasons", []).append("design_content_undeclared")
+        result.findings.append(Finding(
+            rule="MARGIN_SUBJECT_UNDECLARED",
+            severity="ERROR",
+            message=(
+                f"Block '{block_name}': {total} corners and every readable "
+                f"margin ≥ {MIN_MARGIN_PCT:.0f}%, and the artefact records no "
+                f"answer to what circuit produced them (`design_content` "
+                f"{data.get('design_content')!r}) — so the PVT margin "
+                f"re-derived here cannot be reported as this design's. Naming "
+                f"a library default (`{_acc.CONTENT_STRUCTURE_ONLY}`) "
+                f"certifies in its own tier; declining to answer does not, or "
+                f"saying nothing would cost less than saying so."
+            ),
+            file=rel,
+        ))
+        result.passed = False
+    elif block_ok and content == _acc.CONTENT_STRUCTURE_ONLY:
+        # Disclosed as a library default. The margins above are real, and they
+        # are margins OF THAT TOPOLOGY — reported, never as this design's.
+        result.findings.append(Finding(
+            rule="CORNER_MARGIN_STRUCTURE_ONLY",
+            severity="WARNING",
+            message=(
+                f"Block '{block_name}': {total} corners, {margins_read} "
+                f"margin(s) checked, all ≥ {MIN_MARGIN_PCT:.0f}% — OF A "
+                f"LIBRARY TOPOLOGY. The artefact records that its circuit came "
+                f"from a topology library and that no bound input reached any "
+                f"device parameter. Not missing (re-running produces the same "
+                f"artefact) and not a design-bound pass."
+            ),
+            file=rel,
+        ))
+    elif block_ok:
         result.findings.append(Finding(
             rule="CORNER_MARGIN_OK",
             severity="INFO",
@@ -312,10 +403,29 @@ def run_audit(project: Path) -> AuditResult:
         return result
 
     blocks_pass = sum(1 for d in details if d.get("pass"))
+    so = [d["block"] for d in details
+          if d.get("pass") and not d.get("stub")
+          and d.get("content") == _acc.CONTENT_STRUCTURE_ONLY]
+    design_bound = sum(1 for d in details
+                       if d.get("pass") and not d.get("stub")
+                       and d.get("content") == _acc.CONTENT_DESIGN_BOUND)
+    # A pass over a library default is a pass in its own tier, so it travels
+    # on the verdict WORD as well as in the JSON. Only when NO block cleared
+    # the gate as a design-bound one: a project with both has a design-bound
+    # margin to report, and the structure-only subset is named beside it.
+    verdict_tier = ("PASS_STRUCTURE_ONLY"
+                    if (result.passed and so and not design_bound) else "PASS")
     result.summary = {
         "skipped": False,
         "blocks_checked": blocks_with_data,
         "blocks_pass": blocks_pass,
+        # The design-bound pass count is the one a reader wants when asking
+        # "did THIS DESIGN's PVT margin close" — `blocks_pass` answers a
+        # different question and is kept unchanged for back-compat.
+        "blocks_design_bound_pass": design_bound,
+        "blocks_structure_only": len(so),
+        "structure_only_blocks": so,
+        "verdict_tier": verdict_tier,
         "blocks_fail": blocks_with_data - blocks_pass,
         "min_corners_required": MIN_CORNERS,
         "min_margin_pct": MIN_MARGIN_PCT,
@@ -350,15 +460,31 @@ def main(argv: Optional[list] = None) -> int:
     skipped = _vx.summary_is_skipped(result.summary)
     reason = _vx.skip_reason(result.summary)
 
+    so_blocks = (result.summary or {}).get("structure_only_blocks") or []
     if not args.json:
-        print(_vx.verdict_line("analog_corner_margin_check", result.passed,
-                               skipped, reason))
+        # The tier travels on the verdict WORD — `pass_token` is the seam
+        # `_vacuous_exit` already provides for it — so a reader of the one
+        # line can tell this design's PVT margin from a library topology's.
+        print(_vx.verdict_line(
+            "analog_corner_margin_check", result.passed, skipped, reason,
+            pass_token=((result.summary or {}).get("verdict_tier") or "PASS")))
         for f in result.findings:
             if f.severity in ("ERROR", "WARNING"):
                 print(f"  [{f.severity}] {f.rule}: {f.message}")
 
     if result.passed and skipped:
         _vx.announce_vacuous(result.program, reason)
+    # LAST, SHORT, and on every path — the disclosure the flow auditor reads
+    # from a fixed-width TAIL of this stream, whatever the verdict was. To
+    # stderr for the same reason `announce_vacuous` is: `--json` puts a
+    # document on stdout and a sentinel mixed into it would not parse.
+    if so_blocks:
+        names = ", ".join(str(b) for b in so_blocks)
+        if len(names) > 60:
+            names = f"{names[:57]}..."
+        print(f"{_acc.STRUCTURE_ONLY_TOKEN} {len(so_blocks)} corner "
+              f"artefact(s) ({names}) came from a library default, not a "
+              f"bound input [analog_corner_margin_check]", file=sys.stderr)
     return _vx.exit_code(result.passed, skipped)
 
 

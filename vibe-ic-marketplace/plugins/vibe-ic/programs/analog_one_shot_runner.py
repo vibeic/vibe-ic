@@ -41,6 +41,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import _path_layout as _pl
+import _analog_a_check_common as _acc
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
 
@@ -480,14 +481,33 @@ def _step_outputs(project: Path, block: str, step_name: str) -> List[str]:
 # The token is a LINE-START sentinel on stdout, the same shape as this repo's
 # `VACUOUS_PASS:`, and it is read whether or not the gate passed.
 _STRUCTURE_ONLY_SENTINEL = "STRUCTURE_ONLY:"
-#: The per-step artefact whose own record answers "what is in it?", and the
-#: key inside it. Two producers, two shapes; both are read from the artefact
-#: and never inferred here.
+#: The per-step artefacts whose record answers "what is in it?", and the key
+#: inside each. An ORDERED, nearest-first chain per step: a step's OWN record
+#: outranks anything it inherits, because only its producer can state what
+#: THAT file contains. Every shape is read from an artefact and never inferred
+#: here; a link that names no content is skipped, not accepted, so a chain can
+#: only ever find an answer a producer actually wrote down.
+#:
+#: A7 has a chain rather than a single source because no producer writes the
+#: field into `pre_vs_post.json`, while the pre-layout corner result the
+#: comparison is against — the artefact `analog_a4_corner_sweep_check` is the
+#: gate of record for — carries it. Until this entry existed, the runner
+#: recorded a PASS_STRUCTURE_ONLY A7 step with EMPTY extras: it read the
+#: gate's sentinel and then had nothing to say about what the step contained,
+#: which is the same defect one layer down.
 _CONTENT_SOURCES: Dict[str, tuple] = {
-    "A3_netlist_gen": ("netlist_provenance.json", ("_provenance",
-                                                   "design_content")),
-    "A4_corner_sweep": ("corner_results.json", ("design_content",)),
+    "A3_netlist_gen": (("netlist_provenance.json", ("_provenance",
+                                                    "design_content")),),
+    "A4_corner_sweep": (("corner_results.json", ("design_content",)),),
+    "A7_post_layout_resim": (("pre_vs_post.json", ("design_content",)),
+                             ("corner_results.json", ("design_content",))),
 }
+#: The answers that NAME a content — IMPORTED from the gates' own whitelist,
+#: never restated. A second copy here would be free to drift from the one the
+#: gates certify on, and the runner would record a content the gate refuses.
+#: (A whitelist and not a blacklist for the reason stated where it is defined:
+#: a blacklist certifies the next token nobody has thought of yet.)
+_CONTENT_DISCLOSED = _acc.DESIGN_CONTENT_DISCLOSED
 
 
 def _structure_only_disclosure(cp) -> Optional[str]:
@@ -510,26 +530,27 @@ def _content_extras(project: Path, block: str,
     answer the producer did not write down, which is the whole point of the
     field.
     """
-    spec = _CONTENT_SOURCES.get(step_name)
-    if not spec:
+    chain = _CONTENT_SOURCES.get(step_name)
+    if not chain:
         return {}
-    name, keys = spec
-    path = _pl.analog_dir(project) / block / name
-    if not path.is_file():
-        return {}
-    try:
-        doc: Any = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    for k in keys:
-        if not isinstance(doc, dict):
-            return {}
-        doc = doc.get(k)
-    if not isinstance(doc, str) or not doc:
-        return {}
-    return {"design_content": doc,
-            "structure_only": doc == "structure_only",
-            "design_content_source": str(path.relative_to(project))}
+    for name, keys in chain:
+        path = _pl.analog_dir(project) / block / name
+        if not path.is_file():
+            continue
+        try:
+            doc: Any = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for k in keys:
+            if not isinstance(doc, dict):
+                doc = None
+                break
+            doc = doc.get(k)
+        if doc in _CONTENT_DISCLOSED:
+            return {"design_content": doc,
+                    "structure_only": doc == "structure_only",
+                    "design_content_source": str(path.relative_to(project))}
+    return {}
 
 
 def _producer_gap(project: Path, block: str,

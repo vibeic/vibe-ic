@@ -81,10 +81,20 @@ def _layout_stub(project: Path, block: str):
 
 
 def _prevspost_ok(project: Path, block: str):
+    """A well-formed A7 comparison — and one that SAYS WHAT IT COMPARED.
+
+    `design_content` was added when A7 stopped certifying a re-simulation
+    whose subject nothing on the tree names. Every test in this file that uses
+    this helper is about BLOCK COVERAGE (how many declared blocks produced an
+    artefact at all), so each needs an artefact that clears every other rule;
+    without the field they would now fail on content instead, and a coverage
+    test that fails for a content reason measures neither.
+    """
     d = project / "phase3" / "analog" / block
     d.mkdir(parents=True, exist_ok=True)
     (d / "pre_vs_post.json").write_text(json.dumps({
-        "pre": {"gain_db": 60.0}, "post": {"gain_db": 59.0}}))
+        "pre": {"gain_db": 60.0}, "post": {"gain_db": 59.0},
+        "design_content": "structure_and_geometry"}))
 
 
 def _hardmacro_ok(project: Path, block: str):

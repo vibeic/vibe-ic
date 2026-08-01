@@ -414,6 +414,65 @@ def content_class_of_artefact(path) -> str:
     return classify_design_content(doc.get("design_content"))
 
 
+# ── WHEN THE ARTEFACT A CONSUMER GRADES CARRIES NO RECORD OF ITS OWN ──────
+# THE RULE, with no tool, step or block name in it, and it is the rule that
+# was already stated for the PRODUCERS, applied to a CONSUMER:
+#
+#   An artefact derived from another artefact INHERITS the upstream record of
+#   what that artefact CONTAINS. A consumer that grades a derived artefact
+#   whose producer did not republish the record reads the upstream record
+#   itself — it never infers one, and it never treats the absence of one as
+#   evidence of design content.
+#
+# WHY A CONSUMER NEEDS THIS AND THE GATE OF RECORD DOES NOT. A gate that
+# grades the corner artefact reads that artefact's OWN `design_content`, full
+# stop; the field is right there. A gate that signs off a Liberty, or a
+# post-layout comparison, grades a file into which no producer has ever
+# written the field. Asking that file its own question would classify EVERY
+# tree undisclosed — including one whose upstream says plainly that the
+# content is design-bound — and a rule that fails the honest tree is not the
+# rule this track is defending.
+#
+# WHY IT CANNOT BECOME A LOOPHOLE. The chain is ORDERED nearest-first and
+# every link is read through :func:`classify_design_content`, the same
+# whitelist the gate of record uses. A link that names no content is skipped,
+# not accepted; when no link in the chain names one the answer is
+# UNDISCLOSED, exactly as if the chain had one element. So the chain can only
+# ever find an answer that a producer actually wrote down, and silence at
+# every link still costs.
+#
+# WHY THE CHAIN IS SHORT, deliberately. Each consumer's chain ends at the
+# artefact the GATE OF RECORD for that content reads. Extending it past that
+# point would let a consumer certify a tree its own gate of record refuses on
+# content grounds — two gates disagreeing about one artefact, which is the
+# drift `classify_design_content` exists to prevent.
+
+def content_class_inherited(paths) -> tuple:
+    """``(content_class, source_path_or_None)`` for an ordered, nearest-first
+    chain of candidate artefacts.
+
+    The FIRST artefact in *paths* whose ``design_content`` NAMES a content
+    decides, and its path is returned beside the answer so a reader is told
+    where it came from. When no artefact in the chain names one the answer is
+    :data:`CONTENT_UNDISCLOSED` and the path is ``None`` — there is nothing to
+    cite, which is the point.
+
+    An artefact's OWN record outranks anything it inherits: the record is a
+    statement about what THAT file contains, and only its producer can make
+    it.
+    """
+    for cand in paths:
+        if cand is None:
+            continue
+        p = Path(cand)
+        if not p.is_file():
+            continue
+        klass = content_class_of_artefact(p)
+        if klass != CONTENT_UNDISCLOSED:
+            return klass, p
+    return CONTENT_UNDISCLOSED, None
+
+
 def structure_only_disclosure(gate_name: str, blocks: list,
                               artefact: str, detail: str = "") -> None:
     """Print the STRUCTURE-ONLY disclosure. Two properties this has to hold,
@@ -488,15 +547,26 @@ def artefact_missing_for_block(gate_name: str, args, block: str,
     return 2
 
 
-def emit_pass(gate_name: str, args, summary: dict) -> int:
+def emit_pass(gate_name: str, args, summary: dict,
+              pass_token: str = "PASS") -> int:
+    """A genuine pass, with the TIER on the verdict word.
+
+    ``pass_token`` is the same seam ``_vacuous_exit.verdict_line`` already
+    provides for the gates outside this family, and it exists for the same
+    reason: a reader of the ONE line a gate prints must be able to tell a
+    measurement of this design from a measurement of a library default,
+    without opening the JSON. It applies only to a genuine pass — a failing
+    run still reads FAIL, and a run that examined nothing still reads
+    VACUOUS_PASS.
+    """
     report = {
         "gate": gate_name,
-        "verdict": "PASS",
+        "verdict": pass_token,
         **summary,
         "findings": [],
     }
     write_report(args.json, report)
-    print(f"PASS: {gate_name} — "
+    print(f"{pass_token}: {gate_name} — "
           f"{summary.get('blocks_pass', 0)}/"
           f"{summary.get('blocks_checked', 0)} block(s) clean")
     return 0

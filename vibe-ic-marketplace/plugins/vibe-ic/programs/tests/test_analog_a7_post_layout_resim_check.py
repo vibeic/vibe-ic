@@ -16,6 +16,18 @@ def _block_list(project: Path, blocks: list) -> None:
         json.dumps({"blocks": blocks}))
 
 
+#: What the re-simulated circuit contains. Written by the two HAPPY-PATH
+#: fixtures below and by nothing else: this gate stopped certifying a
+#: post-layout re-simulation whose subject nothing on the tree names, so a
+#: happy-path fixture that omitted the field would be asserting that a
+#: comparison of an unattributable circuit still certifies A7 — which is the
+#: inverted incentive the rule exists to remove. The FAILING fixtures are left
+#: exactly as they were: each already fails for its own value reason, and the
+#: gate asks the content question LAST, so adding the field to them would
+#: prove nothing and could mask which rule fired.
+DESIGN_BOUND = "structure_and_geometry"
+
+
 def _resim(project: Path, block: str, doc: dict) -> None:
     d = project / "phase3" / "analog" / block
     d.mkdir(parents=True, exist_ok=True)
@@ -39,6 +51,7 @@ def _run(project: Path, *args: str) -> subprocess.CompletedProcess:
 def test_happy_path_specs(tmp_path: Path) -> None:
     _block_list(tmp_path, ["ldo"])
     _resim(tmp_path, "ldo", {
+        "design_content": DESIGN_BOUND,
         "specs": [
             {"name": "vout", "pre_value": 1.8, "post_value": 1.78,
              "delta_pct": -1.1},
@@ -50,16 +63,60 @@ def test_happy_path_specs(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
     rpt = json.loads((tmp_path / "report.json").read_text())
     assert rpt["verdict"] == "PASS"
+    assert rpt["blocks_design_bound_pass"] == 1
 
 
 def test_happy_path_pre_post_dict(tmp_path: Path) -> None:
+    _block_list(tmp_path, ["ldo"])
+    _resim(tmp_path, "ldo", {
+        "design_content": DESIGN_BOUND,
+        "pre": {"vout": 1.8, "psrr": 60},
+        "post": {"vout": 1.78, "psrr": 58},
+    })
+    r = _run(tmp_path)
+    assert r.returncode == 0
+
+
+def test_a_comparison_that_names_no_circuit_does_not_certify(
+        tmp_path: Path) -> None:
+    """The rule the two happy paths above now state. A post-layout comparison
+    of a library topology and one of a design sized to its spec are
+    indistinguishable in every other field of `pre_vs_post.json`, and this
+    gate is a step of the A-track runner — whatever it certifies is what the
+    run record inherits."""
     _block_list(tmp_path, ["ldo"])
     _resim(tmp_path, "ldo", {
         "pre": {"vout": 1.8, "psrr": 60},
         "post": {"vout": 1.78, "psrr": 58},
     })
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 1, r.stdout + r.stderr
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert any("A7_DESIGN_CONTENT_UNDECLARED" in f["rule"]
+               for f in rpt["findings"])
+
+
+def test_a_disclosed_library_default_certifies_in_its_own_tier(
+        tmp_path: Path) -> None:
+    """Only silence costs. The record is INHERITED from the pre-layout corner
+    result here — the artefact this comparison is against, and the one the A4
+    gate of record reads — because no producer writes the field into
+    `pre_vs_post.json`."""
+    _block_list(tmp_path, ["ldo"])
+    _corners(tmp_path, "ldo", {
+        "design_content": "structure_only",
+        "corners": [{"process": "TT", "simulator_run": True}]})
+    _resim(tmp_path, "ldo", {
+        "pre": {"vout": 1.8, "psrr": 60},
+        "post": {"vout": 1.78, "psrr": 58},
+    })
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert rpt["verdict"] == "PASS_STRUCTURE_ONLY"
+    assert rpt["structure_only_blocks"] == ["ldo"]
+    assert rpt["blocks_design_bound_pass"] == 0
+    assert "STRUCTURE_ONLY:" in r.stdout, r.stdout
 
 
 def test_missing_per_block_waived(tmp_path: Path) -> None:
