@@ -148,6 +148,35 @@ from _specrtl_common import (  # noqa: E402
     _split_md_row, _is_md_delim_row, _strip_md_emphasis)
 
 
+#: `aes.[`CTRL_SHADOWED`](#ctrl_shadowed)` -> `CTRL_SHADOWED`.
+#:
+#: vibe-ic#593. A register-tool summary table writes the name as a markdown LINK
+#: under a block prefix, and the identifier match rejected the whole cell — so
+#: the summary table contributed NOTHING and the 28 registers that did come out
+#: were read from a different table elsewhere in the document. The ones the
+#: summary uniquely carries are exactly the ones with FIELDS: CTRL_SHADOWED,
+#: CTRL_AUX_SHADOWED, CTRL_GCM_SHADOWED, TRIGGER, STATUS. Measured on the
+#: shipped OpenTitan AES register document.
+#:
+#: Markdown link grammar plus an optional `<block>.` qualifier; no vendor or
+#: design token. The identifier match below is unchanged, so a cell that is not
+#: a name after this is still rejected.
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+
+
+def _regmap_name_cell(cell: str) -> str:
+    """The register name a summary-table Name cell states."""
+    txt = _strip_md_emphasis(cell)
+    m = _MD_LINK_RE.search(txt)
+    if m:
+        txt = _strip_md_emphasis(m.group(1))
+    # `aes.CTRL_SHADOWED` -> `CTRL_SHADOWED`; the block qualifier names the IP,
+    # not the register, and every row in a table carries the same one.
+    if "." in txt:
+        txt = txt.rsplit(".", 1)[-1]
+    return txt.strip()
+
+
 def extract_regmap(prompt: str) -> List[Dict]:
     """Parse a markdown REGISTER-MAP table: a table carrying a name column AND an
     OFFSET/ADDRESS column (the offset is what makes it a regmap, not a port list).
@@ -182,7 +211,7 @@ def extract_regmap(prompt: str) -> List[Dict]:
             if len(cells) <= max(name_c, off_c):
                 j += 1
                 continue
-            name = _strip_md_emphasis(cells[name_c])
+            name = _regmap_name_cell(cells[name_c])
             off = _strip_md_emphasis(cells[off_c])
             if (not re.fullmatch(r'[A-Za-z_]\w*', name)
                     or not re.search(r'0x[0-9a-fA-F]+|\d', off)):
@@ -202,7 +231,99 @@ def extract_regmap(prompt: str) -> List[Dict]:
             out.append(rec)
             j += 1
         i = j if j > i else i + 1
+    _attach_regmap_fields(prompt, out)
     return out
+
+
+#: `## CTRL_SHADOWED` — the per-register section heading a register-tool doc
+#: emits above that register's own field description.
+#: The LEVEL is captured because a register's own field diagram lives in a
+#: SUBSECTION (`### Fields`) of it. Ending the register's slice at the next
+#: heading of any depth cuts the diagram off — measured: `## CTRL_SHADOWED`
+#: ended at `### Fields` and the wavejson fence, the only thing worth reading,
+#: fell outside every slice. The slice ends at the next heading of the SAME or
+#: SHALLOWER level.
+_REG_SECTION_RE = re.compile(
+    r"^(?P<hashes>##+)\s+(?:\w+\.)?[`\[]*([A-Za-z_]\w*)[`\]]*\s*$",
+    re.MULTILINE)
+#: The wavejson fence a register tool writes under `### Fields`. wavedrom /
+#: wavejson is a general register-diagram format, not a vendor token.
+_WAVEJSON_FENCE_RE = re.compile(r"```\s*wavejson\s*\n(.*?)\n```", re.S)
+
+
+def extract_register_fields(section_text: str):
+    """``[{name, lsb, width, msb, access?}]`` from a wavejson register diagram.
+
+    vibe-ic#593. `extract_regmap` returns a FLAT `{name, offset, width}` per
+    register and emits no `fields[]`, so every field-level name a document
+    declares — and every `<REG>_<FIELD>_MASK` / `_OFFSET` accessor macro built
+    on it — lands in no L layer.
+
+    The fields are already MACHINE-READABLE in these documents: the register
+    tool writes them as a `wavejson` diagram whose `reg` array is JSON, in bit
+    order, LSB first. An unnamed entry is reserved padding — it is NOT emitted
+    as a field, but its width still advances the bit position, because dropping
+    it would shift every field above it.
+
+    Reads the document; invents nothing. A fence that does not parse, or whose
+    `reg` is not a list, yields no fields rather than a guess.
+    """
+    m = _WAVEJSON_FENCE_RE.search(section_text)
+    if not m:
+        return []
+    try:
+        obj = json.loads(m.group(1))
+    except (ValueError, TypeError):
+        return []
+    reg = obj.get("reg") if isinstance(obj, dict) else None
+    if not isinstance(reg, list):
+        return []
+    fields = []
+    lsb = 0
+    for ent in reg:
+        if not isinstance(ent, dict):
+            return []
+        try:
+            width = int(ent.get("bits"))
+        except (TypeError, ValueError):
+            return []
+        if width <= 0:
+            return []
+        name = ent.get("name")
+        if isinstance(name, str) and re.fullmatch(r"[A-Za-z_]\w*", name.strip()):
+            rec = {"name": name.strip(), "lsb": lsb, "width": width,
+                   "msb": lsb + width - 1}
+            attr = ent.get("attr")
+            if isinstance(attr, list) and attr and isinstance(attr[0], str):
+                rec["access"] = attr[0]
+            elif isinstance(attr, str) and attr:
+                rec["access"] = attr
+            fields.append(rec)
+        lsb += width
+    return fields
+
+
+def _attach_regmap_fields(prompt: str, regs):
+    """Attach `fields[]` to each register that has a wavejson section."""
+    if not regs:
+        return
+    by_name = {r["name"]: r for r in regs if r.get("name")}
+    if not by_name:
+        return
+    marks = [(m.start(), m.group(2), len(m.group("hashes")))
+             for m in _REG_SECTION_RE.finditer(prompt)]
+    for k, (pos, name, level) in enumerate(marks):
+        reg = by_name.get(name)
+        if reg is None or reg.get("fields"):
+            continue
+        end = len(prompt)
+        for pos2, _n2, lvl2 in marks[k + 1:]:
+            if lvl2 <= level:
+                end = pos2
+                break
+        got = extract_register_fields(prompt[pos:end])
+        if got:
+            reg["fields"] = got
 
 
 # Prose signal-DEFINITION bullet: `- [**|`]?[ [w-1:0] ]?NAME[`|**]? : description`.
