@@ -51,6 +51,27 @@ def _hardmacro(project: Path, block: str,
     )
 
 
+#: What the packaged circuit contains. Nothing writes `design_content` into a
+#: LEF, a Liberty, a GDS or a behavioural Verilog, so the whole answer is the
+#: corner artefact's — the A4 gate of record's own subject. The HAPPY-PATH
+#: fixture carries it because this gate stopped signing off a macro digital
+#: PnR will instantiate when nothing on the tree names the circuit it models;
+#: a fixture that omitted it would be asserting that silence still signs off.
+#: The FAILING fixtures are left exactly as they were: each already fails for
+#: its own deliverable reason, and the gate asks the content question LAST.
+DESIGN_BOUND = "structure_and_geometry"
+
+
+def _baseline(project: Path, block: str, design_content=DESIGN_BOUND) -> None:
+    d = project / "phase3" / "analog" / block
+    d.mkdir(parents=True, exist_ok=True)
+    doc = {"block": block, "_provenance": "real_ngspice",
+           "corners": [{"name": "tt_27c_1v8", "simulator_run": True}]}
+    if design_content is not None:
+        doc["design_content"] = design_content
+    (d / "corner_results.json").write_text(json.dumps(doc))
+
+
 def _run(project: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(PROG), str(project),
@@ -62,10 +83,66 @@ def _run(project: Path, *args: str) -> subprocess.CompletedProcess:
 def test_happy_path(tmp_path: Path) -> None:
     _block_list(tmp_path, ["ldo"])
     _hardmacro(tmp_path, "ldo")
+    _baseline(tmp_path, "ldo")
     r = _run(tmp_path)
     assert r.returncode == 0, r.stderr
     rpt = json.loads((tmp_path / "report.json").read_text())
     assert rpt["verdict"] == "PASS"
+    assert rpt["blocks_design_bound_pass"] == 1
+
+
+def test_a_package_that_names_no_circuit_does_not_certify(
+        tmp_path: Path) -> None:
+    """The rule the happy path above now states. Every deliverable is present
+    and substantive, so the only thing this can fail on is the certification.
+
+    Measured before the fix: this gate and `analog_hardmacro_check` both
+    answered PASS on a design-bound tree, a disclosed-library-default tree and
+    a silent one, over the same complete package on which
+    `analog_liberty_nonzero_delay_check` answered PASS /
+    PASS_STRUCTURE_ONLY / FAIL.
+    """
+    _block_list(tmp_path, ["ldo"])
+    _hardmacro(tmp_path, "ldo")
+    _baseline(tmp_path, "ldo", design_content=None)
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert any("A8_DESIGN_CONTENT_UNDECLARED" in f["rule"]
+               for f in rpt["findings"])
+
+
+def test_a_disclosed_library_default_certifies_in_its_own_tier(
+        tmp_path: Path) -> None:
+    """Only silence costs. A package whose corner artefact records a library
+    default still certifies — in the structure-only tier, never as a
+    design-bound pass."""
+    _block_list(tmp_path, ["ldo"])
+    _hardmacro(tmp_path, "ldo")
+    _baseline(tmp_path, "ldo", design_content="structure_only")
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert rpt["verdict"] == "PASS_STRUCTURE_ONLY"
+    assert rpt["blocks_design_bound_pass"] == 0
+    assert "STRUCTURE_ONLY:" in r.stdout, r.stdout
+
+
+def test_a_missing_deliverable_is_still_a_missing_deliverable(
+        tmp_path: Path) -> None:
+    """ORDERING CONTROL. A package with no behavioural view is diagnosed as
+    that, even on a tree that also says nothing about its subject — that
+    finding names a deeper cause and answers this one as a side effect."""
+    _block_list(tmp_path, ["ldo"])
+    _hardmacro(tmp_path, "ldo")
+    (tmp_path / "phase3" / "analog" / "hardmacro" / "ldo" / "ldo.v").unlink()
+    _baseline(tmp_path, "ldo", design_content=None)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rules = {f["rule"] for f in
+             json.loads((tmp_path / "report.json").read_text())["findings"]}
+    assert "A8_HARDMACRO_V_MISSING" in rules, rules
+    assert "A8_DESIGN_CONTENT_UNDECLARED" not in rules, rules
 
 
 def test_missing_per_block_waived(tmp_path: Path) -> None:

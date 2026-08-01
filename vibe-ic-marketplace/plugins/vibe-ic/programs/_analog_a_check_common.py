@@ -42,7 +42,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, NamedTuple, Optional, Sequence, Tuple
 
 
 # ── where the block list actually lives ───────────────────────────────────
@@ -295,6 +295,429 @@ def make_argparser(gate_name: str, doc: str) -> argparse.ArgumentParser:
     return ap
 
 
+# ── STRUCTURE-ONLY disclosure tier ────────────────────────────────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   A step that produced its declared artefact, but produced it from a library
+#   default because no bound input determined its content, is neither complete
+#   nor absent. It is dispositioned in its own tier: never counted as an
+#   executed pass, never counted as missing, and always named on the ONE
+#   summary line a reader reads.
+#
+# WHY IT IS NOT `MISSING`: the artefact exists, it is well-formed, every
+# downstream consumer can read it, and re-running the step will not produce a
+# different one. Calling it missing would send a reader to look for work that
+# has already been done as well as the inputs allow.
+#
+# WHY IT IS NOT A PASS: the artefact's content came from a default, so any
+# number measured on it is a number about the default. A pass here would let a
+# library topology be reported as a designed one.
+#
+# WHY IT IS NOT A FAIL: nothing is wrong. The bounded inputs did not determine
+# the content, and inventing content to fill the gap is precisely the failure
+# this whole track exists to prevent. Failing an honest ceiling teaches the
+# next run to stop being honest.
+#
+# The disclosure travels as a line-start stdout token, the same shape as this
+# repo's existing `VACUOUS_PASS:` sentinel, so `flow_compliance_check` can read
+# it from a gate that PASSED and from a gate that failed for an unrelated
+# reason, without either one having to change its exit code.
+STRUCTURE_ONLY_TOKEN = "STRUCTURE_ONLY:"
+
+#: The `design_content` value that means "structure came from a library, no
+#: bound input reached the content".
+DESIGN_CONTENT_STRUCTURE_ONLY = "structure_only"
+
+#: ...and the value that means at least one bound input reached it.
+DESIGN_CONTENT_SIZED = "structure_and_geometry"
+
+# ── AND THE PRICE OF SAYING NOTHING ───────────────────────────────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   An artefact that declines to say what it contains must not certify the
+#   step it is the evidence for.
+#
+# WHY IT HAD TO BE ADDED. The tier above gives an honest ceiling its own
+# disposition, which is the right answer and also, on its own, an INVERTED
+# INCENTIVE: measured on the adversarial round, deleting the disclosure fields
+# from an artefact — which is the shape of every artefact written before the
+# fields existed, and of every stale one — made it CERTIFY, while disclosing
+# honestly earned the lesser tier. Silence was strictly cheaper than
+# disclosure, so the change rewarded exactly the behaviour it exists to remove.
+#
+# The two answers below NAME a content. Everything else is the artefact
+# declining to answer, and all of it is treated the same way:
+#
+#   * the field absent entirely  — the pre-disclosure and stale shape;
+#   * the field present and empty;
+#   * a "no record upstream" token — an honest statement of ignorance is
+#     still not a statement of content. If it certified, a producer could buy
+#     a pass by writing the token instead of by inheriting the answer, and
+#     silence would be cheap again under a new name.
+#
+# NOT A CONTRADICTION OF THE TIER ABOVE. `structure_only` DISCLOSES, so it
+# still certifies — in its own tier, never as a plain pass. The ordering that
+# matters is preserved end to end: a run that discloses a library default
+# scores ABOVE a run that says nothing, and a run that invents content scores
+# below both.
+DESIGN_CONTENT_DISCLOSED = (DESIGN_CONTENT_STRUCTURE_ONLY,
+                            DESIGN_CONTENT_SIZED)
+
+
+def content_disclosed(value) -> bool:
+    """True iff *value* NAMES what an artefact contains.
+
+    Deliberately a whitelist. A blacklist of the known "no answer" tokens
+    would certify the next token nobody has thought of yet, and the whole
+    point of this predicate is that an unrecognised answer is not an answer.
+    """
+    return isinstance(value, str) and value in DESIGN_CONTENT_DISCLOSED
+
+
+# ── the three answers a CONSUMER has to tell apart ────────────────────────
+# Every consumer that grades a measurement asks the same question of the
+# artefact it grades, so they ask it through one function. Copied predicates
+# drift, and a consumer that classified this differently from the gate of
+# record would re-open the gap by another door.
+CONTENT_DESIGN_BOUND = "design_bound"
+CONTENT_STRUCTURE_ONLY = DESIGN_CONTENT_STRUCTURE_ONLY
+CONTENT_UNDISCLOSED = "undisclosed"
+
+
+def classify_design_content(value) -> str:
+    """One of :data:`CONTENT_DESIGN_BOUND`, :data:`CONTENT_STRUCTURE_ONLY`,
+    :data:`CONTENT_UNDISCLOSED`.
+
+    The ORDER these rank in is the whole point, and it is the same everywhere:
+    design-bound is a measurement of the design; structure-only is a
+    measurement of a library default, disclosed; undisclosed is neither, and
+    it must never outrank the one that told the truth.
+    """
+    if value == DESIGN_CONTENT_SIZED:
+        return CONTENT_DESIGN_BOUND
+    if value == DESIGN_CONTENT_STRUCTURE_ONLY:
+        return CONTENT_STRUCTURE_ONLY
+    return CONTENT_UNDISCLOSED
+
+
+#: The name of the record itself. Named ONCE so a reader of any consumer can
+#: find every site that touches it, and so the key path below is built from the
+#: same string the producers write.
+DESIGN_CONTENT_FIELD = "design_content"
+
+#: Where the record sits when nothing says otherwise: at the document's top
+#: level, which is the shape of every artefact a consumer grades.
+CONTENT_TOP_LEVEL_KEYS = (DESIGN_CONTENT_FIELD,)
+
+
+def _chain_entry(entry) -> tuple:
+    """Normalise one chain element to ``(path, key_path)``.
+
+    A bare path means the record is at the top level. A ``(path, keys)`` pair
+    names a NESTED one — the A3 producer stamps its record inside the
+    `_provenance` object it writes beside the netlist, and a helper that could
+    only read a top-level field would have had to keep its own reader for that
+    artefact, which is the copied predicate this module exists to remove.
+    Both shapes are then read by the SAME whitelist; only WHERE the value is
+    found differs, never WHICH answers count as an answer.
+    """
+    if isinstance(entry, tuple):
+        path, keys = entry
+        return path, tuple(keys)
+    return entry, CONTENT_TOP_LEVEL_KEYS
+
+
+def content_class_of_artefact(path, keys=CONTENT_TOP_LEVEL_KEYS) -> str:
+    """:func:`classify_design_content` of the `design_content` recorded in the
+    JSON artefact at *path*, reached by walking *keys*. An unreadable or
+    non-object artefact classifies UNDISCLOSED — it said nothing, whatever the
+    reason, and so does a document that does not carry the key path at all."""
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8",
+                                              errors="replace"))
+    except (json.JSONDecodeError, OSError):
+        return CONTENT_UNDISCLOSED
+    for key in keys:
+        if not isinstance(doc, dict):
+            return CONTENT_UNDISCLOSED
+        doc = doc.get(key)
+    return classify_design_content(doc)
+
+
+# ── WHEN THE ARTEFACT A CONSUMER GRADES CARRIES NO RECORD OF ITS OWN ──────
+# THE RULE, with no tool, step or block name in it, and it is the rule that
+# was already stated for the PRODUCERS, applied to a CONSUMER:
+#
+#   An artefact derived from another artefact INHERITS the upstream record of
+#   what that artefact CONTAINS. A consumer that grades a derived artefact
+#   whose producer did not republish the record reads the upstream record
+#   itself — it never infers one, and it never treats the absence of one as
+#   evidence of design content.
+#
+# WHY A CONSUMER NEEDS THIS AND THE GATE OF RECORD DOES NOT. A gate that
+# grades the corner artefact reads that artefact's OWN `design_content`, full
+# stop; the field is right there. A gate that signs off a Liberty, or a
+# post-layout comparison, grades a file into which no producer has ever
+# written the field. Asking that file its own question would classify EVERY
+# tree undisclosed — including one whose upstream says plainly that the
+# content is design-bound — and a rule that fails the honest tree is not the
+# rule this track is defending.
+#
+# WHY IT CANNOT BECOME A LOOPHOLE. The chain is ORDERED nearest-first and
+# every link is read through :func:`classify_design_content`, the same
+# whitelist the gate of record uses. A link that names no content is skipped,
+# not accepted; when no link in the chain names one the answer is
+# UNDISCLOSED, exactly as if the chain had one element. So the chain can only
+# ever find an answer that a producer actually wrote down, and silence at
+# every link still costs.
+#
+# WHY THE CHAIN IS SHORT, deliberately. Each consumer's chain ends at the
+# artefact the GATE OF RECORD for that content reads. Extending it past that
+# point would let a consumer certify a tree its own gate of record refuses on
+# content grounds — two gates disagreeing about one artefact, which is the
+# drift `classify_design_content` exists to prevent.
+
+def content_class_inherited(paths) -> tuple:
+    """``(content_class, source_path_or_None)`` for an ordered, nearest-first
+    chain of candidate artefacts.
+
+    The FIRST artefact in *paths* whose ``design_content`` NAMES a content
+    decides, and its path is returned beside the answer so a reader is told
+    where it came from. When no artefact in the chain names one the answer is
+    :data:`CONTENT_UNDISCLOSED` and the path is ``None`` — there is nothing to
+    cite, which is the point.
+
+    An artefact's OWN record outranks anything it inherits: the record is a
+    statement about what THAT file contains, and only its producer can make
+    it.
+    """
+    for cand in paths:
+        if cand is None:
+            continue
+        raw, keys = _chain_entry(cand)
+        p = Path(raw)
+        if not p.is_file():
+            continue
+        klass = content_class_of_artefact(p, keys)
+        if klass != CONTENT_UNDISCLOSED:
+            return klass, p
+    return CONTENT_UNDISCLOSED, None
+
+
+# ── WHY "NEAREST-FIRST" WAS NOT ENOUGH, AND WHAT REPLACES IT ──────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   A DERIVED artefact may CONFIRM or LOWER the content its baseline records.
+#   It may never RAISE it. What a comparison is a comparison OF is decided by
+#   the thing it is compared against, not by the file that reports the
+#   comparison.
+#
+# WHAT THE PREVIOUS ROUND CLAIMED, AND THE MEASUREMENT THAT REFUTED IT. The
+# chain above was documented as ordered nearest-first "so this gate can never
+# certify a tree its own gate of record refuses". Stopping at the gate of
+# record's artefact is not the same as being BOUNDED BY it. Measured, on a
+# tree whose corner artefact was SILENT and whose derived artefact carried the
+# design-bound token:
+#
+#   analog_a4_corner_sweep_check        rc 1 FAIL  (A4_DESIGN_CONTENT_UNDECLARED)
+#   analog_a7_post_layout_resim_check   rc 0 PASS  — a bare design-bound pass,
+#                                                    no disclosure sentinel
+#
+# because :func:`content_class_inherited` SKIPS a link that names nothing and
+# takes the first link that names something — so the nearer link decides even
+# when it outranks the farther one. The nearer link is the one an AI step
+# authors; the farther one is the one a deterministic producer writes. Ordering
+# alone therefore put the AI-authored file ABOVE the gate of record, which is
+# the exact inversion this whole track exists to remove.
+#
+# RE-ORDERING THE CHAIN DOES NOT FIX IT EITHER, and that is worth stating so
+# the cheap fix is not tried again: with the baseline first, a SILENT baseline
+# is still skipped and the derived claim still decides. The fix has to be a
+# CEILING, not an order.
+#
+# WHY LOWERING IS STILL ALLOWED. `structure_only` under a design-bound
+# baseline is a producer disclosing something WEAKER than it was entitled to
+# claim. Refusing that would make honesty cost again, which is the inverted
+# incentive one level up.
+CONTENT_RANK = {
+    CONTENT_UNDISCLOSED: 0,
+    CONTENT_STRUCTURE_ONLY: 1,
+    CONTENT_DESIGN_BOUND: 2,
+}
+
+
+def content_rank(klass: str) -> int:
+    """Where *klass* sits in the one ordering every consumer shares:
+    design-bound > structure-only (disclosed) > undisclosed."""
+    return CONTENT_RANK.get(klass, 0)
+
+
+class BoundedContent(NamedTuple):
+    """What a consumer of a DERIVED artefact may certify, and why.
+
+    ``klass``          the content class the consumer may certify at.
+    ``source``         the artefact whose record ``klass`` came from, or
+                       ``None`` when nothing named a content.
+    ``ceiling``        the class the BASELINE — the gate of record's own
+                       subject — supports.
+    ``ceiling_source`` the baseline artefact that said so, or ``None`` when no
+                       baseline artefact exists or none named a content.
+    ``refused``        the derived artefact's own claim when it EXCEEDED the
+                       ceiling and was refused, else ``None``. Carried so the
+                       finding can name the disagreement instead of reporting a
+                       bare silence the reader can see is contradicted on disk.
+    """
+    klass: str
+    source: Optional[Path]
+    ceiling: str
+    ceiling_source: Optional[Path]
+    refused: Optional[str]
+
+
+def content_class_bounded(baseline_paths: Sequence,
+                          derived_paths: Sequence = ()) -> BoundedContent:
+    """The content class a derived artefact may certify at.
+
+    *baseline_paths* is the chain the GATE OF RECORD for this content reads;
+    its record is the CEILING. *derived_paths* are artefacts whose own producer
+    may republish the record; theirs may confirm or lower the ceiling and can
+    never raise it.
+
+    Both chains are read through :func:`content_class_inherited`, i.e. through
+    the same whitelist the gate of record uses, so neither can find an answer a
+    producer did not actually write down.
+    """
+    ceiling, ceiling_src = content_class_inherited(baseline_paths)
+    claim, claim_src = content_class_inherited(derived_paths)
+
+    if claim == CONTENT_UNDISCLOSED:
+        # The ordinary case: nothing deterministic writes the field into the
+        # derived artefact, so it inherits, exactly as before.
+        return BoundedContent(ceiling, ceiling_src, ceiling, ceiling_src, None)
+    if content_rank(claim) > content_rank(ceiling):
+        return BoundedContent(ceiling, ceiling_src, ceiling, ceiling_src,
+                              claim)
+    # Confirms, or discloses something weaker than it was entitled to claim.
+    return BoundedContent(claim, claim_src, ceiling, ceiling_src, None)
+
+
+# ── ONE RULE PER ARTEFACT, NOT ONE PER GATE ──────────────────────────────
+# THE INVARIANT, with no tool, step or block name in it:
+#
+#   Two gates that certify ONE artefact must not disagree about it. Whatever
+#   else they check, they answer the content question through ONE site.
+#
+# WHY THIS IS A SHARED CONSTANT AND NOT A COPIED ONE. Measured: the FLOW
+# declares one program as the gate for the post-layout step and the A-track
+# runner runs another over the same file. One had the content rule and the
+# other did not, so the flow-declared gate returned rc 0 PASS with a
+# BYTE-IDENTICAL console and `--json` artefact on the design-bound, the
+# structure-only AND the silent tree, while the runner's gate read
+# PASS / PASS_STRUCTURE_ONLY / FAIL over those same three. On the silent tree
+# they disagreed outright. A per-gate constant is how that happened; a shared
+# one is why it cannot happen again silently, and
+# `test_two_gates_over_one_artefact_agree` is why it cannot happen again
+# quietly.
+
+#: The gate of record for design content is the corner sweep. EVERY consumer's
+#: baseline chain ends at its artefact — that is what makes the ceiling the
+#: same ceiling everywhere.
+CONTENT_GATE_OF_RECORD_ARTEFACT = "corner_results.json"
+
+#: The derived artefact of the post-layout comparison step. Nothing
+#: deterministic writes `design_content` into it — it is authored by an AI
+#: skill — which is precisely why its claim is bounded rather than trusted.
+PRE_VS_POST_DERIVED_ARTEFACT = "pre_vs_post.json"
+
+
+def pre_vs_post_content(block_dir) -> BoundedContent:
+    """THE content rule for `pre_vs_post.json`, for every gate that certifies
+    it. *block_dir* is the per-block analog directory holding both artefacts.
+    """
+    d = Path(block_dir)
+    return content_class_bounded(
+        [d / CONTENT_GATE_OF_RECORD_ARTEFACT],
+        [d / PRE_VS_POST_DERIVED_ARTEFACT])
+
+
+#: The sidecar the A3 producer writes BESIDE the netlist, and the key path to
+#: the record inside it. Nothing writes JSON into a SPICE deck, so the whole
+#: answer for `<block>.sp` is this file's — the same reason the hardmacro
+#: package's answer is the corner artefact's.
+NETLIST_PROVENANCE_ARTEFACT = "netlist_provenance.json"
+NETLIST_CONTENT_KEYS = ("_provenance", DESIGN_CONTENT_FIELD)
+
+
+def netlist_content(block_dir) -> BoundedContent:
+    """THE content rule for `<block>.sp`, for every gate that certifies it.
+    *block_dir* is the per-block analog directory holding the netlist and the
+    producer's sidecar.
+
+    WHY THIS CHAIN HAS ONE LINK AND NO CEILING ARTEFACT, which is the one way
+    it differs from its two siblings. The netlist is the ROOT of this record:
+    `analog_real_corner_sweep.upstream_design_content` reads THIS file to stamp
+    `corner_results.json`, so the gate of record's own subject is DERIVED from
+    it. Giving A3 a ceiling taken from the corner artefact would invert the
+    direction of the whole rule — a downstream artefact bounding the upstream
+    one it was copied from — and would let a re-run of A4 raise or lower what
+    A3 shipped. Nothing may raise this record because nothing upstream of it
+    exists; the producer that resolved the parameters is the only writer, and
+    it is read here through the same whitelist as everything else, so a sidecar
+    that is absent, unreadable, empty, or carrying a token that names no
+    content is UNDISCLOSED exactly as it is everywhere else.
+
+    A skill-authored netlist carries no sidecar at all, and that is UNDISCLOSED
+    rather than exempt. The exemption that already exists beside this
+    (`_provenance_ref_fail` stays silent without a sidecar) is about refusing to
+    punish the ABSENCE OF A CLAIM; this rule is about refusing to CERTIFY on
+    one. Exempting silence here is precisely how silence became cheaper than
+    disclosure.
+    """
+    return content_class_bounded(
+        [(Path(block_dir) / NETLIST_PROVENANCE_ARTEFACT,
+          NETLIST_CONTENT_KEYS)])
+
+
+def hardmacro_content(block_dir) -> BoundedContent:
+    """THE content rule for the packaged hardmacro (LEF / Liberty / GDS /
+    Verilog), for every gate that certifies it. *block_dir* is the per-block
+    ANALOG directory — not the hardmacro directory: nothing in the package
+    carries `design_content`, so the whole answer is the baseline's, and asking
+    the package its own question would classify every tree undisclosed and fail
+    the honest one too.
+    """
+    return content_class_bounded(
+        [Path(block_dir) / CONTENT_GATE_OF_RECORD_ARTEFACT])
+
+
+def structure_only_disclosure(gate_name: str, blocks: list,
+                              artefact: str, detail: str = "") -> None:
+    """Print the STRUCTURE-ONLY disclosure. Two properties this has to hold,
+    both learned the hard way from the sibling `VACUOUS_PASS:` sentinel:
+
+    * Called REGARDLESS of the gate's verdict. A step can fail for one unit
+      and still have produced a library-default artefact for another; both
+      facts are true and a reader needs both.
+    * Called LAST, and kept SHORT. The consumer of a gate's output keeps a
+      fixed-width TAIL of each stream (300 chars), so a disclosure printed
+      first, or printed long, is a disclosure the consumer never sees — which
+      is the same defect one layer down: a signal that exists and is not read.
+      Measured: a 330-char line emitted before the verdict line vanished
+      entirely from the compliance summary.
+    """
+    if not blocks:
+        return
+    names = ", ".join(str(b) for b in blocks)
+    if len(names) > 60:
+        names = f"{names[:57]}..."
+    # ONE line, and the LAST line. The long-form reason lives in the JSON
+    # report and in the compliance summary's own explanatory block; putting it
+    # here would push the token itself out of the consumer's 300-char tail.
+    print(f"{STRUCTURE_ONLY_TOKEN} {len(blocks)} {artefact} artefact(s) "
+          f"({names}) came from a library default, not a bound input "
+          f"[{gate_name}]")
+
+
 def write_report(json_path: Optional[str], report: dict) -> None:
     if not json_path:
         return
@@ -341,15 +764,26 @@ def artefact_missing_for_block(gate_name: str, args, block: str,
     return 2
 
 
-def emit_pass(gate_name: str, args, summary: dict) -> int:
+def emit_pass(gate_name: str, args, summary: dict,
+              pass_token: str = "PASS") -> int:
+    """A genuine pass, with the TIER on the verdict word.
+
+    ``pass_token`` is the same seam ``_vacuous_exit.verdict_line`` already
+    provides for the gates outside this family, and it exists for the same
+    reason: a reader of the ONE line a gate prints must be able to tell a
+    measurement of this design from a measurement of a library default,
+    without opening the JSON. It applies only to a genuine pass — a failing
+    run still reads FAIL, and a run that examined nothing still reads
+    VACUOUS_PASS.
+    """
     report = {
         "gate": gate_name,
-        "verdict": "PASS",
+        "verdict": pass_token,
         **summary,
         "findings": [],
     }
     write_report(args.json, report)
-    print(f"PASS: {gate_name} — "
+    print(f"{pass_token}: {gate_name} — "
           f"{summary.get('blocks_pass', 0)}/"
           f"{summary.get('blocks_checked', 0)} block(s) clean")
     return 0

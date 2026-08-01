@@ -164,15 +164,24 @@ def test_sweep_records_deck_origin_when_it_does_run(
         tmp_path: Path, monkeypatch) -> None:
     """When the sweep DOES run, the artefact must say what circuit it ran on.
 
-    Even with A3's netlist present, this program's deck is its own built-in
-    testbench — nothing here consumes `<block>.sp` as the circuit under test.
-    The artefact has to say so; the silence is what let a template self-test
-    read as a design measurement."""
+    UPDATED CONTRACT. This test used to assert that a netlist on disk was
+    simulated as `builtin_template` anyway — the quiet half of the same
+    substitution the loud half of this file forbids. A delivered artefact is
+    now the subject of measurement, and half a delivered pair (a netlist with
+    no stimulus, which is what this fixture writes) is refused rather than
+    improvised over. The INTENT is unchanged and is what is checked here: the
+    artefact must say which circuit it ran on, whatever the outcome.
+
+    The consumption path itself is covered in
+    `test_a4_consumes_design_netlist.py`."""
     import analog_real_corner_sweep as S
 
     project = _project(tmp_path, [("vreg", "ldo")], with_netlist=("vreg",))
 
+    calls: list = []
+
     def fake_docker(container, cmd, timeout=120):
+        calls.append(cmd)
         if "command -v ngspice" in cmd:
             return subprocess.CompletedProcess(cmd, 0, "/usr/bin/ngspice\n", "")
         if "-b " in cmd and ".sp" in cmd:                 # the ngspice run
@@ -184,22 +193,31 @@ def test_sweep_records_deck_origin_when_it_does_run(
     S._NGSPICE_CACHE.clear()
     S._CONTAINER_PATH_CACHE.clear()
 
+    # PRECONDITION — A3's declared netlist really is on disk, so this exercises
+    # the "output present" path and not the already-covered absent one.
+    assert (project / "phase3" / "analog" / "vreg" / "vreg.sp").is_file()
+
     rc = S.run_block(project, "vreg", "fake-container", "sky130", "auto")
-    assert rc == 0
+    assert rc == 2, (
+        "a netlist with no stimulus deck cannot be simulated without inventing "
+        "its operating conditions")
+    assert calls == [], f"the simulator was reached anyway: {calls[:3]}"
+    assert not sorted((project / "phase3" / "analog" / "vreg"
+                       / "sizing_loop").glob("*.sp")) \
+        if (project / "phase3" / "analog" / "vreg" / "sizing_loop").is_dir() \
+        else True
 
     doc = json.loads((project / "phase3" / "analog" / "vreg"
                       / "corner_results.json").read_text())
-    assert doc.get("netlist_provenance") == "builtin_template", (
-        "corner_results.json must record the SUBJECT of the measurement, not "
-        "only the simulator that made it")
-    assert doc.get("netlist_source") == "phase3/analog/vreg/vreg.sp"
-    assert doc.get("netlist_sha256")
-    decks = sorted((project / "phase3" / "analog" / "vreg"
-                    / "sizing_loop").glob("*.sp"))
-    assert decks, "expected the sweep to emit decks"
-    head = decks[0].read_text()
-    assert "netlist_provenance: builtin_template" in head, (
-        "a deck read on its own must still say where its circuit came from")
+    assert doc.get("status") == "BLOCKED"
+    assert doc.get("design_traceable") is False
+    assert doc.get("netlist_present_but_unusable") == \
+        "phase3/analog/vreg/vreg.sp", (
+        "the record must say the netlist EXISTS and could not be used — a "
+        "different fix from 'it was never produced'")
+    assert doc.get("netlist_sha256"), (
+        "the bytes that could not be used must still be identified")
+    assert "tb_vreg.sp" in doc.get("reason", "")
 
 
 # ── SHAPE 2 — the gate refuses to certify a self-authored circuit ───────────
@@ -259,9 +277,16 @@ def test_gate_passes_a3_derived_sweep(tmp_path: Path) -> None:
     derived from A3's output still passes. The fix is a provenance requirement,
     not a blanket refusal."""
     project = _project(tmp_path, [("vreg", "ldo")], with_netlist=("vreg",))
+    # The design_content field joined the shape the sweep writes when the
+    # record of WHERE a deck came from stopped being allowed to stand in for
+    # the record of WHAT IS IN IT. An artefact that claims a3-derived and
+    # stays silent on its content is now its own finding
+    # (A4_DESIGN_CONTENT_UNDECLARED), so this negative control states the
+    # content it is a control for.
     _corners(project, "vreg", _real_sim_doc(
         netlist_provenance="a3_netlist",
         netlist_source="phase3/analog/vreg/vreg.sp",
+        design_content="structure_and_geometry",
         netlist_sha256="0" * 64))
 
     r = _run_gate(project)
@@ -333,10 +358,18 @@ def test_matrix_does_not_read_a4_done_on_a_blocked_record(
 
 def test_matrix_still_reads_a4_done_for_an_a3_derived_sweep(
         tmp_path: Path) -> None:
-    """Negative control: a sweep with A3's netlist behind it still counts."""
+    """Negative control: a sweep with A3's netlist behind it still counts.
+
+    Carries `design_content` for the same reason the sibling gate control
+    above does: the matrix cell delegates to the gate's certification
+    predicates, and an artefact that claims an upstream-derived deck while
+    saying nothing about what is IN it is not one of them. Without the field
+    this control would be asserting that the cell may sign off what the gate
+    refuses."""
     project = _project(tmp_path, [("vreg", "ldo")], with_netlist=("vreg",))
     _corners(project, "vreg", _real_sim_doc(
         netlist_provenance="a3_netlist",
+        design_content="structure_and_geometry",
         netlist_source="phase3/analog/vreg/vreg.sp"))
     row = _matrix(project)["vreg"]
     assert row["A3"] == "PASS", row

@@ -16,10 +16,25 @@ def _block_list(project: Path, blocks: list) -> None:
         json.dumps({"blocks": blocks}))
 
 
-def _sp(project: Path, block: str, body: str) -> None:
+def _sp(project: Path, block: str, body: str,
+        design_content: str = "structure_and_geometry") -> None:
+    """Write the deck AND, unless `design_content=None`, the producer's record
+    beside it.
+
+    The record is written BY DEFAULT because the gate now asks a substantive
+    deck what circuit is in it, and a fixture that asserted a CERTIFIED step on
+    a silent deck would be a standing statement that omission is fine — the
+    incentive the disclosure tier exists to remove. Every fixture below whose
+    property under test is a VALUE rule keeps measuring that rule; the tier
+    tests pass the token they mean."""
     d = project / "phase3" / "analog" / block
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{block}.sp").write_text(body)
+    if design_content is not None:
+        (d / "netlist_provenance.json").write_text(json.dumps({
+            "block": block,
+            "_provenance": {"producer": "test-fixture",
+                            "design_content": design_content}}))
 
 
 def _run(project: Path, *args: str) -> subprocess.CompletedProcess:
@@ -45,6 +60,76 @@ def test_happy_path(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
     rpt = json.loads((tmp_path / "report.json").read_text())
     assert rpt["verdict"] == "PASS"
+
+
+# ── THREE TIERS, and the ORDER they rank in ───────────────────────────────
+# design-bound > structure-only (disclosed) > undisclosed. Until v1.9.41+1 this
+# gate had the middle tier and NOT the last one, so a design-bound deck and a
+# silent deck produced the same rc AND the same `--json` document, while the
+# deck that DISCLOSED a library default was the only one marked down. Silence
+# ranked above disclosure in the one gate the flow declares for this step.
+
+def test_a_silent_netlist_does_not_certify_the_step(tmp_path: Path) -> None:
+    """Same substantive deck as `test_happy_path`, with the producer's record
+    removed — the shape of a stale artefact and of every artefact written
+    before the field existed."""
+    _block_list(tmp_path, ["ldo"])
+    _sp(tmp_path, "ldo", _REAL_NETLIST, design_content=None)
+    r = _run(tmp_path)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert rpt["verdict"] == "FAIL", rpt
+    assert any(f["rule"] == "A3_DESIGN_CONTENT_UNDECLARED"
+               for f in rpt["findings"]), rpt
+
+
+def test_an_honest_statement_of_ignorance_is_not_a_statement_of_content(
+        tmp_path: Path) -> None:
+    """A non-empty token that names no content must not certify either. If it
+    did, a producer could buy a pass by WRITING the token instead of by
+    inheriting the answer, and silence would be cheap again under a new name."""
+    _block_list(tmp_path, ["ldo"])
+    _sp(tmp_path, "ldo", _REAL_NETLIST, design_content="undeclared")
+    r = _run(tmp_path)
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert any(f["rule"] == "A3_DESIGN_CONTENT_UNDECLARED"
+               for f in rpt["findings"]), rpt
+
+
+def test_a_disclosed_library_netlist_certifies_in_its_own_tier(
+        tmp_path: Path) -> None:
+    """The middle tier is a CERTIFICATION, not a softer failure: rc 0, the
+    block counted covered, the verdict word carrying the tier, and the
+    line-start sentinel the runner and the flow auditor read."""
+    _block_list(tmp_path, ["ldo"])
+    _sp(tmp_path, "ldo", _REAL_NETLIST, design_content="structure_only")
+    r = _run(tmp_path)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert rpt["verdict"] == "PASS_STRUCTURE_ONLY", rpt
+    assert rpt["blocks_pass"] == 1, rpt
+    assert rpt["structure_only_blocks"] == ["ldo"], rpt
+    assert any(l.startswith("STRUCTURE_ONLY:")
+               for l in (r.stdout + r.stderr).splitlines()), r.stdout
+
+
+def test_the_three_tiers_write_three_different_documents(
+        tmp_path: Path) -> None:
+    """THE RANKING, read from the artefact a machine consumer reads rather than
+    from prose. Pre-fix the design-bound and the silent document were
+    BYTE-IDENTICAL."""
+    import hashlib
+    shas = {}
+    for tag, dc in (("d", "structure_and_geometry"),
+                    ("s", "structure_only"), ("n", None)):
+        p = tmp_path / tag
+        _block_list(p, ["ldo"])
+        _sp(p, "ldo", _REAL_NETLIST, design_content=dc)
+        _run(p)
+        shas[tag] = hashlib.sha256(
+            (p / "report.json").read_bytes()).hexdigest()[:16]
+    assert len(set(shas.values())) == 3, shas
 
 
 def test_missing_per_block_waived(tmp_path: Path) -> None:

@@ -29,6 +29,14 @@ Failure rules:
                               (`netlist_provenance` != `a3_netlist`).
                               Real ngspice on a stand-in circuit measures
                               the template library, not the design.
+  A4_DESIGN_CONTENT_UNDECLARED
+                           — the artefact reached the certification point and
+                              will not say WHAT the circuit it simulated
+                              contains: no `design_content`, an empty one, or
+                              a token that records no answer. Disclosing
+                              `structure_only` still certifies (in its own
+                              tier); declining to disclose does not, or
+                              silence would be cheaper than disclosure.
   A4_NO_CORNERS            — corners[] empty / missing
   A4_NO_PASS_SPEC          — no spec_results entry has status=PASS
                               (and at least one is FAIL or all blank)
@@ -69,9 +77,11 @@ from typing import List, Optional
 
 from _analog_a_check_common import (
     BLOCK_LIST_ABSENT_REASON,
+    CONTENT_STRUCTURE_ONLY,
+    content_class_of_artefact, content_disclosed,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
-    resolve_block_artefact,
+    resolve_block_artefact, structure_only_disclosure,
 )
 
 GATE = "analog_a4_corner_sweep_check"
@@ -210,6 +220,105 @@ def _netlist_disclosed_fail(project: Path, block: str, data: dict,
                        f"not this design; it cannot certify A4."),
         }
     return None
+
+
+# WAS MEASURED, WAS REVERTED, IS NOW IMPLEMENTED — `_content_undisclosed_fail`.
+#
+# The finding recorded here read: an artefact that discloses NOTHING still
+# certifies this step. Simulated corners, the upstream netlist present on disk,
+# and no `netlist_provenance` and no `design_content` at all —
+# `_netlist_absent_fail` is scoped to the case the FILESYSTEM decides (the
+# upstream output is missing) and the content rule fired only on an artefact
+# that CLAIMED an upstream-derived deck. Between them sat the pre-disclosure
+# shape, and it passed.
+#
+# Recording it was right; leaving it was not, because it INVERTS THIS CHANGE'S
+# OWN INCENTIVE. Deleting the disclosure fields from a corner artefact — the
+# shape of every pre-disclosure artefact and every stale one — bought a plain
+# certification, while disclosing honestly earned the lesser structure-only
+# tier. A gate that pays more for silence than for disclosure teaches the next
+# producer to be silent.
+#
+# The shipped fixtures that encoded that shape as certifiable were each a small
+# statement that omission is fine; they were UPDATED, not deferred to. Their
+# new shape is the point of the change, not its cost.
+#
+# The blast radius the earlier note estimated at 13 measures at 14 here — the
+# extra one is an artefact recording that it HAS NO RECORD. A rule keyed on "is
+# the field present?" accepts that token, which would have left silence
+# available under a new name, so this rule is keyed on whether the value NAMES
+# a content. Wiring the consumers that read a corner result cost 16 more, for
+# 30 across 15 files; every one of them now states the content it certifies
+# instead of asserting that omission certifies.
+
+
+def _content_undisclosed_fail(block: str, data: dict, rel: str
+                              ) -> Optional[dict]:
+    """THE RULE, with no tool, step or block name in it:
+
+        An artefact that declines to say what it contains must not certify
+        the step it is the evidence for.
+
+    `netlist_provenance` says WHERE the deck came from. `design_content` says
+    WHAT IS IN IT — whether any bound input reached the content, or whether the
+    content is a library default. Both silences have the same shape as the one
+    this whole track started from: "measured with a real simulator" was true of
+    the simulator and said nothing about the subject.
+
+    Applied to EVERY artefact that reaches the certification point, not only to
+    one that claims an upstream-derived deck. Scoping it to the claiming case
+    was the defect: it left the pre-disclosure shape — which claims nothing at
+    all — as the cheapest way through the gate.
+
+    NOT a failure when the answer is `structure_only`: that DISCLOSES, and a
+    library default is an honest ceiling where the bounded inputs do not
+    determine the content. Failing an honest ceiling teaches the next run to
+    stop being honest. What fails is declining to answer — by omitting the
+    field, by leaving it empty, or by recording that no upstream record exists.
+    An honest statement of ignorance is still not a statement of content, and
+    if it certified, a producer could buy a pass by writing that token instead
+    of by inheriting the answer.
+    """
+    dc = data.get("design_content")
+    if content_disclosed(dc):
+        return None
+    claim = (f"netlist_provenance={NETLIST_PROV_OK!r} claims the deck was "
+             f"derived from {A3_STEP}'s output, and " if
+             data.get("netlist_provenance") == NETLIST_PROV_OK else
+             "the artefact declares simulated corners, and ")
+    said = (f"records `design_content: {dc!r}`, which names no content"
+            if dc is not None else "records no `design_content` at all")
+    return {
+        "block": block, "rule": "A4_DESIGN_CONTENT_UNDECLARED",
+        "rel_path": rel,
+        "detail": (f"{claim}the artefact {said}. A deck rendered from a "
+                   f"library topology and a deck rendered from a design sized "
+                   f"to its spec are indistinguishable in every other field of "
+                   f"this file. The producer must republish the upstream "
+                   f"`design_content` record; absence of it is not evidence of "
+                   f"design content, and an artefact that will not say what "
+                   f"circuit it simulated must not certify this step. Declaring "
+                   f"`{CONTENT_STRUCTURE_ONLY}` is not a penalty — it "
+                   f"certifies, in its own disclosed tier."),
+    }
+
+
+def _structure_only_blocks(project: Path, blocks: list) -> list:
+    """Blocks whose A4 artefact discloses that the circuit it measured carries
+    NO design-bound content. Read from the artefact, never inferred, and
+    CLASSIFIED through the shared site rather than by a local `==` against the
+    producer's raw token — this list and the certification rule above answer
+    the same question about the same file, and two readings of one artefact are
+    free to drift apart."""
+    out = []
+    for block in blocks:
+        path, found = resolve_block_artefact(
+            project, block, "corner_results.json", DECLARED_PHASE)
+        if not found:
+            continue
+        if content_class_of_artefact(path) == CONTENT_STRUCTURE_ONLY:
+            out.append(block)
+    return out
 
 
 def _netlist_absent_fail(project: Path, block: str, data: dict,
@@ -451,11 +560,19 @@ def _check_block(project: Path, block: str
                        f"failure the best-corner view hid (#185)"),
         }]
     # LAST — an otherwise-clean sweep may still be certifying a circuit that
-    # does not exist. Nothing above can see that: every rule so far reads the
-    # artefact's own numbers.
+    # does not exist, or one it will not name. Nothing above can see either:
+    # every rule so far reads the artefact's own numbers.
+    #
+    # The two are ordered so the DEEPER cause is the one reported. "A3's output
+    # was never produced" answers "what is in the deck?" as a side effect; the
+    # reverse is not true, and a reader told only "say what it contains" about a
+    # tree that has no netlist would fix the wrong thing.
     nl = _netlist_absent_fail(project, block, data, corners, rel)
     if nl is not None:
         return "FAIL", [nl]
+    dc = _content_undisclosed_fail(block, data, rel)
+    if dc is not None:
+        return "FAIL", [dc]
     return "PASS", []
 
 
@@ -488,13 +605,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             findings.extend(fs)
 
+    # DISCLOSED BEFORE THE VERDICT, and independently of it. A step can fail
+    # for one block and still have certified a library-default artefact for
+    # another; both facts are true and a reader needs both.
+    structure_only = _structure_only_blocks(project, blocks)
     summary = {
         "blocks_checked": len(blocks),
         "blocks_pass": blocks_pass,
         "blocks_missing": len(missing_seen),
         "blocks_fail": len(findings),
+        "blocks_structure_only": len(structure_only),
+        "structure_only_blocks": structure_only,
     }
+    rc = _verdict(project, args, findings, missing_seen, blocks_pass, summary)
+    # LAST, and on every path — see `structure_only_disclosure` for why the
+    # position is part of the contract.
+    structure_only_disclosure(GATE, structure_only, "corner_results.json")
+    return rc
 
+
+def _verdict(project: Path, args, findings: List[dict],
+             missing_seen: List[dict], blocks_pass: int, summary: dict) -> int:
     if args.block:
         if findings:
             return emit_fail(GATE, args, findings, summary)

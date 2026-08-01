@@ -101,6 +101,20 @@ def _project(tmp_path: Path, block: str = "blk1", *, gds: bytes = None,
     project = tmp_path / "proj"
     hm = project / "phase3" / "analog" / "hardmacro" / block
     hm.mkdir(parents=True)
+    # The corner artefact carrying the record of what circuit this package
+    # models. `analog_hardmacro_check` — the gate the FLOW declares for A8 —
+    # stopped signing off a macro digital PnR will instantiate and
+    # integration STA will close on when nothing on the tree names its
+    # subject. These fixtures are about GDS SUBSTANCE and LEF/GDS OUTLINE, so
+    # each needs a package that clears every other rule; without this record
+    # the direction-1 guard below would fail on content instead, and a guard
+    # that fails for the wrong reason guards nothing.
+    ad = project / "phase3" / "analog" / block
+    ad.mkdir(parents=True, exist_ok=True)
+    (ad / "corner_results.json").write_text(json.dumps({
+        "block": block, "_provenance": "real_ngspice",
+        "corners": [{"name": "tt_27c_1v8", "simulator_run": True}],
+        "design_content": "structure_and_geometry"}))
     if declare:
         for rel in ("phase3/analog/analog_block_list.json",
                     "phase1/analog/analog_block_list.json"):

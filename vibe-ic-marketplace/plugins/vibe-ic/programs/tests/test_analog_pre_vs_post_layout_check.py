@@ -19,8 +19,36 @@ def _run(tmp_path: Path) -> subprocess.CompletedProcess:
     )
 
 
+def _run_console(tmp_path: Path) -> subprocess.CompletedProcess:
+    """WITHOUT `--json` — the human path, which is the only one that prints the
+    verdict WORD the tier travels on."""
+    return subprocess.run(
+        [sys.executable, str(PROG), str(tmp_path)],
+        capture_output=True, text=True,
+    )
+
+
 def _load_report(tmp_path: Path) -> dict:
     return json.loads((tmp_path / "report.json").read_text())
+
+
+#: What the corner artefact this comparison is measured against says its
+#: circuit contains. Both PASS fixtures below now carry it, because this gate
+#: stopped certifying the post-layout step when nothing on the tree names the
+#: circuit that was compared — and a fixture that omitted it would be
+#: asserting that silence still certifies.
+DESIGN_BOUND = "structure_and_geometry"
+
+
+def _corner(block_dir: Path, design_content=DESIGN_BOUND) -> None:
+    """The pre-layout baseline `pre_vs_post.json` is a comparison AGAINST.
+    `design_content=None` builds the pre-disclosure shape: the field simply
+    absent, which is what a stale artefact looks like."""
+    doc = {"block": block_dir.name, "_provenance": "real_ngspice",
+           "corners": [{"name": "tt_27c_1v8", "simulator_run": True}]}
+    if design_content is not None:
+        doc["design_content"] = design_content
+    (block_dir / "corner_results.json").write_text(json.dumps(doc))
 
 
 def test_skip_no_analog_dir(tmp_path):
@@ -45,6 +73,7 @@ def test_skip_no_pre_vs_post(tmp_path):
 def test_pass_acceptable_degradation(tmp_path):
     ad = tmp_path / "phase3" / "analog" / "ldo"
     ad.mkdir(parents=True)
+    _corner(ad)
     (ad / "pre_vs_post.json").write_text(json.dumps({
         "comparisons": [
             {"name": "vout", "pre_layout": 3.30, "post_layout": 3.25},
@@ -56,6 +85,8 @@ def test_pass_acceptable_degradation(tmp_path):
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert rpt["summary"]["specs_compared"] == 2
+    assert rpt["summary"]["design_bound_blocks"] == ["ldo"]
+    assert rpt["summary"]["verdict_tier"] == "PASS"
 
 
 def test_fail_severe_degradation(tmp_path):
@@ -144,12 +175,81 @@ def test_guard_specs_container_and_pre_layout_keys_still_read(tmp_path):
     working — the doc fix must not have narrowed the parser."""
     ad = tmp_path / "phase3" / "analog" / "ldo"
     ad.mkdir(parents=True)
+    _corner(ad)
     (ad / "pre_vs_post.json").write_text(json.dumps({
         "specs": [{"name": "vout", "pre_layout": 3.30, "post_layout": 3.25}]
     }))
     r = _run(tmp_path)
     assert r.returncode == 0
     assert _load_report(tmp_path)["summary"]["specs_compared"] == 1
+
+
+# ── the step's DECLARED gate answers the same question as the step gate ────
+# `flow/phase1_phase2_phase3.yaml` declares THIS program for the post-layout
+# step; `analog_a7_post_layout_resim_check` — which the A-track runner runs
+# over the same artefact — appears nowhere in that YAML. Measured, before
+# these three: this gate returned rc 0 with a byte-identical console and a
+# byte-identical `--json` on a design-bound tree, a disclosed-library-default
+# tree and a silent one, while the step gate read PASS /
+# PASS_STRUCTURE_ONLY / FAIL. The cross-gate agreement lives in
+# `test_two_gates_over_one_artefact_cannot_disagree`; these are this gate's
+# own three answers.
+
+def test_a_comparison_that_names_no_circuit_does_not_certify(tmp_path):
+    """Everything a value rule could catch is clean — 1.5 % drift, well inside
+    the floor — so the only thing this can fail on is the certification."""
+    ad = tmp_path / "phase3" / "analog" / "ldo"
+    ad.mkdir(parents=True)
+    _corner(ad, design_content=None)
+    (ad / "pre_vs_post.json").write_text(json.dumps({
+        "comparisons": [{"name": "vout", "pre_layout": 3.30,
+                         "post_layout": 3.25}]}))
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    rpt = _load_report(tmp_path)
+    assert "PRE_VS_POST_DESIGN_CONTENT_UNDECLARED" in {
+        f["rule"] for f in rpt["findings"]}
+    assert rpt["summary"]["undisclosed_blocks"] == ["ldo"]
+
+
+def test_a_disclosed_library_default_still_certifies_in_its_own_tier(
+        tmp_path):
+    """Only silence costs. A comparison whose baseline records a library
+    default still certifies — in the structure-only tier, never as a
+    design-bound pass — because failing an honest ceiling teaches the next run
+    to stop being honest.
+
+    Asserted through the VERDICT WORD and the exit code, not a JSON key: the
+    tier has to reach the one line a reader reads.
+    """
+    ad = tmp_path / "phase3" / "analog" / "ldo"
+    ad.mkdir(parents=True)
+    _corner(ad, design_content="structure_only")
+    (ad / "pre_vs_post.json").write_text(json.dumps({
+        "comparisons": [{"name": "vout", "pre_layout": 3.30,
+                         "post_layout": 3.25}]}))
+    r = _run_console(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS_STRUCTURE_ONLY]" in r.stdout, r.stdout
+    assert "STRUCTURE_ONLY:" in r.stderr, r.stderr
+
+
+def test_the_disclosure_is_emitted_on_the_json_path_the_flow_uses(tmp_path):
+    """The flow runs this gate as `... --json reports/phase2/gates/
+    pre_vs_post.json`, which suppresses the console verdict entirely. A
+    disclosure printed only on the console path is one the flow auditor never
+    sees."""
+    ad = tmp_path / "phase3" / "analog" / "ldo"
+    ad.mkdir(parents=True)
+    _corner(ad, design_content="structure_only")
+    (ad / "pre_vs_post.json").write_text(json.dumps({
+        "comparisons": [{"name": "vout", "pre_layout": 3.30,
+                         "post_layout": 3.25}]}))
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert any(l.lstrip().startswith("STRUCTURE_ONLY:")
+               for l in (r.stdout + r.stderr).splitlines()), (
+        r.stdout + r.stderr)
 
 
 def test_unrecognised_container_key_names_the_schema_drift(tmp_path):
