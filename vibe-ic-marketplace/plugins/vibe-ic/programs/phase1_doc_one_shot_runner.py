@@ -55495,6 +55495,37 @@ def _post_emit_l22_coverage_goals(project: Path) -> int:
     return n
 
 
+def _post_emit_l22_checklist_milestones(project: Path) -> int:
+    """vibe-ic#593 cause 2 — lift the verification checklist's own milestone
+    IDENTIFIERS into ``L22.fields.checklist_milestones[]``.
+
+    The ingester read the checklist's prose and never its identifiers, so a
+    document whose entire content is a verification plan contributed nothing to
+    L22 and 24 tokens read as uncaptured.
+
+    THE SCOPING DECISION IS THE DOCUMENT'S. #593 asks whether some milestones
+    are pure project tracking with no design meaning and requires the answer to
+    be RECORDED, not silently waived. The table states a `Type` per row, so each
+    milestone carries the document's own `type` and `resolution` and a consumer
+    that wants only design-bearing items filters on it. Nothing is dropped here.
+
+    Fail-open on any import/IO error, like its `_post_emit_*` neighbours.
+    """
+    try:
+        from l22_checklist_milestone_emit import run as _l22_chk_emit
+    except Exception:
+        return 0
+    try:
+        rep = _l22_chk_emit(project)
+    except Exception:
+        return 0
+    n = rep.get("emitted_count", 0) if isinstance(rep, dict) else 0
+    if n:
+        print(f"      L22 checklist: lifted {n} milestone(s) from the "
+              f"design's own verification checklist")
+    return n
+
+
 def _post_emit_floorplan_contract(project: Path) -> None:
     """G-FIXED-DIE-1 — ingest a design-PROVIDED MANDATED fixed-floorplan
     contract into L19 (fields.die_area_budget_um / floorplan_hints /
@@ -60021,6 +60052,7 @@ def main() -> int:
     # disk first. See `_post_emit_l22_coverage_goals`.
     try:
         _post_emit_l22_coverage_goals(project)
+        _post_emit_l22_checklist_milestones(project)
     except Exception as _l22_cov_err:
         print(f"      L22 coverage-goal emit FAILED (fail-open): "
               f"{_l22_cov_err}", file=sys.stderr)

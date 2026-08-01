@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1020
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1020)
+- **Total programs (excluding helpers / shims):** 1021
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1021)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1011 |
+| `any` | 1012 |
 
 ## Alphabetical listing
 
@@ -499,6 +499,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l21_macro_supply_rail_declared_check` | any | — | L21 SEMANTIC completeness gate. |
 | `l21_macro_supply_rail_synth` | any | — | Derive the power-intent rail set from the design's OWN hard-macro LEFs. |
 | `l21_to_upf_emit` | any | v0.1.51 | render L21 power intent into an IEEE-1801 UPF handoff artifact (flow v2.3.1, external review R1). |
+| `l22_checklist_milestone_emit` | any | — | the verification checklist's own milestones. |
 | `l22_coverage_goal_emit` | any | — | lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them. |
 | `l22_verification_plan_measurable_check` | any | — | SEMANTIC gate for L22_VERIFICATION_PLAN (batch layergate-7). |
 | `l23_security_requirements_typed_check` | any | — | SEMANTIC gate for L23_SECURITY_REQUIREMENTS (batch layergate-7). |
@@ -1092,7 +1093,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1011 programs)
+### `any` (1012 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1563,6 +1564,7 @@ _(no programs in this group)_
 - `l21_macro_supply_rail_declared_check` — L21 SEMANTIC completeness gate.
 - `l21_macro_supply_rail_synth` — Derive the power-intent rail set from the design's OWN hard-macro LEFs.
 - `l21_to_upf_emit` — render L21 power intent into an IEEE-1801 UPF handoff artifact (flow v2.3.1, external review R1).  _[v0.1.51]_
+- `l22_checklist_milestone_emit` — the verification checklist's own milestones.
 - `l22_coverage_goal_emit` — lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them.
 - `l22_verification_plan_measurable_check` — SEMANTIC gate for L22_VERIFICATION_PLAN (batch layergate-7).
 - `l23_security_requirements_typed_check` — SEMANTIC gate for L23_SECURITY_REQUIREMENTS (batch layergate-7).
