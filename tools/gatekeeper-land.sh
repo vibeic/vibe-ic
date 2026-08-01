@@ -93,8 +93,18 @@ fi
 #
 # Cheap tier: it is one `git status`, and it is the last thing that can tell a
 # complete landing from a coherent fragment of one.
+#
+# ...and the tree must still be THAT tree when the stamp is written. The full
+# tier below runs for minutes and reads the WORKTREE, while the stamp names a
+# COMMIT. On the v1.9.16 run the gate started at 10:28 on a clean tree, an
+# unrelated file was edited at 10:35, and the targeted tests ran at 10:41 and
+# stamped 9fd81bb45 — a tree that never existed. FP is per-run, so two gates in
+# one checkout do not read each other's.
+FP="$(mktemp -t gk_fingerprint.XXXXXX)"
+trap 'rm -f "$FP"' EXIT
 run "worktree carries no uncommitted change" \
-    python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT"
+    python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
+        --emit-fingerprint "$FP"
 
 if [ "$CHEAP_ONLY" = "1" ]; then
   echo "--- full tier SKIPPED (--cheap-only) — no stamp will be written ---"
@@ -132,6 +142,13 @@ run_pytest
 
 run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh"
 run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+
+# LAST, and after every suite has read the tree. Everything above answers
+# "do the gates pass"; this answers "did they all read the same tree", which is
+# the question the stamp actually asserts.
+run "worktree unchanged since the gates started" \
+    python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
+        --expect-fingerprint "$FP"
 
 if [ "$FAILED" -eq 0 ]; then
   # Stamp the exact commit these suites were verified against. The hook compares

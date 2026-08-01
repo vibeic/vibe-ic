@@ -43,6 +43,34 @@ read a coherent repository.
 The only thing that distinguishes it is that the author's worktree still held
 the missing half.
 
+THE SECOND EDGE (v1.9.16, also mine)
+====================================
+Closing the BEFORE edge left the AFTER edge open. This check sits in the landing
+gate's cheap tier; the full tier then runs for MINUTES, and the stamp is written
+at the end. Measured on the v1.9.16 run:
+
+    10:28:14   gate starts, tree clean, this check PASSES
+    10:35:50   `mixed_signal_top_lvs_run.py` edited   (#597, uncommitted)
+    10:37:49   a new test file written
+    10:41      targeted tests run, "ALL GATES PASS - stamped 9fd81bb45"
+
+The 16 targeted test files were selected from the COMMIT RANGE and executed
+against a worktree carrying an unrelated uncommitted change. The stamp names a
+commit; the suites read a tree that is not that commit and never was. Either
+direction is wrong: the edit could have broken something the batch is blamed
+for, or it could have repaired something the batch would otherwise have failed.
+
+So the question is not only "is the tree clean when we start" but "is it the
+SAME tree when we stamp". `--emit-fingerprint` records it at the start,
+`--expect-fingerprint` re-checks and compares before the stamp is written.
+
+WHAT THE FINGERPRINT DOES NOT COVER, stated because a bound nobody states gets
+read as a guarantee: a change made AND reverted entirely inside the full tier
+leaves an identical fingerprint. The suites still read the mutated tree. This
+narrows the window from "the whole expensive tier" to "an edit undone within
+it"; it does not eliminate it, and only running the gates on a private checkout
+would.
+
 WHAT THIS MEASURES
 ==================
 Tracked modifications (M / A / D / R) under the paths that SHIP, at the moment
@@ -58,14 +86,19 @@ chip-AGNOSTIC: reads git status. No design, PDK or vendor input.
 USAGE
 -----
     landing_worktree_is_clean_check.py [<repo>] [--json OUT]
+    landing_worktree_is_clean_check.py <repo> --emit-fingerprint <file>
+    landing_worktree_is_clean_check.py <repo> --expect-fingerprint <file>
 
 EXIT CODES
 ----------
-    0 = PASS     1 = a tracked file is modified     2 = not a git repo
+    0 = PASS     1 = a tracked file is modified, or the tree moved under the
+                     gates since the fingerprint was taken
+    2 = not a git repo, or a fingerprint was expected and none was recorded
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -109,10 +142,48 @@ def modified_tracked(repo: Path, paths=SHIPPED_PATHS):
     return out
 
 
+def fingerprint(repo: Path, paths=SHIPPED_PATHS):
+    """A digest of what the suites will READ, or None if it cannot be taken.
+
+    Three parts, because three different things move a tree out from under a
+    running gate:
+
+      HEAD          a commit landing mid-run
+      tracked diff  an edit to a file already in the repo   <- the v1.9.16 case
+      untracked set an added file pytest can collect
+
+    The untracked part is NAMES only. Hashing their contents would flip on every
+    tool that writes beside the code, and `git status` already drops anything
+    .gitignore covers, which is what keeps `__pycache__` out of it. Verified by
+    taking the fingerprint on both sides of a pytest run rather than assumed.
+    """
+    present = [p for p in paths if (repo / p).exists()]
+    if not present:
+        return None
+    head = _git(repo, "rev-parse", "HEAD")
+    diff = _git(repo, "diff", "HEAD", "--", *present)
+    stat = _git(repo, "status", "--porcelain", "--", *present)
+    if any(r.returncode != 0 for r in (head, diff, stat)):
+        return None
+    untracked = sorted(l[3:].strip() for l in (stat.stdout or "").splitlines()
+                       if l.startswith("??"))
+    h = hashlib.sha256()
+    h.update(head.stdout.strip().encode())
+    h.update(b"\0")
+    h.update((diff.stdout or "").encode())
+    h.update(b"\0")
+    h.update("\n".join(untracked).encode())
+    return h.hexdigest()
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("repo", nargs="?", default=".")
     ap.add_argument("--json", dest="json_out")
+    ap.add_argument("--emit-fingerprint", metavar="FILE",
+                    help="record the tree state for a later --expect-fingerprint")
+    ap.add_argument("--expect-fingerprint", metavar="FILE",
+                    help="fail if the tree moved since FILE was written")
     a = ap.parse_args(argv)
 
     repo = Path(a.repo).resolve()
@@ -150,8 +221,46 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return RC_DIRTY
 
+    # The tree is clean NOW. Whether it is the same tree the gates started on
+    # is a different question, and the one v1.9.16 got wrong.
+    fp = fingerprint(repo)
+    if a.expect_fingerprint:
+        want_path = Path(a.expect_fingerprint)
+        if not want_path.is_file():
+            print(f"[SKIP] landing_worktree_is_clean: --expect-fingerprint "
+                  f"{want_path} does not exist, so the tree was NOT compared "
+                  f"against its state at the start of the run. Not a pass.",
+                  file=sys.stderr)
+            return RC_CANNOT_MEASURE
+        want = want_path.read_text(errors="replace").strip()
+        if fp is None or not want:
+            print("[SKIP] landing_worktree_is_clean: the fingerprint could not "
+                  "be taken on one side, so no comparison was made",
+                  file=sys.stderr)
+            return RC_CANNOT_MEASURE
+        if fp != want:
+            print(f"[FAIL] landing_worktree_is_clean: the worktree MOVED while "
+                  f"the gates were running.\n    at start  {want[:16]}\n"
+                  f"    now       {fp[:16]}\n\n"
+                  "  The expensive tier reads the worktree; the stamp names a "
+                  "COMMIT. If the\n  two disagree, the suites did not verify "
+                  "what is about to be pushed —\n  an edit made during the run "
+                  "can hide a failure in the batch or take the\n  blame for "
+                  "one. Re-run the gate on a settled tree.",
+                  file=sys.stderr)
+            return RC_DIRTY
+    if a.emit_fingerprint:
+        if fp is None:
+            print("[SKIP] landing_worktree_is_clean: could not take a "
+                  "fingerprint; the end-of-run comparison will refuse",
+                  file=sys.stderr)
+            return RC_CANNOT_MEASURE
+        Path(a.emit_fingerprint).write_text(fp + "\n")
+
     print("[PASS] landing_worktree_is_clean: no tracked modification under "
-          + ", ".join(SHIPPED_PATHS))
+          + ", ".join(SHIPPED_PATHS)
+          + (f"; tree unchanged since the gates started ({fp[:12]})"
+             if a.expect_fingerprint and fp else ""))
     return RC_OK
 
 
