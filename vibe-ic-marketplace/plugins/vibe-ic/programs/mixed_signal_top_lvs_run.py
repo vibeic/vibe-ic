@@ -77,14 +77,76 @@ import lvs_verdict_tokens as _lvt  # noqa: E402  — #524 shared verdict tokens
 TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
 
+#: DECIDE PER MACRO, never append (vibe-ic#597).
+#:
+#: `Layout.read` APPENDS into a cell that already exists under the same name.
+#: Once OpenROAD's stream-out has been handed the hardmacro GDS, the digital
+#: GDS already carries a REAL body for that macro — so reading the macro file
+#: on top of it put every polygon in twice. Measured: `delta_sigma` 45678 ->
+#: 91356 own shapes, `ldo` 36887 -> 73774. Exactly double, both blocks.
+#:
+#: Magic then extracts the duplicated geometry as duplicated devices, so the
+#: layout-side device count is 2x the schematic's and LVS can never match — a
+#: failure whose report reads like a design defect.
+#:
+#: PRESENCE OF THE CELL NAME IS NOT EVIDENCE THAT IT IS AN ABSTRACT, and the
+#: old merge assumed it was. The branch is now taken on whether the cell
+#: actually holds geometry, and BOTH branches are recorded per macro in
+#: merge.json with the before/after shape count, so a doubled body can be seen
+#: in the artefact rather than inferred from an LVS mismatch.
 _KLAYOUT_MERGE_PY = """\
-import pya, os
+import pya, os, json
+
+def own_shapes(ly, name):
+    # `has_cell` / `cell_by_name`, not `cell_name_to_index` — the latter is not
+    # on this KLayout's Layout binding and raised AttributeError when this was
+    # first run against the real tool.
+    if not ly.has_cell(name):
+        return None
+    # `cell_by_name` returns an INDEX; `cell()` turns it into the object.
+    # Both corrections came from running this against the real KLayout, not
+    # from reading the API.
+    c = ly.cell(ly.cell_by_name(name))
+    return sum(c.shapes(li).size() for li in ly.layer_indexes())
+
 ly = pya.Layout()
 ly.read(os.environ["DIGITAL_GDS"])
+
+record = []
 for g in os.environ["MACRO_GDS"].split(";"):
-    if g.strip():
-        ly.read(g.strip())
+    g = g.strip()
+    if not g:
+        continue
+    probe = pya.Layout()
+    probe.read(g)
+    tops = [probe.cell(i).name for i in probe.each_top_cell()]
+    for name in tops:
+        before = own_shapes(ly, name)
+        if before is None:
+            action = "added"          # not in the digital GDS at all
+        elif before == 0:
+            action = "filled"         # an abstract placeholder — today's intent
+        else:
+            action = "kept_digital"   # already a real body: reading would double it
+        record.append({"macro": name, "file": g, "action": action,
+                       "shapes_before": before})
+    if all(r["action"] != "kept_digital"
+           for r in record if r["file"] == g):
+        ly.read(g)
+    for r in record:
+        if r["file"] == g:
+            r["shapes_after"] = own_shapes(ly, r["macro"])
+
 ly.write(os.environ["MERGED_OUT"])
+mj = os.environ.get("MERGE_JSON")
+if mj:
+    with open(mj, "w") as f:
+        json.dump({"merged_out": os.environ["MERGED_OUT"],
+                   "digital_gds": os.environ["DIGITAL_GDS"],
+                   "macros": record}, f, indent=2)
+for r in record:
+    print("KLAYOUT_MERGE_MACRO", r["macro"], r["action"],
+          r["shapes_before"], "->", r.get("shapes_after"))
 print("KLAYOUT_MERGE_DONE", os.environ["MERGED_OUT"])
 """
 
@@ -451,7 +513,11 @@ def run(project: Path, top: str, container: str, pdk: str,
         merge_py.write_text(_KLAYOUT_MERGE_PY)
         env = (f"export DIGITAL_GDS={_to_container_path(digital_gds, container)} "
                f"MACRO_GDS=\"{';'.join(_to_container_path(g, container) for g in macro_gds)}\" "
-               f"MERGED_OUT={_to_container_path(merged, container)} && ")
+               f"MERGED_OUT={_to_container_path(merged, container)} "
+               # Per-macro branch record (#597). Written by the merge itself,
+               # so a doubled body is visible in an artefact rather than
+               # inferred from an LVS device-count mismatch two steps later.
+               f"MERGE_JSON={_to_container_path(ms_dir / 'merge.json', container)} && ")
         # C5 pipefail — see the note at the Magic site below. Without it the rc
         # this branch reports is `tee`'s, so a KLayout that died mid-merge is
         # indistinguishable from one that merged nothing.
