@@ -384,13 +384,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     for pin in sorted(ground_pins):
         if pin in have_gnd:
             continue
+        # #598: this entry is a RAIL DECLARATION, not a power domain, and it
+        # must say so. `power_net` is here because both readers need it (see
+        # the measured L21-1/L21-2 trade above) — it is the design's primary
+        # rail, NOT this entry's operating voltage. Without the marker a
+        # consumer reads a domain named after a GROUND pin carrying the 1.2 V
+        # core rail at 0.0 V, and `power_domain_signal_crossing_check` built
+        # exactly that phantom domain.
         added.append({
             _NAME_KEY: pin, _POWER_KEY: _primary_power, _GROUND_KEY: pin,
             "derived_by": PROGRAM,
             "derived_from": {"macro_lef_pin_use": "GROUND",
                              "declared_by_macros": sorted(ground_pins[pin])},
+            "is_power_domain": False,
             "voltage_v": 0.0,
-            "voltage_status": "ground reference",
+            "voltage_status": (
+                "ground reference; `power_net` names the design's primary rail "
+                "so both the completeness gate and the Phase-3 consumer "
+                "resolve this pin, and is NOT this entry's operating voltage"),
         })
 
     # An EXPLICIT (master, pin) -> rail binding map, in addition to the rails.
