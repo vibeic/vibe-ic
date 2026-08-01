@@ -82,6 +82,7 @@ from gds_substance_check import (  # noqa: E402
     structure_text_census,
 )
 from def_gds_port_power_restore import (  # noqa: E402
+    pdk_port_label_layers,
     def_declared_pin_count,
     def_design_name,
     parse_pins,
@@ -138,7 +139,58 @@ def pair_def_with_gds(def_paths: List[Path],
     return cands[0][1], cands[0][2]
 
 
-def census_one(gds_path: Path, def_paths: List[Path]) -> Dict:
+def label_layer_readability(cen, design, pdk_tech=None):
+    """(readable, note) — are the top cell's labels on a layer the design's PDK
+    declares as a PORT-label layer?
+
+    DISCLOSURE ONLY, DELIBERATELY. vibe-ic#631 is right that presence is not
+    readability: a label on a layer the extractor's tech does not map is
+    byte-for-byte present and semantically absent, and the measured case is
+    20 labels in the file against `Circuits do NOT match uniquely (top-level
+    cell has no ports)`.
+
+    But BLOCKING on it is not calibrated yet, and the reason is a measurement
+    taken while writing this. The restore writes layer 100; NATIVE KLayout
+    streamout writes 10/1 — and sky130A's Magic tech declares neither (its port
+    layers are 68/5, 69/5, …). So `subservient`, a shipped cell whose sign-off
+    is green, would be flagged by the naive rule. Either its LVS never reads the
+    GDS through Magic, or the rule is wrong; until that is established, turning
+    this into a FAIL would fail a design on a predicate whose accept case has
+    never been run. #613's own calibration rule — measure the blast radius
+    before choosing the predicate — applies to its own follow-up.
+
+    So it REPORTS, and `readable` is None (unknown) or True, never False.
+    """
+    layers = sorted(set(cen.label_layers_per_structure.get(design, [])))
+    if not layers:
+        return None, ""
+    if not pdk_tech:
+        return None, (f"label layer(s) {layers}; the design's PDK tech was not "
+                      f"supplied, so whether a Magic-based extractor can READ "
+                      f"them is UNKNOWN — not confirmed (vibe-ic#631)")
+    try:
+        declared = pdk_port_label_layers(Path(pdk_tech).read_text(errors="replace"))
+    except OSError as exc:
+        return None, f"could not read the PDK tech {pdk_tech}: {exc}"
+    want = set(declared.values())
+    if not want:
+        return None, (f"label layer(s) {layers}; this PDK's tech declares NO "
+                      f"port-label layer, so readability cannot be established "
+                      f"either way")
+    hit = [l for l in layers if l in want]
+    if hit:
+        return True, (f"label layer(s) {layers} include the PDK-declared port "
+                      f"layer(s) {sorted(want)} — an extractor reading through "
+                      f"that tech can name the ports")
+    return None, (f"ADVISORY (vibe-ic#631): label layer(s) {layers} are NOT "
+                  f"among the PDK-declared port-label layer(s) {sorted(want)}, "
+                  f"so a Magic-based extractor reading through that tech would "
+                  f"DROP them and extract a portless subckt. Reported, not "
+                  f"failed: the predicate's accept case is not yet calibrated.")
+
+
+def census_one(gds_path: Path, def_paths: List[Path],
+                pdk_tech=None) -> Dict:
     """Measure one GDS against whichever DEF names a structure inside it."""
     rec: Dict = {"gds_file": str(gds_path), "verdict": "NOT_MEASURED",
                  "def_file": None, "top_cell": None}
@@ -172,6 +224,14 @@ def census_one(gds_path: Path, def_paths: List[Path]) -> Dict:
     declared = def_declared_pin_count(def_text)
     placed = [n for n, _l, _x, _y in parse_pins(def_text)]
     labels = cen.labels_per_structure.get(design, [])
+    # #631 — PRESENCE IS NOT READABILITY. A label on a layer the extractor's
+    # PDK tech does not map is byte-for-byte present and semantically absent:
+    # measured on a real run, 20 labels in the file and
+    # `Circuits do NOT match uniquely (top-level cell has no ports)`. This
+    # gate's own argument one level down — that a PDK CLASS predicts nothing
+    # and the readable fact is whether the labels are IN THE FILE — turns out
+    # to apply to itself: being in the file predicts nothing either.
+    readable, unreadable_note = label_layer_readability(cen, design, pdk_tech)
 
     missing = sorted(set(placed) - set(labels))
     unmatched = sorted(set(labels) - set(placed))
@@ -214,6 +274,10 @@ def census_one(gds_path: Path, def_paths: List[Path]) -> Dict:
                f"rather than an absence?)" if unmatched else ""))
     else:
         rec["verdict"] = "OK"
+    if unreadable_note:
+        rec["readability"] = unreadable_note
+        rec["label_layers"] = sorted(
+            set(cen.label_layers_per_structure.get(design, [])))
     return rec
 
 

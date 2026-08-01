@@ -107,6 +107,7 @@ RT_TEXT = 0x0C00
 RT_LAYER = 0x0D02
 RT_SNAME = 0x1206
 RT_STRING = 0x1906
+RT_TEXTTYPE = 0x1602
 RT_BOX = 0x2D00
 
 # Elements that constitute actual layout content.
@@ -326,6 +327,10 @@ class StructureCensus:
     structures: List[str] = field(default_factory=list)
     text_per_structure: Dict[str, int] = field(default_factory=dict)
     labels_per_structure: Dict[str, List[str]] = field(default_factory=dict)
+    #: (gds_layer, texttype) per TEXT, in the same order as the strings.
+    #: vibe-ic#631 — a label's LAYER decides whether an extractor can read it,
+    #: and the string alone cannot say.
+    label_layers_per_structure: Dict[str, List] = field(default_factory=dict)
     referenced: List[str] = field(default_factory=list)
 
     def top_structures(self) -> List[str]:
@@ -345,6 +350,7 @@ def structure_text_census(data: bytes) -> StructureCensus:
     """
     cen = StructureCensus()
     cur: Optional[str] = None
+    _pend = None          # (layer, texttype) accumulating for the open TEXT
     for _off, rt, payload in iter_records(data):
         if rt == RT_STRNAME:
             cur = payload.rstrip(b'\x00').decode('ascii', 'replace')
@@ -352,11 +358,23 @@ def structure_text_census(data: bytes) -> StructureCensus:
                 cen.structures.append(cur)
                 cen.text_per_structure[cur] = 0
                 cen.labels_per_structure[cur] = []
+                cen.label_layers_per_structure[cur] = []
         elif rt == RT_TEXT and cur is not None:
             cen.text_per_structure[cur] = cen.text_per_structure.get(cur, 0) + 1
+            _pend = [None, 0]
+        elif rt == RT_LAYER and cur is not None and _pend is not None:
+            if len(payload) >= 2:
+                _pend[0] = struct.unpack_from('>h', payload, 0)[0]
+        elif rt == RT_TEXTTYPE and cur is not None and _pend is not None:
+            if len(payload) >= 2:
+                _pend[1] = struct.unpack_from('>h', payload, 0)[0]
         elif rt == RT_STRING and cur is not None:
             cen.labels_per_structure.setdefault(cur, []).append(
                 payload.rstrip(b'\x00').decode('ascii', 'replace'))
+            if _pend is not None and _pend[0] is not None:
+                cen.label_layers_per_structure.setdefault(cur, []).append(
+                    (int(_pend[0]), int(_pend[1])))
+            _pend = None
         elif rt == RT_SNAME:
             nm = payload.rstrip(b'\x00').decode('ascii', 'replace')
             if nm not in cen.referenced:

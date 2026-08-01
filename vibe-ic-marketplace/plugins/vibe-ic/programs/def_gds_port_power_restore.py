@@ -145,6 +145,59 @@ def parse_power_rails(def_text):
     return rails
 
 
+# vibe-ic#630 — WRITING A LABEL AND WRITING A READABLE LABEL ARE DIFFERENT.
+# `TEXT_LAYER` (100) is this file's contract with `klayout_pdk_lvs`, the
+# GEOMETRIC extractor. M1's top-level LVS does not use that consumer: it
+# extracts with MAGIC, which reads GDS through the PDK's own tech file. On a PDK
+# whose tech declares port labels only on its own pin-purpose layers, every text
+# on layer 100 is DROPPED at `gds read`, `port makeall` has nothing to promote,
+# and extraction emits a portless `.subckt` — MEASURED on a real mixed-signal
+# run: 20 labels provably in the file, `Final result: Circuits do NOT match
+# uniquely (top-level cell has no ports)`.
+#
+# The PDK DECLARES the layer, so it is read, not guessed — hardcoding one would
+# be the same error class #613 fixed. Magic's `*-GDS.tech` states it uniformly
+# (verified on two independent PDKs):
+#
+#     layer  MET2PIN            layer  MET2PIN
+#     labels MET2PIN port       labels MET2PIN port
+#     calma 10 2                calma 69 5
+#
+# so the pin-purpose layer for metal n is the `calma` of the block whose
+# `labels ... port` names `MET<n>PIN`. Resolved through the SAME `metal_index`
+# the datatype contract uses, so the two cannot drift.
+_TECH_LAYER_BLOCK_RE = re.compile(
+    r"^\s*layer\s+(?P<name>\w+).*?(?=^\s*layer\s+\w|\Z)",
+    re.MULTILINE | re.DOTALL)
+_TECH_PORT_LABELS_RE = re.compile(r"^\s*labels\s+(\w+)\s+port\b", re.MULTILINE)
+_TECH_CALMA_RE = re.compile(r"^\s*calma\s+(\d+)\s+(\d+)", re.MULTILINE)
+
+
+def pdk_port_label_layers(tech_text):
+    """metal index -> (gds_layer, datatype) for every PDK-declared PORT label
+    layer. `{}` when the tech declares none — which is a refusal, not a default.
+
+    Chip- and PDK-AGNOSTIC: nothing here names a PDK. A block only counts when
+    it BOTH declares `labels <X> port` and carries a `calma`, so a
+    label layer the tech mentions without giving GDS coordinates contributes
+    nothing rather than a half-known answer.
+    """
+    out = {}
+    for m in _TECH_LAYER_BLOCK_RE.finditer(tech_text or ""):
+        block = m.group(0)
+        lbl = _TECH_PORT_LABELS_RE.search(block)
+        cal = _TECH_CALMA_RE.search(block)
+        if not (lbl and cal):
+            continue
+        name = lbl.group(1)
+        if not name.upper().endswith("PIN"):
+            continue
+        idx = metal_index(name[:-3])
+        if idx:
+            out.setdefault(idx, (int(cal.group(1)), int(cal.group(2))))
+    return out
+
+
 def unresolved_pin_layers(pins):
     """The distinct pin-layer names `metal_index` cannot place, sorted.
 
@@ -154,7 +207,7 @@ def unresolved_pin_layers(pins):
     return sorted({layer for _n, layer, _x, _y in pins if not metal_index(layer)})
 
 
-def restore(gds_in, def_file, gds_out, top=None):
+def restore(gds_in, def_file, gds_out, top=None, pdk_tech=None):
     try:
         def_text = open(def_file).read()
     except OSError as exc:
@@ -196,12 +249,29 @@ def restore(gds_in, def_file, gds_out, top=None):
     scale = (1.0 / 1000.0) / ly.dbu     # DEF unit (nm) -> GDS dbu
     tbase = TEXT_LAYER[0]
 
+    # #630 — the PDK's own PORT-label layers, when it declares any. Written IN
+    # ADDITION to layer 100, never instead of it: layer 100 is the contract with
+    # `klayout_pdk_lvs` and dropping it would break the geometric extractor to
+    # fix the Magic one.
+    _pdk_map = {}
+    if pdk_tech:
+        try:
+            _pdk_map = pdk_port_label_layers(open(pdk_tech).read())
+        except OSError as exc:
+            sys.stderr.write(f"def_gds_port_power_restore: could not read the "
+                             f"PDK tech {pdk_tech}: {exc}\n")
+    _n_pdk = 0
     for name, layer, x, y in pins:
+        _idx = metal_index(layer)
+        _tr = pya.Trans(pya.Trans.R0, int(round(x * scale)), int(round(y * scale)))
         # per-metal text layer keyed to the pin's own metal (layer-aware; never
         # weld the pin net to a foreign crossover on another metal).
-        tlayer = ly.layer(tbase, metal_index(layer))
-        tc.shapes(tlayer).insert(pya.Text(
-            name, pya.Trans(pya.Trans.R0, int(round(x * scale)), int(round(y * scale)))))
+        tlayer = ly.layer(tbase, _idx)
+        tc.shapes(tlayer).insert(pya.Text(name, _tr))
+        _pdk_ld = _pdk_map.get(_idx)
+        if _pdk_ld:
+            tc.shapes(ly.layer(*_pdk_ld)).insert(pya.Text(name, _tr))
+            _n_pdk += 1
 
     # v1.3.93 — paint the uniting rail-marker on the FOLLOW-PIN layer ONLY.
     # The marker exists to weld the physically-DISJOINT met1 follow-pin rails
@@ -242,8 +312,20 @@ def restore(gds_in, def_file, gds_out, top=None):
     _unres_note = (f" [UNRESOLVED LAYER: {len(_unresolved)} name(s) "
                    f"({', '.join(_unresolved)}) -> datatype-0 catch-all, bound "
                    f"to m1 by the extractor]" if _unresolved else "")
+    # #630 — a run that wrote NO extractor-readable label must say so: the
+    # labels are then present and invisible to Magic, which is the defect.
+    if not _pdk_map:
+        _pdk_note = (" [NO PDK PORT-LABEL LAYER: none supplied or the tech "
+                     "declares none — the labels are on layer "
+                     f"{TEXT_LAYER[0]} only, which a Magic-based extractor "
+                     "reads ONLY if its tech maps that layer]")
+    else:
+        _pdk_note = (f" (+{_n_pdk} on the PDK's own port-label layer(s) "
+                     f"{sorted(set(_pdk_map.values()))} so a Magic extractor "
+                     f"can read them)")
     print(f"restored: {len(pins)} I/O labels + {n_rail} power-rail markers "
-          f"({', '.join(rails.keys())}){_strap_note}{_unres_note} -> {gds_out}")
+          f"({', '.join(rails.keys())}){_strap_note}{_pdk_note}{_unres_note} "
+          f"-> {gds_out}")
     return 0
 
 
@@ -253,8 +335,14 @@ def main(argv=None):
     ap.add_argument("--def-file", required=True)
     ap.add_argument("--gds-out", required=True)
     ap.add_argument("--top")
+    ap.add_argument("--pdk-tech",
+                    help="Magic `*-GDS.tech` for the design's PDK. Its "
+                         "`labels <X>PIN port` + `calma` blocks declare the "
+                         "PORT-label layers a Magic-based extractor reads; "
+                         "labels are written there IN ADDITION to layer "
+                         f"{TEXT_LAYER[0]}. Absent -> disclosed, never guessed.")
     a = ap.parse_args(argv)
-    return restore(a.gds_in, a.def_file, a.gds_out, a.top)
+    return restore(a.gds_in, a.def_file, a.gds_out, a.top, a.pdk_tech)
 
 
 if __name__ == "__main__":
