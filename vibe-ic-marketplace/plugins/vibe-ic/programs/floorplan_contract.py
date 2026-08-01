@@ -468,6 +468,111 @@ def extract_floorplan_contract(project: Path,
 
 
 # ---------------------------------------------------------------------------
+# Fixed-pinout wrapper detection (DFT boundary-scan applicability)
+# ---------------------------------------------------------------------------
+# A design whose TOP-LEVEL PORT GEOMETRY is fixed by an external parent — an
+# OpenLane ``FP_DEF_TEMPLATE`` copies the die outline AND every pin position out
+# of a template DEF the parent (harness / management SoC) handed down — is a
+# *fixed-pinout wrapper*: its ports connect to that parent BY NAME, not to chip
+# pads. `fault chain` defaults to inserting a boundary-scan register wrapping
+# every top-level port; on such a wrapper that register is BOTH wrong DFT (the
+# pins are not pads, so there is nothing at the chip boundary to scan) AND a
+# physical hazard — MEASURED on caravel_user_project × sky130A: the 606-cell
+# boundary register routed across a fixed 2920×3520 µm die at the functional
+# 25 ns clock produced an SS-corner setup violation of −0.73 ns (TNS −11.63) and
+# a +707 % instance blow-up. `fault chain --skip-boundary` inserts the internal
+# scan chain only, which is the correct DFT for this class. This predicate is
+# the deterministic, chip-AGNOSTIC selector for it — no agent chooses the flag.
+#
+# THE SIGNAL is ``FP_DEF_TEMPLATE`` (a template DEF that fixes the pin
+# placement), NOT a chip name. A standalone padframe chip defines its own pads
+# via a padring; it does NOT take its outline/pins from a parent's template DEF.
+# So the presence of a fixed pin-placement template for the top module is a
+# specific, sound marker of "ports are not chip pads". ``FP_PIN_ORDER_CFG`` /
+# ``pin_order*.cfg`` alone is weaker (any design may order its own pins) and is
+# reported as CORROBORATION, never as the sole trigger.
+def is_fixed_pinout_wrapper(project: Path,
+                            top_module: Optional[str] = None
+                            ) -> Tuple[bool, Dict[str, Any]]:
+    """Is ``top_module`` (or the design, if unnamed) a fixed-pinout wrapper?
+
+    Returns ``(is_fixed_pinout, evidence)``. ``is_fixed_pinout`` is True only
+    when a fixed pin-placement DEF template (``FP_DEF_TEMPLATE``) governs the
+    top — the load-bearing marker that the ports are a parent interface, not
+    chip pads. ``evidence`` records exactly what was read, so the decision is
+    auditable and never a bare boolean.
+
+    chip-AGNOSTIC: derives entirely from the design's own staged input via
+    ``extract_floorplan_contract`` — no chip / vendor / SKU literal.
+    """
+    if not isinstance(project, Path):
+        project = Path(project)
+    contract = extract_floorplan_contract(project, top_module)
+    hints = contract.get("floorplan_hints") or []
+    def_hints = [h for h in hints if h.get("kind") == "def_template"]
+    # A def_template for THIS top (or one carrying no DESIGN_NAME, which the
+    # extractor leaves unset when the config omitted it) governs the top's
+    # pins. A def_template that names a DIFFERENT module is a sub-macro's
+    # template and does not, on its own, make the top fixed-pinout.
+    # AN UNNAMED TEMPLATE IS ONLY THE TOP'S WHEN THERE IS NOTHING ELSE IT COULD
+    # BE (gatekeeper, landing #625). `design_name` is unset whenever the config
+    # omitted `DESIGN_NAME`, and `extract_floorplan_contract` collects configs
+    # from the whole input tree — so a SUB-MACRO config that declares
+    # `FP_DEF_TEMPLATE` and omits `DESIGN_NAME` produced an unnamed hint that
+    # matched any top. DRIVEN before this line was written:
+    #
+    #     sub_blk config, FP_DEF_TEMPLATE set, DESIGN_NAME omitted
+    #     is_fixed_pinout_wrapper(project, "padframe_chip") -> True
+    #
+    # and True here means `--skip-boundary`, so a padframe chip whose ports ARE
+    # pads would silently lose its boundary-scan register. That is the unsafe
+    # direction: the opposite error is a loud timing violation, this one is a
+    # silent DFT loss. The named negative control above cannot see it, because
+    # its sub-macro names itself.
+    #
+    # So an unnamed template counts only when it is the ONLY one — then there
+    # is no other design it could belong to. With several and one unnamed, which
+    # governs the top is not established, and not established means the default
+    # (keep the boundary register) rather than a guess.
+    if top_module:
+        named = [h for h in def_hints if h.get("design_name") == top_module]
+        unnamed = [h for h in def_hints if h.get("design_name") is None]
+        matched = named or (unnamed if len(def_hints) == 1 else [])
+    else:
+        matched = def_hints
+    is_fixed = bool(matched)
+    fp_sizing = next((h["value"] for h in hints
+                      if h.get("kind") == "fp_sizing"), None)
+    pin_order = [h for h in hints if h.get("kind") == "pin_order"]
+    evidence: Dict[str, Any] = {
+        "is_fixed_pinout": is_fixed,
+        "top_module": top_module,
+        "def_template": (matched[0]["value"] if matched else None),
+        "def_template_source": (matched[0].get("source") if matched else None),
+        "def_template_design_name": (
+            matched[0].get("design_name") if matched else None),
+        "fp_sizing": fp_sizing,
+        "die_area_um": contract.get("die_area_budget_um"),
+        "pin_order_cfg": (pin_order[0]["value"] if pin_order else None),
+        # Every def_template seen, so a reader can tell a top template from a
+        # sub-macro one without re-deriving.
+        "all_def_templates": [
+            {"value": h.get("value"), "source": h.get("source"),
+             "design_name": h.get("design_name")}
+            for h in def_hints],
+        "reason": (
+            "FP_DEF_TEMPLATE fixes the top's pin placement → ports are a "
+            "parent interface, not chip pads → boundary-scan register is "
+            "incorrect DFT here; insert the internal scan chain only "
+            "(--skip-boundary)"
+            if is_fixed else
+            "no FP_DEF_TEMPLATE governs the top → not a fixed-pinout wrapper; "
+            "default boundary-scan behaviour is unchanged"),
+    }
+    return is_fixed, evidence
+
+
+# ---------------------------------------------------------------------------
 # Design-declared DRV limits (max-fanout / max-transition)
 # ---------------------------------------------------------------------------
 # A fixed-floorplan design ships an OpenLane-style config, and this module
