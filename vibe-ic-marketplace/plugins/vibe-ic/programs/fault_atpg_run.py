@@ -1527,6 +1527,32 @@ def run_fault(
     faults_total_source = parsed["faults_total_source"]
     coverage_measured = parsed["coverage_measured"]
 
+    # ── TEST coverage (vibe-ic#603): raw FAULT coverage is what Fault reports;
+    # sign-off TEST coverage removes the ATPG-UNTESTABLE faults (the unused pad
+    # frame: unobservable inputs / constant-driven outputs) from the denominator.
+    # Both numbers are kept distinct so neither stands in for the other. The
+    # std-cell Liberty (pin directions) lives in the EDA container, so it is read
+    # out host-side, exactly as fault_cut_async_observe does. SOUND-only: the
+    # excluded set is UNCOVERED ∩ structurally-untestable, so a detected fault is
+    # never removed and test coverage can never exceed 100 %.
+    test_coverage = None
+    try:
+        import dft_test_coverage as _dtc            # sibling; no import cycle
+        import atpg_untestable_fault_classify as _auc
+        if cov_file.exists() and (project / cut_out).exists():
+            _lib_ctr = _atpg_liberty_container_path(project, cell_model, pdk_dir)
+            if _lib_ctr:
+                _ec_l, _lib_text, _ = _run_docker(
+                    project, ["cat", _lib_ctr], timeout=120, pdk_dir=pdk_dir)
+                if _ec_l == 0 and _lib_text:
+                    _dirs = _auc.parse_liberty_pin_directions(_lib_text)
+                    test_coverage = _dtc.compute(
+                        project / cut_out, cov_file, directions=_dirs)
+                    (project / "phase2/stage2/dft/test_coverage.json").write_text(
+                        json.dumps(test_coverage, indent=2))
+    except Exception as _tc_exc:   # measurement-only: never fail the run on it
+        test_coverage = {"computed": False, "reason": f"exception: {_tc_exc}"}
+
     # ── Transition (at-speed) fault model — SECOND model, own target ──
     transition = None
     if run_transition:
@@ -1616,6 +1642,22 @@ def run_fault(
         "coverage_pct": coverage_ratio,
         "faults_covered": faults_covered,
         "faults_total": faults_total,
+        # vibe-ic#603 — RAW fault coverage above (coverage_pct) is Fault's ratio;
+        # TEST coverage below is detected / (total − ATPG-untestable). Distinct on
+        # purpose: the gate judges TEST coverage, the report keeps RAW visible.
+        "test_coverage_pct": (test_coverage.get("test_coverage_pct")
+                              if test_coverage and test_coverage.get("computed")
+                              else None),
+        "test_coverage_measured": bool(
+            test_coverage and test_coverage.get("computed")),
+        "test_coverage_untestable_excluded": (
+            test_coverage.get("untestable_faults_excluded")
+            if test_coverage and test_coverage.get("computed") else None),
+        "test_coverage_source": (
+            "dft_test_coverage: (unobservable|uncontrollable) ∩ uncovered"
+            if test_coverage and test_coverage.get("computed")
+            else (test_coverage.get("reason") if test_coverage else
+                  "not computed (no liberty / no cut netlist / no coverage.yml)")),
         # DFT_FCC / 11-d3 — the producer DECLARES whether this run is a real
         # measurement, and names the artefact each number was read out of, so
         # no consumer has to re-derive that from a single scraped integer.
