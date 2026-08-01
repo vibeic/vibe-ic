@@ -142,8 +142,26 @@ def _artefact(project: Path, block: str, filename: str,
         (d / f"{block}.sp").write_text(_REAL_NETLIST.format(block=block))
     elif name.endswith(".sp"):
         (d / name).write_text(_REAL_NETLIST.format(block=block))
+        _netlist_record(d, block)
     else:                                       # pragma: no cover
         raise AssertionError(f"unhandled artefact {name}")
+
+
+def _netlist_record(d: Path, block: str) -> None:
+    """The producer's record BESIDE the netlist, for the same reason
+    `_REAL_CORNERS` carries `design_content`: several of this file's coverage
+    fixtures assert a CERTIFIED A3, and a deck that refuses to say what circuit
+    is in it no longer certifies one. Coverage, not disclosure, stays the
+    property under test — so the deck discloses, and the fixtures keep
+    measuring what they were written to measure.
+
+    A fixture that asserted a certified step on a SILENT artefact would be a
+    small standing statement that omission is fine, which is the incentive the
+    disclosure tier exists to remove."""
+    (d / "netlist_provenance.json").write_text(json.dumps({
+        "block": block,
+        "_provenance": {"producer": "test-fixture",
+                        "design_content": "structure_and_geometry"}}))
 
 
 def _run(prog: Path, project: Path, *args: str,
@@ -523,6 +541,7 @@ def test_guard_a3_x_instance_only_body_passes(tmp_path: Path) -> None:
         + "Xstage1 vdd vss vin mid amp_core\n" * 4
         + "Xstage2 vdd vss mid vout amp_core\n"
         ".ends top\n.end\n")
+    _netlist_record(d, "top")       # the DEVICE-CARD rule is what is under test
     r = _run(A3, tmp_path)
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert _report(tmp_path)["verdict"] == "PASS"

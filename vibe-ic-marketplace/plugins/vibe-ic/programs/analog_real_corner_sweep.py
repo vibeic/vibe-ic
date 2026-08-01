@@ -1928,7 +1928,18 @@ def upstream_design_content(netlist_path: Path) -> tuple:
     whether a number in it came from a spec or from a library default — only
     the producer that resolved the parameters knows that, and it wrote the
     answer down. Missing sidecar is reported as `undeclared`, which is a third
-    answer and not a synonym for either of the other two."""
+    answer and not a synonym for either of the other two.
+
+    WHICH ANSWERS COUNT AS AN ANSWER is decided by the SHARED whitelist, not by
+    a tuple restated here. This program republishes the record into
+    `corner_results.json`, which is the artefact the gate of record grades — so
+    a local list of accepted tokens is a second copy of the predicate the gate
+    certifies on, and a token this list accepted while the gate did not (or the
+    reverse) would put a value into the artefact its own gate then refuses.
+    Fail-closed and deliberately in ONE direction: if the shared module cannot
+    be reached at all, EVERY token reads `undeclared`. That is the safe answer —
+    it can only ever move a result down the ordering, never promote one — and it
+    leaves no second copy of the whitelist to drift."""
     side = netlist_path.parent / _UPSTREAM_SIDECAR
     if not side.is_file():
         return DESIGN_CONTENT_UNDECLARED, None, None
@@ -1940,9 +1951,21 @@ def upstream_design_content(netlist_path: Path) -> tuple:
     if not isinstance(prov, dict):
         return DESIGN_CONTENT_UNDECLARED, str(side), None
     dc = prov.get("design_content")
-    if dc not in (DESIGN_CONTENT_STRUCTURE_ONLY, DESIGN_CONTENT_SIZED):
+    if not _content_disclosed(dc):
         dc = DESIGN_CONTENT_UNDECLARED
     return dc, str(side), prov.get("provenance_ref")
+
+
+def _content_disclosed(value) -> bool:
+    """`_analog_a_check_common.content_disclosed` — the ONE whitelist that says
+    whether a token NAMES a content. Imported, never restated."""
+    try:
+        if str(Path(__file__).resolve().parent) not in sys.path:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import _analog_a_check_common as _acc
+        return _acc.content_disclosed(value)
+    except Exception:  # pragma: no cover — fail-closed, as before
+        return False
 
 
 def a3_netlist_path(project: Path, block: str):

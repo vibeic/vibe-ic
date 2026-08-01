@@ -214,6 +214,24 @@ def _has_place_and_route(project: Path) -> bool:
     return False
 
 
+def _content_rule_module():
+    """`_analog_a_check_common`, or None when it cannot be imported.
+
+    THE PREDICATE IS IMPORTED, NOT RESTATED — the same doctrine
+    `_rtl_file_is_testbench` follows below. The three answers this pillar ranks
+    are the three the analog gates certify on, and a second copy of the
+    whitelist here would be free to drift from the one at the gate of record: a
+    pillar signing off something the gate refuses, by another door."""
+    try:
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        import _analog_a_check_common as _aac  # local program, same dir
+        return _aac
+    except Exception:  # nosec — never let the shared import break the report
+        return None
+
+
 def _rtl_file_is_testbench(path: str) -> bool:
     """True iff `path` is a TESTBENCH / TB skeleton, NOT synthesizable design
     RTL. Reuses rtl_hygiene_lint._is_testbench — the SAME predicate the hygiene
@@ -477,16 +495,26 @@ def main():
         # An artefact that will not say which of the two it holds is ranked
         # BELOW the one that disclosed a library default, never above it:
         # otherwise this pillar pays a producer to delete a field.
+        #
+        # CLASSIFIED THROUGH THE SHARED SITE. This pillar is a consumer of the
+        # same artefact the corner gate is the gate of record for; a local
+        # `==` against the producer's raw tokens is free to drift from the
+        # whitelist that gate certifies on, and then this report signs off a
+        # tier the gate refuses. The import is local and fail-closed: if the
+        # shared module cannot be reached the block is counted UNDISCLOSED,
+        # never silently promoted.
         structure_only, undisclosed = [], []
+        _acc = _content_rule_module()
         for cr in sorted(glob.glob(str(project / "phase3" / "analog" / "*" /
                                        "corner_results.json"))):
             d = _load_json(Path(cr)) or {}
             if d.get("partial_measurement"):
                 partial.append(Path(cr).parent.name)
-            dc = d.get("design_content")
-            if dc == "structure_only":
+            klass = (_acc.classify_design_content(d.get("design_content"))
+                     if _acc is not None else None)
+            if _acc is not None and klass == _acc.CONTENT_STRUCTURE_ONLY:
                 structure_only.append(Path(cr).parent.name)
-            elif dc != "structure_and_geometry":
+            elif _acc is None or klass != _acc.CONTENT_DESIGN_BOUND:
                 undisclosed.append(Path(cr).parent.name)
         blocks_txt = ", ".join(names) if names else "(see analog/ reports)"
         if not a_run:

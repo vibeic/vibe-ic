@@ -119,6 +119,13 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
 import _analog_producer_common as _pc  # noqa: E402
+# The vocabulary this producer WRITES is defined once, beside the gates that
+# certify on it. This program decides which token to write; whenever it READS
+# one back — to count its own records for the run report — it classifies
+# through the shared site, because a raw `==` here is free to drift from the
+# whitelist the gate uses and then the run report and the gate disagree about
+# a netlist neither of them has to re-read.
+import _analog_a_check_common as _acc  # noqa: E402
 
 PRODUCER = "analog_a3_netlist_emit"
 PROVENANCE_SCHEMA = 1
@@ -549,11 +556,26 @@ _CHECKERS = (
 )
 
 
-def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str]
+def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str],
+                         design_content: Optional[str] = None
                          ) -> Tuple[bool, List[Dict[str, Any]]]:
     """Run the real checkers over a staging project holding ONLY this block's
     netlist, so the verdict is about this file and not about whatever else the
-    run has left in the tree."""
+    run has left in the tree.
+
+    STAGE WHAT WILL BE EMITTED, not a subset of it. The A3 gate now asks the
+    netlist what circuit is in it, and the answer lives in the sidecar this
+    producer writes a few lines below — so a staging tree carrying the deck
+    WITHOUT the record is a tree that will never exist on disk, and a verdict
+    taken on it is a verdict about a different artefact set. Measured when the
+    sidecar was left out: every emitted netlist came back
+    NETLIST_REJECTED_BY_CHECKS and the producer wrote an honest-gap file for a
+    deck it had just rendered correctly.
+
+    `design_content` is passed in rather than re-derived here for the reason
+    every other consumer reads it rather than inferring it: only the caller that
+    resolved the parameters knows the answer, and a second derivation is free to
+    disagree with the one it writes."""
     findings: List[Dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="a3verify_") as td:
         proj = Path(td)
@@ -562,6 +584,12 @@ def verify_with_checkers(block: str, sp_text: str, tb_text: Optional[str]
         (proj / _CANONICAL_ANALOG / "analog_block_list.json").write_text(
             json.dumps({"blocks": [{"name": block}]}), encoding="utf-8")
         (bdir / f"{block}.sp").write_text(sp_text, encoding="utf-8")
+        if design_content is not None:
+            (bdir / _acc.NETLIST_PROVENANCE_ARTEFACT).write_text(
+                json.dumps({"block": block,
+                            "_provenance": {"producer": PRODUCER,
+                                            "design_content": design_content}}),
+                encoding="utf-8")
         if tb_text:
             (bdir / f"tb_{block}.sp").write_text(tb_text, encoding="utf-8")
         ok = True
@@ -872,7 +900,8 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
     sp_text = render_netlist(ir, pdkctx, prov_lines, overrides)
     tb_text, tb_env, tb_notes = render_testbench(ir, pdkctx, env, prov_lines)
 
-    ok, findings = verify_with_checkers(name, sp_text, tb_text)
+    ok, findings = verify_with_checkers(name, sp_text, tb_text,
+                                        design_content)
     if not ok:
         _drop_stale(bdir, name)
         gap = write_gap(bdir, project, name, btype, "NETLIST_REJECTED_BY_CHECKS",
@@ -1055,7 +1084,9 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
         # carrying a design's name, which is the whole distinction A4 and the
         # compliance line are now required to carry.
         "blocks_structure_only": sum(
-            1 for r in records if r.get("design_content") == "structure_only"),
+            1 for r in records
+            if _acc.classify_design_content(r.get("design_content"))
+            == _acc.CONTENT_STRUCTURE_ONLY),
         "design_content": {r["block"]: r.get("design_content")
                            for r in records if r.get("emitted")},
         "provenance_ref": {r["block"]: r.get("provenance_ref")

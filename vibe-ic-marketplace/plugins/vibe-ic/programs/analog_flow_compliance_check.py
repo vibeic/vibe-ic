@@ -105,8 +105,6 @@ RC_PASS, RC_FAIL, RC_VACUOUS = 0, 1, 2
 # scored below one that is not.
 CELL_STRUCTURE_ONLY = "PASS_STRUCTURE_ONLY"
 VERDICT_STRUCTURE_ONLY = "PASS_STRUCTURE_ONLY"
-#: The value an artefact records to say its content came from a library default.
-DESIGN_CONTENT_STRUCTURE_ONLY = "structure_only"
 
 
 @dataclass
@@ -342,9 +340,17 @@ def _structure_only(project: Path, block: str, step_id: str) -> bool:
     or a corner result and know whether a number in it came from a bound input
     or from a default. Only the producer that resolved it knows, and it wrote
     the answer down. Absence of the record is NOT read as structure-only:
-    "undeclared" is a different answer and the per-step gate owns it."""
+    "undeclared" is a different answer and the per-step gate owns it.
+
+    CLASSIFIED THROUGH THE SHARED SITE, not by a local `==`. This matrix is a
+    THIRD consumer of the same two artefacts the A3 and A4 gates certify, and a
+    private comparison here is free to drift from the one the gates certify on —
+    which is exactly how `analog_a3_netlist_gen_check` came to have a disclosed
+    tier and no undisclosed one while `analog_one_shot_runner` read the same
+    sidecar through the whitelist. Degrades to the historic answer only if the
+    shared module cannot be imported at all."""
     if step_id == "A3":
-        name, key = "netlist_provenance.json", ("_provenance", "design_content")
+        name, key = _acc_netlist_record()
     elif step_id == "A4":
         name, key = "corner_results.json", ("design_content",)
     else:
@@ -354,15 +360,23 @@ def _structure_only(project: Path, block: str, step_id: str) -> bool:
         if not p.is_file():
             continue
         try:
-            doc = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            import _analog_a_check_common as _aac
+        except Exception:  # pragma: no cover — degraded to the historic answer
             return False
-        for k in key:
-            if not isinstance(doc, dict):
-                return False
-            doc = doc.get(k)
-        return doc == DESIGN_CONTENT_STRUCTURE_ONLY
+        return _aac.content_class_of_artefact(p, key) == \
+            _aac.CONTENT_STRUCTURE_ONLY
     return False
+
+
+def _acc_netlist_record() -> tuple:
+    """`(filename, key path)` of the A3 producer's record, from the shared
+    module when it is importable. Named once, there, so this matrix and the A3
+    gate cannot come to look in two different places."""
+    try:
+        import _analog_a_check_common as _aac
+        return (_aac.NETLIST_PROVENANCE_ARTEFACT, _aac.NETLIST_CONTENT_KEYS)
+    except Exception:  # pragma: no cover
+        return ("netlist_provenance.json", ("_provenance", "design_content"))
 
 
 def _check_step(project: Path, block: str, step_id: str) -> bool:

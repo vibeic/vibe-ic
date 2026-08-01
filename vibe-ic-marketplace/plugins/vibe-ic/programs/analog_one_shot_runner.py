@@ -597,8 +597,13 @@ def _content_extras(project: Path, block: str,
 
     if token is None or path is None:
         return {}
+    # CLASSIFIED, not compared: the raw tokens are the PRODUCER's vocabulary
+    # and this is a consumer. `_acc.CONTENT_STRUCTURE_ONLY` is the class the
+    # gates rank on, and reading it through the same classifier is what stops
+    # this record from naming a tier the gate refuses.
     return {"design_content": token,
-            "structure_only": token == "structure_only",
+            "structure_only": (_acc.classify_design_content(token)
+                               == _acc.CONTENT_STRUCTURE_ONLY),
             "design_content_source": str(path.relative_to(project))}
 
 

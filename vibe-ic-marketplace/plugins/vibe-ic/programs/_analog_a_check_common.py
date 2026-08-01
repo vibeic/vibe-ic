@@ -400,18 +400,48 @@ def classify_design_content(value) -> str:
     return CONTENT_UNDISCLOSED
 
 
-def content_class_of_artefact(path) -> str:
+#: The name of the record itself. Named ONCE so a reader of any consumer can
+#: find every site that touches it, and so the key path below is built from the
+#: same string the producers write.
+DESIGN_CONTENT_FIELD = "design_content"
+
+#: Where the record sits when nothing says otherwise: at the document's top
+#: level, which is the shape of every artefact a consumer grades.
+CONTENT_TOP_LEVEL_KEYS = (DESIGN_CONTENT_FIELD,)
+
+
+def _chain_entry(entry) -> tuple:
+    """Normalise one chain element to ``(path, key_path)``.
+
+    A bare path means the record is at the top level. A ``(path, keys)`` pair
+    names a NESTED one — the A3 producer stamps its record inside the
+    `_provenance` object it writes beside the netlist, and a helper that could
+    only read a top-level field would have had to keep its own reader for that
+    artefact, which is the copied predicate this module exists to remove.
+    Both shapes are then read by the SAME whitelist; only WHERE the value is
+    found differs, never WHICH answers count as an answer.
+    """
+    if isinstance(entry, tuple):
+        path, keys = entry
+        return path, tuple(keys)
+    return entry, CONTENT_TOP_LEVEL_KEYS
+
+
+def content_class_of_artefact(path, keys=CONTENT_TOP_LEVEL_KEYS) -> str:
     """:func:`classify_design_content` of the `design_content` recorded in the
-    JSON artefact at *path*. An unreadable or non-object artefact classifies
-    UNDISCLOSED — it said nothing, whatever the reason."""
+    JSON artefact at *path*, reached by walking *keys*. An unreadable or
+    non-object artefact classifies UNDISCLOSED — it said nothing, whatever the
+    reason, and so does a document that does not carry the key path at all."""
     try:
         doc = json.loads(Path(path).read_text(encoding="utf-8",
                                               errors="replace"))
     except (json.JSONDecodeError, OSError):
         return CONTENT_UNDISCLOSED
-    if not isinstance(doc, dict):
-        return CONTENT_UNDISCLOSED
-    return classify_design_content(doc.get("design_content"))
+    for key in keys:
+        if not isinstance(doc, dict):
+            return CONTENT_UNDISCLOSED
+        doc = doc.get(key)
+    return classify_design_content(doc)
 
 
 # ── WHEN THE ARTEFACT A CONSUMER GRADES CARRIES NO RECORD OF ITS OWN ──────
@@ -464,10 +494,11 @@ def content_class_inherited(paths) -> tuple:
     for cand in paths:
         if cand is None:
             continue
-        p = Path(cand)
+        raw, keys = _chain_entry(cand)
+        p = Path(raw)
         if not p.is_file():
             continue
-        klass = content_class_of_artefact(p)
+        klass = content_class_of_artefact(p, keys)
         if klass != CONTENT_UNDISCLOSED:
             return klass, p
     return CONTENT_UNDISCLOSED, None
@@ -607,6 +638,44 @@ def pre_vs_post_content(block_dir) -> BoundedContent:
     return content_class_bounded(
         [d / CONTENT_GATE_OF_RECORD_ARTEFACT],
         [d / PRE_VS_POST_DERIVED_ARTEFACT])
+
+
+#: The sidecar the A3 producer writes BESIDE the netlist, and the key path to
+#: the record inside it. Nothing writes JSON into a SPICE deck, so the whole
+#: answer for `<block>.sp` is this file's — the same reason the hardmacro
+#: package's answer is the corner artefact's.
+NETLIST_PROVENANCE_ARTEFACT = "netlist_provenance.json"
+NETLIST_CONTENT_KEYS = ("_provenance", DESIGN_CONTENT_FIELD)
+
+
+def netlist_content(block_dir) -> BoundedContent:
+    """THE content rule for `<block>.sp`, for every gate that certifies it.
+    *block_dir* is the per-block analog directory holding the netlist and the
+    producer's sidecar.
+
+    WHY THIS CHAIN HAS ONE LINK AND NO CEILING ARTEFACT, which is the one way
+    it differs from its two siblings. The netlist is the ROOT of this record:
+    `analog_real_corner_sweep.upstream_design_content` reads THIS file to stamp
+    `corner_results.json`, so the gate of record's own subject is DERIVED from
+    it. Giving A3 a ceiling taken from the corner artefact would invert the
+    direction of the whole rule — a downstream artefact bounding the upstream
+    one it was copied from — and would let a re-run of A4 raise or lower what
+    A3 shipped. Nothing may raise this record because nothing upstream of it
+    exists; the producer that resolved the parameters is the only writer, and
+    it is read here through the same whitelist as everything else, so a sidecar
+    that is absent, unreadable, empty, or carrying a token that names no
+    content is UNDISCLOSED exactly as it is everywhere else.
+
+    A skill-authored netlist carries no sidecar at all, and that is UNDISCLOSED
+    rather than exempt. The exemption that already exists beside this
+    (`_provenance_ref_fail` stays silent without a sidecar) is about refusing to
+    punish the ABSENCE OF A CLAIM; this rule is about refusing to CERTIFY on
+    one. Exempting silence here is precisely how silence became cheaper than
+    disclosure.
+    """
+    return content_class_bounded(
+        [(Path(block_dir) / NETLIST_PROVENANCE_ARTEFACT,
+          NETLIST_CONTENT_KEYS)])
 
 
 def hardmacro_content(block_dir) -> BoundedContent:

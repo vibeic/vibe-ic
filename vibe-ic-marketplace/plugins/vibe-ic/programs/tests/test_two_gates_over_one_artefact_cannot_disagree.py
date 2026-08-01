@@ -41,6 +41,22 @@ gaps in coverage:
     above the deterministic record. STOPPING at the gate of record's artefact
     is not the same as being BOUNDED by it.
 
+(c) A THIRD LEAK, found on top of (a) and (b), and the reason section 4 no
+    longer takes a list. `analog_a3_netlist_gen_check` — the gate the flow
+    declares for the A3 step — answered the SAME content question about a THIRD
+    artefact with a private `==` against ONE token, so it had a DISCLOSED tier
+    and no UNDISCLOSED one. Measured on the same three trees, run verbatim as
+    the flow runs it:
+
+        analog_a3_netlist_gen_check   rc 0 / rc 0 (disclosed) / rc 0
+        --json sha256                 6c3a3a36 / 7b1d5477 / 6c3a3a36
+
+    design-bound and SILENT byte-identical; the tree that DISCLOSED a library
+    default the only one marked down. Silence ranked ABOVE disclosure. The
+    invariant in section 4 was supposed to make this impossible and did not,
+    because it was parameterised over an ENUMERATED two artefacts and the third
+    was never added to the list. It now DERIVES its subjects.
+
 THE RULES UNDER TEST, with no tool, step or block name in them:
 
     Two gates that certify ONE artefact must not disagree about it. One may
@@ -65,6 +81,7 @@ no design content, no PDK SKU, no vendor, no part number.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -88,6 +105,12 @@ A4_GATE_OF_RECORD = PROGRAMS / "analog_a4_corner_sweep_check.py"
 HM_DECLARED_GATE = PROGRAMS / "analog_hardmacro_check.py"
 HM_STEP_GATE = PROGRAMS / "analog_a8_hardmacro_gen_check.py"
 HM_LIBERTY_GATE = PROGRAMS / "analog_liberty_nonzero_delay_check.py"
+
+#: The gate the FLOW declares for the A3 step, and the only program that
+#: certifies `phase3/analog/<block>/<block>.sp`. Its SECOND consumer is not a
+#: program but `analog_one_shot_runner`, which reads the same producer sidecar
+#: through the shared whitelist to write the run record — see section 5.
+A3_GATE = PROGRAMS / "analog_a3_netlist_gen_check.py"
 
 #: The gates that certify `phase3/analog/<block>/pre_vs_post.json`. The FLOW
 #: declares the first; the A-track runner runs the second.
@@ -231,7 +254,7 @@ def _gds_bytes(cellname: str) -> bytes:
 
 def _project(root: Path, design_content, derived_content=None,
              blocks=BLOCKS, drift_pct: float = 1.0,
-             hardmacro: bool = True) -> Path:
+             hardmacro: bool = True, netlist_bytes: int = 0) -> Path:
     """A complete analog tree carrying every artefact these gates read.
 
     `design_content`  — what the CORNER artefact (the gate of record's own
@@ -259,12 +282,18 @@ def _project(root: Path, design_content, derived_content=None,
         d.mkdir(parents=True, exist_ok=True)
         (d / "spec.json").write_text(json.dumps({"block": b, "specs": []}))
         (d / "topology.md").write_text("# topology\nlibrary topology\n")
-        (d / f"{b}.sp").write_text(
-            f"* {b} — synthetic block netlist for this fixture\n"
-            f"* every geometry below is a library nominal, on purpose\n"
-            f".subckt {b} vdd vss vin vout\n"
-            f"xm1 vout vin vss vss nch w=8 l=1\n"
-            f".ends {b}\n")
+        # `netlist_bytes` pads the deck past A3's 200-byte substance floor.
+        # The DEFAULT is deliberately below it: at 193 bytes this deck is the
+        # thin tree A3's own value rule owns, and section 5's ordering control
+        # depends on it staying that way.
+        head = (f"* {b} — synthetic block netlist for this fixture\n"
+                f"* every geometry below is a library nominal, on purpose\n")
+        body = (f".subckt {b} vdd vss vin vout\n"
+                f"xm1 vout vin vss vss nch w=8 l=1\n"
+                f".ends {b}\n")
+        while len((head + body).encode()) < netlist_bytes:
+            head += "* synthetic fixture padding\n"
+        (d / f"{b}.sp").write_text(head + body)
         if design_content is not None:
             (d / "netlist_provenance.json").write_text(json.dumps({
                 "block": b,
@@ -344,13 +373,15 @@ def _tier(cp) -> str:
     return CERTIFIED_BOUND
 
 
-def _tiers(prog: Path, tmp_path: Path, tag: str) -> dict:
+def _tiers(prog: Path, tmp_path: Path, tag: str, **kw) -> dict:
     """The tier *prog* reaches on each of the three trees."""
     return {
-        "bound": _tier(_run(prog, _project(tmp_path / f"{tag}_d", SIZED))),
+        "bound": _tier(_run(prog, _project(tmp_path / f"{tag}_d", SIZED,
+                                           **kw))),
         "structure_only": _tier(
-            _run(prog, _project(tmp_path / f"{tag}_s", STRUCTURE_ONLY))),
-        "silent": _tier(_run(prog, _project(tmp_path / f"{tag}_n", None))),
+            _run(prog, _project(tmp_path / f"{tag}_s", STRUCTURE_ONLY, **kw))),
+        "silent": _tier(_run(prog, _project(tmp_path / f"{tag}_n", None,
+                                            **kw))),
     }
 
 
@@ -803,17 +834,196 @@ def test_the_ceiling_is_a_ceiling_and_not_a_lock(tmp_path):
     assert got.refused is None, got
 
 
+# ── WHY THIS TEST NO LONGER TAKES A LIST OF SUBJECTS ─────────────────────
+# It used to be parameterised over an ENUMERATED two artefacts —
+# `pre_vs_post.json` and the hardmacro package — with the docstring "it is the
+# cheapest thing that reddens when the next gate is added with its own copy".
+# It was not. `analog_a3_netlist_gen_check` answered the same question about a
+# THIRD artefact with a private `==` against one token, in the same round that
+# claimed the class closed, and this test stayed green because the A3 netlist
+# was never in the list. AN ENUMERATION YOU MUST REMEMBER TO EXTEND IS NOT AN
+# INVARIANT: it is a record of what somebody remembered last time.
+#
+# So the subjects are DERIVED from the tree. Whatever asks the question is a
+# subject, the day it is written, without anyone adding it anywhere.
+#
+# WHAT IT COVERS, stated plainly so the coverage is reviewable and not assumed:
+#
+#   (A) MEMBERSHIP, derived: every non-test program under `programs/` whose
+#       source mentions the record's field name. Nothing is listed here; the
+#       set is whatever the tree contains.
+#   (B) THE SHARED SURFACE, derived: the public callables in
+#       `_analog_a_check_common` that answer the content question, found by
+#       introspection. A new helper joins the surface by existing.
+#   (C) THE OBLIGATION, two clauses:
+#         A. a subject must REFERENCE the shared surface at all;
+#         B. no subject may COMPARE against the producer's raw tokens — the
+#            string literals, or a `DESIGN_CONTENT_*` constant holding one.
+#            That is the exact shape of every divergence measured so far, and
+#            it is per-SITE rather than per-file.
+#
+# WHAT IT DOES NOT COVER, and these are real holes, not caveats:
+#
+#   * A file that references the surface ONCE and still answers privately
+#     somewhere else with `raw == CONTENT_STRUCTURE_ONLY`. The class constant
+#     and the raw token are the SAME STRING, so clause B — which keys on the
+#     NAME — cannot tell that compare from a legitimate one on a classifier's
+#     output. Clause A catches it only if the file calls nothing shared at all.
+#   * A gate that reaches the record through a key path built at runtime and
+#     never spells the field name as a literal: clause A's membership scan
+#     would not see it.
+#   * A gate that copies the record into a DIFFERENTLY NAMED field and grades
+#     that. Nothing here can see a rename.
+#
+# The two named checks the enumerated version made — that a specific helper
+# exists and that specific gates call it — survive below as
+# `test_the_named_per_artefact_rules_are_the_ones_the_gates_call`, which is a
+# specialisation of this, not the invariant.
+
+#: Programs are the subjects; their tests are not (a test naming the field is
+#: describing the rule, not answering it).
+def _subject_programs() -> list:
+    """Every non-test program under `programs/` that touches the record.
+
+    DERIVED, not listed. `_analog_a_check_common` is excluded because it IS the
+    shared site — the one file where the producer's raw tokens are translated
+    into the class the consumers rank on."""
+    import _analog_a_check_common as _acc
+    field = _acc.DESIGN_CONTENT_FIELD
+    out = []
+    for p in sorted(PROGRAMS.glob("*.py")):
+        if p.name == "_analog_a_check_common.py":
+            continue
+        try:
+            src = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:                                 # pragma: no cover
+            continue
+        if field in src:
+            out.append(p)
+    return out
+
+
+def _shared_surface() -> set:
+    """The public names in `_analog_a_check_common` that ANSWER the content
+    question, found by introspection so a new helper joins by existing."""
+    import _analog_a_check_common as _acc
+    return {n for n in dir(_acc)
+            if not n.startswith("_") and callable(getattr(_acc, n))
+            and (n.startswith("content_") or n.endswith("_content"))}
+
+
+def _raw_token_names() -> tuple:
+    """`(constant names, string literals)` of the PRODUCER's vocabulary.
+
+    Derived from the shared module: a `DESIGN_CONTENT_*` constant whose value is
+    a disclosed token, or the whitelist itself. The CLASS vocabulary
+    (`CONTENT_*`) is deliberately not here — comparing a classifier's OUTPUT
+    against it is the correct shape."""
+    import _analog_a_check_common as _acc
+    disclosed = _acc.DESIGN_CONTENT_DISCLOSED
+    names = {n for n in dir(_acc) if n.startswith("DESIGN_CONTENT_")
+             and (getattr(_acc, n) in disclosed
+                  or getattr(_acc, n) == disclosed)}
+    return names, set(disclosed)
+
+
+def _names_in(tree) -> set:
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name):
+            out.add(n.id)
+        elif isinstance(n, ast.Attribute):
+            out.add(n.attr)
+    return out
+
+
+def _raw_token_compares(tree, names: set, literals: set) -> list:
+    """Every `Compare` whose operands include a raw producer token — directly,
+    or inside a tuple/list an `in` test is run against."""
+    hits = []
+
+    def _flat(node):
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            for e in node.elts:
+                yield from _flat(e)
+        else:
+            yield node
+
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Compare):
+            continue
+        for operand in [n.left] + list(n.comparators):
+            for o in _flat(operand):
+                nm = (o.id if isinstance(o, ast.Name)
+                      else o.attr if isinstance(o, ast.Attribute) else None)
+                if nm in names:
+                    hits.append((n.lineno, nm))
+                    break
+                if isinstance(o, ast.Constant) and o.value in literals:
+                    hits.append((n.lineno, repr(o.value)))
+                    break
+    return hits
+
+
+def test_one_rule_per_artefact_not_one_per_gate():
+    """THE INVARIANT, with its subjects DERIVED from the tree.
+
+    Clause A: every program that touches the record must reach the shared
+    surface. A program that mentions the field and references nothing shared is
+    answering the content question privately, whatever else it does — which is
+    literally what `analog_a3_netlist_gen_check` was doing when
+    `grep -c 'classify_design_content\\|content_class' ` over it returned 0.
+    """
+    surface = _shared_surface()
+    assert surface, "the shared content surface is empty — nothing to route to"
+    offenders = {}
+    for p in _subject_programs():
+        tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        if not (_names_in(tree) & surface):
+            offenders[p.name] = "references no shared content rule"
+    assert not offenders, (
+        f"program(s) answer the design-content question without going through "
+        f"`_analog_a_check_common` — a private copy is how two consumers over "
+        f"one artefact came to disagree: {offenders}. The shared surface is "
+        f"{sorted(surface)}.")
+
+
+def test_no_consumer_compares_against_the_producers_raw_token():
+    """Clause B, and it is the one that would have caught THIS round.
+
+    A consumer compares the CLASS `classify_design_content` returns. Comparing
+    against the raw token the producer writes is a second answer to the shared
+    question, and it is how a gate ended up with a DISCLOSED tier and no
+    UNDISCLOSED one: `(_sidecar(project, b) or {}).get("design_content") ==
+    DESIGN_CONTENT_STRUCTURE_ONLY` names one of three answers and silently
+    merges the other two.
+    """
+    names, literals = _raw_token_names()
+    assert names and literals, "the producer vocabulary derived empty"
+    offenders = {}
+    for p in _subject_programs():
+        tree = ast.parse(p.read_text(encoding="utf-8", errors="replace"))
+        hits = _raw_token_compares(tree, names, literals)
+        if hits:
+            offenders[p.name] = hits
+    assert not offenders, (
+        f"a consumer compares against the PRODUCER's raw design-content token "
+        f"instead of the class the shared classifier returns "
+        f"(file -> [(line, token)]): {offenders}")
+
+
 @pytest.mark.parametrize("artefact,gates,helper", [
     ("pre_vs_post.json", PVP_GATES, "pre_vs_post_content"),
     ("hardmacro package", HM_GATES, "hardmacro_content"),
+    ("<block>.sp", (A3_GATE,), "netlist_content"),
 ])
-def test_one_rule_per_artefact_not_one_per_gate(artefact, gates, helper):
-    """Every gate that certifies one artefact answers the content question
-    through ONE site. A copied predicate is how the last two divergences
-    happened: A7 kept a private `_CONTENT_CHAIN` ordered nearest-first, and the
-    Liberty gate kept a private one the two A8 gates never got. This is a
-    structural assertion on purpose — it is the cheapest thing that redden
-    when the next gate is added with its own copy."""
+def test_the_named_per_artefact_rules_are_the_ones_the_gates_call(
+        artefact, gates, helper):
+    """The SPECIALISATION, kept because it says something the derived invariant
+    cannot: that the gates over ONE artefact reach the shared surface at the
+    helper written FOR that artefact, not merely somewhere on it. It is no
+    longer the invariant, and it is no longer where a new artefact has to be
+    remembered — the two tests above cover a new one the day it appears."""
     import _analog_a_check_common as _acc
     assert hasattr(_acc, helper), (
         f"the shared rule for {artefact} does not exist at a shared site")
@@ -823,3 +1033,201 @@ def test_one_rule_per_artefact_not_one_per_gate(artefact, gates, helper):
             f"{g.name} certifies {artefact} without going through the shared "
             f"rule `_analog_a_check_common.{helper}` — a private copy is how "
             f"two gates over one artefact came to disagree")
+
+
+# ═══ 5. THE A3 NETLIST — the artefact the enumeration above never covered ═══
+# THE MEASUREMENT, run verbatim as `flow/phase1_phase2_phase3.yaml` runs this
+# gate (`analog_a3_netlist_gen_check . --json reports/analog/a3_netlist.json`)
+# on a completed benchmark tree carrying GDS/LEF/Liberty/DRC/LVS:
+#
+#   design-bound    rc=0  PASS: ... 2/2 block(s) clean   --json 6c3a3a36e0d812b0
+#   silent          rc=0  PASS: ... 2/2 block(s) clean   --json 6c3a3a36e0d812b0
+#   structure-only  rc=0  PASS + STRUCTURE_ONLY sentinel --json 7b1d547773af32f5
+#
+# Design-bound and silent BYTE-IDENTICAL; the DISCLOSED tree the only one marked
+# down. Silence ranked ABOVE disclosure — the exact inversion the rest of this
+# file exists to remove, in the one gate that had a disclosed tier and no
+# undisclosed one.
+#
+# The netlist decks below are padded past A3's 200-byte substance floor on
+# purpose: the DEFAULT fixture deck is 193 bytes, and a tree that fails for a
+# value reason cannot show anything about content.
+A3_SUBSTANTIVE = 400
+
+
+def test_the_flow_declared_a3_gate_names_what_the_netlist_contains(tmp_path):
+    """THE HEADLINE. Pre-fix this gate answered rc 0 on all three trees, and it
+    is the gate the FLOW runs for this step, so that certification is what the
+    flow record inherits."""
+    bound = _run(A3_GATE, _project(tmp_path / "d", SIZED,
+                                   netlist_bytes=A3_SUBSTANTIVE))
+    so = _run(A3_GATE, _project(tmp_path / "s", STRUCTURE_ONLY,
+                                netlist_bytes=A3_SUBSTANTIVE))
+    silent = _run(A3_GATE, _project(tmp_path / "n", None,
+                                    netlist_bytes=A3_SUBSTANTIVE))
+
+    assert bound.returncode == 0, _both(bound)
+    assert bound.stdout.startswith("PASS:"), bound.stdout
+
+    assert so.returncode == 0, _both(so)
+    assert so.stdout.startswith("PASS_STRUCTURE_ONLY:"), (
+        f"a netlist rendered from a LIBRARY TOPOLOGY was certified by the "
+        f"step's declared gate in the same tier as a design's:\n{so.stdout}")
+    assert "STRUCTURE_ONLY:" in _both(so)
+
+    assert silent.returncode == 1, (
+        f"the step's DECLARED gate certified (rc={silent.returncode}) a "
+        f"netlist with nothing anywhere saying what circuit is in it — and it "
+        f"certified it in the SAME tier as the design-bound tree, while the "
+        f"tree that disclosed a library default was marked down")
+    assert "A3_DESIGN_CONTENT_UNDECLARED" in _both(silent)
+
+
+def test_the_a3_gate_writes_a_different_artefact_for_a_different_tree(
+        tmp_path):
+    """The flow runs this gate as `... --json reports/analog/a3_netlist.json`,
+    and that document is what a machine consumer reads. Pre-fix its sha256 was
+    IDENTICAL on the design-bound and the silent tree, so no consumer
+    downstream of the flow could tell those two apart either."""
+    shas = {}
+    for tag, dc in (("d", SIZED), ("s", STRUCTURE_ONLY), ("n", None)):
+        project = _project(tmp_path / tag, dc, netlist_bytes=A3_SUBSTANTIVE)
+        out = tmp_path / f"{tag}.json"
+        _run(A3_GATE, project, "--json", str(out))
+        shas[tag] = hashlib.sha256(out.read_bytes()).hexdigest()
+    assert len(set(shas.values())) == 3, (
+        f"the artefact the FLOW writes for the A3 step does not distinguish a "
+        f"design-bound run, a disclosed library default and a silent one: "
+        f"{shas}")
+
+
+def test_the_a3_gate_and_the_run_record_agree_on_every_tree(tmp_path):
+    """THE INVARIANT ITSELF at A3, and the divergence that let the bug through.
+
+    Two consumers read ONE artefact: the GATE (private `==`, pre-fix) and
+    `analog_one_shot_runner`, which reads the same producer sidecar through the
+    SHARED whitelist to write the run record. Pre-fix, on the silent tree, the
+    gate certified design-bound while the run record — asking the same file the
+    same question through the shared site — recorded NO content at all."""
+    import analog_one_shot_runner as R
+
+    for tree, dc, want in (("bound", SIZED, CERTIFIED_BOUND),
+                           ("structure_only", STRUCTURE_ONLY, CERTIFIED_SO),
+                           ("silent", None, REFUSED)):
+        project = _project(tmp_path / f"agree_{tree}", dc,
+                           blocks=("blk_alpha",),
+                           netlist_bytes=A3_SUBSTANTIVE)
+        gate = _tier(_run(A3_GATE, project))
+        res = R.step_for_block(project, {"name": "blk_alpha", "type": "ldo"},
+                               "A3_netlist_gen")
+        record = (REFUSED if res.status == "FAIL"
+                  else CERTIFIED_SO if res.status == "PASS_STRUCTURE_ONLY"
+                  else CERTIFIED_BOUND)
+        assert gate == record == want, (
+            f"the gate and the run record disagree about the {tree!r} tree "
+            f"(gate={gate}, run record={record} from status "
+            f"{res.status!r}/extras {res.extras}); both read "
+            f"phase3/analog/blk_alpha/netlist_provenance.json")
+
+
+def test_the_a3_run_record_names_the_content_it_certified(tmp_path):
+    """The other half of the same agreement: what the run record SAYS, not only
+    which tier it lands in. A step certified in the disclosed tier must carry
+    the disclosed token; a design-bound one must carry the design-bound token
+    and say `structure_only: False`."""
+    import analog_one_shot_runner as R
+
+    so = R.step_for_block(
+        _project(tmp_path / "so", STRUCTURE_ONLY, blocks=("blk_alpha",),
+                 netlist_bytes=A3_SUBSTANTIVE),
+        {"name": "blk_alpha", "type": "ldo"}, "A3_netlist_gen")
+    assert so.status == "PASS_STRUCTURE_ONLY", (so.status, so.detail)
+    assert so.extras.get("design_content") == STRUCTURE_ONLY, so.extras
+    assert so.extras.get("structure_only") is True, so.extras
+
+    bound = R.step_for_block(
+        _project(tmp_path / "b", SIZED, blocks=("blk_alpha",),
+                 netlist_bytes=A3_SUBSTANTIVE),
+        {"name": "blk_alpha", "type": "ldo"}, "A3_netlist_gen")
+    assert bound.status == "PASS", (bound.status, bound.detail)
+    assert bound.extras.get("design_content") == SIZED, bound.extras
+    assert bound.extras.get("structure_only") is False, bound.extras
+
+
+def test_the_a3_disclosure_survives_the_way_the_flow_actually_runs_it(
+        tmp_path):
+    """`--json` is the only path the flow ever takes for this gate, and
+    `flow_compliance_check._stdout_signals_structure_only` reads the line-start
+    token out of the concatenated streams. A disclosure that only exists on the
+    bare console path is a disclosure the flow auditor never sees."""
+    project = _project(tmp_path, STRUCTURE_ONLY, netlist_bytes=A3_SUBSTANTIVE)
+    cp = _run(A3_GATE, project, "--json", str(tmp_path / "r.json"))
+    assert cp.returncode == 0, _both(cp)
+    assert any(l.lstrip().startswith("STRUCTURE_ONLY:")
+               for l in _both(cp).splitlines()), (
+        f"run the way the flow runs it, the gate disclosed nothing:\n"
+        f"{_both(cp)!r}")
+
+
+def test_a_thin_netlist_is_still_a_thin_netlist(tmp_path):
+    """ORDERING CONTROL for section 5, and the property the fix had to keep: a
+    deck below the substance floor is diagnosed as THAT, even on a tree that
+    also says nothing about what is in it. The content question is asked LAST,
+    behind every value rule. Holds pre-fix and post-fix."""
+    cp = _run(A3_GATE, _project(tmp_path, None))      # 193 B — the thin deck
+    assert cp.returncode == 1
+    out = _both(cp)
+    assert "A3_NETLIST_TOO_SMALL" in out, out
+    assert "A3_DESIGN_CONTENT_UNDECLARED" not in out, out
+
+
+def test_an_empty_subckt_shell_is_still_an_empty_subckt_shell(tmp_path):
+    """The other ordering control this gate owns: a `.subckt` wrapping no
+    device is a placeholder, and that is the finding — on a substantive-sized,
+    silent deck where the content rule would otherwise fire. Holds pre-fix and
+    post-fix."""
+    root = _project(tmp_path, None, netlist_bytes=A3_SUBSTANTIVE)
+    for b in BLOCKS:
+        p = root / "phase3" / "analog" / b / f"{b}.sp"
+        p.write_text(p.read_text().replace(
+            f"xm1 vout vin vss vss nch w=8 l=1\n", "* the circuit goes here\n"))
+    cp = _run(A3_GATE, root)
+    assert cp.returncode == 1
+    out = _both(cp)
+    assert "A3_NETLIST_NO_DEVICES" in out, out
+    assert "A3_DESIGN_CONTENT_UNDECLARED" not in out, out
+
+
+def test_a_disclosed_library_netlist_still_certifies_the_step(tmp_path):
+    """NEGATIVE CONTROL. The disclosed tier is a CERTIFICATION, not a softer
+    failure: rc 0, and the step is counted covered. Only silence costs.
+    Refusing an honest ceiling is what teaches the next run to stop being
+    honest."""
+    project = _project(tmp_path, STRUCTURE_ONLY, netlist_bytes=A3_SUBSTANTIVE)
+    out = tmp_path / "r.json"
+    cp = _run(A3_GATE, project, "--json", str(out))
+    assert cp.returncode == 0, _both(cp)
+    doc = json.loads(out.read_text())
+    assert doc["verdict"] == "PASS_STRUCTURE_ONLY", doc
+    assert doc["blocks_pass"] == len(BLOCKS), doc
+    assert doc["blocks_structure_only"] == len(BLOCKS), doc
+    assert doc.get("blocks_fail", 0) == 0, doc
+
+
+def test_the_gate_the_flow_declares_for_a3_is_the_one_verified_here():
+    """The same membership guard sections 1 and 3 carry. The A3 step's gate is
+    an `all_of`; the sibling clause `analog_netlist_pdk_check` judges model
+    includes and body connections and does not answer the content question,
+    which is safe only while the combinator is a conjunction — a clause in an
+    `all_of` can only make the step stricter."""
+    declared = _declared_programs("A3")
+    assert declared, (
+        f"no `program_exit_zero` clause found in the A3 step of {FLOW_YAML}")
+    known = {A3_GATE.stem, "analog_netlist_pdk_check"}
+    assert set(declared) <= known, (
+        f"the flow declares {sorted(set(declared) - known)} for the A3 step, "
+        f"and no test measures whether it agrees with {sorted(known)} about "
+        f"`<block>.sp`")
+    assert _gate_combinator("A3") == "all_of", (
+        f"the A3 gate is no longer a conjunction, so a clause that does not "
+        f"ask the content question can now certify the step by itself")

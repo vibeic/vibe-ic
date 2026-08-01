@@ -77,8 +77,8 @@ from typing import List, Optional
 
 from _analog_a_check_common import (
     BLOCK_LIST_ABSENT_REASON,
-    DESIGN_CONTENT_STRUCTURE_ONLY,
-    content_disclosed,
+    CONTENT_STRUCTURE_ONLY,
+    content_class_of_artefact, content_disclosed,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
     resolve_block_artefact, structure_only_disclosure,
@@ -298,26 +298,25 @@ def _content_undisclosed_fail(block: str, data: dict, rel: str
                    f"`design_content` record; absence of it is not evidence of "
                    f"design content, and an artefact that will not say what "
                    f"circuit it simulated must not certify this step. Declaring "
-                   f"`{DESIGN_CONTENT_STRUCTURE_ONLY}` is not a penalty — it "
+                   f"`{CONTENT_STRUCTURE_ONLY}` is not a penalty — it "
                    f"certifies, in its own disclosed tier."),
     }
 
 
 def _structure_only_blocks(project: Path, blocks: list) -> list:
     """Blocks whose A4 artefact discloses that the circuit it measured carries
-    NO design-bound content. Read from the artefact, never inferred."""
+    NO design-bound content. Read from the artefact, never inferred, and
+    CLASSIFIED through the shared site rather than by a local `==` against the
+    producer's raw token — this list and the certification rule above answer
+    the same question about the same file, and two readings of one artefact are
+    free to drift apart."""
     out = []
     for block in blocks:
         path, found = resolve_block_artefact(
             project, block, "corner_results.json", DECLARED_PHASE)
         if not found:
             continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if isinstance(data, dict) and \
-                data.get("design_content") == DESIGN_CONTENT_STRUCTURE_ONLY:
+        if content_class_of_artefact(path) == CONTENT_STRUCTURE_ONLY:
             out.append(block)
     return out
 
