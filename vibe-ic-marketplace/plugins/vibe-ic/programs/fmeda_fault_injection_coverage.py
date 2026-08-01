@@ -355,14 +355,33 @@ def _rcvar_base(mod: str) -> str:
 
 def _module_ports(text: str, module: str) -> List[Tuple[str, str, int]]:
     """Best-effort port list (name, dir, width) for `module`. Handles ANSI
-    `input [W-1:0] name` headers. Width defaults to 1. Pure-ish (regex)."""
+    `input [W-1:0] name` headers. Width defaults to 1. Pure-ish (regex).
+
+    The SystemVerilog net/variable-TYPE keyword between the direction and the
+    packed dimension must be SKIPPED, not captured as the port name. The old
+    pattern skipped only `reg|wire`, so `output logic [56:0] data_o` — the
+    lowRISC / OpenTitan house style, and the SV ANSI default — parsed as
+    name=`logic`, width=1, losing both the real name and the `[56:0]` width.
+    Measured on opentitan_aes x sky130A: every port of
+    `prim_secded_inv_64_57_dec` (`output logic [56:0] data_o`,
+    `output logic [6:0] syndrome_o`, `output logic [1:0] err_o`) collapsed to
+    `('logic', 'output', 1)`, so the ECC decoder had no detect port and no
+    corrected-data output, `detect_safety_mechanism` found no decoder and
+    returned NOT_APPLICABLE, and Step FS1 VACUOUSLY passed on a design that
+    ships a genuine SEC-DED ECC + declares it (`SECDED` matches the strong
+    safety-declaration regex) — an ASIL-D FMEDA that was never run.
+
+    Skip a run of net/var-type + signedness keywords (`logic`, `bit`, `var`,
+    `signed`, `unsigned`, `reg`, `wire`, e.g. `output wire signed [7:0] x`)
+    before the optional dimension. chip-AGNOSTIC — keyed on SV syntax only."""
     # isolate the module header up to the first ');'
     m = re.search(r"\bmodule\s+" + re.escape(module) + r"\b(.*?)\)\s*;",
                   text, re.DOTALL)
     body = m.group(1) if m else ""
     ports: List[Tuple[str, str, int]] = []
     for pm in re.finditer(
-            r"(?i)\b(input|output|inout)\b\s*(?:reg|wire)?\s*"
+            r"(?i)\b(input|output|inout)\b\s*"
+            r"(?:(?:reg|wire|logic|bit|var|signed|unsigned)\b\s*)*"
             r"(?:\[\s*(\d+)\s*:\s*(\d+)\s*\])?\s*([A-Za-z_]\w*)", body):
         d, hi, lo, name = pm.groups()
         w = (abs(int(hi) - int(lo)) + 1) if hi is not None else 1
