@@ -204,6 +204,32 @@ def main(argv=None) -> int:
     ap.add_argument("--json", dest="json_out")
     a = ap.parse_args(argv)
 
+    # vibe-ic#619 — THIS CHECK'S POPULATION IS THE PROGRAM REGISTRY, not a
+    # project: it builds one fresh empty project PER GATE and never reads the
+    # `project` argument. It still accepted one, ignored it, and answered PASS
+    # — byte-identical output for a path that exists, a path that is empty, and
+    # a path that is not there.
+    #
+    # That is the exact shape this file exists to detect. Its own subject is
+    # "a zero denominator that exits 0 is a silent pass", and it was reporting
+    # success over a population it had never established: a run pointed at a
+    # typo'd path read PASS. Both registry-wide meta-checks caught it the moment
+    # it joined the registry it audits — `PASS_ON_A_PROJECT_THAT_IS_NOT_THERE`.
+    #
+    # A path it will not read is a path it cannot vouch for, so an absent one is
+    # NOT_CHECKED (rc 2, the disclosed-skip convention) rather than a pass. The
+    # default `.` always exists, so the standing invocation
+    # (`repo_hygiene_gates.sh`, no argument) is unchanged.
+    _proj = Path(a.project)
+    if not _proj.exists():
+        print(f"[SKIP] {TOOL}: the project path {a.project!r} does not exist. "
+              f"This check's population is the PROGRAM REGISTRY — it probes "
+              f"each gate against its own fresh empty project and never reads "
+              f"the project argument — so it cannot answer for that path, and "
+              f"reporting PASS for a project that is not there is the very "
+              f"defect it looks for in others.", file=sys.stderr)
+        return RC_CANNOT_PROBE
+
     verdict, findings, stats = audit(Path(a.programs_dir), a.timeout, a.workers)
     rep = {"tool": TOOL, "verdict": verdict, "findings": findings, **stats}
     if a.json_out:
@@ -218,8 +244,12 @@ def main(argv=None) -> int:
         print(f"[FAIL] {f['gate']}: {f['kind']} — {f['detail']}", file=sys.stderr)
         if f.get("output_tail"):
             print(f"    said: {f['output_tail']}", file=sys.stderr)
-    print(f"{TOOL}: {verdict} — {stats['gates_probed']} gate(s) probed against "
-          f"an empty project; {stats['stated_zero_population']} stated a zero "
+    # #619 — say WHAT was audited. "probed against an empty project" reads, to
+    # anyone who passed a project path, as a statement about THEIR project.
+    print(f"{TOOL}: {verdict} — {stats['gates_probed']} gate(s) probed, each "
+          f"against its OWN fresh empty project (the population is the program "
+          f"registry under {a.programs_dir}; {a.project!r} is not read); "
+          f"{stats['stated_zero_population']} stated a zero "
           f"population, of which {stats['zero_and_refused']} refused and "
           f"{stats['zero_and_exited_0']} exited 0 "
           f"({stats['exempted']} exempted, {stats['unrunnable']} unrunnable)")
