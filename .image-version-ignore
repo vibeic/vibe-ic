@@ -61,3 +61,11 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/container_image_provenance.py
 # entries above, and here it would also quietly invite someone to "refresh" the
 # log itself. The run is history; the parser under test is not.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_scan_chain_insert.py
+
+# The image a MEASUREMENT was taken in, not a pointer the code uses. The test
+# resolves its image from `tools/vibeic-eda/VERSION` at runtime (`_image()`), so
+# it already follows the anchor; the tag in the docstring records WHERE the
+# `MACRO TAPCELL_ASAP7_75t_R` / `CLASS CORE WELLTAP` / `SITE asap7sc7p5t` lines
+# were read. Advancing it would say I measured on 0.2.52, which I did not — the
+# same measurement-honesty violation as the entries above.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue586_tapcell_master_must_be_explicit.py
