@@ -158,7 +158,38 @@ existed. The cost is real and the choice is the owner's:
                                      known regressions  (mean of 40)
   ownership (default)  851 (45.5%)   0 / 3              16.8             20
   reference-capped    1652 (88.3%)   2 / 3              19.8             48
+  import-edge          --            see below         110-158          176
   reference           1849 (98.9%)   3 / 3              48.5            213
+
+vibe-ic#565 — THE IMPORT-EDGE ROW, measured 2026-08-01 because the decision it
+feeds was being asked without it. The mechanism shipped with #534 and the
+DEFAULT was left at `ownership` pending a cost that nobody had taken.
+
+On the exact regression #565 is about — `phase3_one_shot_runner.py` changes and
+`test_spm_ihp_openrcx_captable_layout.py` is the file that pins the behaviour a
+734-line edit silently reverted for three releases:
+
+    mode                selects    catches that test
+    ownership              16         no
+    reference-capped       16         no
+    import-edge           176         YES
+    reference             258         YES
+
+Selection size on three real landings of this repo (v1.9.19/20/21):
+
+    ownership          21    26    27
+    reference-capped   35    47    48
+    import-edge       110   157   158
+
+Wall-clock with the real CI command on the largest of those (v1.9.18's diff):
+
+    ownership     27 files     484 tests     49s
+    import-edge  158 files    3276 tests    409s      (8.4x)
+
+So import-edge buys the catch that `reference-capped` does not, at ~2/3 of
+`reference`'s file count — and costs roughly eight ownership lanes per landing.
+Whether that trade is worth making the DEFAULT is still the owner's call; what
+changed is that the call now has its number.
 
 Wall-clock, measured with the real CI command (``pytest -q --maxfail=10
 --timeout=180``):
