@@ -24801,6 +24801,38 @@ _V1_6_512_ENCODING_PROSE_RE = re.compile(
     r"(?:\s*[:\-—–]\s*(?P<desc>[^\n,]{1,80}))?",
 )
 
+# vibe-ic#592 — Tier 2b. The Tier-2 row below hard-requires column 1 to be a
+# BARE BINARY string, so a table that states the code in hex or in a sized
+# literal is invisible to it. Measured on the OpenTitan AES register doc, whose
+# `CTRL_SHADOWED.MODE` table is
+#
+#     | Value | Enum Name | Description |
+#     | 0x01 | AES_ECB | 6'b00_0001: Electronic Codebook (ECB) mode. |
+#
+# every existing path yields ZERO typed `enumerated_values`: Tier 2 needs binary
+# in column 1, the Tier-1 prose regex needs `<binary>[:=]<mnem>` adjacency (the
+# binary here is followed by a sentence), and the v1.7.72 code-literal lifter
+# rejects the row because it declares TWO literals (the hex and the col-3
+# binary) and that lifter requires exactly one.
+#
+# SELF-CHECKING, which is what makes a numeric first column safe to lift at all:
+# a row is accepted only when the DESCRIPTION carries a code literal that renders
+# to the SAME width-`width` pattern as column 1. The two literals are independent
+# statements by the document, and requiring them to agree is what stops an
+# arbitrary `| number | name | text |` table — a register offset map, a pin list
+# — from being read as an encoding. Under-extraction is the safe direction here;
+# a table that states the code once is simply not lifted by this tier.
+#
+# chip-AGNOSTIC: pipe-table grammar plus the shared code-literal renderer. No
+# vendor, PDK or design token appears.
+_V1_6_592_ENCODING_TABLE_HEXROW_RE = re.compile(
+    r"^[ \t]*\|\s*[`]?(?P<code>(?:\d+'[bBhHdDoO][0-9a-fA-FxXzZ_]+"
+    r"|0[xX][0-9a-fA-F]+|0[bB][01_]+))[`]?\s*\|\s*"
+    r"[`]?(?P<mnem>[A-Za-z][A-Za-z0-9_]+)[`]?\s*\|"
+    r"(?P<desc>[^|\n]{1,160})?",
+    re.MULTILINE,
+)
+
 _V1_6_512_ENCODING_TABLE_ROW_RE = re.compile(
     r"^\s*\|\s*[`]?(?P<pattern>[01]{1,8})[`]?\s*\|\s*"
     r"[`]?(?P<mnem>[A-Za-z][A-Za-z0-9_]+)[`]?\s*\|"
@@ -25131,6 +25163,39 @@ def _v1_6_512_lift_field_encoding(
             "description": desc,
             "extraction_strategy":
                 "field_encoding_table_row_v1_6_512",
+        })
+        appended += 1
+    # Tier 2b (#592) — pipe-table rows whose code column is hex / sized /
+    # 0b-prefixed rather than a bare binary string. Accepted ONLY when the
+    # description states a literal that renders to the same pattern, so the row
+    # verifies itself; see the regex comment for why that guard is the whole
+    # reason a numeric first column can be lifted safely.
+    for m in _V1_6_592_ENCODING_TABLE_HEXROW_RE.finditer(window_text):
+        code_tok = m.group("code")
+        mnem = m.group("mnem")
+        if not code_tok or not mnem:
+            continue
+        pat = _cl_to_binary_pattern(code_tok, width)
+        if pat is None or len(pat) != width:
+            continue
+        desc = (m.group("desc") or "").strip().lstrip("|").strip()
+        if not any(_cl_to_binary_pattern(t, width) == pat
+                   for t in _CODE_LITERAL_RE.findall(desc)):
+            # The document states the code once. Not lifted — under-extraction
+            # is the safe direction, and an unverified numeric column is how a
+            # register offset map becomes an "encoding".
+            continue
+        key = (pat, mnem)
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        existing.append({
+            "pattern": pat,
+            "mnem": mnem,
+            "meaning": desc or mnem,
+            "description": desc,
+            "extraction_strategy":
+                "field_encoding_table_hexrow_v1_6_592",
         })
         appended += 1
     # v1.6.518 — for #356 P3 ORGANIC. Reserved-field guard for the
