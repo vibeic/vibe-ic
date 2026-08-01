@@ -19,6 +19,16 @@ with substance:
 Failure rules:
   A4_CORNERS_MISSING       — corner_results.json absent
   A4_CORNERS_INVALID_JSON  — present but unparsable
+  A4_NETLIST_ABSENT        — the sweep declares simulated corners while
+                              A3's declared output `<block>.sp` does not
+                              exist, or the producer recorded BLOCKED on
+                              A3. There is no design netlist behind the
+                              measurement.
+  A4_NETLIST_NOT_FROM_A3   — the artefact discloses a deck the sweep
+                              program authored itself
+                              (`netlist_provenance` != `a3_netlist`).
+                              Real ngspice on a stand-in circuit measures
+                              the template library, not the design.
   A4_NO_CORNERS            — corners[] empty / missing
   A4_NO_PASS_SPEC          — no spec_results entry has status=PASS
                               (and at least one is FAIL or all blank)
@@ -67,6 +77,38 @@ from _analog_a_check_common import (
 GATE = "analog_a4_corner_sweep_check"
 SKILL = "ams-sim"
 DECLARED_PHASE = 2
+
+# ── A3→A4 netlist provenance (the subject-of-measurement rules) ────────────
+#
+# WHAT WENT WRONG (measured on a real run). Ten blocks carried a corner_results.json
+# reading `_provenance: "real_ngspice"`, `corners_executed: 9`,
+# `simulator_run: true` — and this gate certified seven of them. A1/A2/A3 were
+# WAIVED for all ten and A3's declared output `<block>.sp` existed for NONE of
+# them, so every deck ngspice consumed was the producer's own built-in
+# testbench, selected by canonical block type. `_provenance` was true about the
+# SIMULATOR and said nothing about the SUBJECT, and this gate read only the
+# former. Nine real corners on a stand-in circuit is a self-test of the
+# plugin's template library; it is not evidence about the design, and it must
+# not reach PASS.
+#
+# TWO RULES, deliberately independent:
+#
+#   A4_NETLIST_NOT_FROM_A3 — the artefact DISCLOSES a deck the producer
+#     authored (`netlist_provenance` present and not `a3_netlist`). Catches an
+#     honest producer.
+#
+#   A4_NETLIST_ABSENT — the artefact declares simulated corners while A3's
+#     declared output `<block>.sp` does not exist ANYWHERE on disk. Catches a
+#     silent one: it is decided by the filesystem, so omitting the provenance
+#     field evades nothing. This is the rule that would have caught the measured run, whose
+#     artefacts carried no provenance field at all.
+#
+# Both are checked BEFORE the value rules below, so a block blocked on A3 is
+# reported as blocked on A3 rather than as a corner-margin miss against a
+# target its circuit never had.
+NETLIST_PROV_OK = "a3_netlist"
+A3_STEP = "A3_netlist_gen"
+A3_SKILL = "analog-netlist-gen"
 
 
 def _worst_corner_margin_fail(data: dict, corners: list) -> Optional[dict]:
@@ -133,6 +175,90 @@ def _worst_corner_margin_fail(data: dict, corners: list) -> Optional[dict]:
     return worst
 
 
+def _netlist_disclosed_fail(project: Path, block: str, data: dict,
+                            rel: str) -> Optional[dict]:
+    """The two rules decided by what the artefact SAYS about itself. Checked
+    BEFORE the value rules: a block blocked on A3, or one whose deck the
+    producer authored, must be reported as that rather than as a corner-margin
+    miss against a target its circuit never had.
+
+    chip-AGNOSTIC: block name, step name and paths only."""
+    # Rule 1 — the producer refused upstream and said so.
+    if data.get("_provenance") == "upstream_netlist_missing" \
+            or data.get("blocked_on") == A3_STEP:
+        return {
+            "block": block, "rule": "A4_NETLIST_ABSENT",
+            "rel_path": rel,
+            "detail": (f"corner_results.json records status "
+                       f"{data.get('status')!r} blocked on {A3_STEP}: "
+                       f"{data.get('required_input')!r} was never produced. "
+                       f"A4 has no netlist of this design to measure — run "
+                       f"skill `{A3_SKILL}`."),
+        }
+    prov = data.get("netlist_provenance")
+    # Rule 2 — disclosed: the deck was not derived from A3's output.
+    if prov is not None and prov != NETLIST_PROV_OK:
+        return {
+            "block": block, "rule": "A4_NETLIST_NOT_FROM_A3",
+            "rel_path": rel,
+            "detail": (f"netlist_provenance={prov!r} — the simulated deck was "
+                       f"authored by the sweep program "
+                       f"({data.get('deck_authored_by') or 'built-in template'}), "
+                       f"not derived from {A3_STEP}'s output "
+                       f"{data.get('netlist_source') or '<none>'}. Real ngspice "
+                       f"on a stand-in circuit measures the template library, "
+                       f"not this design; it cannot certify A4."),
+        }
+    return None
+
+
+def _netlist_absent_fail(project: Path, block: str, data: dict,
+                         corners: list, rel: str) -> Optional[dict]:
+    """The rule decided by the FILESYSTEM rather than by a self-report: the
+    artefact claims a simulation while A3's declared output does not exist
+    anywhere, so the sweep cannot have measured this design's netlist. Omitting
+    `netlist_provenance` evades nothing — this is the rule that catches a
+    producer that says nothing at all, which is how the measured round's
+    artefacts were shaped.
+
+    Checked LAST, immediately before the PASS: it answers "may this be
+    certified?", and must not displace the existing diagnosis of an artefact
+    that is already failing for a value reason. An artefact that claims no
+    simulation is left alone entirely — `A4_NO_SIMULATOR_RUN` already owns
+    that case and says it better."""
+    if data.get("netlist_provenance") is not None:
+        return None                       # disclosed → handled by rules 1-2
+    if not any(isinstance(c, dict) and c.get("simulator_run") is True
+               for c in corners):
+        return None                       # claims no sim → value rules own it
+    sp_path, sp_found = _a3_netlist(project, block)
+    if sp_found:
+        return None
+    return {
+        "block": block, "rule": "A4_NETLIST_ABSENT",
+        "rel_path": rel,
+        "detail": (f"corners declare `simulator_run: true` while {A3_STEP}'s "
+                   f"declared output {sp_path!r} does not exist — the sweep "
+                   f"cannot have simulated this design's netlist, and the "
+                   f"artefact records no `netlist_provenance` saying what it "
+                   f"did simulate. Run skill `{A3_SKILL}`, or have the producer "
+                   f"stamp the deck's origin."),
+    }
+
+
+def _a3_netlist(project: Path, block: str) -> tuple:
+    """(rel_path, found) for A3's declared per-block output. Resolution is the
+    same two-root search `analog_a3_netlist_gen_check` uses, so the two gates
+    can never disagree about whether the netlist exists."""
+    path, found = resolve_block_artefact(
+        project, block, f"{block}.sp", DECLARED_PHASE)
+    try:
+        rel = str(path.relative_to(project))
+    except ValueError:
+        rel = str(path)
+    return rel, found
+
+
 def _check_block(project: Path, block: str
                  ) -> tuple[Optional[str], List[dict]]:
     path, found = resolve_block_artefact(
@@ -156,6 +282,12 @@ def _check_block(project: Path, block: str
             "block": block, "rule": "A4_CORNERS_INVALID_JSON",
             "rel_path": rel, "detail": "top-level not a JSON object",
         }]
+    # SUBJECT before value: a block the producer reported as blocked on A3, or
+    # one whose deck the producer authored, must be reported as that — not as
+    # an empty-corners or corner-margin problem.
+    nl = _netlist_disclosed_fail(project, block, data, rel)
+    if nl is not None:
+        return "FAIL", [nl]
     corners = data.get("corners")
     if not isinstance(corners, list) or not corners:
         return "FAIL", [{
@@ -318,6 +450,12 @@ def _check_block(project: Path, block: str
                        f"the nominal corner is in-spec — a genuine PVT-margin "
                        f"failure the best-corner view hid (#185)"),
         }]
+    # LAST — an otherwise-clean sweep may still be certifying a circuit that
+    # does not exist. Nothing above can see that: every rule so far reads the
+    # artefact's own numbers.
+    nl = _netlist_absent_fail(project, block, data, corners, rel)
+    if nl is not None:
+        return "FAIL", [nl]
     return "PASS", []
 
 

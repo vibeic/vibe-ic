@@ -140,6 +140,16 @@ def _corners(project, block, doc):
     d = project / "phase3" / "analog" / block
     d.mkdir(parents=True, exist_ok=True)
     (d / "corner_results.json").write_text(json.dumps(doc))
+    # A4's declared upstream input. These fixtures are about WHICH corner the
+    # gate grades; a sweep with no netlist behind it never gets that far (the
+    # gate's A4_NETLIST_ABSENT rule stops it), so they carry the netlist a run
+    # that reached A4 would have.
+    (d / f"{block}.sp").write_text(
+        f"* {block} — synthetic block netlist\n"
+        f".subckt {block} vdd vss vin vout\n"
+        f"xm1 vout vin vss vss nch w=8 l=1\n"
+        f"r1 vout vss 100k\n"
+        f".ends {block}\n")
 
 
 def _run_a4(project, *args):

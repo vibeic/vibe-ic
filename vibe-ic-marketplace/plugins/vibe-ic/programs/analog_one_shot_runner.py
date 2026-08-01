@@ -573,13 +573,29 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                               "sky130")]
                     rs_cp = subprocess.run(rs_cmd, capture_output=True,
                                             text=True, timeout=600)
-                    if rs_cp.returncode == 0:
-                        # Real ngspice wrote corner_results.json — re-run
-                        # the substance gate; PASS means real sim
-                        # converged AND met spec_results.status==PASS.
+                    # Re-run the substance gate whenever the sweep left an
+                    # artefact behind — not only when the sweep exited 0.
+                    #
+                    # WHY (measured on a real run). The sweep now REFUSES to simulate a
+                    # block whose A3 netlist is absent and records that refusal
+                    # in corner_results.json (status BLOCKED, blocked_on
+                    # A3_netlist_gen). Exiting non-zero, it used to fall
+                    # straight through to the WAIVED branch below — and WAIVED
+                    # says "artefact not yet emitted", which would now be false:
+                    # the artefact exists and states a named blocker. The
+                    # runner's record must agree with what is on disk, so the
+                    # gate's verdict on that artefact is what gets reported.
+                    # A step blocked on its upstream lands as a NAMED FAIL
+                    # rather than an anonymous deferral no reader can act on.
+                    cr = (project / "phase3" / "analog" / bname
+                          / "corner_results.json")
+                    if rs_cp.returncode == 0 or cr.is_file():
                         cp_real = subprocess.run(cmd, capture_output=True,
                                                   text=True, timeout=1800)
                         if cp_real.returncode == 0:
+                            # PASS means real sim converged AND met
+                            # spec_results.status==PASS AND its deck came from
+                            # A3's netlist (the gate's provenance rules).
                             tail = (rs_cp.stdout.strip().splitlines()[-1]
                                     if rs_cp.stdout else "PASS")
                             return StepResult(
@@ -590,6 +606,14 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                     "extraction_strategy": "real_ngspice",
                                     "low_confidence": False,
                                 })
+                        if cp_real.returncode == 1:
+                            tail = (cp_real.stdout.strip().splitlines()[-1]
+                                    if cp_real.stdout
+                                    else (rs_cp.stderr.strip().splitlines()[-1]
+                                          if rs_cp.stderr else "FAIL"))
+                            return StepResult(
+                                step_name, bname, "FAIL",
+                                time.time() - t0, tail)
 
             # v1.6.171 (#60 P1-6) — when ANALOG_DETERMINISTIC_STUBS=1
             # OR --allow-deterministic-stubs is set, emit a minimal

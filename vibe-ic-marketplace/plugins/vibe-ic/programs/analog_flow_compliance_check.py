@@ -256,6 +256,49 @@ def _pv_flag_signed_off(project: Path, block: str, name: str,
     return matched is True
 
 
+def _a4_signed_off(project: Path, block: str) -> bool:
+    """A4 sign-off evidence, not merely A4's filename.
+
+    Presence alone is NOT evidence, for exactly the reason `_pv_flag_signed_off`
+    above exists. Measured on a real round: ten blocks each carried a
+    corner_results.json and this cell read `PASS` for all ten, while A1/A2/A3
+    read `MISSING` for all ten in the same matrix — A3's declared output
+    `<block>.sp` existed for none of them, so every deck the sweep simulated was
+    its own built-in testbench. A matrix that says "netlist MISSING, corner
+    sweep PASS" for the same block is reporting a measurement of something the
+    run never built.
+
+    Delegates to `analog_a4_corner_sweep_check`'s own provenance predicates so
+    the two can never disagree about the same artefact — the same delegation
+    `_pv_flag_signed_off` makes to the A6 gate. On import failure it degrades to
+    the historic presence check, which is what it always was."""
+    path = None
+    for d in _block_dirs(project, block, "A4"):
+        cand = d / "corner_results.json"
+        if cand.is_file():
+            path = cand
+            break
+    if path is None:
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    try:
+        import analog_a4_corner_sweep_check as _a4
+    except Exception:  # pragma: no cover — degraded to the historic minimum
+        return True
+    rel = str(path)
+    corners = data.get("corners") if isinstance(data.get("corners"), list) else []
+    if _a4._netlist_disclosed_fail(project, block, data, rel) is not None:
+        return False
+    if _a4._netlist_absent_fail(project, block, data, corners, rel) is not None:
+        return False
+    return True
+
+
 def _check_step(project: Path, block: str, step_id: str) -> bool:
     if step_id == "A1":
         return _any_file(project, block, "A1", "spec.json")
@@ -264,7 +307,7 @@ def _check_step(project: Path, block: str, step_id: str) -> bool:
     elif step_id == "A3":
         return _any_glob(project, block, "A3", "*.sp")
     elif step_id == "A4":
-        return _any_file(project, block, "A4", "corner_results.json")
+        return _a4_signed_off(project, block)
     elif step_id == "A5":
         return (_any_file(project, block, "A5", "layout.mag") or
                 _any_glob(project, block, "A5", "*.gds"))
