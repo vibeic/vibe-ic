@@ -374,21 +374,83 @@ _EXIT = {"DONE": 0, "RUNNING_ON_TIME": 0, "RUNNING": 0, "STUCK": 1,
          "DIED": 2, "UNKNOWN": 3}
 
 
+#: The linear phases, earliest first. `analog` and `phase23` are alternative
+#: shapes rather than points on this line, so they are not ordered here — they
+#: are still selected when they are the only evidence present.
+_PHASE_ORDER = ("phase1", "phase2", "phase3")
+
+
+def _phase_was_reached(project: Path, phase: str) -> bool:
+    """Did the run GET to this phase — whether or not it finished it?
+
+    Evidence, in the order it becomes available to a phase that is running:
+    its working tree, any log it writes, or its final report. A phase that
+    was killed has the first two and not the third, and that is exactly the
+    case `_detect_phase` used to be unable to see.
+    """
+    for fname in (project / "reports" / "orchestrator" / _PHASE_REPORTS[phase],
+                  project / "reports" / _PHASE_REPORTS[phase]):
+        if fname.is_file():
+            return True
+    if phase in ("phase2", "phase3") and (project / phase).is_dir():
+        return True
+    for pat in _PHASE_LOG_GLOBS.get(phase, []):
+        try:
+            if any(project.glob(pat)):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def _detect_phase(project: Path) -> str:
-    """auto: the phase with the newest one_shot.json (most recent run),
-    else phase3 if its tree exists, else orchestrator."""
+    """auto: the FURTHEST phase the run reached, not the newest report.
+
+    THE DEFECT (vibe-ic#590). This took "the phase with the newest
+    `one_shot.json`". A phase that was KILLED never writes one, so the only
+    report on disk belonged to the last phase that SUCCEEDED — and `auto`
+    selected it. The failure mode chose the phase that hides it, and the later
+    a run died the more confidently this reported success:
+
+        killed mid-phase2, phase3 never started
+          auto          DONE — verdict=PASS (phase1)      rc 0
+          --phase phase2  STUCK — no output for 8221s     (the true answer)
+
+    Ordering by REACH inverts that. A phase with a working tree or a log and no
+    report is FURTHER than one that completed, because completing is what
+    produced the report the other one lacks. `phase23` and `analog` are
+    alternative run shapes rather than points on the phase1->3 line, so they are
+    chosen only when nothing on that line was reached.
+    """
+    # AN ORCHESTRATOR VERDICT MEANS THE RUN FINISHED, and it outranks reach.
+    # Ordering by reach without this check calls a COMPLETED run dead: phase3
+    # legitimately writes no report of its own when it is skipped or waived, so
+    # its tree exists, its report does not, and reach alone reads that as "died
+    # in phase3". Measured over the 182 tracked run dirs while writing this —
+    # 11 flipped 0 -> 1/2, and 3 of the first 4 inspected (ibex, sha256,
+    # opentitan_aes on the commercial PDK) had an orchestrator verdict on disk.
+    # Those are finished runs and calling them STUCK would be a false finding
+    # of exactly the kind this program exists to remove.
+    for cand in (project / "reports" / "orchestrator" / _PHASE_REPORTS["orchestrator"],
+                 project / "reports" / _PHASE_REPORTS["orchestrator"]):
+        if cand.is_file():
+            return "orchestrator"
+
+    for phase in reversed(_PHASE_ORDER):
+        if _phase_was_reached(project, phase):
+            return phase
+    # Off-line shapes: whichever left a report, newest first — the old rule,
+    # which is correct when there is no linear phase to be further than.
     newest_phase, newest_m = None, -1.0
-    for ph, fname in _PHASE_REPORTS.items():
-        for cand in (project / "reports" / "orchestrator" / fname,
-                     project / "reports" / fname):
+    for ph in ("phase23", "analog", "orchestrator"):
+        for cand in (project / "reports" / "orchestrator" / _PHASE_REPORTS[ph],
+                     project / "reports" / _PHASE_REPORTS[ph]):
             if cand.is_file():
                 m = cand.stat().st_mtime
                 if m > newest_m:
                     newest_m, newest_phase = m, ph
     if newest_phase:
         return newest_phase
-    if (project / "phase3").is_dir():
-        return "phase3"
     return "orchestrator"
 
 
