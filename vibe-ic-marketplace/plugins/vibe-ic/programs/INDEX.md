@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1019
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1019)
+- **Total programs (excluding helpers / shims):** 1022
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1022)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1010 |
+| `any` | 1013 |
 
 ## Alphabetical listing
 
@@ -42,8 +42,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ams_analysis_select` | any | — | deterministic spec -> SPICE-analysis selector. |
 | `an_validator` | any | — | Application-Note (AN) validator / quality scorer, 0-80. |
 | `analog_a0_skip_forbidden_check` | any | Wave 47 | forbidden-artefact gate (Wave 47). |
+| `analog_a1_spec_emit` | any | — | the A1 spec PRODUCER that was missing. |
 | `analog_a1_spec_extract_check` | any | — | A1 deterministic gate (v1.6.35). |
+| `analog_a2_topology_emit` | any | — | the A2 topology PRODUCER that was missing. |
 | `analog_a2_topology_select_check` | any | — | A2 deterministic gate (v1.6.35). |
+| `analog_a3_netlist_emit` | any | — | the A3 netlist PRODUCER that was missing. |
 | `analog_a3_netlist_gen_check` | any | — | A3 deterministic gate (v1.6.35). |
 | `analog_a4_corner_sweep_check` | any | — | A4 deterministic gate (v1.6.35). |
 | `analog_a5_layout_check` | any | — | Verifies that the upstream `analog-layout` skill has emitted the |
@@ -1091,7 +1094,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1010 programs)
+### `any` (1013 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1109,8 +1112,11 @@ _(no programs in this group)_
 - `ams_analysis_select` — deterministic spec -> SPICE-analysis selector.
 - `an_validator` — Application-Note (AN) validator / quality scorer, 0-80.
 - `analog_a0_skip_forbidden_check` — forbidden-artefact gate (Wave 47).  _[Wave 47]_
+- `analog_a1_spec_emit` — the A1 spec PRODUCER that was missing.
 - `analog_a1_spec_extract_check` — A1 deterministic gate (v1.6.35).
+- `analog_a2_topology_emit` — the A2 topology PRODUCER that was missing.
 - `analog_a2_topology_select_check` — A2 deterministic gate (v1.6.35).
+- `analog_a3_netlist_emit` — the A3 netlist PRODUCER that was missing.
 - `analog_a3_netlist_gen_check` — A3 deterministic gate (v1.6.35).
 - `analog_a4_corner_sweep_check` — A4 deterministic gate (v1.6.35).
 - `analog_a5_layout_check` — Verifies that the upstream `analog-layout` skill has emitted the

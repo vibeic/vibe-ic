@@ -405,6 +405,83 @@ def _emit_deterministic_stub(project: Path, bname: str,
     return written
 
 
+# ── A1-A3 deterministic producers ─────────────────────────────────────────
+# The FIRST track for the three steps that had none. Each records its own
+# honest absence in a named gap file when it declines, and each stamps its
+# provenance into the artefact it writes.
+_A1_A3_PRODUCERS: Dict[str, Dict[str, Any]] = {
+    "A1_spec_extract": {
+        "program": "analog_a1_spec_emit.py",
+        "status": "PASS_WITH_REAL_EXTRACT",
+        "strategy": "l5_structured_bind",
+        "gap": "spec_gap.json",
+    },
+    "A2_topology_select": {
+        "program": "analog_a2_topology_emit.py",
+        "status": "PASS_WITH_DERIVED_TOPOLOGY",
+        "strategy": "type_topology_library",
+        "gap": "topology_gap.json",
+    },
+    "A3_netlist_gen": {
+        "program": "analog_a3_netlist_emit.py",
+        "status": "PASS_WITH_REAL_NETLIST",
+        "strategy": "topology_ir_render",
+        "gap": "netlist_gap.json",
+        "takes_container": True,
+        # Simulate the emitted deck inside the flow, not only when a human
+        # remembers the flag. Safe by the producer's own contract: an
+        # unreachable container is recorded as NOT_VERIFIED_NO_SIMULATOR and
+        # the netlist is still emitted, so this can never turn A3 into a FAIL
+        # the gate has not itself found — it can only stop a deck that does
+        # not converge from being shipped as an artefact.
+        "extra_args": ["--verify-sim"],
+    },
+}
+
+# What each A-step's artefacts are called, so `StepResult.output_files` can
+# stop being `[]` on every path including PASS. The runner's own record never
+# named what a step produced, which is how a step could be reported done while
+# nothing on disk backed it.
+_STEP_ARTEFACTS: Dict[str, tuple] = {
+    "A1_spec_extract": ("spec.json",),
+    "A2_topology_select": ("topology.md", "topology.json"),
+    "A3_netlist_gen": ("{block}.sp", "tb_{block}.sp",
+                       "netlist_provenance.json"),
+    "A4_corner_sweep": ("corner_results.json",),
+    "A5_layout": ("layout.mag",),
+    "A7_post_layout_resim": ("pre_vs_post.json",),
+    "A9_hw_verify": ("hw_measurements.json",),
+}
+
+
+def _step_outputs(project: Path, block: str, step_name: str) -> List[str]:
+    """Project-relative paths of the step's artefacts that actually EXIST.
+    Only files on disk are listed — this must never assert an output the step
+    did not produce."""
+    out: List[str] = []
+    bdir = _pl.analog_dir(project) / block
+    for pattern in _STEP_ARTEFACTS.get(step_name, ()):  # noqa: SIM118
+        p = bdir / pattern.format(block=block)
+        if p.is_file():
+            try:
+                out.append(str(p.relative_to(project)))
+            except ValueError:                          # pragma: no cover
+                out.append(str(p))
+    return out
+
+
+def _producer_gap(project: Path, block: str,
+                  prod: Dict[str, Any]) -> Optional[str]:
+    """The gap file a declining producer wrote, if it wrote one."""
+    p = _pl.analog_dir(project) / block / str(prod.get("gap") or "")
+    if p.is_file():
+        try:
+            return str(p.relative_to(project))
+        except ValueError:                              # pragma: no cover
+            return str(p)
+    return None
+
+
 def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                     args=None
                     ) -> StepResult:
@@ -549,8 +626,66 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                 return StepResult(step_name, bname, "VACUOUS_PASS",
                                   time.time() - t0, stdout_tail)
             return StepResult(step_name, bname, "PASS",
-                              time.time() - t0, stdout_tail)
+                              time.time() - t0, stdout_tail,
+                              output_files=_step_outputs(project, bname,
+                                                         step_name))
         if cp.returncode == 2:
+            # A1-A3 PRODUCERS — the deterministic first track, in exactly the
+            # shape A4's real-sim bypass below already uses: run BEFORE the
+            # stub fallback, then re-run the gate and let IT decide.
+            #
+            # Until these existed, A1-A3 were skill-only steps: the gate found
+            # no artefact, returned rc 2, and the runner reported WAIVED for
+            # every block of every run. Meanwhile `programs/` shipped four
+            # checkers for a netlist and no program that generates one.
+            #
+            # Producing is NOT a verdict. A producer crash or a producer that
+            # honestly declines (rc 2) leaves the step exactly where the gate
+            # left it — WAIVED — with the gap file named in `detail` so the
+            # caller can see WHY the deterministic track stood down and which
+            # skill it handed off to.
+            prod = _A1_A3_PRODUCERS.get(step_name)
+            if prod:
+                pprog = PROGRAMS_DIR / prod["program"]
+                if pprog.is_file():
+                    pcmd = [sys.executable, str(pprog), str(project),
+                            "--block", bname]
+                    if prod.get("takes_container"):
+                        pcmd += ["--container",
+                                 (getattr(args, "container", None)
+                                  or os.environ.get(
+                                      "VIBEIC_ANALOG_CONTAINER",
+                                      "vibeic-eda"))]
+                    pcmd += list(prod.get("extra_args") or [])
+                    try:
+                        pcp = subprocess.run(pcmd, capture_output=True,
+                                             text=True, timeout=1800)
+                    except (OSError, subprocess.SubprocessError):
+                        pcp = None
+                    if pcp is not None and pcp.returncode == 0:
+                        cp_prod = subprocess.run(cmd, capture_output=True,
+                                                 text=True, timeout=1800)
+                        if cp_prod.returncode == 0:
+                            tail = (pcp.stdout.strip().splitlines()[-1]
+                                    if pcp.stdout else "produced")
+                            return StepResult(
+                                step_name, bname, prod["status"],
+                                time.time() - t0, tail,
+                                output_files=_step_outputs(project, bname,
+                                                           step_name),
+                                extras={
+                                    "extraction_strategy": prod["strategy"],
+                                    "low_confidence": False,
+                                    "producer": prod["program"],
+                                })
+                    gap = _producer_gap(project, bname, prod)
+                    if gap:
+                        return StepResult(
+                            step_name, bname, "WAIVED", time.time() - t0,
+                            (f"deterministic producer declined and RECORDED "
+                             f"why: {gap} — invoke skill `{skill}`"),
+                            extras={"gap_path": gap,
+                                    "producer": prod["program"]})
             # v1.6.214 (ORGANIC-20260512) — BEFORE the stub fallback,
             # try a REAL ngspice sweep via analog_real_corner_sweep.py.
             # chip-AGNOSTIC: only kicks in when (a) docker container
