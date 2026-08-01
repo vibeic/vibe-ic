@@ -533,8 +533,75 @@ def _hardmacro_is_stub(hm_dir: Path, block: str) -> bool:
     return False
 
 
+#: `MANUFACTURINGGRID 0.005 ;` — the standard LEF token. Same pattern
+#: `def_manufacturing_grid_check` uses; NOT that function, because it falls back
+#: to a PDK default when the tech LEF is unreadable and here a guessed grid
+#: would decide between two remedies. "I could not read the grid" must stay its
+#: own answer.
+_MFG_GRID_RE = re.compile(r"MANUFACTURINGGRID\s+([0-9.]+)\s*;", re.IGNORECASE)
+
+#: Where a tech LEF is found, in the order to look. Nothing is defaulted.
+_TECH_LEF_GLOBS = (
+    "phase3/stage3/pnr/*.tlef", "phase3/stage3/pnr/*tech*.lef",
+    "pdk/**/*.tlef", "**/*.tlef",
+)
+
+
+def manufacturing_grid_um(project: Path, tech_lef: "str | None" = None):
+    """The PDK manufacturing grid in um, or None when it could not be read.
+
+    vibe-ic#595. The registration offset alone does not say WHICH remedy is
+    safe, and the two are not equivalent:
+
+      * stream the GDS in the LEF's frame  — a rigid translation. DRC and LVS
+        are translation-INVARIANT, so this cannot change either verdict, but it
+        CAN move every coordinate off the manufacturing grid if the offset is
+        not an exact multiple of it. This repo has already paid for an off-grid
+        streamout once.
+      * declare `FOREIGN <cell> <llx> <lly> ;` — moves nothing, but depends on a
+        sign convention and OpenROAD's stream-out does not honour FOREIGN
+        uniformly.
+
+    Whether the offset is a whole number of grid steps is the fact that decides
+    it, and it was not being measured. It is measured here and REPORTED; the
+    choice stays with the flow owner, which is what the issue asked for.
+    """
+    if tech_lef:
+        try:
+            m = _MFG_GRID_RE.search(Path(tech_lef).read_text(errors="replace"))
+            if m:
+                return float(m.group(1))
+        except OSError:
+            return None
+        return None
+    for pat in _TECH_LEF_GLOBS:
+        for c in sorted(project.glob(pat))[:4]:
+            try:
+                m = _MFG_GRID_RE.search(c.read_text(errors="replace"))
+            except OSError:
+                continue
+            if m:
+                return float(m.group(1))
+    return None
+
+
+def offset_on_grid(off_x: float, off_y: float, grid_um: "float | None"):
+    """(is_multiple, detail). `None` when the grid is unknown — never True."""
+    if not grid_um or grid_um <= 0:
+        return None, ("the manufacturing grid could not be read, so whether a "
+                      "rigid translation would stay on-grid is UNKNOWN")
+    # Compare in grid steps with a tolerance well under half a step, so
+    # floating-point noise in the um values cannot decide it either way.
+    def _steps(v):
+        n = v / grid_um
+        return abs(n - round(n)) < 1e-6
+    ok = _steps(off_x) and _steps(off_y)
+    return ok, (f"offset is {'an exact' if ok else 'NOT an exact'} multiple of "
+                f"the {grid_um:g}um manufacturing grid")
+
+
 def check_block(project: Path, block: str, tol_pct: float,
-                tol_um: float = DEFAULT_TOL_UM) -> dict:
+                tol_um: float = DEFAULT_TOL_UM, tech_lef: Optional[str] = None) -> dict:
     """Return a verdict dict for one block:
       status ∈ {PASS, FAIL, NOT_PACKAGED, STUB_NOT_PACKAGED}
     Only FAIL is a violation; NOT_PACKAGED and STUB_NOT_PACKAGED are DISCLOSED
@@ -612,6 +679,8 @@ def check_block(project: Path, block: str, tol_pct: float,
 
     exp_llx, exp_lly, frame_src = parse_lef_frame_ll(lef_text)
     off_x, off_y = gllx - exp_llx, glly - exp_lly
+    grid_um = manufacturing_grid_um(project, tech_lef)
+    on_grid, grid_detail = offset_on_grid(off_x, off_y, grid_um)
 
     rec = {
         "block": block,
@@ -623,6 +692,8 @@ def check_block(project: Path, block: str, tol_pct: float,
         "lef_frame_ll_um": [round(exp_llx, 4), round(exp_lly, 4)],
         "lef_frame_source": frame_src,
         "registration_offset_um": [round(off_x, 4), round(off_y, 4)],
+        "manufacturing_grid_um": grid_um,
+        "offset_is_grid_multiple": on_grid,
         "width_delta_pct": round(dw, 3),
         "height_delta_pct": round(dh, 3),
         "tol_pct": tol_pct,
@@ -650,7 +721,15 @@ def check_block(project: Path, block: str, tol_pct: float,
                 f"{-off_y:+.3f}um away from the metal it names, and the "
                 f"placer will reserve the outline where the body is not. "
                 f"Declare the offset with `FOREIGN <cell> {gllx:g} {glly:g} ;`"
-                f" or stream the GDS in the LEF's frame."),
+                f" or stream the GDS in the LEF's frame. "
+                + (f"{grid_detail}, so translating the stream is a rigid, "
+                   f"grid-preserving move and DRC/LVS are invariant under it."
+                   if on_grid is True else
+                   f"{grid_detail} — translating the stream would put every "
+                   f"coordinate off-grid, so FOREIGN is the safe remedy here."
+                   if on_grid is False else
+                   f"{grid_detail}, so neither remedy can be recommended from "
+                   f"this run.")),
         })
     if findings:
         rec["status"] = "FAIL"
@@ -664,7 +743,8 @@ def check_block(project: Path, block: str, tol_pct: float,
 
 def build_report(project: Path, block_filter: Optional[str],
                  tol_pct: float,
-                 tol_um: float = DEFAULT_TOL_UM) -> Tuple[int, dict]:
+                 tol_um: float = DEFAULT_TOL_UM,
+                 tech_lef: Optional[str] = None) -> Tuple[int, dict]:
     blocks = _load_block_list(project)
     if blocks is None:
         # A PROJECT THAT IS NOT THERE IS NOT A DIGITAL PROJECT. Measured:
@@ -694,7 +774,8 @@ def build_report(project: Path, block_filter: Optional[str],
     if block_filter:
         blocks = [block_filter]
 
-    results = [check_block(project, b, tol_pct, tol_um) for b in blocks]
+    results = [check_block(project, b, tol_pct, tol_um, tech_lef)
+               for b in blocks]
     failed = [r for r in results if r["status"] == "FAIL"]
     passed = [r for r in results if r["status"] == "PASS"]
     not_pkg = [r for r in results if r["status"] == "NOT_PACKAGED"]
@@ -728,6 +809,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="restrict to a single block")
     ap.add_argument("--tol-pct", type=float, default=DEFAULT_TOL_PCT,
                     help=f"max LEF-vs-GDS outline delta %% (default {DEFAULT_TOL_PCT})")
+    ap.add_argument("--tech-lef", default=None,
+                    help="tech LEF to read MANUFACTURINGGRID from; #595 — "
+                         "whether the registration offset is a whole number "
+                         "of grid steps is what decides between translating "
+                         "the stream and declaring FOREIGN. Auto-located "
+                         "under the project when omitted, and reported as "
+                         "UNKNOWN rather than defaulted when neither works.")
     ap.add_argument("--tol-um", type=float, default=DEFAULT_TOL_UM,
                     help=("max LEF-frame-vs-GDS-bbox registration offset in "
                           f"microns (default {DEFAULT_TOL_UM})"))
@@ -735,7 +823,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         rc, report = build_report(args.project_dir, args.block, args.tol_pct,
-                                  args.tol_um)
+                                  args.tol_um, tech_lef=args.tech_lef)
     except Exception as e:  # truly fatal (programming error)
         print(f"ERROR: {GATE}: {e}", file=sys.stderr)
         return 2
