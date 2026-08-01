@@ -702,6 +702,44 @@ def _smoke_set(plugin_root: Path) -> set[str]:
     return out
 
 
+def import_edge_gap(
+    changed_paths: list[str], selected: list[str] | set[str],
+    plugin_root: Path,
+) -> tuple[list[tuple[str, int, int, int]], int]:
+    """(rows, total_missed) — what the selection LEFT OUT, by import edge.
+
+    Each row is ``(source_stem, imported_by, selected, not_selected)``. PURE and
+    separate from `main` so it can be driven against a constructed tree; the
+    inline version could only be exercised through the CLI, which resolves
+    `plugin_root` from the SCRIPT's own location and therefore always audits the
+    real plugin — a fixture handed to it was never read, and the test that
+    thought it was passed for the wrong reason.
+
+    vibe-ic#565. The default `ownership` mode maps a changed module to tests by
+    FILENAME, so 2035 of 2850 import edges (71%) are unseeable by name. Whether
+    to WIDEN the default is a cost decision and stays the owner's; this reports
+    the shortfall so a landing is not stamped on a count that reads as coverage.
+    Changed TEST files are excluded — rule 2 already selects them, and their
+    stems are not source modules.
+    """
+    stems = {Path(c).stem for c in changed_paths
+             if c.endswith(".py") and f"/{_TESTS_REL.split('/')[-1]}/" not in c}
+    if not stems:
+        return [], 0
+    idx = _build_import_edge_index(plugin_root, stems)
+    sel = set(selected)
+    rows: list[tuple[str, int, int, int]] = []
+    total = 0
+    for stem in sorted(idx):
+        importers = idx[stem]
+        if not importers:
+            continue
+        missed = len(importers - sel)
+        total += missed
+        rows.append((stem, len(importers), len(importers) - missed, missed))
+    return rows, total
+
+
 def select_tests(
     changed_paths: list[str],
     plugin_root: Path,
@@ -860,6 +898,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="base SHA/ref; diff is <base>..HEAD")
     ap.add_argument("--plugin-root", default=None,
                     help="plugin root (default: this file's grandparent)")
+    ap.add_argument("--no-gap-report", action="store_true",
+                    help="skip the import-edge gap disclosure (vibe-ic#565). "
+                         "It costs ~3 s over the tests tree and does not change "
+                         "what is selected; opting out means the landing is "
+                         "stamped without knowing what the selection dropped.")
     ap.add_argument("--mode", choices=MODES, default=MODE_OWNERSHIP,
                     help="selection rule (default: %(default)s — the shipped "
                          "behaviour). 'reference'/'reference-capped' are OPT-IN "
@@ -905,6 +948,41 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[ci_targeted_test_select] selected {len(selected)} test file(s) "
           f"from {len(changed)} changed path(s) (base={args.base}, "
           f"mode={args.mode})", file=sys.stderr)
+
+    # vibe-ic#565 — SAY WHAT WAS LEFT OUT. The default `ownership` mode maps a
+    # changed module to tests by FILENAME, so a test named after the chip or the
+    # feature is invisible however directly it imports the module: 2035 of 2850
+    # import edges (71%) are unseeable by name. Whether to WIDEN the default is
+    # a cost decision and stays the owner's — but a bounded selection that does
+    # not say what it dropped reads as full coverage, and that is what a landing
+    # gets stamped on. Measured: the landing that changed
+    # `phase3_one_shot_runner` selected 17 files while 162 test files import it.
+    #
+    # The index costs 2.98 s over the whole tests tree — affordable beside a
+    # landing that already runs for minutes, and it is the only way this number
+    # exists at all. `--no-gap-report` opts out for a caller that cannot pay it.
+    if not args.no_gap_report:
+        try:
+            rows, miss_total = import_edge_gap(changed, selected, plugin_root)
+            if rows:
+                print("[ci_targeted_test_select] IMPORT-EDGE GAP — test files "
+                      "that IMPORT a changed module and were NOT selected (the "
+                      "default maps by filename, not by import):",
+                      file=sys.stderr)
+                for stem, n_imp, n_sel, n_missed in rows:
+                    print(f"    {stem:<34} imported by {n_imp:>4}, selected "
+                          f"{n_sel:>4}, NOT selected {n_missed:>4}",
+                          file=sys.stderr)
+                print(f"    TOTAL not selected: {miss_total} — rerun with "
+                      f"`--mode import-edge` to include them (vibe-ic#565)",
+                      file=sys.stderr)
+        except Exception as _gap_exc:            # noqa: BLE001
+            # The report is a disclosure, not a dependency: a selection that
+            # dies computing its own footnote selects nothing, and selecting
+            # nothing is the defect this file exists against.
+            print(f"[ci_targeted_test_select] import-edge gap report "
+                  f"unavailable ({_gap_exc}) — the selection above stands, but "
+                  f"what it left out is UNKNOWN, not zero", file=sys.stderr)
     return 0
 
 
