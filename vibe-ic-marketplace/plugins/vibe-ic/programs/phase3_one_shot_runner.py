@@ -22488,6 +22488,40 @@ _PVT_MATRIX_TEMPLATE = {
 }
 
 
+def stamp_pvt_corner_coverage(pvt: dict, corners: list) -> dict:
+    """Stamp the corner census AND the #442 disclosure. ONE writer of both.
+
+    vibe-ic ORGANIC #442 said it plainly: "corners=[] (or a single corner) is
+    NOT a PVT matrix — say so in the artifact instead of letting an empty list
+    wear the pvt_matrix name". That disclosure was added at ONE of the two
+    places this runner writes `pvt_matrix.json`.
+
+    The other — the Step-7c writer, which runs FIRST and is therefore the one
+    that creates the file when it does not exist — stamped `corner_count` and
+    `multi_corner` and omitted the disclosure entirely. So the common path
+    produced a matrix with `multi_corner: false`, no `coverage` field and no
+    note: exactly the artefact #442 exists to prevent, from the writer that
+    usually wins.
+
+    Found because `test_v0_2_71_pvt_matrix_min_corner` was red on main. Its
+    assertion scanned a +-window of SOURCE around the first `pvt["corner_count"]`
+    for the token, which measures DISTANCE rather than behaviour — but the
+    distance it measured was real: the token sat 8738 characters away, beside
+    the OTHER writer. The test is behavioural now and drives this helper.
+    """
+    pvt["corner_count"] = len(corners)
+    pvt["multi_corner"] = len(corners) >= 2
+    if len(corners) < 2:
+        pvt["coverage"] = "SINGLE_CORNER_ONLY" if corners else "NO_CORNERS"
+        pvt["note"] = (
+            "fewer than 2 Liberty corners discovered under "
+            "input/pdk/liberty — this matrix does NOT substantiate "
+            "multi-corner sign-off (#442); add ss/tt/ff libs or "
+            "waive with rationale.")
+    return pvt
+
+
+
 def _classify_corner_from_name(name: str) -> str:
     """Return canonical corner label (SS/TT/FF/best/worst/typ) from filename.
     Heuristics:
@@ -24051,8 +24085,7 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         pvt = dict(_PVT_MATRIX_TEMPLATE)
         pvt["corners"] = corners
         pvt["primary_corner"] = "TT"
-        pvt["corner_count"] = len(corners)
-        pvt["multi_corner"] = len(corners) >= 2
+        stamp_pvt_corner_coverage(pvt, corners)
         pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
 
@@ -24214,15 +24247,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         # ORGANIC-20260606 #442: corners=[] (or a single corner) is NOT a
         # PVT matrix — say so in the artifact instead of letting an empty
         # list wear the pvt_matrix name. ≥2 labelled corners = multi.
-        pvt["corner_count"] = len(corners)
-        pvt["multi_corner"] = len(corners) >= 2
-        if len(corners) < 2:
-            pvt["coverage"] = "SINGLE_CORNER_ONLY" if corners else "NO_CORNERS"
-            pvt["note"] = (
-                "fewer than 2 Liberty corners discovered under "
-                "input/pdk/liberty — this matrix does NOT substantiate "
-                "multi-corner sign-off (#442); add ss/tt/ff libs or "
-                "waive with rationale.")
+        stamp_pvt_corner_coverage(pvt, corners)
         pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
         # --- ORGANIC #694: durable single-corner stance attestation -------
