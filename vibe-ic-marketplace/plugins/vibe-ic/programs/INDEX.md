@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1022
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1022)
+- **Total programs (excluding helpers / shims):** 1023
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1023)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1013 |
+| `any` | 1014 |
 
 ## Alphabetical listing
 
@@ -261,6 +261,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dft_atpg_coverage_check` | any | — | REAL stuck-at coverage gate (Step 11 DFT/ATPG). |
 | `dft_signoff_check` | any | — | aggregate DFT sign-off gate (foundry / ATE bar). |
 | `dft_signoff_common` | any | — | shared helper for the DFT sign-off gates. |
+| `dft_test_coverage` | any | — | raw FAULT coverage vs sign-off TEST coverage (#603). |
 | `dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
 | `diff_verify_harness` | any | — | independent DIFFERENTIAL self-verification (N-version) for blind RTL authoring (ORGANIC #700). |
 | `dispatch_fetch_loop_population_check` | any | — | Stub multi-frame fetch loop detector. |
@@ -1094,7 +1095,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1013 programs)
+### `any` (1014 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1328,6 +1329,7 @@ _(no programs in this group)_
 - `dft_atpg_coverage_check` — REAL stuck-at coverage gate (Step 11 DFT/ATPG).
 - `dft_signoff_check` — aggregate DFT sign-off gate (foundry / ATE bar).
 - `dft_signoff_common` — shared helper for the DFT sign-off gates.
+- `dft_test_coverage` — raw FAULT coverage vs sign-off TEST coverage (#603).
 - `dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
 - `diff_verify_harness` — independent DIFFERENTIAL self-verification (N-version) for blind RTL authoring (ORGANIC #700).
 - `dispatch_fetch_loop_population_check` — Stub multi-frame fetch loop detector.

@@ -1598,6 +1598,32 @@ def run_fault(
     json_out_path = (Path(json_out) if json_out is not None
                      else _pl.report_path(project, "dft/coverage.json"))
 
+    # ── TEST coverage (vibe-ic#603): raw FAULT coverage is what Fault reports;
+    # sign-off TEST coverage removes the ATPG-UNTESTABLE faults (the unused pad
+    # frame: unobservable inputs / constant-driven outputs) from the denominator.
+    # Both numbers are kept distinct so neither stands in for the other. The
+    # std-cell Liberty (pin directions) lives in the EDA container, so it is read
+    # out host-side, exactly as fault_cut_async_observe does. SOUND-only: the
+    # excluded set is UNCOVERED ∩ structurally-untestable, so a detected fault is
+    # never removed and test coverage can never exceed 100 %.
+    test_coverage = None
+    try:
+        import dft_test_coverage as _dtc            # sibling; no import cycle
+        import atpg_untestable_fault_classify as _auc
+        if cov_file.exists() and (project / cut_out).exists():
+            _lib_ctr = _atpg_liberty_container_path(project, cell_model, pdk_dir)
+            if _lib_ctr:
+                _ec_l, _lib_text, _ = _run_docker(
+                    project, ["cat", _lib_ctr], timeout=120, pdk_dir=pdk_dir)
+                if _ec_l == 0 and _lib_text:
+                    _dirs = _auc.parse_liberty_pin_directions(_lib_text)
+                    test_coverage = _dtc.compute(
+                        project / cut_out, cov_file, directions=_dirs)
+                    (project / "phase2/stage2/dft/test_coverage.json").write_text(
+                        json.dumps(test_coverage, indent=2))
+    except Exception as _tc_exc:   # measurement-only: never fail the run on it
+        test_coverage = {"computed": False, "reason": f"exception: {_tc_exc}"}
+
     def _assemble_report(transition_block):
         rep = {
             "tool": "fault",
@@ -1615,6 +1641,33 @@ def run_fault(
             # Disclosed so a reader can see the PDK was DERIVED, and from what.
             "pdk_sniff_note": pdk_sniff_note,
             "pdk_used": pdk,
+            # vibe-ic#603 (PR #615) folded into PR #610's durable snapshot:
+            # raw FAULT coverage and sign-off TEST coverage are kept DISTINCT
+            # so neither stands in for the other, and the snapshot carries
+            # both from the moment stuck-at is first measured.
+            "test_coverage": test_coverage,
+            # THE COMPLETE #615 FIELD SET, taken from that PR verbatim
+            # rather than retyped: `dft_atpg_coverage_check` reads
+            # `test_coverage_pct` by NAME, and a hand-copied subset had
+            # already dropped two of them — a merge that compiles and
+            # leaves the consumer blind.
+            # vibe-ic#603 — RAW fault coverage above (coverage_pct) is Fault's ratio;
+            # TEST coverage below is detected / (total − ATPG-untestable). Distinct on
+            # purpose: the gate judges TEST coverage, the report keeps RAW visible.
+            "test_coverage_pct": (test_coverage.get("test_coverage_pct")
+                                  if test_coverage and test_coverage.get("computed")
+                                  else None),
+            "test_coverage_measured": bool(
+                test_coverage and test_coverage.get("computed")),
+            "test_coverage_untestable_excluded": (
+                test_coverage.get("untestable_faults_excluded")
+                if test_coverage and test_coverage.get("computed") else None),
+            "test_coverage_source": (
+                "dft_test_coverage: (unobservable|uncontrollable) \u2229 uncovered"
+                if test_coverage and test_coverage.get("computed")
+                else (test_coverage.get("reason") if test_coverage else
+                      "not computed (no liberty / no cut netlist / no "
+                      "coverage.yml)")),
             "coverage_pct": coverage_ratio,
             "faults_covered": faults_covered,
             "faults_total": faults_total,
