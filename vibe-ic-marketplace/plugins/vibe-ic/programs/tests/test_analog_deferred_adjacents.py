@@ -461,7 +461,17 @@ def _pv_project(tmp_path: Path, drc: str, lvs: str) -> Path:
     (ad / "spec.json").write_text("{}")
     (ad / "topology.md").write_text("# ldo\n")
     (ad / "ldo.sp").write_text(".title ldo\n.end\n")
-    (ad / "corner_results.json").write_text("{}")
+    # WAS `{}`. An empty object is a corner artefact that declares nothing —
+    # no corners, no provenance, no statement of what circuit it measured —
+    # and every test here asserting a whole-project rc 0 was therefore also
+    # asserting that such an artefact signs off A4. These fixtures are about
+    # the A6 PV markers, so A4 carries what a run that reached it would.
+    (ad / "corner_results.json").write_text(json.dumps({
+        "netlist_provenance": "a3_netlist",
+        "design_content": "structure_and_geometry",
+        "corners": [{"name": "tt_27c", "simulator_run": True, "vout_v": 1.8}],
+        "spec_results": [{"name": "vout", "status": "PASS", "target": None}],
+    }))
     (ad / "layout.mag").write_text("magic\n")
     (ad / "drc_clean.flag").write_text(drc)
     (ad / "lvs_match.flag").write_text(lvs)

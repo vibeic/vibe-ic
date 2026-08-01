@@ -92,6 +92,13 @@ _EMPTY_SHELL = (
 )
 _REAL_CORNERS = {
     "_provenance": "real_ngspice",
+    # `_provenance` is true of the SIMULATOR and says nothing about the
+    # SUBJECT. Six of this file's coverage fixtures assert a certified A4, and
+    # an artefact that declares simulated corners while refusing to say what
+    # circuit produced them no longer certifies one — so the record of WHAT was
+    # simulated sits beside the netlist `_artefact` already writes. Coverage,
+    # not disclosure, stays the property under test.
+    "design_content": "structure_and_geometry",
     "best_corner": {"name": "tt_27"},
     "corners": [
         {"name": "tt_27", "simulator_run": True, "vout_v": 1.2},

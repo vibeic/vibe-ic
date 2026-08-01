@@ -328,6 +328,91 @@ STRUCTURE_ONLY_TOKEN = "STRUCTURE_ONLY:"
 #: bound input reached the content".
 DESIGN_CONTENT_STRUCTURE_ONLY = "structure_only"
 
+#: ...and the value that means at least one bound input reached it.
+DESIGN_CONTENT_SIZED = "structure_and_geometry"
+
+# ── AND THE PRICE OF SAYING NOTHING ───────────────────────────────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   An artefact that declines to say what it contains must not certify the
+#   step it is the evidence for.
+#
+# WHY IT HAD TO BE ADDED. The tier above gives an honest ceiling its own
+# disposition, which is the right answer and also, on its own, an INVERTED
+# INCENTIVE: measured on the adversarial round, deleting the disclosure fields
+# from an artefact — which is the shape of every artefact written before the
+# fields existed, and of every stale one — made it CERTIFY, while disclosing
+# honestly earned the lesser tier. Silence was strictly cheaper than
+# disclosure, so the change rewarded exactly the behaviour it exists to remove.
+#
+# The two answers below NAME a content. Everything else is the artefact
+# declining to answer, and all of it is treated the same way:
+#
+#   * the field absent entirely  — the pre-disclosure and stale shape;
+#   * the field present and empty;
+#   * a "no record upstream" token — an honest statement of ignorance is
+#     still not a statement of content. If it certified, a producer could buy
+#     a pass by writing the token instead of by inheriting the answer, and
+#     silence would be cheap again under a new name.
+#
+# NOT A CONTRADICTION OF THE TIER ABOVE. `structure_only` DISCLOSES, so it
+# still certifies — in its own tier, never as a plain pass. The ordering that
+# matters is preserved end to end: a run that discloses a library default
+# scores ABOVE a run that says nothing, and a run that invents content scores
+# below both.
+DESIGN_CONTENT_DISCLOSED = (DESIGN_CONTENT_STRUCTURE_ONLY,
+                            DESIGN_CONTENT_SIZED)
+
+
+def content_disclosed(value) -> bool:
+    """True iff *value* NAMES what an artefact contains.
+
+    Deliberately a whitelist. A blacklist of the known "no answer" tokens
+    would certify the next token nobody has thought of yet, and the whole
+    point of this predicate is that an unrecognised answer is not an answer.
+    """
+    return isinstance(value, str) and value in DESIGN_CONTENT_DISCLOSED
+
+
+# ── the three answers a CONSUMER has to tell apart ────────────────────────
+# Every consumer that grades a measurement asks the same question of the
+# artefact it grades, so they ask it through one function. Copied predicates
+# drift, and a consumer that classified this differently from the gate of
+# record would re-open the gap by another door.
+CONTENT_DESIGN_BOUND = "design_bound"
+CONTENT_STRUCTURE_ONLY = DESIGN_CONTENT_STRUCTURE_ONLY
+CONTENT_UNDISCLOSED = "undisclosed"
+
+
+def classify_design_content(value) -> str:
+    """One of :data:`CONTENT_DESIGN_BOUND`, :data:`CONTENT_STRUCTURE_ONLY`,
+    :data:`CONTENT_UNDISCLOSED`.
+
+    The ORDER these rank in is the whole point, and it is the same everywhere:
+    design-bound is a measurement of the design; structure-only is a
+    measurement of a library default, disclosed; undisclosed is neither, and
+    it must never outrank the one that told the truth.
+    """
+    if value == DESIGN_CONTENT_SIZED:
+        return CONTENT_DESIGN_BOUND
+    if value == DESIGN_CONTENT_STRUCTURE_ONLY:
+        return CONTENT_STRUCTURE_ONLY
+    return CONTENT_UNDISCLOSED
+
+
+def content_class_of_artefact(path) -> str:
+    """:func:`classify_design_content` of the `design_content` recorded in the
+    JSON artefact at *path*. An unreadable or non-object artefact classifies
+    UNDISCLOSED — it said nothing, whatever the reason."""
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8",
+                                              errors="replace"))
+    except (json.JSONDecodeError, OSError):
+        return CONTENT_UNDISCLOSED
+    if not isinstance(doc, dict):
+        return CONTENT_UNDISCLOSED
+    return classify_design_content(doc.get("design_content"))
+
 
 def structure_only_disclosure(gate_name: str, blocks: list,
                               artefact: str, detail: str = "") -> None:

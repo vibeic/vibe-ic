@@ -466,11 +466,28 @@ def main():
         a_run = _load_json(project / "reports" / "phase3" / "analog_one_shot.json")
         a_verdict = str((a_run or {}).get("verdict") or "").upper()
         partial = []
+        # WHAT THE CLOSED LOOP CLOSED ON. `partial_measurement` says whether
+        # every corner resolved; it says nothing about which circuit resolved
+        # them. Measured before this: a project whose every corner artefact
+        # RECORDS that its circuit came from a topology library, with no bound
+        # input reaching any device parameter, read
+        # "CONVERGED — all corner sweeps fully measured" and passed the
+        # load-bearing analog pillar. The loop closed on the library default.
+        #
+        # An artefact that will not say which of the two it holds is ranked
+        # BELOW the one that disclosed a library default, never above it:
+        # otherwise this pillar pays a producer to delete a field.
+        structure_only, undisclosed = [], []
         for cr in sorted(glob.glob(str(project / "phase3" / "analog" / "*" /
                                        "corner_results.json"))):
             d = _load_json(Path(cr)) or {}
             if d.get("partial_measurement"):
                 partial.append(Path(cr).parent.name)
+            dc = d.get("design_content")
+            if dc == "structure_only":
+                structure_only.append(Path(cr).parent.name)
+            elif dc != "structure_and_geometry":
+                undisclosed.append(Path(cr).parent.name)
         blocks_txt = ", ".join(names) if names else "(see analog/ reports)"
         if not a_run:
             analog_state = "PENDING"
@@ -484,10 +501,37 @@ def main():
             analog_state = "PENDING"
             analog_detail = (f"analog blocks: {blocks_txt} — corner sweep is "
                              f"PARTIAL (.meas unresolved) for: {', '.join(partial)}")
+        elif undisclosed:
+            # NOT a pass, and NOT "not yet run": the artefact exists and
+            # declines to say what it measured. Nothing to wait for and
+            # nothing to certify.
+            analog_state = "UNDISCLOSED"
+            analog_detail = (
+                f"analog blocks: {blocks_txt} — the corner artefact records no "
+                f"answer to what circuit it simulated for: "
+                f"{', '.join(undisclosed)}. A sweep that will not say whether "
+                f"its geometry came from a bound input or from a library "
+                f"default cannot show that the analog loop closed on this "
+                f"design")
+        elif structure_only:
+            # The honest ceiling. It does not pass this pillar — the loop
+            # closed on a library topology, not on the design — and it is
+            # deliberately NOT a FAIL: a run that invents content to fill the
+            # gap lands in the FAIL row above, and must never score better.
+            analog_state = "STRUCTURE_ONLY"
+            analog_detail = (
+                f"analog blocks: {blocks_txt} — A-track verdict {a_verdict}, "
+                f"all corner sweeps fully measured, and the artefacts record "
+                f"that the circuit measured for {', '.join(structure_only)} "
+                f"came from a topology library with no bound input reaching "
+                f"any device parameter. Real corners on a library nominal are "
+                f"a measurement OF THAT TOPOLOGY; the analog loop has not "
+                f"closed on this design")
         else:
             analog_state = "CONVERGED"
             analog_detail = (f"analog blocks: {blocks_txt} — A-track verdict "
-                             f"{a_verdict}, all corner sweeps fully measured")
+                             f"{a_verdict}, all corner sweeps fully measured "
+                             f"on design-bound netlists")
 
     # ── Pillar 6: Design-for-ECO readiness (spare-cell coverage + preservation) ──
     # Applicable to any DIGITAL place-and-route IC; N/A only when the IC never
@@ -573,9 +617,12 @@ def main():
     # (no digital RTL), mirroring Pillar 6's N/A-without-place-and-route.
     g_code = cc_na or (line_pct is not None and float(line_pct) >= a.code_cov_floor)
     g_fpga = fpga_na or (fpga_verdict == "PASS")
-    # Pillar 5 passes only on a CONVERGED A-track (verdict non-FAIL and every
-    # corner sweep fully measured). PRESENT/PENDING/FAIL do not pass — presence
-    # of analog blocks is not evidence that the analog loop closed.
+    # Pillar 5 passes only on a CONVERGED A-track (verdict non-FAIL, every
+    # corner sweep fully measured, and every corner artefact recording that
+    # what it measured was design-bound). PRESENT/PENDING/FAIL do not pass —
+    # presence of analog blocks is not evidence that the analog loop closed —
+    # and neither does STRUCTURE_ONLY (the loop closed on a library topology)
+    # or UNDISCLOSED (the artefact will not say which circuit it closed on).
     g_analog = (not analog_ic) or (analog_state == "CONVERGED")
     # Design-for-ECO gate: N/A passes; otherwise requires coverage PASS + preservation intact.
     g_dfe = (not dfe_applicable) or (dfe_state == "PASS")
@@ -619,7 +666,17 @@ def main():
     _fpga_cell = "➖ N/A" if fpga_na else gate(g_fpga)
     L.append(f"| 3. Code Coverage (line) | >= {a.code_cov_floor:.0f}% / N/A | {_code_cell} | {cc_detail} |")
     L.append(f"| 4. FPGA digital verification | PASS / N/A | {_fpga_cell} | {fpga_detail} |")
-    L.append(f"| 5. Analog verification | converged / N/A | {gate(g_analog)} | {analog_detail} |")
+    # Pillar 5 status cell: `gate()` collapses everything short of a pass into
+    # one word, and this pillar now has four things it can be. STRUCTURE-ONLY
+    # is not a FAIL — a run honest about its ceiling must not be shown scoring
+    # the same as one whose A-track failed — and UNDISCLOSED is not "PENDING",
+    # because there is nothing to wait for. Mirrors Pillar 6's per-state cell.
+    _analog_cell = {"N/A": "➖ N/A", "CONVERGED": "✅ PASS",
+                    "PENDING": "⏳ PENDING",
+                    "STRUCTURE_ONLY": "◐ STRUCTURE-ONLY (does not pass)",
+                    "UNDISCLOSED": "❔ UNDISCLOSED (does not pass)",
+                    }.get(analog_state, "❌ FAIL")
+    L.append(f"| 5. Analog verification | converged / N/A | {_analog_cell} | {analog_detail} |")
     # Pillar 6 status cell: show N/A / PENDING explicitly (gate() collapses both to FAIL/PENDING).
     _dfe_cell = {"PASS": "✅ PASS", "N/A": "➖ N/A",
                  "PENDING": "⏳ PENDING"}.get(dfe_state, "❌ FAIL")

@@ -1303,6 +1303,7 @@ def _gather_analog_evidence(project: Path) -> Dict[str, Any]:
     # gate of record). `_analog_a_step_paths` mirrors their globs
     # exactly; see programs/analog_a{1..9}_*_check.py.
     block_grid = _gather_analog_block_grid(project, block_names)
+    structure_only_grid = _gather_analog_structure_only(project, block_names)
     # HW measurements present?
     hw_present = any((_pl.analog_dir(project) / n / "hw_measurements.json").is_file()
                      for n in block_names)
@@ -1320,8 +1321,64 @@ def _gather_analog_evidence(project: Path) -> Dict[str, Any]:
             mixed_paths.append(f)
     return {"block_names": block_names,
             "block_grid": block_grid,
+            "structure_only_grid": structure_only_grid,
             "hw_tuning_invoked": hw_present,
             "mixed_paths": mixed_paths}
+
+
+# ── PRESENCE IS NOT THE SAME QUESTION AS CONTENT ──────────────────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   A grid cell that says an artefact exists must not, by looking the same,
+#   also say what is in it. When the producer recorded that the artefact's
+#   content came from a library default, the cell says that too.
+#
+# Measured before this: on a project whose A3 and A4 artefacts each RECORD
+# that their circuit came from a topology library with no bound input reaching
+# any device parameter, this grid rendered them with the same ✅ as a design
+# sized against its spec, and counted them, one for one, into "artefacts
+# present". A reader of the summary could not tell the two projects apart.
+#
+# READ from the producer's own record, never inferred: no consumer can look at
+# a `.sp` or a corner result and know whether a number in it came from a bound
+# input or from a default. Only the producer that resolved it knows, and it
+# wrote the answer down. Absence of the record is NOT read as structure-only —
+# "undeclared" is a different answer and the per-step gate owns it.
+#
+# Kept SEPARATE from `block_grid` on purpose. Presence and content are two
+# questions, `block_grid` answers the first, and folding a second answer into
+# its booleans would make every existing reader of it silently mean something
+# new.
+_STRUCTURE_ONLY_VALUE = "structure_only"
+_CONTENT_RECORDS = {
+    # step -> (filename, key path into the JSON document)
+    "A3": ("netlist_provenance.json", ("_provenance", "design_content")),
+    "A4": ("corner_results.json", ("design_content",)),
+}
+
+
+def _gather_analog_structure_only(project: Path, block_names: List[str]
+                                  ) -> Dict[str, Dict[str, bool]]:
+    """`{block: {step: True}}` for every cell whose artefact records that its
+    content came from a library default."""
+    out: Dict[str, Dict[str, bool]] = {}
+    for name in block_names:
+        cells: Dict[str, bool] = {}
+        for step, (fname, keys) in _CONTENT_RECORDS.items():
+            for base in (project / "phase3" / "analog" / name,
+                         project / "analog" / name):
+                p = base / fname
+                if not p.is_file():
+                    continue
+                doc: Any = _safe_json(p)
+                for k in keys:
+                    doc = doc.get(k) if isinstance(doc, dict) else None
+                if doc == _STRUCTURE_ONLY_VALUE:
+                    cells[step] = True
+                break
+        if cells:
+            out[name] = cells
+    return out
 
 
 def _analog_a_step_paths(project: Path, block: str) -> Dict[str, List[Path]]:
@@ -1782,11 +1839,32 @@ def _render(project: Path, run_audit: bool = True,
             md.append("**Per-block A1-A9 artefact presence:**")
             md.append("")
             steps_hdr = ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9"]
+            so_grid = analog_ev.get("structure_only_grid") or {}
             md.append("| Block | " + " | ".join(steps_hdr) + " |")
             md.append("|---|" + "|".join([":---:"] * len(steps_hdr)) + "|")
+            any_so = False
             for name, grid in analog_ev["block_grid"].items():
-                cells_md = " | ".join("✅" if grid.get(s) else "—" for s in steps_hdr)
-                md.append(f"| `{name}` | {cells_md} |")
+                so = so_grid.get(name) or {}
+                row_cells = []
+                for s in steps_hdr:
+                    if not grid.get(s):
+                        row_cells.append("—")
+                    elif so.get(s):
+                        row_cells.append("◐")
+                        any_so = True
+                    else:
+                        row_cells.append("✅")
+                md.append(f"| `{name}` | {' | '.join(row_cells)} |")
+            if any_so:
+                # The legend is emitted only when a ◐ is on the page, so the
+                # sentence a reader needs is the sentence they get.
+                md.append("")
+                md.append("_◐ = the step produced its declared artefact and "
+                          "the producer recorded that its content came from a "
+                          "library default: no bound input determined it. Not "
+                          "missing (re-running produces the same artefact) and "
+                          "not a design-bound ✅ (every number measured on it "
+                          "is a number about the default)._")
         # Mixed-signal references — inline list (avoid nested bullets)
         if analog_ev.get("mixed_paths"):
             md.append("")
@@ -1961,8 +2039,17 @@ def _render(project: Path, run_audit: bool = True,
     if analog_ev.get("block_names"):
         n = len(analog_ev["block_names"])
         a_total = sum(sum(g.values()) for g in analog_ev["block_grid"].values())
+        # An artefact produced from a library default is PRESENT — the count
+        # keeps it — but a resource line that stopped there would say the same
+        # number for a design sized to its spec and for a topology library.
+        # The subset is named beside the total rather than deducted from it.
+        so_n = sum(len(c) for c in
+                   (analog_ev.get("structure_only_grid") or {}).values())
+        so_txt = (f"; {so_n} of them from a library default, not a bound input"
+                  if so_n else "")
         md.append(f"- Analog blocks: {n} × 9 stages "
-                  f"= {n*9} per-block step-runs (artefacts present: {a_total}/{n*9})")
+                  f"= {n*9} per-block step-runs (artefacts present: "
+                  f"{a_total}/{n*9}{so_txt})")
         if analog and analog.get("tuning"):
             for t in analog["tuning"]:
                 md.append(f"- Closed-loop tuning ({t['block']}): "

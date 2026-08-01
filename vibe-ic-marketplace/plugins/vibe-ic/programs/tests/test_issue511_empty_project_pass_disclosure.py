@@ -152,7 +152,18 @@ def test_flow_gate_pass_now_states_how_many_obligations_stood_behind_it(
     (ad / "spec.json").write_text("{}")
     (ad / "topology.md").write_text("# LDO\n")
     (ad / "ldo.sp").write_text(".title LDO\n.end\n")
-    (ad / "corner_results.json").write_text("{}")
+    # WAS `{}`. This test asserts a whole-project A1-A9 PASS, and with an
+    # empty object in it the A4 cell was signing off a corner artefact that
+    # declares no corners, no provenance and no statement of what circuit it
+    # measured. The A4 cell delegates to the A4 gate's own certification
+    # predicates, so the fixture carries what a signed-off A4 looks like; the
+    # denominator disclosure this file is about is untouched by it.
+    (ad / "corner_results.json").write_text(json.dumps({
+        "netlist_provenance": "a3_netlist",
+        "design_content": "structure_and_geometry",
+        "corners": [{"name": "tt_27c", "simulator_run": True, "vout_v": 1.8}],
+        "spec_results": [{"name": "vout", "status": "PASS", "target": None}],
+    }))
     (ad / "layout.mag").write_text("magic\n")
     (ad / "drc_clean.flag").write_text("violations: 0\n")
     (ad / "lvs_match.flag").write_text("lvs: match\n")

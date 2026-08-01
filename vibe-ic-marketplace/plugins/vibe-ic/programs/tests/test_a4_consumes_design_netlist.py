@@ -103,6 +103,36 @@ def _project(tmp_path, blocks, *, netlist=(), testbench=(), extra_card="",
     return root
 
 
+#: The two answers that NAME what a netlist contains. Anything else — the
+#: record absent, or present and saying it has no answer — is the upstream
+#: declining to say, and a run built on it cannot be certified.
+STRUCTURE_ONLY = "structure_only"
+SIZED = "structure_and_geometry"
+
+
+def _sidecar(project: Path, block: str, design_content: str = SIZED) -> None:
+    """The upstream producer's record of WHAT its netlist contains.
+
+    Deliberately NOT written by `_project`. Whether the chain discloses is a
+    property several tests here vary on purpose, and a fixture that supplied it
+    unconditionally would hide the tree in which nobody says anything — which
+    is the tree the gate exists for. No consumer can look at a `.sp` and know
+    whether a number in it came from a bound input or from a library default;
+    only the producer that resolved it knows, and this is where it writes the
+    answer down.
+    """
+    (project / "phase3" / "analog" / block / "netlist_provenance.json"
+     ).write_text(json.dumps({
+         "block": block,
+         "_provenance": {
+             "producer": "synthetic-fixture",
+             "design_content": design_content,
+             "spec_bound_params": ([] if design_content == STRUCTURE_ONLY
+                                   else ["r1.l"]),
+             "library_nominal_params": ["m1.w", "m1.l"],
+         }}, indent=2))
+
+
 def _fake_docker(meas="MEAS vout=1.800000e+00\n", decks=None, calls=None):
     """A container stand-in that answers the sweep's probes and RECORDS the
     exact deck text handed to the simulator, so the assertions are about the
@@ -512,16 +542,52 @@ def test_the_gate_of_record_certifies_what_this_producer_now_emits(
     Before, no input to this program could produce an artefact the gate would
     certify — every path led to `absent` or `builtin_template`. A gate whose
     pass state is unreachable is not a gate.
+
+    The fixture gained the upstream sidecar. Without it the producer inherits
+    `undeclared` — an honest statement that it has no record of what its
+    netlist contains — and the gate declines to certify that, on purpose: if
+    "I have no record" certified, a producer could buy a pass by writing that
+    token instead of by inheriting the answer, and silence would be cheap again
+    under a new name. Satisfying the gate means the WHOLE chain discloses, so
+    the fixture supplies the link the chain was missing.
     """
     S = _sweep(monkeypatch)
     project = _project(tmp_path, [("blk_alpha", "ldo")],
                        netlist=("blk_alpha",), testbench=("blk_alpha",))
+    _sidecar(project, "blk_alpha", SIZED)
     assert S.run_block(project, "blk_alpha", "fake", "sky130", "auto") == 0
     r = subprocess.run([sys.executable, str(GATE), str(project),
                         "--block", "blk_alpha"], capture_output=True, text=True)
     assert r.returncode == 0, (
         f"the gate refused a design-derived sweep:\n{r.stdout}\n{r.stderr}")
     assert "PASS" in r.stdout
+
+
+def test_the_same_run_without_the_upstream_record_is_not_certified(
+        tmp_path: Path, monkeypatch) -> None:
+    """The negative control for the line above, and the measured inversion.
+
+    Byte-identical inputs except the upstream sidecar. Pre-fix this tree was
+    the CHEAPER of the two: the producer wrote `undeclared`, nothing read it,
+    and the gate certified — so a chain that disclosed nothing outscored a
+    chain that disclosed a library default.
+    """
+    S = _sweep(monkeypatch)
+    project = _project(tmp_path, [("blk_alpha", "ldo")],
+                       netlist=("blk_alpha",), testbench=("blk_alpha",))
+    assert S.run_block(project, "blk_alpha", "fake", "sky130", "auto") == 0
+    # PRECONDITION — the sweep ran and produced a full artefact; only the
+    # statement of content is missing from it.
+    rec = _record(project, "blk_alpha")
+    assert rec.get("corners"), "PRECONDITION: no corners were produced"
+    assert rec.get("design_content") == "undeclared", rec.get("design_content")
+
+    r = subprocess.run([sys.executable, str(GATE), str(project),
+                        "--block", "blk_alpha"], capture_output=True, text=True)
+    assert r.returncode == 1, (
+        f"a corner artefact that records no answer about what it simulated "
+        f"was certified (rc={r.returncode})")
+    assert "A4_DESIGN_CONTENT_UNDECLARED" in (r.stdout + r.stderr)
 
 
 # ── 6. THE CORNER IS OURS TO CHOOSE; THE MODEL SET IS NOT ───────────────────

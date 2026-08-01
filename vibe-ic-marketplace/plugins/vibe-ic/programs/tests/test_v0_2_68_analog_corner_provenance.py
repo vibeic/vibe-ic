@@ -77,6 +77,13 @@ def _block(tmp_path, corners, spec_status="PASS"):
     bdir.mkdir(parents=True, exist_ok=True)
     (bdir / "corner_results.json").write_text(json.dumps({
         "_provenance": "real_ngspice",
+        # `_provenance` and the executed/derived split are both about HOW the
+        # corners were obtained. `design_content` is the separate answer to
+        # WHAT circuit they were obtained from, and these fixtures assert a
+        # certified sweep — so without it each of them would also be asserting
+        # that a sweep which will not name its subject can be certified.
+        # Executed-vs-derived accounting stays the property under test.
+        "design_content": "structure_and_geometry",
         "total_corners": len(corners),
         "results_found": len(corners),
         "corners": corners,

@@ -222,12 +222,26 @@ def test_the_run_record_names_the_circuit_a4_measured(tmp_path, monkeypatch):
     monkeypatch.setattr(R.subprocess, "run", spy)
     res = R.step_for_block(p, blk, "A4_corner_sweep")
 
-    assert res.status == "PASS_WITH_REAL_SIM", res.detail
+    # The deterministic A3 producer resolves this block's netlist from a
+    # topology library — the project's documents bound no quantity that reaches
+    # a device parameter — and RECORDS that. The sweep republishes it and the
+    # gate discloses it, so the runner's own disposition for this step is the
+    # structure-only tier rather than a plain real-sim pass. "PASS_WITH_REAL_SIM"
+    # here would be the original defect in the run log: a status that is true
+    # about the SIMULATOR and silent about the SUBJECT.
+    assert res.status == "PASS_STRUCTURE_ONLY", res.detail
+    assert res.extras.get("design_content") == "structure_only", res.extras
+    assert (res.extras.get("design_content_source") or "").endswith(
+        "corner_results.json"), res.extras
     assert res.extras.get("design_traceable") is True, res.extras
     assert res.extras.get("deck_source") == "a3_netlist", res.extras
     assert (res.extras.get("netlist_source") or "").endswith(
         "vreg_alpha.sp"), res.extras
     assert any("corner_results.json" in f for f in res.output_files), (
         f"the run record must NAME the artefact: {res.output_files}")
+    # BOTH halves on the one line a reviewer reads: which circuit, and what is
+    # in it. Neither replaces the other.
     assert "vreg_alpha.sp" in res.detail, (
         f"the one line a reviewer reads must say which circuit: {res.detail!r}")
+    assert "STRUCTURE_ONLY" in res.detail, (
+        f"...and what was in it: {res.detail!r}")

@@ -47,6 +47,12 @@ def _run(project: Path, *args: str) -> subprocess.CompletedProcess:
 def test_happy_path(tmp_path: Path) -> None:
     _block_list(tmp_path, ["ldo"])
     _corners(tmp_path, "ldo", {
+        # WAS: no `design_content` at all. That made this "happy path" the
+        # assertion that an artefact declaring simulated corners and refusing
+        # to say what circuit produced them is the certifiable shape — which
+        # is the pre-disclosure shape, and every stale artefact's shape.
+        # A complete run says what it measured; the happy path now does too.
+        "design_content": "structure_and_geometry",
         "corners": [
             {"process": "TT", "temp_c": 27, "vdd_v": 1.8,
              "simulator_run": True},

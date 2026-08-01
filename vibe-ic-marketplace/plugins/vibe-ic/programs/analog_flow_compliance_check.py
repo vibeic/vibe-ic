@@ -324,6 +324,13 @@ def _a4_signed_off(project: Path, block: str) -> bool:
         return False
     if _a4._netlist_absent_fail(project, block, data, corners, rel) is not None:
         return False
+    # ...and the third of the gate's certification predicates. Delegated for
+    # the same reason as the other two: this matrix and the gate of record
+    # must not be able to disagree about the same artefact. Without it the
+    # cell read a signed-off A4 for an artefact the gate itself refuses to
+    # certify — which is the "A3 MISSING / A4 PASS" shape one door along.
+    if _a4._content_undisclosed_fail(block, data, rel) is not None:
+        return False
     return True
 
 

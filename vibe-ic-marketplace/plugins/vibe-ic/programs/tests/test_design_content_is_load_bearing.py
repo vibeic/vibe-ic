@@ -43,27 +43,13 @@ A3_GATE = PROGRAMS / "analog_a3_netlist_gen_check.py"
 ANALOG_COMPLIANCE = PROGRAMS / "analog_flow_compliance_check.py"
 FLOW_COMPLIANCE = PROGRAMS / "flow_compliance_check.py"
 
+# `_sidecar` is IMPORTED, not redefined. It is the only place the answer to
+# "what does this netlist contain?" exists, and two copies of it in two test
+# files is two chances for the fixtures to drift apart on the one field this
+# whole change turns on.
 from test_a4_consumes_design_netlist import (      # noqa: E402
-    _project, _sweep, _record, _decks_on_disk)
-
-STRUCTURE_ONLY = "structure_only"
-SIZED = "structure_and_geometry"
-
-
-def _sidecar(project: Path, block: str, design_content: str) -> None:
-    """The upstream producer's own record of what its netlist contains. This
-    is the ONLY place that answer exists: no consumer can look at a `.sp` and
-    know whether a number in it came from a bound input or from a default."""
-    (project / "phase3" / "analog" / block / "netlist_provenance.json"
-     ).write_text(json.dumps({
-         "block": block,
-         "_provenance": {
-             "producer": "synthetic-fixture",
-             "design_content": design_content,
-             "spec_bound_params": ([] if design_content == STRUCTURE_ONLY
-                                   else ["r1.l"]),
-             "library_nominal_params": ["m1.w", "m1.l"],
-         }}, indent=2))
+    _project, _sweep, _record, _decks_on_disk, _sidecar,
+    STRUCTURE_ONLY, SIZED)
 
 
 def _run(prog: Path, project: Path, *args) -> subprocess.CompletedProcess:

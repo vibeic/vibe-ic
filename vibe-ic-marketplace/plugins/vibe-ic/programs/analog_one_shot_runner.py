@@ -470,6 +470,68 @@ def _step_outputs(project: Path, block: str, step_name: str) -> List[str]:
     return out
 
 
+# ── the disclosure a PASSING gate prints, and where it lands ──────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   When a step certifies an artefact whose content came from a library
+#   default, the run record must SAY SO — as the step's own disposition, not
+#   as a plain pass with the disclosure dropped on the floor.
+#
+# The token is a LINE-START sentinel on stdout, the same shape as this repo's
+# `VACUOUS_PASS:`, and it is read whether or not the gate passed.
+_STRUCTURE_ONLY_SENTINEL = "STRUCTURE_ONLY:"
+#: The per-step artefact whose own record answers "what is in it?", and the
+#: key inside it. Two producers, two shapes; both are read from the artefact
+#: and never inferred here.
+_CONTENT_SOURCES: Dict[str, tuple] = {
+    "A3_netlist_gen": ("netlist_provenance.json", ("_provenance",
+                                                   "design_content")),
+    "A4_corner_sweep": ("corner_results.json", ("design_content",)),
+}
+
+
+def _structure_only_disclosure(cp) -> Optional[str]:
+    """The gate's structure-only line, or None. Reads stdout AND stderr for
+    the same reason the flow auditor concatenates them: which stream a gate
+    uses is not part of the contract, and a disclosure missed because it went
+    to the other one is a disclosure that does not exist."""
+    for stream in ((cp.stdout or ""), (cp.stderr or "")):
+        for line in stream.splitlines():
+            if line.startswith(_STRUCTURE_ONLY_SENTINEL):
+                return line.strip()
+    return None
+
+
+def _content_extras(project: Path, block: str,
+                    step_name: str) -> Dict[str, Any]:
+    """`design_content` for a step's own artefact, READ from that artefact.
+
+    Empty for a step that has no such record — this must never assert an
+    answer the producer did not write down, which is the whole point of the
+    field.
+    """
+    spec = _CONTENT_SOURCES.get(step_name)
+    if not spec:
+        return {}
+    name, keys = spec
+    path = _pl.analog_dir(project) / block / name
+    if not path.is_file():
+        return {}
+    try:
+        doc: Any = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    for k in keys:
+        if not isinstance(doc, dict):
+            return {}
+        doc = doc.get(k)
+    if not isinstance(doc, str) or not doc:
+        return {}
+    return {"design_content": doc,
+            "structure_only": doc == "structure_only",
+            "design_content_source": str(path.relative_to(project))}
+
+
 def _producer_gap(project: Path, block: str,
                   prod: Dict[str, Any]) -> Optional[str]:
     """The gap file a declining producer wrote, if it wrote one."""
@@ -625,10 +687,29 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             if "VACUOUS_PASS" in cp.stdout:
                 return StepResult(step_name, bname, "VACUOUS_PASS",
                                   time.time() - t0, stdout_tail)
+            # THE SECOND SENTINEL, read exactly like the first. A gate that
+            # PASSED can still be saying that the artefact it certified came
+            # from a library default, and until this branch existed the runner
+            # recorded that step as a plain PASS with EMPTY extras — the
+            # disclosure the gate printed reached no consumer, which is the
+            # same defect one layer down: a signal that exists and is not read.
+            # Measured: `grep -c STRUCTURE` over this runner's own report was 0
+            # on a project whose every A3/A4 artefact disclosed a library
+            # default.
+            so = _structure_only_disclosure(cp)
+            if so:
+                return StepResult(step_name, bname, "PASS_STRUCTURE_ONLY",
+                                  time.time() - t0, so,
+                                  output_files=_step_outputs(project, bname,
+                                                             step_name),
+                                  extras=_content_extras(project, bname,
+                                                         step_name))
             return StepResult(step_name, bname, "PASS",
                               time.time() - t0, stdout_tail,
                               output_files=_step_outputs(project, bname,
-                                                         step_name))
+                                                         step_name),
+                              extras=_content_extras(project, bname,
+                                                     step_name))
         if cp.returncode == 2:
             # A1-A3 PRODUCERS — the deterministic first track, in exactly the
             # shape A4's real-sim bypass below already uses: run BEFORE the
@@ -668,15 +749,23 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                         if cp_prod.returncode == 0:
                             tail = (pcp.stdout.strip().splitlines()[-1]
                                     if pcp.stdout else "produced")
+                            # The gate certified it. What it certified is the
+                            # gate's own disclosure to make, and the run record
+                            # carries it rather than a bare producer status.
+                            so = _structure_only_disclosure(cp_prod)
                             return StepResult(
-                                step_name, bname, prod["status"],
-                                time.time() - t0, tail,
+                                step_name, bname,
+                                "PASS_STRUCTURE_ONLY" if so
+                                else prod["status"],
+                                time.time() - t0, so or tail,
                                 output_files=_step_outputs(project, bname,
                                                            step_name),
                                 extras={
                                     "extraction_strategy": prod["strategy"],
                                     "low_confidence": False,
                                     "producer": prod["program"],
+                                    **_content_extras(project, bname,
+                                                      step_name),
                                 })
                     gap = _producer_gap(project, bname, prod)
                     if gap:
@@ -763,12 +852,26 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                 _doc = json.loads(cr.read_text())
                             except Exception:
                                 _doc = {}
+                            # `real ngspice on <deck>` names WHERE the deck
+                            # came from and says nothing about WHAT IS IN IT —
+                            # the same silence, one layer up, that this whole
+                            # track started from. The gate's disclosure decides
+                            # the step's disposition.
+                            so = _structure_only_disclosure(cp_real)
+                            _on = (f"real ngspice on "
+                                   f"{_doc.get('netlist_source') or 'an unnamed deck'}")
                             return StepResult(
-                                step_name, bname, "PASS_WITH_REAL_SIM",
+                                step_name, bname,
+                                "PASS_STRUCTURE_ONLY" if so
+                                else "PASS_WITH_REAL_SIM",
                                 time.time() - t0,
-                                f"real ngspice on "
-                                f"{_doc.get('netlist_source') or 'an unnamed deck'}"
-                                f": {tail}",
+                                # BOTH facts, disclosure FIRST: the console
+                                # line is truncated, so whichever comes first
+                                # wins the visible slot, and "what is in it"
+                                # is the newer news. WHICH deck stays in the
+                                # sentence — it is the other half a reviewer
+                                # needs and neither replaces the other.
+                                (f"{so} — {_on}" if so else f"{_on}: {tail}"),
                                 output_files=[str(cr.relative_to(project))],
                                 extras={
                                     "extraction_strategy": "real_ngspice",
@@ -777,6 +880,8 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                     "netlist_source": _doc.get("netlist_source"),
                                     "deck_source": _doc.get("deck_source"),
                                     "low_confidence": False,
+                                    **_content_extras(project, bname,
+                                                      step_name),
                                 })
                         if cp_real.returncode == 1:
                             tail = (cp_real.stdout.strip().splitlines()[-1]
@@ -984,10 +1089,20 @@ def main() -> int:
     has_vacuous = any(s.status == "VACUOUS_PASS" for s in plan)
     has_waiver = any(s.status in ("WAIVED", "SKIP") for s in plan)
     has_real_pass = any(s.status == "PASS" for s in plan)
+    # STRUCTURE-ONLY joins the ladder BELOW a waiver-free pass and ABOVE
+    # nothing: the step ran and produced its declared artefact from a library
+    # default. It is not a real pass (every number measured on it is a number
+    # about the default), it is not vacuous (the gate examined something), and
+    # it is not a FAIL — a run honest about its ceiling must not score below
+    # one that invented content to fill the gap, or the next run stops being
+    # honest. Counted here so the top-level verdict cannot round it up.
+    structure_only = [s for s in plan if s.status == "PASS_STRUCTURE_ONLY"]
     if has_fail:
         verdict = "FAIL"
-    elif has_vacuous and not has_real_pass:
+    elif has_vacuous and not has_real_pass and not structure_only:
         verdict = "VACUOUS_PASS"
+    elif structure_only:
+        verdict = "PASS_STRUCTURE_ONLY"
     elif has_vacuous or has_waiver:
         verdict = "PASS_WITH_WAIVERS"
     else:
@@ -998,6 +1113,9 @@ def main() -> int:
         "blocks": [b.get("name") or b.get("type") for b in blocks],
         "steps": [asdict(s) for s in plan],
         "verdict": verdict,
+        # NAMED, not only counted: a reader who sees the tier needs to know
+        # which step of which block produced it without opening nine records.
+        "structure_only_steps": [f"{s.block}/{s.name}" for s in structure_only],
     }
     out = _pl.report_path(project, "analog_one_shot.json")
     out.parent.mkdir(parents=True, exist_ok=True)

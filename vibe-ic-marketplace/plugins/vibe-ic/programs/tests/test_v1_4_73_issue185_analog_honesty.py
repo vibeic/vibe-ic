@@ -162,6 +162,13 @@ def _run_a4(project, *args):
 def _ldo_doc(nominal_vout, worst_vout, worst_real=True):
     # target 1.2 V, tol 0.05 (window ~1.14..1.26). best_corner = nominal tt_27c.
     return {
+        # These fixtures are about WHICH corner the gate grades. Two of them
+        # assert a clean PASS, and a corner artefact that will not say what
+        # circuit it simulated no longer reaches one — so, like the netlist
+        # `_corners` already writes, the record of WHAT was simulated is part
+        # of the run these fixtures stand in for rather than a property under
+        # test here.
+        "design_content": "structure_and_geometry",
         "best_corner": {"name": "tt_27c", "value": nominal_vout},
         "corners": [
             {"name": "tt_27c", "process": "tt", "temp_c": 27,

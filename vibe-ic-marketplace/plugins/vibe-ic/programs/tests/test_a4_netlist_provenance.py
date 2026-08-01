@@ -358,10 +358,18 @@ def test_matrix_does_not_read_a4_done_on_a_blocked_record(
 
 def test_matrix_still_reads_a4_done_for_an_a3_derived_sweep(
         tmp_path: Path) -> None:
-    """Negative control: a sweep with A3's netlist behind it still counts."""
+    """Negative control: a sweep with A3's netlist behind it still counts.
+
+    Carries `design_content` for the same reason the sibling gate control
+    above does: the matrix cell delegates to the gate's certification
+    predicates, and an artefact that claims an upstream-derived deck while
+    saying nothing about what is IN it is not one of them. Without the field
+    this control would be asserting that the cell may sign off what the gate
+    refuses."""
     project = _project(tmp_path, [("vreg", "ldo")], with_netlist=("vreg",))
     _corners(project, "vreg", _real_sim_doc(
         netlist_provenance="a3_netlist",
+        design_content="structure_and_geometry",
         netlist_source="phase3/analog/vreg/vreg.sp"))
     row = _matrix(project)["vreg"]
     assert row["A3"] == "PASS", row
