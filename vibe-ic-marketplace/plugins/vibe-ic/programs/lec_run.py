@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -63,6 +64,7 @@ from _rtl_include_hub import (  # noqa: E402
     drop_include_hubs as _drop_include_hubs,
     macro_headers_first as _macro_headers_first,
 )
+import _hardmacro_stage as _hms  # noqa: E402 — staged SRAM/IP macro blackbox
 
 PROGRAM = "lec_run"
 
@@ -75,7 +77,25 @@ DEFAULT_LIBERTY = (
 # ~2k compared points through equiv_induct -seq 64) runs far past the old
 # 1800s, and a killed run produced NO evidence — indistinguishable at the
 # gate from a real mismatch. Tunable via --timeout for smaller budgets.
-DEFAULT_YOSYS_TIMEOUT_S = 7200
+# ORGANIC-20260801 — VIBEIC_LEC_YOSYS_TIMEOUT_S overrides the default for very
+# large (>1M-cell) golds whose MONOLITHIC equiv legitimately exceeds — or is
+# deliberately bounded below (a giant gold that cannot converge in any open-tool
+# budget honestly lands SKIPPED-CONDITION, never a fake PASS) — the historical
+# 7200s. Symmetric with the synth step's VIBEIC_PHASE2_SYNTH_TIMEOUT_S. The
+# runner reads this SAME constant for its outer subprocess budget and inherits
+# the env into the lec_run subprocess, so both stay in lock-step. Byte-identical
+# (7200) when the env var is unset. chip-AGNOSTIC.
+def _env_yosys_timeout_default() -> int:
+    try:
+        v = int(os.environ.get("VIBEIC_LEC_YOSYS_TIMEOUT_S", "") or 0)
+        if v > 0:
+            return v
+    except ValueError:
+        pass
+    return 7200
+
+
+DEFAULT_YOSYS_TIMEOUT_S = _env_yosys_timeout_default()
 DEFAULT_JSON_REL = "reports/lec.json"
 DEFAULT_RPT_REL = "reports/lec.rpt"
 
@@ -1776,6 +1796,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     gate_abs = str(gate_netlist.resolve())
+
+    # ORGANIC-20260801 — an instantiated hard-macro (SRAM/IP) whose model is
+    # STAGED under input/pdk_local (L8) is UNDEFINED in rtl/, so the GOLD read
+    # aborts `unknown module <macro>` (0 compared points → false FAIL) and the
+    # synth GATE netlist instantiates it without a module decl. Blackbox the
+    # macro on BOTH sides — prepend a `(* blackbox *)` stub to the gold read
+    # AND pass it as `blackbox_v` for the gate read — so the miter proves the
+    # surrounding logic under an assume-guarantee on identical macro
+    # interfaces. No-op when the design stages no hard-macro (byte-identical).
+    macro_blackbox_v: List[str] = []
+    for _m in _hms.staged_hardmacro_models(project, gold_files):
+        if _m["v"] is not None:
+            _stub = _hms.emit_blackbox_stub(
+                _m["v"], _m["name"], rpt_out.parent / "lec_hardmacro_bb")
+            macro_blackbox_v.append(str(_stub.resolve()))
+    if macro_blackbox_v:
+        gold_files = macro_blackbox_v + gold_files
+        print(f"[lec_run] staged hard-macro blackbox: "
+              f"{[Path(s).name for s in macro_blackbox_v]}", file=sys.stderr)
+
     # A pre-techmap generic `$_`-primitive netlist must be read with `-icells`
     # and NO Liberty, else `hierarchy -check` aborts on an undefined `\$_DFF_P_`
     # module before any $equiv point is built (compared_points=0 false-FAIL).
@@ -1891,6 +1931,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     def _run(frontend: str, slang_prefix: str = "",
              defines: str = "-DSIMULATION -DYOSYS"):
         script = build_equiv_script(gold_files, gate_abs, resolved_top, liberty,
+                                    blackbox_v=macro_blackbox_v or None,
                                     gate_is_generic=gate_is_generic,
                                     gold_frontend=frontend,
                                     slang_prefix=slang_prefix,
