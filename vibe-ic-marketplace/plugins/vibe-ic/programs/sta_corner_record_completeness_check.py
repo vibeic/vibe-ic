@@ -173,7 +173,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
@@ -447,6 +447,82 @@ def extract_slacks(text: str) -> Dict[str, Optional[float]]:
             "tns_ns": min(tns_pool) if tns_pool else None}
 
 
+def _row_instance(line: str) -> str:
+    """The INSTANCE a DRV row belongs to.
+
+    OpenSTA prints `<instance>/<pin>` in the first column:
+
+        _07014_/A2                              1.50   27.34  -25.84 (VIOLATED)
+
+    Hierarchical names contain `/` too, so the PIN is the last segment and the
+    instance is everything before it. Returns "" when the row has no leading
+    identifier, which is not the same as an instance named "".
+    """
+    tok = line.split()[0] if line.split() else ""
+    if "/" not in tok:
+        return ""
+    return tok.rsplit("/", 1)[0]
+
+
+def spare_instances(project: Path) -> Optional[Set[str]]:
+    """Instance names the SPARE-CELL producer recorded, or None if it recorded
+    nothing here.
+
+    THE PRODUCER ALREADY KNOWS (vibe-ic#582). `_build_spare_postfix_tcl`
+    (#563 r2) deliberately ties every unconnected spare INPUT to one
+    `spare_tielo` net, because floating spare inputs make netgen wire their
+    pins to a neighbour's pseudo-net and LVS mismatches. That is correct and
+    must not be undone — but it puts every spare input on ONE net, and a net
+    with hundreds of sinks has an enormous transition, so those pins land in
+    the max-slew table as if they were design violations.
+
+    Read from `spare_cells.json` rather than re-derived: the producer states
+    `tied_off` and lists every instance, so no name heuristic is needed. A
+    `spare_`-prefix rule would be exactly the keyword an differently-named pool
+    escapes, and this repo has removed several of those.
+
+    None means "no spare record here" — NOT "no spare cells". The caller must
+    not report an attribution it could not compute.
+    """
+    for cand in (project / "phase3" / "stage3" / "pnr" / "spare_cells.json",
+                 project / "reports" / "phase3" / "spare_cells.json"):
+        if not cand.is_file():
+            continue
+        try:
+            d = json.loads(cand.read_text(errors="replace"))
+        except (OSError, ValueError):
+            return None
+        if not d.get("tied_off"):
+            # Not tied off -> its inputs are floating, not sinks on one net,
+            # and none of this applies.
+            return set()
+        return {i.get("name") for i in (d.get("instances") or [])
+                if i.get("name")}
+    return None
+
+
+def attribute_drv(rows: Dict[str, List[str]],
+                  spares: Optional[Set[str]]) -> Dict[str, object]:
+    """Split a DRV row population into design rows and tie-off rows.
+
+    DISCLOSED, NEVER SUBTRACTED. A DC-constant net's slew is meaningless, but a
+    total that quietly shrinks is the defect this repo keeps removing; both
+    numbers are published and their sum is still the total.
+    """
+    if spares is None:
+        return {"attributed": False,
+                "reason": "no spare_cells.json under this project"}
+    per_kind = {}
+    d_tot = s_tot = 0
+    for kind, insts in rows.items():
+        s_n = sum(1 for i in insts if i in spares)
+        per_kind[kind] = {"design": len(insts) - s_n, "constant_net": s_n}
+        d_tot += len(insts) - s_n
+        s_tot += s_n
+    return {"attributed": True, "per_kind": per_kind,
+            "design": d_tot, "constant_net": s_tot, "total": d_tot + s_tot}
+
+
 def extract_drv(text: str) -> Dict[str, object]:
     """DRV evidence from one STA report body: was OpenSTA ASKED for max_slew /
     max_capacitance / max_fanout, and what did it answer?
@@ -456,6 +532,9 @@ def extract_drv(text: str) -> Dict[str, object]:
     never asked — which this gate treats as a failure, not as a clean result,
     because an unqueried limit and a met limit look identical downstream."""
     counts: Dict[str, int] = {}
+    #: kind -> the INSTANCE each violating row belongs to, so a total can be
+    #: attributed instead of only sized (vibe-ic#582).
+    rows: Dict[str, List[str]] = {}
     queried = False
     query_error: Optional[str] = None
     kinds_seen: List[str] = []
@@ -522,14 +601,17 @@ def extract_drv(text: str) -> Dict[str, object]:
             continue
         if _VIOLATED_RE.search(line):
             counts[kind] = counts.get(kind, 0) + 1
+            rows.setdefault(kind, []).append(_row_instance(line))
             continue
         mneg = _TRAILING_NEG_RE.search(line)
         # Only a data row (a name followed by numbers) counts, never the title
         # underline or a stray negative in prose.
         if mneg and len(line.split()) >= 3:
             counts[kind] = counts.get(kind, 0) + 1
+            rows.setdefault(kind, []).append(_row_instance(line))
 
     violations = {k: v for k, v in counts.items() if v > 0}
+    _rows = {k: v for k, v in rows.items() if v}
     # vibe-ic#573 — a check type the run ASKED FOR whose table never appeared.
     #
     # `kinds_seen` is what the emitter's marker says was queried; `counts` gets a
@@ -560,6 +642,10 @@ def extract_drv(text: str) -> Dict[str, object]:
         "kinds_without_table": silent,
         "violations": violations,
         "total": sum(violations.values()),
+        # The INSTANCE each violating row belongs to, so a caller can attribute
+        # the total rather than only size it (vibe-ic#582). Kept out of the
+        # count so no existing consumer changes.
+        "rows": _rows,
     }
 
 
