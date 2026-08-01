@@ -2318,6 +2318,35 @@ _VACUOUS_HINT_PREFIX = "__VACUOUS_HINT__: "
 # uses.
 _STRUCTURE_ONLY_HINT_PREFIX = "__STRUCTURE_ONLY_HINT__: "
 _STRUCTURE_ONLY_STDOUT_SENTINEL = "STRUCTURE_ONLY:"
+# vibe-ic#599 — the roll-up had no vocabulary between PASS and VACUOUS-PASS, so
+# two different things arrived wearing the same word:
+#
+#   * step 14: `yosys_hilomap_required_check` prints `VACUOUS_PASS:` because no
+#     `.ys` script existed, and in the same sentence reports that the runner's
+#     INLINE `yosys -p` command was extracted and verified conformant. Its own
+#     docstring says the verdict word stays vacuous ON PURPOSE and `reason_class`
+#     carries how much was verified — a deliberate decision, so the gate is not
+#     what is wrong. The roll-up read the token and never the reason.
+#
+#   * D1: `phase1_expert_parse_track` returns VACUOUS_PASS when no deterministic
+#     rule applied AND the AI sub-track never answered. The input WAS applicable;
+#     that is INCOMPLETE. "A vacuous step is one nobody needs to come back to."
+#
+# Both are disclosed by a PRINTED SENTINEL rather than by matching a gate's prose
+# — matching prose is how a gate that says "I verified the inline command" got
+# read as "I examined nothing" to begin with.
+#
+# AGGREGATION IS UNCHANGED: both tiers count exactly as VACUOUS_PASS did, so no
+# design turns red on this alone. What changes is that the per-step listing can
+# tell "audited by another route" and "not audited, and someone must return"
+# apart from "nothing applied".
+_SUBSTANTIVE_HINT_PREFIX = "__SUBSTANTIVE_HINT__: "
+_INCOMPLETE_HINT_PREFIX = "__INCOMPLETE_HINT__: "
+
+#: What a gate PRINTS to raise each. Line-start, leading whitespace allowed —
+#: the same shape as the `VACUOUS_PASS:` disclosure that already exists.
+_SUBSTANTIVE_STDOUT_TOKEN = "SUBSTANTIVE_PASS"
+_INCOMPLETE_STDOUT_TOKEN = "INCOMPLETE"
 
 # ORGANIC #608 — internal marker a gate can emit to promote its step to
 # SKIPPED-CONDITION (not FAIL) when the gate's own evidence artifact HONESTLY
@@ -2624,6 +2653,18 @@ def _stdout_signals_waiver(snippet: str) -> bool:
         if line.lstrip().startswith(_WAIVER_STDOUT_SENTINEL):
             return True
     return False
+
+
+def _stdout_signals_token(snippet: str, token: str) -> bool:
+    """True iff `token` starts a line of the snippet (leading space allowed).
+
+    The generic form of `_stdout_signals_vacuous`, which is now one caller of
+    it. #599 adds two more disclosures and three copies of the same loop would
+    be three places for them to drift apart.
+    """
+    if not snippet:
+        return False
+    return any(line.lstrip().startswith(token) for line in snippet.splitlines())
 
 
 def _stdout_signals_vacuous(snippet: str) -> bool:
@@ -6301,6 +6342,10 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # as a bare PASS through a required one. A disclosure only counts if
             # the consumer reads it in both.
             reasons.append(f"{_VACUOUS_HINT_PREFIX}{_cmd}")
+        if passed and _stdout_signals_token(out, _SUBSTANTIVE_STDOUT_TOKEN):
+            reasons.append(f"{_SUBSTANTIVE_HINT_PREFIX}{_cmd}")
+        if passed and _stdout_signals_token(out, _INCOMPLETE_STDOUT_TOKEN):
+            reasons.append(f"{_INCOMPLETE_HINT_PREFIX}{_cmd}")
         return passed, reasons
 
     # `json_field_true`
@@ -6378,6 +6423,10 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # aggregation. The hint is filtered out before display so the
             # per-step listing only shows real reasons.
             reasons.append(f"{_VACUOUS_HINT_PREFIX}{cmd}")
+        if passed and _stdout_signals_token(out, _SUBSTANTIVE_STDOUT_TOKEN):
+            reasons.append(f"{_SUBSTANTIVE_HINT_PREFIX}{cmd}")
+        if passed and _stdout_signals_token(out, _INCOMPLETE_STDOUT_TOKEN):
+            reasons.append(f"{_INCOMPLETE_HINT_PREFIX}{cmd}")
         return passed, reasons
 
     # `advisory_program_exit_zero` (#306) — RUNS the program, RECORDS the
@@ -8055,12 +8104,19 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"STRUCTURE-ONLY: a declared artefact of this step was "
                     f"produced from a library default, not from a bound "
                     f"input — {h[len(_STRUCTURE_ONLY_HINT_PREFIX):]}")
+        # #599 — the two words the roll-up did not have.
+        substantive_hints = [r for r in reasons
+                             if r.startswith(_SUBSTANTIVE_HINT_PREFIX)]
+        incomplete_hints = [r for r in reasons
+                            if r.startswith(_INCOMPLETE_HINT_PREFIX)]
         non_hint_reasons = [r for r in reasons
                             if not r.startswith(_VACUOUS_HINT_PREFIX)
                             and not r.startswith(_SKIP_HINT_PREFIX)
                             and not r.startswith(_WAIVER_HINT_PREFIX)
                             and not r.startswith(_STRUCTURE_ONLY_HINT_PREFIX)
-                            and not r.startswith(_ADVISORY_HINT_PREFIX)]
+                            and not r.startswith(_ADVISORY_HINT_PREFIX)
+                            and not r.startswith(_SUBSTANTIVE_HINT_PREFIX)
+                            and not r.startswith(_INCOMPLETE_HINT_PREFIX)]
         if (passed and waiver_hints and not non_hint_reasons
                 and not skip_hints and not vacuous_hints):
             # WAIVED here means "DEFERRED via waiver": it leaves the required
@@ -8091,6 +8147,39 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 result.reasons.append(
                     f"SKIPPED-CONDITION: gate evidence self-reports a skip "
                     f"(#608/#675): {h[len(_SKIP_HINT_PREFIX):]}")
+        elif (passed and incomplete_hints and not non_hint_reasons
+                and not skip_hints):
+            # #599 D1. The input WAS applicable and was not examined — the AI
+            # sub-track of a two-track gate never delivered a reading, and the
+            # gate said so in writing while returning the token that means
+            # "nothing applies". A vacuous step is one nobody needs to come
+            # back to; this is one somebody does.
+            #
+            # AGGREGATED EXACTLY AS VACUOUS_PASS WAS, so nothing turns red on
+            # this alone. It is a naming fix, and whether an unexamined
+            # applicable input should BLOCK is a separate decision with a
+            # corpus sweep in front of it.
+            result.status = "INCOMPLETE"
+            for h in incomplete_hints:
+                result.reasons.append(
+                    f"INCOMPLETE: the gate reports its input was applicable "
+                    f"and was NOT examined: {h[len(_INCOMPLETE_HINT_PREFIX):]}")
+        elif (passed and vacuous_hints and substantive_hints
+                and not non_hint_reasons and not skip_hints):
+            # #599 step 14. The gate printed `VACUOUS_PASS:` because the
+            # artefact it normally audits was absent, and in the same breath
+            # reported that it verified the equivalent by another route — for
+            # `yosys_hilomap_required_check`, the runner's inline `yosys -p`
+            # command instead of a `.ys` script. Its docstring keeps the vacuous
+            # word deliberately, so the gate is not what is wrong; the roll-up
+            # simply never read the second half. A substantive verification is a
+            # PASS.
+            result.status = "PASS"
+            for h in substantive_hints:
+                result.reasons.append(
+                    f"substantive: the audited artefact was absent, and the "
+                    f"gate verified the equivalent by another route: "
+                    f"{h[len(_SUBSTANTIVE_HINT_PREFIX):]}")
         elif passed and vacuous_hints and not non_hint_reasons and not skip_hints:
             result.status = "VACUOUS_PASS"
             for h in vacuous_hints:
@@ -8386,31 +8475,79 @@ def _attribute_cascade_verdicts(
                     return m.group(1)
         return "?"
 
+    # vibe-ic#600 — a step (or an ancestor) that DECLARES a known gap is never
+    # softened by this cascade. M2 carried "KNOWN GAP, deliberately left
+    # declared and RED" in a COMMENT for four releases, so the cascade could not
+    # see it: M2's ancestry reaches step 13's LEC waiver and M2/M3/M4 were
+    # reported DEFERRED-BY-UPSTREAM(13). Closing 13 would have moved none of
+    # them — M3 and M4 FAIL on their own declared inputs — and the real blocker
+    # was hidden behind an unrelated waiver under a verdict that reads softer
+    # than MISSING and carries an implicit roadmap.
+    known_gap_of: Dict[Any, str] = {}
+    for st in steps:
+        sid = st.get("id")
+        kg = st.get("known_gap")
+        if sid is not None and isinstance(kg, str) and kg.strip():
+            known_gap_of[sid] = " ".join(kg.split())
+
     for r in results:
         if r.status != "MISSING":
             continue
-        # BFS over blocks_on ancestry → nearest deferred ancestor wins.
+        own_gap = known_gap_of.get(r.id)
+        if own_gap:
+            r.cascade_note = f"known-gap({r.id})"
+            r.reasons.insert(0, (
+                f"known-gap({r.id}): this step DECLARES its own gap, so no "
+                f"upstream waiver explains it and the verdict stays MISSING — "
+                f"{own_gap}"))
+            info.setdefault("known_gap", []).append((r.id, own_gap))
+            continue
+        # BFS over blocks_on ancestry. A declared known gap is nearer to the
+        # truth than any waiver behind it, so whichever is reached FIRST wins
+        # and a known gap stops the walk.
         queue = list(parents_of.get(r.id, []))
         seen: set = set()
         hit = None
+        gap_hit = None
         while queue:
             pid = queue.pop(0)
             if pid in seen:
                 continue
             seen.add(pid)
+            if pid in known_gap_of:
+                gap_hit = pid
+                break
             if pid in deferred_ids:
                 hit = pid
                 break
             queue.extend(parents_of.get(pid, []))
+        if gap_hit is not None:
+            # Attribution WITHOUT softening: the status stays MISSING, because
+            # the ancestor's gap is not a waiver and nothing is deferred.
+            r.cascade_note = f"blocked-by-known-gap({gap_hit})"
+            r.reasons.insert(0, (
+                f"blocked-by-known-gap({gap_hit}): the nearest blocking "
+                f"ancestor DECLARES a gap rather than carrying a waiver, so "
+                f"this is not deferred work — {known_gap_of[gap_hit]}"))
+            info.setdefault("blocked_by_known_gap", []).append((r.id, gap_hit))
+            continue
         if hit is None:
             continue
         ticket = _ticket_for(hit)
         r.status = "DEFERRED-BY-UPSTREAM"
         r.cascade_note = f"deferred-by-upstream({hit}, ticket={ticket})"
+        # WHAT IS KNOWN, and no more. The old wording asserted "this step
+        # consumes outputs that step X's waiver deferred", and nothing in the
+        # flow establishes that: `blocks_on` is an ORDERING edge, the flow
+        # declares `inputs:` ZERO times, and over 1221 (step, ancestor) pairs
+        # exactly ONE shares a declared output. The ordering fact is real and
+        # is what this says.
         r.reasons.insert(0, (
-            f"deferred-by-upstream({hit}, ticket={ticket}): this step "
-            f"consumes outputs that step {hit}'s waiver deferred — same "
-            f"waiver, not an independent gap"
+            f"deferred-by-upstream({hit}, ticket={ticket}): step {hit} is a "
+            f"waived ancestor of this step in the declared blocks_on ORDER, so "
+            f"this step never ran. The flow declares no inputs, so whether its "
+            f"artefacts would have appeared had {hit} run is not established "
+            f"from the flow — one waiver, one deduction"
         ))
         info["deferred_by_upstream"].append((r.id, hit, ticket))
 
@@ -8910,7 +9047,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     counts = {"PASS": 0, "FAIL": 0, "MISSING": 0, "WAIVED": 0,
               "DEFERRED-BY-UPSTREAM": 0,
               "SKIPPED-CONDITION": 0, "SKIPPED-SETUP-REQUIRED": 0,
-              "VACUOUS_PASS": 0, "STRUCTURE-ONLY": 0}
+              "VACUOUS_PASS": 0, "STRUCTURE-ONLY": 0,
+              # #599 — counted and rendered separately from VACUOUS-PASS.
+              # Same aggregation (a disclosure tier, never a failure); a
+              # different word, because a vacuous step is one nobody needs to
+              # come back to and this is one somebody does.
+              "INCOMPLETE": 0}
     for r in results:
         counts[r.status] = counts.get(r.status, 0) + 1
     # v1.6.97 (issue #29 Bugs 1+2) — thin-input waivers count toward
@@ -9109,6 +9251,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     skipped_str = f"  SKIPPED={counts.get('SKIPPED-CONDITION', 0)}" if counts.get("SKIPPED-CONDITION") else ""
     vacuous_str = (f"  VACUOUS-PASS={counts['VACUOUS_PASS']}"
                    if counts.get("VACUOUS_PASS") else "")
+    incomplete_str = (f"  INCOMPLETE={counts['INCOMPLETE']}"
+                      if counts.get("INCOMPLETE") else "")
     # v0.3.5 — #503: split cascade MISSING from independent gaps in the
     # summary so the actionable root-cause surface is visible at a
     # glance; #502: surface the waiver-chain bucket separately.
@@ -9139,7 +9283,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(
         f"  PASS={counts['PASS']}  {fail_str}  "
         f"{missing_str}  WAIVED-DEFERRED={counts['WAIVED']}"
-        f"{dbu_str}{skipped_str}{vacuous_str}{so_str}\n"
+        f"{dbu_str}{skipped_str}{vacuous_str}{so_str}{incomplete_str}\n"
     )
     if counts.get("STRUCTURE-ONLY") or so_failing:
         print(
@@ -9154,6 +9298,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
 
     _icon = {"PASS": "✓", "FAIL": "✗", "MISSING": "·", "WAIVED": "~",
+             "INCOMPLETE": "…",
              "DEFERRED-BY-UPSTREAM": "~",
              "SKIPPED-CONDITION": "-", "SKIPPED-SETUP-REQUIRED": "!",
              "VACUOUS_PASS": "○", "STRUCTURE-ONLY": "◐"}
@@ -9162,7 +9307,8 @@ def main(argv: Optional[List[str]] = None) -> int:
               "SKIPPED-CONDITION": "SKIPPED-CONDITION",
               "SKIPPED-SETUP-REQUIRED": "SKIPPED-SETUP-REQUIRED",
               "VACUOUS_PASS": "VACUOUS-PASS",
-              "STRUCTURE-ONLY": "STRUCTURE-ONLY"}
+              "STRUCTURE-ONLY": "STRUCTURE-ONLY",
+              "INCOMPLETE": "INCOMPLETE"}
     for r in results:
         icon = _icon.get(r.status, "?")
         label = _label.get(r.status, r.status)

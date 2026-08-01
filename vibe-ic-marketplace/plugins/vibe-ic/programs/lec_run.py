@@ -207,6 +207,49 @@ def induction_did_not_converge(text: str):
                       "the escalating -seq sweep (a flat induction wall)")
     return False, ""
 
+
+# #778 / round-2 subservient×sky130A — the escalating `-seq 4/16/64` induction
+# ladder can run OUT of depth on a deep bit-serial datapath (SERV accumulates
+# its memory ADDRESS bit-serially, threading bufreg→bufreg2→arbiter→mux far past
+# a single 32-cycle period) while its DEEPEST rung is STILL proving new cells.
+# MEASURED (subservient×sky130A, 3544 points): equiv_simple proved 3369, then
+# equiv_induct proved 35 (-seq 4), 22 (-seq 16), 27 (-seq 64) — a strictly
+# positive, still-descending tail — leaving 91 unproven with ZERO counterexample
+# (all on `o_wb_mem_adr`/`arbiter.o_wb_mem_adr`). That is "converging but
+# ladder-exhausted", NOT a flat wall (`Proved 0`, handled above) and NOT a proven
+# difference (a counterexample, handled by _MISMATCH_EVIDENCE_RE). It is the SAME
+# disclosed sequential-depth capability gap as `induction_did_not_converge`, so
+# it must ALSO reclassify to INCONCLUSIVE, never a false NOT_EQUIVALENT.
+_EQUIV_INDUCT_MARKER_RE = re.compile(r"equiv_induct", re.IGNORECASE)
+
+
+def induction_ladder_exhausted(text: str):
+    """(bool, evidence) — True when the equiv_INDUCT ladder made POSITIVE but
+    INCOMPLETE progress: at least one induct rung proved >0 previously-unproven
+    cells, yet points remain unproven at equiv_status. This is the -seq depth
+    budget running out on a deep sequential design, NOT a proven difference
+    (witnessed by a counterexample) and NOT a flat wall (`Proved 0`). PRECISION-
+    first / §4.05 NO-LEAK: the caller MUST also confirm NO counterexample AND
+    unproven>0 before re-classing to INCONCLUSIVE. The `Proved N` scan is scoped
+    to the region AFTER the first equiv_induct marker so equiv_simple's OWN
+    proved-count can never trigger it — a genuine mismatch (MISMATCH_OUTPUT:
+    equiv_simple proves 33, equiv_induct then proves 0 and leaves 7 unproven)
+    has NO post-induct `Proved N>0` line and correctly stays FAIL. chip-AGNOSTIC:
+    pure yosys log phrases, no chip/vendor literal."""
+    m = _EQUIV_INDUCT_MARKER_RE.search(text)
+    if not m:
+        return False, ""
+    induct_region = text[m.start():]
+    proved = [int(n) for n in _PROVED_SIMPLE_RE.findall(induct_region)]
+    total = sum(n for n in proved if n > 0)
+    if total > 0:
+        return True, (
+            f"equiv_induct proved {total} previously-unproven cell(s) across "
+            "the escalating -seq sweep but the ladder was exhausted before full "
+            "convergence — a bounded sequential-depth induction gap, not a flat "
+            "wall and not a counterexample")
+    return False, ""
+
 # Frontend-ABORT signatures — a read_verilog / read_slang failure that prevented
 # ANY equivalence miter from being built (0 compared points). DISTINCT from a
 # genuine mismatch (a miter DID run and left points unproven). A zero-miter abort
@@ -781,6 +824,13 @@ def parse_equiv_output(text: str) -> Dict:
         # WITHOUT the flat-wall signature also stays FAIL. Never a PASS.
         _noconv, _noconv_ev = induction_did_not_converge(text)
         _has_ctrex = bool(_MISMATCH_EVIDENCE_RE.search(text))
+        # #778 — a `-seq` ladder that ran out of depth WHILE STILL PROVING new
+        # cells on its deepest rung (converging, not a flat wall) is the same
+        # disclosed sequential-depth capability gap. Only consulted when there is
+        # neither a flat wall nor a counterexample, so it can never soften a real
+        # mismatch (which prints a counterexample → stays the blocking FAIL).
+        if not _noconv and not _has_ctrex:
+            _noconv, _noconv_ev = induction_ladder_exhausted(text)
         if _noconv and not _has_ctrex and (unproven or 0) > 0:
             equivalent = False
             verdict = "INCONCLUSIVE"

@@ -137,6 +137,63 @@ def tb_dir(project: Path) -> Path:
     return project / "phase2/stage1/tb"
 
 
+#: Where a testbench is actually written, in the order to look. The flow itself
+#: writes `sim_full_stack/`, and MEASURED across the tracked corpus that is where
+#: the majority of them are:
+#:
+#:     sim_full_stack/ holds a testbench   29 project(s)
+#:     sim/            holds a testbench   11
+#:
+#: vibe-ic#599: `l10_tb_conformance_check` carried its own candidate list without
+#: `sim_full_stack` and `l12_tb_coverage_check` carried none at all, so step 4 —
+#: the simulation step — was credited with no TB conformance or coverage
+#: measurement on designs that had four L10 test cases and a real testbench on
+#: disk. Two gates answering one question from two independently incomplete
+#: views; the answer lives here now so there is one.
+_TB_DIR_CANDIDATES = (
+    "phase2/stage1/sim/tb",
+    "phase2/stage1/sim_full_stack",
+    "phase2/stage1/sim",
+    "phase2/stage1/tb",
+    "sim/tb",
+    "sim_full_stack",
+    "sim",
+)
+
+
+def _holds_testbench(d: Path) -> bool:
+    if not d.is_dir():
+        return False
+    return any(d.glob("*.v")) or any(d.glob("*.sv")) or \
+        any(d.glob("tb_*.v")) or any(d.glob("tb_*.sv"))
+
+
+def resolve_tb_dir(project: Path, given: "str | Path | None" = None):
+    """The first location under `project` that actually HOLDS a testbench.
+
+    `None` when none of them do — which is a different answer from "the default
+    path does not exist", and the caller must not report the second when the
+    first is true.
+    """
+    cands = []
+    if given is not None:
+        g = Path(given)
+        cands.append(g if g.is_absolute() else project / g)
+        if g.name == "tb":
+            parent = g.parent
+            cands.append(parent if parent.is_absolute() else project / parent)
+    cands += [project / c for c in _TB_DIR_CANDIDATES]
+    seen = set()
+    for c in cands:
+        k = str(c)
+        if k in seen:
+            continue
+        seen.add(k)
+        if _holds_testbench(c):
+            return c
+    return None
+
+
 def fpga_early_dir(project: Path) -> Path:
     """Step 6: early FPGA prototype + on-board <half-duplex-tester> test (Phase 2)."""
     return project / "phase2/stage1/fpga"

@@ -12,7 +12,7 @@ commercial PDK). All pure-Python / deterministic (no `pya`, no container, no ora
   * _build_pdn_tcl                 — emits upper-metal straps + add_pdn_connect
                                      when pdk.pdn_straps is set; met1-only else.
   * def_gds_port_power_restore     — parse_power_rails captures the metal layer;
-                                     _metal_num; the marker is painted on the
+                                     metal_index; the marker is painted on the
                                      FOLLOW-PIN layer only (straps NOT marked).
 
 Chip-AGNOSTIC synthetic fixtures (generic `widget` top, generic cells).
@@ -135,11 +135,14 @@ def test_build_pdn_tcl_met1_only_when_no_straps(tmp_path):
 
 # --- def_gds_port_power_restore: layer-aware rail markers ------------------
 def test_metal_num():
-    assert pwr._metal_num("MET1") == 1
-    assert pwr._metal_num("MET4") == 4
-    assert pwr._metal_num("met3") == 3          # case-insensitive
-    assert pwr._metal_num("VIA1") == 9999       # non-MET -> sentinel
-    assert pwr._metal_num(None) == 9999
+    """#613 folded `_metal_num`'s sentinel into the ONE resolver: an
+    unresolvable name is 0, and `parse_power_rails` drops those segments before
+    the minimum is taken, so no sentinel has to survive into the arithmetic."""
+    assert pwr.metal_index("MET1") == 1
+    assert pwr.metal_index("MET4") == 4
+    assert pwr.metal_index("met3") == 3          # case-insensitive
+    assert pwr.metal_index("VIA1") == 0          # non-metal -> unresolved
+    assert pwr.metal_index(None) == 0
 
 
 _DEF_WITH_STRAP = """\
@@ -175,11 +178,11 @@ def test_followpin_min_layer_is_met1():
     # the marker-painting layer selection in restore() picks the LOWEST metal
     # among all rail segs — MET1 here — so MET4 straps are NOT painted.
     rails = pwr.parse_power_rails(_DEF_WITH_STRAP)
-    all_metals = [pwr._metal_num(s[5]) for segs in rails.values() for s in segs]
+    all_metals = [pwr.metal_index(s[5]) for segs in rails.values() for s in segs]
     assert min(all_metals) == 1             # follow-pin layer
     # exactly the MET4 strap segs would be skipped (2 straps: 1 VDD + 1 VSS).
     skipped = [s for segs in rails.values() for s in segs
-               if pwr._metal_num(s[5]) != 1]
+               if pwr.metal_index(s[5]) != 1]
     assert len(skipped) == 2
     assert all(s[5] == "MET4" for s in skipped)
 

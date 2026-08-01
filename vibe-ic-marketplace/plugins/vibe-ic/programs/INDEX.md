@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1022
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1022)
+- **Total programs (excluding helpers / shims):** 1028
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1028)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1013 |
+| `any` | 1019 |
 
 ## Alphabetical listing
 
@@ -110,6 +110,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `asap7_finfet_lvs` | any | — | device-level LVS for the ASAP7 (predictive 7nm FinFET) PDK. |
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Spec to enforce (chip-AGNOSTIC): |
 | `assertion_property_check` | any | — | Deterministic compliance check for assertion-gen. |
+| `atpg_untestable_fault_classify` | any | — | which stuck-at faults NO test can detect. |
 | `auto_diagnostic_led_synth` | any | v0.114 | v0.114 (BACKLOG-v6 D1). |
 | `automotive_ethernet_protocol_synth` | any | v0.1.91 | Automotive Ethernet (single-twisted-pair Ethernet PHY) protocol synth. |
 | `avalon_protocol_synth` | any | — | Intel/Altera Avalon Interface protocol synth helper (protocol #54). |
@@ -263,6 +264,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dft_atpg_coverage_check` | any | — | REAL stuck-at coverage gate (Step 11 DFT/ATPG). |
 | `dft_signoff_check` | any | — | aggregate DFT sign-off gate (foundry / ATE bar). |
 | `dft_signoff_common` | any | — | shared helper for the DFT sign-off gates. |
+| `dft_test_coverage` | any | — | raw FAULT coverage vs sign-off TEST coverage (#603). |
 | `dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
 | `diff_verify_harness` | any | — | independent DIFFERENTIAL self-verification (N-version) for blind RTL authoring (ORGANIC #700). |
 | `dispatch_fetch_loop_population_check` | any | — | Stub multi-frame fetch loop detector. |
@@ -396,12 +398,14 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_skip_routing_check` | any | — | every gate, and whether its skip REACHES the machine that reads the verdict (#528). |
 | `gate_utils` | any | v0.117 | Shared helpers for v0.117+ structural-RTL gates. |
 | `gate_verilog_to_spice` | any | — | convert a structural (gate-level) Verilog netlist to SPICE for netgen LVS against a KLayout-extracted layout netlist. |
+| `gate_zero_denominator_refuses_check` | any | — | a gate that read NOTHING must not exit 0. |
 | `gatekeeper_assign_version` | any | — | v1.1.7 (owner directive 2026-06-17). |
 | `gatekeeper_review` | any | — | the DETERMINISTIC half of the single PR gatekeeper. |
 | `gatekeeper_stale_branch_check` | any | — | the STALE-BRANCH / phantom-revert guard. |
 | `gddr6_protocol_synth` | any | — | GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory). |
 | `gds_antenna_deck_check` | any | — | independent GDS-geometry process-antenna sign-off. |
 | `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry handoff GDS as user-data records. |
+| `gds_port_label_check` | any | — | every port the DEF declares must be NAMED in the sign-off GDS. |
 | `gds_size_check` | any | — | Deterministic GDS file existence and size checker. |
 | `gds_streamout_layermap_check` | any | — | Deterministic sign-off streamout layer conformance checker. |
 | `gds_substance_check` | any | — | the shipped chip GDS must be a structurally valid GDSII stream carrying layout substance proportional to the design's own placed-instance... |
@@ -501,6 +505,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l21_macro_supply_rail_declared_check` | any | — | L21 SEMANTIC completeness gate. |
 | `l21_macro_supply_rail_synth` | any | — | Derive the power-intent rail set from the design's OWN hard-macro LEFs. |
 | `l21_to_upf_emit` | any | v0.1.51 | render L21 power intent into an IEEE-1801 UPF handoff artifact (flow v2.3.1, external review R1). |
+| `l22_checklist_milestone_emit` | any | — | the verification checklist's own milestones. |
 | `l22_coverage_goal_emit` | any | — | lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them. |
 | `l22_verification_plan_measurable_check` | any | — | SEMANTIC gate for L22_VERIFICATION_PLAN (batch layergate-7). |
 | `l23_security_requirements_typed_check` | any | — | SEMANTIC gate for L23_SECURITY_REQUIREMENTS (batch layergate-7). |
@@ -696,6 +701,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_expert_parse_track` | any | — | the SECOND track of Phase 1. |
 | `phase1_expert_track_evidence_check` | any | — | did the Phase-1 EXPERT track actually run, or is its zero the zero of never having been asked? (#312) |
 | `phase1_gate_contract_check` | any | v0.74 | Meta-checker for Phase 1 deterministic gates. |
+| `phase1_input_corpus_purity_check` | any | — | did Phase-1 specify the DESIGN, or the TOOL? |
 | `phase1_input_vs_generated_completeness_check` | any | v0.60 | Phase 1 coverage gate ======================================================================== |
 | `phase1_json_converge` | any | — | deterministic comparator for the Phase-1 DIALOGUE dual-track convergence (program-first + AI-backup, ORGANIC #716). |
 | `phase1_k5_quality_check` | any | — | catch the K5 issues found by real Phase-2 synth. |
@@ -1094,7 +1100,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1013 programs)
+### `any` (1019 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1180,6 +1186,7 @@ _(no programs in this group)_
 - `asap7_finfet_lvs` — device-level LVS for the ASAP7 (predictive 7nm FinFET) PDK.
 - `assertion_covers_l3_constraints_check` — Spec to enforce (chip-AGNOSTIC):  _[Wave 39]_
 - `assertion_property_check` — Deterministic compliance check for assertion-gen.
+- `atpg_untestable_fault_classify` — which stuck-at faults NO test can detect.
 - `auto_diagnostic_led_synth` — v0.114 (BACKLOG-v6 D1).  _[v0.114]_
 - `automotive_ethernet_protocol_synth` — Automotive Ethernet (single-twisted-pair Ethernet PHY) protocol synth.  _[v0.1.91]_
 - `avalon_protocol_synth` — Intel/Altera Avalon Interface protocol synth helper (protocol #54).
@@ -1330,6 +1337,7 @@ _(no programs in this group)_
 - `dft_atpg_coverage_check` — REAL stuck-at coverage gate (Step 11 DFT/ATPG).
 - `dft_signoff_check` — aggregate DFT sign-off gate (foundry / ATE bar).
 - `dft_signoff_common` — shared helper for the DFT sign-off gates.
+- `dft_test_coverage` — raw FAULT coverage vs sign-off TEST coverage (#603).
 - `dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
 - `diff_verify_harness` — independent DIFFERENTIAL self-verification (N-version) for blind RTL authoring (ORGANIC #700).
 - `dispatch_fetch_loop_population_check` — Stub multi-frame fetch loop detector.
@@ -1462,12 +1470,14 @@ _(no programs in this group)_
 - `gate_skip_routing_check` — every gate, and whether its skip REACHES the machine that reads the verdict (#528).
 - `gate_utils` — Shared helpers for v0.117+ structural-RTL gates.  _[v0.117]_
 - `gate_verilog_to_spice` — convert a structural (gate-level) Verilog netlist to SPICE for netgen LVS against a KLayout-extracted layout netlist.
+- `gate_zero_denominator_refuses_check` — a gate that read NOTHING must not exit 0.
 - `gatekeeper_assign_version` — v1.1.7 (owner directive 2026-06-17).
 - `gatekeeper_review` — the DETERMINISTIC half of the single PR gatekeeper.
 - `gatekeeper_stale_branch_check` — the STALE-BRANCH / phantom-revert guard.
 - `gddr6_protocol_synth` — GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory).
 - `gds_antenna_deck_check` — independent GDS-geometry process-antenna sign-off.
 - `gds_ip_attribution` — Embed IP attribution metadata into the foundry handoff GDS as user-data records.
+- `gds_port_label_check` — every port the DEF declares must be NAMED in the sign-off GDS.
 - `gds_size_check` — Deterministic GDS file existence and size checker.
 - `gds_streamout_layermap_check` — Deterministic sign-off streamout layer conformance checker.
 - `gds_substance_check` — the shipped chip GDS must be a structurally valid GDSII stream carrying layout substance proportional to the design's own placed-instance...
@@ -1567,6 +1577,7 @@ _(no programs in this group)_
 - `l21_macro_supply_rail_declared_check` — L21 SEMANTIC completeness gate.
 - `l21_macro_supply_rail_synth` — Derive the power-intent rail set from the design's OWN hard-macro LEFs.
 - `l21_to_upf_emit` — render L21 power intent into an IEEE-1801 UPF handoff artifact (flow v2.3.1, external review R1).  _[v0.1.51]_
+- `l22_checklist_milestone_emit` — the verification checklist's own milestones.
 - `l22_coverage_goal_emit` — lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them.
 - `l22_verification_plan_measurable_check` — SEMANTIC gate for L22_VERIFICATION_PLAN (batch layergate-7).
 - `l23_security_requirements_typed_check` — SEMANTIC gate for L23_SECURITY_REQUIREMENTS (batch layergate-7).
@@ -1761,6 +1772,7 @@ _(no programs in this group)_
 - `phase1_expert_parse_track` — the SECOND track of Phase 1.
 - `phase1_expert_track_evidence_check` — did the Phase-1 EXPERT track actually run, or is its zero the zero of never having been asked? (#312)
 - `phase1_gate_contract_check` — Meta-checker for Phase 1 deterministic gates.  _[v0.74]_
+- `phase1_input_corpus_purity_check` — did Phase-1 specify the DESIGN, or the TOOL?
 - `phase1_input_vs_generated_completeness_check` — Phase 1 coverage gate ========================================================================  _[v0.60]_
 - `phase1_json_converge` — deterministic comparator for the Phase-1 DIALOGUE dual-track convergence (program-first + AI-backup, ORGANIC #716).
 - `phase1_k5_quality_check` — catch the K5 issues found by real Phase-2 synth.

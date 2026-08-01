@@ -77,14 +77,215 @@ import lvs_verdict_tokens as _lvt  # noqa: E402  — #524 shared verdict tokens
 TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
 
+#: DECIDE PER MACRO, never append (vibe-ic#597).
+#:
+#: `Layout.read` APPENDS into a cell that already exists under the same name.
+#: Once OpenROAD's stream-out has been handed the hardmacro GDS, the digital
+#: GDS already carries a REAL body for that macro — so reading the macro file
+#: on top of it put every polygon in twice. Measured: `delta_sigma` 45678 ->
+#: 91356 own shapes, `ldo` 36887 -> 73774. Exactly double, both blocks.
+#:
+#: Magic then extracts the duplicated geometry as duplicated devices, so the
+#: layout-side device count is 2x the schematic's and LVS can never match — a
+#: failure whose report reads like a design defect.
+#:
+#: PRESENCE OF THE CELL NAME IS NOT EVIDENCE THAT IT IS AN ABSTRACT, and the
+#: old merge assumed it was. The branch is now taken on whether the cell
+#: actually holds geometry, and BOTH branches are recorded per macro in
+#: merge.json with the before/after shape count, so a doubled body can be seen
+#: in the artefact rather than inferred from an LVS mismatch.
+#: `- u_ds3 delta_sigma + PLACED ( 123000 456000 ) N ;` — DEF COMPONENTS.
+_DEF_COMPONENT_RE = re.compile(
+    r"^\s*-\s+(?P<inst>\S+)\s+(?P<cell>\S+)\s+\+\s*"
+    r"(?:FIXED|PLACED|COVER)\s*\(\s*(?P<x>-?\d+)\s+(?P<y>-?\d+)\s*\)\s*"
+    r"(?P<orient>[A-Z]+)", re.MULTILINE)
+_DEF_UNITS_RE = re.compile(r"^\s*UNITS\s+DISTANCE\s+MICRONS\s+(\d+)",
+                           re.MULTILINE)
+
+#: DEF orientation -> KLayout `Trans(rot, mirrx)`. Only the four unflipped
+#: orientations and the two flips this can back are mapped; `FE` / `FW` are
+#: DELIBERATELY absent. vibe-ic#612 asks for macros to be placed where the
+#: floorplan says, and a placement at the wrong orientation is worse than none:
+#: it looks integrated and is not. An unmapped orientation refuses, by name.
+_DEF_ORIENT_TO_KLAYOUT = {
+    "N": (0, False), "W": (1, False), "S": (2, False), "E": (3, False),
+    "FS": (0, True),           # mirror at the x-axis
+    "FN": (2, True),           # mirror at the y-axis
+}
+
+
+def def_macro_placements(def_text: str, macro_cells):
+    """``({cell: [placement, ...]}, [refusal, ...])`` read from a DEF.
+
+    vibe-ic#612 — M1 read each macro GDS into the layout and never INSTANTIATED
+    it, so the design top carried `child_insts = 0`, both macros sat as their
+    own top cells at the origin, and `Layout.top_cell()` raised "multiple top
+    cells". Reading a GDS adds STRUCTURES to the library; it does not place
+    anything. The step is named "... + macro placement" and the placement half
+    did not happen.
+
+    The positions are not invented: they are the design's own DEF COMPONENTS
+    entries. A macro the DEF does not place, or places at an orientation this
+    cannot back, is REFUSED by name rather than dropped at the origin.
+    """
+    want = {c for c in macro_cells if c}
+    um = _DEF_UNITS_RE.search(def_text)
+    per_um = float(um.group(1)) if um else None
+    out, refusals = {}, []
+    if per_um is None or per_um <= 0:
+        return {}, ["DEF states no `UNITS DISTANCE MICRONS`, so no placement "
+                    "coordinate can be converted"]
+    for m in _DEF_COMPONENT_RE.finditer(def_text):
+        cell = m.group("cell")
+        if cell not in want:
+            continue
+        orient = m.group("orient")
+        if orient not in _DEF_ORIENT_TO_KLAYOUT:
+            refusals.append(
+                f"{m.group('inst')} ({cell}) is placed {orient}, an "
+                f"orientation this merge does not map; placing it at a guessed "
+                f"transform would look integrated and be wrong")
+            continue
+        rot, mirr = _DEF_ORIENT_TO_KLAYOUT[orient]
+        out.setdefault(cell, []).append({
+            "inst": m.group("inst"), "orient": orient,
+            "rot": rot, "mirror": mirr,
+            "x_um": int(m.group("x")) / per_um,
+            "y_um": int(m.group("y")) / per_um})
+    for c in sorted(want - set(out)):
+        refusals.append(f"{c} is not placed by any DEF COMPONENTS entry")
+    return out, refusals
+
+
+def resolve_macro_placements(project, macro_cells):
+    """``({cell: [placement, ...]}, [refusal, ...])`` from the project's DEF.
+
+    Split out of the M1 caller so it can be DRIVEN. The first version of this
+    lived inline, and the test that was supposed to pin it asserted the string
+    `def_macro_placements(` appeared in the source — which a mutation that
+    short-circuits the call (`({}, []) or def_macro_placements(...)`) satisfies
+    while placing nothing. A property that can only be asserted by looking at
+    source text is not being measured.
+    """
+    refusals = ["no DEF under the PnR directory places any macro"]
+    for d in sorted(_pl.pnr_dir(project).glob("*.def")):
+        try:
+            txt = d.read_text(errors="replace")
+        except OSError:
+            continue
+        got, ref = def_macro_placements(txt, macro_cells)
+        if got:
+            return got, ref
+        refusals = ref
+    return {}, refusals
+
+
 _KLAYOUT_MERGE_PY = """\
-import pya, os
+import pya, os, json
+
+def own_shapes(ly, name):
+    # `has_cell` / `cell_by_name`, not `cell_name_to_index` — the latter is not
+    # on this KLayout's Layout binding and raised AttributeError when this was
+    # first run against the real tool.
+    if not ly.has_cell(name):
+        return None
+    # `cell_by_name` returns an INDEX; `cell()` turns it into the object.
+    # Both corrections came from running this against the real KLayout, not
+    # from reading the API.
+    c = ly.cell(ly.cell_by_name(name))
+    return sum(c.shapes(li).size() for li in ly.layer_indexes())
+
 ly = pya.Layout()
 ly.read(os.environ["DIGITAL_GDS"])
+
+record = []
 for g in os.environ["MACRO_GDS"].split(";"):
-    if g.strip():
-        ly.read(g.strip())
+    g = g.strip()
+    if not g:
+        continue
+    probe = pya.Layout()
+    probe.read(g)
+    tops = [probe.cell(i).name for i in probe.each_top_cell()]
+    for name in tops:
+        before = own_shapes(ly, name)
+        if before is None:
+            action = "added"          # not in the digital GDS at all
+        elif before == 0:
+            action = "filled"         # an abstract placeholder — today's intent
+        else:
+            action = "kept_digital"   # already a real body: reading would double it
+        record.append({"macro": name, "file": g, "action": action,
+                       "shapes_before": before})
+    if all(r["action"] != "kept_digital"
+           for r in record if r["file"] == g):
+        ly.read(g)
+    for r in record:
+        if r["file"] == g:
+            r["shapes_after"] = own_shapes(ly, r["macro"])
+
+# vibe-ic#612 — READING A GDS ADDS STRUCTURES; IT DOES NOT PLACE ANYTHING.
+# Until now the loop above ended here, so the design top carried child_insts=0,
+# each macro sat as its OWN top cell at the origin, and `Layout.top_cell()`
+# raised "multiple top cells". A merged GDS with more than one top cell is on
+# its face not an integrated design: top-level extraction sees no macro devices
+# at all, and no overlap / halo / track check means anything about a cell that
+# is nowhere.
+#
+# Positions are the design's OWN DEF COMPONENTS entries, passed in by the
+# caller. Nothing is placed at a guessed transform.
+placements = {}
+pj = os.environ.get("PLACEMENTS_JSON")
+if pj and os.path.isfile(pj):
+    with open(pj) as f:
+        _pj = json.load(f)
+    # The caller writes {"placements": {...}, "refusals": [...]} so the
+    # refusals travel with the map rather than only to stdout.
+    placements = _pj.get("placements", _pj) if isinstance(_pj, dict) else {}
+
+placed = []
+design_top = os.environ.get("DESIGN_TOP", "").strip()
+if design_top and ly.has_cell(design_top):
+    top = ly.cell(ly.cell_by_name(design_top))
+    for r in record:
+        for pl in placements.get(r["macro"], []):
+            if not ly.has_cell(r["macro"]):
+                continue
+            ci = ly.cell_by_name(r["macro"])
+            t = pya.Trans(int(pl["rot"]), bool(pl["mirror"]),
+                          int(round(pl["x_um"] / ly.dbu)),
+                          int(round(pl["y_um"] / ly.dbu)))
+            top.insert(pya.CellInstArray(ci, t))
+            placed.append({"macro": r["macro"], "inst": pl.get("inst"),
+                           "orient": pl.get("orient"),
+                           "x_um": pl["x_um"], "y_um": pl["y_um"]})
+    for r in record:
+        r["instances_placed"] = sum(1 for q in placed if q["macro"] == r["macro"])
+
+tops_after = [ly.cell(i).name for i in ly.each_top_cell()]
+
 ly.write(os.environ["MERGED_OUT"])
+mj = os.environ.get("MERGE_JSON")
+if mj:
+    with open(mj, "w") as f:
+        json.dump({"merged_out": os.environ["MERGED_OUT"],
+                   "digital_gds": os.environ["DIGITAL_GDS"],
+                   "design_top": design_top,
+                   "placed": placed,
+                   "top_cells_after": tops_after,
+                   "single_top": len(tops_after) == 1,
+                   "macros": record}, f, indent=2)
+for r in record:
+    print("KLAYOUT_MERGE_MACRO", r["macro"], r["action"],
+          r["shapes_before"], "->", r.get("shapes_after"))
+for q in placed:
+    print("KLAYOUT_MERGE_PLACED", q["macro"], q["inst"], q["orient"],
+          q["x_um"], q["y_um"])
+print("KLAYOUT_MERGE_TOPS", ",".join(tops_after))
+if len(tops_after) != 1:
+    # LOUD, not silent. Emitting the file and reporting DONE would let a
+    # multi-top GDS travel downstream as an "integrated" design.
+    print("KLAYOUT_MERGE_MULTITOP " + ",".join(tops_after))
+    raise SystemExit(3)
 print("KLAYOUT_MERGE_DONE", os.environ["MERGED_OUT"])
 """
 
@@ -449,9 +650,27 @@ def run(project: Path, top: str, container: str, pdk: str,
         merge_log_before = _mtime_or_none(merge_log)
         merge_py = ms_dir / "klayout_merge.py"
         merge_py.write_text(_KLAYOUT_MERGE_PY)
-        env = (f"export DIGITAL_GDS={_to_container_path(digital_gds, container)} "
+        # vibe-ic#612 — the placement half of "A+D GDS merge + macro placement".
+        # Read from the design's OWN DEF; a macro the DEF does not place, or
+        # places at an orientation the merge cannot back, is refused by name and
+        # the merge then fails on the multi-top check rather than shipping a
+        # file whose design top has no children.
+        _pl_map, _pl_refusals = resolve_macro_placements(
+            project, [g.stem for g in macro_gds])
+        _pl_json = ms_dir / "macro_placements.json"
+        _pl_json.write_text(json.dumps(
+            {"placements": _pl_map, "refusals": _pl_refusals}, indent=2) + "\n")
+        for _r in _pl_refusals:
+            print(f"      M1 placement REFUSED: {_r}")
+        env = (f"export DESIGN_TOP={top} "
+               f"PLACEMENTS_JSON={_to_container_path(_pl_json, container)} "
+               f"DIGITAL_GDS={_to_container_path(digital_gds, container)} "
                f"MACRO_GDS=\"{';'.join(_to_container_path(g, container) for g in macro_gds)}\" "
-               f"MERGED_OUT={_to_container_path(merged, container)} && ")
+               f"MERGED_OUT={_to_container_path(merged, container)} "
+               # Per-macro branch record (#597). Written by the merge itself,
+               # so a doubled body is visible in an artefact rather than
+               # inferred from an LVS device-count mismatch two steps later.
+               f"MERGE_JSON={_to_container_path(ms_dir / 'merge.json', container)} && ")
         # C5 pipefail — see the note at the Magic site below. Without it the rc
         # this branch reports is `tee`'s, so a KLayout that died mid-merge is
         # indistinguishable from one that merged nothing.
@@ -638,9 +857,38 @@ def main(argv=None) -> int:
     if rep.get("verdict") == "SKIP":
         _ev = project / "reports" / "analog" / "mixed_signal" / "top_lvs.json"
         _ev.parent.mkdir(parents=True, exist_ok=True)
-        _ev.write_text(json.dumps(
-            {k: v for k, v in rep.items() if k != "rc"},
-            indent=2, ensure_ascii=False) + "\n")
+        # vibe-ic#614 — C5's reason above is right (a SKIP must leave verdict
+        # evidence) and the write was UNCONDITIONAL, so a run that could not
+        # compare REPLACED one that did. `flow_compliance_check` invokes this
+        # producer with the DEFAULT container, so on any host where the run
+        # root is not bind-mounted under that name the audit overwrote a
+        # computed FAIL with a capability-gap SKIP — and the gate then
+        # published that SKIP as a design mismatch.
+        #
+        # A NON-RESULT MUST NOT DISPLACE A RESULT. The skip still leaves
+        # evidence, beside the comparison rather than on top of it.
+        _prior = None
+        if _ev.is_file():
+            try:
+                _prior = json.loads(_ev.read_text(errors="replace"))
+            except (OSError, ValueError):
+                _prior = None
+        _compared = isinstance(_prior, dict) and bool(_prior.get("lvs_report"))
+        _payload = {k: v for k, v in rep.items() if k != "rc"}
+        if _compared:
+            _alt = _ev.with_name("top_lvs_skipped.json")
+            _payload["preserved"] = (
+                f"an existing {_ev.name} records a COMPLETED comparison "
+                f"(verdict {_prior.get('verdict')!r}, report "
+                f"{_prior.get('lvs_report')!r}); this skip is recorded here "
+                f"instead of replacing it")
+            _alt.write_text(json.dumps(_payload, indent=2,
+                                       ensure_ascii=False) + "\n")
+            rep["skip_evidence"] = str(_alt.relative_to(project))
+            rep["did_not_overwrite"] = str(_ev.relative_to(project))
+        else:
+            _ev.write_text(json.dumps(_payload, indent=2,
+                                       ensure_ascii=False) + "\n")
     rep.setdefault("top", top)
     rep.setdefault("top_source", top_src)
     rep.setdefault("pdk", pdk)
