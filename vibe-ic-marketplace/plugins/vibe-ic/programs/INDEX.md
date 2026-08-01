@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1025
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1025)
+- **Total programs (excluding helpers / shims):** 1026
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1026)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1016 |
+| `any` | 1017 |
 
 ## Alphabetical listing
 
@@ -731,6 +731,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `plugin_change_pytest_gate` | any | — | plugin_change_pytest_gate.py -- "Plugin-test hard rule" pre-claim-DONE gate. |
 | `plugin_full_audit` | any | — | deterministic D1 + D2 of the "have full test" audit. |
 | `plugin_manifest_discovery` | any | — | ONE source of truth for locating EVERY version-bearing manifest of a plugin (ORGANIC #152). |
+| `plugin_version_prose_sync_check` | any | — | a version STATED IN PROSE must be the shipped one. |
 | `png_ocr_extractor` | any | — | for #36 Bug 3: PNG OCR Tier-2 fallback. |
 | `pnr_doctor` | any | v0.1.96 | OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program). |
 | `pnr_timing_repair_completeness_check` | any | v0.1.26 | chip-AGNOSTIC static audit of an OpenROAD P&R Tcl script for the MANDATORY setup-timing-repair sequence. |
@@ -1097,7 +1098,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1016 programs)
+### `any` (1017 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1799,6 +1800,7 @@ _(no programs in this group)_
 - `plugin_change_pytest_gate` — plugin_change_pytest_gate.py -- "Plugin-test hard rule" pre-claim-DONE gate.
 - `plugin_full_audit` — deterministic D1 + D2 of the "have full test" audit.
 - `plugin_manifest_discovery` — ONE source of truth for locating EVERY version-bearing manifest of a plugin (ORGANIC #152).
+- `plugin_version_prose_sync_check` — a version STATED IN PROSE must be the shipped one.
 - `png_ocr_extractor` — for #36 Bug 3: PNG OCR Tier-2 fallback.
 - `pnr_doctor` — OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program).  _[v0.1.96]_
 - `pnr_timing_repair_completeness_check` — chip-AGNOSTIC static audit of an OpenROAD P&R Tcl script for the MANDATORY setup-timing-repair sequence.  _[v0.1.26]_
