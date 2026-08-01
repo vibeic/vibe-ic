@@ -741,25 +741,28 @@ def _tb_files_under(d: Path) -> bool:
     return False
 
 
+import _path_layout as _pl  # noqa: E402
+
+
 def _resolve_tb_dir(given: str) -> Optional[str]:
     """ORGANIC #572 — the default --tb-dir (phase2/stage1/sim/tb) is rigid;
     a project that keeps testbenches at the sim/ ROOT (phase2/stage1/sim/)
     reported 4/4 false 'lack evidence'. Try the given path first, then its
     parent when the leaf is 'tb', then the canonical sim roots. Returns the
     first directory that actually holds a .v/.sv, else None."""
-    cands: List[str] = [given]
-    gp = Path(given)
-    if gp.name == "tb":
-        cands.append(str(gp.parent))
-    cands += ["phase2/stage1/sim/tb", "phase2/stage1/sim",
-              "sim/tb", "sim"]
-    seen = set()
-    for c in cands:
-        if c in seen:
-            continue
-        seen.add(c)
-        if _tb_files_under(Path(c)):
-            return c
+    # vibe-ic#599: this list did not have `sim_full_stack`, which is where the
+    # flow itself writes the full-stack testbench and — MEASURED over the
+    # tracked corpus — where 29 of them are, against 11 under `sim/`. The
+    # resolution now lives in `_path_layout` so `l12_tb_coverage_check`, which
+    # had NO fallback at all, answers the same question the same way; two gates
+    # with two independently incomplete views of one question is how step 4 got
+    # credited without any measurement.
+    got = _pl.resolve_tb_dir(Path("."), given)
+    if got is not None:
+        try:
+            return str(got.relative_to(Path(".").resolve()))
+        except ValueError:
+            return str(got)
     # last resort: return the given path if it at least exists as a dir, so
     # the caller's missing-dir error message is accurate.
     return given if Path(given).is_dir() else None
