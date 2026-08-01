@@ -114,6 +114,16 @@ def _make_project(tmp_path, block, btype):
     bdir.mkdir(parents=True, exist_ok=True)
     bl = tmp_path / "phase3" / "analog" / "analog_block_list.json"
     bl.write_text(json.dumps({"blocks": [{"name": block, "type": btype}]}))
+    # A3's declared output — `run_block`'s upstream precondition. Without it the
+    # sweep refuses to simulate at all (it will not stand a built-in testbench
+    # in for a netlist that was never produced), so these partial-measurement
+    # fixtures carry the netlist a run that reached A4 would have.
+    (bdir / f"{block}.sp").write_text(
+        f"* {block} — synthetic block netlist\n"
+        f".subckt {block} vdd vss vin vout\n"
+        f"xm1 vout vin vss vss nch w=8 l=1\n"
+        f"r1 vout vss 100k\n"
+        f".ends {block}\n")
     return bdir
 
 

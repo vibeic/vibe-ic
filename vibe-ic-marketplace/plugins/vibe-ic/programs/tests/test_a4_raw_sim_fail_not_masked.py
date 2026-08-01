@@ -51,6 +51,19 @@ def _corner(name, value, sim_run=True):
             "_provenance": "real_ngspice"}
 
 
+# A4's declared upstream input: A3's per-block netlist. A project that has A4
+# results also has this file — the sweep cannot have measured a design whose
+# netlist was never produced, and the gate's A4_NETLIST_ABSENT rule says so.
+# These fixtures are about the raw_sim_verdict rule, so they carry the netlist
+# a complete run would have and let that rule be the one under test.
+_A3_NETLIST = (
+    "* {block} — synthetic block netlist (A4's declared upstream input)\n"
+    ".subckt {block} vdd vss vin vout\n"
+    "xm1 vout vin vss vss nch w=8 l=1\n"
+    "r1 vout vss 100k\n"
+    ".ends {block}\n")
+
+
 def _write_project(tmp, blocks):
     """Build a minimal synthetic project the gate can read."""
     proj = Path(tmp)
@@ -63,6 +76,8 @@ def _write_project(tmp, blocks):
         d.mkdir()
         (d / "corner_results.json").write_text(json.dumps(payload),
                                                encoding="utf-8")
+        (d / f"{name}.sp").write_text(_A3_NETLIST.format(block=name),
+                                      encoding="utf-8")
     return proj
 
 

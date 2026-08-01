@@ -22,6 +22,20 @@ def _corners(project: Path, block: str, doc: dict) -> None:
     (d / "corner_results.json").write_text(json.dumps(doc))
 
 
+def _a3_netlist(project: Path, block: str) -> None:
+    """A4's declared upstream input. A sweep that produced corner results ran
+    on a netlist; the gate's A4_NETLIST_ABSENT rule declines to certify one
+    that has none. Fixtures asserting a clean A4 carry it."""
+    d = project / "phase3" / "analog" / block
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{block}.sp").write_text(
+        f"* {block} — synthetic block netlist\n"
+        f".subckt {block} vdd vss vin vout\n"
+        f"xm1 vout vin vss vss nch w=8 l=1\n"
+        f"r1 vout vss 100k\n"
+        f".ends {block}\n")
+
+
 def _run(project: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(PROG), str(project),
@@ -43,6 +57,7 @@ def test_happy_path(tmp_path: Path) -> None:
             {"spec": "vout", "corner": "TT_27C", "status": "PASS"},
         ],
     })
+    _a3_netlist(tmp_path, "ldo")
     r = _run(tmp_path)
     assert r.returncode == 0, r.stderr
     rpt = json.loads((tmp_path / "report.json").read_text())

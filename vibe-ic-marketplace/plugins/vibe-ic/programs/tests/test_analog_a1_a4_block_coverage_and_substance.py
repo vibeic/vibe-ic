@@ -128,6 +128,11 @@ def _artefact(project: Path, block: str, filename: str,
         (d / name).write_text(_REAL_TOPOLOGY)
     elif name == "corner_results.json":
         (d / name).write_text(json.dumps(_REAL_CORNERS))
+        # A4's declared upstream input. A block that has corner results also
+        # has the netlist those corners were run on; without it the A4 gate's
+        # A4_NETLIST_ABSENT rule (correctly) declines to certify the sweep,
+        # which is not the property these coverage fixtures are exercising.
+        (d / f"{block}.sp").write_text(_REAL_NETLIST.format(block=block))
     elif name.endswith(".sp"):
         (d / name).write_text(_REAL_NETLIST.format(block=block))
     else:                                       # pragma: no cover

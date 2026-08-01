@@ -34,7 +34,7 @@ analog_a4_corner_sweep_check.py can distinguish from stub.
 Falls back rc=2 if simulator unreachable. chip-AGNOSTIC.
 """
 from __future__ import annotations
-import argparse, json, os, re, shlex, subprocess, sys, time
+import argparse, hashlib, json, os, re, shlex, subprocess, sys, time
 from pathlib import Path
 
 try:
@@ -1664,7 +1664,8 @@ def _pdk_has_section(container, pdk_lib, section):
 def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                      pdk_lib, knob, val, deck_overrides, subst_header, base_tt,
                      process_corners=None, devices=None, typ_section="tt",
-                     device_terminals=None, device_geometry_units=None):
+                     device_terminals=None, device_geometry_units=None,
+                     origin=None):
     """Attempt a REAL ngspice sim at each PVT corner (real .lib section + real
     .temp) for the sized sweep point. Returns a real_sims dict for the corners
     that genuinely converged; a corner whose model section is absent or whose
@@ -1693,7 +1694,8 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                                   device_terminals=device_terminals,
                                   device_geometry_units=device_geometry_units)
             sp = sl_dir / f"pvt_{proc}_{tlbl}.sp"
-            sp.write_text((subst_header or "") + deck)
+            sp.write_text(deck_origin_header(origin or {})
+                          + (subst_header or "") + deck)
             ok, meas, raw, _ss = _run_ngspice(
                 container, _container_path(container, host_root, sp))
             log = sl_dir / f"pvt_{proc}_{tlbl}.ngspice.log"
@@ -1778,6 +1780,163 @@ def _deck_context(project, container, pdk, btype):
                                           reader=reader)
     except Exception:
         return None
+
+
+# ───────── A3→A4 netlist provenance: the upstream-output precondition ──────
+#
+# WHAT WENT WRONG (measured on a real run). A4 ran real ngspice over ten blocks × nine
+# PVT corners and wrote `_provenance: "real_ngspice"` for each, while A1/A2/A3
+# were WAIVED for all ten blocks with `output_files=[]` — A3's declared output
+# `phase3/analog/<block>/<block>.sp` existed for ZERO of them. Every deck
+# ngspice consumed came from the built-in table `T[block_type]` in THIS file:
+# a pure function of (canonical block type, PDK section, one sweep knob) with
+# no design content whatsoever. The decks were byte-identical to the previous
+# round's for all 126 files. `_provenance: "real_ngspice"` was true about the
+# SIMULATOR and silent about the SUBJECT, and that silence is what let the
+# analog result read as a measurement of the design.
+#
+# THE RULE. A step must not consume a substitute for an upstream step's
+# declared output while that output is absent. A4's declared upstream input is
+# A3's `<block>.sp`; when it is missing, A4 refuses — it does not reach for the
+# simulator, and it records an honest BLOCKED artefact naming the missing input
+# and the skill that produces it, so the block lands in a NAMED failure rather
+# than an anonymous MISSING.
+#
+# WHAT THIS DOES NOT DO. It does not make the built-in testbench derive from
+# the block netlist — nothing in this program consumes `<block>.sp` as the
+# circuit under test, and pretending otherwise would be the same fabrication in
+# a new coat. It makes the artefact SAY which circuit was simulated
+# (`netlist_provenance`), so a downstream reader and the A4 gate can tell a
+# design measurement from a self-test of this file's template library.
+#
+# chip-AGNOSTIC; NDA-safe (paths and step names only).
+
+A3_STEP = "A3_netlist_gen"
+A3_SKILL = "analog-netlist-gen"
+
+#: `netlist_provenance` vocabulary written into corner_results.json.
+NETLIST_PROV_A3 = "a3_netlist"            # deck derived from A3's <block>.sp
+NETLIST_PROV_BUILTIN = "builtin_template"  # deck authored by THIS program
+NETLIST_PROV_ABSENT = "absent"             # A3 produced nothing; A4 refused
+
+_BUILTIN_OK_ENV = "ANALOG_ALLOW_BUILTIN_NETLIST"
+
+
+def a3_netlist_path(project: Path, block: str):
+    """Resolve A3's declared per-block output. Returns `(path, found)`.
+
+    Search order mirrors `analog_a3_netlist_gen_check.resolve_block_artefact`:
+    the analog runner's `phase3/analog/<block>/` root first, then the
+    `phase2/analog/<block>/` root the flow declares as A3's required_output.
+    The returned path is the phase3 (canonical) one when nothing is found, so
+    the refusal message names the location a reader should look at."""
+    for phase in ("phase3", "phase2"):
+        p = project / phase / "analog" / block / f"{block}.sp"
+        if p.is_file():
+            return p, True
+    return project / "phase3" / "analog" / block / f"{block}.sp", False
+
+
+def builtin_netlist_allowed(env=None) -> bool:
+    """True when the caller has EXPLICITLY opted in to running the built-in
+    testbench library with no A3 netlist present (`ANALOG_ALLOW_BUILTIN_NETLIST=1`).
+
+    This is a disclosure escape hatch, not a pass: the artefact it produces is
+    stamped `netlist_provenance: "builtin_template"` and the A4 gate refuses to
+    certify it (`A4_NETLIST_NOT_FROM_A3`). It exists so the template library can
+    still be exercised deliberately — never so a run can quietly reach PASS."""
+    src = os.environ if env is None else env
+    return str(src.get(_BUILTIN_OK_ENV, "")).strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def netlist_origin(project: Path, block: str, env=None) -> dict:
+    """The subject-of-measurement record for one block, as written into
+    corner_results.json and `sizing_loop/results.json`.
+
+    `netlist_provenance` is the load-bearing field: `a3_netlist` when the deck
+    derives from A3's output, `builtin_template` when this program authored the
+    circuit itself, `absent` when A3 produced nothing. `netlist_sha256` ties the
+    record to the exact bytes so a later reader can prove which netlist it was.
+    """
+    path, found = a3_netlist_path(project, block)
+    rel = str(path.relative_to(project)) if str(path).startswith(str(project)) \
+        else str(path)
+    if not found:
+        return {"netlist_source": None, "netlist_provenance": NETLIST_PROV_ABSENT,
+                "netlist_sha256": None, "netlist_expected_path": rel,
+                "netlist_produced_by": A3_STEP}
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        digest = None
+    # The deck this program emits is its OWN built-in testbench: nothing here
+    # reads <block>.sp as the circuit under test. Say so rather than let the
+    # netlist's mere presence imply it was simulated.
+    return {"netlist_source": rel,
+            "netlist_provenance": NETLIST_PROV_BUILTIN,
+            "netlist_sha256": digest, "netlist_expected_path": rel,
+            "netlist_produced_by": A3_STEP}
+
+
+def deck_origin_header(origin: dict) -> str:
+    """SPICE comment block stamping a deck with the circuit it actually
+    contains. Emitted at the head of every deck this program writes to disk, so
+    a deck read on its own — years later, out of context — still says whether
+    the circuit in it came from the design or from this file's template table.
+
+    Comment-only: ngspice ignores it, so a deck's electrical content is
+    byte-unchanged. Kept out of `render_deck` deliberately — the rendered text
+    is compared byte-for-byte by the corpus regression guards."""
+    return (f"* netlist_provenance: {origin.get('netlist_provenance')}\n"
+            f"* netlist_source: {origin.get('netlist_source')}\n"
+            f"* deck_authored_by: analog_real_corner_sweep.T[block_type] "
+            f"(built-in testbench, not the block netlist)\n")
+
+
+def _write_upstream_netlist_gap(bdir: Path, project: Path, block: str,
+                                btype, origin: dict) -> dict:
+    """Honest A4 artefact for a block whose A3 netlist never arrived.
+
+    Written as `corner_results.json` ON PURPOSE: A4's declared output existing
+    with `status: BLOCKED` puts the step in a NAMED failure that says what is
+    missing, where a silent absence would have made it an anonymous MISSING that
+    no reader can act on. Nothing in it can be misread as a measurement —
+    `corners` and `spec_results` are empty, `simulator_run` is false, and the
+    provenance names the gap."""
+    rec = {
+        "block": block, "block_type": btype,
+        "status": "BLOCKED",
+        "_provenance": "upstream_netlist_missing",
+        "blocked_on": A3_STEP,
+        "required_input": origin.get("netlist_expected_path"),
+        "required_skill": A3_SKILL,
+        "reason": (f"A4 refuses to simulate: A3's declared output "
+                   f"{origin.get('netlist_expected_path')!r} does not exist, so "
+                   f"there is no netlist of this design to measure. Running the "
+                   f"built-in testbench library here would measure this "
+                   f"program's own template, not the design — a result that "
+                   f"reads as design evidence and is not. Emit the netlist "
+                   f"(skill `{A3_SKILL}`), or set "
+                   f"{_BUILTIN_OK_ENV}=1 to exercise the template library "
+                   f"deliberately (the artefact is then stamped "
+                   f"`{NETLIST_PROV_BUILTIN}` and the A4 gate will not certify "
+                   f"it)."),
+        "simulator": None,
+        "simulator_run": False,
+        "corners": [],
+        "total_corners": 0,
+        "results_found": 0,
+        "corners_executed": 0,
+        "corners_derived": 0,
+        "full_pvt_sweep_executed": False,
+        "spec_results": [],
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    rec.update(origin)
+    bdir.mkdir(parents=True, exist_ok=True)
+    (bdir / "corner_results.json").write_text(json.dumps(rec, indent=2))
+    return rec
 
 
 def _write_native_template_gap(bdir, block, btype, ctx):
@@ -1889,6 +2048,32 @@ def run_block(project, block, container, pdk, topology_override):
     if not bdir.is_dir():
         print(f"[real_sim] block dir missing: {bdir}", file=sys.stderr)
         return 2
+
+    # ── A3→A4 precondition: refuse to substitute for an absent upstream output.
+    # FIRST, before the simulator is probed and before a single deck is written:
+    # a block with no A3 netlist has nothing of this design to measure, and the
+    # 82-222 s of ngspice this would otherwise spend per block would be spent on
+    # this program's own template. See `netlist_origin` above for the measured
+    # failure this rule comes from.
+    origin = netlist_origin(project, block)
+    if origin["netlist_provenance"] == NETLIST_PROV_ABSENT \
+            and not builtin_netlist_allowed():
+        btype_for_rec = (topology_override
+                         if topology_override and topology_override != "auto"
+                         else _pick_block_type(block, project))
+        _write_upstream_netlist_gap(bdir, project, block, btype_for_rec, origin)
+        print(f"[real_sim] block={block} BLOCKED on {A3_STEP}: "
+              f"{origin['netlist_expected_path']} absent — not simulating a "
+              f"built-in template in its place (skill `{A3_SKILL}`)",
+              file=sys.stderr)
+        return 2
+    if origin["netlist_provenance"] == NETLIST_PROV_ABSENT:
+        # Escape hatch taken: a deck WILL be written, and it is this program's
+        # built-in one. Record what the deck is, not what A3 failed to deliver —
+        # `netlist_source: None` already carries the second fact.
+        origin = dict(origin, netlist_provenance=NETLIST_PROV_BUILTIN,
+                      builtin_override=_BUILTIN_OK_ENV)
+
     if not _ngspice_available(container):
         print(f"[real_sim] ngspice not in container {container}", file=sys.stderr)
         return 2
@@ -1983,7 +2168,7 @@ def run_block(project, block, container, pdk, topology_override):
                                    device_geometry_units=device_geometry_units)
         # #496 (round-2): structured PDK-substitution disclosure goes FIRST so
         # it lands in the deck head (the gate scans the first 24 lines).
-        tb = subst_header + tb
+        tb = deck_origin_header(origin) + subst_header + tb
         sp_host = sl_dir / f"run_{knob}_{val}.sp"
         sp_host.write_text(tb)
         ok, meas, raw, sim_status = _run_ngspice(
@@ -2058,7 +2243,7 @@ def run_block(project, block, container, pdk, topology_override):
         deck_overrides, subst_header, base_tt,
         process_corners=grid_corners, devices=devices, typ_section=typ_section,
         device_terminals=device_terminals,
-        device_geometry_units=device_geometry_units)
+        device_geometry_units=device_geometry_units, origin=origin)
     pvt_grid, corners_executed = build_pvt_grid(
         base, base_log, real_sims, target.get("tol"),
         process_corners=grid_corners)
@@ -2108,6 +2293,16 @@ def run_block(project, block, container, pdk, topology_override):
         "block": block,
         "block_type": btype,
         "_provenance": block_provenance,
+        # SUBJECT of the measurement, stamped alongside the simulator that made
+        # it. `_provenance` above says HOW it was measured (real ngspice);
+        # these say WHAT was measured. Without them a corner_results.json reads
+        # as design-traceable no matter where its deck came from — the exact
+        # silence that let a real run's analog section read stronger than it was.
+        "netlist_source": origin["netlist_source"],
+        "netlist_provenance": origin["netlist_provenance"],
+        "netlist_sha256": origin["netlist_sha256"],
+        "netlist_produced_by": origin["netlist_produced_by"],
+        "deck_authored_by": "analog_real_corner_sweep.T[block_type]",
         # #464 — first-class partial-measurement evidence so downstream gates
         # and human review never have to dig the failure out of the raw log.
         "partial_measurement": block_partial,
@@ -2197,6 +2392,8 @@ def run_block(project, block, container, pdk, topology_override):
          "runs":runs,"verdict":verdict,
          "partial_measurement":block_partial,
          "sim_warnings":block_sim_warnings_dedup,
+         "netlist_source":origin["netlist_source"],
+         "netlist_provenance":origin["netlist_provenance"],
          "_provenance":block_provenance}, indent=2))
     print(f"[real_sim] block={block} type={btype} {verdict} "
           f"{target['key']}={best.get(target['key'])} target={target['target']}")
