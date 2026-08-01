@@ -733,12 +733,28 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                             # A3's netlist (the gate's provenance rules).
                             tail = (rs_cp.stdout.strip().splitlines()[-1]
                                     if rs_cp.stdout else "PASS")
+                            # WHAT was measured, READ from the artefact rather
+                            # than assumed. The sweep can only reach a gate PASS
+                            # from a design-derived deck, but the run record
+                            # should SAY which circuit that was instead of
+                            # leaving a reader to infer it from a gate rc.
+                            try:
+                                _doc = json.loads(cr.read_text())
+                            except Exception:
+                                _doc = {}
                             return StepResult(
                                 step_name, bname, "PASS_WITH_REAL_SIM",
                                 time.time() - t0,
-                                f"real ngspice: {tail}",
+                                f"real ngspice on "
+                                f"{_doc.get('netlist_source') or 'an unnamed deck'}"
+                                f": {tail}",
+                                output_files=[str(cr.relative_to(project))],
                                 extras={
                                     "extraction_strategy": "real_ngspice",
+                                    "design_traceable": bool(
+                                        _doc.get("design_traceable")),
+                                    "netlist_source": _doc.get("netlist_source"),
+                                    "deck_source": _doc.get("deck_source"),
                                     "low_confidence": False,
                                 })
                         if cp_real.returncode == 1:

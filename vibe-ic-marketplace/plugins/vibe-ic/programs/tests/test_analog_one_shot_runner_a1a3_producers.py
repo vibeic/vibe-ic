@@ -162,3 +162,72 @@ def test_the_full_analog_chain_produces_what_each_step_declares(tmp_path):
     assert not list((bdir(p, "widget_q")).glob("*.sp")), (
         "a block the deterministic track deferred on must not have acquired "
         "a netlist along the way")
+
+
+# ── A4: the RUN RECORD must name the circuit, not only the simulator ────────
+
+def test_the_run_record_names_the_circuit_a4_measured(tmp_path, monkeypatch):
+    """`real ngspice` with `output_files: []` names the tool and not the work.
+
+    The whole failure this round comes from is a record that was true about the
+    simulator and silent about the subject. Fixing it only inside the artefact
+    leaves the run log — the thing a reviewer actually reads first — saying
+    exactly as little as before.
+
+    Driven through the runner with a stubbed simulator, so the assertion is on
+    the StepResult the runner really returns, not on the runner's source.
+    """
+    p = make_project(tmp_path, [block("vreg_alpha", "ldo",
+                                      [{"name": "Vout", "target": 1.8,
+                                        "unit": "V"}])])
+    blk = {"name": "vreg_alpha", "type": "ldo"}
+    for earlier in ("A1_spec_extract", "A2_topology_select", "A3_netlist_gen"):
+        R.step_for_block(p, blk, earlier)
+    # PRECONDITION — A3 really delivered the pair A4 is supposed to consume.
+    assert (bdir(p, "vreg_alpha") / "vreg_alpha.sp").is_file()
+    assert (bdir(p, "vreg_alpha") / "tb_vreg_alpha.sp").is_file()
+
+    import analog_real_corner_sweep as S
+
+    def fake_docker(container, cmd, timeout=120):
+        if "command -v ngspice" in cmd or "ls /foss/tools" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "/usr/bin/ngspice\n", "")
+        if "--json-measure" in cmd and " -v " in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "unrecognized option", "")
+        if cmd.startswith("grep -ioE") and ".lib" in cmd:
+            return subprocess.CompletedProcess(
+                cmd, 0, ".lib ss\n.lib tt\n.lib ff\n", "")
+        if " -b " in cmd and ".sp" in cmd:
+            return subprocess.CompletedProcess(
+                cmd, 0, "MEAS vout=1.800000e+00\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(S, "_docker", fake_docker)
+    S._NGSPICE_CACHE.clear()
+    S._CONTAINER_PATH_CACHE.clear()
+    S._JSON_MEASURE_SUPPORT.clear()
+    S._PDK_SECTION_CACHE.clear()
+    # The runner shells out; keep the sweep in-process so the stub applies.
+    real = subprocess.run
+
+    def spy(cmd, *a, **kw):
+        if any("analog_real_corner_sweep" in str(t) for t in cmd):
+            argv = [str(t) for t in cmd]
+            rc = S.run_block(Path(argv[2]),
+                             argv[argv.index("--block") + 1],
+                             "fake", "sky130", "auto")
+            return subprocess.CompletedProcess(cmd, rc, "", "")
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(R.subprocess, "run", spy)
+    res = R.step_for_block(p, blk, "A4_corner_sweep")
+
+    assert res.status == "PASS_WITH_REAL_SIM", res.detail
+    assert res.extras.get("design_traceable") is True, res.extras
+    assert res.extras.get("deck_source") == "a3_netlist", res.extras
+    assert (res.extras.get("netlist_source") or "").endswith(
+        "vreg_alpha.sp"), res.extras
+    assert any("corner_results.json" in f for f in res.output_files), (
+        f"the run record must NAME the artefact: {res.output_files}")
+    assert "vreg_alpha.sp" in res.detail, (
+        f"the one line a reviewer reads must say which circuit: {res.detail!r}")
