@@ -160,3 +160,72 @@ def test_a_real_corpus_report_still_extracts_the_same_totals():
     assert got["attributed"] is True
     assert got["constant_net"] == 0
     assert got["design"] == d["total"]
+
+# ── THE WIRING, which is where the value actually is ────────────────────────
+#
+# v1.9.15 landed `attribute_drv` and NEVER CALLED IT. Every unit test above
+# passed, the corpus test passed, and no artefact carried the answer — the
+# issue's acceptance asks for the excluded count "reported separately and
+# visibly in the SAME artefact", and nothing wrote it there. A gate can be
+# perfectly correct and wired into a place where it answers nothing; these
+# tests are the part that would have caught that.
+_RPT_REL = "phase3/stage3/sta/sta_mcorner_ocv.rpt"
+
+
+def _axis_project(tmp_path, with_spares=True):
+    d = tmp_path / "phase3" / "stage3" / "sta"
+    d.mkdir(parents=True)
+    (d / "sta_mcorner_ocv.rpt").write_text(_RPT, encoding="utf-8")
+    if with_spares:
+        _project(tmp_path)
+    return tmp_path
+
+
+def test_the_emitted_axis_evidence_carries_the_attribution(tmp_path):
+    ax = M.read_axis_evidence(_axis_project(tmp_path), {})
+    drv = [a["drv"] for a in ax if a.get("drv")]
+    assert drv, "no axis produced DRV evidence — the fixture stopped exercising this"
+    att = drv[0].get("attribution")
+    assert att is not None, (
+        "`attribute_drv` is not called at the emit site, so the artefact "
+        "states a DRV total it cannot attribute — the v1.9.15 half-landing")
+    assert att["attributed"] is True
+    assert att["constant_net"] == 2 and att["design"] == 1
+
+
+def test_nothing_is_subtracted_from_the_published_total(tmp_path):
+    """LOAD-BEARING. The issue flags reducing a violation count as the change
+    deserving the most scrutiny. The sum must still be the total."""
+    ax = M.read_axis_evidence(_axis_project(tmp_path), {})
+    drv = [a["drv"] for a in ax if a.get("drv")][0]
+    assert drv["total"] == 3
+    assert drv["attribution"]["total"] == drv["total"]
+    assert sum(drv["violations"].values()) == drv["total"]
+
+
+def test_a_project_with_no_spare_record_says_so_in_the_artefact(tmp_path):
+    """"no tie-off rows" and "I could not tell" must not arrive as the same
+    number in the published evidence."""
+    ax = M.read_axis_evidence(_axis_project(tmp_path, with_spares=False), {})
+    att = [a["drv"] for a in ax if a.get("drv")][0]["attribution"]
+    assert att["attributed"] is False
+    assert "spare_cells.json" in att["reason"]
+
+
+def test_the_r5_finding_discloses_the_split():
+    """Pinned on the source: the number a human reads is the finding text, not
+    the JSON, so the split has to reach that too."""
+    src = (_PROGRAMS / "sta_corner_record_completeness_check.py").read_text(
+        encoding="utf-8")
+    assert "DISCLOSED, not subtracted" in src
+    assert 'att.get("attributed")' in src, (
+        "the R5 finding no longer reads the attribution")
+
+
+def test_attribute_drv_is_actually_called(tmp_path):
+    """The single assertion that would have caught the half-landing."""
+    src = (_PROGRAMS / "sta_corner_record_completeness_check.py").read_text(
+        encoding="utf-8")
+    calls = [l for l in src.splitlines()
+             if "attribute_drv(" in l and not l.lstrip().startswith("def ")]
+    assert calls, "attribute_drv is defined and never called"

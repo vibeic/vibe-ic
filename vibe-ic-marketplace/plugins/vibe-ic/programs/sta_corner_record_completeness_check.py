@@ -945,6 +945,26 @@ _AXIS_ARTIFACTS = (
 )
 
 
+def _drv_with_attribution(project: Path, text: str):
+    """`extract_drv` plus the tie-off split, attached where it is EMITTED.
+
+    #582 landed `attribute_drv` and never called it. The capability existed and
+    no artefact carried the answer — a gate can be perfectly correct and wired
+    into a place where it answers nothing. The issue's acceptance asks for the
+    excluded count "reported separately and visibly in the SAME artefact", and
+    that is this dict, which is what the report writes out.
+
+    NOTHING IS SUBTRACTED: `total` and `violations` are byte-identical to what
+    they were, and `attribution.total` is asserted to equal `total`.
+    """
+    if not text:
+        return None
+    drv = extract_drv(text)
+    rows = drv.get("rows") or {}
+    drv["attribution"] = attribute_drv(rows, spare_instances(project))
+    return drv
+
+
 def read_axis_evidence(project: Path,
                        decl: Dict[str, object]) -> List[Dict[str, object]]:
     """For each sign-off axis that produced a report: the multi-corner CLAIM it
@@ -1036,7 +1056,7 @@ def read_axis_evidence(project: Path,
             "unresolved_reason": unresolved_reason,
             "resolution_source": res_src,
             "resolution_recorded": bool(lib_by_corner),
-            "drv": extract_drv(text) if text else None,
+            "drv": _drv_with_attribution(project, text),
         })
     return out
 
@@ -1355,11 +1375,29 @@ def evaluate(project: Path,
         if viol:
             rules.append("R5_DRV_VIOLATION")
             pretty = ", ".join(f"{k} x{v}" for k, v in sorted(viol.items()))
+            # #582: the total could be SIZED and not ATTRIBUTED. On the run
+            # that raised it, 602 of 1767 max-slew rows were the ECO spare
+            # pool's inputs, all tied to one 614-fanout constant net by
+            # `_build_spare_postfix_tcl` — a net whose transition is enormous
+            # and whose slew is meaningless. Both numbers are stated and their
+            # sum is still the total; the count is NOT reduced.
+            att = drv.get("attribution") or {}
+            split = ""
+            if att.get("attributed"):
+                split = (f" — of which {att['design']} are design rows and "
+                         f"{att['constant_net']} are the preserved spare "
+                         f"pool's tied-off inputs on a constant net "
+                         f"(DISCLOSED, not subtracted)")
+            elif att:
+                split = (f" — NOT attributed ({att.get('reason','?')}), so "
+                         f"whether any of these are tie-off rows is unknown "
+                         f"rather than zero")
             findings.append(
                 f"R5 {rpt} ({axis} axis) reports {drv['total']} DRV violation"
-                f"{'' if drv['total'] == 1 else 's'}: {pretty} — design-rule "
-                f"violations are sign-off violations and are surfaced here, "
-                f"not left in the report body for nobody to read")
+                f"{'' if drv['total'] == 1 else 's'}: {pretty}{split} — "
+                f"design-rule violations are sign-off violations and are "
+                f"surfaced here, not left in the report body for nobody to "
+                f"read")
 
     ordered = [r for r in ("R1_INCOMPLETE_CORNER_RECORD",
                            "R2_DECLARED_BUT_UNREPORTED",
