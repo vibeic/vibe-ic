@@ -167,5 +167,104 @@ def test_gate_counterexample_is_hard_fail(tmp_path):
     assert rc == 1, "a genuine counterexample must remain a hard FAIL"
 
 
+# ---------------------------------------------------------------------------
+# #778 — the induction ladder can run OUT of DEPTH on a deep bit-serial datapath
+# while its DEEPEST rung is STILL proving new cells (converging, NOT a flat
+# wall). MEASURED on subservient×sky130A: equiv_simple proves 3369, then
+# equiv_induct proves 35/22/27 across -seq 4/16/64 — a strictly positive tail —
+# leaving 91 unproven (all `o_wb_mem_adr`) with ZERO counterexample. The old code
+# booked this "converging but ladder-exhausted" case as FAIL because the flat-
+# wall detector (`Proved 0`) never fired; it is the SAME disclosed sequential-
+# depth gap as a flat wall and must be INCONCLUSIVE.
+# ---------------------------------------------------------------------------
+LADDER_EXHAUSTED_OUTPUT = """\
+equiv_simple: Starting.
+Found 3544 unproven $equiv cells (3544 groups) in equiv:
+Proved 3369 previously unproven $equiv cells.
+equiv_induct: Proving $equiv cells in module equiv (-seq 4).
+Found 175 unproven $equiv cells in module equiv:
+Proved 35 previously unproven $equiv cells.
+equiv_induct: Proving $equiv cells in module equiv (-seq 16).
+Found 140 unproven $equiv cells in module equiv:
+Proved 22 previously unproven $equiv cells.
+equiv_induct: Proving $equiv cells in module equiv (-seq 64).
+Found 118 unproven $equiv cells in module equiv:
+Proved 27 previously unproven $equiv cells.
+equiv_status: Found 3544 $equiv cells in equiv:
+  Of those cells 3453 are proven and 91 are unproven.
+"""
+
+# NEGATIVE CONTROL: equiv_simple proves 33, equiv_induct then proves NOTHING (no
+# post-induct `Proved N` line) and leaves 7 unproven with no counterexample.
+# equiv_simple's OWN `Proved 33` must NOT be misread as induct progress — this
+# stays a hard FAIL exactly as before the #778 fix.
+INDUCT_PROVED_NOTHING_OUTPUT = """\
+equiv_simple: Starting.
+Found 40 unproven $equiv cells (40 groups) in equiv:
+Proved 33 previously unproven $equiv cells.
+equiv_induct: Proving $equiv cells in module equiv.
+Found 7 unproven $equiv cells in module equiv:
+equiv_status: Found 40 $equiv cells in equiv:
+  Of those cells 33 are proven and 7 are unproven.
+"""
+
+
+def test_ladder_exhausted_is_inconclusive_not_fail():
+    # The #778 case: was FAIL before the fix (flat-wall detector never fired
+    # because every rung proved >0). Now a disclosed sequential-depth gap.
+    p = lec_run.parse_equiv_output(LADDER_EXHAUSTED_OUTPUT)
+    assert p["verdict"] == "INCONCLUSIVE", p["verdict_explanation"]
+    assert p["equivalent"] is False           # visible non-PASS, never vacuous
+    assert p["unproven"] == 91
+    assert "ladder" in p["verdict_explanation"].lower() \
+        or "converge" in p["verdict_explanation"].lower()
+
+
+def test_ladder_exhausted_report_marks_non_convergence():
+    p = lec_run.parse_equiv_output(LADDER_EXHAUSTED_OUTPUT)
+    r = lec_run.build_report(p, "subservient", "netlist.v", None)
+    assert r["verdict"] == "INCONCLUSIVE"
+    assert r["inconclusive"] is True
+    assert r["non_convergence"] is True
+    assert r["non_equivalent_points"] == 0     # zero counterexamples
+
+
+def test_ladder_exhausted_gate_is_non_blocking(tmp_path):
+    # Same non-blocking rc=3 as the flat-wall sibling (WAIVED-DEFERRED), NOT a
+    # blocking LEC_NOT_EQUIVALENT.
+    res, rc = _run_gate(tmp_path, LADDER_EXHAUSTED_OUTPUT)
+    assert res.inconclusive is True
+    assert res.passed is False
+    rules = {f.rule for f in res.findings}
+    assert "LEC_NOT_EQUIVALENT" not in rules
+    assert rc == 3, "INCONCLUSIVE: non-blocking, but never a bare PASS"
+
+
+def test_induct_proved_nothing_stays_fail():
+    # NEGATIVE CONTROL (bidirectional): equiv_simple's `Proved 33` is BEFORE the
+    # induct marker, so induction_ladder_exhausted must NOT fire — a mismatch
+    # where induct proved 0 stays a hard FAIL.
+    assert lec_run.induction_ladder_exhausted(INDUCT_PROVED_NOTHING_OUTPUT)[0] is False
+    assert lec_run.parse_equiv_output(INDUCT_PROVED_NOTHING_OUTPUT)["verdict"] == "FAIL"
+
+
+def test_induction_ladder_exhausted_detector():
+    # Fires ONLY on positive post-induct progress with points remaining.
+    assert lec_run.induction_ladder_exhausted(LADDER_EXHAUSTED_OUTPUT)[0] is True
+    assert lec_run.induction_ladder_exhausted(FLAT_WALL_OUTPUT)[0] is False   # Proved 0 rungs
+    assert lec_run.induction_ladder_exhausted(DIVERGE_OUTPUT)[0] is False     # last rung Proved 0
+    assert lec_run.induction_ladder_exhausted("no equiv here")[0] is False
+
+
+def test_ladder_exhausted_counterexample_still_fails():
+    # §4.05 NO-LEAK: a converging ladder that ALSO records a counterexample must
+    # stay FAIL — the counterexample wins over the depth-gap signal.
+    with_ctrex = LADDER_EXHAUSTED_OUTPUT.replace(
+        "Proved 27 previously unproven $equiv cells.",
+        "Proved 27 previously unproven $equiv cells.\n"
+        "Trying to prove $equiv for \\o_gpio: failed, found counterexample.")
+    assert lec_run.parse_equiv_output(with_ctrex)["verdict"] == "FAIL"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
