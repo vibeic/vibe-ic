@@ -8376,31 +8376,79 @@ def _attribute_cascade_verdicts(
                     return m.group(1)
         return "?"
 
+    # vibe-ic#600 — a step (or an ancestor) that DECLARES a known gap is never
+    # softened by this cascade. M2 carried "KNOWN GAP, deliberately left
+    # declared and RED" in a COMMENT for four releases, so the cascade could not
+    # see it: M2's ancestry reaches step 13's LEC waiver and M2/M3/M4 were
+    # reported DEFERRED-BY-UPSTREAM(13). Closing 13 would have moved none of
+    # them — M3 and M4 FAIL on their own declared inputs — and the real blocker
+    # was hidden behind an unrelated waiver under a verdict that reads softer
+    # than MISSING and carries an implicit roadmap.
+    known_gap_of: Dict[Any, str] = {}
+    for st in steps:
+        sid = st.get("id")
+        kg = st.get("known_gap")
+        if sid is not None and isinstance(kg, str) and kg.strip():
+            known_gap_of[sid] = " ".join(kg.split())
+
     for r in results:
         if r.status != "MISSING":
             continue
-        # BFS over blocks_on ancestry → nearest deferred ancestor wins.
+        own_gap = known_gap_of.get(r.id)
+        if own_gap:
+            r.cascade_note = f"known-gap({r.id})"
+            r.reasons.insert(0, (
+                f"known-gap({r.id}): this step DECLARES its own gap, so no "
+                f"upstream waiver explains it and the verdict stays MISSING — "
+                f"{own_gap}"))
+            info.setdefault("known_gap", []).append((r.id, own_gap))
+            continue
+        # BFS over blocks_on ancestry. A declared known gap is nearer to the
+        # truth than any waiver behind it, so whichever is reached FIRST wins
+        # and a known gap stops the walk.
         queue = list(parents_of.get(r.id, []))
         seen: set = set()
         hit = None
+        gap_hit = None
         while queue:
             pid = queue.pop(0)
             if pid in seen:
                 continue
             seen.add(pid)
+            if pid in known_gap_of:
+                gap_hit = pid
+                break
             if pid in deferred_ids:
                 hit = pid
                 break
             queue.extend(parents_of.get(pid, []))
+        if gap_hit is not None:
+            # Attribution WITHOUT softening: the status stays MISSING, because
+            # the ancestor's gap is not a waiver and nothing is deferred.
+            r.cascade_note = f"blocked-by-known-gap({gap_hit})"
+            r.reasons.insert(0, (
+                f"blocked-by-known-gap({gap_hit}): the nearest blocking "
+                f"ancestor DECLARES a gap rather than carrying a waiver, so "
+                f"this is not deferred work — {known_gap_of[gap_hit]}"))
+            info.setdefault("blocked_by_known_gap", []).append((r.id, gap_hit))
+            continue
         if hit is None:
             continue
         ticket = _ticket_for(hit)
         r.status = "DEFERRED-BY-UPSTREAM"
         r.cascade_note = f"deferred-by-upstream({hit}, ticket={ticket})"
+        # WHAT IS KNOWN, and no more. The old wording asserted "this step
+        # consumes outputs that step X's waiver deferred", and nothing in the
+        # flow establishes that: `blocks_on` is an ORDERING edge, the flow
+        # declares `inputs:` ZERO times, and over 1221 (step, ancestor) pairs
+        # exactly ONE shares a declared output. The ordering fact is real and
+        # is what this says.
         r.reasons.insert(0, (
-            f"deferred-by-upstream({hit}, ticket={ticket}): this step "
-            f"consumes outputs that step {hit}'s waiver deferred — same "
-            f"waiver, not an independent gap"
+            f"deferred-by-upstream({hit}, ticket={ticket}): step {hit} is a "
+            f"waived ancestor of this step in the declared blocks_on ORDER, so "
+            f"this step never ran. The flow declares no inputs, so whether its "
+            f"artefacts would have appeared had {hit} run is not established "
+            f"from the flow — one waiver, one deduction"
         ))
         info["deferred_by_upstream"].append((r.id, hit, ticket))
 
