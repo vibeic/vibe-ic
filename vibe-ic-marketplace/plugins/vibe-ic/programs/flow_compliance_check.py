@@ -1593,6 +1593,12 @@ class StepResult:
     #       unmet requirement wearing an explanation.
     # Only (c) sets this flag, and only (c) is routed into the verdict.
     self_skip_disclosed: bool = False
+    # True when a gate on this step disclosed that an artefact it certifies
+    # carries no design-bound content. Set INDEPENDENTLY of `status`: when the
+    # step otherwise passes the status becomes STRUCTURE-ONLY, and when it
+    # fails for another reason the FAIL stands and this flag is what puts the
+    # disclosure on the tally line anyway.
+    structure_only_disclosed: bool = False
     # #497 step 1 — the STRUCTURED per-gate payload, emitted ALONGSIDE
     # `reasons` and read by nothing yet.
     #
@@ -2281,6 +2287,38 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
 # vs. were vacuously satisfied.
 _VACUOUS_HINT_PREFIX = "__VACUOUS_HINT__: "
 
+# ── STRUCTURE-ONLY verdict tier ───────────────────────────────────────────
+# The tally line had no way to say the third thing a step can be. It said a
+# step executed and passed, or failed, or is missing. A fourth case was being
+# reported as the first: the step RAN, it PRODUCED its declared artefact, and
+# that artefact's content came from a library default because no bound input
+# determined it.
+#
+# THE RULE, with no tool, step or block name in it:
+#
+#   A step that produced its declared artefact from a library default, because
+#   no bound input determined its content, is neither an executed pass nor a
+#   missing step. It is dispositioned in its own tier, it leaves the
+#   executed-PASS numerator, it stays in the denominator, and its count is
+#   printed on the one line a reader reads.
+#
+# Not MISSING: the artefact exists and re-running produces the same one.
+# Not PASS: every number measured on it is a number about the default.
+# Not FAIL: the bounded inputs did not determine the content, and inventing
+# content to fill that gap is the failure the whole track exists to prevent —
+# a run that is honest about its ceiling must not score below one that is not.
+#
+# The tier is signalled exactly the way VACUOUS_PASS is: a gate program prints
+# a line beginning `STRUCTURE_ONLY:` on stdout. It is read WHETHER OR NOT the
+# gate passed — a step can fail for one declared unit and still have produced a
+# library-default artefact for another, and both facts are true. When the step
+# passes, the tier REPLACES PASS; when it fails for another reason, FAIL stays
+# (it is the louder news) and the disclosure is carried as a parenthetical on
+# the FAIL count, the same shape `MISSING=n (k blocked-by-upstream…)` already
+# uses.
+_STRUCTURE_ONLY_HINT_PREFIX = "__STRUCTURE_ONLY_HINT__: "
+_STRUCTURE_ONLY_STDOUT_SENTINEL = "STRUCTURE_ONLY:"
+
 # ORGANIC #608 — internal marker a gate can emit to promote its step to
 # SKIPPED-CONDITION (not FAIL) when the gate's own evidence artifact HONESTLY
 # self-reports it was skipped (verdict ∈ SKIP/SKIPPED/SKIPPED-CONDITION) and the
@@ -2598,6 +2636,28 @@ def _stdout_signals_vacuous(snippet: str) -> bool:
         if line.lstrip().startswith("VACUOUS_PASS"):
             return True
     return False
+
+
+def _stdout_signals_structure_only(snippet: str) -> bool:
+    """True iff the gate disclosed that an artefact it certifies carries no
+    design-bound content. Same line-start shape as the vacuous sentinel, and
+    read on the FAILING path too — the disclosure is about what was produced,
+    not about whether the gate was satisfied."""
+    if not snippet:
+        return False
+    for line in snippet.splitlines():
+        if line.lstrip().startswith(_STRUCTURE_ONLY_STDOUT_SENTINEL):
+            return True
+    return False
+
+
+def _structure_only_note(snippet: str) -> str:
+    """The disclosure line itself, so the per-step listing can print WHY."""
+    for line in (snippet or "").splitlines():
+        s = line.lstrip()
+        if s.startswith(_STRUCTURE_ONLY_STDOUT_SENTINEL):
+            return s[len(_STRUCTURE_ONLY_STDOUT_SENTINEL):].strip()
+    return ""
 
 
 def _run_yosys_gates(project: Path) -> tuple[bool, List[str]]:
@@ -6212,6 +6272,13 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         # accept the flag (byte-identical command otherwise).
         _cmd = _maybe_forward_skip_analog(project, _cmd, skip_analog)
         passed, out = _check_program_exit_zero(project, _cmd)
+        # Read BEFORE the pass/fail split and on the FULL snippet: the
+        # 200-char truncation below would drop the sentinel, and the
+        # disclosure is about what the gate certified, not about whether it
+        # was satisfied.
+        if _stdout_signals_structure_only(out):
+            reasons.append(f"{_STRUCTURE_ONLY_HINT_PREFIX}"
+                           f"{_structure_only_note(out) or _cmd}")
         if not passed:
             reasons.append(f"program failed: {_cmd}")
             reasons.append(f"output: {out[:200]}")
@@ -6283,6 +6350,9 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         # hands over the flag the gate already knows how to honour.
         cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
         passed, out = _check_program_exit_zero(project, cmd)
+        if _stdout_signals_structure_only(out):
+            reasons.append(f"{_STRUCTURE_ONLY_HINT_PREFIX}"
+                           f"{_structure_only_note(out) or cmd}")
         if not passed:
             reasons.append(f"optional program failed: {cmd}")
             reasons.append(f"output: {out[:200]}")
@@ -6407,6 +6477,14 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     # would give an advisory sub-gate that RAN and FOUND
                     # something no way to be seen, which is the failure mode
                     # the slot exists to avoid.
+                    reasons.append(hint)
+                elif hint.startswith(_STRUCTURE_ONLY_HINT_PREFIX):
+                    # Same reason, one tier over. This list is a WHITELIST: a
+                    # hint a sub-gate emits and this loop does not name is
+                    # dropped here, silently, and the disclosure dies one
+                    # level below the line that was supposed to carry it —
+                    # which is precisely the shape of defect the tier exists
+                    # to make visible.
                     reasons.append(hint)
         return True, reasons
 
@@ -7965,10 +8043,23 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # after the status is decided.
         advisory_hints = [r for r in reasons
                           if r.startswith(_ADVISORY_HINT_PREFIX)]
+        # The structure-only disclosure is NOT a reason the step failed and
+        # NOT a reason it passed; it says what the step produced. It is read
+        # on both paths and never suppresses another verdict.
+        structure_only_hints = [r for r in reasons
+                                if r.startswith(_STRUCTURE_ONLY_HINT_PREFIX)]
+        if structure_only_hints:
+            result.structure_only_disclosed = True
+            for h in structure_only_hints:
+                result.reasons.append(
+                    f"STRUCTURE-ONLY: a declared artefact of this step was "
+                    f"produced from a library default, not from a bound "
+                    f"input — {h[len(_STRUCTURE_ONLY_HINT_PREFIX):]}")
         non_hint_reasons = [r for r in reasons
                             if not r.startswith(_VACUOUS_HINT_PREFIX)
                             and not r.startswith(_SKIP_HINT_PREFIX)
                             and not r.startswith(_WAIVER_HINT_PREFIX)
+                            and not r.startswith(_STRUCTURE_ONLY_HINT_PREFIX)
                             and not r.startswith(_ADVISORY_HINT_PREFIX)]
         if (passed and waiver_hints and not non_hint_reasons
                 and not skip_hints and not vacuous_hints):
@@ -8010,6 +8101,10 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"vacuous: gate program signalled VACUOUS_PASS "
                     f"(input not applicable): {cmd}"
                 )
+        elif passed and structure_only_hints and not non_hint_reasons:
+            # The step ran and produced its declared artefact — from a library
+            # default. PASS would say the artefact is design-bound; it is not.
+            result.status = "STRUCTURE-ONLY"
         else:
             result.status = "PASS" if passed else "FAIL"
             result.reasons.extend(non_hint_reasons)
@@ -8112,7 +8207,12 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # MEASURED on the real spm x ihp-sg13g2 run: Step 21 declared drc.rpt
     # (absent) + routed.def (present) and reported PASS; Step 9 declared
     # netlist.v (present) + "area.rpt OR stats.json" (both absent), PASS.
-    if result.status in ("PASS", "VACUOUS_PASS") and missing_entries:
+    # STRUCTURE-ONLY is a PASS-TIER verdict and is demoted here exactly like
+    # the other two: the tier says the artefact's CONTENT came from a default,
+    # which presupposes the artefact exists. A declared output that is absent
+    # is MISSING whatever the gate said about the ones that are present.
+    if result.status in ("PASS", "VACUOUS_PASS", "STRUCTURE-ONLY") \
+            and missing_entries:
         result.status = "MISSING"
         result.reasons.append(
             f"required_outputs missing: {missing_entries} "
@@ -8810,7 +8910,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     counts = {"PASS": 0, "FAIL": 0, "MISSING": 0, "WAIVED": 0,
               "DEFERRED-BY-UPSTREAM": 0,
               "SKIPPED-CONDITION": 0, "SKIPPED-SETUP-REQUIRED": 0,
-              "VACUOUS_PASS": 0}
+              "VACUOUS_PASS": 0, "STRUCTURE-ONLY": 0}
     for r in results:
         counts[r.status] = counts.get(r.status, 0) + 1
     # v1.6.97 (issue #29 Bugs 1+2) — thin-input waivers count toward
@@ -9001,6 +9101,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # `final_report_generate._parse_audit_tally` scans for.
     vacuous_head = (f", {counts['VACUOUS_PASS']} VACUOUS-PASS excluded from "
                     f"executed" if counts.get("VACUOUS_PASS") else "")
+    vacuous_head += (
+        f", {counts['STRUCTURE-ONLY']} STRUCTURE-ONLY excluded from executed"
+        if counts.get("STRUCTURE-ONLY") else "")
     print(f"Steps: {len(steps)} total ({pass_count}/{total_required} executed PASS, "
           f"{counts['WAIVED']} DEFERRED via waiver{vacuous_head})")
     skipped_str = f"  SKIPPED={counts.get('SKIPPED-CONDITION', 0)}" if counts.get("SKIPPED-CONDITION") else ""
@@ -9017,21 +9120,49 @@ def main(argv: Optional[List[str]] = None) -> int:
             for sid, n in _blocked.items()) + ")"
     dbu_str = (f"  DEFERRED-BY-UPSTREAM={counts['DEFERRED-BY-UPSTREAM']}"
                if counts.get("DEFERRED-BY-UPSTREAM") else "")
+    # THE THIRD DISPOSITION, ON THE LINE. Two shapes, because the fact is true
+    # in two situations and a reader needs it in both:
+    #   * a step that produced ONLY library-default artefacts and was
+    #     otherwise clean lands in its own bucket, out of PASS;
+    #   * a step that FAILED for another reason and ALSO produced one keeps
+    #     the FAIL and carries the disclosure as a parenthetical, exactly the
+    #     shape MISSING already uses for blocked-by-upstream. Nothing is
+    #     double-counted: the parenthetical annotates a bucket, it is not one.
+    so_failing = sum(1 for r in results
+                     if r.status == "FAIL" and r.structure_only_disclosed)
+    fail_str = f"FAIL={counts['FAIL']}"
+    if so_failing:
+        fail_str += (f" ({so_failing} also produced a library-default "
+                     f"artefact, see STRUCTURE-ONLY below)")
+    so_str = (f"  STRUCTURE-ONLY={counts['STRUCTURE-ONLY']}"
+              if counts.get("STRUCTURE-ONLY") else "")
     print(
-        f"  PASS={counts['PASS']}  FAIL={counts['FAIL']}  "
+        f"  PASS={counts['PASS']}  {fail_str}  "
         f"{missing_str}  WAIVED-DEFERRED={counts['WAIVED']}"
-        f"{dbu_str}{skipped_str}{vacuous_str}\n"
+        f"{dbu_str}{skipped_str}{vacuous_str}{so_str}\n"
     )
+    if counts.get("STRUCTURE-ONLY") or so_failing:
+        print(
+            "  STRUCTURE-ONLY = the step ran and produced its declared "
+            "artefact, and that artefact's content came from a library "
+            "default because no bound input determined it. Not missing (the "
+            "artefact exists and re-running produces the same one), not a "
+            "design-bound pass (every number measured on it is a number "
+            "about the default), not a failure (the inputs did not determine "
+            "the content and inventing content to fill that gap is the "
+            "defect this tier exists to make visible).\n"
+        )
 
     _icon = {"PASS": "✓", "FAIL": "✗", "MISSING": "·", "WAIVED": "~",
              "DEFERRED-BY-UPSTREAM": "~",
              "SKIPPED-CONDITION": "-", "SKIPPED-SETUP-REQUIRED": "!",
-             "VACUOUS_PASS": "○"}
+             "VACUOUS_PASS": "○", "STRUCTURE-ONLY": "◐"}
     _label = {"PASS": "PASS", "FAIL": "FAIL", "MISSING": "MISSING", "WAIVED": "WAIVED-DEFERRED",
               "DEFERRED-BY-UPSTREAM": "DEFERRED-BY-UPSTREAM",
               "SKIPPED-CONDITION": "SKIPPED-CONDITION",
               "SKIPPED-SETUP-REQUIRED": "SKIPPED-SETUP-REQUIRED",
-              "VACUOUS_PASS": "VACUOUS-PASS"}
+              "VACUOUS_PASS": "VACUOUS-PASS",
+              "STRUCTURE-ONLY": "STRUCTURE-ONLY"}
     for r in results:
         icon = _icon.get(r.status, "?")
         label = _label.get(r.status, r.status)

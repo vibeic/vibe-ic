@@ -90,6 +90,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _analog_producer_common as _pc  # noqa: E402
+
 PRODUCER = "analog_a2_topology_emit"
 PROVENANCE_SCHEMA = 1
 SKILL = "analog-topology-select"
@@ -889,8 +891,10 @@ def run(project: Path, only: Optional[str], pdk: str
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(prog=PRODUCER, description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    # A usage error exits `_pc.EX_USAGE`, never the honest-gap tier — see
+    # `_analog_producer_common` for the measurement that forced the split.
+    ap = _pc.ProducerArgumentParser(prog=PRODUCER, description=__doc__,
+                                    formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("project", type=Path)
     ap.add_argument("--block", default=None)
     ap.add_argument("--pdk", default="sky130",
@@ -912,10 +916,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"{PRODUCER}: {report['blocks_emitted']} topology emitted, "
               f"{report['blocks_gap']} honest gap(s) "
               f"(hand off to `{SKILL}`)")
-    elif rc == 2:
-        print(f"{PRODUCER}: NO block type is in the topology library — "
-              f"{report['blocks_gap']} topology_gap.json written; "
-              f"invoke skill `{SKILL}`", file=sys.stderr)
+    elif rc == _pc.RC_HONEST_GAP:
+        print(_pc.honest_gap_line(
+            PRODUCER,
+            f"NO block type is in the topology library — "
+            f"{report['blocks_gap']} topology_gap.json written; "
+            f"invoke skill `{SKILL}`"), file=sys.stderr)
     else:
         print(f"{PRODUCER}: {report.get('verdict')} — "
               f"{report.get('reason')}", file=sys.stderr)

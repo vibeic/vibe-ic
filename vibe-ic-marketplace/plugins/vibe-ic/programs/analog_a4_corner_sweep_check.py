@@ -69,9 +69,10 @@ from typing import List, Optional
 
 from _analog_a_check_common import (
     BLOCK_LIST_ABSENT_REASON,
+    DESIGN_CONTENT_STRUCTURE_ONLY,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail, emit_incomplete,
-    resolve_block_artefact,
+    resolve_block_artefact, structure_only_disclosure,
 )
 
 GATE = "analog_a4_corner_sweep_check"
@@ -212,6 +213,84 @@ def _netlist_disclosed_fail(project: Path, block: str, data: dict,
     return None
 
 
+# MEASURED AND NOT CLOSED HERE, on purpose — recorded so the next reader does
+# not have to rediscover it.
+#
+#   An artefact that discloses NOTHING still certifies this step. Simulated
+#   corners, the upstream netlist present on disk, and no `netlist_provenance`
+#   and no `design_content` at all: `_netlist_absent_fail` is scoped by its own
+#   docstring to the case the FILESYSTEM decides (the upstream output is
+#   missing), and `_design_content_fail` below fires only on an artefact that
+#   CLAIMS an upstream-derived deck. Between them sits the pre-disclosure
+#   shape, and it passes.
+#
+#   Reproduce: a ten-block project whose corner artefacts predate both
+#   disclosures — the gate returns 0 and the A1-A9 matrix reads PASS while
+#   nothing on disk says which circuit produced the numbers.
+#
+#   NOT widened in this change. Making silence a finding here flips 13 shipped
+#   tests whose fixtures encode the pre-disclosure shape as certifiable; that
+#   is a contract move with its own blast radius and its own evidence
+#   obligation, and it is not the change `design_content` needed. Filed as
+#   itself rather than smuggled in beside a different fix.
+
+
+def _design_content_fail(block: str, data: dict, rel: str) -> Optional[dict]:
+    """The rule that stops a corner result from reading as design-traceable
+    when its deck was rendered from a library topology.
+
+    `netlist_provenance` says WHERE the deck came from. `design_content` says
+    WHAT IS IN IT — whether any bound input reached the content, or whether
+    the content is a library default. An artefact that claims the first and is
+    silent on the second is exactly the silence this gate exists to refuse:
+    "measured with a real simulator" was true of the simulator and said
+    nothing about the subject, and a field nobody reads is the same silence in
+    more words.
+
+    NOT a failure when the answer is `structure_only`: a library default is an
+    honest ceiling where the bounded inputs do not determine the content, and
+    failing an honest ceiling teaches the next run to stop being honest. It is
+    a failure to claim a design-derived deck and DECLINE TO SAY what is in it.
+    """
+    if data.get("netlist_provenance") != NETLIST_PROV_OK:
+        return None                      # rules 1-2 already own these
+    dc = data.get("design_content")
+    if isinstance(dc, str) and dc:
+        return None
+    return {
+        "block": block, "rule": "A4_DESIGN_CONTENT_UNDECLARED",
+        "rel_path": rel,
+        "detail": (f"netlist_provenance={NETLIST_PROV_OK!r} claims the deck "
+                   f"was derived from {A3_STEP}'s output, and the artefact "
+                   f"records no `design_content` saying what that output "
+                   f"contains. A deck rendered from a library topology and a "
+                   f"deck rendered from a design sized to its spec are "
+                   f"indistinguishable in every other field of this file. "
+                   f"The producer must republish the upstream "
+                   f"`design_content` record; absence of it is not evidence "
+                   f"of design content."),
+    }
+
+
+def _structure_only_blocks(project: Path, blocks: list) -> list:
+    """Blocks whose A4 artefact discloses that the circuit it measured carries
+    NO design-bound content. Read from the artefact, never inferred."""
+    out = []
+    for block in blocks:
+        path, found = resolve_block_artefact(
+            project, block, "corner_results.json", DECLARED_PHASE)
+        if not found:
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(data, dict) and \
+                data.get("design_content") == DESIGN_CONTENT_STRUCTURE_ONLY:
+            out.append(block)
+    return out
+
+
 def _netlist_absent_fail(project: Path, block: str, data: dict,
                          corners: list, rel: str) -> Optional[dict]:
     """The rule decided by the FILESYSTEM rather than by a self-report: the
@@ -288,6 +367,10 @@ def _check_block(project: Path, block: str
     nl = _netlist_disclosed_fail(project, block, data, rel)
     if nl is not None:
         return "FAIL", [nl]
+    # ...and what is IN the subject, not only where it came from.
+    dc = _design_content_fail(block, data, rel)
+    if dc is not None:
+        return "FAIL", [dc]
     corners = data.get("corners")
     if not isinstance(corners, list) or not corners:
         return "FAIL", [{
@@ -488,13 +571,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             findings.extend(fs)
 
+    # DISCLOSED BEFORE THE VERDICT, and independently of it. A step can fail
+    # for one block and still have certified a library-default artefact for
+    # another; both facts are true and a reader needs both.
+    structure_only = _structure_only_blocks(project, blocks)
     summary = {
         "blocks_checked": len(blocks),
         "blocks_pass": blocks_pass,
         "blocks_missing": len(missing_seen),
         "blocks_fail": len(findings),
+        "blocks_structure_only": len(structure_only),
+        "structure_only_blocks": structure_only,
     }
+    rc = _verdict(project, args, findings, missing_seen, blocks_pass, summary)
+    # LAST, and on every path — see `structure_only_disclosure` for why the
+    # position is part of the contract.
+    structure_only_disclosure(GATE, structure_only, "corner_results.json")
+    return rc
 
+
+def _verdict(project: Path, args, findings: List[dict],
+             missing_seen: List[dict], blocks_pass: int, summary: dict) -> int:
     if args.block:
         if findings:
             return emit_fail(GATE, args, findings, summary)

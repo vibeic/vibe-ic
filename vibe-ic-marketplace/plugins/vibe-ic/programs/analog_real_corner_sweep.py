@@ -1875,6 +1875,75 @@ NETLIST_PROV_ABSENT = "absent"             # A3 produced nothing; A4 refused
 
 _BUILTIN_OK_ENV = "ANALOG_ALLOW_BUILTIN_NETLIST"
 
+# ── design_content: inherited, not re-derived ─────────────────────────────
+# WHERE THE DECK CAME FROM is not the same question as WHAT IS IN IT.
+# `netlist_provenance` answers the first: the deck derives from the upstream
+# artefact. The upstream artefact itself records the second — whether any bound
+# spec value reached a device parameter, or whether the geometry is the
+# topology library's nominal. Until this change that second answer stopped at
+# the upstream sidecar and nothing downstream read it, so a corner result
+# rendered from a library topology was byte-indistinguishable, in every field a
+# consumer grades, from one rendered from a designed netlist. That is the same
+# defect one layer up: `_provenance: real_ngspice` was true of the simulator and
+# silent about the subject.
+#
+# THE RULE, with no tool or step name in it: an artefact derived from another
+# artefact INHERITS the upstream record of what that artefact contains, and
+# republishes it. A field that says what an artefact is made of is not
+# disclosure until a consumer that grades the artefact reads it.
+DESIGN_CONTENT_NONE = "none"           # no design content: deck authored here
+DESIGN_CONTENT_UNDECLARED = "undeclared"   # upstream shipped no such record
+DESIGN_CONTENT_STRUCTURE_ONLY = "structure_only"
+DESIGN_CONTENT_SIZED = "structure_and_geometry"
+
+#: The upstream sidecar this program inherits `design_content` from. Named
+#: once so the reader of a corner result can find the record it came from.
+_UPSTREAM_SIDECAR = "netlist_provenance.json"
+
+_DESIGN_CONTENT_MEANING = {
+    DESIGN_CONTENT_NONE: (
+        "none — the simulated deck's circuit was authored by this program's "
+        "built-in table, so it carries no content of this design at all"),
+    DESIGN_CONTENT_UNDECLARED: (
+        "undeclared — the upstream netlist shipped no record of what it "
+        "contains, so this result cannot say whether any bound spec value "
+        "reached a device parameter. Absence of the record is not evidence "
+        "of design content"),
+    DESIGN_CONTENT_STRUCTURE_ONLY: (
+        "structure_only — the circuit class came from a topology library and "
+        "NO bound spec value reached any device parameter; every geometry is "
+        "a library nominal. The corners below are real measurements OF THAT "
+        "TOPOLOGY, not of a design sized to this spec"),
+    DESIGN_CONTENT_SIZED: (
+        "structure_and_geometry — at least one device parameter was solved "
+        "against a bound spec value"),
+}
+
+
+def upstream_design_content(netlist_path: Path) -> tuple:
+    """`(design_content, source_rel_or_None, provenance_ref_or_None)` read from
+    the sidecar the upstream producer wrote beside its netlist.
+
+    READ, never re-derived: this program cannot look at a `.sp` and know
+    whether a number in it came from a spec or from a library default — only
+    the producer that resolved the parameters knows that, and it wrote the
+    answer down. Missing sidecar is reported as `undeclared`, which is a third
+    answer and not a synonym for either of the other two."""
+    side = netlist_path.parent / _UPSTREAM_SIDECAR
+    if not side.is_file():
+        return DESIGN_CONTENT_UNDECLARED, None, None
+    try:
+        doc = json.loads(side.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return DESIGN_CONTENT_UNDECLARED, str(side), None
+    prov = doc.get("_provenance") if isinstance(doc, dict) else None
+    if not isinstance(prov, dict):
+        return DESIGN_CONTENT_UNDECLARED, str(side), None
+    dc = prov.get("design_content")
+    if dc not in (DESIGN_CONTENT_STRUCTURE_ONLY, DESIGN_CONTENT_SIZED):
+        dc = DESIGN_CONTENT_UNDECLARED
+    return dc, str(side), prov.get("provenance_ref")
+
 
 def a3_netlist_path(project: Path, block: str):
     """Resolve A3's declared per-block output. Returns `(path, found)`.
@@ -2069,6 +2138,9 @@ def netlist_origin(project: Path, block: str, env=None) -> dict:
                 "netlist_testbench": None,
                 "netlist_expected_testbench_path": tb_rel,
                 "netlist_produced_by": A3_STEP,
+                "design_content": DESIGN_CONTENT_NONE,
+                "design_content_source": None,
+                "netlist_provenance_ref": None,
                 "design_traceable": False}
     try:
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -2081,12 +2153,22 @@ def netlist_origin(project: Path, block: str, env=None) -> dict:
                 "netlist_expected_testbench_path": tb_rel,
                 "netlist_present_but_unusable": rel,
                 "netlist_produced_by": A3_STEP,
+                "design_content": DESIGN_CONTENT_NONE,
+                "design_content_source": None,
+                "netlist_provenance_ref": None,
                 "design_traceable": False}
     try:
         tb_digest = hashlib.sha256(tb_path.read_bytes()).hexdigest()
     except OSError:
         tb_digest = None
     # The deck this program emits IS this netlist, driven by this stimulus.
+    # `design_content` is INHERITED from the upstream record, never inferred
+    # here — see `upstream_design_content`.
+    dc, dc_src, dc_ref = upstream_design_content(path)
+    dc_src_rel = None
+    if dc_src is not None:
+        dc_src_rel = (str(Path(dc_src).relative_to(project))
+                      if str(dc_src).startswith(str(project)) else str(dc_src))
     return {"netlist_source": rel,
             "netlist_provenance": NETLIST_PROV_A3,
             "netlist_sha256": digest, "netlist_expected_path": rel,
@@ -2094,6 +2176,9 @@ def netlist_origin(project: Path, block: str, env=None) -> dict:
             "netlist_testbench_sha256": tb_digest,
             "netlist_expected_testbench_path": tb_rel,
             "netlist_produced_by": A3_STEP,
+            "design_content": dc,
+            "design_content_source": dc_src_rel,
+            "netlist_provenance_ref": dc_ref,
             "design_traceable": True}
 
 
@@ -2115,12 +2200,28 @@ def deck_origin_header(origin: dict) -> str:
         authored = ("analog_real_corner_sweep.T[block_type] (BUILT-IN "
                     "testbench, NOT the block netlist — this deck carries no "
                     "design content)")
+    dc = origin.get("design_content") or DESIGN_CONTENT_UNDECLARED
+    # The five original lines keep their positions. Consumers read this header
+    # through fixed-width windows (a shipped gate scans the first 24 lines; a
+    # regression guard reads the first 6), so a new field inserted ABOVE an
+    # existing one silently pushes that one out of somebody's window — the
+    # same class of defect as a disclosure nobody reads. New fields go after.
     return (f"* netlist_provenance: {prov}\n"
             f"* netlist_source: {origin.get('netlist_source')}\n"
             f"* netlist_testbench: {origin.get('netlist_testbench')}\n"
             f"* design_traceable: "
             f"{str(bool(origin.get('design_traceable'))).lower()}\n"
-            f"* deck_authored_by: {authored}\n")
+            f"* deck_authored_by: {authored}\n"
+            # WHERE the deck came from and WHAT IS IN IT are two questions, and
+            # a deck read on its own years later has to answer both.
+            # `a3_netlist` + `structure_only` is a real design netlist whose
+            # geometry is a library nominal — the pair a reader must not have
+            # to reconstruct.
+            f"* design_content: {dc}\n"
+            f"* design_content_meaning: "
+            f"{_DESIGN_CONTENT_MEANING.get(dc, dc)}\n"
+            f"* netlist_provenance_ref: "
+            f"{origin.get('netlist_provenance_ref')}\n")
 
 
 def _write_upstream_netlist_gap(bdir: Path, project: Path, block: str,
@@ -2183,6 +2284,10 @@ def _write_upstream_netlist_gap(bdir: Path, project: Path, block: str,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     rec.update(origin)
+    # A refusal measured nothing, so it contains no design content — stated,
+    # not left to be inferred from an absent field.
+    rec["design_content"] = DESIGN_CONTENT_NONE
+    rec["design_content_meaning"] = _DESIGN_CONTENT_MEANING[DESIGN_CONTENT_NONE]
     bdir.mkdir(parents=True, exist_ok=True)
     (bdir / "corner_results.json").write_text(json.dumps(rec, indent=2))
     return rec
@@ -2456,6 +2561,7 @@ def run_block(project, block, container, pdk, topology_override):
                 bdir, project, block, btype,
                 dict(origin, netlist_provenance=NETLIST_PROV_ABSENT,
                      netlist_source=None, design_traceable=False,
+                     design_content=DESIGN_CONTENT_NONE,
                      netlist_present_but_unusable=origin.get("netlist_source"),
                      deck_unbuildable_reason=str(exc)))
             print(f"[real_sim] block={block} BLOCKED: {exc}", file=sys.stderr)
@@ -2647,6 +2753,18 @@ def run_block(project, block, container, pdk, topology_override):
         # deck's circuit came from the design; false for every deck this file
         # authored, no matter how real the simulator run was.
         "design_traceable": bool(origin.get("design_traceable")),
+        # ...and the field that says what that design content IS. Inherited
+        # from the upstream artefact's own record, republished here so a
+        # corner result can never read as design-traceable-and-sized when the
+        # netlist it was rendered from said `structure_only`. `design_traceable`
+        # answers WHERE the circuit came from; this answers WHAT IS IN IT, and
+        # the two are not the same claim.
+        "design_content": (origin.get("design_content")
+                           or DESIGN_CONTENT_UNDECLARED),
+        "design_content_meaning": _DESIGN_CONTENT_MEANING.get(
+            origin.get("design_content") or DESIGN_CONTENT_UNDECLARED, ""),
+        "design_content_source": origin.get("design_content_source"),
+        "netlist_provenance_ref": origin.get("netlist_provenance_ref"),
         "deck_authored_by": (
             A3_STEP if design_deck
             else "analog_real_corner_sweep.T[block_type] (BUILT-IN template — "
@@ -2765,6 +2883,15 @@ def run_block(project, block, container, pdk, topology_override):
          "sim_warnings":block_sim_warnings_dedup,
          "netlist_source":origin["netlist_source"],
          "netlist_provenance":origin["netlist_provenance"],
+         # The sizing-loop record is derived from the same deck, so it carries
+         # the same statement of what that deck contains. An artefact derived
+         # from a structure-only netlist must not be readable as a sized one
+         # in ANY of the files the run leaves behind.
+         "design_content":(origin.get("design_content")
+                           or DESIGN_CONTENT_UNDECLARED),
+         "design_content_meaning":_DESIGN_CONTENT_MEANING.get(
+             origin.get("design_content") or DESIGN_CONTENT_UNDECLARED, ""),
+         "netlist_provenance_ref":origin.get("netlist_provenance_ref"),
          "_provenance":block_provenance}, indent=2))
     print(f"[real_sim] block={block} type={btype} {verdict} "
           f"{target['key']}={best.get(target['key'])} target={target['target']}")

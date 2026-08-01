@@ -56,6 +56,7 @@ Exit codes
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -153,6 +154,83 @@ _AUDIT_VERDICT_RE = re.compile(
     r"(PASS_WITH_WAIVERS|PASS)\b",
     re.IGNORECASE,
 )
+
+# ── two rules that apply to ANY RESULT.md, PASS-claiming or not ───────────
+# Both come from the same measured failure shape: a document reporting on a
+# run tree that is not the tree it sits in.
+#
+# THE RULE, with no tool or step name in it:
+#
+#   A directory presented as the evidence for a result must not contain a
+#   document that contradicts that evidence. A number a document quotes as
+#   proof must be recomputable from the directory the document sits in, and a
+#   document that reports on artefacts older than itself is reporting on a
+#   different run.
+#
+# (a) STALE. Measured: a run directory carried a report written at 05:55
+#     asserting one tally and describing a step as having produced nothing,
+#     while the artefacts in the same directory were written at 10:12 and that
+#     step had produced them. Four sibling directories carried byte-identical
+#     copies of that one document. Nothing in the tree said which run it
+#     described, and a reader opening the directory it was told to open got
+#     the wrong round's numbers with no way to notice.
+#
+# (b) UNVERIFIED DIGEST. The audit-SHA citation below was checked for
+#     PRESENCE and never against the artefact it names, so a 64-hex string
+#     copied from any other run satisfied it. A digest quoted as proof that
+#     nobody recomputes is not proof; it is a shape.
+_TALLY_RE = re.compile(
+    r"PASS\s*=\s*(\d+)\s+FAIL\s*=\s*(\d+)\s+MISSING\s*=\s*(\d+)",
+    re.IGNORECASE,
+)
+#: Directories whose newest file dates the run this document reports on.
+_EVIDENCE_ROOTS = ("reports", "phase1", "phase2", "phase3")
+#: A document written within this many seconds of the newest artefact is part
+#: of the same round. Generous on purpose: the rule must fire on a stale
+#: ROUND, never on the ordinary case of writing the report a few minutes after
+#: the run that produced the artefacts.
+_STALE_GRACE_S = 3600
+
+
+def _newest_evidence(project: Path) -> Tuple[Optional[float], Optional[str]]:
+    """`(mtime, path)` of the newest artefact under the evidence roots."""
+    newest: Optional[float] = None
+    newest_p: Optional[str] = None
+    for root in _EVIDENCE_ROOTS:
+        d = project / root
+        if not d.is_dir():
+            continue
+        for p in d.rglob("*"):
+            if not p.is_file():
+                continue
+            try:
+                m = p.stat().st_mtime
+            except OSError:
+                continue
+            if newest is None or m > newest:
+                newest, newest_p = m, str(p.relative_to(project))
+    return newest, newest_p
+
+
+def _find_audit_json(project: Path) -> Optional[Path]:
+    """The audit artefact a RESULT.md cites by digest, in THIS tree."""
+    for cand in sorted(project.rglob("phase23_completion_audit.json")):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _is_run_tree(project: Path) -> bool:
+    """True when this directory is a RUN TREE — one that holds the artefacts a
+    report would be reporting on.
+
+    Both rules below are about an evidence DIRECTORY: a document that
+    contradicts the evidence beside it, and a digest that cannot be recomputed
+    from the tree that published it. A directory holding a document and no
+    evidence is not that; there is nothing there for the document to
+    contradict, and inventing an obligation for it would be a different rule
+    wearing this one's name."""
+    return any((project / r).is_dir() for r in _EVIDENCE_ROOTS)
 _VERDICT_QUOTED_RE = re.compile(
     r'"verdict"\s*:\s*"(PASS_WITH_WAIVERS|PASS)"',
     re.IGNORECASE,
@@ -201,6 +279,81 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
 
     summary["result_md_path"] = str(result_md.relative_to(project))
     summary["result_md_bytes"] = len(text.encode("utf-8"))
+
+    # ── (a) the document must not predate the evidence it reports on ──────
+    # Checked BEFORE the PASS-claim gate below, on purpose. The measured
+    # failure was a document that claimed a FAIL — so every rule that fires
+    # only on a PASS claim skipped it — while asserting the WRONG ROUND's
+    # numbers inside the directory a reader had been pointed at. A stale
+    # report is a trap whatever verdict it carries.
+    is_run_tree = _is_run_tree(project)
+    summary["is_run_tree"] = is_run_tree
+    tally = _TALLY_RE.search(text) if is_run_tree else None
+    summary["quotes_compliance_tally"] = bool(tally)
+    if tally:
+        summary["quoted_tally"] = {
+            "PASS": int(tally.group(1)), "FAIL": int(tally.group(2)),
+            "MISSING": int(tally.group(3))}
+    # Only walked when the document actually asserts the run's NUMBERS. This
+    # checker is wired into the umbrella that runs on every compliance check,
+    # and the roots it walks hold the whole run — a tree scan on every
+    # invocation to answer a question no document asked is a cost nobody
+    # asked for either.
+    newest_m, newest_p = _newest_evidence(project) if tally else (None, None)
+    try:
+        doc_m: Optional[float] = result_md.stat().st_mtime
+    except OSError:
+        doc_m = None
+    summary["result_md_mtime"] = doc_m
+    summary["newest_evidence"] = newest_p
+    summary["newest_evidence_mtime"] = newest_m
+    if (tally and doc_m is not None and newest_m is not None
+            and newest_m - doc_m > _STALE_GRACE_S):
+        failures.append(
+            f"RESULT_MD_STALE_VS_EVIDENCE — RESULT.md quotes a compliance "
+            f"tally (PASS={tally.group(1)} FAIL={tally.group(2)} "
+            f"MISSING={tally.group(3)}) and was written "
+            f"{int(newest_m - doc_m)}s BEFORE the newest artefact in the "
+            f"evidence it sits in ({newest_p}). It is reporting a different "
+            f"round than the one this directory now holds, and a reader sent "
+            f"to this directory reads that round's numbers as this round's. "
+            f"Regenerate it against this tree or remove it — an evidence "
+            f"directory must not contain a document that contradicts its own "
+            f"evidence."
+        )
+
+    # ── (b) a digest quoted as proof must recompute in THIS tree ─────────
+    # The citation rule below checked that a 64-hex string was PRESENT. It
+    # never compared it to the artefact it names, so a digest copied from any
+    # other run satisfied it. Recompute and compare.
+    cited = ((_AUDIT_SHA_RE.search(text) or _AUDIT_SHA_GENERIC_RE.search(text))
+             if is_run_tree else None)
+    if cited:
+        cited_sha = cited.group(1).lower()
+        audit_json = _find_audit_json(project)
+        summary["audit_json_in_tree"] = (
+            str(audit_json.relative_to(project)) if audit_json else None)
+        if audit_json is None:
+            failures.append(
+                f"RESULT_MD_AUDIT_SHA_UNVERIFIABLE — RESULT.md cites "
+                f"audit sha {cited_sha[:16]}… and this tree carries no "
+                f"`phase23_completion_audit.json` to compare it against. A "
+                f"digest quoted as proof of a run must be recomputable from "
+                f"that run's own tree."
+            )
+        else:
+            actual = hashlib.sha256(audit_json.read_bytes()).hexdigest()
+            summary["audit_sha_actual"] = actual
+            if not actual.startswith(cited_sha) and \
+                    not cited_sha.startswith(actual):
+                failures.append(
+                    f"RESULT_MD_AUDIT_SHA_MISMATCH — RESULT.md cites audit "
+                    f"sha {cited_sha} while "
+                    f"{audit_json.relative_to(project)} in THIS tree digests "
+                    f"to {actual}. The reported digest and the reported run "
+                    f"are not the same thing: the citation was produced by a "
+                    f"different run."
+                )
 
     # Wave 36 — combine chip-agnostic defaults with per-project
     # signature regexes (if any).

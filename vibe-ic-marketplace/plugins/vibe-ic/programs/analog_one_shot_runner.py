@@ -685,7 +685,28 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                             (f"deterministic producer declined and RECORDED "
                              f"why: {gap} — invoke skill `{skill}`"),
                             extras={"gap_path": gap,
-                                    "producer": prod["program"]})
+                                    "producer": prod["program"],
+                                    "producer_rc": (pcp.returncode
+                                                    if pcp else None)})
+                    # NO gap file. Until the producers were given a distinct
+                    # usage exit code this fell through to the same WAIVED as
+                    # an honest gap, so a producer that never examined the
+                    # project — a wrong flag, rc 2, nothing written — read
+                    # exactly like one that examined it and stood down for a
+                    # stated reason. The step is still not produced, so it is
+                    # still WAIVED; what changes is that the record now says
+                    # the producer ERRORED and names the code, instead of
+                    # reporting the gate's "artefact missing, invoke skill".
+                    if pcp is not None and pcp.returncode not in (0, 2):
+                        return StepResult(
+                            step_name, bname, "WAIVED", time.time() - t0,
+                            (f"deterministic producer ERRORED rc="
+                             f"{pcp.returncode} and wrote NO gap file — this "
+                             f"is not an honest gap: "
+                             f"{(pcp.stderr or '').strip().splitlines()[-1] if (pcp.stderr or '').strip() else 'no stderr'}"),
+                            extras={"producer": prod["program"],
+                                    "producer_rc": pcp.returncode,
+                                    "producer_error": True})
             # v1.6.214 (ORGANIC-20260512) — BEFORE the stub fallback,
             # try a REAL ngspice sweep via analog_real_corner_sweep.py.
             # chip-AGNOSTIC: only kicks in when (a) docker container

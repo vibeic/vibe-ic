@@ -118,6 +118,8 @@ from typing import Any, Dict, List, Optional, Tuple
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
+import _analog_producer_common as _pc  # noqa: E402
+
 PRODUCER = "analog_a3_netlist_emit"
 PROVENANCE_SCHEMA = 1
 SKILL = "analog-netlist-gen"
@@ -834,9 +836,14 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
             "unsized_params": nominal,
         }
 
+    # ONE stamp for this emission, used by the netlist header, the sidecar and
+    # the run reference. Calling `_now()` three times gave three values for one
+    # event, so nothing downstream could tell whether two records described the
+    # same emission.
+    stamp = _now()
     prov_lines = [
         f"_provenance: producer={PRODUCER} schema={PROVENANCE_SCHEMA}",
-        f"_provenance: produced_at={_now()}",
+        f"_provenance: produced_at={stamp}",
         f"_provenance: topology_ir={_CANONICAL_ANALOG}/{name}/topology.json "
         f"sha256={_sha256(ir_path)}",
         f"_provenance: spec={_CANONICAL_ANALOG}/{name}/spec.json "
@@ -907,17 +914,41 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         f" status={sim.get('simulation_status')}"
         f"\n* _provenance: ai_handoff", 1)
 
+    # ── the digest a report quotes has to name the run it came from ───────
+    # The two digests already in the header are over files that embed a
+    # wall-clock stamp and an absolute path, so they change on every run of
+    # identical inputs and identify neither the content nor the run. Measured
+    # across five sibling run trees of the same inputs: five different quoted
+    # digests, and nothing on any of them saying which tree produced it.
+    # `content_sha256` is stable across runs (every `* _provenance:` line is
+    # excluded before hashing, including these two, so stamping them cannot
+    # move it) and `provenance_ref` carries the run tree, the artefact and the
+    # content in ONE token. `analog_a3_netlist_gen_check` recomputes both.
+    sp_rel = str(sp_path.relative_to(project))
+    content_sha = _pc.content_digest(sp_text)
+    rref = _pc.new_run_ref()
+    ref = _pc.provenance_ref(rref, sp_rel, content_sha)
+    sp_text = sp_text.replace(
+        "* _provenance: ai_handoff",
+        f"* _provenance: run_ref={rref}\n"
+        f"* _provenance: content_sha256={content_sha}\n"
+        f"* _provenance: provenance_ref={ref}\n"
+        f"* _provenance: ai_handoff", 1)
+
     bdir.mkdir(parents=True, exist_ok=True)
     sp_path.write_text(sp_text, encoding="utf-8")
+    tb_content_sha = None
     if tb_text:
         (bdir / f"tb_{name}.sp").write_text(tb_text, encoding="utf-8")
+        tb_content_sha = _pc.content_digest(tb_text)
     sidecar = {
         "block": name,
         "block_type": btype,
         "_provenance": {
             "schema": PROVENANCE_SCHEMA,
             "producer": PRODUCER,
-            "produced_at": _now(),
+            # The SAME stamp the netlist header carries — one event, one time.
+            "produced_at": stamp,
             "rendered_from": {
                 "topology_json": {
                     "path": f"{_CANONICAL_ANALOG}/{name}/topology.json",
@@ -927,6 +958,24 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
                     "sha256": _sha256(spec_path)},
             },
             "has_own_netlist_template": False,
+            # ONE token that names the run tree, the artefact and the content
+            # it is proof of. `content_sha256` is recomputable by a reader
+            # from the artefact alone and is stable across runs of the same
+            # inputs; `run_ref` is stamped into BOTH this record and the
+            # artefact, so a record from another run disagrees with the
+            # artefact it claims to describe while a whole tree copied intact
+            # still agrees with itself.
+            "run_ref": rref,
+            "provenance_ref": ref,
+            "content_sha256": content_sha,
+            "artifact_sha256": _pc.file_digest(sp_path),
+            "testbench_content_sha256": tb_content_sha,
+            "content_digest_definition": (
+                "sha256 over the artefact with every `* _provenance:` line "
+                "removed — the design content, not the run. Stable across "
+                "runs of the same inputs; the `sha256=` values under "
+                "rendered_from are NOT, because their subjects embed a "
+                "timestamp and an absolute path."),
             "design_content": design_content,
             "design_content_meaning": (
                 "structure_and_geometry — at least one device parameter was "
@@ -967,6 +1016,8 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
                netlist=str(sp_path.relative_to(project)),
                testbench=(f"tb_{name}.sp" if tb_text else None),
                spec_bound_params=spec_bound,
+               design_content=design_content,
+               provenance_ref=ref,
                simulation_status=sim.get("simulation_status"))
     return rec
 
@@ -999,6 +1050,16 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
         "blocks_emitted": len(emitted),
         "blocks_kept_preexisting": len(kept),
         "blocks_gap": len(gaps),
+        # WHAT was emitted, not only HOW MANY. A caller that reads only the
+        # count cannot tell a design-bound netlist from a library topology
+        # carrying a design's name, which is the whole distinction A4 and the
+        # compliance line are now required to carry.
+        "blocks_structure_only": sum(
+            1 for r in records if r.get("design_content") == "structure_only"),
+        "design_content": {r["block"]: r.get("design_content")
+                           for r in records if r.get("emitted")},
+        "provenance_ref": {r["block"]: r.get("provenance_ref")
+                           for r in records if r.get("emitted")},
         "gap_status": {r["block"]: r.get("status") for r in gaps},
         "ai_handoff_blocks": [r["block"] for r in gaps],
         "suggested_skill": SKILL if gaps else None,
@@ -1008,8 +1069,10 @@ def run(project: Path, only: Optional[str], pdk: str, container: str,
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(prog=PRODUCER, description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    # A usage error exits `_pc.EX_USAGE`, never the honest-gap tier — see
+    # `_analog_producer_common` for the measurement that forced the split.
+    ap = _pc.ProducerArgumentParser(prog=PRODUCER, description=__doc__,
+                                    formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("project", type=Path)
     ap.add_argument("--block", default=None)
     ap.add_argument("--pdk", default=os.environ.get("VIBEIC_ANALOG_PDK",
@@ -1036,11 +1099,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"{PRODUCER}: {report['blocks_emitted']} netlist(s) emitted "
               f"and verified, {report['blocks_gap']} honest gap(s) "
               f"(hand off to `{SKILL}`)")
-    elif rc == 2:
-        print(f"{PRODUCER}: NO netlist emitted — "
-              f"{report['blocks_gap']} netlist_gap.json written "
-              f"({report['gap_status']}); invoke skill `{SKILL}`",
-              file=sys.stderr)
+    elif rc == _pc.RC_HONEST_GAP:
+        print(_pc.honest_gap_line(
+            PRODUCER,
+            f"NO netlist emitted — {report['blocks_gap']} netlist_gap.json "
+            f"written ({report['gap_status']}); invoke skill `{SKILL}`"),
+            file=sys.stderr)
     else:
         print(f"{PRODUCER}: {report.get('verdict')} — "
               f"{report.get('reason')}", file=sys.stderr)

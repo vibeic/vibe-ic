@@ -295,6 +295,68 @@ def make_argparser(gate_name: str, doc: str) -> argparse.ArgumentParser:
     return ap
 
 
+# ── STRUCTURE-ONLY disclosure tier ────────────────────────────────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   A step that produced its declared artefact, but produced it from a library
+#   default because no bound input determined its content, is neither complete
+#   nor absent. It is dispositioned in its own tier: never counted as an
+#   executed pass, never counted as missing, and always named on the ONE
+#   summary line a reader reads.
+#
+# WHY IT IS NOT `MISSING`: the artefact exists, it is well-formed, every
+# downstream consumer can read it, and re-running the step will not produce a
+# different one. Calling it missing would send a reader to look for work that
+# has already been done as well as the inputs allow.
+#
+# WHY IT IS NOT A PASS: the artefact's content came from a default, so any
+# number measured on it is a number about the default. A pass here would let a
+# library topology be reported as a designed one.
+#
+# WHY IT IS NOT A FAIL: nothing is wrong. The bounded inputs did not determine
+# the content, and inventing content to fill the gap is precisely the failure
+# this whole track exists to prevent. Failing an honest ceiling teaches the
+# next run to stop being honest.
+#
+# The disclosure travels as a line-start stdout token, the same shape as this
+# repo's existing `VACUOUS_PASS:` sentinel, so `flow_compliance_check` can read
+# it from a gate that PASSED and from a gate that failed for an unrelated
+# reason, without either one having to change its exit code.
+STRUCTURE_ONLY_TOKEN = "STRUCTURE_ONLY:"
+
+#: The `design_content` value that means "structure came from a library, no
+#: bound input reached the content".
+DESIGN_CONTENT_STRUCTURE_ONLY = "structure_only"
+
+
+def structure_only_disclosure(gate_name: str, blocks: list,
+                              artefact: str, detail: str = "") -> None:
+    """Print the STRUCTURE-ONLY disclosure. Two properties this has to hold,
+    both learned the hard way from the sibling `VACUOUS_PASS:` sentinel:
+
+    * Called REGARDLESS of the gate's verdict. A step can fail for one unit
+      and still have produced a library-default artefact for another; both
+      facts are true and a reader needs both.
+    * Called LAST, and kept SHORT. The consumer of a gate's output keeps a
+      fixed-width TAIL of each stream (300 chars), so a disclosure printed
+      first, or printed long, is a disclosure the consumer never sees — which
+      is the same defect one layer down: a signal that exists and is not read.
+      Measured: a 330-char line emitted before the verdict line vanished
+      entirely from the compliance summary.
+    """
+    if not blocks:
+        return
+    names = ", ".join(str(b) for b in blocks)
+    if len(names) > 60:
+        names = f"{names[:57]}..."
+    # ONE line, and the LAST line. The long-form reason lives in the JSON
+    # report and in the compliance summary's own explanatory block; putting it
+    # here would push the token itself out of the consumer's 300-char tail.
+    print(f"{STRUCTURE_ONLY_TOKEN} {len(blocks)} {artefact} artefact(s) "
+          f"({names}) came from a library default, not a bound input "
+          f"[{gate_name}]")
+
+
 def write_report(json_path: Optional[str], report: dict) -> None:
     if not json_path:
         return

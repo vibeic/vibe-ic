@@ -277,9 +277,16 @@ def test_gate_passes_a3_derived_sweep(tmp_path: Path) -> None:
     derived from A3's output still passes. The fix is a provenance requirement,
     not a blanket refusal."""
     project = _project(tmp_path, [("vreg", "ldo")], with_netlist=("vreg",))
+    # The design_content field joined the shape the sweep writes when the
+    # record of WHERE a deck came from stopped being allowed to stand in for
+    # the record of WHAT IS IN IT. An artefact that claims a3-derived and
+    # stays silent on its content is now its own finding
+    # (A4_DESIGN_CONTENT_UNDECLARED), so this negative control states the
+    # content it is a control for.
     _corners(project, "vreg", _real_sim_doc(
         netlist_provenance="a3_netlist",
         netlist_source="phase3/analog/vreg/vreg.sp",
+        design_content="structure_and_geometry",
         netlist_sha256="0" * 64))
 
     r = _run_gate(project)
