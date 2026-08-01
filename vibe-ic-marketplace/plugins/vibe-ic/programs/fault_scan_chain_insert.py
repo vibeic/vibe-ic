@@ -330,6 +330,29 @@ def decide_skip_boundary(project: Path, mode: str,
     return is_fixed, ev
 
 
+# `--skip-boundary` was added to the `fault` fork after image 0.2.52 (present in
+# 0.2.54+; MEASURED: `fault chain --help` on 0.2.52 does NOT list it, on 0.2.54
+# does — same 0.9.4 binary string, rebuilt between tags). The boundary decision
+# in `decide_skip_boundary` is PURE w.r.t. the project and image-INDEPENDENT, so
+# on a fixed-pinout wrapper `auto` decides skip=True regardless of image. If that
+# runs against an older `fault` the binary REJECTS the flag: MEASURED
+#   `Error: Unknown option '--skip-boundary'` -> RC=64, no netlist produced.
+# Without this classifier the failure surfaces as the generic "produced no scan
+# netlist" and the wrapper that MOST needs skip-boundary silently loses its scan
+# chain, the real cause (image too old) buried in log_tail with no remedy. This
+# is chip-AGNOSTIC — it keys on the TOOL's own error string, not on any design.
+_SKIP_BOUNDARY_UNSUPPORTED_RE = re.compile(
+    r"(?:unknown|unrecognized|unexpected|invalid)\s+option[^\n]*--skip-boundary",
+    re.IGNORECASE)
+
+
+def skip_boundary_unsupported_in_log(log: str) -> bool:
+    """True iff `fault chain`'s output shows it rejected `--skip-boundary` as an
+    unsupported option (this build of `fault` predates the flag).  PURE — a
+    string check on the tool's own error, unit-testable without Docker."""
+    return bool(_SKIP_BOUNDARY_UNSUPPORTED_RE.search(log or ""))
+
+
 def run_chain(project: Path, netlist_rel: str, clock: str,
               pdk: str, reset: str | None = None,
               reset_active_low: bool = False,
@@ -455,6 +478,24 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
                       "skip_boundary_evidence": skip_boundary_evidence,
                       "log_tail": log[-1500:],
                       "error": "`fault chain` produced no scan netlist"}
+        if skip_boundary_flag and skip_boundary_unsupported_in_log(log):
+            # DEGRADE LOUDLY, never silently: the deterministic decision was to
+            # skip the boundary register (correct for a fixed-pinout wrapper),
+            # but THIS build of `fault` predates `--skip-boundary` and rejected
+            # it. Say the cause and BOTH remedies, so the next blind run's
+            # failure is self-explaining instead of a generic "no scan netlist".
+            err_report["skip_boundary_unsupported_by_binary"] = True
+            err_report["error"] = (
+                "`fault chain` rejected `--skip-boundary` — this build of the "
+                "`fault` binary predates the flag (MEASURED: absent on image "
+                "0.2.52, present on 0.2.54+). The fixed-pinout wrapper's correct "
+                "DFT is internal-scan-only, which needs `--skip-boundary`. "
+                "Remedies: (a) run in an image whose `fault chain --help` lists "
+                "`--skip-boundary` (>=0.2.54); or (b) set "
+                "VIBEIC_DFT_SKIP_BOUNDARY=off to accept legacy boundary-scan "
+                "insertion — but on a fixed-pinout wrapper that re-introduces "
+                "the SS-corner setup violation (#604) and a large area blow-up.")
+            return 1, err_report
         if connected_inout:
             # A CONNECTED bidirectional port cannot be stripped losslessly and
             # `fault chain` cannot represent it — name it, do not hide it.
