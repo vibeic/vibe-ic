@@ -122,6 +122,42 @@ _VERSION = "1.1.0"
 # a lenient self-chosen target cannot pass a sub-foundry coverage number.
 FOUNDRY_FLOOR_DEFAULT = 95.0
 
+# ── The SINGLE non-blocking-verdict contract, shared with dft_signoff_check ──
+# The stuck-at verdicts `audit()` can emit that DO NOT block DFT sign-off. This
+# is the ONE definition of "non-blocking stuck-at disposition"; it is consulted
+# by BOTH this program's own rc mapping (`main`) AND the aggregate
+# `dft_signoff_check`, so the two gates cannot classify the same recorded verdict
+# differently — the whole point of vibe-ic#603 was that two gates keyed on the
+# same L20 applicability and disagreed, and that can only recur if one of them
+# re-invents this list instead of reading it.
+#
+#   PASS          — measured stuck-at coverage met the foundry floor.
+#   INFORMATIONAL — `audit()` downgraded a floor FAIL because the design's OWN
+#                   L20 declares no DFT (see `l20_dft_applicability`). This is
+#                   NEVER a blanket pass: a design that DECLARES DFT still yields
+#                   PASS/FAIL against the floor, and a real below-floor coverage
+#                   on a DFT-declaring design still FAILs. INFORMATIONAL is non-
+#                   blocking ONLY because the applicability-guarded downgrade
+#                   already decided the floor does not govern this design.
+#
+# SKIPPED-CONDITION is deliberately absent: `audit()` never emits it (the
+# disclosed-skip short-circuits in `main()` before `audit()` is reached), so a
+# stuck-at status of SKIPPED-CONDITION reaching this predicate would be an
+# unexpected state and must NOT vacuously pass.
+NON_BLOCKING_STUCK_AT_VERDICTS = frozenset({"PASS", "INFORMATIONAL"})
+
+
+def stuck_at_signoff_passes(verdict: Optional[str]) -> bool:
+    """True iff a stuck-at verdict (as emitted by `audit()`) is non-blocking for
+    DFT sign-off.
+
+    ONE predicate, shared by this program's `main()` rc mapping and by
+    `dft_signoff_check`'s aggregate, so a design's recorded stuck-at disposition
+    is judged identically wherever it is read. This is the invariant that keeps
+    the coverage gate and the sign-off gate from drifting into opposite verdicts
+    about the same tree (vibe-ic#603). chip-AGNOSTIC — a pure string check."""
+    return str(verdict).strip().upper() in NON_BLOCKING_STUCK_AT_VERDICTS
+
 # Field names that may hold the REAL measured stuck-at coverage (%) — in
 # priority order. vibe-ic#603: `test_coverage_pct` (detected / (total −
 # ATPG-untestable)) is the sign-off number and is preferred when present; a
@@ -765,8 +801,10 @@ def main(argv: Optional[list] = None) -> int:
     print(f"{_PROGRAM}: measured={meas} raw={raw} written_target={tgt} "
           f"effective_target={eff} verdict={verdict}", file=sys.stderr)
     # PASS and the L20-INFORMATIONAL downgrade (design declares no DFT) both
-    # resolve to rc=0; only a floor-enforced FAIL is rc=1.
-    return 0 if verdict in ("PASS", "INFORMATIONAL") else 1
+    # resolve to rc=0; only a floor-enforced FAIL is rc=1. Routed through the
+    # SHARED predicate so this rc mapping and dft_signoff_check's stuck-at
+    # acceptance read the SAME non-blocking set — they cannot drift.
+    return 0 if stuck_at_signoff_passes(verdict) else 1
 
 
 if __name__ == "__main__":
