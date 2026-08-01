@@ -857,9 +857,38 @@ def main(argv=None) -> int:
     if rep.get("verdict") == "SKIP":
         _ev = project / "reports" / "analog" / "mixed_signal" / "top_lvs.json"
         _ev.parent.mkdir(parents=True, exist_ok=True)
-        _ev.write_text(json.dumps(
-            {k: v for k, v in rep.items() if k != "rc"},
-            indent=2, ensure_ascii=False) + "\n")
+        # vibe-ic#614 — C5's reason above is right (a SKIP must leave verdict
+        # evidence) and the write was UNCONDITIONAL, so a run that could not
+        # compare REPLACED one that did. `flow_compliance_check` invokes this
+        # producer with the DEFAULT container, so on any host where the run
+        # root is not bind-mounted under that name the audit overwrote a
+        # computed FAIL with a capability-gap SKIP — and the gate then
+        # published that SKIP as a design mismatch.
+        #
+        # A NON-RESULT MUST NOT DISPLACE A RESULT. The skip still leaves
+        # evidence, beside the comparison rather than on top of it.
+        _prior = None
+        if _ev.is_file():
+            try:
+                _prior = json.loads(_ev.read_text(errors="replace"))
+            except (OSError, ValueError):
+                _prior = None
+        _compared = isinstance(_prior, dict) and bool(_prior.get("lvs_report"))
+        _payload = {k: v for k, v in rep.items() if k != "rc"}
+        if _compared:
+            _alt = _ev.with_name("top_lvs_skipped.json")
+            _payload["preserved"] = (
+                f"an existing {_ev.name} records a COMPLETED comparison "
+                f"(verdict {_prior.get('verdict')!r}, report "
+                f"{_prior.get('lvs_report')!r}); this skip is recorded here "
+                f"instead of replacing it")
+            _alt.write_text(json.dumps(_payload, indent=2,
+                                       ensure_ascii=False) + "\n")
+            rep["skip_evidence"] = str(_alt.relative_to(project))
+            rep["did_not_overwrite"] = str(_ev.relative_to(project))
+        else:
+            _ev.write_text(json.dumps(_payload, indent=2,
+                                       ensure_ascii=False) + "\n")
     rep.setdefault("top", top)
     rep.setdefault("top_source", top_src)
     rep.setdefault("pdk", pdk)
