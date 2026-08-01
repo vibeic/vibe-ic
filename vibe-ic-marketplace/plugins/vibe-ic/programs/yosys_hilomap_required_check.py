@@ -321,6 +321,20 @@ def main(argv: list[str] | None = None) -> int:
             out.write_text(_json.dumps(report, indent=2) + "\n")
         stream = sys.stderr if rc else sys.stdout
         print(f"{verdict}: {reason_text}", file=stream)
+        # vibe-ic#599. The verdict word stays VACUOUS_PASS on purpose — no `.ys`
+        # script existed to audit, and `reason_class` is what records how much
+        # was verified. That distinction was invisible to the roll-up, which
+        # reads the printed token and never the report, so a step whose inline
+        # `yosys -p` command HAD been extracted and checked was tallied as one
+        # where nothing was examined. This line is the disclosure the roll-up
+        # consumes; it is emitted only on the tiers whose reason_class says a
+        # command was actually read, never on `_unconfirmed`.
+        if rc == 0 and fields["reason_class"] in (
+                "inline_yosys_p_mode_conformant",
+                "inline_yosys_p_mode_confirmed"):
+            print(f"SUBSTANTIVE_PASS: no `.ys` script existed, and the "
+                  f"equivalent was verified by another route "
+                  f"({fields['reason_class']})", file=stream)
         for m in report["messages"]:
             print(f"  {m}", file=stream)
         return rc

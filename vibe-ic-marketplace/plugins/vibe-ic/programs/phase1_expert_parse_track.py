@@ -787,8 +787,20 @@ def main(argv=None) -> int:
         return 1
 
     if rep["verdict"] == "VACUOUS_PASS":
-        print(f"VACUOUS_PASS: {PROGRAM} — no expert expectation applies to "
-              f"this design and the AI sub-track is unavailable")
+        # vibe-ic#599 D1. Two different things reached this line. No expert
+        # expectation applying is vacuous — nobody needs to come back to it.
+        # The AI sub-track never delivering a reading is NOT: the input was
+        # applicable, the gate wrote a handoff pack, and it said in writing
+        # that its own findings are "a floor, not coverage". Reporting that as
+        # "input not applicable" is the step being credited for work nobody did.
+        if rep["ai_subtrack"]["status"] != "CONSUMED":
+            print(f"INCOMPLETE: {PROGRAM} — the AI sub-track did not deliver a "
+                  f"reading ({rep['ai_subtrack']['status']}), so the expert "
+                  f"expectation was NOT examined; the deterministic findings "
+                  f"are a floor, not coverage")
+        else:
+            print(f"VACUOUS_PASS: {PROGRAM} — no expert expectation applies to "
+                  f"this design")
     print(f"{PROGRAM}: {rep['verdict']} "
           f"({len(rep['findings'])} finding(s); AI sub-track "
           f"{rep['ai_subtrack']['status']})")
