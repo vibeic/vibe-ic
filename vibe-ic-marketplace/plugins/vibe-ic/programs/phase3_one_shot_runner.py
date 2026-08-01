@@ -17096,9 +17096,73 @@ def _ship_program(name: str, dest_dir: Path) -> Path:
     return dst
 
 
+def _port_label_census(gds_path: Path, def_file: Path) -> Optional[Dict[str, Any]]:
+    """vibe-ic#613 — does this streamed GDS name every port the DEF places?
+
+    Host-side and engine-independent: it reads the bytes step_gds just wrote.
+    Returns the per-file census record, or None when it could not be taken (no
+    pya, no container, no import) — never a fabricated verdict.
+    """
+    try:
+        import importlib
+        _c = importlib.import_module("gds_port_label_check")
+        return _c.census_one(gds_path, [def_file] if def_file.is_file() else [])
+    except Exception:                                     # noqa: BLE001
+        return None
+
+
+def _restore_port_labels_if_missing(project: Path, top: str, pdk: PdkConfig,
+                                    container: str, gds_path: Path,
+                                    def_file: Path) -> Tuple[bool, str]:
+    """vibe-ic#613 — run the port-label restore when the ARTEFACT needs it.
+
+    The restore used to be gated on a bridge config declaring
+    `port_label_restore`, on the premise that "OSS PDKs keep native streamout".
+    Measured, that premise predicts nothing: sky130A's sha256 (77/77) and
+    subservient (31/31) get their labels natively, and an IHP SG13G2 run
+    streamed 0 labels for 20 declared pins — all three without the config. A
+    PDK CLASS does not decide whether the labels are in the file; the file does,
+    and it is readable the moment streamout finishes.
+
+    So the trigger is the measurement, and the config is kept as an override
+    (a PDK that declares the pass still gets it unconditionally, byte-identical
+    to before). The pass then RE-MEASURES, because a restore that ran and did
+    not fix it must not read the same as one that did.
+
+    Engine-independent by construction — a post-streamout pass over the finished
+    GDS, like the density fill, so it costs the design nothing on the Magic path.
+    NONFATAL: every failure leaves the GDS untouched and says so.
+    """
+    before = _port_label_census(gds_path, def_file)
+    forced = bool(pdk.port_label_restore)
+    if before is None and not forced:
+        return False, "port-label census unavailable — restore not attempted"
+    needs = bool(before and before.get("verdict") in ("NO_LABELS",
+                                                      "MISSING_LABELS"))
+    if not (forced or needs):
+        v = (before or {}).get("verdict", "?")
+        return False, f"port labels not restored — census says {v}"
+
+    why = ("bridge config declares port_label_restore" if forced and not needs
+           else f"MEASURED: {(before or {}).get('reason', 'labels missing')}")
+    ok, note = _klayout_restore_port_labels(project, top, pdk, container,
+                                            gds_path, def_file, force=True)
+    if not ok:
+        return False, f"{note} (trigger: {why})"
+    after = _port_label_census(gds_path, def_file)
+    if after is not None and after.get("verdict") not in ("OK", "NOT_MEASURED"):
+        # Ran, and the artefact still does not name its ports. Saying "restored"
+        # here would be the defect wearing the fix's report.
+        return False, (f"port-label restore RAN AND DID NOT FIX IT "
+                       f"({after.get('verdict')}: {after.get('reason')}) "
+                       f"— trigger: {why}")
+    return True, f"{note} (trigger: {why})"
+
+
 def _klayout_restore_port_labels(project: Path, top: str, pdk: PdkConfig,
                                  container: str, gds_path: Path,
-                                 def_file: Path) -> Tuple[bool, str]:
+                                 def_file: Path,
+                                 force: bool = False) -> Tuple[bool, str]:
     """v1.3.91 — restore top-level PORT text labels + VDD/VSS rail markers into
     the KLayout-streamed sign-off GDS.
 
@@ -17109,7 +17173,7 @@ def _klayout_restore_port_labels(project: Path, top: str, pdk: PdkConfig,
     geometric LVS (klayout_pdk_lvs.py) can name ports and unite the rails by
     geometry. NONFATAL: any failure leaves the GDS untouched, reported in the
     note. §4.05: reads only the routed DEF (design INPUT), never oracle/golden."""
-    if not pdk.port_label_restore:
+    if not (force or pdk.port_label_restore):
         return False, "no port_label_restore config"
     if not gds_path.is_file():
         return False, "no GDS to label"
@@ -18530,6 +18594,12 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         # Per-layer density fill BEFORE the density checks / sign-off DRC read
         # this GDS. Config-gated + NONFATAL; the note always discloses.
         dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
+        # vibe-ic#613 — the port-label restore is a POST-streamout pass over the
+        # finished GDS, so it belongs on BOTH engines. Gating it on the KLayout
+        # path alone would have made "which streamout ran" decide whether a
+        # sign-off GDS can be pin-matched. Last, so labels land on final geometry.
+        label_ok, label_note = _restore_port_labels_if_missing(
+            project, top, pdk, container, gds_out, def_file)
         # #306 — BOTH stream-out engines get the substance gate. A stub GDS
         # out of Magic is the same defect as a stub GDS out of KLayout, and
         # gating only the fall-back path would leave the primary one open.
@@ -18547,12 +18617,15 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
             f"gds={gds_out.name} size={gds_out.stat().st_size} "
             f"(streamout=magic, abutting geometry merged"
             f"{'; ' + snap_note if snap_ok else ''}"
-            f"{'; ' + dfill_note if dfill_ok else ''})",
+            f"{'; ' + dfill_note if dfill_ok else ''}"
+            f"{'; ' + label_note if label_ok else ''})",
             [str(gds_out)],
             extras={"streamout_engine": "magic",
                     "grid_snap": snap_ok, "grid_snap_note": snap_note,
                     "density_fill": dfill_ok,
-                    "density_fill_note": dfill_note})
+                    "density_fill_note": dfill_note,
+                    "port_label_restore": label_ok,
+                    "port_label_restore_note": label_note})
 
     script = pnr_dir / "stream_out.py"
     script.write_text(_GDS_STREAMOUT_PY)
@@ -18661,7 +18734,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # merge/heal/fill so the labels/markers land on the final geometry): makes
     # the KLayout-streamed GDS LVS-able by the geometric extractor. Config-gated
     # (no-op for OSS PDKs).
-    label_ok, label_note = _klayout_restore_port_labels(
+    label_ok, label_note = _restore_port_labels_if_missing(
         project, top, pdk, container, gds_out, def_file)
     # A map can also be present but WRONG or partial, which the pre-flight
     # gate above cannot see. Verify the finished artifact instead: every layer
@@ -22488,6 +22561,40 @@ _PVT_MATRIX_TEMPLATE = {
 }
 
 
+def stamp_pvt_corner_coverage(pvt: dict, corners: list) -> dict:
+    """Stamp the corner census AND the #442 disclosure. ONE writer of both.
+
+    vibe-ic ORGANIC #442 said it plainly: "corners=[] (or a single corner) is
+    NOT a PVT matrix — say so in the artifact instead of letting an empty list
+    wear the pvt_matrix name". That disclosure was added at ONE of the two
+    places this runner writes `pvt_matrix.json`.
+
+    The other — the Step-7c writer, which runs FIRST and is therefore the one
+    that creates the file when it does not exist — stamped `corner_count` and
+    `multi_corner` and omitted the disclosure entirely. So the common path
+    produced a matrix with `multi_corner: false`, no `coverage` field and no
+    note: exactly the artefact #442 exists to prevent, from the writer that
+    usually wins.
+
+    Found because `test_v0_2_71_pvt_matrix_min_corner` was red on main. Its
+    assertion scanned a +-window of SOURCE around the first `pvt["corner_count"]`
+    for the token, which measures DISTANCE rather than behaviour — but the
+    distance it measured was real: the token sat 8738 characters away, beside
+    the OTHER writer. The test is behavioural now and drives this helper.
+    """
+    pvt["corner_count"] = len(corners)
+    pvt["multi_corner"] = len(corners) >= 2
+    if len(corners) < 2:
+        pvt["coverage"] = "SINGLE_CORNER_ONLY" if corners else "NO_CORNERS"
+        pvt["note"] = (
+            "fewer than 2 Liberty corners discovered under "
+            "input/pdk/liberty — this matrix does NOT substantiate "
+            "multi-corner sign-off (#442); add ss/tt/ff libs or "
+            "waive with rationale.")
+    return pvt
+
+
+
 def _classify_corner_from_name(name: str) -> str:
     """Return canonical corner label (SS/TT/FF/best/worst/typ) from filename.
     Heuristics:
@@ -24051,8 +24158,7 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         pvt = dict(_PVT_MATRIX_TEMPLATE)
         pvt["corners"] = corners
         pvt["primary_corner"] = "TT"
-        pvt["corner_count"] = len(corners)
-        pvt["multi_corner"] = len(corners) >= 2
+        stamp_pvt_corner_coverage(pvt, corners)
         pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
 
@@ -24214,15 +24320,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         # ORGANIC-20260606 #442: corners=[] (or a single corner) is NOT a
         # PVT matrix — say so in the artifact instead of letting an empty
         # list wear the pvt_matrix name. ≥2 labelled corners = multi.
-        pvt["corner_count"] = len(corners)
-        pvt["multi_corner"] = len(corners) >= 2
-        if len(corners) < 2:
-            pvt["coverage"] = "SINGLE_CORNER_ONLY" if corners else "NO_CORNERS"
-            pvt["note"] = (
-                "fewer than 2 Liberty corners discovered under "
-                "input/pdk/liberty — this matrix does NOT substantiate "
-                "multi-corner sign-off (#442); add ss/tt/ff libs or "
-                "waive with rationale.")
+        stamp_pvt_corner_coverage(pvt, corners)
         pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
         # --- ORGANIC #694: durable single-corner stance attestation -------

@@ -339,6 +339,13 @@ run "inner timeouts fit the harness"    "$ROOT" python3 "$PG/ci_harness_timeout_
 # examined nothing. Placed LAST so it probes the full list; ~40s.
 run "gates disclose their denominator" "$ROOT" python3 "$PG/gate_discloses_denominator_check.py" "$ROOT"
 
+# vibe-ic#564 — the SIBLING property. The gate above requires a PASS to say how
+# much it looked at; this one requires a gate that looked at NOTHING to refuse.
+# Both are needed: the P0 umbrella reads exit codes, so a gate that discloses
+# `0` in prose and returns `0` in rc is a silent pass, and the disclosure gate
+# passes it correctly.
+run "a zero denominator refuses" "$ROOT" python3 "$PG/gate_zero_denominator_refuses_check.py"
+
 # vibe-ic#528 — the OTHER half of the disclosure question, and the reason both
 # are wired: the check above asks whether a HUMAN READER can see that a gate
 # examined nothing, judged from output text. This one asks whether the MACHINE

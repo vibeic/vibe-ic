@@ -96,9 +96,9 @@ def _resolve_docker_image() -> str:
     if env:
         return env
     candidates = (
-        "ghcr.io/vibeic/vibeic-eda:0.2.52",
-        "vibeic-eda:0.2.52",
-        "vibeic/vibeic-eda:0.2.52",
+        "ghcr.io/vibeic/vibeic-eda:0.2.53",
+        "vibeic-eda:0.2.53",
+        "vibeic/vibeic-eda:0.2.53",
         "hpretl/iic-osic-tools:latest",
     )
     for img in candidates:
@@ -112,7 +112,7 @@ def _resolve_docker_image() -> str:
     # nothing found locally — return the fork's pinned canonical name; the
     # caller's `docker run` then pulls exactly the verified image (or surfaces
     # a clear pull error) rather than running a stale floating tag.
-    return "ghcr.io/vibeic/vibeic-eda:0.2.52"
+    return "ghcr.io/vibeic/vibeic-eda:0.2.53"
 
 
 DOCKER_IMAGE = _resolve_docker_image()
@@ -1233,6 +1233,45 @@ def run_transition_atpg(project: Path,
         supported, reason, transition_target, plan_rel, measured)
 
 
+def _write_coverage_rpt(path: Path, *, clock: str, netlist_rel: str, pdk: str,
+                        coverage_ratio: float, faults_covered: int,
+                        faults_total: int, min_coverage: float,
+                        trans_line: str, cov_out: str, tv_out: str) -> None:
+    """Write the human-readable stuck-at coverage report (atpg_coverage.rpt).
+
+    Factored out of run_fault so the CONTRACT-NAMED report can be written twice:
+    a durable stuck-at snapshot the moment stuck-at is measured, then a final
+    version once the (independent, long-running) transition pass has resolved.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "Fault ATPG Coverage Report\n"
+        "==========================\n"
+        f"Clock         : {clock}\n"
+        f"Netlist       : {netlist_rel}\n"
+        f"PDK           : {pdk}\n"
+        f"Stuck-at %    : {coverage_ratio:.2f}\n"
+        f"Covered / Total: {faults_covered} / {faults_total}\n"
+        f"Target (min)  : {min_coverage:.2f}\n"
+        f"Result        : {'PASS' if coverage_ratio >= min_coverage else 'FAIL'}\n"
+        f"{trans_line}"
+        "\n"
+        f"(coverage metadata: {cov_out})\n"
+        f"(test vectors    : {tv_out})\n"
+    )
+
+
+def _write_coverage_json(path: Path, report: dict) -> None:
+    """Write the machine-readable coverage report (reports/dft/coverage.json).
+
+    This is the artefact `dft_signoff_check` / `dft_atpg_coverage_check` read.
+    Written by run_fault ITSELF (not deferred to the CLI wrapper) so an
+    in-process caller gets the contract-named artefact too.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2))
+
+
 def run_fault(
     project: Path,
     netlist_rel: str,
@@ -1248,6 +1287,7 @@ def run_fault(
     transition_probe_fn=None,
     cell_model_override: str | None = None,
     dff_cells_override: str | None = None,
+    json_out: "Path | str | None" = None,
 ) -> tuple[int, dict]:
     """Run Fault cut+atpg in the Docker container. Returns (exit, report_dict).
 
@@ -1527,6 +1567,149 @@ def run_fault(
     faults_total_source = parsed["faults_total_source"]
     coverage_measured = parsed["coverage_measured"]
 
+    # ── DURABLE STUCK-AT SNAPSHOT — emit the CONTRACT-NAMED artefacts NOW ──
+    #
+    # The `fault atpg` engine has written coverage.yml (its native
+    # machine-readable metadata) and the stuck-at ratio is parsed. Emit the two
+    # artefacts the sign-off gate actually reads — atpg_coverage.rpt and
+    # reports/dft/coverage.json — RIGHT HERE, before the expensive,
+    # timeout-prone transition (at-speed) pass below and independent of the CLI
+    # wrapper's own json write.
+    #
+    # WHY (measured, opentitan_aes × sky130A, r5→r8): stuck-at ATPG completed
+    # and left coverage.yml carrying a real ratio (0.507), but the
+    # machine-readable coverage.json / atpg_coverage.rpt the gate NAMES were
+    # written only AFTER the transition pass — and coverage.json only in
+    # main(). When the transition pass ran long and the run was interrupted (or
+    # a library caller used run_fault() directly), the completed stuck-at
+    # measurement survived only in coverage.yml, which `dft_signoff_check` does
+    # not read, so it reported "no DFT/ATPG coverage evidence found" on a design
+    # that HAD been measured — a measurement that exists reading identically to
+    # a tool that never ran. A completed measurement must not become invisible
+    # to the gate because a SECOND, independent fault model ran long afterwards.
+    #
+    # This is NOT a second file written only to be found: it is the producer's
+    # OWN declared output (see this module's docstring — "reports/dft/
+    # coverage.json … machine-readable"), emitted at the point in its lifecycle
+    # where the real data first exists. chip-AGNOSTIC and PDK-AGNOSTIC: no
+    # design/PDK literal; keyed only on the fixed two-fault-model ordering.
+    scan_netlist_present = (
+        project / "phase2/stage2/dft/scan_netlist.v").is_file()
+    json_out_path = (Path(json_out) if json_out is not None
+                     else _pl.report_path(project, "dft/coverage.json"))
+
+    # ── TEST coverage (vibe-ic#603): raw FAULT coverage is what Fault reports;
+    # sign-off TEST coverage removes the ATPG-UNTESTABLE faults (the unused pad
+    # frame: unobservable inputs / constant-driven outputs) from the denominator.
+    # Both numbers are kept distinct so neither stands in for the other. The
+    # std-cell Liberty (pin directions) lives in the EDA container, so it is read
+    # out host-side, exactly as fault_cut_async_observe does. SOUND-only: the
+    # excluded set is UNCOVERED ∩ structurally-untestable, so a detected fault is
+    # never removed and test coverage can never exceed 100 %.
+    test_coverage = None
+    try:
+        import dft_test_coverage as _dtc            # sibling; no import cycle
+        import atpg_untestable_fault_classify as _auc
+        if cov_file.exists() and (project / cut_out).exists():
+            _lib_ctr = _atpg_liberty_container_path(project, cell_model, pdk_dir)
+            if _lib_ctr:
+                _ec_l, _lib_text, _ = _run_docker(
+                    project, ["cat", _lib_ctr], timeout=120, pdk_dir=pdk_dir)
+                if _ec_l == 0 and _lib_text:
+                    _dirs = _auc.parse_liberty_pin_directions(_lib_text)
+                    test_coverage = _dtc.compute(
+                        project / cut_out, cov_file, directions=_dirs)
+                    (project / "phase2/stage2/dft/test_coverage.json").write_text(
+                        json.dumps(test_coverage, indent=2))
+    except Exception as _tc_exc:   # measurement-only: never fail the run on it
+        test_coverage = {"computed": False, "reason": f"exception: {_tc_exc}"}
+
+    def _assemble_report(transition_block):
+        rep = {
+            "tool": "fault",
+            "clock": clock,
+            "pdk": pdk,
+            "netlist": netlist_rel,
+            # DECLARED, so no consumer has to infer this program's outputs.
+            # `cut_netlist.v` is the combinational ATPG view; the scan-INSERTED
+            # implementation netlist is a different artefact, different owner.
+            "cut_netlist": cut_out,
+            "writes_scan_netlist": False,
+            "scan_netlist_present": scan_netlist_present,
+            "scan_netlist_owner": "fault_scan_chain_insert.py (`fault chain`)",
+            "netlist_switch_note": netlist_switch_note,
+            # Disclosed so a reader can see the PDK was DERIVED, and from what.
+            "pdk_sniff_note": pdk_sniff_note,
+            "pdk_used": pdk,
+            # vibe-ic#603 (PR #615) folded into PR #610's durable snapshot:
+            # raw FAULT coverage and sign-off TEST coverage are kept DISTINCT
+            # so neither stands in for the other, and the snapshot carries
+            # both from the moment stuck-at is first measured.
+            "test_coverage": test_coverage,
+            # THE COMPLETE #615 FIELD SET, taken from that PR verbatim
+            # rather than retyped: `dft_atpg_coverage_check` reads
+            # `test_coverage_pct` by NAME, and a hand-copied subset had
+            # already dropped two of them — a merge that compiles and
+            # leaves the consumer blind.
+            # vibe-ic#603 — RAW fault coverage above (coverage_pct) is Fault's ratio;
+            # TEST coverage below is detected / (total − ATPG-untestable). Distinct on
+            # purpose: the gate judges TEST coverage, the report keeps RAW visible.
+            "test_coverage_pct": (test_coverage.get("test_coverage_pct")
+                                  if test_coverage and test_coverage.get("computed")
+                                  else None),
+            "test_coverage_measured": bool(
+                test_coverage and test_coverage.get("computed")),
+            "test_coverage_untestable_excluded": (
+                test_coverage.get("untestable_faults_excluded")
+                if test_coverage and test_coverage.get("computed") else None),
+            "test_coverage_source": (
+                "dft_test_coverage: (unobservable|uncontrollable) \u2229 uncovered"
+                if test_coverage and test_coverage.get("computed")
+                else (test_coverage.get("reason") if test_coverage else
+                      "not computed (no liberty / no cut netlist / no "
+                      "coverage.yml)")),
+            "coverage_pct": coverage_ratio,
+            "faults_covered": faults_covered,
+            "faults_total": faults_total,
+            # DFT_FCC / 11-d3 — the producer DECLARES whether this is a real
+            # measurement, and names the artefact each number came from.
+            "coverage_measured": coverage_measured,
+            "coverage_source": coverage_source,
+            "faults_total_source": faults_total_source,
+            "cell_model": cell_model,
+            "dff_cells": dff_cells,
+            "target_pct": min_coverage,
+            "stuck_at_ge_target": coverage_ratio >= min_coverage,
+            "atpg_exit": ec,
+            # Retry history + crash classification, so a consumer can tell "the
+            # engine crashed" from "the engine answered".
+            "atpg_attempt_exits": atpg_attempts,
+            "atpg_signal_death": atpg_signal_death,
+            "log_tail": atpg_log[-500:],
+        }
+        if transition_block is not None:
+            rep["transition"] = transition_block
+            # Flat mirror fields so a simple consumer can read them without
+            # descending into the nested block.
+            rep["transition_coverage_pct"] = transition_block.get("coverage_pct")
+            rep["transition_target_pct"] = transition_block.get("target_pct")
+            rep["transition_ge_target"] = transition_block.get("ge_target")
+            rep["transition_supported"] = transition_block.get("supported")
+            rep["transition_engine_limited"] = transition_block.get(
+                "engine_limited")
+        return rep
+
+    # Durable stuck-at-only snapshot: the at-speed pass has not run yet.
+    _pending_trans = (
+        "Transition     : PENDING (at-speed pass not yet run)\n"
+        if run_transition else "Transition     : SKIPPED (--no-transition)\n")
+    _write_coverage_rpt(
+        project / rpt_out, clock=clock, netlist_rel=netlist_rel, pdk=pdk,
+        coverage_ratio=coverage_ratio, faults_covered=faults_covered,
+        faults_total=faults_total, min_coverage=min_coverage,
+        trans_line=_pending_trans, cov_out=cov_out, tv_out=tv_out)
+    _write_coverage_json(json_out_path, _assemble_report(None))
+
     # ── Transition (at-speed) fault model — SECOND model, own target ──
     transition = None
     if run_transition:
@@ -1554,22 +1737,15 @@ def run_fault(
             f"(target {transition_target:.2f}%, "
             f"{'PASS' if transition.get('ge_target') else 'FAIL'})\n")
 
-    # Write human-readable report
-    (project / rpt_out).write_text(
-        "Fault ATPG Coverage Report\n"
-        "==========================\n"
-        f"Clock         : {clock}\n"
-        f"Netlist       : {netlist_rel}\n"
-        f"PDK           : {pdk}\n"
-        f"Stuck-at %    : {coverage_ratio:.2f}\n"
-        f"Covered / Total: {faults_covered} / {faults_total}\n"
-        f"Target (min)  : {min_coverage:.2f}\n"
-        f"Result        : {'PASS' if coverage_ratio >= min_coverage else 'FAIL'}\n"
-        f"{trans_line}"
-        "\n"
-        f"(coverage metadata: {cov_out})\n"
-        f"(test vectors    : {tv_out})\n"
-    )
+    # Re-write both contract-named artefacts with the COMPLETE result now that
+    # the transition pass has resolved. The snapshot above already guaranteed
+    # the gate can read a real stuck-at measurement even if this second pass
+    # never returned.
+    _write_coverage_rpt(
+        project / rpt_out, clock=clock, netlist_rel=netlist_rel, pdk=pdk,
+        coverage_ratio=coverage_ratio, faults_covered=faults_covered,
+        faults_total=faults_total, min_coverage=min_coverage,
+        trans_line=trans_line, cov_out=cov_out, tv_out=tv_out)
 
     # ── `scan_netlist.v` IS NOT THIS PROGRAM'S TO WRITE ────────────────────
     # This used to be:
@@ -1593,59 +1769,12 @@ def run_fault(
     # MEASURING that the chain covers every flop in the input. This program now
     # writes only the ATPG artefacts it actually measures, and DECLARES what
     # its own view is so no consumer has to infer it.
-    scan_netlist_rel = "phase2/stage2/dft/scan_netlist.v"
-    scan_netlist_present = (project / scan_netlist_rel).is_file()
 
-    report = {
-        "tool": "fault",
-        "clock": clock,
-        "pdk": pdk,
-        "netlist": netlist_rel,
-        # DECLARED, so no consumer has to infer what this program's outputs are.
-        # `cut_netlist.v` is the combinational ATPG view; the scan-INSERTED
-        # implementation netlist is a different artefact with a different owner.
-        "cut_netlist": cut_out,
-        "writes_scan_netlist": False,
-        "scan_netlist_present": scan_netlist_present,
-        "scan_netlist_owner": "fault_scan_chain_insert.py (`fault chain`)",
-        "netlist_switch_note": netlist_switch_note,
-        # Disclosed so a reader can see the PDK was DERIVED, and from what,
-        # rather than taken from the caller. None when the caller's PDK stood.
-        "pdk_sniff_note": pdk_sniff_note,
-        "pdk_used": pdk,
-        "coverage_pct": coverage_ratio,
-        "faults_covered": faults_covered,
-        "faults_total": faults_total,
-        # DFT_FCC / 11-d3 — the producer DECLARES whether this run is a real
-        # measurement, and names the artefact each number was read out of, so
-        # no consumer has to re-derive that from a single scraped integer.
-        "coverage_measured": coverage_measured,
-        "coverage_source": coverage_source,
-        "faults_total_source": faults_total_source,
-        "cell_model": cell_model,
-        "dff_cells": dff_cells,
-        "target_pct": min_coverage,
-        "stuck_at_ge_target": coverage_ratio >= min_coverage,
-        "atpg_exit": ec,
-        # The retry history and the crash classification, so a consumer can
-        # tell "the engine crashed" from "the engine answered". Before this,
-        # both collapsed into an absent coverage artefact and the step reported
-        # a SIGSEGV as a disclosed OSS capability gap. `atpg_attempt_exits`
-        # names every attempt; a single-element list is the unchanged
-        # first-try-succeeded case.
-        "atpg_attempt_exits": atpg_attempts,
-        "atpg_signal_death": atpg_signal_death,
-        "log_tail": atpg_log[-500:],
-    }
-    if transition is not None:
-        report["transition"] = transition
-        # Flat mirror fields so a simple consumer/gate can read them without
-        # descending into the nested block.
-        report["transition_coverage_pct"] = transition.get("coverage_pct")
-        report["transition_target_pct"] = transition.get("target_pct")
-        report["transition_ge_target"] = transition.get("ge_target")
-        report["transition_supported"] = transition.get("supported")
-        report["transition_engine_limited"] = transition.get("engine_limited")
+    # Final report — includes the transition (at-speed) block now that it has
+    # resolved. Re-write the machine-readable coverage.json so the complete
+    # result supersedes the durable stuck-at-only snapshot written above.
+    report = _assemble_report(transition)
+    _write_coverage_json(json_out_path, report)
 
     return (0 if report["stuck_at_ge_target"] else 1), report
 
@@ -1728,6 +1857,14 @@ def main(argv: list[str] | None = None) -> int:
         if candidate.exists():
             pdk_dir = candidate
 
+    # coverage.json is now written by run_fault ITSELF (durably, at the moment
+    # the stuck-at measurement exists — see the DURABLE STUCK-AT SNAPSHOT block)
+    # so an interruption of the later transition pass, or an in-process caller
+    # that never reaches this wrapper, still leaves the gate its contract-named
+    # artefact. Pass the resolved path through so --json still honours a custom
+    # destination.
+    json_path = Path(args.json) if args.json else (_pl.report_path(project, "dft/coverage.json"))
+
     exit_code, report = run_fault(
         project,
         netlist_rel=args.netlist,
@@ -1742,9 +1879,14 @@ def main(argv: list[str] | None = None) -> int:
         run_transition=not args.no_transition,
         cell_model_override=args.cell_model_path,
         dff_cells_override=args.dff_cells,
+        json_out=json_path,
     )
 
-    json_path = Path(args.json) if args.json else (_pl.report_path(project, "dft/coverage.json"))
+    # Idempotent safety net: run_fault writes coverage.json itself on every path
+    # that reaches the stuck-at measurement, but its EARLY-return error stubs
+    # (cut failure, no resolvable cell model) return before that write. Preserve
+    # the prior contract that a CLI invocation always leaves a coverage.json —
+    # on the normal path this re-writes the identical final report.
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, indent=2))
 
