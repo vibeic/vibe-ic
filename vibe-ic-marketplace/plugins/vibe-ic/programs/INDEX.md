@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1024
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1024)
+- **Total programs (excluding helpers / shims):** 1025
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1025)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1015 |
+| `any` | 1016 |
 
 ## Alphabetical listing
 
@@ -402,6 +402,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gddr6_protocol_synth` | any | — | GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory). |
 | `gds_antenna_deck_check` | any | — | independent GDS-geometry process-antenna sign-off. |
 | `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry handoff GDS as user-data records. |
+| `gds_port_label_check` | any | — | every port the DEF declares must be NAMED in the sign-off GDS. |
 | `gds_size_check` | any | — | Deterministic GDS file existence and size checker. |
 | `gds_streamout_layermap_check` | any | — | Deterministic sign-off streamout layer conformance checker. |
 | `gds_substance_check` | any | — | the shipped chip GDS must be a structurally valid GDSII stream carrying layout substance proportional to the design's own placed-instance... |
@@ -1096,7 +1097,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1015 programs)
+### `any` (1016 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1470,6 +1471,7 @@ _(no programs in this group)_
 - `gddr6_protocol_synth` — GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory).
 - `gds_antenna_deck_check` — independent GDS-geometry process-antenna sign-off.
 - `gds_ip_attribution` — Embed IP attribution metadata into the foundry handoff GDS as user-data records.
+- `gds_port_label_check` — every port the DEF declares must be NAMED in the sign-off GDS.
 - `gds_size_check` — Deterministic GDS file existence and size checker.
 - `gds_streamout_layermap_check` — Deterministic sign-off streamout layer conformance checker.
 - `gds_substance_check` — the shipped chip GDS must be a structurally valid GDSII stream carrying layout substance proportional to the design's own placed-instance...

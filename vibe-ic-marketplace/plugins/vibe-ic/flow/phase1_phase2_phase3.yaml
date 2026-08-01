@@ -2985,6 +2985,21 @@ steps:
         # from phase3/stage3/pnr/routed.def — a derived floor, never a
         # per-design constant. Hard FAIL; VACUOUS_PASS before stream-out.
         - program_exit_zero: "gds_substance_check . --json reports/phase3/gds_substance.json"
+        # vibe-ic#613 — substance is not nameability. A structurally valid,
+        # substance-carrying sign-off GDS whose TOP CELL has no text labels
+        # cannot be pin-matched by any top-level LVS: extraction emits
+        # `.subckt <top>` with no ports at all, so every schematic port
+        # resolves to an anonymous node and the comparison fails regardless of
+        # whether the layout is correct. Measured on a real run: DEF `PINS 20 ;`
+        # against 0 labels in the streamed top cell.
+        # PER-STRUCTURE and BY NAME: a chip GDS carries the std cells' own pin
+        # texts (sha256: 2,314 library labels), so a library-wide count is
+        # non-zero for a top cell with none, and a count alone cannot say WHICH
+        # port is unnamed. Pairs the DEF to the GDS by the DEF's own
+        # `DESIGN <name> ;` — sha256's pnr dir holds DEFs for two designs.
+        # VACUOUS_PASS (rc 2) when no DEF describes the layout; blocks only on a
+        # PLACED port with no label. Flips 0 of the 4 real sign-off GDS here.
+        - program_exit_zero: "gds_port_label_check . --json reports/phase3/gds_port_labels.json"
         # Provenance required: GDS must be produced by a real streamer
         # (KLayout def2gds, Magic gds write, etc.). This closes the
         # "rename old .def to .gds" loophole.
