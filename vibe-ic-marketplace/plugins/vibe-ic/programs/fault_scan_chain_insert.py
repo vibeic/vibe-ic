@@ -51,6 +51,7 @@ from pathlib import Path
 
 import _path_layout as _pl
 import fault_atpg_run as _fatpg
+import floorplan_contract as _fpc
 
 
 # ---------------------------------------------------------------------------
@@ -293,17 +294,61 @@ from _dft_netlist_ports import (  # noqa: E402,F401
 # Driver
 # ---------------------------------------------------------------------------
 
+def decide_skip_boundary(project: Path, mode: str,
+                         top_module: str | None) -> tuple[bool, dict]:
+    """Resolve the `--skip-boundary` decision.  PURE w.r.t. the project input.
+
+    `mode` is one of "auto" (default), "on", "off":
+      * "on"  — always skip the boundary register (explicit override);
+      * "off" — never skip it (explicit override, restores legacy default);
+      * "auto" — DETERMINISTIC selection: skip iff the design is a fixed-pinout
+        wrapper (see floorplan_contract.is_fixed_pinout_wrapper), because its
+        ports are a parent interface, not chip pads.  No agent chooses this.
+
+    Returns (skip: bool, evidence: dict).  The evidence records the mode and,
+    in auto mode, the fixed-pinout contract that drove the decision — so a
+    reader can audit WHY the boundary register was or was not inserted.
+    """
+    if mode == "on":
+        return True, {"mode": "on",
+                      "reason": "explicit --skip-boundary=on override"}
+    if mode == "off":
+        return False, {"mode": "off",
+                       "reason": "explicit --skip-boundary=off override "
+                                 "(legacy default: boundary scan inserted)"}
+    # auto
+    try:
+        is_fixed, ev = _fpc.is_fixed_pinout_wrapper(project, top_module)
+    except Exception as exc:                                   # noqa: BLE001
+        # A detection failure must NEVER silently drop the boundary register —
+        # fall back to the legacy default (insert it) and say why.
+        return False, {"mode": "auto", "detection_error": str(exc),
+                       "reason": "fixed-pinout detection failed → legacy "
+                                 "default (boundary scan inserted)"}
+    ev = dict(ev)
+    ev["mode"] = "auto"
+    return is_fixed, ev
+
+
 def run_chain(project: Path, netlist_rel: str, clock: str,
               pdk: str, reset: str | None = None,
               reset_active_low: bool = False,
               liberty_override: str | None = None,
               dff_cells_override: str | None = None,
               pdk_dir: Path | None = None,
+              skip_boundary: str = "auto",
+              top_module: str | None = None,
               timeout: int = 900) -> tuple[int, dict]:
     """Insert a real scan chain.  Returns (exit_code, report_dict).
 
     Never raises for a tool failure: every outcome comes back as a report the
     caller can write verbatim, so an absent artefact is never silence.
+
+    `skip_boundary` ("auto"|"on"|"off", see decide_skip_boundary) governs
+    whether `fault chain` inserts a top-level boundary-scan register.  In the
+    default "auto" mode a fixed-pinout wrapper (FP_DEF_TEMPLATE) DETERMINISTIC-
+    ally selects `--skip-boundary`; every other design keeps the legacy
+    default.  The internal scan chain is inserted either way.
     """
     # Same resolver the ATPG producer uses — `fault chain` needs a
     # library-mapped netlist for exactly the reason `fault cut` does, so the
@@ -379,11 +424,19 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         else:
             stripped_inout.clear()
 
+    # Boundary-scan decision — DETERMINISTIC in the default "auto" mode: a
+    # fixed-pinout wrapper (FP_DEF_TEMPLATE) gets `--skip-boundary`.  Recorded
+    # in the report so the choice is auditable, never a silent flag.
+    skip_boundary_flag, skip_boundary_evidence = decide_skip_boundary(
+        project, skip_boundary, top_module)
+
     cmd = ["fault", "chain",
            "--liberty", liberty,
            "--clock", clock,
            "--dff", dff_cells,
            "-o", f"/work/{out_rel}"]
+    if skip_boundary_flag:
+        cmd.append("--skip-boundary")
     if reset:
         cmd += ["--reset", reset]
         if reset_active_low:
@@ -397,6 +450,9 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
     if ec != 0 or not produced.is_file():
         err_report = {"stage": "chain", "exit": ec, "netlist": netlist_rel,
                       "pdk": pdk, "liberty": liberty, "dff_cells": dff_cells,
+                      "skip_boundary": skip_boundary_flag,
+                      "skip_boundary_mode": skip_boundary,
+                      "skip_boundary_evidence": skip_boundary_evidence,
                       "log_tail": log[-1500:],
                       "error": "`fault chain` produced no scan netlist"}
         if connected_inout:
@@ -446,6 +502,14 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         "dff_cells": dff_cells,
         "clock": clock,
         "reset": reset,
+        # Whether the top-level boundary-scan register was inserted, and WHY.
+        # `--skip-boundary` is the deterministic choice for a fixed-pinout
+        # wrapper (ports are a parent interface, not chip pads) — it removes
+        # the SS-corner setup violation (#604) and the +707% area blow-up while
+        # the internal scan chain is preserved.
+        "skip_boundary": skip_boundary_flag,
+        "skip_boundary_mode": skip_boundary,
+        "skip_boundary_evidence": skip_boundary_evidence,
         "chain_exit": ec,
         # `inout` port handling (see find_inout_ports): which bidirectional
         # ports were stripped for `fault chain` and restored into its output,
@@ -502,6 +566,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--liberty", default=None,
                    help="Container-absolute .lib path.  Wins over SCAN_LIBERTY.")
     p.add_argument("--dff-cells", default=None)
+    p.add_argument("--skip-boundary", choices=("auto", "on", "off"),
+                   default="auto",
+                   help="Insert a top-level boundary-scan register? "
+                        "'auto' (default) skips it iff the design is a "
+                        "fixed-pinout wrapper (FP_DEF_TEMPLATE) — its ports "
+                        "are a parent interface, not chip pads; 'on' always "
+                        "skips; 'off' always inserts (legacy default).")
+    p.add_argument("--top-module", default=None,
+                   help="Top module name — used by 'auto' skip-boundary "
+                        "detection to match the fixed-pinout DEF template to "
+                        "THIS top.")
     p.add_argument("--pdk-dir", default=None)
     p.add_argument("--json", default=SCAN_JSON_REL,
                    help=f"Report JSON path relative to project "
@@ -520,6 +595,7 @@ def main(argv: list[str] | None = None) -> int:
         reset=args.reset, reset_active_low=args.reset_active_low,
         liberty_override=args.liberty, dff_cells_override=args.dff_cells,
         pdk_dir=Path(args.pdk_dir).resolve() if args.pdk_dir else None,
+        skip_boundary=args.skip_boundary, top_module=args.top_module,
         timeout=args.timeout)
 
     out = project / args.json
@@ -532,6 +608,8 @@ def main(argv: list[str] | None = None) -> int:
               f"{report['boundary_chain_length']} boundary; input flops="
               f"{report['input_flop_count']}; "
               f"matches={report['chain_length_matches_flop_count']}; "
+              f"skip_boundary={report['skip_boundary']} "
+              f"(mode={report['skip_boundary_mode']}); "
               f"area {report['area_instances_before']} -> "
               f"{report['area_instances_after']} instances "
               f"({report['area_instances_delta_pct']}%)")

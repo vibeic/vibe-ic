@@ -10153,6 +10153,29 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                      "phase2/stage2/synth/netlist.v",
                      "--clock", clk, "--json",
                      str(_scan_json.relative_to(project))]
+        # `fault chain` DEFAULTS to inserting a top-level boundary-scan
+        # register wrapping every port. On a FIXED-PINOUT WRAPPER — a design
+        # whose die outline and pin placement are fixed by a parent's DEF
+        # template (FP_DEF_TEMPLATE), so its ports connect to that parent, not
+        # to chip pads — that register is wrong DFT AND a timing/area hazard
+        # (#604: on caravel_user_project × sky130A the 606-cell register routed
+        # across the fixed 2920×3520 µm die at 25 ns gave an SS-corner setup
+        # violation of −0.73 ns and a +707% area blow-up). The producer decides
+        # `--skip-boundary` DETERMINISTICALLY from the fixed-pinout contract in
+        # its default `auto` mode; passing `--top-module` lets it match the DEF
+        # template to THIS top rather than a sub-macro's.
+        if top_name:
+            _scan_cmd += ["--top-module", top_name]
+        # Operator override of the boundary-scan decision. The DEFAULT is
+        # `auto` (the deterministic fixed-pinout selector above); an operator
+        # may force `on`/`off` via VIBEIC_DFT_SKIP_BOUNDARY. `off` restores the
+        # legacy always-insert-boundary behaviour — this is what the #604
+        # control run uses to reproduce the SS-corner violation as a
+        # ONE-VARIABLE experiment (same die, netlist, pins, image; only the
+        # boundary register differs). An unset/unknown value leaves `auto`.
+        _sb_env = (os.environ.get("VIBEIC_DFT_SKIP_BOUNDARY") or "").strip().lower()
+        if _sb_env in ("auto", "on", "off"):
+            _scan_cmd += ["--skip-boundary", _sb_env]
         # `fault chain --reset` DEFAULTS TO THE LITERAL NAME `rst`. Leaving it
         # unset makes fault declare `input rst;` in the chained netlist's body
         # without adding it to the module header, and fault's own yosys
