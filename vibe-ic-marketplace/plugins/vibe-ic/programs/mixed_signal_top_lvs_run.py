@@ -73,6 +73,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 import lvs_verdict_tokens as _lvt  # noqa: E402  — #524 shared verdict tokens
+# #626 — the ONE rule for "which DEF describes this layout", shared with
+# `gds_port_label_check` so the two halves cannot pair to different DEFs.
+from def_gds_port_power_restore import (  # noqa: E402
+    def_design_name,
+    def_rank,
+)
 
 TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
@@ -157,7 +163,119 @@ def def_macro_placements(def_text: str, macro_cells):
     return out, refusals
 
 
-def resolve_macro_placements(project, macro_cells):
+def _placement_signature(placements):
+    """A comparable, order-free statement of WHERE a DEF puts the macros.
+
+    Instance names are deliberately in the key: two DEFs that place the same
+    cell the same number of times but attach the positions to different
+    instances have not agreed.
+    """
+    return sorted(
+        (p.get("inst"), cell, p.get("orient"),
+         round(float(p["x_um"]), 6), round(float(p["y_um"]), 6))
+        for cell, pl in placements.items() for p in pl)
+
+
+def resolve_macro_placements_detailed(project, macro_cells, design_top=None):
+    """Where the design's own DEF puts each analog macro, and WHICH DEF said so.
+
+    Returns a dict: ``placements``, ``refusals``, ``def_source`` (the basename
+    the placements were read from, or None), ``defs_considered`` and
+    ``defs_disagreeing`` (basenames that place the same macros somewhere else).
+
+    vibe-ic#626 — WHICH DEF IS NOT A FREE CHOICE, AND IT WAS BEING MADE BY
+    ALPHABETICAL ORDER. This used to walk ``sorted(pnr_dir.glob("*.def"))`` and
+    take the first entry that placed anything. A PnR directory holds one DEF per
+    stage — floorplan, macro_placed, placed, post_cts, post_hold, routed,
+    routed_preantenna, filled, and the design's own — and they do NOT all agree:
+    an earlier iteration's DEF is still on disk with the macros somewhere else.
+    Measured on a real run (IHP SG13G2 `u_hawaii_adc`), eight of nine DEFs
+    agreed and the alphabetical glob returned the ninth:
+
+        u_hawaii_adc.def   u_ds1 delta_sigma + FIXED ( 30080 439350 ) N     <- the
+                           DEF the sign-off GDS was streamed from
+                           (`stream_tail: file=u_hawaii_adc.def`)
+        filled.def         u_ds1 delta_sigma + FIXED ( 15080 760610 ) FS    <- taken,
+                           because "f" sorts before everything else
+
+    so M1 instantiated the analog macros 15.0 x 321.3 um from where the digital
+    layout they were merged INTO carries them, one of them mirrored, and the
+    merged GDS reported one clean top cell while being wrong. `merge.json`
+    recorded the coordinates but not the FILE, so nothing in the artefact could
+    be audited for it.
+
+    Two things change. The DEF is chosen with `def_rank` — the SAME rule
+    `gds_port_label_check` uses to decide which DEF describes a layout, so the
+    flow cannot hold two answers — and every OTHER DEF that places these macros
+    is still parsed and DISCLOSED when it disagrees. That disagreement is a real
+    fact about the project (a stale DEF next to a live one) and it now travels
+    in `macro_placements.json` instead of being silently resolved.
+    """
+    defs = list(_pl.pnr_dir(project).glob("*.def"))
+    heads = {}
+    for d in defs:
+        try:
+            with open(d, "r", errors="replace") as fh:
+                # HEAD ONLY — `DESIGN <name> ;` is in the first few lines and a
+                # routed DEF runs to hundreds of megabytes.
+                heads[d] = def_design_name(fh.read(8192))
+        except OSError:
+            heads[d] = None
+    if not design_top:
+        # The caller did not say, so ASK THE ARTEFACTS. A ranking that depends
+        # on an argument the caller may forget to pass is a defect waiting to
+        # come back: without a design name `def_rank` falls through to the
+        # preference order and puts `filled.def` first again — the exact file
+        # this issue is about. When every DEF here names ONE design, that name
+        # IS the design top and nothing has to be guessed; when they name
+        # several, the directory holds more than one design and the caller's
+        # silence cannot be resolved, so the preference order stands.
+        named = {n for n in heads.values() if n}
+        design_top = next(iter(named)) if len(named) == 1 else None
+    parsed = []                          # [(path, placements, refusals)]
+    fallback_refusals = ["no DEF under the PnR directory places any macro"]
+    for d in sorted(defs, key=lambda p: def_rank(p, design_top)):
+        try:
+            txt = d.read_text(errors="replace")
+        except OSError:
+            continue
+        # The design's own statement of its top cell. A PnR directory can hold
+        # DEFs for MORE THAN ONE design; a DEF describing a different design
+        # says nothing about where THIS design's macros go.
+        if design_top and (heads.get(d) or design_top) != design_top:
+            continue
+        got, ref = def_macro_placements(txt, macro_cells)
+        if got:
+            parsed.append((d, got, ref))
+        else:
+            fallback_refusals = ref
+    if not parsed:
+        return {"placements": {}, "refusals": fallback_refusals,
+                "disclosures": [], "def_source": None,
+                "defs_considered": [], "defs_disagreeing": []}
+    chosen_path, chosen, chosen_ref = parsed[0]
+    sig = _placement_signature(chosen)
+    disagreeing = [p.name for p, got, _r in parsed[1:]
+                   if _placement_signature(got) != sig]
+    # DISCLOSURE, NOT REFUSAL — kept in its own list because a refusal means a
+    # macro was NOT placed, and reporting "n other DEFs disagree" under that
+    # heading would describe a merge that did happen as one that did not.
+    disclosures = []
+    if disagreeing:
+        disclosures.append(
+            f"placements read from {chosen_path.name}; "
+            f"{len(disagreeing)} other DEF(s) under the same PnR directory "
+            f"place these macros somewhere else "
+            f"({', '.join(sorted(disagreeing))}) — one of them is stale, and "
+            f"which one is a fact about the project, not about this merge")
+    return {"placements": chosen, "refusals": list(chosen_ref),
+            "disclosures": disclosures,
+            "def_source": chosen_path.name,
+            "defs_considered": [p.name for p, _g, _r in parsed],
+            "defs_disagreeing": sorted(disagreeing)}
+
+
+def resolve_macro_placements(project, macro_cells, design_top=None):
     """``({cell: [placement, ...]}, [refusal, ...])`` from the project's DEF.
 
     Split out of the M1 caller so it can be DRIVEN. The first version of this
@@ -166,18 +284,12 @@ def resolve_macro_placements(project, macro_cells):
     short-circuits the call (`({}, []) or def_macro_placements(...)`) satisfies
     while placing nothing. A property that can only be asserted by looking at
     source text is not being measured.
+
+    The two-value shape is kept for callers that only want the map; the DEF this
+    came from is in `resolve_macro_placements_detailed` (vibe-ic#626).
     """
-    refusals = ["no DEF under the PnR directory places any macro"]
-    for d in sorted(_pl.pnr_dir(project).glob("*.def")):
-        try:
-            txt = d.read_text(errors="replace")
-        except OSError:
-            continue
-        got, ref = def_macro_placements(txt, macro_cells)
-        if got:
-            return got, ref
-        refusals = ref
-    return {}, refusals
+    r = resolve_macro_placements_detailed(project, macro_cells, design_top)
+    return r["placements"], r["refusals"]
 
 
 _KLAYOUT_MERGE_PY = """\
@@ -655,13 +767,22 @@ def run(project: Path, top: str, container: str, pdk: str,
         # places at an orientation the merge cannot back, is refused by name and
         # the merge then fails on the multi-top check rather than shipping a
         # file whose design top has no children.
-        _pl_map, _pl_refusals = resolve_macro_placements(
-            project, [g.stem for g in macro_gds])
+        # #626 — `top` is passed so the DEF is picked by the DESIGN'S OWN NAME
+        # and not by alphabetical glob position, and the artefact records WHICH
+        # DEF was read plus any sibling DEF that disagrees with it.
+        _pl_res = resolve_macro_placements_detailed(
+            project, [g.stem for g in macro_gds], top)
+        _pl_map, _pl_refusals = _pl_res["placements"], _pl_res["refusals"]
         _pl_json = ms_dir / "macro_placements.json"
-        _pl_json.write_text(json.dumps(
-            {"placements": _pl_map, "refusals": _pl_refusals}, indent=2) + "\n")
+        _pl_json.write_text(json.dumps(_pl_res, indent=2) + "\n")
         for _r in _pl_refusals:
             print(f"      M1 placement REFUSED: {_r}")
+        for _d in _pl_res.get("disclosures", []):
+            print(f"      M1 placement DISCLOSED: {_d}")
+        if _pl_res.get("def_source"):
+            print(f"      M1 placements read from {_pl_res['def_source']} "
+                  f"(of {len(_pl_res['defs_considered'])} DEF(s) that place "
+                  f"these macros)")
         env = (f"export DESIGN_TOP={top} "
                f"PLACEMENTS_JSON={_to_container_path(_pl_json, container)} "
                f"DIGITAL_GDS={_to_container_path(digital_gds, container)} "

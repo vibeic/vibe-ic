@@ -80,6 +80,47 @@ def def_design_name(def_text):
     return m.group(1) if m else None
 
 
+#: Stable preference among DEFs that name the SAME design. A PnR directory
+#: holds one DEF per stage and they all carry the same `DESIGN` line, so the
+#: name alone does not pick one; this orders the tie. Anything not listed sorts
+#: after these, alphabetically.
+_DEF_PREFERENCE = ("filled.def", "routed.def")
+
+
+def def_rank(path, design):
+    """Sort key (LOWER IS BETTER) for "which DEF describes `design`".
+
+    vibe-ic#626 — THE ONE DEF-PAIRING RULE. It lived privately in
+    `gds_port_label_check`, and the sibling half of the same change
+    (`mixed_signal_top_lvs_run.resolve_macro_placements`) picked its DEF by
+    taking the first entry of a sorted `*.def` glob instead — i.e. by DIRECTORY
+    POSITION, the thing `gds_port_label_check`'s own docstring says never to
+    pair on. Measured on a real run (IHP SG13G2 `u_hawaii_adc`), the PnR
+    directory held nine DEFs; eight agreed on where the macros go and the ninth
+    did not, and the alphabetical glob returned exactly that ninth:
+
+        u_hawaii_adc.def  (the DEF the sign-off GDS was streamed from)
+                          u_ds1 delta_sigma + FIXED ( 30080 439350 ) N
+        filled.def        (a stale earlier iteration, alphabetically first)
+                          u_ds1 delta_sigma + FIXED ( 15080 760610 ) FS
+
+    so the merge instantiated the analog macros 15.0 x 321.3 um away from where
+    the layout they were merged INTO has them, one of them mirrored. That is
+    the failure the orientation guard next to it was written to prevent — "it
+    looks integrated and is not" — reached one level up, through DEF choice.
+
+    Both consumers now call THIS, so the flow cannot hold two answers to "which
+    DEF describes this layout". `path` is a `pathlib.Path`; `design` may be None
+    or empty, in which case only the preference order applies.
+    """
+    name = getattr(path, "name", str(path))
+    if design and name == f"{design}.def":
+        return (0, name)
+    if name in _DEF_PREFERENCE:
+        return (1 + _DEF_PREFERENCE.index(name), name)
+    return (1 + len(_DEF_PREFERENCE), name)
+
+
 def def_declared_pin_count(def_text):
     """The `PINS <n> ;` header count, or None when the DEF declares no PINS
     section at all.

@@ -84,6 +84,7 @@ from gds_substance_check import (  # noqa: E402
 from def_gds_port_power_restore import (  # noqa: E402
     def_declared_pin_count,
     def_design_name,
+    def_rank,
     parse_pins,
 )
 
@@ -94,20 +95,15 @@ RC_OK, RC_FINDINGS, RC_CANNOT_MEASURE = 0, 1, 2
 #: DEF's own `DESIGN` name, so the glob does not have to guess which is right.
 _DEF_GLOB = "phase3/stage3/pnr/*.def"
 
-#: Stable preference among DEFs that name the SAME design, so a re-run compares
-#: the same pair. Anything not listed sorts after these, alphabetically.
-_DEF_PREFERENCE = ("filled.def", "routed.def")
-
 #: Names reported in full before the list is truncated in the JSON/stderr.
 _NAME_CAP = 40
 
-
-def _def_rank(path: Path, design: str) -> Tuple[int, str]:
-    if path.name == f"{design}.def":
-        return (0, path.name)
-    if path.name in _DEF_PREFERENCE:
-        return (1 + _DEF_PREFERENCE.index(path.name), path.name)
-    return (1 + len(_DEF_PREFERENCE), path.name)
+#: vibe-ic#626 — the tie-break among DEFs naming the same design now lives in
+#: `def_gds_port_power_restore.def_rank`, because M1's merge needs the SAME
+#: answer and had been picking its DEF by alphabetical glob position instead.
+#: Behaviour here is unchanged; the rule is simply no longer private to this
+#: file. `_def_rank` is kept as the local name so the call sites read the same.
+_def_rank = def_rank
 
 
 def pair_def_with_gds(def_paths: List[Path],
