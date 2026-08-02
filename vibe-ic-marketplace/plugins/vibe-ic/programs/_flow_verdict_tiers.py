@@ -128,3 +128,61 @@ def done_claims_in(statuses) -> Set[str]:
     the producer's vocabulary grows so a human classifies the new word instead
     of discovering later which side it silently landed on."""
     return {normalize(s) for s in statuses if is_done_claim(s)}
+
+
+# ── which TRACK a step is on, and whether it reaches the verdict ──────────
+#
+# The module above answers "what does this WORD mean". The two predicates
+# below answer the two questions the verdict SCOPE asks of a step — which
+# track it is on, and whether it counts — and they are here rather than in
+# the consumer for the same reason everything else is: a scope kept as a list
+# in a reader drifts from the thing it is a list of.
+#
+#: The flow yaml's own stage word for the analog track. Read from the STEP,
+#: never from a step-id allow-list: ids get renumbered and tracks grow steps,
+#: and an allow-list goes quiet on exactly the step it did not know about —
+#: the same failure mode as the enumerated done-set this module deleted.
+ANALOG_STAGE = "stage_analog"
+
+
+def _field(step, name: str) -> str:
+    """One field off a step record in either shape. `flow_compliance_check`
+    holds its steps as `StepResult` objects and writes them to the JSON report
+    as dicts, and a predicate that saw only one of those would answer
+    correctly in the producer and silently `False` in every reader."""
+    raw = (step.get(name) if isinstance(step, dict)
+           else getattr(step, name, ""))
+    return str(raw or "")
+
+
+def in_analog_track(step) -> bool:
+    """Is this canonical step part of the ANALOG track?
+
+    Chip-AGNOSTIC and renumber-proof: the answer comes from the flow yaml's
+    own `stage` vocabulary, which is where the track is defined, not from a
+    list of step ids kept in a consumer.
+
+    `stage_mixed_signal` (M1-M4) is a DIFFERENT track and is deliberately NOT
+    included — see the scoping note in `flow_compliance_check.main`.
+    """
+    return _field(step, "stage").strip().lower() == ANALOG_STAGE
+
+
+def scoped_into_verdict(step) -> bool:
+    """ABSENT IS NOT FAILED — the discrimination the analog scoping turns on.
+
+    Answers "does this step reach `Overall`?", and it is the COMPLEMENT of the
+    registered not-run states — `is_excused`, which is precisely what the
+    producer subtracts from `total_required` — never a list of the states that
+    cost. On the analog track `SKIPPED-CONDITION` is exactly what "this design
+    has no analog content" looks like: every A-step's flow `condition` keys on
+    an analog block list, so a pure-digital design — and an explicit
+    `--skip-analog` — resolve the whole track to it.
+
+    Everything else is scoped in, INCLUDING a word this tree has never seen.
+    Same fail-safe direction as `is_done_claim`: absent is a claim the
+    vocabulary has to make, not a default an unregistered word inherits. A
+    track that ran and failed, a declared output that was never produced, and
+    a step wearing an unregistered status all reach the verdict.
+    """
+    return not is_excused(_field(step, "status"))
