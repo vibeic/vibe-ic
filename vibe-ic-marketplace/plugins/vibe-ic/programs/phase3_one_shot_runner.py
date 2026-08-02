@@ -24946,6 +24946,22 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     mc_ocv_rpt.read_text(errors="replace"))
         _viol = [n for n, v in (("setup", setup_wns), ("hold", hold_wns))
                  if v is not None and v < 0]
+        # The basis this STA was actually run on (read from the report's own
+        # banner, not assumed). A netlist-only run is a real measurement but is
+        # NOT a sign-off, so it may not be published as closure — see
+        # `_mcorner_sta_rc_basis` for the measured run this comes from.
+        _rc_basis = "unknown"
+        try:
+            if mc_ocv_ok and mc_ocv_rpt.is_file():
+                _rc_basis = _mcorner_sta_rc_basis(
+                    mc_ocv_rpt.read_text(errors="replace"))
+        except OSError:
+            _rc_basis = "unknown"
+        # UNMEASURED is not RC-annotated, but it is also not proof of the
+        # opposite: only a POSITIVELY-observed netlist-only basis withholds
+        # closure, so an older report with no banner keeps its prior verdict
+        # and this can only ever REMOVE a closure claim, never add one.
+        _basis_blocks_closure = (_rc_basis in ("netlist_only", "mixed"))
         mc_ocv_stance.write_text(json.dumps({
             "signoff_dimension": "multi_corner_ocv_process",
             "setup_process_corner": setup_lbl,
@@ -24964,8 +24980,24 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             # here so it is judgeable instead of merely assumed from the label.
             "corner_library_resolution": _process_lib_resolution(
                 corner_libs, setup_lbl, hold_lbl),
-            "timing_closed_multi_corner": (mc_ocv_ok and not _viol),
+            "timing_closed_multi_corner": (mc_ocv_ok and not _viol
+                                           and not _basis_blocks_closure),
+            # The basis the slacks above were measured on, published NEXT TO
+            # them so no reader has to open the report to know whether this is
+            # a sign-off number or a netlist-only one.
+            "sta_rc_basis": _rc_basis,
             "disclosure": (
+                ("NETLIST-ONLY STA — the report's own banner says "
+                 f"SPEF={_rc_basis.replace('_', '-')}: no parasitics were "
+                 "annotated, so the slacks above are NOT sign-off numbers and "
+                 "this run has NOT closed timing, whatever their sign. They "
+                 "are a real measurement of an un-annotated netlist and "
+                 "nothing more. This states the observation only — the cause "
+                 "is NOT determined here; a route that never completed and an "
+                 "extraction that produced no SPEF both land in this state, "
+                 "so check the PnR log for a swallowed detailed_route abort "
+                 "and the extraction step for whether any SPEF was written.")
+                if _basis_blocks_closure else
                 # NOTE: the literal ±5%% is an ESCAPED percent — this string is
                 # %-formatted with (setup_lbl, hold_lbl); a bare "5%" made Python
                 # read "% +" as a third conversion spec → TypeError on the
@@ -26690,6 +26722,53 @@ def _run_eco_repair(project: Path, top: str, container: str,
         notes.append("ECO auto-trigger FIRED but produced no ECO netlist "
                      "(see eco/eco_repair.log) — surfaced, not masked.")
     return ok
+
+
+def _mcorner_sta_rc_basis(rpt_text: str) -> str:
+    """Was the multi-corner OCV STA RC-ANNOTATED, or netlist-only?
+
+    Returns "rc_annotated" | "netlist_only" | "mixed" | "unknown".
+
+    `_emit_multi_corner_sta` stamps each corner's banner with `SPEF=<name>`,
+    or the literal `SPEF=no-SPEF (netlist-only)` when no SPEF file existed.
+    This reads that stamp back rather than assuming — the report states its own
+    basis, so nothing here has to guess or re-derive it.
+
+    WHY THIS EXISTS. `timing_closed_multi_corner` was `mc_ocv_ok and not
+    _viol`: a report was produced and no slack was negative. Neither term asks
+    whether the STA had any parasitics. So a run whose `detailed_route`
+    ABORTED -- leaving zero signal routing, therefore no extraction, therefore
+    no SPEF -- still published a MET slack, an empty `violated_corners`, and
+    `timing_closed_multi_corner: true`, next to a disclosure asserting
+    "SETUP @ <c> process (slow) + max-RC". The report it cites said
+    `SPEF=no-SPEF (netlist-only)` and `clock network delay (ideal)` on the same
+    run. That is the shape this file keeps removing: a sentence asserting
+    something the record beside it contradicts.
+
+    MEASURED (subservient x sky130A, plugin v1.9.59, image 0.2.52):
+    `detailed_route` aborted with DRT-0218 (guide not connected, 2 nets),
+    swallowed as DETAILED_ROUTE_NONFATAL. Every DEF the flow wrote then carried
+    0 signal-net routing (PDN SPECIALNETS only) and 0 SPEF files were produced,
+    yet the run published setup +2.51 ns / hold +0.25 ns / violated_corners []
+    / timing_closed_multi_corner true. LVS was the ONLY gate that refused
+    (LVS_INPUT_DEF_SIGNAL_UNROUTED, #477); STA, DRC and GDS all reported PASS
+    on a design with no interconnect.
+
+    An unrouted netlist-only STA is a REAL measurement of a real thing -- it is
+    just not a sign-off, and must not be published as closure.
+    chip/PDK/vendor-AGNOSTIC: reads only the banner this file writes.
+    """
+    if not isinstance(rpt_text, str) or not rpt_text:
+        return "unknown"
+    stamps = re.findall(r"SPEF=([^,=]*?)\s*===", rpt_text)
+    if not stamps:
+        return "unknown"
+    netlist_only = [s for s in stamps if "no-SPEF" in s]
+    if len(netlist_only) == len(stamps):
+        return "netlist_only"
+    if netlist_only:
+        return "mixed"
+    return "rc_annotated"
 
 
 def _parse_mcorner_ocv_slacks(rpt_text: str) -> Tuple[Optional[float],
