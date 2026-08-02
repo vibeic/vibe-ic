@@ -168,3 +168,23 @@ def test_staged_pdk_present_but_none_of_it_loaded_is_fail(tmp_path):
             staged=["mq42kpm180su_typ.lib"], loaded=["othernode_fd_sc_hd.lef"])
     rc, out = _run(r)
     assert rc == 1, out
+
+
+def test_an_agent_transcript_at_the_run_root_is_not_a_tool_log(tmp_path):
+    """The defect this rule fixes: a name an agent QUOTED, read as a name a tool LOADED.
+
+    `agent.log` records what an agent said, and agents quote filenames while
+    analysing other runs. Measured: a run whose every tool log named only the
+    declared PDK was reported as also loading a foreign one, because a previous
+    round's filename appeared in the agent's own narration.
+
+    Tool logs live under the phase/step tree; transcripts live at the run root.
+    """
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
+            staged=["mq42kpm180su_typ.lib"], loaded=["mq42kpm180su_typ.lib"])
+    r.joinpath("agent.log").write_text(
+        "Earlier I looked at another round which loaded othernode_fd_sc_hd.lef\n",
+        encoding="utf-8")
+    rc, out = _run(r)
+    assert rc == 0, out
+    assert "othernode_fd_sc_hd.lef" not in out

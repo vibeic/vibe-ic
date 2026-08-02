@@ -144,8 +144,19 @@ def loaded_libraries(run: Path, cap: int = 400) -> Tuple[Set[str], int]:
     names: Set[str] = set()
     scanned = 0
     for log in sorted(run.rglob("*.log"))[:cap]:
-        if "/plugin_work/" in str(log) or "/plugin_" in str(log):
+        rel = log.relative_to(run)
+        if "plugin_work" in rel.parts or any(p.startswith("plugin_") for p in rel.parts):
             continue                       # the plugin's own tree is not the run
+        # A TRANSCRIPT IS NOT A TOOL LOG. `agent.log` and the runner's `run*.log`
+        # sit at the run root and record what an agent SAID, including filenames
+        # it quoted while analysing some other run. Measured: this reported a
+        # foreign library "loaded" by a run whose every tool log named only the
+        # declared PDK — the name came from the agent narrating a PREVIOUS round.
+        #
+        # Tool logs live under the phase/step tree; transcripts live at the root.
+        # That is the whole distinction and it needs no list of filenames.
+        if len(rel.parts) == 1:
+            continue
         try:
             text = log.read_text(errors="replace")
         except OSError:
