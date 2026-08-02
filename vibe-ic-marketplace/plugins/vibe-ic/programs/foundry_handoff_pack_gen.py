@@ -396,6 +396,23 @@ def _l10_test_pattern_ids(project: Path):
     return out[:200]
 
 
+def _routing_incomplete(project: Path):
+    """True / False / None — the fact the antenna step RECORDED (#654).
+
+    None means it was never recorded, which is NOT False: the caller must not
+    read a missing key as a routed design."""
+    try:
+        f = _pl.reports_phase3_dir(project) / "antenna.json"
+        if not f.is_file():
+            return None
+        data = json.loads(f.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "routing_incomplete" not in data:
+        return None
+    return bool(data.get("routing_incomplete"))
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("project", type=Path)
@@ -409,6 +426,24 @@ def main(argv=None) -> int:
     if not project.is_dir():
         print(f"VACUOUS_PASS: project dir missing: {project}",
               file=sys.stderr)
+        return 2
+
+    # ORGANIC #654 — a handoff pack for a layout the router never finished is
+    # the most expensive form this failure takes. The fact is already on disk:
+    # the antenna step records `routing_incomplete` beside `net_violations: 0`,
+    # and that pair on one line IS the trap. `grep -c routing_incomplete` over
+    # this file used to return 0.
+    #
+    # A MISSING key is not False — a run whose antenna step never reached the
+    # in-session post-repair path records nothing, and reading that as "routing
+    # is fine" would rebuild the defect one level up. Only an explicit True
+    # refuses.
+    _ri = _routing_incomplete(project)
+    if _ri is True:
+        print("VACUOUS_PASS: detailed routing is INCOMPLETE (recorded by the "
+              "antenna step in reports/phase3/antenna.json). Refusing to write "
+              "a foundry handoff pack for a layout with no realized "
+              "interconnect. Finish routing, then re-run.", file=sys.stderr)
         return 2
 
     handoff_dir = _pl.foundry_handoff_dir(project)

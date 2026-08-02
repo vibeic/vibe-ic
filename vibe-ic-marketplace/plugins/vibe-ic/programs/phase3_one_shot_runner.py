@@ -18953,9 +18953,81 @@ def _gds_substance_gate(gds_out: Path, def_file: Path) -> Optional[str]:
     return None
 
 
+# ── ORGANIC #654 — the router aborted, and only one step noticed ───────────
+#
+# MEASURED on a real sky130A run:
+#
+#     x  Step 26  Antenna check                     FAIL
+#     v  Step 31  Physical Verification (DRC+LVS)   PASS
+#     v  Step 37  GDSII output                      PASS
+#     v  Step 38  Foundry Handoff                   PASS
+#
+# A 24 MB GDS was streamed and declared handoff-ready for a layout the router
+# never finished. Step 37's own NAME states the contract — "only if Step 31 PV
+# fully clean" — and Step 31 passed vacuously, so the guard let it through.
+#
+# DRC and LVS on an unrouted layout are not WRONG, they are VACUOUS: there is
+# little routing to violate a spacing rule, and a netlist with no realized
+# interconnect can still match uniquely. They are true statements about a
+# question nobody asked, published under the names of the questions that were.
+#
+# Nothing has to be inferred. The antenna step already computes the fact and
+# writes it to disk beside `net_violations: 0` — that pair, on one line, IS the
+# trap. The steps downstream simply never read it. `flow_compliance_check`
+# catches it at the audit layer, so the FLOW knows; the individual steps each
+# certify independently and never ask.
+_ROUTING_INCOMPLETE_NOTE = (
+    "routing is INCOMPLETE (detailed_route aborted; recorded by the antenna "
+    "step in reports/phase3/antenna.json). This check's inputs do not describe "
+    "a routed design, so its result is VACUOUS rather than clean — a DRC/LVS "
+    "pass on a layout with no realized interconnect is a true answer to a "
+    "question nobody asked. Finish routing, then re-run."
+)
+
+
+def routing_is_incomplete(project: Path) -> Optional[bool]:
+    """Did detailed routing abort? Reads the fact the antenna step RECORDED.
+
+    Returns True / False, or None when the fact was never recorded — which is
+    NOT False. A run whose antenna step did not reach the in-session
+    post-repair path writes no `routing_incomplete` key at all, and treating a
+    missing key as "routing is fine" would re-create the defect one level up.
+    Callers must decide what to do with None; they must not read it as clean.
+
+    chip/PDK-AGNOSTIC: one recorded boolean, no design or vendor literal."""
+    try:
+        f = _pl.reports_phase3_dir(project) / "antenna.json"
+        if not f.is_file():
+            return None
+        data = json.loads(f.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "routing_incomplete" not in data:
+        return None
+    return bool(data.get("routing_incomplete"))
+
+
+def _vacuous_on_unrouted(project: Path, step_name: str,
+                         t0: float) -> Optional["StepResult"]:
+    """VACUOUS-PASS for a sign-off step whose inputs are an unrouted layout.
+
+    VACUOUS-PASS, not FAIL, deliberately: the check RAN and its own result is
+    honest — what is missing is the precondition. `_flow_verdict_tiers` already
+    ranks VACUOUS-PASS as non-green, so the audit and the step now agree instead
+    of the audit alone knowing. Returns None when routing is complete, or when
+    the fact was never recorded, so a healthy run is untouched."""
+    if routing_is_incomplete(project) is not True:
+        return None
+    return StepResult(step_name, "VACUOUS_PASS", time.time() - t0,
+                      _ROUTING_INCOMPLETE_NOTE)
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
+    _vac = _vacuous_on_unrouted(project, "gds", t0)
+    if _vac is not None:
+        return _vac
     pnr_dir = _pl.pnr_dir(project)
     def_file = pnr_dir / f"{top}.def"
     gds_out = pnr_dir / f"{top}.gds"
@@ -20271,6 +20343,9 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
 def step_drc(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
+    _vac = _vacuous_on_unrouted(project, "drc", t0)
+    if _vac is not None:
+        return _vac
     if not pdk.drc_deck:
         # No KLayout deck. If a Calibre deck is present, distinguish
         # ENV_UNAVAILABLE (calibre binary absent in this env — env
@@ -20845,6 +20920,9 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
              container: str,
              upstream_pnr: Optional[StepResult] = None) -> StepResult:
     t0 = time.time()
+    _vac = _vacuous_on_unrouted(project, "lvs", t0)
+    if _vac is not None:
+        return _vac
     # ORGANIC #590 — upstream-incomplete gate. When pnr died mid-tcl
     # (parse abort, segfault, timeout, ROUTE_NOT_CONVERGED) the final
     # DEF/pin-label stages were never written: an LVS against the best
@@ -32388,6 +32466,23 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # (PASS / PASS_WITH_WAIVERS / FAIL) stays a stable contract for its
     # existing consumers.
     if any(s.status in ("FAIL", "BLOCKED") for s in plan):
+        return "FAIL"
+    # ORGANIC #654 — a VACUOUS sign-off is not a pass, and fell through both
+    # of the tests around it. MEASURED: a step returning VACUOUS_PASS matched
+    # neither the FAIL/BLOCKED test above nor the WAIVED/SKIP/ENV_UNAVAILABLE
+    # test below, so the run returned "PASS" — which would have made the unrouted
+    # sign-off steps produce a GREEN run, the defect #654 is about, inside its
+    # own fix. Found by a test asserting the tier, not by reading the code.
+    #
+    # Stated in THIS function's vocabulary on purpose. `_flow_verdict_tiers` is
+    # the authority for `flow_compliance_check`'s words and correctly ranks
+    # VACUOUS-PASS as a QUALIFIED done-claim, but StepResult.status is a
+    # DIFFERENT vocabulary (PASS/FAIL/BLOCKED/SKIP/WAIVED/ENV_UNAVAILABLE), and
+    # routing its words through that classifier marks bare `SKIP` and
+    # `ENV_UNAVAILABLE` as qualified too — both established PASS_WITH_WAIVERS
+    # states here. Tried, measured, and rejected: borrowing a classifier across
+    # two vocabularies is how a fix acquires a second defect.
+    if any(s.status == "VACUOUS_PASS" for s in plan):
         return "FAIL"
     # v1.6.54 — ENV_UNAVAILABLE counts toward PASS_WITH_WAIVERS the
     # same way as WAIVED / SKIP. The verdict tier is preserved at the
