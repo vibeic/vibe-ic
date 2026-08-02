@@ -541,8 +541,28 @@ def main() -> int:
     # only, --skip-phase3) must not start failing here.
     _img_rec = _capture_container_image(project, args.container,
                                         args.require_image)
-    if _img_rec.get("verdict") == "MISMATCH" and args.require_image:
-        print(f"ERROR: {_img_rec.get('reason', '')}", file=sys.stderr)
+    # `--require-image` is a DEMAND, so anything short of PASS fails it — not
+    # only MISMATCH. An earlier revision halted on MISMATCH alone, which left
+    # the most common way the demand goes unmet wide open: when the named
+    # container does not exist the verdict is FAIL (`status=not_found`), not
+    # MISMATCH, so the run fell through to the advisory below and CONTINUED —
+    # on whatever tools happened to be on the host PATH. The operator gets a
+    # reports/container_image.json recording FAIL, a one-line ⚠, and a full
+    # set of step verdicts measured against an unpinned toolchain. Measured:
+    # a run pinned to an image whose yosys is 0.67+ completed phase 2 on a
+    # host yosys 0.33 and reported PASS for synthesis.
+    #
+    # SKIP (docker absent) is refused for the same reason: the operator asked
+    # for a specific image and this run cannot show it got one.
+    if args.require_image and _img_rec.get("verdict") != "PASS":
+        print(f"ERROR: --require-image {args.require_image!r} not satisfied: "
+              f"{_img_rec.get('verdict')} — {_img_rec.get('reason', '')}\n"
+              f"  refusing to continue: every step verdict from here would be "
+              f"measured against a toolchain this run cannot attest to.\n"
+              f"  fix: start the container from the required image, or drop "
+              f"--require-image to run unpinned (identity is still RECORDED "
+              f"to reports/container_image.json).",
+              file=sys.stderr)
         lock.release()
         return 2
     if _img_rec.get("verdict") not in ("PASS", None):
