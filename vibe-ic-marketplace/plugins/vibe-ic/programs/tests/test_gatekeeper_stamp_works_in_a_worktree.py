@@ -100,15 +100,22 @@ def test_a_worktree_gets_its_own_stamp_not_a_shared_one():
     """Per-worktree is the point, not an accident of the expression: a shared
     stamp would let a gate run in one worktree authorise a push of a DIFFERENT
     commit from another."""
-    common = subprocess.run(["git", "-C", str(_REPO), "rev-parse",
-                             "--git-common-dir"],
-                            capture_output=True, text=True, timeout=30).stdout.strip()
-    own = subprocess.run(["git", "-C", str(_REPO), "rev-parse",
-                          "--absolute-git-dir"],
-                         capture_output=True, text=True, timeout=30).stdout.strip()
+    def _rp(flag):
+        out = subprocess.run(["git", "-C", str(_REPO), "rev-parse", flag],
+                             capture_output=True, text=True,
+                             timeout=30).stdout.strip()
+        # RESOLVE BOTH. `--git-common-dir` answers RELATIVE (".git") in a main
+        # checkout while `--absolute-git-dir` is absolute, so comparing the raw
+        # strings says "these differ" about one directory — and this test then
+        # asserted the main checkout was a worktree. Measured: it failed in the
+        # main checkout while passing in every worktree, which is the one place
+        # a stamp test must not be wrong.
+        return (_REPO / out).resolve()
+
+    common, own = _rp("--git-common-dir"), _rp("--absolute-git-dir")
     if own == common:
         return                      # main checkout: they coincide, by design
-    assert "worktrees" in own, own
+    assert "worktrees" in own.as_posix(), own
 
 
 def test_the_success_line_and_the_write_cannot_disagree_silently():
