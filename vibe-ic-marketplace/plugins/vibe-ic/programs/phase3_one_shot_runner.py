@@ -17905,6 +17905,76 @@ def _parse_ship_repair_log(log: str) -> dict:
     }
 
 
+def _ship_repair_nonpromotion_note(parsed: dict) -> str:
+    """The note the NON-PROMOTED sign-off repair publishes about its own slack.
+
+    This step has two exits and they used to publish two different KINDS of
+    number. The promoted exit prints `wns_postroute` and calls it, correctly,
+    "honest post-reroute real-SPEF". The non-promoted exit printed
+    `wns_before -> wns_after_repair` as a bare improvement pair -- and
+    `wns_after_repair` is the number this file's own `_SHIP_POSTROUTE_CVG_TCL`
+    comment describes as "measured with the set_wire_rc wire-load model on the
+    buffers/cells the pre-reroute repair just inserted/resized", i.e. the
+    OPTIMISTIC estimate, on a different timing basis from the one sign-off
+    judges. `_ship_repair_should_promote` already refuses to key on it for
+    exactly that reason.
+
+    So the run kept the base route (a real timing FAIL) while its own step note
+    advertised the estimate as a closure delta, with the honest number sitting
+    unpublished in the same `parsed` dict. MEASURED, this file, two designs:
+      sha256 x sky130A       SS setup  +0.05 ns estimate ->  -6.66 ns real
+      subservient x sky130A  SS setup -14.39 ns -> +0.0003 ns ESTIMATE, while
+                             the shipped route stayed at -14.39 ns
+    The second one was then carried into three downstream round briefs as
+    "0.0003 ns from closing" -- a design 14 ns from closing. A published number
+    that is read as closure IS the defect; the promotion gate being right about
+    it internally does not undo that.
+
+    RULE (deterministic, no threshold, no chip/PDK/vendor literal):
+      1. When the honest post-reroute real-SPEF slack was MEASURED, it leads
+         the note and is named as the sign-off basis. The estimate may follow
+         only as an explicitly-labelled estimate, with the measured divergence
+         between the two stated so nobody has to know this file to spot it.
+      2. When it was NOT measured, say UNMEASURED and do NOT render the
+         estimate as an `A -> B` closure pair at all -- an unmeasured basis
+         cannot be reported as an improvement.
+    No fabricated cause either (the #543 doctrine in this file): the note
+    reports the divergence it measured, never a reason for it.
+    """
+    viols = parsed.get("route_violations")
+    tail = (f" reroute violations={viols}; not promoted "
+            f"(needs setup>=0 and DRC-clean).")
+    est_b = parsed.get("wns_before")
+    est_a = parsed.get("wns_after_repair")
+    post = parsed.get("wns_postroute")
+
+    if post is not None:
+        note = (f"no-op (base route kept): SIGN-OFF setup slack {post} ns "
+                f"(post-reroute real-SPEF -- the basis sign-off judges).")
+        if est_a is not None:
+            note += (f" The resizer's pre-reroute ESTIMATE said {est_b}->"
+                     f"{est_a} ns on the set_wire_rc wire-load model; that is "
+                     f"NOT the sign-off number")
+            if est_a > post:
+                note += f" and is optimistic by {est_a - post:.4f} ns here"
+            note += "."
+        return note + tail
+
+    note = ("no-op (base route kept): SIGN-OFF setup slack UNMEASURED -- no "
+            "post-reroute real-SPEF slack was emitted, so this run has NO "
+            "number on the basis sign-off judges.")
+    if est_a is not None:
+        note += (f" The only slack present is the resizer's pre-reroute "
+                 f"ESTIMATE ({est_a} ns on the set_wire_rc wire-load model, "
+                 f"from {est_b} ns); it is optimistic by construction and is "
+                 f"NOT reportable as closure.")
+    if parsed.get("reroute_incomplete"):
+        note += (f" Named upstream cause: the reroute aborted "
+                 f"{parsed['reroute_incomplete']} time(s) "
+                 f"(SHIP_REROUTE_INCOMPLETE).")
+    return note + tail
+
+
 def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
                                 repaired_v_ok: bool) -> bool:
     """Promotion policy (FAIL-SAFE, no DRC regression, no DRV regression):
@@ -17956,7 +18026,26 @@ def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
         return False
     wp = parsed.get("wns_postroute")
     wb = parsed.get("wns_before")
-    if wp is not None and wb is not None and wp < wb - 0.001:
+    # #603 kept the base route when `wp` was WORSE than it. But "not worse" is
+    # not "better": at wp == wb the repaired route has bought nothing on the
+    # basis sign-off judges, and the ONLY thing then carrying the promotion is
+    # the `wa` estimate below -- which this file's own `_SHIP_POSTROUTE_CVG_TCL`
+    # comment calls the optimistic set_wire_rc wire-load number.
+    #
+    # MEASURED (subservient x sky130A, plugin v1.9.59): base -14.39 ns, honest
+    # post-reroute real-SPEF -14.39 ns, estimate +0.0003 ns. Zero honest gain,
+    # and the estimate alone would have shipped the rerouted design as the
+    # sign-off route -- and did publish "-14.39->0.0003" as this step's note,
+    # which three downstream round briefs then read as "0.0003 ns from closing".
+    #
+    # So when the honest number exists, promotion requires a MEASURABLE honest
+    # improvement over the base. This deliberately still promotes an honest
+    # improvement that has NOT closed (base -19.85 -> real -2.42 is the better
+    # route and must ship; `test_gate_promotes_honest_improvement_over_base`
+    # encodes that policy and is unchanged) -- closure is not the bar here,
+    # being genuinely better is. Same tolerance as before, and still skipped
+    # when either marker is absent, so this only ADDS a refusal.
+    if wp is not None and wb is not None and wp <= wb + 0.001:
         return False
     wa = parsed.get("wns_after_repair")
     if wa is None or wa < -0.001:
@@ -18064,9 +18153,7 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
             [str(routed), str(_pnr_v)])
     return StepResult(
         "signoff_spef_repair", "PASS", time.time() - t0,
-        f"no-op (base route kept): repair estimate {parsed['wns_before']}->"
-        f"{parsed['wns_after_repair']} ns, reroute violations="
-        f"{parsed['route_violations']}; not promoted (needs setup>=0 and DRC-clean).")
+        _ship_repair_nonpromotion_note(parsed))
 
 
 # --- DRV wire-length escalation (a SEPARATE, independently-gated attempt) --
