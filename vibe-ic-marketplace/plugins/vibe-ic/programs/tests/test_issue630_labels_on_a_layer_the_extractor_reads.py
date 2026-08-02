@@ -221,8 +221,22 @@ def test_the_gate_still_does_not_FAIL_on_an_off_layer_label():
     # caught it at the landing gate.
     base = _REPO / "benchmark-data" / "ic" / "subservient"
     tech = _TECH / "sky130A-GDS.tech" if _TECH else None
-    if not base.is_dir() or tech is None or not tech.is_file():
-        return
+    # THE GUARD WAS ON THE WRONG THING. `base.is_dir()` is true in every
+    # checkout — the directory is tracked — while the GDS this drives on is
+    # NOT IN GIT at all (`git ls-files …/stage4/gds` -> 0). So the test passed
+    # only where that artefact happens to sit on disk, and failed in every
+    # worktree — which is the environment the dispatch doctrine tells every
+    # agent to work in, and the one the widened selection first ran it in.
+    #
+    # A bare `return` also made the absence look like a pass. Skipping loudly
+    # is the honest shape: the accept case genuinely needs a real shipped GDS
+    # (a synthetic fixture would prove only the fixture), so where there is
+    # none there is nothing to assert.
+    gds = sorted((base / "phase3/stage4/gds").glob("*.gds")) if base.is_dir() else []
+    if not gds or tech is None or not tech.is_file():
+        import pytest
+        pytest.skip("needs a real shipped subservient GDS (untracked) and a PDK "
+                    "tech; absent here, so there is no accept case to drive")
     out = pathlib.Path("/tmp") / "t630_gate.json"
     r = subprocess.run(
         [_sys.executable, str(_PROGRAMS / "gds_port_label_check.py"), str(base),

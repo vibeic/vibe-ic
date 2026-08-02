@@ -13982,22 +13982,22 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         # The routing clear. Without it `global_route` no-ops on already-routed
         # nets, the follow-on detailed_route aborts, and the design measures
         # clean because it is UNROUTED. PG and dont_touch nets are preserved.
-        "    if {[catch {\n"
-        "      set _sdr_rrc 0; set _sdr_skip 0\n"
-        "      foreach _sdr_net [[ord::get_db_block] getNets] {\n"
-        "        set _sdr_st [$_sdr_net getSigType]\n"
-        "        if {$_sdr_st eq \"POWER\" || $_sdr_st eq \"GROUND\"} { continue }\n"
-        "        set _sdr_dnt 0\n"
-        "        foreach _sdr_it [$_sdr_net getITerms] {\n"
-        "          if {[[$_sdr_it getInst] isDoNotTouch]} { set _sdr_dnt 1; break }\n"
-        "        }\n"
-        "        if {$_sdr_dnt} { incr _sdr_skip; continue }\n"
-        "        set _sdr_wire [$_sdr_net getWire]\n"
-        "        if {$_sdr_wire ne \"NULL\"} "
-        "{ odb::dbWire_destroy $_sdr_wire; incr _sdr_rrc }\n"
-        "      }\n"
-        "      puts \"SDR_ROUTING_CLEARED: $_sdr_rrc (dont_touch_preserved=$_sdr_skip)\"\n"
-        "    } _sdr_rce]} { puts \"SDR_CLEAR_NONFATAL: $_sdr_rce\" }\n"
+        # THE HELPER, not a second copy of it. This block used to re-implement
+        # `_spare_safe_routing_clear_tcl` inline — same POWER/GROUND skip, same
+        # `isDoNotTouch` skip, same destroy — under `_sdr_`-prefixed names. Two
+        # copies of a routing-clear filter drift, and only one of them is the
+        # one anybody reads when the filter has to change; the shipped test
+        # `test_all_routing_clear_sites_use_the_filtered_helper` says exactly
+        # that and had been failing on it.
+        #
+        # Checked before substituting: none of the helper's variable names
+        # (`_rrc _skip _net _w _st _it _has_dnt`, catch-var `e`) occurs
+        # unprefixed anywhere in the enclosing Tcl, so the `_sdr_` prefixes were
+        # not load-bearing. The emitted marker moves from
+        # `(dont_touch_preserved=…)` to `(spare_preserved=…)`; nothing parses
+        # either — the only consumer of that token is the helper's own test.
+        + _spare_safe_routing_clear_tcl("SDR")
+        +
         "    if {[catch {global_route} _sdr_gr]} "
         "{ puts \"SDR_GR_NONFATAL: $_sdr_gr\"; break }\n"
         "    if {[catch {detailed_route} _sdr_dr]} "
