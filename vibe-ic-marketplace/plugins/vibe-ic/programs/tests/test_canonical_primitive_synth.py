@@ -14,12 +14,20 @@ import subprocess
 import sys
 from pathlib import Path
 
+import os
 import pytest
 
 HERE = Path(__file__).resolve().parent
 PROGRAMS = HERE.parent                         # .../programs
 PROG = PROGRAMS / "canonical_primitive_synth.py"
-RTLLM = Path("/home/reyerchu/_bench_rtllm2_scratch/RTLLM")
+# Resolved from the environment, not hardcoded: a personal home path in
+# shipped source is unresolvable for every other user, and
+# `shipped_path_portability_check` blocks on it. The dataset-backed tests
+# already skip when the corpus is absent, so an unset var simply skips.
+# Reintroduced twice by stacked PRs authored against an older base — hence
+# the gate, and hence this comment sitting where the literal used to be.
+RTLLM = Path(os.environ.get("VIBEIC_RTLLM_CORPUS",
+                            Path.home() / "_bench_rtllm2_scratch/RTLLM"))
 # The dataset-backed tests only run where the RTLLM corpus is checked out locally;
 # in CI it is absent, so they skip. The self-contained inline tests below prove
 # the detection contract with NO external dataset (they always run).

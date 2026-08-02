@@ -40,7 +40,7 @@ def _run(page: Path, *extra):
     return subprocess.run(
         [sys.executable, str(GEN), "--page", str(page), "--plugin-root",
          str(root / "vibe-ic-marketplace" / "plugins" / "vibe-ic"), *extra],
-        capture_output=True, text=True, timeout=180)
+        capture_output=True, text=True, timeout=30)
 
 
 def test_main_still_reaches_its_write_call():

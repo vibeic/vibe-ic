@@ -29,7 +29,7 @@ def _flow(tmp: Path, steps) -> Path:
 def _run(flow: Path, programs: Path):
     p = subprocess.run([sys.executable, str(GRID), "--flow", str(flow),
                         "--programs", str(programs)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=30)
     return p.returncode, p.stdout + p.stderr
 
 

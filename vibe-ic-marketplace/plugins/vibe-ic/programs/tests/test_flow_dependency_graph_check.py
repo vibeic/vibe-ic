@@ -16,7 +16,7 @@ yaml = pytest.importorskip("yaml")
 
 def _run(flow: Path):
     p = subprocess.run([sys.executable, str(GATE), "--flow", str(flow)],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=30)
     return p.returncode, p.stdout + p.stderr
 
 

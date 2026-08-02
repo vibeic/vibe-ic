@@ -49,7 +49,7 @@ def test_the_transitive_case_is_a_violation_too():
 
 def _run(project: Path):
     p = subprocess.run([sys.executable, str(CHECK), str(project)],
-                       capture_output=True, text=True, timeout=600)
+                       capture_output=True, text=True, timeout=30)
     return p.stdout + p.stderr
 
 
