@@ -14,8 +14,12 @@ GATE = Path(__file__).resolve().parent.parent / "declared_pdk_is_the_pdk_used_ch
 
 
 def _run(run_dir: Path):
+    # 30s, not 120: `ci_harness_timeout_ceiling_check` caps an inner bound at
+    # 60s because the harness itself dies at 180 — a bound above the ceiling
+    # kills the SESSION instead of the test. MEASURED: 0.03s per call, so 30
+    # leaves three orders of magnitude of headroom.
     p = subprocess.run([sys.executable, str(GATE), str(run_dir)],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=30)
     return p.returncode, p.stdout + p.stderr
 
 

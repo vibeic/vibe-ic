@@ -31646,6 +31646,28 @@ _DERIVED_ARTEFACT_GENERATORS = (
     ("tapeout_checklist_gen.py", "tapeout checklist"),
 )
 
+# ORGANIC #655 — POST-HOC audits of the finished run: read what the tools
+# actually did, and record it. Distinct from the pre-flight guards above main(),
+# which decide whether to START; these can only be answered afterwards, from the
+# logs the run produced.
+#
+# `declared_pdk_is_the_pdk_used_check` was landing with nothing but its own test
+# invoking it — `checker_execution_wiring_audit` blocked on exactly that, and it
+# is right: a checker's unit test proves the logic on a fixture its author wrote
+# and proves nothing about a production artefact. Its own docstring is about a
+# guard that never ran, which makes shipping it unwired a second instance of the
+# defect it was written for.
+#
+# Each entry writes its verdict to a report and does NOT change the run's
+# verdict. `declared_pdk_target_guard` (#656) already refuses at the START on
+# the same class, so a completed run has passed that gate; this one answers the
+# different question of what the tools then LOADED.
+_POST_RUN_AUDITS = (
+    ("declared_pdk_is_the_pdk_used_check.py",
+     "phase3/declared_pdk_is_the_pdk_used.json",
+     "declared-vs-used PDK"),
+)
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -32199,6 +32221,27 @@ def main() -> int:
             except Exception as exc:
                 print(f"[WARN] {kind} generator failed: {exc}",
                       file=sys.stderr)
+
+    # ORGANIC #655 — the post-hoc audits, on the run that just finished.
+    for prog, rel_json, kind in _POST_RUN_AUDITS:
+        prog_path = PROGRAMS_DIR / prog
+        if not prog_path.is_file():
+            continue
+        out_json = _pl.reports_phase3_dir(project) / rel_json.rsplit("/", 1)[-1]
+        try:
+            out_json.parent.mkdir(parents=True, exist_ok=True)
+            # 55s: `ci_harness_timeout_ceiling_check` caps an inner bound at 60
+            # because the harness dies at 180 and a longer bound kills the
+            # SESSION rather than the call.
+            r = subprocess.run(
+                [sys.executable, str(prog_path), str(project),
+                 "--json", str(out_json)],
+                timeout=55, check=False, capture_output=True, text=True)
+            if r.returncode not in (0, 1, 2):
+                print(f"[WARN] {kind} audit exited {r.returncode}",
+                      file=sys.stderr)
+        except Exception as exc:
+            print(f"[WARN] {kind} audit failed: {exc}", file=sys.stderr)
 
     # v1.6.52 — auto-emit `waivers.json` from any WAIVED steps so the
     # SOLE-ACCEPTANCE-CRITERION schema (evidence + ticket id +
