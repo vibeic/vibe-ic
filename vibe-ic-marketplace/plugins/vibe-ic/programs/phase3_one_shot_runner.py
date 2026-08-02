@@ -17237,6 +17237,44 @@ def _restore_port_labels_if_missing(project: Path, top: str, pdk: PdkConfig,
     return True, f"{note} (trigger: {why})"
 
 
+def _resolve_magic_gds_tech(pdk: "PdkConfig", container: str) -> Optional[str]:
+    """The PDK's Magic `*-GDS.tech`, or None — never a guessed path.
+
+    vibe-ic#630/#631. `def_gds_port_power_restore` can write port labels on the
+    layers a PDK DECLARES for them, but only if it is told which tech file
+    declares them. Landing that ability without wiring this made the fix INERT:
+    the producer supported `--pdk-tech`, nothing supplied it, and every run kept
+    writing labels only on layer 100 — which the extractor drops.
+
+    MEASURED end to end on a real design, magic `gds read` + `ext2spice`:
+
+        as shipped (labels on 8/1)              (no `.subckt` line at all)
+        after the restore with --pdk-tech       .subckt subservient i_clk i_rst
+                                                i_sram_rdata[0] …
+
+    The PDK ROOT comes from the same `libs.ref` split `_synth_excluded_patterns`
+    already uses, so the two cannot drift; the tech file is then LISTED in the
+    container rather than assumed, and an absent one returns None so the caller
+    discloses instead of passing a path that is not there.
+    """
+    lib = (getattr(pdk, "liberty", "") or "")
+    parts = lib.split("/")
+    if "libs.ref" not in parts:
+        return None
+    root = "/".join(parts[:parts.index("libs.ref")])
+    if not root:
+        return None
+    try:
+        rc, out, _ = _docker_exec(
+            container, f"ls {root}/libs.tech/magic/*GDS*.tech 2>/dev/null")
+    except Exception:                                     # noqa: BLE001
+        return None
+    if rc != 0:
+        return None
+    hits = [l.strip() for l in (out or "").splitlines() if l.strip()]
+    return hits[0] if hits else None
+
+
 def _klayout_restore_port_labels(project: Path, top: str, pdk: PdkConfig,
                                  container: str, gds_path: Path,
                                  def_file: Path,
@@ -17262,12 +17300,17 @@ def _klayout_restore_port_labels(project: Path, top: str, pdk: PdkConfig,
     pnr_dir = _pl.pnr_dir(project)
     prog = _ship_program("def_gds_port_power_restore.py", pnr_dir)
     labeled = pnr_dir / f"{top}.labeled.gds"
+    # #630 — tell the producer which layers this PDK declares for PORT labels.
+    # Without it the labels go only on layer 100, which a Magic-based extractor
+    # does not read, and the restore succeeds while the ports stay unnamed.
+    _mtech = _resolve_magic_gds_tech(pdk, container)
     cmd = (
         f"export QT_QPA_PLATFORM=offscreen && "
         f"python3 {_to_container_path(str(prog), container)} "
         f"--gds-in {_to_container_path(str(gds_path), container)} "
         f"--def-file {_to_container_path(str(def_file), container)} "
         f"--gds-out {_to_container_path(str(labeled), container)}"
+        + (f" --pdk-tech {_mtech}" if _mtech else "")
     )
     rc, out, err = _docker_exec(container, cmd,
                                 marker=_to_container_path(str(prog), container))
@@ -17279,7 +17322,11 @@ def _klayout_restore_port_labels(project: Path, top: str, pdk: PdkConfig,
             return False, f"restore wrote {labeled.name} but swap failed: {exc}"
         tail = "; ".join(l for l in (out or "").splitlines()
                          if l.startswith("restored:"))
-        return True, f"port labels + rail markers restored ({tail})"
+        _tn = (f"; PDK port-label layers from {_mtech}" if _mtech else
+               "; NO PDK magic *-GDS.tech resolved — labels are on the "
+               "KLayout contract layer ONLY, which a Magic-based extractor "
+               "does not read (vibe-ic#630)")
+        return True, f"port labels + rail markers restored ({tail}){_tn}"
     return False, f"port-label restore NONFATAL: rc={rc} {(out + err)[-300:]}"
 
 
