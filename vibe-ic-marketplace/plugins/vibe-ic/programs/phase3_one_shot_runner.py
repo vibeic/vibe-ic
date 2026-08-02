@@ -13693,9 +13693,31 @@ def _v1_8_100_routing_layer_range(pdk, project, container
             floor_i += 1
         if floor_i >= len(order):               # every layer is pin-dominated
             return None
+        # The walk above stops on the first layer pin access does NOT use, and
+        # taking THAT as the floor puts every pin-access layer OUT of the signal
+        # range. That is not a conservative choice, it is an unroutable one:
+        # global routing emits the guides of a net whose pins all fall in one
+        # GCell on the PIN layers themselves, so such a net arrives at detailed
+        # routing with all of its guides on layers the router has just been
+        # forbidden to use, and TritonRoute aborts the WHOLE design with
+        #   [ERROR DRT-0218] Guide is not connected to design for net <n>
+        # MEASURED on sky130_fd_sc_hd (ports li1 1711 / met1 966 of 3579, so
+        # both are pin-dominated and the old rule returned met2): floor met2
+        # -> DRT-0218 on 2 of 6735 nets and ZERO nets routed; floor met1 ->
+        # "Number of violations = 0", all 6735 nets routed, and met1 alone
+        # carries 107955 um of the 242485 um of signal wire. Excluding it was
+        # never affordable.
+        #
+        # INVARIANT: the topmost pin-access layer MUST stay inside the signal
+        # range. Layers below it may still be excluded (on sky130 that keeps
+        # signal off the high-resistance li1 local-interconnect layer), which
+        # is the whole benefit this derivation was written for.
+        floor_i = max(0, floor_i - 1)
         why_floor = (f"cell ports/layer {[(n, cnt.get(n, 0)) for n in lower]} "
                      f"of {total}; pin-access layers {dominated}; "
-                     f"signal floor = {order[floor_i]}")
+                     f"signal floor = {order[floor_i]} (topmost pin-access "
+                     f"layer — excluding it strands single-GCell nets whose "
+                     f"guides global routing emits on the pin layers)")
 
     # --- ceiling: the design's own declared RT_MAX_LAYER, else the top layer ---
     ceil_i = len(order) - 1
