@@ -403,6 +403,13 @@ run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary
 # or a gate whose rules changed without re-review — fails.
 run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py"
 
+# The flow-gate grid: recompute every dimension decidable from the flow source,
+# and name the ones that are not. 315 of 504 cells are now recomputed; the other
+# 189 are reported as NOT DERIVABLE with the reason, which is what stops the page
+# claiming they are live. D3 in particular is a fact about a RUN — the page's
+# framing is wrong for it, not merely stale.
+run "flow-gate grid" "$PLUGIN" python3 programs/flow_gate_grid.py
+
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
 gate_dispatch_finish
