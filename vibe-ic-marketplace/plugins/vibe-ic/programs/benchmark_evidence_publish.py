@@ -483,6 +483,38 @@ _CITED_RE = re.compile(
     r"(?:" + "|".join(re.escape(e) for e in _CITED_EXT) + r")")
 
 
+def _gate_citations(doc: Path) -> set:
+    """The citations `evidence_citation_resolves_check` would find in `doc`.
+
+    ONE definition of "a citation", borrowed from the gate rather than
+    re-derived. `_CITED_RE` above only matches a path ROOTED at a known
+    published prefix (`phaseN/stageN`, `reports`, `steps`), and this function
+    only ever scanned `*.json`. Two real citations in the caravel cell sat
+    outside both: `RESULT.md` cites `sta_mcorner_ocv.rpt` (Markdown, and a bare
+    filename), and `quartus_map_audit.json` carries `[compile_log]
+    fpga/compile.log` (a JSON KEY whose value starts at no known prefix).
+
+    Neither appeared in CITATION_ROUTING.txt, so the record silently answered
+    for a narrower set than the one a reader actually follows — and the gate
+    and the record disagreed about the same cell. A disclosure that does not
+    cover a citation is indistinguishable, to a reader, from one that says the
+    citation is fine.
+
+    Degrades to nothing if the gate cannot be imported: this must never be the
+    reason a publish fails."""
+    try:
+        import evidence_citation_resolves_check as _g       # sibling program
+    except Exception:
+        return set()
+    try:
+        if doc.suffix.lower() == ".json":
+            return {tok for _field, tok in _g._json_artifact_refs(doc)}
+        text = doc.read_text(errors="replace")
+        return {t for t in _g._CITE_RE.findall(text) if _g._is_citation(t)}
+    except Exception:
+        return set()
+
+
 def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
     """Every evidence path the STAGED tree's own JSONs cite, and whether it
     resolves inside the published cell.
@@ -501,7 +533,7 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
     # building this: the first version attributed citations to a directory that
     # is not in the published tree at all. Same defect this repo fixed in four
     # programs (#447) — reproduced here, in the fix for it.
-    docs = sorted(dest.rglob("*.json"))
+    docs = sorted(dest.rglob("*.json")) + sorted(dest.rglob("*.md"))
     docs = _published_tree.filter_to_published(dest, docs)
     for doc in docs:
         try:
@@ -511,7 +543,8 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
         rel_doc = doc.relative_to(dest).as_posix()
         asserted = _citations_under_a_pass(text)
         absolute = _absolute_citation_values(text)
-        for cited in sorted(set(_CITED_RE.findall(text)) | absolute):
+        for cited in sorted(set(_CITED_RE.findall(text)) | absolute
+                            | _gate_citations(doc)):
             key = (rel_doc, cited)
             if key in seen:
                 continue

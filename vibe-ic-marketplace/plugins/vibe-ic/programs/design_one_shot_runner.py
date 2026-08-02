@@ -11267,7 +11267,16 @@ def step_emit_phase2_manifests(project: Path,
         "skip_reason": (None if sof_present
                         else "not_attempted" if fpga_compile_step is None
                         else "attempted_incomplete"),
-        "compile_log": "fpga/compile.log",
+        # NAMED ONLY IF IT IS THERE (#645 landing). This was the literal
+        # "fpga/compile.log" unconditionally, so a SKIP payload — `audited:
+        # false`, no compile attempted — still pointed a reader at a log the
+        # deliverable does not carry. The key stays present (four consumers key
+        # on this shape and fields are ADDED, never removed); the VALUE becomes
+        # None when there is nothing to follow, and `evidence` below already
+        # says why. A field that names a proof when there is no proof reads
+        # exactly like one that has it.
+        "compile_log": ("fpga/compile.log"
+                        if (project / "fpga/compile.log").is_file() else None),
         "evidence": (fpga_compile_step.detail if fpga_compile_step
                      else "fpga_compile not run"),
         "audited": False,

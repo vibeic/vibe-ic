@@ -248,6 +248,10 @@ def _simulate(rtl: str, module: str, outport: str, width: int, clk: str,
         (d / "tb.v").write_text(
             _build_tb(module, outport, width, clk, rst, pol, str(res)))
         try:
+            # watchdog-exempt: bounded two-file iverilog compile of a generated
+            # TB against one module's RTL — a fixed, small elaboration, not an
+            # open-ended EDA run. The sibling oracle checks carry the same
+            # marker for the same shape.
             b = subprocess.run(
                 ["iverilog", "-g2012", "-o", str(d / "a.out"),
                  str(d / "dut.v"), str(d / "tb.v")],

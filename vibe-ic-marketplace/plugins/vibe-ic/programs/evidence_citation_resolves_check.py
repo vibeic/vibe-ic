@@ -256,12 +256,75 @@ def _json_artifact_refs(path: Path) -> List[Tuple[str, str]]:
     return out
 
 
+# ── DISCLOSED citations (vibe-ic#448 + the caravel landing) ────────────────
+#
+# `CITATION_ROUTING.txt` is the per-cell record of whether a reader can follow
+# each citation, and OUT_OF_PUBLISHED_SCOPE is the decision it exists to
+# express: the publisher copies phase1/, phase2/, phase3/reports/ and reports/,
+# so a run-directory citation is correct WHERE THE RUN PUT IT and unfollowable
+# HERE. That is a DISCLOSURE, not a hole — the reader is told, in a tracked
+# artefact, exactly what they cannot reach.
+#
+# This gate used to count those as dangling, so the two mechanisms built for the
+# same problem returned different verdicts on the same citation, and a cell that
+# had done the disclosure correctly still could not land.
+#
+# ONLY the two decisions that give a STRUCTURAL reason the reader cannot follow
+# it: the publisher's layout excludes the path, or the path is absolute and
+# therefore unfollowable on any machine but the author's. Both are facts about
+# the deliverable, and both are checkable.
+#
+# `DANGLING` and `DANGLING_UNDER_PASS` are deliberately NOT honoured. They mean
+# "the publisher found no file", which is the HOLE, not a reason for it — and
+# honouring them would let any new hole be laundered by writing one line into a
+# routing file, which is precisely the shrink-only baseline discipline this gate
+# exists to enforce. Considered and rejected while wiring this: it would have
+# cleared the two remaining caravel findings and made the baseline meaningless.
+#
+# A RESOLVES row can never suppress a finding here — and cannot lie either,
+# since `citation_routing_is_true_check` blocks a RESOLVES row whose file is not
+# findable from the cell as committed.
+_ROUTING_NAME = "CITATION_ROUTING.txt"
+_DISCLOSURE_DECISIONS = {"OUT_OF_PUBLISHED_SCOPE", "UNFOLLOWABLE_ABSOLUTE"}
+
+
+def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], str]:
+    """{(doc_rel_to_ROOT, cited): decision} for every disclosure recorded in a
+    TRACKED routing file. Untracked records are ignored: a disclosure that is
+    not published cannot inform a reader."""
+    out: Dict[Tuple[str, str], str] = {}
+    names = ([t for t in tracked if t.endswith("/" + _ROUTING_NAME)]
+             if tracked is not None else
+             [str(p.relative_to(root)) for p in root.rglob(_ROUTING_NAME)])
+    for rel in sorted(names):
+        cell = (root / rel).parent
+        try:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") or " :: " not in s:
+                continue
+            rest, _, decision = s.rpartition(" ")
+            if decision not in _DISCLOSURE_DECISIONS or " :: " not in rest:
+                continue
+            doc, _, cited = rest.partition(" :: ")
+            try:
+                key_doc = (cell / doc.strip()).relative_to(root).as_posix()
+            except ValueError:
+                continue
+            out[(key_doc, cited.strip())] = decision
+    return out
+
+
 def scan(root: Path,
          tracked: Optional[set] = None) -> Tuple[List[Dict[str, str]], int, int]:
     """Return (dangling, cited_total, docs_scanned). Only TRACKED documents
     are scanned and only TRACKED artifacts satisfy a citation when `tracked`
     is available — see `tracked_files`."""
     dangling: List[Dict[str, str]] = []
+    disclosed = _disclosed_map(root, tracked)
     cited = 0
     docs = 0
     # ENUMERATE FROM THE TRACKED LIST, never from a filesystem walk. A
@@ -284,10 +347,10 @@ def scan(root: Path,
                 continue
             cited += 1
             if resolve_citation(md, tok, root, tracked) is None:
-                dangling.append({
-                    "doc": str(md.relative_to(root)),
-                    "citation": tok,
-                })
+                _d = str(md.relative_to(root))
+                if (_d, tok) in disclosed:
+                    continue
+                dangling.append({"doc": _d, "citation": tok})
     _jsons = (sorted(root / t for t in tracked if t.lower().endswith(".json"))
               if tracked is not None else sorted(root.rglob("*.json")))
     for js in _jsons:
@@ -297,10 +360,10 @@ def scan(root: Path,
         for field, tok in refs:
             cited += 1
             if resolve_citation(js, tok, root, tracked) is None:
-                dangling.append({
-                    "doc": str(js.relative_to(root)),
-                    "citation": f"[{field}] {tok}",
-                })
+                _d = str(js.relative_to(root))
+                if (_d, tok) in disclosed:
+                    continue
+                dangling.append({"doc": _d, "citation": f"[{field}] {tok}"})
     return dangling, cited, docs
 
 

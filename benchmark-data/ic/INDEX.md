@@ -11,17 +11,18 @@ This tree holds converged evidence AND runs that did not converge, and the folde
 
 | classification | cells |
 |---|---|
-| CONVERGED EVIDENCE | 3 |
+| CONVERGED EVIDENCE | 4 |
 | RETAINED FAILURE | 12 |
 | UNAUDITED RECORD | 13 |
-| **total** | **28** |
+| **total** | **29** |
 
-## CONVERGED EVIDENCE — 3
+## CONVERGED EVIDENCE — 4
 
 The cell's own audit artefact reads PASS or PASS_WITH_WAIVERS. This is what the project means when it says a cell converged.
 
 | cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
 |---|---|---|---|---|---|---|
+| `caravel_user_project/v1.9.43_sky130A` | PASS_WITH_WAIVERS | P35 F0 M0 W3 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | PASS_WITH_WAIVERS | yes | corpus member — walked by both blocking corpus gates |
 | `spm/v1.5.58_ihp-sg13g2` | PASS_WITH_WAIVERS | P35 F0 M0 W3 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged; the real-GDS source for #287/#291 and the formal-evidence-chain repro for #412/#417/#418/#420 |
 | `spm/v1.5.65_sky130A` | PASS_WITH_WAIVERS | P35 F0 M0 W3 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged; the byte-identical witness run the #235 fix landed against, and the corpus #421/#441 measured gate coverage on |
 | `spm/v1.5.66_gf180mcuD` | PASS_WITH_WAIVERS | P33 F0 M0 W4 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged; repro for #363 (EM coordinates outside the die) and second site of the #366/#381 formal false-PASS |

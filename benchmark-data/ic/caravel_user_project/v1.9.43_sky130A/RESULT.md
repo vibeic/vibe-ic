@@ -39,7 +39,7 @@ sign-off: 5 of 5 declared sign-off gate(s) PASSED
   PASS  step11_dft_scan_insertion  33 internal + 0 boundary scan cells; input flops=33; chain covers every flop=True
 ```
 
-The SS-corner setup violation that #604 was about stays closed — `sta_mcorner_ocv.rpt`,
+The SS-corner setup violation that #604 was about stays closed — `reports/phase3/sta_mcorner_ocv.rpt`,
 liberty `sky130_fd_sc_hd__ss_100C_1v60.lib`, SPEF `user_project_wrapper.max.spef`:
 `worst slack max 7.77 … 7.77 slack (MET)`, `tns max 0.00`; FF-hold corner
 `worst slack min 0.41 … slack (MET)`; `post_route_summary.json real_violation_found=false`.

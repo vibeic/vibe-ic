@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1031
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1031)
+- **Total programs (excluding helpers / shims):** 1035
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1035)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1022 |
+| `any` | 1026 |
 
 ## Alphabetical listing
 
@@ -176,11 +176,13 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ci_harness_timeout_ceiling_check` | any | — | a test's own subprocess timeout must be able to FIRE under the pytest harness that bounds it. |
 | `ci_ran_at_all_check` | any | — | Did CI actually run on this commit, or has it not run at all? |
 | `ci_targeted_test_select` | any | — | pick a FAST targeted pytest subset for the patch-cadence gatekeeper CI gate. |
+| `citation_routing_is_true_check` | any | — | CITATION_ROUTING.txt says whether a reader can follow each citation. Check it. |
 | `clause_smoke_tb` | any | — | ORGANIC #740 (G2) [chip-AGNOSTIC] |
 | `clock_cascade_synthesis_check` | any | — | refuse a top-level RTL that ties every submodule's clock port to a single wire when L9 `clock_binding` declares ≥2 distinct clocks for ≥2... |
 | `clock_contract` | any | — | one clock name declares exactly one period. |
 | `clock_divider_period_check` | any | v0.116 | Detect clock-divider toggle patterns whose period does NOT match the |
 | `clock_divider_phase_form_check` | any | — | deterministic emit gate for the odd / double-edge clock-divider PHASE-FORM trap. |
+| `clock_divider_ratio_oracle_check` | any | — | deterministic emit gate that MEASURES a clock divider / generator's produced waveform and compares it to the ratio the SPEC states, via a... |
 | `clock_domain_reg_crossing_check` | any | — | RTL-level clock-domain-crossing screen. |
 | `clock_plan_check` | any | — | Step 16 (Clock planning) substance gate. |
 | `clock_scale_consistency_check` | any | — | Catch un-rescaled threshold values. |
@@ -391,6 +393,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gameable_placeholder_scan` | any | — | deterministic half of the compliance-gate-spot-check "gameability scan" (Step 3, first three bullets). |
 | `gap_reset_granularity_check` | any | — | deterministic compliance check derived from <chip-class> v041 fresh-agent debug (bug #6, the final blocker). |
 | `gate_cli_mutation_probe` | any | — | Does anything notice when a gate is made unable to fail? |
+| `gate_directed_rtl_repair` | any | — | act on a blocking gate's OWN verdict instead of giving up. |
 | `gate_discloses_denominator_check` | any | — | a PASS must say how much it looked at. |
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
 | `gate_host_independence_check` | any | — | the same commit must give the same verdict. |
@@ -782,6 +785,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `qsf_gen` | any | Wave 72 | auto-generate Quartus QSF (FPGA pin assignments). |
 | `qspi_ospi_protocol_synth` | any | v0.1.91 | Quad/Octal SPI (QSPI/OSPI) — JEDEC Expanded SPI (xSPI, JESD251) protocol synth helper. |
 | `quartus_map_audit` | any | — | Scan Quartus .map.rpt for silent-failure indicators. |
+| `ramp_waveform_oracle_check` | any | — | deterministic gate that MEASURES a multi-bit monotonic-ramp / triangle / sawtooth output and compares it to the bounds and step the SPEC ... |
 | `readme_class_detector` | any | — | README-token IC class detector (v1.6.522). |
 | `readme_deep_parser` | any | — | Capability 1 of GitHub issue #27. |
 | `readme_ppa_extractor` | any | — | for #36 Bug 10: PPA implementation-results table picker. |
@@ -1103,7 +1107,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1022 programs)
+### `any` (1026 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1254,11 +1258,13 @@ _(no programs in this group)_
 - `ci_harness_timeout_ceiling_check` — a test's own subprocess timeout must be able to FIRE under the pytest harness that bounds it.
 - `ci_ran_at_all_check` — Did CI actually run on this commit, or has it not run at all?
 - `ci_targeted_test_select` — pick a FAST targeted pytest subset for the patch-cadence gatekeeper CI gate.
+- `citation_routing_is_true_check` — CITATION_ROUTING.txt says whether a reader can follow each citation. Check it.
 - `clause_smoke_tb` — ORGANIC #740 (G2) [chip-AGNOSTIC]
 - `clock_cascade_synthesis_check` — refuse a top-level RTL that ties every submodule's clock port to a single wire when L9 `clock_binding` declares ≥2 distinct clocks for ≥2...
 - `clock_contract` — one clock name declares exactly one period.
 - `clock_divider_period_check` — Detect clock-divider toggle patterns whose period does NOT match the  _[v0.116]_
 - `clock_divider_phase_form_check` — deterministic emit gate for the odd / double-edge clock-divider PHASE-FORM trap.
+- `clock_divider_ratio_oracle_check` — deterministic emit gate that MEASURES a clock divider / generator's produced waveform and compares it to the ratio the SPEC states, via a...
 - `clock_domain_reg_crossing_check` — RTL-level clock-domain-crossing screen.
 - `clock_plan_check` — Step 16 (Clock planning) substance gate.
 - `clock_scale_consistency_check` — Catch un-rescaled threshold values.
@@ -1466,6 +1472,7 @@ _(no programs in this group)_
 - `gameable_placeholder_scan` — deterministic half of the compliance-gate-spot-check "gameability scan" (Step 3, first three bullets).
 - `gap_reset_granularity_check` — deterministic compliance check derived from <chip-class> v041 fresh-agent debug (bug #6, the final blocker).
 - `gate_cli_mutation_probe` — Does anything notice when a gate is made unable to fail?
+- `gate_directed_rtl_repair` — act on a blocking gate's OWN verdict instead of giving up.
 - `gate_discloses_denominator_check` — a PASS must say how much it looked at.
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_
 - `gate_host_independence_check` — the same commit must give the same verdict.
@@ -1856,6 +1863,7 @@ _(no programs in this group)_
 - `qsf_gen` — auto-generate Quartus QSF (FPGA pin assignments).  _[Wave 72]_
 - `qspi_ospi_protocol_synth` — Quad/Octal SPI (QSPI/OSPI) — JEDEC Expanded SPI (xSPI, JESD251) protocol synth helper.  _[v0.1.91]_
 - `quartus_map_audit` — Scan Quartus .map.rpt for silent-failure indicators.
+- `ramp_waveform_oracle_check` — deterministic gate that MEASURES a multi-bit monotonic-ramp / triangle / sawtooth output and compares it to the bounds and step the SPEC ...
 - `readme_class_detector` — README-token IC class detector (v1.6.522).
 - `readme_deep_parser` — Capability 1 of GitHub issue #27.
 - `readme_ppa_extractor` — for #36 Bug 10: PPA implementation-results table picker.

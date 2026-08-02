@@ -215,6 +215,11 @@ run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_p
 # vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log
 # is unverifiable, and the failure is silent.
 run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_resolves_check.py"
+# The record the gate above now TRUSTS for its disclosures. It may only say
+# a citation resolves when it does — verified against the cell as committed,
+# because the publisher computes the decision against the tree it had and
+# nothing re-derived it afterwards (8 false RESOLVES rows, measured).
+run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is_true_check.py" --root "$ROOT"
 
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.

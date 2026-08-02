@@ -187,6 +187,11 @@ DISPOSITION: Dict[Tuple[str, str], Tuple[str, str, str]] = {
         "SystemRDL `@` is a BYTE address; L4 states no unit (see --address-unit)"),
     ("register", "address_int"): (
         D_NATIVE, "@ <address>", "same address, pre-parsed"),
+    ("register", "addr_hex"): (
+        D_NATIVE, "@ <address>",
+        "the same address as a hex STRING ('0x0000'); SystemRDL `@` takes a "
+        "numeric literal and prints its own radix, so the text form carries "
+        "nothing `address`/`address_int` does not already export"),
     ("register", "offset"): (D_NATIVE, "@ <address>", ""),
     ("register", "offset_h"): (D_NATIVE, "@ <address>", ""),
     ("register", "sub_address_hex"): (
