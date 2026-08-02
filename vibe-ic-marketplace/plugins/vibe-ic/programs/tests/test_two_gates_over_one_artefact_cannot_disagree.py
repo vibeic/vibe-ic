@@ -212,6 +212,22 @@ endmodule
 
 # ── a GDS carrying real BOUNDARY records, built here so the fixture needs no
 #    binary blob checked in and no PDK of any kind.
+#
+#: Database unit of the GDS below, in microns. The UNITS record declares
+#: (1e-3 user-units-per-db-unit, 1e-9 metres-per-db-unit), so one db unit is
+#: one nanometre and 1000 of them are one micron.
+_GDS_DBU_PER_UM = 1000
+#: The outline the GDS covers, in microns, and it is `_LEF`'s `SIZE` READ BACK
+#: rather than a second number that has to be kept equal to it by hand. The
+#: fixture's own docstring promises that everything a VALUE rule could catch is
+#: clean; `analog_lef_gds_outline_check` is a value rule over exactly this pair,
+#: and before this was derived the two numbers were 20 um and 2 um — Δ900 %
+#: against a 2 % tolerance, which pinned A8 at FAIL in every variant and hid
+#: whatever the variants were supposed to be measuring at that step.
+_GDS_OUTLINE_UM = float(
+    re.search(r"SIZE\s+([\d.]+)\s+BY\s+([\d.]+)\s*;", _LEF).group(1))
+
+
 def _gds_rec(rtype: int, dtype: int, payload: bytes = b"") -> bytes:
     return struct.pack(">HBB", 4 + len(payload), rtype, dtype) + payload
 
@@ -238,11 +254,19 @@ def _gds_bytes(cellname: str) -> bytes:
     out += _gds_rec(0x03, 5, _gds_real8(1e-3) + _gds_real8(1e-9))
     out += _gds_rec(0x05, 2, stamp)
     out += _gds_rec(0x06, 6, nm)
-    for i, (lay, w) in enumerate(((66, 2000), (67, 1400), (68, 900), (69, 600))):
+    # Four nested boundaries, the outermost spanning the WHOLE declared
+    # outline so the bounding box the outline gate measures is `_LEF`'s own
+    # `SIZE`. The inner three keep the original relative geometry; only the
+    # scale is derived, so the fixture still exercises "several boundaries on
+    # several layers" and no longer trips a value rule while doing it.
+    full = round(_GDS_OUTLINE_UM * _GDS_DBU_PER_UM)
+    for i, (lay, frac) in enumerate(
+            ((66, 1.0), (67, 0.7), (68, 0.45), (69, 0.3))):
         out += _gds_rec(0x08, 0)
         out += _gds_rec(0x0D, 2, struct.pack(">h", lay))
         out += _gds_rec(0x0E, 2, struct.pack(">h", 20))
-        x0 = y0 = i * 100
+        w = round(full * frac)
+        x0 = y0 = round(full * 0.05) * i
         pts = [(x0, y0), (x0 + w, y0), (x0 + w, y0 + w), (x0, y0 + w), (x0, y0)]
         out += _gds_rec(0x10, 3,
                         b"".join(struct.pack(">ii", a, b) for a, b in pts))
@@ -774,6 +798,35 @@ def test_the_gate_the_flow_declares_for_a8_is_verified_to_agree_too():
     assert _gate_combinator("A8") == "all_of", (
         f"the A8 gate is no longer a conjunction, so a clause that does not "
         f"ask the content question can now certify the step by itself")
+
+
+def test_this_fixtures_package_does_not_trip_the_numeric_clause(tmp_path):
+    """THE BUILDER'S OWN PROMISE, ENFORCED — `_project`'s docstring says
+    everything a VALUE rule could catch is deliberately clean, and for one
+    value rule it was not.
+
+    `analog_lef_gds_outline_check` compares `_LEF`'s `SIZE` against the
+    bounding box of `_gds_bytes`' BOUNDARY records to a 2 % tolerance. The two
+    numbers were written independently — 20 um and 2 um — so the clause failed
+    at Δ900 % on EVERY tree this builder makes. A8 was therefore pinned at
+    FAIL in all four content variants, and the step-level differential the
+    variants exist to expose (`PASS / STRUCTURE-ONLY / PASS / PASS` across
+    design-bound / disclosed / silent / silent — silence outranking disclosure
+    at the step level) was invisible underneath it.
+
+    A fixture that fails a gate for a reason no test is about does not merely
+    waste the gate: it SILENCES every measurement taken over that step. The
+    outline is now derived from `_LEF` rather than written twice, and this
+    pins it, because the next reader of that GDS builder has no other way to
+    find out the two numbers are load-bearing on each other.
+    """
+    cp = _run(PROGRAMS / "analog_lef_gds_outline_check.py",
+              _project(tmp_path, SIZED))
+    assert cp.returncode == 0, (
+        f"the shared builder's hardmacro fails the numeric A8 clause "
+        f"(rc={cp.returncode}) — every variant measured over A8 is pinned by "
+        f"a fixture defect rather than by the content value under test:\n"
+        f"{cp.stdout}{cp.stderr}")
 
 
 #: Every answer an artefact can give, including the three ways of declining.
