@@ -1,0 +1,30 @@
+{
+  "program": "eda_report_audit:antenna",
+  "passed": true,
+  "findings": [
+    {
+      "rule": "ANTENNA_NO_TOOL_SIGNATURE",
+      "severity": "ERROR",
+      "message": "report lacks any known antenna tool signature (one of: ['openroad', 'check_antenna', 'ANT-', 'antenna check']... ). Hand-typed reports rejected.",
+      "file": "plugin_work/programs/gds_antenna/antenna_config.example.json"
+    },
+    {
+      "rule": "ANTENNA_NO_TOOL_SIGNATURE",
+      "severity": "ERROR",
+      "message": "report lacks any known antenna tool signature (one of: ['openroad', 'check_antenna', 'ANT-', 'antenna check']... ). Hand-typed reports rejected.",
+      "file": "plugin_work/programs/gds_antenna/antenna_config_caa.example.json"
+    },
+    {
+      "rule": "ANTENNA_NO_TOOL_SIGNATURE",
+      "severity": "ERROR",
+      "message": "report lacks any known antenna tool signature (one of: ['openroad', 'check_antenna', 'ANT-', 'antenna check']... ). Hand-typed reports rejected.",
+      "file": "plugin_work/programs/gds_antenna/antenna_config_diode.example.json"
+    }
+  ],
+  "summary": {
+    "files_found": 7,
+    "violations": 0,
+    "clean": true,
+    "tool_authentic": true
+  }
+}
