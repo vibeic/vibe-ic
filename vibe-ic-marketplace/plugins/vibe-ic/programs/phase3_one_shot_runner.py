@@ -28908,6 +28908,37 @@ def _liberty_operating_condition(liberty_path, container: str) -> str:
     return ""
 
 
+def _ir_supply_from_psm_log(log: str,
+                            nominal_v: float = 1.8) -> Tuple[float, bool]:
+    """PSM's reported supply voltage, and whether it is a MEASUREMENT.
+
+    Returns ``(volts, measured)``. Three inputs, three answers:
+
+      * no ``Supply voltage`` line, or an unparseable one -> the nominal, and
+        ``measured=True``: PSM ran, this reader simply could not read the
+        banner, so the historical nominal-based percentage is preserved.
+      * a parsed value of **zero** -> ``measured=False``. Zero is not a 0 V
+        supply; it is what PSM prints when it found no source to analyse on
+        the net — an unconnected macro supply pin, or a rail declared in
+        SPECIALNETS with no geometry under it. Nothing derived from it (a
+        percentage, a budget, a PASS) is a statement about the design, so the
+        caller must publish the absence instead of a number.
+
+    Split out from the JSON builder so the zero case is testable without a
+    container: it reached production as a ZeroDivisionError that aborted the
+    sign-off chain after routing and streamout had already succeeded.
+    chip-AGNOSTIC.
+    """
+    m = re.search(r"Supply voltage\s*:\s*([0-9.eE+\-]+)\s*V", log or "")
+    if not m:
+        return nominal_v, True
+    try:
+        v = float(m.group(1))
+    except ValueError:
+        return nominal_v, True
+    return v, v > 0.0
+
+
 def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
                         container: str, ir_rpt: Path, em_rpt: Path,
                         notes: List[str]) -> Tuple[bool, bool]:
@@ -29057,24 +29088,29 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         # PSM number is a CONSERVATIVE upper bound — a padless core is modelled
         # with PSM's default single-bump supply (PSM-0073), so the real
         # multi-bump/pad power-delivery IR is lower.
-        _vdd_m = re.search(r"Supply voltage\s*:\s*([0-9.eE+\-]+)\s*V", log)
-        try:
-            _vdd_v = float(_vdd_m.group(1)) if _vdd_m else 1.8
-        except ValueError:
-            _vdd_v = 1.8
+        # See `_ir_supply_from_psm_log`: a parsed ZERO is the absence of a
+        # measurement, not a 0 V supply, and everything derived from it (a
+        # percentage, a budget, a PASS) would be a number about nothing.
+        _vdd_v, _supply_measured = _ir_supply_from_psm_log(log)
         _budget_pct = float(getattr(pdk, "ir_budget_pct", None) or 10.0)
         _ir_budget_uv = (_budget_pct / 100.0) * _vdd_v * 1e6
         _worst_ir_uv = worst_ir_v * 1e6
         _bump_m = re.search(r"PSM-0073.*?bump", log)
+        # PSM's own connectivity verdict, kept beside the number it explains.
+        _psm_unconn = re.findall(r"PSM-0039\]\s*(.+)", log)
         (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
             "tool": "openroad-psm",
             "mode": "static_ir_drop",
             "power_nets": power_nets,
             "source": str(ir_rpt.relative_to(project)),
             "worst_ir_uv": _worst_ir_uv,
-            "worst_ir_pct_vdd": round(_worst_ir_uv / (_vdd_v * 1e6) * 100.0, 3),
-            "budget_uv": _ir_budget_uv,
-            "budget_pct_vdd": _budget_pct,
+            "supply_voltage_v": _vdd_v,
+            "supply_measured": _supply_measured,
+            "worst_ir_pct_vdd": (
+                round(_worst_ir_uv / (_vdd_v * 1e6) * 100.0, 3)
+                if _supply_measured else None),
+            "budget_uv": _ir_budget_uv if _supply_measured else None,
+            "budget_pct_vdd": _budget_pct if _supply_measured else None,
             "budget_basis": ("plugin ir_drop_budget_check default (10% VDD, the "
                              "loosest commonly-cited static budget; typical "
                              "5-10%); override via pdk.ir_budget_pct"),
@@ -29082,9 +29118,21 @@ catch {{set_wire_rc -clock -layer {mp}5}}
                              "core -> CONSERVATIVE upper bound; real multi-bump "
                              "power delivery is lower" if _bump_m else
                              "PSM analyze_power_grid"),
-            "verdict": "PASS" if _worst_ir_uv <= _ir_budget_uv else "FAIL",
+            "unconnected_supply_pins": _psm_unconn[:20],
+            "verdict": (("PASS" if _worst_ir_uv <= _ir_budget_uv else "FAIL")
+                        if _supply_measured else "UNMEASURED"),
+            "unmeasured_reason": (None if _supply_measured else (
+                "PSM reported a supply voltage of 0 V: it found no source to "
+                "analyse on the power net(s). No IR percentage or budget "
+                "verdict is derivable from this run; see "
+                "unconnected_supply_pins and the PSM-0069 line in the report.")),
             "evidence": "analyze_power_grid stdout",
         }, indent=2) + "\n")
+        if not _supply_measured:
+            notes.append(
+                "IR-drop UNMEASURED: PSM supply voltage 0 V (no source found "
+                f"on {', '.join(power_nets)}); "
+                f"{len(_psm_unconn)} unconnected supply pin(s) reported")
         ir_ok = True
     else:
         notes.append(f"IR-drop PSM produced no 'IR drop' line (rc={rc})")
