@@ -102,6 +102,9 @@ if [ -n "${PUSH_RANGE:-}" ]; then
            agent_checkin_scope_guard.py --role core-agent --base "$PUSH_BASE"
   run_gate "benchmark evidence structure" \
            benchmark_evidence_structure_check.py --tree benchmark-data --changed-since "$PUSH_BASE"
+  # vibe-ic#635 — a NEW published number must arrive with its composition.
+  run_gate "benchmark run manifest" \
+           benchmark_run_manifest.py check --tree benchmark-data --changed-since "$PUSH_BASE"
   git log --format='%B' "$PUSH_RANGE" > /tmp/gk_push_commit_text.txt 2>/dev/null
   run_gate "git prohibition guard" \
            git_prohibition_guard.py /tmp/gk_push_commit_text.txt
