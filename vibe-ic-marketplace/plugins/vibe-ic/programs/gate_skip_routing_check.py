@@ -274,6 +274,9 @@ _EXCLUDED: Dict[str, str] = {
 #
 # MEASURED 2026-07-28 at v1.7.84 + the four fixes that land with this file:
 # 52 gates carry 97 skip paths that exit 0 where no consumer channel fires.
+# (v1.7.84+ update: +1 gate / +1 path for buffer_occupancy_flag_latency_check
+#  → 53 gates / 98 skip paths; the empty/full stale-pointer latency screen has
+#  the same "no occupancy flag present → SKIP" unrouted branch.)
 # #515 fixed 4 and #521 fixed 19; this is 97 more, and the reason neither
 # earlier round saw them is exactly what #528 says — a sweep whose
 # preconditions decide what it can find reports a clean zero when nothing
@@ -311,6 +314,10 @@ _EXCLUDED: Dict[str, str] = {
 _UNROUTED_INVENTORY: Dict[str, int] = {
     "analog_content_detected_must_emit_l5_check": 1,
     "bram_init_file_actually_loaded_check": 1,
+    # buffer_occupancy_flag_latency_check (empty/full stale-pointer latency
+    # gate) SKIPs (exit 0) on any design with no occupancy flag — an unrouted
+    # skip path, same shape as nba_shift_register_same_cycle_read_check below.
+    "buffer_occupancy_flag_latency_check": 1,
     "byte_assembler_explicit_9bit_reject_check": 5,
     "cmd_buf_index_semantic_consistency_check": 7,
     "connect_vs_send_test_parity_check": 1,

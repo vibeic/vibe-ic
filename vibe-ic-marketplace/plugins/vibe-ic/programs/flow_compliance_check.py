@@ -280,6 +280,15 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "otp_write_lock_gate_check",
     "l12_sequence_implementation_check",
     "nba_addr_read_race_check",
+    # Storage-buffer occupancy flags (empty/full family) registered from a
+    # STALE same-block-advanced pointer settle one cycle late. A FIFO / LIFO /
+    # stack / queue whose `full`/`empty` is `flag <= (ptr == LVL)` in the same
+    # posedge block that does `ptr <= ptr +/- k` samples the OLD pointer, so
+    # the flag asserts one cycle after the push/pop that changed occupancy —
+    # the boundary vector that samples the flag on the transition cycle fails
+    # deterministically. Chip-AGNOSTIC: keys only on the occupancy-flag output
+    # name + an advancing pointer; SKIPs any design without such a flag.
+    "buffer_occupancy_flag_latency_check",
     "sustained_vs_edge_check",
     "transient_signal_latch_check",
     "periodic_timer_vs_rx_activity_check",
