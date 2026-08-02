@@ -20601,6 +20601,34 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
                 svrf = _try_svrf_native_drc(project, top, pdk, container)
                 if svrf is not None:
                     return svrf
+                # `_try_svrf_native_drc` declines for TWO unrelated reasons: the
+                # engine is absent, or there is no LAYOUT to check. Only the
+                # first is an environment gap, and ENV_UNAVAILABLE carries a
+                # WAIVER TIER — so collapsing them lets a missing GDS suppress
+                # the natural verdict of the whole Physical-Verification step
+                # by blaming the image for something the image provides.
+                #
+                # Measured: `command -v svrfdrc` resolved inside the very
+                # container the message named, while the step reported
+                # `svrfdrc buddy was not found on PATH` and the compliance gate
+                # turned Step 31's natural FAIL into WAIVED-DEFERRED. The GDS
+                # was absent because an upstream step had failed and the stream-
+                # out never ran; nothing about the environment was missing.
+                _svrf_bin = _svrfdrc_bin_container(container)
+                _gds_p = _pl.pnr_dir(project) / f"{top}.gds"
+                if _svrf_bin is not None and not _gds_p.is_file():
+                    return StepResult(
+                        "drc", "SKIP", time.time() - t0,
+                        f"DRC_NO_LAYOUT: the native sign-off engine IS present "
+                        f"in container {container!r} ({_svrf_bin}), but there is "
+                        f"no layout to check — {_gds_p} does not exist, so an "
+                        f"upstream step did not stream one out. This is NOT an "
+                        f"environment gap and carries no ENV waiver; fix the "
+                        f"step that produced no GDS and sign-off DRC will run.",
+                        extras={"calibre_drc_deck": pdk.calibre_drc,
+                                "gds": str(_gds_p),
+                                "svrfdrc_bin": _svrf_bin,
+                                "missing_input": "gds"})
                 return StepResult(
                     "drc", "ENV_UNAVAILABLE", time.time() - t0,
                     f"Calibre DRC deck present at {pdk.calibre_drc} but the "
