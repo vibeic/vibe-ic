@@ -1705,6 +1705,42 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
                 "reason": f"functional_mismatch ({m.group(0) if m else 'no summary'})"}
 
 
+def no_sample_disclosure(results, total, npass, ident="design"):
+    """`(count, problems, pct_of_authored, partially_authored)`. vibe-ic#637.
+
+    NEVER AUTHORED is not ANSWERED WRONGLY. Every other way a problem fails to
+    be a real measurement already carries a count and a rate in this summary;
+    the one that means THE RUN WAS NOT FINISHED carried neither.
+
+    MEASURED on two PUBLISHED runs, whose summaries say none of this:
+
+        verilogeval_human/run_kimi_k3_20260718  149/156 = 95.51%
+                                                2 no_sample -> 149/154 = 96.75%
+        verilogeval_v2/run_kimi_k3_20260718     147/156 = 94.23%
+                                                4 no_sample -> 147/152 = 96.71%
+
+    Six problems across two published numbers counted as submissions that were
+    wrong, when nothing was submitted.
+
+    It misleads most exactly when it matters most: `no_sample` is the signature
+    of an INCOMPLETE run — an agent that died, hit a quota, or was stopped —
+    which is the state someone opens this file to discover. A scorer invocation
+    over a run that had barely started produced a fully-formed result claiming
+    2.0%; re-scored after it finished, 79.59%.
+
+    DERIVED from the per-result `reason` both shapes already write, so there is
+    no second detector to keep in sync, and the rate EXCLUDES rather than
+    REPLACES the headline.
+    """
+    nosamp = [r for r in results if r.get("reason") == "no_sample"]
+    n_ns = len(nosamp)
+    authored = total - n_ns
+    return (n_ns,
+            [str(r.get(ident, "?")).split("/")[-1] for r in nosamp],
+            round(100.0 * npass / authored, 2) if authored else 0.0,
+            bool(n_ns))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--bench", required=True, help="benchmark name (key in BENCHMARK_REGISTRY.json)")
@@ -1819,6 +1855,29 @@ def main():
     dsus = [r for r in results if r.get("dataset_defect_suspected")]
     n_dsus = len(dsus)
     n_eff_unsuspected = n_eff_satisfiable - n_dsus
+    # NEVER AUTHORED is not ANSWERED WRONGLY (vibe-ic#637). Every other way a
+    # problem fails to be a real measurement already has a count and a rate in
+    # this summary; the one that means THE RUN WAS NOT FINISHED had neither, so
+    # `39/50 = 79.59%` read as "39 of 50 designs solved" when it was "39 of the
+    # 48 that were authored", with two designs that produced nothing counted as
+    # submissions that were wrong.
+    #
+    # It misleads most exactly when it matters most. `no_sample` is the
+    # signature of an INCOMPLETE run — an agent that died, hit a quota, or was
+    # stopped — which is precisely the state someone opens this file to discover.
+    # Measured: a scorer invocation over a run that had barely started wrote a
+    # fully-formed `pass_at_1.json` claiming 2.0%, and nothing in the file said
+    # the run was still going. Re-scored after it finished: 79.59%.
+    #
+    # DERIVED from the per-result `reason` the scorer already writes, in both
+    # shapes, so there is no second detector to keep in sync.
+    #
+    # The rate EXCLUDES them rather than replacing the headline, symmetric with
+    # the dual reports above: "39 of 48 authored" beside "39 of 50 in scope",
+    # neither hiding the other.
+    n_nosamp, nosamp_problems, pct_authored, partially = \
+        no_sample_disclosure(results, n, npass, ident)
+    n_authored = n - n_nosamp
     summary = {
         "benchmark": entry["title"],
         "shape": shape,
@@ -1841,6 +1900,12 @@ def main():
              "evidence": r.get("canonical_evidence", "")} for r in dsus],
         "pass_at_1_excluding_suspected_defects_pct": round(
             100.0 * npass / n_eff_unsuspected, 2) if n_eff_unsuspected else 0.0,
+        "no_sample_count": n_nosamp,
+        "no_sample_problems": nosamp_problems,
+        "pass_at_1_excluding_no_sample_pct": pct_authored,
+        # The one bit a reader most needs and currently has to reconstruct by
+        # counting the `results` array by hand.
+        "partially_authored": partially,
         "results": results,
     }
     (run / "pass_at_1.json").write_text(json.dumps(summary, indent=2) + "\n")
@@ -1850,6 +1915,15 @@ def main():
               f"{summary['pass_at_1_pct_no_skip_excluded']}%)  [Shape {shape}]")
     else:
         print(f"{entry['title']}  pass@1 = {npass}/{n} = {summary['pass_at_1_pct']}%  [Shape {shape}]")
+    if n_nosamp:
+        # Printed AND in the file. A disclosure that does not travel with the
+        # number is not a disclosure: stdout is gone by the time anyone reads
+        # the artefact, and the JSON is what survives, gets copied and quoted.
+        print(f"  ⚠ PARTIALLY-AUTHORED RUN — {n_nosamp} of {n} problem(s) produced "
+              f"no sample at all and are counted as FAIL in the headline. "
+              f"Of the {n_authored} authored: "
+              f"{summary['pass_at_1_excluding_no_sample_pct']}%. "
+              f"Missing: {summary['no_sample_problems']}")
     if nd_pass:
         print(f"  ⚠ discriminating-TB audit: {nd_pass} PASS have a NON-DISCRIMINATING TB "
               f"(a constant-0 stub also passes — benchmark TB defect, counted under the "
