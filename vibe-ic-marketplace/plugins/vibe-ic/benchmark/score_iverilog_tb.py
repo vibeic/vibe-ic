@@ -801,9 +801,12 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
     standalone Shape-B benchmark can have a golden that compiles cleanly yet
     FAILs its own official TB at RUNTIME — a desc<->TB contradiction or a
     handshake race (e.g. a TB holding res_ready tied high for the whole run, or
-    a clock-generator whose golden never prints the pass marker). Such a design
-    is unsatisfiable by ANY spec-compliant submission, so a model FAIL on it must
-    be DISCLOSED as a dataset defect, not charged to the model.
+    a clock-generator whose golden never prints the pass marker). Such a golden may
+    OR MAY NOT indicate an unsatisfiable TB — a wrong reference implementation fails
+    its own TB exactly as an unsatisfiable TB would. So a model FAIL here is DISCLOSED
+    as a SUSPECTED defective golden (non-excluding), never auto-charged as an
+    irreducible dataset defect. (Runtime is unsound for irreducibility; only the
+    COMPILE-level audit — a TB port neither golden nor spec provides — is sound.)
 
     Resolves the golden via `layout.ref_glob` (e.g. `verified_*.v`) in the design
     dir, iverilog -g2012 compiles it with `layout.tb_filename`, runs vvp with
@@ -813,7 +816,14 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
 
     Returns:
       True  — golden COMPILES but FAILs its own TB at runtime (no pass marker, or
-              a fail_regex match) → irreducible dataset defect.
+              a fail_regex match) → the shipped GOLDEN is buggy. This is DISCLOSURE-
+              ONLY (suspected), NOT proof of irreducibility: a runtime functional
+              mismatch cannot distinguish "TB unsatisfiable by anyone" from "the
+              reference is a wrong implementation while a correct submission passes"
+              (measured: radix2_div — golden fails 3/8 of its own TB, yet a correct
+              signed/unsigned divider passes all 8). The caller therefore routes this
+              to the non-excluding `dataset_defect_suspected` channel; it must NEVER
+              be auto-excluded from the denominator.
       False — golden PASSes its own TB at runtime → the design IS satisfiable;
               a candidate FAIL stays a real model FAIL (no flag).
       None  — no determination (no ref_glob, no glob match, no TB, golden fails to
@@ -1519,7 +1529,26 @@ def _score_shape_b(design: str, samples: Path, dataset: Path,
     else:
         gref = _golden_ref_fails_own_tb_runtime(design, dataset, layout, args)
         if gref is True:
-            res["dataset_defect"] = True
+            # DISCLOSURE-ONLY (suspected), NOT auto-exclude. A golden that COMPILES
+            # but FAILs its own TB at RUNTIME proves only that the shipped GOLDEN is
+            # buggy — it is NOT sound proof that the design is unsatisfiable by
+            # anyone. A runtime functional mismatch has two indistinguishable causes:
+            # (a) the TB is genuinely unsatisfiable, or (b) the reference is simply a
+            # wrong implementation while a CORRECT submission still passes. Only (a)
+            # is irreducible, and a golden failing its own TB cannot tell them apart.
+            # MEASURED counter-example: RTLLM `radix2_div`'s golden fails 3/8 of its
+            # own TB (e.g. unsigned 123/123 -> quotient 0x00 instead of 0x01), yet a
+            # correct signed/unsigned radix-2 divider passes all 8 — the design is
+            # satisfiable, so auto-excluding it removed a real, fixable design from
+            # the denominator (a FALSE certificate that inflates the effective rate).
+            # Route to the suspected (non-excluding) channel — the same contract the
+            # comparable golden-disagreement audit (_canonical_disagrees_with_golden)
+            # already obeys: FLAG, never EXCLUDE. Auto-exclusion stays reserved for
+            # the COMPILE-level proven-irreducible class (tb_requires_spec_absent_port
+            # / golden_ref_fails_own_tb_compile), where the TB binds a port neither
+            # the golden nor the spec provides and NO spec-faithful author can satisfy
+            # it. The verdict is unchanged either way (never inflate the pass rate).
+            res["dataset_defect_suspected"] = True
             res["dataset_defect_reason"] = "golden_ref_fails_own_tb_runtime"
     return res
 
