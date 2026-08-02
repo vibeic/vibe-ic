@@ -1358,6 +1358,45 @@ def _resolve_top_module_text(mod_texts: Dict[str, str], top_name: str,
     return None
 
 
+def _repair_top_in_place(project: Path, rtl_files: List[Path],
+                         top_text: str, spec_text: str) -> Optional[str]:
+    """Try a gate-directed repair of the top module and write it back.
+
+    Returns a human-readable note on success, None when no repair was accepted.
+    The acceptance decision belongs entirely to `gate_directed_rtl_repair`,
+    which re-runs the SAME spec-derived oracle that raised the finding — this
+    helper only locates the file the module text came from and persists the
+    repaired bytes."""
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import gate_directed_rtl_repair as _gdr  # noqa: E402
+    except Exception:
+        return None
+    try:
+        res = _gdr.repair(top_text, spec_text)
+    except Exception:
+        return None
+    if res.get("verdict") != "REPAIRED":
+        return None
+    new_top = res["rtl"]
+    for f in rtl_files:
+        try:
+            txt = f.read_text(errors="replace")
+        except OSError:
+            continue
+        if top_text in txt:
+            try:
+                f.write_text(txt.replace(top_text, new_top, 1))
+            except OSError:
+                return None
+            return (f"{f.name}: worked-example oracle raised "
+                    f"{res['defect']}; repaired via {res['transform']} and "
+                    f"re-verified by the same spec-derived oracle")
+    return None
+
+
 def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     """Run the structural DETERMINISM gates over the authored RTL — the SAME
     gates the benchmark emit path applies (`shape_b_sample_export.guard_export`
@@ -1409,6 +1448,7 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                           f"gate modules unavailable: {e}")
     spec_text = _gather_spec_text(project)
     findings: List[str] = []
+    repairs: List[str] = []
     n_checked = 0
     mod_texts: Dict[str, str] = {}
     for f in rtl_files:
@@ -1449,13 +1489,26 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
             try:
                 o = _wex.analyze(top_text, spec_text)
                 if o.get("verdict") == "BLOCK":
-                    findings.append(
-                        f"{o.get('module', 'top')}: worked-example oracle — RTL "
-                        f"mismatches the spec's disclosed example "
-                        f"({o['inport']}={o['in_bits']} → {o['outport']} expected "
-                        f"{o['out_bits']}); the output must assert in the SAME cycle "
-                        f"as the trigger (a registered Moore output lags one cycle). "
-                        f"{o.get('log', '')}")
+                    # GATE-DIRECTED REPAIR — the oracle has named the defect
+                    # precisely, so try to ACT on it before reporting a bare
+                    # FAIL. `gate_directed_rtl_repair` applies a deterministic
+                    # source transform and accepts it only on this same
+                    # oracle's explicit PASS, so the gate is the acceptance
+                    # test and cannot be weakened by the repair. On success the
+                    # repaired RTL is written back to the file it came from and
+                    # the finding is not raised; on failure the FAIL stands.
+                    repaired = _repair_top_in_place(
+                        project, rtl_files, top_text, spec_text)
+                    if repaired:
+                        repairs.append(repaired)
+                    else:
+                        findings.append(
+                            f"{o.get('module', 'top')}: worked-example oracle — RTL "
+                            f"mismatches the spec's disclosed example "
+                            f"({o['inport']}={o['in_bits']} → {o['outport']} expected "
+                            f"{o['out_bits']}); the output must assert in the SAME cycle "
+                            f"as the trigger (a registered Moore output lags one cycle). "
+                            f"{o.get('log', '')}")
             except Exception:
                 pass
     # clock divider / generator WAVEFORM-MEASUREMENT oracle runs ONCE on the whole
@@ -1476,6 +1529,25 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                     f"measured {wf.get('measured_ratio')}).")
         except Exception:
             pass
+    # multi-bit RAMP / triangle / sawtooth WAVEFORM oracle. `spec_conformance_check`
+    # already carries `waveform-peak-hold-dropped` for this family, but that rule is
+    # STRUCTURAL and by its own docstring "cannot count the hold without simulation";
+    # it says nothing about WHERE the ramp turns or how big each step is. This
+    # MEASURES the bounds, the step and the dwell against what the spec states.
+    # SKIPs unless the prose gives an unambiguous ramp contract; purely additive.
+    if spec_text and mod_texts:
+        try:
+            import ramp_waveform_oracle_check as _rwo  # noqa: E402
+            full_rtl = "\n\n".join(mod_texts.values())
+            rw = _rwo.analyze(full_rtl, spec_text, top_name or None)
+            if rw.get("verdict") == "BLOCK":
+                findings.append(
+                    f"{rw.get('module', 'top')}: ramp waveform oracle — "
+                    f"{rw.get('reason', '')} (measured via a spec-derived "
+                    f"self-testbench: {rw.get('evidence')}).")
+        except Exception:
+            pass
+
     if findings:
         return StepResult(
             "determinism_gates", "FAIL", time.time() - t0,
@@ -1483,11 +1555,15 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
             extras={"gate": "determinism_gates",
                     "source": "shape_b_sample_export.guard_export checks C/D "
                               "(promoted to the shared phase-2 chain)"})
-    return StepResult(
-        "determinism_gates", "PASS", time.time() - t0,
-        f"determinism gates clean over {n_checked} RTL file(s) "
-        f"(clock-divider phase-form + worked-example oracle + clock-divider "
-        f"waveform-ratio oracle; all self-skip when not applicable)")
+    detail = (f"determinism gates clean over {n_checked} RTL file(s) "
+              f"(clock-divider phase-form + worked-example oracle + "
+              f"clock-divider waveform-ratio oracle; all self-skip when not "
+              f"applicable)")
+    if repairs:
+        detail += " | gate-directed repair: " + "; ".join(repairs)
+    return StepResult("determinism_gates", "PASS", time.time() - t0, detail,
+                      extras={"gate_directed_repairs": repairs} if repairs
+                      else None)
 
 
 def step_leaf_typo_aliases(project: Path) -> StepResult:
