@@ -90,6 +90,40 @@ def lef_pg_pins(lef_text: str) -> List[Dict[str, str]]:
     return out
 
 
+# The independence the docstring above calls "the anti-cheat anchor" was stated
+# and never enforced. A synthesiser writes rails INTO this layer, deriving them
+# from the macro PG pins, and those entries were then returned as independent
+# declarations — so every pin matched a rail BY CONSTRUCTION and the
+# "N pins with no matching rail" count could not be non-zero.
+#
+# Measured on a real run: the flow reported `0 POWER/GROUND pin(s) have NO
+# matching supply rail` while OpenROAD's own power-grid analysis on the same DEF
+# reported `Unconnected instance <macro>/VDD` and `PSM-0069 Check connectivity
+# failed`. Both statements were about the same instance. The entries carried
+#     "derived_by":   "l21_macro_supply_rail_synth"
+#     "derived_from": {"macro_lef_pin_use": "POWER", "declared_by_macros": [...]}
+# which says plainly where they came from; nothing read it.
+#
+# Keyed on the PROVENANCE the synthesiser records about itself rather than on a
+# list of synthesiser names, so a new producer is covered the day it is written.
+_SELF_DERIVED_KEYS = ("macro_lef_pin_use", "declared_by_macros", "from_macro_pins")
+
+
+def _derived_from_the_macros_under_test(entry: Dict[str, Any]) -> bool:
+    """Was this rail synthesised FROM the macro pins it would be used to check?
+
+    A declaration derived from its own subject cannot falsify anything about it.
+    Absence of provenance is NOT treated as self-derived: a hand-written rail
+    carries no `derived_from`, and refusing those would lock the door this
+    escape hatch exists to open (#348).
+    """
+    src = entry.get("derived_from")
+    if isinstance(src, dict) and any(k in src for k in _SELF_DERIVED_KEYS):
+        return True
+    by = entry.get("derived_by")
+    return isinstance(by, str) and "macro" in by.lower() and "rail" in by.lower()
+
+
 def declared_rails(l21: Dict[str, Any]) -> List[str]:
     """Rail names the design INDEPENDENTLY declares in its power-intent layer.
 
@@ -101,6 +135,8 @@ def declared_rails(l21: Dict[str, Any]) -> List[str]:
     names: List[str] = []
     for r in (f.get("power_rails") or []):
         if isinstance(r, dict):
+            if _derived_from_the_macros_under_test(r):
+                continue
             v = r.get("rail") or r.get("name")
         else:
             v = r
@@ -108,6 +144,8 @@ def declared_rails(l21: Dict[str, Any]) -> List[str]:
             names.append(v.strip())
     for d in (f.get("power_domains") or []):
         if isinstance(d, dict):
+            if _derived_from_the_macros_under_test(d):
+                continue
             for k in ("rail", "supply", "name"):
                 v = d.get(k)
                 if isinstance(v, str) and v.strip():
@@ -168,9 +206,73 @@ def measured_rails(project: Path) -> List[str]:
             continue
         end = _END_SPECIALNETS_RE.search(txt[m.start():])
         sec = txt[m.start():m.start() + end.start()] if end else txt[m.start():]
-        names = [n for n in _SPECIALNET_NAME_RE.findall(sec) if n]
-        if names:
-            return sorted(set(names))
+        built, bare = _specialnets_with_and_without_conductor(sec)
+        if built or bare:
+            return sorted(built)
+    return []
+
+
+# A SPECIALNETS entry may be a connect-all-by-name and nothing else:
+#
+#     - <RAIL> ( * <RAIL> ) + USE POWER ;
+#
+# one line, no stripe, no via, no followpin. Measured on a real routed DEF beside
+# two real rails:
+#
+#     VSS  33,141 lines   VDD  32,642 lines   third rail  1 line
+#
+# The docstring above argues the DEF is better than a claim because "a rail is
+# here because the PDN built it". That argument is right and this entry does not
+# satisfy it — the PDN did not build anything, the design merely NAMED a net. So
+# the name alone was accepted as physical evidence, and a macro pin bound to that
+# rail counted as covered while carrying no current at all.
+#
+# The tool downstream says so in the same run, vacuously and truthfully:
+#     [INFO PSM-0040] All shapes on net <RAIL> are connected.
+# There are no shapes.
+_CONDUCTOR_RE = re.compile(r"\+\s*(?:ROUTED|FIXED|COVER|SHAPE)\b")
+
+
+def _specialnets_with_and_without_conductor(section: str):
+    """(rails the PDN actually built, rails that are a name and nothing else).
+
+    Split on entry starts rather than on `;`, because a routed entry contains
+    many `;`-free continuation lines and one terminator; the entry boundary is
+    the reliable delimiter.
+    """
+    built, bare = set(), set()
+    for ent in re.split(r"\n(?=\s*-\s+\S)", section)[1:]:
+        m = re.match(r"\s*-\s+(\S+)", ent)
+        if not m:
+            continue
+        body = ent[:ent.find(";") + 1] if ";" in ent else ent
+        (built if _CONDUCTOR_RE.search(body) else bare).add(m.group(1))
+    return built, bare
+
+
+def rails_named_but_not_built(project: Path) -> List[str]:
+    """Rails that appear in SPECIALNETS carrying no conductor.
+
+    Reported rather than silently dropped: a rail the design declared and the
+    PDN did not build is a finding about the PDN, and dropping it from
+    `measured_rails` without saying so would trade one silence for another.
+    """
+    for rel in _DEF_CANDIDATES:
+        p = project / rel
+        if not p.is_file():
+            continue
+        try:
+            txt = p.read_text(errors="replace")
+        except OSError:
+            continue
+        m = _SPECIALNETS_RE.search(txt)
+        if not m:
+            continue
+        end = _END_SPECIALNETS_RE.search(txt[m.start():])
+        sec = txt[m.start():m.start() + end.start()] if end else txt[m.start():]
+        built, bare = _specialnets_with_and_without_conductor(sec)
+        if built or bare:
+            return sorted(bare)
     return []
 
 
