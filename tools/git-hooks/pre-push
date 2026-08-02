@@ -205,7 +205,11 @@ run_gate "marketplace <-> plugin version sync" marketplace_version_sync_check.py
 # it belongs, at the merge, and a push to `main` without a matching stamp is
 # refused exactly as before.
 if [ -n "${PUSH_RANGE:-}" ] && [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
-  STAMP="$REPO_ROOT/.git/gatekeeper-stamp"
+  # `--absolute-git-dir`, not "$REPO_ROOT/.git": in a worktree `.git` is a FILE,
+  # so this looked for a stamp inside a path that is not a directory, found
+  # none, and refused every push from a worktree. Same expression as the writer
+  # in gatekeeper-land.sh — one way to name the stamp, so the two cannot drift.
+  STAMP="$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   HEAD_SHA="$(git rev-parse HEAD)"
   if [ ! -f "$STAMP" ]; then
     echo "pre-push: FAILED — the full suites have not been run for this commit" >&2

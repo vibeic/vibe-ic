@@ -158,10 +158,19 @@ run "worktree unchanged since the gates started" \
 if [ "$FAILED" -eq 0 ]; then
   # Stamp the exact commit these suites were verified against. The hook compares
   # this to what is being pushed, so a later commit invalidates it automatically.
-  git rev-parse HEAD > "$ROOT/.git/gatekeeper-stamp"
+  #
+  # `--absolute-git-dir`, not "$ROOT/.git". In a WORKTREE `.git` is a FILE (a
+  # `gitdir:` pointer), so the redirect died with "Not a directory" and no stamp
+  # was ever written — while the hook, computing the same path the same way,
+  # found no stamp and refused the push. Landing from a worktree was therefore
+  # impossible, and the failure named neither cause. `--absolute-git-dir` gives
+  # the PER-WORKTREE dir (…/.git/worktrees/<name>), which is what this stamp
+  # must be: two worktrees sitting at different commits must not share one, or a
+  # gate run in one would authorise a push from the other.
+  git rev-parse HEAD > "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
 else
-  rm -f "$ROOT/.git/gatekeeper-stamp"
+  rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
 fi
 exit "$FAILED"
