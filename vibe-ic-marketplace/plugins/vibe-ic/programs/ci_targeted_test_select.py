@@ -903,11 +903,16 @@ def main(argv: list[str] | None = None) -> int:
                          "It costs ~3 s over the tests tree and does not change "
                          "what is selected; opting out means the landing is "
                          "stamped without knowing what the selection dropped.")
-    ap.add_argument("--mode", choices=MODES, default=MODE_OWNERSHIP,
-                    help="selection rule (default: %(default)s — the shipped "
-                         "behaviour). 'reference'/'reference-capped' are OPT-IN "
-                         "and cost more; see the module docstring for the "
-                         "measured coverage/cost frontier.")
+    ap.add_argument("--mode", choices=MODES, default=MODE_IMPORT_EDGE,
+                    help="selection rule (default: %(default)s). OWNER DECISION "
+                         "(vibe-ic#565): the default follows the IMPORT EDGES a "
+                         "test declares, not the test's FILENAME. A test named "
+                         "after the chip or the feature rather than after the "
+                         "module it pins was never selected, and a 734-line edit "
+                         "silently reverted a landed fix for three releases "
+                         "because of it. 'ownership' remains available and is "
+                         "now the opt-IN narrowing; see the module docstring for "
+                         "the measured coverage/cost frontier.")
     ap.add_argument("--ref-max-tests", type=int, default=DEFAULT_REF_MAX_TESTS,
                     help="reference-capped only: a stem named by more than this "
                          "many test files contributes nothing through the "

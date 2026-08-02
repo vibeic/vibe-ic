@@ -580,3 +580,36 @@ def test_unparseable_helper_or_test_does_not_silence_the_selector(tmp_path):
     (t / "test_broken.py").write_text("import h\ndef (\n", encoding="utf-8")
     out = set(sel.select_tests(["programs/tests/h.py"], root, plugin_prefix=""))
     assert f"{TESTS_REL}/test_broken.py" in out
+
+
+# ── owner decision (vibe-ic#565): the default follows import edges ──────────
+def test_the_default_mode_is_import_edge():
+    """OWNER DECISION. A test named after the chip or the feature rather than
+    after the module it pins was never selected by filename ownership — and a
+    734-line edit silently reverted a landed fix for three releases because of
+    it.
+
+    MEASURED at the switch, on this repo's own landings:
+
+        ownership     19 files      ~33 s
+        import-edge  184 files     879 s / 6102 tests   (on the heaviest base)
+
+    That cost is the decision, and it is the reason the number is written here
+    rather than left to be rediscovered."""
+    import importlib
+    M = importlib.import_module("ci_targeted_test_select")
+    ap = M.build_parser() if hasattr(M, "build_parser") else None
+    src = __import__("pathlib").Path(M.__file__).read_text(encoding="utf-8")
+    body = "\n".join(l for l in src.splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "default=MODE_IMPORT_EDGE" in body
+    assert "default=MODE_OWNERSHIP" not in body
+
+
+def test_ownership_is_still_reachable_as_an_opt_in():
+    """The narrowing did not disappear — it became opt-IN. A landing that
+    genuinely needs the cheap set must still be able to ask for it, and say so."""
+    import importlib
+    M = importlib.import_module("ci_targeted_test_select")
+    assert M.MODE_OWNERSHIP in M.MODES
+    assert M.MODE_IMPORT_EDGE in M.MODES

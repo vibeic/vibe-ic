@@ -355,6 +355,58 @@ def _f_gds_bad(p: Path) -> None:
     _w(p, "phase3/stage4/foundry_handoff/empty_member.txt", "")
 
 
+def _f_gds_no_labels(p: Path) -> None:
+    """A parseable GDS whose top cell carries NO text, beside a DEF that PLACES
+    a port.
+
+    `gds_port_label_check`'s subject is whether the streamed GDS names every
+    port the DEF places, so neither input alone reaches its comparison: on the
+    bare EMPTY fixture it answered VACUOUS_PASS, and its blocking clause had
+    therefore never been shown to block. That is what step 37 was failing on.
+
+    Geometry but no TEXT records is the smallest input that reaches the
+    comparison and fails it. MEASURED before wiring:
+
+        [FAIL] top.gds: NO_LABELS — top cell 'top' carries 0 text labels
+               while the DEF places 1 port(s)                        rc 1
+    """
+    import struct
+
+    def _rec(rt: int, dt: int, payload: bytes = b"") -> bytes:
+        return struct.pack(">HBB", len(payload) + 4, rt, dt) + payload
+
+    def _r8(v: float) -> bytes:
+        if v == 0:
+            return b"\x00" * 8
+        sign, exp = 0, 64
+        while v >= 1:
+            v /= 16.0
+            exp += 1
+        while v < 1 / 16.0:
+            v *= 16.0
+            exp -= 1
+        return struct.pack(">B", sign | exp) + int(v * (1 << 56)).to_bytes(7, "big")
+
+    nm = b"top\x00"
+    stamp = struct.pack(">12h", *([2026, 8, 1, 0, 0, 0] * 2))
+    g = _rec(0x00, 2, struct.pack(">h", 600))
+    g += _rec(0x01, 2, stamp) + _rec(0x02, 6, nm)
+    g += _rec(0x03, 5, _r8(1e-3) + _r8(1e-9))
+    g += _rec(0x05, 2, stamp) + _rec(0x06, 6, nm)
+    g += _rec(0x08, 0) + _rec(0x0D, 2, struct.pack(">h", 68))
+    g += _rec(0x0E, 2, struct.pack(">h", 20))
+    pts = [(0, 0), (900, 0), (900, 900), (0, 900), (0, 0)]
+    g += _rec(0x10, 3, b"".join(struct.pack(">ii", x, y) for x, y in pts))
+    g += _rec(0x11, 0) + _rec(0x07, 0) + _rec(0x04, 0)
+    (p / "phase3/stage4/gds").mkdir(parents=True, exist_ok=True)
+    (p / "phase3/stage4/gds/top.gds").write_bytes(g)
+    _w(p, "phase3/stage3/pnr/top.def",
+       "VERSION 5.8 ;\nDESIGN top ;\nUNITS DISTANCE MICRONS 1000 ;\n"
+       "PINS 1 ;\n    - a + NET a + DIRECTION INPUT + USE SIGNAL\n"
+       "      + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 2000 ) N ;\n"
+       "END PINS\nEND DESIGN\n")
+
+
 def _f_mfg_bad(p: Path) -> None:
     """Manufacturing intake artefacts that exist and attest NOTHING."""
     m = "phase3/stage5_manufacturing/"
@@ -428,6 +480,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "SDC_BAD": _f_sdc_bad,
     "PNR_BAD": _f_pnr_bad,
     "GDS_BAD": _f_gds_bad,
+    "GDS_NO_LABELS": _f_gds_no_labels,
     "MFG_BAD": _f_mfg_bad,
     "FMEDA_BAD": _f_fmeda_bad,
     "FMEDA_RTL_BLIND": _f_fmeda_rtl_blind,
@@ -499,6 +552,11 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
            "reports/phase3/gds_size.json"): "GDS_BAD",
     ("37", "gds_substance_check . --json reports/phase3/gds_substance.json"):
         "GDS_BAD",
+    # `GDS_BAD`'s 0-byte deliverable does not reach this gate's comparison — it
+    # needs a PARSEABLE GDS and a DEF that places a port, or it answers
+    # VACUOUS_PASS. See `_f_gds_no_labels`.
+    ("37", "gds_port_label_check . --json reports/phase3/gds_port_labels.json"):
+        "GDS_NO_LABELS",
     ("38", "foundry_handoff_package_check . --json "
            "reports/phase3/foundry_handoff_audit.json"): "GDS_BAD",
     ("M1", "mixed_signal_merge_check . --json "
