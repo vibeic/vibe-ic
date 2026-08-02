@@ -5809,11 +5809,142 @@ def autofix_input_reg_port(path: Path) -> Tuple[int, List[str]]:
     return count, dirs
 
 
+# ---------------------------------------------------------------------------
+# ORGANIC-20260803 — ANSI `output` port re-declared as `reg` in the module body.
+#
+# In ANSI-2001 / SystemVerilog port style the direction (and any range) live
+# INSIDE the port-list parentheses:
+#       module m (input clk, output [15:0] p, output rdy);
+# that header entry ALREADY declares `p` (implicitly a net). Re-declaring the
+# same name in the body as a `reg` is a DUPLICATE declaration and hard-ERRORs on
+# every conforming simulator (iverilog 12/14, verilator, the CVDP icarus-13
+# scorer):
+#       error: 'p' has already been declared in this scope.
+#       ...    : It was declared here as a net.
+# A registered output is a single object; the ONLY correct rewrite is to promote
+# the HEADER entry to `output reg` and DELETE the body `reg` decl (preserving any
+# power-up initializer as a standalone `initial NAME = <val>;`).
+#
+# This is DISTINCT from the legal NON-ANSI idiom, which this rule must NEVER
+# touch — there the direction is declared in the BODY, and a separate `reg` is
+# the intended storage decl:
+#       module m (p, rdy);
+#         output [15:0] p;   // direction decl in the BODY (non-ANSI)
+#         reg    [15:0] p;   // separate storage decl — LEGAL, no conflict
+# The discriminator is strictly POSITIONAL: fire ONLY when the `output` appears
+# INSIDE the module port-list parentheses (ANSI) AND the same name is re-declared
+# `reg` AFTER the header close-paren. That pair is always a compile error, so the
+# repair has zero false positives (a legal design cannot contain it).
+# chip-AGNOSTIC: pure Verilog port-direction grammar.
+# ---------------------------------------------------------------------------
+def _module_port_and_body_spans(text: str) -> List[Tuple[int, int, int]]:
+    """Yield (hdr_open_idx, hdr_close_idx, body_end_idx) for each module that
+    uses an ANSI/paren port list. body_end is the module's `endmodule` (or EOF).
+    Depth-matched so nested parens (`#( ... )` params, nested concats) are safe."""
+    ends = [m.end() for m in re.finditer(r'\bendmodule\b', text)]
+    spans: List[Tuple[int, int, int]] = []
+    for hm in re.finditer(r'\bmodule\b\s+\w+\s*(?:#\s*\([^)]*\)\s*)?\(', text):
+        depth, i = 0, hm.end() - 1
+        op = i
+        while i < len(text):
+            c = text[i]
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        cp = i
+        body_end = next((e for e in ends if e > cp), len(text))
+        spans.append((op, cp, body_end))
+    return spans
+
+
+def _find_output_reg_redecls(text: str) -> List[Dict[str, object]]:
+    """Return one dict per ANSI `output` port illegally re-declared as `reg` in
+    the body (the 'already declared' compile error). Empty list on legal code."""
+    hits: List[Dict[str, object]] = []
+    for (op, cp, body_end) in _module_port_and_body_spans(text):
+        header = text[op + 1:cp]
+        hbase = op + 1
+        body = text[cp + 1:body_end]
+        bbase = cp + 1
+        # ANSI output port, one name per `output` keyword, NOT already reg/wire/
+        # logic (those are correct or non-conflicting).
+        for m in re.finditer(
+                r'\boutput\b(?!\s+(?:reg|wire|logic))\s*(?:signed\s+)?'
+                r'(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)', header):
+            name = m.group(1)
+            if name in VERILOG_KEYWORDS:
+                continue
+            reg_re = re.compile(
+                r'\breg\b\s*(?:signed\s+)?(?:\[[^\]]+\]\s*)?'
+                + re.escape(name) + r'\b\s*(=\s*[^;]*?)?\s*;')
+            bm = reg_re.search(body)
+            if not bm:
+                continue
+            hits.append({
+                'name': name,
+                'hdr_start': hbase + m.start(),
+                'hdr_end': hbase + m.end(),
+                'hdr_text': m.group(0),
+                'body_start': bbase + bm.start(),
+                'body_end': bbase + bm.end(),
+                'init': (bm.group(1) or '').strip(),  # e.g. "= 8'b0" or ""
+                'lineno': text[:hbase + m.start()].count('\n') + 1,
+            })
+    return hits
+
+
+def rule_output_port_reg_redeclared(src: str, path: str) -> List[Finding]:
+    findings: List[Finding] = []
+    for h in _find_output_reg_redecls(src):
+        name = h['name']
+        findings.append(Finding(
+            path, int(h['lineno']), 'ERROR', 'output-port-reg-redeclared', str(name),
+            f"ANSI `output {name}` in the port list is ALSO re-declared `reg "
+            f"{name};` in the body — a duplicate declaration that ELAB_ERRORs "
+            f"('{name}' has already been declared in this scope). A registered "
+            f"output is one object: write `output reg [W-1:0] {name}` in the "
+            f"header and delete the body `reg`. rtl_hygiene_lint --fix repairs "
+            f"this deterministically (init preserved as `initial {name}=…;`)."))
+    return findings
+
+
+def autofix_output_reg_redeclared(path: Path) -> Tuple[int, List[str]]:
+    """ORGANIC-20260803 — repair an ANSI `output` port re-declared as `reg` in
+    the body. Promotes the header entry to `output reg` and removes the body
+    `reg` decl, preserving any power-up initializer as a standalone `initial`.
+    Returns (count_fixed, [names]); no-op (0, []) when nothing matches.
+    chip-AGNOSTIC; zero false positives (the pattern is always a compile error)."""
+    text = path.read_text(errors='replace')
+    hits = _find_output_reg_redecls(text)
+    if not hits:
+        return 0, []
+    edits: List[Tuple[int, int, str]] = []
+    names: List[str] = []
+    for h in hits:
+        names.append(str(h['name']))
+        # promote the header entry: `output` -> `output reg`
+        new_hdr = re.sub(r'\boutput\b', 'output reg', str(h['hdr_text']), count=1)
+        edits.append((int(h['hdr_start']), int(h['hdr_end']), new_hdr))
+        # body reg decl: delete, or keep power-up value as a standalone initial
+        init = str(h['init'])
+        repl = f"initial {h['name']} {init};" if init else ""
+        edits.append((int(h['body_start']), int(h['body_end']), repl))
+    for (s, e, r) in sorted(edits, key=lambda x: x[0], reverse=True):
+        text = text[:s] + r + text[e:]
+    path.write_text(text)
+    return len(hits), names
+
+
 def lint_file(path: Path) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
     results = []
     results += rule_input_port_reg(src, str(path))
+    results += rule_output_port_reg_redeclared(src, str(path))
     results += rule_undriven_and_unread(src, str(path))
     results += rule_case_coverage(src, str(path))
     results += rule_if_no_else_latch(src, str(path))
@@ -6151,6 +6282,7 @@ def main():
         cast_total = 0
         inreg_total = 0
         sens_total = 0
+        outreg_total = 0
         for f in args.files:
             p = Path(f)
             if not p.exists():
@@ -6165,6 +6297,14 @@ def main():
             if ir:
                 print(f"{f}: removed illegal `reg` from {ir} input/inout "
                       f"port(s): {irdirs}")
+            # ORGANIC-20260803 — repair an ANSI `output` port re-declared as
+            # `reg` in the body (the 'already declared' duplicate-decl compile
+            # error). Runs alongside the input/inout repair; both are pure
+            # port-grammar rewrites with zero semantic change.
+            orr, orrnames = autofix_output_reg_redeclared(p)
+            if orr:
+                print(f"{f}: promoted {orr} ANSI output port(s) to `output reg` "
+                      f"(removed duplicate body `reg`): {orrnames}")
             n, names = autofix_uninit_registered_output(p)
             if n:
                 print(f"{f}: inserted `initial` power-up 0 for {names}")
@@ -6183,9 +6323,9 @@ def main():
             s, slabels = autofix_incomplete_sensitivity(p)
             if s:
                 print(f"{f}: rewrote incomplete sensitivity list(s) to @(*): {slabels}")
-            if _iv and pre_ok and (ir or n or g or w or s) and not _compiles(p):
+            if _iv and pre_ok and (ir or orr or n or g or w or s) and not _compiles(p):
                 p.write_text(pre_text)
-                ir = n = g = w = s = 0
+                ir = orr = n = g = w = s = 0
                 print(f"WARN fix-reverted-noncompiling: {f} compiled before "
                       f"--fix but not after; ALL fixes reverted (#533 "
                       f"compile-neutrality net — file a backlog with this "
@@ -6195,10 +6335,12 @@ def main():
             cast_total += w
             inreg_total += ir
             sens_total += s
+            outreg_total += orr
         print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s), "
               f"fenced {guarded_total} sim-only assertion construct(s), "
               f"inserted {cast_total} value-identical width cast(s), "
               f"removed illegal `reg` from {inreg_total} input/inout port(s), "
+              f"promoted {outreg_total} duplicate-declared output port(s) to `output reg`, "
               f"rewrote {sens_total} incomplete sensitivity list(s) to @(*)")
         return 0
 
