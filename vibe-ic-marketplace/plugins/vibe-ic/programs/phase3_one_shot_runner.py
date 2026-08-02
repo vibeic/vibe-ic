@@ -28692,6 +28692,14 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         _budget_pct = float(getattr(pdk, "ir_budget_pct", None) or 10.0)
         _ir_budget_uv = (_budget_pct / 100.0) * _vdd_v * 1e6
         _worst_ir_uv = worst_ir_v * 1e6
+        # ONE implementation of this rule, in `psm_analysis_coverage`, so the
+        # runner and its tests cannot drift into two answers about one log.
+        from psm_analysis_coverage import (analysis_coverage, ir_verdict,
+                                           verdict_basis)
+        _cov = analysis_coverage(log, power_nets)
+        _psm_analysed = _cov["analysed"]
+        _psm_failed = _cov["analysis_failed"]
+        _psm_conn = _cov["connectivity"]
         _bump_m = re.search(r"PSM-0073.*?bump", log)
         (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
             "tool": "openroad-psm",
@@ -28709,7 +28717,29 @@ catch {{set_wire_rc -clock -layer {mp}5}}
                              "core -> CONSERVATIVE upper bound; real multi-bump "
                              "power delivery is lower" if _bump_m else
                              "PSM analyze_power_grid"),
-            "verdict": "PASS" if _worst_ir_uv <= _ir_budget_uv else "FAIL",
+            # A NET WHOSE ANALYSIS FAILED CANNOT MAKE THE RESULT BETTER.
+            #
+            # The Tcl wraps every `analyze_power_grid` in a `catch` and prints
+            # `PSM_NONFATAL <net>: <err>` on failure, so the step keeps going —
+            # correct, a failed net must not abort the run. But that marker
+            # appeared exactly ONCE in the whole programs tree, on the line that
+            # writes it: nothing read it.
+            #
+            # The consequence is not a missing warning, it is an inverted one.
+            # A net that failed contributes NO "IR drop" line, so `worst_ir_uv`
+            # is the worst of the nets that WORKED — the failure makes the number
+            # smaller and the verdict likelier to pass. Measured on a real run:
+            # `[ERROR PSM-0069] Check connectivity failed on VDD` beside an IR
+            # verdict of PASS.
+            #
+            # So the verdict now also asks whether every net it was ASKED about
+            # produced an answer. `analysed` / `analysis_failed` travel with it
+            # so a reader re-derives the decision instead of trusting it.
+            "nets_analysed": _psm_analysed,
+            "nets_analysis_failed": _psm_failed,
+            "connectivity_findings": _psm_conn,
+            "verdict": ir_verdict(_worst_ir_uv, _ir_budget_uv, _psm_failed),
+            "verdict_basis": verdict_basis(_psm_failed),
             "evidence": "analyze_power_grid stdout",
         }, indent=2) + "\n")
         ir_ok = True
