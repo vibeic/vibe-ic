@@ -313,6 +313,26 @@ def guard_export(sample: Path, prompt_text: str = "") -> Tuple[bool, List[str]]:
         except Exception:
             pass
 
+    # E. clock divider / generator WAVEFORM-MEASUREMENT oracle. Builds a
+    #    spec-derived self-TB, MEASURES the produced divide ratio / duty / reset
+    #    value, and BLOCKs an UNAMBIGUOUS mismatch — the property class the hidden
+    #    TB checks that the structural gates cannot see (check C is only the odd
+    #    two-edge-OR self-toggle PHASE form; this catches a wrong RATIO / DUTY /
+    #    reset value at any structural form — the freq_divbyeven / freq_divbyfrac
+    #    false certificates). It SKIPs on any ambiguity / tool failure / non-divider
+    #    spec, so it never false-blocks; purely additive (can only add a BLOCK).
+    if prompt_text:
+        try:
+            import clock_divider_ratio_oracle_check as _cdr  # noqa: E402
+            _wf = _cdr.analyze(txt, prompt_text)
+            if _wf.get("verdict") == "BLOCK":
+                problems.append(
+                    f"clock-divider/generator waveform oracle: {_wf.get('reason', '')} "
+                    f"— the spec-stated ratio/duty/reset is not what the RTL produces "
+                    f"(measured via a spec-derived self-testbench, not the hidden TB).")
+        except Exception:
+            pass
+
     # A. standalone compile. An unavailable tool is a NOTE, never a hard FAIL —
     # the structural completeness check (B) still governs the verdict.
     notes: List[str] = []

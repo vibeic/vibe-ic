@@ -1379,6 +1379,11 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
         replays the spec's own cycle-by-cycle input→output example against the
         RTL; a registered (Moore) output that lags one cycle is caught. SKIPs
         unless a complete unambiguous example parses and all ports map.
+      • clock divider/generator WAVEFORM oracle (`clock_divider_ratio_oracle_check`)
+        — MEASURES the produced divide ratio / duty / reset value via a
+        spec-derived self-TB and fails a wrong RATIO/DUTY/reset at ANY code form
+        (freq_divbyeven / freq_divbyfrac false certificates). SKIPs unless the
+        spec is an unambiguous divider/generator contract and the sim runs clean.
 
     A fired gate is a real determinism bug → FAIL (an ECO point), exactly what
     the benchmark path blocks emit on; both gates self-skip otherwise."""
@@ -1398,6 +1403,7 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
             _sys.path.insert(0, str(PROGRAMS_DIR))
         import clock_divider_phase_form_check as _cdp  # noqa: E402
         import worked_example_sequence_oracle_check as _wex  # noqa: E402
+        import clock_divider_ratio_oracle_check as _cdr  # noqa: E402
     except Exception as e:  # pragma: no cover — defensive import guard
         return StepResult("determinism_gates", "SKIP", time.time() - t0,
                           f"gate modules unavailable: {e}")
@@ -1452,6 +1458,24 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                         f"{o.get('log', '')}")
             except Exception:
                 pass
+    # clock divider / generator WAVEFORM-MEASUREMENT oracle runs ONCE on the whole
+    # authored RTL: it builds a spec-derived self-TB, MEASURES the produced divide
+    # ratio / duty / reset value, and FAILs an UNAMBIGUOUS mismatch — the property
+    # the hidden TB checks that the structural gates cannot see (a wrong RATIO/DUTY
+    # at ANY code form; complements the odd two-edge-OR PHASE gate above). SKIPs on
+    # any ambiguity / tool failure / non-divider spec; purely additive.
+    if spec_text and mod_texts:
+        try:
+            full_rtl = "\n\n".join(mod_texts.values())
+            wf = _cdr.analyze(full_rtl, spec_text, top_name or None)
+            if wf.get("verdict") == "BLOCK":
+                findings.append(
+                    f"{wf.get('module', 'top')}: clock-divider/generator waveform "
+                    f"oracle — {wf.get('reason', '')} (measured via a spec-derived "
+                    f"self-testbench; expected ratio {wf.get('expected_ratio')}, "
+                    f"measured {wf.get('measured_ratio')}).")
+        except Exception:
+            pass
     if findings:
         return StepResult(
             "determinism_gates", "FAIL", time.time() - t0,
@@ -1462,8 +1486,8 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     return StepResult(
         "determinism_gates", "PASS", time.time() - t0,
         f"determinism gates clean over {n_checked} RTL file(s) "
-        f"(clock-divider phase-form + worked-example oracle; both self-skip "
-        f"when not applicable)")
+        f"(clock-divider phase-form + worked-example oracle + clock-divider "
+        f"waveform-ratio oracle; all self-skip when not applicable)")
 
 
 def step_leaf_typo_aliases(project: Path) -> StepResult:
