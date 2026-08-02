@@ -9080,6 +9080,66 @@ def main(argv: Optional[List[str]] = None) -> int:
     # carries a ticket id so foundry tape-out review can close them.
     counts["WAIVED"] += len(structural_waivers)
 
+    # THE VIOLATION MUST BE KNOWN BEFORE THE TABLE IS RENDERED.
+    #
+    # It used to be computed ~300 lines below the print loop, so demoting a
+    # contradicted step there changed nothing a reader ever saw — the first
+    # attempt at this fix did exactly that and the table still said PASS.
+    # Detection moves up; the verdict logic below is untouched and simply reads
+    # the list computed here.
+    _ordering_violations: List[Dict[str, Any]] = []
+    try:
+        import flow_step_execution_coverage_check as _cov0
+        _g0 = {str(st.get("id")): [str(e) for e in (st.get("blocks_on") or [])]
+               for st in steps if st.get("id") is not None}
+        _r0 = {"steps": [{"id": r.id, "name": r.name, "status": r.status,
+                          "stage": getattr(r, "stage", "")} for r in results]}
+        _ordering_violations = _cov0.analyze(_r0, _g0).get(
+            "ordering_violations", []) or []
+    except Exception:  # nosec — additive enforcement must never crash the audit
+        _ordering_violations = []
+    # WRITE THE CONTRADICTION BACK INTO THE STEP.
+    #
+    # The violation is already detected and already forces the RUN to FAIL.
+    # What it never did is touch the step's OWN status, because
+    # `compute_cascade` never demotes an already-PASS terminal step — the
+    # comment above says so. So the per-step table published
+    #
+    #     [PASS] Step 37: GDSII output (only if Step 31 PV fully clean)
+    #
+    # beside its own violation line saying step 31 had FAILED. Both are
+    # locally correct and the table showed the weaker one; a reader takes
+    # `37 PASS` to mean the GDS is good.
+    #
+    # A DISTINCT status, not VACUOUS_PASS: that tier means "ran cleanly on
+    # input that did not apply" and deliberately rolls into `pass_count`.
+    # This is the opposite case — the input applied, the step passed, and
+    # something it depends on failed, so the PASS certifies nothing about
+    # the design. Reusing that tier would keep the inflation this fixes.
+    for _v in _ordering_violations:
+        _tid = str(_v.get("terminal_id"))
+        for _r in results:
+            if str(_r.id) != _tid or _r.status != "PASS":
+                continue
+            _r.status = "PASS_VOIDED_BY_DEPENDENCY"
+            # One line per DISTINCT dependency. The violation list carries one
+            # entry per (terminal, dependency) pair and a step can reach the same
+            # failed dependency by several paths, so appending blindly repeats it.
+            _why = (f"PASS voided: dependency [{_v.get('signoff_id')}] "
+                    f"{_v.get('signoff')} = {_v.get('signoff_status')}, so this "
+                    f"step's PASS certifies nothing about the design")
+            _r.reasons = list(getattr(_r, "reasons", []) or [])
+            if _why not in _r.reasons:
+                _r.reasons.append(_why)
+    if _ordering_violations:
+        counts = {k: 0 for k in counts}
+        for _r in results:
+            counts[_r.status] = counts.get(_r.status, 0) + 1
+        counts["WAIVED"] += len(structural_waivers)
+        pass_count = counts["PASS"] + counts["VACUOUS_PASS"]
+
+
+
     # v0.119.53 Wave 21 — `--strict-structural` semantic fix. When
     # `--phase 2 --strict-structural` is requested (and the broader
     # `--strict-step-artifacts` is NOT), verdict scope is the
@@ -9313,6 +9373,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     skipped_str = f"  SKIPPED={counts.get('SKIPPED-CONDITION', 0)}" if counts.get("SKIPPED-CONDITION") else ""
     vacuous_str = (f"  VACUOUS-PASS={counts['VACUOUS_PASS']}"
                    if counts.get("VACUOUS_PASS") else "")
+    # ON THE LINE, or the parts stop summing to the total. The first cut of the
+    # dependency write-back demoted 18 of 63 steps into a bucket this summary
+    # does not print, so the line read 4+16+12+1+1+9+2 = 45 out of 63 and the
+    # other 18 simply vanished — the silent loss this whole change exists to
+    # remove, reintroduced by the change itself.
+    voided_str = (f"  PASS-VOIDED={counts['PASS_VOIDED_BY_DEPENDENCY']}"
+                  if counts.get("PASS_VOIDED_BY_DEPENDENCY") else "")
     incomplete_str = (f"  INCOMPLETE={counts['INCOMPLETE']}"
                       if counts.get("INCOMPLETE") else "")
     # v0.3.5 — #503: split cascade MISSING from independent gaps in the
@@ -9345,7 +9412,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(
         f"  PASS={counts['PASS']}  {fail_str}  "
         f"{missing_str}  WAIVED-DEFERRED={counts['WAIVED']}"
-        f"{dbu_str}{skipped_str}{vacuous_str}{so_str}{incomplete_str}\n"
+        f"{dbu_str}{skipped_str}{vacuous_str}{voided_str}{so_str}{incomplete_str}\n"
     )
     if counts.get("STRUCTURE-ONLY") or so_failing:
         print(
@@ -9363,12 +9430,14 @@ def main(argv: Optional[List[str]] = None) -> int:
              "INCOMPLETE": "…",
              "DEFERRED-BY-UPSTREAM": "~",
              "SKIPPED-CONDITION": "-", "SKIPPED-SETUP-REQUIRED": "!",
-             "VACUOUS_PASS": "○", "STRUCTURE-ONLY": "◐"}
+             "VACUOUS_PASS": "○", "STRUCTURE-ONLY": "◐",
+             "PASS_VOIDED_BY_DEPENDENCY": "⊘"}
     _label = {"PASS": "PASS", "FAIL": "FAIL", "MISSING": "MISSING", "WAIVED": "WAIVED-DEFERRED",
               "DEFERRED-BY-UPSTREAM": "DEFERRED-BY-UPSTREAM",
               "SKIPPED-CONDITION": "SKIPPED-CONDITION",
               "SKIPPED-SETUP-REQUIRED": "SKIPPED-SETUP-REQUIRED",
               "VACUOUS_PASS": "VACUOUS-PASS",
+              "PASS_VOIDED_BY_DEPENDENCY": "PASS-VOIDED",
               "STRUCTURE-ONLY": "STRUCTURE-ONLY",
               "INCOMPLETE": "INCOMPLETE"}
     for r in results:
@@ -9464,8 +9533,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         _cov_report = {"steps": [
             {"id": r.id, "name": r.name, "status": r.status,
              "stage": getattr(r, "stage", "")} for r in results]}
-        for v in _cov.analyze(_cov_report, _cov_graph).get(
-                "ordering_violations", []):
+        for v in _ordering_violations:
             ordering_fail_lines.append(
                 f"[{v['terminal_id']}] {v['terminal']} = "
                 f"{v['terminal_status']} marked done while dependency "
@@ -9474,6 +9542,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             forced_fail = True
     except Exception:  # nosec — additive enforcement must never crash the audit
         ordering_fail_lines = []
+        _ordering_violations = []
 
     if not ok or forced_fail:
         overall = "FAIL"
