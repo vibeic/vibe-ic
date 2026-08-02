@@ -47,6 +47,8 @@ POSITIVE = {
         ("pulse_detect_0to1to0", "pulse_detect"),
     "Miscellaneous/Others/serial2parallel":
         ("serial_to_parallel_8", "serial2parallel"),
+    "Miscellaneous/Others/parallel2serial":
+        ("parallel_to_serial_4", "parallel2serial"),
     "Arithmetic/Divider/div_16bit":
         ("combinational_long_divider", "div_16bit"),
     "Miscellaneous/Others/traffic_light":
@@ -190,6 +192,13 @@ _INLINE_POS = {
         "Input ports:\n clk: Clock.\n rst_n: Active low reset.\n i_en: Enable.\n"
         " adda: 64-bit A.\n addb: 64-bit B.\n"
         "Output ports:\n result: 65-bit sum.\n o_en: Output enable.\n"),
+    "parallel_to_serial_4": (
+        "Module name:\n    parallel2serial\n"
+        "Implement a module for parallel-to-serial conversion, where every four "
+        "input bits are converted to a serial one bit output (from MSB to LSB).\n"
+        "Input ports:\n clk: Clock.\n rst_n: Active low reset.\n"
+        " d: 4-bit parallel data input.\n"
+        "Output ports:\n valid_out: Valid signal.\n dout: Serial output.\n"),
 }
 
 # Near-miss descriptions that MUST fail-closed to None (no template mis-fire).
@@ -223,6 +232,11 @@ _INLINE_NEG = [
     ("Module name:\n    adder_pipe_32bit\n"
      "A 32-bit pipelined ripple carry adder.\n"
      "Input ports:\n clk\n rst_n\n i_en\n adda\n addb\n Output ports:\n result\n o_en\n"),
+    # right module name + ports for parallel2serial but NO parallel-to-serial
+    # phrase — the detector must fail-closed rather than key on ports alone.
+    ("Module name:\n    parallel2serial\n"
+     "A generic 4-bit register block.\n"
+     "Input ports:\n clk\n rst_n\n d\n Output ports:\n valid_out\n dout\n"),
 ]
 
 
@@ -238,6 +252,21 @@ def test_inline_detect_negative_failclosed(desc):
 
 def test_module_name_extraction():
     assert rcs.module_name_of("Module name:\n    freq_divbyodd\n") == "freq_divbyodd"
+
+
+def test_parallel2serial_dout_is_combinational():
+    """The load-bearing property: the parallel2serial template must drive dout
+    with a CONTINUOUS assign (combinational MSB of the shift register), never a
+    registered `dout <=`. Registering it delays every serial bit one cycle — the
+    exact r8 failure this shape was added to fold in. This test FAILS if a future
+    edit registers dout."""
+    rtl = rcs.emit_rtl("parallel_to_serial_4")
+    # strip // comments so the explanatory prose can't satisfy/trip the checks
+    code = "\n".join(re.sub(r"//.*$", "", ln) for ln in rtl.splitlines())
+    assert re.search(r"assign\s+dout\s*=", code), "dout must be a continuous assign"
+    assert not re.search(r"\bdout\s*<=", code), "dout must NOT be registered"
+    # dout is a plain wire output (not `output reg`)
+    assert re.search(r"output\s+dout\b", code), "dout must be a wire output, not reg"
 
 
 # ============================================================================
