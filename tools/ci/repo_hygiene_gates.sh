@@ -429,6 +429,23 @@ run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary
 # or a gate whose rules changed without re-review — fails.
 run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py"
 
+# The flow-gate dashboard publishes a per-step dimension asking "can this step
+# actually fail", and NOTHING recomputes it — the page's own generator says so in
+# its docstring and carries the distribution forward. Recomputed from the flow
+# yaml, EIGHT of 63 steps have no criterion that can fail on content: two have no
+# blocking criterion at all (P0, 14) and six can fail only on a declared file
+# being ABSENT (1, 12, 18, 27, 32, 35), never on it holding the wrong answer.
+#
+# Step 32 is the worked example: a run recorded `eco_needed=true,
+# changes_count=0, re_verified=false` — an ECO raised, never applied, never
+# re-verified — and the step passed because a file existed and its program
+# criterion is optional.
+#
+# The eight are a baseline that MAY ONLY SHRINK, so this is blocking for anything
+# NEW from its first run, and it fires again if a baseline step gains a real gate
+# and the record is not shrunk to match.
+run "a step whose gate cannot fail" "$PLUGIN" python3 programs/flow_step_can_fail_check.py
+
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
 gate_dispatch_finish
