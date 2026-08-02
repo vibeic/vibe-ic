@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1029
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1029)
+- **Total programs (excluding helpers / shims):** 1030
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1030)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1020 |
+| `any` | 1021 |
 
 ## Alphabetical listing
 
@@ -128,6 +128,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `benchmark_evidence_structure_check` | any | — | CI gate for published benchmark evidence folders (the STRUCTURE half of the program-first publish contract). |
 | `benchmark_golden_capture` | any | — | record a HOST-VERIFIED, vibe-ic-AUTHORED solution as OUR OWN golden, kept SEPARATE from the downloaded `reference_solution`, and tagged w... |
 | `benchmark_result_md_lint` | any | — | presence-check linter for the mandatory § 6 RESULT.md section checklist. |
+| `benchmark_run_manifest` | any | — | a scored benchmark run must leave behind the NAME SET, not only the count. vibe-ic#635. |
 | `benchmark_score_cwd_guard` | any | — | assert the host scorer is invoked FROM the design directory before it runs. |
 | `benchmark_setup` | any | — | environment check + dataset-clone helper for open benchmarks. |
 | `benchmark_shape_classify` | any | — | classify a benchmark's run-shape (A/B/C/D/E) from its on-disk layout. |
@@ -1101,7 +1102,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1020 programs)
+### `any` (1021 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1205,6 +1206,7 @@ _(no programs in this group)_
 - `benchmark_evidence_structure_check` — CI gate for published benchmark evidence folders (the STRUCTURE half of the program-first publish contract).
 - `benchmark_golden_capture` — record a HOST-VERIFIED, vibe-ic-AUTHORED solution as OUR OWN golden, kept SEPARATE from the downloaded `reference_solution`, and tagged w...
 - `benchmark_result_md_lint` — presence-check linter for the mandatory § 6 RESULT.md section checklist.
+- `benchmark_run_manifest` — a scored benchmark run must leave behind the NAME SET, not only the count. vibe-ic#635.
 - `benchmark_score_cwd_guard` — assert the host scorer is invoked FROM the design directory before it runs.
 - `benchmark_setup` — environment check + dataset-clone helper for open benchmarks.
 - `benchmark_shape_classify` — classify a benchmark's run-shape (A/B/C/D/E) from its on-disk layout.

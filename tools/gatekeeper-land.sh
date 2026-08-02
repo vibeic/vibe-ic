@@ -61,6 +61,11 @@ if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
   run "version bumped monotonically" python3 "$PROGRAMS/version_bump_monotonic_check.py" --plugin-json "$PJSON" --base "$BASE"
   run "agent check-in scope"    python3 "$PROGRAMS/agent_checkin_scope_guard.py" --role core-agent --base "$BASE"
   run "benchmark evidence structure" python3 "$PROGRAMS/benchmark_evidence_structure_check.py" --tree benchmark-data --changed-since "$BASE"
+  # vibe-ic#635 — a NEW published number must arrive with its composition.
+  # Scoped `--changed-since` like the gate above: 20 of the 25 runs already
+  # published carry no per-problem name set, and applying this retroactively
+  # would fail every landing over work nobody is doing.
+  run "benchmark run manifest" python3 "$PROGRAMS/benchmark_run_manifest.py" check --tree benchmark-data --changed-since "$BASE"
   git log --format='%B' "$RANGE" > /tmp/gk_commit_text.txt 2>/dev/null
   run "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" /tmp/gk_commit_text.txt
 else

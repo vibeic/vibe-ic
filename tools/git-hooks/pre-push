@@ -73,6 +73,21 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   PUSH_RANGE="$RANGE"
   PUSH_BASE="$remote_sha"
   [ "$remote_sha" = "$ZERO" ] && PUSH_BASE="origin/main"
+  # WHERE this push LANDS decides which gates apply (vibe-ic#636). `_remote_ref`
+  # was read and discarded, so `refs/heads/main` and `refs/heads/feat/anything`
+  # were gated identically — and the version is assigned AT MERGE, by the
+  # gatekeeper. A contributor pushing a version-less branch therefore hit
+  #
+  #     version not bumped: current 1.9.51 == previous 1.9.51
+  #
+  # which is correct about the branch and wrong about the flow: bumping would
+  # claim a number that is not theirs to assign, and two concurrent branches
+  # would claim the same one. The gate was unsatisfiable in principle for the
+  # documented contributor path.
+  case "$_remote_ref" in
+    refs/heads/main) PUSH_TO_MAIN=1 ;;
+    *)               PUSH_TO_MAIN=0 ;;
+  esac
 done
 
 # --- the gates gatekeeper-ci.yml would have run as required status checks -----
@@ -96,13 +111,41 @@ run_gate() {                       # run_gate <label> <program> [args…]
 if [ -n "${PUSH_RANGE:-}" ]; then
   run_gate "NDA tokens in added content or paths" \
            nda_diff_scan_check.py --rev-range "$PUSH_RANGE"
-  run_gate "version bumped monotonically vs the remote" \
-           version_bump_monotonic_check.py --plugin-json "$PJSON" --base "$PUSH_BASE"
+  # OFF-MAIN THE DEFERRAL IS `--version-by-gatekeeper`, NOT A SKIP. The flag
+  # already exists with exactly the right semantics and had simply never been
+  # plumbed into this hook (the program's own docstring says so):
+  #
+  #     case                            default   --version-by-gatekeeper
+  #     no change   (cur == prev)        FAIL       PASS   <- the documented path
+  #     bump        (cur >  prev)        PASS       PASS
+  #     BACKWARDS   (cur <  prev)        FAIL       FAIL   <- still refused
+  #
+  # So a version-less branch pushes, and a branch that REGRESSES the version is
+  # still stopped everywhere. Turning the gate off off-main would have traded an
+  # unsatisfiable gate for an unguarded one.
+  if [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
+    run_gate "version bumped monotonically vs the remote" \
+             version_bump_monotonic_check.py --plugin-json "$PJSON" --base "$PUSH_BASE"
+  else
+    run_gate "version monotonic (assigned at merge — off-main)" \
+             version_bump_monotonic_check.py --plugin-json "$PJSON" --base "$PUSH_BASE" \
+             --version-by-gatekeeper
+  fi
   run_gate "agent check-in scope" \
            agent_checkin_scope_guard.py --role core-agent --base "$PUSH_BASE"
   run_gate "benchmark evidence structure" \
            benchmark_evidence_structure_check.py --tree benchmark-data --changed-since "$PUSH_BASE"
-  git log --format='%B' "$PUSH_RANGE" > /tmp/gk_push_commit_text.txt 2>/dev/null
+  # vibe-ic#635 — a NEW published number must arrive with its composition.
+  run_gate "benchmark run manifest" \
+           benchmark_run_manifest.py check --tree benchmark-data --changed-since "$PUSH_BASE"
+  # UNQUOTED ON PURPOSE (vibe-ic#636, second layer). For a NEW branch
+  # `PUSH_RANGE` is `<sha> --not --remotes` — three git arguments in one string,
+  # exactly as the comment beside the checker above already says. Quoted, git
+  # receives a single token and exits 128, which killed the hook on EVERY
+  # new-branch push before the `git prohibition guard` below could run at all.
+  # The checker above survives it because it re-splits the string itself.
+  # shellcheck disable=SC2086
+  git log --format='%B' $PUSH_RANGE > /tmp/gk_push_commit_text.txt 2>/dev/null
   run_gate "git prohibition guard" \
            git_prohibition_guard.py /tmp/gk_push_commit_text.txt
 fi
@@ -115,7 +158,16 @@ run_gate "marketplace <-> plugin version sync" marketplace_version_sync_check.py
 # and writes the verified commit into `.git/gatekeeper-stamp`; this checks the
 # stamp names the commit actually being pushed. Amend or add a commit and the
 # stamp stops matching, so it cannot be reused.
-if [ -n "${PUSH_RANGE:-}" ]; then
+#
+# MAIN ONLY (vibe-ic#636, third layer). The stamp is written by
+# `gatekeeper-land.sh` — the LANDING tool — so requiring it on a feature-branch
+# push demands the landing procedure from someone who is not landing. That is
+# the same shape as the version gate above: a required gate the documented
+# contributor flow cannot pass. Off-main the cheap tier still runs in full
+# (measured: 7 run_gate calls in BOTH directions); the expensive tier runs where
+# it belongs, at the merge, and a push to `main` without a matching stamp is
+# refused exactly as before.
+if [ -n "${PUSH_RANGE:-}" ] && [ "${PUSH_TO_MAIN:-1}" = "1" ]; then
   STAMP="$REPO_ROOT/.git/gatekeeper-stamp"
   HEAD_SHA="$(git rev-parse HEAD)"
   if [ ! -f "$STAMP" ]; then
