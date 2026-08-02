@@ -80,7 +80,7 @@ def test_image_ref_passed_as_container_name_fails_with_actionable_hint(monkeypat
     rec = cip.verify("vibeic-eda:0.2.30")
     assert rec["verdict"] == "FAIL", rec
     assert "IMAGE ref" in rec["reason"]
-    assert "docker run -d --name" in rec["reason"]
+    assert "docker run -d --init --name" in rec["reason"]
 
 
 def test_the_actionable_hint_is_a_command_that_would_actually_run(monkeypatch):
@@ -100,8 +100,8 @@ def test_the_actionable_hint_is_a_command_that_would_actually_run(monkeypatch):
                         lambda n: {"status": "not_found", "container": n})
     ref = "ghcr.io/vibeic/vibeic-eda:0.2.30"
     reason = cip.verify(ref)["reason"]
-    assert "docker run -d --name <name> %s sleep infinity" % ref in reason
-    assert "docker run -d --name <name> %s --skip sleep infinity" % ref in reason
+    assert "docker run -d --init --name <name> %s sleep infinity" % ref in reason
+    assert "docker run -d --init --name <name> %s --skip sleep infinity" % ref in reason
     assert "restart-eda.sh" in reason
 
 
