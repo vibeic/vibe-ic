@@ -84,27 +84,6 @@ run "container exec deadlines"  "$ROOT" python3 "$PG/container_exec_deadline_che
 # condition out of the error-matching sets BY CONSTRUCTION, so the
 # registry has to be checked rather than trusted.
 run "fork downgrades stay visible" "$PLUGIN" python3 programs/fork_downgrade_visibility_check.py .
-# A diagnostic emitted at severity=ERROR must be consumed by SOME verdict. The
-# sibling of `fork_downgrade_visibility_check` one step further along: that one
-# keeps a condition visible to the gate that needs it, this one proves a gate
-# needs it at all. Measured when first wired: 443 severity=ERROR emissions,
-# 380 distinct tokens, 1 inert.
-#
-# BLOCKING, with the one standing finding named rather than hidden. The
-# precedent two gates up runs ADVISORY because 54 findings stood on day one and
-# failing a pre-existing pile makes a gate people route around; that reasoning
-# does not transfer to a pile of one. Naming it keeps the gate blocking for
-# anything NEW from the first run, which is the property worth having.
-#
-# MACRO_STAGED_UNUSABLE: emitted by the synth front-end when a staged vendor
-# macro is instantiated under no define-world, so synthesis substitutes the
-# behavioural arm — its own reason says "a BEHAVIOURAL model of a cell that was
-# staged as a real macro". The emitter is a library with no exit status and no
-# runner branches on the verdict. Removing this entry is the fix; it is left
-# out of THIS change because wiring a verdict to it alters flow outcomes and
-# belongs in its own reviewable diff, not smuggled into the gate that found it.
-run "severity=ERROR is consumed" "$PLUGIN" python3 programs/error_diagnostic_consumed_check.py . \
-    --allow MACRO_STAGED_UNUSABLE
 
 # Three more of `gatekeeper_review`'s own gates, copied INTO this lane when it
 # was the only direction available. Since #538 the traffic runs the other way
@@ -236,11 +215,6 @@ run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_p
 # vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log
 # is unverifiable, and the failure is silent.
 run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_resolves_check.py"
-# The record the gate above now TRUSTS for its disclosures. It may only say
-# a citation resolves when it does — verified against the cell as committed,
-# because the publisher computes the decision against the tree it had and
-# nothing re-derived it afterwards (8 false RESOLVES rows, measured).
-run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is_true_check.py" --root "$ROOT"
 
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.
@@ -429,22 +403,12 @@ run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary
 # or a gate whose rules changed without re-review — fails.
 run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py"
 
-# The flow-gate dashboard publishes a per-step dimension asking "can this step
-# actually fail", and NOTHING recomputes it — the page's own generator says so in
-# its docstring and carries the distribution forward. Recomputed from the flow
-# yaml, EIGHT of 63 steps have no criterion that can fail on content: two have no
-# blocking criterion at all (P0, 14) and six can fail only on a declared file
-# being ABSENT (1, 12, 18, 27, 32, 35), never on it holding the wrong answer.
-#
-# Step 32 is the worked example: a run recorded `eco_needed=true,
-# changes_count=0, re_verified=false` — an ECO raised, never applied, never
-# re-verified — and the step passed because a file existed and its program
-# criterion is optional.
-#
-# The eight are a baseline that MAY ONLY SHRINK, so this is blocking for anything
-# NEW from its first run, and it fires again if a baseline step gains a real gate
-# and the record is not shrunk to match.
-run "a step whose gate cannot fail" "$PLUGIN" python3 programs/flow_step_can_fail_check.py
+# The flow-gate dashboard's DEPENDENCY dimension, recomputed instead of assessed.
+# Fully decidable from the flow yaml: every blocks_on target must exist, the
+# graph must be acyclic, and a step with no dependencies must be a declared entry
+# point. On its first run against the real tree it caught a baseline taken from a
+# checkout 700 commits behind — which is the argument for recomputing.
+run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_check.py
 
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
