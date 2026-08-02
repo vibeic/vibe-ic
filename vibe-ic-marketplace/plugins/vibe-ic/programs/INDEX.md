@@ -181,7 +181,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `clock_contract` | any | — | one clock name declares exactly one period. |
 | `clock_divider_period_check` | any | v0.116 | Detect clock-divider toggle patterns whose period does NOT match the |
 | `clock_divider_phase_form_check` | any | — | deterministic emit gate for the odd / double-edge clock-divider PHASE-FORM trap. |
-| `clock_divider_ratio_oracle_check` | any | — | deterministic emit gate that MEASURES a clock divider / generator's produced waveform and compares it to the ratio the SPEC states, via a... |
+| `clock_domain_reg_crossing_check` | any | — | RTL-level clock-domain-crossing screen. |
 | `clock_plan_check` | any | — | Step 16 (Clock planning) substance gate. |
 | `clock_scale_consistency_check` | any | — | Catch un-rescaled threshold values. |
 | `cmd_arg_range_validation_check` | any | — | M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated... |
@@ -1259,7 +1259,7 @@ _(no programs in this group)_
 - `clock_contract` — one clock name declares exactly one period.
 - `clock_divider_period_check` — Detect clock-divider toggle patterns whose period does NOT match the  _[v0.116]_
 - `clock_divider_phase_form_check` — deterministic emit gate for the odd / double-edge clock-divider PHASE-FORM trap.
-- `clock_divider_ratio_oracle_check` — deterministic emit gate that MEASURES a clock divider / generator's produced waveform and compares it to the ratio the SPEC states, via a...
+- `clock_domain_reg_crossing_check` — RTL-level clock-domain-crossing screen.
 - `clock_plan_check` — Step 16 (Clock planning) substance gate.
 - `clock_scale_consistency_check` — Catch un-rescaled threshold values.
 - `cmd_arg_range_validation_check` — M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated...

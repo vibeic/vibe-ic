@@ -331,3 +331,90 @@ class TestIncompleteSensitivity:
               "endmodule\n")
         _, findings = run_cli(tmp_path, sv, severity='WARN')
         assert 'incomplete-sensitivity-list' not in {f['rule'] for f in findings}
+
+
+# ---------------------------------------------------------------------------
+# rule_undriven_output_port — an output with no driver holds X forever, so a
+# testbench waiting on it never finishes. Every positive below is paired with a
+# negative control of the same shape that must stay green.
+# ---------------------------------------------------------------------------
+def _undriven(src):
+    return [f.symbol for f in
+            rhl.rule_undriven_output_port(rhl.strip_comments(src), 't.v')]
+
+
+def test_undriven_output_port_is_an_error():
+    src = """
+    module m(input clk, input rst_n, input go, output reg busy, output reg status);
+      always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) busy <= 1'b0; else busy <= go;
+      end
+    endmodule
+    """
+    assert _undriven(src) == ['status']
+
+
+def test_driven_outputs_are_clean():
+    """NEGATIVE CONTROL — the same interface, fully driven."""
+    src = """
+    module m(input clk, input rst_n, input go, output reg busy, output reg status);
+      always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin busy <= 1'b0; status <= 1'b0; end
+        else begin busy <= go; status <= ~go; end
+      end
+    endmodule
+    """
+    assert _undriven(src) == []
+
+
+def test_output_driven_by_continuous_assign_is_clean():
+    src = "module m(input a, input b, output y); assign y = a & b; endmodule"
+    assert _undriven(src) == []
+
+
+def test_output_driven_through_an_instance_is_clean():
+    src = """
+    module m(input clk, output [3:0] q);
+      sub u (.clk(clk), .q(q));
+    endmodule
+    """
+    assert _undriven(src) == []
+
+
+def test_systemverilog_implicit_port_connection_counts_as_driven():
+    """`.q_o` with no parens is shorthand for `.q_o(q_o)` — pervasive in real
+    SV. Missing it reported a whole reference codebase as undriven."""
+    src = """
+    module m(input clk_i, input rst_ni, output logic [3:0] q_o);
+      sub u_sync (.clk_i, .rst_ni, .q_o);
+    endmodule
+    """
+    assert _undriven(src) == []
+
+
+def test_wildcard_port_connection_suppresses_the_rule():
+    """`.*` binds every same-named signal; nothing can be shown undriven."""
+    src = """
+    module m(input clk_i, output logic [3:0] q_o);
+      sub u_sync (.*);
+    endmodule
+    """
+    assert _undriven(src) == []
+
+
+def test_blackbox_stub_module_is_not_flagged():
+    src = "module bb(input a, output y); endmodule"
+    assert _undriven(src) == []
+
+
+def test_rule_is_scoped_per_module():
+    """A signal driven in a SIBLING module must not credit this module."""
+    src = """
+    module a(input clk, output reg y);
+      always @(posedge clk) y <= 1'b1;
+    endmodule
+    module b(input clk, output reg y);
+      always @(posedge clk) begin end
+    endmodule
+    """
+    assert _undriven(src) == ['y']  # only module b's
