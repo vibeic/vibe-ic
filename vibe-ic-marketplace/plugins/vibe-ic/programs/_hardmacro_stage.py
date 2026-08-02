@@ -132,14 +132,67 @@ def staged_hardmacro_models(project: Path, rtl_files) -> List[dict]:
     return out
 
 
+# A module header, its port list, its body and its `endmodule`. Non-greedy body
+# so a multi-module model yields one match per module rather than one giant one.
+_MODULE_RE = re.compile(
+    r'(?ms)^[ \t]*module\b[ \t]*([A-Za-z_]\w*)'      # 1: module name
+    r'[ \t]*((?:#[ \t]*\((?:[^()]|\([^()]*\))*\))?)'  # 2: optional #(params)
+    r'[ \t]*(\((?:[^()]|\([^()]*\))*\))?'             # 3: optional port list
+    r'[ \t]*;(.*?)^[ \t]*endmodule')                  # 4: body
+
+# A port DIRECTION declaration in a non-ANSI body: `input [`W-1:0] PA;`. Widths
+# routinely reference preprocessor macros, which is why _defines() is hoisted.
+_PORTDECL_RE = re.compile(
+    r'(?m)^[ \t]*((?:input|output|inout)\b(?:[ \t]+(?:wire|reg|logic))?[^;]*);')
+
+_DEFINE_RE = re.compile(r'(?m)^[ \t]*`(?:define|undef)\b.*$')
+
+
 def emit_blackbox_stub(model_v: Path, name: str, out_dir: Path) -> Path:
-    """Write a ``(* blackbox *)``-attributed copy of a hard-macro model so
-    every yosys frontend treats it as an interface-only blackbox. The attribute
-    is inserted before EACH ``module`` declaration (multi-module models
-    supported). Pure text transform, no chip/PDK literal."""
+    """Write an INTERFACE-ONLY ``(* blackbox *)`` stub for a hard-macro model:
+    module header + port list + port DIRECTION declarations + ``endmodule``,
+    with the body dropped.
+
+    Why the body must go rather than just carry a ``(* blackbox *)`` attribute:
+    the attribute is applied by the frontend AFTER it has PARSED the module, so
+    a body it cannot parse is still fatal. A vendor behavioural model is written
+    for a simulator, not a synthesis frontend, and routinely declares
+    ``realtime`` / ``time`` variables, specify blocks and UDPs that the built-in
+    Verilog reader rejects outright — the whole read then aborts, no miter is
+    built, and the caller reports "no equivalence evidence" for what is really
+    an unparsed stub. An equivalence check never looks inside a hard macro, so
+    the body carries no information the comparison can use.
+
+    ``define``/``undef`` directives are hoisted ahead of the stub because
+    non-ANSI port widths habitually reference them. Directives guarded by a
+    conditional are hoisted unconditionally — a width macro is what is being
+    preserved, not the model's configuration semantics.
+
+    Falls back to the previous attribute-only transform when no module header is
+    recognised, so an unparseable-but-currently-working input cannot regress.
+    Pure text transform, no chip/PDK literal."""
     txt = model_v.read_text(errors="replace")
-    txt = re.sub(r'(?m)^(\s*)(module\b)', r'\1(* blackbox *)\n\1\2', txt)
+
+    stubs = []
+    for m in _MODULE_RE.finditer(txt):
+        mod_name, params, ports, body = m.group(1), m.group(2), m.group(3), m.group(4)
+        # ANSI header (directions live in the port list) needs no body decls;
+        # non-ANSI needs the `input/output/inout` lines lifted out of the body.
+        ansi = bool(ports) and re.search(r'\b(?:input|output|inout)\b', ports)
+        decls = [] if ansi else [d.strip() for d in _PORTDECL_RE.findall(body)]
+        head = f"(* blackbox *)\nmodule {mod_name}{(' ' + params) if params else ''}"
+        head += f"{ports or '()'};"
+        stubs.append("\n".join([head] + [f"  {d};" for d in decls] + ["endmodule"]))
+
+    if not stubs:                       # unrecognised shape → previous behaviour
+        out = re.sub(r'(?m)^(\s*)(module\b)', r'\1(* blackbox *)\n\1\2', txt)
+    else:
+        out = "\n".join(
+            ["// interface-only blackbox stub — body dropped; see "
+             "emit_blackbox_stub()"]
+            + _DEFINE_RE.findall(txt) + [""] + stubs) + "\n"
+
     out_dir.mkdir(parents=True, exist_ok=True)
     dst = out_dir / f"{name}.bb.v"
-    dst.write_text(txt)
+    dst.write_text(out)
     return dst
