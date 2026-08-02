@@ -403,6 +403,13 @@ run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary
 # or a gate whose rules changed without re-review — fails.
 run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py"
 
+# The flow-gate dashboard's DEPENDENCY dimension, recomputed instead of assessed.
+# Fully decidable from the flow yaml: every blocks_on target must exist, the
+# graph must be acyclic, and a step with no dependencies must be a declared entry
+# point. On its first run against the real tree it caught a baseline taken from a
+# checkout 700 commits behind — which is the argument for recomputing.
+run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_check.py
+
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
 gate_dispatch_finish
