@@ -84,6 +84,27 @@ run "container exec deadlines"  "$ROOT" python3 "$PG/container_exec_deadline_che
 # condition out of the error-matching sets BY CONSTRUCTION, so the
 # registry has to be checked rather than trusted.
 run "fork downgrades stay visible" "$PLUGIN" python3 programs/fork_downgrade_visibility_check.py .
+# A diagnostic emitted at severity=ERROR must be consumed by SOME verdict. The
+# sibling of `fork_downgrade_visibility_check` one step further along: that one
+# keeps a condition visible to the gate that needs it, this one proves a gate
+# needs it at all. Measured when first wired: 443 severity=ERROR emissions,
+# 380 distinct tokens, 1 inert.
+#
+# BLOCKING, with the one standing finding named rather than hidden. The
+# precedent two gates up runs ADVISORY because 54 findings stood on day one and
+# failing a pre-existing pile makes a gate people route around; that reasoning
+# does not transfer to a pile of one. Naming it keeps the gate blocking for
+# anything NEW from the first run, which is the property worth having.
+#
+# MACRO_STAGED_UNUSABLE: emitted by the synth front-end when a staged vendor
+# macro is instantiated under no define-world, so synthesis substitutes the
+# behavioural arm — its own reason says "a BEHAVIOURAL model of a cell that was
+# staged as a real macro". The emitter is a library with no exit status and no
+# runner branches on the verdict. Removing this entry is the fix; it is left
+# out of THIS change because wiring a verdict to it alters flow outcomes and
+# belongs in its own reviewable diff, not smuggled into the gate that found it.
+run "severity=ERROR is consumed" "$PLUGIN" python3 programs/error_diagnostic_consumed_check.py . \
+    --allow MACRO_STAGED_UNUSABLE
 
 # Three more of `gatekeeper_review`'s own gates, copied INTO this lane when it
 # was the only direction available. Since #538 the traffic runs the other way
