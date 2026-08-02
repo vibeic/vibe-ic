@@ -179,3 +179,59 @@ def test_the_hook_says_NOT_CHECKED_rather_than_FAILED_when_a_gate_cannot_run():
                      if not l.lstrip().startswith("#"))
     assert 'if [ "$rc" = "2" ]' in code
     assert "NOT CHECKED — $label (the gate could not run)" in code
+
+
+# ── a binary file in the diff crashed the scan, and the crash read as a leak ──
+#
+# `text=True` decodes git's stdout as STRICT UTF-8. A diff touching a non-UTF-8
+# file — `status.sqlite`, `design_aiger.aig`, any binary artefact an evidence
+# landing routinely carries — raised UnicodeDecodeError inside `subprocess`, the
+# traceback exited 1, and `run_gate` reads exit 1 as a POSITIVE NDA FINDING.
+#
+# Same "a failed question wearing a finding's clothes" shape as the rev-list
+# range above, by a different route, on the one gate this repo cannot afford to
+# get wrong. MEASURED on PR #645 (352 files, an IC evidence cell):
+#
+#   before   UnicodeDecodeError at byte 0x96 — reported as a leak
+#   after    rc 0, and the scan sees 1,291,241 added lines across 360 paths,
+#            with 456 U+FFFD substitutions in 41 MB — confined to the binaries
+def test_a_non_utf8_file_in_the_diff_does_not_crash_the_scan(tmp_path):
+    """THE DEFECT. Any evidence landing carries binaries, so this fired every
+    time one was pushed."""
+    g = _repo(tmp_path)
+    (tmp_path / "notes.txt").write_text("an ordinary added line\n", encoding="utf-8")
+    (tmp_path / "blob.bin").write_bytes(bytes(range(256)) * 32)
+    g("add", "notes.txt", "blob.bin")
+    g("commit", "-q", "-m", "text beside a binary")
+    head = g("rev-parse", "HEAD").stdout.strip()
+    diff = N.diff_for_range(tmp_path, f"{head} --not --remotes")
+    assert "an ordinary added line" in diff, (
+        "the TEXT half of the diff must still reach the scanner")
+    assert "+++ b/notes.txt" in diff
+
+
+def test_the_substitution_cannot_manufacture_a_finding(tmp_path):
+    """LOAD-BEARING in the other direction. Replacing an undecodable byte must
+    only ever REMOVE a possible match, never add one: U+FFFD appears in no
+    pattern, so a scan over replaced bytes cannot invent a token."""
+    g = _repo(tmp_path)
+    (tmp_path / "blob.bin").write_bytes(b"\x96\x97\x98" * 64)
+    g("add", "blob.bin")
+    g("commit", "-q", "-m", "binary only")
+    head = g("rev-parse", "HEAD").stdout.strip()
+    diff = N.diff_for_range(tmp_path, f"{head} --not --remotes")
+    assert N.scan_unified_diff(diff) == [], (
+        "replaced bytes produced a finding — the substitution is not neutral")
+
+
+def test_the_decode_is_lenient_at_the_subprocess_boundary():
+    """Pinned at the boundary where it broke: a later edit that drops
+    `errors=` restores a crash that reads as a leak."""
+    import pathlib as _pl
+    src = (_pl.Path(N.__file__)).read_text(encoding="utf-8")
+    body = "\n".join(l for l in src.splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert 'errors="replace"' in body
+    seg = body[body.index("def _git("):]
+    seg = seg[:seg.index("\ndef ", 10)]
+    assert 'errors="replace"' in seg, "the leniency is not on the git call itself"

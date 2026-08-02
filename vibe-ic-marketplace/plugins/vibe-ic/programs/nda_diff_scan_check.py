@@ -153,8 +153,26 @@ _GIT_TIMEOUT_S = 55
 
 def _git(repo: Path, *args: str) -> Tuple[int, str, str]:
     try:
+        # errors="replace" (vibe-ic#640 follow-on). `text=True` decodes git's
+        # stdout as strict UTF-8, and a diff that touches a non-UTF-8 file —
+        # `status.sqlite`, `design_aiger.aig`, any binary artefact an evidence
+        # landing routinely carries — raises UnicodeDecodeError inside
+        # `subprocess`. The traceback exits 1, and `run_gate` reads exit 1 as a
+        # POSITIVE NDA FINDING: the same "a failed question wearing a finding's
+        # clothes" shape as the rev-list range, by a different route, on the one
+        # gate this repo cannot afford to get wrong.
+        #
+        # MEASURED on PR #645 (352 files, an IC evidence cell):
+        #   before  UnicodeDecodeError at byte 0x96, rc 1 -> reported as a leak
+        #   after   the scan runs and answers
+        #
+        # A replaced byte cannot manufacture a token: U+FFFD appears in no
+        # pattern, so substitution can only ever remove a match, never add one —
+        # and the bytes it replaces are, by construction, not text a token could
+        # be spelled in.
         proc = subprocess.run(["git", "-C", str(repo), *args],
                               capture_output=True, text=True,
+                              errors="replace",
                               timeout=_GIT_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         # An honest error, never a finding and never a clean scan.
