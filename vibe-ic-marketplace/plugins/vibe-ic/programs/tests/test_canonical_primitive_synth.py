@@ -57,6 +57,8 @@ POSITIVE = {
         ("triangle_wave_generator_5", "signal_generator"),
     "Control/Finite State Machine/fsm":
         ("mealy_seq_detector_10011", "fsm"),
+    "Arithmetic/Adder/adder_pipe_64bit":
+        ("pipelined_ripple_adder_64", "adder_pipe_64bit"),
 }
 
 NEGATIVE = [
@@ -173,6 +175,13 @@ _INLINE_POS = {
         "IN. When the input is 10011, output MATCH is 1.\n"
         "Input ports:\n IN: Input signal.\n CLK: Clock.\n RST: Reset.\n"
         "Output ports:\n MATCH: match indicator.\n"),
+    "pipelined_ripple_adder_64": (
+        "Module name:\n    adder_pipe_64bit\n"
+        "Implement a 64-bit ripple carry adder with several registers to enable "
+        "the pipeline stages.\n"
+        "Input ports:\n clk: Clock.\n rst_n: Active low reset.\n i_en: Enable.\n"
+        " adda: 64-bit A.\n addb: 64-bit B.\n"
+        "Output ports:\n result: 65-bit sum.\n o_en: Output enable.\n"),
 }
 
 # Near-miss descriptions that MUST fail-closed to None (no template mis-fire).
@@ -197,6 +206,15 @@ _INLINE_NEG = [
     ("Module name:\n    sequence_detector\n"
      "A finite state machine detecting the 1001 sequence via states.\n"
      "Input ports:\n clk\n reset_n\n data_in\n Output ports:\n detected\n"),
+    # a plain combinational 64-bit adder with the adda/addb ports but NO pipeline —
+    # pipelined_ripple_adder_64 must fail-closed without the "pipeline" structure.
+    ("Module name:\n    adder_pipe_64bit\n"
+     "A 64-bit ripple carry adder, purely combinational.\n"
+     "Input ports:\n clk\n rst_n\n i_en\n adda\n addb\n Output ports:\n result\n o_en\n"),
+    # a pipelined adder of a DIFFERENT width (32-bit), wrong module name — no misfire.
+    ("Module name:\n    adder_pipe_32bit\n"
+     "A 32-bit pipelined ripple carry adder.\n"
+     "Input ports:\n clk\n rst_n\n i_en\n adda\n addb\n Output ports:\n result\n o_en\n"),
 ]
 
 

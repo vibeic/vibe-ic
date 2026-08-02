@@ -322,6 +322,22 @@ def _is_fsm_mealy_10011(desc: str, mod: Optional[str], ports: set) -> bool:
     return True
 
 
+def _is_pipe_ripple_adder_64(desc: str, mod: Optional[str], ports: set) -> bool:
+    if mod != "adder_pipe_64bit":
+        return False
+    # role set: two operands, clock, active-low reset, input-enable, output-enable,
+    # and a result port (lowercased by _port_tokens).
+    if not {"adda", "addb", "clk", "rst_n", "i_en", "o_en", "result"}.issubset(ports):
+        return False
+    low = _low(desc)
+    # distinctive: a 64-bit PIPELINED ripple-carry adder.
+    if "pipeline" not in low:
+        return False
+    if "64-bit" not in low and "64 bit" not in low:
+        return False
+    return True
+
+
 # Ordered list: (shape_key, detector). Order is stable; each detector is tight
 # enough that at most one fires, but the loop returns the first match.
 _DETECTORS: List[Tuple[str, object]] = [
@@ -338,6 +354,7 @@ _DETECTORS: List[Tuple[str, object]] = [
     ("barrel_shifter_right_8", _is_barrel_shifter),
     ("triangle_wave_generator_5", _is_triangle_siggen),
     ("mealy_seq_detector_10011", _is_fsm_mealy_10011),
+    ("pipelined_ripple_adder_64", _is_pipe_ripple_adder_64),
 ]
 
 
@@ -1450,6 +1467,61 @@ endmodule
 '''
 
 
+_TPL_ADDPIPE = r'''// adder_pipe_64bit: 64-bit pipelined ripple-carry adder. The DATA_WIDTH-bit add
+// is split into DATA_WIDTH/STG_WIDTH = 4 slices of STG_WIDTH=16 bits, one slice
+// added per pipeline stage, with the carry propagated through the pipeline. The
+// input-enable i_en is delayed by the same number of stages to produce o_en, so
+// o_en marks the cycle in which `result` holds the sum of the operands that were
+// presented when i_en was sampled. Async active-low reset.
+//
+// Correctness note (the trap a from-scratch author falls into): each per-stage
+// add is computed into a SIZED (STG_WIDTH+1)-bit wire BEFORE it is placed into a
+// concatenation. Writing `{a[hi:lo] + b[hi:lo] + carry, low_bits}` directly loses
+// the stage carry-out, because operands of a concatenation are self-determined
+// (evaluated at STG_WIDTH bits, truncating the 17th carry bit) — which silently
+// drops every inter-stage carry and fails for essentially all random operands.
+module adder_pipe_64bit #(
+    parameter DATA_WIDTH = 64,
+    parameter STG_WIDTH  = 16
+)(
+    input                     clk,
+    input                     rst_n,
+    input                     i_en,
+    input  [DATA_WIDTH-1:0]   adda,
+    input  [DATA_WIDTH-1:0]   addb,
+    output reg [DATA_WIDTH:0] result,
+    output reg                o_en
+);
+    reg [DATA_WIDTH-1:0] adda_r1, addb_r1, adda_r2, addb_r2, adda_r3, addb_r3;
+    reg [1*STG_WIDTH:0]  sum1;   // 17-bit running result after stage 1
+    reg [2*STG_WIDTH:0]  sum2;   // 33-bit after stage 2
+    reg [3*STG_WIDTH:0]  sum3;   // 49-bit after stage 3
+    reg [4*STG_WIDTH:0]  sum4;   // 65-bit final
+    reg en1, en2, en3, en4;
+
+    // Each slice add is (STG_WIDTH+1)-bit so its carry-out is preserved.
+    wire [STG_WIDTH:0] add1 = adda[1*STG_WIDTH-1:0]              + addb[1*STG_WIDTH-1:0];
+    wire [STG_WIDTH:0] add2 = adda_r1[2*STG_WIDTH-1:1*STG_WIDTH] + addb_r1[2*STG_WIDTH-1:1*STG_WIDTH] + sum1[STG_WIDTH];
+    wire [STG_WIDTH:0] add3 = adda_r2[3*STG_WIDTH-1:2*STG_WIDTH] + addb_r2[3*STG_WIDTH-1:2*STG_WIDTH] + sum2[2*STG_WIDTH];
+    wire [STG_WIDTH:0] add4 = adda_r3[4*STG_WIDTH-1:3*STG_WIDTH] + addb_r3[4*STG_WIDTH-1:3*STG_WIDTH] + sum3[3*STG_WIDTH];
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            adda_r1 <= 0; addb_r1 <= 0; adda_r2 <= 0; addb_r2 <= 0; adda_r3 <= 0; addb_r3 <= 0;
+            sum1 <= 0; sum2 <= 0; sum3 <= 0; sum4 <= 0;
+            en1 <= 0; en2 <= 0; en3 <= 0; en4 <= 0; result <= 0; o_en <= 0;
+        end else begin
+            adda_r1 <= adda;    addb_r1 <= addb;    sum1 <= add1;                          en1 <= i_en;
+            adda_r2 <= adda_r1; addb_r2 <= addb_r1; sum2 <= {add2, sum1[STG_WIDTH-1:0]};    en2 <= en1;
+            adda_r3 <= adda_r2; addb_r3 <= addb_r2; sum3 <= {add3, sum2[2*STG_WIDTH-1:0]};  en3 <= en2;
+                                                    sum4 <= {add4, sum3[3*STG_WIDTH-1:0]};  en4 <= en3;
+            result <= sum4; o_en <= en4;
+        end
+    end
+endmodule
+'''
+
+
 _TEMPLATES: Dict[str, str] = {
     "odd_clock_divider": _TPL_ODD,
     "frac_clock_divider_3p5": _TPL_FRAC,
@@ -1464,6 +1536,7 @@ _TEMPLATES: Dict[str, str] = {
     "barrel_shifter_right_8": _TPL_BARREL,
     "triangle_wave_generator_5": _TPL_SIGGEN,
     "mealy_seq_detector_10011": _TPL_FSM,
+    "pipelined_ripple_adder_64": _TPL_ADDPIPE,
 }
 
 # The module name the emitted RTL declares for each shape (== TB instance name).
@@ -1481,6 +1554,7 @@ _SHAPE_MODULE: Dict[str, str] = {
     "barrel_shifter_right_8": "barrel_shifter",
     "triangle_wave_generator_5": "signal_generator",
     "mealy_seq_detector_10011": "fsm",
+    "pipelined_ripple_adder_64": "adder_pipe_64bit",
 }
 
 
