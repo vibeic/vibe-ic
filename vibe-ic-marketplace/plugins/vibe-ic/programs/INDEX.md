@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1035
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1035)
+- **Total programs (excluding helpers / shims):** 1039
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1039)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1026 |
+| `any` | 1030 |
 
 ## Alphabetical listing
 
@@ -157,6 +157,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `can_protocol_synth` | any | v0.1.81 | CAN-class protocol synth helper. |
 | `canfd_protocol_synth` | any | v0.1.84 | CAN-FD-class protocol synth helper. |
 | `canonical_path_symlink_forbid_check` | any | — | generalised symlink ban for canonical deliverable trees. |
+| `canonical_primitive_synth` | any | — | ONE deterministic SOLVER that emits verified-correct RTL for NINE canonical RTLLM design shapes, keyed on STATED STRUCTURE. |
 | `canopen_protocol_synth` | any | — | CANopen (CiA 301) protocol synth helper (protocol #70). |
 | `caravel_integration_runner` | any | v0.1.51 | Caravel chipignite integration runner (B2 from spm pilot). |
 | `caravel_wrapper_emit` | any | v0.1.51 | Caravel user_project_wrapper emitter (B3 from spm pilot). |
@@ -251,6 +252,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dead_timing_constant_warn` | any | — | Scan all RTL files for `define macros and localparam declarations whose |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
 | `decap_route_short_guard` | any | — | remove VDD<->VSS shorts caused by decap fillers placed under signal routing (a real post-route PnR defect), by swapping each conflicting ... |
+| `declared_pdk_is_the_pdk_used_check` | any | — | the PDK that ran must be the PDK declared. |
 | `def_gds_port_power_restore` | any | — | restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p... |
 | `def_manufacturing_grid_check` | any | — | ORGANIC #597. |
 | `def_stage_progression_check` | any | v0.47 | Catch fabricated PnR stage DEF files. |
@@ -306,6 +308,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `enhancement_emit` | any | v0.1.35 | driver for the benchmark-enhancement-capture skill. |
 | `erc_density_check` | any | — | Step-31 ERC + sign-off density-rule verification (real substance). |
 | `erc_float_owner_classify` | any | v0.3.16 | ORGANIC #514. Classify ERC floating nets/pins BY OWNER into benign-by-construction vs functional. |
+| `error_diagnostic_consumed_check` | any | — | flow-integrity gate. |
 | `espi_protocol_synth` | any | — | Enhanced Serial Peripheral Interface (eSPI) protocol synth helper. |
 | `ethercat_protocol_synth` | any | v0.1.84 | EtherCAT-class protocol synth helper. |
 | `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
@@ -879,6 +882,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `shape_b_sample_export` | any | — | deterministic Shape-B sample-export (ORGANIC #678). |
 | `shift_counter_synth` | any | — | deterministic SOLVER for the CVDP barrel-shift / rotate and saturating / specialized-counter families. |
 | `shift_register_synth` | any | — | deterministic SOLVER for the shift-register / rotate / barrel-shift family. |
+| `ship_postroute_convergence_exhaustion_check` | any | — | chip-AGNOSTIC audit of the post-reroute real-SPEF convergence loop's OWN markers, answering one question a setup-VIOLATED run cannot othe... |
 | `shipped_path_portability_check` | any | — | shipped-source path-portability guard. |
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
 | `si_mcf_sta` | any | — | SI-aware STA via Miller Coupling Factor (MCF) bounding. |
@@ -1107,7 +1111,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1026 programs)
+### `any` (1030 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1239,6 +1243,7 @@ _(no programs in this group)_
 - `can_protocol_synth` — CAN-class protocol synth helper.  _[v0.1.81]_
 - `canfd_protocol_synth` — CAN-FD-class protocol synth helper.  _[v0.1.84]_
 - `canonical_path_symlink_forbid_check` — generalised symlink ban for canonical deliverable trees.
+- `canonical_primitive_synth` — ONE deterministic SOLVER that emits verified-correct RTL for NINE canonical RTLLM design shapes, keyed on STATED STRUCTURE.
 - `canopen_protocol_synth` — CANopen (CiA 301) protocol synth helper (protocol #70).
 - `caravel_integration_runner` — Caravel chipignite integration runner (B2 from spm pilot).  _[v0.1.51]_
 - `caravel_wrapper_emit` — Caravel user_project_wrapper emitter (B3 from spm pilot).  _[v0.1.51]_
@@ -1331,6 +1336,7 @@ _(no programs in this group)_
 - `dead_timing_constant_warn` — Scan all RTL files for `define macros and localparam declarations whose
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
 - `decap_route_short_guard` — remove VDD<->VSS shorts caused by decap fillers placed under signal routing (a real post-route PnR defect), by swapping each conflicting ...
+- `declared_pdk_is_the_pdk_used_check` — the PDK that ran must be the PDK declared.
 - `def_gds_port_power_restore` — restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p...
 - `def_manufacturing_grid_check` — ORGANIC #597.
 - `def_stage_progression_check` — Catch fabricated PnR stage DEF files.  _[v0.47]_
@@ -1385,6 +1391,7 @@ _(no programs in this group)_
 - `enhancement_emit` — driver for the benchmark-enhancement-capture skill.  _[v0.1.35]_
 - `erc_density_check` — Step-31 ERC + sign-off density-rule verification (real substance).
 - `erc_float_owner_classify` — ORGANIC #514. Classify ERC floating nets/pins BY OWNER into benign-by-construction vs functional.  _[v0.3.16]_
+- `error_diagnostic_consumed_check` — flow-integrity gate.
 - `espi_protocol_synth` — Enhanced Serial Peripheral Interface (eSPI) protocol synth helper.
 - `ethercat_protocol_synth` — EtherCAT-class protocol synth helper.  _[v0.1.84]_
 - `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
@@ -1955,6 +1962,7 @@ _(no programs in this group)_
 - `shape_b_sample_export` — deterministic Shape-B sample-export (ORGANIC #678).
 - `shift_counter_synth` — deterministic SOLVER for the CVDP barrel-shift / rotate and saturating / specialized-counter families.
 - `shift_register_synth` — deterministic SOLVER for the shift-register / rotate / barrel-shift family.
+- `ship_postroute_convergence_exhaustion_check` — chip-AGNOSTIC audit of the post-reroute real-SPEF convergence loop's OWN markers, answering one question a setup-VIOLATED run cannot othe...
 - `shipped_path_portability_check` — shipped-source path-portability guard.
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
 - `si_mcf_sta` — SI-aware STA via Miller Coupling Factor (MCF) bounding.
