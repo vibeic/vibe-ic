@@ -32861,8 +32861,42 @@ def _autogen_waivers_json(project: Path,
     artefact tree; no chip-specific names.
     """
     waivers_path = project / "waivers.json"
+    # A waiver THIS PROGRAM wrote must be re-derived every run, or a step that
+    # has since stopped waiving keeps its waiver forever.
+    #
+    # The old rule was `if the file exists, do nothing`, on the reasoning that
+    # a hand-authored waiver must always win. That is right for a HUMAN file
+    # and wrong for the runner's own: the entries carry `_autogen: true`, and
+    # nothing ever read that flag back. Measured: a step waived as
+    # ENV_UNAVAILABLE in one run, the cause was fixed, the next run's step no
+    # longer waived — and the compliance gate still reported
+    #     ~ [WAIVED-DEFERRED] Step 31 ... ENV_UNAVAILABLE waiver applied
+    #       (natural verdict was FAIL/MISSING)
+    # from the stale file, on a run whose own report contained no such waiver.
+    # A check that stopped excusing the design went on excusing it.
+    #
+    # So: OURS is the narrow case — a NON-EMPTY `waivers` list in which EVERY
+    # entry carries `_autogen: true`. Everything else is somebody else's file
+    # and is left exactly as found: no `waivers` key, a `waivers` that is not a
+    # list, an EMPTY list, any entry without the flag, or JSON we cannot read.
+    # The empty-list case matters and is not hypothetical: this program never
+    # writes an empty list (it returns early when nothing waives), so an empty
+    # or absent one is a hand-authored file — and treating "no autogen entries"
+    # as "purely autogen" would overwrite exactly the file the old rule existed
+    # to protect.
+    _human_owned = False
     if waivers_path.exists():
-        return
+        try:
+            _prev = json.loads(waivers_path.read_text())
+            _prev_w = _prev.get("waivers") if isinstance(_prev, dict) else None
+            _ours = (isinstance(_prev_w, list) and bool(_prev_w)
+                     and all(isinstance(w, dict) and w.get("_autogen") is True
+                             for w in _prev_w))
+            _human_owned = not _ours
+        except Exception:  # noqa: BLE001 — unreadable = not ours, leave it
+            _human_owned = True
+        if _human_owned:
+            return
     # v1.6.54 — also emit waivers for ENV_UNAVAILABLE steps. They share
     # the same SOLE-ACCEPTANCE-CRITERION shape (rationale + evidence +
     # ticket + review_required) but the rationale records the missing
@@ -32871,6 +32905,16 @@ def _autogen_waivers_json(project: Path,
     waived = [s for s in plan
               if s.status in ("WAIVED", "ENV_UNAVAILABLE")]
     if not waived:
+        # Nothing waives now. If our own stale file says otherwise, RETRACT it
+        # — leaving it is the defect above, spelled the other way round.
+        if waivers_path.exists() and not _human_owned:
+            try:
+                waivers_path.unlink()
+                print("[INFO] retracted the runner's own waivers.json: this "
+                      "run waives no step, so the auto-generated waiver(s) "
+                      "no longer describe it")
+            except OSError as exc:  # noqa: BLE001
+                print(f"[WARN] could not retract stale waivers.json: {exc}")
         return
     waivers = []
     project_str = str(project)
