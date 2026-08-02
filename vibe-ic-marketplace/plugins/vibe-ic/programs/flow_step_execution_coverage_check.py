@@ -73,6 +73,12 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _DEFAULT_FLOW = _HERE.parent / "flow" / "phase1_phase2_phase3.yaml"
 
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+# vibe-ic#634 — the producer and this guard read the SAME classification of
+# verdict words, so a tier added on one side cannot be unknown on the other.
+import _flow_verdict_tiers as _T                           # noqa: E402
+
 # Exit codes. 2 = NOT CHECKED is a first-class verdict, not an error code: it is
 # what the gate must return whenever it could not actually inspect the run.
 VERDICT_RC = {"PASS": 0, "FAIL": 1, "NOT-CHECKED": 2}
@@ -102,11 +108,11 @@ _SILICON_ATTEST_RE = re.compile(
     r"|final\s*test|burn-?in|reliability\s*qual|(?<![a-z])htol(?![a-z])",
     re.IGNORECASE)
 
-# A step is "legitimately not run" (does NOT count as a skip) in these states.
-_NOT_APPLICABLE = {"SKIPPED-CONDITION", "SKIPPED", "WAIVED",
-                   "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM", "DEFERRED"}
+# A step is "legitimately not run" (does NOT count as a skip) in these states —
+# exactly what the producer subtracts from `total_required` (vibe-ic#634).
+_NOT_APPLICABLE = _T.EXCUSED
 # A real PASS always satisfies a predecessor.
-_REAL_DONE = {"PASS"}
+_REAL_DONE = {_T.FULL_PASS}
 # VACUOUS-PASS = the gate RAN and legitimately had nothing applicable to check
 # (rc=2 "input not applicable", e.g. the synthesis-handoff gate on a design with
 # no hi/lo tie cells or no yosys-script template). For an ordinary design PROCESS
@@ -119,7 +125,12 @@ _REAL_DONE = {"PASS"}
 # block a downstream done-claim — you cannot wafer-sort a lot the foundry never
 # delivered, and the downstream step's own PASS asserts the upstream event
 # occurred. See `_blocks_when_vacuous`, applied in analyze().
-_VACUOUS = {"VACUOUS-PASS"}
+# vibe-ic#634 — DERIVED, not enumerated. Every done-claim that is not a full
+# PASS gets this treatment: VACUOUS-PASS, and since v1.9.48 also STRUCTURE-ONLY
+# (#632) and INCOMPLETE (#599), both of which used to be in NO set here and so
+# escaped the ordering guard entirely while the producer's own arithmetic
+# counted them done. A tier added tomorrow lands here by construction.
+_VACUOUS = _T.is_qualified_done
 
 
 def _blocks_when_vacuous(step: dict) -> bool:
@@ -305,7 +316,7 @@ def analyze(report: dict, graph: dict | None = None,
     # before a step it declares it depends on. Uses the flow's own edges, so it
     # is precise (no cross-track false positives).
     for s in steps:
-        if _norm(s.get("status")) not in ("PASS", "VACUOUS-PASS"):
+        if not _T.is_done_claim(s.get("status")):
             continue
         for anc_id in _ancestors(str(s.get("id")), graph):
             ast = status_of.get(anc_id)
@@ -320,7 +331,7 @@ def analyze(report: dict, graph: dict | None = None,
             # that attested to nothing must all still block. A vacuous PROCESS
             # step (e.g. synth-handoff with no tie-cells to check) ran and did not
             # fail — it is not a silent MISSING and does not break ordering.
-            if ast in _VACUOUS:
+            if _VACUOUS(ast):
                 anc = by_id.get(anc_id)
                 if anc and not _blocks_when_vacuous(anc):
                     continue
@@ -330,7 +341,7 @@ def analyze(report: dict, graph: dict | None = None,
     # declare NO blocks_on edges at all (the exact data bug where GDSII/handoff
     # ship `blocks_on: []`). Guards them against every applicable sign-off step.
     for t in terminal_steps:
-        if _norm(t.get("status")) not in ("PASS", "VACUOUS-PASS"):
+        if not _T.is_done_claim(t.get("status")):
             continue
         if graph.get(str(t.get("id"))):
             continue  # has real edges → already covered by the graph pass

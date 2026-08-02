@@ -84,6 +84,10 @@ import _waiver_entries as _we
 import _evidence_independence as _ev_ind  # #524
 import _sim_results_bridge as _srb
 import _gate_invocation
+# vibe-ic#634 — the ONE classification of verdict words, shared with
+# `flow_step_execution_coverage_check` so a tier added here cannot be
+# unknown to the guard that adjudicates dependency ordering.
+import _flow_verdict_tiers as _T
 import fpga_board_capability as _fpga_cap
 
 try:
@@ -8300,8 +8304,11 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # the other two: the tier says the artefact's CONTENT came from a default,
     # which presupposes the artefact exists. A declared output that is absent
     # is MISSING whatever the gate said about the ones that are present.
-    if result.status in ("PASS", "VACUOUS_PASS", "STRUCTURE-ONLY") \
-            and missing_entries:
+    # DERIVED (vibe-ic#634). This used to enumerate the pass tiers and had
+    # already fallen a tier behind: `INCOMPLETE` (#599) is a done-claim by the
+    # same arithmetic and was not demoted, so a step that declared an output,
+    # did not produce it, and reported INCOMPLETE kept its tier.
+    if _T.is_done_claim(result.status) and missing_entries:
         result.status = "MISSING"
         result.reasons.append(
             f"required_outputs missing: {missing_entries} "
@@ -9205,9 +9212,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     # eliminated. Closing it for a specific step means giving that step a
     # condition, which is a flow change with its own blast radius, not a
     # numerator change.
-    total_required = (len(steps) - counts["WAIVED"]
-                      - counts["DEFERRED-BY-UPSTREAM"]
-                      - counts.get("SKIPPED-CONDITION", 0)
+    # DERIVED from the shared tier table (vibe-ic#634): the words subtracted
+    # here ARE the definition of "excused", and the ordering guard reads the
+    # same set, so the two cannot drift into different notions of which steps
+    # are claimed as done. Byte-identical to the previous three-term
+    # subtraction for the current vocabulary — the extra spellings in `EXCUSED`
+    # are consumer-side tolerance the producer never emits, so they count 0.
+    total_required = (len(steps)
+                      - sum(_n for _k, _n in counts.items()
+                            if _T.is_excused(_k))
                       + len(oss_blocked_skipped))
     # ADJUDICATED AT MERGE, v1.7.96 (supersedes Wave 93) — this is NOT an
     # owner ruling and must not be read as one; the repo's real ones carry a
