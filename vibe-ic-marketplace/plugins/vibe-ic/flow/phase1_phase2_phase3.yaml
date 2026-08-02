@@ -972,13 +972,16 @@ steps:
       #           failure). On the cut-ok / atpg-failed shape the two declared
       #           entries are present and tv.json is absent — exactly the new
       #           red the basis denied.
-      #       (b) The population is ZERO. Denominator: a project snapshot is
-      #           any directory holding a tracked file under
-      #           {reports,phase1,phase2,phase3,steps}/ — 17 of them across 9
-      #           designs in benchmark-data/ic. None carries tv.json,
-      #           scan_netlist.v or atpg_coverage.rpt at all, so the change
-      #           has no evidence base and this repo does not build for a
-      #           population of one (vibe-ic#439), let alone zero.
+      #       (b) RETIRED BY DATA, recorded so the withdrawal is not read as
+      #           resting on it. When written, no snapshot in benchmark-data/ic
+      #           carried tv.json, scan_netlist.v or atpg_coverage.rpt, so the
+      #           proposal had no evidence base (vibe-ic#439 — this repo does
+      #           not build for a population of one, let alone zero). That is
+      #           no longer true: caravel_user_project x sky130A now carries
+      #           all three. The co-occurrence is NOT evidence for declaring
+      #           tv.json — that snapshot is a SUCCESSFUL run, and (a) is about
+      #           the failure path, which no passing artefact can speak to.
+      #           Ground (a) alone carries the withdrawal.
       #     Declaring tv.json needs the producer's failure path handled first
       #     (write the two Python-side artefacts only when the engine ran, or
       #     declare all three together), not a declaration added on its own.
