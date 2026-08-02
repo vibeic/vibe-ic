@@ -353,6 +353,40 @@ def skip_boundary_unsupported_in_log(log: str) -> bool:
     return bool(_SKIP_BOUNDARY_UNSUPPORTED_RE.search(log or ""))
 
 
+# `fault chain` builds the scan wrapper's module HEADER from the design's own
+# port list plus the scan pins (sin/sout/shift/tck/test), but declares the
+# chain's reset in the BODY under the fixed name `rst`. When the design's reset
+# is called anything else — `rst_ni`, `resetn`, `rst_n`, … — `rst` is declared
+# and never listed, so fault's own yosys re-synthesis rejects the netlist it
+# just wrote and NOTHING is published.
+#
+# MEASURED (vibe-ic, opentitan_aes x sky130A, image ghcr.io/vibeic/vibeic-eda:
+# 0.2.54): `fault chain` reported "Internal scan chain successfully
+# constructed. Length: 66 / Boundary scan cells ... 105 / Total ... 171" and
+# then died with
+#   chained.v.chain-intermediate.v:10209: ERROR: Module port `\rst' is not
+#   declared in module header.
+# The chain was BUILT and thrown away. Before this classifier the report said
+# only "`fault chain` produced no scan netlist" + a log tail, so the next blind
+# run could not tell this from a genuine no-flops design.
+_MISSING_HEADER_PORT_RE = re.compile(
+    r"Module port `\\?([^']+?)'\s+is not declared in module header", re.I)
+
+
+def chain_resynth_missing_header_ports(log: str) -> list:
+    """Port names `fault chain`'s own re-synthesis rejected as body-declared
+    but absent from the wrapper's module header, in first-seen order.
+
+    PURE — a string check on the tool's own error, unit-testable without
+    Docker. Empty list means this failure mode is not present."""
+    seen: list = []
+    for m in _MISSING_HEADER_PORT_RE.finditer(log or ""):
+        name = m.group(1).strip()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
 def run_chain(project: Path, netlist_rel: str, clock: str,
               pdk: str, reset: str | None = None,
               reset_active_low: bool = False,
@@ -495,6 +529,32 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
                 "VIBEIC_DFT_SKIP_BOUNDARY=off to accept legacy boundary-scan "
                 "insertion — but on a fixed-pinout wrapper that re-introduces "
                 "the SS-corner setup violation (#604) and a large area blow-up.")
+            return 1, err_report
+        _missing_hdr = chain_resynth_missing_header_ports(log)
+        if _missing_hdr:
+            # DEGRADE LOUDLY: the chain was CONSTRUCTED and then discarded by
+            # fault's own re-synthesis. Say so, name the port, and name the
+            # remedy — otherwise this is indistinguishable from a design that
+            # legitimately has no scan chain to build.
+            err_report["chain_resynth_missing_header_ports"] = _missing_hdr
+            err_report["chain_built_then_discarded"] = True
+            err_report["error"] = (
+                f"`fault chain` BUILT the scan chain and then rejected its own "
+                f"intermediate netlist: port(s) {_missing_hdr} are declared in "
+                f"the wrapper's body but absent from its module header, so the "
+                f"re-synthesis fault runs internally fails and nothing is "
+                f"published. This is an upstream `fault chain` wrapper defect, "
+                f"not a property of this design: fault names the chain reset "
+                f"`rst` in the body while the header carries the design's own "
+                f"reset name, so EVERY design whose reset is not literally "
+                f"`rst` (rst_ni, rst_n, resetn, reset, …) hits it. The chain "
+                f"itself is sound — see the constructed/boundary/total lengths "
+                f"in log_tail. Remedies: (a) run in an image whose `fault "
+                f"chain` emits the port in the header; or (b) re-drive the "
+                f"design with its reset port named `rst`. VERIFIED on "
+                f"opentitan_aes x sky130A: adding the missing name to the "
+                f"header makes the identical intermediate elaborate under "
+                f"`yosys hierarchy -check` with rc=0.")
             return 1, err_report
         if connected_inout:
             # A CONNECTED bidirectional port cannot be stripped losslessly and
