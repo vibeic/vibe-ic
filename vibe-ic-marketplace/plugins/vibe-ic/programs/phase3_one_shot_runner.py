@@ -3076,7 +3076,189 @@ def _def_pdn_evidence(def_text: str) -> Dict[str, Any]:
     }
 
 
-def _build_pdn_tcl(pdk: "PdkConfig") -> str:
+def _macro_pg_ports_from_lef(
+        lef_text: str) -> List[Dict[str, Any]]:
+    """``[{master, pin, use, layer, w, h}]`` — every POWER/GROUND PORT RECT of
+    every MACRO in one LEF, with the rect's own width and height in um.
+
+    The SIZE of each port is the load-bearing part: a strap PATTERN can only be
+    guaranteed to cross a port whose extent across the strap exceeds the strap
+    pitch, and this macro's supply ports are 0.6um in one axis. Pure LEF
+    grammar, chip-AGNOSTIC."""
+    out: List[Dict[str, Any]] = []
+    if not isinstance(lef_text, str) or not lef_text:
+        return out
+    for mm in re.finditer(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\1\s*$",
+                          lef_text, re.S | re.M):
+        master, body = mm.group(1), mm.group(2)
+        for pm in re.finditer(r"^\s*PIN\s+(\S+)\s*$(.*?)^\s*END\s+\1\s*$",
+                              body, re.S | re.M):
+            pin, pbody = pm.group(1), pm.group(2)
+            use = re.search(r"^\s*USE\s+(POWER|GROUND)\s*;", pbody, re.M)
+            if not use:
+                continue
+            layer = None
+            for line in pbody.splitlines():
+                lm = re.match(r"\s*LAYER\s+(\S+)\s*;", line)
+                if lm:
+                    layer = lm.group(1)
+                    continue
+                rm = re.match(r"\s*RECT\s+([\d.-]+)\s+([\d.-]+)\s+"
+                              r"([\d.-]+)\s+([\d.-]+)\s*;", line)
+                if rm and layer:
+                    x1, y1, x2, y2 = (float(v) for v in rm.groups())
+                    out.append({"master": master, "pin": pin,
+                                "use": use.group(1), "layer": layer,
+                                "w": abs(x2 - x1), "h": abs(y2 - y1)})
+    return out
+
+
+def _macro_pdn_grid_plan(
+        macro_lef_texts: Sequence[str],
+        tech_lef_text: Optional[str],
+        stripes: Sequence[Dict[str, Any]],
+        followpin_layer: str) -> Optional[Dict[str, Any]]:
+    """Plan the MACRO grid — the construct that puts a conductor on a placed
+    hard macro's supply pins.
+
+    WHY THIS EXISTS
+    ===============
+    `pdngen` builds ONE grid per `define_pdn_grid`. The core grid straps the
+    standard-cell rows; it does nothing whatever to a hard macro's own supply
+    pins, because those pins are not on the rows. A macro grid is the only
+    construct in OpenROAD's PDN that connects them, and this flow emitted none:
+    `define_pdn_grid -macro` appeared NOWHERE in the programs tree.
+
+    What that produced on a real run, with the macro placed FIXED and its pins
+    bound BY NAME to the rails (so every claim-shaped check passed):
+
+        [phase3] HARD-MACRO SUPPLY AUTO GLOBAL-CONNECT: 2 pin(s) bound ...
+        [INFO  PDN-0001] Inserting grid: grid       <- one grid, the core's
+        [WARNING PSM-0038] Unconnected shape on net <rail> at (...), layer: <pin layer>.
+        [WARNING PSM-0039] Unconnected instance <inst>/<pin> at (...).
+        [ERROR   PSM-0069] Check connectivity failed on <rail>.
+
+    and, measured on the routed DEF, ZERO wire segments and ZERO vias of the
+    net on the pin's own layer anywhere inside the pin rectangle. The core's
+    straps ran directly OVER the macro — the metal was there, one layer up,
+    with nothing bringing it down.
+
+    THE TWO RULES THAT MAKE THE GRID LAND
+    =====================================
+    1. THE MACRO GRID'S STRAP MUST CROSS THE CORE'S TOP STRAP, NOT PARALLEL IT.
+       Giving the macro grid straps on BOTH strap layers makes it self-
+       sufficient: `pdngen` bonds macro-strap to macro-strap and never to the
+       core, and the result is a fully-built ISLAND. Measured: the pins carried
+       metal and the net went from 1 electrical island to 2, with the pins in
+       the smaller one. Straps on ONE layer only, perpendicular to the core's
+       other strap layer, leave the macro grid with nothing to bond to except
+       the core — which is the point.
+
+    2. A STRAP PATTERN ONLY REACHES A PORT WIDER THAN ITS OWN PITCH.
+       Supply ports on a hard macro are often slivers at the boundary. A pitch
+       is guaranteed to cross a port only when the port's extent ACROSS the
+       strap is at least the pitch, and `pdngen` refuses a pitch below
+       2*width+spacing, so a port narrower than that CANNOT be reached by any
+       legal pattern. Those ports are reported, not silently missed.
+
+    Returns None when there is nothing to do (no macros, no PG pins, no strap
+    layer above the pin layer, no port a legal pattern can cross) so a design
+    without hard macros produces a BYTE-IDENTICAL pnr.tcl.
+
+    chip-AGNOSTIC: masters, pin layers and every dimension come from the
+    design's own LEFs; no PDK name, no layer-name convention, no literal."""
+    ports: List[Dict[str, Any]] = []
+    for t in (macro_lef_texts or []):
+        ports.extend(_macro_pg_ports_from_lef(t))
+    if not ports:
+        return None
+    layers = _techlef_routing_layers(tech_lef_text or "")
+    if not layers:
+        return None
+    order = {n.lower(): i for i, (n, _d, _p, _w) in enumerate(layers)}
+    dirs = {n.lower(): d for n, d, _p, _w in layers}
+    pin_layers = sorted({p["layer"] for p in ports},
+                        key=lambda l: order.get(l.lower(), 10 ** 6))
+    pin_layer = pin_layers[0]
+    if pin_layer.lower() not in order:
+        return None
+    pin_i = order[pin_layer.lower()]
+    strap_by_layer = {s.get("layer", "").lower(): s for s in (stripes or [])
+                      if s.get("layer")}
+    above = [s for s in (stripes or [])
+             if order.get(str(s.get("layer", "")).lower(), -1) > pin_i]
+    if not above:
+        return None
+    above.sort(key=lambda s: order[str(s["layer"]).lower()])
+    # Rule 1: the macro's strap must have a PARTNER strap layer of the opposite
+    # direction in the core plan, and the macro grid must use only one of them.
+    strap = None
+    partner = None
+    for cand in above:
+        cd = dirs.get(str(cand["layer"]).lower(), "")
+        for other in (stripes or []):
+            od = dirs.get(str(other.get("layer", "")).lower(), "")
+            if other is cand or not od or not cd or od == cd:
+                continue
+            strap, partner = cand, other
+            break
+        if strap:
+            break
+    if not strap:
+        return None
+    sw = float(strap.get("width") or 0.0)
+    if sw <= 0:
+        return None
+    s_dir = dirs.get(str(strap["layer"]).lower(), "")
+    # min spacing of the strap layer, from the tech LEF's own WIDTH for it
+    s_minw = next((w for n, _d, _p, w in layers
+                   if n.lower() == str(strap["layer"]).lower()), sw)
+    floor = round(2.0 * sw + s_minw, 3)
+    # Rule 2: the extent that matters is ACROSS the strap — the port's width
+    # for a vertical strap, its height for a horizontal one.
+    def _across(p: Dict[str, Any]) -> float:
+        return float(p["h"] if s_dir == "HORIZONTAL" else p["w"])
+    reachable = [p for p in ports if _across(p) >= floor]
+    unreachable = [p for p in ports if _across(p) < floor]
+    if not reachable:
+        return None
+    pitch = round(max(floor, min(_across(p) for p in reachable)), 3)
+    return {
+        "masters": sorted({p["master"] for p in ports}),
+        "pin_layer": pin_layer,
+        "strap_layer": strap["layer"],
+        "strap_width": sw,
+        "pitch": pitch,
+        "partner_layer": partner["layer"],
+        "pitch_floor": floor,
+        "unreachable": sorted({(p["master"], p["pin"],
+                                round(_across(p), 3)) for p in unreachable}),
+    }
+
+
+def _build_macro_pdn_grid_tcl(plan: Optional[Dict[str, Any]]) -> str:
+    """Render `_macro_pdn_grid_plan` as Tcl. Empty string for an empty plan, so
+    a design with no hard macros emits a BYTE-IDENTICAL pnr.tcl."""
+    if not plan:
+        return ""
+    cells = " ".join(plan["masters"])
+    out = (
+        "  # --- macro grid: the only construct that puts a conductor on a\n"
+        "  # hard macro's supply pins. One strap layer only, perpendicular to\n"
+        "  # the core's other strap, so this grid bonds INTO the core grid\n"
+        "  # instead of building a fully-connected island beside it.\n"
+        f"  define_pdn_grid -macro -name macro_grid -voltage_domains CORE \\\n"
+        f"      -cells {{{cells}}} -grid_over_pg_pins\n"
+        f"  add_pdn_stripe -grid macro_grid -layer {plan['strap_layer']} "
+        f"-width {plan['strap_width']} -pitch {plan['pitch']} -offset 0\n"
+        f"  add_pdn_connect -grid macro_grid -layers "
+        f"{{{plan['pin_layer']} {plan['strap_layer']}}}\n"
+        f"  add_pdn_connect -grid macro_grid -layers "
+        f"{{{plan['strap_layer']} {plan['partner_layer']}}}\n")
+    return out
+
+
+def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
     """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
     `pdngen`) Tcl, NONFATAL-guarded.
 
@@ -3204,6 +3386,29 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
                 strap_note = (" + straps(" + _auto_note
                               + ",".join(str(s.get("layer")) for s in _stripes
                                          if s.get("layer")) + ")")
+        # === macro grid ===
+        # The core grid above straps the standard-cell ROWS. A placed hard
+        # macro's supply pins are not on the rows, so nothing here reaches
+        # them; see `_macro_pdn_grid_plan` for the measurement that showed the
+        # core's straps running directly over an unconnected macro pin.
+        _mg_tcl = ""
+        _mg_note = ""
+        _mg_plan = None
+        if _stripes:
+            _mg_lefs = [t for t in
+                        (_read_pdk_text(m, container)
+                         for m in (getattr(pdk, "macro_lefs", None) or [])) if t]
+            _mg_plan = _macro_pdn_grid_plan(
+                _mg_lefs, _read_pdk_text(getattr(pdk, "tech_lef", None),
+                                         container),
+                _stripes, fpl)
+            _mg_tcl = _build_macro_pdn_grid_tcl(_mg_plan)
+            if _mg_plan:
+                _mg_note = (f" + macro_grid({_mg_plan['pin_layer']}->"
+                            f"{_mg_plan['strap_layer']}@{_mg_plan['pitch']}"
+                            + (f", {len(_mg_plan['unreachable'])} port(s) "
+                               "narrower than any legal pitch"
+                               if _mg_plan["unreachable"] else "") + ")")
         # NEVER report success for a grid with no straps. `pdngen` returns 0
         # for a follow-pin-only grid, so the old code printed
         # PDN_INSERTED_ADAPTIVE and every downstream consumer read that as a
@@ -3212,9 +3417,20 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
         # be strapped (single-metal stack, or an unreadable/unparseable tech
         # LEF) the run emits a marker that `_pnr_pdn_status` treats as NOT-OK,
         # so the PnR step reports BLOCKED instead of passing hollow.
+        _mg_unreach = ""
+        if _mg_plan and _mg_plan["unreachable"]:
+            # A port a legal pitch cannot cross is reported, never left to be
+            # discovered as a PSM-0038 three steps downstream.
+            for _m, _p, _ext in _mg_plan["unreachable"]:
+                _mg_unreach += (
+                    f"  puts \"MACRO_PDN_PORT_UNREACHABLE: {_m}/{_p} port "
+                    f"extent {_ext}um across the strap is below the smallest "
+                    f"legal pitch {_mg_plan['pitch_floor']}um — no strap "
+                    f"pattern can be guaranteed to cross it\"\n")
         _ok_marker = (
             f"  puts \"PDN_INSERTED_ADAPTIVE: {fpl} follow-pins "
-            f"net={pwr}/{gnd} width={w}{strap_note}{well_note}\"\n"
+            f"net={pwr}/{gnd} width={w}{strap_note}{_mg_note}{well_note}\"\n"
+            + _mg_unreach
             if strap_tcl else
             f"  puts \"PDN_NO_STRAPS: {fpl} follow-pins net={pwr}/{gnd} "
             f"width={w}{well_note} — {_no_strap_why}, so the per-row rails "
@@ -3232,6 +3448,7 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
             "  define_pdn_grid -name grid -voltage_domains CORE\n"
             f"  add_pdn_stripe -grid grid -layer {fpl} -width {w} -followpins\n"
             + strap_tcl
+            + _mg_tcl
             + "  pdngen\n"
             "} _pdn_err]} {\n"
             "  puts \"PDN_NONFATAL: $_pdn_err\"\n"
@@ -15292,7 +15509,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         for _si in spare_plan.get("instances", [])
         if _si.get("cell")]
     tapcell_prune_block = _build_tapcell_prune_tcl(pdk, _spare_pts_um)
-    pdn_block = _build_pdn_tcl(pdk)
+    pdn_block = _build_pdn_tcl(pdk, container)
     # === hard-macro supply-pin auto global-connect ===
     # C4/2026-07-31 — this block is now emitted BEFORE `pdngen`, not
     # after it. Its purpose is to bind each hard macro's POWER/GROUND
