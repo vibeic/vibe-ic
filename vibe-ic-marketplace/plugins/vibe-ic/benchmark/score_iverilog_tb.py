@@ -41,7 +41,7 @@ Honesty: this scorer ONLY touches the hidden testbench/ref/golden at scoring tim
 The generation step must be blind (per the skill's absolute-blindness rule).
 """
 from __future__ import annotations
-import argparse, atexit, json, subprocess, tempfile, os, re, shutil, sys
+import argparse, atexit, json, shlex, subprocess, tempfile, os, re, shutil, sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -348,6 +348,148 @@ def _strip_waveform_dumps(text: str) -> str:
 
 _FORK_IV_COUNTER = [0]
 
+# ─── ORGANIC #643 — the timeout has to reach the SIMULATION, not the client ───
+#
+# Every scored simulation below is bounded the ordinary way:
+#
+#     subprocess.run(["vvp", binp], timeout=N)
+#
+# which kills its DIRECT CHILD. When `vvp` on PATH is a host binary that child IS
+# the simulation and the bound is exactly right. When it is a shim —
+#
+#     #!/usr/bin/env bash
+#     exec docker exec -w "$PWD" <container> /foss/tools/bin/vvp "$@"
+#
+# — the direct child is the docker CLIENT, and `docker exec` has no
+# kill-on-disconnect. The client dies; the simulation inside the container runs
+# to completion or forever. MEASURED on `.114`, ~4 h after the RTLLM run that
+# started them had already written its RESULT: four `vvp` at 99.9 % CPU,
+# ELAPSED 03:5x, parented by `containerd-shim`, their `TemporaryDirectory()`
+# roots long since removed from the host.
+#
+# The waste is the smaller half. `sim_timeout` is a SCORED verdict, so a leak
+# feeds itself: a hung TB steals a core, the next design is scored on a smaller
+# machine, a design near the bound now exceeds it and is scored `sim_timeout`,
+# which leaks another core. By the end of a sweep the designs scored last were
+# measured under conditions the ones scored first never saw, the verdict depends
+# on ordering, and a re-score is not idempotent — it starts with the previous
+# run's leaks still burning.
+#
+# WHY NOTHING CAUGHT IT: `programs/container_exec_deadline_check.py` exists for
+# precisely this defect, and its population is "an argv literal that STARTS a
+# `docker exec`". These call sites say `vvp`. The containerization is in PATH,
+# not in the argv, so the gate could not see them — the fix belongs at the call,
+# where the routing is discoverable at run time.
+#
+# So: ask what `vvp` on PATH actually IS, and put the bound where the work is.
+
+# Cache: "unresolved" | None (a real binary) | (container, remote_vvp_path).
+_VVP_ROUTE = ["unresolved"]
+# `docker exec` flags that CONSUME the next token — needed to find the container
+# name, which is the first token that is neither a flag nor a flag's value.
+_DOCKER_EXEC_VALUE_FLAGS = {"-w", "--workdir", "-u", "--user", "-e", "--env",
+                            "--env-file", "--detach-keys"}
+
+
+def _resolve_vvp_route(which=None):
+    """(container, remote_vvp) when `vvp` on PATH routes into a container, else
+    None. Reads the resolved file rather than assuming any particular harness —
+    the shim is written by the benchmark host, not by this repo, so the only
+    honest way to know is to look at the one actually on PATH."""
+    if _VVP_ROUTE[0] != "unresolved":
+        return _VVP_ROUTE[0]
+    _VVP_ROUTE[0] = _vvp_route_of(which or shutil.which("vvp"))
+    return _VVP_ROUTE[0]
+
+
+def _vvp_route_of(path):
+    """The pure half of `_resolve_vvp_route`, so it is testable without PATH."""
+    if not path:
+        return None
+    try:
+        head = Path(path).read_bytes()[:8192].decode("utf-8", "replace")
+    except OSError:
+        return None
+    if not head.startswith("#!"):          # a real ELF binary — the bound is fine
+        return None
+    m = re.search(r"\bdocker\s+exec\b(.*)$", head, re.M)
+    if not m:
+        return None
+    try:
+        toks = shlex.split(m.group(1), comments=True)
+    except ValueError:
+        return None
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t in _DOCKER_EXEC_VALUE_FLAGS:
+            i += 2
+            continue
+        if t.startswith("-"):
+            i += 1
+            continue
+        container = t
+        remote = toks[i + 1] if i + 1 < len(toks) else "vvp"
+        if remote.startswith("-") or remote.startswith("$"):
+            remote = "vvp"
+        return (container, remote)
+    return None
+
+
+_CONTAINER_HAS_TIMEOUT = {}
+
+
+def _container_has_timeout(container: str) -> bool:
+    """Whether GNU `timeout` exists in the container. Probed once per container;
+    a container without it still runs, just unbounded — the same behaviour as
+    before this fix, never worse."""
+    if container not in _CONTAINER_HAS_TIMEOUT:
+        try:
+            ok = subprocess.run(["docker", "exec", container,
+                                 "timeout", "--version"],
+                                capture_output=True, timeout=30).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        _CONTAINER_HAS_TIMEOUT[container] = ok
+    return _CONTAINER_HAS_TIMEOUT[container]
+
+
+def _bounded_vvp(binp, *, timeout, cwd, route=None):
+    """`vvp binp`, bounded where the SIMULATION lives.
+
+    Raises `subprocess.TimeoutExpired` on either route, so every call site's
+    existing `except subprocess.TimeoutExpired` keeps its meaning unchanged —
+    the container rung reports its deadline through rc 124/137 (GNU `timeout`,
+    137 when it had to escalate to KILL), translated back here.
+
+    `timeout --kill-after=5` puts the simulation in its own process group and
+    signals the GROUP, so a tool that spawns children is torn down whole; it
+    fires 5 s BEFORE the host bound, so the container side is already dead when
+    the host would have given up. Same shape `_docker_watchdog.
+    wrap_with_container_timeout` uses for every other supervised tool.
+
+    NO SHELL, deliberately — not even the `bash -lc` that wrapper needs. The
+    container's login profile PRINTS (`[INFO] Final PATH variable: …`), and this
+    call's stdout is the exact text `pass_regex`/`fail_regex` are matched
+    against; a banner in there is a scoring hazard, not a cosmetic one. The
+    remote path comes out of the shim already absolute, so no profile is needed
+    to resolve it — and running the tool directly is also what the shim itself
+    does."""
+    route = _resolve_vvp_route() if route is None else route
+    if route is None:
+        return subprocess.run(["vvp", str(binp)], capture_output=True, text=True,
+                              timeout=timeout, cwd=cwd)
+    container, remote = route
+    argv = ["docker", "exec", "-w", str(cwd), container]
+    if _container_has_timeout(container):
+        argv += ["timeout", "--kill-after=5", str(max(1, int(timeout) - 5))]
+    argv += [remote, str(binp)]
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    if r.returncode in (124, 137):
+        raise subprocess.TimeoutExpired(cmd=["vvp", str(binp)], timeout=timeout)
+    return r
+
+
 # Fork-rung vvp wall-clock cap (seconds). Module-level so tests can shrink it.
 _FORK_VVP_TIMEOUT = 120
 # Sentinel returned when the fork BUILD succeeded but the simulation hit the
@@ -540,8 +682,7 @@ def _tb_is_non_discriminating(sample_text: str, tb: Path, design_dir: Path,
         if c.returncode != 0 or not os.path.exists(binp):
             return None
         try:
-            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=30, cwd=str(design_dir))
+            r = _bounded_vvp(binp, timeout=30, cwd=str(design_dir))
         except subprocess.TimeoutExpired:
             return None  # stub hangs the TB ⇒ TB depends on outputs ⇒ inconclusive→leave counted
         return bool(pass_re.search(r.stdout + r.stderr))
@@ -724,9 +865,7 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
             # not a runtime defect. Don't double-count; leave it to the main path.
             return None
         try:
-            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=120,
-                               cwd=str(design_dir) if use_cwd else _VVP_SCRATCH_CWD)
+            r = _bounded_vvp(binp, timeout=120, cwd=str(design_dir) if use_cwd else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             # Golden's own TB hangs — treat as no determination (could be a TB
             # that waits forever); don't flip a model FAIL into a defect on a
@@ -1170,9 +1309,7 @@ def _score_side_port_permutation_rescue_shape_b(
         if c.returncode != 0 or not os.path.exists(binp):
             return None  # the permutation did NOT rescue the compile → keep FAIL.
         try:
-            r = subprocess.run(
-                ["vvp", binp], capture_output=True, text=True, timeout=120,
-                cwd=str(design_dir) if use_cwd else _VVP_SCRATCH_CWD)
+            r = _bounded_vvp(binp, timeout=120, cwd=str(design_dir) if use_cwd else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return None  # permuted candidate hangs → not a rescue → keep FAIL.
     out = r.stdout + r.stderr
@@ -1337,9 +1474,7 @@ def _param_passthrough_retry_shape_b(
     if c.returncode != 0 or not os.path.exists(binp):
         return None  # the injection did NOT clear the elaboration → keep FAIL.
     try:
-        r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                           timeout=120,
-                           cwd=str(dataset / design) if use_cwd else _VVP_SCRATCH_CWD)
+        r = _bounded_vvp(binp, timeout=120, cwd=str(dataset / design) if use_cwd else _VVP_SCRATCH_CWD)
     except subprocess.TimeoutExpired:
         return {"design": design, "verdict": "FAIL", "reason": "sim_timeout"}
     out = r.stdout + r.stderr
@@ -1466,9 +1601,7 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
                     "log": c.stderr[-400:]}
         try:
             # cwd=design dir so the TB's relative-path $readmemh works (skill §3)
-            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=120,
-                               cwd=str(dataset / design) if args.get("cwd_design_dir", True) else _VVP_SCRATCH_CWD)
+            r = _bounded_vvp(binp, timeout=120, cwd=str(dataset / design) if args.get("cwd_design_dir", True) else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return {"design": design, "verdict": "FAIL", "reason": "sim_timeout"}
         out = r.stdout + r.stderr
@@ -1602,8 +1735,7 @@ def _canonical_disagrees_with_golden(prob: str, dataset: Path, layout: dict,
         else:
             return None
         try:
-            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=120, cwd=_VVP_SCRATCH_CWD)
+            r = _bounded_vvp(binp, timeout=120, cwd=_VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return None
         out = r.stdout + r.stderr
@@ -1692,9 +1824,7 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
                 return {"problem": prob, "verdict": "FAIL", "reason": "compile_error",
                         "log": c.stderr[-400:]}
         try:
-            r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=120,
-                               cwd=str(dataset) if args.get("cwd_design_dir", False) else _VVP_SCRATCH_CWD)
+            r = _bounded_vvp(binp, timeout=120, cwd=str(dataset) if args.get("cwd_design_dir", False) else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return {"problem": prob, "verdict": "FAIL", "reason": "sim_timeout"}
         out = r.stdout + r.stderr
