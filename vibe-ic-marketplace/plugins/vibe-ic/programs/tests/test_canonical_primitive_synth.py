@@ -55,6 +55,8 @@ POSITIVE = {
         ("barrel_shifter_right_8", "barrel_shifter"),
     "Miscellaneous/Signal generation/signal_generator":
         ("triangle_wave_generator_5", "signal_generator"),
+    "Control/Finite State Machine/fsm":
+        ("mealy_seq_detector_10011", "fsm"),
 }
 
 NEGATIVE = [
@@ -165,6 +167,12 @@ _INLINE_POS = {
         "0 and 31.\n"
         "Input ports:\n clk: Clock.\n rst_n: Active-low reset.\n"
         "Output ports:\n wave: 5-bit output waveform.\n"),
+    "mealy_seq_detector_10011": (
+        "Module name:\n    fsm\n"
+        "Implement a Mealy FSM detection circuit that detects a single-bit input "
+        "IN. When the input is 10011, output MATCH is 1.\n"
+        "Input ports:\n IN: Input signal.\n CLK: Clock.\n RST: Reset.\n"
+        "Output ports:\n MATCH: match indicator.\n"),
 }
 
 # Near-miss descriptions that MUST fail-closed to None (no template mis-fire).
@@ -180,6 +188,15 @@ _INLINE_NEG = [
     ("Module name:\n    mul_16bit\n"
      "A 16-bit multiplier in combinational logic.\n"
      "Input ports:\n A: 16-bit.\n B: 8-bit.\n Output ports:\n result\n odd\n"),
+    # a Mealy FSM with the fsm ports but a DIFFERENT pattern (1011, not 10011) —
+    # the mealy_seq_detector_10011 shape must fail-closed on a foreign pattern.
+    ("Module name:\n    fsm\n"
+     "Implement a Mealy FSM that detects the input pattern 1011.\n"
+     "Input ports:\n IN\n CLK\n RST\n Output ports:\n MATCH\n"),
+    # the sibling sequence_detector — an FSM, but NOT module `fsm`, so no misfire.
+    ("Module name:\n    sequence_detector\n"
+     "A finite state machine detecting the 1001 sequence via states.\n"
+     "Input ports:\n clk\n reset_n\n data_in\n Output ports:\n detected\n"),
 ]
 
 

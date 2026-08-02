@@ -308,6 +308,20 @@ def _is_triangle_siggen(desc: str, mod: Optional[str], ports: set) -> bool:
     return True
 
 
+def _is_fsm_mealy_10011(desc: str, mod: Optional[str], ports: set) -> bool:
+    if mod != "fsm":
+        return False
+    # role set: single-bit IN, CLK, RST, MATCH (lowercased by _port_tokens)
+    if not {"in", "clk", "rst", "match"}.issubset(ports):
+        return False
+    # distinctive: a MEALY detector for the exact serial pattern 10011
+    if "10011" not in _low(desc):
+        return False
+    if "mealy" not in _low(desc):
+        return False
+    return True
+
+
 # Ordered list: (shape_key, detector). Order is stable; each detector is tight
 # enough that at most one fires, but the loop returns the first match.
 _DETECTORS: List[Tuple[str, object]] = [
@@ -323,6 +337,7 @@ _DETECTORS: List[Tuple[str, object]] = [
     ("pipelined_unsigned_multiplier_8", _is_pipe_mul8),
     ("barrel_shifter_right_8", _is_barrel_shifter),
     ("triangle_wave_generator_5", _is_triangle_siggen),
+    ("mealy_seq_detector_10011", _is_fsm_mealy_10011),
 ]
 
 
@@ -1389,6 +1404,52 @@ endmodule
 '''
 
 
+_TPL_FSM = r'''// fsm: Mealy FSM detecting the serial bit pattern 10011 on IN, with overlap.
+// The spec is explicit that this is a MEALY machine: MATCH is asserted
+// COMBINATIONALLY in the SAME cycle as the fifth bit (the last IN=1 that
+// completes 10011) — never registered a cycle late. The state holds the longest
+// matched prefix of 10011; on the completing input the machine overlaps back to
+// the "matched 1" state, so a continuous 100110011 stream fires MATCH at the
+// 5th and 9th bits. Async active-high RST clears the machine.
+module fsm(
+    input      IN,
+    input      CLK,
+    input      RST,
+    output reg MATCH
+);
+    localparam S0 = 3'd0, // matched ""
+               S1 = 3'd1, // matched "1"
+               S2 = 3'd2, // matched "10"
+               S3 = 3'd3, // matched "100"
+               S4 = 3'd4; // matched "1001"
+    reg [2:0] state, next_state;
+
+    always @(posedge CLK or posedge RST) begin
+        if (RST) state <= S0;
+        else     state <= next_state;
+    end
+
+    always @(*) begin
+        case (state)
+            S0: next_state = IN ? S1 : S0;
+            S1: next_state = IN ? S1 : S2;
+            S2: next_state = IN ? S1 : S3;
+            S3: next_state = IN ? S4 : S0;
+            S4: next_state = IN ? S1 : S2;
+            default: next_state = S0;
+        endcase
+    end
+
+    // Mealy output: combinational, same cycle as the completing 5th bit.
+    always @(*) begin
+        if (RST)                    MATCH = 1'b0;
+        else if (state == S4 && IN) MATCH = 1'b1;
+        else                        MATCH = 1'b0;
+    end
+endmodule
+'''
+
+
 _TEMPLATES: Dict[str, str] = {
     "odd_clock_divider": _TPL_ODD,
     "frac_clock_divider_3p5": _TPL_FRAC,
@@ -1402,6 +1463,7 @@ _TEMPLATES: Dict[str, str] = {
     "pipelined_unsigned_multiplier_8": _TPL_MULPIPE,
     "barrel_shifter_right_8": _TPL_BARREL,
     "triangle_wave_generator_5": _TPL_SIGGEN,
+    "mealy_seq_detector_10011": _TPL_FSM,
 }
 
 # The module name the emitted RTL declares for each shape (== TB instance name).
@@ -1418,6 +1480,7 @@ _SHAPE_MODULE: Dict[str, str] = {
     "pipelined_unsigned_multiplier_8": "multi_pipe_8bit",
     "barrel_shifter_right_8": "barrel_shifter",
     "triangle_wave_generator_5": "signal_generator",
+    "mealy_seq_detector_10011": "fsm",
 }
 
 
