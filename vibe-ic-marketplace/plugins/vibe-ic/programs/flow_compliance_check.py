@@ -2189,7 +2189,90 @@ def _resolve_program_cmd(cmd_str: str, cwd: Path | None = None) -> List[str]:
     return [sys.executable, str(prog_path)] + args
 
 
+# ── ORGANIC #682 — a gate that never ran read exactly like one that passed ────
+#
+# This program reported a STEP's verdict and never named the GATE that produced
+# it. Only the failing branches wrote the command; a gate that ran and passed
+# left no trace at all. So `grep -c <gate> flow_compliance_check.log` returned 0
+# for a gate that had just written `{"verdict": "FAIL", "rc": 1}`, and 0 for one
+# that certainly ran, and 0 for one that was never wired — three different facts,
+# one answer.
+#
+# It cost a false alarm: a round-report concluded from that grep that
+# `drv_promotion_corroboration` writes a blocking FAIL the compliance gate never
+# reads. Verified false — the gate is wired at step 23, it ran, it wrote its
+# verdict, and step 23 was FAIL. The inference only looked sound because the
+# record could not separate "never read" from "not recorded".
+#
+# Same shape as #544 ("the run looked clean because the only gate that would have
+# disagreed had not spoken"), which fixed the AGGREGATION and left the
+# OBSERVABILITY open. And the same shape as the P0-umbrella registry entry above,
+# which was fixed for one registry and not in general.
+#
+# Every invocation is recorded, whatever it returns. Recording only failures is
+# how an absence became indistinguishable from a pass in the first place.
+_GATE_LEDGER: List[Dict[str, Any]] = []
+
+
+def _record_gate_execution(cmd: str, rc: Optional[int], verdict: str) -> None:
+    """One row per gate INVOCATION. `rc=None` means the program could not be
+    launched at all — itself a distinct fact from any exit code."""
+    _GATE_LEDGER.append({"gate": _gate_name(cmd), "cmd": cmd,
+                         "rc": rc, "verdict": verdict})
+
+
+def _gate_name(cmd: str) -> str:
+    """The program name a reader would grep for — the first token that looks
+    like a checker, not the whole command line with its paths and flags."""
+    for tok in (cmd or "").split():
+        base = tok.rsplit("/", 1)[-1]
+        if base.endswith(".py"):
+            return base[:-3]
+        if base.endswith(("_check", "_audit")):
+            return base
+    return (cmd or "").split(" ", 1)[0] or "<empty>"
+
+
+def gate_ledger_lines() -> List[str]:
+    """The attribution block, for the log. Emitted even when every gate passed —
+    a record that appears only on failure cannot be used to prove a gate ran."""
+    if not _GATE_LEDGER:
+        return ["GATE EXECUTION LEDGER: no program gate was invoked in this run."]
+    out = [f"GATE EXECUTION LEDGER: {len(_GATE_LEDGER)} invocation(s) — "
+           f"every program gate this run dispatched, whatever it returned."]
+    for row in _GATE_LEDGER:
+        rc = "launch-failed" if row["rc"] is None else f"rc={row['rc']}"
+        out.append(f"  GATE_RAN {row['gate']:44} {rc:14} {row['verdict']}")
+    return out
+
+
 def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
+    """#682 attribution wrapper. Records the invocation whatever it returns, then
+    delegates. WRAPPING rather than inserting a `_record_gate_execution` call at
+    each of the eleven return points: a return added later would otherwise be
+    unrecorded, and an unrecorded gate is the exact defect this exists to close.
+    The verdict is read back from the snippet the inner function already builds,
+    so there is one classification and not a second one that can disagree."""
+    ok, out = __check_program_exit_zero(project, cmd_str)
+    if out.startswith(_VACUOUS_HINT_PREFIX):
+        verdict, rc = "VACUOUS_PASS", 2
+    elif out.startswith(_WAIVER_HINT_PREFIX):
+        verdict, rc = "PASS_WITH_WAIVERS", _WAIVER_EXIT_CODE
+    elif out.startswith("program not found:"):
+        verdict, rc = "NOT_FOUND", None
+    elif out.startswith(_CRASH_HINT_PREFIX):
+        verdict, rc = "CRASHED", None
+    elif out.startswith("program TIMED OUT"):
+        verdict, rc = "TIMEOUT", None
+    elif out.startswith("program invocation error:"):
+        verdict, rc = "INVOCATION_ERROR", None
+    else:
+        verdict, rc = ("PASS", 0) if ok else ("FAIL", 1)
+    _record_gate_execution(cmd_str, rc, verdict)
+    return ok, out
+
+
+def __check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     """Run program in project dir (with globs expanded relative to project),
     return (passed, output_snippet).
 
@@ -9901,6 +9984,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Surface a stderr warning so a human reviewer can spot it.
         print(f"flow_compliance_check: WARN — could not emit "
               f"phase23_completion_audit.json: {e}", file=sys.stderr)
+
+    # ORGANIC #682 — the attribution block. Printed on EVERY run, before the
+    # verdict, so `grep <gate> flow_compliance_check.log` answers the question a
+    # reader is actually asking: did this gate run? A block emitted only when
+    # something failed would leave the passing case exactly as unreadable as it
+    # was, which is the defect.
+    for _line in gate_ledger_lines():
+        print(_line)
 
     # v1.6.210 (#91) — PASS_WITH_OPEN_SOURCE_CONSTRAINTS exits 0 (it is
     # a recognised verdict tier, not a FAIL). PASS, PASS_WITH_WAIVERS,
