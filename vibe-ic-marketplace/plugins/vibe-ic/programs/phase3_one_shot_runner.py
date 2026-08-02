@@ -3076,7 +3076,189 @@ def _def_pdn_evidence(def_text: str) -> Dict[str, Any]:
     }
 
 
-def _build_pdn_tcl(pdk: "PdkConfig") -> str:
+def _macro_pg_ports_from_lef(
+        lef_text: str) -> List[Dict[str, Any]]:
+    """``[{master, pin, use, layer, w, h}]`` — every POWER/GROUND PORT RECT of
+    every MACRO in one LEF, with the rect's own width and height in um.
+
+    The SIZE of each port is the load-bearing part: a strap PATTERN can only be
+    guaranteed to cross a port whose extent across the strap exceeds the strap
+    pitch, and this macro's supply ports are 0.6um in one axis. Pure LEF
+    grammar, chip-AGNOSTIC."""
+    out: List[Dict[str, Any]] = []
+    if not isinstance(lef_text, str) or not lef_text:
+        return out
+    for mm in re.finditer(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\1\s*$",
+                          lef_text, re.S | re.M):
+        master, body = mm.group(1), mm.group(2)
+        for pm in re.finditer(r"^\s*PIN\s+(\S+)\s*$(.*?)^\s*END\s+\1\s*$",
+                              body, re.S | re.M):
+            pin, pbody = pm.group(1), pm.group(2)
+            use = re.search(r"^\s*USE\s+(POWER|GROUND)\s*;", pbody, re.M)
+            if not use:
+                continue
+            layer = None
+            for line in pbody.splitlines():
+                lm = re.match(r"\s*LAYER\s+(\S+)\s*;", line)
+                if lm:
+                    layer = lm.group(1)
+                    continue
+                rm = re.match(r"\s*RECT\s+([\d.-]+)\s+([\d.-]+)\s+"
+                              r"([\d.-]+)\s+([\d.-]+)\s*;", line)
+                if rm and layer:
+                    x1, y1, x2, y2 = (float(v) for v in rm.groups())
+                    out.append({"master": master, "pin": pin,
+                                "use": use.group(1), "layer": layer,
+                                "w": abs(x2 - x1), "h": abs(y2 - y1)})
+    return out
+
+
+def _macro_pdn_grid_plan(
+        macro_lef_texts: Sequence[str],
+        tech_lef_text: Optional[str],
+        stripes: Sequence[Dict[str, Any]],
+        followpin_layer: str) -> Optional[Dict[str, Any]]:
+    """Plan the MACRO grid — the construct that puts a conductor on a placed
+    hard macro's supply pins.
+
+    WHY THIS EXISTS
+    ===============
+    `pdngen` builds ONE grid per `define_pdn_grid`. The core grid straps the
+    standard-cell rows; it does nothing whatever to a hard macro's own supply
+    pins, because those pins are not on the rows. A macro grid is the only
+    construct in OpenROAD's PDN that connects them, and this flow emitted none:
+    `define_pdn_grid -macro` appeared NOWHERE in the programs tree.
+
+    What that produced on a real run, with the macro placed FIXED and its pins
+    bound BY NAME to the rails (so every claim-shaped check passed):
+
+        [phase3] HARD-MACRO SUPPLY AUTO GLOBAL-CONNECT: 2 pin(s) bound ...
+        [INFO  PDN-0001] Inserting grid: grid       <- one grid, the core's
+        [WARNING PSM-0038] Unconnected shape on net <rail> at (...), layer: <pin layer>.
+        [WARNING PSM-0039] Unconnected instance <inst>/<pin> at (...).
+        [ERROR   PSM-0069] Check connectivity failed on <rail>.
+
+    and, measured on the routed DEF, ZERO wire segments and ZERO vias of the
+    net on the pin's own layer anywhere inside the pin rectangle. The core's
+    straps ran directly OVER the macro — the metal was there, one layer up,
+    with nothing bringing it down.
+
+    THE TWO RULES THAT MAKE THE GRID LAND
+    =====================================
+    1. THE MACRO GRID'S STRAP MUST CROSS THE CORE'S TOP STRAP, NOT PARALLEL IT.
+       Giving the macro grid straps on BOTH strap layers makes it self-
+       sufficient: `pdngen` bonds macro-strap to macro-strap and never to the
+       core, and the result is a fully-built ISLAND. Measured: the pins carried
+       metal and the net went from 1 electrical island to 2, with the pins in
+       the smaller one. Straps on ONE layer only, perpendicular to the core's
+       other strap layer, leave the macro grid with nothing to bond to except
+       the core — which is the point.
+
+    2. A STRAP PATTERN ONLY REACHES A PORT WIDER THAN ITS OWN PITCH.
+       Supply ports on a hard macro are often slivers at the boundary. A pitch
+       is guaranteed to cross a port only when the port's extent ACROSS the
+       strap is at least the pitch, and `pdngen` refuses a pitch below
+       2*width+spacing, so a port narrower than that CANNOT be reached by any
+       legal pattern. Those ports are reported, not silently missed.
+
+    Returns None when there is nothing to do (no macros, no PG pins, no strap
+    layer above the pin layer, no port a legal pattern can cross) so a design
+    without hard macros produces a BYTE-IDENTICAL pnr.tcl.
+
+    chip-AGNOSTIC: masters, pin layers and every dimension come from the
+    design's own LEFs; no PDK name, no layer-name convention, no literal."""
+    ports: List[Dict[str, Any]] = []
+    for t in (macro_lef_texts or []):
+        ports.extend(_macro_pg_ports_from_lef(t))
+    if not ports:
+        return None
+    layers = _techlef_routing_layers(tech_lef_text or "")
+    if not layers:
+        return None
+    order = {n.lower(): i for i, (n, _d, _p, _w) in enumerate(layers)}
+    dirs = {n.lower(): d for n, d, _p, _w in layers}
+    pin_layers = sorted({p["layer"] for p in ports},
+                        key=lambda l: order.get(l.lower(), 10 ** 6))
+    pin_layer = pin_layers[0]
+    if pin_layer.lower() not in order:
+        return None
+    pin_i = order[pin_layer.lower()]
+    strap_by_layer = {s.get("layer", "").lower(): s for s in (stripes or [])
+                      if s.get("layer")}
+    above = [s for s in (stripes or [])
+             if order.get(str(s.get("layer", "")).lower(), -1) > pin_i]
+    if not above:
+        return None
+    above.sort(key=lambda s: order[str(s["layer"]).lower()])
+    # Rule 1: the macro's strap must have a PARTNER strap layer of the opposite
+    # direction in the core plan, and the macro grid must use only one of them.
+    strap = None
+    partner = None
+    for cand in above:
+        cd = dirs.get(str(cand["layer"]).lower(), "")
+        for other in (stripes or []):
+            od = dirs.get(str(other.get("layer", "")).lower(), "")
+            if other is cand or not od or not cd or od == cd:
+                continue
+            strap, partner = cand, other
+            break
+        if strap:
+            break
+    if not strap:
+        return None
+    sw = float(strap.get("width") or 0.0)
+    if sw <= 0:
+        return None
+    s_dir = dirs.get(str(strap["layer"]).lower(), "")
+    # min spacing of the strap layer, from the tech LEF's own WIDTH for it
+    s_minw = next((w for n, _d, _p, w in layers
+                   if n.lower() == str(strap["layer"]).lower()), sw)
+    floor = round(2.0 * sw + s_minw, 3)
+    # Rule 2: the extent that matters is ACROSS the strap — the port's width
+    # for a vertical strap, its height for a horizontal one.
+    def _across(p: Dict[str, Any]) -> float:
+        return float(p["h"] if s_dir == "HORIZONTAL" else p["w"])
+    reachable = [p for p in ports if _across(p) >= floor]
+    unreachable = [p for p in ports if _across(p) < floor]
+    if not reachable:
+        return None
+    pitch = round(max(floor, min(_across(p) for p in reachable)), 3)
+    return {
+        "masters": sorted({p["master"] for p in ports}),
+        "pin_layer": pin_layer,
+        "strap_layer": strap["layer"],
+        "strap_width": sw,
+        "pitch": pitch,
+        "partner_layer": partner["layer"],
+        "pitch_floor": floor,
+        "unreachable": sorted({(p["master"], p["pin"],
+                                round(_across(p), 3)) for p in unreachable}),
+    }
+
+
+def _build_macro_pdn_grid_tcl(plan: Optional[Dict[str, Any]]) -> str:
+    """Render `_macro_pdn_grid_plan` as Tcl. Empty string for an empty plan, so
+    a design with no hard macros emits a BYTE-IDENTICAL pnr.tcl."""
+    if not plan:
+        return ""
+    cells = " ".join(plan["masters"])
+    out = (
+        "  # --- macro grid: the only construct that puts a conductor on a\n"
+        "  # hard macro's supply pins. One strap layer only, perpendicular to\n"
+        "  # the core's other strap, so this grid bonds INTO the core grid\n"
+        "  # instead of building a fully-connected island beside it.\n"
+        f"  define_pdn_grid -macro -name macro_grid -voltage_domains CORE \\\n"
+        f"      -cells {{{cells}}} -grid_over_pg_pins\n"
+        f"  add_pdn_stripe -grid macro_grid -layer {plan['strap_layer']} "
+        f"-width {plan['strap_width']} -pitch {plan['pitch']} -offset 0\n"
+        f"  add_pdn_connect -grid macro_grid -layers "
+        f"{{{plan['pin_layer']} {plan['strap_layer']}}}\n"
+        f"  add_pdn_connect -grid macro_grid -layers "
+        f"{{{plan['strap_layer']} {plan['partner_layer']}}}\n")
+    return out
+
+
+def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
     """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
     `pdngen`) Tcl, NONFATAL-guarded.
 
@@ -3204,6 +3386,29 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
                 strap_note = (" + straps(" + _auto_note
                               + ",".join(str(s.get("layer")) for s in _stripes
                                          if s.get("layer")) + ")")
+        # === macro grid ===
+        # The core grid above straps the standard-cell ROWS. A placed hard
+        # macro's supply pins are not on the rows, so nothing here reaches
+        # them; see `_macro_pdn_grid_plan` for the measurement that showed the
+        # core's straps running directly over an unconnected macro pin.
+        _mg_tcl = ""
+        _mg_note = ""
+        _mg_plan = None
+        if _stripes:
+            _mg_lefs = [t for t in
+                        (_read_pdk_text(m, container)
+                         for m in (getattr(pdk, "macro_lefs", None) or [])) if t]
+            _mg_plan = _macro_pdn_grid_plan(
+                _mg_lefs, _read_pdk_text(getattr(pdk, "tech_lef", None),
+                                         container),
+                _stripes, fpl)
+            _mg_tcl = _build_macro_pdn_grid_tcl(_mg_plan)
+            if _mg_plan:
+                _mg_note = (f" + macro_grid({_mg_plan['pin_layer']}->"
+                            f"{_mg_plan['strap_layer']}@{_mg_plan['pitch']}"
+                            + (f", {len(_mg_plan['unreachable'])} port(s) "
+                               "narrower than any legal pitch"
+                               if _mg_plan["unreachable"] else "") + ")")
         # NEVER report success for a grid with no straps. `pdngen` returns 0
         # for a follow-pin-only grid, so the old code printed
         # PDN_INSERTED_ADAPTIVE and every downstream consumer read that as a
@@ -3212,9 +3417,20 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
         # be strapped (single-metal stack, or an unreadable/unparseable tech
         # LEF) the run emits a marker that `_pnr_pdn_status` treats as NOT-OK,
         # so the PnR step reports BLOCKED instead of passing hollow.
+        _mg_unreach = ""
+        if _mg_plan and _mg_plan["unreachable"]:
+            # A port a legal pitch cannot cross is reported, never left to be
+            # discovered as a PSM-0038 three steps downstream.
+            for _m, _p, _ext in _mg_plan["unreachable"]:
+                _mg_unreach += (
+                    f"  puts \"MACRO_PDN_PORT_UNREACHABLE: {_m}/{_p} port "
+                    f"extent {_ext}um across the strap is below the smallest "
+                    f"legal pitch {_mg_plan['pitch_floor']}um — no strap "
+                    f"pattern can be guaranteed to cross it\"\n")
         _ok_marker = (
             f"  puts \"PDN_INSERTED_ADAPTIVE: {fpl} follow-pins "
-            f"net={pwr}/{gnd} width={w}{strap_note}{well_note}\"\n"
+            f"net={pwr}/{gnd} width={w}{strap_note}{_mg_note}{well_note}\"\n"
+            + _mg_unreach
             if strap_tcl else
             f"  puts \"PDN_NO_STRAPS: {fpl} follow-pins net={pwr}/{gnd} "
             f"width={w}{well_note} — {_no_strap_why}, so the per-row rails "
@@ -3232,6 +3448,7 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
             "  define_pdn_grid -name grid -voltage_domains CORE\n"
             f"  add_pdn_stripe -grid grid -layer {fpl} -width {w} -followpins\n"
             + strap_tcl
+            + _mg_tcl
             + "  pdngen\n"
             "} _pdn_err]} {\n"
             "  puts \"PDN_NONFATAL: $_pdn_err\"\n"
@@ -4982,6 +5199,139 @@ def commercial_pdk_fallback_guard(
         "OR re-run with an explicit `--pdk <oss-name>` if an open-source run "
         "was intended, OR pass `--allow-oss-pdk-fallback` to acknowledge the "
         "fallback in writing."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Declared-PDK-target mismatch guard (chip-AGNOSTIC)
+# ---------------------------------------------------------------------------
+# Where Phase 1 records the PDK the DESIGN declares. First hit wins; both are
+# written by Phase 1 itself, so this reads the design's own statement, never
+# the operator's and never the host's.
+_DECLARED_PDK_SOURCES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("reports/phase1/pdk_staging_read.json", ("adopted_pdk_target",)),
+    ("phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+     ("fields", "pdk_target")),
+)
+
+
+def _read_declared_pdk_target(project: Path) -> Optional[str]:
+    """The PDK target the DESIGN declares, as Phase 1 recorded it.
+
+    None when Phase 1 recorded no target — a design that expressed no
+    preference cannot be contradicted, so the guard must stay silent.
+    """
+    for rel, keys in _DECLARED_PDK_SOURCES:
+        try:
+            doc = json.loads((project / rel).read_text())
+        except Exception:
+            continue
+        for k in keys:
+            if not isinstance(doc, dict):
+                doc = None
+                break
+            doc = doc.get(k)
+        if isinstance(doc, str) and doc.strip():
+            return doc.strip()
+    return None
+
+
+def _pdk_tokens(text: str) -> set:
+    """Lower-cased alphanumeric tokens of a PDK name, for containment tests.
+
+    `sky130A` -> {'sky130a'}; `sky130A / 1.8V` -> {'sky130a', '1', '8v'}.
+    Deliberately crude: the ONLY question asked is whether the resolved
+    OSS name appears in the declared target at all.
+    """
+    return {t for t in re.split(r"[^A-Za-z0-9]+", text.lower()) if t}
+
+
+def declared_pdk_target_guard(
+    project: Path,
+    resolved_pdk_name: Optional[str],
+    allow_mismatch: bool = False,
+) -> Optional[str]:
+    """REFUSE when the PDK actually loaded contradicts the one the DESIGN declares.
+
+    The rule, stated generally: **the PDK actually loaded must match the PDK
+    the design declares.** When it does not, the run must REFUSE rather than
+    substitute.
+
+    Why `commercial_pdk_fallback_guard` does not already cover this. That guard
+    keys on two things this one deliberately does not:
+      * HOST CONFIG (`_commercial_pdk.is_configured()`) rather than the
+        design's own declaration — so a design that declares a target on a
+        host with nothing configured is unprotected; and
+      * it returns None the moment `--pdk` names something explicitly
+        ("deliberate, not a silent fallback"). That is right for the defect
+        it covers and wrong here: naming a PDK explicitly is exactly HOW a
+        run comes to load one the design never asked for. An operator typing
+        `--pdk <oss-name>` against a design whose Phase 1 adopted a different
+        target is not making a deliberate choice about THIS design — they are
+        overriding the design's own statement, silently, with no diagnostic.
+
+    So this guard fires REGARDLESS of how the PDK was selected. It compares
+    outcome against declaration, which is the only pair that matters.
+
+    Conservative by construction — it fires ONLY when all of:
+      * Phase 1 recorded a declared target for this design, AND
+      * resolution landed on an in-container OSS enablement, AND
+      * the resolved OSS name does not appear in the declared target, AND
+      * the operator did not acknowledge the mismatch
+        (`--allow-pdk-target-mismatch`).
+
+    A design that declares the OSS PDK it resolved is UNAFFECTED (the positive
+    case). A design that declares nothing is UNAFFECTED. A project-staged
+    (`custom:<dir>`) resolution is UNAFFECTED — nothing was substituted.
+
+    Returns the refusal message, or None when the run may proceed.
+    NDA: never prints the declared target's identifier/SKU — only the resolved
+    OSS name (which is public) and the shape of the disagreement.
+
+    chip-AGNOSTIC: keyed on a Phase-1 record + resolution outcome, no chip
+    literal, no foundry literal, no vendor literal.
+    """
+    if allow_mismatch:
+        return None
+    if not resolved_pdk_name:
+        return None
+    if resolved_pdk_name.startswith("custom:"):
+        # A project-staged PDK resolved — nothing was substituted.
+        return None
+    if resolved_pdk_name not in _OSS_CONTAINER_PDKS:
+        return None
+    declared = _read_declared_pdk_target(project)
+    if not declared:
+        # The design expressed no preference — nothing to contradict.
+        return None
+    if resolved_pdk_name.lower() in _pdk_tokens(declared):
+        # The design declares the very PDK that resolved.
+        return None
+    staged = project / "input" / "pdk"
+    return (
+        "[FAIL] phase3 PDK resolution REFUSED — resolved PDK contradicts the "
+        "PDK this DESIGN declares.\n"
+        "  declared by the design   : a PDK target recorded by Phase 1 "
+        "(identifier withheld; see reports/phase1/pdk_staging_read.json "
+        "-> adopted_pdk_target)\n"
+        f"  actually resolved        : {resolved_pdk_name} "
+        "(open-source, in-container)\n"
+        "  reason                   : the resolved name does not appear in "
+        "the target the design adopted, so Phase 3 would measure a DIFFERENT "
+        "PDK than the one Phase 1 committed this design to\n"
+        "  impact                   : every downstream verdict — timing, DRC, "
+        "LVS, antenna, GDS streamout, foundry handoff — would be computed "
+        "against a std-cell library this design never declared. Those reports "
+        "would look authoritative and be VOID.\n"
+        "  note                     : this fires however the PDK was chosen. "
+        "An explicit `--pdk <name>` does NOT make the mismatch deliberate — "
+        "it is the most common way one is introduced.\n"
+        "  how to fix               : stage the declared PDK under "
+        f"{staged}/ (liberty/, lef/) and re-run with `--pdk auto`, "
+        "OR correct the design's declared target in Phase 1 if the "
+        "open-source run is the intended one, "
+        "OR pass `--allow-pdk-target-mismatch` to acknowledge in writing that "
+        "this run measures a PDK the design does not declare."
     )
 
 
@@ -13560,9 +13910,31 @@ def _v1_8_100_routing_layer_range(pdk, project, container
             floor_i += 1
         if floor_i >= len(order):               # every layer is pin-dominated
             return None
+        # The walk above stops on the first layer pin access does NOT use, and
+        # taking THAT as the floor puts every pin-access layer OUT of the signal
+        # range. That is not a conservative choice, it is an unroutable one:
+        # global routing emits the guides of a net whose pins all fall in one
+        # GCell on the PIN layers themselves, so such a net arrives at detailed
+        # routing with all of its guides on layers the router has just been
+        # forbidden to use, and TritonRoute aborts the WHOLE design with
+        #   [ERROR DRT-0218] Guide is not connected to design for net <n>
+        # MEASURED on sky130_fd_sc_hd (ports li1 1711 / met1 966 of 3579, so
+        # both are pin-dominated and the old rule returned met2): floor met2
+        # -> DRT-0218 on 2 of 6735 nets and ZERO nets routed; floor met1 ->
+        # "Number of violations = 0", all 6735 nets routed, and met1 alone
+        # carries 107955 um of the 242485 um of signal wire. Excluding it was
+        # never affordable.
+        #
+        # INVARIANT: the topmost pin-access layer MUST stay inside the signal
+        # range. Layers below it may still be excluded (on sky130 that keeps
+        # signal off the high-resistance li1 local-interconnect layer), which
+        # is the whole benefit this derivation was written for.
+        floor_i = max(0, floor_i - 1)
         why_floor = (f"cell ports/layer {[(n, cnt.get(n, 0)) for n in lower]} "
                      f"of {total}; pin-access layers {dominated}; "
-                     f"signal floor = {order[floor_i]}")
+                     f"signal floor = {order[floor_i]} (topmost pin-access "
+                     f"layer — excluding it strands single-GCell nets whose "
+                     f"guides global routing emits on the pin layers)")
 
     # --- ceiling: the design's own declared RT_MAX_LAYER, else the top layer ---
     ceil_i = len(order) - 1
@@ -15137,7 +15509,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         for _si in spare_plan.get("instances", [])
         if _si.get("cell")]
     tapcell_prune_block = _build_tapcell_prune_tcl(pdk, _spare_pts_um)
-    pdn_block = _build_pdn_tcl(pdk)
+    pdn_block = _build_pdn_tcl(pdk, container)
     # === hard-macro supply-pin auto global-connect ===
     # C4/2026-07-31 — this block is now emitted BEFORE `pdngen`, not
     # after it. Its purpose is to bind each hard macro's POWER/GROUND
@@ -17826,6 +18198,58 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     )
 
 
+def _ship_convergence_exhaustion_report(project: Path, log: str) -> None:
+    """DIAGNOSTIC, not a verdict — separate "the loop ran out of passes" from
+    "the loop converged", on THIS run's own log.
+
+    The convergence loop announces every exit it takes on policy
+    (SHIP_CVG_CLOSED / _PLATEAU / _NONNUMERIC / _CLOSED_DRV_UNMEASURED) and
+    announces NOTHING when it simply falls out of its `for` bound. Both exits
+    publish the same SHIP_WNS_POSTROUTE and the same VIOLATED setup verdict, so
+    a run that stopped COUNTING has been indistinguishable from one that stopped
+    CONVERGING — and the two call for opposite actions: raise the bound, or
+    change the design.
+
+    Deliberately DOES NOT gate. Declaring it blocking needs a proven-by-run
+    demonstration that it stops the flow on a real design, which does not exist
+    yet. But a checker nothing ever invokes has zero coverage of real inputs —
+    its own unit test proves the logic on a fixture the author wrote and proves
+    nothing about production artefacts, which is the finding
+    `checker_execution_wiring_audit` raised against it. Running it here on the
+    log the step just wrote is what makes it see a real one; the verdict it
+    reaches changes nothing today, and is recorded so it can be read."""
+    out = project / "reports/phase3/ship_convergence_exhaustion.json"
+    # EXPLICIT path, like its siblings in this step (post_route_summary.json,
+    # spef_vs_estimate_discrepancy.json). `_pl.report_path` auto-routes by
+    # FILENAME and does not know this one, so it lands the report in
+    # `reports/audit/` — measured while wiring this, and it is why the first
+    # probe of this function reported "no report written" while the function was
+    # in fact working. The report has to be where the reader of a phase-3 run
+    # looks.
+    try:
+        import ship_postroute_convergence_exhaustion_check as _cvg
+        verdict, findings, summary = _cvg.audit(log)
+        payload = {
+            "verdict": verdict,
+            "blocking": False,
+            "findings": [f.__dict__ if hasattr(f, "__dict__") else str(f)
+                         for f in findings],
+            "summary": summary,
+        }
+    except Exception as exc:
+        # RECORDED, not swallowed. `except: pass` would make a diagnostic that
+        # could not run indistinguishable from one that found nothing to report
+        # — the exact defect this whole file keeps paying for, and one I wrote
+        # into the first version of this function.
+        payload = {"verdict": "ERROR", "blocking": False, "findings": [],
+                   "summary": {"error": repr(exc)}}
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2, default=str))
+    except OSError:
+        pass          # an unwritable report dir must never fail the step
+
+
 def _parse_ship_repair_log(log: str) -> dict:
     """Extract the SHIP_* markers + the detailed_route final violation count from
     the repair transcript. Pure text parsing (testable without OpenROAD).
@@ -17905,6 +18329,76 @@ def _parse_ship_repair_log(log: str) -> dict:
     }
 
 
+def _ship_repair_nonpromotion_note(parsed: dict) -> str:
+    """The note the NON-PROMOTED sign-off repair publishes about its own slack.
+
+    This step has two exits and they used to publish two different KINDS of
+    number. The promoted exit prints `wns_postroute` and calls it, correctly,
+    "honest post-reroute real-SPEF". The non-promoted exit printed
+    `wns_before -> wns_after_repair` as a bare improvement pair -- and
+    `wns_after_repair` is the number this file's own `_SHIP_POSTROUTE_CVG_TCL`
+    comment describes as "measured with the set_wire_rc wire-load model on the
+    buffers/cells the pre-reroute repair just inserted/resized", i.e. the
+    OPTIMISTIC estimate, on a different timing basis from the one sign-off
+    judges. `_ship_repair_should_promote` already refuses to key on it for
+    exactly that reason.
+
+    So the run kept the base route (a real timing FAIL) while its own step note
+    advertised the estimate as a closure delta, with the honest number sitting
+    unpublished in the same `parsed` dict. MEASURED, this file, two designs:
+      sha256 x sky130A       SS setup  +0.05 ns estimate ->  -6.66 ns real
+      subservient x sky130A  SS setup -14.39 ns -> +0.0003 ns ESTIMATE, while
+                             the shipped route stayed at -14.39 ns
+    The second one was then carried into three downstream round briefs as
+    "0.0003 ns from closing" -- a design 14 ns from closing. A published number
+    that is read as closure IS the defect; the promotion gate being right about
+    it internally does not undo that.
+
+    RULE (deterministic, no threshold, no chip/PDK/vendor literal):
+      1. When the honest post-reroute real-SPEF slack was MEASURED, it leads
+         the note and is named as the sign-off basis. The estimate may follow
+         only as an explicitly-labelled estimate, with the measured divergence
+         between the two stated so nobody has to know this file to spot it.
+      2. When it was NOT measured, say UNMEASURED and do NOT render the
+         estimate as an `A -> B` closure pair at all -- an unmeasured basis
+         cannot be reported as an improvement.
+    No fabricated cause either (the #543 doctrine in this file): the note
+    reports the divergence it measured, never a reason for it.
+    """
+    viols = parsed.get("route_violations")
+    tail = (f" reroute violations={viols}; not promoted "
+            f"(needs setup>=0 and DRC-clean).")
+    est_b = parsed.get("wns_before")
+    est_a = parsed.get("wns_after_repair")
+    post = parsed.get("wns_postroute")
+
+    if post is not None:
+        note = (f"no-op (base route kept): SIGN-OFF setup slack {post} ns "
+                f"(post-reroute real-SPEF -- the basis sign-off judges).")
+        if est_a is not None:
+            note += (f" The resizer's pre-reroute ESTIMATE said {est_b}->"
+                     f"{est_a} ns on the set_wire_rc wire-load model; that is "
+                     f"NOT the sign-off number")
+            if est_a > post:
+                note += f" and is optimistic by {est_a - post:.4f} ns here"
+            note += "."
+        return note + tail
+
+    note = ("no-op (base route kept): SIGN-OFF setup slack UNMEASURED -- no "
+            "post-reroute real-SPEF slack was emitted, so this run has NO "
+            "number on the basis sign-off judges.")
+    if est_a is not None:
+        note += (f" The only slack present is the resizer's pre-reroute "
+                 f"ESTIMATE ({est_a} ns on the set_wire_rc wire-load model, "
+                 f"from {est_b} ns); it is optimistic by construction and is "
+                 f"NOT reportable as closure.")
+    if parsed.get("reroute_incomplete"):
+        note += (f" Named upstream cause: the reroute aborted "
+                 f"{parsed['reroute_incomplete']} time(s) "
+                 f"(SHIP_REROUTE_INCOMPLETE).")
+    return note + tail
+
+
 def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
                                 repaired_v_ok: bool) -> bool:
     """Promotion policy (FAIL-SAFE, no DRC regression, no DRV regression):
@@ -17956,7 +18450,26 @@ def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
         return False
     wp = parsed.get("wns_postroute")
     wb = parsed.get("wns_before")
-    if wp is not None and wb is not None and wp < wb - 0.001:
+    # #603 kept the base route when `wp` was WORSE than it. But "not worse" is
+    # not "better": at wp == wb the repaired route has bought nothing on the
+    # basis sign-off judges, and the ONLY thing then carrying the promotion is
+    # the `wa` estimate below -- which this file's own `_SHIP_POSTROUTE_CVG_TCL`
+    # comment calls the optimistic set_wire_rc wire-load number.
+    #
+    # MEASURED (subservient x sky130A, plugin v1.9.59): base -14.39 ns, honest
+    # post-reroute real-SPEF -14.39 ns, estimate +0.0003 ns. Zero honest gain,
+    # and the estimate alone would have shipped the rerouted design as the
+    # sign-off route -- and did publish "-14.39->0.0003" as this step's note,
+    # which three downstream round briefs then read as "0.0003 ns from closing".
+    #
+    # So when the honest number exists, promotion requires a MEASURABLE honest
+    # improvement over the base. This deliberately still promotes an honest
+    # improvement that has NOT closed (base -19.85 -> real -2.42 is the better
+    # route and must ship; `test_gate_promotes_honest_improvement_over_base`
+    # encodes that policy and is unchanged) -- closure is not the bar here,
+    # being genuinely better is. Same tolerance as before, and still skipped
+    # when either marker is absent, so this only ADDS a refusal.
+    if wp is not None and wb is not None and wp <= wb + 0.001:
         return False
     wa = parsed.get("wns_after_repair")
     if wa is None or wa < -0.001:
@@ -18037,6 +18550,7 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
                           f"no-op (base route kept): repair invocation failed: {exc}")
     log = (out or "") + "\n" + (err or "")
     (pnr_out / "signoff_spef_repair.log").write_text(log)
+    _ship_convergence_exhaustion_report(project, log)
     parsed = _parse_ship_repair_log(log)
     repaired_def = pnr_out / "routed_repaired.def"
     repaired_v = pnr_out / f"{top}_pnr_repaired.v"
@@ -18064,9 +18578,7 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
             [str(routed), str(_pnr_v)])
     return StepResult(
         "signoff_spef_repair", "PASS", time.time() - t0,
-        f"no-op (base route kept): repair estimate {parsed['wns_before']}->"
-        f"{parsed['wns_after_repair']} ns, reroute violations="
-        f"{parsed['route_violations']}; not promoted (needs setup>=0 and DRC-clean).")
+        _ship_repair_nonpromotion_note(parsed))
 
 
 # --- DRV wire-length escalation (a SEPARATE, independently-gated attempt) --
@@ -18680,9 +19192,81 @@ def _gds_substance_gate(gds_out: Path, def_file: Path) -> Optional[str]:
     return None
 
 
+# ── ORGANIC #654 — the router aborted, and only one step noticed ───────────
+#
+# MEASURED on a real sky130A run:
+#
+#     x  Step 26  Antenna check                     FAIL
+#     v  Step 31  Physical Verification (DRC+LVS)   PASS
+#     v  Step 37  GDSII output                      PASS
+#     v  Step 38  Foundry Handoff                   PASS
+#
+# A 24 MB GDS was streamed and declared handoff-ready for a layout the router
+# never finished. Step 37's own NAME states the contract — "only if Step 31 PV
+# fully clean" — and Step 31 passed vacuously, so the guard let it through.
+#
+# DRC and LVS on an unrouted layout are not WRONG, they are VACUOUS: there is
+# little routing to violate a spacing rule, and a netlist with no realized
+# interconnect can still match uniquely. They are true statements about a
+# question nobody asked, published under the names of the questions that were.
+#
+# Nothing has to be inferred. The antenna step already computes the fact and
+# writes it to disk beside `net_violations: 0` — that pair, on one line, IS the
+# trap. The steps downstream simply never read it. `flow_compliance_check`
+# catches it at the audit layer, so the FLOW knows; the individual steps each
+# certify independently and never ask.
+_ROUTING_INCOMPLETE_NOTE = (
+    "routing is INCOMPLETE (detailed_route aborted; recorded by the antenna "
+    "step in reports/phase3/antenna.json). This check's inputs do not describe "
+    "a routed design, so its result is VACUOUS rather than clean — a DRC/LVS "
+    "pass on a layout with no realized interconnect is a true answer to a "
+    "question nobody asked. Finish routing, then re-run."
+)
+
+
+def routing_is_incomplete(project: Path) -> Optional[bool]:
+    """Did detailed routing abort? Reads the fact the antenna step RECORDED.
+
+    Returns True / False, or None when the fact was never recorded — which is
+    NOT False. A run whose antenna step did not reach the in-session
+    post-repair path writes no `routing_incomplete` key at all, and treating a
+    missing key as "routing is fine" would re-create the defect one level up.
+    Callers must decide what to do with None; they must not read it as clean.
+
+    chip/PDK-AGNOSTIC: one recorded boolean, no design or vendor literal."""
+    try:
+        f = _pl.reports_phase3_dir(project) / "antenna.json"
+        if not f.is_file():
+            return None
+        data = json.loads(f.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "routing_incomplete" not in data:
+        return None
+    return bool(data.get("routing_incomplete"))
+
+
+def _vacuous_on_unrouted(project: Path, step_name: str,
+                         t0: float) -> Optional["StepResult"]:
+    """VACUOUS-PASS for a sign-off step whose inputs are an unrouted layout.
+
+    VACUOUS-PASS, not FAIL, deliberately: the check RAN and its own result is
+    honest — what is missing is the precondition. `_flow_verdict_tiers` already
+    ranks VACUOUS-PASS as non-green, so the audit and the step now agree instead
+    of the audit alone knowing. Returns None when routing is complete, or when
+    the fact was never recorded, so a healthy run is untouched."""
+    if routing_is_incomplete(project) is not True:
+        return None
+    return StepResult(step_name, "VACUOUS_PASS", time.time() - t0,
+                      _ROUTING_INCOMPLETE_NOTE)
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
+    _vac = _vacuous_on_unrouted(project, "gds", t0)
+    if _vac is not None:
+        return _vac
     pnr_dir = _pl.pnr_dir(project)
     def_file = pnr_dir / f"{top}.def"
     gds_out = pnr_dir / f"{top}.gds"
@@ -19998,6 +20582,9 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
 def step_drc(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
+    _vac = _vacuous_on_unrouted(project, "drc", t0)
+    if _vac is not None:
+        return _vac
     if not pdk.drc_deck:
         # No KLayout deck. If a Calibre deck is present, distinguish
         # ENV_UNAVAILABLE (calibre binary absent in this env — env
@@ -20014,6 +20601,34 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
                 svrf = _try_svrf_native_drc(project, top, pdk, container)
                 if svrf is not None:
                     return svrf
+                # `_try_svrf_native_drc` declines for TWO unrelated reasons: the
+                # engine is absent, or there is no LAYOUT to check. Only the
+                # first is an environment gap, and ENV_UNAVAILABLE carries a
+                # WAIVER TIER — so collapsing them lets a missing GDS suppress
+                # the natural verdict of the whole Physical-Verification step
+                # by blaming the image for something the image provides.
+                #
+                # Measured: `command -v svrfdrc` resolved inside the very
+                # container the message named, while the step reported
+                # `svrfdrc buddy was not found on PATH` and the compliance gate
+                # turned Step 31's natural FAIL into WAIVED-DEFERRED. The GDS
+                # was absent because an upstream step had failed and the stream-
+                # out never ran; nothing about the environment was missing.
+                _svrf_bin = _svrfdrc_bin_container(container)
+                _gds_p = _pl.pnr_dir(project) / f"{top}.gds"
+                if _svrf_bin is not None and not _gds_p.is_file():
+                    return StepResult(
+                        "drc", "SKIP", time.time() - t0,
+                        f"DRC_NO_LAYOUT: the native sign-off engine IS present "
+                        f"in container {container!r} ({_svrf_bin}), but there is "
+                        f"no layout to check — {_gds_p} does not exist, so an "
+                        f"upstream step did not stream one out. This is NOT an "
+                        f"environment gap and carries no ENV waiver; fix the "
+                        f"step that produced no GDS and sign-off DRC will run.",
+                        extras={"calibre_drc_deck": pdk.calibre_drc,
+                                "gds": str(_gds_p),
+                                "svrfdrc_bin": _svrf_bin,
+                                "missing_input": "gds"})
                 return StepResult(
                     "drc", "ENV_UNAVAILABLE", time.time() - t0,
                     f"Calibre DRC deck present at {pdk.calibre_drc} but the "
@@ -20572,6 +21187,9 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
              container: str,
              upstream_pnr: Optional[StepResult] = None) -> StepResult:
     t0 = time.time()
+    _vac = _vacuous_on_unrouted(project, "lvs", t0)
+    if _vac is not None:
+        return _vac
     # ORGANIC #590 — upstream-incomplete gate. When pnr died mid-tcl
     # (parse abort, segfault, timeout, ROUTE_NOT_CONVERGED) the final
     # DEF/pin-label stages were never written: an LVS against the best
@@ -28535,6 +29153,37 @@ def _liberty_operating_condition(liberty_path, container: str) -> str:
     return ""
 
 
+def _ir_supply_from_psm_log(log: str,
+                            nominal_v: float = 1.8) -> Tuple[float, bool]:
+    """PSM's reported supply voltage, and whether it is a MEASUREMENT.
+
+    Returns ``(volts, measured)``. Three inputs, three answers:
+
+      * no ``Supply voltage`` line, or an unparseable one -> the nominal, and
+        ``measured=True``: PSM ran, this reader simply could not read the
+        banner, so the historical nominal-based percentage is preserved.
+      * a parsed value of **zero** -> ``measured=False``. Zero is not a 0 V
+        supply; it is what PSM prints when it found no source to analyse on
+        the net — an unconnected macro supply pin, or a rail declared in
+        SPECIALNETS with no geometry under it. Nothing derived from it (a
+        percentage, a budget, a PASS) is a statement about the design, so the
+        caller must publish the absence instead of a number.
+
+    Split out from the JSON builder so the zero case is testable without a
+    container: it reached production as a ZeroDivisionError that aborted the
+    sign-off chain after routing and streamout had already succeeded.
+    chip-AGNOSTIC.
+    """
+    m = re.search(r"Supply voltage\s*:\s*([0-9.eE+\-]+)\s*V", log or "")
+    if not m:
+        return nominal_v, True
+    try:
+        v = float(m.group(1))
+    except ValueError:
+        return nominal_v, True
+    return v, v > 0.0
+
+
 def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
                         container: str, ir_rpt: Path, em_rpt: Path,
                         notes: List[str]) -> Tuple[bool, bool]:
@@ -28684,11 +29333,10 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         # PSM number is a CONSERVATIVE upper bound — a padless core is modelled
         # with PSM's default single-bump supply (PSM-0073), so the real
         # multi-bump/pad power-delivery IR is lower.
-        _vdd_m = re.search(r"Supply voltage\s*:\s*([0-9.eE+\-]+)\s*V", log)
-        try:
-            _vdd_v = float(_vdd_m.group(1)) if _vdd_m else 1.8
-        except ValueError:
-            _vdd_v = 1.8
+        # See `_ir_supply_from_psm_log`: a parsed ZERO is the absence of a
+        # measurement, not a 0 V supply, and everything derived from it (a
+        # percentage, a budget, a PASS) would be a number about nothing.
+        _vdd_v, _supply_measured = _ir_supply_from_psm_log(log)
         _budget_pct = float(getattr(pdk, "ir_budget_pct", None) or 10.0)
         _ir_budget_uv = (_budget_pct / 100.0) * _vdd_v * 1e6
         _worst_ir_uv = worst_ir_v * 1e6
@@ -28701,15 +29349,21 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         _psm_failed = _cov["analysis_failed"]
         _psm_conn = _cov["connectivity"]
         _bump_m = re.search(r"PSM-0073.*?bump", log)
+        # PSM's own connectivity verdict, kept beside the number it explains.
+        _psm_unconn = re.findall(r"PSM-0039\]\s*(.+)", log)
         (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
             "tool": "openroad-psm",
             "mode": "static_ir_drop",
             "power_nets": power_nets,
             "source": str(ir_rpt.relative_to(project)),
             "worst_ir_uv": _worst_ir_uv,
-            "worst_ir_pct_vdd": round(_worst_ir_uv / (_vdd_v * 1e6) * 100.0, 3),
-            "budget_uv": _ir_budget_uv,
-            "budget_pct_vdd": _budget_pct,
+            "supply_voltage_v": _vdd_v,
+            "supply_measured": _supply_measured,
+            "worst_ir_pct_vdd": (
+                round(_worst_ir_uv / (_vdd_v * 1e6) * 100.0, 3)
+                if _supply_measured else None),
+            "budget_uv": _ir_budget_uv if _supply_measured else None,
+            "budget_pct_vdd": _budget_pct if _supply_measured else None,
             "budget_basis": ("plugin ir_drop_budget_check default (10% VDD, the "
                              "loosest commonly-cited static budget; typical "
                              "5-10%); override via pdk.ir_budget_pct"),
@@ -28717,6 +29371,12 @@ catch {{set_wire_rc -clock -layer {mp}5}}
                              "core -> CONSERVATIVE upper bound; real multi-bump "
                              "power delivery is lower" if _bump_m else
                              "PSM analyze_power_grid"),
+            "unconnected_supply_pins": _psm_unconn[:20],
+            "unmeasured_reason": (None if _supply_measured else (
+                "PSM reported a supply voltage of 0 V: it found no source to "
+                "analyse on the power net(s). No IR percentage or budget "
+                "verdict is derivable from this run; see "
+                "unconnected_supply_pins and the PSM-0069 line in the report.")),
             # A NET WHOSE ANALYSIS FAILED CANNOT MAKE THE RESULT BETTER.
             #
             # The Tcl wraps every `analyze_power_grid` in a `catch` and prints
@@ -28738,10 +29398,21 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "nets_analysed": _psm_analysed,
             "nets_analysis_failed": _psm_failed,
             "connectivity_findings": _psm_conn,
-            "verdict": ir_verdict(_worst_ir_uv, _ir_budget_uv, _psm_failed),
             "verdict_basis": verdict_basis(_psm_failed),
+            # BOTH conditions, composed. #662 says an unmeasured supply has no
+            # derivable verdict; #669 says a net whose analysis FAILED must not
+            # make the number better. They are independent reasons the verdict
+            # is not a PASS, and taking either side of the conflict alone would
+            # have dropped the other silently.
+            "verdict": ("UNMEASURED" if not _supply_measured
+                        else ir_verdict(_worst_ir_uv, _ir_budget_uv, _psm_failed)),
             "evidence": "analyze_power_grid stdout",
         }, indent=2) + "\n")
+        if not _supply_measured:
+            notes.append(
+                "IR-drop UNMEASURED: PSM supply voltage 0 V (no source found "
+                f"on {', '.join(power_nets)}); "
+                f"{len(_psm_unconn)} unconnected supply pin(s) reported")
         ir_ok = True
     else:
         notes.append(f"IR-drop PSM produced no 'IR drop' line (rc={rc})")
@@ -31403,6 +32074,28 @@ _DERIVED_ARTEFACT_GENERATORS = (
     ("tapeout_checklist_gen.py", "tapeout checklist"),
 )
 
+# ORGANIC #655 — POST-HOC audits of the finished run: read what the tools
+# actually did, and record it. Distinct from the pre-flight guards above main(),
+# which decide whether to START; these can only be answered afterwards, from the
+# logs the run produced.
+#
+# `declared_pdk_is_the_pdk_used_check` was landing with nothing but its own test
+# invoking it — `checker_execution_wiring_audit` blocked on exactly that, and it
+# is right: a checker's unit test proves the logic on a fixture its author wrote
+# and proves nothing about a production artefact. Its own docstring is about a
+# guard that never ran, which makes shipping it unwired a second instance of the
+# defect it was written for.
+#
+# Each entry writes its verdict to a report and does NOT change the run's
+# verdict. `declared_pdk_target_guard` (#656) already refuses at the START on
+# the same class, so a completed run has passed that gate; this one answers the
+# different question of what the tools then LOADED.
+_POST_RUN_AUDITS = (
+    ("declared_pdk_is_the_pdk_used_check.py",
+     "phase3/declared_pdk_is_the_pdk_used.json",
+     "declared-vs-used PDK"),
+)
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -31431,6 +32124,12 @@ def main() -> int:
                         "PDK is configured for this host. Without this flag a "
                         "silent OSS fallback is REFUSED (it would emit VOID "
                         "sign-off reports under a false PDK belief).")
+    p.add_argument("--allow-pdk-target-mismatch", action="store_true",
+                   help="Acknowledge, in writing, that this run may resolve a "
+                        "PDK the DESIGN does not declare. Without this flag a "
+                        "resolved PDK that contradicts the target Phase 1 "
+                        "adopted is REFUSED — however the PDK was selected, "
+                        "including an explicit --pdk.")
     # Design-for-ECO (Step 18) — spare-cell-array density as a fraction
     # of the placed-cell count. Default 2% (0.02); clamped to [0, 0.2].
     p.add_argument("--spare-density", type=float,
@@ -31509,6 +32208,38 @@ def main() -> int:
                 "pdk_override": args.pdk,
                 "staged_pdk_dir": str(project / "input" / "pdk"),
                 "rationale": _cp_refusal,
+            }, indent=2) + "\n")
+        except Exception:
+            pass
+        return 4
+
+    # The PDK actually loaded must match the PDK the design DECLARES. Keyed on
+    # Phase 1's own record, so it fires however the PDK was selected — an
+    # explicit `--pdk` is the most common way a contradicting one is
+    # introduced, not evidence that the operator meant it for THIS design.
+    _dt_refusal = declared_pdk_target_guard(
+        project, pdk.name,
+        allow_mismatch=bool(getattr(args, "allow_pdk_target_mismatch", False)))
+    if _dt_refusal:
+        print(_dt_refusal, file=sys.stderr)
+        try:
+            _rp = _pl.reports_phase3_dir(project)
+            _rp.mkdir(parents=True, exist_ok=True)
+            (_rp / "pdk_target_mismatch_refusal.json").write_text(json.dumps({
+                "program": "phase3_one_shot_runner",
+                "gate": "declared_pdk_target_guard",
+                "verdict": "REFUSED",
+                "pass": False,
+                "resolved_pdk": pdk.name,
+                "resolved_pdk_kind": "oss_in_container",
+                "design_declares_a_pdk_target": True,
+                "pdk_override": args.pdk,
+                # NDA: the declared target's identifier is deliberately NOT
+                # recorded here — the pointer to Phase 1's record is enough to
+                # act on, and this file is routinely attached to reports.
+                "declared_target_source":
+                    "reports/phase1/pdk_staging_read.json:adopted_pdk_target",
+                "rationale": _dt_refusal,
             }, indent=2) + "\n")
         except Exception:
             pass
@@ -31919,6 +32650,27 @@ def main() -> int:
                 print(f"[WARN] {kind} generator failed: {exc}",
                       file=sys.stderr)
 
+    # ORGANIC #655 — the post-hoc audits, on the run that just finished.
+    for prog, rel_json, kind in _POST_RUN_AUDITS:
+        prog_path = PROGRAMS_DIR / prog
+        if not prog_path.is_file():
+            continue
+        out_json = _pl.reports_phase3_dir(project) / rel_json.rsplit("/", 1)[-1]
+        try:
+            out_json.parent.mkdir(parents=True, exist_ok=True)
+            # 55s: `ci_harness_timeout_ceiling_check` caps an inner bound at 60
+            # because the harness dies at 180 and a longer bound kills the
+            # SESSION rather than the call.
+            r = subprocess.run(
+                [sys.executable, str(prog_path), str(project),
+                 "--json", str(out_json)],
+                timeout=55, check=False, capture_output=True, text=True)
+            if r.returncode not in (0, 1, 2):
+                print(f"[WARN] {kind} audit exited {r.returncode}",
+                      file=sys.stderr)
+        except Exception as exc:
+            print(f"[WARN] {kind} audit failed: {exc}", file=sys.stderr)
+
     # v1.6.52 — auto-emit `waivers.json` from any WAIVED steps so the
     # SOLE-ACCEPTANCE-CRITERION schema (evidence + ticket id +
     # review_required: true) is satisfied without the agent having
@@ -32064,6 +32816,23 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # (PASS / PASS_WITH_WAIVERS / FAIL) stays a stable contract for its
     # existing consumers.
     if any(s.status in ("FAIL", "BLOCKED") for s in plan):
+        return "FAIL"
+    # ORGANIC #654 — a VACUOUS sign-off is not a pass, and fell through both
+    # of the tests around it. MEASURED: a step returning VACUOUS_PASS matched
+    # neither the FAIL/BLOCKED test above nor the WAIVED/SKIP/ENV_UNAVAILABLE
+    # test below, so the run returned "PASS" — which would have made the unrouted
+    # sign-off steps produce a GREEN run, the defect #654 is about, inside its
+    # own fix. Found by a test asserting the tier, not by reading the code.
+    #
+    # Stated in THIS function's vocabulary on purpose. `_flow_verdict_tiers` is
+    # the authority for `flow_compliance_check`'s words and correctly ranks
+    # VACUOUS-PASS as a QUALIFIED done-claim, but StepResult.status is a
+    # DIFFERENT vocabulary (PASS/FAIL/BLOCKED/SKIP/WAIVED/ENV_UNAVAILABLE), and
+    # routing its words through that classifier marks bare `SKIP` and
+    # `ENV_UNAVAILABLE` as qualified too — both established PASS_WITH_WAIVERS
+    # states here. Tried, measured, and rejected: borrowing a classifier across
+    # two vocabularies is how a fix acquires a second defect.
+    if any(s.status == "VACUOUS_PASS" for s in plan):
         return "FAIL"
     # v1.6.54 — ENV_UNAVAILABLE counts toward PASS_WITH_WAIVERS the
     # same way as WAIVED / SKIP. The verdict tier is preserved at the
