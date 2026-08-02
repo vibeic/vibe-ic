@@ -449,6 +449,13 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
           "reports/phase2/gates/cdc_async_input.json"): "RTL_BAD",
     ("3", "reset_dependency_check . --json "
           "reports/phase2/gates/cdc_reset_dep.json"): "RTL_BAD",
+    # RTL_BAD's `top` already plants the crossing this gate exists to find:
+    # `a_flop` is written under clk_a and read under clk_b with no synchroniser.
+    # On the bare EMPTY fixture the gate answers rc=2 (no RTL to analyse), which
+    # is a disclosed skip and not a falsification — the crossing verdict itself
+    # would go unproven while the register recorded the clause as falsifiable.
+    ("3", "clock_domain_reg_crossing_check . --json "
+          "reports/phase2/gates/cdc_reg_crossing.json"): "RTL_BAD",
     ("4", "vacuous_testbench_check . --json "
           "reports/phase2/gates/vacuous_testbench.json"): "TB_BAD",
     ("4", "professional_tb_check . --json "

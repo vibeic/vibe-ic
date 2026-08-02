@@ -329,6 +329,17 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # remains Step 3's own blocking gate, so this changes WHEN a project with
     # unsynchronised async inputs is told, not WHETHER.
     "cdc_async_input_check",
+    # The RTL-level counterpart of the two CDC gates above. `cdc_async_input_
+    # check` screens top-level INPUT PORTS for a 2-flop synchroniser, and
+    # `cdc_crossing_check` reads a CDC REPORT (accepting SKIPPED-CONDITION for a
+    # multi-clock design as a disclosed capability gap). Between them, an
+    # INTERNAL register written under one clock and read under another — not a
+    # port, not conventionally named — was screened by neither, so a multi-clock
+    # design could clear Step 3 with no RTL crossing analysis at all. This gate
+    # reads the RTL and reports an unsynchronised crossing, the shape that makes
+    # a status flag in the receiving domain fail to assert. Single-clock modules
+    # are skipped by construction, so it cannot fire on them.
+    "clock_domain_reg_crossing_check",
     "bus_turnaround_consumes_spec_constant_check",
     "dead_timing_constant_warn",
     "l9_response_delay_schema_check",

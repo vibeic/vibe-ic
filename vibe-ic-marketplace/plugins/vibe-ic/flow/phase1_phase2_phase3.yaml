@@ -409,6 +409,7 @@ steps:
     programs:
       - cdc_crossing_check
       - cdc_async_input_check
+      - clock_domain_reg_crossing_check
       - reset_dependency_check
     required_outputs:
       - "reports/phase2/cdc/crossing.json"
@@ -424,6 +425,11 @@ steps:
         # crossings/async/reset fields.
         - program_exit_zero: "cdc_crossing_check . --json reports/phase2/gates/cdc_crossing.json"
         - program_exit_zero: "cdc_async_input_check . --json reports/phase2/gates/cdc_async_input.json"
+        # RTL-level crossing screen. `cdc_crossing_check` above reads the CDC
+        # REPORT and may accept a disclosed SKIPPED-CONDITION for a multi-clock
+        # design; this one reads the RTL itself, so a multi-clock design can no
+        # longer clear Step 3 with zero crossing analysis performed.
+        - program_exit_zero: "clock_domain_reg_crossing_check . --json reports/phase2/gates/cdc_reg_crossing.json"
         - program_exit_zero: "reset_dependency_check . --json reports/phase2/gates/cdc_reset_dep.json"
     blocks_on: [1]
 

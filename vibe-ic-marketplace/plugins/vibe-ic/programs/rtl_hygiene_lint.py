@@ -1893,6 +1893,88 @@ def _registered_nba_lhs(src: str) -> Set[str]:
     return registered
 
 
+def rule_undriven_output_port(src: str, path: str) -> List[Finding]:
+    """An OUTPUT port that is never driven anywhere in its own module.
+
+    Such a port has no driver at all, so it holds X for the entire simulation
+    (Z if it is a tri-state net). Anything that waits on it — a status flag, a
+    completion signal, a handshake — waits forever, and the run ends by timeout
+    rather than by mismatch, which is the hardest failure shape to attribute.
+
+    This is the interface contract the spec declares: a module that names an
+    output promises to drive it. `rule_undriven_and_unread` covers declared
+    internal WIRES, but `find_declarations` does not read ANSI port headers, so
+    no rule saw output PORTS; `rule_uninit_registered_output` covers a DRIVEN
+    output that lacks a power-up value, which is a different defect.
+
+    Scoped PER MODULE — a name driven in a sibling module must never credit a
+    same-named port here.
+
+    Zero-false-positive carve-outs, each for a shape where "no driver in this
+    file" is legitimate rather than a defect:
+      * a module with no body (no assign / always / instantiation) is a
+        black-box or stub declaration;
+      * `inout` ports, whose driver may legitimately be external;
+      * a port connected to an instance, since the submodule may drive it.
+
+    chip-AGNOSTIC: pure structural. No signal-name, design or vendor literal.
+    """
+    findings: List[Finding] = []
+
+    for mm in re.finditer(r'\bmodule\s+(\w+)', src):
+        end = src.find('endmodule', mm.end())
+        body = src[mm.end():end if end != -1 else len(src)]
+        mod_off = mm.end()
+
+        # A module with no drivers at all is a black-box / stub declaration.
+        if not re.search(r'\b(?:assign|always|always_ff|always_comb|initial)\b', body) \
+           and not re.search(r'\.\s*\w+\s*\(', body):
+            continue
+
+        out_ports: Dict[str, int] = {}
+        for m in re.finditer(
+                r'\boutput\b\s+(?:(?:reg|logic|wire)\s+)?(?:signed\s+|unsigned\s+)?'
+                r'(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)\s*(?=[,;)=])', body):
+            name = m.group(1)
+            if name and name not in VERILOG_KEYWORDS:
+                out_ports.setdefault(name, src[:mod_off + m.start()].count('\n') + 1)
+        if not out_ports:
+            continue
+
+        # A `.*` wildcard connection binds every same-named signal implicitly,
+        # so nothing in this module can be shown undriven by inspection.
+        if re.search(r'\.\s*\*', body):
+            continue
+
+        driven = collect_lhs_set(body)
+        # Instance connections. `collect_instance_connections` returns a dict
+        # keyed by PORT name, so two instances sharing a port name overwrite
+        # each other and signals go missing — collect them directly instead.
+        connected: Set[str] = set()
+        for m in re.finditer(r'\.\s*\w+\s*\(([^()]*)\)', body):
+            connected |= {t for t in re.findall(r'[A-Za-z_]\w*', m.group(1))
+                          if t not in VERILOG_KEYWORDS}
+        # SystemVerilog IMPLICIT port connection: `.q_o` with no parentheses is
+        # shorthand for `.q_o(q_o)` and drives the same-named signal. This idiom
+        # is pervasive in real SV; missing it reports correct code as undriven.
+        for m in re.finditer(r'\.\s*([A-Za-z_]\w*)\s*(?=[,)])', body):
+            connected.add(m.group(1))
+        # An output given a declaration-time initialiser is driven.
+        for m in re.finditer(r'\boutput\b[^;,)]*?([A-Za-z_]\w*)\s*=', body):
+            driven.add(m.group(1))
+
+        for name, lineno in sorted(out_ports.items(), key=lambda kv: kv[1]):
+            if name in driven or name in connected:
+                continue
+            findings.append(Finding(
+                path, lineno, 'ERROR', 'undriven-output-port', name,
+                f"output port '{name}' is never driven in module "
+                f"'{mm.group(1)}' (no assignment, no continuous driver, no "
+                f"instance connection) — it holds X for the whole simulation, "
+                f"so anything waiting on it never proceeds."))
+    return findings
+
+
 def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
     """
     Detect a REGISTERED output port (assigned via `<=` in a clocked block) in a
@@ -5737,6 +5819,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_if_no_else_latch(src, str(path))
     results += rule_pulse_swallow(src, str(path))
     results += rule_uninit_registered_output(src, str(path))
+    results += rule_undriven_output_port(src, str(path))
     results += rule_incomplete_sensitivity(src, str(path))
     results += rule_vector_self_shift_fold(src, str(path))
     results += rule_reserved_word_identifier(src, str(path))
