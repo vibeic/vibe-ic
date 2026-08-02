@@ -95,9 +95,14 @@ def test_case_and_punctuation_do_not_defeat_the_match(tmp_path):
 
 
 def test_generic_words_alone_never_match(tmp_path):
-    """'cells', 'liberty', 'tech' appear in every PDK and carry no identity."""
+    """'cells', 'liberty', 'tech' appear in every PDK and carry no identity.
+
+    Nothing is staged here on purpose: with staged files present the comparison
+    is filename-to-filename and the declared prose is not consulted at all. This
+    exercises the fallback path, which is the only one prose matching serves.
+    """
     r = _mk(tmp_path, target="Example Foundry Standard Cell Library",
-            staged=["othernode.lib"], loaded=["othernode_std_cell_tech.lef"])
+            staged=[], loaded=["othernode_std_cell_tech.lef"])
     rc, out = _run(r)
     assert rc == 1, out
 
@@ -113,3 +118,53 @@ def test_the_plugins_own_tree_is_not_mistaken_for_the_run(tmp_path):
     rc, out = _run(r)
     assert rc == 0, out
     assert "othernode" not in out
+
+
+def test_a_staged_library_counts_even_when_its_name_shares_no_word(tmp_path):
+    """The regression that made the first version reject correct work.
+
+    A declared target is a human sentence; a vendor's cell library is named on
+    its own convention. They can share no whole word and still be the same PDK.
+    Here the declared name and the library name have only a fragment in common,
+    and the library is one the design staged for itself — which settles it.
+    """
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3 / SL1.9c",
+            staged=["mq42kpm180su_typ.lib"], loaded=["mq42kpm180su_typ.lib"])
+    rc, out = _run(r)
+    assert rc == 0, out
+    assert "staged filenames" in out
+
+
+def test_a_derived_copy_of_a_staged_library_still_counts(tmp_path):
+    """The flow re-emits a staged tech LEF with a correction applied.
+
+    It keeps the staged stem and appends to it. That is still the staged PDK.
+    """
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
+            staged=["mq42kpm180su_6lm_tech_v56.lef"],
+            loaded=["mq42kpm180su_6lm_tech_v56_topmetal_fix.lef"])
+    rc, out = _run(r)
+    assert rc == 0, out
+
+
+def test_a_foreign_library_alongside_the_right_one_is_reported_not_failed(tmp_path):
+    """A flow legitimately reads something else for an unrelated step.
+
+    Failing on that would punish correct runs; hiding it would let a substitution
+    creep in beside the right PDK. So it is named under a PASS.
+    """
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
+            staged=["mq42kpm180su_typ.lib"],
+            loaded=["mq42kpm180su_typ.lib", "othernode_fd_sc_hd.lef"])
+    rc, out = _run(r)
+    assert rc == 0, out
+    assert "also loaded" in out
+    assert "othernode_fd_sc_hd.lef" in out
+
+
+def test_staged_pdk_present_but_none_of_it_loaded_is_fail(tmp_path):
+    """Staging a PDK and then implementing against a different one."""
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
+            staged=["mq42kpm180su_typ.lib"], loaded=["othernode_fd_sc_hd.lef"])
+    rc, out = _run(r)
+    assert rc == 1, out

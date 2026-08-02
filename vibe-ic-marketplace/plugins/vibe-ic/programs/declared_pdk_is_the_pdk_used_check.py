@@ -165,6 +165,53 @@ def staged_pdk_files(run: Path) -> int:
     return n
 
 
+def staged_library_names(run: Path) -> Set[str]:
+    """Basenames of the .lef/.lib the design staged for itself.
+
+    THE STRONGEST AVAILABLE EVIDENCE, and the reason this beats matching the
+    declared prose. A declared target is a human sentence ("Some Foundry
+    HP-style-name") while a vendor's cell library is named on its own convention
+    ("m…pm180su_typ.lib") — the two can share no whole word at all and still be
+    the same PDK. The first version of this file compared them by token and
+    FAILED a run that had loaded the staged liberty by its exact filename. A
+    check that rejects correct work is worse than the one it replaced.
+
+    When files are staged, compare filenames to filenames. Prose matching stays
+    only for the case where nothing is staged and the PDK comes from the image.
+    """
+    out: Set[str] = set()
+    for base in (run, run / "run"):
+        d = base / "input" / "pdk"
+        if not d.is_dir():
+            continue
+        for f in d.rglob("*"):
+            if f.is_file() and f.suffix.lower() in (".lef", ".lib"):
+                out.add(f.name)
+    return out
+
+
+def _stem(name: str) -> str:
+    return name.rsplit(".", 1)[0]
+
+
+def matches_staged(loaded: str, staged: Set[str]) -> bool:
+    """Is this loaded library one of the staged ones?
+
+    Exact basename, or a staged stem that the loaded name extends. The flow
+    legitimately writes derived copies — a tech LEF re-emitted with a top-metal
+    correction keeps the staged stem and appends to it — and those are still the
+    staged PDK, not a foreign one.
+    """
+    # Case-insensitively: a vendor ships `HP…-S1.9cS.lib` and a flow writes
+    # `hp…-s1.9cs.lib`; they are the same file and only the shell disagrees.
+    low = loaded.lower()
+    staged_low = {x.lower() for x in staged}
+    if low in staged_low:
+        return True
+    ls = _stem(low)
+    return any(ls.startswith(_stem(x)) and len(_stem(x)) >= 8 for x in staged_low)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("run_dir", type=Path)
@@ -218,15 +265,36 @@ def main(argv=None) -> int:
         return 2
 
     want = tokens(target)
-    hits = sorted({n for n in libs if shares_identity(want, n)})
-    rec["declared_tokens"] = sorted(want)
+    staged_names = staged_library_names(run)
+    if staged_names:
+        hits = sorted({n for n in libs if matches_staged(n, staged_names)})
+        rec["compared_against"] = "staged filenames"
+        rec["staged_libraries"] = len(staged_names)
+    else:
+        # Nothing staged: the PDK can only have come from the image, so the
+        # declared prose is the only reference left.
+        hits = sorted({n for n in libs if shares_identity(want, n)})
+        rec["compared_against"] = "the declared target's own words"
+        rec["declared_tokens"] = sorted(want)
     rec["matching_libraries"] = hits
+    rec["foreign_libraries"] = sorted(set(libs) - set(hits))
 
     if hits:
         rec["verdict"] = "PASS"
         _emit(a.json, rec)
         print(f"declared_pdk_is_the_pdk_used: PASS — {len(hits)} of {len(libs)} loaded "
-              f"librar(ies) match the declared target ({source})")
+              f"librar(ies) match the declared target, compared against "
+              f"{rec['compared_against']} ({source})")
+        for n in hits[:6]:
+            print(f"        {n}")
+        # Not a failure: a flow legitimately reads a foreign library for an
+        # unrelated step. Reported so a substitution creeping in alongside the
+        # right PDK is visible rather than averaged away by the PASS.
+        if rec["foreign_libraries"]:
+            print(f"    also loaded, not from the declared PDK "
+                  f"({len(rec['foreign_libraries'])}):")
+            for n in rec["foreign_libraries"][:6]:
+                print(f"        {n}")
         return 0
 
     rec["verdict"] = "FAIL"
