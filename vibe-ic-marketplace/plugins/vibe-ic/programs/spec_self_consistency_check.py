@@ -35,6 +35,14 @@ Findings (verdict tiers):
                       numbered-port family (`Y1, Y3`) that is absent from the interface —
                       the garbled-spec (Prob099) signature, detected pre-RTL.
     duplicate-port  : the declared interface lists the same port name twice.
+    handshake-consume-undeclared : the spec uses a valid/req handshake and its behaviour
+                      prose gates on the RESULT being CONSUMED, but declares no
+                      ready/ack/consume INPUT to observe it — a half-declared interface
+                      insufficient to build the multi-cycle behaviour it describes
+                      (RTLLM radix2_div signature: prose says "whether the result has been
+                      consumed" yet no `res_ready`-style input is declared). Detected from
+                      the spec ALONE — the behaviour prose vs the declared interface — never
+                      from the testbench that happens to drive the missing port.
 
 chip-AGNOSTIC: detection is purely textual/structural over the spec — no IC-, bus-,
 or protocol-specific knowledge. Spec may be a natural-language prompt, a markdown
@@ -103,6 +111,80 @@ def _families(names: List[str]) -> Dict[str, set]:
     return fams
 
 
+# ── handshake-completeness detection ──────────────────────────────────────
+# A spec that uses a valid/req handshake but describes behaviour that depends
+# on the RESULT being CONSUMED, yet declares no ready/ack/consume input to
+# observe that consumption, has a HALF-DECLARED interface: a builder cannot
+# know when to retire the result. Detection is spec-INTERNAL — it compares the
+# spec's OWN behaviour prose against the spec's OWN declared interface. It never
+# consults a testbench, golden, or any oracle for the missing signal's name.
+#
+# A valid/req handshake is present (a *_valid / req / request signal, in the
+# interface or the prose).
+_HS_VALID = re.compile(r'(?<![A-Za-z0-9_])(\w*valid|req|request)(?![A-Za-z0-9_])', re.I)
+# A declared INPUT that can serve as the consume/ready/ack side of the handshake.
+_HS_READY_NAME = re.compile(
+    r'ready|rdy|\back\b|ackn|accept|consum|\bdeq\b|\bpop\b|\btake\b'
+    r'|rd_?en|read_?en|\bgrant\b', re.I)
+# The behaviour prose references result CONSUMPTION / acceptance / acknowledge —
+# an interaction the module must OBSERVE via an input it does not declare.
+_CONSUME_PROSE = re.compile(
+    r'\bconsum\w*\b'                                # consumed / consumes / consumption
+    r'|\backnowledg\w*\b'                           # acknowledged / acknowledgement
+    r'|\b(?:result|output|data)\b[^.\n]{0,40}\bbeen\s+read\b'
+    r'|\bbeen\s+accepted\b', re.I)
+
+# Interface-section heading of the RTLLM "Input ports:" colon form that
+# extract_spec_contract (markdown/verilog oriented) does not parse.
+_PORT_SECTION_HDR = re.compile(r'^[ \t]*(input|output|inout)[ \t]*ports?[ \t]*:?[ \t]*$', re.I)
+# An indented `name : description` port line beneath such a heading.
+_PORT_COLON_LINE = re.compile(r'^[ \t]+([A-Za-z_]\w*)[ \t]*:', re.I)
+
+
+def _interface_signals(text: str, is_json: bool) -> Dict[str, set]:
+    """Declared interface signal names, split by direction, ROBUST across the
+    markdown/verilog forms extract_spec_contract handles AND the RTLLM
+    `Input ports:` / `Output ports:` colon-section form it does not.
+
+    Returns {'inputs': set, 'outputs': set, 'all': set}. Direction-less names
+    (parser could not tell) land only in 'all'. Purely structural — no chip-,
+    bus-, or protocol-specific knowledge."""
+    inputs: set = set()
+    outputs: set = set()
+    alls: set = set()
+    # (1) whatever the shared extractor recognises (markdown bullets / verilog)
+    try:
+        contract = extract_spec_contract(text, is_json=is_json)
+        for p in contract.ports:
+            d = (p.direction or "").lower()
+            alls.add(p.name)
+            if d == "input":
+                inputs.add(p.name)
+            elif d in ("output", "inout"):
+                outputs.add(p.name)
+    except Exception:
+        pass
+    # (2) RTLLM colon-section form (heading sets the direction for indented lines)
+    if not is_json:
+        cur: Optional[str] = None
+        for line in text.splitlines():
+            h = _PORT_SECTION_HDR.match(line)
+            if h:
+                cur = h.group(1).lower()
+                continue
+            if cur is not None:
+                m = _PORT_COLON_LINE.match(line)
+                if m:
+                    name = m.group(1)
+                    alls.add(name)
+                    (inputs if cur == "input" else outputs).add(name)
+                    continue
+                # a non-indented, non-port line ends the current section
+                if line.strip() and not line[:1].isspace():
+                    cur = None
+    return {"inputs": inputs, "outputs": outputs, "all": alls}
+
+
 
 
 def check_spec(text: str, is_json: bool = False) -> List[Finding]:
@@ -156,6 +238,36 @@ def check_spec(text: str, is_json: bool = False) -> List[Finding]:
                     f"declared '{prefix}*' family ({decl_names}) — that are NOT in the "
                     f"interface. Likely a garbled spec (VerilogEval Prob099 signature): "
                     f"confirm whether the interface or the body is authoritative."))
+
+    # ── handshake-consume-undeclared (half-declared valid/ready interface) ────
+    # A spec that (a) uses a valid/req handshake and (b) whose OWN behaviour prose
+    # gates on the RESULT being CONSUMED, but (c) declares no ready/ack/consume
+    # INPUT, has an interface insufficient to build what it describes: a builder
+    # cannot know when the result is retired. Purely spec-internal — compares the
+    # spec's behaviour prose against the spec's declared interface; never reads a
+    # TB or golden for the missing signal. The honest verdict on an under-declared
+    # multi-cycle interface is "name the gap", not "invent the port".
+    if not is_json:
+        body = strip_comments(text)
+        sig = _interface_signals(text, is_json)
+        has_valid = bool(_HS_VALID.search(body)) or any(
+            _HS_VALID.search(n) for n in sig["all"])
+        consume_ref = bool(_CONSUME_PROSE.search(body))
+        has_ready_in = any(_HS_READY_NAME.search(n) for n in sig["inputs"])
+        # If no directions were resolvable at all, fall back to the whole
+        # declared set so a parser miss cannot manufacture a false gap.
+        if consume_ref and not sig["inputs"] and sig["all"]:
+            has_ready_in = any(_HS_READY_NAME.search(n) for n in sig["all"])
+        if has_valid and consume_ref and not has_ready_in:
+            findings.append(Finding(
+                "handshake-consume-undeclared", "WARN",
+                "spec uses a valid/req handshake and its behaviour references result "
+                "CONSUMPTION ('...consumed/accepted/acknowledged...') — an interaction "
+                "the module must OBSERVE — but the declared interface has no "
+                "ready/ack/consume INPUT to signal it. The interface is half-declared: "
+                "a builder cannot know when to retire the result. Name the missing "
+                "consume/ready input (e.g. res_ready) or state the result is "
+                "free-running / never back-pressured."))
 
     # ── reset-semantics contradictions inside the spec (phrase-bound) ─────────
     low = strip_comments(text).lower() if not is_json else ""
