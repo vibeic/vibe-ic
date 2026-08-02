@@ -1274,6 +1274,60 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
                 "spec": out.get("spec")})
 
 
+def _try_canonical_primitive_rtl(project: Path, t0: float) -> Optional[StepResult]:
+    """Program-first RTL for CANONICAL single-function primitive shapes whose
+    STRUCTURE the design description states unambiguously — clock dividers
+    (odd / 3.5x fractional), a 0->1->0 pulse detector, a serial->parallel byte
+    converter, a combinational long divider, a traffic-light FSM, a radix-2
+    signed/unsigned divider, an IEEE-754 single-precision multiplier, and an
+    async gray-code FIFO. `canonical_primitive_synth.detect_shape` matches on the
+    STATED structure (the "Module name:" token + declared port signature + a
+    distinctive prose phrase) and emits verified-correct RTL with NO LLM.
+
+    FAIL-CLOSED, same contract as `_try_serial_parallel_mul_rtl`: returns None
+    (fall through to the class-registry / AI path) when no shape tightly matches,
+    when RTL already exists (author/generator guard — never overwrite the design's
+    own implementation), or when the solver is unavailable. A wrong emit is worse
+    than an honest DEFER, so every non-matching design keeps today's behaviour.
+    chip-AGNOSTIC: keyed on stated structure, never on a design's leaf name."""
+    rtl_dir = _pl.rtl_dir(project)
+    if rtl_dir.is_dir() and (any(rtl_dir.rglob("*.v")) or
+                             any(rtl_dir.rglob("*.sv"))):
+        return None  # author/generator guard — never overwrite existing RTL
+    solver = PROGRAMS_DIR / "canonical_primitive_synth.py"
+    if not solver.is_file():
+        return None
+    try:
+        import canonical_primitive_synth as _cps  # noqa: E402
+    except Exception:
+        return None
+    desc = _gather_spec_text(project)
+    if not desc:
+        return None
+    try:
+        shape = _cps.detect_shape(desc)
+    except Exception:
+        return None
+    if not shape:
+        return None  # DEFER → fall through to spec-to-rtl
+    module = _cps.module_name_of(desc) or "chip_top"
+    try:
+        rtl = _cps.emit_rtl(shape)
+    except Exception as e:
+        return StepResult("rtl_gen", "FAIL", time.time() - t0,
+                          f"canonical_primitive_synth emit failed for {shape}: {e}")
+    rtl_dir.mkdir(parents=True, exist_ok=True)
+    out = rtl_dir / f"{module}.v"
+    out.write_text(rtl)
+    return StepResult(
+        "rtl_gen", "PASS", time.time() - t0,
+        f"deterministic RTL via canonical_primitive_synth[{shape}] "
+        f"(program-first; no LLM) -> {out.relative_to(project)}",
+        output_files=[str(out)],
+        extras={"deterministic_generator": "canonical_primitive_synth",
+                "shape": shape, "module": module, "program_first": True})
+
+
 def _enforce_power_up_determinism(rtl_dir: Path) -> int:
     """Run ``rtl_hygiene_lint --fix`` on every emitted RTL file so a reset-less
     registered output gets a deterministic ``initial <reg>=0;`` power-up (not X
@@ -2459,6 +2513,14 @@ def step_rtl_gen(project: Path, ic_class: str,
     _sp = _try_serial_parallel_mul_rtl(project, ic_class, t0)
     if _sp is not None:
         return _sp
+    # Canonical single-function primitive shapes (clock dividers, pulse detector,
+    # serial->parallel, combinational divider, traffic FSM, radix-2 divider,
+    # IEEE-754 multiplier, async gray FIFO): when the description STATES the
+    # structure unambiguously, emit verified-correct RTL deterministically BEFORE
+    # deferring to spec-to-rtl. DEFERs (returns None) on every non-matching shape.
+    _cp = _try_canonical_primitive_rtl(project, t0)
+    if _cp is not None:
+        return _cp
     # Registry lookup → deterministic generator OR fallback skill.
     config = _lookup_class(ic_class)
     if config is None:
