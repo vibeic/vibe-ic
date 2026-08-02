@@ -101,7 +101,19 @@ run_gate() {                       # run_gate <label> <program> [args…]
     echo "pre-push: NOT CHECKED — $label ($prog absent)" >&2
     FAILED=1; return
   fi
-  if ! out="$(python3 "$PROGRAMS/$prog" "$@" 2>&1)"; then
+  out="$(python3 "$PROGRAMS/$prog" "$@" 2>&1)"; rc=$?
+  # A GATE THAT COULD NOT RUN HAS NOT PASSED, AND HAS NOT FAILED ITS SUBJECT
+  # (vibe-ic#640). The repo's checkers already distinguish these: rc 1 is a
+  # finding, rc 2 is "the question could not be put". Collapsing both into
+  # FAILED sent someone hunting for an NDA leak that did not exist — and the
+  # gate whose subject is the one thing this repo cannot afford to get wrong
+  # was the one reporting it. The push stays blocked either way; only the
+  # sentence changes, and the sentence is what a reader acts on.
+  if [ "$rc" = "2" ]; then
+    echo "pre-push: NOT CHECKED — $label (the gate could not run)" >&2
+    printf '%s\n' "$out" | tail -3 | sed 's/^/    /' >&2
+    FAILED=1
+  elif [ "$rc" != "0" ]; then
     echo "pre-push: FAILED — $label" >&2
     printf '%s\n' "$out" | tail -3 | sed 's/^/    /' >&2
     FAILED=1

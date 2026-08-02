@@ -142,10 +142,72 @@ def scan_unified_diff(diff: str) -> List[DiffFinding]:
 # ---------------------------------------------------------------------------
 # Git access for --rev-range.
 # ---------------------------------------------------------------------------
+#: Bound every git call. vibe-ic#640: `git diff <sha> --not --remotes` does not
+#: REJECT the rev-list selectors — it BLOCKS, reading stdin, with zero output and
+#: empty stderr. Unbounded, the scan simply never returned; the caller's own
+#: timeout then surfaced as a non-zero exit that `run_gate` rendered as a
+#: positive NDA finding. 55 s stays under the 60 s inner ceiling this repo
+#: enforces, and a real `git diff` over a branch runs in well under a second.
+_GIT_TIMEOUT_S = 55
+
+
 def _git(repo: Path, *args: str) -> Tuple[int, str, str]:
-    proc = subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True)
+    try:
+        proc = subprocess.run(["git", "-C", str(repo), *args],
+                              capture_output=True, text=True,
+                              timeout=_GIT_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        # An honest error, never a finding and never a clean scan.
+        return 124, "", (f"git {' '.join(args)[:120]} did not return within "
+                         f"{_GIT_TIMEOUT_S}s")
     return proc.returncode, proc.stdout, proc.stderr
+
+
+#: Selectors `git rev-list`/`git log` accept and `git diff` does not. A range
+#: carrying one of these is a COMMIT-SET expression, not a diff endpoint pair.
+_REVLIST_ONLY = ("--not", "--remotes", "--branches", "--tags", "--all",
+                 "--glob", "--exclude")
+
+
+def resolve_diffable_range(repo: Path, rev_range: str) -> List[str]:
+    """The `git diff` arguments that cover what `rev_range` selects.
+
+    vibe-ic#640. `pre-push` builds a NEW branch's range as a rev-list
+    expression — `<sha> --not --remotes`, "commits not already on a remote" —
+    and handed it straight to `git diff`, which blocks on it. So on every
+    new-branch push this gate scanned NOTHING, and the hang was reported as an
+    NDA violation: the worst combination, because it both cried wolf and left
+    the rule it protects unenforced.
+
+    A commit-set expression is resolved with the tool that understands it:
+    `git rev-list` gives the commits, oldest-last, and the diff that covers them
+    is `<oldest>^..<newest>`. A root commit has no parent, so the empty tree is
+    used as the base rather than refusing — a first-ever commit is exactly when
+    an added path most needs scanning.
+
+    Ranges git diff already understands are returned untouched.
+    """
+    parts = rev_range.split()
+    if not any(p in _REVLIST_ONLY or p.startswith("--glob=")
+               or p.startswith("--exclude=") for p in parts):
+        return parts
+    rc, out, err = _git(repo, "rev-list", *parts)
+    if rc != 0:
+        raise RuntimeError(f"git rev-list {rev_range!r} failed: {err.strip()[:300]}")
+    commits = out.split()
+    if not commits:
+        # Not a clean scan — an empty commit set means the range selected
+        # nothing, which `main` already treats as rc 2.
+        raise RuntimeError(f"rev-range {rev_range!r} selects no commit")
+    newest, oldest = commits[0], commits[-1]
+    rc, _o, _e = _git(repo, "rev-parse", "--verify", f"{oldest}^")
+    if rc == 0:
+        return [f"{oldest}^..{newest}"]
+    # Root commit: diff against the empty tree so the whole first commit is seen.
+    rc, empty, _e = _git(repo, "hash-object", "-t", "tree", "/dev/null")
+    if rc != 0:
+        raise RuntimeError("cannot resolve the empty tree for a root commit")
+    return [empty.strip(), newest]
 
 
 def diff_for_range(repo: Path, rev_range: str) -> str:
@@ -155,6 +217,7 @@ def diff_for_range(repo: Path, rev_range: str) -> str:
     parts = rev_range.split()
     if not parts:
         raise RuntimeError("empty --rev-range")
+    parts = resolve_diffable_range(repo, rev_range)
     # --no-color / -U0-ish not needed; default unified is fine. Include renames
     # so a renamed-in leaked filename is visible as `rename to <path>`.
     rc, out, err = _git(repo, "diff", "--find-renames", *parts)
