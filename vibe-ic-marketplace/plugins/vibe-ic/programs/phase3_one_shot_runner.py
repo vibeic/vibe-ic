@@ -4986,6 +4986,139 @@ def commercial_pdk_fallback_guard(
 
 
 # ---------------------------------------------------------------------------
+# Declared-PDK-target mismatch guard (chip-AGNOSTIC)
+# ---------------------------------------------------------------------------
+# Where Phase 1 records the PDK the DESIGN declares. First hit wins; both are
+# written by Phase 1 itself, so this reads the design's own statement, never
+# the operator's and never the host's.
+_DECLARED_PDK_SOURCES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("reports/phase1/pdk_staging_read.json", ("adopted_pdk_target",)),
+    ("phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+     ("fields", "pdk_target")),
+)
+
+
+def _read_declared_pdk_target(project: Path) -> Optional[str]:
+    """The PDK target the DESIGN declares, as Phase 1 recorded it.
+
+    None when Phase 1 recorded no target — a design that expressed no
+    preference cannot be contradicted, so the guard must stay silent.
+    """
+    for rel, keys in _DECLARED_PDK_SOURCES:
+        try:
+            doc = json.loads((project / rel).read_text())
+        except Exception:
+            continue
+        for k in keys:
+            if not isinstance(doc, dict):
+                doc = None
+                break
+            doc = doc.get(k)
+        if isinstance(doc, str) and doc.strip():
+            return doc.strip()
+    return None
+
+
+def _pdk_tokens(text: str) -> set:
+    """Lower-cased alphanumeric tokens of a PDK name, for containment tests.
+
+    `sky130A` -> {'sky130a'}; `sky130A / 1.8V` -> {'sky130a', '1', '8v'}.
+    Deliberately crude: the ONLY question asked is whether the resolved
+    OSS name appears in the declared target at all.
+    """
+    return {t for t in re.split(r"[^A-Za-z0-9]+", text.lower()) if t}
+
+
+def declared_pdk_target_guard(
+    project: Path,
+    resolved_pdk_name: Optional[str],
+    allow_mismatch: bool = False,
+) -> Optional[str]:
+    """REFUSE when the PDK actually loaded contradicts the one the DESIGN declares.
+
+    The rule, stated generally: **the PDK actually loaded must match the PDK
+    the design declares.** When it does not, the run must REFUSE rather than
+    substitute.
+
+    Why `commercial_pdk_fallback_guard` does not already cover this. That guard
+    keys on two things this one deliberately does not:
+      * HOST CONFIG (`_commercial_pdk.is_configured()`) rather than the
+        design's own declaration — so a design that declares a target on a
+        host with nothing configured is unprotected; and
+      * it returns None the moment `--pdk` names something explicitly
+        ("deliberate, not a silent fallback"). That is right for the defect
+        it covers and wrong here: naming a PDK explicitly is exactly HOW a
+        run comes to load one the design never asked for. An operator typing
+        `--pdk <oss-name>` against a design whose Phase 1 adopted a different
+        target is not making a deliberate choice about THIS design — they are
+        overriding the design's own statement, silently, with no diagnostic.
+
+    So this guard fires REGARDLESS of how the PDK was selected. It compares
+    outcome against declaration, which is the only pair that matters.
+
+    Conservative by construction — it fires ONLY when all of:
+      * Phase 1 recorded a declared target for this design, AND
+      * resolution landed on an in-container OSS enablement, AND
+      * the resolved OSS name does not appear in the declared target, AND
+      * the operator did not acknowledge the mismatch
+        (`--allow-pdk-target-mismatch`).
+
+    A design that declares the OSS PDK it resolved is UNAFFECTED (the positive
+    case). A design that declares nothing is UNAFFECTED. A project-staged
+    (`custom:<dir>`) resolution is UNAFFECTED — nothing was substituted.
+
+    Returns the refusal message, or None when the run may proceed.
+    NDA: never prints the declared target's identifier/SKU — only the resolved
+    OSS name (which is public) and the shape of the disagreement.
+
+    chip-AGNOSTIC: keyed on a Phase-1 record + resolution outcome, no chip
+    literal, no foundry literal, no vendor literal.
+    """
+    if allow_mismatch:
+        return None
+    if not resolved_pdk_name:
+        return None
+    if resolved_pdk_name.startswith("custom:"):
+        # A project-staged PDK resolved — nothing was substituted.
+        return None
+    if resolved_pdk_name not in _OSS_CONTAINER_PDKS:
+        return None
+    declared = _read_declared_pdk_target(project)
+    if not declared:
+        # The design expressed no preference — nothing to contradict.
+        return None
+    if resolved_pdk_name.lower() in _pdk_tokens(declared):
+        # The design declares the very PDK that resolved.
+        return None
+    staged = project / "input" / "pdk"
+    return (
+        "[FAIL] phase3 PDK resolution REFUSED — resolved PDK contradicts the "
+        "PDK this DESIGN declares.\n"
+        "  declared by the design   : a PDK target recorded by Phase 1 "
+        "(identifier withheld; see reports/phase1/pdk_staging_read.json "
+        "-> adopted_pdk_target)\n"
+        f"  actually resolved        : {resolved_pdk_name} "
+        "(open-source, in-container)\n"
+        "  reason                   : the resolved name does not appear in "
+        "the target the design adopted, so Phase 3 would measure a DIFFERENT "
+        "PDK than the one Phase 1 committed this design to\n"
+        "  impact                   : every downstream verdict — timing, DRC, "
+        "LVS, antenna, GDS streamout, foundry handoff — would be computed "
+        "against a std-cell library this design never declared. Those reports "
+        "would look authoritative and be VOID.\n"
+        "  note                     : this fires however the PDK was chosen. "
+        "An explicit `--pdk <name>` does NOT make the mismatch deliberate — "
+        "it is the most common way one is introduced.\n"
+        "  how to fix               : stage the declared PDK under "
+        f"{staged}/ (liberty/, lef/) and re-run with `--pdk auto`, "
+        "OR correct the design's declared target in Phase 1 if the "
+        "open-source run is the intended one, "
+        "OR pass `--allow-pdk-target-mismatch` to acknowledge in writing that "
+        "this run measures a PDK the design does not declare."
+    )
+
+
+# ---------------------------------------------------------------------------
 # pdk_local hard-macro <-> target-PDK LAYER compatibility guard (chip-AGNOSTIC)
 # ---------------------------------------------------------------------------
 _LEF_LAYER_DECL_RE = re.compile(
@@ -31401,6 +31534,12 @@ def main() -> int:
                         "PDK is configured for this host. Without this flag a "
                         "silent OSS fallback is REFUSED (it would emit VOID "
                         "sign-off reports under a false PDK belief).")
+    p.add_argument("--allow-pdk-target-mismatch", action="store_true",
+                   help="Acknowledge, in writing, that this run may resolve a "
+                        "PDK the DESIGN does not declare. Without this flag a "
+                        "resolved PDK that contradicts the target Phase 1 "
+                        "adopted is REFUSED — however the PDK was selected, "
+                        "including an explicit --pdk.")
     # Design-for-ECO (Step 18) — spare-cell-array density as a fraction
     # of the placed-cell count. Default 2% (0.02); clamped to [0, 0.2].
     p.add_argument("--spare-density", type=float,
@@ -31479,6 +31618,38 @@ def main() -> int:
                 "pdk_override": args.pdk,
                 "staged_pdk_dir": str(project / "input" / "pdk"),
                 "rationale": _cp_refusal,
+            }, indent=2) + "\n")
+        except Exception:
+            pass
+        return 4
+
+    # The PDK actually loaded must match the PDK the design DECLARES. Keyed on
+    # Phase 1's own record, so it fires however the PDK was selected — an
+    # explicit `--pdk` is the most common way a contradicting one is
+    # introduced, not evidence that the operator meant it for THIS design.
+    _dt_refusal = declared_pdk_target_guard(
+        project, pdk.name,
+        allow_mismatch=bool(getattr(args, "allow_pdk_target_mismatch", False)))
+    if _dt_refusal:
+        print(_dt_refusal, file=sys.stderr)
+        try:
+            _rp = _pl.reports_phase3_dir(project)
+            _rp.mkdir(parents=True, exist_ok=True)
+            (_rp / "pdk_target_mismatch_refusal.json").write_text(json.dumps({
+                "program": "phase3_one_shot_runner",
+                "gate": "declared_pdk_target_guard",
+                "verdict": "REFUSED",
+                "pass": False,
+                "resolved_pdk": pdk.name,
+                "resolved_pdk_kind": "oss_in_container",
+                "design_declares_a_pdk_target": True,
+                "pdk_override": args.pdk,
+                # NDA: the declared target's identifier is deliberately NOT
+                # recorded here — the pointer to Phase 1's record is enough to
+                # act on, and this file is routinely attached to reports.
+                "declared_target_source":
+                    "reports/phase1/pdk_staging_read.json:adopted_pdk_target",
+                "rationale": _dt_refusal,
             }, indent=2) + "\n")
         except Exception:
             pass
