@@ -49,6 +49,12 @@ POSITIVE = {
         ("ieee754_single_multiplier", "float_multi"),
     "Memory/FIFO/asyn_fifo":
         ("async_gray_fifo", "asyn_fifo"),
+    "Arithmetic/Multiplier/multi_pipe_8bit":
+        ("pipelined_unsigned_multiplier_8", "multi_pipe_8bit"),
+    "Memory/Shifter/barrel_shifter":
+        ("barrel_shifter_right_8", "barrel_shifter"),
+    "Miscellaneous/Signal generation/signal_generator":
+        ("triangle_wave_generator_5", "signal_generator"),
 }
 
 NEGATIVE = [
@@ -141,6 +147,24 @@ _INLINE_POS = {
         "16-bit and the divisor is 8-bit.\n"
         "Input ports:\n A: 16-bit dividend.\n B: 8-bit divisor.\n"
         "Output ports:\n result: 16-bit quotient.\n odd: 16-bit remainder.\n"),
+    "pipelined_unsigned_multiplier_8": (
+        "Module name:\n    multi_pipe_8bit\n"
+        "Implement an unsigned 8bit multiplier based on pipelining processing.\n"
+        "Input ports:\n clk: Clock.\n rst_n: Active-low reset.\n"
+        " mul_en_in: Input enable.\n mul_a: 8-bit multiplicand.\n"
+        " mul_b: 8-bit multiplier.\n"
+        "Output ports:\n mul_en_out: Output enable.\n mul_out: 16-bit product.\n"),
+    "barrel_shifter_right_8": (
+        "Module name:\n    barrel_shifter\n"
+        "A barrel shifter for shifting bits efficiently, controlled by ctrl.\n"
+        "Input ports:\n in: 8-bit input to be shifted.\n ctrl: 3-bit shift amount.\n"
+        "Output ports:\n out: 8-bit shifted output.\n"),
+    "triangle_wave_generator_5": (
+        "Module name:\n    signal_generator\n"
+        "Implement a Triangle Wave generator whose 5-bit wave cycles between "
+        "0 and 31.\n"
+        "Input ports:\n clk: Clock.\n rst_n: Active-low reset.\n"
+        "Output ports:\n wave: 5-bit output waveform.\n"),
 }
 
 # Near-miss descriptions that MUST fail-closed to None (no template mis-fire).
