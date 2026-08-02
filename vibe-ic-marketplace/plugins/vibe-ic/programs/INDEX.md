@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1031
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1031)
+- **Total programs (excluding helpers / shims):** 1032
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1032)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1022 |
+| `any` | 1023 |
 
 ## Alphabetical listing
 
@@ -875,6 +875,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `shape_b_sample_export` | any | — | deterministic Shape-B sample-export (ORGANIC #678). |
 | `shift_counter_synth` | any | — | deterministic SOLVER for the CVDP barrel-shift / rotate and saturating / specialized-counter families. |
 | `shift_register_synth` | any | — | deterministic SOLVER for the shift-register / rotate / barrel-shift family. |
+| `ship_postroute_convergence_exhaustion_check` | any | — | chip-AGNOSTIC audit of the post-reroute real-SPEF convergence loop's OWN markers, answering one question a setup-VIOLATED run cannot othe... |
 | `shipped_path_portability_check` | any | — | shipped-source path-portability guard. |
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
 | `si_mcf_sta` | any | — | SI-aware STA via Miller Coupling Factor (MCF) bounding. |
@@ -1103,7 +1104,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1022 programs)
+### `any` (1023 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1947,6 +1948,7 @@ _(no programs in this group)_
 - `shape_b_sample_export` — deterministic Shape-B sample-export (ORGANIC #678).
 - `shift_counter_synth` — deterministic SOLVER for the CVDP barrel-shift / rotate and saturating / specialized-counter families.
 - `shift_register_synth` — deterministic SOLVER for the shift-register / rotate / barrel-shift family.
+- `ship_postroute_convergence_exhaustion_check` — chip-AGNOSTIC audit of the post-reroute real-SPEF convergence loop's OWN markers, answering one question a setup-VIOLATED run cannot othe...
 - `shipped_path_portability_check` — shipped-source path-portability guard.
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
 - `si_mcf_sta` — SI-aware STA via Miller Coupling Factor (MCF) bounding.
