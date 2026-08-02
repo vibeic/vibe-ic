@@ -1,0 +1,14 @@
+{
+  "program": "eda_report_audit:lvs",
+  "passed": true,
+  "findings": [],
+  "summary": {
+    "files_found": 5,
+    "categories_found": [
+      "device"
+    ],
+    "tool_authentic": true,
+    "terminal_verdict": "MATCH",
+    "canonical_report_used": true
+  }
+}

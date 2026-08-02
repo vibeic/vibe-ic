@@ -1,0 +1,85 @@
+{
+  "subagent_type": "vibe-ic:ic-expert-agent",
+  "role": "IC Expert Agent authors the body using expert-DB + expert-skills",
+  "prompt_is_input_only": true,
+  "target_module": null,
+  "interface_contract": null,
+  "spec_requirements": [
+    {
+      "kind": "self_tb_coverage",
+      "requirement": "SELF-TB COVERAGE — your close-loop self-verification (not just the RTL) is the graded axis here; a weak self-TB lets a real bug ship. Before emit, ensure your self-TB exercises: HANDSHAKE FSM: drive BACK-TO-BACK transactions (assert the next start/valid on the SAME cycle the previous one signals ready/done) — a terminal state that never re-arms only fails here; and sample pulse outputs as an EXTERNAL checker: drive stimulus, DEASSERT it, then check the output pulse on the FOLLOWING clock edge; hold data-valid outputs until consumed. INTERRUPT CONTROLLER: exercise the handshake-latency slices — after an ack clears one IRQ the interrupt line must RE-ASSERT for remaining pending IRQs within tolerance, DEASSERT exactly during ack, and the request synchronizer's latency must stay within bounds.",
+      "shapes": [
+        "handshake_fsm",
+        "interrupt_controller"
+      ]
+    },
+    {
+      "kind": "preserve_named_signals",
+      "requirement": "PRESERVE SPEC-NAMED SIGNALS VERBATIM: the prompt names signals in backticks (user_project_wrapper, user_proj_example, wbs_dat_o, wbs_dat_i, wbs_sel_i, ready, wbs_ack_o, la_data_in, la_oenb, la_data_out, io_oeb, wb_clk_i…). Declare EACH one as a real named net/reg with EXACTLY that identifier — do NOT rename (no _w/_reg/_sig suffix), fold it into an expression, or optimize it away. This applies to INTERNAL/intermediate signals (index, counter, state, flag), not only ports: a white-box testbench may force/peek any of them by the exact spec name through the hierarchy, and a missing/renamed one crashes every test with a 'no child object named <name>' error before any functional check.",
+      "named_signals": [
+        "user_project_wrapper",
+        "user_proj_example",
+        "wbs_dat_o",
+        "wbs_dat_i",
+        "wbs_sel_i",
+        "ready",
+        "wbs_ack_o",
+        "la_data_in",
+        "la_oenb",
+        "la_data_out",
+        "io_oeb",
+        "wb_clk_i",
+        "wb_rst_i",
+        "wbs_stb_i",
+        "wbs_cyc_i",
+        "wbs_we_i",
+        "wbs_adr_i",
+        "io_in",
+        "io_out",
+        "analog_io"
+      ]
+    }
+  ],
+  "expert_skills": [],
+  "verify_gates": [
+    "phase1_expert_parse_track"
+  ],
+  "db_classes": [
+    {
+      "ic_class": "priority-interrupt-controller",
+      "score": 68.0
+    },
+    {
+      "ic_class": "cdc-mux-synchronizer",
+      "score": 56.0
+    },
+    {
+      "ic_class": "mmio-register-controlled-counter",
+      "score": 55.5
+    },
+    {
+      "ic_class": "priority-interrupt-controller",
+      "score": 55.5
+    },
+    {
+      "ic_class": "glitch-free-clock-mux",
+      "score": 53.5
+    }
+  ],
+  "dual_track": {
+    "track1_general_blind": {
+      "context": [
+        "lessons.md"
+      ],
+      "n_skills": 207
+    },
+    "track2_db_informed": {
+      "context": [
+        "ic_expert_db.md"
+      ],
+      "n_db_lessons": 5
+    },
+    "converge": "diff the two bodies; root-cause + reconcile disagreement"
+  },
+  "output_target": "l_doc_expectations.json"
+}
