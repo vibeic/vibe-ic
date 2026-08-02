@@ -11,29 +11,29 @@ This tree holds converged evidence AND runs that did not converge, and the folde
 
 | classification | cells |
 |---|---|
-| CONVERGED EVIDENCE | 4 |
-| RETAINED FAILURE | 12 |
+| CONVERGED EVIDENCE | 3 |
+| RETAINED FAILURE | 13 |
 | UNAUDITED RECORD | 13 |
 | **total** | **29** |
 
-## CONVERGED EVIDENCE — 4
+## CONVERGED EVIDENCE — 3
 
 The cell's own audit artefact reads PASS or PASS_WITH_WAIVERS. This is what the project means when it says a cell converged.
 
 | cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
 |---|---|---|---|---|---|---|
-| `caravel_user_project/v1.9.43_sky130A` | PASS_WITH_WAIVERS | P35 F0 M0 W3 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | PASS_WITH_WAIVERS | yes | corpus member — walked by both blocking corpus gates |
 | `spm/v1.5.58_ihp-sg13g2` | PASS_WITH_WAIVERS | P35 F0 M0 W3 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged; the real-GDS source for #287/#291 and the formal-evidence-chain repro for #412/#417/#418/#420 |
 | `spm/v1.5.65_sky130A` | PASS_WITH_WAIVERS | P35 F0 M0 W3 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged; the byte-identical witness run the #235 fix landed against, and the corpus #421/#441 measured gate coverage on |
 | `spm/v1.5.66_gf180mcuD` | PASS_WITH_WAIVERS | P33 F0 M0 W4 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged; repro for #363 (EM coordinates outside the die) and second site of the #366/#381 formal false-PASS |
 
-## RETAINED FAILURE — 12
+## RETAINED FAILURE — 13
 
 An audit ran and did NOT converge. These are retained on purpose: deleting them would make "we never ran this" and "we ran it, it failed, and we kept the record" the same state. Read the step counts — they separate one failed gate from a flow that never reached the steps at all.
 
 | cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
 |---|---|---|---|---|---|---|
 | `caravel_user_project` | FAIL | P28 F2 M0 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | provenance-defect row in #413; inventory member of the #419/#426 layout-artefact audits |
+| `caravel_user_project/v1.9.43_sky130A` | FAIL | P5 F10 M10 W2 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | PASS_WITH_WAIVERS | yes | corpus member — walked by both blocking corpus gates |
 | `edge_llm_accel` | FAIL | P22 F8 M4 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | COMPLETE | yes | read directly by tests under programs/tests/ (its input/docs/ and its published-cell layer gates); provenance-defect row in #413 |
 | `edge_llm_matmul_accel` | FAIL | P5 F3 M28 W2 | phase2=FAIL | UNSTATED | yes | corpus member — walked by both blocking corpus gates |
 | `ibex` | FAIL | P2 F7 M27 W0 | vibe_ic=FAIL; phase2=FAIL | — | yes | the richest L4 in the repo (48 registers / 84 fields); the cell #377 (OPEN) tested its SystemRDL export hypothesis against, via phase1/systemrdl/ |

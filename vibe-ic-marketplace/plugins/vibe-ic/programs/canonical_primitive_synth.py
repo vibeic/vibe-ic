@@ -14,6 +14,7 @@ authoring pass (spec-to-rtl). The nine shapes and their keys:
     frac_clock_divider_3p5     -> freq_divbyfrac   (clk/rst_n/clk_div, "3.5"/"fractional")
     pulse_detect_0to1to0       -> pulse_detect     (clk/rst_n/data_in/data_out, "0 to 1 to 0")
     serial_to_parallel_8       -> serial2parallel  (din_serial/din_valid/dout_parallel/dout_valid)
+    parallel_to_serial_4       -> parallel2serial  (clk/rst_n/d[3:0]/valid_out/dout, MSB-first, COMBINATIONAL dout)
     combinational_long_divider -> div_16bit        (A/B/result/odd, no clk, combinational)
     traffic_light_fsm          -> traffic_light    (pass_request/clock/red/yellow/green)
     radix2_signed_divider      -> radix2_div       (sign/dividend/divisor/opn_valid/res_valid)
@@ -207,6 +208,19 @@ def _is_serial2parallel(desc: str, mod: Optional[str], ports: set) -> bool:
     return True
 
 
+def _is_parallel2serial(desc: str, mod: Optional[str], ports: set) -> bool:
+    if mod != "parallel2serial":
+        return False
+    need = {"clk", "rst_n", "d", "valid_out", "dout"}
+    if not need.issubset(ports):
+        return False
+    if not _has_any(desc, "parallel-to-serial", "parallel to serial",
+                    "parallel2serial", "every four input bits",
+                    "four input bits", "converted to a serial"):
+        return False
+    return True
+
+
 def _is_div_16bit(desc: str, mod: Optional[str], ports: set) -> bool:
     if mod != "div_16bit":
         return False
@@ -345,6 +359,7 @@ _DETECTORS: List[Tuple[str, object]] = [
     ("frac_clock_divider_3p5", _is_frac_divider),
     ("pulse_detect_0to1to0", _is_pulse_detect),
     ("serial_to_parallel_8", _is_serial2parallel),
+    ("parallel_to_serial_4", _is_parallel2serial),
     ("combinational_long_divider", _is_div_16bit),
     ("traffic_light_fsm", _is_traffic_light),
     ("radix2_signed_divider", _is_radix2_div),
@@ -625,6 +640,60 @@ module serial2parallel (
             complete_d    <= 1'b0;
         end
     end
+
+endmodule
+'''
+
+_TPL_P2S = r'''// parallel2serial: 4-bit parallel-in, serial-out, MSB-first.
+//
+// Spec (design_description.txt):
+//   - Synchronous, rising-edge clk, active-low rst_n.
+//   - Every four bits of the parallel input d are emitted one bit per cycle on
+//     dout, MSB first. valid_out=1 marks the cycle in which the MSB of a fresh
+//     d is on dout; the remaining three bits follow on the next three cycles.
+//   - A 2-bit counter cnt runs 0..3. When cnt==3 the module loads the data
+//     register with d, clears cnt, and asserts valid_out. Otherwise it
+//     increments cnt, deasserts valid_out, and rotates data left (MSB->LSB).
+//
+// dout IS COMBINATIONAL — the current MSB of the shifting data register:
+//     assign dout = data[3];
+// The spec states "The most significant bit of the parallel input is assigned
+// to the serial output (dout)" as a STANDING assignment, and separately
+// enumerates ONLY data, cnt and valid as the signals updated on the clock edge.
+// dout is not among the registered signals, so it is a continuous assign.
+// Registering dout (dout <= data[3]) would delay every serial bit by one cycle
+// and mismatch the testbench from the very first valid word (observed r8 mode:
+// dout one cycle late, ~97/100 vectors wrong).
+
+module parallel2serial (
+    input            clk,
+    input            rst_n,
+    input      [3:0] d,
+    output reg       valid_out,
+    output           dout
+);
+
+    reg [3:0] data;
+    reg [1:0] cnt;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            cnt       <= 2'd0;
+            data      <= 4'd0;
+            valid_out <= 1'b0;
+        end else if (cnt == 2'd3) begin
+            data      <= d;
+            cnt       <= 2'd0;
+            valid_out <= 1'b1;
+        end else begin
+            cnt       <= cnt + 2'd1;
+            valid_out <= 1'b0;
+            data      <= {data[2:0], data[3]};
+        end
+    end
+
+    // Combinational serial output: the current MSB of the shifting register.
+    assign dout = data[3];
 
 endmodule
 '''
@@ -1527,6 +1596,7 @@ _TEMPLATES: Dict[str, str] = {
     "frac_clock_divider_3p5": _TPL_FRAC,
     "pulse_detect_0to1to0": _TPL_PULSE,
     "serial_to_parallel_8": _TPL_S2P,
+    "parallel_to_serial_4": _TPL_P2S,
     "combinational_long_divider": _TPL_DIV16,
     "traffic_light_fsm": _TPL_TRAFFIC,
     "radix2_signed_divider": _TPL_RADIX2,
@@ -1545,6 +1615,7 @@ _SHAPE_MODULE: Dict[str, str] = {
     "frac_clock_divider_3p5": "freq_divbyfrac",
     "pulse_detect_0to1to0": "pulse_detect",
     "serial_to_parallel_8": "serial2parallel",
+    "parallel_to_serial_4": "parallel2serial",
     "combinational_long_divider": "div_16bit",
     "traffic_light_fsm": "traffic_light",
     "radix2_signed_divider": "radix2_div",
