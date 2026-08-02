@@ -168,7 +168,12 @@ def _handoff(project):
     return subprocess.run(
         [sys.executable, str(_PROGRAMS / "foundry_handoff_pack_gen.py"),
          str(project)],
-        capture_output=True, text=True, timeout=300)
+        # 30s: `ci_harness_timeout_ceiling_check` caps an inner bound at 60,
+        # because the harness dies at 180 and a longer bound kills the SESSION
+        # rather than the call. MEASURED at 0.04s per invocation. This test
+        # tripped that ceiling on its first landing — the third time in this one
+        # batch, which is why the ceiling is a gate and not a convention.
+        capture_output=True, text=True, timeout=30)
 
 
 def test_the_handoff_pack_refuses_on_an_unrouted_layout(tmp_path):

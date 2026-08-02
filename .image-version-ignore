@@ -7,7 +7,17 @@
 # Benchmark RESULT.md files record WHICH image a PAST clean-room run used (its
 # tool-substitution disclosure). That tag is an immutable record of that run —
 # never a live pointer that should track VERSION — so ignore them.
-RESULT.md
+#
+# BOUNDED BY LOCATION, not by NAME. This was the bare basename `RESULT.md`, and
+# `_matches` tries the basename against every path in the repo — so a
+# `docs/RESULT.md` or a plugin `RESULT.md` written next year would be silently
+# exempted from the drift-net, by nothing but its filename. MEASURED at the time
+# of this change: all 56 tracked RESULT.md are run records (55 under
+# benchmark-data/, 1 under benchmark_external/), so the two globs below cover
+# exactly today's population and stop covering anything that leaves it. What
+# makes a file a record is WHERE it is, not what it is called.
+benchmark-data/*/RESULT.md
+benchmark_external/*/RESULT.md
 # Sign-off reports are the same: they record the exact toolchain a SPECIFIC
 # tapeout/sign-off run used (e.g. a commercial-PDK SPM sign-off on 0.2.16 / yosys 0.66-vibeic).
 # 0.2.17 ships yosys 0.67, so bumping the tag would misstate that run — history.
@@ -69,3 +79,36 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_scan_chain_insert.py
 # were read. Advancing it would say I measured on 0.2.52, which I did not — the
 # same measurement-honesty violation as the entries above.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue586_tapcell_master_must_be_explicit.py
+
+# The image a MEASUREMENT was taken in (opentitan_aes x sky130A), recorded in
+# the docstring beside the numbers it produced. Same measurement-honesty rule as
+# the entries above: advancing it would claim a reading that was never taken.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_fault_chain_resynth_header_defect.py
+
+# A test FIXTURE, not a pointer: the string this test FEEDS to the drift checker
+# so it can assert the checker notices a stale one. Advancing it makes the
+# fixture agree with the anchor, which is precisely the condition the test needs
+# to NOT hold — the check would pass while detecting nothing.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue621_prose_version_drift.py
+
+# A test FIXTURE: the `--image` argument this test passes to the manifest gate.
+# It stands for "some image", and the gate's behaviour must not depend on which
+# one — pinning it to the live anchor would couple a unit test to a release.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue635_benchmark_run_manifest.py
+
+# ── benchmark-data is a RECORD, as a whole ────────────────────────────────
+#
+# Stated as ONE rule rather than accumulated file by file. Every ghcr tag under
+# benchmark-data/ names the image that PRODUCED the numbers beside it, so
+# advancing any of them attributes a measurement to a toolchain that never ran
+# it. Two entries above already say exactly this, one file at a time
+# (DYNAMIC_IR_REGENERATED.md, SOURCE_MANIFEST.md) — and the caravel landing then
+# surfaced seven more in one cell (scan_chain.json, container_image.json x3,
+# vibe_ic_one_shot.json x3), which is how a per-file list behaves: it is always
+# one evidence cell behind, and the gap is silent until the next landing.
+#
+# `_matches` runs fnmatch against the full relative path, so the glob covers
+# every cell, present and future. A published run's record is never rewritten to
+# agree with today's anchor; if the anchor must change, a NEW run produces a NEW
+# record.
+benchmark-data/*
