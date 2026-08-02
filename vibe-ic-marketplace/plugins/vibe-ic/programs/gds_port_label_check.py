@@ -99,6 +99,8 @@ _DEF_GLOB = "phase3/stage3/pnr/*.def"
 #: Names reported in full before the list is truncated in the JSON/stderr.
 _NAME_CAP = 40
 
+
+
 #: vibe-ic#626 — the tie-break among DEFs naming the same design now lives in
 #: `def_gds_port_power_restore.def_rank`, because M1's merge needs the SAME
 #: answer and had been picking its DEF by alphabetical glob position instead.
@@ -155,7 +157,16 @@ def label_layer_readability(cen, design, pdk_tech=None):
     never been run. #613's own calibration rule — measure the blast radius
     before choosing the predicate — applies to its own follow-up.
 
-    So it REPORTS, and `readable` is None (unknown) or True, never False.
+    THREE STATES, and the gate uses only two of them:
+
+      True   on a declared port layer — the extractor can name the ports.
+      False  MEASURED off every declared layer. The GATE does not fail on this
+             (see above); the PRODUCER does act on it, because "the labels are
+             there but unreadable" is exactly the trigger the restore was
+             missing — #613 fixed "is there a label", and this is the same
+             argument one level further: presence was the wrong measurement.
+      None   could not be established: no tech supplied, or the tech declares
+             no port layer at all.
     """
     layers = sorted(set(cen.label_layers_per_structure.get(design, [])))
     if not layers:
@@ -178,7 +189,7 @@ def label_layer_readability(cen, design, pdk_tech=None):
         return True, (f"label layer(s) {layers} include the PDK-declared port "
                       f"layer(s) {sorted(want)} — an extractor reading through "
                       f"that tech can name the ports")
-    return None, (f"ADVISORY (vibe-ic#631): label layer(s) {layers} are NOT "
+    return False, (f"ADVISORY (vibe-ic#631): label layer(s) {layers} are NOT "
                   f"among the PDK-declared port-label layer(s) {sorted(want)}, "
                   f"so a Magic-based extractor reading through that tech would "
                   f"DROP them and extract a portless subckt. Reported, not "
@@ -248,6 +259,10 @@ def census_one(gds_path: Path, def_paths: List[Path],
         "labels_matching_no_pin": unmatched[:_NAME_CAP],
         "labels_matching_no_pin_count": len(unmatched),
     })
+    # #631 — a False from the predicate is a MEASUREMENT, not a verdict. The
+    # gate keeps it advisory (the calibration is on the issue); the runner uses
+    # it to decide whether to re-run the restore.
+    rec["labels_extractor_readable"] = readable
     if not placed:
         rec["verdict"] = "NO_PLACED_PINS"
         rec["reason"] = (
@@ -278,14 +293,17 @@ def census_one(gds_path: Path, def_paths: List[Path],
 
 
 def audit(project: Optional[Path], gds_file: Optional[Path],
-          def_file: Optional[Path]) -> Tuple[str, List[Dict]]:
+          def_file: Optional[Path],
+          pdk_tech: Optional[str] = None) -> Tuple[str, List[Dict]]:
     if gds_file is not None:
         defs = [def_file] if def_file else []
-        recs = [census_one(gds_file, [d for d in defs if d and d.is_file()])]
+        recs = [census_one(gds_file, [d for d in defs if d and d.is_file()],
+                           pdk_tech=pdk_tech)]
     else:
         assert project is not None
         defs = sorted(p for p in project.glob(_DEF_GLOB) if p.is_file())
-        recs = [census_one(g, defs) for g in find_canonical_gds(project)]
+        recs = [census_one(g, defs, pdk_tech=pdk_tech)
+                for g in find_canonical_gds(project)]
 
     if any(r["verdict"] in ("NO_LABELS", "MISSING_LABELS") for r in recs):
         return "FINDINGS", recs
@@ -300,6 +318,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="project directory (scans the canonical chip-GDS paths)")
     ap.add_argument("--gds-file", help="audit a single GDS instead")
     ap.add_argument("--def-file", help="the DEF to pair with it (single-file mode)")
+    ap.add_argument("--pdk-tech",
+                    help="Magic `*-GDS.tech` for this design's PDK, so the "
+                         "record can say whether a Magic-based extractor could "
+                         "READ the labels (vibe-ic#631). NOT discovered "
+                         "automatically: the PDK root a project's artefacts "
+                         "name is a CONTAINER path (`/foss/pdks/...`) that does "
+                         "not exist host-side, so a discovery here could only "
+                         "ever return nothing — and a code path that cannot "
+                         "succeed makes an architectural fact look like a "
+                         "lookup failure. The runner, which has the container, "
+                         "resolves it and passes it.")
     ap.add_argument("--json", dest="json_out")
     a = ap.parse_args(argv)
 
@@ -314,7 +343,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     verdict, recs = audit(project,
                           Path(a.gds_file) if a.gds_file else None,
-                          Path(a.def_file) if a.def_file else None)
+                          Path(a.def_file) if a.def_file else None,
+                          pdk_tech=a.pdk_tech)
     report = {"tool": TOOL, "verdict": verdict,
               "project": str(project) if project else None,
               "checked_globs": list(_CANONICAL_GDS_GLOBS),

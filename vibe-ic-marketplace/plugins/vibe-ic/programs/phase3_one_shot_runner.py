@@ -17174,7 +17174,8 @@ def _ship_program(name: str, dest_dir: Path) -> Path:
     return dst
 
 
-def _port_label_census(gds_path: Path, def_file: Path) -> Optional[Dict[str, Any]]:
+def _port_label_census(gds_path: Path, def_file: Path,
+                       pdk_tech: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """vibe-ic#613 — does this streamed GDS name every port the DEF places?
 
     Host-side and engine-independent: it reads the bytes step_gds just wrote.
@@ -17184,7 +17185,8 @@ def _port_label_census(gds_path: Path, def_file: Path) -> Optional[Dict[str, Any
     try:
         import importlib
         _c = importlib.import_module("gds_port_label_check")
-        return _c.census_one(gds_path, [def_file] if def_file.is_file() else [])
+        return _c.census_one(gds_path, [def_file] if def_file.is_file() else [],
+                             pdk_tech=pdk_tech)
     except Exception:                                     # noqa: BLE001
         return None
 
@@ -17211,23 +17213,34 @@ def _restore_port_labels_if_missing(project: Path, top: str, pdk: PdkConfig,
     GDS, like the density fill, so it costs the design nothing on the Magic path.
     NONFATAL: every failure leaves the GDS untouched and says so.
     """
-    before = _port_label_census(gds_path, def_file)
+    _mtech = _resolve_magic_gds_tech(pdk, container)
+    before = _port_label_census(gds_path, def_file, pdk_tech=_mtech)
     forced = bool(pdk.port_label_restore)
     if before is None and not forced:
         return False, "port-label census unavailable — restore not attempted"
-    needs = bool(before and before.get("verdict") in ("NO_LABELS",
-                                                      "MISSING_LABELS"))
+    # PRESENT is not the same as READ (#631). A GDS whose labels all sit off
+    # every layer the design's own PDK declares for ports passes the presence
+    # census and still extracts to a portless subckt — the state #630 measured,
+    # which read exactly like success. When the tech says so, that is a trigger
+    # too; when no tech resolved the field is None and nothing changes.
+    _readable = (before or {}).get("labels_extractor_readable")
+    needs = bool(before and (before.get("verdict") in ("NO_LABELS",
+                                                       "MISSING_LABELS")
+                             or _readable is False))
     if not (forced or needs):
         v = (before or {}).get("verdict", "?")
         return False, f"port labels not restored — census says {v}"
 
     why = ("bridge config declares port_label_restore" if forced and not needs
+           else "MEASURED: labels present but on no layer this PDK declares "
+                "for ports, so the extractor drops them"
+           if _readable is False and (before or {}).get("verdict") == "OK"
            else f"MEASURED: {(before or {}).get('reason', 'labels missing')}")
     ok, note = _klayout_restore_port_labels(project, top, pdk, container,
                                             gds_path, def_file, force=True)
     if not ok:
         return False, f"{note} (trigger: {why})"
-    after = _port_label_census(gds_path, def_file)
+    after = _port_label_census(gds_path, def_file, pdk_tech=_mtech)
     if after is not None and after.get("verdict") not in ("OK", "NOT_MEASURED"):
         # Ran, and the artefact still does not name its ports. Saying "restored"
         # here would be the defect wearing the fix's report.

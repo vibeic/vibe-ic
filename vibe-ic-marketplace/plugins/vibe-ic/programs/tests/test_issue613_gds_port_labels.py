@@ -394,9 +394,17 @@ def _runner(monkeypatch, verdicts, restore=(True, "restored: 3 I/O labels")):
     P = importlib.import_module("phase3_one_shot_runner")
     seq = list(verdicts)
     calls = []
+    techs = []
 
-    def fake_census(_gds, _def):
+    def fake_census(_gds, _def, pdk_tech=None):
+        # Recorded, not ignored: whether the design's PDK tech reaches the
+        # census is the readability half of the same measurement, and a stub
+        # that swallowed it would let the argument go unpassed again (#631).
+        techs.append(pdk_tech)
         return seq.pop(0)
+
+    monkeypatch.setattr(P, "_resolve_magic_gds_tech",
+                        lambda *_a, **_k: "/pdk/x-GDS.tech")
 
     def fake_restore(*_a, **kw):
         calls.append(kw.get("force"))
@@ -404,13 +412,13 @@ def _runner(monkeypatch, verdicts, restore=(True, "restored: 3 I/O labels")):
 
     monkeypatch.setattr(P, "_port_label_census", fake_census)
     monkeypatch.setattr(P, "_klayout_restore_port_labels", fake_restore)
-    return P, calls
+    return P, calls, techs
 
 
 def test_a_missing_label_triggers_the_restore_with_no_config(tmp_path, monkeypatch):
     """The whole #613 ask: an OSS PDK with no `port_label_restore` config, whose
     streamed GDS is measurably unlabelled, must get the pass."""
-    P, calls = _runner(monkeypatch,
+    P, calls, techs = _runner(monkeypatch,
                        [{"verdict": "NO_LABELS", "reason": "0 labels"},
                         {"verdict": "OK"}])
     ok, note = P._restore_port_labels_if_missing(
@@ -422,17 +430,20 @@ def test_a_missing_label_triggers_the_restore_with_no_config(tmp_path, monkeypat
 def test_a_labelled_gds_is_left_alone(tmp_path, monkeypatch):
     """THE ACCEPT CASE, and the reason sky130A runs are byte-identical: the pass
     must not rewrite a GDS that already names its ports."""
-    P, calls = _runner(monkeypatch, [{"verdict": "OK"}])
+    P, calls, techs = _runner(monkeypatch, [{"verdict": "OK"}])
     ok, note = P._restore_port_labels_if_missing(
         tmp_path, "chip", _Pdk(None), "c", tmp_path / "a.gds", tmp_path / "a.def")
     assert not ok and calls == [], note
     assert "OK" in note
+    assert techs == ["/pdk/x-GDS.tech"], (
+        "the census was asked about labels without being told which layers the "
+        "design's own extractor reads — the #631 wiring leak, one layer in")
 
 
 def test_the_config_still_forces_the_pass(tmp_path, monkeypatch):
     """Backward compatibility: a PDK that declares the restore keeps getting it
     unconditionally, even where the census would not have asked for it."""
-    P, calls = _runner(monkeypatch, [{"verdict": "OK"}, {"verdict": "OK"}])
+    P, calls, techs = _runner(monkeypatch, [{"verdict": "OK"}, {"verdict": "OK"}])
     ok, note = P._restore_port_labels_if_missing(
         tmp_path, "chip", _Pdk({"any": 1}), "c",
         tmp_path / "a.gds", tmp_path / "a.def")
@@ -444,7 +455,7 @@ def test_a_restore_that_did_not_fix_it_is_not_reported_as_restored(tmp_path,
                                                                   monkeypatch):
     """LOAD-BEARING. The pass RE-MEASURES; a restore that ran and left the top
     cell unnamed reading as "restored" is the defect wearing the fix's report."""
-    P, _calls = _runner(monkeypatch,
+    P, _calls, _techs = _runner(monkeypatch,
                         [{"verdict": "NO_LABELS", "reason": "0 labels"},
                          {"verdict": "NO_LABELS", "reason": "still 0"}])
     ok, note = P._restore_port_labels_if_missing(
@@ -453,8 +464,45 @@ def test_a_restore_that_did_not_fix_it_is_not_reported_as_restored(tmp_path,
     assert "RAN AND DID NOT FIX IT" in note
 
 
+def test_labels_present_but_UNREADABLE_also_triggers_the_restore(tmp_path,
+                                                                monkeypatch):
+    """#631, the second half of #613's own argument.
+
+    #613 established that a PDK CLASS predicts nothing and the readable fact is
+    whether the labels are IN THE FILE. That argument applies to itself:
+    PRESENCE predicts nothing either. A GDS whose 31 labels all sit on layer
+    100 passes the presence census with `OK` and still extracts to a portless
+    subckt, because the PDK's tech declares no layer 100 — which is exactly the
+    state #630 measured on a real run, wearing a green report.
+
+    So an `OK` verdict whose labels are measurably off every declared port
+    layer must RE-RUN the restore, now with `--pdk-tech`, which writes them
+    where the extractor looks.
+    """
+    P, calls, techs = _runner(
+        monkeypatch,
+        [{"verdict": "OK", "labels_extractor_readable": False},
+         {"verdict": "OK", "labels_extractor_readable": True}])
+    ok, note = P._restore_port_labels_if_missing(
+        tmp_path, "chip", _Pdk(None), "c", tmp_path / "a.gds", tmp_path / "a.def")
+    assert ok and calls == [True], note
+    assert "no layer this PDK declares" in note, note
+
+
+def test_an_UNKNOWN_readability_is_not_a_trigger(tmp_path, monkeypatch):
+    """LOAD-BEARING, and the reason the predicate is three-state. When no tech
+    resolved, the field is None — and re-running the restore on every design
+    whose readability could not be established would rewrite the two shipped
+    GDS that are byte-identical today, on no evidence at all."""
+    P, calls, _t = _runner(
+        monkeypatch, [{"verdict": "OK", "labels_extractor_readable": None}])
+    ok, note = P._restore_port_labels_if_missing(
+        tmp_path, "chip", _Pdk(None), "c", tmp_path / "a.gds", tmp_path / "a.def")
+    assert not ok and calls == [], note
+
+
 def test_an_unavailable_census_does_not_invent_a_verdict(tmp_path, monkeypatch):
-    P, calls = _runner(monkeypatch, [None])
+    P, calls, techs = _runner(monkeypatch, [None])
     ok, note = P._restore_port_labels_if_missing(
         tmp_path, "chip", _Pdk(None), "c", tmp_path / "a.gds", tmp_path / "a.def")
     assert not ok and calls == []
