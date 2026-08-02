@@ -38,6 +38,25 @@ So they are carried forward untouched, and the header stops implying they were
 recomputed: `updated` becomes two dated facts, one for the figures this program
 derives and one for the distributions it inherited. A reader can then see which
 half is live.
+
+The header was made honest first; the PROSE was not, and the prose is what a
+reader believes. Four places on the page assert liveness in words:
+
+    <meta name="description">   "…即時狀態：504 格，每一格都是對當前原始碼重新計算的謂詞。"
+    <meta property="og:...">    the same sentence again
+    <p class="sub">             "每一格都是對當前原始碼重新計算的謂詞,
+                                 不是把判定存起來再讀回來。"
+    <div class="eyebrow">       "Flow Gate · live state"
+
+The third is the load-bearing one: it names the exact thing that is not true —
+the distributions ARE stored and read back, and this program is what stores them.
+A page can carry an honest two-part timestamp and still be believed wrong,
+because nobody reads a timestamp to decide what a sentence means.
+
+So the same pass that recomputes the figures also rewrites those four claims to
+say which half is live. `--check` reports a stale claim as DRIFT, exactly like a
+stale version number: both are the page asserting something about a tree it no
+longer matches.
 """
 from __future__ import annotations
 
@@ -46,6 +65,7 @@ import json
 import os
 import re
 import subprocess
+from typing import List, Tuple
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -84,6 +104,38 @@ def run_suite(cmd: str, cwd: Path) -> str:
         if re.search(r"\d+ (passed|failed)", line):
             return re.sub(r"\s*\[.*?\]\s*", " ", line).strip()
     return "suite produced no summary line"
+
+
+# The words a reader believes, and what each must say instead.
+# Keyed on the FALSE half so a page already corrected is left alone and the
+# substitution stays idempotent.
+_LIVENESS_CLAIMS = (
+    ("每一格都是對當前原始碼<b>重新計算</b>的謂詞，不是把判定存起來再讀回來。",
+     "表頭的數字（步驟數、格數、plugin 版本）每次產生都對當前原始碼重新計算；"
+     "下方八個維度的 E/W/n 分佈<b>不是</b>——它們是一次人工評估的結果，"
+     "由這支程式原封搬運，日期標在表頭。"),
+    ("即時狀態：504 格，每一格都是對當前原始碼重新計算的謂詞。",
+     "表頭數字為現算；八個維度的分佈為指定日期的人工評估，非現算。"),
+    ("每一格都是對當前原始碼重新計算的謂詞。",
+     "表頭數字為現算；八個維度的分佈為指定日期的人工評估，非現算。"),
+    ("Flow Gate · live state",
+     "Flow Gate · header live, distributions inherited"),
+)
+
+
+def rewrite_liveness_claims(page: str) -> Tuple[str, List[str]]:
+    """Make the page's words agree with what this program actually recomputes.
+
+    Returns the page and the claims that were still asserting liveness. An empty
+    list means the page already says which half is live -- so running twice
+    changes nothing, and `--check` on a corrected page is silent.
+    """
+    stale: List[str] = []
+    for false_claim, honest in _LIVENESS_CLAIMS:
+        if false_claim in page:
+            stale.append(false_claim[:44])
+            page = page.replace(false_claim, honest)
+    return page, stale
 
 
 def main(argv=None) -> int:
@@ -139,6 +191,10 @@ def main(argv=None) -> int:
     if cur["cells"] and cur["cells"].group(1) != str(steps * dims):
         drift.append(f"cells {cur['cells'].group(1)} -> {steps * dims}")
 
+    _, stale_claims = rewrite_liveness_claims(page)
+    for c in stale_claims:
+        drift.append(f"the page still claims liveness in words: \u201c{c}\u2026\u201d")
+
     if args.check:
         for d in drift:
             print(f"  DRIFT  {d}")
@@ -146,7 +202,7 @@ def main(argv=None) -> int:
               f" x {dims} dimensions = {steps * dims} cells, plugin v{version}")
         return 1 if drift else 0
 
-    out = page
+    out, _ = rewrite_liveness_claims(page)
     out = re.sub(r"plugin <b>v[\d.]+</b>", f"plugin <b>v{version}</b>", out)
     out = re.sub(r"flow steps <b>\d+</b>", f"flow steps <b>{steps}</b>", out)
     out = re.sub(r"cells <b>\d+</b>", f"cells <b>{steps * dims}</b>", out)
@@ -164,7 +220,13 @@ def main(argv=None) -> int:
     if not args.suite_cmd:
         carried.append("the suite figure")
     out = re.sub(
-        r"updated <b>[^<]*</b>",
+        # Consume any parenthetical a PREVIOUS run appended, not just the
+        # timestamp. Without this the note accumulates: measured, three runs
+        # leave three copies of it on one line. It went unnoticed because this
+        # program runs rarely and the duplication sits at the end of a long
+        # line — a substitution that is not idempotent is a substitution that
+        # only looks right the first time.
+        r"updated <b>[^<]*</b>(?:\s*<i>\([^<]*\)</i>)*",
         f"updated <b>{now}</b> "
         f"<i>(plugin / steps / cells derived from source; "
         f"{' and '.join(carried)} carried forward, not recomputed)</i>",
