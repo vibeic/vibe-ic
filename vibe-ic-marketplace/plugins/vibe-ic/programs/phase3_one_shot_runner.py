@@ -17826,6 +17826,58 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     )
 
 
+def _ship_convergence_exhaustion_report(project: Path, log: str) -> None:
+    """DIAGNOSTIC, not a verdict — separate "the loop ran out of passes" from
+    "the loop converged", on THIS run's own log.
+
+    The convergence loop announces every exit it takes on policy
+    (SHIP_CVG_CLOSED / _PLATEAU / _NONNUMERIC / _CLOSED_DRV_UNMEASURED) and
+    announces NOTHING when it simply falls out of its `for` bound. Both exits
+    publish the same SHIP_WNS_POSTROUTE and the same VIOLATED setup verdict, so
+    a run that stopped COUNTING has been indistinguishable from one that stopped
+    CONVERGING — and the two call for opposite actions: raise the bound, or
+    change the design.
+
+    Deliberately DOES NOT gate. Declaring it blocking needs a proven-by-run
+    demonstration that it stops the flow on a real design, which does not exist
+    yet. But a checker nothing ever invokes has zero coverage of real inputs —
+    its own unit test proves the logic on a fixture the author wrote and proves
+    nothing about production artefacts, which is the finding
+    `checker_execution_wiring_audit` raised against it. Running it here on the
+    log the step just wrote is what makes it see a real one; the verdict it
+    reaches changes nothing today, and is recorded so it can be read."""
+    out = project / "reports/phase3/ship_convergence_exhaustion.json"
+    # EXPLICIT path, like its siblings in this step (post_route_summary.json,
+    # spef_vs_estimate_discrepancy.json). `_pl.report_path` auto-routes by
+    # FILENAME and does not know this one, so it lands the report in
+    # `reports/audit/` — measured while wiring this, and it is why the first
+    # probe of this function reported "no report written" while the function was
+    # in fact working. The report has to be where the reader of a phase-3 run
+    # looks.
+    try:
+        import ship_postroute_convergence_exhaustion_check as _cvg
+        verdict, findings, summary = _cvg.audit(log)
+        payload = {
+            "verdict": verdict,
+            "blocking": False,
+            "findings": [f.__dict__ if hasattr(f, "__dict__") else str(f)
+                         for f in findings],
+            "summary": summary,
+        }
+    except Exception as exc:
+        # RECORDED, not swallowed. `except: pass` would make a diagnostic that
+        # could not run indistinguishable from one that found nothing to report
+        # — the exact defect this whole file keeps paying for, and one I wrote
+        # into the first version of this function.
+        payload = {"verdict": "ERROR", "blocking": False, "findings": [],
+                   "summary": {"error": repr(exc)}}
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2, default=str))
+    except OSError:
+        pass          # an unwritable report dir must never fail the step
+
+
 def _parse_ship_repair_log(log: str) -> dict:
     """Extract the SHIP_* markers + the detailed_route final violation count from
     the repair transcript. Pure text parsing (testable without OpenROAD).
@@ -18126,6 +18178,7 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
                           f"no-op (base route kept): repair invocation failed: {exc}")
     log = (out or "") + "\n" + (err or "")
     (pnr_out / "signoff_spef_repair.log").write_text(log)
+    _ship_convergence_exhaustion_report(project, log)
     parsed = _parse_ship_repair_log(log)
     repaired_def = pnr_out / "routed_repaired.def"
     repaired_v = pnr_out / f"{top}_pnr_repaired.v"

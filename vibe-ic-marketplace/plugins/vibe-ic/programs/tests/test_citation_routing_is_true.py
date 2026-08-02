@@ -96,7 +96,7 @@ def test_the_ladder_a_reader_walks(tmp_path):
 
 def test_an_absolute_path_is_never_followable(tmp_path):
     repo, cell = _cell(tmp_path, [])
-    assert not C.resolves(cell, "a.json", "/home/someone/run/sta.rpt")
+    assert not C.resolves(cell, "a.json", "/home/<your-user>/run/sta.rpt")
 
 
 # ── what it deliberately does NOT judge ────────────────────────────────────
