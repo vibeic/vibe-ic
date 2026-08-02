@@ -9089,12 +9089,50 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Decide exit code
     if structural_only_verdict:
-        # Verdict scope: ONLY the structural-RTL `P0` umbrella. Step-
-        # level gates (1-40) — including the pre-PnR Yosys Step 14 —
-        # are REPORTED for info but not gating, because they need real
+        # Verdict scope: the structural-RTL `P0` umbrella, PLUS the analog
+        # track. Step-level gates (1-40) — including the pre-PnR Yosys Step
+        # 14 — are REPORTED for info but not gating, because they need real
         # EDA tool harnesses that aren't expected to be in scope when
         # `--phase 2 --strict-structural` is run.
-        scoped = [r for r in results if r.id == "P0"]
+        #
+        # OWNER POLICY (2026-08-02), vibe-ic#634 — THE ANALOG TRACK COUNTS
+        # TOWARD `Overall`. Until this change the analog track reached the
+        # verdict ONLY through the step-execution ordering guard, and that
+        # guard adjudicates DONE-CLAIMS (`_T.is_done_claim`). So a tree that
+        # CLAIMED an analog step done over a failed dependency could be
+        # marked down, and a tree whose analog steps simply FAILED — or never
+        # produced their declared outputs at all — made no claim to
+        # adjudicate and audited `Overall: PASS`. MEASURED on four trees
+        # differing in one recorded content value, under exactly these flags:
+        # the trees that bound or disclosed audited FAIL with 3 failed steps,
+        # and the two SILENT trees audited PASS with 4 — no ordering
+        # violation between them. Doing nothing outranked doing something
+        # badly and saying so, one level above the gates built to price that
+        # trade. `_flow_verdict_tiers`' own docstring records this as the
+        # flow-POLICY question it deliberately left open; the owner settled
+        # it, and this is where the answer lands.
+        #
+        # ABSENT IS NOT FAILED, and that is the control this scoping turns
+        # on. `_T.scoped_into_verdict` is the COMPLEMENT of `EXCUSED` — the
+        # states the producer already subtracts from `total_required` — so
+        # `SKIPPED-CONDITION`, which a pure-digital design (no analog block
+        # list ⇒ every A-step's flow `condition` unmet) and an explicit
+        # `--skip-analog` both resolve the whole track to, never reaches the
+        # verdict, while FAIL, MISSING, a self-skipped required setup and any
+        # status this tree has never seen all do. Keeping the not-run states
+        # OUT also keeps the analog track out of `oss_blocked_skipped` below,
+        # which converts a DISCLOSED self-skip of a sign-off step into a
+        # non-green item and lists A3-A9: a design with no analog content
+        # must not acquire a deferral list by not having one.
+        #
+        # NOT WIDENED to `stage_mixed_signal` (M1-M4). That track has its own
+        # producers, its own gates and its own blast radius; this is the
+        # analog decision taken on the analog track, and mixed-signal is left
+        # exactly where it was — pinned by a test so the boundary reads as a
+        # decision rather than an omission.
+        scoped = [r for r in results
+                  if r.id == "P0"
+                  or (_T.in_analog_track(r) and _T.scoped_into_verdict(r))]
     else:
         scoped = results
     failing = [r for r in scoped if r.status == "FAIL"]
