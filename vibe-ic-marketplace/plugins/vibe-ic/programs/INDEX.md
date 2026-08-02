@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1039
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1039)
+- **Total programs (excluding helpers / shims):** 1032
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1032)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1030 |
+| `any` | 1023 |
 
 ## Alphabetical listing
 
@@ -157,7 +157,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `can_protocol_synth` | any | v0.1.81 | CAN-class protocol synth helper. |
 | `canfd_protocol_synth` | any | v0.1.84 | CAN-FD-class protocol synth helper. |
 | `canonical_path_symlink_forbid_check` | any | — | generalised symlink ban for canonical deliverable trees. |
-| `canonical_primitive_synth` | any | — | ONE deterministic SOLVER that emits verified-correct RTL for NINE canonical RTLLM design shapes, keyed on STATED STRUCTURE. |
 | `canopen_protocol_synth` | any | — | CANopen (CiA 301) protocol synth helper (protocol #70). |
 | `caravel_integration_runner` | any | v0.1.51 | Caravel chipignite integration runner (B2 from spm pilot). |
 | `caravel_wrapper_emit` | any | v0.1.51 | Caravel user_project_wrapper emitter (B3 from spm pilot). |
@@ -177,14 +176,12 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ci_harness_timeout_ceiling_check` | any | — | a test's own subprocess timeout must be able to FIRE under the pytest harness that bounds it. |
 | `ci_ran_at_all_check` | any | — | Did CI actually run on this commit, or has it not run at all? |
 | `ci_targeted_test_select` | any | — | pick a FAST targeted pytest subset for the patch-cadence gatekeeper CI gate. |
-| `citation_routing_is_true_check` | any | — | CITATION_ROUTING.txt says whether a reader can follow each citation. Check it. |
 | `clause_smoke_tb` | any | — | ORGANIC #740 (G2) [chip-AGNOSTIC] |
 | `clock_cascade_synthesis_check` | any | — | refuse a top-level RTL that ties every submodule's clock port to a single wire when L9 `clock_binding` declares ≥2 distinct clocks for ≥2... |
 | `clock_contract` | any | — | one clock name declares exactly one period. |
 | `clock_divider_period_check` | any | v0.116 | Detect clock-divider toggle patterns whose period does NOT match the |
 | `clock_divider_phase_form_check` | any | — | deterministic emit gate for the odd / double-edge clock-divider PHASE-FORM trap. |
 | `clock_divider_ratio_oracle_check` | any | — | deterministic emit gate that MEASURES a clock divider / generator's produced waveform and compares it to the ratio the SPEC states, via a... |
-| `clock_domain_reg_crossing_check` | any | — | RTL-level clock-domain-crossing screen. |
 | `clock_plan_check` | any | — | Step 16 (Clock planning) substance gate. |
 | `clock_scale_consistency_check` | any | — | Catch un-rescaled threshold values. |
 | `cmd_arg_range_validation_check` | any | — | M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated... |
@@ -252,7 +249,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dead_timing_constant_warn` | any | — | Scan all RTL files for `define macros and localparam declarations whose |
 | `debug_first_pass` | any | — | single dispatcher for debug-skill deterministic first-pass. |
 | `decap_route_short_guard` | any | — | remove VDD<->VSS shorts caused by decap fillers placed under signal routing (a real post-route PnR defect), by swapping each conflicting ... |
-| `declared_pdk_is_the_pdk_used_check` | any | — | the PDK that ran must be the PDK declared. |
 | `def_gds_port_power_restore` | any | — | restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p... |
 | `def_manufacturing_grid_check` | any | — | ORGANIC #597. |
 | `def_stage_progression_check` | any | v0.47 | Catch fabricated PnR stage DEF files. |
@@ -308,7 +304,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `enhancement_emit` | any | v0.1.35 | driver for the benchmark-enhancement-capture skill. |
 | `erc_density_check` | any | — | Step-31 ERC + sign-off density-rule verification (real substance). |
 | `erc_float_owner_classify` | any | v0.3.16 | ORGANIC #514. Classify ERC floating nets/pins BY OWNER into benign-by-construction vs functional. |
-| `error_diagnostic_consumed_check` | any | — | flow-integrity gate. |
 | `espi_protocol_synth` | any | — | Enhanced Serial Peripheral Interface (eSPI) protocol synth helper. |
 | `ethercat_protocol_synth` | any | v0.1.84 | EtherCAT-class protocol synth helper. |
 | `ethernet_800g_protocol_synth` | any | v0.1.89 | IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper. |
@@ -396,7 +391,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gameable_placeholder_scan` | any | — | deterministic half of the compliance-gate-spot-check "gameability scan" (Step 3, first three bullets). |
 | `gap_reset_granularity_check` | any | — | deterministic compliance check derived from <chip-class> v041 fresh-agent debug (bug #6, the final blocker). |
 | `gate_cli_mutation_probe` | any | — | Does anything notice when a gate is made unable to fail? |
-| `gate_directed_rtl_repair` | any | — | act on a blocking gate's OWN verdict instead of giving up. |
 | `gate_discloses_denominator_check` | any | — | a PASS must say how much it looked at. |
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
 | `gate_host_independence_check` | any | — | the same commit must give the same verdict. |
@@ -788,7 +782,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `qsf_gen` | any | Wave 72 | auto-generate Quartus QSF (FPGA pin assignments). |
 | `qspi_ospi_protocol_synth` | any | v0.1.91 | Quad/Octal SPI (QSPI/OSPI) — JEDEC Expanded SPI (xSPI, JESD251) protocol synth helper. |
 | `quartus_map_audit` | any | — | Scan Quartus .map.rpt for silent-failure indicators. |
-| `ramp_waveform_oracle_check` | any | — | deterministic gate that MEASURES a multi-bit monotonic-ramp / triangle / sawtooth output and compares it to the bounds and step the SPEC ... |
 | `readme_class_detector` | any | — | README-token IC class detector (v1.6.522). |
 | `readme_deep_parser` | any | — | Capability 1 of GitHub issue #27. |
 | `readme_ppa_extractor` | any | — | for #36 Bug 10: PPA implementation-results table picker. |
@@ -882,7 +875,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `shape_b_sample_export` | any | — | deterministic Shape-B sample-export (ORGANIC #678). |
 | `shift_counter_synth` | any | — | deterministic SOLVER for the CVDP barrel-shift / rotate and saturating / specialized-counter families. |
 | `shift_register_synth` | any | — | deterministic SOLVER for the shift-register / rotate / barrel-shift family. |
-| `ship_postroute_convergence_exhaustion_check` | any | — | chip-AGNOSTIC audit of the post-reroute real-SPEF convergence loop's OWN markers, answering one question a setup-VIOLATED run cannot othe... |
 | `shipped_path_portability_check` | any | — | shipped-source path-portability guard. |
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
 | `si_mcf_sta` | any | — | SI-aware STA via Miller Coupling Factor (MCF) bounding. |
@@ -1001,6 +993,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `transient_signal_latch_check` | any | — | Flag 1-cycle pulses read by multi-cycle FSMs without latching. |
 | `transition_coverage_check` | any | — | REAL transition-delay-fault (TDF) coverage gate for the LOC at-speed ATPG step. |
 | `transition_fault_atpg_run` | any | — | REAL open-source TRANSITION-DELAY-FAULT (TDF) ATPG via the forked vibeic/yosys SAT engine (launch-off-capture, 2-frame). |
+| `triage_note_answers_the_question_check` | any | — | A triage note that describes BEHAVIOUR does not say why the behaviour is OK. |
 | `triage_record_check` | any | — | self-consistency linter for benchmark residual-triage records (open-benchmark-methodology § 4 + § 6.4). |
 | `tristate_active_drive_check` | any | — | P1.1 deterministic gate |
 | `tristate_bus_check` | any | — | Generate general tristate / open-drain bus assertions. |
@@ -1111,7 +1104,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1030 programs)
+### `any` (1023 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1243,7 +1236,6 @@ _(no programs in this group)_
 - `can_protocol_synth` — CAN-class protocol synth helper.  _[v0.1.81]_
 - `canfd_protocol_synth` — CAN-FD-class protocol synth helper.  _[v0.1.84]_
 - `canonical_path_symlink_forbid_check` — generalised symlink ban for canonical deliverable trees.
-- `canonical_primitive_synth` — ONE deterministic SOLVER that emits verified-correct RTL for NINE canonical RTLLM design shapes, keyed on STATED STRUCTURE.
 - `canopen_protocol_synth` — CANopen (CiA 301) protocol synth helper (protocol #70).
 - `caravel_integration_runner` — Caravel chipignite integration runner (B2 from spm pilot).  _[v0.1.51]_
 - `caravel_wrapper_emit` — Caravel user_project_wrapper emitter (B3 from spm pilot).  _[v0.1.51]_
@@ -1263,14 +1255,12 @@ _(no programs in this group)_
 - `ci_harness_timeout_ceiling_check` — a test's own subprocess timeout must be able to FIRE under the pytest harness that bounds it.
 - `ci_ran_at_all_check` — Did CI actually run on this commit, or has it not run at all?
 - `ci_targeted_test_select` — pick a FAST targeted pytest subset for the patch-cadence gatekeeper CI gate.
-- `citation_routing_is_true_check` — CITATION_ROUTING.txt says whether a reader can follow each citation. Check it.
 - `clause_smoke_tb` — ORGANIC #740 (G2) [chip-AGNOSTIC]
 - `clock_cascade_synthesis_check` — refuse a top-level RTL that ties every submodule's clock port to a single wire when L9 `clock_binding` declares ≥2 distinct clocks for ≥2...
 - `clock_contract` — one clock name declares exactly one period.
 - `clock_divider_period_check` — Detect clock-divider toggle patterns whose period does NOT match the  _[v0.116]_
 - `clock_divider_phase_form_check` — deterministic emit gate for the odd / double-edge clock-divider PHASE-FORM trap.
 - `clock_divider_ratio_oracle_check` — deterministic emit gate that MEASURES a clock divider / generator's produced waveform and compares it to the ratio the SPEC states, via a...
-- `clock_domain_reg_crossing_check` — RTL-level clock-domain-crossing screen.
 - `clock_plan_check` — Step 16 (Clock planning) substance gate.
 - `clock_scale_consistency_check` — Catch un-rescaled threshold values.
 - `cmd_arg_range_validation_check` — M4: Verify that command argument fields (address, length, channel, etc.) are explicitly bounds-checked before use, not silently truncated...
@@ -1336,7 +1326,6 @@ _(no programs in this group)_
 - `dead_timing_constant_warn` — Scan all RTL files for `define macros and localparam declarations whose
 - `debug_first_pass` — single dispatcher for debug-skill deterministic first-pass.
 - `decap_route_short_guard` — remove VDD<->VSS shorts caused by decap fillers placed under signal routing (a real post-route PnR defect), by swapping each conflicting ...
-- `declared_pdk_is_the_pdk_used_check` — the PDK that ran must be the PDK declared.
 - `def_gds_port_power_restore` — restore top-level port labels + power-rail markers into a streamed GDS from its routed DEF, so LVS can name ports and unite a FOLLOWPIN p...
 - `def_manufacturing_grid_check` — ORGANIC #597.
 - `def_stage_progression_check` — Catch fabricated PnR stage DEF files.  _[v0.47]_
@@ -1391,7 +1380,6 @@ _(no programs in this group)_
 - `enhancement_emit` — driver for the benchmark-enhancement-capture skill.  _[v0.1.35]_
 - `erc_density_check` — Step-31 ERC + sign-off density-rule verification (real substance).
 - `erc_float_owner_classify` — ORGANIC #514. Classify ERC floating nets/pins BY OWNER into benign-by-construction vs functional.  _[v0.3.16]_
-- `error_diagnostic_consumed_check` — flow-integrity gate.
 - `espi_protocol_synth` — Enhanced Serial Peripheral Interface (eSPI) protocol synth helper.
 - `ethercat_protocol_synth` — EtherCAT-class protocol synth helper.  _[v0.1.84]_
 - `ethernet_800g_protocol_synth` — IEEE 802.3df 800 Gigabit Ethernet (800GBASE) protocol synth helper.  _[v0.1.89]_
@@ -1479,7 +1467,6 @@ _(no programs in this group)_
 - `gameable_placeholder_scan` — deterministic half of the compliance-gate-spot-check "gameability scan" (Step 3, first three bullets).
 - `gap_reset_granularity_check` — deterministic compliance check derived from <chip-class> v041 fresh-agent debug (bug #6, the final blocker).
 - `gate_cli_mutation_probe` — Does anything notice when a gate is made unable to fail?
-- `gate_directed_rtl_repair` — act on a blocking gate's OWN verdict instead of giving up.
 - `gate_discloses_denominator_check` — a PASS must say how much it looked at.
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_
 - `gate_host_independence_check` — the same commit must give the same verdict.
@@ -1870,7 +1857,6 @@ _(no programs in this group)_
 - `qsf_gen` — auto-generate Quartus QSF (FPGA pin assignments).  _[Wave 72]_
 - `qspi_ospi_protocol_synth` — Quad/Octal SPI (QSPI/OSPI) — JEDEC Expanded SPI (xSPI, JESD251) protocol synth helper.  _[v0.1.91]_
 - `quartus_map_audit` — Scan Quartus .map.rpt for silent-failure indicators.
-- `ramp_waveform_oracle_check` — deterministic gate that MEASURES a multi-bit monotonic-ramp / triangle / sawtooth output and compares it to the bounds and step the SPEC ...
 - `readme_class_detector` — README-token IC class detector (v1.6.522).
 - `readme_deep_parser` — Capability 1 of GitHub issue #27.
 - `readme_ppa_extractor` — for #36 Bug 10: PPA implementation-results table picker.
@@ -1962,7 +1948,6 @@ _(no programs in this group)_
 - `shape_b_sample_export` — deterministic Shape-B sample-export (ORGANIC #678).
 - `shift_counter_synth` — deterministic SOLVER for the CVDP barrel-shift / rotate and saturating / specialized-counter families.
 - `shift_register_synth` — deterministic SOLVER for the shift-register / rotate / barrel-shift family.
-- `ship_postroute_convergence_exhaustion_check` — chip-AGNOSTIC audit of the post-reroute real-SPEF convergence loop's OWN markers, answering one question a setup-VIOLATED run cannot othe...
 - `shipped_path_portability_check` — shipped-source path-portability guard.
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
 - `si_mcf_sta` — SI-aware STA via Miller Coupling Factor (MCF) bounding.
@@ -2081,6 +2066,7 @@ _(no programs in this group)_
 - `transient_signal_latch_check` — Flag 1-cycle pulses read by multi-cycle FSMs without latching.
 - `transition_coverage_check` — REAL transition-delay-fault (TDF) coverage gate for the LOC at-speed ATPG step.
 - `transition_fault_atpg_run` — REAL open-source TRANSITION-DELAY-FAULT (TDF) ATPG via the forked vibeic/yosys SAT engine (launch-off-capture, 2-frame).
+- `triage_note_answers_the_question_check` — A triage note that describes BEHAVIOUR does not say why the behaviour is OK.
 - `triage_record_check` — self-consistency linter for benchmark residual-triage records (open-benchmark-methodology § 4 + § 6.4).
 - `tristate_active_drive_check` — P1.1 deterministic gate
 - `tristate_bus_check` — Generate general tristate / open-drain bus assertions.

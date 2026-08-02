@@ -245,6 +245,11 @@ run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.
 run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_wiring_audit.py"
+# The baseline the gate above maintains records WHY each entry is still there.
+# 24 of 31 notes said the checker "skips without its input" about an input a
+# real run always has — a reason whose premise is false, standing in for the
+# real one (nothing calls it). vibe-ic#659.
+run "triage notes state a true reason"  "$ROOT" python3 "$PG/triage_note_answers_the_question_check.py"
 
 # The three NDA guards all scan a DELTA (commit messages, an added diff, the
 # plugin source). None can see a token that is ALREADY tracked, so one that
