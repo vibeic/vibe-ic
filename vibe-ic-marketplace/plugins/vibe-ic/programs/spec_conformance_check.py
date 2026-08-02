@@ -42,9 +42,13 @@ Findings:
     shift-implemented-as-rotate  : spec describes a SHIFTER (not explicitly
                                    rotate-only) but the RTL carries an
                                    unambiguous barrel-ROTATE wrap signature
-                                   (`(x<<n)|(x>>m)` opposite shifts of one x, or
-                                   `{x[a:0], x[W-1:b]}` zero-fill-free self-wrap).
-                                   A genuine rotate-only spec disarms it (§4.05).
+                                   (`(x<<n)|(x>>m)` opposite shifts of one x,
+                                   `{x[a:0], x[W-1:b]}` zero-fill-free self-wrap,
+                                   `{x,x}>>k` doubled-vector shift, or a
+                                   modulo/mask index wrap `x[(i+/-k) % W]` /
+                                   `x[(i+/-k) & (W-1)]` — the RTLLM barrel_shifter
+                                   generate form). A genuine rotate-only spec
+                                   disarms it (§4.05).
     waveform-peak-hold-dropped   : spec describes a triangle/ramp/sawtooth
                                    generator that HOLDS the peak/trough but the
                                    RTL toggles direction the instant it hits the
@@ -896,6 +900,25 @@ def _rtl_rotate_signatures(rtl_body: str) -> List[str]:
     for m in dbl_rep.finditer(rtl_body):
         if int(m.group(1)) >= 2:              # {N{x}} with N>=2 is a duplication
             out.append(m.group(0).strip())
+    # (4) a MODULO-ARITHMETIC WRAPPED bit index: x[(i +/- k) % W] or the
+    #     power-of-two mask form x[(i +/- k) & (W-1)]. A barrel shifter built as a
+    #     generate/for over per-bit muxes selects the source bit by index
+    #     arithmetic; the `% W` (or `& (W-1)`) is what WRAPS the index around the
+    #     word — the defining behaviour of a ROTATE. A logical shift never wraps
+    #     the index: it uses a shift operator, a zero-fill concat, or a guarded
+    #     `i+k < W ? x[i+k] : 1'b0`. So a bit-select whose index is reduced modulo
+    #     (or masked to) the width is an unambiguous rotate wrap — the RTLLM
+    #     barrel_shifter `in[(i+4)%8]` generate form, which idioms (1)-(3) [OR-of-
+    #     opposite-shifts / concat partition / doubled-vector] all miss because it
+    #     is neither a shift-operator OR nor a concat. ZERO-FALSE-FIRE: requires an
+    #     OFFSET index `(<expr> +/- <expr>)` reduced by `% <int>` or `& (<int>-1)`
+    #     — a bare `x[i]` or a zero-fill guard matches nothing. chip-AGNOSTIC: any
+    #     vector name, any width literal.
+    mod_idx = re.compile(
+        r'[A-Za-z_]\w*\s*\[\s*\(\s*[^\[\]]*[+\-][^\[\]]*\)\s*'
+        r'(?:%\s*\d+|&\s*\(?\s*\d+\s*-\s*1\s*\)?)\s*\]')
+    for m in mod_idx.finditer(rtl_body):
+        out.append(m.group(0).strip())
     return out
 
 
