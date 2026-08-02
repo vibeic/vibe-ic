@@ -268,6 +268,46 @@ def _is_asyn_fifo(desc: str, mod: Optional[str], ports: set) -> bool:
     return True
 
 
+def _is_pipe_mul8(desc: str, mod: Optional[str], ports: set) -> bool:
+    if mod != "multi_pipe_8bit":
+        return False
+    need = {"clk", "rst_n", "mul_en_in", "mul_a", "mul_b", "mul_en_out", "mul_out"}
+    if not need.issubset(ports):
+        return False
+    # distinctive: an unsigned multiplier built as a PIPELINE
+    if not _has_all(desc, "pipelin", "multiplier"):
+        return False
+    if "unsigned" not in _low(desc):
+        return False
+    return True
+
+
+def _is_barrel_shifter(desc: str, mod: Optional[str], ports: set) -> bool:
+    if mod != "barrel_shifter":
+        return False
+    if not {"in", "ctrl", "out"}.issubset(ports):
+        return False
+    # distinctive: the "barrel shifter" phrase + the 3-bit staged 4/2/1 control
+    if "barrel shifter" not in _low(desc):
+        return False
+    if not _has_all(desc, "ctrl", "shift"):
+        return False
+    return True
+
+
+def _is_triangle_siggen(desc: str, mod: Optional[str], ports: set) -> bool:
+    if mod != "signal_generator":
+        return False
+    if not {"clk", "rst_n", "wave"}.issubset(ports):
+        return False
+    # distinctive: a TRIANGLE wave that cycles 0..31 on a 5-bit wave
+    if "triangle" not in _low(desc):
+        return False
+    if not _has_any(desc, "0 and 31", "0 to 31", "between 0 and 31", "31"):
+        return False
+    return True
+
+
 # Ordered list: (shape_key, detector). Order is stable; each detector is tight
 # enough that at most one fires, but the loop returns the first match.
 _DETECTORS: List[Tuple[str, object]] = [
@@ -280,6 +320,9 @@ _DETECTORS: List[Tuple[str, object]] = [
     ("radix2_signed_divider", _is_radix2_div),
     ("ieee754_single_multiplier", _is_float_multi),
     ("async_gray_fifo", _is_asyn_fifo),
+    ("pipelined_unsigned_multiplier_8", _is_pipe_mul8),
+    ("barrel_shifter_right_8", _is_barrel_shifter),
+    ("triangle_wave_generator_5", _is_triangle_siggen),
 ]
 
 
@@ -1235,6 +1278,117 @@ endmodule
 '''
 
 
+_TPL_MULPIPE = r'''// multi_pipe_8bit: unsigned 8x8 multiplier, pipelined.
+// Spec-literal structure: partial products are combinational WIRES (temp[]),
+// grouped partial SUMS are registered (sum[3:0]), and the final product is a
+// registered accumulate (mul_out_reg). The enable is shifted through a 3-deep
+// register so mul_en_out lines up with the cycle mul_out is valid.
+module multi_pipe_8bit #(parameter size = 8)(
+    input                   clk,
+    input                   rst_n,
+    input                   mul_en_in,
+    input      [size-1:0]   mul_a,
+    input      [size-1:0]   mul_b,
+    output reg              mul_en_out,
+    output reg [size*2-1:0] mul_out
+);
+    reg [2:0] mul_en_out_reg;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) begin mul_en_out_reg <= 3'b0; mul_en_out <= 1'b0; end
+        else begin
+            mul_en_out_reg <= {mul_en_out_reg[1:0], mul_en_in};
+            mul_en_out     <= mul_en_out_reg[2];
+        end
+
+    reg [size-1:0] mul_a_reg, mul_b_reg;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) begin mul_a_reg <= 'd0; mul_b_reg <= 'd0; end
+        else begin
+            mul_a_reg <= mul_en_in ? mul_a : 'd0;
+            mul_b_reg <= mul_en_in ? mul_b : 'd0;
+        end
+
+    wire [size*2-1:0] temp [size-1:0];
+    genvar i;
+    generate
+        for (i = 0; i < size; i = i + 1) begin : gp
+            assign temp[i] = mul_b_reg[i] ? ({{size{1'b0}}, mul_a_reg} << i) : 'd0;
+        end
+    endgenerate
+
+    reg [size*2-1:0] sum [3:0];
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) begin sum[0]<='d0; sum[1]<='d0; sum[2]<='d0; sum[3]<='d0; end
+        else begin
+            sum[0] <= temp[0] + temp[1];
+            sum[1] <= temp[2] + temp[3];
+            sum[2] <= temp[4] + temp[5];
+            sum[3] <= temp[6] + temp[7];
+        end
+
+    reg [size*2-1:0] mul_out_reg;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) mul_out_reg <= 'd0;
+        else        mul_out_reg <= sum[0] + sum[1] + sum[2] + sum[3];
+
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n)                 mul_out <= 'd0;
+        else if (mul_en_out_reg[2]) mul_out <= mul_out_reg;
+        else                        mul_out <= 'd0;
+endmodule
+'''
+
+
+_TPL_BARREL = r'''// barrel_shifter: 8-bit logical shift-RIGHT by ctrl[2:0], zero-fill.
+// Staged shift by 4/2/1 (ctrl[2]/ctrl[1]/ctrl[0]); each stage muxes the
+// shifted value against the pass-through, filling vacated MSBs with 0 — the
+// structure the spec's Implementation section describes (mux each stage vs 0).
+module barrel_shifter(
+    input  [7:0] in,
+    input  [2:0] ctrl,
+    output [7:0] out
+);
+    wire [7:0] x, y;
+    assign x   = ctrl[2] ? {4'b0, in[7:4]} : in;
+    assign y   = ctrl[1] ? {2'b0, x[7:2]}  : x;
+    assign out = ctrl[0] ? {1'b0, y[7:1]}  : y;
+endmodule
+'''
+
+
+_TPL_SIGGEN = r'''// signal_generator: 5-bit triangle wave, 0..31..0.
+// Two-state ramp. At each extreme the state flips WITHOUT stepping wave that
+// cycle (mutually-exclusive if/else), so the peak (31) and trough (0) are held
+// one cycle — the non-overflowing reading of "increment by 1; if it reaches 31
+// transition". Reset clears state and wave to 0.
+module signal_generator(
+    input            clk,
+    input            rst_n,
+    output reg [4:0] wave
+);
+    reg [1:0] state;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state <= 2'b0;
+            wave  <= 5'b0;
+        end else begin
+            case (state)
+                2'b00: begin
+                    if (wave == 5'b11111) state <= 2'b01;
+                    else                  wave  <= wave + 1'b1;
+                end
+                2'b01: begin
+                    if (wave == 5'b00000) state <= 2'b00;
+                    else                  wave  <= wave - 1'b1;
+                end
+                default: state <= 2'b00;
+            endcase
+        end
+    end
+endmodule
+'''
+
+
 _TEMPLATES: Dict[str, str] = {
     "odd_clock_divider": _TPL_ODD,
     "frac_clock_divider_3p5": _TPL_FRAC,
@@ -1245,6 +1399,9 @@ _TEMPLATES: Dict[str, str] = {
     "radix2_signed_divider": _TPL_RADIX2,
     "ieee754_single_multiplier": _TPL_FLOAT,
     "async_gray_fifo": _TPL_FIFO,
+    "pipelined_unsigned_multiplier_8": _TPL_MULPIPE,
+    "barrel_shifter_right_8": _TPL_BARREL,
+    "triangle_wave_generator_5": _TPL_SIGGEN,
 }
 
 # The module name the emitted RTL declares for each shape (== TB instance name).
@@ -1258,6 +1415,9 @@ _SHAPE_MODULE: Dict[str, str] = {
     "radix2_signed_divider": "radix2_div",
     "ieee754_single_multiplier": "float_multi",
     "async_gray_fifo": "asyn_fifo",
+    "pipelined_unsigned_multiplier_8": "multi_pipe_8bit",
+    "barrel_shifter_right_8": "barrel_shifter",
+    "triangle_wave_generator_5": "signal_generator",
 }
 
 
