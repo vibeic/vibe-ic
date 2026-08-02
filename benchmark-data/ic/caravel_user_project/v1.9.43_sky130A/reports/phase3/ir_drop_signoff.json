@@ -3,32 +3,14 @@
   "passed": true,
   "findings": [
     {
-      "rule": "IR_DROP_NO_TOOL_SIGNATURE",
-      "severity": "ERROR",
-      "message": "report lacks any known ir_drop tool signature (one of: ['openroad', 'IR drop', 'PSM', 'static IR']... ). Hand-typed reports rejected.",
-      "file": "phase3/stage3/pnr/sta_spef_repaired.rpt"
-    },
-    {
       "rule": "IR_DROP_REPORT_TOO_SMALL",
       "severity": "ERROR",
       "message": "report 610 B is below minimum 1024 B — suggests a hand-typed stub, not a real ir_drop tool output",
       "file": "reports/phase3/ir_drop.json"
-    },
-    {
-      "rule": "IR_DROP_REPORT_TOO_SMALL",
-      "severity": "ERROR",
-      "message": "report 610 B is below minimum 1024 B — suggests a hand-typed stub, not a real ir_drop tool output",
-      "file": "steps/phase3/stage3/24_ir_drop_static_dynamic/ir_drop.json"
-    },
-    {
-      "rule": "IR_DROP_NO_TOOL_SIGNATURE",
-      "severity": "ERROR",
-      "message": "report lacks any known ir_drop tool signature (one of: ['openroad', 'IR drop', 'PSM', 'static IR']... ). Hand-typed reports rejected.",
-      "file": "plugin_work/programs/tests/test_ir_drop_triage_classify.py"
     }
   ],
   "summary": {
-    "files_found": 13,
+    "files_found": 2,
     "has_drop_value": true,
     "tool_authentic": true,
     "worst_ir_uv": 264.0,

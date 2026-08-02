@@ -1,24 +1,24 @@
 {
   "program": "signoff_audit:tapeout",
-  "passed": true,
+  "passed": false,
   "findings": [
     {
       "rule": "TAPEOUT_GDS_EXISTS",
-      "severity": "INFO",
-      "message": "Declared stream-out GDS found: user_project_wrapper.gds (92753582 bytes, GDSII HEADER record present)",
-      "file": "phase3/stage4/gds/user_project_wrapper.gds"
+      "severity": "ERROR",
+      "message": "No GDS file found (*.gds, *.gds2, *.gdsii)",
+      "file": ""
     },
     {
       "rule": "TAPEOUT_NETLIST_EXISTS",
       "severity": "INFO",
-      "message": "Tape-out netlist found: user_project_wrapper_pnr.v",
-      "file": "phase3/stage3/pnr/user_project_wrapper_pnr.v"
+      "message": "Tape-out netlist found: netlist.v",
+      "file": "phase2/stage2/synth/netlist.v"
     },
     {
       "rule": "TAPEOUT_TIMING_EXISTS",
       "severity": "INFO",
-      "message": "Timing report found: sta_spef_repaired.rpt",
-      "file": "phase3/stage3/pnr/sta_spef_repaired.rpt"
+      "message": "Timing report found: sta_mcorner_ocv.rpt",
+      "file": "reports/phase3/sta_mcorner_ocv.rpt"
     },
     {
       "rule": "TAPEOUT_DRC_CLEAN",
@@ -33,21 +33,21 @@
       "file": "reports/phase3/lvs.rpt"
     },
     {
-      "rule": "TAPEOUT_SI_PROVED",
-      "severity": "INFO",
-      "message": "SI crosstalk-delay sign-off: 1426 victim-net MCF fold(s) re-derived and proved against the bounded SPEF.",
+      "rule": "TAPEOUT_SI_VIOLATION",
+      "severity": "ERROR",
+      "message": "SI crosstalk-delay sign-off refused (VIOLATION): the SI crosstalk-delay report carries verdict 'NOT_RUN', but the report body carries 1 ERROR finding(s) (first: NO_SPEF — original coupling SPEF missing: /home/reyerchu/_c_car15_run/phase3/stage3/extracted/user_project_wrapper.spef). The gate derives FAIL from exactly that evidence, so this report is a FAILURE wearing another label — read as a defect, never as a vacuity to accept.",
       "file": "reports/phase3/si_mcf_sta_check.json"
     }
   ],
   "summary": {
     "evidence": {
-      "gds": true,
+      "gds": false,
       "netlist": true,
       "timing": true,
       "drc": true,
       "lvs": true
     },
-    "evidence_count": 5,
+    "evidence_count": 4,
     "threshold": 5,
     "env_unavailable_steps": [],
     "drc_library_internal_waived": false,
@@ -55,18 +55,18 @@
     "lvs_report": "reports/phase3/lvs.rpt",
     "lvs_verdict": "GENUINE_MATCH",
     "si_signoff": {
-      "state": "PROVED",
+      "state": "VIOLATION",
       "report": "reports/phase3/si_mcf_sta_check.json",
-      "verdict": "PASS",
+      "verdict": "NOT_RUN",
       "vacuity_code": "",
-      "folds_proved": 1426,
+      "folds_proved": 0,
       "waived": false,
       "waiver_approver": "",
       "waiver_reason": "",
       "waiver_refused": "",
       "accepted_vacuity_codes": [],
-      "why": "1426 victim-net MCF fold(s) re-derived and proved against the bounded SPEF."
+      "why": "the SI crosstalk-delay report carries verdict 'NOT_RUN', but the report body carries 1 ERROR finding(s) (first: NO_SPEF — original coupling SPEF missing: /home/reyerchu/_c_car15_run/phase3/stage3/extracted/user_project_wrapper.spef). The gate derives FAIL from exactly that evidence, so this report is a FAILURE wearing another label — read as a defect, never as a vacuity to accept."
     },
-    "verdict_tier": "PASS"
+    "verdict_tier": "FAIL"
   }
 }

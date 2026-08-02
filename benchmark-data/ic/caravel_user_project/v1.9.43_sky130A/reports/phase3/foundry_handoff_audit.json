@@ -1,6 +1,6 @@
 {
   "gate": "foundry_handoff_package_check",
-  "verdict": "PASS",
+  "verdict": "FAIL",
   "step_label": "foundry_handoff",
   "required_files": [
     "phase3/stage4/foundry_handoff/mask_spec.json",
@@ -8,43 +8,30 @@
     "phase3/stage4/foundry_handoff/corner_test_vectors.json",
     "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt"
   ],
-  "found": [
+  "found": [],
+  "missing": [
     "phase3/stage4/foundry_handoff/mask_spec.json",
     "phase3/stage4/foundry_handoff/wat_plan.json",
     "phase3/stage4/foundry_handoff/corner_test_vectors.json",
-    "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt"
+    "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt"
   ],
-  "missing": [],
   "ic_name": "caravel_user_project",
-  "physical_top_candidates": [
-    "user_project_wrapper"
-  ],
-  "chip_gds": "/home/reyerchu/_c_car15_run/phase3/stage4/gds/user_project_wrapper.gds",
+  "physical_top_candidates": [],
+  "chip_gds": null,
   "scribe_only": false,
   "waiver": null,
   "rationale_when_skipped": "Foundry-handoff kit assembler not shipped.",
-  "pending_foundry_fields": [
-    "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt:PENDING_FOUNDRY_scribe_line_layout",
-    "phase3/stage4/foundry_handoff/corner_test_vectors.json:PENDING_FOUNDRY_voltage_corners",
-    "phase3/stage4/foundry_handoff/corner_test_vectors.json:PENDING_FOUNDRY_temperature_corners_celsius",
-    "phase3/stage4/foundry_handoff/corner_test_vectors.json:PENDING_FOUNDRY_test_patterns",
-    "phase3/stage4/foundry_handoff/corner_test_vectors.json:PENDING_FOUNDRY_loadboard_id",
-    "phase3/stage4/foundry_handoff/mask_spec.json:PENDING_FOUNDRY_mask_layers",
-    "phase3/stage4/foundry_handoff/mask_spec.json:PENDING_FOUNDRY_reticle_steppers",
-    "phase3/stage4/foundry_handoff/wat_plan.json:PENDING_FOUNDRY_wat_structures",
-    "phase3/stage4/foundry_handoff/wat_plan.json:PENDING_FOUNDRY_yield_target_pct",
-    "phase3/stage4/foundry_handoff/wat_plan.json:PENDING_FOUNDRY_acceptance_criteria"
-  ],
+  "pending_foundry_fields": [],
   "findings": [
     {
-      "severity": "INFO",
-      "rule": "FILES_PRESENT",
-      "message": "all 4 required artefacts present + chip GDS 'user_project_wrapper.gds'"
+      "severity": "ERROR",
+      "rule": "FOUNDRY_HANDOFF_CHIP_GDS_MISSING",
+      "message": "no non-empty chip GDS matching L1.ic_name='caravel_user_project', L9.top_module, or the physical PnR top (none resolved) under phase3/stage4/foundry_handoff/gds/ or phase3/stage4/gds/ or gds/. Step 35 PASS requires the chip-named GDS deliverable."
     },
     {
       "severity": "INFO",
-      "rule": "FOUNDRY_HANDOFF_PENDING_FOUNDRY",
-      "message": "10 foundry-supplied open item(s) pending before tapeout (#449): phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt:PENDING_FOUNDRY_scribe_line_layout; phase3/stage4/foundry_handoff/corner_test_vectors.json:PENDING_FOUNDRY_voltage_corners; phase3/stage4/foundry_handoff/corner_test_vectors.json:PENDING_FOUNDRY_temperature_corners_celsius; phase3/stage4/foundry_handoff/corner_test_vectors.json:PENDING_FOUNDRY_test_patterns; phase3/stage4/foundry_handoff/corner_test_vectors.json:PENDING_FOUNDRY_loadboard_id; phase3/stage4/foundry_handoff/mask_spec.json:PENDING_FOUNDRY_mask_layers; phase3/stage4/foundry_handoff/mask_spec.json:PENDING_FOUNDRY_reticle_steppers; phase3/stage4/foundry_handoff/wat_plan.json:PENDING_FOUNDRY_wat_structures; phase3/stage4/foundry_handoff/wat_plan.json:PENDING_FOUNDRY_yield_target_pct; phase3/stage4/foundry_handoff/wat_plan.json:PENDING_FOUNDRY_acceptance_criteria"
+      "rule": "REQUIRED_FILES_MISSING",
+      "message": "missing: ['phase3/stage4/foundry_handoff/mask_spec.json', 'phase3/stage4/foundry_handoff/wat_plan.json', 'phase3/stage4/foundry_handoff/corner_test_vectors.json', 'phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt']"
     }
   ]
 }

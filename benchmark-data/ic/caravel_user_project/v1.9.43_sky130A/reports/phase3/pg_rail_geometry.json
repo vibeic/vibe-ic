@@ -1,27 +1,5 @@
 {
   "gate": "pg_rail_geometry_check",
-  "verdict": "PASS",
-  "def": "/home/reyerchu/_c_car15_run/phase3/stage3/pnr/routed.def",
-  "rails_total": 2,
-  "rails_routed": 2,
-  "rails_empty_disclosed": 0,
-  "reason": "all 2 declared rail(s) carry a geometry clause (2/2 examined)",
-  "rails": [
-    {
-      "rail": "VGND",
-      "def_line": 14123,
-      "pins": 2,
-      "geometry_lines": 241483,
-      "disclosed": false,
-      "disclosure": null
-    },
-    {
-      "rail": "VPWR",
-      "def_line": 255607,
-      "pins": 2,
-      "geometry_lines": 237824,
-      "disclosed": false,
-      "disclosure": null
-    }
-  ]
+  "verdict": "SKIP",
+  "reason": "no routed.def under the project — nothing to judge"
 }

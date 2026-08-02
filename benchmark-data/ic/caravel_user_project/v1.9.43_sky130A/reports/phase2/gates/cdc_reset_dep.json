@@ -3,80 +3,52 @@
   "passed": true,
   "findings": [],
   "summary": {
-    "files_scanned": 40,
+    "files_scanned": 30,
     "violations": 0,
-    "files_skipped": 18,
+    "files_skipped": 11,
     "skipped": [
       {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage2/dft/cell_model_combined.v",
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage1/rtl/uprj_netlists.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage1/formal/uprj_netlists.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/dft/cut_netlist.v",
+        "reason": "synth/pnr output (no design reset hierarchy)"
+      },
+      {
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/dft/cell_model_combined.v",
         "reason": "size>2000000B (machine-generated)"
       },
       {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage2/dft/scan_netlist.v",
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/dft/scan_netlist.v",
         "reason": "synth/pnr output (no design reset hierarchy)"
       },
       {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage2/dft/cut_netlist.v",
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/synth/user_project_wrapper_sv2v.v",
         "reason": "synth/pnr output (no design reset hierarchy)"
       },
       {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage2/synth/user_project_wrapper_synth.v",
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/synth/netlist.v",
         "reason": "synth/pnr output (no design reset hierarchy)"
       },
       {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage2/synth/netlist_yosys.v",
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/synth/post_dft_netlist.v",
         "reason": "synth/pnr output (no design reset hierarchy)"
       },
       {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage2/synth/post_dft_netlist.v",
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/synth/_dlatch_map.v",
         "reason": "synth/pnr output (no design reset hierarchy)"
       },
       {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage2/synth/user_project_wrapper_sv2v.v",
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/synth/user_project_wrapper_synth.v",
         "reason": "synth/pnr output (no design reset hierarchy)"
       },
       {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage2/synth/_dlatch_map.v",
-        "reason": "synth/pnr output (no design reset hierarchy)"
-      },
-      {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage2/synth/netlist.v",
-        "reason": "synth/pnr output (no design reset hierarchy)"
-      },
-      {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage1/rtl/uprj_netlists.v",
-        "reason": "synth/pnr output (no design reset hierarchy)"
-      },
-      {
-        "file": "/home/reyerchu/_c_car15_run/phase2/stage1/formal/uprj_netlists.v",
-        "reason": "synth/pnr output (no design reset hierarchy)"
-      },
-      {
-        "file": "/home/reyerchu/_c_car15_run/steps/phase2/stage2/14_synthesis_handoff_gate_pre_pnr_yosys_script_netl/netlist.v",
-        "reason": "synth/pnr output (no design reset hierarchy)"
-      },
-      {
-        "file": "/home/reyerchu/_c_car15_run/steps/phase2/stage2/9_synthesis_yosys_mapped_netlist/netlist.v",
-        "reason": "synth/pnr output (no design reset hierarchy)"
-      },
-      {
-        "file": "/home/reyerchu/_c_car15_run/steps/phase2/stage2/12_post_dft_optimization_resynth_buffering/post_dft_netlist.v",
-        "reason": "synth/pnr output (no design reset hierarchy)"
-      },
-      {
-        "file": "/home/reyerchu/_c_car15_run/steps/phase2/stage2/11_dft_insertion_scan_chain_atpg_at_speed_bsdl/scan_netlist.v",
-        "reason": "synth/pnr output (no design reset hierarchy)"
-      },
-      {
-        "file": "/home/reyerchu/_c_car15_run/input/design_src/verilog/rtl/uprj_netlists.v",
-        "reason": "synth/pnr output (no design reset hierarchy)"
-      },
-      {
-        "file": "/home/reyerchu/_c_car15_run/phase3/stage3/pnr/user_project_wrapper_pnr_repaired.v",
-        "reason": "synth/pnr output (no design reset hierarchy)"
-      },
-      {
-        "file": "/home/reyerchu/_c_car15_run/phase3/stage3/pnr/user_project_wrapper_pnr.v",
+        "file": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/synth/netlist_yosys.v",
         "reason": "synth/pnr output (no design reset hierarchy)"
       }
     ]

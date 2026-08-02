@@ -10,22 +10,17 @@
     }
   ],
   "summary": {
-    "files_found": 4,
+    "files_found": 2,
     "has_leakage": true,
     "has_dynamic": true,
     "tool_authentic": true,
     "analysis_modes_in_report": [
       "vector_vcd"
     ],
-    "machine_readable_found": 2,
+    "machine_readable_found": 1,
     "machine_readable": [
       {
         "file": "reports/phase3/power.json",
-        "source": "reports/phase3/power.rpt",
-        "analysis_mode": "vector_vcd"
-      },
-      {
-        "file": "steps/phase3/stage4/33_power_analysis_pre_post_layout/power.json",
         "source": "reports/phase3/power.rpt",
         "analysis_mode": "vector_vcd"
       }

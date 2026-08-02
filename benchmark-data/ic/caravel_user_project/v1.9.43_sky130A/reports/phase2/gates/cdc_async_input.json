@@ -3,7 +3,7 @@
   "passed": true,
   "findings": [],
   "summary": {
-    "files_scanned": 15,
+    "files_scanned": 5,
     "violations": 0
   }
 }

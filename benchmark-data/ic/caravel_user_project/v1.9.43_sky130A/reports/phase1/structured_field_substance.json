@@ -1,7 +1,7 @@
 {
   "gate": "phase1_structured_field_substance_check",
   "verdict": "PASS",
-  "project": "/home/reyerchu/_c_car15_run",
+  "project": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A",
   "audit_table": {
     "L1_DATASHEET": [
       {

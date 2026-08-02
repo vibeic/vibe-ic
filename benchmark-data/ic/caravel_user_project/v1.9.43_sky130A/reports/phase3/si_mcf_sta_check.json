@@ -2,73 +2,42 @@
   "program": "si_mcf_sta_check",
   "version": "1.0.0",
   "project_dir": ".",
-  "verdict": "PASS",
+  "verdict": "NOT_RUN",
   "summary": {
-    "corners_checked": [
-      "setup",
-      "hold"
-    ],
-    "windows_exact": true,
-    "coupling_pairs": 4014,
-    "errors_count": 0,
-    "findings_count": 0,
-    "pass": true,
-    "vacuous": false,
+    "corners_checked": [],
+    "windows_exact": null,
+    "coupling_pairs": null,
+    "errors_count": 1,
+    "findings_count": 1,
+    "pass": false,
+    "vacuous": true,
     "denominator": {
       "unit": "victim-net MCF folds re-derived and PROVED against the bounded SPEF (one per coupled net per corner, counting only nets whose re-derived expectation is non-zero — a comparison against an expected fold of 0.0 cannot fail and proves nothing)",
-      "examined": 1426,
-      "considered": 1696,
-      "not_applicable_reason": "",
+      "examined": 0,
+      "considered": 0,
+      "not_applicable_reason": "the coupling SPEF the report names could not be read, so no fold was re-derived. WHAT THIS VERDICT DOES NOT SAY: it is NOT a crosstalk-delay sign-off — no fold was re-derived, so nothing about SI was verified. The checker cannot distinguish a genuinely grounded-only extraction from a coupled one that was replaced, truncated, or never handed to it, beyond the cases it fails outright; both parse to zero coupling pairs. Read this as NOT CHECKED.",
       "details": {
         "vacuity_code": "",
-        "unwaivable_code": "",
-        "coupling_pairs": 4014,
-        "coupling_caps": 11414,
-        "coupling_nets": 848,
-        "spef_net_records": 855,
-        "spef_parsed_nets": 855,
-        "spef_r_net_records": 0,
-        "emitter_coupling_pairs": 4014,
-        "nets_compared_per_corner": {
-          "setup": 848,
-          "hold": 848
-        },
-        "folds_proved_per_corner": {
-          "setup": 836,
-          "hold": 590
-        }
+        "unwaivable_code": "SPEF_UNREADABLE",
+        "coupling_pairs": null,
+        "coupling_caps": null,
+        "coupling_nets": null,
+        "spef_net_records": null,
+        "spef_parsed_nets": null,
+        "spef_r_net_records": null,
+        "emitter_coupling_pairs": null,
+        "nets_compared_per_corner": {},
+        "folds_proved_per_corner": {}
       }
     }
   },
-  "recount": {
-    "setup": {
-      "ok": true,
-      "nets_checked": 848,
-      "folds_proved": 836,
-      "residual_coupling_caps": 0,
-      "violations": [],
-      "mode": "exact-window"
-    },
-    "hold": {
-      "ok": true,
-      "nets_checked": 848,
-      "folds_proved": 590,
-      "residual_coupling_caps": 0,
-      "violations": [],
-      "mode": "exact-window"
+  "recount": {},
+  "monotonicity": {},
+  "findings": [
+    {
+      "severity": "ERROR",
+      "category": "NO_SPEF",
+      "message": "original coupling SPEF missing: /home/reyerchu/_c_car15_run/phase3/stage3/extracted/user_project_wrapper.spef"
     }
-  },
-  "monotonicity": {
-    "setup": {
-      "before_ns": 12.0794,
-      "after_ns": 8.4359,
-      "ok": true
-    },
-    "hold": {
-      "before_ns": 1.1616,
-      "after_ns": 1.0978,
-      "ok": true
-    }
-  },
-  "findings": []
+  ]
 }

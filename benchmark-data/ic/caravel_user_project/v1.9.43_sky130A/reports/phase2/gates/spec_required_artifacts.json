@@ -1,27 +1,17 @@
 {
   "schema_version": 1,
   "program": "spec_required_artifact_check",
-  "run_at": "2026-08-01T20:23:27.275951+00:00",
-  "run_dir": "/home/reyerchu/_c_car15_run",
+  "run_at": "2026-08-02T23:41:02.998735+00:00",
+  "run_dir": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A",
   "verdict": "VACUOUS_PASS",
   "note": "No path-shaped MUST-emit clauses found in input docs — nothing to assert.",
   "clauses_found": 0,
   "failed_count": 0,
   "results": [],
   "input_doc_dirs_scanned": [
-    "phase1/input_doc",
-    "input/docs"
+    "phase1/input_doc"
   ],
   "input_docs_read": [
-    "input/docs/L1_product_metadata.md",
-    "input/docs/L2_architecture.md",
-    "input/docs/L3_external_interface.md",
-    "input/docs/L4_command_protocol.md",
-    "input/docs/L5_register_map.md",
-    "input/docs/L6_calibration.md",
-    "input/docs/L7_verification_plan.md",
-    "input/docs/L8_submodule_integration.md",
-    "input/docs/L9_constraints_floorplan.md",
     "phase1/input_doc/L1_product_metadata.txt",
     "phase1/input_doc/L2_architecture.txt",
     "phase1/input_doc/L3_external_interface.txt",

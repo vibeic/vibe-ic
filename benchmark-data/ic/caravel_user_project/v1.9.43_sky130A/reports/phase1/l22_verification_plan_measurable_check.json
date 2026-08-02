@@ -1,6 +1,6 @@
 {
   "gate": "l22_verification_plan_measurable_check",
-  "project": "/home/reyerchu/_c_car15_run",
+  "project": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A",
   "verdict": "PASS_WITH_ADVISORY",
   "blocking_findings": [],
   "advisory_findings": [
@@ -11,7 +11,7 @@
     }
   ],
   "evidence": {
-    "l22_path": "/home/reyerchu/_c_car15_run/phase1/generated_docs/L22_VERIFICATION_PLAN.json",
+    "l22_path": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase1/generated_docs/L22_VERIFICATION_PLAN.json",
     "applicability": "APPLICABLE",
     "coverage_goal_count": 0,
     "measurable_goal_count": 0,

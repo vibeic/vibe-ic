@@ -1,28 +1,16 @@
 {
   "program": "eda_report_audit:em",
   "passed": true,
-  "findings": [
-    {
-      "rule": "EM_NO_TOOL_SIGNATURE",
-      "severity": "ERROR",
-      "message": "report lacks any known em tool signature (one of: ['openroad', 'Electromigration', 'EM lifetime', 'current density']... ). Hand-typed reports rejected.",
-      "file": "phase3/stage3/pnr/sta_spef_repaired.rpt"
-    }
-  ],
+  "findings": [],
   "summary": {
-    "files_found": 6,
+    "files_found": 2,
     "has_density": true,
     "positive_current_in_report": true,
     "tool_authentic": true,
-    "machine_readable_found": 2,
+    "machine_readable_found": 1,
     "machine_readable": [
       {
         "file": "reports/phase3/em.json",
-        "segments_analysed": 270665,
-        "max_segment_current_A": 6.474e-05
-      },
-      {
-        "file": "steps/phase3/stage3/25_em_check_electromigration_lifetime/em.json",
         "segments_analysed": 270665,
         "max_segment_current_A": 6.474e-05
       }

@@ -1,11 +1,11 @@
 {
   "verdict": "VACUOUS_PASS",
-  "reason_class": "inline_yosys_p_mode_conformant",
-  "reason": "no .ys scripts found; the inline `yosys -p` command echoed by the runner's synth log was extracted and verified conformant (hilomap + flatten present on every real-PDK command, or simulation-only synth only) across 1 log(s).",
+  "reason_class": "inline_yosys_p_mode_confirmed",
+  "reason": "no .ys scripts found, BUT inline `yosys -p` runner mode is positively confirmed by project markers (1 evidence path(s)); gate is legitimately not applicable.",
   "inline_evidence": [
-    "phase2/stage2/synth/synth.log"
+    "reports/orchestrator/phase3_one_shot.json"
   ],
-  "project": "/home/reyerchu/_c_car15_run",
+  "project": "/tmp/claude-1000/-home-reyerchu-vibe-ic/53be63b6-2e3e-4d98-bb26-e496b7c589b1/scratchpad/b3/benchmark-data/ic/caravel_user_project/v1.9.43_sky130A",
   "findings": [],
   "handoff_netlist_audit": {
     "handoff_netlist": "phase2/stage2/synth/netlist.v",

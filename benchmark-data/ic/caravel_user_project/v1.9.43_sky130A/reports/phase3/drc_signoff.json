@@ -22,7 +22,7 @@
     }
   ],
   "summary": {
-    "files_found": 2,
+    "files_found": 1,
     "categories_found": [
       "spacing",
       "width",
@@ -31,7 +31,7 @@
     ],
     "has_count": false,
     "tool_authentic": true,
-    "determined_files": 2,
+    "determined_files": 1,
     "real_violation_total": 0,
     "foundry_stdcell_excluded": 0,
     "scoped_under": [
