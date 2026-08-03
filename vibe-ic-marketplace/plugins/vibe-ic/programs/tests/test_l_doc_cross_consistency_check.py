@@ -138,7 +138,9 @@ def test_empty_l9_ports_with_escape_flag_is_na(tmp_path: Path) -> None:
         "ports": [],
     })
     verdict, findings, _ = check(tmp_path)
-    assert verdict == "PASS"  # N/A does not fail the gate
+    # N/A does not FAIL the gate — but with the other relation also N/A the
+    # gate judged nothing, so it must not claim the plain-PASS tier either.
+    assert verdict == "VACUOUS_PASS"
     rel = {f.relation: f for f in findings}
     assert rel["R_pin_table_subset_ports"].verdict == "N/A"
 
@@ -157,7 +159,7 @@ def test_otp_empty_with_escape_flag_is_na(tmp_path: Path) -> None:
     })
     _w(tmp_path, "L4_REGMAP.json", {"otp_layout": {"fields": []}})
     verdict, findings, _ = check(tmp_path)
-    assert verdict == "PASS"
+    assert verdict == "VACUOUS_PASS"   # both relations N/A — nothing judged
     rel = {f.relation: f for f in findings}
     assert rel["R_otp_bytes_subset_layout"].verdict == "N/A"
 
@@ -177,9 +179,59 @@ def test_layers_absent_relations_na(tmp_path: Path) -> None:
     # generated_docs exists but only an unrelated L doc present.
     _w(tmp_path, "L2_FRS.json", {"ic_name": "x"})
     verdict, findings, _ = check(tmp_path)
-    assert verdict == "PASS"  # both relations N/A
+    assert verdict == "VACUOUS_PASS"  # both relations N/A
     assert all(f.verdict == "N/A" for f in findings)
 
 
 def test_bad_target_returns_2(tmp_path: Path) -> None:
     assert main([str(tmp_path / "does_not_exist")]) == 2
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#693 — a gate that judged NOTHING must not be credited a plain PASS.
+#
+# Both relations can legitimately be N/A at once (an IC with no pin_table and
+# no OTP — reachable via the documented `no_*_in_input` escape valves). The
+# driver used to return `"FAIL" if fails else "PASS"`, so that corpus printed
+# `PASS: … pass=0 fail=0 na=2` and exited 0: the ordinary verdict tier awarded
+# over zero relations examined. rc stays 0 (this is not a failure); what
+# changes is the tier, signalled by the `VACUOUS_PASS` line-start sentinel
+# that `flow_compliance_check._stdout_signals_vacuous` reads.
+# ---------------------------------------------------------------------------
+def test_all_relations_na_is_vacuous_not_plain_pass(tmp_path: Path) -> None:
+    _w(tmp_path, "L1_DATASHEET.json", {"pin_table": [],
+                                       "no_pin_table_in_input": True})
+    _w(tmp_path, "L9_INTEGRATION_SPEC.json", {"ports": [],
+                                              "no_top_module_in_input": True})
+    _w(tmp_path, "L11_OTP_CONTENT.json", {"otp_bytes": [],
+                                          "no_otp_in_input": True})
+    _w(tmp_path, "L4_REGMAP.json", {"otp_layout": {},
+                                    "no_otp_layout_in_input": True})
+    verdict, findings, summary = check(tmp_path)
+    assert verdict == "VACUOUS_PASS"
+    assert summary["pass"] == 0 and summary["fail"] == 0 and summary["na"] == 2
+    assert all(f.verdict == "N/A" for f in findings)
+
+
+def test_all_relations_na_prints_the_vacuous_sentinel_and_exits_0(
+        tmp_path: Path, capsys) -> None:
+    """The tier is only real if the CONSUMER can see it. flow_compliance_check
+    promotes on a line that STARTS with `VACUOUS_PASS`; assert that shape, not
+    merely the returned verdict string."""
+    _w(tmp_path, "L1_DATASHEET.json", {"pin_table": [],
+                                       "no_pin_table_in_input": True})
+    _w(tmp_path, "L11_OTP_CONTENT.json", {"otp_bytes": [],
+                                          "no_otp_in_input": True})
+    assert main([str(tmp_path)]) == 0
+    first = capsys.readouterr().out.splitlines()[0]
+    assert first.startswith("VACUOUS_PASS"), first
+
+
+def test_one_relation_judged_is_still_a_plain_pass(tmp_path: Path) -> None:
+    """Guard the other direction: the vacuous tier must NOT swallow a real
+    PASS just because the OTHER relation was N/A."""
+    _w(tmp_path, "L1_DATASHEET.json", {"pin_table": [{"name": "clk"}]})
+    _w(tmp_path, "L9_INTEGRATION_SPEC.json", {"ports": [{"name": "clk"}]})
+    verdict, _, summary = check(tmp_path)
+    assert verdict == "PASS"
+    assert summary["pass"] == 1 and summary["na"] == 1

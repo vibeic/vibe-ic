@@ -266,6 +266,55 @@ steps:
         # condition is stated in the program's own docstring and is a
         # re-measurement, not a judgement call.
         - advisory_program_exit_zero: "cross_layer_reference_check ."
+        # ── doc-spec family (vibe-ic#693) ─────────────────────────────────
+        # Three gates that existed with passing unit tests and no executable
+        # caller: they had never judged real data. Each was run over the 16
+        # published runs tracked under `benchmark-data/ic/**/phase1/
+        # generated_docs` BEFORE wiring, and the measured blast radius is
+        # recorded here so the next reader does not have to re-derive it.
+        #
+        # BLOCKING. Counts `__TODO__` — the phase1 runner's own "I could not
+        # extract this" sentinel — across every L*.json, threshold == 0 (the
+        # threshold is the skill's, not invented). MEASURED: 0 of 16 published
+        # runs red, 24-28 L docs scanned each. Blocking is affordable because
+        # the blast radius is empty and the sibling
+        # `phase1_all_l_docs_present_check` above already blocks the
+        # docs-absent case this one VACUOUS_PASSes on.
+        - program_exit_zero: "l_doc_todo_stub_count_check ."
+        # ADVISORY. L1 pin_table ⊂ L9 ports, and L11 otp_bytes ⊂ L4 otp_layout.
+        # MEASURED: 10 of 16 red — but the reds are NOT evenly distributed and
+        # the split is the whole reason this is advisory. Splitting by producer
+        # vintage (the commit date of each run's own L1 doc):
+        #   * 6 runs produced at v1.0.x (2026-06-14/15): 5 red, 45 violating
+        #     entries. These are FOSSILS — re-runs of the same ICs at v1.4.22+
+        #     from byte-identical inputs pass or carry far fewer violations.
+        #   * 10 runs produced at v1.4.22 or later: 5 red, 7 violating entries,
+        #     and ZERO genuinely lost functional pins.
+        # So the modern producer reddens 5 runs over 7 entries: 2 are an L1
+        # extractor harvesting non-pins out of prose (a parameter name, a top-
+        # module name), 1 is a wildcard glob, and 4 are supply pads absent from
+        # a port list by convention. None is a pin that vanished from a design.
+        # BLOCKING would fail half the corpus for defects in the DOC PRODUCER,
+        # not in the designs. Promotion requires the extractor repair first,
+        # then a re-measurement.
+        - advisory_program_exit_zero: "l_doc_cross_consistency_check ."
+        # ADVISORY, and `--strict` is load-bearing: without it every WARN exits
+        # 0 and the gate cannot fail at all — a blocking gate that cannot fail
+        # is a fake gate, so it is wired strict AND advisory rather than
+        # non-strict and blocking.
+        # The argument is a GLOB LIST, never `.` — measured, `spec_review_lint .`
+        # returns rc 2 forever (a directory is not a file), i.e. a permanent
+        # __VACUOUS_HINT__: wired somewhere it can never execute, which is the
+        # same defect as being unwired. `*.rst` is in the list because one
+        # published run ships 17 `.rst` spec chapters and an `*.md`-only glob
+        # linted 1 of 19 candidate files and still printed a verdict.
+        # MEASURED: 12 of 16 red under --strict, 0 of 16 red without it, 4
+        # VACUOUS (no input/ dir at all). 422 WARNs, of which 329 (78%) are
+        # `corner-case-uncovered` — which is evaluated PER FILE, so an 18-file
+        # spec set can score 72 of them even when the corner cases ARE covered.
+        # Promotion to blocking requires that per-file/per-corpus bug fixed
+        # first; until then --strict is only honest as an advisory signal.
+        - advisory_program_exit_zero: "spec_review_lint --strict input/docs/*.md input/docs/*.rst input/*.md"
     blocks_on: []
 
   - id: 1
