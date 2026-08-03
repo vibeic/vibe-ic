@@ -247,4 +247,12 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
         f"saw {new_arm}")
     # Pinned so a silent vocabulary drift in the producer shows up as a diff
     # rather than as a quietly shrinking denominator.
-    assert (nonempty, declared, examined, all_skipped) == (36, 130, 62, 16)
+    #
+    # 2026-08-04, vibe-ic#744: (36, 130, 62, 16) -> (37, 132, 64, 16). The
+    # reader learned three further spellings of the L9 port layer, so it now
+    # EXAMINES two more documents that it previously walked past. Every moving
+    # number went UP and `all_skipped` is unchanged, which is the direction this
+    # assertion exists to protect: a shrinking denominator is the defect, a
+    # growing one is the fix. Checked before updating — had any number fallen,
+    # the census would have been the finding, not the expectation.
+    assert (nonempty, declared, examined, all_skipped) == (37, 132, 64, 16)

@@ -45,6 +45,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import _path_layout as _pl
+# ONE reader for L9's top-level port contract. This generator used to read the
+# single legacy alias `top_module_pins`; on a layer written with the canonical
+# `top_ports` it therefore saw NO ports and emitted an SDC with no I/O delays
+# at all, while the sibling gate that certifies the same layer
+# (`l9_rtl_pin_consistency_check`) read the union and reported PASS.
+from l_doc_consumer_contract import l9_port_direction, l9_top_ports
 import sdc_constraints as _sdc
 
 
@@ -846,23 +852,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         # (#619) only when the top module is unresolvable; empty ⇒ no filtering.
         rtl_ports = (top_ports if top_ports is not None
                      else _collect_all_module_ports(rtl_files))
-        for port in l9.get("top_module_pins", []):
+        for port in l9_top_ports(l9):
             if not isinstance(port, dict):
                 continue
             name = port.get("name", "")
             if rtl_ports and name and name not in rtl_ports:
                 dropped_pins.append(name)
                 continue
-            mode = (port.get("mode") or "").lower()
+            # Direction via the shared accessor: the promoter writes `dir`,
+            # older writers wrote `mode`. Testing one spelling read a missing
+            # key and sent EVERY port — outputs included — down the `inputs`
+            # branch, so every output port got a `set_input_delay`.
+            _dir = l9_port_direction(port)
             if _port_is_clock(name):
                 clock_port = name
                 if name.lower() in _l8_clock_names:
                     _l8_clock_ports.append(name)
                 continue
-            if _is_reset(name) or "inout" in mode or _is_async_io(name):
+            if _is_reset(name) or _dir == "inout" or _is_async_io(name):
                 async_ports.append(name)
                 continue
-            if mode == "output":
+            if _dir == "out":
                 outputs.append(name)
             else:
                 inputs.append(name)
@@ -872,7 +882,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # surface (#619), else a clock-like TOP port (#207 — never a default
         # guess that isn't actually a port), else 'clk'.
         clock_port = "clk"
-        for port in l9.get("top_module_pins", []):
+        for port in l9_top_ports(l9):
             if not (isinstance(port, dict) and _is_clock(port.get("name", ""))):
                 continue
             cand = port["name"]
@@ -934,6 +944,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("NOTE: clock port(s) taken from L8's DECLARED clock contract: "
               + ", ".join(f"{n}@{p:g}ns on '{pt}'"
                           for n, pt, p in l8_clock_set))
+
+    # DEGRADE LOUDLY. `_render_sdc` emits the `set_input_delay` block only
+    # `if inputs:` and the `set_output_delay` block only `if outputs:`, so an
+    # empty role split renders a syntactically fine SDC in which every I/O
+    # path is UNCONSTRAINED — and the old code printed nothing about it. The
+    # generator is the one place that knows the port roles came out empty
+    # while the layer it read was non-empty; say so here rather than leaving
+    # Step 8's validator to report `missing set_input_delay` several steps
+    # later with no indication of why.
+    if not inputs and not outputs:
+        _declared = len(l9_top_ports(l9))
+        print("NOTE: no I/O ports classified — the emitted SDC constrains NO "
+              "input or output path. L9 declares %d top-level port record(s); "
+              "%d were dropped as absent from the synthesizable surface. "
+              "Every remaining port was consumed as a clock/reset/async pin."
+              % (_declared, len(dropped_pins)))
 
     text = _render_sdc(top, clock_port, period_ns, inputs, outputs,
                        async_ports, gen_clocks, l8_clock_set or None)

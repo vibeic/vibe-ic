@@ -123,6 +123,108 @@ def l_doc_fields(doc: Optional[dict]) -> dict:
     return doc
 
 
+# --------------------------------------------------------------------------
+# L9's top-level port contract — ONE accessor, because there are FOUR keys.
+#
+# The layer's port list has accumulated aliases: `top_ports` (what the
+# promoter and full_stack_tb_gen write today), `ports` (the promoter's own
+# alias), `top_level_ports` (the original schema-v1 key) and
+# `top_module_pins` (the legacy compat name). `l9_rtl_pin_consistency_check`
+# already had to learn to read the UNION of all four — its docstring records
+# that reading one key gave a correct RTL top NO verification at all, and that
+# field runs were dual-writing the same pins into two keys to clear the gate.
+#
+# It fixed that FOR ITSELF. `phase1_k5_quality_check` then re-declared the
+# same tuple, and a third consumer never got the lesson: it still reads the
+# single legacy alias, so on a layer written with the canonical key it sees an
+# EMPTY port list — and, being a generator rather than a gate, it does not
+# report a skip. It emits a plausible-looking artefact built from nothing.
+#
+# The direction key has the same split: records are written `{"name","dir",
+# "width"}` by the promoter, while a consumer testing `port["mode"]` reads a
+# missing key and classifies EVERY port — including every output — as an
+# input. That failure is worse than the empty one, because the artefact is
+# populated and passes a presence check.
+#
+# So both live here, once, and consumers import them.
+_L9_PORT_KEYS = (
+    "top_ports",          # canonical (promoter + TB-gen + emitters)
+    "ports",              # promoter alias
+    "top_level_ports",    # original schema-v1 key
+    "top_module_pins",    # legacy compat alias
+)
+
+# Every spelling of the direction field seen across the writers above.
+_L9_DIR_KEYS = ("dir", "mode", "direction")
+
+
+def l9_port_direction(port: Any) -> str:
+    """``"out"``, ``"inout"`` or ``"in"`` for one L9 port record.
+
+    Reads whichever direction key the record carries. Defaults to ``"in"``
+    only when the record names NO direction at all — the same default the
+    callers already applied, so a record that was classified correctly before
+    still is.
+    """
+    if not isinstance(port, dict):
+        return "in"
+    for k in _L9_DIR_KEYS:
+        raw = port.get(k)
+        if raw is None:
+            continue
+        v = str(raw).strip().lower()
+        if not v:
+            continue
+        if v.startswith("inout") or v == "bidir":
+            return "inout"
+        if v.startswith("out"):
+            return "out"
+        if v.startswith("in"):
+            return "in"
+    return "in"
+
+
+def l9_top_ports(l9: Optional[dict]) -> list:
+    """L9's top-level port records: the UNION of every known key, deduped by
+    name, first occurrence winning.
+
+    Mirrors `l9_rtl_pin_consistency_check.extract_l9_ports` deliberately — a
+    consumer and the gate that certifies it must not disagree about what the
+    layer says. Returns ``[]`` for a layer that declares no ports anywhere,
+    so a caller can tell "declared nothing" from "declared something I could
+    not read"; before this accessor those two were indistinguishable.
+    """
+    if not isinstance(l9, dict):
+        return []
+    # Accept the RAW document as well as an already-unwrapped payload. The
+    # emitter nests under `fields` (schema v2) and other writers stay flat; a
+    # consumer that reads only the top level sees NOTHING on the nested form
+    # and cannot tell that from "declares no ports". That is the same defect
+    # class the PDK-target gate was carrying, and it is why this lives in the
+    # shared contract rather than in each caller.
+    l9 = l_doc_fields(l9)
+    lists: list = []
+    for key in _L9_PORT_KEYS:
+        v = l9.get(key)
+        if isinstance(v, list):
+            lists.append(v)
+    dtop = l9.get("dtop_top_level")
+    if isinstance(dtop, dict) and isinstance(dtop.get("ports"), list):
+        lists.append(dtop["ports"])
+    out: list = []
+    seen: set = set()
+    for lst in lists:
+        for rec in lst:
+            if not isinstance(rec, dict):
+                continue
+            name = str(rec.get("name") or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            out.append(rec)
+    return out
+
+
 def applicability_of(doc: Optional[dict]) -> str:
     if not isinstance(doc, dict):
         return "UNKNOWN"
