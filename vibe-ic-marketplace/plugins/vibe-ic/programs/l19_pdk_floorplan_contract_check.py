@@ -110,14 +110,52 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-try:  # emitter/checker doctrine: reuse the CONSUMER's own resolvers.
-    from phase3_one_shot_runner import (  # type: ignore
-        _l19_declared_die_area as _consumer_l19_die,
-        _l9_declared_die_area as _consumer_l9_die,
-    )
-except Exception:  # pragma: no cover
-    _consumer_l19_die = None  # type: ignore
-    _consumer_l9_die = None  # type: ignore
+# EMITTER/CHECKER DOCTRINE: reuse the CONSUMER's own resolvers, so gate and
+# consumer can never drift.
+#
+# BOUND LAZILY, and that is the fix rather than a style choice. This used to be
+# a module-level `from phase3_one_shot_runner import ...` wrapped in
+# `except Exception: _consumer_l19_die = None`, and the runtime then read
+# `if _consumer_l19_die is not None:` before falling back to a REIMPLEMENTATION
+# of the same rule kept in this file. So any import that failed once — during
+# the one moment some other module was mid-import, in a suite that imports 500
+# of them — silently converted "reuse the consumer's resolver" into "use my own
+# copy", which is exactly the drift the doctrine exists to prevent, with no
+# diagnostic anywhere. MEASURED: the identity assertion passed when the test ran
+# alone and failed in the full suite, and the gate went on answering.
+#
+# Import-time binding cannot be retried; a function-level one can. `main()`
+# additionally REPORTS when the consumer could not be reached, so a fallback is
+# a stated condition rather than a silent substitution.
+_CONSUMER_IMPORT_ERROR: Optional[str] = None
+
+
+def _consumers():
+    """(l19_resolver, l9_resolver) from the consumer, or (None, None).
+
+    Resolved on every call: `sys.modules` makes the success path a dict lookup,
+    and the failure path a retry instead of a permanent downgrade."""
+    global _CONSUMER_IMPORT_ERROR
+    try:
+        from phase3_one_shot_runner import (  # type: ignore
+            _l19_declared_die_area, _l9_declared_die_area)
+    except Exception as exc:      # pragma: no cover - depends on import order
+        _CONSUMER_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+        return None, None
+    _CONSUMER_IMPORT_ERROR = None
+    return _l19_declared_die_area, _l9_declared_die_area
+
+
+def __getattr__(name):
+    """`_consumer_l19_die` / `_consumer_l9_die` as live attributes.
+
+    Keeps the two names other modules and the doctrine test read, without
+    freezing whatever they resolved to at first import."""
+    if name == "_consumer_l19_die":
+        return _consumers()[0]
+    if name == "_consumer_l9_die":
+        return _consumers()[1]
+    raise AttributeError(name)
 
 WAIVER_KEY = "l19_pdk_floorplan_contract_disclosed"
 WAIVER_MIN = 40
@@ -321,9 +359,10 @@ def _emit(path: Optional[Path], report: Dict[str, object]) -> None:
 
 
 def _l19_die(project: Path, fields: dict) -> Optional[str]:
-    if _consumer_l19_die is not None:
+    consumer_l19, _ = _consumers()
+    if consumer_l19 is not None:
         try:
-            return _consumer_l19_die(project)
+            return consumer_l19(project)
         except Exception:
             pass
     val = fields.get("die_area_budget_um")
@@ -337,9 +376,10 @@ def _l19_die(project: Path, fields: dict) -> Optional[str]:
 
 
 def _l9_die(project: Path) -> Optional[str]:
-    if _consumer_l9_die is not None:
+    _, consumer_l9 = _consumers()
+    if consumer_l9 is not None:
         try:
-            return _consumer_l9_die(project)
+            return consumer_l9(project)
         except Exception:
             return None
     return None
@@ -380,6 +420,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     report["l19_die_area_budget_um"] = fields.get("die_area_budget_um")
     report["l19_die_resolved"] = l19_die
     report["l9_die_resolved"] = l9_die
+    # A fallback is a STATED condition, never a silent substitution. If the
+    # consumer's resolvers could not be reached, this gate answered from its
+    # own copy of the rule — which is the drift it exists to prevent, and the
+    # one thing a reader of a green verdict has to know.
+    report["consumer_resolvers_reached"] = _consumers()[0] is not None
+    if _CONSUMER_IMPORT_ERROR:
+        report["consumer_import_error"] = _CONSUMER_IMPORT_ERROR
+        advisories.append(
+            "the consumer's own die resolvers could not be imported "
+            f"({_CONSUMER_IMPORT_ERROR}); this gate answered from its own copy "
+            "of the rule, so gate and consumer are NOT proven to agree here")
     if mandates:
         rects = {r for _s, r in mandates}
         if l9_die is None and l19_die is None:
