@@ -38,8 +38,12 @@ def _tree(root: Path, *, gates=(), flow_names=(), skill_names=(), ci_names=()):
 
 
 def _run(root: Path, *args):
+    # <=60s: the targeted-subset harness dies at 180s, and an inner bound above
+    # the ceiling kills the SESSION instead of the test. Every case here runs
+    # over a synthetic tree of a handful of files and finishes in well under a
+    # second; measured worst case is ~0.4s.
     r = subprocess.run([sys.executable, str(GATE), "--root", str(root), *args],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=55)
     return r.returncode, r.stdout + r.stderr
 
 

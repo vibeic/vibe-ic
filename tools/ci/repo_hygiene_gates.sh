@@ -269,6 +269,14 @@ for _cell in "$ROOT"/benchmark-data/ic/*/*/; do
   # verdict, not a shape that can only ever say "nothing to look at".
   run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$(dirname "$_cell")"))" \
     "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
+  # Another of the 35. Its subject is an inner FAIL that never reaches the outer
+  # verdict, and nothing ran it. It also had the defect: "nothing to examine"
+  # exited 0 printing VACUOUS_PASS, one branch above a test in its own file
+  # stating that "I could not look" must never share an exit code with "I looked
+  # and it was clean". MEASURED on the published cells: 67-68 reports examined
+  # each, so this is a live verdict over a real denominator.
+  run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
+    "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
 done
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a

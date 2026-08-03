@@ -37,7 +37,6 @@
     "signaltap_stp_completeness_check",
     "silent_decline_audit",
     "spec_review_lint",
-    "step_internal_fail_bubble_up_check",
     "yosys_tiecell_recipe_order_check"
   ],
   "skill_only": [
@@ -67,7 +66,6 @@
     "signaltap_stp_completeness_check",
     "silent_decline_audit",
     "spec_review_lint",
-    "step_internal_fail_bubble_up_check",
     "yosys_tiecell_recipe_order_check"
   ]
 }

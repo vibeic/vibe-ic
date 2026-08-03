@@ -32,25 +32,33 @@ def _write_waivers(p: Path, entries):
     }))
 
 
-def test_vacuous_when_no_reports(tmp_path):
+def test_no_reports_tree_is_NOT_EXAMINED(tmp_path):
+    """Nothing to look at is not a clean result. Through v1.9.62 this returned
+    VACUOUS_PASS and the CLI exited 0 for it — the same exit code as a run that
+    read 68 reports and found every FAIL acknowledged."""
     p = tmp_path / "empty"
     p.mkdir()
-    verdict, findings = g.audit(p)
-    assert verdict == "VACUOUS_PASS"
+    verdict, findings, examined = g.audit(p)
+    assert verdict == "NOT_EXAMINED"
+    assert examined == 0
 
 
-def test_vacuous_when_no_fail_reports(tmp_path):
+def test_reports_read_and_none_failing_is_a_REAL_pass(tmp_path):
+    """The property genuinely holds here, over a population of 1. Calling it
+    VACUOUS_PASS put it in the same class as "there was nothing to look at",
+    and the denominator that separates the two was never reported."""
     p = _proj(tmp_path)
     _write_report(p, "foo", "PASS")
-    verdict, findings = g.audit(p)
-    assert verdict == "VACUOUS_PASS"
+    verdict, findings, examined = g.audit(p)
+    assert verdict == "PASS"
+    assert examined == 1
 
 
 def test_fail_when_no_waiver_no_bubble(tmp_path):
     """The escape this gate exists to catch."""
     p = _proj(tmp_path)
     _write_report(p, "lvs", "FAIL")
-    verdict, findings = g.audit(p)
+    verdict, findings, examined = g.audit(p)
     assert verdict == "FAIL"
     assert findings[0].rule == "STEP_FAIL_NOT_BUBBLED"
     assert "lvs" in findings[0].report_file
@@ -66,7 +74,7 @@ def test_pass_when_waiver_mentions_name(tmp_path):
         "ticket": "BACKLOG-step29-lvs",
         "evidence": "no LVS artefact",
     }])
-    verdict, findings = g.audit(p)
+    verdict, findings, examined = g.audit(p)
     assert verdict == "PASS", findings
 
 
@@ -81,7 +89,7 @@ def test_pass_when_bubble_up_records_fail(tmp_path):
         "summary": "antenna gate FAIL — see reports/phase3/antenna.json",
         "verdict": "FAIL",
     }))
-    verdict, findings = g.audit(p)
+    verdict, findings, examined = g.audit(p)
     assert verdict == "PASS", findings
 
 
@@ -92,8 +100,9 @@ def test_neutral_verdicts_skipped(tmp_path):
     for v in ("INSUFFICIENT_DATA", "FALLBACK", "SKELETON_EMITTED",
               "WAIVED"):
         _write_report(p, f"r_{v.lower()}", v)
-    verdict, findings = g.audit(p)
-    assert verdict == "VACUOUS_PASS"
+    verdict, findings, examined = g.audit(p)
+    assert verdict == "PASS"
+    assert examined == 4, "each neutral report was READ; it is skipped, not unseen"
 
 
 def test_audit_dir_excluded(tmp_path):
@@ -106,8 +115,11 @@ def test_audit_dir_excluded(tmp_path):
         "verdict": "FAIL",
         "reviewer": "human",
     }))
-    verdict, findings = g.audit(p)
-    assert verdict == "VACUOUS_PASS"
+    verdict, findings, examined = g.audit(p)
+    assert verdict == "NOT_EXAMINED", (
+        "the only verdict-bearing file is the excluded human review, so this "
+        "project genuinely has nothing in scope — and must not read as clean")
+    assert examined == 0
 
 
 def test_waiver_matches_via_step_id(tmp_path):
@@ -123,7 +135,7 @@ def test_waiver_matches_via_step_id(tmp_path):
         "ticket": "T-29",
         "evidence": "x",
     }])
-    verdict, findings = g.audit(p)
+    verdict, findings, examined = g.audit(p)
     assert verdict == "PASS", findings
 
 
@@ -141,7 +153,7 @@ def test_short_candidates_filtered(tmp_path):
         "ticket": "X",
         "evidence": "y",
     }])
-    verdict, findings = g.audit(p)
+    verdict, findings, examined = g.audit(p)
     # Should FAIL — `em` is too short to match anything reliably.
     assert verdict == "FAIL"
     assert findings[0].rule == "STEP_FAIL_NOT_BUBBLED"
@@ -175,27 +187,31 @@ def test_an_unacknowledged_fail_exits_1(tmp_path, monkeypatch):
         report_file: str = "reports/step07/lint.json"
         verdict: str = "FAIL"
         detail: str = ""
-    monkeypatch.setattr(M, "audit", lambda proj: ("FAIL", [F()]))
+    monkeypatch.setattr(M, "audit", lambda proj: ("FAIL", [F()], 7))
     assert M.main([str(tmp_path)]) == 1
 
 
 def test_pass_exits_0(tmp_path, monkeypatch):
     """…or the test above is met by a gate that always returns 1."""
     M = _cli()
-    monkeypatch.setattr(M, "audit", lambda proj: ("PASS", []))
+    monkeypatch.setattr(M, "audit", lambda proj: ("PASS", [], 7))
     assert M.main([str(tmp_path)]) == 0
 
 
-def test_vacuous_pass_exits_0(tmp_path, monkeypatch):
-    """A third verdict with its own branch, and its own way to go wrong.
+def test_nothing_examined_exits_2_not_0(tmp_path, monkeypatch):
+    """This test used to assert the OPPOSITE, one line above the test below
+    that states the rule it broke:
 
-    VACUOUS_PASS means nothing was examined. It exits 0 deliberately — a
-    pre-output project has no reports to acknowledge — so the branch is easy to
-    break in the direction of "always 0" without any test noticing.
+        "VACUOUS_PASS means nothing was examined. It exits 0 deliberately."
+        "\"I could not look\" must never share an exit code with \"I looked
+         and it was clean\""
+
+    Both were in this file at once. The first is the defect the second names,
+    and a step that crashed before writing any report produced exactly it.
     """
     M = _cli()
-    monkeypatch.setattr(M, "audit", lambda proj: ("VACUOUS_PASS", []))
-    assert M.main([str(tmp_path)]) == 0
+    monkeypatch.setattr(M, "audit", lambda proj: ("NOT_EXAMINED", [], 0))
+    assert M.main([str(tmp_path)]) == 2
 
 
 def test_a_missing_project_dir_is_rc_2_not_rc_0(tmp_path):

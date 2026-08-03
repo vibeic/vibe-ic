@@ -123,9 +123,12 @@ def _run_probe(tmp_path: Path) -> str:
     project = tmp_path / "proj"
     project.mkdir()
     (project / _SEED).write_text("stub\n", encoding="utf-8")
+    # <=60s: the targeted-subset harness dies at 180s, so an inner bound above
+    # the ceiling kills the SESSION instead of the test. This probe drives a
+    # four-step synthetic flow over a one-file project; measured ~0.5s.
     p = subprocess.run(
         [sys.executable, str(CHECK), str(project), "--flow-def", str(flow)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=55)
     return p.stdout + p.stderr
 
 

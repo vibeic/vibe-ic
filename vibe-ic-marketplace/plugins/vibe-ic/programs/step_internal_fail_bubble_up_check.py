@@ -47,18 +47,25 @@ Files used as evidence of bubble-up:
   reports/audit/*.json
   reports/phase23_completion_audit.json (if present)
 
-VACUOUS_PASS conditions:
+NOT_EXAMINED conditions (rc=2, never a pass — vibe-ic#693 follow-up):
   * no `reports/` tree on disk → pre-output project
-  * no FAIL/MISSING report → nothing to bubble up
+  * `reports/` exists but no file in it declares a verdict
+
+Both mean NOTHING WAS EXAMINED. Through v1.9.62 they returned rc=0 printing
+`VACUOUS_PASS`, which put them in the same exit class as a genuine clean run
+over a hundred reports — and a step that crashed before writing any report
+produces exactly this. The denominator is now disclosed on every pass, so
+"no FAIL/MISSING reports" can no longer be read without knowing how many
+reports that was over.
 
 Usage:
     python3 step_internal_fail_bubble_up_check.py <project_dir>
                                                    [--json <out>]
 
 Exit codes:
-    0  PASS / VACUOUS_PASS
+    0  PASS — reports were examined and every FAIL/MISSING one is acknowledged
     1  FAIL — at least one FAIL report is not bubbled / waivered
-    2  argument or I/O error
+    2  NOT EXAMINED (nothing to look at), or argument / I/O error
 
 chip-AGNOSTIC. No vendor / IC / specific filename hardcoded.
 """
@@ -207,17 +214,25 @@ def _iter_report_files(project: Path) -> List[Path]:
     return out
 
 
-def audit(project: Path) -> Tuple[str, List[BubbleFinding]]:
+def audit(project: Path) -> Tuple[str, List[BubbleFinding], int]:
+    """Returns (verdict, findings, examined) — `examined` is the DENOMINATOR:
+    how many report files actually carried a readable verdict.
+
+    It is returned because without it "no FAIL/MISSING reports" is the same
+    sentence whether a hundred reports were read and all were clean, or the
+    step crashed before writing any report at all. The second is the state this
+    gate exists to notice, and it was the one that read as a pass."""
     if not project.is_dir():
-        return "VACUOUS_PASS", []
+        return "NOT_EXAMINED", [], 0
     if not (project / "reports").is_dir():
-        return "VACUOUS_PASS", []
+        return "NOT_EXAMINED", [], 0
 
     waiver_text = _waiver_text_corpus(project)
     bubbled_text = _bubbled_corpus(project)
 
     findings: List[BubbleFinding] = []
     saw_any_fail = False
+    examined = 0
 
     for rp in _iter_report_files(project):
         d = _read_json(rp)
@@ -226,6 +241,7 @@ def audit(project: Path) -> Tuple[str, List[BubbleFinding]]:
         verdict_raw = d.get("verdict")
         if not isinstance(verdict_raw, str):
             continue
+        examined += 1
         verdict = verdict_raw.strip().upper()
         if verdict in _NEUTRAL_VERDICTS:
             continue
@@ -259,9 +275,18 @@ def audit(project: Path) -> Tuple[str, List[BubbleFinding]]:
                     "the failure."),
         ))
 
+    if examined == 0:
+        # `reports/` exists but nothing in it declares a verdict. Nothing was
+        # examined, so there is no result — not a clean one.
+        return "NOT_EXAMINED", [], 0
     if not saw_any_fail:
-        return "VACUOUS_PASS", []
-    return ("FAIL" if findings else "PASS"), findings
+        # A REAL pass over a REAL population: reports were read and none of
+        # them declares a FAIL, so the property holds. Formerly returned as
+        # VACUOUS_PASS, which is this repo's word for a verdict issued over
+        # nothing — and it collapsed into the same rc as the genuinely empty
+        # case above.
+        return "PASS", [], examined
+    return ("FAIL" if findings else "PASS"), findings, examined
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -278,11 +303,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: not a directory: {proj}", file=sys.stderr)
         return 2
 
-    verdict, findings = audit(proj)
+    verdict, findings, examined = audit(proj)
     report = {
         "gate": "step_internal_fail_bubble_up_check",
         "verdict": verdict,
         "project": str(proj),
+        "reports_examined": examined,
         "findings_count": len(findings),
         "findings": [asdict(f) for f in findings[:200]],
     }
@@ -291,15 +317,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, indent=2) + "\n")
 
-    if verdict == "VACUOUS_PASS":
-        if not (proj / "reports").is_dir():
-            print("VACUOUS_PASS: no reports/ tree (pre-output project)")
-        else:
-            print("VACUOUS_PASS: no FAIL/MISSING reports under reports/")
-        return 0
+    if verdict == "NOT_EXAMINED":
+        why = ("no reports/ tree (pre-output project)"
+               if not (proj / "reports").is_dir()
+               else "reports/ exists but no file in it declares a verdict")
+        print(f"[CANNOT DETERMINE] step_internal_fail_bubble_up: {why}, so no "
+              f"report was examined. NOT a pass — a step that crashed before "
+              f"writing its report produces exactly this, and it is the state "
+              f"this gate exists to notice.", file=sys.stderr)
+        return 2
     if verdict == "PASS":
-        print("PASS: every FAIL/MISSING report is acknowledged "
-              "(waivered or bubbled up)")
+        print(f"PASS: {examined} report(s) examined; every FAIL/MISSING one is "
+              f"acknowledged (waivered or bubbled up)")
         return 0
     print(f"FAIL: {len(findings)} unacknowledged step-internal "
           "FAIL(s):", file=sys.stderr)
