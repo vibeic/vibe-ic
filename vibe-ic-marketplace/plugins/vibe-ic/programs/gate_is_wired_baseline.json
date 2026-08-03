@@ -1,14 +1,8 @@
 {
   "_comment": "Gates no automatic verdict consults (vibe-ic#693). MAY ONLY SHRINK. A gate here produces no verdict, and the tree looks the same either way. `skill_only` is recorded because a skill mention runs the gate only if an agent remembers to \u2014 which for a gate that catches a vacuous pass is the same as absent at the moment it matters.",
   "unwired": [
-    "analog_a0_skip_forbidden_check",
-    "analog_corner_lib_realism_lint",
     "analog_corner_margin_check",
     "analog_hil_convergence_log_check",
-    "analog_hil_iteration_cap_check",
-    "analog_hil_report_schema_check",
-    "analog_hil_single_knob_check",
-    "analog_hw_tb_de10lite_budget_check",
     "analog_sigma_delta_gain_floor_check",
     "arith_ss_corner_risk_check",
     "benchmark_triage_absorption_audit",
@@ -40,12 +34,7 @@
     "yosys_tiecell_recipe_order_check"
   ],
   "skill_only": [
-    "analog_a0_skip_forbidden_check",
     "analog_corner_margin_check",
-    "analog_hil_iteration_cap_check",
-    "analog_hil_report_schema_check",
-    "analog_hil_single_knob_check",
-    "analog_hw_tb_de10lite_budget_check",
     "arith_ss_corner_risk_check",
     "benchmark_triage_absorption_audit",
     "checkpoint_gate_check",

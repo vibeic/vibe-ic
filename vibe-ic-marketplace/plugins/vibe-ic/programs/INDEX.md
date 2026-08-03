@@ -63,7 +63,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_block_type_classify` | any | — | deterministic name→type taxonomy lookup. |
 | `analog_content_detected_must_emit_l5_check` | any | Wave 47 | Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when |
 | `analog_corner_lib_realism_lint` | any | — | R15 stale-corner-lib doc-lint (A4). |
-| `analog_corner_margin_check` | any | — | Codifies the fixed thresholds in |
+| `analog_corner_margin_check` | any | — | NOT WIRED (vibe-ic#693): A4 strict PVT-margin gate, superseded and broken. |
 | `analog_corner_sweep_check` | any | — | deterministic gate for PVT corner coverage |
 | `analog_digital_interface_check` | any | — | deterministic gate for digital-analog interface validation |
 | `analog_flow_compliance_check` | any | — | analog track compliance gate (A1-A9) |
@@ -1159,7 +1159,7 @@ _(no programs in this group)_
 - `analog_block_type_classify` — deterministic name→type taxonomy lookup.
 - `analog_content_detected_must_emit_l5_check` — Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when  _[Wave 47]_
 - `analog_corner_lib_realism_lint` — R15 stale-corner-lib doc-lint (A4).
-- `analog_corner_margin_check` — Codifies the fixed thresholds in
+- `analog_corner_margin_check` — NOT WIRED (vibe-ic#693): A4 strict PVT-margin gate, superseded and broken.
 - `analog_corner_sweep_check` — deterministic gate for PVT corner coverage
 - `analog_digital_interface_check` — deterministic gate for digital-analog interface validation
 - `analog_flow_compliance_check` — analog track compliance gate (A1-A9)
