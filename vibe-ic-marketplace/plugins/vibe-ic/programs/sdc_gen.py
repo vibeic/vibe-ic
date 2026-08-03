@@ -506,6 +506,36 @@ def _named_module_ports(rtl_files: List[Path], top_name: str) -> Optional[set]:
     return None
 
 
+def _named_module_port_records(
+        rtl_files: List[Path],
+        top_name: str) -> Optional[List[Tuple[str, str, int]]]:
+    """The FULL (name, direction, width) records declared by the TOP module
+    `top_name`, or None when that module is not found/parseable in rtl/.
+
+    `_named_module_ports` returns only the NAMES, because #207/#619 use the
+    surface as a FILTER. This returns the same surface with the RTL's own
+    declared DIRECTION attached, so the surface can also be used as a SOURCE
+    when the L9 pin list under-covers it (see the residue pass in main()).
+    Same resolution order and same parser as `_named_module_ports`, so the two
+    can never disagree about which module is the top. Chip-AGNOSTIC: Verilog
+    module-header parsing only, no chip / PDK / vendor names."""
+    pat = re.compile(r"\bmodule\s+" + re.escape(top_name) + r"\b")
+    for f in rtl_files:
+        try:
+            txt = _strip_v_comments(f.read_text(encoding="utf-8",
+                                                errors="ignore"))
+        except Exception:
+            continue
+        m = pat.search(txt)
+        if not m:
+            continue
+        recs = [(name, direction, width)
+                for name, direction, width in _parse_module_ports(
+                    txt[m.start():]) if name]
+        return recs or None
+    return None
+
+
 def _sdc_port_refs(text: str) -> Tuple[List[str], List[str]]:
     """#207 — (clock_refs, all_refs): the base port NAMES referenced by
     `[get_ports {...}]` in the SDC, bus index stripped. `clock_refs` are those
@@ -789,6 +819,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     async_ports: List[str] = []
     clock_port: Optional[str] = None
     dropped_pins: List[str] = []
+    residue_pins: List[str] = []  # top-surface ports L9 never covered
     rtl_ports: set = set()  # synthesizable RTL surface used to filter (#619/#207)
 
     # C4/2026-07-31 — L8's DECLARED clock contract. Ports named here are
@@ -876,6 +907,60 @@ def main(argv: Optional[List[str]] = None) -> int:
                 outputs.append(name)
             else:
                 inputs.append(name)
+
+        # ---- SURFACE RESIDUE -------------------------------------------
+        # The loop above filters the L9 pin list AGAINST the synthesizable top
+        # surface (#619/#207) but never reads that surface as a SOURCE. When
+        # L9 spells a pin differently from the RTL that implements it, the pin
+        # is DROPPED and the port it describes is left with no I/O constraint
+        # at all — an untimed path that STA reports nothing about and no gate
+        # sees, because an SDC missing a whole direction is still syntactically
+        # valid. In the limit every input is dropped and the deck carries no
+        # `set_input_delay` whatsoever.
+        #
+        # So: after L9 has had its say, constrain the RESIDUE — the top
+        # module's own ports that nothing above classified — using the RTL's
+        # OWN declared direction. The residue is empty whenever L9 covers the
+        # surface, so a design that constrains correctly today renders
+        # byte-identically. Ports come from the same parse #207 already trusts
+        # to VALIDATE the deck, so this can only ever name a port that exists.
+        # Chip-AGNOSTIC: set difference on parsed Verilog headers.
+        _recs = (_named_module_port_records(rtl_files, top)
+                 if top_ports is not None else None)
+        # `_parse_module_ports` DEFAULTS an undirected port to "input" — which
+        # is what a NON-ANSI header (`module m(a,b); input a; output b;`) parses
+        # as, every port included. Classifying that residue would put a
+        # `set_input_delay` on an output and make STA error. So the residue is
+        # only trusted when the header actually declares direction in-line, i.e.
+        # at least one output/inout token was parsed. A non-ANSI top renders
+        # exactly as it does today.
+        if _recs and not any((d or "").lower() in ("output", "inout")
+                             for _n, d, _w in _recs):
+            _recs = None
+        if _recs:
+            _claimed = {clock_port} | set(inputs) | set(outputs) \
+                | set(async_ports) | set(_l8_clock_ports)
+            for _name, _dir, _w in _recs:
+                if not _name or _name in _claimed:
+                    continue
+                _claimed.add(_name)
+                if _port_is_clock(_name):
+                    # A clock the L9 pin list never mentioned. Record it so the
+                    # clock-resolution fallback below can bind it; do NOT give
+                    # it an I/O delay.
+                    if _name.lower() in _l8_clock_names:
+                        _l8_clock_ports.append(_name)
+                    continue
+                if _is_reset(_name) or "inout" in (_dir or "").lower() \
+                        or _is_async_io(_name):
+                    async_ports.append(_name)
+                    residue_pins.append(_name)
+                    continue
+                if _is_output(_name, _dir or ""):
+                    outputs.append(_name)
+                else:
+                    inputs.append(_name)
+                residue_pins.append(_name)
 
     if not clock_port:
         # Fallback: take first 'clk*' from L9 that EXISTS on the synthesizable
@@ -981,6 +1066,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "resolved_against": (str(out.parent) + f"::module {top} (rtl/)"
                              if top_ports is not None else None),
         "top_ports": (sorted(top_ports) if top_ports is not None else None),
+        "dropped_l9_pins": sorted(dropped_pins),
+        "residue_pins_constrained": sorted(residue_pins),
     }
     if top_ports is not None:
         clock_refs, all_refs = _sdc_port_refs(text)
@@ -1019,6 +1106,9 @@ def main(argv: Optional[List[str]] = None) -> int:
           + (f"; dropped {len(dropped_pins)} L9 pin(s) absent from "
              f"synthesizable RTL surface: {sorted(dropped_pins)} (#619)"
              if dropped_pins else "")
+          + (f"; constrained {len(residue_pins)} top-surface port(s) the L9 "
+             f"pin list did not cover: {sorted(residue_pins)}"
+             if residue_pins else "")
           + ")")
     return 0
 

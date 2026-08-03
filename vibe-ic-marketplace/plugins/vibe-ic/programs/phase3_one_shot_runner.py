@@ -2432,7 +2432,27 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
         + _tu_note +
         f"create_clock -name clk -period {_period_str} "
         f"[get_ports {clk_port_name}]\n"
-        f"set_input_delay  {_io_str} -clock clk [all_inputs]\n"
+        # `[all_inputs]` INCLUDES the clock port, and OpenSTA REFUSES the whole
+        # command for it — `Warning 441: set_input_delay relative to a clock
+        # defined on the same port/pin not allowed` — so the deck ends up with
+        # NO input delay in effect at all while still reading as if it had one.
+        # The warning is the only trace, and nothing in the flow reads it.
+        # Filter the clock port(s) out in the deck itself: OpenSTA has no
+        # `remove_from_collection`, so this is a plain Tcl set difference over
+        # the collection `all_inputs` returns. The count line is printed so a
+        # run's own log states how many ports were constrained, and the guard
+        # keeps a clock-only top from emitting an empty-collection command.
+        "set _vibeic_clk_ports [get_ports " + str(clk_port_name) + "]\n"
+        "set _vibeic_data_in {}\n"
+        "foreach _vibeic_p [all_inputs] {\n"
+        "  if {[lsearch -exact $_vibeic_clk_ports $_vibeic_p] < 0} "
+        "{ lappend _vibeic_data_in $_vibeic_p }\n"
+        "}\n"
+        "puts \"VIBEIC_INPUT_DELAY_PORTS [llength $_vibeic_data_in] of "
+        "[llength [all_inputs]] (clock port(s) excluded — OpenSTA rejects "
+        "set_input_delay on the port its own clock is defined on)\"\n"
+        "if {[llength $_vibeic_data_in] > 0} { set_input_delay  "
+        f"{_io_str} -clock clk $_vibeic_data_in " + "}\n"
         f"set_output_delay {_io_str} -clock clk [all_outputs]\n"
     )
     # GAP-E2E-7 — carry ONLY the timing exceptions the design's own staged
@@ -27760,6 +27780,32 @@ def _flat_ocv_derate_tcl(indent: str = "") -> str:
             f"{indent}set_timing_derate -late {_FLAT_OCV_DERATE_LATE}\n")
 
 
+def _propagated_clock_tcl(indent: str = "") -> str:
+    """Emit `set_propagated_clock [all_clocks]` for a deck that annotates REAL
+    extracted parasitics.
+
+    MEASURED root cause (subservient x gf180mcuD, r7): every sign-off STA deck
+    this runner emits read the post-PnR netlist and a real SPEF and then
+    reported with an IDEAL clock — `clock network delay (ideal)  0.00` on every
+    path in `sta_mcorner_ocv.rpt` — because `set_propagated_clock` appeared in
+    exactly one program in the plugin, and not in any of these. The clock TREE
+    was built (TritonCTS, 1193 sinks, H-tree) and none of its insertion delay or
+    skew reached any reported number. On that run the SS-corner setup slack read
+    `+0.53 ns` ideal and `-0.09 ns` propagated (setup skew 0.92 ns, source
+    latency 3.75 ns) on the identical netlist / SPEF / liberty / derate.
+
+    An ideal clock is correct BEFORE CTS. It is never correct on a deck that has
+    read real post-route parasitics: those two facts cannot both describe the
+    same netlist. So this is emitted only where a SPEF is annotated — a
+    pre-layout / no-SPEF deck is untouched and renders as before.
+    chip/PDK-AGNOSTIC: no design, PDK or vendor literal."""
+    return (f"{indent}# Post-route parasitics are annotated, so the clock TREE "
+            f"exists in this netlist:\n"
+            f"{indent}# report against the PROPAGATED clock, not an ideal one "
+            f"(insertion delay + skew).\n"
+            f"{indent}set_propagated_clock [all_clocks]\n")
+
+
 # The authoritative sign-off check-types marker. LIVE-VALIDATED: OpenSTA 3.1.0's
 # `report_check_types` output uses "Group Slack" / "Required Width" tables and
 # NEVER prints the literal words recovery/removal/min_pulse_width — so the rigor
@@ -28079,6 +28125,7 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"link_design {top}\n"
         f"read_sdc {sdc_c}\n"
         f"read_spef {spef_c}\n"
+        f"{_propagated_clock_tcl()}"
         f"{ocv_tcl}"
         f"report_checks > {rpt_c}\n"
         f"report_tns >> {rpt_c}\n"
@@ -28378,6 +28425,9 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"link_design {top}\n"
             f"read_sdc {sdc_c}\n"
             f"{read_spef_tcl}"
+            # Only when a SPEF was actually annotated (post-route);
+            # a no-SPEF pre-layout deck keeps the ideal clock.
+            + (_propagated_clock_tcl() if read_spef_tcl else "") +
             f"report_checks > {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
             f"report_wns >> {rpt_c}\n"
@@ -28856,6 +28906,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"link_design {top}\n"
             f"read_sdc {sdc_c}\n"
             f"read_spef {spef_c}\n"
+            f"{_propagated_clock_tcl()}"
             f"set _f [open {rpt_c} a]\n"
             # The banner names the LIBERTY as well as the SPEF: the corner name
             # alone never proved which library was read, which is exactly how a
@@ -29089,6 +29140,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             f"link_design {top}\n"
             f"read_sdc {sdc_c}\n"
             f"{spef_tcl}"
+            + (_propagated_clock_tcl() if spef_tcl else "") +
             # flat-OCV derate BEFORE any report (the rigor gate requires it).
             # TWO commands — this OpenSTA build rejects a combined -early -late.
             f"{_flat_ocv_derate_tcl()}"
