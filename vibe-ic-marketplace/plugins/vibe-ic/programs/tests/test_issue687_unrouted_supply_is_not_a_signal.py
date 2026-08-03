@@ -107,18 +107,23 @@ def test_the_regex_matches_what_the_emitter_writes():
 def test_a_clean_run_matches_nothing():
     log = ("PG_CLEANUP_DEL: stub (POWER)\n"
            "PG_CLEANUP_DONE: deleted=1 unrouted_supply=0\n"
-           "PG_CONNECT_AUDIT: total=3337 unconnected=0\n")
+           "PG_NET_OWNERSHIP_AUDIT: total=3337 no_net=0\n")
     assert re.findall(_RE, log, re.M) == []
 
 
-def test_the_verdict_is_reached_BEFORE_the_pg_connect_audit():
-    """THE ORDERING IS THE FIX. `PG_CONNECT_AUDIT: unconnected=0` holds in both
-    cases — an unrouted rail's terminals are attached to exactly the right net.
-    Checking afterwards lets the vacuous pass win the race."""
+def test_the_verdict_is_reached_BEFORE_the_net_ownership_audit():
+    """THE ORDERING IS THE FIX. The ownership audit reads `no_net=0` in both
+    cases — an unrouted rail's terminals are attached to exactly the right net,
+    which is the whole reason a pointer test cannot see the defect. Checking
+    afterwards lets the vacuous pass win the race.
+
+    The audit was named `PG_CONNECT_AUDIT: unconnected=0` through v1.9.62;
+    vibe-ic#699 renamed it to what it measures. The ordering property is
+    unchanged — only the name it is anchored to."""
     i = _BODY.index("PG_CLEANUP_UNROUTED_SUPPLY")
-    # the first PG_CONNECT verdict return after the audit is parsed
-    j = _BODY.index("PG_CONNECT_UNMEASURED")
-    assert i < j, "the unrouted-supply check runs after the connect audit"
+    # the first ownership verdict return after the audit is parsed
+    j = _BODY.index("PG_NET_OWNERSHIP_UNMEASURED")
+    assert i < j, "the unrouted-supply check runs after the ownership audit"
 
 
 def test_it_is_a_FAIL_not_an_advisory():

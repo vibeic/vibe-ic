@@ -4005,6 +4005,17 @@ def _build_pg_reconnect_tcl(reroute: bool = True) -> str:
         "# Audit every POWER/GROUND instance terminal in the design. This is the\n"
         "# gate's PRIMARY evidence and it is emitted unconditionally: a PDN that\n"
         "# connects nothing must be visible, never silent.\n"
+        "#\n"
+        "# SCOPE, STATED SO IT CANNOT BE MISQUOTED: the predicate below is\n"
+        "# `[$iterm getNet] eq \"NULL\"`. That measures NET OWNERSHIP -- does some\n"
+        "# net own this terminal -- and NOTHING ELSE.\n"
+        "# THIS IS NOT A CONDUCTOR TEST. A net pointer is not a conductor: a\n"
+        "# terminal can be owned by a supply net that carries no metal at all\n"
+        "# over the port, and this audit counts it as owned. So the number below\n"
+        "# must never be reported as \"connected\", \"supply connectivity\", or\n"
+        "# \"reachable\". Whether current can actually reach a terminal is a\n"
+        "# DIFFERENT question that this audit does not ask and this flow does\n"
+        "# not yet answer.\n"
         "if {[catch {\n"
         "  set _pg_tot 0\n"
         "  set _pg_bad 0\n"
@@ -4023,29 +4034,118 @@ def _build_pg_reconnect_tcl(reroute: bool = True) -> str:
         "      }\n"
         "    }\n"
         "  }\n"
-        "  puts \"PG_CONNECT_AUDIT: total=$_pg_tot unconnected=$_pg_bad"
+        "  puts \"PG_NET_OWNERSHIP_AUDIT: total=$_pg_tot no_net=$_pg_bad"
         " masters=[join $_pg_ex ,]\"\n"
         "} _pga_err]} {\n"
-        "  puts \"PG_CONNECT_AUDIT_NONFATAL: $_pga_err\"\n"
+        "  puts \"PG_NET_OWNERSHIP_AUDIT_NONFATAL: $_pga_err\"\n"
         "}\n")
 
 
 # The audit line the Tcl above emits, read back by the Python gate.
+#
+# DUAL SPELLING, deliberately. The marker was called `PG_CONNECT_AUDIT: total=N
+# unconnected=M` up to and including v1.9.62. That name asserted a property the
+# predicate never tested (see `_build_pg_reconnect_tcl`), so it was renamed —
+# but a RESUMED run replays a cached openroad.log written by the older emitter,
+# and a resumed run whose evidence suddenly stops parsing would be reported
+# BLOCKED/unmeasured rather than read. Both spellings therefore parse, and both
+# mean exactly the same measurement: net ownership.
 _PG_AUDIT_RE = re.compile(
-    r"PG_CONNECT_AUDIT:\s*total=(\d+)\s+unconnected=(\d+)(?:\s+masters=(\S*))?")
+    r"PG_(?:NET_OWNERSHIP_AUDIT:\s*total=(\d+)\s+no_net=(\d+)"
+    r"|CONNECT_AUDIT:\s*total=(\d+)\s+unconnected=(\d+))"
+    r"(?:\s+masters=(\S*))?")
 
 
-def _parse_pg_connect_audit(text: str) -> Optional[Tuple[int, int, str]]:
-    """Return (total_pg_iterms, unconnected_pg_iterms, example_masters) from the
-    LAST PG_CONNECT_AUDIT line in an OpenROAD log, or None when the design
+def _parse_pg_net_ownership_audit(text: str) -> Optional[Tuple[int, int, str]]:
+    """Return (total_pg_iterms, pg_iterms_on_no_net, example_masters) from the
+    LAST PG net-ownership audit line in an OpenROAD log, or None when the design
     never emitted one. None means "not measured" — which the caller must treat
-    as unproven, never as clean."""
+    as unproven, never as clean.
+
+    NOT a connectivity parser. The second element counts terminals whose net
+    POINTER is NULL. A terminal absent from that count is owned by a net; it is
+    NOT thereby proven to carry a conductor."""
     last = None
     for m in _PG_AUDIT_RE.finditer(text or ""):
         last = m
     if last is None:
         return None
-    return (int(last.group(1)), int(last.group(2)), last.group(3) or "")
+    total = last.group(1) if last.group(1) is not None else last.group(3)
+    bad = last.group(2) if last.group(2) is not None else last.group(4)
+    return (int(total), int(bad), last.group(5) or "")
+
+
+# ── The one supply-REACH witness this flow already produces, and discarded ───
+#
+# `_macro_pdn_grid_plan` computes, per hard-macro supply port, the port extent
+# across the strap direction, and compares it against the smallest legal strap
+# pitch for the layer. When the extent is below that floor, NO strap pattern can
+# be guaranteed to cross the port — i.e. the flow's own plan says this supply
+# port will not be reached. `_build_macro_pdn_grid_tcl` prints that conclusion
+# as `MACRO_PDN_PORT_UNREACHABLE: <inst>/<pin> port extent ...`.
+#
+# `git grep MACRO_PDN_PORT_UNREACHABLE` over v1.9.62 returns exactly one hit:
+# the line that prints it. Nothing read it. So the flow computed the single
+# statement it can make about supply REACH (as opposed to net ownership) and
+# threw it away, while the PnR step reported "PG terminals connected".
+#
+# This surfaces it. REPORTED, NEVER BLOCKING — deliberately, and the reason is
+# not timidity: there is no in-flow repair for it. The strap pitch floor is a
+# property of the tech LEF and the port width is a property of the macro's own
+# LEF; the flow cannot widen either. Turning a condition the flow cannot fix
+# into a FAIL converts a run into an unresolvable stop. The honest report is
+# "this port is declared unreachable by the grid plan; the grid plan is not a
+# conductor measurement either".
+_MACRO_PDN_UNREACHABLE_RE = re.compile(
+    r"MACRO_PDN_PORT_UNREACHABLE:\s*(\S+)")
+
+
+def _parse_macro_pdn_unreachable(text: str) -> List[str]:
+    """Return the de-duplicated, ORDER-PRESERVING list of `<inst>/<pin>` hard-
+    macro supply ports the PDN grid plan declared no legal strap pitch can
+    cross. Empty list = the marker never appeared, which on a design with no
+    hard macros is the normal and correct state."""
+    seen: List[str] = []
+    for m in _MACRO_PDN_UNREACHABLE_RE.finditer(text or ""):
+        if m.group(1) not in seen:
+            seen.append(m.group(1))
+    return seen
+
+
+# ── A measurement names the database it was taken on ────────────────────────
+#
+# The PG net-ownership audit runs inside the PnR OpenROAD session, two
+# statements before `write_def routed.def`. Its number therefore describes the
+# BASE route. Two later steps can REPLACE that artifact in place:
+#
+#   * `step_signoff_spef_repair`  — `shutil.copy2(repaired_def, routed)` and
+#     over `<top>.def` as well, after a reroute whose Tcl explicitly CLEARS the
+#     decap/fill tiling and re-inserts it (`refill_block`).
+#   * `step_signoff_drv_wire_length_repair` — same promotion for the escalated
+#     route.
+#
+# Physical-only cells inserted after the last `global_connect` are the EXACT
+# defect the PG audit exists to catch, and the refill happens after the last
+# audit. So the number published for the run can describe a different instance
+# population than the DEF that ships.
+#
+# MEASURED, on a published run (spm v1.5.65_sky130A, which took the promotion
+# branch): the run's own transcript records total=2148, and the shipped
+# `phase3/stage3/pnr/routed.def` measures 2136 PG instance terminals when read
+# back with the same LEF pair — 12 terminals of drift, i.e. cells that entered
+# or left the design after the number was taken.
+#
+# This does not re-measure (that would need another OpenROAD session on the
+# promoted DEF, which is a separate change with its own blast radius). It
+# DISCLOSES. A number that silently changes meaning is the same defect as a
+# number that silently overclaims.
+_PG_STALE_AFTER_PROMOTION = (
+    "PG_NET_OWNERSHIP_STALE_AFTER_PROMOTION: this step replaced routed.def / "
+    "<top>.def with a route built after the PnR step's PG net-ownership audit "
+    "(and after a pass that clears and re-inserts the decap/fill physical-only "
+    "cells). The PG terminal count published by the PnR step describes the "
+    "pre-promotion database, NOT this artifact; the shipped route's PG "
+    "terminal population was not re-audited.")
 
 
 # ── Hard-macro supply-pin auto global-connect (before detailed routing) ──────
@@ -4318,7 +4418,10 @@ def _build_hardmacro_supply_gc_tcl(
 
     Returns ``""`` when the plan is empty (no hard-macro PG pins) so a design
     without hard macros produces a BYTE-IDENTICAL pnr.tcl. Both passes are
-    NONFATAL-guarded; the existing ``PG_CONNECT_AUDIT`` remains the gate."""
+    NONFATAL-guarded; the existing ``PG_NET_OWNERSHIP_AUDIT`` remains the gate
+    — and that gate answers ONLY "does a net own this terminal", never "does a
+    conductor reach it", so a hard-macro supply pin this pass binds to a rail
+    is thereby NAMED, not supplied."""
     conn_by_master: Dict[str, List[Dict[str, str]]] = {}
     for c in (connect or []):
         conn_by_master.setdefault(c["master"], []).append(c)
@@ -16173,37 +16276,53 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     "non_signoff_outputs": [str(def_file)],
                     "resize_history": resize_history,
                     "loosen_declines": loosen_declines})
-    # ── PG-CONNECT gate — a supply network that half the design is not part of
-    # must never leave PnR silently. `global_connect` is a one-shot over the
-    # instances alive when it runs; the PDN step runs it before placement, so
+    # ── PG NET-OWNERSHIP gate — a supply network that half the design is not
+    # part of must never leave PnR silently. `global_connect` is a one-shot over
+    # the instances alive when it runs; the PDN step runs it before placement, so
     # everything created after (repair/CTS buffers, spares, antenna diodes, and
     # the decap/fill physical-only cells inserted after routing) used to keep
     # BOTH PG terminals on no net. The Tcl now re-applies the rules and audits;
     # this reads the audit and refuses to call the result a pass.
     #
+    # WHAT THIS GATE MEASURES, and the ONLY thing it measures: whether a net
+    # OWNS each POWER/GROUND instance terminal (`[$iterm getNet] eq "NULL"`).
+    # It does NOT measure supply connectivity, reachability, or whether any
+    # conductor exists over the port — a terminal can be owned by a supply net
+    # that carries no metal there at all, and this gate counts it as owned.
+    # Until v1.9.62 this gate's marker, its finding names and its PASS-path
+    # message all said "connected"/"unconnected", and the published records
+    # inherited the overclaim verbatim ("N/N PG terminals connected (0
+    # orphaned)"). A check that answers one question and reports another is
+    # worse than no check: it converts an unknown into a false clean bill of
+    # health. Every name here now states the question that was actually asked.
+    #
     # Three outcomes, none of them silent:
-    #   unconnected == 0            -> PASS, with the count recorded as evidence
-    #   unconnected  > 0            -> FAIL (orphaned PG terminals shipped)
-    #   audit line absent / total 0 -> BLOCKED (nothing was measured; a PDN step
-    #                                  that connects zero PG pins is the exact
-    #                                  condition that shipped this defect, so it
-    #                                  is reported, never assumed clean)
+    #   no_net == 0            -> PASS, with the count recorded as evidence
+    #   no_net  > 0            -> FAIL (PG terminals on no net shipped)
+    #   audit line absent /
+    #   total 0                -> BLOCKED (nothing was measured; a PDN step that
+    #                             attaches zero PG pins is the exact condition
+    #                             that shipped this defect, so it is reported,
+    #                             never assumed clean)
     _pg_log_txt = ""
     try:
         _pg_log_txt = (out_dir / "openroad.log").read_text(errors="ignore")
     except Exception:
         _pg_log_txt = (out or "") + "\n" + (err or "")
-    _pg_audit = _parse_pg_connect_audit(_pg_log_txt)
+    _pg_audit = _parse_pg_net_ownership_audit(_pg_log_txt)
     _pg_evidence = [str(out_dir / "openroad.log"), str(def_file)]
 
     # ORGANIC #687 — a supply the PDN failed to build is a RESULT, not a
     # routing obstacle to route around. The cleanup pass no longer reclassifies
     # such a net to SIGNAL; it names it, and this is what reads that.
     #
-    # Placed BEFORE the PG_CONNECT_AUDIT verdicts on purpose: that audit tests
-    # `[$t getNet] eq "NULL"` and an unrouted rail's terminals are attached to
-    # exactly the right net, so it reports 0 unconnected and the run goes green.
-    # Checking it afterwards would let the vacuous pass win the race.
+    # Placed BEFORE the PG_NET_OWNERSHIP_AUDIT verdicts on purpose: that audit
+    # tests `[$t getNet] eq "NULL"` and an unrouted rail's terminals are
+    # attached to exactly the right net, so it reports 0 on-no-net and the run
+    # goes green. Checking it afterwards would let the vacuous pass win the
+    # race. (The audit was spelled PG_CONNECT_AUDIT through v1.9.62; #699
+    # renamed it to what it measures. The ordering is the property, not the
+    # name — pinned by test_issue687's ordering test.)
     _unrouted = re.findall(
         r"^PG_CLEANUP_UNROUTED_SUPPLY:\s+(\S+)\s+\((POWER|GROUND)\)\s+"
         r"iterms=(\d+)\s+bterms=(\d+)", _pg_log_txt, re.M)
@@ -16233,28 +16352,32 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if _pg_audit is None:
         return StepResult(
             "pnr", "BLOCKED", time.time() - t0,
-            ("PG_CONNECT_UNMEASURED: the routed design emitted no "
-             "PG_CONNECT_AUDIT line, so it is not known whether the power/"
-             "ground terminals of the placed instances are attached to the "
-             "supply network at all. A PnR result whose supply connectivity "
-             "was never measured is not a sign-off result — it is the exact "
-             "state in which orphaned physical-only cells ship unnoticed."),
-            _pg_evidence, extras={"finding": "PG_CONNECT_UNMEASURED"})
+            ("PG_NET_OWNERSHIP_UNMEASURED: the routed design emitted no "
+             "PG_NET_OWNERSHIP_AUDIT line, so it is not known whether the "
+             "power/ground terminals of the placed instances are attached to "
+             "any net at all. That is the weaker of the two supply questions "
+             "and it was still not answered here; the stronger one (is there a "
+             "conductor on the terminal) is not answered by this flow at all. "
+             "A PnR result whose PG terminals were never even counted is not a "
+             "sign-off result — it is the exact state in which orphaned "
+             "physical-only cells ship unnoticed."),
+            _pg_evidence, extras={"finding": "PG_NET_OWNERSHIP_UNMEASURED"})
     _pg_total, _pg_bad, _pg_masters = _pg_audit
     if _pg_total == 0:
         return StepResult(
             "pnr", "BLOCKED", time.time() - t0,
-            ("PG_CONNECT_ZERO_TERMINALS: the design reports zero POWER/GROUND "
-             "instance terminals. Either the cell library declares no PG pins "
-             "or the audit could not read them; either way no supply "
-             "connectivity was verified and the result cannot be signed off."),
-            _pg_evidence, extras={"finding": "PG_CONNECT_ZERO_TERMINALS",
+            ("PG_NET_OWNERSHIP_ZERO_TERMINALS: the design reports zero POWER/"
+             "GROUND instance terminals. Either the cell library declares no "
+             "PG pins or the audit could not read them; either way not even "
+             "net ownership was established and the result cannot be signed "
+             "off."),
+            _pg_evidence, extras={"finding": "PG_NET_OWNERSHIP_ZERO_TERMINALS",
                                   "pg_terminals_total": _pg_total})
     if _pg_bad > 0:
         _pg_pct = 100.0 * _pg_bad / _pg_total
         return StepResult(
             "pnr", "FAIL", time.time() - t0,
-            (f"PG_TERMINALS_UNCONNECTED: {_pg_bad} of {_pg_total} power/ground "
+            (f"PG_TERMINALS_ON_NO_NET: {_pg_bad} of {_pg_total} power/ground "
              f"instance terminals ({_pg_pct:.1f}%) are attached to no net "
              f"after routing"
              + (f" (e.g. masters {_pg_masters})" if _pg_masters else "")
@@ -16265,11 +16388,15 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                "the router's own DRC nor the cell library's DRC can see. Every "
                "instance created after the PDN step's one-shot global_connect "
                "is affected. Re-apply the global-connect rules after the last "
-               "instance-creating step and re-route."),
+               "instance-creating step and re-route. SCOPE: this gate reports "
+               "NET OWNERSHIP only. The terminals NOT counted here are owned by "
+               "a net; that does not establish that any conductor reaches them, "
+               "which is a different question this flow does not answer."),
             _pg_evidence,
-            extras={"finding": "PG_TERMINALS_UNCONNECTED",
+            extras={"finding": "PG_TERMINALS_ON_NO_NET",
                     "pg_terminals_total": _pg_total,
-                    "pg_terminals_unconnected": _pg_bad,
+                    "pg_terminals_on_no_net": _pg_bad,
+                    "pg_measures": "net_ownership_only",
                     "pg_example_masters": _pg_masters,
                     "non_signoff_outputs": [str(def_file)]})
     # v1.3.92 — post-route decap-under-signal-route SHORT guard (config-gated;
@@ -16393,13 +16520,47 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     pnr_outputs = [str(def_file), str(sta_file)]
     if spare_json_path.is_file():
         pnr_outputs.append(str(spare_json_path))
-    # PG connectivity is sign-off evidence, so it is stated on the PASS path
-    # too — "0 unconnected out of N" is a measurement, "no mention" is not.
-    detail += (f" | pg_connect: {_pg_total - _pg_bad}/{_pg_total} PG terminals "
-               f"connected (0 orphaned)")
+    # PG net ownership is sign-off evidence, so it is stated on the PASS path
+    # too — "0 on no net out of N" is a measurement, "no mention" is not.
+    #
+    # THIS SENTENCE IS THE ONE THAT CAUSED THE MISREAD. Until v1.9.62 it read
+    # "pg_connect: N/N PG terminals connected (0 orphaned)", and that string is
+    # what every published record carries and what every reader quoted as proof
+    # of supply connectivity. The predicate behind N never looked at a single
+    # piece of metal. The number is unchanged; the claim is now the one the
+    # measurement supports, and the limitation is stated in the same breath so
+    # it cannot be quoted without it.
+    detail += (f" | pg_net_ownership: {_pg_total - _pg_bad}/{_pg_total} PG "
+               f"terminals owned by a net (0 on no net) — NET OWNERSHIP ONLY, "
+               f"NOT a conductor test: this does not establish that any metal "
+               f"reaches a terminal")
+    # The grid plan's own supply-REACH verdict, which the flow computed and
+    # discarded until now. Reported, never blocking (see the parser's comment):
+    # there is no in-flow repair for a port narrower than the smallest legal
+    # strap pitch, so this is NOT CHECKED-with-a-reason, not a FAIL.
+    _pg_unreach = _parse_macro_pdn_unreachable(_pg_log_txt)
+    if _pg_unreach:
+        detail += (
+            f" | MACRO_PDN_PORT_UNREACHABLE: {len(_pg_unreach)} hard-macro "
+            f"supply port(s) ({', '.join(_pg_unreach[:5])}"
+            + (", …" if len(_pg_unreach) > 5 else "") + ") are narrower across "
+            "the strap direction than the smallest legal strap pitch, so the "
+            "grid plan states no strap pattern can be guaranteed to cross "
+            "them. REPORTED, NOT BLOCKING: the flow cannot widen a macro port "
+            "or lower a PDK pitch floor, so there is no in-flow repair. Those "
+            "ports are counted as net-owned above; that number says nothing "
+            "about them")
     spare_extras = {
         "pg_terminals_total": _pg_total,
-        "pg_terminals_unconnected": _pg_bad,
+        "pg_terminals_on_no_net": _pg_bad,
+        # Machine-readable scope, so a consumer cannot re-derive the overclaim
+        # from the numbers alone.
+        "pg_measures": "net_ownership_only",
+        "pg_measures_note": (
+            "counts POWER/GROUND instance terminals whose net pointer is NULL; "
+            "carries no information about conductor presence or reachability"),
+        "pg_conductor_measured": False,
+        "macro_pdn_ports_unreachable": _pg_unreach,
         "spare_density_target": round(spare_dens, 6),
         "spare_count": spare_plan.get("count", 0),
         "spare_types": spare_plan.get("types", {}),
@@ -18759,8 +18920,12 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
             f"SHIPPED real-SPEF setup repair @slow sign-off corner: setup "
             f"{parsed['wns_before']}->{parsed.get('wns_postroute', parsed['wns_after_repair'])} "
             f"ns (honest post-reroute real-SPEF), reroute "
-            f"DRC-clean (0 violations); promoted as sign-off route.",
-            [str(routed), str(_pnr_v)])
+            f"DRC-clean (0 violations); promoted as sign-off route. "
+            + _PG_STALE_AFTER_PROMOTION,
+            [str(routed), str(_pnr_v)],
+            extras={"pg_net_ownership_stale": True,
+                    "pg_net_ownership_stale_reason":
+                        _PG_STALE_AFTER_PROMOTION})
     return StepResult(
         "signoff_spef_repair", "PASS", time.time() - t0,
         _ship_repair_nonpromotion_note(parsed))
@@ -19321,8 +19486,12 @@ def step_signoff_drv_wire_length_repair(
             f"(step-local ss-only count {parsed.get('before_count')}->"
             f"{parsed.get('after_count')}, traceability only), setup WNS "
             f"{parsed.get('wns_after')} ns, reroute DRC-clean (0 violations); "
-            f"promoted over the pre-escalation route.",
-            [str(routed), str(_pnr_v)])
+            f"promoted over the pre-escalation route. "
+            + _PG_STALE_AFTER_PROMOTION,
+            [str(routed), str(_pnr_v)],
+            extras={"pg_net_ownership_stale": True,
+                    "pg_net_ownership_stale_reason":
+                        _PG_STALE_AFTER_PROMOTION})
 
     # NOT promoted — restore the incumbent byte-for-byte.
     if _incumbent_def.is_file():

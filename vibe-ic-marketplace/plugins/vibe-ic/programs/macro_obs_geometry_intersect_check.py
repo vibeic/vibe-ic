@@ -19,9 +19,11 @@ the very LEF the run loaded.
 THE FAILURE IS SILENT BY CONSTRUCTION, which is the part worth naming. Every
 existing check is either
 
-  * a COUNT OF ATTACHMENTS — `PG_CONNECT_AUDIT: total=3337 unconnected=1` tests
+  * a COUNT OF ATTACHMENTS — `PG_NET_OWNERSHIP_AUDIT: total=3337 no_net=1` tests
     `[$_pg_t getNet] eq "NULL"`, i.e. whether a terminal has a net. A wire that
-    crosses a blockage is attached to exactly the right net.
+    crosses a blockage is attached to exactly the right net. (Spelled
+    `PG_CONNECT_AUDIT: unconnected=N` through v1.9.62, until vibe-ic#699 renamed
+    it to what it measures.)
   * a GEOMETRIC DRC AGAINST THE PDK DECK — `drc_signoff.json: passed: true,
     real_violation_total: 0`, `detailed route: violation report: 0`. A macro
     obstruction is not in the PDK deck; it is in the macro's LEF.
