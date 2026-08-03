@@ -203,3 +203,19 @@ def test_the_total_required_subtraction_is_derived_not_enumerated():
     seg = seg[:seg.index("\n\n")]
     assert "_T.is_excused" in seg, seg
     assert 'counts["WAIVED"]' not in seg, seg
+
+def test_pass_voided_by_dependency_is_not_a_done_claim():
+    """vibe-ic#695. #671 introduced this word precisely to say "this is NOT a
+    pass", and left it unregistered — so the subtraction rule read it as a
+    done-claim, which is the exact inversion this module exists to prevent.
+
+    The anti-drift test above caught it the moment the word appeared. This one
+    pins the ANSWER, so registering it in the wrong set later is also caught:
+    putting it in EXCUSED would make `total_required` subtract it, and a step
+    voided by a violated dependency is still a step that was required and did
+    not deliver."""
+    w = "PASS_VOIDED_BY_DEPENDENCY"
+    assert T.normalize(w) in T.PRODUCER_STATUSES
+    assert T.is_done_claim(w) is False
+    assert T.normalize(w) in T.NON_GREEN
+    assert T.normalize(w) not in T.EXCUSED

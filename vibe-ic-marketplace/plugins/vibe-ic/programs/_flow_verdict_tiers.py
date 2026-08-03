@@ -64,6 +64,15 @@ PRODUCER_STATUSES: Set[str] = {
     "PASS", "FAIL", "MISSING", "VACUOUS-PASS", "STRUCTURE-ONLY", "INCOMPLETE",
     "WAIVED", "DEFERRED-BY-UPSTREAM", "SKIPPED-CONDITION",
     "SKIPPED-SETUP-REQUIRED",
+    # vibe-ic#695 — added by #671 and left unregistered. This module derives
+    # done-claim membership BY SUBTRACTION, so a word in neither EXCUSED nor
+    # NON_GREEN IS a done-claim: `PASS_VOIDED_BY_DEPENDENCY` — the word #671
+    # introduced precisely to say "this is NOT a pass" — was being read as one.
+    #
+    # That is the mechanism this module exists for working exactly as designed,
+    # and it is why the anti-drift test went red the moment the word appeared
+    # rather than at the next landing that happened to notice.
+    "PASS-VOIDED-BY-DEPENDENCY",
 }
 
 #: The step is NOT claimed as done and is not held against the run — the
@@ -76,7 +85,13 @@ EXCUSED: Set[str] = {
 
 #: The step is a defect or an absence — the producer's `failing` / `missing` /
 #: `setup_required_skipped` buckets, which are what keep a run from being green.
-NON_GREEN: Set[str] = {"FAIL", "MISSING", "SKIPPED-SETUP-REQUIRED"}
+NON_GREEN: Set[str] = {"FAIL", "MISSING", "SKIPPED-SETUP-REQUIRED",
+                       # #695 — a PASS its own dependency contradicts is
+                       # not a pass. NON_GREEN, not EXCUSED: EXCUSED is
+                       # what `total_required` SUBTRACTS, and a step
+                       # voided by a violated dependency is still a step
+                       # that was required and did not deliver.
+                       "PASS-VOIDED-BY-DEPENDENCY"}
 
 #: The one word that satisfies a predecessor outright. Every OTHER done-claim is
 #: QUALIFIED: it ran and did not fail, but it measured, certified or produced
