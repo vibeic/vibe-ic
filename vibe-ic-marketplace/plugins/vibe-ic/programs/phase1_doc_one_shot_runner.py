@@ -8813,14 +8813,257 @@ def _staged_pdk_enablement_files(project: Path) -> List[str]:
     return out
 
 
-def _staged_pdk_identifier(project: Path, staged: Optional[List[str]] = None):
-    """#513 — (pdk_target, source_rel) derived from the design's OWN
-    staged PDK enablement paths, or (None, None).
+# ORGANIC-20260803 — TIER 3 of the staged read: the enablement's OWN
+# DECLARED LIBRARY NAME.
+#
+# WHAT WAS MEASURED. On a real run the staged read opened 27 enablement
+# files and recorded `"staged_identifier": null` with the reason "neither
+# the open-PDK token table nor the foundry-context rule matched". Both
+# tiers above test the tokenised PATH against a CLOSED NAME LIST, so the
+# staged read can only ever name a PDK whose name is already compiled in.
+# Across every staged tree reachable on the run fleet the path tiers
+# derived an identifier for 14 of 110 recorded reads — and the 96 that
+# failed were not all commercial: an open-PDK design whose enablement is
+# filed under vendor-neutral directory names fails identically.
+#
+# So the flow could STAGE a process it could not NAME, and a process it
+# cannot name becomes an unnamed input to sign-off:
+# `declared_pdk_is_the_pdk_used_check.declared_target` reads exactly this
+# record, and a null here is what makes that gate unanswerable.
+#
+# WIDENING THE NAME LIST IS STILL NOT THE FIX (see the #513 note above).
+# Read what the enablement DECLARES about ITSELF instead.
+#
+# WHY LIBERTY, AND ONLY LIBERTY. Every candidate content record was
+# measured on the staged trees actually present on the fleet:
+#
+#   Liberty  `library (<name>) {`   the file's own top-level declaration.
+#                                   Present in every Liberty file read,
+#                                   and the name carries the library
+#                                   family (corner suffixes differ, the
+#                                   family prefix does not).      ADOPTED
+#   LEF      `MACRO <name>`         yielded a FILLER CELL name on a real
+#                                   macro LEF and a LAYER name on a tech
+#                                   LEF — cell/layer identity, not
+#                                   library identity.            REJECTED
+#   GDS      LIBNAME record         yielded a bare DATE on one staged
+#                                   stream and a 3-letter placeholder on
+#                                   tool-written streams.        REJECTED
+#   SPICE    files named `.lib`     model libraries, no `library(` header
+#                                   at all — they must be, and are,
+#                                   silently skipped.         NO EVIDENCE
+#
+# A `.lib` suffix therefore does NOT imply Liberty; the header decides.
+#
+# WHY THIS CANNOT INVENT A VALUE. The identifier returned is always a
+# VERBATIM PREFIX of names the staged files declare about themselves —
+# never a normalised, guessed or table-derived string. When the declared
+# names share no token-boundary prefix the tier returns nothing rather
+# than manufacturing one, and the disclosure records every name it saw so
+# the refusal is auditable.
+#
+# Chip-AGNOSTIC: the vocabulary here is the Liberty grammar's `library`
+# keyword and a structural stop-list of words every PDK on earth uses
+# ("cells", "tech", "typ"). No vendor, foundry, SKU or part appears.
+_LIBERTY_LIBRARY_HEADER_RE = re.compile(
+    rb"(?im)^[ \t]*library[ \t]*\([ \t]*[\"']?([A-Za-z0-9_.+\-]{2,120})")
+# Only a Liberty-carrying suffix is opened. The path tiers still cover
+# every suffix in `_STAGED_PDK_SUFFIXES`.
+_STAGED_CONTENT_SUFFIXES = (".lib",)
+# The `library(...)` header is the first declaration in a Liberty file by
+# grammar, so a bounded head read always reaches it. Measured: found in
+# the first 256 KiB of every Liberty file on the fleet.
+_STAGED_CONTENT_HEAD_BYTES = 262_144
+# Bounded by the same 64 the enablement listing is bounded by, so no
+# staged file the disclosure names is one the header read skipped: a cap
+# lower than the listing would make "read but not named" ambiguous
+# between "declared nothing" and "never opened".
+_STAGED_CONTENT_MAX_FILES = _STAGED_PDK_MAX_FILES
+_STAGED_FAMILY_MIN_LEN = 3
+_STAGED_FAMILY_MAX_LEN = 64
+# Words that identify no process because every process has them. Same
+# doctrine as `declared_pdk_is_the_pdk_used_check.STOPWORDS`.
+_STAGED_FAMILY_STOPWORDS = frozenset({
+    "lib", "libs", "library", "liberty", "cell", "cells", "stdcell",
+    "stdcells", "std", "pdk", "tech", "technology", "kit", "process",
+    "node", "foundry", "corner", "corners", "typ", "typical", "min",
+    "max", "slow", "fast", "nom", "nominal", "worst", "best", "generic",
+    "default", "top", "macro", "macros", "model", "models",
+})
 
-    Same two tiers as the prose path, same regexes, same #457 guards:
+
+def _declared_library_names(project: Path, files: List[str]):
+    """(rel, declared_name) for every staged file that DECLARES a Liberty
+    library name in its own header. Deterministic (input order kept),
+    bounded per file and in file count. A file whose header is not
+    Liberty contributes nothing — no guess is made from its name."""
+    out: List[Tuple[str, str]] = []
+    opened = 0
+    for rel in files:
+        if opened >= _STAGED_CONTENT_MAX_FILES:
+            break
+        if not rel.lower().endswith(_STAGED_CONTENT_SUFFIXES):
+            continue
+        f = project / rel
+        try:
+            with f.open("rb") as fh:
+                head = fh.read(_STAGED_CONTENT_HEAD_BYTES)
+        except OSError:
+            continue
+        opened += 1
+        m = _LIBERTY_LIBRARY_HEADER_RE.search(head)
+        if not m:
+            continue                    # not Liberty (e.g. a SPICE model lib)
+        try:
+            name = m.group(1).decode("ascii", "replace").strip()
+        except Exception:               # noqa: BLE001
+            continue
+        if name:
+            out.append((rel, name))
+    return out
+
+
+def _token_boundary_common_prefix(names: List[str]) -> str:
+    """The longest prefix all `names` share, cut back to a TOKEN
+    boundary so the result is stable when the staged set changes.
+
+    A character-wise common prefix is not stable: staging one more corner
+    of the same library can slice a name in half. Cutting back to the
+    last separator makes the answer depend on the library FAMILY rather
+    than on which files happened to be staged.
+    """
+    if not names:
+        return ""
+    if len(set(names)) == 1:
+        return names[0]
+    ordered = sorted(set(names))
+    lo, hi = ordered[0], ordered[-1]        # sorted: extremes bound the rest
+    k = 0
+    while k < len(lo) and k < len(hi) and lo[k] == hi[k]:
+        k += 1
+    cp = lo[:k]
+    if not cp:
+        return ""
+    # A mid-token cut: the prefix ends on an alphanumeric and at least one
+    # name continues with another alphanumeric.
+    if cp[-1].isalnum() and any(
+            len(s) > len(cp) and s[len(cp)].isalnum() for s in names):
+        m = re.search(r"^(.*[^0-9A-Za-z])[0-9A-Za-z]*$", cp)
+        cp = m.group(1) if m else ""
+    return cp.rstrip("_-.+ ")
+
+
+def _library_family(names: List[str]) -> str:
+    """The family identifier a set of declared library names agrees on,
+    or "" when they agree on nothing usable.
+
+    Heterogeneous sets are handled by GROUPING on the first token and
+    taking the STRICTLY largest group: a staged root routinely carries a
+    std-cell library in several corners plus one unrelated hardmacro, and
+    the library staged in depth is the process. A TIE is refused, not
+    broken — picking one of two equally-attested families would be a
+    coin-flip presented as a measurement, the silent-wrong-value shape
+    #457 exists to refuse.
+    """
+    fam = _token_boundary_common_prefix(names)
+    if not fam:
+        groups: Dict[str, List[str]] = {}
+        for n in names:
+            key = _PATH_WORD_SPLIT_RE.split(n, 1)[0].lower()
+            groups.setdefault(key, []).append(n)
+        if not groups:
+            return ""
+        ranked = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+        if len(ranked) > 1 and len(ranked[0][1]) == len(ranked[1][1]):
+            return ""                   # no plurality — no honest answer
+        fam = _token_boundary_common_prefix(ranked[0][1])
+    if len(fam) < _STAGED_FAMILY_MIN_LEN:
+        return ""
+    if not re.search(r"[A-Za-z]", fam):
+        return ""                       # a bare number names no process
+    # Every token generic: `cells_typ` says "the typical corner of the
+    # cells", which is true of every PDK ever shipped and therefore
+    # identifies none of them. At least one token has to carry identity.
+    parts = [t for t in _PATH_WORD_SPLIT_RE.split(fam.lower()) if t]
+    if not parts or all(t in _STAGED_FAMILY_STOPWORDS for t in parts):
+        return ""
+    return fam[:_STAGED_FAMILY_MAX_LEN]
+
+
+def _staged_pdk_content_identifier(project: Path, files: List[str]):
+    """(identifier, source_rel, evidence) from the staged enablement's OWN
+    declared library names, or (None, None, []).
+
+    Derived PER STAGED ROOT in sorted order. `input/pdk` is consulted
+    before `input/pdk_local` because that is the order the roots already
+    sort in, and a design's own local additions must not outrank the PDK
+    it staged. Every returned identifier is a verbatim prefix of names
+    read out of the files; `evidence` lists each (file, declared name)
+    that voted for it.
+    """
+    declared = _declared_library_names(project, files)
+    if not declared:
+        return None, None, []
+    by_root: Dict[str, List[Tuple[str, str]]] = {}
+    for rel, name in declared:
+        root = rel.split("/", 2)
+        key = "/".join(root[:2]) if len(root) > 1 else root[0]
+        by_root.setdefault(key, []).append((rel, name))
+    for key in sorted(by_root):
+        entries = by_root[key]
+        fam = _library_family([n for _rel, n in entries])
+        if not fam:
+            continue
+        voters = [(rel, n) for rel, n in entries if n.startswith(fam)]
+        if not voters:
+            continue
+        return fam, voters[0][0], voters
+    return None, None, []
+
+
+def _staged_pdk_scan_truncated(project: Path) -> bool:
+    """Did either cap hide staged enablement from the read?
+
+    `_staged_pdk_enablement_files` applies a 2000-entry glob cap (mirroring
+    `l19_pdk_floorplan_contract_check`) and a 64-file listing cap. Measured
+    on a real 15433-entry staged tree, the glob cap hid 11 of 62 enablement
+    files. A refusal produced by a cap is not a statement about the PDK, and
+    the two must not be indistinguishable in the record.
+    """
+    for pat in _STAGED_PDK_GLOBS:
+        try:
+            entries = sorted(project.glob(pat))
+        except OSError:
+            continue
+        if len(entries) > _STAGED_PDK_MAX_ENTRIES:
+            return True
+        kept = 0
+        for f in entries:
+            try:
+                if f.is_file() and f.suffix.lower() in _STAGED_PDK_SUFFIXES:
+                    kept += 1
+            except OSError:
+                continue
+        if kept > _STAGED_PDK_MAX_FILES:
+            return True
+    return False
+
+
+def _staged_pdk_identifier_detail(project: Path,
+                                  staged: Optional[List[str]] = None) -> dict:
+    """#513 + ORGANIC-20260803 — everything the staged read concluded.
+
+    Returns a dict with `identifier`, `source`, `kind` and `evidence`.
+    `_staged_pdk_identifier` is the stable 2-tuple shim over it.
+
+    Three tiers, in this order, so every answer the two path tiers could
+    already produce is byte-identical to before and the new tier can only
+    turn a null into a value:
       1. an open-PDK token in the tokenised path, unambiguous bare;
       2. a commercial-foundry name that clears `_FOUNDRY_CTX_RE` AND
-         `_foundry_match_trustworthy` (negation-free + numeric node).
+         `_foundry_match_trustworthy` (negation-free + numeric node);
+      3. the library family the staged Liberty files DECLARE about
+         themselves.
 
     Tier 2 is deliberately conservative on shallow layouts: the staged
     root's own `pdk` component is itself one of the context anchors
@@ -8829,24 +9072,44 @@ def _staged_pdk_identifier(project: Path, staged: Optional[List[str]] = None):
     dual-evidence guard then denies the match. Denying is the correct
     outcome: the alternative is loosening the guard #457 exists to
     enforce, which would trade a silent null for a silent wrong value.
+    Tier 3 does not loosen it — it stops asking the path at all and reads
+    the declaration instead.
     """
+    empty = {"identifier": None, "source": None, "kind": None,
+             "evidence": []}
     files = _staged_pdk_enablement_files(project) if staged is None else staged
     if not files:
-        return None, None
+        return empty
     texts = [(rel, _PATH_WORD_SPLIT_RE.sub(" ", rel)) for rel in files]
     for rel, words in texts:
         m = _OPEN_PDK_TOKEN_RE.search(words)
         if m:
             tok = re.sub(r"^ihp[- ]?", "",
                          m.group(1).lower()).replace(" ", "")
-            return tok, rel
+            return {"identifier": tok, "source": rel, "kind": "path_token",
+                    "evidence": []}
     for rel, words in texts:
         for m in _FOUNDRY_CTX_RE.finditer(words):
             span = words[max(0, m.start() - 24):m.end()]
             if not _foundry_match_trustworthy(span):
                 continue
-            return (m.group(1) or m.group(2)).lower(), rel
-    return None, None
+            return {"identifier": (m.group(1) or m.group(2)).lower(),
+                    "source": rel, "kind": "path_token", "evidence": []}
+    fam, src, voters = _staged_pdk_content_identifier(project, files)
+    if fam:
+        return {"identifier": fam, "source": src,
+                "kind": "declared_library_name",
+                "evidence": [{"file": r, "declared_library": n}
+                             for r, n in voters]}
+    return empty
+
+
+def _staged_pdk_identifier(project: Path, staged: Optional[List[str]] = None):
+    """#513 — (pdk_target, source_rel) derived from the design's OWN
+    staged PDK enablement, or (None, None). Stable 2-tuple shim over
+    `_staged_pdk_identifier_detail`; see that docstring for the tiers."""
+    d = _staged_pdk_identifier_detail(project, staged)
+    return d["identifier"], d["source"]
 
 
 # ORGANIC #513 — where the staged-PDK READ is recorded. Same dual-write
@@ -8893,19 +9156,32 @@ def _write_staged_pdk_read_disclosure(
         return                       # nothing staged → no read to disclose
 
     files = _staged_pdk_enablement_files(project)
-    staged_tok, staged_rel = _staged_pdk_identifier(project, staged=files)
+    detail = _staged_pdk_identifier_detail(project, staged=files)
+    staged_tok = detail["identifier"]
+    staged_rel = detail["source"]
     adopted_from = None
     if adopted_target:
         adopted_from = "input_doc_prose" if adopted_line else "staged_pdk_path"
+
+    # ORGANIC-20260803 — what was READ but yielded no name. A refusal that
+    # cannot show what it looked at is indistinguishable from not looking.
+    read_names = _declared_library_names(project, files)
+    truncated = _staged_pdk_scan_truncated(project)
 
     if not files:
         reason = ("a staged-PDK root exists but holds no enablement file "
                   f"({', '.join(_STAGED_PDK_SUFFIXES)}); nothing to read")
     elif not staged_tok:
         reason = ("enablement files were read but no PDK identifier could be "
-                  "derived from their paths: neither the open-PDK token table "
-                  "nor the foundry-context rule (which additionally requires a "
-                  "negation-free span carrying a numeric process node) matched")
+                  "derived: the open-PDK token table and the foundry-context "
+                  "rule found nothing in their paths, and their own headers "
+                  f"declared {len(read_names)} library name(s) that agree on "
+                  "no usable family. This staged PDK CANNOT BE NAMED — it "
+                  "must not become an unnamed input to sign-off"
+                  + (". NOTE: the staged-tree scan hit its cap, so enablement "
+                     "the read never saw may exist — this refusal may be an "
+                     "artefact of the cap rather than of the PDK"
+                     if truncated else ""))
     elif adopted_from == "staged_pdk_path":
         reason = "the staged path supplied L19.fields.pdk_target"
     else:
@@ -8926,9 +9202,26 @@ def _write_staged_pdk_read_disclosure(
         # A count equal to the cap means the listing is truncated, not
         # that the design staged exactly this many files.
         "enablement_files_read_cap": _STAGED_PDK_MAX_FILES,
+        # True when a cap hid staged enablement from this read. A refusal
+        # below is then not necessarily a statement about the PDK.
+        "enablement_scan_truncated": truncated,
         "enablement_files": files,
         "staged_identifier": staged_tok,
         "staged_identifier_source": staged_rel,
+        # WHICH tier produced it: "path_token" (the two closed name lists)
+        # or "declared_library_name" (the enablement's own header).
+        "staged_identifier_kind": detail["kind"],
+        # Each (file, declared library name) that voted for the identifier,
+        # so the value can be re-derived by hand from the staged tree.
+        "staged_identifier_evidence": detail["evidence"],
+        # Every library name the headers declared, adopted or not. This is
+        # the audit trail behind a refusal.
+        "declared_library_names": [
+            {"file": r, "declared_library": n} for r, n in read_names],
+        # THE REFUSAL SIGNAL. True when a PDK is physically staged and the
+        # flow could not name it. A consumer that proceeds past this is
+        # signing off against a process it cannot identify.
+        "staged_pdk_unnameable": bool(files) and not staged_tok,
         "adopted_pdk_target": adopted_target,
         "adopted_evidence_source": adopted_source,
         "adopted_evidence_kind": adopted_from,
