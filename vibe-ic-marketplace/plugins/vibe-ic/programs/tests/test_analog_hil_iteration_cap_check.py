@@ -65,7 +65,12 @@ def test_missing_count_is_error(tmp_path):
     # report exists but has no hardware iteration field → ERROR, never vacuous PASS
     f = _write(tmp_path / "hw_tuning_report.json", {"block_name": "ldo"})
     assert evaluate_file(f, DEFAULT_MAX_HW_ITERS).verdict == "ERROR"
-    assert main(["--file", str(f)]) == 2
+    # #693 — exit 1, NOT 2. Exit 2 is `flow_compliance_check`'s cannot-judge
+    # tier: `__check_program_exit_zero` maps it to __VACUOUS_HINT__ and returns
+    # True (counted in pass_count), and the advisory slot renders it as
+    # "n/a (input not present)". Returning 2 here made "a malformed report must
+    # NOT silently pass" do exactly that under every wiring.
+    assert main(["--file", str(f)]) == 1
 
 
 def test_negative_count_is_error(tmp_path):
@@ -79,12 +84,15 @@ def test_garbage_file_is_error(tmp_path):
     f = tmp_path / "hw_tuning_report.json"
     f.write_text("not json at all")
     assert evaluate_file(f, DEFAULT_MAX_HW_ITERS).verdict == "ERROR"
-    assert main(["--file", str(f)]) == 2
+    assert main(["--file", str(f)]) == 1
 
 
-def test_skip_empty_project(tmp_path):
+def test_no_report_is_not_checked_not_pass(tmp_path):
+    # #693 — no artefact is exit 2 = NOT CHECKED, NOT exit 0. Wired into a
+    # flow gate, exit 0 is recorded as "ran and found nothing wrong"; exit 2 is
+    # the disclosed cannot-judge tier that says the cap was never counted.
     (tmp_path / "phase3" / "analog").mkdir(parents=True)
-    assert main([str(tmp_path)]) == 0
+    assert main([str(tmp_path)]) == 2
 
 
 def test_missing_file_errors(tmp_path):

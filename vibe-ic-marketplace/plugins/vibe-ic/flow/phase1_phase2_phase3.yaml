@@ -1566,6 +1566,54 @@ steps:
         # stays legal (headless and CI analog runs must remain possible) but
         # stops being reported as an undifferentiated PASS.
         - program_exit_zero: "analog_a9_hw_verify_check . --json reports/phase2/gates/a9_hw_verify.json"
+        # ── The HIL discipline half (#693 family `analog-hil`) ─────────────
+        # Four gates were WRITTEN, TESTED and never WIRED: they appeared only
+        # in skills/analog-hw-tuning-loop/SKILL.md, in
+        # skills/analog-hw-testbench-gen/SKILL.md, in programs/INDEX.md and in
+        # their own unit tests — in NO flow gate and in no CI script. One line
+        # of prose in a SKILL.md is also what kept them out of
+        # `checker_execution_wiring_baseline.json`, whose audit counts a SKILL
+        # mention as a runner.
+        #
+        # They are ADVISORY, and both halves of that choice are measured:
+        #
+        #   * NOT `program_exit_zero`. `_evaluate_gate` short-circuits an
+        #     `all_of` at the first failing sub-gate and only re-runs the
+        #     ADVISORY siblings after it. A9's first sub-gate
+        #     (`mixed_signal_cosim_check`) FAILs on the ONE published run that
+        #     reaches this gate tree at all; appending blocking sub-gates here
+        #     executes them on 0 of 17 published runs — the same defect moved,
+        #     not fixed. Wired advisory they execute on that run.
+        #
+        #   * NON-BLOCKING, for now. NOTHING IN THIS REPO WRITES
+        #     `hw_tuning_report.json` OR `hw_sizing_history.json` — 0 files
+        #     repo-wide, no producer program; the skill documents them as
+        #     agent-authored. A blocking gate over an artefact with no producer
+        #     certifies nothing. So all three report exit 2 = NOT CHECKED
+        #     today, which the advisory slot renders as
+        #     "n/a (input not present)" instead of "ok" — the first time an
+        #     analog run says out loud that the HIL discipline was not checked.
+        #
+        # PROMOTION CONDITION, so this does not sit advisory forever: when
+        # `analog-hw-tuning-loop` (or a runner step) emits
+        # `phase3/analog/<block>/hw_tuning_report.json` and
+        # `hw_sizing_history.json`, move the first three to
+        # `program_exit_zero`. They already return 1 for every defect,
+        # including a malformed report.
+        - advisory_program_exit_zero: "analog_hil_report_schema_check . --json reports/phase2/gates/hil_report_schema.json"
+        - advisory_program_exit_zero: "analog_hil_iteration_cap_check . --json reports/phase2/gates/hil_iteration_cap.json"
+        - advisory_program_exit_zero: "analog_hil_single_knob_check . --json reports/phase2/gates/hil_single_knob.json"
+        # The DE10-Lite board gate is pointed at its DECLARED SUBJECT —
+        # `analog/<block>/hw_test/pin_assignments.qsf`, per
+        # skills/analog-hw-testbench-gen/SKILL.md — not at the project root.
+        # It is ALSO registered in `flow_compliance_check._STRUCTURAL_RTL_GATES`
+        # for the digital side, and that is not redundant: the structural
+        # umbrella resolves an `rtl_dir` first and returns
+        # `_P0_NO_RTL_NOTE` without dispatching ANY gate when there is none —
+        # measured, that is 0 of the 3 pure-analog published runs. So the
+        # umbrella alone would never let this gate see the analog QSF it was
+        # written for.
+        - advisory_program_exit_zero: "analog_hw_tb_de10lite_budget_check phase3/analog --json reports/phase2/gates/a9_de10lite_budget.json"
     blocks_on: [A8]
 
   # ── Step 14 (Wave 91 / v1.6.15): pre-PnR Yosys gate ──────────────

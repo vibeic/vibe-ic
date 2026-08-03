@@ -1431,6 +1431,18 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # (synth/sim/UPF/coverage/HW verdict) are available as standalone
     # *_check.py but NOT in the canonical structural-RTL-gates tuple.
     "backlog_sanitize_check",
+    # #693 family `analog-hil` — the DE10-Lite board gate. Registered here for
+    # the DIGITAL side of the corpus; A9 drives it separately at its declared
+    # analog subject, because this umbrella never dispatches on a pure-analog
+    # project (no rtl_dir -> `_P0_NO_RTL_NOTE`, measured 0 of 3 analog runs).
+    # It takes the umbrella's default argv shape (one positional project path),
+    # so unlike its sibling `fpga_qsf_lint` — which needs `--qsf-file
+    # --rtl-dir` and is therefore parked in KNOWN_NOT_INVOCABLE, i.e. never
+    # actually run — it is invocable here and DOES run. Measured over the 17
+    # published runs: 13 dispatch, 1 (a real Phase-2 FPGA run) returns rc 0
+    # PASS on a genuine DE10-Lite QSF, 12 return rc 2 NO_DATA into the skip
+    # bucket. 0 newly red.
+    "analog_hw_tb_de10lite_budget_check",
     "fpga_program_chain_attest_check",
     "fpga_qsf_lint",
     "fresh_agent_provenance_check",

@@ -54,6 +54,37 @@ def test_fail_converged_inconsistent():
     assert any("converged is not true" in v for v in validate(bad))
 
 
+# ── #693: the convergence_status vocabulary ────────────────────────────────
+# The tests below were the gap that let this ship. The originals used only
+# IDEAL / WARNING — both drawn from the SKILL's JSON EXAMPLE — so the half of
+# the vocabulary the SKILL's own decision table defines, and that
+# `analog_hil_three_way_verdict` actually computes, was never exercised. Every
+# one of these three statuses came back as a SCHEMA violation, including
+# MODEL_INACCURACY, which is the honest "hardware disagrees with SPICE"
+# outcome: a real bench finding reported as a format complaint.
+
+def test_accepts_three_way_verdict_vocabulary():
+    for status in ("CONVERGED_WARNING", "MODEL_INACCURACY", "BACK_TO_PHASE1"):
+        body = dict(_GOOD, convergence_status=status,
+                    converged=status == "CONVERGED_WARNING")
+        assert validate(body) == [], f"{status} rejected: {validate(body)}"
+
+
+def test_non_converged_verdict_cannot_claim_converged():
+    # The rule that REPLACES the rejection: a report carrying one of the two
+    # verdicts analog_hil_three_way_verdict FAILs on cannot also say it
+    # converged. Widening the accepted set without this would have been a pure
+    # loosening.
+    for status in ("MODEL_INACCURACY", "BACK_TO_PHASE1"):
+        bad = dict(_GOOD, convergence_status=status, converged=True)
+        assert any("non-converged verdict" in v for v in validate(bad)), status
+
+
+def test_status_outside_both_vocabularies_still_rejected():
+    assert any("convergence_status" in v
+               for v in validate(dict(_GOOD, convergence_status="TOTALLY_MADE_UP")))
+
+
 def test_fail_negative_iterations():
     bad = json.loads(json.dumps(_GOOD))
     bad["total_iterations"]["hardware"] = -1
@@ -90,9 +121,12 @@ def test_garbage_file_is_fail_not_pass(tmp_path):
     assert main(["--file", str(f)]) == 1
 
 
-def test_skip_empty_project(tmp_path):
+def test_no_report_is_not_checked_not_pass(tmp_path):
+    # #693 — no artefact is exit 2 = NOT CHECKED, NOT exit 0. Nothing in this
+    # repo writes hw_tuning_report.json, so this is the tier every published
+    # run lands in; it must not read as "schema audited and clean".
     (tmp_path / "phase3" / "analog").mkdir(parents=True)
-    assert main([str(tmp_path)]) == 0
+    assert main([str(tmp_path)]) == 2
 
 
 def test_missing_file_errors(tmp_path):
