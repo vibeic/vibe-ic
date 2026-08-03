@@ -363,6 +363,32 @@ def _f_ldoc_todo(p: Path) -> None:
        {"ic_name": "probe", "ports": []})
 
 
+def _f_signoff_unverifiable(p: Path) -> None:
+    """A sign-off DRC certificate with NO parseable verdict and NO geometry,
+    and a PORTLESS top .subckt beside it.
+
+    vibe-ic#717 wired `drc_vacuous_pass_check` and `lvs_signoff_guard` into
+    step 31 and neither had a fixture proving its FAIL reachable. Both are
+    fail-safe gates, so each needs the ABSENCE of positive evidence rather than
+    the presence of a bad number:
+
+      drc  DRC_UNVERIFIABLE_RUN — a report whose verdict will not parse and
+           behind which no geometry can be established. A clean requires
+           positive evidence; this supplies none.
+      lvs  a top `.subckt` with no ports, so a netgen verdict about it is
+           anchored to nothing.
+    """
+    # It must READ as a DRC report (`_is_drc_log` looks for drc/violation/error)
+    # and still yield no verdict — a bare "no verdict here" file is SKIPped as
+    # not-a-DRC-report and reddens nothing. This is the killed-mid-write shape.
+    _w(p, "reports/phase3/drc_signoff.rpt",
+       "signoff DRC deck run started\n"
+       "(the tool was killed before it wrote a verdict line)\n")
+    _w(p, "reports/phase3/lvs.rpt", "Final result: Circuits match uniquely.\n")
+    _w(p, "phase3/stage3/extracted/chip_top.spice",
+       ".subckt chip_top\nX1 a b sky130_fd_sc_hd__inv_1\n.ends\n")
+
+
 def _f_synth_bad(p: Path) -> None:
     _w(p, "phase2/stage2/synth/synth.ys", _BAD_YS)
     _w(p, "phase2/stage2/synth/netlist.v", "// empty netlist\n")
@@ -509,6 +535,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "ANALOG_P3": _f_analog_p3,
     "A0_SKIPPED": _f_a0_skipped,
     "LDOC_TODO": _f_ldoc_todo,
+    "SIGNOFF_UNVERIFIABLE": _f_signoff_unverifiable,
     "SYNTH_BAD": _f_synth_bad,
     "SDC_BAD": _f_sdc_bad,
     "PNR_BAD": _f_pnr_bad,
@@ -536,6 +563,12 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # no generated_docs means phase1 has not run, which is not an incomplete
     # extraction. The docs must exist AND carry a placeholder.
     ("D1", "l_doc_todo_stub_count_check ."): "LDOC_TODO",
+    # vibe-ic#717 wired both into step 31. Both are FAIL-SAFE gates, so an
+    # EMPTY tree gives them nothing to refuse; each needs the absence of
+    # positive evidence to be OBSERVABLE, which means the artefact has to
+    # exist and be unverifiable.
+    ("31", "drc_vacuous_pass_check . --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_vacuous.json"): "SIGNOFF_UNVERIFIABLE",
+    ("31", "lvs_signoff_guard . --verdict-file reports/phase3/lvs.rpt"): "SIGNOFF_UNVERIFIABLE",
     ("2", "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v "
           "--severity ERROR --json reports/phase2/lint/rtl_hygiene.json"):
         "RTL_BAD",

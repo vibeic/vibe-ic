@@ -68,8 +68,14 @@ def _wire(monkeypatch, tmp_path, *, report_by_model, rc=0, patched=1):
     project = _project(tmp_path)
     seen: list = []
 
+    # `cell_lef` is accepted because the real `emit_to_file` gained it
+    # (vibe-ic#719: a project-staged PDK has no table entry, so its power model
+    # is derived from its own std-cell LEF). A stub that refuses the kwarg
+    # raises TypeError inside the caller's `except Exception`, the attempt is
+    # discarded, and the whole power-aware path silently returns None — which
+    # is what these tests measured before the signature was matched.
     def _emit_to_file(netlist, pdk_name, out_path, top=None,
-                      tie_wells_to_rails=False):
+                      tie_wells_to_rails=False, cell_lef=None):
         Path(out_path).write_text("// power-aware netlist\n")
         return {"modules_patched": patched, "instances_patched": 1191,
                 "rails": ["VPWR", "VGND"]}

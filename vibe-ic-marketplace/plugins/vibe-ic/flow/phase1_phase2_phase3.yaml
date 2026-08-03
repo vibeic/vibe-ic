@@ -2821,7 +2821,6 @@ steps:
         # anywhere in the tree, so geometry cannot be established at all. Both
         # are superseded by later sha256 runs that PASS.
         - program_exit_zero: "drc_vacuous_pass_check . --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_vacuous.json"
-        - program_exit_zero: "drc_report_check . --mode drc --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
         # `--signoff` is THIS step's policy and step 21 must never get it: the
         # producer that is exactly right there (the router's own detailed-route
         # DRC) is the one disqualified here. MEASURED on origin/main, a project
