@@ -6851,12 +6851,40 @@ def _detect_pdk(project: Path, override: Optional[str] = None
 # `LOGIC0/1_X1`, and a suffix-tolerant bare `lo` would over-match): sky130
 # (conb/conp) and nangate (unmatched, as before) discovery is byte-identical;
 # only ASAP7-style `TIE(HI|LO)x<n>_…` names are newly recognised. chip-AGNOSTIC.
+# The `logic0` / `logic1` token is the Nangate / Si2 Open-Cell naming for the
+# same two cells (`LOGIC0_X1` drives a constant 0, `LOGIC1_X1` a constant 1;
+# both are declared in the Liberty AND the LEF of every FreePDK45-derived
+# library). The A8 comment above records that they were left "unmatched, as
+# before" when the ASAP7 suffix was added — this is that gap, closed with a
+# SPECIFIC token rather than the bare `hi`/`lo` alternatives that comment
+# correctly rejected as over-matching. `logic` alone is not enough (a
+# functional `LOGIC_AND2` must not match); the digit is part of the token, so
+# only `logic0` / `logic1` are recognised.
+#
+# MEASURED consequence of the gap, edge_llm_accel x nangate45, v1.9.65, on a
+# library that DOES ship both cells:
+#
+#     cell (LOGIC0_X1) {          MACRO LOGIC0_X1
+#     cell (LOGIC1_X1) {          MACRO LOGIC1_X1
+#
+#   * SPARE_TIEOFF_SKIPPED: no tie-low cell discovered in this PDK liberty
+#     — spare inputs remain floating
+#     ...beside SPARE_FIRM_LOCKED: 27121 instances. 27,121 design-for-ECO
+#     spare cells were placed with FLOATING INPUTS, and `tied_off` stayed
+#     false, which is a hard FAIL condition of spare_cell_coverage_check
+#     ("PASS iff ... all spares are tied off (tied_off == true)").
+#   * The same undiscovered pair left `hilomap` inert, so the 1'b0 / 1'b1
+#     literals reached the DEF as constant nets and the PG cleanup had to
+#     delete them at the other end of the flow:
+#         PG_CLEANUP_DEL: zero_ (GROUND)
+#         PG_CLEANUP_UNROUTED_SUPPLY: one_ (POWER) iterms=780 bterms=0
+#     — the exact `Net zero_` / DRT-0305 shape v1.6.604 fixed for sky130A.
 _V1_6_596_TIE_HI_PAT = re.compile(
-    r"(?:^|_)(?:conb|conp|tiehi|tie_hi|tieh|tiep)(?:[_x]?\d|_|$)",
+    r"(?:^|_)(?:conb|conp|tiehi|tie_hi|tieh|tiep|logic1)(?:[_x]?\d|_|$)",
     re.IGNORECASE,
 )
 _V1_6_596_TIE_LO_PAT = re.compile(
-    r"(?:^|_)(?:conb|conp|tielo|tie_lo|tiel|tien)(?:[_x]?\d|_|$)",
+    r"(?:^|_)(?:conb|conp|tielo|tie_lo|tiel|tien|logic0)(?:[_x]?\d|_|$)",
     re.IGNORECASE,
 )
 # v1.6.600 — for #404 R3 ORGANIC. Real-benchmark verification on
