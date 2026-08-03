@@ -49,10 +49,31 @@ from pathlib import Path
 # Clause extraction
 # ---------------------------------------------------------------------------
 
+# Markdown emphasis around the imperative. Specs BOLD the requirement word —
+# that is what bold is for — so `**MUST**` and `**必須**` are the ordinary
+# forms, not exotic ones.
+#
+# This fragment is SHARED by both patterns below on purpose. It was previously
+# spelled out inline in the Chinese pattern only, and the two drifted: the
+# Chinese half tolerated `**必須**` while the English half did not tolerate
+# `**MUST**`. MEASURED on this program, same clause, same table, three forms:
+#
+#   `**必須**於 \`p/declaration.json\` 聲明`   -> clauses_found=1  FAIL
+#   `**MUST** emit \`p/declaration.json\``     -> clauses_found=0  VACUOUS_PASS
+#   `MUST emit \`p/declaration.json\``         -> clauses_found=1  FAIL
+#
+# So an English spec that bolds MUST declared a required artifact this gate
+# then reported as "nothing to assert" — a silent false negative in the one
+# gate whose job is to notice a required artifact is missing. Sharing the
+# fragment is the fix for the DRIFT, not just for the bold case.
+_MD_EMPH = r'[*_]{0,2}'
+
 # English: "MUST emit/produce/declare `some/path.json`"
 # Also covers "shall emit", "is required to emit" etc.
 _EN_PATTERN = re.compile(
-    r'(?:MUST|shall|required\s+to)\s+(?:emit|produce|declare|generate|write|output)\s+[`\'""]([^\s`\'"">]+)[`\'""]]?',
+    rf'{_MD_EMPH}(?:MUST|shall|required\s+to){_MD_EMPH}\s+'
+    rf'{_MD_EMPH}(?:emit|produce|declare|generate|write|output){_MD_EMPH}\s+'
+    r'[`\'""]([^\s`\'"">]+)[`\'""]]?',
     re.IGNORECASE,
 )
 
@@ -60,9 +81,11 @@ _EN_PATTERN = re.compile(
 # "**必須**於 `plugin_output/declaration.json` 聲明" or
 # "必須 emit `path`" or "必須產出 `path`"
 _ZH_PATTERN = re.compile(
-    r'(?:\*\*)?必須(?:\*\*)?\s*(?:於\s*)?[`\'""]([^\s`\'"">]+)[`\'""]]?\s*(?:聲明|宣告|emit|產出|寫出|輸出)?'
+    rf'{_MD_EMPH}必須{_MD_EMPH}\s*(?:於\s*)?'
+    r'[`\'""]([^\s`\'"">]+)[`\'""]]?\s*(?:聲明|宣告|emit|產出|寫出|輸出)?'
     r'|'
-    r'(?:\*\*)?必須(?:\*\*)?\s*(?:emit|produce|declare|generate|write|output)\s+[`\'""]([^\s`\'"">]+)[`\'""]]?',
+    rf'{_MD_EMPH}必須{_MD_EMPH}\s*'
+    r'(?:emit|produce|declare|generate|write|output)\s+[`\'""]([^\s`\'"">]+)[`\'""]]?',
     re.IGNORECASE,
 )
 
