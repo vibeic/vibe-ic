@@ -1974,6 +1974,11 @@ _PIN_TABLE_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A whitespace-delimited token carrying a path separator: a file path, never a
+# port declaration nor a port name. Masked out of the narrative line-scan
+# before the direction anchor is searched and before names are tokenised.
+_PATHLIKE_TOKEN_RE = re.compile(r"\S*[/\\]\S*")
+
 # v1.6.252 — for #111 ORGANIC. CSR / regmap / ISA-spec / bit-field
 # docs must NEVER trigger OTP-evidence extraction. The L4/L11 OTP
 # bracket-field scanner used a loose filename gate (`otp|table|
@@ -20782,7 +20787,23 @@ def gen_l1_datasheet(project: Path,
             # may not have a trailing \n but offset error is
             # bounded and never causes a wrong range hit).
             _running_offset += len(line) + 1
-            ml = _PIN_TABLE_LINE_RE.search(line)
+            # ORGANIC — a FILE PATH is not a port declaration. The direction
+            # anchor `\b(input|output|inout|...)\b` was searched over the RAW
+            # line, and `/` is a word boundary, so a document that cites its
+            # own staged PDK by path — `input/pdk/lef/.../STD/<lib>.lef`, the
+            # very path this flow MANDATES for a staged PDK — matched
+            # `\binput\b` INSIDE the path. The line then promoted every
+            # capitalised token on it to a port with `mode=input`. Measured on
+            # a CPU cell whose L1/L3 cite their staged PDK in the ordinary
+            # way: `PDK`, `STD` and `IO` were emitted into L1.pin_table as
+            # phantom input ports, and `l9_rtl_pin_consistency_check` then
+            # correctly FAILed the design for declaring a pin its RTL top does
+            # not have. Mask whitespace-delimited path-like tokens for BOTH
+            # the anchor search and the name tokenisation: a directory name is
+            # never a port direction and a path fragment is never a port name.
+            # chip-AGNOSTIC — pure token shape, no path, vendor or PDK literal.
+            scan_line = _PATHLIKE_TOKEN_RE.sub(" ", line)
+            ml = _PIN_TABLE_LINE_RE.search(scan_line)
             if not ml:
                 continue
             # v1.6.264 — for #122 ORGANIC. Lines inside RST grid-
@@ -20819,7 +20840,7 @@ def gen_l1_datasheet(project: Path,
             mode_token = ml.group(1).lower()
             if mode_token not in {"input", "output", "inout"}:
                 continue
-            tokens = re.split(r"[\s\t\|,]+", line.strip())
+            tokens = re.split(r"[\s\t\|,]+", scan_line.strip())
             tokens = [t for t in tokens if t]
             if len(tokens) < 2:
                 continue
