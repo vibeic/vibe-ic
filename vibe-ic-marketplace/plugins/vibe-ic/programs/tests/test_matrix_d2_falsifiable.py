@@ -349,6 +349,20 @@ def _f_a0_skipped(p: Path) -> None:
        {"decision": "skip", "reason": "no analog content identified"})
 
 
+def _f_ldoc_todo(p: Path) -> None:
+    """An L doc still carrying the generator's `__TODO__` placeholder.
+
+    `l_doc_todo_stub_count_check` was wired into D1 by vibe-ic#704 and had no
+    fixture proving its FAIL reachable. EMPTY answers VACUOUS_PASS by design —
+    no `generated_docs/` means phase1 has not run, which is not the same as an
+    incomplete extraction — so the fixture has to produce the docs AND leave a
+    placeholder in one."""
+    _w(p, "phase1/generated_docs/L1_DATASHEET.json",
+       {"ic_name": "probe", "fields": {"supply_v": "__TODO__"}})
+    _w(p, "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
+       {"ic_name": "probe", "ports": []})
+
+
 def _f_synth_bad(p: Path) -> None:
     _w(p, "phase2/stage2/synth/synth.ys", _BAD_YS)
     _w(p, "phase2/stage2/synth/netlist.v", "// empty netlist\n")
@@ -494,6 +508,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "RTL_BAD": _f_rtl_bad,
     "ANALOG_P3": _f_analog_p3,
     "A0_SKIPPED": _f_a0_skipped,
+    "LDOC_TODO": _f_ldoc_todo,
     "SYNTH_BAD": _f_synth_bad,
     "SDC_BAD": _f_sdc_bad,
     "PNR_BAD": _f_pnr_bad,
@@ -517,6 +532,10 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
     ("D1", "analog_a0_skip_forbidden_check ."): "A0_SKIPPED",
+    # vibe-ic#704 wired this into D1. EMPTY answers VACUOUS_PASS by design:
+    # no generated_docs means phase1 has not run, which is not an incomplete
+    # extraction. The docs must exist AND carry a placeholder.
+    ("D1", "l_doc_todo_stub_count_check ."): "LDOC_TODO",
     ("2", "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v "
           "--severity ERROR --json reports/phase2/lint/rtl_hygiene.json"):
         "RTL_BAD",

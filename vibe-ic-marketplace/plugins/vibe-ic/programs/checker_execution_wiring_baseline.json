@@ -4,6 +4,7 @@
   "scope_expanded": "the checker population glob was widened from *_check.py/*_audit.py to also cover the checker-shaped suffixes *_guard.py, *_lint.py and *_gate.py, because gitignore_scratch_guard.py was a wired-to-nothing gate that this audit could not see by filename alone (vibe-ic#693)",
   "known": [
     "analog_adc_enob_corner_check.py",
+    "analog_corner_margin_check.py",
     "analog_hil_convergence_log_check.py",
     "analog_sigma_delta_gain_floor_check.py",
     "behavioral_evidence_per_spec_item_check.py",
@@ -66,6 +67,7 @@
     "spec_rtl_port_fidelity_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "synth_wrapper_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "verilator_timing_fallback_check.py": "rc=2 SKIPs / refuses without its input — --tb-top TB_TOP --dut-name DUT_NAME",
-    "waiver_growth_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659)."
+    "waiver_growth_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
+    "analog_corner_margin_check.py": "unwired for lack of a CALLER, not for lack of an input — it requires only project_dir, which a real run always has. Unlike the rest of that class it is unwired ON PURPOSE (vibe-ic#693), because both of its thresholds are unreachable by the producer that writes the artefact it grades. MIN_CORNERS=27 needs a voltage axis that `analog_real_corner_sweep.build_pvt_grid` does not have (3 process x 3 temp = 9, and the emitted corner dicts carry no supply field), so that rule is red on 100% of analog runs for a defect no producer can fix. And `corners[].margin` is the SPEC TOLERANCE BAND the producer copies from its target table, not an achieved margin: measured on one published artefact, nine distinct simulated values carry ONE identical `margin`, and the static default band for a common block type is 0.05 — below this gate's own 10% floor, so a TIGHTER spec makes it redder. A4's gate of record is `analog_a4_corner_sweep_check`, wired in the flow and invoked inline by the analog runner. Wireable once the producer grows a voltage axis and emits a real per-corner `margin_pct` under a key distinct from `tol`."
   }
 }

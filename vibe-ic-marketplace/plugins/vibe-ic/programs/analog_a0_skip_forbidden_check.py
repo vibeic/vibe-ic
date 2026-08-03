@@ -13,48 +13,57 @@ This is a pure file-presence / shape assertion — deterministic, no
 inference.
 
 Algorithm (chip-AGNOSTIC):
-  1. Look for `analog/A0_skip_decision.json` anywhere under the project
-     (both `analog/` and `phase3/analog/`).
+  1. Look for `A0_skip_decision.json` at one of THIS PROJECT'S OWN
+     canonical analog roots (`_ANALOG_ROOTS`). Never `**/` — see
+     "THREE MEASURED DEFECTS" below.
   2. If absent → PASS (the forbidden artefact was not produced).
   3. If present → it is forbidden ONLY when it actually encodes a SKIP
-     decision, read from the NAMED decision fields (`decision` /
-     `status` / `verdict` / `result` / `analog_decision`, top-level or
-     one level down under `analog`). A file that happens to be named
-     that but carries no skip verdict is reported but not a hard FAIL —
-     we FAIL on the real defect (a top-level analog skip), not on the
-     filename alone.
+     decision, read from the DECISION-BEARING keys and with negation
+     honoured. A file that happens to be named that but carries no skip
+     verdict is reported but not a hard FAIL — we FAIL on the real defect
+     (a top-level analog skip), not on the filename alone.
   4. When a real skip IS encoded, FAIL unless one of the two sanctioned
-     replacements is present and substantive:
-        (a) `analog/A0_implementation_status.json` with a per-block /
-            per-step status object (non-empty `blocks` or `steps`), OR
+     replacements is present and substantive, AT A CANONICAL ANALOG ROOT
+     OF THIS PROJECT:
+        (a) `A0_implementation_status.json` with a per-block / per-step
+            status object (non-empty `blocks` or `steps`), OR
         (b) an L5_ADI_SPEC.json carrying `analog_blocks_detected=false`.
 
-MEASURED DEFECTS REPAIRED 2026-08-03 (vibe-ic#693 analog-corner family).
-This gate had never run outside its own unit test. Exercised against
-fixtures before wiring, it FAILED on state that is not the defect and
-PASSED on state that is:
+THREE MEASURED DEFECTS THIS FILE REPAIRS
+----------------------------------------
+This gate had never been wired anywhere, so nothing outside its own unit
+test had ever handed it a project tree. Run over nine synthetic trees it
+answered FOUR of them wrongly. The common root is that each of the three
+matchers was WIDER than the rule it implements.
 
-  * `{"decision": "NO_SKIP", "rationale": "2 analog blocks detected;
-    the analog track runs in full"}` → rc 1. The skip regex was bare
-    `skip` with no negation handling, so a file recording the OPPOSITE
-    of a skip was read as a skip. Repaired: `_NEGATED_SKIP_RE` is
-    consulted first, and an explicitly-negated verdict is a PASS.
-  * `{"decision": "PROCEED", "note": "no A-step was skipped in this
-    run"}` → rc 1, evidence `value='no A-step was skipped in this run'`.
-    The old code looped over EVERY string value in the file, so free
-    prose in an unrelated field decided the verdict. Repaired: only the
-    NAMED decision fields are read (plus a nested `analog` object).
-  * A project whose analog track ran in full but which retains
-    `archive/old_run/analog/A0_skip_decision.json` → rc 1, naming the
-    archived file. The globs ended in `**/`, so any nested historical
-    run anywhere under the project was judged as if it were this run's.
-  * The mirror-image FALSE NEGATIVE: a REAL top-level skip excused by an
-    `A0_implementation_status.json` belonging to an unrelated nested run
-    → rc 0. Same unbounded `**/` glob, now deciding the wrong way.
-    Repaired: both globs are bounded to this project's OWN analog roots
-    (`analog/`, `phase1|phase2|phase3/analog/`). The published corpus is
-    itself the nested shape (a run dir inside its parent project), so
-    this was not a hypothetical.
+  1. NEGATION. `_SKIP_RE` was a bare `skip` alternation with no negation
+     handling. `{"decision": "NO_SKIP", "rationale": "2 analog blocks
+     detected; the analog track runs in full"}` — a file recording the
+     exact OPPOSITE of the forbidden state — returned rc 1 with the
+     evidence `decision='NO_SKIP'`. A gate that fails a run for writing
+     down that it did the right thing teaches the next run not to write
+     it down.
+
+  2. PROSE IS NOT A VERDICT. The same regex was applied to EVERY string
+     value in the object (`for v in data.values()`), not to the
+     decision-bearing keys, so `{"decision": "PROCEED", "note": "no
+     A-step was skipped in this run"}` FAILed on its own explanation.
+
+  3. UNBOUNDED SEARCH. `_FORBIDDEN_GLOBS` and `_STATUS_GLOBS` both ended
+     in `**/`, so neither search was bounded to the project. One choice,
+     two failures in opposite directions:
+       * a fully-run analog project carrying an ARCHIVED
+         `archive/old_run/analog/A0_skip_decision.json` FAILed on a
+         decision that is not this run's;
+       * a real top-level skip was EXCUSED (rc 0) by an
+         `A0_implementation_status.json` belonging to an unrelated nested
+         run — a false negative on the single defect this gate exists
+         for.
+     The published corpus is exactly that nested shape
+     (`<project>/clean_run_*/` inside `<project>/`), so both were live.
+
+The repair in each case is to narrow the matcher to what the rule says:
+decision-bearing keys, negation-aware, this project's own analog roots.
 
 Usage:
     python3 analog_a0_skip_forbidden_check.py <project_dir> [--json out.json]
@@ -75,43 +84,59 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
+# `skip` / `skipped`, as a word. Deliberately NOT an alternation containing
+# `no.?analog`: those two families need OPPOSITE negation handling (see
+# `_value_encodes_skip`), and folding them into one pattern is what made a
+# negation guard impossible to write.
+_SKIP_TOKEN_RE = re.compile(r"\bskip(?:ped|ping)?\b", re.IGNORECASE)
 
-_SKIP_RE = re.compile(r"skip|skipped|skipped[\-_ ]?condition|no[\s_\-]?analog|"
-                      r"digital[\s_\-]?only", re.IGNORECASE)
+# A negation IMMEDIATELY BEFORE the skip token, allowing the separators a
+# JSON enum uses (`NO_SKIP`, `no-skip`, `not skipped`, `never skipped`).
+_NEG_BEFORE_RE = re.compile(r"\b(?:no|not|never|without|non|zero)[\s_\-]*$",
+                            re.IGNORECASE)
 
-# Consulted BEFORE `_SKIP_RE`. A verdict that says a skip did NOT happen
-# contains the substring `skip` and matched the rule it is the negation of.
-# `no.?analog` / `digital.only` are deliberately NOT negatable here: those
-# ARE the forbidden verdict, and "no analog" is not "not skipped".
-_NEGATED_SKIP_RE = re.compile(
-    r"\b(?:no|not|non|never)[_\-\s]*skip"      # NO_SKIP, not-skipped, never skip
-    r"|\bskip(?:ped)?[_\-\s]*(?:=|:)?[_\-\s]*(?:false|none|no)\b"
-    r"|\bnot\s+skipped\b",
-    re.IGNORECASE,
-)
+# Phrases that ARE a skip in their own right and carry their own "no".
+_NO_ANALOG_RE = re.compile(r"\bno[\s_\-]?analog\b|"
+                           r"\bdigital[\s_\-]?only\b|"
+                           r"\banalog[\s_\-]?(?:not[\s_\-]?)?"
+                           r"(?:absent|omitted)\b",
+                           re.IGNORECASE)
 
-# The named fields a decision is actually recorded in. Free prose in any
-# OTHER field is not a verdict — reading it as one made an unrelated note
-# decide this gate (see the docstring's measured defects).
-_DECISION_KEYS = ("decision", "status", "verdict", "result",
-                  "analog_decision")
+# The keys whose VALUE is a verdict. Everything else in the file is prose.
+_DECISION_KEYS = ("decision", "status", "verdict", "result", "analog_decision",
+                  "analog_status", "outcome")
 
-# BOUNDED to this project's own analog roots. A trailing `**/` reached into
-# archived / nested historical runs and judged them as this run's, in both
-# directions (false FAIL on an archived skip, false PASS on a nested status).
-_ANALOG_ROOTS = ("analog", "phase1/analog", "phase2/analog", "phase3/analog")
+# Boolean-shaped verdicts: `{"skip": true}` / `{"analog_skipped": false}`.
+_BOOL_SKIP_KEYS = ("skip", "skipped", "analog_skip", "analog_skipped",
+                   "is_skipped")
 
-_FORBIDDEN_GLOBS = tuple(f"{r}/A0_skip_decision.json" for r in _ANALOG_ROOTS)
+# One nesting level the rule's own wording allows: `{"analog": {...}}`.
+_NESTED_KEYS = ("analog", "a0", "analog_track")
 
-_STATUS_GLOBS = tuple(
-    f"{r}/A0_implementation_status.json" for r in _ANALOG_ROOTS)
+# THIS PROJECT'S canonical analog roots. Fixed relative paths, never a
+# recursive glob: an artefact belonging to a DIFFERENT run is not this
+# project's decision, in either direction (defect 3 above).
+_ANALOG_ROOTS = ("phase3/analog", "phase2/analog", "phase1/analog", "analog")
+
+_FORBIDDEN_NAME = "A0_skip_decision.json"
+_STATUS_NAME = "A0_implementation_status.json"
 
 _L5_GLOBS = (
     "phase1/generated_docs/L5_ADI_SPEC.json",
     "phase1/generated_docs/L5*.json",
 )
+
+
+def _analog_root_file(project: Path, name: str) -> Optional[Path]:
+    """First `<project>/<analog root>/<name>` that exists. Bounded on
+    purpose — see defect 3."""
+    for root in _ANALOG_ROOTS:
+        cand = project / root / name
+        if cand.is_file():
+            return cand
+    return None
 
 
 def _find_first(project: Path, globs) -> Optional[Path]:
@@ -122,66 +147,71 @@ def _find_first(project: Path, globs) -> Optional[Path]:
     return None
 
 
+def _value_encodes_skip(value: str) -> bool:
+    """True iff this verdict STRING states an analog skip.
+
+    Negation-aware for the `skip` family, because `NO_SKIP` and `SKIPPED`
+    differ by exactly the two characters the old matcher ignored. The
+    `no analog` / `digital only` family is a skip in its own right and
+    carries its own leading `no`, which is why the two are matched
+    separately rather than by one alternation.
+    """
+    if _NO_ANALOG_RE.search(value):
+        return True
+    for m in _SKIP_TOKEN_RE.finditer(value):
+        if not _NEG_BEFORE_RE.search(value[:m.start()]):
+            return True
+    return False
+
+
+def _scan_object(data: dict, prefix: str = "") -> Tuple[bool, str]:
+    """Verdict-bearing scan of one decision object (one nesting level)."""
+    for key in _DECISION_KEYS:
+        v = data.get(key)
+        if isinstance(v, str) and _value_encodes_skip(v):
+            return True, f"{prefix}{key}={v!r}"
+    for key in _BOOL_SKIP_KEYS:
+        v = data.get(key)
+        if v is True:
+            return True, f"{prefix}{key}=true"
+    for key in _NESTED_KEYS:
+        v = data.get(key)
+        if isinstance(v, dict):
+            hit, ev = _scan_object(v, prefix=f"{prefix}{key}.")
+            if hit:
+                return True, ev
+    return False, ""
+
+
 def _encodes_skip(path: Path) -> Tuple[bool, str]:
     """Return (True, evidence) iff the file encodes a top-level skip.
 
-    Robust: inspects the parsed `decision`/`status`/`verdict` fields if
-    JSON-parsable; falls back to a raw-text scan otherwise (a garbage /
-    unparsable A0_skip_decision.json is treated as encoding a skip,
-    since its very name + presence is the failure pattern — honest FAIL,
-    never vacuous PASS).
+    Reads the DECISION-BEARING keys only (defects 1 and 2). Falls back to
+    a raw-text scan when the JSON does not parse: an unparsable
+    A0_skip_decision.json is treated as encoding a skip, since its very
+    name + presence is the failure pattern — honest FAIL, never vacuous
+    PASS.
     """
     try:
         raw = path.read_text(encoding="utf-8", errors="ignore")
     except OSError as exc:
         return True, f"unreadable ({exc}) — treated as skip"
     try:
-        data = json.loads(raw)
+        data: Any = json.loads(raw)
     except json.JSONDecodeError:
         # Unparsable but present + named skip_decision → treat raw text.
-        if _SKIP_RE.search(raw):
+        if _SKIP_TOKEN_RE.search(raw) or _NO_ANALOG_RE.search(raw):
             return True, "unparsable JSON but skip token in raw text"
         return True, "unparsable JSON named A0_skip_decision (presence)"
-
-    def _verdict(scope: dict, prefix: str = "") -> Optional[Tuple[bool, str]]:
-        """Read the NAMED decision fields of one object. Returns None when
-        this object records no verdict at all, so the caller can look one
-        level down instead of guessing from unrelated prose."""
-        for key in _DECISION_KEYS:
-            v = scope.get(key)
-            if isinstance(v, bool):
-                # `{"skipped": false}` shape carried on a decision key.
-                return (v, f"{prefix}{key}={v!r}")
-            if not isinstance(v, str):
-                continue
-            if _NEGATED_SKIP_RE.search(v):
-                return False, f"{prefix}{key}={v!r} explicitly records NO skip"
-            if _SKIP_RE.search(v):
-                return True, f"{prefix}{key}={v!r}"
-            # A named decision field that parses and says something else
-            # (e.g. "PROCEED") is a real verdict and it is not a skip.
-            return False, f"{prefix}{key}={v!r} is not a skip verdict"
-        return None
-
     if isinstance(data, dict):
-        got = _verdict(data)
-        if got is not None:
-            return got
-        nested = data.get("analog")
-        if isinstance(nested, dict):
-            got = _verdict(nested, prefix="analog.")
-            if got is not None:
-                return got
-    elif isinstance(data, str):
-        if _NEGATED_SKIP_RE.search(data):
-            return False, f"top-level string={data!r} records NO skip"
-        if _SKIP_RE.search(data):
-            return True, f"top-level string={data!r}"
-    return False, "no skip verdict in parsed content"
+        return _scan_object(data)
+    if isinstance(data, str) and _value_encodes_skip(data):
+        return True, f"top-level string={data!r}"
+    return False, "no skip verdict in the decision-bearing keys"
 
 
 def _status_replacement_ok(project: Path) -> Tuple[bool, str]:
-    p = _find_first(project, _STATUS_GLOBS)
+    p = _analog_root_file(project, _STATUS_NAME)
     if p is None:
         return False, ""
     try:
@@ -195,7 +225,8 @@ def _status_replacement_ok(project: Path) -> Tuple[bool, str]:
     has_blocks = isinstance(blocks, (list, dict)) and len(blocks) > 0
     has_steps = isinstance(steps, (list, dict)) and len(steps) > 0
     if has_blocks or has_steps:
-        return True, f"{p.name} (per-block/step status present)"
+        rel = p.relative_to(project)
+        return True, f"{rel} (per-block/step status present)"
     return False, f"{p.name} present but empty blocks/steps"
 
 
@@ -224,7 +255,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     project = args.project_dir.resolve()
-    report: dict = {"gate": "analog_a0_skip_forbidden_check"}
+    report: dict = {"gate": "analog_a0_skip_forbidden_check",
+                    # DISCLOSE THE DENOMINATOR. A reader of a PASS must be
+                    # able to see WHERE this gate looked, because the whole
+                    # repair above is about the search being bounded.
+                    "searched_roots": list(_ANALOG_ROOTS),
+                    "forbidden_artefact_name": _FORBIDDEN_NAME}
 
     def _emit(rc: int) -> int:
         if args.json:
@@ -243,12 +279,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         report["status"] = "ERROR"
         return 2
 
-    forbidden = _find_first(project, _FORBIDDEN_GLOBS)
+    forbidden = _analog_root_file(project, _FORBIDDEN_NAME)
     if forbidden is None:
         report["status"] = "PASS"
-        report["detail"] = "A0_skip_decision.json not present"
-        print("[PASS] analog_a0_skip_forbidden_check: forbidden "
-              "A0_skip_decision.json not present")
+        report["detail"] = (f"{_FORBIDDEN_NAME} not present at any of "
+                            f"{'/'.join(_ANALOG_ROOTS)}")
+        print(f"[PASS] analog_a0_skip_forbidden_check: forbidden "
+              f"{_FORBIDDEN_NAME} not present at any of "
+              f"{'/'.join(_ANALOG_ROOTS)}")
         return _emit(0)
 
     rel = str(forbidden.relative_to(project))
