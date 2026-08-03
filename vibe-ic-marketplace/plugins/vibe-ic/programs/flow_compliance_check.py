@@ -9203,11 +9203,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     # locally correct and the table showed the weaker one; a reader takes
     # `37 PASS` to mean the GDS is good.
     #
-    # A DISTINCT status, not VACUOUS_PASS: that tier means "ran cleanly on
-    # input that did not apply" and deliberately rolls into `pass_count`.
-    # This is the opposite case — the input applied, the step passed, and
-    # something it depends on failed, so the PASS certifies nothing about
-    # the design. Reusing that tier would keep the inflation this fixes.
+    # A DISTINCT status, not VACUOUS_PASS. The two are SIBLINGS, not
+    # opposites: since v1.7.96 both are DISCLOSURE tiers, both sit OUTSIDE
+    # the executed-PASS numerator, and both stay INSIDE `total_required`
+    # (neither is EXCUSED), so neither can be mistaken for a step nobody
+    # owes an answer for. What they disclose is what differs —
+    # VACUOUS_PASS: the gate ran and found nothing to audit.
+    # PASS_VOIDED_BY_DEPENDENCY: the gate ran, audited, and passed, but
+    # rests on a chain that broke, so its PASS certifies nothing.
+    # They therefore get their own icon and label (`○ [VACUOUS-PASS]` vs
+    # `⊘ [PASS-VOIDED]`), their own counter in the tally line, and their own
+    # headline clause. Reusing VACUOUS_PASS would erase a distinction a
+    # reader needs: a vacuous step is one nobody has to come back to, and a
+    # voided one is a step somebody does.
     for _v in _ordering_violations:
         _tid = str(_v.get("terminal_id"))
         for _r in results:
@@ -9228,9 +9236,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         for _r in results:
             counts[_r.status] = counts.get(_r.status, 0) + 1
         counts["WAIVED"] += len(structural_waivers)
-        pass_count = counts["PASS"] + counts["VACUOUS_PASS"]
-
-
+        # NO `pass_count` HERE. The re-tally above is load-bearing (the tally
+        # line, `total_required` and the sole numerator assignment all read
+        # `counts`), but a `pass_count` store on this branch is dead: the
+        # unconditional `pass_count = counts["PASS"]` below overwrites it
+        # before the only read, and has done since v1.7.96 — which is BEFORE
+        # this branch was written. The store that used to be here folded
+        # VACUOUS_PASS back in and never once reached the headline.
 
     # v0.119.53 Wave 21 — `--strict-structural` semantic fix. When
     # `--phase 2 --strict-structural` is requested (and the broader
