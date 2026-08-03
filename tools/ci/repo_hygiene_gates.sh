@@ -258,6 +258,12 @@ run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check
 # after already publishing a wrong value. One vocabulary now (`_prose_polarity`),
 # and this finds the next extractor that does not consult it.
 run "prose extractors read polarity"    "$ROOT" python3 "$PG/prose_polarity_consulted_check.py"
+# vibe-ic#731 — `// This module controls ...` matches `module\s+(\w+)` and mints
+# a module that does not exist: 24 of them, measured, in #729. It is a DATAFLOW
+# question, not a presence one — the defect function CALLS the stripper, for a
+# SIBLING variable, and scans the raw one. Three detectors were built and
+# retracted on that basis; this one carries the known instance as a test.
+run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_scan_strips_comments_check.py"
 # ORGANIC #686 — a macro OBS is the vendor's statement of where the integrator
 # may not put metal. It is not in the PDK deck, so sign-off DRC cannot see a
 # crossing; and the wire is on the right net, so a connectivity audit cannot
