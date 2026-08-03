@@ -25,6 +25,11 @@ never re-implemented):
                                          file landed since would phantom-revert
                                          it under a blind checkout — land via
                                          cherry-pick of the PR's own delta
+  * landing_collateral_revert_check.py — the same guard AFTER the fact: no
+                                         commit in `base..head` may erase the
+                                         contribution an EARLIER commit of the
+                                         same range made to a file (the shape a
+                                         blind checkout land actually produces)
   * loop_watchdog_compliance_check.py  — every long sub-process is watchdog-
                                          supervised + every risky loop is
                                          bounded (no fixed-timeout kill of a
@@ -558,6 +563,38 @@ def stale_branch_gate(repo: Path, base: str, head: str) -> GateResult:
 
 
 # --------------------------------------------------------------------------
+# landing_collateral_revert_check — the landing-method guard AFTER the fact.
+#
+# `stale_branch_gate` above is a PRE-land guard: it reasons about a branch that
+# has not been landed yet. It said rc 1 STALE_OVERLAP on all five PRs of the
+# 2026-08-03 batch and named the exact overlap files, and the batch landed
+# anyway with three of its eleven commits erasing the other two.
+#
+# It could not have said otherwise once the land had happened. Its verdict is
+# `merge-base(base, head) == base tip -> FRESH`, and after a cherry-pick the
+# landed commit IS a fast-forward descendant of the base, so FRESH is
+# structurally guaranteed and says nothing about the content that now exists.
+# This gate reads that content: it takes the same `base..head` the review is
+# already scoped to and asks whether any commit in it erases an earlier one's
+# contribution to a file. rc 2 (unresolvable or empty range) is NOT CHECKED,
+# never a pass — same contract as every other range-shaped gate here.
+# --------------------------------------------------------------------------
+def collateral_revert_gate(repo: Path, base: str, head: str) -> GateResult:
+    prog = _PROGRAMS_DIR / "landing_collateral_revert_check.py"
+    if not prog.is_file():
+        return GateResult("landing_collateral_revert_check", 2,
+                          f"checker missing at {prog}")
+    rc, out, err = _run_program(prog, ["--repo", str(repo),
+                                       "--rev-range", f"{base}..{head}"])
+    body = (err.strip() or out.strip()).splitlines()
+    reason = body[-1] if body else "(no output)"
+    if rc == 2:
+        return GateResult("landing_collateral_revert_check", -1,
+                          f"skipped — {base}..{head} not walkable: {reason[:160]}")
+    return GateResult("landing_collateral_revert_check", rc, reason[:400])
+
+
+# --------------------------------------------------------------------------
 # loop_watchdog_compliance_check — subprocess against the plugin root. FAILs
 # when any programs/*.py launches a long EDA tool without the watchdog or has
 # an unbounded risky loop. rc 0 clean / 1 offender(s) / 2 usage error.
@@ -1044,6 +1081,10 @@ def review(base: str, head: str, *,
     gates.append(commit_msg_nda_gate(repo, base, head))
     gates.append(nda_diff_scan_gate(repo, base, head))
     gates.append(stale_branch_gate(repo, base, head))
+    # The same landing method, seen from the other side. `stale_branch_gate`
+    # judges a branch BEFORE it lands; once it has landed, its FRESH verdict is
+    # structurally guaranteed and content-blind. This one reads the commits.
+    gates.append(collateral_revert_gate(repo, base, head))
     # #459 — the landing SHAPE, alongside the landing METHOD above.
     #
     # v1.7.65: this used to omit `head`, and the comment that stood here

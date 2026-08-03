@@ -151,6 +151,31 @@ def _derive_latency_from_gls(run_dir: Path) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _oracle_manifest(run_dir: Path) -> dict | None:
+    """Load arith_oracle_manifest.json from either known location."""
+    for candidate in [
+        run_dir / "phase2" / "stage1" / "sim_full_stack" / "arith_oracle_manifest.json",
+        run_dir / "sim" / "arith_oracle_manifest.json",
+    ]:
+        if not candidate.exists():
+            continue
+        try:
+            d = json.loads(candidate.read_text())
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            return d
+    return None
+
+
+def _derive_bit_order_from_oracle_manifest(run_dir: Path) -> str | None:
+    """MEASURED serial input bit-order, written by the runner from the oracle
+    TB's framing search. None when the TB established no single framing."""
+    d = _oracle_manifest(run_dir) or {}
+    v = d.get("calibrated_bit_order")
+    return v if v in ("LSB_first", "MSB_first") else None
+
+
 def _derive_latency_from_oracle_manifest(run_dir: Path) -> int | None:
     """Try to read framing offset from arith_oracle_manifest.json.
 
@@ -168,6 +193,14 @@ def _derive_latency_from_oracle_manifest(run_dir: Path) -> int | None:
             d = json.loads(candidate.read_text())
         except Exception:
             continue
+        # MEASURED framing first. `calibrated_latency` is written by the
+        # runner from the oracle TB's own framing search (a real measurement
+        # against an independently computed golden). `declared_latency` is
+        # only ever a copy of declaration.json — the file this program
+        # writes — so preferring it would close a dependency cycle and, for
+        # any IC whose spec requires declaration.json, deadlock the flow.
+        if isinstance(d.get("calibrated_latency"), int):
+            return d["calibrated_latency"]
         if isinstance(d.get("declared_latency"), int):
             return d["declared_latency"]
         # Framing string encodes the winning offset as "offset=N" sometimes
@@ -206,9 +239,15 @@ def main(argv: list[str] | None = None) -> int:
         rtl_text = rtl_path.read_text(errors="replace")
 
     # --- bit_order ---
-    bit_order = _derive_bit_order(rtl_text)
+    # MEASURED value wins over the RTL header comment: the comment is prose an
+    # author can get wrong, while `calibrated_bit_order` is the framing the
+    # oracle TB proved reassembles the DUT stream to the golden.
+    bit_order = _derive_bit_order_from_oracle_manifest(run_dir)
     if bit_order is None:
-        errors.append("bit_order: no LSB/MSB-first marker found in RTL header")
+        bit_order = _derive_bit_order(rtl_text)
+    if bit_order is None:
+        errors.append("bit_order: no LSB/MSB-first marker found in RTL header "
+                      "and no calibrated_bit_order in arith_oracle_manifest.json")
 
     # --- reset_polarity ---
     reset_polarity = _derive_reset_polarity(rtl_text)

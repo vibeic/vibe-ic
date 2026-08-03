@@ -219,7 +219,6 @@ run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_tar
 # that no longer exists is not conservative, it is a blind spot the exact size
 # of the bug it used to describe.
 # host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
-
 run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py
 
 # vibe-ic#559 — 33 of the P0 umbrella's 243 registered gates reject the argv it
@@ -245,6 +244,39 @@ run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.
 run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_wiring_audit.py"
+# vibe-ic#693 — and the question NOTHING was asking: is a gate CONSULTED AT ALL?
+# `gate_skip_routing_check` reports "98 unrouted skip path(s) in 53 gate(s);
+# published inventory holds 98 in 53" — balanced, over a 53-gate population that
+# contains none of the 35 gates no automatic verdict invokes. Its scope is its
+# coverage. A gate nothing runs produces no verdict, and the tree looks the same
+# either way.
+run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check.py"
+# ORGANIC #686 — a macro OBS is the vendor's statement of where the integrator
+# may not put metal. It is not in the PDK deck, so sign-off DRC cannot see a
+# crossing; and the wire is on the right net, so a connectivity audit cannot
+# either. Runs over every published cell that has both a routed DEF and a
+# macro LEF; rc=2 (nothing to look at) is tolerated, rc=1 is not.
+for _cell in "$ROOT"/benchmark-data/ic/*/*/; do
+  [ -f "$_cell/phase3/stage3/pnr/routed.def" ] || continue
+  run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
+    "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
+  # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
+  # certificate over an empty layout is the strongest form of an absence
+  # rendering as a pass, and the gate written for it was reachable only if an
+  # agent read a skill and remembered to run it. MEASURED on the published
+  # cells: it parses real geometry (8290 shapes, 35 violations) — a live
+  # verdict, not a shape that can only ever say "nothing to look at".
+  run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$(dirname "$_cell")"))" \
+    "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
+  # Another of the 35. Its subject is an inner FAIL that never reaches the outer
+  # verdict, and nothing ran it. It also had the defect: "nothing to examine"
+  # exited 0 printing VACUOUS_PASS, one branch above a test in its own file
+  # stating that "I could not look" must never share an exit code with "I looked
+  # and it was clean". MEASURED on the published cells: 67-68 reports examined
+  # each, so this is a live verdict over a real denominator.
+  run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
+    "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
+done
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the
@@ -411,6 +443,27 @@ run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_
 run "verdict token propagation"         "$PLUGIN" python3 programs/verdict_token_propagation_check.py
 run "signoff gate self-skip"            "$PLUGIN" python3 programs/signoff_gate_self_skip_consistency_check.py
 run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_artifact_hygiene_check.py
+
+# ORGANIC #720 / #693 — the ONE gate in the repo-process family that really was
+# wired to nothing. It was invisible to `checker_execution_wiring_audit` (wired
+# at line 247) purely by FILENAME: that gate's population was `*_check.py` +
+# `*_audit.py`, and `_guard.py` is neither, so it reported "[PASS] no NEW
+# test-only checker" over a population that structurally could not contain it.
+# The population is widened in the same change.
+#
+# ONLY THE COMMIT-DETERMINED HALF IS WIRED HERE, and the flag is load-bearing.
+# Every gate in this script is re-run by `gate_host_independence_check` above
+# against a fresh worktree at the same commit and must produce the same verdict
+# line and rc. The guard's untracked-scratch scan is a fact about a CHECKOUT,
+# so wiring it here would make this script's own host-independence probe go red
+# the moment any agent left a scratch file in the tree — measured, with the
+# probe output in the PR. That half runs report-only from `gatekeeper-land.sh`.
+#
+# BLAST RADIUS, measured 2026-08-03 over 250 checkouts of this repo on one
+# host: 0 red. `rule_present` true in 250/250, `subdir_registry_ignored` false
+# in 250/250 (with the `--no-index` fix that makes that assertion capable of
+# firing at all), no tracked root `_*.js` anywhere.
+run "gitignore scratch guard"           "$ROOT" python3 "$PG/gitignore_scratch_guard.py" --root "$ROOT"
 
 # vibe-ic#428 — final_summary.md printed TWO verdict roll-ups over the same 63
 # steps and they disagreed on the BLOCKING-FAILURE count, with nothing marking

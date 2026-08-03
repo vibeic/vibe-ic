@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1045
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1045)
+- **Total programs (excluding helpers / shims):** 1048
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1048)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1036 |
+| `any` | 1039 |
 
 ## Alphabetical listing
 
@@ -63,7 +63,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_block_type_classify` | any | — | deterministic name→type taxonomy lookup. |
 | `analog_content_detected_must_emit_l5_check` | any | Wave 47 | Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when |
 | `analog_corner_lib_realism_lint` | any | — | R15 stale-corner-lib doc-lint (A4). |
-| `analog_corner_margin_check` | any | — | Codifies the fixed thresholds in |
+| `analog_corner_margin_check` | any | — | NOT WIRED (vibe-ic#693): A4 strict PVT-margin gate, superseded and broken. |
 | `analog_corner_sweep_check` | any | — | deterministic gate for PVT corner coverage |
 | `analog_digital_interface_check` | any | — | deterministic gate for digital-analog interface validation |
 | `analog_flow_compliance_check` | any | — | analog track compliance gate (A1-A9) |
@@ -404,6 +404,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_discloses_denominator_check` | any | — | a PASS must say how much it looked at. |
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
 | `gate_host_independence_check` | any | — | the same commit must give the same verdict. |
+| `gate_is_wired_check` | any | — | A gate no automatic verdict consults. vibe-ic#693. |
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
@@ -562,6 +563,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_taxonomy` | any | v0.1.51 | L-doc taxonomy single source of truth. |
 | `l_doc_todo_stub_count_check` | any | — | D3 program-first capture of the ``phase1-output-verify`` skill's "Completeness" checklist (item 1). |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
+| `landing_collateral_revert_check` | any | — | a squash must not silently revert work that landed alongside it in the same push. |
 | `landing_is_one_commit_check` | any | — | a landing is ONE commit, not two. |
 | `landing_worktree_is_clean_check` | any | — | the gate verifies COMMITS; a tracked file still modified in the worktree means what was verified is not what the author has. |
 | `latchup_esd_spacing_check` | any | v0.2.30 | the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN... |
@@ -594,6 +596,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lvs_tapeout_signoff_check` | any | — | the TAPEOUT-tier LVS gate. |
 | `lvs_triage_classify` | any | v0.1.50 | LVS triage classifier (Pattern-B → program). |
 | `lvs_verdict_tokens` | any | — | single source of truth for netgen LVS terminal- verdict classification (ORGANIC #524, extends #507/#477). |
+| `macro_obs_geometry_intersect_check` | any | — | Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686. |
 | `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction TCL emitter + validator. |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
@@ -1068,7 +1071,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `yield_fix_cost_rank` | any | — | D3 program-first extraction of the yield-diagnostic skill's fixed fix-cost ordinal ranking. |
 | `yosys_hilomap_required_check` | any | — | Assert a Yosys .ys script's commands occur in the order required by CLAUDE.md rule 4. |
 | `yosys_script_template_check` | any | — | Audit a Yosys .ys script for the three flags CLAUDE.md rule 4 requires on real-PDK synthesis: |
-| `yosys_tiecell_recipe_order_check` | any | v0.1.98 | Enforce the two v0.1.98 LOAD-BEARING ordering rules of the constant-net tie-cell pass in a Yosys .ys synth script. |
+| `yosys_tiecell_recipe_order_check` | any | v0.1.98 | Enforce the two v0.1.98 LOAD-BEARING ordering rules of the constant-net tie-cell pass in a Yosys synthesis recipe. |
 | `zigbee_protocol_synth` | any | v0.1.91 | Zigbee / IEEE 802.15.4 low-power wireless PAN protocol synth helper. |
 
 ## By ic_class
@@ -1117,7 +1120,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1036 programs)
+### `any` (1039 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1156,7 +1159,7 @@ _(no programs in this group)_
 - `analog_block_type_classify` — deterministic name→type taxonomy lookup.
 - `analog_content_detected_must_emit_l5_check` — Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when  _[Wave 47]_
 - `analog_corner_lib_realism_lint` — R15 stale-corner-lib doc-lint (A4).
-- `analog_corner_margin_check` — Codifies the fixed thresholds in
+- `analog_corner_margin_check` — NOT WIRED (vibe-ic#693): A4 strict PVT-margin gate, superseded and broken.
 - `analog_corner_sweep_check` — deterministic gate for PVT corner coverage
 - `analog_digital_interface_check` — deterministic gate for digital-analog interface validation
 - `analog_flow_compliance_check` — analog track compliance gate (A1-A9)
@@ -1493,6 +1496,7 @@ _(no programs in this group)_
 - `gate_discloses_denominator_check` — a PASS must say how much it looked at.
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_
 - `gate_host_independence_check` — the same commit must give the same verdict.
+- `gate_is_wired_check` — A gate no automatic verdict consults. vibe-ic#693.
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
@@ -1650,6 +1654,7 @@ _(no programs in this group)_
 - `l_doc_taxonomy` — L-doc taxonomy single source of truth.  _[v0.1.51]_
 - `l_doc_todo_stub_count_check` — D3 program-first capture of the ``phase1-output-verify`` skill's "Completeness" checklist (item 1).
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
+- `landing_collateral_revert_check` — a squash must not silently revert work that landed alongside it in the same push.
 - `landing_is_one_commit_check` — a landing is ONE commit, not two.
 - `landing_worktree_is_clean_check` — the gate verifies COMMITS; a tracked file still modified in the worktree means what was verified is not what the author has.
 - `latchup_esd_spacing_check` — the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN...  _[v0.2.30]_
@@ -1682,6 +1687,7 @@ _(no programs in this group)_
 - `lvs_tapeout_signoff_check` — the TAPEOUT-tier LVS gate.
 - `lvs_triage_classify` — LVS triage classifier (Pattern-B → program).  _[v0.1.50]_
 - `lvs_verdict_tokens` — single source of truth for netgen LVS terminal- verdict classification (ORGANIC #524, extends #507/#477).
+- `macro_obs_geometry_intersect_check` — Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
 - `magic_extract_spice_emit` — Magic parasitic-RC extraction TCL emitter + validator.
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_
@@ -2153,6 +2159,6 @@ _(no programs in this group)_
 - `yield_fix_cost_rank` — D3 program-first extraction of the yield-diagnostic skill's fixed fix-cost ordinal ranking.
 - `yosys_hilomap_required_check` — Assert a Yosys .ys script's commands occur in the order required by CLAUDE.md rule 4.
 - `yosys_script_template_check` — Audit a Yosys .ys script for the three flags CLAUDE.md rule 4 requires on real-PDK synthesis:
-- `yosys_tiecell_recipe_order_check` — Enforce the two v0.1.98 LOAD-BEARING ordering rules of the constant-net tie-cell pass in a Yosys .ys synth script.  _[v0.1.98]_
+- `yosys_tiecell_recipe_order_check` — Enforce the two v0.1.98 LOAD-BEARING ordering rules of the constant-net tie-cell pass in a Yosys synthesis recipe.  _[v0.1.98]_
 - `zigbee_protocol_synth` — Zigbee / IEEE 802.15.4 low-power wireless PAN protocol synth helper.  _[v0.1.91]_
 

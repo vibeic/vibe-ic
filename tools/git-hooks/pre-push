@@ -148,6 +148,14 @@ run_gate() {                       # run_gate <label> <program> [args…]
 if [ -n "${PUSH_RANGE:-}" ]; then
   run_gate "NDA tokens in added content or paths" \
            nda_diff_scan_check.py --rev-range "$PUSH_RANGE"
+  # 2026-08-03 — a commit of this push must not erase what an EARLIER commit of
+  # the SAME push is publishing. QUOTED, like the NDA gate above and unlike the
+  # `git log` below: for a new branch `PUSH_RANGE` is `<sha> --not --remotes`,
+  # three git arguments in one string, and this checker re-splits it itself
+  # (vibe-ic#640) instead of handing it to something that would exit 128.
+  run_gate "no collateral revert within the push" \
+           landing_collateral_revert_check.py --repo "$REPO_ROOT" \
+           --rev-range "$PUSH_RANGE"
   # OFF-MAIN THE DEFERRAL IS `--version-by-gatekeeper`, NOT A SKIP. The flag
   # already exists with exactly the right semantics and had simply never been
   # plumbed into this hook (the program's own docstring says so):

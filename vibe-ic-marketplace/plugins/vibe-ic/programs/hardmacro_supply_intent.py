@@ -53,6 +53,8 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+
+import _path_layout as _pl
 from typing import Any, Dict, List, Optional, Tuple
 
 # `PIN <name>` ... `USE POWER|GROUND` ... `END <name>` — LEF is whitespace and
@@ -124,6 +126,29 @@ def _derived_from_the_macros_under_test(entry: Dict[str, Any]) -> bool:
     return isinstance(by, str) and "macro" in by.lower() and "rail" in by.lower()
 
 
+def rail_producers_that_did_not_run(project) -> List[str]:
+    """Which L21 rail producers this run dispatched and FAILED. vibe-ic#691.
+
+    Reads `reports/phase1/l21_rail_producers.json`, written unconditionally by
+    the Phase-1 doc runner. Returns [] when every producer ran, and [] ALSO when
+    the record is absent — an older run has no record, and inventing a failure
+    from its absence would flag every project that predates the record.
+
+    That asymmetry is deliberate and is the opposite of the usual rule here: an
+    absent record cannot prove a producer ran, but neither can it prove one
+    failed, and the cost of the two mistakes is not equal. This is used to EXPLAIN
+    a finding that already exists on its own evidence, never to create one."""
+    try:
+        f = _pl.report_path(Path(project), "phase1/l21_rail_producers.json")
+        if not f.is_file():
+            return []
+        d = json.loads(f.read_text(errors="replace"))
+    except (OSError, ValueError, TypeError):
+        return []
+    return [r.get("producer", "?") for r in (d.get("producers") or [])
+            if r.get("outcome") != "ran"]
+
+
 def declared_rails(l21: Dict[str, Any]) -> List[str]:
     """Rail names the design INDEPENDENTLY declares in its power-intent layer.
 
@@ -193,23 +218,7 @@ def measured_rails(project: Path) -> List[str]:
 
     Empty list when no DEF exists or none has a SPECIALNETS section.
     """
-    for rel in _DEF_CANDIDATES:
-        p = project / rel
-        if not p.is_file():
-            continue
-        try:
-            txt = p.read_text(errors="replace")
-        except OSError:
-            continue
-        m = _SPECIALNETS_RE.search(txt)
-        if not m:
-            continue
-        end = _END_SPECIALNETS_RE.search(txt[m.start():])
-        sec = txt[m.start():m.start() + end.start()] if end else txt[m.start():]
-        built, bare = _specialnets_with_and_without_conductor(sec)
-        if built or bare:
-            return sorted(built)
-    return []
+    return specialnets_split(project)[0]
 
 
 # A SPECIALNETS entry may be a connect-all-by-name and nothing else:
@@ -250,12 +259,14 @@ def _specialnets_with_and_without_conductor(section: str):
     return built, bare
 
 
-def rails_named_but_not_built(project: Path) -> List[str]:
-    """Rails that appear in SPECIALNETS carrying no conductor.
+def specialnets_split(project: Path) -> Tuple[List[str], List[str]]:
+    """``(rails the PDN built, rails that are a name and nothing else)``.
 
-    Reported rather than silently dropped: a rail the design declared and the
-    PDN did not build is a finding about the PDN, and dropping it from
-    `measured_rails` without saying so would trade one silence for another.
+    ONE scan of the first `_DEF_CANDIDATES` entry that has a non-empty
+    SPECIALNETS section. `measured_rails` and `rails_named_but_not_built` are
+    the two halves of this result and were byte-for-byte the same scan; a
+    caller that wants both used to read and re-parse the DEF twice, and a DEF
+    here runs to tens of thousands of lines.
     """
     for rel in _DEF_CANDIDATES:
         p = project / rel
@@ -272,8 +283,59 @@ def rails_named_but_not_built(project: Path) -> List[str]:
         sec = txt[m.start():m.start() + end.start()] if end else txt[m.start():]
         built, bare = _specialnets_with_and_without_conductor(sec)
         if built or bare:
-            return sorted(bare)
-    return []
+            return sorted(built), sorted(bare)
+    return [], []
+
+
+def rails_named_but_not_built(project: Path) -> List[str]:
+    """Rails that appear in SPECIALNETS carrying no conductor.
+
+    The COMPLEMENT of `measured_rails` — the other half of one
+    `specialnets_split`. It is the reason a macro pin can be reported as a gap
+    while its rail is plainly visible in the DEF: `measured_rails` drops the
+    bare rail, and the drop is what turns the pin from accounted to gap.
+
+    WHO CONSUMES IT
+    ---------------
+    `_macro_supply_preroute_decision` (phase3_one_shot_runner) carries this
+    into the same dict it blocks with, and the PnR FAIL row puts it in
+    `extras` — serialized to `reports/phase3/phase3_one_shot.json`. So the
+    drop is stated on the verdict it explains, in a channel that outlives the
+    terminal, and ONLY when there is something to state (see below).
+
+    WHEN IT IS EMPTY, AND WHY THAT IS NOT A CLEAN BILL OF HEALTH
+    -----------------------------------------------------------
+    MEASURED: every DEF in `_DEF_CANDIDATES` is written by `step_pnr`'s OWN
+    OpenROAD TCL — `floorplan.def`, `post_cts.def`, `routed.def` — and that
+    TCL runs AFTER the pre-route gate calls this. On a FIRST run
+    `phase3/stage3/pnr/` is therefore empty at the gate and this returns `[]`
+    having examined nothing. `[]` here means "no bare rail was SEEN", never
+    "no bare rail EXISTS", which is why the runner reports the key only when
+    it is non-empty rather than publishing an empty list that would read as a
+    clean examination.
+
+    `floorplan.def` can never contribute either: it is written BEFORE the PDN
+    block, so no supply rail exists in it yet — and an absent or empty
+    SPECIALNETS section falls through to the next candidate either way.
+
+    RELATIONSHIP TO `pg_rail_geometry_check` — COMPLEMENTS, NOT DUPLICATES
+    ---------------------------------------------------------------------
+    The same fact is JUDGED, with a governed waiver channel, by
+    `pg_rail_geometry_check` at flow step 31. That gate reads `routed.def`
+    ONLY. MEASURED, one bare rail, three DEF placements:
+
+        DEF present     this function   pg_rail_geometry_check
+        routed.def      ['<RAIL>']      FAIL, names the rail
+        post_cts.def    ['<RAIL>']      SKIP ("no routed.def")
+        none            []              SKIP
+
+    So where `routed.def` exists the fact already has a channel and this adds
+    nothing; the band where this is both non-empty and otherwise UNREPORTED is
+    a re-run whose previous PnR wrote `post_cts.def` and died before
+    `routed.def`. Narrow, and deliberately not widened into a second report of
+    a finding that already has one.
+    """
+    return specialnets_split(project)[1]
 
 
 def rail_name_tokens(rails: List[str]) -> List[str]:
@@ -390,20 +452,48 @@ def declared_binding_map(l21: Dict[str, Any],
 
 
 def assess(lef_texts: List[str], l21: Dict[str, Any],
-           extra_rails: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Classify every LEF-typed PG pin across the given macro LEFs."""
+           extra_rails: Optional[List[str]] = None,
+           project=None) -> Dict[str, Any]:
+    """Classify every LEF-typed PG pin across the given macro LEFs.
+
+    `project` is OPTIONAL and changes no verdict: it lets the result carry WHY
+    a rail is undeclared when the reason is that a producer never ran
+    (vibe-ic#691). Omitting it leaves the output byte-identical to before."""
     pins: List[Dict[str, Any]] = []
     for txt in lef_texts or []:
         for p in lef_pg_pins(txt):
             pins.append({**classify_pin(p["master"], p["pin"], l21, extra_rails),
                          "use": p["use"]})
-    return {
+    out = {
         "pins": pins,
         "accounted": [p for p in pins if p["status"] in ACCOUNTED],
         "gaps": [p for p in pins if p["status"] not in ACCOUNTED],
         "declared_rails": declared_rails(l21),
         "measured_rails": sorted(set(extra_rails or [])),
     }
+    # #691 — a rail can be undeclared because the design does not declare it, or
+    # because the INDEPENDENT declaration step never ran. Those are the same
+    # finding and different work. MEASURED on a real Phase-3 run: 0 power_rails,
+    # 3 power_domains all stamped `derived_by: l21_macro_supply_rail_synth`, and
+    # the doc synthesiser had left no artefact anywhere. The visible symptom was
+    # one rail `rail_undeclared` — `measured_rails()` re-derives from DEF
+    # geometry and rescues the two rails that HAVE geometry, and the third has
+    # none precisely because it was never declared.
+    #
+    # ANNOTATION ONLY. The finding stands on its own evidence; this says which
+    # of the two it is, so chasing it leads to the producer instead of the rail.
+    if project is not None:
+        missing = rail_producers_that_did_not_run(project)
+        if missing and out["gaps"]:
+            out["undeclared_cause"] = {
+                "producers_that_did_not_run": missing,
+                "note": (f"{len(out['gaps'])} pin(s) are unaccounted AND "
+                         f"{len(missing)} L21 rail producer(s) did not run "
+                         f"({', '.join(missing)}). An undeclared rail here is "
+                         f"as likely to be a missing PRODUCER as a missing "
+                         f"declaration — fix the producer first."),
+            }
+    return out
 
 
 def load_l21(project: Path) -> Dict[str, Any]:

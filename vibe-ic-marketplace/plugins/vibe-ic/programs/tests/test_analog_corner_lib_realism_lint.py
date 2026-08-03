@@ -94,8 +94,83 @@ def test_disclosure_via_sibling_corner_results(tmp_path: Path):
     assert rpt["verdict"] == "WARN"
 
 
-def test_skip_no_decks(tmp_path: Path):
+def test_skip_no_decks_reaches_the_vacuous_tier(tmp_path: Path):
+    """#521 — a lint that read NOTHING must not be credited a plain PASS.
+
+    This test previously asserted rc 0, which is the defect: `[SKIP]` at rc 0
+    is indistinguishable from `[PASS]` to `flow_compliance_check`, whose
+    `_stdout_signals_vacuous` matches only a line-start `VACUOUS_PASS`. An
+    analog-declared project with zero decks was therefore credited a clean
+    corner-lib result by a gate that opened no file.
+    """
     (tmp_path / "phase3" / "analog").mkdir(parents=True)
     r, rpt = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 2
     assert rpt["verdict"] == "SKIP"
+    assert "VACUOUS_PASS" in (r.stdout + r.stderr)
+
+
+# ── vibe-ic#693 regressions ───────────────────────────────────────────────
+# The FAIL branch is this lint's whole purpose, and three separate accidents
+# silenced it. None had ever been exercised: the lint ran nowhere but this
+# file until it was wired at A4.
+
+def test_bare_modeled_in_an_ordinary_comment_is_not_a_disclosure(tmp_path):
+    """`_DISCLOSURE_TOKENS` carried the bare word `modeled`, so an ordinary
+    remark about channel-length modulation downgraded a silent LEVEL=1
+    substitution from FAIL to WARN."""
+    deck = ("* toy deck\n"
+            "* channel-length modulation is modeled with LAMBDA below\n"
+            ".model nm nmos (LEVEL=1 VTO=0.4 KP=70u LAMBDA=0.02)\n")
+    _mk_deck(tmp_path, "amp0", deck)
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert rpt["verdict"] == "FAIL"
+
+
+def test_unrelated_prose_in_sibling_json_is_not_a_disclosure(tmp_path):
+    """The sibling check substring-scanned the WHOLE corner_results.json, so
+    any document containing `modelled` anywhere silenced the deck beside it.
+    Only the structured `model_disclosure` field may disclose."""
+    _mk_deck(tmp_path, "amp0", _LEVEL1_NO_DISCLOSURE)
+    sib = tmp_path / "phase3" / "analog" / "amp0" / "corner_results.json"
+    sib.write_text(json.dumps({"notes": "resistance modelled at 27C"}))
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert rpt["verdict"] == "FAIL"
+
+
+def test_a_denied_waiver_does_not_silence_the_lint(tmp_path):
+    """`_project_waiver` never read a waiver's own status, so a waiver a
+    reviewer REFUSED still downgraded every finding project-wide. A blocking
+    gate any subject can switch off is a check that lies."""
+    _mk_deck(tmp_path, "amp0", _LEVEL1_NO_DISCLOSURE)
+    (tmp_path / "waivers.json").write_text(json.dumps({"waivers": [
+        {"id": "W1", "topic": "level1", "status": "DENIED",
+         "reason": "rejected by reviewer"}]}))
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert rpt["verdict"] == "FAIL"
+
+
+def test_an_approved_waiver_still_downgrades(tmp_path):
+    """The sanctioned escape hatch must keep working."""
+    _mk_deck(tmp_path, "amp0", _LEVEL1_NO_DISCLOSURE)
+    (tmp_path / "waivers.json").write_text(json.dumps({"waivers": [
+        {"id": "W1", "topic": "level1", "status": "APPROVED",
+         "reason": "open PDK has no public ngspice corner lib"}]}))
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert rpt["verdict"] == "WARN"
+
+
+def test_phase2_analog_layout_is_scanned(tmp_path):
+    """A4's own `required_outputs` accepts `phase2/analog/*/...`. Reading only
+    `phase3/analog/` made a byte-identical project self-skip and measure
+    nothing — a plain PASS from a lint that opened no file."""
+    d = tmp_path / "phase2" / "analog" / "amp0"
+    d.mkdir(parents=True)
+    (d / "amp0.sp").write_text(_LEVEL1_NO_DISCLOSURE)
+    r, rpt = _run(tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert rpt["verdict"] == "FAIL"

@@ -125,10 +125,45 @@ CLI:
     handoff_bundle_check.py --manifest manifest.json [--json OUT]
     handoff_bundle_check.py <bundle_dir> --repo-root /path/to/checkout
 
+There is NO `--bundle` flag. The bundle directory is the POSITIONAL argument.
+`skills/field-agent-loop/SKILL.md` shipped `--bundle <bundle_dir>` at two call
+sites; measured, argparse answered `unrecognized arguments: --bundle` with
+rc=2, and the skill's own comment reads `exit !0 -> NOT admissible`, so a field
+agent following the shipped instruction got a permanent false REFUSAL and never
+a verdict. Both call sites are corrected; this paragraph exists so the next
+edit does not re-introduce the flag from memory.
+
 Exit codes:
-    0  ADMIT       — all six contract items green
+    0  ADMIT       — all SEVEN contract items green
     1  INCOMPLETE  — at least one item missing (fail-closed; never ADMIT)
     2  usage / I/O error (bundle or manifest not found / unreadable)
+
+──────────────────────────────────────────────────────────────────────────
+WHAT THIS GATE IS NOT WIRED TO, AND THE MEASUREMENT THAT SAYS WHY
+──────────────────────────────────────────────────────────────────────────
+This gate is run by an AGENT following `skills/field-agent-loop/SKILL.md`
+(and `docs/GATEKEEPER_CUTOVER_RUNBOOK.md` §6). It is deliberately NOT wired
+into `flow/phase1_phase2_phase3.yaml`, `tools/ci/repo_hygiene_gates.sh`,
+`tools/git-hooks/pre-push` or `tools/gatekeeper-land.sh`, and the reason is a
+measurement rather than a preference:
+
+  * ITS ARTEFACT CLASS DOES NOT EXIST IN-REPO. `origin/main` contains 0
+    `candidate.patch` files and 0 `clean_room/` directories; no bundle path
+    convention is declared anywhere. A `--changed-since`-scoped call on a
+    push rail would therefore scan a path class nothing produces.
+  * ITEM (5) REFUSES EVERY REAL CHANGE BODY MEASURED. Feeding the 200 most
+    recent `origin/main` commits to `fix_surface_classify.classify_diff` as
+    candidate bodies yields PRODUCER 0 · CONSUMER_ONLY 85 · MIXED 115. Since
+    item (5) admits ONLY `PRODUCER`, 200 of 200 measured change bodies would
+    be refused ADMIT. Item (5) is not wrong — it is stricter than the
+    PRODUCER registry can currently recognise, and `fix_surface_classify`'s
+    own docstring calls MIXED "the genuine judgment residual a human/agent
+    must read", i.e. advisory, which this gate promotes to a refusal.
+
+What would make an automated rail meaningful: a declared bundle path
+convention AND a non-zero measured PRODUCER rate over real change bodies.
+Until both exist, an automated wiring would either fire on nothing or refuse
+everything, and both are worse than the agent-driven invocation it has.
 """
 from __future__ import annotations
 
@@ -178,6 +213,23 @@ _NONZERO_RESIDUAL_RE = re.compile(
 #   MIXED         → could not be PROVEN a root-cause fix → BLOCK (fail-closed;
 #                   ambiguity never ADMITs).
 _ROOT_CAUSE_VERDICT = "PRODUCER"
+
+#: THE contract, in the order `evaluate()` checks it. Single source of truth:
+#: the JSON report's `contract` field is rendered from this tuple and
+#: `evaluate()` is asserted against it by `test_handoff_bundle_check`. The
+#: report used to carry a hand-written list of SIX keys while `items` carried
+#: seven — `version_less_candidate`, the owner directive that a field bundle
+#: must not self-assign a version, was the one missing — so a consumer reading
+#: `contract` to learn what the gate enforces was told one rule too few.
+CONTRACT_ITEMS: Tuple[str, ...] = (
+    "root_cause_per_layer",
+    "candidate_applies_clean",
+    "two_depth_regression",
+    "clean_room_two_rounds",
+    "root_cause_not_surface",
+    "chip_agnostic_candidate",
+    "version_less_candidate",
+)
 
 
 @dataclass
@@ -524,7 +576,23 @@ def check_root_cause_verdict(patch: Optional[Path]) -> Tuple[bool, str]:
         diff_text = patch.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         return False, f"patch unreadable: {e}"
-    rep = _fsc.classify_diff(diff_text)
+    try:
+        rep = _fsc.classify_diff(diff_text)
+    except Exception as exc:      # defence-in-depth, see below
+        # A COMPOSED program that dies is NOT a verdict about the bundle.
+        # Before this guard the exception propagated out of `evaluate()`, out
+        # of `main()`, and the interpreter exited 1 — the SAME rc as a
+        # legitimate INCOMPLETE — with no `--json` report written at all, so a
+        # caller branching on rc could not tell a crash from a judgment.
+        # (Measured: a candidate patch that deletes one file and edits another
+        # crashed `fix_surface_classify.classify_diff`; that specific defect is
+        # fixed at its source, this guard is for the next one.) Fail-closed is
+        # preserved — the item is NOT green — but the detail says INCONCLUSIVE
+        # so nobody reads a crash as "the patch is a surface fix".
+        return False, (f"INCONCLUSIVE — composed fix_surface_classify CRASHED "
+                       f"({type(exc).__name__}: {exc}). A crash is not a "
+                       f"verdict; the bundle is NOT admitted, but this item "
+                       f"was never judged.")
     verdict = rep.get("verdict")
     if verdict == _ROOT_CAUSE_VERDICT:
         prods = rep.get("producers") or []
@@ -654,7 +722,7 @@ def evaluate(bundle_dir: Optional[Path], manifest_path: Optional[Path],
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Completeness-contract gate for a Field deep-resolution "
-                    "handoff bundle (Q3). ADMIT iff all six items green; "
+                    "handoff bundle (Q3). ADMIT iff all SEVEN items green; "
                     "else INCOMPLETE naming the gap (fail-closed).",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("bundle_dir", nargs="?",
@@ -683,11 +751,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "bundle": rep.bundle,
         "items": [asdict(it) for it in rep.items],
         "missing": rep.missing,
-        "contract": [
-            "root_cause_per_layer", "candidate_applies_clean",
-            "two_depth_regression", "clean_room_two_rounds",
-            "root_cause_not_surface", "chip_agnostic_candidate",
-        ],
+        "contract": list(CONTRACT_ITEMS),
     }
     if args.json:
         out = Path(args.json)
@@ -700,7 +764,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     if rep.verdict == "ADMIT":
         print(f"ADMIT: handoff bundle is the WHOLE verified solution — all "
-              f"six contract items green ({rep.bundle})")
+              f"{len(CONTRACT_ITEMS)} contract items green ({rep.bundle})")
         for it in rep.items:
             print(f"  [ok] {it.key}: {it.detail}")
         return 0

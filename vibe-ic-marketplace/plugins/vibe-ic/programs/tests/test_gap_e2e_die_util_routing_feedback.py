@@ -310,11 +310,17 @@ def _loosen_records(res):
             if r.get("direction") == "loosen"]
 
 
-# Every simulated OpenROAD run carries the PG_CONNECT_AUDIT line a real one
-# emits at the end of pnr.tcl. These fixtures exercise the ROUTE-convergence
-# feedback loop, so they must not also trip the PG-connect gate — a routed
-# design whose supply connectivity was never measured is BLOCKED, by design.
-_PG_OK = "PG_CONNECT_AUDIT: total=600 unconnected=0 masters=\n"
+# Every simulated OpenROAD run carries the PG_NET_OWNERSHIP_AUDIT line a real
+# one emits at the end of pnr.tcl. These fixtures exercise the ROUTE-convergence
+# feedback loop, so they must not also trip the PG net-ownership gate — a routed
+# design whose PG terminals were never counted is BLOCKED, by design.
+#
+# The marker was called PG_CONNECT_AUDIT (field `unconnected=`) through v1.9.62,
+# a name that asserted connectivity its predicate never tested; see
+# `_build_pg_reconnect_tcl`. Both spellings parse so a resumed run can still
+# read its cached log; the fixture uses the current one so it stays a faithful
+# stand-in for what the emitter actually writes today.
+_PG_OK = "PG_NET_OWNERSHIP_AUDIT: total=600 no_net=0 masters=\n"
 
 _R_NONCONV = (0, "[INFO DRT-0199] Number of violations = 40.\n"
                  "[INFO DRT-0199] Number of violations = 45.\n" + _PG_OK, "")

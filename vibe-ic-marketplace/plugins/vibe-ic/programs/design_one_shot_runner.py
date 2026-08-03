@@ -5392,6 +5392,61 @@ def _is_reused_ip_project(project: Path) -> bool:
         return False
 
 
+def _persist_oracle_calibrated_framing(project: Path, log_text: str) -> None:
+    """Persist the oracle TB's MEASURED serial framing into
+    `arith_oracle_manifest.json`.
+
+    WHY THIS EXISTS (circular-dependency break). The generated oracle TB
+    SELF-CALIBRATES the serial framing — it searches (in_order, out_order,
+    offset) until one triple reassembles the DUT stream to the independently
+    computed golden for EVERY vector. That search result is a real
+    measurement. Before this, the TB printed only the match COUNT and threw
+    the winning triple away, and the manifest's `declared_*` fields were
+    copied from `plugin_output/declaration.json`.
+
+    That made the two artifacts mutually dependent:
+      * `arith_declaration_emit.py` needs a measured `latency_cycles` to
+        write declaration.json, and looks for it in this manifest;
+      * this manifest only carried a latency when declaration.json already
+        existed to declare one.
+
+    So for any IC whose spec DECLARES declaration.json as a required
+    artifact, `spec_required_artifact_check.py` FAILs the flow for a file the
+    flow cannot produce. Recording the MEASURED framing under distinct
+    `calibrated_*` keys breaks the cycle without ever letting a DECLARED
+    value masquerade as a measured one.
+
+    No-op unless the TB emitted ORACLE_TB_FRAMING, which it does only when a
+    single framing matched every vector. chip-AGNOSTIC: parses the runner's
+    own marker, no design literal.
+    """
+    m = re.search(r"ORACLE_TB_FRAMING\s+in_order=(\d+)\s+out_order=(\d+)"
+                  r"\s+latency_cycles=(\d+)", log_text or "")
+    if not m:
+        return
+    order = {0: "LSB_first", 1: "MSB_first"}
+    manifest_p = _pl.sim_full_stack_dir(project) / "arith_oracle_manifest.json"
+    if not manifest_p.is_file():
+        return
+    try:
+        d = json.loads(manifest_p.read_text())
+    except Exception:
+        return
+    if not isinstance(d, dict):
+        return
+    d["calibrated_bit_order"] = order.get(int(m.group(1)))
+    d["calibrated_out_bit_order"] = order.get(int(m.group(2)))
+    d["calibrated_latency"] = int(m.group(3))
+    d["calibrated_source"] = (
+        "measured by the oracle TB framing search (single framing matched "
+        "every vector); NOT copied from declaration.json")
+    try:
+        manifest_p.write_text(
+            json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
 def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
                    track_reason: str, t0: float,
                    container: str) -> Optional[StepResult]:
@@ -5492,6 +5547,7 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
         # ONLY a genuine PASS reaches here: skeleton-WAIVED / FAILed oracle
         # runs return through other branches and never write this bridge.
         _emit_oracle_sim_bridge(project, transcript, n_pass, n_total)
+        _persist_oracle_calibrated_framing(project, out)
         return StepResult(
             "reference_tb", "PASS", time.time() - t0,
             (f"per-IC oracle TB {tb_path.name}: {n_pass}/{n_total} "
@@ -10936,6 +10992,54 @@ def _sha256_file(path: Path) -> Optional[str]:
     return f"sha256:{h.hexdigest()}"
 
 
+def step_arith_declaration_emit(project: Path) -> StepResult:
+    """Run the deterministic `plugin_output/declaration.json` emitter.
+
+    WHY THIS STEP EXISTS. `arith_declaration_emit.py` shipped as an ORPHAN:
+    it was implemented and tested, but no runner, no step in
+    `flow/phase1_phase2_phase3.yaml` and no entry in
+    `benchmark/CAPTURE_ROUTING.json` ever invoked it. Meanwhile
+    `spec_required_artifact_check.py` FAILs the flow whenever a design's own
+    spec declares `plugin_output/declaration.json` as a required artifact —
+    so the flow was failing a run for an artifact that nothing in the flow
+    was wired to produce.
+
+    NON-BLOCKING BY CONSTRUCTION. The emitter is FAIL-CLOSED: when a required
+    field is not derivable it writes no file and exits rc=1. That is reported
+    here as SKIP with the emitter's own reason, never as FAIL — whether the
+    absent file MATTERS is `spec_required_artifact_check`'s decision (it
+    knows if the spec demanded it), not this producer's. So wiring this in
+    cannot newly fail any IC that was passing.
+
+    chip-AGNOSTIC: no design literal; the emitter derives every field from
+    the run's own RTL / L-docs / measured oracle framing.
+    """
+    t0 = time.time()
+    out_p = project / "plugin_output" / "declaration.json"
+    prog = PROGRAMS_DIR / "arith_declaration_emit.py"
+    if not prog.is_file():
+        return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
+                          f"emitter not present at {prog}")
+    try:
+        cp = subprocess.run([sys.executable, str(prog), str(project)],
+                            capture_output=True, text=True, timeout=120)
+    except Exception as exc:
+        return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
+                          f"emitter did not run: {exc}")
+    if cp.returncode == 0 and out_p.is_file():
+        try:
+            fields = ", ".join(sorted(json.loads(out_p.read_text()).keys()))
+        except Exception:
+            fields = "(unreadable)"
+        return StepResult("arith_declaration_emit", "PASS", time.time() - t0,
+                          f"emitted plugin_output/declaration.json [{fields}]",
+                          [str(out_p)])
+    reason = (cp.stderr or cp.stdout or "").strip().replace("\n", " ")[:400]
+    return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
+                      f"emitter fail-closed (rc={cp.returncode}); no file "
+                      f"written — {reason}")
+
+
 def step_emit_phase2_manifests(project: Path,
                                 plan: List[StepResult],
                                 top_name: Optional[str] = None,
@@ -12294,6 +12398,9 @@ def main() -> int:
 
     # Phase 2 only — Phase 3 lives in phase3_one_shot_runner.py and is
     # chained by phase23_one_shot_runner.py.
+    # Emit plugin_output/declaration.json from the now-final RTL + the
+    # oracle TB's measured framing, BEFORE the manifests/audit read it.
+    plan.append(step_arith_declaration_emit(project))
     plan.append(step_emit_phase2_manifests(project, plan, args.top_name,
                                            args.container))
     # v0.1.58 capture: regenerate final_summary.md BEFORE the audit so the

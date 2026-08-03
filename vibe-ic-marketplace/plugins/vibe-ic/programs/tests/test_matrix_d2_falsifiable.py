@@ -332,6 +332,23 @@ def _f_analog_p3(p: Path) -> None:
     _analog_partial(p, "phase3/analog")
 
 
+def _f_a0_skipped(p: Path) -> None:
+    """The forbidden artefact, encoding the forbidden verdict.
+
+    `analog_a0_skip_forbidden_check` was wired into D1 by vibe-ic#700, and this
+    gate then had a blocking clause whose FAIL nothing proved reachable. On the
+    bare EMPTY fixture it answers PASS — correctly, because absence of the
+    artefact IS the pass — so the falsifiability question could not be answered
+    from EMPTY by construction.
+
+    Absence is not enough and neither is mere presence: the gate reads the
+    named decision fields and FAILs only on a verdict that actually encodes a
+    top-level analog skip, which is what makes it a rule rather than a
+    file-existence test. So the fixture has to state the skip."""
+    _w(p, "phase1/analog/A0_skip_decision.json",
+       {"decision": "skip", "reason": "no analog content identified"})
+
+
 def _f_synth_bad(p: Path) -> None:
     _w(p, "phase2/stage2/synth/synth.ys", _BAD_YS)
     _w(p, "phase2/stage2/synth/netlist.v", "// empty netlist\n")
@@ -531,6 +548,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
     "ANALOG_P3": _f_analog_p3,
+    "A0_SKIPPED": _f_a0_skipped,
     "SYNTH_BAD": _f_synth_bad,
     "SDC_BAD": _f_sdc_bad,
     "PNR_BAD": _f_pnr_bad,
@@ -553,6 +571,10 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
 #: not redden it) fails loudly rather than silently keeping a stale recipe.
 #: Clauses absent from this table use ``EMPTY``.
 CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
+    # vibe-ic#700 wired this into D1. EMPTY cannot redden it: absence of the
+    # forbidden artefact IS the pass, so the clause needs the artefact present
+    # AND carrying the forbidden verdict.
+    ("D1", "analog_a0_skip_forbidden_check ."): "A0_SKIPPED",
     ("2", "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v "
           "--severity ERROR --json reports/phase2/lint/rtl_hygiene.json"):
         "RTL_BAD",

@@ -49,9 +49,23 @@ def test_a_rail_that_is_only_a_name_is_not_measured(tmp_path):
     assert "VPROG" not in H.measured_rails(p)
 
 
-def test_the_unbuilt_rail_is_reported_not_silently_dropped(tmp_path):
-    """Dropping it without saying so trades one silence for another."""
+def test_the_unbuilt_rail_is_returned_as_the_complement(tmp_path):
+    """The other half of the same split.
+
+    RENAMED. The previous name was
+    `test_the_unbuilt_rail_is_reported_not_silently_dropped`, which asserted
+    REPORTING while its body only asserted a RETURN VALUE — the same over-claim
+    the function's own docstring carried, pinned by a test that could never
+    catch it. What is reported, and where, is asserted by the
+    `_macro_supply_preroute_decision` / `step_pnr` tests below.
+    """
     assert H.rails_named_but_not_built(_project(tmp_path, BUILT)) == ["VPROG"]
+
+
+def test_both_halves_come_from_one_scan(tmp_path):
+    p = _project(tmp_path, BUILT)
+    assert H.specialnets_split(p) == (["VGND", "VPWR"], ["VPROG"])
+    assert H.specialnets_split(tmp_path / "nothing-here") == ([], [])
 
 
 def test_a_rail_built_only_with_fixed_geometry_still_counts(tmp_path):
@@ -124,3 +138,216 @@ def test_a_macro_pin_bound_to_a_nameonly_rail_is_no_longer_covered(tmp_path):
     measured = H.measured_rails(_project(tmp_path, BUILT))
     got = H.classify_pin("GENERIC_HARDMACRO", "VPROG", l21, extra_rails=measured)
     assert got["status"] == "rail_undeclared", got
+
+
+# ─────────── the drop must reach the run's REPORT, not just a return value ────
+#
+# The defect this section exists for: `rails_named_but_not_built` shipped a
+# docstring saying "Reported rather than silently dropped" while having ZERO
+# non-test callers. Availability is not reporting — a filter that fires
+# silently cannot be told apart from one that never fires (#313 §6).
+#
+# Every assertion below is BEHAVIOURAL: it runs the real decision / the real
+# step and reads the value back. None of them searches the runner's source
+# text. A source-substring assertion is satisfied by a COMMENT saying the
+# report does not exist, which would reproduce this very defect inside its own
+# fix; an AST "every dict-literal return carries the key" assertion is
+# satisfied by a branch that hardcodes an empty list.
+
+_LEF_FULL = """
+MACRO GENERIC_HARDMACRO
+  PIN VPWR
+    DIRECTION INOUT ; USE POWER ;
+  END VPWR
+  PIN VGND
+    DIRECTION INOUT ; USE GROUND ;
+  END VGND
+  PIN VPROG
+    DIRECTION INOUT ; USE POWER ;
+  END VPROG
+END GENERIC_HARDMACRO
+"""
+
+# No VPROG pin — every PG pin matches a rail the DEF really built, so the
+# decision takes the no-gaps return.
+_LEF_ACCOUNTED = """
+MACRO GENERIC_HARDMACRO
+  PIN VPWR
+    DIRECTION INOUT ; USE POWER ;
+  END VPWR
+  PIN VGND
+    DIRECTION INOUT ; USE GROUND ;
+  END VGND
+END GENERIC_HARDMACRO
+"""
+
+# Every SPECIALNETS entry is a bare name: nothing is BUILT, so no rail is
+# established from any source and the decision takes the env-blind return.
+ALL_BARE = """SPECIALNETS 1 ;
+    - VPROG ( * VPROG ) + USE POWER ;
+END SPECIALNETS
+"""
+
+_NL_TIED = ("module top;\n"
+            "GENERIC_HARDMACRO u ( .VPROG(1'b1), .VPWR(VPWR), .VGND(VGND) );\n"
+            "endmodule\n")
+_NL_UNDRIVEN = ("module top;\n"
+                "GENERIC_HARDMACRO u ( .VPWR(VPWR), .VGND(VGND) );\n"
+                "endmodule\n")
+
+
+def _decision_project(tmp: Path, def_text, lef_text: str) -> Path:
+    if def_text is not None:
+        _project(tmp, def_text)
+    (tmp / "macro.lef").write_text(lef_text, encoding="utf-8")
+    return tmp
+
+
+class _Pdk:
+    """Only `macro_lefs` — `_design_supply_nets` then finds no PDK cell LEF and
+    returns (∅, ∅), so the env-blind witness is decided by the DEF/L21 alone."""
+
+    def __init__(self, lef: Path):
+        self.macro_lefs = [str(lef)]
+
+
+def _p3():
+    import phase3_one_shot_runner as p3
+    return p3
+
+
+# --- all five returns taken AFTER the DEF is read carry the real value -------
+
+def test_return_no_gaps_carries_the_bare_rail(tmp_path):
+    p = _decision_project(tmp_path, BUILT, _LEF_ACCOUNTED)
+    d = _p3()._macro_supply_preroute_decision(p, _Pdk(p / "macro.lef"))
+    assert d["blocking"] is False and d["gaps"] == []
+    assert d["rails_named_not_built"] == ["VPROG"]
+
+
+def test_return_env_blind_carries_the_bare_rail(tmp_path):
+    p = _decision_project(tmp_path, ALL_BARE, _LEF_FULL)
+    d = _p3()._macro_supply_preroute_decision(p, _Pdk(p / "macro.lef"))
+    assert d.get("env_blind") is True
+    assert d["rails_named_not_built"] == ["VPROG"]
+
+
+def test_return_benign_gaps_carries_the_bare_rail(tmp_path):
+    p = _decision_project(tmp_path, BUILT, _LEF_FULL)
+    d = _p3()._macro_supply_preroute_decision(p, _Pdk(p / "macro.lef"),
+                                              netlist_text=_NL_UNDRIVEN)
+    assert d["blocking"] is False
+    assert {g["pin"] for g in d["gaps_reported"]} == {"VPROG"}
+    assert d["rails_named_not_built"] == ["VPROG"]
+
+
+def test_return_fatal_tie_carries_the_bare_rail(tmp_path):
+    p = _decision_project(tmp_path, BUILT, _LEF_FULL)
+    d = _p3()._macro_supply_preroute_decision(p, _Pdk(p / "macro.lef"),
+                                              netlist_text=_NL_TIED)
+    assert d["blocking"] is True
+    assert {g["pin"] for g in d["gaps"]} == {"VPROG"}
+    assert d["rails_named_not_built"] == ["VPROG"]
+
+
+def test_return_no_netlist_carries_the_bare_rail(tmp_path):
+    p = _decision_project(tmp_path, BUILT, _LEF_FULL)
+    d = _p3()._macro_supply_preroute_decision(p, _Pdk(p / "macro.lef"))
+    assert d["blocking"] is True
+    assert d["rails_named_not_built"] == ["VPROG"]
+
+
+def test_returns_taken_before_the_def_is_read_claim_nothing(tmp_path):
+    """The three `return None` paths precede the DEF read. They must stay None:
+    a dict carrying `[]` there would be a claim about a file never opened."""
+    p = _project(tmp_path, BUILT)
+    (p / "empty.lef").write_text("", encoding="utf-8")
+    assert _p3()._macro_supply_preroute_decision(
+        p, _Pdk(p / "empty.lef")) is None
+
+
+# --- and it reaches the durable report the run leaves behind -----------------
+
+def _pnr_project(tmp: Path, def_name, def_text: str) -> Path:
+    """A tree just complete enough for `step_pnr` to reach its blocking FAIL.
+
+    That return is taken BEFORE any container invocation, so no PnR tree and no
+    OpenROAD is needed — MEASURED, and it is why the report is asserted on the
+    real StepResult instead of on the runner's source text.
+
+    The L21 declares VPWR/VGND (never VPROG) so that a tree WITHOUT a DEF still
+    establishes rails and reaches the BLOCKING return. Without it the gate is
+    correctly env-blind and never blocks, and the two tests below would differ
+    in their verdict rather than in the one variable under test: the DEF.
+    """
+    import json as _json
+    import _path_layout as _pl
+    sd = _pl.synth_dir(tmp)
+    sd.mkdir(parents=True, exist_ok=True)
+    (sd / "chip_top_synth.v").write_text(_NL_TIED, encoding="utf-8")
+    gd = tmp / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "L21_POWER_INTENT.json").write_text(_json.dumps(
+        {"fields": {"power_rails": [{"rail": "VPWR"}, {"rail": "VGND"}]}}),
+        encoding="utf-8")
+    if def_name is not None:
+        pd = _pl.pnr_dir(tmp)
+        pd.mkdir(parents=True, exist_ok=True)
+        (pd / def_name).write_text(def_text, encoding="utf-8")
+    (tmp / "macro.lef").write_text(_LEF_FULL, encoding="utf-8")
+    return tmp
+
+
+def test_the_bare_rail_reaches_the_pnr_fail_rows_extras(tmp_path):
+    """THE assertion the docstring's "Reported" claim now rests on.
+
+    `extras` is serialized into `reports/phase3/phase3_one_shot.json`, so this
+    survives the terminal. The DEF is `post_cts.def`: the one band where the
+    fact is non-empty AND `pg_rail_geometry_check` (which reads `routed.def`
+    only) is SKIP — i.e. where nothing else says it.
+    """
+    p = _pnr_project(tmp_path, "post_cts.def", BUILT)
+    r = _p3().step_pnr(p, "chip_top", _Pdk(p / "macro.lef"),
+                       "no-such-container", "200x200", 0.4)
+    assert r.status == "FAIL"
+    assert r.extras["macro_supply_gaps"]
+    assert r.extras["rails_named_not_built"] == ["VPROG"]
+
+
+def test_no_def_publishes_no_key_rather_than_an_empty_all_clear(tmp_path):
+    """On a FIRST run `phase3/stage3/pnr/` is empty at the gate — every DEF is
+    written by this step's own TCL, further down. An empty list here would read
+    as "the built rails were examined and none was a bare name". Nothing was
+    examined, so the key is ABSENT: no claim, rather than a false clean one."""
+    p = _pnr_project(tmp_path, None, "")
+    r = _p3().step_pnr(p, "chip_top", _Pdk(p / "macro.lef"),
+                       "no-such-container", "200x200", 0.4)
+    assert r.status == "FAIL"
+    assert "rails_named_not_built" not in (r.extras or {})
+
+
+# --- complementarity with the post-route gate, asserted rather than assumed --
+
+def test_the_two_gates_are_complements_not_duplicates(tmp_path):
+    """Pins the band claim the docstring makes.
+
+    HONEST LABEL: this test passes both BEFORE and AFTER this change. It is not
+    evidence of the fix — it pins the PREMISE the fix is scoped on, so that
+    widening `pg_rail_geometry_check._find_def` to accept `post_cts.def` (which
+    would turn the runner-side report into a duplicate) fails here and forces
+    the docstring to be revisited rather than silently rotting.
+    """
+    import pg_rail_geometry_check as PG
+
+    routed = _project(tmp_path / "routed", BUILT)
+    assert H.rails_named_but_not_built(routed) == ["VPROG"]
+    res = PG.check(routed)
+    assert res["verdict"] == "FAIL"
+    assert "VPROG" in {f["rail"] for f in res["findings"]}
+
+    pre = tmp_path / "prects"
+    d = pre / "phase3" / "stage3" / "pnr"
+    d.mkdir(parents=True)
+    (d / "post_cts.def").write_text(BUILT, encoding="utf-8")
+    assert H.rails_named_but_not_built(pre) == ["VPROG"]
+    assert PG.check(pre)["verdict"] == "SKIP"

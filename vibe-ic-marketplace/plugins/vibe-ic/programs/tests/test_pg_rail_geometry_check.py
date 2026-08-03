@@ -6,8 +6,10 @@ third-party hard macro takes a second supply: the DEF declared the rail and
 bound the macro's supply pin to it, and the rail carried ZERO routed geometry.
 Three tools reported success anyway —
 
-  * ``PG_CONNECT_AUDIT: unconnected=0`` counts pins whose net pointer is NULL;
-    this pin's pointer is valid, it points at the empty rail.
+  * ``PG_NET_OWNERSHIP_AUDIT: no_net=0`` counts pins whose net pointer is NULL;
+    this pin's pointer is valid, it points at the empty rail. (Spelled
+    ``PG_CONNECT_AUDIT: unconnected=0`` through v1.9.62 — a name that asserted
+    connectivity the predicate never tested.)
   * ``[INFO PSM-0040] All shapes on net <RAIL> are connected`` is vacuously
     true over an empty shape set.
   * the router had nothing to route, so it had nothing to fail on.
