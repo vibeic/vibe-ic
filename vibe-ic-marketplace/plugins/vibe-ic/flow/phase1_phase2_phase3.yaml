@@ -2584,8 +2584,11 @@ steps:
         # tapeout run with a third-party hard macro on a second supply: the DEF
         # declared the rail, bound the macro's supply pin to it, and the rail
         # carried ZERO routed geometry — while THREE tools reported success.
-        # PG_CONNECT_AUDIT counts pins whose net pointer is NULL (this pin's was
-        # valid, pointing at the empty rail); PSM-0040 "all shapes on net X are
+        # PG_NET_OWNERSHIP_AUDIT counts pins whose net pointer is NULL (this
+        # pin's was valid, pointing at the empty rail — and through v1.9.62 that
+        # audit was called PG_CONNECT_AUDIT and its result was published as "N/N
+        # PG terminals connected", which is the overclaim, not the measurement);
+        # PSM-0040 "all shapes on net X are
         # connected" is vacuously true over an empty shape set; and the router
         # had nothing to route so nothing to fail on. Each answered its own
         # question correctly; none answered "can current reach this pin".
