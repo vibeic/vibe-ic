@@ -209,10 +209,31 @@ def declared_target(run: Path) -> Tuple[Optional[str], Optional[str]]:
                 d = json.loads(p.read_text(errors="replace"))
             except (OSError, ValueError):
                 continue
-            for k in keys:
-                v = d.get(k)
-                if isinstance(v, str) and v.strip():
-                    return v.strip(), f"{rel}:{k}"
+            if not isinstance(d, dict):
+                continue
+            # THE L-DOC SCHEMA NESTS THE VALUE UNDER `fields`.
+            #
+            # Schema-v2 L-docs are `{doc_id, doc_name, applicability, fields:
+            # {...}, schema_version: 2, ...}` — the payload lives in `fields`,
+            # NOT at the top level. Reading only the top level made this gate
+            # blind to the canonical shape phase 1 emits, and the failure was
+            # SILENT AND INVERTED: with a real target declared and the right
+            # library loaded, `declared_target()` returned None and the gate
+            # exited 1 with "loaded cell libraries but declares NO PDK target".
+            # The one gate that exists to prove the process was the intended
+            # one reported that the design had named no process at all.
+            #
+            # Top level is tried FIRST so any flat producer keeps its exact
+            # precedence; `fields` is a fallback, so no currently-passing run
+            # can change verdict. The source label records which shape matched,
+            # so a reader can see where the value came from.
+            for scope, label in ((d, ""), (d.get("fields"), "fields.")):
+                if not isinstance(scope, dict):
+                    continue
+                for k in keys:
+                    v = scope.get(k)
+                    if isinstance(v, str) and v.strip():
+                        return v.strip(), f"{rel}:{label}{k}"
     return None, None
 
 
