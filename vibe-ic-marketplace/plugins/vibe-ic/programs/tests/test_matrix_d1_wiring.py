@@ -1122,12 +1122,38 @@ def test_probe_no_cell_rests_on_channel_c_alone():
 #: to a real ``programs/<name>.py`` but are reachable through NONE of the three
 #: channels, measured 2026-07-27. Residue of the 2026-07 audit's dimension-1
 #: DEFECT notes on steps 4/5/6/9.
+#:
+#: 2026-08-03, vibe-ic#693 — TWO ENTRIES ADDED ON PURPOSE. The two SignalTap
+#: gates are declared at step 39 and wired through no channel BY DESIGN, and
+#: that is the whole point of listing them: #693's floor is that a shipped,
+#: gate-shaped program must never be both unwired and unlisted, and this pin is
+#: the only register in the repo whose semantics are exactly "declared in a
+#: step's ``programs:`` array and reachable through none of the three
+#: channels". Being here is the DISCLOSURE, not permission.
+#:
+#:   signaltap_recompile_sequence_check — audits a four-stage interactive
+#:     SignalTap recompile (quartus_stp -> map -> fit -> asm). The flow's only
+#:     FPGA command line is ``quartus_sh --flow compile <base>``, which contains
+#:     none of the four tokens, and the published corpus holds 0 compile.log,
+#:     0 *.map.rpt and 0 *.sof over 28 run roots. Wiring it anywhere would be
+#:     rc=2 NOT-CHECKED on 28/28 — a permanently silent gate.
+#:   signaltap_stp_completeness_check — validates a generated ``.stp``. No flow
+#:     step produces one and 0 exist in the corpus. It is also not yet safe as a
+#:     post-condition of its own declared producer, the MCP tool
+#:     ``eda_rtl_signaltap_autogen``, which fails it on its default invocation.
+#:
+#: Both are driven EXPLICITLY by the agent following
+#: ``skills/fpga-signaltap/SKILL.md`` with a board on the bench. If either ever
+#: gains a real automatic subject, wire it and delete its line here — this test
+#: reddens in that direction too.
 ORPHAN_DECLARED_PROGRAMS: Tuple[Tuple[str, str], ...] = (
     ("6", "debug_first_pass"),
     ("6", "fpga_test_harness_gen"),
     ("9", "synth_wrapper_gen"),
     ("15", "phase3_backend_step"),
     ("39", "bringup_plan_gen"),
+    ("39", "signaltap_recompile_sequence_check"),
+    ("39", "signaltap_stp_completeness_check"),
 )
 
 

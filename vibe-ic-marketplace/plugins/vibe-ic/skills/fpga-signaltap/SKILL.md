@@ -34,6 +34,26 @@ eda_rtl_signaltap_autogen(rtl_dir=..., top_module=..., target="quartus",
   -> <top_module>_debug.stp
 ```
 
+> ⚠️ **MEASURED 2026-08-03 (vibe-ic#693) — this tool does NOT yet satisfy the
+> policy stated in the next section, and it reports `status: "PASS"` anyway.**
+> Driven for real against a published memory-mapped DUT's RTL directory it
+> emitted **one** signal (a heuristic `state` match), **no DUT ports**, **no
+> BIST group**, and an EMPTY self-closing `<trigger_set …/>`.
+> `signaltap_stp_completeness_check` on that output:
+> 4 × `MISSING_BIST_SIGNAL` + 8 × `MISSING_PORT` + `NO_TRIGGER`.
+> Its signal selection is four name patterns
+> (`tx_start|rx_done|state|delimiter`), not a port-list parse.
+>
+> Until that is fixed: **always** validate the emitted `.stp` with
+> `signaltap_stp_completeness_check` (step 2 of the workflow below) and add
+> what is missing via `extra_signals=[...]`, or use the other shipped producer
+> `tools/signaltap_gen.py --module <m> --sv <top.sv>`, which parses the port
+> list and emits the BIST group and a populated trigger, and PASSES the
+> validator both with and without `--sv`. This split is why
+> `signaltap_stp_completeness_check` is deliberately NOT wired as a blocking
+> post-condition of the MCP tool: doing so today would break the declared
+> generator 100% of the time.
+
 ## Generated .stp policy — enforced by `programs/signaltap_stp_completeness_check.py`
 
 The capture-signal include-set and the trigger/depth/clock policy are NOT
@@ -52,8 +72,19 @@ judgment — they are a fixed checklist verified by
 ```bash
 python3 programs/signaltap_stp_completeness_check.py <module>_debug.stp \
     --sv rtl/<module>.sv --json stp_check.json
-# 0=PASS  1=FAIL(findings)  2=io-error ; SKIP(0) only when no .stp is given.
+# 0=PASS  1=FAIL(findings)
+# 2=SKIP — NOTHING EXAMINED (no .stp given), or io-error. Never a pass.
 ```
+
+Rule 3's trigger test requires a trigger with **content**. An empty
+`<trigger_set …/>` is `NO_TRIGGER`: an analyzer that triggers on nothing
+free-runs, and the capture window will not be aligned on the failure.
+
+**This gate is not wired into the flow, on purpose.** No flow step produces a
+`.stp` and none exists in any published run, so any automatic wiring would be a
+permanently silent rc=2. It is registered in
+`flow/phase1_phase2_phase3.yaml` step 39's `programs:` list with that reason
+written down, and driven EXPLICITLY from step 2 of the workflow below.
 
 ## Typical Debug Workflow
 
@@ -85,8 +116,19 @@ all** (`STAGE_MISSING`), or attaches the `.stp` after the fit (`WRONG_ORDER`).
 ```bash
 python3 programs/signaltap_recompile_sequence_check.py recompile.sh \
     --expect-stp <module>_debug.stp --json recompile_check.json
-# 0=PASS  1=FAIL  2=io-error ; SKIP(0) when no quartus_* sequence is present.
+# 0=PASS  1=FAIL
+# 2=SKIP — NOTHING EXAMINED (no input, or no quartus_* sequence in it), or
+#          io-error. Never a pass.
 ```
+
+**This gate is not wired into the flow, on purpose.** The flow's only FPGA
+command line is `quartus_sh --flow compile <base>`, which contains none of the
+four tokens; repo-wide there are 0 `compile.log`, 0 `*.map.rpt` and 0 `*.sof`
+files, so any automatic wiring would be rc=2 on every published run. It is
+registered in `flow/phase1_phase2_phase3.yaml` step 39's `programs:` list with
+that reason written down, and driven EXPLICITLY from step 3 of the workflow
+above — paste the recompile block you are about to run into a file and check it
+*before* spending the ~30-minute Quartus round-trip.
 
 ### LLM-judgment step (NOT a program)
 
