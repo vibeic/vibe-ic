@@ -157,14 +157,32 @@ def test_legacy_mode_spelling_still_works(tmp_path):
     assert {"s_valid", "s_data"} <= _ports_of(text, "set_input_delay")
 
 
+#: A top with a clock and reset and NO data path. `RTL` above has four data
+#: ports, which the generator now recovers from the RTL surface even when L9
+#: declares none — so it is the wrong fixture for "constrains no I/O path".
+RTL_NO_IO = """\
+module dut (
+    input  wire        aclk,
+    input  wire        arst_n
+);
+endmodule
+"""
+
+
 def test_empty_l9_still_emits_and_now_says_so(tmp_path):
     """A layer that declares NO ports is the design's problem, not this
     generator's — it must still emit (unchanged behaviour) but must no longer
-    do it silently."""
+    do it silently.
+
+    FIXTURE CORRECTED: this used `RTL`, whose four data ports the generator
+    recovers from the RTL surface, so the design was fully constrained and the
+    condition under test never arose. The assertion was right and could not
+    fire — #744 shipped it with no code that prints the diagnostic at all,
+    which is how a test can be both correct and never green."""
     p = tmp_path / "empty"
     (p / "phase1" / "generated_docs").mkdir(parents=True)
     (p / "phase2" / "stage1" / "rtl").mkdir(parents=True)
-    (p / "phase2" / "stage1" / "rtl" / "dut.v").write_text(RTL)
+    (p / "phase2" / "stage1" / "rtl" / "dut.v").write_text(RTL_NO_IO)
     (p / "phase1" / "generated_docs" / "L9_INTEGRATION_SPEC.json").write_text(
         json.dumps({"top_module": "dut"}))
     (p / "phase1" / "generated_docs" / "L8_RTL_CONSTANTS.json").write_text(

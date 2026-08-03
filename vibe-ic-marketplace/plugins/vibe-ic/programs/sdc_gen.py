@@ -1110,6 +1110,19 @@ def main(argv: Optional[List[str]] = None) -> int:
              f"pin list did not cover: {sorted(residue_pins)}"
              if residue_pins else "")
           + ")")
+    # AN SDC THAT CONSTRAINS NO I/O PATH IS NOT A CONSTRAINED DESIGN (#744).
+    #
+    # The file is still emitted — a layer that declares no ports is the design's
+    # problem, not this generator's, and refusing to write would strand the
+    # flow. But emitting it SILENTLY makes "constrained" and "constrained
+    # nothing" the same observable, which is the shape this whole batch is
+    # about. #744 shipped a test asserting this diagnostic and no code that
+    # prints it; the test was right and the gap was real.
+    if not inputs and not outputs:
+        print(f"NOTE sdc_gen: {out} constrains NO input or output path — the "
+              f"clock is constrained and every data path is unconstrained. "
+              f"L9 declared no ports and none were recovered from the RTL "
+              f"surface.", file=sys.stderr)
     return 0
 
 
