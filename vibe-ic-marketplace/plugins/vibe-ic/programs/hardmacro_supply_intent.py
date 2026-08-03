@@ -53,6 +53,8 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+
+import _path_layout as _pl
 from typing import Any, Dict, List, Optional, Tuple
 
 # `PIN <name>` ... `USE POWER|GROUND` ... `END <name>` — LEF is whitespace and
@@ -122,6 +124,29 @@ def _derived_from_the_macros_under_test(entry: Dict[str, Any]) -> bool:
         return True
     by = entry.get("derived_by")
     return isinstance(by, str) and "macro" in by.lower() and "rail" in by.lower()
+
+
+def rail_producers_that_did_not_run(project) -> List[str]:
+    """Which L21 rail producers this run dispatched and FAILED. vibe-ic#691.
+
+    Reads `reports/phase1/l21_rail_producers.json`, written unconditionally by
+    the Phase-1 doc runner. Returns [] when every producer ran, and [] ALSO when
+    the record is absent — an older run has no record, and inventing a failure
+    from its absence would flag every project that predates the record.
+
+    That asymmetry is deliberate and is the opposite of the usual rule here: an
+    absent record cannot prove a producer ran, but neither can it prove one
+    failed, and the cost of the two mistakes is not equal. This is used to EXPLAIN
+    a finding that already exists on its own evidence, never to create one."""
+    try:
+        f = _pl.report_path(Path(project), "phase1/l21_rail_producers.json")
+        if not f.is_file():
+            return []
+        d = json.loads(f.read_text(errors="replace"))
+    except (OSError, ValueError, TypeError):
+        return []
+    return [r.get("producer", "?") for r in (d.get("producers") or [])
+            if r.get("outcome") != "ran"]
 
 
 def declared_rails(l21: Dict[str, Any]) -> List[str]:
@@ -390,20 +415,48 @@ def declared_binding_map(l21: Dict[str, Any],
 
 
 def assess(lef_texts: List[str], l21: Dict[str, Any],
-           extra_rails: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Classify every LEF-typed PG pin across the given macro LEFs."""
+           extra_rails: Optional[List[str]] = None,
+           project=None) -> Dict[str, Any]:
+    """Classify every LEF-typed PG pin across the given macro LEFs.
+
+    `project` is OPTIONAL and changes no verdict: it lets the result carry WHY
+    a rail is undeclared when the reason is that a producer never ran
+    (vibe-ic#691). Omitting it leaves the output byte-identical to before."""
     pins: List[Dict[str, Any]] = []
     for txt in lef_texts or []:
         for p in lef_pg_pins(txt):
             pins.append({**classify_pin(p["master"], p["pin"], l21, extra_rails),
                          "use": p["use"]})
-    return {
+    out = {
         "pins": pins,
         "accounted": [p for p in pins if p["status"] in ACCOUNTED],
         "gaps": [p for p in pins if p["status"] not in ACCOUNTED],
         "declared_rails": declared_rails(l21),
         "measured_rails": sorted(set(extra_rails or [])),
     }
+    # #691 — a rail can be undeclared because the design does not declare it, or
+    # because the INDEPENDENT declaration step never ran. Those are the same
+    # finding and different work. MEASURED on a real Phase-3 run: 0 power_rails,
+    # 3 power_domains all stamped `derived_by: l21_macro_supply_rail_synth`, and
+    # the doc synthesiser had left no artefact anywhere. The visible symptom was
+    # one rail `rail_undeclared` — `measured_rails()` re-derives from DEF
+    # geometry and rescues the two rails that HAVE geometry, and the third has
+    # none precisely because it was never declared.
+    #
+    # ANNOTATION ONLY. The finding stands on its own evidence; this says which
+    # of the two it is, so chasing it leads to the producer instead of the rail.
+    if project is not None:
+        missing = rail_producers_that_did_not_run(project)
+        if missing and out["gaps"]:
+            out["undeclared_cause"] = {
+                "producers_that_did_not_run": missing,
+                "note": (f"{len(out['gaps'])} pin(s) are unaccounted AND "
+                         f"{len(missing)} L21 rail producer(s) did not run "
+                         f"({', '.join(missing)}). An undeclared rail here is "
+                         f"as likely to be a missing PRODUCER as a missing "
+                         f"declaration — fix the producer first."),
+            }
+    return out
 
 
 def load_l21(project: Path) -> Dict[str, Any]:

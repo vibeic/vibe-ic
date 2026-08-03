@@ -9169,23 +9169,55 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
     # earliest and most direct evidence there is, so it is read first; the LEF
     # producer then adds only what the documents did not state, because both
     # test "already declared" against the same consumer-visible key set.
+    # ORGANIC #691 — RECORD THAT EACH PRODUCER RAN, whatever it returned.
+    #
+    # Both calls are fail-open, which is right: a synthesiser that dies must not
+    # take Phase 1 with it. But a producer that did not run was, from the
+    # record, indistinguishable from one that ran and found nothing to declare.
+    # MEASURED on a real Phase-3 run: L21_POWER_INTENT.json carried 0
+    # power_rails and 3 power_domains, every one stamped
+    # `derived_by: l21_macro_supply_rail_synth`, and the doc synthesiser had
+    # left NO artefact anywhere in the run.
+    #
+    # The visible symptom was one rail reported `rail_undeclared`, because
+    # `measured_rails()` re-derives from DEF geometry and rescues the two rails
+    # that HAVE geometry — the third has none precisely because it was never
+    # declared. Chasing that symptom leads to the rail; the cause is a missing
+    # producer.
+    #
+    # Same family as #544 (a declared gate that returned no verdict) and #682
+    # (a gate whose execution nothing recorded) — except this one is a PRODUCER,
+    # upstream of every gate that consumes it.
+    _prod_log: List[Dict[str, Any]] = []
+    for _label, _mod in (("l21_doc_supply_rail_synth", "l21_doc_supply_rail_synth"),
+                         ("l21_macro_supply_rail_synth", "l21_macro_supply_rail_synth")):
+        _row: Dict[str, Any] = {"producer": _label}
+        try:
+            _m = __import__(_mod).main
+            _rc = _m([str(project), "--apply"])
+            _row["rc"] = _rc
+            _row["outcome"] = "ran"
+            if _rc not in (0, 2):
+                print(f"      L21 {_label} rc={_rc}", file=sys.stderr)
+        except Exception as e:                              # noqa: BLE001
+            _row["rc"] = None
+            _row["outcome"] = "did-not-run"
+            _row["error"] = repr(e)
+            print(f"      L21 {_label} FAILED (fail-open): {e}", file=sys.stderr)
+        _prod_log.append(_row)
     try:
-        from l21_doc_supply_rail_synth import main as _l21_doc_synth
-        _rc = _l21_doc_synth([str(project), "--apply"])
-        if _rc not in (0, 2):
-            print(f"      L21 doc supply-rail synth rc={_rc}", file=sys.stderr)
-    except Exception as e:                                  # noqa: BLE001
-        print(f"      L21 doc supply-rail synth FAILED (fail-open): {e}",
-              file=sys.stderr)
-    try:
-        from l21_macro_supply_rail_synth import main as _l21_rail_synth
-        _rc = _l21_rail_synth([str(project), "--apply"])
-        if _rc not in (0, 2):
-            print(f"      L21 macro supply-rail synth rc={_rc}",
-                  file=sys.stderr)
-    except Exception as e:                                  # noqa: BLE001
-        print(f"      L21 macro supply-rail synth FAILED (fail-open): {e}",
-              file=sys.stderr)
+        _pp = _pl.report_path(project, "phase1/l21_rail_producers.json")
+        _pp.parent.mkdir(parents=True, exist_ok=True)
+        _pp.write_text(json.dumps({
+            "_comment": "Which L21 rail producers this run DISPATCHED, and what "
+                        "each returned. Written unconditionally: a producer "
+                        "that did not run must not read like one that ran and "
+                        "declared nothing (vibe-ic#691).",
+            "producers": _prod_log,
+            "all_ran": all(r["outcome"] == "ran" for r in _prod_log),
+        }, indent=2) + "\n")
+    except OSError:
+        pass          # an unwritable report dir must never fail Phase 1
     return out
 
 
