@@ -1,10 +1,9 @@
 {
-  "_comment": "Checkers that NOTHING but their own unit test ever runs (vibe-ic#381). MAY ONLY SHRINK — each entry is a checker with zero coverage of real inputs. `triage` records why an entry is still here; the wrong repair is to delete the test so the entry disappears.",
-  "previous_size": 31,
+  "_comment": "Checkers that NOTHING but their own unit test ever runs (vibe-ic#381). MAY ONLY SHRINK — each entry is a checker with zero coverage of real inputs. `triage` records why an entry is still here; the wrong repair is to delete the test so the entry disappears. REMOVAL LOG: analog_corner_lib_realism_lint.py removed at v1.9.63 — vibe-ic#700 wired it into the flow, so its entry had stopped suppressing anything and had become permission. Its triage note said the checker 'refuses without its input' about `project_dir`, which every real run has; the note was standing in for 'nothing calls it', and now something does. Removed, not blanked — an entry with an empty reason is the same suppression with the reason deleted.",
+  "previous_size": 32,
   "scope_expanded": "the checker population glob was widened from *_check.py/*_audit.py to also cover the checker-shaped suffixes *_guard.py, *_lint.py and *_gate.py, because gitignore_scratch_guard.py was a wired-to-nothing gate that this audit could not see by filename alone (vibe-ic#693)",
   "known": [
     "analog_adc_enob_corner_check.py",
-    "analog_corner_lib_realism_lint.py",
     "analog_hil_convergence_log_check.py",
     "analog_sigma_delta_gain_floor_check.py",
     "behavioral_evidence_per_spec_item_check.py",
@@ -38,7 +37,6 @@
   ],
   "triage": {
     "analog_adc_enob_corner_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
-    "analog_corner_lib_realism_lint.py": "rc=2 SKIPs / refuses without its input — analog_corner_lib_realism_lint.py: error: the following arguments are required: project_dir",
     "analog_hil_convergence_log_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "analog_sigma_delta_gain_floor_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "behavioral_evidence_per_spec_item_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
