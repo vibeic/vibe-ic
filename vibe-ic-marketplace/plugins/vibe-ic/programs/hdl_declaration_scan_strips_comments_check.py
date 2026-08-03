@@ -47,10 +47,15 @@ thing, however plausible its output.
 
 BASELINE
 --------
-174 call sites scan a declaration regex over an unstripped local today. Most are
+Call sites that scan a declaration regex over an unstripped local. Most are
 harmless — a netlist has no comments, a prompt is not HDL — and failing all of
 them on day one is how a gate gets switched off. The set may only shrink;
 anything NEW fails from the first run.
+
+The live number is in `hdl_declaration_scan_baseline.json`, not here: a count
+written into prose stops tracking the thing it counts. This docstring said 174
+while the register held 171, and neither figure was challenged because nothing
+compares them.
 
 chip-AGNOSTIC: pure AST structure. No design, PDK or vendor literal.
 
