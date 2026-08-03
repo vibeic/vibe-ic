@@ -134,6 +134,33 @@ def def_declared_pin_count(def_text):
     return int(m.group(1)) if m else None
 
 
+# The DEF's OWN database resolution. Every coordinate in `parse_pins` /
+# `parse_power_rails` is in these units, and it is NOT a constant: OpenROAD /
+# librelane emit `2000` for a PDK whose LEF DATABASE MICRONS is 2000 and `1000`
+# for one at 1000. Assuming 1000 puts every injected label and rail marker at
+# `units/1000` times its true position — 2x on a 2000-unit DEF — which silently
+# inflates the streamed GDS bounding box by the same factor. That bbox is what a
+# foundry sign-off deck divides by: gf180mcu's `chip_area = extent.sized(0.0).area`
+# feeding PL.8 / M1.4 / M2.4… so a 2x bbox reports every density at a QUARTER of
+# its real value and manufactures die-level density violations.
+_DEF_UNITS_RE = re.compile(r"^\s*UNITS\s+DISTANCE\s+MICRONS\s+(\d+)\s*;", re.M)
+_DEF_UNITS_FALLBACK = 1000
+
+
+def def_units_per_micron(def_text):
+    """The DEF's declared database units per micron, or None when the DEF
+    carries no `UNITS DISTANCE MICRONS` line. Chip/PDK-AGNOSTIC: it is read from
+    the DEF being labelled, never assumed."""
+    m = _DEF_UNITS_RE.search(def_text or "")
+    if not m:
+        return None
+    try:
+        n = int(m.group(1))
+    except ValueError:
+        return None
+    return n if n > 0 else None
+
+
 def parse_pins(def_text):
     """-> list of (name, layer, x_dbu, y_dbu). Coordinates are DEF database units."""
     pins = []
@@ -287,7 +314,17 @@ def restore(gds_in, def_file, gds_out, top=None, pdk_tech=None):
 
     ly = pya.Layout(); ly.read(gds_in)
     tc = ly.cell(top) if top else ly.top_cell()
-    scale = (1.0 / 1000.0) / ly.dbu     # DEF unit (nm) -> GDS dbu
+    # DEF database unit -> GDS dbu, using the DEF's OWN declared resolution.
+    _units = def_units_per_micron(def_text)
+    if _units is None:
+        _units = _DEF_UNITS_FALLBACK
+        sys.stderr.write(
+            "def_gds_port_power_restore: the DEF declares no "
+            "'UNITS DISTANCE MICRONS' line — falling back to "
+            f"{_DEF_UNITS_FALLBACK} units/um. Every label and rail marker below "
+            "is placed on that ASSUMPTION; if the DEF is at another resolution "
+            "they are mislocated by the ratio.\n")
+    scale = (1.0 / _units) / ly.dbu
     tbase = TEXT_LAYER[0]
 
     # #630 — the PDK's own PORT-label layers, when it declares any. Written IN
@@ -366,7 +403,7 @@ def restore(gds_in, def_file, gds_out, top=None, pdk_tech=None):
                      f"can read them)")
     print(f"restored: {len(pins)} I/O labels + {n_rail} power-rail markers "
           f"({', '.join(rails.keys())}){_strap_note}{_pdk_note}{_unres_note} "
-          f"-> {gds_out}")
+          f"[DEF units/um={_units} (declared), gds dbu={ly.dbu}] -> {gds_out}")
     return 0
 
 

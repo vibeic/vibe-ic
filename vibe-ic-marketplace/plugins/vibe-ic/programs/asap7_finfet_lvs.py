@@ -355,7 +355,14 @@ def restore_design_labels(pya, gds_in, def_file, gds_out, lm=None):
     txt = open(def_file).read()
     ly = pya.Layout(); ly.read(gds_in)
     tc = ly.top_cell()
-    scale = (1.0 / 1000.0) / ly.dbu            # DEF unit (nm) -> GDS dbu
+    # DEF database unit -> GDS dbu, from the DEF's OWN declared resolution.
+    # A hard-coded 1000 mislocates every label by units/1000 on any PDK whose
+    # DEF is emitted at another resolution (OpenROAD writes 2000 for a 2000-unit
+    # LEF) — see def_gds_port_power_restore.def_units_per_micron for the full
+    # consequence chain.
+    _um = re.search(r"^\s*UNITS\s+DISTANCE\s+MICRONS\s+(\d+)\s*;", txt, re.M)
+    _units = int(_um.group(1)) if _um and int(_um.group(1)) > 0 else 1000
+    scale = (1.0 / _units) / ly.dbu
     n_pins = 0
     if "PINS" in txt:
         body = txt.split("PINS", 1)[1].split("END PINS", 1)[0]

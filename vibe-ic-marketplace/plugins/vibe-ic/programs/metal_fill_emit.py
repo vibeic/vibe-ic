@@ -232,6 +232,63 @@ def _clears_foundry_floor(res: Dict[str, Any],
     }
 
 
+def _is_monotone_improvement(res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Disclosure dict when the filled layout is no worse than the unfilled one
+    on EVERY layer and strictly better on at least one, else None.
+
+    Used only on the BELOW-floor PARTIAL branch, where the fill did not reach
+    the foundry rule everywhere. The question there is not "is this compliant"
+    (it is not, and the verdict says so) but "which of the two layouts the flow
+    is holding should the sign-off DRC measure". Shipping the unfilled one makes
+    the DRC report violations the flow had already fixed.
+
+    FAIL-CLOSED — anything unmeasured refuses:
+      * no layer list                              -> None
+      * a layer with no numeric before/after pair  -> None
+      * ANY layer whose achieved density DROPPED   -> None
+      * ANY layer `over_max` (fill overshot a rule)-> None
+      * no layer improved at all                   -> None (nothing to gain)
+    Before/after are compared on the WORST of the whole-die and worst-window
+    figures, the same basis `_clears_foundry_floor` uses."""
+    layers = res.get("layers")
+    if not isinstance(layers, list) or not layers:
+        return None
+
+    def _worst(lay, keys):
+        vals = [lay.get(k) for k in keys]
+        vals = [float(v) for v in vals
+                if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        return min(vals) if vals else None
+
+    improved, moved = [], False
+    for lay in layers:
+        if not isinstance(lay, dict):
+            return None
+        if lay.get("skipped"):
+            continue
+        if lay.get("over_max"):
+            return None
+        before = _worst(lay, ("density_before", "worst_window_before"))
+        after = _worst(lay, ("density_after", "worst_window_after"))
+        if before is None or after is None:
+            return None
+        if after < before:
+            return None                      # a regression -> refuse
+        if after > before:
+            moved = True
+        improved.append({"layer": lay.get("name"),
+                         "before": round(before, 6), "after": round(after, 6)})
+    if not improved or not moved:
+        return None
+    return {
+        "layers": improved,
+        "note": ("at least one layer is BELOW the foundry floor, so the verdict "
+                 "stays FAIL — but no layer REGRESSED and at least one improved, "
+                 "so the FILLED layout is promoted and the sign-off DRC judges "
+                 "the better of the two layouts this run produced"),
+    }
+
+
 def run(project: Path, gds: Optional[str], config: Optional[str],
         out: Optional[str], in_place: bool, cell: Optional[str],
         report: Optional[str]) -> Dict[str, Any]:
@@ -315,6 +372,27 @@ def run(project: Path, gds: Optional[str], config: Optional[str],
         if above is not None:
             res["promoted_on_foundry_floor"] = above
             promote = True
+        else:
+            # Below the foundry floor on some layer. The pre-fix policy shipped
+            # the UNFILLED GDS to sign-off in this case — which is the same
+            # mistake `_clears_foundry_floor` was written to remove, only
+            # partial. MEASURED (subservient x gf180mcuD, r7, the PDK's own
+            # KLayout deck, three runs of the same command): the unfilled GDS
+            # carries 5 density violations (M2.4 M3.4 M4.4 M5.4 MT.3) and the
+            # filled sibling carries 2 (M2.4 M3.4) — the flow computed the fill
+            # that closes M4.4/M5.4/MT.3 and then discarded it, so sign-off
+            # reported three violations that do not exist in the layout the
+            # flow had already produced.
+            #
+            # So promote a fill that is a MONOTONE IMPROVEMENT: no layer's
+            # achieved density is lower than before the fill. This does NOT
+            # touch the VERDICT — it stays PARTIAL/FAIL below the floor, and
+            # the foundry's own deck still judges whatever is promoted. It only
+            # stops the flow from choosing the worse of two layouts it holds.
+            better = _is_monotone_improvement(res)
+            if better is not None:
+                res["promoted_on_monotone_improvement"] = better
+                promote = True
     if promote and staged.is_file():
         if in_place:
             staged.replace(dest)
@@ -387,10 +465,15 @@ def main(argv=None) -> int:
                   f"{above.get('worst_layer_density')}); the FILLED GDS is "
                   "promoted and the sign-off DRC judges it")
             return PASS
+        mono = res.get("promoted_on_monotone_improvement")
         print("metal_fill_emit: FAIL — density target NOT reached on every "
               "layer (achieved densities disclosed above), and at least one "
-              "layer is BELOW the foundry floor — the filled GDS is NOT "
-              "promoted")
+              "layer is BELOW the foundry floor"
+              + (" — the FILLED GDS is promoted anyway because no layer "
+                 "regressed and at least one improved, so the sign-off DRC "
+                 "judges the better of the two layouts; the VERDICT is "
+                 "unchanged: this fill does NOT meet the foundry rule"
+                 if mono else " — the filled GDS is NOT promoted"))
         return FAIL
     print(f"metal_fill_emit: FAIL — {res.get('reason') or res.get('error')}")
     return FAIL

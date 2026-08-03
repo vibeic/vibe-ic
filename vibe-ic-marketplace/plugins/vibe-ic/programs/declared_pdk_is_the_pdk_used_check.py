@@ -363,6 +363,43 @@ def declared_target(run: Path) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+#: The list Phase 1 writes beside `pdk_target` holding the OTHER process names
+#: the design declares ON THE SAME target row. `declared_pdk_target_guard`
+#: already honours it (a design that names two targets may be built on either);
+#: this gate did not, so the two consumers of one declaration disagreed.
+_L19_ALT_KEYS = ("pdk_target_alternates",)
+
+
+def declared_alternates(run: Path) -> List[str]:
+    """The OTHER process names the design declares on its own target row.
+
+    A design may legitimately declare more than one target — "SKY130 primary;
+    GF180MCU secondary" is one declaration naming two processes — and a run
+    builds ONE of them. Reading only the scalar `pdk_target` makes every build
+    of a SECOND declared target look like a contradiction: the gate reports
+    that the declaration names a process no loaded library corroborates, which
+    is true of the name it read and false of the declaration it came from.
+
+    Same probe order and same envelope handling as `declared_target`, so the
+    two cannot resolve from different documents. Returns [] when the key is
+    absent, which is every single-target design — those read exactly as before.
+    Chip/PDK-AGNOSTIC: the names come from the design's own L-doc."""
+    for kind, rel in (("l-doc-canonical", "L19"),
+                      ("l-doc", "phase1/L19_CONSTRAINTS_PDK.json")):
+        for base in (run, run / "run"):
+            for _label, doc in _probe(base, kind, rel):
+                payload: Dict[str, Any] = l_doc_fields(doc)
+                for k in _L19_ALT_KEYS:
+                    for scope in (payload, doc):
+                        v = scope.get(k)
+                        if isinstance(v, list):
+                            out = [str(x).strip() for x in v
+                                   if isinstance(x, str) and str(x).strip()]
+                            if out:
+                                return out
+    return []
+
+
 def loaded_libraries(run: Path, cap: int = 400) -> Tuple[Set[str], int]:
     """Every .lef/.lib basename the tools actually read, from their own logs.
 
@@ -547,6 +584,43 @@ def main(argv=None) -> int:
     # Unreachable before the `declared_target` repair in this same change: the
     # reader resolved nothing, so no run ever got this far.
     contradicted = contradicting_named_pdks(target, libs) if libs else []
+
+    # A CO-DECLARED SECOND TARGET IS NOT A CONTRADICTION.
+    #
+    # `pdk_target` is a SCALAR cut out of a declaration that may name more than
+    # one process ("open-source (SKY130 primary; GF180MCU secondary)"). Phase 1
+    # records the co-declared names on the same row in `pdk_target_alternates`,
+    # and `declared_pdk_target_guard` already lets a run be built on any of
+    # them. This gate read only the scalar, so building the SECOND declared
+    # target read as "the declaration names a process no loaded library
+    # corroborates" — MEASURED on subservient x gf180mcuD (r7): the run loaded
+    # `gf180mcu_fd_sc_mcu7t5v0` throughout, the design declares both, and the
+    # gate FAILed on the name that was NOT built. Two consumers of one
+    # declaration must not disagree about what it permits.
+    #
+    # NARROW BY CONSTRUCTION: an alternate only clears a token when a LOADED
+    # library corroborates that alternate. A process merely listed and never
+    # built clears nothing, and a design with no alternates (every
+    # single-target design) takes the identical path it did before.
+    alternates = declared_alternates(run) if contradicted else []
+    rec["declared_alternates"] = alternates
+    corroborated_alt = sorted(
+        {a for a in alternates
+         if any(shares_identity(tokens(a), n) for n in libs)})
+    if contradicted and corroborated_alt:
+        rec["contradiction_cleared_by_alternate"] = corroborated_alt
+        rec["not_built"] = contradicted
+        contradicted = []
+        # The libraries that corroborate the BUILT alternate are matches for
+        # this declaration too — otherwise the run falls through to "declared a
+        # target and no loaded library matches it", which is the same false
+        # accusation one branch later.
+        alt_hits = sorted({n for n in libs
+                           for a in corroborated_alt
+                           if shares_identity(tokens(a), n)})
+        hits = sorted(set(hits) | set(alt_hits))
+        rec["matching_libraries"] = hits
+
     rec["contradicting_named_pdks"] = contradicted
     if contradicted:
         rec["verdict"] = "FAIL"
@@ -571,6 +645,12 @@ def main(argv=None) -> int:
         # derivable from a LEF filename, so it was not checked — and a PASS that
         # stays silent about that reads as though it had been.
         rec["verified"] = "library identity only"
+        if rec.get("contradiction_cleared_by_alternate"):
+            print("    the design declares more than one target; this run built "
+                  f"{rec['contradiction_cleared_by_alternate']} and NOT "
+                  f"{rec['not_built']} — both are named on the design's own "
+                  "target row (pdk_target_alternates), so this is a choice "
+                  "among declared targets, not a substitution.")
         rec["not_verified"] = "foundry / process node (not derivable from a library filename)"
         _emit(a.json, rec)
         print(f"declared_pdk_is_the_pdk_used: PASS — {len(hits)} of {len(libs)} loaded "
