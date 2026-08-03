@@ -41,10 +41,34 @@ from pathlib import Path
 from typing import List
 
 # Directory components excluded by exact name (build / output / scratch dirs).
+#
+# `steps` is the flow's own PUBLICATION VIEW: `<project>/steps/<phase>/<stage>/
+# <id>_<name>/` republishes each canonical step output under its flow-step id.
+# Every file there is already in scope at its canonical location if it belongs
+# in scope at all, so including the tree can only (a) duplicate a file that is
+# already scanned or (b) admit a build OUTPUT whose canonical directory this
+# very list excludes. Both happened, and the second one was expensive:
+#
+#     steps/phase2/stage2/9_synthesis_yosys_mapped_netlist/netlist.v
+#     steps/phase2/stage2/14_synthesis_handoff_gate_pre_pnr_yosys_script_netl/netlist.v
+#
+# are the SAME emitted gate-level netlist published twice. The component
+# `synth` in this set never matched them, because the publication view names
+# the directory after the flow step (`9_synthesis_...`), not after the build
+# dir. MEASURED on a 3.1M-cell design: this collector returned 9 files /
+# 715,640,356 bytes where the design's RTL is 3 files / 12,499 bytes — a
+# factor of 57,255. `cdc_async_input_check` then took 160.7 s / 3.5 GB RSS and
+# `clock_domain_reg_crossing_check` 67.0 s / 3.5 GB, both TIMED OUT under the
+# P0 umbrella's per-gate budget, and the P0 FAIL halted the flow at phase 2.
+#
+# It is also semantically wrong for these two consumers: CDC is a property of
+# RTL clock-domain structure, and a flattened NAND/NOR/DFF netlist carries
+# none of it. The gates were paying 57,000x to read a file that cannot answer
+# the question they ask.
 EXCLUDED_DIR_NAMES = frozenset({
     "build", "synth", "pnr", "gds", "db", "dft", "reports",
     "output_files", "incremental_db", "__pycache__", "node_modules",
-    "formal", "oracle_run", "input",
+    "formal", "oracle_run", "input", "steps",
 })
 
 def is_excluded_component(part: str) -> bool:
