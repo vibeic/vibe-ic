@@ -187,15 +187,29 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
             "Error and fault condition detection and handling",
             "Reset behavior verification",
             "Back-to-back / sustained operation"]
-    for ld_name, payload in [
-        ("L19_CONSTRAINTS_PDK.json", {
+    # Each `notes` string below explains an EMPTY record, so it may only be
+    # attached to a record that really is empty. `setdefault` guards the KEY,
+    # not the CLAIM: on a doc the extractor already populated, the `*_present`
+    # flag it wrote survives while `notes` is still absent, and the canned
+    # "...does not include..." sentence lands next to the populated field.
+    #
+    # Measured: an L19 carrying a `pdk_target` read from the design's own input
+    # prose, with `constraints_present: true`, was emitted alongside a note
+    # saying the spec "does not include PDK / timing constraints". The record
+    # answered the same question twice in opposite directions, and the prose is
+    # the half a human reads.
+    #
+    # So the note is gated on the presence flag's EFFECTIVE value - decided
+    # after the flag has settled, not before.
+    for ld_name, presence_key, payload in [
+        ("L19_CONSTRAINTS_PDK.json", "constraints_present", {
             "constraints_present": False,
             "notes": "Block-level peripheral spec does not include PDK / timing constraints; these are deferred to the SoC integration spec."}),
-        ("L20_DFT_SCAN_TOPOLOGY.json", {
+        ("L20_DFT_SCAN_TOPOLOGY.json", "dft_present", {
             "dft_present": False,
             "notes": "Block guide does not specify DFT/scan topology; this is deferred to SoC integration. The peripheral register file is amenable to standard scan insertion at the SoC level."}),
-        ("L22_VERIFICATION_PLAN.json", _l22_payload),
-        ("L23_SECURITY_REQUIREMENTS.json", {
+        ("L22_VERIFICATION_PLAN.json", None, _l22_payload),
+        ("L23_SECURITY_REQUIREMENTS.json", "security_requirements_present", {
             "security_requirements_present": False,
             "notes": "Block guide does not specify confidentiality / integrity / authentication requirements for the serial peripheral. Any access-control (e.g. privileged-mode register access) is deferred to SoC integration."}),
     ]:
@@ -203,8 +217,13 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
         if q.is_file():
             d = _read(q)
             f = d.get("fields") or {}
+            gated_note = payload.get("notes") if presence_key else None
             for k, v in payload.items():
+                if k == "notes" and gated_note is not None:
+                    continue          # decided below, once the flag has settled
                 f.setdefault(k, v)
+            if gated_note is not None and not f.get(presence_key):
+                f.setdefault("notes", gated_note)
             d["fields"] = f
             _write(q, d)
 
