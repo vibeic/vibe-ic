@@ -45,10 +45,14 @@ identifier of any process, foundry or design is written here.
 
 EXIT
     0  the libraries the tools loaded are consistent with the declared target
-    1  they are not — including "a target is declared and no PDK is staged"
-    2  no target declared AND no cell library loaded — there was no physical
-       implementation to judge. A run that DID load libraries without a declared
-       target exits 1, because it cannot show it used the intended process.
+    1  they are not — including "a target is declared and no PDK is staged",
+       and including "a PDK is staged that Phase 1 could not NAME, and no
+       target is declared". An unnameable process is not a skippable case: it
+       is the one that makes every later claim unverifiable.
+    2  no target declared AND no cell library loaded AND the staged PDK, if
+       any, was nameable — there was no physical implementation to judge. A
+       run that DID load libraries without a declared target exits 1, because
+       it cannot show it used the intended process.
 """
 from __future__ import annotations
 
@@ -165,6 +169,29 @@ def staged_pdk_files(run: Path) -> int:
     return n
 
 
+def unnameable_staged_pdk(run: Path) -> bool:
+    """Did Phase 1 stage a PDK it could not NAME?
+
+    Phase 1 writes this verdict down itself. Reading its record rather than
+    re-deriving it keeps the two from drifting, exactly as `declared_target`
+    does. Absent record -> False: a run that predates the field is judged on
+    the evidence it does carry, not on a missing one.
+    """
+    for rel in ("phase1/pdk_staging_read.json",
+                "reports/phase1/pdk_staging_read.json"):
+        for base in (run, run / "run"):
+            p = base / rel
+            if not p.is_file():
+                continue
+            try:
+                d = json.loads(p.read_text(errors="replace"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(d, dict) and d.get("staged_pdk_unnameable") is True:
+                return True
+    return False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("run_dir", type=Path)
@@ -175,12 +202,39 @@ def main(argv=None) -> int:
     target, source = declared_target(run)
     libs, scanned = loaded_libraries(run)
     staged = staged_pdk_files(run)
+    unnameable = unnameable_staged_pdk(run)
 
     rec: Dict[str, object] = {
         "declared_target": target, "declared_source": source,
         "staged_pdk_files": staged, "logs_scanned": scanned,
+        "unnameable_staged_pdk": unnameable,
         "libraries_loaded": sorted(libs)[:40],
     }
+
+    # A PDK THAT CANNOT BE NAMED MUST NOT BECOME AN UNNAMED INPUT.
+    #
+    # Measured: a real run staged a PDK, read 27 enablement files from it,
+    # derived no identifier from any of them, wrote `staged_identifier: null`
+    # — and carried on. With no declared target the branch below then
+    # returned rc=2 NOT CHECKED whenever no library happened to be named in a
+    # log, so the one condition that makes the question unanswerable also
+    # excused the answer. That is the same shape as the `--pdk-lib` skip this
+    # file was written to remove, one level up.
+    #
+    # So: staged-and-unnameable is a FAIL on its own evidence. It is checked
+    # BEFORE the declared-target branches because it is not a statement about
+    # agreement — there is nothing to agree with — it is a statement that the
+    # run cannot say which process it used.
+    if unnameable and not target:
+        rec["verdict"] = "FAIL"
+        rec["reason"] = ("a PDK is staged under input/pdk/ that Phase 1 could "
+                         "not name, and no target is declared — this run "
+                         "cannot say which process it implemented against")
+        _emit(a.json, rec)
+        print(f"declared_pdk_is_the_pdk_used: FAIL — {rec['reason']}")
+        print(f"    staged : {staged} file(s) under input/pdk/, identifier NOT DERIVABLE")
+        print(f"    loaded : {len(libs)} distinct librar(ies) across {scanned} log(s)")
+        return 1
 
     if not target:
         # AN UNANSWERABLE QUESTION IS NOT A PASS. The first cut returned rc=2 here
