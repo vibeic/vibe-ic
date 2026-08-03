@@ -3076,6 +3076,72 @@ def _def_pdn_evidence(def_text: str) -> Dict[str, Any]:
     }
 
 
+def _macro_obs_layers_from_lef(lef_text: str) -> Dict[str, Dict[str, Any]]:
+    """``{master: {"blocked": {layer: total_area_um2}, "size": (w, h)}}`` — what
+    each MACRO's ``OBS`` section declares unroutable, per layer. ORGANIC #685/#686.
+
+    The planner and the follow-pin path both read a macro's ``PIN`` entries and
+    NEITHER reads ``OBS``: measured, `"OBS" in inspect.getsource(...)` is False
+    for both. So the flow will happily strap a layer the macro declares blocked
+    across its ENTIRE footprint, and run standard-cell follow-pins straight
+    through the same obstruction — 28 of 292 segments on one real routed DEF.
+
+    `LAYER OVERLAP` is a LEF keyword, not a metal layer: it declares the macro's
+    own placement extent. Recorded separately so a caller cannot mistake it for
+    a routing blockage and refuse every layer.
+
+    Pure LEF grammar, chip-AGNOSTIC. No design, PDK or vendor literal."""
+    out: Dict[str, Dict[str, Any]] = {}
+    if not isinstance(lef_text, str) or not lef_text:
+        return out
+    for mm in re.finditer(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\1\s*$",
+                          lef_text, re.S | re.M):
+        master, body = mm.group(1), mm.group(2)
+        sm = re.search(r"^\s*SIZE\s+([\d.-]+)\s+BY\s+([\d.-]+)\s*;", body, re.M)
+        size = (float(sm.group(1)), float(sm.group(2))) if sm else None
+        blocked: Dict[str, float] = {}
+        overlap = 0.0
+        # OBS runs to the next section keyword, not to `END <master>`: a macro
+        # may declare PINs after its OBS, and consuming to END would swallow them.
+        om = re.search(r"^\s*OBS\s*$(.*?)(?=^\s*(?:PIN|END)\b)", body, re.S | re.M)
+        if om:
+            layer = None
+            for line in om.group(1).splitlines():
+                lm = re.match(r"\s*LAYER\s+(\S+)\s*;", line)
+                if lm:
+                    layer = lm.group(1)
+                    continue
+                rm = re.match(r"\s*RECT\s+([\d.-]+)\s+([\d.-]+)\s+"
+                              r"([\d.-]+)\s+([\d.-]+)\s*;", line)
+                if rm and layer:
+                    x1, y1, x2, y2 = (float(v) for v in rm.groups())
+                    a = abs(x2 - x1) * abs(y2 - y1)
+                    if layer.upper() == "OVERLAP":
+                        overlap += a
+                    else:
+                        blocked[layer] = blocked.get(layer, 0.0) + a
+        out[master] = {"blocked": blocked, "size": size, "overlap_area": overlap}
+    return out
+
+
+def _layer_is_fully_blocked(entry: Dict[str, Any], layer: str,
+                            tol: float = 0.98) -> Optional[bool]:
+    """Is `layer` blocked across (essentially) the macro's whole footprint?
+
+    None when it cannot be decided — no SIZE, or a zero-area macro. NOT False:
+    a macro whose extent is unknown is one this cannot speak about, and
+    answering False there is the absence-reads-as-clean shape.
+
+    `tol` at 0.98 rather than 1.0 because an OBS is often drawn as several
+    abutting rects whose union is the footprint minus rounding; requiring
+    exactly 100% would report a fully-blocked layer as partially blocked."""
+    size = entry.get("size")
+    if not size or size[0] <= 0 or size[1] <= 0:
+        return None
+    area = size[0] * size[1]
+    return (entry.get("blocked", {}).get(layer, 0.0) / area) >= tol
+
+
 def _macro_pg_ports_from_lef(
         lef_text: str) -> List[Dict[str, Any]]:
     """``[{master, pin, use, layer, w, h}]`` — every POWER/GROUND PORT RECT of
@@ -3168,8 +3234,14 @@ def _macro_pdn_grid_plan(
     chip-AGNOSTIC: masters, pin layers and every dimension come from the
     design's own LEFs; no PDK name, no layer-name convention, no literal."""
     ports: List[Dict[str, Any]] = []
+    # #685 — the same LEF texts, read a second time for what they BLOCK.
+    # Derived here rather than taken as a parameter so every existing caller
+    # gets the rule without being changed; a rule only new callers get is one
+    # the existing runs do not have.
+    obs: Dict[str, Dict[str, Any]] = {}
     for t in (macro_lef_texts or []):
         ports.extend(_macro_pg_ports_from_lef(t))
+        obs.update(_macro_obs_layers_from_lef(t))
     if not ports:
         return None
     layers = _techlef_routing_layers(tech_lef_text or "")
@@ -3190,6 +3262,33 @@ def _macro_pdn_grid_plan(
     if not above:
         return None
     above.sort(key=lambda s: order[str(s["layer"]).lower()])
+    # Rule 0 (ORGANIC #685): never strap a layer the macro declares BLOCKED
+    # across its whole footprint. The planner read the macro's PIN entries and
+    # never its OBS — measured, `"OBS" in inspect.getsource(...)` was False —
+    # so it would place a strap on a layer the macro's own LEF says is
+    # unroutable there, and no gate could see it.
+    #
+    # Only a FULL-footprint block disqualifies a layer. A partial obstruction is
+    # ordinary and a strap can route around it; refusing those would reject
+    # nearly every real macro and the rule would be turned off. An UNDECIDABLE
+    # macro (no SIZE) does not disqualify either — it is not evidence of a
+    # block, and inventing one would fail designs this cannot speak about.
+    # Two forms on purpose: the comparison is case-insensitive because LEF is,
+    # but the REPORTED name keeps the LEF's own casing — a row that renames the
+    # layer makes a reader hunt for something the LEF does not contain.
+    _blocked_layers = set()          # as written in the LEF, for reporting
+    _blocked_lc = set()              # folded, for matching
+    for _e in (obs or {}).values():
+        for _lay in (_e.get("blocked") or {}):
+            if _layer_is_fully_blocked(_e, _lay) is True:
+                _blocked_layers.add(_lay)
+                _blocked_lc.add(_lay.lower())
+    _refused = [s for s in above
+                if str(s.get("layer", "")).lower() in _blocked_lc]
+    above = [s for s in above
+             if str(s.get("layer", "")).lower() not in _blocked_lc]
+    if not above:
+        return None
     # Rule 1: the macro's strap must have a PARTNER strap layer of the opposite
     # direction in the core plan, and the macro grid must use only one of them.
     strap = None
@@ -3231,6 +3330,10 @@ def _macro_pdn_grid_plan(
         "pitch": pitch,
         "partner_layer": partner["layer"],
         "pitch_floor": floor,
+        # #685 — what the macro's OBS took off the table, so a reader can tell a
+        # layer that was never a candidate from one this rule removed.
+        "blocked_layers": sorted(_blocked_layers),
+        "refused_for_blockage": sorted({str(s.get("layer")) for s in _refused}),
         "unreachable": sorted({(p["master"], p["pin"],
                                 round(_across(p), 3)) for p in unreachable}),
     }
