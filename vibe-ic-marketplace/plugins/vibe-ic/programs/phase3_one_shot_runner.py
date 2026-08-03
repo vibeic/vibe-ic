@@ -10618,8 +10618,32 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
             Path(pdk.cell_lef).read_text(errors="ignore"))
     except Exception:
         site_area = None
-    avg_cell = ((site_area * _AUTO_DIE_AVG_SITES_PER_CELL) if site_area
-                else _AUTO_DIE_FALLBACK_CELL_UM2)
+    # DEGRADE LOUDLY, NEVER SILENTLY.
+    #
+    # `pdk.cell_lef` is an IN-CONTAINER path (the PDK lives in the EDA image,
+    # not on the host), so on a containerised run this host-side `read_text`
+    # raises FileNotFoundError, the `except` above swallows it, and every
+    # design silently falls back to `_AUTO_DIE_FALLBACK_CELL_UM2`. The log line
+    # then prints `avg_cell=<fallback>µm²` in exactly the format it uses for a
+    # MEASURED value, so nothing downstream — and no reader — can tell that the
+    # die was sized from a constant rather than from this PDK.
+    #
+    # Measured consequence on one real cell: the fallback over-estimated the
+    # average cell area by 5.3x against the design's OWN post-synthesis report,
+    # so `--die-um auto` produced a die 5.3x too large in area and OpenROAD
+    # reported `Effective utilization: 0.064` against a 0.25 target.
+    #
+    # This change does NOT alter the number or any die produced today — it only
+    # makes the estimate SAY which of its two sources it came from, so a
+    # mis-sized die is attributable instead of invisible.
+    _avg_cell_src = "site-LEF"
+    if site_area:
+        avg_cell = site_area * _AUTO_DIE_AVG_SITES_PER_CELL
+    else:
+        avg_cell = _AUTO_DIE_FALLBACK_CELL_UM2
+        _avg_cell_src = ("FALLBACK CONSTANT — the site could not be read from "
+                         "this PDK's cell LEF, so the die is NOT sized from "
+                         "this process; verify the die/utilization")
     # die-util FIDELITY: honor the design's own declared core density; else the
     # routing-headroom default. `util` (placement) is deliberately unused here.
     # Precedence: L9 generated constraint (design's own authored target) > the
@@ -10669,7 +10693,7 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
                      f"{cell_side} (cell-area-dominated)")
     return (f"{side}x{side}",
             f"die-um=auto → {side}x{side} (cells={cells}, "
-            f"avg_cell={avg_cell:.2f}µm², "
+            f"avg_cell={avg_cell:.2f}µm² [{_avg_cell_src}], "
             f"target_util={util_frac:g} [{_util_src}]{_pin_note})")
 
 
