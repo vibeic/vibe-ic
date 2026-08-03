@@ -635,6 +635,16 @@ def main() -> int:
         # doc-extraction track runs and produces L*.json for phase2.
         if p1_mode == "docs":
             p1_args += ["--mode", "docs"]
+            # ORGANIC-20260803b — a design document may state its timing
+            # target ONCE PER PROCESS, as a table keyed by PDK. Phase 1
+            # cannot resolve such a table without knowing which process this
+            # run builds, and until now it was never told: `--pdk` reached
+            # phase3 only, so the SDC that drives CTS and STA was authored
+            # two phases before anything knew the process. Forwarded through
+            # `parse_known_args` extras; ignored by every design whose spec
+            # is not PDK-keyed.
+            if args.pdk and str(args.pdk).strip().lower() != "auto":
+                p1_args += ["--pdk", str(args.pdk).strip()]
         label = ("PHASE 1 (vendor docs → L1-L23)" if p1_mode == "docs"
                  else "PHASE 1 (NL → L1-L23)")
         rc = _run_phase(label, runner, p1_args, env=_phase_env)
