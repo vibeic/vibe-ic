@@ -734,6 +734,10 @@ steps:
       # human-written FPGA verification report must be traceable to
       # a tool-generated artefact (sim summary + coverage_actual.json).
       - fpga_verification_audit
+      # vibe-ic#693 — WIRED BELOW as `advisory_program_exit_zero`. Enforces the
+      # four LED-probe anti-patterns of skills/fpga-led-probe-allocation. See
+      # the gate leg for why it is advisory and what would make it blocking.
+      - fpga_led_probe_lint
     required_outputs:
       - "phase2/stage1/fpga/output_files/*.sof"
       - "phase2/stage1/fpga/output_files/*.map.rpt"
@@ -763,6 +767,53 @@ steps:
         - optional_program_exit_zero:
             command: "fpga_verification_audit --report reports/fpga_verification_report.md --summary phase2/stage1/sim/work/summary.txt --coverage reports/phase2/coverage/coverage_actual.json --out reports/phase2/gates/fpga_verification_audit.json"
             condition_files_exist: ["reports/fpga_verification_report.md"]
+        # ── vibe-ic#693 — `fpga_led_probe_lint`, wired for the first time ────
+        #
+        # WHAT IT ASSERTS. The four deterministic anti-patterns of
+        # skills/fpga-led-probe-allocation/SKILL.md over the FPGA top RTL:
+        # instantaneous-on-pulse, sticky-without-reset-clear,
+        # mode-mix-without-table, and — the one no other wired gate covers —
+        # per-BIT shared-pin-vs-QSF. (`fpga_port_qsf_consistency_check` IS
+        # wired, in _STRUCTURAL_RTL_GATES, but it normalises bus indices to the
+        # base name `LEDR`; measured on the corpus's only real FPGA top it does
+        # not even reach that code, because `find_fpga_top` requires an `inout`
+        # port and that top has none, so it prints "no FPGA top module found"
+        # and exits 0. Per-bit LED allocation is covered by nothing.)
+        #
+        # WHY `advisory_`, NOT `optional_`. Two separate reasons, both measured
+        # on the published sha256 run in its as-shipped state:
+        #   1. `optional_program_exit_zero` NEVER EXECUTES here. `_evaluate_gate`
+        #      short-circuits `all_of` on the first failing leg and re-runs ONLY
+        #      `advisory_program_exit_zero` legs afterwards. Leg 1 is
+        #      `files_exist: phase2/stage1/fpga/output_files/*.sof`, and ZERO
+        #      .sof files exist anywhere in benchmark-data — the FPGA build has
+        #      never run in the published corpus (28/28 run roots report
+        #      quartus_map_audit verdict=SKIP). Wired as `optional_`, no
+        #      reports/phase2/gates/fpga_led_probe_lint.json was written at all:
+        #      a gate wired somewhere it never runs is the same defect moved.
+        #      Wired as `advisory_`, it executes and writes its JSON.
+        #   2. `optional_program_exit_zero` is BLOCKING — `_evaluate_gate`
+        #      returns its `passed` verbatim into `all_of`. With a forged .sof
+        #      + .map.rpt + audit JSON to reach the leg, step 6 went from
+        #      WAIVED-DEFERRED to a hard FAIL. "Non-blocking" and that slot are
+        #      incompatible; `advisory_` is the slot that records without
+        #      blocking.
+        #
+        # BLAST RADIUS, MEASURED (28 published run roots: 16 under
+        # benchmark-data/ic + 12 under benchmark-data/evaluation).
+        #   executes on  1  — ic/sha256, the only run with a .qsf
+        #   RED          0  — after the repairs in this change; it reports
+        #                     1 WARNING (`test_done`, a held handshake level)
+        #   silent      27  — condition_files_exist has no match, so the leg
+        #                     returns without running: no vacuous PASS is
+        #                     credited anywhere
+        #
+        # WHAT WOULD MAKE IT BLOCKING. A run where Quartus genuinely built (so
+        # legs 1-3 pass and the step is not already WAIVED-DEFERRED), plus a
+        # second FPGA top in the corpus to measure against. Today there is one.
+        - advisory_program_exit_zero:
+            command: "fpga_led_probe_lint phase2/stage1/fpga --qsf phase2/stage1/fpga/*.qsf --json reports/phase2/gates/fpga_led_probe_lint.json"
+            condition_files_exist: ["phase2/stage1/fpga/*.qsf"]
     blocks_on: [2, 4, 5]
 
   - id: 7
@@ -3072,7 +3123,7 @@ steps:
   - id: 39
     name: "FPGA final sign-off (recompile + on-board test)"
     stage: stage4
-    skills: [fpga-test-harness]
+    skills: [fpga-test-harness, fpga-signaltap]
     programs:
       # Wave 82 — `bringup_plan_gen` emits the bring-up plan from
       # L13_LAB_CALIBRATION before the on-board attestation runs;
@@ -3080,6 +3131,61 @@ steps:
       # board-up sequence (probe order / supply ramp / safe-states).
       - bringup_plan_gen
       - fpga_on_board_attestation_check
+      # ── vibe-ic#693 — the two SignalTap gates: REGISTERED, NOT WIRED ──────
+      #
+      # Both are shipped, gate-shaped, and (as of 2026-08-03) referenced from
+      # no executable location at all. Being listed HERE is the DISCLOSURE
+      # #693 asks for, not permission: it puts them in an executable location's
+      # `programs:` list with the reason recorded next to the step they belong
+      # to, exactly as `fpga_test_harness_gen` and `debug_first_pass` are
+      # registered at step 6. Neither appears in this step's `gate:` block, and
+      # that is deliberate; the measurement is below. Both are driven EXPLICITLY
+      # by the agent following skills/fpga-signaltap/SKILL.md with a board on
+      # the bench.
+      #
+      # `_UNROUTED_INVENTORY` in gate_skip_routing_check.py is NOT the right
+      # register for either, and putting them there was tried and measured:
+      # that table counts UNROUTED SKIP PATHS, not unwired gates, and injecting
+      # a gate makes the ratchet exit 1 ("[RATCHET-FIXED] ...: 1 -> 0; delete
+      # the inventory entry"). After the rc 0 -> 2 repair in this same change
+      # their skip paths are ROUTED, so they can never legitimately appear
+      # there. `_SEMANTIC_ARGV_UNDRIVABLE` / `_NOT_A_PROJECT_GATE` /
+      # `_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA` are all wrong too: each carries a
+      # parametrized test asserting membership in `_STRUCTURAL_RTL_GATES`, and
+      # neither gate is registered there.
+      #
+      # signaltap_recompile_sequence_check
+      #   ASSERTS: quartus_stp -> quartus_map -> quartus_fit -> quartus_asm all
+      #   present, in canonical order, with --stp_file=<x>.stp. The defect is
+      #   real and expensive: omit quartus_stp and you get a perfectly valid
+      #   SOF containing NO logic analyzer, discovered only after programming
+      #   the board.
+      #   WHY NOT WIRED: the flow does not emit that sequence. Its only FPGA
+      #   command line is `quartus_sh --flow compile <base>`
+      #   (design_one_shot_runner), which contains none of the four tokens and
+      #   returns SKIP. Repo-wide there are 0 compile.log, 0 *.map.rpt and 0
+      #   *.sof files, and grep for `quartus_stp` outside docs returns only
+      #   tools/signaltap_gen.py, the gate, and its test. Wired at step 6 or
+      #   here it would be rc=2 NOT-CHECKED on 28/28 published run roots — a
+      #   permanently silent gate. Its subject exists only when an engineer is
+      #   re-fitting a SignalTap image at the bench.
+      #
+      # signaltap_stp_completeness_check
+      #   ASSERTS: a generated .stp captures every DUT port plus the four
+      #   BIST-engine signals, and defines a trigger, a positive sample depth
+      #   and a capture clock.
+      #   WHY NOT WIRED: no flow step produces a .stp, and 0 exist in the
+      #   published corpus, so any automatic wiring is rc=2 on 28/28. It is
+      #   ALSO not yet safe as a post-condition of its own producer: the MCP
+      #   tool `eda_rtl_signaltap_autogen`, which this gate's header and
+      #   skills/fpga-signaltap/SKILL.md both name as THE generator, fails it
+      #   on its default invocation (measured against the published sha256 RTL:
+      #   one signal emitted, 4 x MISSING_BIST_SIGNAL + 8 x MISSING_PORT +
+      #   NO_TRIGGER). The other shipped producer, tools/signaltap_gen.py,
+      #   PASSES it. Making the gate blocking before that producer split is
+      #   settled would break the declared generator 100% of the time.
+      - signaltap_recompile_sequence_check
+      - signaltap_stp_completeness_check
     required_outputs:
       - "phase2/stage1/fpga/final/*.sof"
       - "reports/phase2/fpga/on_board_pass.json"

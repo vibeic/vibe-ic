@@ -113,21 +113,46 @@ python3 plugins/vibe-ic/programs/fpga_led_probe_lint.py \
     [--json fpga_led_probe_lint.json]
 ```
 
-Exit codes: `0` = PASS / SKIP (nothing to lint); `1` = anti-pattern found;
-`2` = usage error. The JSON `findings[]` carries `rule` / `file` / `line`
-/ `detail` / `fix_hint` for each hit.
+Exit codes: `0` = PASS (ERROR-free; WARNINGs may still be reported);
+`1` = ERROR anti-pattern found; `2` = **NOTHING EXAMINED** — no input file, or
+no LED drive in any file that was read. `2` is the *disclosed-skip* tier, never
+a pass: `flow_compliance_check` files it as VACUOUS_PASS. The JSON `findings[]`
+carries `rule` / `file` / `line` / `detail` / `fix_hint` for each ERROR;
+`warnings[]` carries the same shape for advisory hits; `unreadable[]` and
+`led_drives_examined` disclose the lint's actual coverage.
+
+**Where it runs automatically.** Flow step 6, as an `advisory_program_exit_zero`
+leg guarded by `condition_files_exist: [phase2/stage1/fpga/*.qsf]`. It RECORDS,
+it does not block. Over the 28 published run roots it executes on 1 and is
+silent on 27 (no `.qsf`). Making it blocking needs a run where Quartus genuinely
+built and more than one FPGA top to measure against.
 
 The four rules it flags (and ONLY these — no false alerts):
 
 - **`instantaneous-on-pulse`** — Using `instantaneous` mode
   (`assign LED[N] = sig;`) for a 1-cycle pulse → the camera will never
-  catch it. The lint recognises a pulse by a pulse-token name (deny-listed
-  against held levels like `*_en` / `*_busy` / `*_state`) **or** the
-  structural set-1/set-0 pulse shape; a pulse fed through `pulse_stretch`
-  is NOT flagged.
+  catch it. Evidence is **two-tier**, because a name alone is not always
+  enough:
+  - **ERROR** — the structural set-1/set-0 pulse shape (evaluated *outside*
+    reset branches, so a reset clear is not read as a pulse deassert), **or**
+    an unambiguous pulse-token name (`*_pulse`, `*_strobe`, `*_stb`, `*_tick`,
+    `*_edge`, `*_trig`, `*_fire`, `*_onehot`).
+  - **WARNING** — a *handshake* token only (`*_done`, `*_valid`, `*_ack`,
+    `*_req`, `*_start`, `*_stop`) with no structural pulse shape. These name a
+    held level at least as often as a pulse; measured on a real FPGA top,
+    `test_done` was asserted in one state and HELD in the terminal state, and
+    calling that a pulse was wrong. Reported, never a red.
+  - Names on the level deny-list (`*_en` / `*_busy` / `*_state` / `*_q` / …)
+    are never a pulse, and a pulse fed through `pulse_stretch` is not flagged.
 - **`mode-mix-without-table`** — Mixing ≥ 2 of {pulse, sticky, byte}
-  modes without a commented **`LED PROBE TABLE`** → reviewer cannot decode
+  modes without a commented probe table → reviewer cannot decode
   the photo. A single-mode top needs no table (not flagged).
+  `instantaneous` is the BASELINE mode and is **not** a mix participant — a
+  byte column plus one level probe is the recommended layout above, not an
+  anti-pattern. The table is recognised either by the literal
+  **`LED PROBE TABLE`** title *or* by a commented block that actually maps ≥ 2
+  LED indices to signals: the rule fires on a missing TABLE, not a missing
+  STRING.
 - **`sticky-without-reset-clear`** — A sticky LED latch set to `1'b1` and
   driving an LED but never cleared on reset will be ON forever even if the
   test never stimulated the signal. The lint accepts both `if (!rst_n)

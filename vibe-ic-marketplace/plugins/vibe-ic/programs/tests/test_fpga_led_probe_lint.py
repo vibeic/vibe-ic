@@ -352,22 +352,254 @@ endmodule
 # Graceful degradation
 # ---------------------------------------------------------------------------
 def test_missing_input_skips_gracefully(tmp_path):
-    """An empty / non-RTL directory yields SKIP, never a crash or false flag."""
+    """An empty / non-RTL directory yields SKIP, never a crash or false flag.
+
+    CONTRACT CHANGE (2026-08-03): rc is 2, not 0. This case used to exit 0,
+    which `flow_compliance_check._check_program_exit_zero` credits as a plain
+    PASS — so "this project has no FPGA top" and "the FPGA top was audited and
+    is clean" produced the same verdict. rc 2 is the VACUOUS_PASS tier.
+    """
     empty = tmp_path / "empty_dir"
     empty.mkdir()
     res, report = _run(str(empty))
-    assert res.returncode == 0
+    assert res.returncode == 2, res.stderr
     assert report["status"] == "SKIP"
     assert report["findings"] == []
+    # The declaration must be visible to gate_skip_routing_check._skip_token,
+    # which matches its vocabulary at LINE START.
+    assert res.stderr.lstrip().startswith("[SKIP]"), res.stderr
 
 
 def test_unexpected_content_no_crash(tmp_path):
-    """A non-Verilog spec file with no LED constructs → PASS, no findings."""
+    """A non-Verilog spec file with no LED constructs → SKIP, no findings.
+
+    CONTRACT CHANGE (2026-08-03): rc is 2, not 0. Prose that merely mentions
+    LEDs contains no LED drive for the lint to examine; a PASS there certifies
+    an examination that never happened. Not crashing is still the point — the
+    file is read and reported, it is simply not credited.
+    """
     f = _write(tmp_path, "spec.txt",
                "This design uses 10 LEDs for debug. No code here.\n")
     res, report = _run(str(f))
-    assert res.returncode == 0
+    assert res.returncode == 2, res.stderr
     assert report["findings"] == []
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#693 — repairs made before this gate was wired. Each case below is a
+# defect MEASURED on real published data, not a hypothetical.
+# ---------------------------------------------------------------------------
+def test_held_handshake_level_is_a_warning_not_an_error(tmp_path):
+    """`test_done` set in one state and HELD in the terminal state.
+
+    The corpus's only real FPGA top does exactly this, and the gate called it a
+    1-cycle pulse on the identifier alone: renaming `test_done` -> `test_finished`
+    and changing nothing else removed the finding. A weak handshake token with
+    no structural pulse shape is now a WARNING — reported, never a red.
+    """
+    body = """
+// LED PROBE TABLE
+module top(input clk, input rst_n, output [9:0] LEDR);
+    reg [1:0] st;
+    reg test_done;
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            st <= 2'd0; test_done <= 0;
+        end else begin
+            case (st)
+            2'd0: begin test_done <= 1'b1; st <= 2'd1; end
+            2'd1: begin test_done <= 1'b1; end
+            default: st <= 2'd1;
+            endcase
+        end
+    end
+    assign LEDR[1] = test_done;
+endmodule
+"""
+    f = _write(tmp_path, "held.v", body)
+    res, report = _run(str(f))
+    assert res.returncode == 0, res.stderr
+    assert _rules(report) == [], _rules(report)
+    warn = [w["rule"] for w in report["warnings"]]
+    assert warn == ["instantaneous-on-pulse"], report["warnings"]
+    assert report["warnings"][0]["severity"] == "WARNING"
+
+
+def test_structural_pulse_with_bare_literals_is_an_error(tmp_path):
+    """`sig <= 1;` / `sig <= 0;` is a pulse shape too — and the reset clear of
+    a HELD flag must not be mistaken for the deassert half of one."""
+    body = """
+// LED PROBE TABLE
+module top(input clk, input rst_n, input go, output [9:0] LEDR);
+    reg blip;
+    always @(posedge clk) begin
+        if (!rst_n) blip <= 0;
+        else begin
+            blip <= 0;
+            if (go) blip <= 1;
+        end
+    end
+    assign LEDR[0] = blip;
+endmodule
+"""
+    f = _write(tmp_path, "shape.v", body)
+    res, report = _run(str(f))
+    assert res.returncode == 1, res.stderr
+    assert "instantaneous-on-pulse" in _rules(report)
+    detail = report["findings"][0]["detail"]
+    assert "shape" in detail, detail
+
+
+def test_reset_clear_alone_is_not_a_pulse_shape(tmp_path):
+    """Set to 1 in normal code, cleared ONLY by reset → held level, not a pulse.
+
+    This is the negative control for `_strip_reset_branches`: without it the
+    widened `<= 0` match would read the reset clear as a pulse deassert and
+    re-introduce the false positive the two-tier name rule just removed.
+    """
+    body = """
+// LED PROBE TABLE
+module top(input clk, input rst_n, input go, output [9:0] LEDR);
+    reg latched;
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            latched <= 0;
+        end else begin
+            if (go) latched <= 1;
+        end
+    end
+    assign LEDR[0] = latched;
+endmodule
+"""
+    f = _write(tmp_path, "heldshape.v", body)
+    res, report = _run(str(f))
+    assert res.returncode == 0, res.stderr
+    assert "instantaneous-on-pulse" not in _rules(report)
+
+
+def test_identifier_ending_in_end_does_not_truncate_the_reset_branch(tmp_path):
+    """`frame_end` inside the reset branch must not close the `begin`.
+
+    `_strip_reset_branches` walks begin/end to find the matching `end`. A
+    trailing-side-only token test keeps `endcase`/`endmodule` out but lets the
+    `end` inside `frame_end` count: the walk then stops early, the rest of the
+    reset branch is NOT blanked, and `latched <= 0;` — a reset clear — is read
+    as the deassert half of a pulse. Measured: with the leading-side check
+    removed and nothing else changed, this exact file goes rc=1
+    `instantaneous-on-pulse` on 'latched'.
+    """
+    body = """
+// LED PROBE TABLE
+module top(input clk, input rst_n, input go, output [9:0] LEDR);
+    reg frame_end;
+    reg latched;
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            frame_end <= 0;
+            latched   <= 0;
+        end else begin
+            if (go) latched <= 1;
+        end
+    end
+    assign LEDR[0] = latched;
+endmodule
+"""
+    f = _write(tmp_path, "kwtoken.v", body)
+    res, report = _run(str(f))
+    assert res.returncode == 0, res.stderr
+    assert "instantaneous-on-pulse" not in _rules(report)
+    assert report["warnings"] == [], report["warnings"]
+
+
+def test_mode_mix_ignores_the_instantaneous_baseline_mode(tmp_path):
+    """SKILL.md counts {pulse, sticky, byte}. `instantaneous` is the BASELINE
+    mode; a byte column plus one plain level probe is the SKILL's own
+    recommended layout, not an anti-pattern."""
+    body = """
+module top(input clk, output [9:0] LEDR);
+    wire fsm_ok;
+    wire [7:0] resp_byte;
+    assign LEDR[9]   = fsm_ok;      // instantaneous level probe
+    assign LEDR[7:0] = resp_byte;   // byte-display
+endmodule
+"""
+    f = _write(tmp_path, "instbyte.v", body)
+    res, report = _run(str(f))
+    assert res.returncode == 0, res.stderr
+    assert "mode-mix-without-table" not in _rules(report)
+    assert "inst" in report["modes_detected"]
+    assert "byte" in report["modes_detected"]
+
+
+def test_commented_led_map_counts_as_a_probe_table(tmp_path):
+    """A real LED map in comments IS a probe table even without the literal
+    title `LED PROBE TABLE`. The rule must fire on a missing TABLE, not on a
+    missing STRING."""
+    body = """
+// LEDR[9]   sticky    seen_q     event happened at least once
+// LEDR[7:0] byte-disp resp_byte  most recent response byte
+module top(input clk, input rst_n, input event_in, output [9:0] LEDR);
+    reg seen_q;
+    wire [7:0] resp_byte;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) seen_q <= 1'b0;
+        else if (event_in) seen_q <= 1'b1;
+    end
+    assign LEDR[9]   = seen_q;
+    assign LEDR[7:0] = resp_byte;
+endmodule
+"""
+    f = _write(tmp_path, "maptable.v", body)
+    res, report = _run(str(f))
+    assert res.returncode == 0, res.stderr
+    assert "mode-mix-without-table" not in _rules(report)
+
+
+def test_dangling_symlink_in_tree_does_not_abort_the_lint(tmp_path):
+    """A dangling symlink used to abort with rc=2 — the VACUOUS_PASS tier — so
+    an aborted lint was credited as a benign skip. 31 dangling symlinks exist
+    under the published corpus, and one of them silently false-cleaned the only
+    run with an FPGA top."""
+    import os
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    (rtl / "top.v").write_text("""
+// LED PROBE TABLE
+module top(input clk, output [9:0] LEDR);
+    wire tx_done_pulse;
+    assign LEDR[9] = tx_done_pulse;
+endmodule
+""")
+    os.symlink(str(tmp_path / "nowhere" / "gone.v"), str(rtl / "dangling.v"))
+    res, report = _run(str(rtl))
+    # The real top is still linted and its real defect still fires.
+    assert res.returncode == 1, res.stderr
+    assert "instantaneous-on-pulse" in _rules(report)
+    assert len(report["files_scanned"]) == 1
+
+
+def test_unreadable_file_is_disclosed_not_swallowed(tmp_path):
+    """Coverage loss must be visible in the report, never silent."""
+    import os
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    (rtl / "top.v").write_text("""
+// LED PROBE TABLE
+module top(input clk, output [9:0] LEDR);
+    wire steady_level;
+    assign LEDR[0] = steady_level;
+endmodule
+""")
+    bad = rtl / "locked.v"
+    bad.write_text("module x(); endmodule\n")
+    os.chmod(bad, 0o000)
+    try:
+        res, report = _run(str(rtl))
+    finally:
+        os.chmod(bad, 0o644)
+    assert res.returncode == 0, res.stderr
+    assert len(report["unreadable"]) == 1, report
+    assert report["led_drives_examined"] >= 1
 
 
 def test_each_antipattern_fires_only_its_own(tmp_path):
