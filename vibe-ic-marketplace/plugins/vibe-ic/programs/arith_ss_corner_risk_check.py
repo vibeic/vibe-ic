@@ -300,8 +300,9 @@ def analyse_module(name: str, body: str, base_line: int, path: str,
             path, line, sev, kind, lhs, risk, width, add_depth,
             f"module '{name}': {why} feeding '{lhs}' is a slow-corner (SS) "
             f"timing risk — consider a carry-save / carry-select / "
-            f"parallel-prefix adder or pipelining. (This is the spm/sha256 "
-            f"re-architecture pattern.)"))
+            f"parallel-prefix adder or pipelining. (This is the sha256 "
+            f"re-architecture pattern; see the module docstring for why the "
+            f"spm half of the original claim was withdrawn.)"))
     return findings
 
 

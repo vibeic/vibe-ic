@@ -421,11 +421,23 @@ steps:
         #
         # DISCLOSED FINDING COUNT, measured over all 40 published RTL roots
         # (every `phase2/stage1/rtl` under benchmark-data): 11 roots emit at
-        # least one HIGH, 85 HIGH findings in total; 0 roots block, by
-        # construction. WHAT WOULD MAKE IT BLOCKING, in order: a per-design
-        # waiver channel (3 of the 11 are third-party vendor RTL the flow does
-        # not author), then a re-measure, then a per-step promotion with the
-        # new number stated.
+        # least one HIGH, 85 HIGH findings in total; 4 further roots emit MED
+        # only (6 MED); 0 roots block, by construction.
+        # TWO FALSE-POSITIVE CLASSES were repaired against the real published
+        # lines that produced them BEFORE wiring, because wiring a lint that is
+        # provably wrong is how a check gets waived by habit: a `<=` COMPARISON
+        # inside an assertion macro or an `if (…)` condition, and arithmetic
+        # that only computes a SHIFT DISTANCE. Measured effect: 92 HIGH -> 85
+        # HIGH, 7 removed, 0 added, verified as a set difference over all 40
+        # roots. All 7 removals are demonstrably not datapaths.
+        # IN-FLOW EVIDENCE, on a published run: step 2 status stays PASS and the
+        # record carries `ADVISORY (non-blocking, #306): FINDING: … [HIGH]
+        # wide-ripple-add: 32-bit add/compare chain …`. Without `--strict` the
+        # same record reads the single word `ok`.
+        # WHAT WOULD MAKE IT BLOCKING, in order: a per-design waiver channel
+        # (3 of the 11 are third-party vendor RTL the flow does not author),
+        # then a re-measure, then a per-step promotion with the new number
+        # stated.
         - advisory_program_exit_zero: "arith_ss_corner_risk_check --strict phase2/stage1/rtl --json reports/phase2/gates/arith_ss_corner_risk.json"
     blocks_on: [1]
 
@@ -1708,18 +1720,26 @@ steps:
         # the algorithm; adding the chain gave +10.95 ns on the SAME RTL.
         #
         # THREE deliberate wiring choices, each measured:
-        #   * FIRST in the `all_of`, not last. `_evaluate_gate` SHORT-CIRCUITS:
-        #     it returns on the first failing sub-gate and only later ADVISORY
-        #     sub-gates still run. Wired last, this gate ran on 0 of 5 sampled
-        #     published runs; wired first it runs whenever step 17 is evaluated
-        #     (measured in-flow: rc=0 PASS on a real published pnr.tcl). It
-        #     carries an rc=2 NOT-CHECKED tier and measures 0 red over the
-        #     whole corpus, so ordering it first cannot turn a green run red.
-        #     NOTE, separately: step 17 declares a `*.def` required_output and
-        #     the root .gitignore excludes `*.def` under benchmark-data/ic/**,
-        #     so on the PUBLISHED tree this step is MISSING and `check_step`
-        #     evaluates no gate here at all. That is a property of the corpus,
-        #     not of the wiring; on a live run the DEF exists.
+        #   * FIRST in the `all_of`, not last. `_evaluate_gate` SHORT-CIRCUITS
+        #     (flow_compliance_check.py, the `all_of` loop: it `return False`s
+        #     on the first failing sub-gate and only later ADVISORY sub-gates
+        #     still run). ORDER CONTROL, measured on one identical project by
+        #     re-running the audit against a flow YAML in which the three new
+        #     sub-gates are moved to the END of their `all_of`: wired FIRST all
+        #     three emit a GATE_RAN line; wired LAST only one does — this gate
+        #     and `hold_corner_coverage_check` do not execute at all, because an
+        #     earlier sibling had already failed. A gate wired where it never
+        #     executes is the same defect moved, so it goes first. It carries an
+        #     rc=2 NOT-CHECKED tier and measures 0 red over the whole corpus, so
+        #     ordering it first cannot turn a green run red.
+        #     NOTE, separately: step 17 declares `phase3/stage3/pnr/placed.def`
+        #     and NO published run carries one (the root .gitignore ignores
+        #     `*.def` globally and re-includes only `benchmark-data/ic/**/*.def`;
+        #     3 `routed.def` are published, 0 `placed.def`, 0 `post_hold.def`).
+        #     So on the PUBLISHED tree this step is MISSING on 34 of 34 roots
+        #     and `check_step` evaluates no gate here at all. That is a property
+        #     of the corpus, not of the wiring; on a live run the DEF exists,
+        #     and the in-flow evidence below is from a project where it does.
         #   * UNCONDITIONAL. `condition_files_exist: [phase3/stage3/pnr/pnr.tcl]`
         #     is the self-disabling shape `flow_condition_reachability_check`
         #     refuses — measured: patching it in makes that gate FAIL with
@@ -1727,11 +1747,19 @@ steps:
         #     trigger survives". The rc=2 tier does the same job without a hole.
         #   * the argument is the P&R DIRECTORY, because the published run
         #     whose defect this gate was written for names its script
-        #     `pnr_fixed.tcl`. On the literal `pnr.tcl` the gate reached 5 of
-        #     34 run roots and MISSED exactly that one; on the directory it
-        #     reaches 6 and includes it.
-        # BLAST RADIUS, measured over all 34 published phase-3 run roots:
-        # 0 FAIL / 6 PASS / 28 rc=2 NOT CHECKED. No published run turns red.
+        #     `pnr_fixed.tcl`. Measured: the literal `phase3/stage3/pnr/pnr.tcl`
+        #     path exists on 6 of the 34 run roots and MISSES exactly that one;
+        #     the directory's `pnr*.tcl` reaches 7 and includes it.
+        # BLAST RADIUS, measured by invoking the gate in every one of the 34
+        # published phase-3 run roots (a directory under benchmark-data/ holding
+        # a `phase3/`, excluding anything under a `reports/`):
+        # 0 FAIL / 7 PASS / 27 rc=2 NOT CHECKED. No published run turns red.
+        # IN-FLOW EVIDENCE, on a published run with the two DEFs materialised:
+        # control -> `GATE_RAN pnr_timing_repair_completeness_check rc=0 PASS`;
+        # NEGATIVE CONTROL (the same run with `set_wire_rc`, `repair_design` and
+        # `repair_timing -setup` stripped from its real pnr.tcl) ->
+        # `GATE_RAN ... rc=1 FAIL` and step 17 records
+        # "program failed: pnr_timing_repair_completeness_check phase3/stage3/pnr".
         - program_exit_zero: "pnr_timing_repair_completeness_check phase3/stage3/pnr --json reports/phase3/pnr/timing_repair_completeness.json"
         - files_exist: ["phase3/stage3/pnr/placed.def"]
         - program_exit_zero: "placement_legality_check . --json reports/phase3/placement_legality.json"
@@ -1877,6 +1905,18 @@ steps:
         # disclosure wired last is a disclosure that is skipped on exactly the
         # runs that needed it. It can only ever return rc=2 today, so the
         # position costs nothing.
+        #
+        # NEGATIVE CONTROL, in-flow, proving this is a real gate and not a
+        # permanent no-op: drop a producer file
+        # (`reports/phase3/pnr/hold_area.json`) into the same project.
+        # 3% overhead -> `GATE_RAN hold_area_budget_check rc=0 PASS`;
+        # 8% overhead -> `GATE_RAN hold_area_budget_check rc=1 FAIL` and step 20
+        # turns FAIL with "[AREA_BUDGET_EXCEEDED] hold-buffer overhead 8.000%
+        # exceeds the 5% guardrail". The day the producer lands, this wire
+        # judges it with no further change.
+        # SAME STEP, unchanged: step 20 declares `phase3/stage3/pnr/post_hold.def`
+        # and 0 of the 34 published run roots carry one, so on the published
+        # tree the step is MISSING and this gate is not reached there either.
         - program_exit_zero: "hold_area_budget_check . --json reports/phase3/pnr/hold_area_budget.json"
         # File-presence precondition (kept, consistent with sibling Steps 21/23).
         - files_exist: ["phase3/stage3/pnr/post_hold.def"]
@@ -2202,8 +2242,9 @@ steps:
         # an unreported corner became indistinguishable from a met one. The
         # gate carries an rc=2 NOT-CHECKED tier for a run that produced no hold
         # sign-off record at all, so the unconditional wire costs nothing;
-        # without that tier an unconditional wire reddened 31 of 33 roots for
-        # INPUT_MISSING, which is why the tier was added in the same change.
+        # MEASURED: the gate AS WRITTEN, wired this way, returns rc=1
+        # INPUT_MISSING on 34 of 34 published run roots — a total outage for the
+        # wrong reason, which is why the tier was added in the same change.
         # It judges the DECLARED stance (reports/phase3/mcorner_ocv_stance.json)
         # first and a hold STA script only as a fallback — the stance is
         # durable when the Tcl is pruned from a published run, and it is what
@@ -2211,24 +2252,43 @@ steps:
         #
         # FIRST in the `all_of`, deliberately, and this one HAS a cost worth
         # stating: `_evaluate_gate` short-circuits on the first failing
-        # sub-gate, so wired last this gate did not execute on 4 of 5 sampled
-        # published runs. Wired first it executes whenever step 23 is evaluated
-        # at all. On every root where it PASSes or returns rc=2 each sibling
+        # sub-gate. ORDER CONTROL, measured on one identical project: wired
+        # FIRST this gate emits a GATE_RAN line; wired LAST it emits none — it
+        # does not execute at all, because an earlier sibling had already
+        # failed. On every root where it PASSes or returns rc=2 each sibling
         # still runs exactly as before; only on a root where it FAILs do the
         # siblings stop reporting, and there the step is FAIL either way.
         #
-        # BLAST RADIUS, two numbers because they answer two questions:
-        #   * invoked directly on all 34 published phase-3 run roots:
-        #     1 FAIL / 7 PASS / 26 rc=2 NOT CHECKED. The single FAIL is
-        #     benchmark-data/ic/edge_llm_accel (hold_process_corner "TT").
-        #   * inside flow_compliance_check over the same corpus: 0 red. Only
-        #     11 of the 34 roots carry any of step 23's declared
-        #     required_outputs, so `check_step` marks the step MISSING on the
-        #     rest and never evaluates this gate there — and edge_llm_accel is
-        #     one of the 23 that do not. On the 11 that ARE evaluated this gate
-        #     returns 6 PASS and 5 rc=2.
-        # So no published run changes its step VERDICT, and the one true
-        # finding surfaces on a live run rather than on the pruned tree.
+        # BLAST RADIUS, invoked directly in every one of the 34 published
+        # phase-3 run roots: 1 FAIL / 6 PASS / 27 rc=2 NOT CHECKED. The single
+        # FAIL is benchmark-data/ic/edge_llm_accel, whose stance record declares
+        # hold_process_corner "TT" with multi_process_corner false — a TRUE
+        # finding, not a wiring artefact. The 6 PASS all judge a declared FF
+        # stance (both sha256 clean runs, all three spm PDK variants, and the
+        # caravel_user_project re-run).
+        #
+        # BLAST RADIUS IN FLOW, baseline vs patched flow_compliance_check run
+        # on all 34 published run roots from clean copies of each tree: the
+        # OVERALL verdict is UNCHANGED on all 34, and NOTHING FAILs that did not
+        # FAIL before. FIVE step verdicts move, all the same move —
+        # step 23 PASS_VOIDED_BY_DEPENDENCY -> VACUOUS_PASS on
+        # benchmark-data/ic/caravel_user_project and
+        # benchmark-data/evaluation/phase1_parity/{espi,lpc/phase3,mdio,sgmii}.
+        # Those runs carry no stance record and no hold STA script, so this gate
+        # returns rc=2 and the step-level rule "every executed sub-gate was
+        # vacuously satisfied" relabels the step. Every sibling gate still RAN
+        # and still PASSed on all five. The cost is real and is disclosed: the
+        # relabel suppresses the pre-existing "PASS voided: dependency [22] ...
+        # MISSING" line on those runs. See the PR body.
+        # NOTE the coverage limit this exposes: on the published tree
+        # edge_llm_accel — the one root this gate FAILs when invoked directly —
+        # has step 23 MISSING, so the gate is never reached there in flow. The
+        # true finding surfaces on a live run, not on the pruned corpus.
+        #
+        # NEGATIVE CONTROL, in-flow: the same project with a stance declaring
+        # hold_process_corner "FF" -> `GATE_RAN hold_corner_coverage_check rc=0
+        # PASS`; flipped to "TT" -> `rc=1 FAIL` and step 23 records
+        # "program failed: hold_corner_coverage_check .".
         - program_exit_zero: "hold_corner_coverage_check . --json reports/phase3/sta/hold_corner_coverage.json"
         - files_exist: ["phase3/stage3/sta/post_route_timing.rpt"]
         # `--mode` is a report CLASS, not a directory — see step 10. The

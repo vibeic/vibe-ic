@@ -1,9 +1,12 @@
 """Unit tests for arith_ss_corner_risk_check.py.
 
-The advisor predicts the slow-corner re-architecture that the spm and sha256
-benchmark ICs needed. It must: fire on undocumented wide ripple chains, stay
-quiet on documented carry-save / structured / narrow designs, and ignore
-loop-counter / index-math / parameter false positives.
+The advisor predicts the slow-corner re-architecture the sha256 benchmark IC
+needed (the spm half of the original claim was withdrawn — see the module
+docstring: the published spm datapath contains no `+`, `-` or `*` at all, so
+this heuristic cannot see it with or without a mitigation marker). It must:
+fire on undocumented wide ripple chains, stay quiet on documented carry-save /
+structured / narrow designs, and ignore loop-counter / index-math / shift-
+amount / assertion-comparison / parameter false positives.
 """
 import json
 import subprocess
