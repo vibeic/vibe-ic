@@ -12248,12 +12248,20 @@ def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
     # clear this gate. A built rail is a physical fact and cannot be fabricated,
     # so it is stronger evidence than the declaration it substitutes for.
     _l21 = _hmsi.load_l21(project)
-    _measured = _hmsi.measured_rails(project)
+    # BOTH halves of one DEF scan. `_bare` is the rails SPECIALNETS names and
+    # the PDN did not build; `measured_rails` drops them, and that drop is
+    # exactly what turns a pin from accounted into a gap below — so the FAIL
+    # this returns can be read beside the DEF that appears to contradict it.
+    # Carried on every return taken AFTER the DEF read, never on the three
+    # `return None` above (nothing was read yet, so `[]` would be a claim
+    # about a file that was never opened).
+    _measured, _bare = _hmsi.specialnets_split(project)
     rep = _hmsi.assess(lefs, _l21, extra_rails=_measured)
     if not rep["pins"]:
         return None
     if not rep["gaps"]:
-        return {"blocking": False, "bound": rep["accounted"], "gaps": []}
+        return {"blocking": False, "bound": rep["accounted"], "gaps": [],
+                "rails_named_not_built": _bare}
     all_rails = set(rep["declared_rails"]) | set(rep["measured_rails"])
     # ENV-BLIND witness: the PDK's own supply nets, NOT the L21/DEF rails —
     # #348 measured 27 of 30 real designs with the structured L21 fields
@@ -12269,6 +12277,7 @@ def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
     if not (all_rails | _pset | _gset):
         return {"blocking": False, "bound": rep["accounted"], "gaps": [],
                 "gaps_reported": rep["gaps"], "env_blind": True,
+                "rails_named_not_built": _bare,
                 "message": (
                     "ENV-BLIND: no supply rail is visible from ANY source "
                     "(L21 declaration, DEF SPECIALNETS, or the PDK cell "
@@ -12291,6 +12300,7 @@ def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
         if not fatal:
             return {"blocking": False, "bound": rep["accounted"], "gaps": [],
                     "gaps_reported": benign,
+                    "rails_named_not_built": _bare,
                     "message": (
                         "hard-macro supply pin(s) with no bindable rail, but "
                         "the netlist drives NONE of them — routing survives "
@@ -12298,6 +12308,7 @@ def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
                         "gaps, not blocked")}
         return {"blocking": True, "bound": rep["accounted"], "gaps": fatal,
                 "gaps_reported": benign,
+                "rails_named_not_built": _bare,
                 "message": (
                     "hard-macro supply pin(s) with no bindable rail AND a "
                     "netlist-proven signal/constant tie — detailed routing "
@@ -12307,6 +12318,7 @@ def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
                                 f"({g.get('use','POWER')}, {g['status']})"
                                 for g in fatal[:6]))}
     return {"blocking": True, "bound": rep["accounted"], "gaps": rep["gaps"],
+            "rails_named_not_built": _bare,
             "message": (
                 "hard-macro supply pin(s) with no bindable rail — detailed "
                 "routing WILL abort on a signal net landing on a POWER "
@@ -15180,9 +15192,21 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             print(f"[phase3]   BLOCKING SUPPLY-ON-POWER (integration gap): "
                   f"{_g['master']}/{_g['pin']} ({_g.get('use','POWER')}) — "
                   f"{_g['detail']}")
+        _ms_extras: Dict[str, Any] = {"macro_supply_gaps": _ms["gaps"],
+                                      "macro_supply_bound": _ms["bound"]}
+        # The one sentence that resolves the FAIL against the DEF. A reader who
+        # greps the DEF for the pin's rail finds `- <RAIL> ( * <RAIL> ) + USE
+        # POWER ;` and concludes the gate is wrong; that entry carries no
+        # conductor, so it does NOT count as an established rail, and the pin
+        # really is a gap. Published ONLY when non-empty: an empty list would
+        # assert that the built rails were examined and none was a bare name,
+        # which on a first run is false — every DEF this reads is written by
+        # THIS step's own TCL, further down. Absent therefore means "nothing to
+        # say", never "checked and clean".
+        if _ms.get("rails_named_not_built"):
+            _ms_extras["rails_named_not_built"] = _ms["rails_named_not_built"]
         return StepResult("pnr", "FAIL", time.time() - t0, _ms["message"],
-                          extras={"macro_supply_gaps": _ms["gaps"],
-                                  "macro_supply_bound": _ms["bound"]})
+                          extras=_ms_extras)
 
     # SDC: silicon top != FPGA wrapper. Project's fpga/*.sdc references
     # FPGA-only ports (CLOCK_50/KEY/GPIO_0) and may use Quartus-private
