@@ -77,6 +77,12 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List
 
+_PROGRAMS_DIR = str(Path(__file__).resolve().parent)
+if _PROGRAMS_DIR not in sys.path:
+    sys.path.insert(0, _PROGRAMS_DIR)
+
+import _signoff_drc_format as _sdf  # noqa: E402  (path bootstrap above)
+
 # #651 — dedicated, documented exit code for the PASS_WITH_WAIVERS verdict
 # tier. Distinct from 0 (bare PASS) and 1 (FAIL); also distinct from the
 # flow-runner's rc=2 "VACUOUS/SKIP input-missing" convention so a waived
@@ -1405,14 +1411,15 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
         # mis-read as UNPARSED and hard-FAIL the tapeout slot). Detected by the
         # svrfdrc header OR the presence of the deck's PASS/FAIL result grammar.
         # Chip-AGNOSTIC: keys off report FORMAT, never a design/PDK name.
-        head = txt[:4000]
-        _svrf_line = re.compile(r"(?m)^(FAIL|PASS|SKIP)\s+\S+\s+\S+.*->\s*\d+\s*$")
-        if ("SVRF-native DRC" in head or "svrfdrc" in head.lower()
-                or _svrf_line.search(txt)):
-            fails = len(re.findall(r"(?m)^FAIL\s+\S+", txt))
-            passes = len(re.findall(r"(?m)^PASS\s+\S+", txt))
-            if fails or passes:            # a real per-rule tally was present
-                return fails
+        #
+        # The grammar itself now lives in `_signoff_drc_format` — this file is
+        # where it was first written, and two other programs needed it (the
+        # step-31 substance gate could not read a clean foundry-deck sign-off at
+        # all, measuring `determined_files:0`). It is imported rather than
+        # copied a fourth time; the behaviour is byte-identical.
+        _svrf = _sdf.svrf_fail_count(txt)
+        if _svrf is not None:
+            return _svrf
         m = (re.search(r"(?i)\btotal\s+(?:errors|violations)\s*[:=]?\s*(\d+)", txt)
              or re.search(r"(?i)\bviolations?\s*[:=]\s*(\d+)", txt))
         return int(m.group(1)) if m else None

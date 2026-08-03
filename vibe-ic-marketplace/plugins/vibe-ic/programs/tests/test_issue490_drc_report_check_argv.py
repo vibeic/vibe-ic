@@ -395,7 +395,41 @@ def _under_scopes(cmd: str):
             if t == "--under" and i + 1 < len(toks)]
 
 
-def _plant_in_scope(proj: Path, cmd: str, body: str = _CLEAN_DRC):
+#: An AUTHENTIC, CLEAN SIGN-OFF DRC report: a KLayout report database that
+#: names the deck it ran. `_CLEAN_DRC` above is a plain-text body — fine for the
+#: ROUTER gate (step 21), where the router is the right producer, and refused by
+#: the step-31 `--signoff` scope, which requires a rule deck applied to a
+#: layout. The two fixtures exist because the two steps ask different questions
+#: of the same program.
+_CLEAN_SIGNOFF_RDB = (
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+    "<report-database>\n"
+    "  <description>DRC runset</description>\n"
+    "  <generator>drc: script='/pdk/tech/klayout/drc/deck.lydrc'</generator>\n"
+    "  <top-cell>chip_top</top-cell>\n"
+    "  <categories>\n"
+    + "".join(f"    <category><name>'m{2 + i % 4}.{i}'</name><description>"
+              f"metal spacing width density antenna via enclosure rule {i}"
+              f"</description></category>\n" for i in range(24)) +
+    "  </categories>\n"
+    "  <items>\n  </items>\n"
+    "</report-database>\n"
+)
+
+
+def _plant_signoff_evidence(proj: Path):
+    """What a step-31 `--signoff` invocation legitimately needs on disk.
+
+    Not a relaxation of the gate: a real run reaching step 31 HAS streamed a
+    layout, and the fixture has to carry what a real run carries or it is
+    testing a project that could not exist.
+    """
+    gds = proj / "phase3" / "stage3" / "pnr"
+    gds.mkdir(parents=True, exist_ok=True)
+    (gds / "chip_top.gds").write_bytes(b"\x00\x06\x00\x02\x00\x07")
+
+
+def _plant_in_scope(proj: Path, cmd: str, body: str = None):
     """Put an authentic router-DRC report inside each `--under` scope of `cmd`.
 
     An invocation that SCOPES its discovery can only be exercised by a fixture
@@ -410,7 +444,15 @@ def _plant_in_scope(proj: Path, cmd: str, body: str = _CLEAN_DRC):
     than hardcoded, so a new scoped declaration in the flow is exercised the
     same way instead of silently reddening. Returns the scopes it planted, so
     a caller can assert it was not a no-op.
+
+    The BODY is chosen from the command's own `--signoff` token, for the same
+    reason the scopes are: the sign-off scope demands a rule-deck producer and
+    the router scope does not, so a single hardcoded body would test one of the
+    two declarations against the wrong premise.
     """
+    signoff = "--signoff" in cmd.split()
+    if body is None:
+        body = _CLEAN_SIGNOFF_RDB if signoff else _CLEAN_DRC
     for rel in _under_scopes(cmd):
         target = proj / rel
         if target.suffix in _REPORT_SUFFIXES:
@@ -419,6 +461,8 @@ def _plant_in_scope(proj: Path, cmd: str, body: str = _CLEAN_DRC):
         else:
             target.mkdir(parents=True, exist_ok=True)
             (target / "routed.drc.rpt").write_text(body)
+    if signoff:
+        _plant_signoff_evidence(proj)
     return _under_scopes(cmd)
 
 
