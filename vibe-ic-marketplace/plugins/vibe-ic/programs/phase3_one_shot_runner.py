@@ -2907,7 +2907,43 @@ def _techlef_routing_layers(
             except ValueError:
                 pitch = None
             continue
-        m = re.match(r"^WIDTH\s+([\d.]+)", s)
+        # A LAYER's OWN width is `WIDTH <n> ;` — one value, terminated.
+        #
+        # `SPACINGTABLE PARALLELRUNLENGTH` rows ALSO begin with the token
+        # `WIDTH`, and they come BEFORE the layer's own declaration:
+        #
+        #     LAYER metal2
+        #       TYPE ROUTING ;
+        #       SPACINGTABLE
+        #         PARALLELRUNLENGTH  0.0000  0.3000  0.9000 ...
+        #           WIDTH 0.0000     0.0700  0.0700  0.0700 ...   <-- not a width
+        #           WIDTH 0.0900     0.0700  0.0900  0.0900 ...   <-- not a width
+        #           ...
+        #       WIDTH 0.07 ;                                      <-- the width
+        #       PITCH 0.19 ;
+        #
+        # The old `^WIDTH\s+([\d.]+)` matched the FIRST spacing-table row, and
+        # `width is None` then locked that value in, so the layer's real width
+        # was never read. On a table whose first row is the 0-width entry the
+        # parsed width is 0.0, `_flush()`'s `width > 0` guard drops the layer
+        # ENTIRELY, and the drop is silent.
+        #
+        # MEASURED on one shipped open PDK: 9 of its 10 routing layers were
+        # discarded this way — only the one layer that declares no spacing
+        # table survived. `_auto_pdn_straps_from_techlef` then saw a single
+        # routing layer, correctly concluded there was nothing above the
+        # follow-pin layer to strap to, and returned None; phase 3 BLOCKED the
+        # PnR step with PDN_NO_STRAPS, so that PDK could not reach a GDS at
+        # all and DRC/LVS never ran.
+        #
+        # Requiring the `;` IMMEDIATELY AFTER THE SINGLE VALUE distinguishes
+        # the two unambiguously: a spacing-table row always carries another
+        # number next, so it can never match. The `;` is NOT anchored to end
+        # of line — two other shipped PDKs write `WIDTH 0.14 ;   # Met1 1`
+        # with a trailing comment, and anchoring dropped every one of their
+        # layers (measured: 6 -> 0 and 5 -> 0). Pure LEF grammar,
+        # chip-AGNOSTIC.
+        m = re.match(r"^WIDTH\s+([\d.]+)\s*;", s)
         if m and width is None:
             try:
                 width = float(m.group(1))
