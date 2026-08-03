@@ -431,12 +431,35 @@ def detect_safety_mechanism(rtl_dir: Path,
     # Collect all modules and their ports across files.
     mods: Dict[str, Tuple[Path, List[Tuple[str, str, int]]]] = {}
     for f, t in per_file:
-        for mod in _MODULE_RE.findall(t):
+        # Module NAMES and port lists must come from CODE, never commentary: a
+        # comment sentence "// This module controls the ..." matches `_MODULE_RE`
+        # and fabricates a phantom module named `controls`. Measured on
+        # opentitan_aes x sky130A: the header comments of aes_cipher_control.sv
+        # ("This module controls ...") and aes_ctrl_gcm_reg_shadowed.sv ("This
+        # module implements ...") minted phantom modules `controls`/`implements`,
+        # which the declared-safety arm then paired into a 1-bit phantom ECC whose
+        # TB instances (`controls u_enc`, `implements u_dec`) reference modules
+        # that do not exist -> the fault-injection compile FAILs -> DC=UNMEASURED
+        # -> FS1 FAIL on a design that ships a genuine SEC-DED ECC. Strip comments
+        # first (the same _strip_hdl_comments already used for combined_code).
+        code = _strip_hdl_comments(t)
+        for mod in _MODULE_RE.findall(code):
             if mod not in mods:
-                mods[mod] = (f, _module_ports(t, mod))
+                mods[mod] = (f, _module_ports(code, mod))
 
     # Find a decoder: has a detect output OR (input wider than a narrower output).
-    dec = None
+    # RANK candidates rather than breaking on the FIRST by dict/file order.
+    # Measured on opentitan_aes x sky130A: iterating in file order locked onto
+    # `aes_ctrl_gcm_reg_shadowed` (a shadowed control register whose `err_update_o`
+    # matches _is_detect_port) and broke BEFORE reaching the genuine SEC-DED ECC
+    # `prim_secded_inv_64_57_dec` (input [63:0] data_i, output [56:0] data_o AND
+    # err_o — the textbook corrected-data-plus-detect structure). The shadow
+    # register has a detect port but NO corrected-data output, so it only survives
+    # the §4.05 gate via the weak `declared` arm, while the real ECC has the #145
+    # POSITIVE structure. Prefer the positive-structure decoder (corr_out AND
+    # detect) over a detect-only/corr-only one, then the widest codeword, with a
+    # deterministic name tie-break. chip-AGNOSTIC — ranks on port structure only.
+    candidates = []
     for mod, (f, ports) in mods.items():
         ins = [(n, w) for n, d, w in ports if d == "input"]
         outs = [(n, w) for n, d, w in ports if d == "output"]
@@ -460,14 +483,19 @@ def detect_safety_mechanism(rtl_dir: Path,
             if wide[1] < widest_in[1]:
                 corr_out = wide
         if detect_outs or corr_out:
-            dec = {
+            candidates.append({
                 "module": mod, "file": f,
                 "in": widest_in[0], "code_width": widest_in[1],
                 "detect": detect_outs[0] if detect_outs else None,
                 "out": corr_out[0] if corr_out else None,
                 "data_width": corr_out[1] if corr_out else widest_in[1],
-            }
-            break
+                "_has_both": bool(corr_out and detect_outs),
+            })
+    dec = None
+    if candidates:
+        candidates.sort(key=lambda c: (not c["_has_both"],
+                                       -c["code_width"], c["module"]))
+        dec = candidates[0]
     if dec is None:
         return None
 
@@ -499,7 +527,16 @@ def detect_safety_mechanism(rtl_dir: Path,
         return None
 
     # Find an encoder: input == decoder data_width, output == code_width.
+    # RANK rather than break-on-first (same defect as the decoder scan above):
+    # in file order the first module with any wider-output-than-input shape wins,
+    # which on opentitan_aes grabbed `aes_cipher_control` (an AES control block
+    # that `include`s prim_assert.sv and needs the aes package — uncompilable in
+    # isolation) instead of the SEC-DED ECC's own `prim_secded_inv_64_57_enc`
+    # (input [56:0] → output [63:0], the EXACT inverse of the chosen decoder).
+    # Prefer an encoder whose widths mirror the decoder (out == code_width AND
+    # in == data_width), then the closest structural match. chip-AGNOSTIC.
     enc = None
+    enc_cands = []
     for mod, (f, ports) in mods.items():
         if mod == dec["module"]:
             continue
@@ -516,10 +553,19 @@ def detect_safety_mechanism(rtl_dir: Path,
         widest_out = max(outs, key=lambda x: x[1])
         narrow_in = min(ins, key=lambda x: x[1])
         if widest_out[1] > narrow_in[1]:
-            enc = {"module": mod, "file": f,
-                   "in": narrow_in[0], "out": widest_out[0],
-                   "data_width": narrow_in[1], "code_width": widest_out[1]}
-            break
+            exact = (widest_out[1] == dec["code_width"]
+                     and narrow_in[1] == dec["data_width"])
+            enc_cands.append({
+                "module": mod, "file": f,
+                "in": narrow_in[0], "out": widest_out[0],
+                "data_width": narrow_in[1], "code_width": widest_out[1],
+                "_exact": exact,
+                "_delta": (abs(widest_out[1] - dec["code_width"])
+                           + abs(narrow_in[1] - dec["data_width"])),
+            })
+    if enc_cands:
+        enc_cands.sort(key=lambda c: (not c["_exact"], c["_delta"], c["module"]))
+        enc = enc_cands[0]
 
     files = sorted({str(dec["file"])} | ({str(enc["file"])} if enc else set()))
     kind = "ecc" if (dec["out"] is not None or dec["detect"]) else "parity"
@@ -1159,9 +1205,21 @@ def run(project: Path, args) -> Tuple[int, dict]:
         spec = detect_safety_mechanism(rtl_dir, doc)
         spec_rtl_rel = []
         if spec is not None:
-            # resolve rtl files relative to project for the mount
-            for f in rtl_dir.rglob("*.v"):
-                spec_rtl_rel.append(str(f.relative_to(project)))
+            # Compile the DETECTED mechanism's OWN files (the enc + dec leaves),
+            # resolved from the dir by name — NOT rtl_dir.rglob("*.v"). The old
+            # glob (a) matched only *.v, so on a SystemVerilog design (mechanism
+            # leaves are *.sv) it compiled ZERO mechanism files, and (b) swept in
+            # unrelated *.v files (e.g. an auto-generated typo-alias leaf) that
+            # need not elaborate and crash the injection compile. The mechanism's
+            # own leaves are self-contained; feeding exactly them makes the TB's
+            # `u_enc`/`u_dec` instances resolvable. chip-AGNOSTIC.
+            seen: set = set()
+            for name in spec.rtl_files:
+                for f in rtl_dir.rglob(name):
+                    rel = str(f.relative_to(project))
+                    if rel not in seen:
+                        seen.add(rel)
+                        spec_rtl_rel.append(rel)
 
     floor = asil_floor(args.asil, args.min_dc)
 
