@@ -184,6 +184,31 @@ steps:
         # not. A missing/unparseable report exits 1 here, because a second
         # track that can quietly not run is the same as no second track.
         - program_exit_zero: "phase1_expert_parse_track ."
+        # vibe-ic#693 — the forbidden-artefact rule from
+        # `skills/analog-spec-extract/SKILL.md`: `analog/A0_skip_decision.json`
+        # may not encode a top-level analog skip. Wired HERE, at the
+        # UNCONDITIONAL Phase-1 step, and not at A1: every A-step carries
+        # `condition: files_exist [phase1/analog/analog_block_list.json]`, so
+        # an A-step placement would only ever judge projects that already
+        # declared analog blocks. D1 has no `condition:` and runs on all 17
+        # published roots — the whole population that could write the
+        # forbidden artefact.
+        #
+        # POSITION IS LOAD-BEARING. `_evaluate_gate` short-circuits `all_of`
+        # at the first failing sub-gate and re-runs only LATER entries that
+        # are `advisory_program_exit_zero` — measured. Appended at the END of
+        # this block the gate would execute ZERO times on any project whose
+        # D1 was already red. Placed here, after the two existing blocking
+        # sub-gates and before the advisories, it runs on 16 of 17 published
+        # roots; the 17th (a rerun with no `generated_docs/` at all) is
+        # already red on `phase1_all_l_docs_present_check`, a strictly deeper
+        # cause.
+        #
+        # BLAST RADIUS: 0 of 17. No published root carries the artefact, so
+        # nothing goes red. Four repairs landed with this wiring — see the
+        # gate's own docstring; before them it FAILed a file recording
+        # `NO_SKIP` and PASSed a real skip excused by a nested run.
+        - program_exit_zero: "analog_a0_skip_forbidden_check ."
         # vibe-ic#306/#312 — ADVISORY. Reports whether the Phase-1 EXPERT
         # track actually ran (the dual-track's second rail). Advisory by its
         # own declaration and by necessity: a project may legitimately run
@@ -1319,6 +1344,33 @@ steps:
         # (real ngspice required), matching the analog runner's own
         # per-step gate. chip-AGNOSTIC.
         - program_exit_zero: "analog_a4_corner_sweep_check . --json reports/phase2/gates/analog_corner_sweep.json"
+        # vibe-ic#693 — corner-lib realism. A corner sweep is only as
+        # trustworthy as the device models it ran on; this lint catches a
+        # deck that silently stands in an analytic LEVEL=1 MOSFET for the
+        # foundry corner library, which is how a PVT sweep "passes" on a
+        # process that was never modelled. Its unique coverage vs the gates
+        # already wired: `analog_netlist_pdk_check` (A3) iterates DEVICE
+        # cards, and a `.model` card is not a device instantiation, so a deck
+        # that includes a real PDK lib AND inlines a LEVEL=1 override is
+        # invisible to it — measured (netlist_pdk rc 0, this lint rc 1).
+        #
+        # ADVISORY, and that is not a softening — it is the only slot at A4
+        # that FIRES. Measured with an instrumented copy on a fixture where
+        # both gates FAIL: appended blocking at the end of this block it ran
+        # 0 times (`_evaluate_gate` short-circuits `all_of`); inserted
+        # blocking before the incumbent it ran once but ERASED the
+        # incumbent's `A4_DESIGN_CONTENT_UNDECLARED` finding from the step's
+        # reasons; advisory-last it ran once with BOTH findings visible.
+        #
+        # BLAST RADIUS: 0 red over the 5 in-scope published roots (2 PASS,
+        # 1 WARN, 2 VACUOUS). The single WARN is a real finding on a run that
+        # disclosed honestly — an open PDK with no public ngspice corner lib,
+        # documented in the deck and repeated per-corner in the artefact.
+        # WOULD BECOME BLOCKING when A4's incumbent gate is green on the
+        # corpus (today it is red on both roots that carry corner data, for
+        # an unrelated and fixable producer reason), so that a blocking
+        # placement would actually execute.
+        - advisory_program_exit_zero: "analog_corner_lib_realism_lint ."
     blocks_on: [A3]
 
   - id: A5
@@ -1566,6 +1618,54 @@ steps:
         # stays legal (headless and CI analog runs must remain possible) but
         # stops being reported as an undifferentiated PASS.
         - program_exit_zero: "analog_a9_hw_verify_check . --json reports/phase2/gates/a9_hw_verify.json"
+        # ── The HIL discipline half (#693 family `analog-hil`) ─────────────
+        # Four gates were WRITTEN, TESTED and never WIRED: they appeared only
+        # in skills/analog-hw-tuning-loop/SKILL.md, in
+        # skills/analog-hw-testbench-gen/SKILL.md, in programs/INDEX.md and in
+        # their own unit tests — in NO flow gate and in no CI script. One line
+        # of prose in a SKILL.md is also what kept them out of
+        # `checker_execution_wiring_baseline.json`, whose audit counts a SKILL
+        # mention as a runner.
+        #
+        # They are ADVISORY, and both halves of that choice are measured:
+        #
+        #   * NOT `program_exit_zero`. `_evaluate_gate` short-circuits an
+        #     `all_of` at the first failing sub-gate and only re-runs the
+        #     ADVISORY siblings after it. A9's first sub-gate
+        #     (`mixed_signal_cosim_check`) FAILs on the ONE published run that
+        #     reaches this gate tree at all; appending blocking sub-gates here
+        #     executes them on 0 of 17 published runs — the same defect moved,
+        #     not fixed. Wired advisory they execute on that run.
+        #
+        #   * NON-BLOCKING, for now. NOTHING IN THIS REPO WRITES
+        #     `hw_tuning_report.json` OR `hw_sizing_history.json` — 0 files
+        #     repo-wide, no producer program; the skill documents them as
+        #     agent-authored. A blocking gate over an artefact with no producer
+        #     certifies nothing. So all three report exit 2 = NOT CHECKED
+        #     today, which the advisory slot renders as
+        #     "n/a (input not present)" instead of "ok" — the first time an
+        #     analog run says out loud that the HIL discipline was not checked.
+        #
+        # PROMOTION CONDITION, so this does not sit advisory forever: when
+        # `analog-hw-tuning-loop` (or a runner step) emits
+        # `phase3/analog/<block>/hw_tuning_report.json` and
+        # `hw_sizing_history.json`, move the first three to
+        # `program_exit_zero`. They already return 1 for every defect,
+        # including a malformed report.
+        - advisory_program_exit_zero: "analog_hil_report_schema_check . --json reports/phase2/gates/hil_report_schema.json"
+        - advisory_program_exit_zero: "analog_hil_iteration_cap_check . --json reports/phase2/gates/hil_iteration_cap.json"
+        - advisory_program_exit_zero: "analog_hil_single_knob_check . --json reports/phase2/gates/hil_single_knob.json"
+        # The DE10-Lite board gate is pointed at its DECLARED SUBJECT —
+        # `analog/<block>/hw_test/pin_assignments.qsf`, per
+        # skills/analog-hw-testbench-gen/SKILL.md — not at the project root.
+        # It is ALSO registered in `flow_compliance_check._STRUCTURAL_RTL_GATES`
+        # for the digital side, and that is not redundant: the structural
+        # umbrella resolves an `rtl_dir` first and returns
+        # `_P0_NO_RTL_NOTE` without dispatching ANY gate when there is none —
+        # measured, that is 0 of the 3 pure-analog published runs. So the
+        # umbrella alone would never let this gate see the analog QSF it was
+        # written for.
+        - advisory_program_exit_zero: "analog_hw_tb_de10lite_budget_check phase3/analog --json reports/phase2/gates/a9_de10lite_budget.json"
     blocks_on: [A8]
 
   # ── Step 14 (Wave 91 / v1.6.15): pre-PnR Yosys gate ──────────────
@@ -1591,6 +1691,7 @@ steps:
     programs:
       - yosys_hilomap_required_check
       - yosys_script_template_check
+      - yosys_tiecell_recipe_order_check
     required_outputs:
       - "phase2/stage2/synth/netlist.v"
     gate:
@@ -1600,6 +1701,26 @@ steps:
             condition_files_exist: ["phase2/stage2/synth"]
         - optional_program_exit_zero:
             command: "yosys_script_template_check . --json reports/phase2/gates/yosys_script_template.json"
+            condition_files_exist: ["phase2/stage2/synth"]
+        # v1.9.62+ — the third tie-cell ordering rule pair, ADVISORY.
+        # The two gates above assert hilomap PRESENCE and token presence.
+        # Neither checks `setundef -zero` BEFORE hilomap, nor `opt_clean` /
+        # `clean -purge` AFTER it, which is why the canonical Phase-3 runner's
+        # own recipe drifted from the one `skills/synth-doctor/SKILL.md`
+        # documents without anything noticing.
+        #
+        # ADVISORY, not optional_program_exit_zero, and the reason is measured:
+        # `phase3_one_shot_runner` never emits `setundef -zero`, so a BLOCKING
+        # wiring would redden EVERY future real-PDK run it produces, plus the
+        # one published run that is judgeable today
+        # (`benchmark-data/ic/caravel_user_project`). Fixing the producer
+        # changes how don't-care chip-top OUTPUT / OUTPUT-ENABLE bits resolve
+        # and needs a functional re-verification, so it is not bundled here.
+        # `advisory_program_exit_zero` RUNS the gate and RECORDS the verdict
+        # without failing the step — the slot that exists precisely so a gate
+        # that declares itself advisory can be wired at all.
+        - advisory_program_exit_zero:
+            command: "yosys_tiecell_recipe_order_check . --json reports/phase2/gates/yosys_tiecell_recipe_order.json"
             condition_files_exist: ["phase2/stage2/synth"]
     blocks_on: [9, 13]
 
@@ -2584,8 +2705,11 @@ steps:
         # tapeout run with a third-party hard macro on a second supply: the DEF
         # declared the rail, bound the macro's supply pin to it, and the rail
         # carried ZERO routed geometry — while THREE tools reported success.
-        # PG_CONNECT_AUDIT counts pins whose net pointer is NULL (this pin's was
-        # valid, pointing at the empty rail); PSM-0040 "all shapes on net X are
+        # PG_NET_OWNERSHIP_AUDIT counts pins whose net pointer is NULL (this
+        # pin's was valid, pointing at the empty rail — and through v1.9.62 that
+        # audit was called PG_CONNECT_AUDIT and its result was published as "N/N
+        # PG terminals connected", which is the overclaim, not the measurement);
+        # PSM-0040 "all shapes on net X are
         # connected" is vacuously true over an empty shape set; and the router
         # had nothing to route so nothing to fail on. Each answered its own
         # question correctly; none answered "can current reach this pin".

@@ -186,7 +186,17 @@ def test_e1_is_still_the_narrow_rail_the_remeasurement_left_it_as():
                     info.get("global_signals_declared"):
                 populated_anyway += 1
     assert fired == 21, fired
-    assert status_nothing == 102, status_nothing
+    # 102 -> 103: the corpus GAINED a project (the caravel_user_project cell
+    # landed in v1.9.60), and it declares no channel catalog. The two counts
+    # this test is actually about — `fired` and `populated_anyway` — did not
+    # move, which is what says the relaxation is still un-relaxed. Verified on
+    # origin/main BEFORE this batch touched anything: the number was already
+    # 103 there, so this is corpus growth and not a regression from any change
+    # here.
+    #
+    # A count over a growing corpus drifts by construction. It is kept as a
+    # count rather than a ratio because the POINT is the two that stayed put.
+    assert status_nothing == 103, status_nothing
     # The population the relaxation would have added, and the reason it was
     # not: these 81 declare a catalog the consumer really does read.
     assert populated_anyway == 81, populated_anyway

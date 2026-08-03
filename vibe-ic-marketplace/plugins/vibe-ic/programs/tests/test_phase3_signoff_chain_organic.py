@@ -509,9 +509,10 @@ class TestDontUseFamilyFallback:
 
 class TestPgNetCleanupTcl:
     """Pin the DRT-0305 PG-net cleanup that MUST precede routing (v0.1.49 doctrine).
-    A non-special POWER/GROUND net in regular NETS aborts ALL detailed routing;
-    this pass removes/reclassifies it so the design routes instead of silently
-    shipping unrouted."""
+    A non-special POWER/GROUND net in regular NETS aborts ALL detailed routing
+    when it is DANGLING; this pass removes those so the design routes instead of
+    silently shipping unrouted. One with real terminals is an unrouted SUPPLY
+    and is reported, not reclassified (vibe-ic#687)."""
 
     def test_cleanup_targets_nonspecial_pg_only(self):
         tcl = runner._pg_net_cleanup_tcl()
@@ -519,11 +520,25 @@ class TestPgNetCleanupTcl:
         assert '"POWER"' in tcl and '"GROUND"' in tcl
         assert 'isSpecial' in tcl              # real PG nets (special) are spared
 
-    def test_cleanup_deletes_dangling_reclassifies_connected(self):
+    def test_cleanup_deletes_dangling_and_REPORTS_connected(self):
+        """RENAMED AND INVERTED — vibe-ic#687. This test pinned the defect: it
+        asserted `setSigType SIGNAL`, i.e. that a POWER net WITH terminals gets
+        handed to the detailed router as a signal.
+
+        That net is not dangling; it is an UNROUTED SUPPLY, and routing it at
+        minimum signal width is how a run went green — it leaves SPECIALNETS so
+        geometry gates have nothing to examine, the PG connect audit sees every
+        terminal attached, and DRC/ERC/PV then pass. Worst for a secondary
+        supply above the core voltage, where the vendor requires supply-pin
+        width and signal width is an order of magnitude under it.
+
+        The DANGLING branch is unchanged and still asserted: that one is the
+        DRT-abort fix this pass exists for."""
         tcl = runner._pg_net_cleanup_tcl()
         assert 'dbNet_destroy' in tcl          # dangling stub -> delete
-        assert 'setSigType SIGNAL' in tcl      # connected -> route as signal
-        # delete is gated on zero iterms AND zero bterms (dangling only)
+        assert 'setSigType SIGNAL' not in tcl  # connected -> REPORTED, not retyped
+        assert 'PG_CLEANUP_UNROUTED_SUPPLY' in tcl
+        # delete is still gated on zero iterms AND zero bterms (dangling only)
         assert 'getITerms' in tcl and 'getBTerms' in tcl
 
     def test_cleanup_is_nonfatal_guarded(self):

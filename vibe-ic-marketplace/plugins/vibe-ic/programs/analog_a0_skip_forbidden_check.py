@@ -17,16 +17,44 @@ Algorithm (chip-AGNOSTIC):
      (both `analog/` and `phase3/analog/`).
   2. If absent → PASS (the forbidden artefact was not produced).
   3. If present → it is forbidden ONLY when it actually encodes a SKIP
-     decision (a `decision` / `status` / top-level value matching
-     /skip|skipped|skipped-condition|no.?analog/i). A file that happens
-     to be named that but carries no skip verdict is reported but not a
-     hard FAIL — we FAIL on the real defect (a top-level analog skip),
-     not on the filename alone.
+     decision, read from the NAMED decision fields (`decision` /
+     `status` / `verdict` / `result` / `analog_decision`, top-level or
+     one level down under `analog`). A file that happens to be named
+     that but carries no skip verdict is reported but not a hard FAIL —
+     we FAIL on the real defect (a top-level analog skip), not on the
+     filename alone.
   4. When a real skip IS encoded, FAIL unless one of the two sanctioned
      replacements is present and substantive:
         (a) `analog/A0_implementation_status.json` with a per-block /
             per-step status object (non-empty `blocks` or `steps`), OR
         (b) an L5_ADI_SPEC.json carrying `analog_blocks_detected=false`.
+
+MEASURED DEFECTS REPAIRED 2026-08-03 (vibe-ic#693 analog-corner family).
+This gate had never run outside its own unit test. Exercised against
+fixtures before wiring, it FAILED on state that is not the defect and
+PASSED on state that is:
+
+  * `{"decision": "NO_SKIP", "rationale": "2 analog blocks detected;
+    the analog track runs in full"}` → rc 1. The skip regex was bare
+    `skip` with no negation handling, so a file recording the OPPOSITE
+    of a skip was read as a skip. Repaired: `_NEGATED_SKIP_RE` is
+    consulted first, and an explicitly-negated verdict is a PASS.
+  * `{"decision": "PROCEED", "note": "no A-step was skipped in this
+    run"}` → rc 1, evidence `value='no A-step was skipped in this run'`.
+    The old code looped over EVERY string value in the file, so free
+    prose in an unrelated field decided the verdict. Repaired: only the
+    NAMED decision fields are read (plus a nested `analog` object).
+  * A project whose analog track ran in full but which retains
+    `archive/old_run/analog/A0_skip_decision.json` → rc 1, naming the
+    archived file. The globs ended in `**/`, so any nested historical
+    run anywhere under the project was judged as if it were this run's.
+  * The mirror-image FALSE NEGATIVE: a REAL top-level skip excused by an
+    `A0_implementation_status.json` belonging to an unrelated nested run
+    → rc 0. Same unbounded `**/` glob, now deciding the wrong way.
+    Repaired: both globs are bounded to this project's OWN analog roots
+    (`analog/`, `phase1|phase2|phase3/analog/`). The published corpus is
+    itself the nested shape (a run dir inside its parent project), so
+    this was not a hypothetical.
 
 Usage:
     python3 analog_a0_skip_forbidden_check.py <project_dir> [--json out.json]
@@ -53,22 +81,36 @@ from typing import List, Optional, Tuple
 _SKIP_RE = re.compile(r"skip|skipped|skipped[\-_ ]?condition|no[\s_\-]?analog|"
                       r"digital[\s_\-]?only", re.IGNORECASE)
 
-_FORBIDDEN_GLOBS = (
-    "analog/A0_skip_decision.json",
-    "phase3/analog/A0_skip_decision.json",
-    "**/A0_skip_decision.json",
+# Consulted BEFORE `_SKIP_RE`. A verdict that says a skip did NOT happen
+# contains the substring `skip` and matched the rule it is the negation of.
+# `no.?analog` / `digital.only` are deliberately NOT negatable here: those
+# ARE the forbidden verdict, and "no analog" is not "not skipped".
+_NEGATED_SKIP_RE = re.compile(
+    r"\b(?:no|not|non|never)[_\-\s]*skip"      # NO_SKIP, not-skipped, never skip
+    r"|\bskip(?:ped)?[_\-\s]*(?:=|:)?[_\-\s]*(?:false|none|no)\b"
+    r"|\bnot\s+skipped\b",
+    re.IGNORECASE,
 )
 
-_STATUS_GLOBS = (
-    "analog/A0_implementation_status.json",
-    "phase3/analog/A0_implementation_status.json",
-    "**/A0_implementation_status.json",
-)
+# The named fields a decision is actually recorded in. Free prose in any
+# OTHER field is not a verdict — reading it as one made an unrelated note
+# decide this gate (see the docstring's measured defects).
+_DECISION_KEYS = ("decision", "status", "verdict", "result",
+                  "analog_decision")
+
+# BOUNDED to this project's own analog roots. A trailing `**/` reached into
+# archived / nested historical runs and judged them as this run's, in both
+# directions (false FAIL on an archived skip, false PASS on a nested status).
+_ANALOG_ROOTS = ("analog", "phase1/analog", "phase2/analog", "phase3/analog")
+
+_FORBIDDEN_GLOBS = tuple(f"{r}/A0_skip_decision.json" for r in _ANALOG_ROOTS)
+
+_STATUS_GLOBS = tuple(
+    f"{r}/A0_implementation_status.json" for r in _ANALOG_ROOTS)
 
 _L5_GLOBS = (
     "phase1/generated_docs/L5_ADI_SPEC.json",
     "phase1/generated_docs/L5*.json",
-    "**/L5_ADI_SPEC.json",
 )
 
 
@@ -100,18 +142,41 @@ def _encodes_skip(path: Path) -> Tuple[bool, str]:
         if _SKIP_RE.search(raw):
             return True, "unparsable JSON but skip token in raw text"
         return True, "unparsable JSON named A0_skip_decision (presence)"
+
+    def _verdict(scope: dict, prefix: str = "") -> Optional[Tuple[bool, str]]:
+        """Read the NAMED decision fields of one object. Returns None when
+        this object records no verdict at all, so the caller can look one
+        level down instead of guessing from unrelated prose."""
+        for key in _DECISION_KEYS:
+            v = scope.get(key)
+            if isinstance(v, bool):
+                # `{"skipped": false}` shape carried on a decision key.
+                return (v, f"{prefix}{key}={v!r}")
+            if not isinstance(v, str):
+                continue
+            if _NEGATED_SKIP_RE.search(v):
+                return False, f"{prefix}{key}={v!r} explicitly records NO skip"
+            if _SKIP_RE.search(v):
+                return True, f"{prefix}{key}={v!r}"
+            # A named decision field that parses and says something else
+            # (e.g. "PROCEED") is a real verdict and it is not a skip.
+            return False, f"{prefix}{key}={v!r} is not a skip verdict"
+        return None
+
     if isinstance(data, dict):
-        for key in ("decision", "status", "verdict", "result",
-                    "analog_decision"):
-            v = data.get(key)
-            if isinstance(v, str) and _SKIP_RE.search(v):
-                return True, f"{key}={v!r}"
-        # A nested {analog: {decision: ...}} or any string value matching.
-        for v in data.values():
-            if isinstance(v, str) and _SKIP_RE.search(v):
-                return True, f"value={v!r}"
-    elif isinstance(data, str) and _SKIP_RE.search(data):
-        return True, f"top-level string={data!r}"
+        got = _verdict(data)
+        if got is not None:
+            return got
+        nested = data.get("analog")
+        if isinstance(nested, dict):
+            got = _verdict(nested, prefix="analog.")
+            if got is not None:
+                return got
+    elif isinstance(data, str):
+        if _NEGATED_SKIP_RE.search(data):
+            return False, f"top-level string={data!r} records NO skip"
+        if _SKIP_RE.search(data):
+            return True, f"top-level string={data!r}"
     return False, "no skip verdict in parsed content"
 
 

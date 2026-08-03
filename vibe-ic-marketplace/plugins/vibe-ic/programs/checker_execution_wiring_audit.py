@@ -23,10 +23,40 @@ That is the repo's recurring shape one more time: an empty result is
 indistinguishable from a clean one. Here the emptiness is upstream of the
 checker — it is never handed anything to judge.
 
+THE POPULATION IS A FILENAME GLOB, AND IT LET ONE THROUGH (#693)
+-----------------------------------------------------------------
+Until 2026-08-03 the population was `*_check.py` + `*_audit.py` — 533 of the
+1091 programs. `gitignore_scratch_guard.py` is a gate, was wired to nothing,
+and ends in NEITHER suffix, so this audit reported
+
+    checker_execution_wiring_audit: 533 checker(s)
+    [PASS] no NEW test-only checker (31 recorded)
+
+over a population that structurally could not contain the one real instance
+in its own class. A confident clean answer from a denominator that excluded
+the finding by naming alone is the exact defect this file's docstring is
+about, one level up.
+
+WHY THE FIX IS `+ _guard/_lint/_gate` AND NOT `programs/*.py`. Measured, both
+ways, before choosing:
+
+    population 533 (as shipped)      test_only 31   no_runner  0
+    population 560 (+ the 3 suffixes) test_only 33   no_runner  0   -> +2 entries
+    population 1091 (every program)   test_only 91   no_runner 20   -> +80 entries
+
+The 80 are `a2b_protocol_synth.py`, `crc_vector_gen.py`, `benchmark_setup.py`
+and their kind — GENERATORS and harness helpers, not checkers. A register whose
+`_comment` says "checkers that NOTHING but their own unit test ever runs" does
+not describe them, and filling it with 80 non-checkers to catch one guard is
+the same defect as the glob: a population chosen for convenience rather than
+for the question. The suffix set is widened to the CHECKER-SHAPED names and
+nothing else; the 531 programs still outside it are disclosed by the verdict
+line rather than silently absent.
+
 WHAT IT MEASURES
 ----------------
-For every `*_check.py` / `*_audit.py` under `programs/`, which of these
-can actually INVOKE it:
+For every `*_check.py` / `*_audit.py` / `*_guard.py` / `*_lint.py` /
+`*_gate.py` under `programs/`, which of these can actually INVOKE it:
 
     CI     a GitHub workflow step
     FLOW   the canonical flow definition (a gate entry)
@@ -81,6 +111,14 @@ from pathlib import Path
 from typing import Dict, List, Set
 
 _BASELINE_NAME = "checker_execution_wiring_baseline.json"
+#: Checker-shaped filename suffixes. See "THE POPULATION IS A FILENAME GLOB".
+_CHECKER_SUFFIXES = ("*_check.py", "*_audit.py", "*_guard.py", "*_lint.py",
+                     "*_gate.py")
+#: The SKILL-only disclosure (#693). Not a baseline and not permission: a
+#: register of checkers whose only non-TEST runner is an agent choosing to
+#: follow a skill document, WITH the reason each one is still there. Reported,
+#: never blocking — see `skill_only_register`.
+_SKILL_ONLY_NAME = "checker_skill_only_reasons.json"
 # Matched as path COMPONENTS, never as substrings: `".git" in path` also
 # swallows `.github/`, which would empty the CI haystack and make this gate
 # systematically blind to the strongest form of wiring there is — while
@@ -220,24 +258,72 @@ def _tokenise(hay: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, Set[str]]]:
             for k, v in hay.items()}
 
 
+def checker_population(programs: Path) -> List[str]:
+    """Every checker-shaped program name, deduplicated and sorted."""
+    return sorted({p.name for suf in _CHECKER_SUFFIXES
+                   for p in programs.glob(suf)})
+
+
 def audit(plugin: Path, repo_root: Path) -> dict:
     programs = plugin / "programs"
-    checkers = sorted([p.name for p in programs.glob("*_check.py")]
-                      + [p.name for p in programs.glob("*_audit.py")])
+    checkers = checker_population(programs)
     hay = _tokenise(_haystacks(plugin, repo_root))
     test_only: List[str] = []
     unrun: List[str] = []
+    skill_only: List[str] = []
     for name in checkers:
         r = runners(name[:-3], hay, str(programs / name))
         if not r:
             unrun.append(name)
         elif r == {"TEST"}:
             test_only.append(name)
+        elif r - {"TEST"} == {"SKILL"}:
+            # The WEAKEST runner there is: it fires only if an agent reads that
+            # skill and chooses to run the program. #693 counts it as a runner
+            # deliberately (counting it avoids a false positive) and says so;
+            # what it does NOT do is say how many there are. 51 of 560 on
+            # origin/main. Disclosed here so a gate parked behind a skill line
+            # is at least COUNTED, which is the difference between a decision
+            # and an oversight.
+            skill_only.append(name)
     return {"program": "checker_execution_wiring_audit",
             "checkers": len(checkers),
+            "all_programs": len(list(programs.glob("*.py"))),
             "test_only": sorted(test_only),
             "no_runner_at_all": sorted(unrun),
+            "skill_only": sorted(skill_only),
             "passed": True}
+
+
+def skill_only_register(path: Path) -> Dict[str, str]:
+    """`{checker.py: reason}` for SKILL-only checkers that were investigated.
+
+    A DISCLOSURE, not permission and not a ratchet. `_UNROUTED_INVENTORY` in
+    `gate_skip_routing_check` is the wrong home — it is an exact-equality
+    ratchet over unrouted SKIP PATHS (98 in 53 gates), and putting a
+    never-wired program in it would make that balance mean two things at once.
+    `checker_execution_wiring_baseline.json` is also the wrong home, and it
+    says so by FAILING: it computes `paid = [c for c in baseline if c not in
+    test_only_now]` and any entry that HAS a runner is reported as
+    "(resolved) — shrink the baseline so it cannot become permission".
+    Measured with both #693 inventory candidates added to a copy of it:
+
+        RC=1
+        [FAIL] 2 recorded checker(s) now HAVE a real runner
+           (resolved) benchmark_triage_absorption_audit.py
+           (resolved) organic_issue_body_lint.py
+
+    Both have a SKILL runner, so neither is test-only, so neither belongs
+    there. This file is the third register the two of them actually need.
+    """
+    if not path.is_file():
+        return {}
+    try:
+        d = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return {}
+    r = d.get("reasons") if isinstance(d, dict) else None
+    return {str(k): str(v) for k, v in r.items()} if isinstance(r, dict) else {}
 
 
 def measure_triage(programs: Path, names: List[str], timeout: int = 200) -> Dict[str, str]:
@@ -369,7 +455,24 @@ def main(argv=None) -> int:
         print(f"wrote {bl} ({len(now)} entr(ies))")
         return 0
 
-    print(f"checker_execution_wiring_audit: {rep['checkers']} checker(s)")
+    print(f"checker_execution_wiring_audit: {rep['checkers']} checker-shaped "
+          f"program(s) of {rep['all_programs']} in programs/")
+    reasons = skill_only_register(here.parent / _SKILL_ONLY_NAME)
+    so = rep.get("skill_only") or []
+    named = [c for c in so if c in reasons]
+    print(f"  SKILL-only (the weakest runner): {len(so)} — "
+          f"{len(named)} carry a written reason in {_SKILL_ONLY_NAME}, "
+          f"{len(so) - len(named)} do not. REPORTED, never blocking.")
+    for c in sorted(named):
+        print(f"   (skill-only, reason recorded) {c}")
+    stale = sorted(set(reasons) - set(so))
+    if stale:
+        # The register may not outlive what it describes: an entry that has
+        # gained a real runner, or lost its SKILL one, is describing a state
+        # that no longer exists.
+        print(f"  NOTE {len(stale)} recorded reason(s) no longer match a "
+              f"SKILL-only checker (wired since, or renamed): "
+              + ", ".join(stale[:6]))
     base = _load_baseline(bl)
     new = [c for c in now if base is None or c not in set(base)]
     paid = [c for c in (base or []) if c not in set(now)]

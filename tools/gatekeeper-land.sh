@@ -24,6 +24,24 @@ CHEAP_ONLY=0
 [ "${1:-}" = "--cheap-only" ] && CHEAP_ONLY=1
 
 FAILED=0
+# REPORT, not a gate. Prints what a probe found and NEVER touches FAILED.
+#
+# It exists so that a measurement whose blast radius is not yet a landing bar
+# still EXECUTES against every landing instead of being parked in a flag nobody
+# passes. The distinction is written into the label, so a reader of this log
+# can never mistake a REPORT line for a PASS.
+report() {                           # report <label> <cmd…>
+  local label="$1"; shift
+  local out rc
+  out="$("$@" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '  REPORT  %s\n' "$label"
+  else
+    printf '  REPORT  %s (rc=%s — NOT blocking)\n' "$label" "$rc"
+  fi
+  printf '%s\n' "$out" | grep -aE 'REPORT|VIOLATION|\[FAIL\]|\[SKIP\]' \
+    | head -8 | sed 's/^/            /'
+}
 run() {                              # run <label> <cmd…>
   local label="$1"; shift
   local out
@@ -68,6 +86,12 @@ if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
   run "benchmark run manifest" python3 "$PROGRAMS/benchmark_run_manifest.py" check --tree benchmark-data --changed-since "$BASE"
   git log --format='%B' "$RANGE" > /tmp/gk_commit_text.txt 2>/dev/null
   run "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" /tmp/gk_commit_text.txt
+  # 2026-08-03 — the batch that landed five PRs from a 6.5-hour-stale base and
+  # let three of its own commits erase the other two. `gatekeeper_stale_branch_check`
+  # said STALE_OVERLAP on all five BEFORE the land; nothing looked at the
+  # commits AFTER they existed, which is the artefact this script pushes.
+  run "no collateral revert within the push" \
+      python3 "$PROGRAMS/landing_collateral_revert_check.py" --repo "$ROOT" --rev-range "$RANGE"
 else
   echo "  SKIP  range is empty — nothing new to land"
 fi
@@ -110,6 +134,23 @@ trap 'rm -f "$FP"' EXIT
 run "worktree carries no uncommitted change" \
     python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
         --emit-fingerprint "$FP"
+
+# The gate above deliberately EXCLUDES untracked paths (`??`) — see its module
+# docstring. That exclusion is right for its question and leaves a gap for a
+# different one: an untracked, un-ignored `*scratch*` path is one `git add -A`
+# from being committed, which is why this repo forbids `-A`. ORGANIC #720 found
+# four of them sitting in the tree for three to nine days.
+#
+# REPORT, not a gate, and the reason is measured rather than cautious: all four
+# of those paths are ignored at origin/main (`.gitignore` 139-143), so across
+# 250 checkouts on one host the ONLY thing this half still finds is
+# `vibe-ic-marketplace/scratch_geom_signoff_tests/` in 61 checkouts that are
+# BEHIND origin/main. A bar whose one instance is already closed is a bar that
+# only ever fires on somebody's scratch notes. `--worktree-blocking` promotes
+# it when that changes.
+report "untracked scratch paths in this checkout" \
+    python3 "$PROGRAMS/gitignore_scratch_guard.py" --root "$ROOT" \
+        --include-worktree
 
 if [ "$CHEAP_ONLY" = "1" ]; then
   echo "--- full tier SKIPPED (--cheap-only) — no stamp will be written ---"

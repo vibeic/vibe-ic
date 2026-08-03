@@ -228,6 +228,37 @@ def corpus_gates(script: Path) -> List[Gate]:
     return out
 
 
+def inert_exclusions(script: Path) -> List[Tuple[int, str]]:
+    """EXCLUDE directives WRITTEN in the script that exclude NOTHING.
+
+    The adjacency rule above is fail-safe for the gate — drift means the gate
+    is probed again — but it is NOT fail-safe for the READER, and that half was
+    unenforced. Measured on origin/main 1f3d8d067: THREE directives are written
+    (lines 162, 175, 221) and only TWO take effect. The third sits one blank
+    line above `run_tolerating_uncheckable "STA engines agree"`, so the parser
+    reads the blank line, finds no directive, and probes the gate anyway. A
+    reader of the script sees an exclusion that does not exist.
+
+    A declaration that silently does nothing is this repo's recurring shape
+    with the polarity reversed: not a check that lies about what it found, but
+    a directive that lies about what it governs. It is cheap to detect —
+    written count vs effective count — so it is detected.
+    """
+    try:
+        lines = script.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    out: List[Tuple[int, str]] = []
+    run_head = re.compile(r'^\s*run(?:_\w+)?\s')
+    for i, ln in enumerate(lines):
+        if not _EXCLUDE_RE.match(ln):
+            continue
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if not run_head.match(nxt):
+            out.append((i + 1, ln.strip()[:160]))
+    return out
+
+
 def _expand(cmd: str, root: Path) -> List[str]:
     c = cmd.replace('"$PG/', str(root / "vibe-ic-marketplace" / "plugins" /
                                  "vibe-ic" / "programs") + "/")
@@ -337,6 +368,15 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
 
     findings: List[Dict] = []
     not_probed: List[Tuple[str, str]] = []
+    for lineno, text in inert_exclusions(script):
+        findings.append({
+            "gate": f"(script line {lineno})", "kind": "INERT_EXCLUSION",
+            "detail": ("an EXCLUDE directive is written here but is not the "
+                       "line IMMEDIATELY above a `run` line, so it excludes "
+                       "NOTHING — the script says one thing and the parser "
+                       "reads another. Move it flush against its `run` line, "
+                       "or delete it."),
+            "checkout": text, "worktree": "-"})
     td = tempfile.mkdtemp(prefix="hostindep-")
     wt = Path(td) / "wt"
     try:
