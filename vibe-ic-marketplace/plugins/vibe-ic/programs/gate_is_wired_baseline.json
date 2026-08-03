@@ -10,7 +10,6 @@
     "file_extend_preserve_check",
     "fpga_led_probe_lint",
     "gitignore_scratch_guard",
-    "handoff_bundle_check",
     "hold_area_budget_check",
     "hold_corner_coverage_check",
     "integration_spec_audit",
@@ -30,8 +29,7 @@
     "signaltap_recompile_sequence_check",
     "signaltap_stp_completeness_check",
     "silent_decline_audit",
-    "spec_review_lint",
-    "yosys_tiecell_recipe_order_check"
+    "spec_review_lint"
   ],
   "skill_only": [
     "analog_corner_margin_check",
@@ -40,7 +38,6 @@
     "checkpoint_gate_check",
     "file_extend_preserve_check",
     "fpga_led_probe_lint",
-    "handoff_bundle_check",
     "hold_area_budget_check",
     "hold_corner_coverage_check",
     "l_doc_cross_consistency_check",
@@ -54,7 +51,6 @@
     "signaltap_recompile_sequence_check",
     "signaltap_stp_completeness_check",
     "silent_decline_audit",
-    "spec_review_lint",
-    "yosys_tiecell_recipe_order_check"
+    "spec_review_lint"
   ]
 }

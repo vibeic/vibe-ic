@@ -1691,6 +1691,7 @@ steps:
     programs:
       - yosys_hilomap_required_check
       - yosys_script_template_check
+      - yosys_tiecell_recipe_order_check
     required_outputs:
       - "phase2/stage2/synth/netlist.v"
     gate:
@@ -1700,6 +1701,26 @@ steps:
             condition_files_exist: ["phase2/stage2/synth"]
         - optional_program_exit_zero:
             command: "yosys_script_template_check . --json reports/phase2/gates/yosys_script_template.json"
+            condition_files_exist: ["phase2/stage2/synth"]
+        # v1.9.62+ — the third tie-cell ordering rule pair, ADVISORY.
+        # The two gates above assert hilomap PRESENCE and token presence.
+        # Neither checks `setundef -zero` BEFORE hilomap, nor `opt_clean` /
+        # `clean -purge` AFTER it, which is why the canonical Phase-3 runner's
+        # own recipe drifted from the one `skills/synth-doctor/SKILL.md`
+        # documents without anything noticing.
+        #
+        # ADVISORY, not optional_program_exit_zero, and the reason is measured:
+        # `phase3_one_shot_runner` never emits `setundef -zero`, so a BLOCKING
+        # wiring would redden EVERY future real-PDK run it produces, plus the
+        # one published run that is judgeable today
+        # (`benchmark-data/ic/caravel_user_project`). Fixing the producer
+        # changes how don't-care chip-top OUTPUT / OUTPUT-ENABLE bits resolve
+        # and needs a functional re-verification, so it is not bundled here.
+        # `advisory_program_exit_zero` RUNS the gate and RECORDS the verdict
+        # without failing the step — the slot that exists precisely so a gate
+        # that declares itself advisory can be wired at all.
+        - advisory_program_exit_zero:
+            command: "yosys_tiecell_recipe_order_check . --json reports/phase2/gates/yosys_tiecell_recipe_order.json"
             condition_files_exist: ["phase2/stage2/synth"]
     blocks_on: [9, 13]
 
