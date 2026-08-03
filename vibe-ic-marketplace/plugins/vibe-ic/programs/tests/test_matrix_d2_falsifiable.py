@@ -472,6 +472,23 @@ def _f_hollow_reports(p: Path) -> None:
     _w(p, "reports/phase3/dynamic_ir.json", {})
 
 
+def _f_a0_skip_forbidden(p: Path) -> None:
+    """The forbidden top-level analog skip, with neither sanctioned
+    replacement.
+
+    Absence alone cannot redden this clause and that is by design: the gate
+    PASSes a project that never produced the artefact, which is every published
+    root. The defect is the artefact's PRESENCE carrying a skip verdict while
+    nothing records what was done instead — no
+    `A0_implementation_status.json` at an analog root, and no L5 saying
+    `analog_blocks_detected=false`. So the fixture has to write the decision
+    down and then leave both remedies out.
+    """
+    _w(p, "phase3/analog/A0_skip_decision.json",
+       {"decision": "SKIPPED-CONDITION",
+        "reason": "the extractor read this as digital-only"})
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -487,6 +504,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "MS_BAD": _f_ms_bad,
     "TB_BAD": _f_tb_bad,
     "HOLLOW_REPORTS": _f_hollow_reports,
+    "A0_SKIP_FORBIDDEN": _f_a0_skip_forbidden,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -495,6 +513,11 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
 #: not redden it) fails loudly rather than silently keeping a stale recipe.
 #: Clauses absent from this table use ``EMPTY``.
 CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
+    # vibe-ic#693 — the clause that makes D1's newest blocking gate falsifiable.
+    # This IS the firing proof for that wiring: the published corpus carries no
+    # `A0_skip_decision.json` anywhere, so the gate is green on all 17 roots and
+    # nothing in the corpus can show it reddening a step.
+    ("D1", "analog_a0_skip_forbidden_check ."): "A0_SKIP_FORBIDDEN",
     ("2", "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v "
           "--severity ERROR --json reports/phase2/lint/rtl_hygiene.json"):
         "RTL_BAD",

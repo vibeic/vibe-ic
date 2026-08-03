@@ -179,6 +179,36 @@ steps:
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
+        # vibe-ic#693 — the forbidden top-level analog skip. `analog-spec-extract`
+        # has stated the rule since Wave 47 ("Forbidden: analog/A0_skip_decision
+        # .json as a top-level skip"), and until now NOTHING enforced it: the
+        # gate was referenced from no executable location at all.
+        #
+        # WHY D1 AND NOT A1, MEASURED. A1 (`analog-spec-extract`, the skill that
+        # documents the rule) is the obvious home and it is the wrong one. Its
+        # `condition` is `files_exist: [phase1/analog/analog_block_list.json]`,
+        # evaluated by `_check_condition` -> `_has_canonical_analog_blocks`.
+        # Measured on four trees each carrying a planted top-level skip: the
+        # condition is TRUE only when L5 declares a non-empty `analog_blocks`
+        # array. On the two trees where L5 is silent or declares an EMPTY array
+        # — an agent deciding there are no analog blocks and writing the skip
+        # down, which is the defect's own shape — the condition is FALSE, A1 is
+        # SKIPPED, and a gate wired there would never run in 2 of the 3 shapes
+        # it can fail on. D1 has no `condition:` and runs on every project.
+        #
+        # WHY THIS SLOT AND NOT FIRST. `_evaluate_gate` short-circuits `all_of`
+        # at the first failing sub-gate, so slot order decides what executes.
+        # This gate READS L5 (its sanctioned-replacement branch (b) is
+        # `L5.analog_blocks_detected=false`), so it must run AFTER the gate that
+        # establishes the L docs exist. Measured over the 17 published roots:
+        # it executes on 16; the 17th (`ibex/rerun_v1346`) is a Phase-3-only
+        # rerun with no `generated_docs/` at all, where D1 is already red for
+        # the more fundamental reason and there is no Phase-1 to judge.
+        #
+        # BLAST RADIUS: 0 of 17. No published root carries an
+        # `A0_skip_decision.json` at any analog root. Firing is proved on a
+        # synthetic tree instead — see the PR body.
+        - program_exit_zero: "analog_a0_skip_forbidden_check ."
         # #312 — the SECOND track. Findings are advisory (a divergence between
         # the two tracks needs converging, not an automatic stop); running is
         # not. A missing/unparseable report exits 1 here, because a second
@@ -1319,6 +1349,38 @@ steps:
         # (real ngspice required), matching the analog runner's own
         # per-step gate. chip-AGNOSTIC.
         - program_exit_zero: "analog_a4_corner_sweep_check . --json reports/phase2/gates/analog_corner_sweep.json"
+        # vibe-ic#693 — corner-library realism. ADVISORY, and LAST, and both of
+        # those are measured decisions rather than caution.
+        #
+        # WHAT IT ASSERTS, and why no wired gate already does. A corner sweep is
+        # only as trustworthy as the device models it ran. This lint flags an
+        # inline `.model … [np]mos … LEVEL=1` card — an analytic first-order
+        # stand-in for the foundry corner library — and FAILs it when the deck
+        # discloses nothing. The A3 gate of record (`analog_netlist_pdk_check`)
+        # judges model INCLUDES and body connections by iterating DEVICE cards;
+        # a `.model` card is not a device instantiation, so it is invisible to
+        # it. `analog_a4_corner_sweep_check` judges simulator/netlist
+        # PROVENANCE and says nothing about device-model realism.
+        #
+        # WHY ADVISORY, AND WHY LAST — measured, not preference.
+        # `_evaluate_gate` short-circuits `all_of` at the first failing
+        # sub-gate and then re-runs ONLY the later `advisory_` entries. Over the
+        # 5 in-scope published roots, A4's gate block already fails on all 5
+        # (3 at `files_exist`, 2 at `analog_a4_corner_sweep_check`), so a
+        # BLOCKING entry here executes on 0 of 5 — a gate wired somewhere that
+        # never runs is the same defect moved. Placed first it executes on 5/5
+        # but can short-circuit the incumbent gate, hiding ITS finding. As an
+        # advisory placed last it executes on 5 of 5 AND both findings survive.
+        #
+        # WHAT WOULD MAKE IT BLOCKING: A4's incumbent gate green on the
+        # published corpus. Until then a blocking entry here cannot run.
+        #
+        # BLAST RADIUS: 0 red. Over the 5 in-scope published roots — 2 rc=2
+        # VACUOUS (no analog decks at either analog root), 2 PASS, 1 WARN on a
+        # deck carrying a real, well-formed standin disclosure. The advisory
+        # slot records all three tiers distinctly: the two VACUOUS roots appear
+        # as `n/a (input not present)`, never as `ok`.
+        - advisory_program_exit_zero: "analog_corner_lib_realism_lint . --json reports/phase2/gates/analog_corner_lib_realism.json"
     blocks_on: [A3]
 
   - id: A5
