@@ -78,6 +78,50 @@ def _capture_container_image(project: Path, container: str,
         rec = {"verdict": "SKIP", "container": container,
                "reason": f"image identity unverifiable: "
                          f"{type(exc).__name__}: {exc}"}
+    # ── PROPAGATE the run's declared image to every child that resolves one ──
+    # Recording the image is not the same as USING it. Steps that shell out via
+    # `docker exec <container>` inherit `--container` and are fine; steps that
+    # shell out via `docker run <IMAGE>` resolve an image of their OWN, and
+    # `fault_atpg_run._resolve_docker_image()` does it by scanning which
+    # candidate tags happen to be present LOCALLY — the same
+    # picked-by-what-is-lying-around defect class as choosing a tech LEF by
+    # filesystem order. When its pinned candidate is not pulled on this host it
+    # falls through to the LAST-RESORT upstream `hpretl/iic-osic-tools:latest`,
+    # which is a DIFFERENT DISTRIBUTION, not an older version of ours: it ships
+    # stock tools without this project's forks.
+    #
+    # MEASURED on caravel_user_project x sky130A (v1.9.65, this host):
+    # (Image tags below are spelled WITHOUT the registry prefix on purpose:
+    # they are a historical MEASUREMENT of one run, not live image pointers
+    # for `tools/vibeic-eda/sync_image_version.py` to keep in step.)
+    #   reports/container_image.json : image_ref = the vibeic-eda fork, tag 0.2.58
+    #                                  image_match true, verdict PASS
+    #   the DFT step actually ran in : hpretl/iic-osic-tools:latest
+    #                                  (`fault chain --help` | grep -c skip-boundary = 0;
+    #                                   the pinned 0.2.58 answers 1)
+    #   consequence                  : `fault chain` rc=64 "Unknown option
+    #                                  '--skip-boundary'" -> no scan netlist ->
+    #                                  Step 11 DFT FAIL -> 24 downstream steps
+    #                                  PASS-VOIDED. The run VERIFIED one image
+    #                                  and silently used another.
+    #
+    # So the resolved identity is exported here, at the one place that has
+    # already resolved AND verified it. An operator-set VIBEIC_EDA_IMAGE /
+    # IIC_EDA_IMAGE always wins (this only fills an EMPTY slot, so it cannot
+    # override a deliberate cross-image experiment). The content-addressed id is
+    # preferred over the tag because it is exactly what the container is running
+    # and cannot drift; the tag is the fallback when no id was resolved.
+    _img = rec.get("image_id") or rec.get("image_ref")
+    if _img and not (os.environ.get("VIBEIC_EDA_IMAGE")
+                     or os.environ.get("IIC_EDA_IMAGE")):
+        os.environ["VIBEIC_EDA_IMAGE"] = str(_img)
+        rec["propagated_to_child_docker_run"] = str(_img)
+        rec["propagated_via"] = "VIBEIC_EDA_IMAGE"
+    elif _img:
+        rec["propagated_to_child_docker_run"] = None
+        rec["propagated_via"] = (
+            "operator env override in force (VIBEIC_EDA_IMAGE/IIC_EDA_IMAGE) — "
+            "left as set")
     try:
         out = _pl.reports_dir(project) / "container_image.json"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -520,10 +564,6 @@ def main() -> int:
     lock = _runner_lock.acquire_or_reenter(project, "vibe_ic_one_shot_runner")
     if lock is None:
         return 3
-    # #588 — env passed to every delegated standalone phase runner so it
-    # re-enters this orchestrator's lock instead of being refused by it.
-    _phase_env = _runner_lock.child_env(project, held_lock=lock)
-
     # ---------------- Container IMAGE provenance (capture always) ----------
     # Every containerised step downstream is dispatched as
     # `docker exec <container> ...`, so `--container` selects a CONTAINER and
@@ -541,6 +581,21 @@ def main() -> int:
     # only, --skip-phase3) must not start failing here.
     _img_rec = _capture_container_image(project, args.container,
                                         args.require_image)
+    # #588 — env passed to every delegated standalone phase runner so it
+    # re-enters this orchestrator's lock instead of being refused by it.
+    #
+    # SNAPSHOTTED AFTER the image capture, and the order is load-bearing:
+    # `child_env` copies `os.environ`, and the capture above is what writes
+    # VIBEIC_EDA_IMAGE into it. Built one line earlier (where it used to be),
+    # the snapshot predates that write, every delegated phase runner inherits
+    # an env without it, and the propagation silently does nothing — MEASURED:
+    # `reports/container_image.json` recorded
+    # `propagated_via: VIBEIC_EDA_IMAGE` while the DFT step in the delegated
+    # phase-2 runner still reported `image_used:
+    # hpretl/iic-osic-tools:latest`. A propagation that the record claims and
+    # the children never see is worse than none, because the record then
+    # attests to something untrue.
+    _phase_env = _runner_lock.child_env(project, held_lock=lock)
     # `--require-image` is a DEMAND, so anything short of PASS fails it — not
     # only MISMATCH. An earlier revision halted on MISMATCH alone, which left
     # the most common way the demand goes unmet wide open: when the named

@@ -53,9 +53,29 @@ cleanup shipped in the generated `pnr.tcl` reclassifies exactly this net before
     downstream cleanup pass instead of by the synthesis recipe, which is a
     determinism/intent problem, not a DOA.
 
-Shipping a BLOCKING gate that claims a DOA the same repo already mitigates is
-how a gate gets waived. That is one of the two reasons this gate is wired
-ADVISORY (report-only) rather than blocking — see below.
+*** THAT ASSESSMENT EXPIRED WITH vibe-ic#687. ***
+
+The downstream mitigation it rests on — `PG_CLEANUP_SIG: zero_ (GROUND)`,
+the retype to SIGNAL — was REMOVED by #687, correctly: the same retype was
+also hiding genuinely unrouted supplies. With it gone, an unresolved `x`
+reaches `PG_CLEANUP_UNROUTED_SUPPLY` and HARD-FAILS PnR. Re-measured on the
+same IC one plugin generation later (caravel_user_project x sky130A, v1.9.65,
+die 2920x3520):
+
+    phase2/stage2/synth/user_project_wrapper_synth.v:1793
+        assign io_out = { \\mprj.counter.count [15:8], 22'hxxxxxx,
+                          \\mprj.counter.count [7:0] };
+    phase3/stage3/pnr/openroad.log
+        PG_CLEANUP_UNROUTED_SUPPLY: zero_ (GROUND) iterms=0 bterms=44
+    reports/orchestrator/phase3_one_shot.json
+        "name": "pnr", "status": "FAIL",
+        "detail": "PG_UNROUTED_SUPPLY: 1 POWER/GROUND net(s) carry real
+                   terminals and no special-net geometry ..."
+
+44 driverless chip-top output bits, reported as a power/ground rail. So the
+current consequence of a RULE 1 violation is: PnR FAILs, and the finding names
+the wrong defect class. Not a determinism nit, and not a DOA either — a hard
+stop with a misleading name.
 
 ──────────────────────────────────────────────────────────────────────────
 WHERE IT IS WIRED, AND WHY REPORT-ONLY
@@ -73,6 +93,18 @@ honest tier today:
      Fixing the producer is a change to how don't-care CHIP-TOP OUTPUT and
      OUTPUT-ENABLE bits resolve, so it needs a functional/LEC re-verification
      — it is not a recipe-string edit, and it is not done here.
+
+     >>> REASON 1 IS DISCHARGED. The producer now emits `setundef -zero`
+     inside the hilomap clause itself (order true by construction, all four
+     interpolation sites), pinned by
+     `tests/test_setundef_zero_before_hilomap_producer.py` including the
+     bidirectional negative control. The functional re-verification asked for
+     above was run: post-fix RTL-vs-mapped-netlist LEC on
+     caravel_user_project x sky130A. Blocking no longer reddens the canonical
+     runner — it is REASON 2 (coverage) that still governs the tier, so the
+     tier is deliberately left ADVISORY here rather than flipped by the same
+     change that removed reason 1. Flipping it is a flow-tier decision on
+     evidence wider than the one design measured here.
   2. COVERAGE IS 1 OF 16, NOT "15 CLEAN".
      Over `benchmark-data/` (123 directories with a `phase2/` or `phase3/`
      child), 16 publish a mapped netlist. Exactly 1 of those 16 also publishes
