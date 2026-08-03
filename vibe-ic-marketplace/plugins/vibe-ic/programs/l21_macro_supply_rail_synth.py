@@ -170,11 +170,26 @@ def _voltage_evidence(pin: str, doc_dir: Optional[Path],
     """
     if not doc_dir or not doc_dir.is_dir():
         return None
+    found: List[Dict[str, Any]] = []
     p = re.escape(pin)
     pats = [
         re.compile(rf"{p}\s*[=:]\s*([0-9]+(?:\.[0-9]+)?)\s*V\b", re.I),
         re.compile(rf"([0-9]+(?:\.[0-9]+)?)\s*V\s+{p}\b", re.I),
         re.compile(rf"{p}\b[^.\n]{{0,24}}?\bis\s+([0-9]+(?:\.[0-9]+)?)\s*V\b", re.I),
+        # #689 — "<PIN> same as <n>V <OTHER>". A real form the three patterns
+        # above do not cover, and the one that carries the SECOND operating
+        # voltage of a mode-dependent supply: the NVM datasheet states
+        # "VPP same as 1.8V VDD for Read" on one line and "7.5V VPP … for
+        # Program" four lines later. Without this the extractor sees only the
+        # 7.5 and the rail looks single-voltage.
+        #
+        # The number belongs to the OTHER rail by grammar — "same as 1.8V VDD"
+        # is a statement about VDD — but the sentence asserts THIS pin takes
+        # that value in that mode, which is exactly the fact being lost. Matched
+        # deliberately, and the matched_text keeps the whole clause so a reader
+        # sees the attribution rather than a bare number.
+        re.compile(rf"{p}\b[^.\n]{{0,16}}?\bsame\s+as\s+"
+                   rf"([0-9]+(?:\.[0-9]+)?)\s*V\b[^.\n]{{0,24}}", re.I),
     ]
     for f in sorted(doc_dir.rglob("*.txt")):
         try:
@@ -193,14 +208,51 @@ def _voltage_evidence(pin: str, doc_dir: Optional[Path],
                             # Evidence genuinely outside the project tree: keep
                             # the path but do not fabricate a relative one.
                             rel = str(f)
-                    return {
+                    found.append({
                         "voltage_v": float(m.group(1)),
                         "evidence": {
                             "file": rel, "line": ln,
                             "matched_text": m.group(0).strip(),
                         },
-                    }
-    return None
+                    })
+                    break            # one hit per line; the patterns overlap
+    if not found:
+        return None
+    # ORGANIC #689 — COLLECT, then decide. This used to `return` on the first
+    # match, so a rail with more than one operating voltage had one of them
+    # recorded and the rest dropped, under a `voltage_status` reading "stated in
+    # the design's own documents". A true quotation of a false summary.
+    #
+    # The standard case is a programmable NVM's programming supply: its own
+    # datasheet gives the elevated voltage FOR PROGRAMMING and the core voltage
+    # FOR READING, on the same pin, four lines apart —
+    #
+    #     line 103:  <rail> same as 1.8V VDD for Read
+    #     line 107:  7.5V <rail>, 1.8V VDD for Program
+    #
+    # Recording only 7.5 makes every consumer assert the wrong voltage in read
+    # mode: a crossing check keyed on `7.5 != 1.8` demands level shifters on
+    # paths that sit at the same potential, and an IR budget at 7.5 V is wrong
+    # for the mode the part spends its life in. It also mis-scores the
+    # CONSEQUENCE of leaving the rail unrealised — "we cannot burn the array"
+    # instead of "the device does not read".
+    #
+    # `voltage_v` stays the MAXIMUM so every existing consumer keeps working
+    # unchanged; the list is what stops the information being lost.
+    by_v: Dict[float, Dict[str, Any]] = {}
+    for f_ in found:
+        by_v.setdefault(f_["voltage_v"], f_)
+    distinct = sorted(by_v)
+    top = by_v[distinct[-1]]
+    return {
+        "voltage_v": top["voltage_v"],
+        "evidence": top["evidence"],
+        "voltage_by_mode": [
+            {"voltage_v": v, "evidence": by_v[v]["evidence"]}
+            for v in distinct
+        ],
+        "voltage_complete": len(distinct) <= 1,
+    }
 
 
 def _default_lef_roots(proj: Path) -> List[Path]:
@@ -346,8 +398,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         ev = _voltage_evidence(pin, doc_dir, proj)
         if ev:
             entry["voltage_v"] = ev["voltage_v"]
-            entry["voltage_status"] = "stated in the design's own documents"
             entry["voltage_evidence"] = ev["evidence"]
+            # #689 — carry EVERY stated voltage, and say when there is more than
+            # one. `voltage_status` used to encode only PROVENANCE (stated vs
+            # inferred) and had no representable value meaning "this rail has
+            # more than one operating voltage and I captured one". That is the
+            # value the schema was missing, so the extractor could be truthful
+            # about where it read and silent about what it dropped.
+            entry["voltage_by_mode"] = ev.get("voltage_by_mode") or [
+                {"voltage_v": ev["voltage_v"], "evidence": ev["evidence"]}]
+            if ev.get("voltage_complete", True):
+                entry["voltage_status"] = "stated in the design's own documents"
+            else:
+                _vs = ", ".join(f"{d['voltage_v']}V"
+                                for d in entry["voltage_by_mode"])
+                entry["voltage_status"] = (
+                    f"MODE-DEPENDENT — {len(entry['voltage_by_mode'])} distinct "
+                    f"voltages stated for this rail ({_vs}); `voltage_v` is the "
+                    f"maximum and is NOT the whole answer. A consumer that "
+                    f"reasons about one mode must read `voltage_by_mode`.")
         added.append(entry)
 
     # Every distinct GROUND rail also gets its OWN named entry, even when it is
