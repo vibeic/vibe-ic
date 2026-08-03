@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1045
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1045)
+- **Total programs (excluding helpers / shims):** 1046
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1046)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1036 |
+| `any` | 1037 |
 
 ## Alphabetical listing
 
@@ -594,6 +594,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lvs_tapeout_signoff_check` | any | — | the TAPEOUT-tier LVS gate. |
 | `lvs_triage_classify` | any | v0.1.50 | LVS triage classifier (Pattern-B → program). |
 | `lvs_verdict_tokens` | any | — | single source of truth for netgen LVS terminal- verdict classification (ORGANIC #524, extends #507/#477). |
+| `macro_obs_geometry_intersect_check` | any | — | Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686. |
 | `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction TCL emitter + validator. |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
@@ -1117,7 +1118,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1036 programs)
+### `any` (1037 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1682,6 +1683,7 @@ _(no programs in this group)_
 - `lvs_tapeout_signoff_check` — the TAPEOUT-tier LVS gate.
 - `lvs_triage_classify` — LVS triage classifier (Pattern-B → program).  _[v0.1.50]_
 - `lvs_verdict_tokens` — single source of truth for netgen LVS terminal- verdict classification (ORGANIC #524, extends #507/#477).
+- `macro_obs_geometry_intersect_check` — Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
 - `magic_extract_spice_emit` — Magic parasitic-RC extraction TCL emitter + validator.
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_

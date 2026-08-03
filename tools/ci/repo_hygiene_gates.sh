@@ -245,6 +245,16 @@ run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.
 run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_wiring_audit.py"
+# ORGANIC #686 — a macro OBS is the vendor's statement of where the integrator
+# may not put metal. It is not in the PDK deck, so sign-off DRC cannot see a
+# crossing; and the wire is on the right net, so a connectivity audit cannot
+# either. Runs over every published cell that has both a routed DEF and a
+# macro LEF; rc=2 (nothing to look at) is tolerated, rc=1 is not.
+for _cell in "$ROOT"/benchmark-data/ic/*/*/; do
+  [ -f "$_cell/phase3/stage3/pnr/routed.def" ] || continue
+  run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
+    "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
+done
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the
