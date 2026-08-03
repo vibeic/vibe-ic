@@ -35,16 +35,30 @@ of a false-positive-prone gate.
 DISCLOSURE side is satisfied by any of: an `else` branch, or a `print` /
 logger / `.append(` / `return` reached when the remedy is absent.
 
-ENFORCEMENT: advisory — this reports call sites for a human to judge. Some
-declines legitimately need no record; the point is that the CHOICE be visible
-rather than implicit.
+ENFORCEMENT: advisory on the individual site — this reports call sites for a
+human to judge. Some declines legitimately need no record; the point is that
+the CHOICE be visible rather than implicit.
+
+BUT ADVISORY IS NOT THE SAME AS ALWAYS-GREEN (vibe-ic#693)
+----------------------------------------------------------
+Without `--strict` this returned 0 unconditionally. Wiring THAT into CI adds a
+gate that cannot fail — the same defect the campaign is chasing, one level up.
+Turning `--strict` on instead reddens `main` today: MEASURED at this commit,
+1091 files scanned, 15 silent declines in 6 files, none of which this change
+triages.
+
+So the enforceable form is a RATCHET, the shape `checker_execution_wiring_audit`
+already uses: `--max N` (or a recorded baseline file) passes at or below N and
+FAILS above it. The 15 existing sites stay visible and are not blessed; a
+SIXTEENTH cannot land quietly. Blocking on `--strict` becomes correct once the
+15 are triaged.
 
 chip-AGNOSTIC: pure Python AST. No design, PDK or vendor literals.
 
 Exit codes:
-    0  audit completed (findings are reported, not fatal)
-    1  --strict and at least one silent decline was found
-    2  I/O error
+    0  audit completed at or below the recorded baseline
+    1  --strict with any finding, or the count GREW past the baseline
+    2  I/O error, or a baseline was demanded and none exists (NOT CHECKED)
 """
 from __future__ import annotations
 
@@ -198,6 +212,20 @@ def audit(paths: List[Path]) -> Dict[str, Any]:
             "count": len(findings)}
 
 
+BASELINE_NAME = "silent_decline_baseline.json"
+
+
+def _load_baseline(p: Path) -> Optional[int]:
+    if not p.is_file():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    n = d.get("count")
+    return n if isinstance(n, int) else None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Find remedy decisions whose refusal is silent (#313 §6).")
@@ -205,6 +233,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="files or dirs (default: this programs dir)")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 when any silent decline is found")
+    ap.add_argument("--ratchet", action="store_true",
+                    help="compare the count against the recorded baseline: at "
+                         "or below passes, GROWTH is exit 1. Without a "
+                         "baseline this is exit 2 (NOT CHECKED), never a "
+                         "quiet pass.")
+    ap.add_argument("--baseline", default=None,
+                    help=f"baseline file (default: {BASELINE_NAME} beside this "
+                         f"program)")
+    ap.add_argument("--write-baseline", action="store_true",
+                    help="record the current count as the baseline")
     ap.add_argument("--json", help="write the report here")
     a = ap.parse_args(argv)
     roots = [Path(t) for t in a.targets] or [Path(__file__).resolve().parent]
@@ -227,8 +265,49 @@ def main(argv: Optional[List[str]] = None) -> int:
     for f in rep["silent_declines"]:
         print(f"  {Path(f['file']).name}:{f['line']}  {f['remedy']}() -> "
               f"{f['var']}: {f['why']}")
+
+    bl = (Path(a.baseline) if a.baseline
+          else Path(__file__).resolve().parent / BASELINE_NAME)
+    if a.write_baseline:
+        by_file: dict = {}
+        for f in rep["silent_declines"]:
+            by_file[Path(f["file"]).name] = by_file.get(Path(f["file"]).name, 0) + 1
+        bl.write_text(json.dumps(
+            {"_comment": (
+                "Remedy call sites whose DECLINE path records nothing "
+                "(vibe-ic#313 §6, wired vibe-ic#693). MAY ONLY SHRINK — each "
+                "entry is a place the flow can refuse its own rescue with "
+                "nobody told. The wrong repair is to widen the disclosure "
+                "table until the number falls."),
+             "count": rep["count"],
+             "scanned": rep["scanned"],
+             "by_file": by_file}, indent=2, ensure_ascii=False) + "\n")
+        print(f"wrote {bl} (count={rep['count']})")
+        return 0
+
     if a.strict and rep["count"]:
         return 1
+    if a.ratchet:
+        if rep["scanned"] == 0:
+            print("VACUOUS_PASS: 0 files scanned — the audit examined nothing.")
+            return 2
+        base = _load_baseline(bl)
+        if base is None:
+            print(f"[NOT CHECKED] no baseline at {bl} — record one with "
+                  f"--write-baseline before this can ratchet.")
+            return 2
+        if rep["count"] > base:
+            print(f"[FAIL] silent remedy declines GREW {base} -> "
+                  f"{rep['count']}: a new remedy can now refuse with nobody "
+                  f"told. Disclose the decline path, or triage the existing "
+                  f"backlog and lower the baseline.")
+            return 1
+        if rep["count"] < base:
+            print(f"[PASS] {base} -> {rep['count']}; lower the baseline so the "
+                  f"recorded number stops claiming debt that is paid.")
+            return 0
+        print(f"[PASS] no NEW silent remedy decline ({rep['count']} recorded "
+              f"over {rep['scanned']} file(s))")
     return 0
 
 

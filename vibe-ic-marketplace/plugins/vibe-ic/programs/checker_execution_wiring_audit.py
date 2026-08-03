@@ -81,6 +81,39 @@ YAMLs all NAME checkers without running any. Counting a catalogue as a
 runner would let a checker be "wired" by being listed, which is the exact
 paper-only wiring this gate exists to find.
 
+`unwired_by_decision` — WHERE AN ORPHAN GATE'S DISCLOSURE GOES (vibe-ic#693)
+---------------------------------------------------------------------------
+#693 measured 130 programs referenced from no executable location, 29 of
+them gate-shaped. The three registries that look like they should hold that
+disclosure all refuse it, because each is a RATCHET OVER A MEASURED
+POPULATION and an unwired gate is not in any of those populations:
+
+  * `gate_skip_routing_check._UNROUTED_INVENTORY` counts UNROUTED SKIP PATHS
+    per gate. A gate with 0 skip paths is not in `measured`, so an entry for
+    it lands in `fixed` -> drift -> rc 1. VERIFIED: adding
+    `checkpoint_gate_check: 0` turns a green `98 in 53` ratchet red with
+    "checkpoint_gate_check: 0 -> 0; delete the inventory entry".
+  * `known` in THIS file's baseline is the TEST-ONLY set. A checker a SKILL
+    document names has a runner by this gate's own rule, so recording it here
+    lands it in `paid` -> rc 1. VERIFIED the same way.
+  * `flow_compliance_check._UNDRIVABLE_BY_STRUCTURAL_UMBRELLA` requires
+    membership in `_STRUCTURAL_RTL_GATES`, requires the gate to argparse-REJECT
+    the umbrella argv, and is anchored by test to exactly the twelve v1.9.8
+    gates. `checkpoint_gate_check` satisfies none of the three.
+
+So the disclosure gets a home with its OWN rule, here, where a gate already
+runs in CI. An entry says: this checker is deliberately not machine-wired, and
+here is why. It is enforced in both directions —
+
+  * the named file must exist (a stale name is rc 1);
+  * it must still have NO machine runner. The moment CI / the flow / another
+    program / a repo tool invokes it, the "deliberately unwired" record is
+    false and this gate says so (rc 1) instead of licensing it forever;
+  * it may not also sit in `known` (those are different claims);
+  * the reason must be a measurement, not a gesture (>= 120 chars).
+
+Being listed is a DISCLOSURE, not permission.
+
 METHOD NOTE — THE MATCHER MUST NOT ASSUME QUOTING
 --------------------------------------------------
 The first version of this measurement searched for the quoted stem and
@@ -271,8 +304,14 @@ def audit(plugin: Path, repo_root: Path) -> dict:
     test_only: List[str] = []
     unrun: List[str] = []
     skill_only: List[str] = []
+    # A MACHINE runner: something that invokes the checker without an agent
+    # deciding to. SKILL is excluded here (and only here) because that is the
+    # precise question `unwired_by_decision` asks; the test-only classification
+    # above is unchanged, so this adds no finding to the existing ratchet.
+    machine_runners: Dict[str, List[str]] = {}
     for name in checkers:
         r = runners(name[:-3], hay, str(programs / name))
+        machine_runners[name] = sorted(r - {"TEST", "SKILL"})
         if not r:
             unrun.append(name)
         elif r == {"TEST"}:
@@ -292,6 +331,7 @@ def audit(plugin: Path, repo_root: Path) -> dict:
             "test_only": sorted(test_only),
             "no_runner_at_all": sorted(unrun),
             "skill_only": sorted(skill_only),
+            "machine_runners": machine_runners,
             "passed": True}
 
 
@@ -324,6 +364,56 @@ def skill_only_register(path: Path) -> Dict[str, str]:
         return {}
     r = d.get("reasons") if isinstance(d, dict) else None
     return {str(k): str(v) for k, v in r.items()} if isinstance(r, dict) else {}
+
+_MIN_DECISION_REASON = 120
+
+
+def check_unwired_by_decision(rep: dict, decisions: Dict[str, str],
+                              known: List[str]) -> List[str]:
+    """Enforce the `unwired_by_decision` block. Returns problem lines.
+
+    Bidirectional on purpose: an entry is a disclosure that a checker is
+    deliberately not machine-wired, so it must go stale the moment that stops
+    being true. A record nothing re-derives decays into an assertion nobody
+    can check — which is the shape #693 is about.
+    """
+    problems: List[str] = []
+    in_scope = set(rep.get("machine_runners") or {})
+    for name in sorted(decisions):
+        reason = decisions[name]
+        if name not in in_scope:
+            problems.append(
+                f"   {name}: recorded as deliberately unwired, but it is not a "
+                f"checker in scope (*_check.py / *_audit.py under programs/). "
+                f"Stale entry — delete it.")
+            continue
+        real = rep["machine_runners"].get(name) or []
+        if real:
+            problems.append(
+                f"   {name}: recorded as deliberately unwired, but {real} now "
+                f"invoke(s) it. The record is false — delete the entry (and if "
+                f"the wiring was not intended, remove the wiring).")
+        if name in set(known):
+            problems.append(
+                f"   {name}: is in BOTH `known` (test-only) and "
+                f"`unwired_by_decision`. Those are different claims; pick one.")
+        if not isinstance(reason, str) or len(reason.strip()) < _MIN_DECISION_REASON:
+            problems.append(
+                f"   {name}: reason must state the MEASUREMENT that decided it "
+                f"(>= {_MIN_DECISION_REASON} chars), not gesture at one: "
+                f"{str(reason)[:80]!r}")
+    return problems
+
+
+def _load_decisions(p: Path) -> Dict[str, str]:
+    if not p.is_file():
+        return {}
+    try:
+        d = json.loads(p.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return {}
+    v = d.get("unwired_by_decision") if isinstance(d, dict) else None
+    return v if isinstance(v, dict) else {}
 
 
 def measure_triage(programs: Path, names: List[str], timeout: int = 200) -> Dict[str, str]:
@@ -450,7 +540,10 @@ def main(argv=None) -> int:
              "previous_size": None if prev is None else len(prev),
              "scope_expanded": a.scope_expanded,
              "known": now,
-             "triage": {k: v for k, v in prev_triage.items() if k in now}},
+             "triage": {k: v for k, v in prev_triage.items() if k in now},
+             # Carried through a rewrite: this block is a separate claim from
+             # `known` and a --write-baseline must not silently drop it.
+             "unwired_by_decision": _load_decisions(bl)},
             indent=2, ensure_ascii=False) + "\n")
         print(f"wrote {bl} ({len(now)} entr(ies))")
         return 0
@@ -489,9 +582,19 @@ def main(argv=None) -> int:
               f"artefacts:")
         for c in new:
             print(f"   {c}")
-    if new or paid:
+    decisions = _load_decisions(bl)
+    stale = check_unwired_by_decision(rep, decisions, base or [])
+    if stale:
+        print(f"[FAIL] {len(stale)} problem(s) in `unwired_by_decision` — a "
+              f"'deliberately unwired' record that is no longer true is a "
+              f"licence, not a disclosure:")
+        for line in stale:
+            print(line)
+    if new or paid or stale:
         return 1
-    print(f"[PASS] no NEW test-only checker ({len(now)} recorded)")
+    print(f"[PASS] no NEW test-only checker ({len(now)} recorded)"
+          + (f"; {len(decisions)} deliberately unwired, disclosed"
+             if decisions else ""))
     return 0
 
 

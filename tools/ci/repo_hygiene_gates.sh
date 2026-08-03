@@ -341,6 +341,24 @@ run "artefact-defect close discipline" "$ROOT" python3 "$PG/artefact_defect_clos
 # shrink freely, any increase is red.
 run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_reference_check.py" --corpus "$ROOT/benchmark-data/ic"
 
+# vibe-ic#693 — `flow_compliance_check` classifies a project from each step's
+# `pass.flag` and never walks the per-step report JSON, so a step can ship
+# pass.flag while one of its own sub-reports declares verdict=FAIL. This walks
+# them and requires each FAIL/MISSING to be ACKNOWLEDGED — by a waivers.json
+# entry naming the report, or by an orchestrator/audit record naming it.
+#
+# NON-BLOCKING BY RATCHET, not by being toothless. Measured over the 46 run
+# trees on a working checkout, `--strict` reddens 16 of them on 33 findings the
+# gate did not create; landing that blocking is an outage. The corpus mode
+# instead sweeps the PUBLISHED (git-tracked) trees — 17 here, 5 of which ship a
+# reports/ tree — and ratchets the recorded 7 findings across 4 runs
+# (sha256/clean_run_v1422_20260715, sha256/clean_run_v1427_20260715,
+# u_hawaii_adc/clean_run_v1422_20260715, u_hawaii_adc/clean_run_v1427_20260715).
+# The count may shrink freely; a NEW unacknowledged step-internal FAIL is red.
+# Published, not on-disk, on purpose: 46 vs 17 is exactly the host-dependence
+# `_published_tree` exists to remove from a baseline.
+run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic"
+
 # vibe-ic#410 — pdk_registry.json is not the only per-PDK table. Three others
 # are keyed independently, and registering a PDK in the registry registers it
 # in none of them. An IHP netlist was handed the SKY130A ATPG cell model while
@@ -464,6 +482,22 @@ run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_arti
 # in 250/250 (with the `--no-index` fix that makes that assertion capable of
 # firing at all), no tracked root `_*.js` anywhere.
 run "gitignore scratch guard"           "$ROOT" python3 "$PG/gitignore_scratch_guard.py" --root "$ROOT"
+# vibe-ic#693 (from #313 §6) — a remedy that silently declines is
+# indistinguishable from a remedy that was never needed. Flags a remedy-named
+# call assigned to a variable, guarded by `if <var>:` with no else and no
+# disclosure on the decline path. It audits SOURCE, not runs, so it belongs
+# beside the other plugin-scoped source gates.
+#
+# `--ratchet`, deliberately, and not `--strict`: measured at this commit,
+# 1091 files scanned and 15 silent declines across 6 files
+# (phase1_doc_one_shot_runner x6, cvdp_complete_extract x3, lec_run x2,
+# phase3_one_shot_runner x2, cvdp_context_interface_recover x1,
+# design_one_shot_runner x1). `--strict` reddens main today over a backlog this
+# change does not triage; a bare run returns 0 unconditionally, which would wire
+# a gate that cannot fail. The ratchet keeps the 15 visible, blesses none of
+# them, and makes a SIXTEENTH red. `--strict` becomes correct once they are
+# triaged.
+run "silent remedy decline"             "$PLUGIN" python3 programs/silent_decline_audit.py programs --ratchet
 
 # vibe-ic#428 — final_summary.md printed TWO verdict roll-ups over the same 63
 # steps and they disagreed on the BLOCKING-FAILURE count, with nothing marking
