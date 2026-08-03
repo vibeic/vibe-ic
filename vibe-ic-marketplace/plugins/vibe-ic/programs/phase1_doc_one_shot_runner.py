@@ -9270,6 +9270,72 @@ def _write_staged_pdk_read_disclosure(
             pass
 
 
+# ORGANIC-20260803b — characters that may appear INSIDE one filesystem path
+# token. A PDK name found inside such a token names a FILE, not a process.
+_PATH_TOKEN_CHARS_RE = re.compile(r"[A-Za-z0-9_.+~@%-]|[/\\]")
+
+
+def _match_is_inside_path_token(text: str, start: int, end: int) -> bool:
+    """True when `text[start:end]` sits inside a filesystem PATH token.
+
+    The token is grown outward from the match over path-legal characters and
+    is called a path only when it carries a SEPARATOR (`/` or `\\`). Requiring
+    a separator — rather than guessing at file extensions — is what keeps this
+    from mis-classifying ordinary identifiers: a std-cell library name such as
+    `<pdk>_fd_sc_hd` or a sentence-final `<pdk>.` carries no separator and is
+    NOT a path, while `reference/data/<pdk>.tcl` plainly is.
+
+    chip-AGNOSTIC: path syntax only; no chip / foundry / PDK literal.
+    """
+    i = start
+    while i > 0 and _PATH_TOKEN_CHARS_RE.fullmatch(text[i - 1]):
+        i -= 1
+    j = end
+    while j < len(text) and _PATH_TOKEN_CHARS_RE.fullmatch(text[j]):
+        j += 1
+    tok = text[i:j]
+    return "/" in tok or "\\" in tok
+
+
+def _declared_pdk_alternates(project: Path, source_rel, line, adopted):
+    """Every open-PDK name CO-DECLARED on the adopted target's own line.
+
+    Returns an ordered, de-duplicated list that always begins with `adopted`,
+    or `[]` when the adopted target came from somewhere with no line (a staged
+    enablement PATH — #513 — where there is no row to read) or when the row
+    names nothing else.
+
+    Same-row scope is the whole safety argument: a name on the design's own
+    target row was declared together with the target; a name elsewhere in the
+    document is a mention, and this file's ORGANIC-20260801 note already
+    forbids promoting a mention to a declaration.
+
+    chip-AGNOSTIC: reads the same `_OPEN_PDK_TOKEN_RE` name namespace the
+    adopted target itself came from; no chip / foundry / PDK literal added.
+    """
+    if not adopted or not source_rel or not line:
+        return []
+    try:
+        text = (project / source_rel).read_text(errors="replace")[:200_000]
+    except OSError:
+        return []
+    rows = text.split("\n")
+    if line < 1 or line > len(rows):
+        return []
+    row = rows[line - 1]
+    out = [adopted]
+    for m in _OPEN_PDK_TOKEN_RE.finditer(row):
+        if _match_is_inside_path_token(row, m.start(), m.end()):
+            continue
+        span = row[max(0, m.start() - 24):m.end()]
+        if _FOUNDRY_NEGATION_RE.search(span):
+            continue
+        tok = re.sub(r"^ihp[- ]?", "", m.group(1).lower()).replace(" ", "")
+        if tok not in out:
+            out.append(tok)
+    return out if len(out) > 1 else []
+
+
 def _extract_pdk_target_from_inputs(project: Path):
     """(pdk_target, evidence_snippet) from the project's own input docs,
     or (None, None). Deterministic; capped scan (large-doc doctrine).
@@ -9391,6 +9457,30 @@ def _extract_pdk_target_with_provenance(project: Path):
     # node. Scanning continues past a negated match instead of returning, so a
     # document that first says "not <A>" and later declares <A> plainly still
     # resolves to <A> — only the negated occurrence is skipped.
+    # ORGANIC-20260803b — PROVENANCE. This tier returns the FIRST name-list
+    # match anywhere in the document, and a document's FIRST mention of a PDK
+    # name is very often a FILE PATH in a bibliography, not a statement of
+    # intent. Measured on a real design's L1, whose YAML front matter opens
+    #
+    #     line  9   sources:
+    #                 - reference/data/<pdk-a>.tcl + openlane_common.tcl
+    #     line 33   | target PDK | open-source(<PDK-A> primary;<PDK-B> secondary) |
+    #
+    # and Phase 1 adopted LINE 9 — a citation of a tool config file — as this
+    # design's pdk_target, with `extraction_evidence` pointing at the path. The
+    # same file's ORGANIC-20260801 note already states the governing principle
+    # ("A mention carries no field label. A declaration does."); a path is
+    # weaker than a mention, since it names a FILE rather than a process.
+    #
+    # The repair is a RANKING, not a filter: a path match is kept as a
+    # fallback and returned unchanged when it is the ONLY evidence in the
+    # document. So a design whose docs name their PDK solely through a staged
+    # path answers exactly as before — the answer changes only where the
+    # document ALSO names the PDK outside a path, which is where it should.
+    #
+    # chip-AGNOSTIC: `/` and `\` are path separators, a property of file
+    # systems. No chip, foundry, vendor or PDK literal is added here.
+    _path_only_hit = None
     for rel, text in per_file:
         for m in _OPEN_PDK_TOKEN_RE.finditer(text):
             span = text[max(0, m.start() - 24):m.end()]
@@ -9399,8 +9489,15 @@ def _extract_pdk_target_with_provenance(project: Path):
             tok = re.sub(r"^ihp[- ]?", "",
                          m.group(1).lower()).replace(" ", "")
             line = text.count("\n", 0, m.start()) + 1
-            return (tok, _snip(text, m.start() - 60, m.end() + 60),
-                    rel, line)
+            hit = (tok, _snip(text, m.start() - 60, m.end() + 60),
+                   rel, line)
+            if _match_is_inside_path_token(text, m.start(), m.end()):
+                if _path_only_hit is None:
+                    _path_only_hit = hit
+                continue
+            return hit
+    if _path_only_hit is not None:
+        return _path_only_hit
     # Commercial-foundry names: iterate every match in every file so a
     # negated / weak first mention does not poison a valid later one
     # (polarity-aware + dual-evidence deny via _foundry_match_trustworthy).
@@ -9493,6 +9590,30 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
             if code == "L19" and _pdk_tgt and isinstance(
                     skeleton.get("fields"), dict):
                 skeleton["fields"]["pdk_target"] = _pdk_tgt
+                # ORGANIC-20260803b — a design may declare MORE THAN ONE
+                # target process, and `pdk_target` is one scalar. Measured on
+                # a real design whose L1 declares
+                #     | target PDK | open-source(<A> primary;<B> secondary) |
+                # Phase 1 kept only <A>, and phase3's declared-vs-resolved
+                # guard then REFUSED an entire run on <B> — a process the
+                # design names, in the same breath, on the same row.
+                #
+                # The co-declared names are recorded ALONGSIDE the scalar, so
+                # every existing consumer of `pdk_target` (pdk_registry,
+                # l19_pdk_floorplan_contract_check, the foundry pack) reads
+                # exactly the same value it read before. Only a consumer that
+                # asks "does this design declare <X> at all?" gains an answer.
+                #
+                # SAME-ROW ONLY. The alternates are harvested from the ONE
+                # line the adopted target itself came from, never from the
+                # document at large — the file's own ORGANIC-20260801 rule is
+                # that a MENTION must not become a DECLARATION, and a name
+                # sharing the design's own target row is co-declared, while a
+                # name three paragraphs away is a mention.
+                _alts = _declared_pdk_alternates(
+                    project, _pdk_src, _pdk_line, _pdk_tgt)
+                if _alts:
+                    skeleton["fields"]["pdk_target_alternates"] = _alts
                 skeleton["extraction_status"] = "PARTIALLY_EXTRACTED"
                 # ORGANIC #457 — the pre-#457 code set
                 # skeleton["extraction_evidence"]["pdk_target"] directly,
@@ -20118,6 +20239,206 @@ def _v1_6_295_propagate_class_path_to_layer_docs(
         except Exception:
             continue
     return updated
+
+
+# ORGANIC-20260803b — the run's PDK, set from `--pdk` in main(). None means
+# "not stated"; every extraction then behaves exactly as it did before.
+_CLI_PDK: Optional[str] = None
+
+# A frequency or a period literal, with its unit, anywhere on a line.
+_PDK_ROW_FREQ_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(GHz|MHz|kHz|ns|ps|us)\b", re.IGNORECASE)
+# The row must be ABOUT the clock. Without this, a row that merely names the
+# process and happens to carry a time literal ("<pdk> setup time 3 ns") would
+# be read as a clock-period declaration. Same vocabulary the prose-fmax
+# walker's own `_RE_L2_CLOCK_VOCAB` gate uses, kept in step with it.
+_PDK_ROW_CLOCK_VOCAB_RE = re.compile(
+    r"(?i)\b(?:clock|clk|fmax|f_?max|frequency|period|"
+    r"operating[\s\-]?freq(?:uency)?)\b")
+
+
+def _v1_9_65_pdk_scoped_clock_mhz(project: Path, pdk: Optional[str]):
+    """The clock frequency a design document assigns TO THIS PDK, or None.
+
+    WHY THIS EXISTS
+    ---------------
+    A design that targets more than one process states its timing target once
+    per process, as a table keyed by the process name:
+
+        | Target clock period — <PDK-A> | 10 ns (100 MHz) |
+        | Target clock period — <PDK-B> | 20 ns  (50 MHz) |
+
+    Phase 1's prose-fmax walker takes the FIRST such row it meets and demotes
+    every other to `alternate_frequency_mentions[]`. That is a coin-flip the
+    document already answered: which row applies is decided by which process
+    the run is building. `l8_sta_clock_period_design_owned_check`'s own
+    write-up records the ambiguity — "declare `clk` twice with conflicting
+    frequencies ... and sdc_gen silently takes whichever the precedence walk
+    reaches first — reported as an advisory". On the FIRST process listed the
+    coin lands right and the advisory is harmless; on the SECOND it lands
+    wrong, and the whole backend then closes timing against a period this
+    design never asked for on this process.
+
+    WHAT IS READ
+    ------------
+    Only a line that BOTH names this run's process AND carries a time or
+    frequency literal. The process name must not sit inside a file path (a
+    citation of a tool config file is not a timing statement) and must not be
+    negated. When no line satisfies all of that, this returns None and
+    nothing changes.
+
+    Returns (freq_mhz, source_rel, line_no, line_text) or None.
+
+    chip-AGNOSTIC: a PDK-name namespace the file already owns, plus time /
+    frequency units. No chip literal, no per-design rule.
+    """
+    if not pdk:
+        return None
+    want = pdk.strip().lower()
+    if not want:
+        return None
+    best = None
+    for base in (project / "input" / "docs", project / "phase1" / "input_doc"):
+        if not base.is_dir():
+            continue
+        for f in sorted(base.rglob("*")):
+            if not f.is_file() or f.suffix.lower() in (
+                    ".png", ".jpg", ".pdf", ".gds", ".zip"):
+                continue
+            try:
+                text = f.read_text(errors="replace")[:200_000]
+            except OSError:
+                continue
+            try:
+                rel = str(f.relative_to(project))
+            except ValueError:
+                rel = f.name
+            for n, row in enumerate(text.split("\n"), start=1):
+                if not _PDK_ROW_CLOCK_VOCAB_RE.search(row):
+                    continue
+                named = False
+                for m in _OPEN_PDK_TOKEN_RE.finditer(row):
+                    if _match_is_inside_path_token(row, m.start(), m.end()):
+                        continue
+                    if _FOUNDRY_NEGATION_RE.search(
+                            row[max(0, m.start() - 24):m.end()]):
+                        continue
+                    tok = re.sub(r"^ihp[- ]?", "",
+                                 m.group(1).lower()).replace(" ", "")
+                    # The row names this run's process when it names the
+                    # process exactly, or names the FAMILY this revision
+                    # belongs to (`<family>` covers `<family>D`). Same
+                    # one-directional rule the declared-vs-resolved guard
+                    # uses: a row naming a DIFFERENT revision does not match.
+                    if want == tok or (
+                            len(want) == len(tok) + 1
+                            and want.startswith(tok)
+                            and want[len(tok):].isalpha()):
+                        named = True
+                        break
+                if not named:
+                    continue
+                mhz = None
+                for fm in _PDK_ROW_FREQ_RE.finditer(row):
+                    val, unit = float(fm.group(1)), fm.group(2).lower()
+                    if val <= 0:
+                        continue
+                    if unit == "ghz":
+                        mhz = val * 1000.0
+                    elif unit == "mhz":
+                        mhz = val
+                    elif unit == "khz":
+                        mhz = val / 1000.0
+                    elif unit == "ns":
+                        mhz = 1000.0 / val
+                    elif unit == "us":
+                        mhz = 1.0 / val
+                    elif unit == "ps":
+                        mhz = 1_000_000.0 / val
+                    if mhz is not None:
+                        break
+                if mhz is None:
+                    continue
+                if best is None:
+                    best = (mhz, rel, n, row.strip()[:200])
+    return best
+
+
+def _v1_9_65_post_emit_l8_pdk_scoped_clock(project: Path) -> bool:
+    """Re-point L8's primary clock at the row this run's PDK owns.
+
+    Runs AFTER the prose walker has emitted `clock_domains[]`, so the
+    displaced frequency survives in `alternate_frequency_mentions[]` exactly
+    as the walker's own losers do — nothing the design said is discarded, and
+    the swap records its own evidence (`pdk_scoped_*` keys) so a reader can
+    see which row was chosen and why.
+
+    NO-OP unless the run named a PDK AND a document row assigns a frequency
+    to it AND that frequency differs from the one already adopted. Returns
+    True when a file was rewritten.
+    """
+    hit = _v1_9_65_pdk_scoped_clock_mhz(project, _CLI_PDK)
+    if hit is None:
+        return False
+    mhz, rel, line_no, row_text = hit
+    gd = _pl.generated_docs_dir(project)
+    if not gd.is_dir():
+        return False
+    any_updated = False
+    for layer in ("L8_RTL_CONSTANTS", "L8_TIMING_WAVEFORM"):
+        path = gd / f"{layer}.json"
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        domains = data.get("clock_domains")
+        if not isinstance(domains, list):
+            continue
+        changed = False
+        for d in domains:
+            if not isinstance(d, dict) or d.get("role") != "primary":
+                continue
+            prev = d.get("freq_mhz")
+            if prev is not None and abs(float(prev) - mhz) < 1e-9:
+                continue
+            if prev is not None:
+                _cc.record_alternate_mention(d, {
+                    "freq_mhz": float(prev),
+                    "freq_hz": int(float(prev) * 1e6),
+                    "role": "displaced_by_pdk_scoped_row",
+                    "source": (d.get("evidence") or {}).get("file"),
+                    "extraction_strategy": "clock_domain_doc_prose_fmax",
+                })
+            d["freq_mhz"] = mhz
+            d["freq_low_mhz"] = mhz
+            d["freq_high_mhz"] = None
+            d["freq_hz"] = int(mhz * 1e6)
+            d["period_ns"] = 1000.0 / mhz
+            d["extraction_strategy"] = "clock_domain_pdk_scoped_row"
+            d["pdk_scoped_target"] = _CLI_PDK
+            d["evidence"] = {"file": rel, "line": line_no,
+                             "matched_substring": row_text[:120]}
+            changed = True
+        if not changed:
+            continue
+        if data.get("clock_mhz") is not None:
+            data["clock_mhz"] = mhz
+        try:
+            _stamp.dump(path, data)
+            any_updated = True
+        except Exception:
+            continue
+    if any_updated:
+        print(f"[phase1] PDK-SCOPED CLOCK: the design document assigns "
+              f"{mhz:g} MHz ({1000.0 / mhz:g} ns) to '{_CLI_PDK}' at "
+              f"{rel}:{line_no} — L8 primary clock re-pointed at that row; "
+              f"the displaced value is kept in "
+              f"alternate_frequency_mentions[].")
+    return any_updated
 
 
 def _v1_6_295_post_emit_l8_clock_mhz_back_fill(project: Path) -> bool:
@@ -58426,12 +58747,23 @@ def main() -> int:
                         "it OVERRIDES the doc heuristic (CLI > docs) so a "
                         "block-diagram SVG label/stem can never become the "
                         "ic_name.")
+    p.add_argument("--pdk", default=None,
+                   help="ORGANIC-20260803b — the process this design is "
+                        "being built in. Consulted ONLY to resolve a design "
+                        "document whose own timing table is keyed BY PDK "
+                        "(a `| <pdk> | <period> |` row per target). Omitted "
+                        "or 'auto' leaves every extraction byte-identical.")
     args = p.parse_args()
 
     # ORGANIC #541 — CLI --ic-name is authoritative for docs-mode.
     global _CLI_IC_NAME_OVERRIDE
     if args.ic_name and args.ic_name.strip():
         _CLI_IC_NAME_OVERRIDE = args.ic_name.strip()
+
+    # ORGANIC-20260803b — the run's PDK, for PDK-keyed spec rows only.
+    global _CLI_PDK
+    if args.pdk and args.pdk.strip().lower() not in ("", "auto"):
+        _CLI_PDK = args.pdk.strip()
 
     project = args.project.resolve()
     if not project.is_dir():
@@ -59029,6 +59361,12 @@ def main() -> int:
     # the keyword. Running back-fill AFTER the purge makes the back-
     # fill the FINAL signal that wins. Chip-AGNOSTIC.
     _v1_6_295_post_emit_l8_clock_mhz_back_fill(project)
+
+    # ORGANIC-20260803b — AFTER the back-fill, so the scalar `clock_mhz` and
+    # the primary domain are re-pointed together and cannot disagree (which
+    # is exactly what `l8_sta_clock_period_design_owned_check` L8-2 refuses).
+    # No-op unless the run named a PDK and a document row is keyed to it.
+    _v1_9_65_post_emit_l8_pdk_scoped_clock(project)
 
     # Wave-on-fix: backfill auto-discovered literals into typed fields
     # FIRST so subsequent coverage report sees the final state (otherwise

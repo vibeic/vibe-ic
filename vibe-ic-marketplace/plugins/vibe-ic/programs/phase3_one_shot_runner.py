@@ -5468,6 +5468,59 @@ def _read_declared_pdk_target(project: Path) -> Optional[str]:
     return None
 
 
+_DECLARED_PDK_ALT_SOURCE = ("phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+                            ("fields", "pdk_target_alternates"))
+
+
+def _read_declared_pdk_alternates(project: Path) -> List[str]:
+    """Every process the DESIGN co-declares alongside its primary target.
+
+    Phase 1 records these only when the design's own target row names more
+    than one (see `_declared_pdk_alternates` there). `[]` for every design
+    that names exactly one, so the guard's behaviour on those is unchanged.
+    """
+    rel, keys = _DECLARED_PDK_ALT_SOURCE
+    try:
+        doc: Any = json.loads((project / rel).read_text())
+    except Exception:
+        return []
+    for k in keys:
+        if not isinstance(doc, dict):
+            return []
+        doc = doc.get(k)
+    if not isinstance(doc, list):
+        return []
+    return [d.strip() for d in doc if isinstance(d, str) and d.strip()]
+
+
+def _declares_resolved_pdk(resolved: str, declared_tokens: set) -> bool:
+    """Does a declared token set name the process that actually resolved?
+
+    Exact token match, plus ONE deliberate tolerance: a declared token that
+    names a process FAMILY admits the family's revisions, so a design
+    declaring `<family>` may be built as `<family>D`. The tolerance is
+    strictly one-directional — a design that names a revision is NOT
+    satisfied by a different revision, because revisions differ in metal
+    stack and device flavour and are not interchangeable:
+
+        declared `<family>`   resolved `<family>D`   -> ACCEPT (family named)
+        declared `<family>D`  resolved `<family>A`   -> REFUSE (revision named)
+
+    chip-AGNOSTIC: the single-letter revision suffix is the naming convention
+    the flow's own PDK registry already encodes; no PDK name appears here.
+    """
+    r = (resolved or "").lower()
+    if not r:
+        return False
+    for d in declared_tokens:
+        if r == d:
+            return True
+        if (len(r) == len(d) + 1 and r.startswith(d)
+                and r[len(d):].isalpha()):
+            return True
+    return False
+
+
 def _pdk_tokens(text: str) -> set:
     """Lower-cased alphanumeric tokens of a PDK name, for containment tests.
 
@@ -5536,7 +5589,16 @@ def declared_pdk_target_guard(
     if not declared:
         # The design expressed no preference — nothing to contradict.
         return None
-    if resolved_pdk_name.lower() in _pdk_tokens(declared):
+    # ORGANIC-20260803b — the design's declaration may name SEVERAL processes
+    # (`<A> primary; <B> secondary`), and Phase 1's scalar `pdk_target` keeps
+    # only the first. Reading the scalar alone made this guard REFUSE a run on
+    # a process the design declares, on the same row, as its secondary target.
+    # The union is still the DESIGN's own statement — nothing here reads the
+    # operator's `--pdk` or the host — so the guard keeps its whole purpose.
+    _declared_tokens = set(_pdk_tokens(declared))
+    for _alt in _read_declared_pdk_alternates(project):
+        _declared_tokens |= _pdk_tokens(_alt)
+    if _declares_resolved_pdk(resolved_pdk_name, _declared_tokens):
         # The design declares the very PDK that resolved.
         return None
     staged = project / "input" / "pdk"
