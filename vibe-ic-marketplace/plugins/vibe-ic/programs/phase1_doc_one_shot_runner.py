@@ -9021,6 +9021,34 @@ def _staged_pdk_content_identifier(project: Path, files: List[str]):
     return None, None, []
 
 
+def _staged_pdk_scan_truncated(project: Path) -> bool:
+    """Did either cap hide staged enablement from the read?
+
+    `_staged_pdk_enablement_files` applies a 2000-entry glob cap (mirroring
+    `l19_pdk_floorplan_contract_check`) and a 64-file listing cap. Measured
+    on a real 15433-entry staged tree, the glob cap hid 11 of 62 enablement
+    files. A refusal produced by a cap is not a statement about the PDK, and
+    the two must not be indistinguishable in the record.
+    """
+    for pat in _STAGED_PDK_GLOBS:
+        try:
+            entries = sorted(project.glob(pat))
+        except OSError:
+            continue
+        if len(entries) > _STAGED_PDK_MAX_ENTRIES:
+            return True
+        kept = 0
+        for f in entries:
+            try:
+                if f.is_file() and f.suffix.lower() in _STAGED_PDK_SUFFIXES:
+                    kept += 1
+            except OSError:
+                continue
+        if kept > _STAGED_PDK_MAX_FILES:
+            return True
+    return False
+
+
 def _staged_pdk_identifier_detail(project: Path,
                                   staged: Optional[List[str]] = None) -> dict:
     """#513 + ORGANIC-20260803 — everything the staged read concluded.
@@ -9138,6 +9166,7 @@ def _write_staged_pdk_read_disclosure(
     # ORGANIC-20260803 — what was READ but yielded no name. A refusal that
     # cannot show what it looked at is indistinguishable from not looking.
     read_names = _declared_library_names(project, files)
+    truncated = _staged_pdk_scan_truncated(project)
 
     if not files:
         reason = ("a staged-PDK root exists but holds no enablement file "
@@ -9148,7 +9177,11 @@ def _write_staged_pdk_read_disclosure(
                   "rule found nothing in their paths, and their own headers "
                   f"declared {len(read_names)} library name(s) that agree on "
                   "no usable family. This staged PDK CANNOT BE NAMED — it "
-                  "must not become an unnamed input to sign-off")
+                  "must not become an unnamed input to sign-off"
+                  + (". NOTE: the staged-tree scan hit its cap, so enablement "
+                     "the read never saw may exist — this refusal may be an "
+                     "artefact of the cap rather than of the PDK"
+                     if truncated else ""))
     elif adopted_from == "staged_pdk_path":
         reason = "the staged path supplied L19.fields.pdk_target"
     else:
@@ -9169,6 +9202,9 @@ def _write_staged_pdk_read_disclosure(
         # A count equal to the cap means the listing is truncated, not
         # that the design staged exactly this many files.
         "enablement_files_read_cap": _STAGED_PDK_MAX_FILES,
+        # True when a cap hid staged enablement from this read. A refusal
+        # below is then not necessarily a statement about the PDK.
+        "enablement_scan_truncated": truncated,
         "enablement_files": files,
         "staged_identifier": staged_tok,
         "staged_identifier_source": staged_rel,

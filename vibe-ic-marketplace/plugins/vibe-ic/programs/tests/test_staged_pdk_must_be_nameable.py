@@ -332,6 +332,28 @@ def test_an_unnameable_staged_pdk_says_so_and_shows_its_work(tmp_path):
     assert "staged PDK enablement read but no identifier" in log
 
 
+def test_a_capped_scan_says_so(tmp_path):
+    """A refusal produced by a CAP is not a statement about the PDK.
+    Measured on a real 15433-entry staged tree, the glob cap hid 11 of 62
+    enablement files; the record must not leave the two indistinguishable."""
+    p = _docs(tmp_path, "# Core\nA 32-bit integer core.\n")
+    _stage(p, {"input/pdk/spice/models.lib": ".lib tt\n.endl\n"})
+    assert P1._staged_pdk_scan_truncated(p) is False
+    _emit(p)
+    assert _disclosure(p)["enablement_scan_truncated"] is False
+
+    big = _docs(tmp_path / "big", "# Core\nA 32-bit integer core.\n")
+    over = P1._STAGED_PDK_MAX_FILES + 1
+    _stage(big, {f"input/pdk/lib/c{i:04d}.lib": ".lib tt\n.endl\n"
+                 for i in range(over)})
+    assert P1._staged_pdk_scan_truncated(big) is True
+    _emit(big)
+    rec = _disclosure(big)
+    assert rec["enablement_scan_truncated"] is True
+    assert rec["staged_pdk_unnameable"] is True
+    assert "artefact of the cap" in rec["reason"]
+
+
 def test_the_gate_fails_an_unnameable_staged_pdk_instead_of_skipping(tmp_path):
     """THE REFUSAL. Before: no declared target and no library named in a
     log gave rc=2 NOT CHECKED — the condition that makes the question
