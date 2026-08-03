@@ -142,8 +142,32 @@ def aggregate(project_dir: Path,
     missing = [a for a in artifacts if not a.present]
     failed = [c for c in checks if not c.passed]
     timing_fail = wns < 0 or tns < 0
-    drc_fail = drc_violations > 0  # treat -1 (unknown) as not-failing here
-    verdict = "FAIL" if (missing or failed or timing_fail or drc_fail) else "PASS"
+    drc_fail = drc_violations > 0
+    # NOT MEASURED IS NOT NOT-FAILING (vibe-ic#727). This line used to read
+    #
+    #     drc_fail = drc_violations > 0  # treat -1 (unknown) as not-failing here
+    #
+    # and the comment was the defect, stated in the source. `parse_drc_count`
+    # returns -1 when it cannot determine a count, and it carries NO XML dialect
+    # at all — so a KLayout report database, which is the format every sign-off
+    # certificate in this corpus uses, is unparseable to it BY CONSTRUCTION,
+    # yields -1, and yielded "not failing".
+    #
+    # It was masked rather than safe: this program reads `phase3/drc.rpt` while
+    # the corpus writes `phase3/reports/drc.rpt`, so the missing-artefact check
+    # fired first. Put a real RDB at the declared path and it graded it clean.
+    #
+    # An unmeasurable DRC count is now its OWN verdict, distinct from PASS and
+    # from FAIL, because "the tool ran and found nothing" and "nobody could read
+    # the answer" are different facts and a reader must not have to guess which
+    # one a PASS means.
+    drc_unmeasured = drc_violations < 0
+    if missing or failed or timing_fail or drc_fail:
+        verdict = "FAIL"
+    elif drc_unmeasured:
+        verdict = "UNMEASURED"
+    else:
+        verdict = "PASS"
     return Phase3Report(
         project_dir=str(project_dir),
         artifacts=artifacts, checks=checks,
@@ -206,6 +230,15 @@ def _cli() -> int:
             json.dumps(rep.as_dict(), indent=2), encoding="utf-8")
     if args.strict and rep.verdict != "PASS":
         return 1
+    if rep.verdict == "UNMEASURED":
+        # rc 2 EVEN WITHOUT --strict (vibe-ic#727). Without this, an
+        # unmeasurable DRC count exits 0 — the same code as a clean run — and
+        # the caller cannot tell "the tool found nothing" from "nobody could
+        # read the answer". `--strict` already makes it rc 1; the point here is
+        # that the NON-strict path must not report it as clean either.
+        print("phase3_verify_aggregate: UNMEASURED — the DRC count could not be "
+              "determined, which is not a clean result.", file=sys.stderr)
+        return 2
     return 0
 
 

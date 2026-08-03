@@ -793,9 +793,33 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
         m = re.search(_rx, text, re.I)
         if m:
             return (int(m.group(1)), 0)
-    m = re.search(r"(\d+)\s+(?:total\s+)?violations?\b", text, re.I)
-    if m:
-        return (int(m.group(1)), 0)
+    # THE LOOSE FALLBACK, AND WHY IT TAKES THE MAXIMUM (vibe-ic#726).
+    #
+    # It used to take the FIRST match anywhere in the file. Measured on a real
+    # tracked report with NO injection of any kind —
+    # `subservient/reports/phase3/drc_router.rpt` — dropping the first 30 lines
+    # flips the verdict from 72 violations to CLEAN, because the anchored
+    # summary lives at lines 21-22 and OpenROAD's `detailed_route` progress
+    # output below it reads
+    #
+    #     Completing 10% with 0 violations.
+    #
+    # Those lines are present in EVERY router report in the corpus. So a
+    # truncated report — a tool killed mid-write, a log rotated, a tail copied —
+    # was graded clean by its own progress counter.
+    #
+    # Progress lines are dropped by SHAPE, not by tool name, and then the
+    # MAXIMUM of what remains is taken. Maximum is the fail-safe direction: this
+    # is already the last resort, reached only when no anchored summary parsed,
+    # and under-reporting grades a dirty design clean while over-reporting only
+    # triggers a look.
+    _progress = re.compile(r"\b(?:completing|progress|elapsed|iter(?:ation)?)\b"
+                           r"|\b\d+\s?%\b", re.I)
+    counts = [int(m.group(1))
+              for ln in text.splitlines() if not _progress.search(ln)
+              for m in re.finditer(r"(\d+)\s+(?:total\s+)?violations?\b", ln, re.I)]
+    if counts:
+        return (max(counts), 0)
     return None
 
 
