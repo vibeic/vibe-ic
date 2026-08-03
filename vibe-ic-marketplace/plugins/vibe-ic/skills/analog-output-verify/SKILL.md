@@ -24,7 +24,8 @@ track is enforced by a program — do not re-assert them by eye:
 | Step | Gate | Enforces |
 |------|------|----------|
 | A3 | `programs/analog_a3_netlist_gen_check.py` + `programs/analog_netlist_pdk_check.py` | `.sp` substance (`.subckt`, size), PDK model/body/device-name compliance |
-| A4 | `programs/analog_corner_margin_check.py` | ≥27-corner PVT cube + ≥10% margin/corner (stricter than the 9-corner `analog_corner_sweep_check.py`); accepts `A4_corners.json` or `corner_results.json`, self-skips on stub |
+| A4 | `programs/analog_a4_corner_sweep_check.py` (+ `programs/analog_corner_sweep_check.py`) | anti-stub / real-ngspice provenance, worst-corner margin, `design_content` declared; the project-wide 9-corner floor. **This is A4's gate of record** — it is what the flow and `analog_one_shot_runner` actually run. |
+| A4 | `programs/analog_corner_lib_realism_lint.py` | **advisory** — flags an inline `LEVEL=1` / ideal MOSFET model standing in for the foundry corner library (silent substitution → FAIL; documented standin → WARN) |
 | A5 | `programs/analog_a5_layout_check.py` | `layout.mag`/`<block>.gds` exists with real placed geometry, for **EVERY** declared block (partial coverage → `INCOMPLETE`, never PASS). DRC/LVS sign-off is **A6's** verdict, not A5's: those flags are A6's declared outputs and A6 declares `blocks_on: [A5]`, so requiring them here was a dependency cycle that made A5 red on every correct single-pass run. A6 enforces the same rules over richer evidence. |
 | A6 | `programs/analog_per_block_pv_completeness_check.py` + `programs/analog_a6_block_pv_check.py` | full per-block deliverable set + DRC=0 / LVS=match evidence |
 | A7 | `programs/analog_pre_vs_post_layout_check.py` (+ `analog_a7_post_layout_resim_check.py`) | post-vs-pre degradation bands (≤20% INFO / >20% WARN / >30% FAIL) |
@@ -33,13 +34,27 @@ track is enforced by a program — do not re-assert them by eye:
 | A9 | `programs/analog_hw_spice_correlation_check.py` | HW-vs-SPICE error bands (<5% PASS / 5-15% WARN / >15% FAIL) |
 
 ```bash
-python3 ../../programs/analog_corner_margin_check.py <project> \
-    --json <project>/reports/gates/analog_corner_margin.json
+python3 ../../programs/analog_a4_corner_sweep_check.py <project> \
+    --json <project>/reports/gates/analog_corner_sweep.json
 python3 ../../programs/analog_lef_gds_outline_check.py <project> \
     --json <project>/reports/gates/analog_lef_gds_outline.json
 # (the A1-A9 gates above run inside analog_one_shot_runner; re-run any
 #  individually if a verdict is in doubt)
 ```
+
+> **`analog_corner_margin_check.py` is NOT one of them.** Until 2026-08-03
+> the A4 row of the table above named that program as A4's gate and credited
+> it with a "≥27-corner PVT cube + ≥10 % margin/corner" rule, and the comment
+> above claimed it runs inside the runner.
+> Both were measured false (vibe-ic#693):
+> the runner's A4 entry maps to `analog_a4_corner_sweep_check.py`, and
+> `analog_corner_margin_check` appears nowhere in it or in the flow. The
+> thresholds it transcribes are unsatisfiable by the producer that writes the
+> artefact: `analog_real_corner_sweep.build_pvt_grid` spans process × temp
+> only — **there is no voltage axis**, so the grid is 9 corners and can never
+> be 27 — and the `margin` key it writes is the SPEC TOLERANCE BAND, not
+> achieved headroom, so a *tighter* spec reads as a *smaller* margin. See
+> that program's own docstring for the full inventory record.
 
 Exit 0 = PASS (or self-skip / VACUOUS_PASS), 1 = FAIL. After every gate
 is green, apply the AI judgment below — these are the residual checks

@@ -1,5 +1,75 @@
 #!/usr/bin/env python3
-"""analog_corner_margin_check.py — A4 strict PVT-margin gate.
+"""NOT WIRED (vibe-ic#693): A4 strict PVT-margin gate, superseded and broken.
+
+╔══════════════════════════════════════════════════════════════════════════╗
+║ NOT WIRED — DELIBERATELY. INVENTORIED 2026-08-03 (vibe-ic#693).          ║
+║                                                                          ║
+║ REASON: BOTH of this gate's rules are unsatisfiable by the producer that ║
+║ writes the artefact it grades. It is not wired into                      ║
+║ `flow/phase1_phase2_phase3.yaml` in any tier — not blocking, and not     ║
+║ advisory either — and this block is the disclosure that says so.         ║
+║                                                                          ║
+║ (1) THE 27-CORNER CUBE HAS NO PRODUCER. `MIN_CORNERS = 27` transcribes   ║
+║     SKILL.md's "3 process × 3 temp × 3 voltage". Measured in             ║
+║     `analog_real_corner_sweep.build_pvt_grid`: the grid iterates         ║
+║     `process_corners × PVT_TEMPS` and NOTHING ELSE —                     ║
+║     `PVT_PROCESS = (ss, tt, ff)` × `PVT_TEMPS = (m40c, 27c, 125c)` = 9.  ║
+║     THERE IS NO VOLTAGE AXIS ANYWHERE IN THE GRID, and the emitted       ║
+║     corner dicts carry no supply field. The published artefacts          ║
+║     self-describe as 9 corners; the wired project-wide sibling           ║
+║     `analog_corner_sweep_check` sets `MIN_CORNERS = 9` for exactly this  ║
+║     reason. So `≥ 27` fails 100 % of analog runs, permanently, on a      ║
+║     defect no producer that exists can fix.                              ║
+║                                                                          ║
+║ (2) THE MARGIN RULE READS THE WRONG FIELD, AND ITS POLARITY IS INVERTED. ║
+║     `build_pvt_grid` writes `entry["margin"] = tol`, called as           ║
+║     `build_pvt_grid(base, base_log, real_sims, target.get("tol"), ...)`. ║
+║     `tol` is the SPEC TOLERANCE BAND, not achieved headroom.             ║
+║     `_read_margin_pct` branch 2 reads that same key as margin-to-spec —  ║
+║     a category error. Measured on a real Phase-3 run: every one of a     ║
+║     block's 9 corners reported the IDENTICAL `margin` 0.0833 while its   ║
+║     measured output varied per corner, which is the tell — the value     ║
+║     does not depend on the measurement. Consequence: A TIGHTER SPEC      ║
+║     MAKES THIS GATE REDDER. The plugin's own default `TARGETS` entry     ║
+║     for a regulator block is `tol = 0.05`, hard-coded BELOW this gate's  ║
+║     own 10 % floor, so that block fails by construction while a looser   ║
+║     spec passes.                                                         ║
+║                                                                          ║
+║ (3) ON TODAY'S SCHEMA THE MARGIN HALF IS VACUOUS ANYWAY. The published   ║
+║     corner artefacts carry no `margin_pct`, no `value`/`target` pair;    ║
+║     `margins_read: 0`. Only the unreachable count rule actually fires.   ║
+║                                                                          ║
+║ THE GATE OF RECORD FOR A4 IS `analog_a4_corner_sweep_check` — wired at   ║
+║ A4 in the flow AND run inline by `analog_one_shot_runner`. It already    ║
+║ enforces the anti-stub / provenance / worst-corner / `design_content`    ║
+║ rules. `analog_corner_sweep_check` enforces the real 9-corner floor.     ║
+║ The ONLY thing this gate adds that no wired gate has is the 27-corner    ║
+║ cube and the numeric 10 % floor — i.e. exactly the two rules above.      ║
+║                                                                          ║
+║ WHY NOT EVEN ADVISORY: an advisory finding that says "9 < 27" on every   ║
+║ analog run, and reports a spec tolerance as a margin, is noise that      ║
+║ teaches readers to ignore the A4 advisory channel — the channel the      ║
+║ corner-lib realism lint now depends on.                                  ║
+║                                                                          ║
+║ WHY NOT `gate_skip_routing_check._UNROUTED_INVENTORY`: MEASURED, that    ║
+║ dict tracks unrouted SKIP PATHS INSIDE a function body, not unwired      ║
+║ GATES. This gate contributes 0 of them, so adding it makes the ratchet   ║
+║ FAIL with `[RATCHET-FIXED] analog_corner_margin_check: 1 -> 0` (98==98   ║
+║ becomes 99 in 54 vs 98 in 53). It is not an available home.              ║
+║                                                                          ║
+║ NO `ENFORCEMENT:` LINE IS DECLARED HERE, ON PURPOSE. MEASURED against    ║
+║ `flow_gate_enforcement_audit` (run by `tools/ci/repo_hygiene_gates.sh`,  ║
+║ blocking): `ENFORCEMENT: advisory` on an unwired `*_check.py` yields     ║
+║ `orphan::analog_corner_margin_check` and rc 1, and `ENFORCEMENT: none`   ║
+║ is matched by nothing at all (`_DECL_RE` accepts only                    ║
+║ `blocking|advisory`), so it would record no intent while looking as if   ║
+║ it did. Prose is the honest channel here.                                ║
+║                                                                          ║
+║ TO MAKE THIS GATE WIRABLE, the change is in the PRODUCER, not here:      ║
+║ give `build_pvt_grid` a voltage axis, and emit a genuine achieved        ║
+║ `margin_pct` under a key distinct from `tol`. Only then is a             ║
+║ ≥27 / ≥10 % gate a tightening rather than a permanent red.               ║
+╚══════════════════════════════════════════════════════════════════════════╝
 
 Codifies the fixed thresholds in
 `skills/analog-output-verify/SKILL.md` (A4 corner_sweep checklist):
