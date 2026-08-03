@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1048
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1048)
+- **Total programs (excluding helpers / shims):** 1049
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1049)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1039 |
+| `any` | 1040 |
 
 ## Alphabetical listing
 
@@ -772,6 +772,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `profinet_protocol_synth` | any | — | PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper. |
 | `project_outputs_in_tree_check` | any | — | project_outputs_in_tree_check.py |
 | `prompt_example_selftest` | any | — | RUN the prompt's own worked examples as a blind, deterministic, scorer-independent pre-emit self-test against the authored RTL. |
+| `prose_polarity_consulted_check` | any | — | A prose extractor that never asks whether the sentence DENIES the value. |
 | `protocol_delimiter_consistency_check` | any | v0.99 | Verify the RTL FSM that validates end-of-frame fires on the spec's canonical trailing delimiter, not a proxy signal (idle_long, timeout, ... |
 | `protocol_detector_lib` | any | v0.1.95 | Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95). |
 | `protocol_detector_no_misfire_matrix` | any | v0.2.13 | Bidirectional protocol-detector no-misfire + gold cross-contamination matrix. |
@@ -1120,7 +1121,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1039 programs)
+### `any` (1040 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1863,6 +1864,7 @@ _(no programs in this group)_
 - `profinet_protocol_synth` — PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper.
 - `project_outputs_in_tree_check` — project_outputs_in_tree_check.py
 - `prompt_example_selftest` — RUN the prompt's own worked examples as a blind, deterministic, scorer-independent pre-emit self-test against the authored RTL.
+- `prose_polarity_consulted_check` — A prose extractor that never asks whether the sentence DENIES the value.
 - `protocol_delimiter_consistency_check` — Verify the RTL FSM that validates end-of-frame fires on the spec's canonical trailing delimiter, not a proxy signal (idle_long, timeout, ...  _[v0.99]_
 - `protocol_detector_lib` — Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95).  _[v0.1.95]_
 - `protocol_detector_no_misfire_matrix` — Bidirectional protocol-detector no-misfire + gold cross-contamination matrix.  _[v0.2.13]_

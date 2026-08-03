@@ -111,11 +111,11 @@ _DIE_LABELLED_WXH_RE = re.compile(
 #     the scope is the LINE for a table row and the PARAGRAPH for prose.
 #
 # Chip-, PDK- and vendor-AGNOSTIC: the vocabulary is structural negation only.
-_DIE_NEGATION_RE = re.compile(
-    r"(?:\bnot\b|\bno\b|\bnone\b|\bwithout\b|\bexclud\w*\b|\bnever\b|\bnon-?\b|"
-    r"\bremoved\b|\bobsolete\b|\bsupersed\w*\b|\bn/a\b|\binapplicable\b|"
-    r"非|无|無|不|否)",
-    re.IGNORECASE)
+# vibe-ic#712 — shared with `phase1_doc_one_shot_runner`; see `_prose_polarity`.
+# This field needs BOTH tiers: a die can be denied ("no fixed die") or RETIRED
+# while still printed in full ("removed, not translated"), which is the case
+# #711 measured.
+from _prose_polarity import NEGATION_RE as _DIE_NEGATION_RE  # noqa: E402
 _BRACKETED_RE = re.compile(r"\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}")
 
 

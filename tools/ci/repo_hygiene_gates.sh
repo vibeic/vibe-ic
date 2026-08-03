@@ -251,6 +251,13 @@ run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_w
 # coverage. A gate nothing runs produces no verdict, and the tree looks the same
 # either way.
 run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check.py"
+# vibe-ic#712 — a prose extractor that reads a value out of a sentence without
+# asking whether the sentence DENIES it publishes a denied value as a
+# declaration. Twice in one day, in two fields, and each fix grew its OWN copy
+# of the negation vocabulary — which is how the second field learned it only
+# after already publishing a wrong value. One vocabulary now (`_prose_polarity`),
+# and this finds the next extractor that does not consult it.
+run "prose extractors read polarity"    "$ROOT" python3 "$PG/prose_polarity_consulted_check.py"
 # ORGANIC #686 — a macro OBS is the vendor's statement of where the integrator
 # may not put metal. It is not in the PDK deck, so sign-off DRC cannot see a
 # crossing; and the wire is on the right net, so a connectivity audit cannot

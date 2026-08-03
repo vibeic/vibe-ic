@@ -8572,10 +8572,12 @@ _FOUNDRY_CTX_RE = re.compile(
 #       (\d+ nm) — a bare "TSMC process" with no node is too weak to
 #       overrule a negation-free reading.
 # Chip-AGNOSTIC: pure structural negation vocabulary; no chip literal.
-_FOUNDRY_NEGATION_RE = re.compile(
-    r"(?:\bnot\b|\bno\b|\bwithout\b|\bexcluding\b|\bexclud\w*\b|"
-    r"\bnever\b|\bnon-?\b|非|无|無|不|否)",
-    re.IGNORECASE)
+# vibe-ic#712 — the vocabulary lives in ONE place. This file and
+# `floorplan_contract` each grew a private copy within a day of each other, and
+# two copies drift; the second is written only after the field it guards has
+# already published a denied value. The SCOPE rule stays local (it genuinely
+# differs per field); only the list of words that mean "no" is shared.
+from _prose_polarity import DENIAL_CORE_RE as _FOUNDRY_NEGATION_RE  # noqa: E402
 _FOUNDRY_NUMERIC_NODE_RE = re.compile(r"\d+\s?nm", re.IGNORECASE)
 
 
