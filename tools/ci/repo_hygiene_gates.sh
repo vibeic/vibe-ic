@@ -405,6 +405,7 @@ run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_c
 # previous ones. Refuses (rc 2) on a dirty checkout rather than reporting the
 # uncommitted work as findings.
 run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
+run "gitignore scratch guard"            "$ROOT" python3 "$PG/gitignore_scratch_guard.py"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
 run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_health_audit.py
