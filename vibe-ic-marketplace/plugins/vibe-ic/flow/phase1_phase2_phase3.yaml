@@ -1711,10 +1711,15 @@ steps:
         #   * FIRST in the `all_of`, not last. `_evaluate_gate` SHORT-CIRCUITS:
         #     it returns on the first failing sub-gate and only later ADVISORY
         #     sub-gates still run. Wired last, this gate ran on 0 of 5 sampled
-        #     published runs. It carries an rc=2 NOT-CHECKED tier and measures
-        #     0 red over the whole corpus, so ordering it first cannot turn a
-        #     green run red — it only guarantees the gate executes whenever
-        #     the step is evaluated at all.
+        #     published runs; wired first it runs whenever step 17 is evaluated
+        #     (measured in-flow: rc=0 PASS on a real published pnr.tcl). It
+        #     carries an rc=2 NOT-CHECKED tier and measures 0 red over the
+        #     whole corpus, so ordering it first cannot turn a green run red.
+        #     NOTE, separately: step 17 declares a `*.def` required_output and
+        #     the root .gitignore excludes `*.def` under benchmark-data/ic/**,
+        #     so on the PUBLISHED tree this step is MISSING and `check_step`
+        #     evaluates no gate here at all. That is a property of the corpus,
+        #     not of the wiring; on a live run the DEF exists.
         #   * UNCONDITIONAL. `condition_files_exist: [phase3/stage3/pnr/pnr.tcl]`
         #     is the self-disabling shape `flow_condition_reachability_check`
         #     refuses — measured: patching it in makes that gate FAIL with
@@ -2207,19 +2212,23 @@ steps:
         # FIRST in the `all_of`, deliberately, and this one HAS a cost worth
         # stating: `_evaluate_gate` short-circuits on the first failing
         # sub-gate, so wired last this gate did not execute on 4 of 5 sampled
-        # published runs — including the one run it has something to say about,
-        # whose `files_exist` below fails first. Wired first it executes
-        # whenever step 23 is evaluated. On the 33 roots where it PASSes or
-        # returns rc=2 every sibling still runs exactly as before; on the ONE
-        # root where it FAILs (benchmark-data/ic/edge_llm_accel) the siblings
-        # no longer report, so that run's step-23 reason becomes HOLD_NOT_AT_FF
-        # instead of the missing post_route_timing.rpt. Both are true and the
-        # step is FAIL either way.
-        # BLAST RADIUS over all 34 published phase-3 run roots: 1 FAIL /
-        # 7 PASS / 26 rc=2 NOT CHECKED. The single FAIL is
-        # benchmark-data/ic/edge_llm_accel, where step 23 was ALREADY FAIL on
-        # `sta_report_check` and `sta_corner_record_completeness_check`, so no
-        # published run changes its step VERDICT.
+        # published runs. Wired first it executes whenever step 23 is evaluated
+        # at all. On every root where it PASSes or returns rc=2 each sibling
+        # still runs exactly as before; only on a root where it FAILs do the
+        # siblings stop reporting, and there the step is FAIL either way.
+        #
+        # BLAST RADIUS, two numbers because they answer two questions:
+        #   * invoked directly on all 34 published phase-3 run roots:
+        #     1 FAIL / 7 PASS / 26 rc=2 NOT CHECKED. The single FAIL is
+        #     benchmark-data/ic/edge_llm_accel (hold_process_corner "TT").
+        #   * inside flow_compliance_check over the same corpus: 0 red. Only
+        #     11 of the 34 roots carry any of step 23's declared
+        #     required_outputs, so `check_step` marks the step MISSING on the
+        #     rest and never evaluates this gate there — and edge_llm_accel is
+        #     one of the 23 that do not. On the 11 that ARE evaluated this gate
+        #     returns 6 PASS and 5 rc=2.
+        # So no published run changes its step VERDICT, and the one true
+        # finding surfaces on a live run rather than on the pruned tree.
         - program_exit_zero: "hold_corner_coverage_check . --json reports/phase3/sta/hold_corner_coverage.json"
         - files_exist: ["phase3/stage3/sta/post_route_timing.rpt"]
         # `--mode` is a report CLASS, not a directory — see step 10. The
