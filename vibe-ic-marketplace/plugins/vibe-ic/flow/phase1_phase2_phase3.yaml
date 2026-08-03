@@ -2578,7 +2578,22 @@ steps:
         # directory scope would hand step 21's evidence to step 31 — the very
         # cross-step confusion `--under` exists to end, pointing the other way.
         # Step 21 scopes by directory AND names its file for the same reason.
-        - program_exit_zero: "drc_report_check . --mode drc --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
+        # `--signoff` is THIS step's policy and step 21 must never get it: the
+        # producer that is exactly right there (the router's own detailed-route
+        # DRC) is the one disqualified here. MEASURED on origin/main, a project
+        # with ZERO GDS files whose drc_signoff.rpt is a 19,162-byte OpenROAD
+        # detailed_route projection re-staged by the runner's own alias writer:
+        # rc=0, passed:true, tool_authentic:true, determined_files:1,
+        # real_violation_total:0 — a sign-off DRC certificate issued by the
+        # router over a layout that was never streamed. `--signoff` requires
+        # (a) a PRODUCER that is a rule deck applied to a layout (KLayout report
+        # database naming its <generator> deck / SVRF-native per-rule tally /
+        # Magic transcript; the router's projection is refused) and (b) evidence
+        # of a streamed design layout, disclosed by tier
+        # (invocation > declared > on_disk; `none` is rc 1).
+        # BLAST RADIUS over the 13 published runs carrying this artefact: 0.
+        # All 6 runs green on this gate today stay green.
+        - program_exit_zero: "drc_report_check . --mode drc --signoff --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
         - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
         # 每一條宣告的電源/地軌都必須至少帶一段佈線幾何。MEASURED on a real
         # tapeout run with a third-party hard macro on a second supply: the DEF
@@ -2606,7 +2621,19 @@ steps:
         # NetlistComparer for LVS — v1.3.94: the geometric KLayout comparer is a
         # legitimate authoritative LVS engine for a symmetric-bus design netgen
         # cannot pin-match, so lvs.rpt may be attributed to klayout).
-        - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,openroad"
+        # `openroad` is OUT and `svrfdrc` is IN — but ONLY because the runner's
+        # provenance back-fill now derives the sign-off DRC report's tool from
+        # the ARTEFACT instead of hardcoding "klayout". DO NOT re-add
+        # `openroad` and do not read this list as the thing that closed the
+        # hole: MEASURED on origin/main, with the attribution still laundered,
+        # a router projection at this path passed under EVERY list tried —
+        # klayout,magic,openroad -> rc 0; klayout,magic,svrfdrc -> rc 0;
+        # klayout,magic -> rc 0. An allow-list cannot filter a tool name that
+        # was never derived from the file. `svrfdrc` joins because it is the
+        # runner's own HIGHEST authority tier (svrfdrc > klayout > openroad,
+        # `_signoff_drc_tool`) and, once attribution is honest, it is the tier
+        # that would otherwise go red.
+        - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,svrfdrc"
         - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic,klayout"
         # Step-31 ERC + sign-off density substance (replaces the dangling
         # density_check that referenced a non-existent program). This is a

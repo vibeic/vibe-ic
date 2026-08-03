@@ -64,6 +64,7 @@ import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — 
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
+import _signoff_drc_format as _sdf  # sign-off DRC producer classification (ONE answer)
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
 
@@ -23500,9 +23501,63 @@ def _select_signoff_corners(libs: List[Tuple[str, str]],
     return corners
 
 
+#: How the runner names each sign-off DRC producer in provenance, and the
+#: command string that describes it. Derived from the ARTEFACT — see
+#: `_signoff_drc_tool` — never from a caller default.
+_SIGNOFF_DRC_COMMANDS = {
+    _sdf.KLAYOUT: "klayout -b -r <pdk drc deck> (sign-off DRC)",
+    _sdf.SVRFDRC: "svrfdrc <foundry .rule deck> (sign-off DRC, SVRF-native)",
+    _sdf.MAGIC: "magic -dnull drc (sign-off DRC)",
+    _sdf.OPENROAD: "openroad detailed_route DRC projection "
+                   "(ROUTER-level, NOT a sign-off deck)",
+}
+
+
+def _signoff_drc_tool(path: Path) -> Optional[Tuple[str, str]]:
+    """`(tool, command)` for a sign-off DRC report, decided from its BYTES.
+
+    THE DEFECT THIS CLOSES. `_v1_6_620_append_pv_signoff_provenance` used to
+    hardcode `("reports/phase3/drc_signoff.rpt", "klayout",
+    "klayout -b -r drc (sign-off DRC)")` for whatever happened to be at that
+    path. The alias writer 3000 lines below already computes the REAL source
+    tier (`svrfdrc` > `klayout` > `openroad`) — and that value reached the
+    human-readable `# Tool:` header and NOTHING else.
+
+    MEASURED on origin/main, on a project whose sign-off report is the router's
+    own detailed-route projection::
+
+        _v1_6_620_append_pv_signoff_provenance(proj, top)
+          -> provenance.jsonl: {"tool": "klayout",
+                "command": "klayout -b -r drc (sign-off DRC) (phase3_...)"}
+
+    describing an invocation that never happened. The consequence is that the
+    Step-31 provenance ALLOW-LIST could not do its job: with the same fixture,
+    `--tool klayout,magic,openroad`, `--tool klayout,magic,svrfdrc` and
+    `--tool klayout,magic` ALL returned rc 0. Removing `openroad` from the list
+    closes nothing while the attribution is laundered; this is the half that
+    has to land first.
+
+    An artefact matching no known producer is attributed `unknown`, NOT
+    guessed and NOT silently dropped. The ledger's job is to record what
+    exists with its real digest; deciding what COUNTS is the allow-list's job,
+    and conflating the two is how "klayout" came to be stamped on a router log
+    in the first place. `unknown` is in no allow-list, so the provenance gate
+    still FAILs — with the readable reason "tool 'unknown' not in allowed
+    [...]" rather than "no entry declares this path", which would wrongly read
+    as "the file was never produced"."""
+    p = _sdf.classify_file(path)
+    if p.kind is None:
+        return "unknown", ("sign-off DRC report present but its PRODUCER could "
+                           "not be determined from its content")
+    cmd = _SIGNOFF_DRC_COMMANDS[p.kind]
+    if p.deck:
+        cmd += f" [deck: {p.deck}]"
+    return p.kind, cmd
+
+
 def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]:
-    """ORGANIC #620 — idempotently declare the Step-31 Physical-Verification
-    sign-off outputs (sign-off DRC report, LVS report, streamout GDS) in
+    """ORGANIC #620 — declare the Step-31 Physical-Verification sign-off
+    outputs (sign-off DRC report, LVS report, streamout GDS) in
     provenance.jsonl, mirroring the SPEF provenance append (#509/#590).
     step_canonicalize_artefacts previously declared only the synth netlist,
     routed.def, and the SPEF — so flow_compliance Step 31 ran
@@ -23512,9 +23567,34 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
 
     Anti-fabrication: only outputs that EXIST on disk are declared, each with
     its REAL sha256 + tool attribution; a genuinely-absent report is NOT
-    fabricated (its provenance gate then still FAILs, correctly). Idempotent: a
-    path already present in provenance.jsonl is skipped. Returns the list of
-    newly-declared rel paths. chip-AGNOSTIC: canonical PV paths, no chip name."""
+    fabricated (its provenance gate then still FAILs, correctly). Returns the
+    list of newly-declared rel paths. chip-AGNOSTIC: canonical PV paths, no
+    chip name.
+
+    IDEMPOTENCE IS NOW CONTENT-AWARE, NOT PATH-AWARE. The old skip test was
+    `rel not in existing` — a raw substring search over the whole log — so the
+    FIRST stamp for a path was the last one ever written. MEASURED on the real
+    function::
+
+        call 1                          -> ['reports/phase3/drc_signoff.rpt']
+        <artefact replaced on disk>
+        call 2                          -> []          # nothing re-stamped
+        log carries the NEW sha: False   log carries the OLD sha: True
+
+    That silently breaks the emit-site comment three thousand lines below,
+    which promises the declarer is re-run "ALWAYS after a (re)write, so a
+    svrfdrc force-refresh re-stamps the new sha". It does not: the svrfdrc
+    refresh is the one path that rewrites an EXISTING drc_signoff.rpt, so the
+    highest-authority producer is exactly the one guaranteed to end up with a
+    stale digest — and `provenance_check` then FAILs the run on `hash mismatch`
+    (measured), a correct verdict for an incorrect reason.
+
+    A new entry is therefore appended whenever the newest entry declaring a
+    path disagrees with the artefact on its DIGEST or on its TOOL. The ledger
+    stays append-only — provenance is a history, and rewriting history to make
+    a gate pass is the thing this file exists to prevent — so the correction is
+    a superseding record, which is what `provenance_check` reads (it sorts the
+    matching entries by timestamp and takes the most recent)."""
     import hashlib as _hl
     import datetime as _dt
     prov_path = project / "provenance.jsonl"
@@ -23526,7 +23606,29 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
                 h.update(ch)
         return "sha256:" + h.hexdigest()
 
-    existing = prov_path.read_text() if prov_path.is_file() else ""
+    # The ledger, parsed. The prior substring test also matched a path that
+    # appeared anywhere in ANY field (a command line, a note), not only as a
+    # declared output.
+    _ledger: List[dict] = []
+    if prov_path.is_file():
+        for _line in prov_path.read_text(errors="replace").splitlines():
+            _line = _line.strip()
+            if not _line:
+                continue
+            try:
+                _doc = json.loads(_line)
+            except ValueError:
+                continue
+            if isinstance(_doc, dict):
+                _ledger.append(_doc)
+
+    def _newest(rel: str) -> Optional[dict]:
+        cands = [e for e in _ledger if rel in (e.get("outputs") or {})]
+        if not cands:
+            return None
+        cands.sort(key=lambda e: str(e.get("timestamp", "")))
+        return cands[-1]
+
     # v1.3.94 — the LVS report's authoring tool depends on the deciding engine:
     # for a symmetric-bus design the KLayout NetlistComparer is authoritative
     # and lvs.rpt is rendered from ITS verdict (not netgen's transcript), so
@@ -23542,42 +23644,69 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
             _lvs_cmd = "klayout NetlistComparer lvs (sign-off LVS)"
     except Exception:
         pass
+    # The sign-off DRC report is attributed from ITS OWN BYTES, never from a
+    # caller default — a guess here is the whole defect. An unrecognised
+    # producer becomes `unknown`, which no allow-list contains.
+    _drc_rel = "reports/phase3/drc_signoff.rpt"
     pv_outputs = [
-        ("reports/phase3/drc_signoff.rpt", "klayout",
-         "klayout -b -r drc (sign-off DRC)"),
         ("reports/phase3/lvs.rpt", _lvs_tool, _lvs_cmd),
         (f"phase3/stage3/pnr/{top}.gds", "magic", "magic gds write (streamout)"),
         (f"phase3/stage4/gds/{top}.gds", "klayout",
          "klayout streamout (canonical GDS)"),
     ]
+    _drc_attr = _signoff_drc_tool(project / _drc_rel) \
+        if (project / _drc_rel).is_file() else None
+    if _drc_attr is not None:
+        pv_outputs.insert(0, (_drc_rel, _drc_attr[0], _drc_attr[1]))
     declared: List[str] = []
     for rel, tool, cmd in pv_outputs:
         fp = project / rel
-        if fp.is_file() and rel not in existing:
-            entry = {
-                "tool": tool,
-                "command": f"{cmd} (phase3_one_shot_runner)",
-                "exit_code": 0,
-                # #365 — NOT measured. These provenance entries are
-                # BACK-FILLED: the runner writes them for artifacts it finds
-                # on disk, having never observed the invocation that made
-                # them. `0` is a VALUE and reads as "took no time", i.e. a
-                # measurement claim with no measurement behind it — the
-                # anti-fabrication rule this ledger exists to serve. `null`
-                # says "not measured", which is the truth. (`exit_code: 0`
-                # stays: the artifact exists and is hashed, which IS evidence
-                # the tool produced it, and `provenance_check` reads that
-                # field.)
-                "duration_ms": None,
-                "reconstructed": True,
-                "timestamp": _dt.datetime.now(_dt.timezone.utc)
-                                .strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "outputs": {rel: _sha(fp)},
-            }
-            with prov_path.open("a") as f:
-                f.write(json.dumps(entry) + "\n")
-            existing += "\n" + rel  # de-dup within this loop
-            declared.append(rel)
+        if not fp.is_file():
+            continue
+        _prev = _newest(rel)
+        if _prev is not None:
+            # A BACK-FILL MUST NEVER SUPERSEDE A MEASUREMENT. When the newest
+            # declaration came from `_log_invocation` — a run that was actually
+            # observed — leave it alone even if the file has since changed:
+            # `provenance_check` then reports `hash mismatch`, which is the
+            # correct and much stronger verdict ("the artefact is not the one
+            # the measured run produced"). Overwriting it with a reconstructed
+            # entry carrying the CURRENT digest would turn that FAIL into a
+            # PASS, which is the same class of defect this change closes.
+            if _prev.get("measured") or _prev.get("record") == "invocation":
+                continue
+            _prev_sha = str((_prev.get("outputs") or {}).get(rel, ""))
+            if _prev_sha == _sha(fp) and str(_prev.get("tool")) == tool:
+                continue        # the ledger already says exactly this
+        entry = {
+            "tool": tool,
+            "command": f"{cmd} (phase3_one_shot_runner)",
+            "exit_code": 0,
+            # #365 — NOT measured. These provenance entries are
+            # BACK-FILLED: the runner writes them for artifacts it finds
+            # on disk, having never observed the invocation that made
+            # them. `0` is a VALUE and reads as "took no time", i.e. a
+            # measurement claim with no measurement behind it — the
+            # anti-fabrication rule this ledger exists to serve. `null`
+            # says "not measured", which is the truth. (`exit_code: 0`
+            # stays: the artifact exists and is hashed, which IS evidence
+            # the tool produced it, and `provenance_check` reads that
+            # field.)
+            "duration_ms": None,
+            "reconstructed": True,
+            "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "outputs": {rel: _sha(fp)},
+        }
+        if _prev is not None:
+            # A superseding record says so, so a reader is never left to guess
+            # which of two entries for one path is current.
+            entry["supersedes"] = {"timestamp": _prev.get("timestamp"),
+                                   "tool": _prev.get("tool")}
+        with prov_path.open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+        _ledger.append(entry)   # de-dup within this loop
+        declared.append(rel)
     return declared
 
 

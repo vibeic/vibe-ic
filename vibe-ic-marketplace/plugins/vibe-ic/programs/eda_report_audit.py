@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
+import _signoff_drc_format as _sdf  # the ONE producer/dialect answer
 # Chip-agnostic multi-dialect timing-slack extractor, already hardened for
 # the report shapes real designs actually emit (worst-slack summary lines,
 # WNS/TNS tokens, and a SETUP/HOLD section split) — reused rather than
@@ -574,7 +575,7 @@ def _drc_rule_is_foundry_stdcell(rule: Optional[str]) -> bool:
 
 def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
     """Return `(user_routing, foundry_stdcell_excluded)` DRC violation counts in
-    a report body, or None if a count cannot be determined. Two dialects,
+    a report body, or None if a count cannot be determined. Three dialects,
     chip-agnostic (grammar, not any design/PDK/vendor literal):
 
       klayout RDB/.lyrdb XML   count actual <item> elements under <items>,
@@ -582,10 +583,31 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
                                user-routing (the gating count) vs foundry-
                                qualified std-cell-internal (disclosed, waived —
                                same tiering as the phase-3 drc step).
+      SVRF-native              the per-rule `FAIL|PASS|SKIP <rule> ... -> <n>`
+                               tally the foundry deck's native runner emits.
+                               The design-level violation count is the number
+                               of FAILing RULES; this report never emits a
+                               "total violations:" line.
       plain-text summary       "total violations: N" / "N violations" /
                                the magic-style "DRC errors found: N" — no
                                per-item rule, so the whole N is treated as
                                user-routing (conservative: never auto-waived).
+
+    THE SVRF DIALECT IS NEW AND ITS ABSENCE WAS LOAD-BEARING. The flow's own
+    authority order for the sign-off DRC alias (`phase3_one_shot_runner`) puts
+    the SVRF report ABOVE the KLayout OSS-deck report — it is the foundry's own
+    rule deck. `signoff_audit` has parsed that dialect since the day a clean
+    4533-PASS sign-off was measured as UNPARSED and hard-FAILed the tapeout
+    checklist. This function never learned it. MEASURED on origin/main, the
+    same clean report at the sign-off path::
+
+        drc_report_check . --mode drc --under reports/phase3/drc_signoff.rpt
+            -> rc=1  determined_files:0  real_violation_total:0
+
+    i.e. the HIGHEST-authority producer was the one the Step-31 substance gate
+    could not read, while the router's projection — the LOWEST — measured rc=0.
+    The grammar is imported from `_signoff_drc_format`, not re-authored: three
+    private copies of it is how the divergence happened.
 
     Returns None (never (0,0)) when NEITHER dialect yields a number — an
     unreadable or unrecognised report must not be credited as clean.
@@ -617,6 +639,12 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
                     else:
                         user += 1
                 return (user, stdcell)
+    # SVRF-native: a per-rule tally, no summary line. Tried BEFORE the text
+    # regexes because a rule NAME can contain the word "violation" and the
+    # generic patterns would then read a rule name as a count.
+    _svrf = _sdf.svrf_fail_count(text)
+    if _svrf is not None:
+        return (_svrf, 0)
     m = re.search(r"total\s+violations?\s*[:=]?\s*(\d+)", text, re.I)
     if m:
         return (int(m.group(1)), 0)
@@ -656,12 +684,24 @@ def _check_drc(project_dir: Path) -> AuditResult:
     real_total = 0
     stdcell_excluded = 0
     worst_file = ""
+    # DISCLOSURE ONLY, never gating here. Which PRODUCER wrote each report the
+    # audit read, decided from the report's own bytes. `_check_drc` serves BOTH
+    # the router-DRC gate (step 21, where an `openroad` producer is exactly
+    # right) and the sign-off gate (step 31, where it is not), so the producer
+    # cannot be judged at this level — only recorded, so the caller that owns
+    # the sign-off policy can judge it. See `drc_report_check --signoff`.
+    producers: List[dict] = []
 
     for fp in files:
         try:
             text = fp.read_text(errors="replace")
         except OSError:
             continue
+        _p = _sdf.classify_text(text)
+        _prod = _p.as_dict()
+        _prod["file"] = _rel(fp, project_dir)
+        _prod["attribution_disagreement"] = _sdf.attribution_disagrees(_p)
+        producers.append(_prod)
         for cat, regex in categories_re.items():
             if regex.search(text) and cat not in cats_found:
                 cats_found.append(cat)
@@ -736,7 +776,8 @@ def _check_drc(project_dir: Path) -> AuditResult:
                       "has_count": has_count, "tool_authentic": authentic,
                       "determined_files": determined_files,
                       "real_violation_total": real_total,
-                      "foundry_stdcell_excluded": stdcell_excluded}
+                      "foundry_stdcell_excluded": stdcell_excluded,
+                      "producers": producers}
     return result
 
 
