@@ -48,6 +48,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gate_utils import EXCLUDED_DIRS  # shared RTL-scope contract
 import _vacuous_exit as _vx
 
 
@@ -89,7 +91,16 @@ def audit(rtl_dir: Path) -> AuditResult:
         result.summary = {"skipped": True, "reason": "not_a_directory"}
         return result
 
-    files = sorted(list(rtl_dir.rglob("*.v")) + list(rtl_dir.rglob("*.sv")))
+    # Skip the flow's own build/output trees. This was a bare rglob with no
+    # exclusion; given a PROJECT directory — how the phase-2 umbrella invokes
+    # it — it read every emitted netlist in the tree. MEASURED on
+    # edge_llm_accel x nangate45: 39.14 s / 1.03 GB RSS, and a TIMEOUT under
+    # the umbrella's per-gate budget that FAILed phase 2 before PnR. Exclusion
+    # is delegated to the shared `gate_utils.EXCLUDED_DIRS` rather than to yet
+    # another private copy.
+    files = sorted(
+        p for p in list(rtl_dir.rglob("*.v")) + list(rtl_dir.rglob("*.sv"))
+        if not (set(p.relative_to(rtl_dir).parts[:-1]) & EXCLUDED_DIRS))
     if not files:
         result.summary = {"skipped": True, "reason": "no_rtl_files"}
         return result
