@@ -183,6 +183,32 @@ def test_registration_carries_a_written_reason(gate):
         f"in the preceding comment block")
 
 
+@pytest.mark.parametrize("gate", _SIGNALTAP)
+def test_signaltap_gates_are_pinned_as_declared_orphans(gate):
+    """The repo DOES have a register for exactly this state — use it.
+
+    `test_matrix_d1_wiring.ORPHAN_DECLARED_PROGRAMS` pins every ``(step,
+    program)`` pair named in a step's ``programs:`` array and reachable through
+    none of the three channels (gate command / umbrella registry / runner
+    dispatch). Registering these two at step 39 made that pin red, which is the
+    pin working: a step advertising a program nothing runs is exactly what it
+    counts. The honest response is to add them WITH THE REASON, not to route
+    around it — so this test binds the two records together. Drop one from the
+    yaml or from the pin and this fails; wire one for real and the pin fails,
+    which is the direction that should also be noticed.
+    """
+    import importlib.util
+    path = pathlib.Path(__file__).with_name("test_matrix_d1_wiring.py")
+    spec = importlib.util.spec_from_file_location("_d1_wiring_for_693", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    assert ("39", gate) in mod.ORPHAN_DECLARED_PROGRAMS, (
+        f"{gate} is declared at step 39 and wired nowhere, but is not pinned in "
+        f"ORPHAN_DECLARED_PROGRAMS. Unlisted-and-unwired is the state #693 "
+        f"measured; being pinned is the disclosure.")
+
+
 # ---------------------------------------------------------------------------
 # 4. The skip tier: rc 2 + a token the ratchet can see, for all three.
 # ---------------------------------------------------------------------------
