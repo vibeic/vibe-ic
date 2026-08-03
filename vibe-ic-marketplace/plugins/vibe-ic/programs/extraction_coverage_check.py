@@ -427,8 +427,96 @@ def _load_explicit_patterns(project: Path) -> tuple[dict, Path | None]:
                     tuples.append((it, it))
             if tuples:
                 patterns[filename] = tuples
+        patterns = _reconcile_with_docs(project, patterns)
         return patterns, cand
     return {}, None
+
+
+
+def _is_auto_seeded(label: str) -> bool:
+    """True for entries the seeder harvested, not a human's curation."""
+    return str(label or "").strip().lower().startswith("auto-discovered")
+
+
+def _reconcile_with_docs(project: Path, patterns: dict) -> dict:
+    """Drop pinned literals that no longer occur in their source document.
+
+    The canonical `extraction_patterns.json` is seeded ONCE (the
+    `if not canonical.is_file():` guard in phase1_doc_one_shot_runner) and
+    is then loaded verbatim on every later run. When an input document is
+    subsequently edited -- which is exactly what a retarget does -- literals
+    the edit DELETED stay pinned in the denominator forever. Nothing can
+    ever credit them, because they occur in no document, so a gate that
+    requires 100% with NO waiver becomes unreachable by any honest means.
+
+    Reconcile on load, but ONLY for entries the seeder itself harvested
+    (label `auto-discovered (...)`). A HUMAN-CURATED pattern is a teaching
+    aid -- "look for this literal in the L docs" -- and is deliberately
+    allowed not to occur in the input document at all
+    (test_explicit_patterns_root_used encodes exactly that contract), so
+    curated entries are never pruned. This narrowing came from a measured
+    regression in the first cut of this fix, which pruned curated patterns
+    and broke 3 tests, not from caution.
+
+    For an auto-seeded literal, keep it only while its own source document
+    still contains it. A literal the documents no longer make is outside
+    what this gate measures ("did every literal in the docs reach a typed
+    field"), so removing it restores the gate's stated semantics rather
+    than relaxing them.
+
+    chip-AGNOSTIC: keyed on document content only; no chip, process or
+    vendor token.
+    """
+    out: dict = {}
+    for filename, tuples in patterns.items():
+        doc = _find_input_doc(project, filename)
+        if doc is None:
+            out[filename] = tuples
+            continue
+        try:
+            text = doc.read_text(errors="replace")
+        except Exception:
+            out[filename] = tuples
+            continue
+        kept = [(lit, lbl) for lit, lbl in tuples
+                if not _is_auto_seeded(lbl) or lit in text]
+        dropped = len(tuples) - len(kept)
+        if dropped:
+            print(f"INFO — reconcile: dropped {dropped} pinned literal(s) "
+                  f"absent from {filename} (stale pattern cache)",
+                  file=sys.stderr)
+        if kept:
+            out[filename] = kept
+    return out
+
+
+
+_RE_NUM_UNIT_SPACE = re.compile(r"(?<=[0-9])[ \u00a0\u3000]+(?=[A-Za-z\u00b0\u00b5\u03bc])")
+
+
+def _lit_present(lit: str, hay: str) -> bool:
+    """Credit a literal that the extractor stored in NORMALISED form.
+
+    The Phase-1 extractor writes `<value> <unit>` typed fields with the
+    separating space removed (`"30 ns"` -> `{"literal": "30ns",
+    "value": "30", "unit": "ns"}`), while the coverage denominator
+    harvests the un-normalised prose form. A verbatim-only credit test
+    therefore reports the extractor's OWN successful extraction as a
+    coverage gap, and the 100%-required gate becomes unreachable for any
+    document that writes a number and its unit with a space between them.
+
+    Credit on the verbatim form OR on the same number-unit space collapse
+    the extractor itself applies. The collapse is anchored between a digit
+    and a unit-leading letter, so it cannot join two unrelated tokens.
+
+    chip-AGNOSTIC: no chip, process, vendor or unit vocabulary hard-coded.
+    """
+    if re.search(re.escape(lit), hay, re.IGNORECASE):
+        return True
+    squeezed = _RE_NUM_UNIT_SPACE.sub("", lit)
+    if squeezed != lit and re.search(re.escape(squeezed), hay, re.IGNORECASE):
+        return True
+    return False
 
 
 def _autodiscover_patterns(project: Path, *, persist: bool = True) -> dict:
@@ -620,7 +708,7 @@ def main() -> int:
         docs_checked += 1
         for needle, desc in items:
             total += 1
-            if re.search(re.escape(needle), l_text, re.IGNORECASE):
+            if _lit_present(str(needle), l_text):
                 hits += 1
             else:
                 misses.append((filename, needle, desc))
@@ -680,8 +768,7 @@ def main() -> int:
                     # Only count auto literals whose verbatim string lives
                     # inside the typed L*.json haystack. This is the
                     # backfilled subset = "hands-on universe".
-                    if re.search(re.escape(str(lit)), l_text,
-                                 re.IGNORECASE):
+                    if _lit_present(str(lit), l_text):
                         union_total += 1
                         union_hits += 1
                     else:
