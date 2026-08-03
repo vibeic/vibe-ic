@@ -11992,8 +11992,9 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
     """ORGANIC #562/#563 — emit the OpenROAD TCL that runs AFTER the
     post-spare-insertion `detailed_placement` call, which has already
     snapped each spare to the legal site/row grid. This fragment:
-      (a) (#563 r2) ties every unconnected spare INPUT to a `spare_tielo`
-          net driven by the PDK's tie-low cell (placed + re-legalized),
+      (a) (#563 r2/r4) ties every unconnected spare INPUT to a
+          `spare_tielo_<spare>` net driven by that spare's OWN tie-low cell,
+          placed at that spare's own coordinates (+ re-legalized),
           so spares LVS-match like functional cells even when their cell
           class is also in functional use; SPARE_TIEOFF_SKIPPED when the
           PDK liberty exposes no tie cell,
@@ -12020,109 +12021,136 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
     # requirement the plan previously only CLAIMED. NONFATAL-guarded.
     tie_lo_cell = tie_lo_cell or None
     if tie_lo_cell:
-        # v1.8.100 — the tie driver goes at the MEDIAN of the spares it feeds,
-        # not at the FIRST one. MEASURED (iter2, caravel_user_project x sky130A):
-        # placed at instances[0] the driver landed at x=154 um on a 2920 um die
-        # while its ~33 loads (7 spares + the antenna diodes that later attach to
-        # the same net) spread from x=155 to x=2891 — one conb_1 driving a 2.7 mm
-        # RC tree. That net is `dont_touch` by design (a dont_touch LOAD pin makes
-        # repair_design raise RSZ-3006 and abort the whole pass), so NO repair
-        # stage may buffer it, and it was the ONLY remaining source of sign-off
-        # max_slew violations: all 12, at -0.00 to -0.10 ns.
-        # A tie-off is a placement problem, not a repair problem. The median load
-        # position is the point that minimises total distance to the loads along
-        # each axis. chip-AGNOSTIC: reads only the spare plan's own coordinates.
-        _lx = sorted(i.get("llx", 0) for i in instances) if instances else [0]
-        _ly = sorted(i.get("lly", 0) for i in instances) if instances else [0]
-        _tx = _lx[len(_lx) // 2]
-        _ty = _ly[len(_ly) // 2]
+        # ONE TIE DRIVER PER SPARE — a tie-off is a PLACEMENT problem, and a
+        # placement problem is not solved by moving one driver.
+        #
+        # v1.8.100 moved the single driver from instances[0] to the MEDIAN of the
+        # spares it feeds. That halved the worst distance and did not fix the
+        # shape, because the shape is one driver against every sink in the pool.
+        # MEASURED (caravel_user_project x sky130A, v1.9.67 and again on v1.9.71
+        # with the median driver in force): 20 spare inputs on the ONE net
+        # `spare_tielo`, which the antenna repair then attached 12 diodes to,
+        # giving 174 terminals spread over a 2920x3520 um die. Sign-off STA
+        # reported 54 max_slew rows — limits 1.50 ns against slews of 6.98 /
+        # 4.08 / 3.23 ns — every one of them on that net, and Step 23 FAILed on
+        # them. The net is `dont_touch` by design (a dont_touch LOAD pin makes
+        # repair_design raise RSZ-3006 and abort the whole repair pass), so no
+        # repair stage may buffer it: the flow could only DISCLOSE the rows.
+        #
+        # A tie-low sink does not care WHICH tie cell drives it. Giving each
+        # spare its own tie driver, placed at that spare's own coordinates,
+        # bounds every tie net at one spare's input count (2-6 pins) over ~0 um
+        # of wire, so the transition is a cell delay and not an RC tree. Nothing
+        # about the Design-for-ECO contract changes: every spare input is still
+        # tied (netgen still sees a driven pin, so the #563 LVS mismatch stays
+        # fixed), every spare instance is still `set_dont_touch` + FIRM, and
+        # every tie net is still `setDoNotTouch` so the resizer skips it.
+        #
+        # COST, stated: N tie cells instead of 1. The tie cell is the smallest
+        # cell in any standard-cell library and N is the spare count, so this is
+        # a rounding error against a pool that is itself 1-5% of the design.
+        #
+        # chip-AGNOSTIC: reads only the spare plan's own names + coordinates and
+        # the PDK's own discovered tie cell/pin. A PDK with no tie cell takes the
+        # `else` branch below exactly as before.
+        _spare_xy = [(i.get("name"), i.get("llx", 0), i.get("lly", 0))
+                     for i in instances if i.get("cell") and i.get("name")]
+        _xy_tcl = " ".join("{%s %s %s}" % (n, x, y) for n, x, y in _spare_xy)
         lines += [
-            "# === ORGANIC #563 r2: tie off floating spare inputs ===",
+            "# === ORGANIC #563 r2 / r4: tie off floating spare inputs ===",
+            "# ONE driver per spare, placed AT that spare. `_spare_tie_nets`",
+            "# is the authoritative list of the nets this block created; every",
+            "# later stage that must know them reads it instead of a literal.",
+            "set _spare_tie_nets {}",
             "if {[catch {",
             "  set _blk [ord::get_db_block]",
-            f"  if {{[catch {{place_inst -name spare_tielo_drv "
-            f"-cell {tie_lo_cell} -location {{{_tx} {_ty}}} "
-            f"-status PLACED}} _tp_err]}} {{ "
-            f"puts \"SPARE_TIELO_PLACE_NONFATAL: $_tp_err\" }}",
-            "  set _tdrv [$_blk findInst spare_tielo_drv]",
-            "  if {$_tdrv eq \"NULL\" || $_tdrv eq \"\"} {",
-            # No placed driver → DO NOT create/connect the net: a
-            # driverless net with sinks is exactly the dangling-net shape
-            # that aborts detailed_route (#571 / DRT-0305 class).
-            "    puts \"SPARE_TIEOFF_SKIPPED: tie driver not placed — "
-            "leaving spare inputs untouched\"",
-            "  } else {",
-            "    set _tlnet [$_blk findNet spare_tielo]",
-            "    if {$_tlnet eq \"NULL\" || $_tlnet eq \"\"} {",
-            "      set _tlnet [odb::dbNet_create $_blk spare_tielo]",
+            "  set _tie_n 0",
+            "  set _tie_tot 0",
+            "  set _tie_drv 0",
+            f"  foreach _sp [list {_xy_tcl}] {{",
+            "    set _sn [lindex $_sp 0]",
+            "    set _sx [lindex $_sp 1]",
+            "    set _sy [lindex $_sp 2]",
+            "    set _si [$_blk findInst $_sn]",
+            "    if {$_si eq \"NULL\" || $_si eq \"\"} { continue }",
+            # COUNT FIRST, PLACE SECOND. A spare whose inputs are all already
+            # connected needs no tie cell, and placing one for it would add a
+            # driverless-output instance the router still has to legalize.
+            "    set _need 0",
+            "    foreach _it [$_si getITerms] {",
+            "      set _mt [$_it getMTerm]",
+            "      if {[$_mt getIoType] eq \"INPUT\"} {",
+            "        set _nn [$_it getNet]",
+            "        if {$_nn eq \"NULL\" || $_nn eq \"\"} { incr _need }",
+            "      }",
+            "    }",
+            "    if {$_need == 0} { continue }",
+            "    incr _tie_tot $_need",
+            "    set _dnm spare_tielo_$_sn",
+            f"    if {{[catch {{place_inst -name ${{_dnm}}_drv -cell {tie_lo_cell}"
+            " -location [list $_sx $_sy] -status PLACED} _tp_err]} {",
+            "      puts \"SPARE_TIELO_PLACE_NONFATAL $_sn: $_tp_err\"",
+            "      continue",
+            "    }",
+            "    set _tdrv [$_blk findInst ${_dnm}_drv]",
+            "    if {$_tdrv eq \"NULL\" || $_tdrv eq \"\"} {",
+            # No placed driver -> DO NOT create/connect the net: a driverless net
+            # with sinks is exactly the dangling-net shape that aborts
+            # detailed_route (#571 / DRT-0305 class). Per-spare, so one failure
+            # costs one spare's tie-off instead of the whole pool's.
+            "      puts \"SPARE_TIEOFF_SKIPPED $_sn: tie driver not placed\"",
+            "      continue",
             "    }",
             f"    set _tit [$_tdrv findITerm {tie_lo_pin}]",
             "    if {$_tit eq \"NULL\" || $_tit eq \"\"} {",
-            "      puts \"SPARE_TIEOFF_SKIPPED: tie cell has no "
-            f"{tie_lo_pin} pin — leaving spare inputs untouched\"",
-            "    } else {",
-            "      odb::dbITerm_connect $_tit $_tlnet",
-            "      set _tie_n 0",
-            "      set _tie_tot 0",
-            f"      foreach _sn [list {_names_tcl}] {{",
-            "        set _si [$_blk findInst $_sn]",
-            "        if {$_si ne \"NULL\" && $_si ne \"\"} {",
+            # A missing tie pin is a PDK-level fact, identical for every spare,
+            # so this one breaks the loop rather than repeating per spare.
+            f"      puts \"SPARE_TIEOFF_SKIPPED: tie cell has no {tie_lo_pin} pin"
+            " -- leaving remaining spare inputs untouched\"",
+            "      break",
+            "    }",
+            "    set _tlnet [$_blk findNet $_dnm]",
+            "    if {$_tlnet eq \"NULL\" || $_tlnet eq \"\"} {",
+            "      set _tlnet [odb::dbNet_create $_blk $_dnm]",
+            "    }",
+            "    odb::dbITerm_connect $_tit $_tlnet",
+            "    incr _tie_drv",
+            "    lappend _spare_tie_nets $_dnm",
             # THE #563 DEFECT (measured, sky130A/ihp-sg13g2/gf180mcuD):
             # `_build_spare_protection_tcl` applies `set_dont_touch` to every
             # spare, and odb REFUSES to connect an iterm of a dont_touch
-            # instance — `[ERROR ODB-0369] Attempt to connect iterm of
-            # dont_touch instance <spare>` — which RAISES. So this loop threw
-            # on the FIRST spare on every run, the tie-off connected NOTHING
-            # (net `spare_tielo` carried the driver and zero sinks), and the
-            # throw unwound past the legalization below.
-            # Reproduced in OpenROAD 26Q3 and fixed here: lift dont_touch for
-            # ONE spare, connect, restore it immediately. The protection window
-            # stays minimal (never more than one spare unprotected, and only
-            # across odb calls that move nothing), and dont_touch exists to
-            # stop opt/resize touching spares — never to block the flow's OWN
-            # deliberate tie-off.
-            "          set _dt_lifted 0",
-            "          if {![catch {unset_dont_touch $_sn}]} {",
-            "            set _dt_lifted 1",
-            "          }",
-            "          foreach _it [$_si getITerms] {",
-            "            set _mt [$_it getMTerm]",
-            "            if {[$_mt getIoType] eq \"INPUT\"} {",
-            "              set _nn [$_it getNet]",
-            "              if {$_nn eq \"NULL\" || $_nn eq \"\"} {",
-            "                incr _tie_tot",
-            # Per-iterm catch: one refusal must not skip the remaining spares.
-            # The pre-fix shape had a single catch around the whole loop, so
-            # the first failure silently cost every later spare as well.
-            "                if {[catch {odb::dbITerm_connect $_it $_tlnet} "
-            "_ce]} {",
-            "                  puts \"SPARE_TIEOFF_ITERM_NONFATAL $_sn: "
-            "$_ce\"",
-            "                } else {",
-            "                  incr _tie_n",
-            "                }",
-            "              }",
-            "            }",
-            "          }",
-            # Restore protection for this spare before moving to the next.
-            "          if {$_dt_lifted} {",
-            "            if {[catch {set_dont_touch $_sn} _re]} {",
-            "              puts \"SPARE_DONTTOUCH_RESTORE_NONFATAL $_sn: "
-            "$_re\"",
-            "            }",
+            # instance -- `[ERROR ODB-0369] Attempt to connect iterm of
+            # dont_touch instance <spare>`. Lift it for ONE spare, connect,
+            # restore immediately. dont_touch exists to stop opt/resize touching
+            # spares -- never to block the flow's OWN deliberate tie-off.
+            "    set _dt_lifted 0",
+            "    if {![catch {unset_dont_touch $_sn}]} { set _dt_lifted 1 }",
+            "    foreach _it [$_si getITerms] {",
+            "      set _mt [$_it getMTerm]",
+            "      if {[$_mt getIoType] eq \"INPUT\"} {",
+            "        set _nn [$_it getNet]",
+            "        if {$_nn eq \"NULL\" || $_nn eq \"\"} {",
+            # Per-iterm catch: one refusal must not skip the remaining pins.
+            "          if {[catch {odb::dbITerm_connect $_it $_tlnet} _ce]} {",
+            "            puts \"SPARE_TIEOFF_ITERM_NONFATAL $_sn: $_ce\"",
+            "          } else {",
+            "            incr _tie_n",
             "          }",
             "        }",
             "      }",
-            # COUNTED, not claimed. `SPARE_TIEOFF_DONE` alone asserted
-            # done-ness with no number behind it, so a run that tied off
-            # nothing printed the same line as one that tied off everything —
-            # and `tied_off: true` was then written from the mere EXISTENCE of
-            # a tie cell. The runner parses this count and records the measured
-            # value instead (see `_spare_tieoff_measured_from_log`).
-            "      puts \"SPARE_TIEOFF_CONNECTED $_tie_n of $_tie_tot\"",
-            "      puts \"SPARE_TIEOFF_DONE: net spare_tielo\"",
+            "    }",
+            "    if {$_dt_lifted} {",
+            "      if {[catch {set_dont_touch $_sn} _re]} {",
+            "        puts \"SPARE_DONTTOUCH_RESTORE_NONFATAL $_sn: $_re\"",
+            "      }",
             "    }",
             "  }",
+            # COUNTED, not claimed. The runner parses this count
+            # (`_spare_tieoff_measured_from_log`) -- a run that tied off nothing
+            # must not print the same line as one that tied off everything.
+            "  puts \"SPARE_TIEOFF_CONNECTED $_tie_n of $_tie_tot\"",
+            "  puts \"SPARE_TIEOFF_DRIVERS $_tie_drv\"",
+            "  puts \"SPARE_TIEOFF_DONE: nets $_spare_tie_nets\"",
             "} _tie_err]} { puts \"SPARE_TIEOFF_NONFATAL: $_tie_err\" }",
             # === #563 r3: tie-driver legalization — ITS OWN catch, ALWAYS runs
             # This MUST NOT share the catch above. It used to sit immediately
@@ -12167,9 +12195,10 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
         "} _spfix_err]} { puts \"SPARE_FIXED_NONFATAL: $_spfix_err\" }",
         # === A dont_touch LOAD is not the same thing as a dont_touch NET ===
         # Every spare INSTANCE is set_dont_touch above, and every spare input is
-        # tied to the ONE `spare_tielo` net — so that net's fanout equals the
-        # spare count. The moment a DRV constraint applies to it (a
-        # `set_max_fanout` below the spare count, or a slew limit), the resizer
+        # tied to that spare's own `spare_tielo_<spare>` net (r4; before r4 it
+        # was ONE net for the whole pool). The moment a DRV constraint applies
+        # to such a net (a `set_max_fanout` below its sink count, or a slew
+        # limit), the resizer
         # tries to buffer it, finds a dont_touch LOAD PIN, and raises a HARD
         # ERROR that aborts the WHOLE repair pass:
         #     [WARNING ODB-1211] InsertBufferBeforeLoads: Load pin
@@ -12186,7 +12215,15 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
         # erroring on it, and leaves every real net repairable.
         # chip-AGNOSTIC / NONFATAL-guarded / a PDK with no tie cell has no such
         # net and this is a no-op.
-        "foreach _stn [list spare_tielo spare_tiehi] {",
+        # r4 — the tie nets are now one PER SPARE, so their names are not a
+        # literal any more. `_spare_tie_nets` is what the tie-off block above
+        # actually created; the `info exists` guard covers the PDK-has-no-tie-
+        # cell branch, where the block never ran and the list never existed.
+        # `spare_tiehi` stays named explicitly: nothing creates it today, and
+        # `findNet` on an absent net returns NULL, so it is a no-op that keeps
+        # the protection in place for a future tie-high pool.
+        "if {![info exists _spare_tie_nets]} { set _spare_tie_nets {} }",
+        "foreach _stn [concat $_spare_tie_nets [list spare_tiehi]] {",
         "  if {[catch {",
         "    set _stnet [[ord::get_db_block] findNet $_stn]",
         "    if {$_stnet ne \"NULL\" && $_stnet ne \"\"} {",
@@ -12269,7 +12306,8 @@ def _spare_tieoff_measured_from_log(log_path: Path) -> Dict[str, Any]:
         return out
     out["tied_off"] = connected == candidates
     out["reason"] = (
-        f"measured {connected}/{candidates} spare input(s) tied to spare_tielo"
+        f"measured {connected}/{candidates} spare input(s) tied to their "
+        f"per-spare tie-low net"
         + ("" if out["tied_off"] else " — INCOMPLETE, spare inputs left "
                                       "floating"))
     return out
@@ -13932,7 +13970,10 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         # it independently. NONFATAL-guarded; a PDK with no tie cell has no such
         # net and this is a no-op. chip-AGNOSTIC.
         "set _ant_unprot {}\n"
-        "foreach _astn [list spare_tielo spare_tiehi] {\n"
+        "if {![info exists _spare_tie_nets]} { set _spare_tie_nets {} }\n"
+        # r4 — one tie net per spare; read the list the tie-off block created
+        # rather than a literal name that no longer exists.
+        "foreach _astn [concat $_spare_tie_nets [list spare_tiehi]] {\n"
         "  if {[catch {\n"
         "    set _astnet [[ord::get_db_block] findNet $_astn]\n"
         "    if {$_astnet ne \"NULL\" && $_astnet ne \"\" && "

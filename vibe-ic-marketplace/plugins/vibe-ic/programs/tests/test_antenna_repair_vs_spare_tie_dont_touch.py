@@ -84,13 +84,25 @@ def test_protection_is_restored_after_the_repair():
 
 # ── NO-LEAK: the relaxation must stay scoped, bounded and self-limited ───────
 
-def test_only_the_two_spare_tie_nets_are_ever_unprotected():
-    """No other net may be unprotected — the relaxation is a named-net window."""
+def test_only_the_spare_tie_nets_are_ever_unprotected():
+    """No other net may be unprotected — the relaxation is a CLOSED-set window.
+
+    r4 — the tie nets are one per spare, so the set is no longer spellable as a
+    literal. It is still CLOSED: `_spare_tie_nets` is the list the spare tie-off
+    block itself appended to, one entry per spare it actually created a net for,
+    plus the literal `spare_tiehi` that nothing creates today. The property this
+    test defends is unchanged — the window may never widen to "every net" — and
+    it is checked two ways: the iterated expression names only those two sources,
+    and nothing in the fragment enumerates the block's nets.
+    """
     t = _tcl()
-    lifted = re.findall(r"foreach\s+_astn\s+\[list\s+([^\]]*)\]", t)
-    assert lifted, "the unprotect loop must iterate a LITERAL net list"
-    names = lifted[0].split()
-    assert names == ["spare_tielo", "spare_tiehi"], names
+    lifted = re.findall(r"foreach\s+_astn\s+(\S+|\[[^\n]*?\])\s*\{", t)
+    assert lifted, "the unprotect loop must iterate an explicit net list"
+    src = lifted[0]
+    assert src == "[concat $_spare_tie_nets [list spare_tiehi]]", src
+    # NO-LEAK: the window must never be derived by walking the whole block.
+    assert "getNets" not in t, (
+        "the unprotect window must not enumerate every net in the block")
 
 
 def test_no_instance_protection_is_lifted():
