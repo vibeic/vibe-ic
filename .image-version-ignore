@@ -112,3 +112,15 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue635_benchmark_run_m
 # agree with today's anchor; if the anchor must change, a NEW run produces a NEW
 # record.
 benchmark-data/*
+
+# vibe-ic#735 — the test that proves the run image reaches the child `docker run`.
+# Its tags are FIXTURE DATA, not live pointers, and rewriting them to the current
+# anchor would destroy what the test measures:
+#   * the module docstring records an OBSERVED run (`image_ref: :0.2.58` verified,
+#     the `:0.2.60` candidates absent, `hpretl/iic-osic-tools:latest` PRESENT and
+#     what DFT actually used). Re-stamping a recorded measurement makes it a
+#     fiction.
+#   * the assertions need the verified tag and the used tag to DIFFER — that
+#     difference IS the defect being pinned. Setting both to the anchor makes the
+#     test pass on the broken code it was written to catch.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_run_image_propagates_to_child_docker_run.py
