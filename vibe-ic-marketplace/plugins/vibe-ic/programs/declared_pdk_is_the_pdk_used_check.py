@@ -125,6 +125,85 @@ def tokens(text: str) -> Set[str]:
     return {t for t in TOKEN_RE.findall((text or "").lower()) if t not in STOPWORDS}
 
 
+#: One CamelCase segment: `Nangate`, an all-caps run (`IHP`), or a lower/digit run.
+_CAMEL_SEG_RE = re.compile(r"[A-Z][a-z0-9]*|[A-Z]+(?![a-z])|[a-z][a-z0-9]*")
+
+#: A declared PDK token whose identity is an alphabetic stem plus a node number
+#: (`nangate45` -> `nangate`, `freepdk45` -> `freepdk`). The digits are the NODE,
+#: not part of the library's name, which is why a library omits them.
+_STEM_RE = re.compile(r"^([a-z]+)\d+$")
+
+
+def leading_segments(name: str) -> Set[str]:
+    """The LEADING CamelCase segment of each identifier in ``name``, lowercased.
+
+    `NangateOpenCellLibrary.lef` -> {`nangate`};
+    `sky130_fd_sc_hd__tt.lib`    -> {`sky130`, `fd`, `sc`, `hd`, `tt`}.
+
+    Only the LEADING segment of each underscore/dot-separated identifier is
+    returned. That restriction is the whole safety argument: a compound library
+    name is identified by what it STARTS with, and admitting interior segments
+    would re-open exactly the `#709` interior-fragment hole this file closed —
+    `Cell` and `Library` are generic and appear in libraries from every vendor.
+    """
+    out: Set[str] = set()
+    for ident in re.split(r"[^A-Za-z0-9]+", name or ""):
+        if not ident:
+            continue
+        segs = _CAMEL_SEG_RE.findall(ident)
+        if segs:
+            out.add(segs[0].lower())
+    return out - STOPWORDS
+
+
+def shares_stem_identity(declared: Set[str], name: str) -> bool:
+    """Does a declared `<stem><node>` token name what this library STARTS with?
+
+    THE DEFECT THIS CLOSES. A PDK is distributed under a directory named for its
+    NODE (`nangate45`) while its library is named for its FAMILY
+    (`NangateOpenCellLibrary`). `tokens()` does not split CamelCase, so the
+    library collapses to one 22-character token `nangateopencelllibrary`, and
+    :func:`shares_identity` then fails BOTH of its rules against `nangate45`:
+    the BOUNDARY test fails (`nangateopencelllibrary` does not start with
+    `nangate45` — the digits are not in the library name) and the SUBSTANCE
+    ratio is 9/22 = 0.41, under `MIN_IDENTITY_RATIO`.
+
+    MEASURED, the five PDKs shipped in the EDA image, each against its OWN real
+    library filenames — 4 corroborate and exactly one does not:
+
+        asap7       []              corroborated
+        gf180mcuD   []              corroborated
+        ihp-sg13g2  []              corroborated
+        sky130A     []              corroborated
+        nangate45   ['nangate45']   FALSE FAIL
+
+    So the post-run audit that exists to PROVE which process ran reported that
+    `nangate45` was contradicted by the libraries shipped at
+    `/foss/pdks/nangate45/`. The gate was reading correctly and matching wrongly.
+
+    THE RULE, deliberately narrow. The declared token must be exactly an
+    alphabetic stem followed by digits, the stem must be at least ``MIN_MATCH``
+    characters, and it must EQUAL — not prefix — a LEADING segment of a library
+    identifier. `nangate45` -> stem `nangate` == leading segment of
+    `NangateOpenCellLibrary`. A stem shorter than MIN_MATCH is refused, which is
+    what keeps `sky130` -> `sky` (3) and `scl180` -> `scl` (3) from matching
+    anything on the strength of three characters.
+
+    Chip-AGNOSTIC: pure string structure, no PDK/vendor/foundry literal.
+    """
+    lead = leading_segments(name)
+    for d in declared:
+        m = _STEM_RE.match(d)
+        if not m:
+            continue
+        stem = m.group(1)
+        if len(stem) < MIN_MATCH:
+            continue
+        if stem in lead:
+            return True
+    return False
+
+
 def shares_identity(declared: Set[str], name: str) -> bool:
     """Does this library filename carry any of the declared target's identity?
 
@@ -211,6 +290,7 @@ def contradicting_named_pdks(target: str, libs: List[str]) -> List[str]:
         return []
     return sorted(c for c in claimed
                   if not any(shares_identity({c.replace("-", "")}, n)
+                             or shares_stem_identity({c.replace("-", "")}, n)
                              or c.replace("-", "") in n.lower() for n in libs))
 
 
@@ -559,7 +639,8 @@ def main(argv=None) -> int:
         return 2
 
     want = tokens(target)
-    hits = sorted({n for n in libs if shares_identity(want, n)})
+    hits = sorted({n for n in libs
+                   if shares_identity(want, n) or shares_stem_identity(want, n)})
     rec["declared_tokens"] = sorted(want)
     rec["matching_libraries"] = hits
 
