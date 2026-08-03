@@ -230,6 +230,31 @@ def parse_unified_diff(diff_text: str) -> List[Dict]:
     return hunks
 
 
+#: Label for a hunk whose destination path is `/dev/null` — a FILE DELETION.
+#: `parse_unified_diff` sets `path=None` for those (there is no `b/` side), and
+#: `_symbol_from_context` returns None for any hunk header that is not a real
+#: `def`/`class`/module-assignment. A deletion hunk therefore carries
+#: (symbol=None, path=None) and its bucket label was `None or None` → `None`.
+#: MEASURED: a candidate patch that deletes one file AND edits another put a
+#: `None` beside a `str` in the `sorted({...})` sets below and raised
+#: `TypeError: '<' not supported between instances of 'NoneType' and 'str'` —
+#: reproduced end-to-end through `handoff_bundle_check`, where the uncaught
+#: exception exited 1, the SAME code a legitimate INCOMPLETE verdict uses, and
+#: no JSON report was written at all. Over the 200 most recent `origin/main`
+#: commits fed in as candidate bodies, 1 crashed this way. A label keeps the
+#: set totally ordered; it does not change any verdict, because the bucket a
+#: hunk lands in is decided before it is labelled.
+_DELETED_FILE_LABEL = "(file deletion — no destination path)"
+
+
+def _hunk_label(rec: Dict) -> str:
+    """A TOTALLY-ORDERED display label for one hunk record.
+
+    Never returns None: see `_DELETED_FILE_LABEL`.
+    """
+    return rec.get("symbol") or rec.get("path") or _DELETED_FILE_LABEL
+
+
 def classify_diff(diff_text: str) -> Dict:
     """Classify a whole unified diff → CONSUMER_ONLY / PRODUCER / MIXED.
 
@@ -260,11 +285,11 @@ def classify_diff(diff_text: str) -> Dict:
         "verdict": verdict,
         "action": _ACTION[verdict],
         "hunks": records,
-        "producers": sorted({r["symbol"] or r["path"]
+        "producers": sorted({_hunk_label(r)
                              for r in records if r["class"] == "producer"}),
-        "consumers": sorted({r["symbol"] or r["path"]
+        "consumers": sorted({_hunk_label(r)
                              for r in records if r["class"] == "consumer"}),
-        "ambiguous": sorted({r["symbol"] or r["path"]
+        "ambiguous": sorted({_hunk_label(r)
                              for r in records
                              if r["class"] in ("mixed", "unknown")}),
         "neutral": sorted(set(filter(None, neutral))),

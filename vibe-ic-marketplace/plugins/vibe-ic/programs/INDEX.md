@@ -1068,7 +1068,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `yield_fix_cost_rank` | any | — | D3 program-first extraction of the yield-diagnostic skill's fixed fix-cost ordinal ranking. |
 | `yosys_hilomap_required_check` | any | — | Assert a Yosys .ys script's commands occur in the order required by CLAUDE.md rule 4. |
 | `yosys_script_template_check` | any | — | Audit a Yosys .ys script for the three flags CLAUDE.md rule 4 requires on real-PDK synthesis: |
-| `yosys_tiecell_recipe_order_check` | any | v0.1.98 | Enforce the two v0.1.98 LOAD-BEARING ordering rules of the constant-net tie-cell pass in a Yosys .ys synth script. |
+| `yosys_tiecell_recipe_order_check` | any | v0.1.98 | Enforce the two v0.1.98 LOAD-BEARING ordering rules of the constant-net tie-cell pass in a Yosys synthesis recipe. |
 | `zigbee_protocol_synth` | any | v0.1.91 | Zigbee / IEEE 802.15.4 low-power wireless PAN protocol synth helper. |
 
 ## By ic_class
@@ -2153,6 +2153,6 @@ _(no programs in this group)_
 - `yield_fix_cost_rank` — D3 program-first extraction of the yield-diagnostic skill's fixed fix-cost ordinal ranking.
 - `yosys_hilomap_required_check` — Assert a Yosys .ys script's commands occur in the order required by CLAUDE.md rule 4.
 - `yosys_script_template_check` — Audit a Yosys .ys script for the three flags CLAUDE.md rule 4 requires on real-PDK synthesis:
-- `yosys_tiecell_recipe_order_check` — Enforce the two v0.1.98 LOAD-BEARING ordering rules of the constant-net tie-cell pass in a Yosys .ys synth script.  _[v0.1.98]_
+- `yosys_tiecell_recipe_order_check` — Enforce the two v0.1.98 LOAD-BEARING ordering rules of the constant-net tie-cell pass in a Yosys synthesis recipe.  _[v0.1.98]_
 - `zigbee_protocol_synth` — Zigbee / IEEE 802.15.4 low-power wireless PAN protocol synth helper.  _[v0.1.91]_
 
