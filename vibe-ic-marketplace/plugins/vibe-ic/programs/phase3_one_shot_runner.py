@@ -4784,6 +4784,31 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
     if not enabled_ns:
         return tech_lef, notes
 
+    # PAIRED GUARD: the deck's `Mt.*` family is the THICK-TOP-METAL rule set —
+    # it applies to the stack's TOPMOST routing layer, not to whatever layer
+    # happens to share its index. If the LEF in hand declares MORE routing
+    # layers than the deck's enabled TOPMETAL_N, then METn is an INTERMEDIATE
+    # layer here and raising its width to the top-metal minimum silently
+    # corrupts a thin routing layer (measured on a staged commercial PDK: the
+    # deck's TOPMETAL_5 Mt.W.1=0.44um was applied to MET5 of a SIX-layer LEF
+    # whose MET5 is a plain 0.28um layer and whose real top metal is MET6).
+    # The LEF and the deck describe different stacks; say so and change
+    # nothing rather than "fixing" the wrong layer.
+    _lef_layers = _techlef_routing_layers(lef_text)
+    _lef_top = _lef_layers[-1][0] if _lef_layers else None
+    for n in list(enabled_ns):
+        if _lef_top is not None and len(_lef_layers) != int(n):
+            notes.append(
+                f"[topmetal-width-fix] SKIPPED: deck enables TOPMETAL_{n} "
+                f"(top-metal rules target MET{n}) but {tech_lef_p.name} "
+                f"declares {len(_lef_layers)} routing layers with "
+                f"{_lef_top} on top — the deck and this tech LEF describe "
+                f"DIFFERENT metal stacks, so no width was changed. Harden on "
+                f"the tech LEF the deck is written for, or the sign-off DRC "
+                f"result does not describe the stack that was routed.")
+            enabled_ns = []
+            break
+
     fixed_any = False
     for n in enabled_ns:
         met = f"MET{n}"
@@ -6000,6 +6025,122 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
     )
 
 
+def _lef_top_routing_layer(tech_lef: Path) -> Optional[str]:
+    """Name of the TOPMOST ``TYPE ROUTING`` layer declared by a tech LEF, or
+    ``None`` when the file will not parse. Pure LEF grammar (delegates to
+    ``_techlef_routing_layers``), so no layer-naming convention is assumed."""
+    try:
+        layers = _techlef_routing_layers(
+            tech_lef.read_text(errors="ignore"))
+    except OSError:
+        return None
+    return layers[-1][0] if layers else None
+
+
+def _select_tech_lef(pdk_dir: Path, candidates: List[Path]) -> Path:
+    """Pick the ONE tech LEF a project-staged PDK is to be hardened on.
+
+    WHY THIS EXISTS (measured, not hypothetical). A commercial PDK commonly
+    ships its metal stack as a MATRIX of tech LEFs — one per (layer-count x
+    top-metal flavour) combination — and the stack is a DESIGN CHOICE, not a
+    property of the PDK. The previous code took ``rglob("*tech*.lef")[0]``:
+    filesystem order, so (a) the pick was arbitrary, (b) it was not even
+    reproducible across machines, and (c) nothing anywhere recorded which
+    stack a sign-off number was produced against. Measured on a staged
+    commercial 180nm PDK with 25 tech LEFs: the arbitrary pick was a
+    SIX-layer THICK-top-metal stack while both the design's own L9 and the
+    PDK's own sign-off DRC deck specify a FIVE-layer thin-top stack. Every
+    downstream number — route, STA, DRC, GDS — would have been produced
+    against a stack the design does not build on.
+
+    RESOLUTION ORDER, most-authoritative first:
+
+    1. **Declared.** ``input/pdk/bridge/signoff_config.json`` -> ``tech_lef``
+       (a path relative to ``input/pdk/``). An explicit integrator statement
+       always wins.
+    2. **Only one candidate.** Every open PDK this flow ships against
+       (sky130A, gf180mcu, ihp-sg13g2, nangate45, asap7) declares exactly one
+       tech LEF, so this is the path they take and their behaviour is
+       byte-for-byte unchanged.
+    3. **Narrowed by the PDK's own sign-off deck.** A foundry DRC deck states
+       the stack it is written for as an enabled ``#DEFINE TOPMETAL_<N>``
+       runtime option. Keep only the LEFs whose TOPMOST routing layer is that
+       layer. Purely structural: the layer index comes from the deck, the top
+       layer from LEF grammar, and no name, flavour or path is matched.
+    4. **Otherwise REFUSE.** If more than one candidate survives, raise —
+       enumerating them and naming the key to set. Silently picking one is
+       precisely the failure this function was written to remove: it produces
+       a full green sign-off against a stack nobody chose.
+    """
+    if len(candidates) == 1:
+        return candidates[0]
+
+    cfg_f = pdk_dir / "bridge" / "signoff_config.json"
+    if cfg_f.is_file():
+        try:
+            declared = (json.loads(cfg_f.read_text()) or {}).get("tech_lef")
+        except Exception:
+            declared = None
+        if declared:
+            p = (pdk_dir / declared) if not os.path.isabs(str(declared)) \
+                else Path(str(declared))
+            if not p.is_file():
+                raise SystemExit(
+                    f"[FAIL] bridge signoff_config declares tech_lef="
+                    f"{declared!r} but {p} does not exist. REFUSING to fall "
+                    f"back to an arbitrary stack — a sign-off produced "
+                    f"against an unintended metal stack looks identical to a "
+                    f"correct one.")
+            print(f"[tech-lef] DECLARED by bridge signoff_config: "
+                  f"{p.relative_to(pdk_dir)}", file=sys.stderr)
+            return p
+
+    # Narrow by the sign-off deck's own enabled top-metal option.
+    survivors = list(candidates)
+    calibre_dir = pdk_dir / "calibre"
+    deck = next(iter(sorted(calibre_dir.glob("*DRC*.rule"))), None) \
+        if calibre_dir.is_dir() else None
+    deck_note = ""
+    if deck is not None:
+        try:
+            deck_text = deck.read_text(errors="ignore")
+        except OSError:
+            deck_text = ""
+        enabled = sorted(set(
+            m.group(1) for m in re.finditer(
+                r"(?m)^#DEFINE\s+TOPMETAL_(\d+)\s*$", deck_text)))
+        if len(enabled) == 1:
+            n = int(enabled[0])
+            keep = [c for c in candidates
+                    if (_lef_top_routing_layer(c) or "").upper().endswith(
+                        str(n))
+                    and len(_techlef_routing_layers(
+                        c.read_text(errors="ignore"))) == n]
+            if keep:
+                survivors = keep
+                deck_note = (f" (narrowed from {len(candidates)} by the "
+                             f"sign-off deck's enabled #DEFINE TOPMETAL_{n}: "
+                             f"{n} routing layers)")
+
+    if len(survivors) == 1:
+        print(f"[tech-lef] {survivors[0].relative_to(pdk_dir)}{deck_note}",
+              file=sys.stderr)
+        return survivors[0]
+
+    listing = "\n".join(
+        f"    {c.relative_to(pdk_dir)}  (top routing layer "
+        f"{_lef_top_routing_layer(c)})" for c in sorted(survivors))
+    raise SystemExit(
+        f"[FAIL] the staged PDK ships {len(candidates)} tech LEF(s) and "
+        f"{len(survivors)} of them remain after narrowing{deck_note or ''}. "
+        f"The metal stack is a DESIGN CHOICE, so this flow will not pick one "
+        f"for you — an arbitrary pick yields a fully green sign-off against a "
+        f"stack nobody chose, which is indistinguishable from a correct one. "
+        f"Declare it: set \"tech_lef\" (a path relative to input/pdk/) in "
+        f"{cfg_f.relative_to(pdk_dir.parent.parent) if pdk_dir.parent.parent in cfg_f.parents else cfg_f}."
+        f"\n  candidates:\n{listing}")
+
+
 def _detect_pdk(project: Path, override: Optional[str] = None
                 ) -> Optional[PdkConfig]:
     """Detect which PDK to use. chip-AGNOSTIC: looks at project's input/pdk/
@@ -6220,8 +6361,8 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                                if f not in tech_candidates]
             if not cell_candidates:
                 return None
-            tech_lef = (tech_candidates[0] if tech_candidates
-                        else cell_candidates[0])
+            tech_lef = (_select_tech_lef(pdk_dir, tech_candidates)
+                        if tech_candidates else cell_candidates[0])
             cell_lef = cell_candidates[0]
             # The PDK's std-cell GDS LIBRARY dir is input/pdk/gds (parallel to
             # input/pdk/{lef,liberty}). NOT _pl.gds_dir() — that returns the
