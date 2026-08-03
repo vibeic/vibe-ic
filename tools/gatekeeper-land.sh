@@ -68,6 +68,12 @@ if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
   run "benchmark run manifest" python3 "$PROGRAMS/benchmark_run_manifest.py" check --tree benchmark-data --changed-since "$BASE"
   git log --format='%B' "$RANGE" > /tmp/gk_commit_text.txt 2>/dev/null
   run "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" /tmp/gk_commit_text.txt
+  # 2026-08-03 — the batch that landed five PRs from a 6.5-hour-stale base and
+  # let three of its own commits erase the other two. `gatekeeper_stale_branch_check`
+  # said STALE_OVERLAP on all five BEFORE the land; nothing looked at the
+  # commits AFTER they existed, which is the artefact this script pushes.
+  run "no collateral revert within the push" \
+      python3 "$PROGRAMS/landing_collateral_revert_check.py" --repo "$ROOT" --rev-range "$RANGE"
 else
   echo "  SKIP  range is empty — nothing new to land"
 fi

@@ -562,6 +562,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_taxonomy` | any | v0.1.51 | L-doc taxonomy single source of truth. |
 | `l_doc_todo_stub_count_check` | any | — | D3 program-first capture of the ``phase1-output-verify`` skill's "Completeness" checklist (item 1). |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
+| `landing_collateral_revert_check` | any | — | a squash must not silently revert work that landed alongside it in the same push. |
 | `landing_is_one_commit_check` | any | — | a landing is ONE commit, not two. |
 | `landing_worktree_is_clean_check` | any | — | the gate verifies COMMITS; a tracked file still modified in the worktree means what was verified is not what the author has. |
 | `latchup_esd_spacing_check` | any | v0.2.30 | the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN... |
@@ -1651,6 +1652,7 @@ _(no programs in this group)_
 - `l_doc_taxonomy` — L-doc taxonomy single source of truth.  _[v0.1.51]_
 - `l_doc_todo_stub_count_check` — D3 program-first capture of the ``phase1-output-verify`` skill's "Completeness" checklist (item 1).
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
+- `landing_collateral_revert_check` — a squash must not silently revert work that landed alongside it in the same push.
 - `landing_is_one_commit_check` — a landing is ONE commit, not two.
 - `landing_worktree_is_clean_check` — the gate verifies COMMITS; a tracked file still modified in the worktree means what was verified is not what the author has.
 - `latchup_esd_spacing_check` — the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN...  _[v0.2.30]_
