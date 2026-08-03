@@ -88,6 +88,13 @@ STOPWORDS = {
 # on every pair measured here.
 MIN_MATCH = 4
 
+#: How much of the longer token the shorter one must cover before the two count
+#: as the same identifier. vibe-ic#709: without it, a 4-character prefix of an
+#: 11-character family name declared that family. 0.6 accepts the punctuation
+#: case the docstring below justifies (`zq42` of `zq42k3`, 0.67) and rejects a
+#: foundry-length prefix (`abc1` of `abc123xy456`, 0.36).
+MIN_IDENTITY_RATIO = 0.6
+
 
 def tokens(text: str) -> Set[str]:
     return {t for t in TOKEN_RE.findall((text or "").lower()) if t not in STOPWORDS}
@@ -105,15 +112,81 @@ def shares_identity(declared: Set[str], name: str) -> bool:
     So a declared token counts when it is contained in a library token or vice
     versa, subject to MIN_MATCH. Generic vocabulary is removed first — every PDK on
     earth has cells, a tech file and corners, so those words identify nothing.
+
+    CONTAINMENT ALONE IS NOT IDENTITY (vibe-ic#709). Bare `d in l` let any
+    declared token of >= 4 characters match by appearing ANYWHERE inside a
+    library token, so an arbitrary interior fragment — or a 4-character foundry
+    prefix shared by every family that vendor ships — passed as a declaration of
+    the specific library that ran. Measured on a synthetic 11-character family:
+    both `c123` (interior) and `abc1` (prefix) were accepted as declaring
+    `abc123xy456`.
+
+    Two conditions now, and both are needed:
+
+      BOUNDARY  the shorter token must sit at the START or the END of the
+                longer one, never in its interior. This is what the punctuation
+                argument above actually justifies: a human writing "ZQ42-K3"
+                tokenises to `zq42` + `k3` against a vendor's `zq42k3`, and
+                `zq42` is a PREFIX. It never justifies matching a run of
+                characters from the middle.
+      SUBSTANCE the shorter must cover at least `MIN_IDENTITY_RATIO` of the
+                longer, so the match names most of the identifier rather than a
+                fragment of it. `zq42` of `zq42k3` is 4/6; `abc1` of
+                `abc123xy456` is 4/11.
+
+    Chip-AGNOSTIC: pure string structure. No PDK, vendor or family literal.
     """
     lib = tokens(name)
     for d in declared:
         if len(d) < MIN_MATCH:
             continue
         for l in lib:
-            if d in l or (len(l) >= MIN_MATCH and l in d):
+            if l == d:
+                return True
+            short, long = (d, l) if len(d) < len(l) else (l, d)
+            if len(short) < MIN_MATCH:
+                continue
+            if not (long.startswith(short) or long.endswith(short)):
+                continue                      # interior fragment: not identity
+            if len(short) / len(long) >= MIN_IDENTITY_RATIO:
                 return True
     return False
+
+
+#: PDKs whose NAME is itself an identifier — the open ones this repo ships
+#: support for. A declaration that names one of these is not vague prose; it is
+#: a specific claim about which process ran, and it is checkable.
+_NAMED_PDK_RE = re.compile(
+    r"\b(sky130[a-z]?|gf180mcu[a-z]?|gf180|sg13g2|ihp[- ]?sg13g2|"
+    r"asap7|freepdk\d+|nangate45|scl180)\b", re.IGNORECASE)
+
+
+def contradicting_named_pdks(target: str, libs: List[str]) -> List[str]:
+    """Named PDKs the declaration claims that NO loaded library corroborates.
+
+    vibe-ic#709/#713 — the gate PASSed as soon as ANY declared token matched a
+    loaded library, so a declaration could name a completely different process
+    and still pass on the strength of an unrelated token in the same sentence.
+    Measured: `"<family> on an open-source sky130 130nm process"` PASSed against
+    libraries from `<family>` — the declaration says an open-source process ran,
+    a different one did, and this gate exists for exactly that.
+
+    Only NAMED PDKs are judged, because only they are checkable from a library
+    filename. A foundry or a node in the same sentence ("Foundry R, 55nm") is
+    not derivable from a LEF name, and the caller DISCLOSES that rather than
+    letting a PASS imply it was verified.
+
+    Chip-AGNOSTIC: the table is this repo's own open-PDK vocabulary, already
+    spelled the same way in `phase1_doc_one_shot_runner._OPEN_PDK_TOKEN_RE`. No
+    commercial PDK, vendor or part number appears.
+    """
+    claimed = {m.group(1).lower().replace(" ", "-")
+               for m in _NAMED_PDK_RE.finditer(target or "")}
+    if not claimed:
+        return []
+    return sorted(c for c in claimed
+                  if not any(shares_identity({c.replace("-", "")}, n)
+                             or c.replace("-", "") in n.lower() for n in libs))
 
 
 def declared_target(run: Path) -> Tuple[Optional[str], Optional[str]]:
@@ -281,12 +354,44 @@ def main(argv=None) -> int:
     rec["declared_tokens"] = sorted(want)
     rec["matching_libraries"] = hits
 
+    # A CONTRADICTION OUTRANKS A PARTIAL MATCH (vibe-ic#713). `hits` only says
+    # SOME declared token matched SOME library. If the same declaration also
+    # names a PDK that nothing loaded corroborates, the two halves of the
+    # sentence disagree, and the half that names a different process is the one
+    # this gate exists to catch — it cannot be outvoted by a token that happens
+    # to match.
+    contradicted = contradicting_named_pdks(target, libs)
+    rec["contradicting_named_pdks"] = contradicted
+    if contradicted:
+        rec["verdict"] = "FAIL"
+        rec["reason"] = (
+            f"the declaration names {contradicted}, which no loaded library "
+            f"corroborates" + (f", while other token(s) match {hits}" if hits else ""))
+        _emit(a.json, rec)
+        print(f"declared_pdk_is_the_pdk_used: FAIL — the declared target names "
+              f"{', '.join(contradicted)}, and no loaded library carries that "
+              f"identity ({source})", file=sys.stderr)
+        if hits:
+            print(f"    a DIFFERENT token in the same declaration matches "
+                  f"{len(hits)} librar(ies) — a partial match does not settle a "
+                  f"declaration that names another process.", file=sys.stderr)
+        return 1
+
     if hits:
         rec["verdict"] = "PASS"
         rec["no_library_load_recorded"] = False
+        # WHAT THIS PASS DOES NOT COVER, said out loud. The match is on library
+        # IDENTITY. A foundry or a process node in the same declaration is not
+        # derivable from a LEF filename, so it was not checked — and a PASS that
+        # stays silent about that reads as though it had been.
+        rec["verified"] = "library identity only"
+        rec["not_verified"] = "foundry / process node (not derivable from a library filename)"
         _emit(a.json, rec)
         print(f"declared_pdk_is_the_pdk_used: PASS — {len(hits)} of {len(libs)} loaded "
               f"librar(ies) match the declared target ({source})")
+        print(f"    verified: library identity. NOT verified: any foundry or "
+              f"process-node claim in the same declaration — a LEF filename "
+              f"does not carry either.")
         return 0
 
     if not libs:

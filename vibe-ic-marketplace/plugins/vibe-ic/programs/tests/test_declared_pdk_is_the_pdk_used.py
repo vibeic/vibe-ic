@@ -173,3 +173,81 @@ def test_a_pass_records_the_field_too(tmp_path):
                        capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stdout + p.stderr
     assert json.loads(rec.read_text())["no_library_load_recorded"] is False
+
+
+# ── vibe-ic#709 / #713 — a partial match is not a declaration ───────────────
+# Synthetic names throughout: no real PDK, foundry or part number appears.
+
+import subprocess as _sp, sys as _sys, tempfile as _tf, json as _json
+from pathlib import Path as _P
+
+_FAMILY = "abc123xy456"
+_LOADED = [f"{_FAMILY}_5lm_tech_v56.lef", f"{_FAMILY}_macro_v56.lef"]
+_GATE = _P(__file__).resolve().parents[1] / "declared_pdk_is_the_pdk_used_check.py"
+
+
+def _run_decl(declared: str):
+    """rc and the JSON record, for a run whose logs load `_LOADED`."""
+    td = _tf.mkdtemp()
+    root = _P(td)
+    (root / "phase1").mkdir(parents=True)
+    (root / "input" / "pdk").mkdir(parents=True)
+    (root / "logs").mkdir()
+    for n in _LOADED:
+        (root / "input" / "pdk" / n).write_text("# staged\n")
+    (root / "phase1" / "pdk_staging_read.json").write_text(
+        _json.dumps({"adopted_pdk_target": declared}))
+    (root / "logs" / "pnr.log").write_text("".join(
+        f"[INFO ODB-0227] LEF file: /run/input/pdk/{n}, created 1 layers\n"
+        for n in _LOADED))
+    out = root / "rec.json"
+    r = _sp.run([_sys.executable, str(_GATE), str(root), "--json", str(out)],
+                capture_output=True, text=True, timeout=55)
+    rec = _json.loads(out.read_text()) if out.is_file() else {}
+    return r.returncode, rec
+
+
+def test_an_interior_fragment_is_not_a_declaration():
+    """#709: bare `d in l` accepted any >=4-char run appearing ANYWHERE inside a
+    library token, so a fragment from the middle of the family name declared
+    that family."""
+    rc, _ = _run_decl("c123")
+    assert rc == 1, "an interior fragment must not pass as a declaration"
+
+
+def test_a_foundry_length_prefix_is_not_a_declaration():
+    """#709: a 4-character prefix is shared by every family a vendor ships, so
+    it names the vendor and not the library that ran."""
+    rc, _ = _run_decl("abc1")
+    assert rc == 1
+
+
+def test_the_punctuation_case_the_matcher_exists_for_still_passes():
+    """The reason containment was there at all: a human writes `ABC123-XY456`,
+    the vendor's filename is one token. That must keep working — the fix is
+    boundary+substance, not exact equality."""
+    rc, _ = _run_decl("ABC123XY456 on Foundry Q, 250nm CMOS")
+    assert rc == 0
+
+
+def test_a_declaration_naming_another_PDK_cannot_be_outvoted_by_a_match():
+    """#713, and the worst case in it: the declaration says an OPEN-SOURCE
+    process ran while a different one did. The family token matches, so the gate
+    used to PASS — outvoting the half of the sentence it exists to check."""
+    rc, rec = _run_decl(f"{_FAMILY} on an open-source sky130 130nm process")
+    assert rc == 1
+    assert "sky130" in " ".join(rec.get("contradicting_named_pdks") or [])
+    assert rec.get("matching_libraries"), (
+        "the partial match must still be RECORDED — the finding is that it did "
+        "not settle the question, not that it did not happen")
+
+
+def test_a_pass_says_what_it_did_not_check():
+    """The honest half of #713. A foundry or a process node in the declaration
+    is NOT derivable from a LEF filename, so this gate cannot judge it. Failing
+    on it would be fabrication in the other direction; passing SILENTLY lets the
+    PASS read as though it had been verified. It is disclosed instead."""
+    rc, rec = _run_decl(f"{_FAMILY} on Foundry R, 55nm FinFET")
+    assert rc == 0
+    assert rec.get("verified") == "library identity only"
+    assert "not derivable" in (rec.get("not_verified") or "")
