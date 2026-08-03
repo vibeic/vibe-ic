@@ -472,6 +472,61 @@ def _f_hollow_reports(p: Path) -> None:
     _w(p, "reports/phase3/dynamic_ir.json", {})
 
 
+def _f_hold_only_pnr(p: Path) -> None:
+    """A P&R script that runs ONLY ``repair_timing -hold`` — the silicon-DOA shape.
+
+    Without ``set_wire_rc`` OpenSTA has no per-layer R/C, so STA is optimistic
+    and ``repair_timing -setup`` aborts; a flow that then repairs only hold
+    ships unbuffered high-fanout nets.
+
+    The bare ``EMPTY`` project does NOT redden this clause: with no ``pnr*.tcl``
+    to audit the gate answers rc=2 NOT CHECKED, which is a disclosed skip and
+    not a falsification — the completeness verdict itself would stay unproven
+    while the register recorded the clause as falsifiable. This is the smallest
+    input that reaches the verdict and fails it.
+    """
+    _w(p, "phase3/stage3/pnr/pnr.tcl",
+       "read_verilog netlist.v\n"
+       "link_design top\n"
+       "global_placement\n"
+       "detailed_placement\n"
+       "repair_timing -hold\n"
+       "write_def routed.def\n")
+
+
+def _f_hold_area_over_budget(p: Path) -> None:
+    """A hold-repair area record that blows the hold-fix SKILL's 5% guardrail.
+
+    On the bare ``EMPTY`` project ``hold_area_budget_check`` answers rc=2
+    ``NO_AREA_PRODUCER`` — the honest disclosure that nothing in the plugin
+    writes its input today — so the BUDGET verdict is never reached and the
+    clause would be recorded as falsifiable without its verdict ever being
+    falsified. This plants the producer the flow does not yet have, with hold
+    buffers at 8% of total cell area.
+    """
+    _w(p, "reports/phase3/pnr/hold_area.json",
+       {"hold_buffer_area": 8000.0, "total_cell_area": 100000.0})
+
+
+def _f_hold_at_slow_corner(p: Path) -> None:
+    """A run that DECLARES its hold sign-off role at a non-fast corner.
+
+    Hold is worst at the FAST corner, so a hold role assigned to TT
+    under-reports hold violations. The stance record is the durable artefact
+    this gate judges first — it survives when the hold Tcl is pruned from a
+    published run, and it is what the run actually decided.
+
+    The bare ``EMPTY`` project answers rc=2 (no stance record and no hold STA
+    script — there is no hold sign-off to judge), so the corner verdict would
+    go unproven.
+    """
+    _w(p, "reports/phase3/mcorner_ocv_stance.json",
+       {"signoff_dimension": "multi_corner_ocv_process",
+        "setup_process_corner": "SS", "hold_process_corner": "TT",
+        "multi_process_corner": True,
+        "report": "phase3/stage3/sta/sta_mcorner_ocv.rpt"})
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -487,6 +542,9 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "MS_BAD": _f_ms_bad,
     "TB_BAD": _f_tb_bad,
     "HOLLOW_REPORTS": _f_hollow_reports,
+    "HOLD_ONLY_PNR": _f_hold_only_pnr,
+    "HOLD_AREA_OVER_BUDGET": _f_hold_area_over_budget,
+    "HOLD_AT_SLOW_CORNER": _f_hold_at_slow_corner,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -551,6 +609,21 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
            "reports/phase2/gates/yosys_hilomap.json"): "SYNTH_BAD",
     ("14", "yosys_script_template_check . --json "
            "reports/phase2/gates/yosys_script_template.json"): "SYNTH_BAD",
+    # The three timing-signoff clauses added when that family was wired. Each
+    # carries an rc=2 NOT-CHECKED tier by design — that tier is what lets them
+    # be wired UNCONDITIONALLY instead of behind a self-disabling
+    # `condition_files_exist` — so on the bare EMPTY project every one of them
+    # answers VACUOUS_PASS and the verdict it exists to reach stays unproven.
+    # Each fixture below plants the smallest artefact that reaches the verdict.
+    ("17", "pnr_timing_repair_completeness_check phase3/stage3/pnr --json "
+           "reports/phase3/pnr/timing_repair_completeness.json"):
+        "HOLD_ONLY_PNR",
+    ("20", "hold_area_budget_check . --json "
+           "reports/phase3/pnr/hold_area_budget.json"):
+        "HOLD_AREA_OVER_BUDGET",
+    ("23", "hold_corner_coverage_check . --json "
+           "reports/phase3/sta/hold_corner_coverage.json"):
+        "HOLD_AT_SLOW_CORNER",
     ("22", "provenance_check . --output phase3/stage3/extracted/*.spef "
            "--tool magic,openroad"): "PNR_BAD",
     ("24", "dynamic_ir_drop_check reports/phase3/dynamic_ir.json "
