@@ -12125,12 +12125,35 @@ def _pg_net_cleanup_tcl() -> str:
         "        puts \"PG_CLEANUP_DEL: [$_net getName] ($_st)\"\n"
         "        odb::dbNet_destroy $_net; incr _pgdel\n"
         "      } else {\n"
-        "        puts \"PG_CLEANUP_SIG: [$_net getName] ($_st)\"\n"
-        "        $_net setSigType SIGNAL; incr _pgsig\n"
+        # ORGANIC #687 — a POWER/GROUND net WITH terminals is not dangling. It
+        # is an UNROUTED SUPPLY: a genuine rail pdngen did not stripe. The old
+        # branch set it to SIGNAL, which hands it to the detailed router at
+        # minimum signal width and makes every downstream gate go green on it:
+        #   * it leaves SPECIALNETS, so any geometry gate that enumerates
+        #     SPECIALNETS has nothing to look at and passes vacuously;
+        #   * the PG connect audit tests `[$t getNet] eq \"NULL\"` and sees
+        #     every terminal attached, so it reports 0 unconnected;
+        #   * detailed route then succeeds, so DRC/ERC/PV all pass.
+        # The only trace was one PG_CLEANUP_SIG line in a multi-thousand-line
+        # log with no verdict attached.
+        #
+        # Worst for a SECONDARY SUPPLY above the core voltage, where a macro
+        # vendor's own deliverable requires the supply metal width to be at
+        # least the supply pin width — minimum signal width is roughly an order
+        # of magnitude under that. A flow that silently converts such a rail
+        # into a signal net has produced exactly the failure its own PDN code
+        # exists to prevent.
+        #
+        # So: leave the sig type ALONE and report it. The DRT-abort fix this
+        # block exists for is the zero-terminal branch above, and that is
+        # untouched — a net with terminals never caused that abort.
+        "        puts \"PG_CLEANUP_UNROUTED_SUPPLY: [$_net getName] ($_st) "
+        "iterms=[llength [$_net getITerms]] bterms=[llength [$_net getBTerms]]\"\n"
+        "        incr _pgsig\n"
         "      }\n"
         "    }\n"
         "  }\n"
-        "  puts \"PG_CLEANUP_DONE: deleted=$_pgdel reclassified=$_pgsig\"\n"
+        "  puts \"PG_CLEANUP_DONE: deleted=$_pgdel unrouted_supply=$_pgsig\"\n"
         "} _pgc]} { puts \"PG_CLEANUP_NONFATAL: $_pgc\" }\n")
 
 
@@ -16148,6 +16171,41 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         _pg_log_txt = (out or "") + "\n" + (err or "")
     _pg_audit = _parse_pg_connect_audit(_pg_log_txt)
     _pg_evidence = [str(out_dir / "openroad.log"), str(def_file)]
+
+    # ORGANIC #687 — a supply the PDN failed to build is a RESULT, not a
+    # routing obstacle to route around. The cleanup pass no longer reclassifies
+    # such a net to SIGNAL; it names it, and this is what reads that.
+    #
+    # Placed BEFORE the PG_CONNECT_AUDIT verdicts on purpose: that audit tests
+    # `[$t getNet] eq "NULL"` and an unrouted rail's terminals are attached to
+    # exactly the right net, so it reports 0 unconnected and the run goes green.
+    # Checking it afterwards would let the vacuous pass win the race.
+    _unrouted = re.findall(
+        r"^PG_CLEANUP_UNROUTED_SUPPLY:\s+(\S+)\s+\((POWER|GROUND)\)\s+"
+        r"iterms=(\d+)\s+bterms=(\d+)", _pg_log_txt, re.M)
+    if _unrouted:
+        _names = ", ".join(f"{n} ({t}, {i} iterm(s), {b} bterm(s))"
+                           for n, t, i, b in _unrouted[:6])
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            (f"PG_UNROUTED_SUPPLY: {len(_unrouted)} POWER/GROUND net(s) carry "
+             f"real terminals and no special-net geometry — pdngen did not "
+             f"build them: {_names}"
+             + (" …" if len(_unrouted) > 6 else "")
+             + ". These are UNROUTED SUPPLIES, not dangling stubs (a dangling "
+               "stub has zero terminals and is destroyed above). Until "
+               "vibe-ic#687 they were silently retyped to SIGNAL and handed to "
+               "the detailed router at minimum signal width, which is how the "
+               "run went green: the net leaves SPECIALNETS so every geometry "
+               "gate has nothing to examine, the PG connect audit sees every "
+               "terminal attached, and DRC/ERC/PV then pass. Fix the PDN for "
+               "these rails; a secondary supply above the core voltage in "
+               "particular must not be carried on signal-width metal."),
+            _pg_evidence,
+            extras={"finding": "PG_UNROUTED_SUPPLY",
+                    "unrouted_supplies": [
+                        {"net": n, "sigtype": t, "iterms": int(i),
+                         "bterms": int(b)} for n, t, i, b in _unrouted]})
     if _pg_audit is None:
         return StepResult(
             "pnr", "BLOCKED", time.time() - t0,
