@@ -851,6 +851,63 @@ def parse_equiv_output(text: str) -> Dict:
         # mismatch (which prints a counterexample → stays the blocking FAIL).
         if not _noconv and not _has_ctrex:
             _noconv, _noconv_ev = induction_ladder_exhausted(text)
+        # A WALL-CLOCK KILL THAT MADE PARTIAL PROGRESS.
+        #
+        # The three budget guards above all have a precondition this shape
+        # fails, so it fell through to the blocking FAIL below:
+        #   * the `parse_error + _TIMEOUT_RE` branch needs NOTHING parsed;
+        #   * the `proven is None and unproven is None` branch needs NEITHER
+        #     count parsed;
+        #   * `induction_did_not_converge` needs `Proved 0` or `Circuit
+        #     inherently diverges`, and `induction_ladder_exhausted` needs an
+        #     `equiv_induct` marker — NEITHER exists when the clock kills the
+        #     run during equiv_simple, before equiv_induct ever starts.
+        #
+        # So a run killed mid-`equiv_simple` AFTER it proved some cells parses
+        # as `proven=N>0`, `unproven=total-N>0`, no flat wall, no ladder, no
+        # counterexample — and was reported as
+        #     "N/T proven, U unproven — the RTL and gate netlist MAY GENUINELY
+        #      DIFFER at these points."
+        # from a log whose last line is this program's OWN
+        # `_TIMEOUT_MARKER`. That is the exact harm the module docstring says
+        # this file exists to prevent: "a killed run produced NO evidence —
+        # indistinguishable at the gate from a real mismatch", to be "NAMED
+        # (raise --timeout) instead of read as a mismatch that was never
+        # found."
+        #
+        # THE PRECISE DISTINCTION — a MEASURED unproven count vs an INFERRED
+        # one. This is the line the existing doctrine already draws, which the
+        # budget branches simply never consulted:
+        #
+        #   * `equiv_status` emitted "Of those cells N are proven and M are
+        #     unproven" (_FINAL_RE). Those M points WERE attempted and left
+        #     unproven — a real per-point verdict. A timeout marker arriving
+        #     afterwards (e.g. rc=137 re-attaching it) cannot retract it, and
+        #     it must STAY FAIL. Asserted by
+        #     `test_lec_run.test_container_timeout_rc_with_recorded_mismatch_still_fails`
+        #     and `test_v1462_lvs_lec_manifest_capture
+        #      .test_timeout_with_partial_completed_verdict_still_fails`.
+        #
+        #   * NO `_FINAL_RE` line: `unproven` was not measured at all, it was
+        #     RECONSTRUCTED by `total - proven` further up. Those points were
+        #     never attempted — the clock killed the run first. Reporting them
+        #     as points where the designs "may genuinely differ" states a
+        #     comparison that never happened.
+        #
+        # So the re-class fires only on (timeout marker) AND (no completed
+        # equiv_status) AND (no counterexample). §4.05 PRECISION-first /
+        # NO-LEAK: each of the three conjuncts removes a way this could soften
+        # a real result, and `_TIMEOUT_RE` is written only by the two kill
+        # paths in run_yosys_equiv, so an in-budget run is untouched.
+        _budget_killed = bool(_TIMEOUT_RE.search(text))
+        _measured_verdict = bool(_FINAL_RE.search(text))
+        if _budget_killed and not _measured_verdict and not _has_ctrex \
+                and not _noconv:
+            _noconv = True
+            _noconv_ev = (
+                "the wall-clock budget killed yosys mid-proof, before "
+                "equiv_induct ran — the unproven remainder was never "
+                "attempted, not refuted")
         if _noconv and not _has_ctrex and (unproven or 0) > 0:
             equivalent = False
             verdict = "INCONCLUSIVE"
@@ -904,6 +961,15 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
         "equivalent": parsed["equivalent"],
         # proven $equiv cell count — >0 required for a non-vacuous PASS.
         "compared_points": proven if proven is not None else 0,
+        # The SIZE of the proof obligation, i.e. how many $equiv points
+        # equiv_make built. `parse_equiv_output` has always measured this (it
+        # is the `total` it uses to reconstruct the other two counts) and
+        # build_report has always dropped it, so an INCONCLUSIVE lec.json said
+        # `compared_points: 0` and gave a reader NO way to tell "the budget
+        # nearly covered it, raise --timeout" from "this miter is orders of
+        # magnitude beyond any budget on this machine". Those call for opposite
+        # actions. None only when no total was parseable (never fabricated).
+        "miter_points": parsed.get("total"),
         # Yosys equiv_status does not emit a distinct proven-non-equivalent
         # count; a genuine difference surfaces as `unproven`, so this stays 0.
         "non_equivalent_points": 0,
