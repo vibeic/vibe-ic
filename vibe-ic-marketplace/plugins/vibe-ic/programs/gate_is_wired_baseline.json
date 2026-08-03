@@ -32,7 +32,6 @@
     "frontend_backend_handoff_check",
     "functional_state_transition_coverage_check",
     "gate_evidence_completeness_check",
-    "gitignore_scratch_guard",
     "handoff_bundle_check",
     "hold_area_budget_check",
     "hold_corner_coverage_check",

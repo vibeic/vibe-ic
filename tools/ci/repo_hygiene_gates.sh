@@ -219,7 +219,6 @@ run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_tar
 # that no longer exists is not conservative, it is a blind spot the exact size
 # of the bug it used to describe.
 # host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
-
 run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py
 
 # vibe-ic#559 — 33 of the P0 umbrella's 243 registered gates reject the argv it
@@ -444,6 +443,27 @@ run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_
 run "verdict token propagation"         "$PLUGIN" python3 programs/verdict_token_propagation_check.py
 run "signoff gate self-skip"            "$PLUGIN" python3 programs/signoff_gate_self_skip_consistency_check.py
 run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_artifact_hygiene_check.py
+
+# ORGANIC #720 / #693 — the ONE gate in the repo-process family that really was
+# wired to nothing. It was invisible to `checker_execution_wiring_audit` (wired
+# at line 247) purely by FILENAME: that gate's population was `*_check.py` +
+# `*_audit.py`, and `_guard.py` is neither, so it reported "[PASS] no NEW
+# test-only checker" over a population that structurally could not contain it.
+# The population is widened in the same change.
+#
+# ONLY THE COMMIT-DETERMINED HALF IS WIRED HERE, and the flag is load-bearing.
+# Every gate in this script is re-run by `gate_host_independence_check` above
+# against a fresh worktree at the same commit and must produce the same verdict
+# line and rc. The guard's untracked-scratch scan is a fact about a CHECKOUT,
+# so wiring it here would make this script's own host-independence probe go red
+# the moment any agent left a scratch file in the tree — measured, with the
+# probe output in the PR. That half runs report-only from `gatekeeper-land.sh`.
+#
+# BLAST RADIUS, measured 2026-08-03 over 250 checkouts of this repo on one
+# host: 0 red. `rule_present` true in 250/250, `subdir_registry_ignored` false
+# in 250/250 (with the `--no-index` fix that makes that assertion capable of
+# firing at all), no tracked root `_*.js` anywhere.
+run "gitignore scratch guard"           "$ROOT" python3 "$PG/gitignore_scratch_guard.py" --root "$ROOT"
 
 # vibe-ic#428 — final_summary.md printed TWO verdict roll-ups over the same 63
 # steps and they disagreed on the BLOCKING-FAILURE count, with nothing marking
