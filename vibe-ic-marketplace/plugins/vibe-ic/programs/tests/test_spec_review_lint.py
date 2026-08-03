@@ -247,3 +247,88 @@ def test_missing_spec_exits_2(tmp_path):
     res = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path / 'nope.md')],
                          capture_output=True, text=True)
     assert res.returncode == 2
+
+
+# ---- vibe-ic#693 — the verdict must disclose its own denominator -----------
+#
+# This program is reached through a GLOB. Measured on a published run: an
+# `input/docs/*.md` pattern matched 1 file in a directory holding 17 `.rst`
+# spec chapters, and the program still printed a verdict — reading exactly like
+# a verdict over the whole corpus. The unread siblings are now reported at INFO,
+# which by construction cannot move the exit code.
+def _lint(tmp_path, argv):
+    return subprocess.run([sys.executable, str(SCRIPT), *argv],
+                          capture_output=True, text=True)
+
+
+def test_partial_corpus_is_disclosed(tmp_path):
+    d = tmp_path / 'docs'
+    d.mkdir()
+    (d / 'a.md').write_text(COMPLETE)
+    (d / 'b.rst').write_text("Chapter two of the same spec, unread.\n" * 3)
+    res = _lint(tmp_path, [str(d / 'a.md')])
+    assert res.returncode == 0                     # INFO cannot fail the gate
+    assert 'spec-corpus-partial' in res.stdout
+    assert 'b.rst' in res.stdout
+    assert '1 spec(s) linted of 2 candidate(s)' in res.stdout
+
+
+def test_full_corpus_emits_no_disclosure(tmp_path):
+    d = tmp_path / 'docs'
+    d.mkdir()
+    (d / 'a.md').write_text(COMPLETE)
+    res = _lint(tmp_path, [str(d / 'a.md')])
+    assert res.returncode == 0
+    assert 'spec-corpus-partial' not in res.stdout
+    assert '1 spec(s) linted of 1 candidate(s)' in res.stdout
+
+
+def test_own_json_report_is_not_counted_as_an_unread_spec(tmp_path):
+    d = tmp_path / 'docs'
+    d.mkdir()
+    (d / 'a.md').write_text(COMPLETE)
+    jf = d / 'report.json'
+    jf.write_text('{}')                            # pre-existing, beside the spec
+    res = _lint(tmp_path, ['--json', str(jf), str(d / 'a.md')])
+    assert res.returncode == 0
+    assert 'spec-corpus-partial' not in res.stdout
+
+
+def test_strict_is_load_bearing(tmp_path):
+    """Without --strict the program cannot fail on WARNs, so a gate wired
+    without it would be a gate that can never fire."""
+    bad = tmp_path / 'bad.md'
+    bad.write_text("# Gadget\n\n## Timing\nThe propagation delay is 5 ns.\n")
+    assert _lint(tmp_path, [str(bad)]).returncode == 0
+    assert _lint(tmp_path, ['--strict', str(bad)]).returncode == 1
+
+
+def test_a_directory_argument_can_never_execute(tmp_path):
+    """The flow must pass a GLOB LIST, never `.`. A directory is not a file, so
+    the program exits 2 forever — which the flow reads as a permanent
+    VACUOUS_PASS, i.e. wired somewhere it can never run."""
+    (tmp_path / 'spec.md').write_text(COMPLETE)
+    assert _lint(tmp_path, ['--strict', str(tmp_path)]).returncode == 2
+
+
+def test_corner_case_checklist_is_evaluated_per_file_not_per_corpus(tmp_path):
+    """MEASURED DEFECT, pinned so a fix has to update this test deliberately.
+
+    A complete spec scores 0 findings alone. Adding one benign, unrelated
+    appendix file to the SAME invocation yields 4 `corner-case-uncovered`
+    WARNs — the appendix does not mention the corner cases, and the checklist
+    is asked per FILE instead of per corpus. This is why `--strict` is wired
+    ADVISORY: 78% of the WARNs measured over the published corpus are this.
+    """
+    d = tmp_path / 'docs'
+    d.mkdir()
+    (d / 'a.md').write_text(COMPLETE)
+    alone = _lint(tmp_path, ['--strict', str(d / 'a.md')])
+    assert alone.returncode == 0
+    assert alone.stdout.count('corner-case-uncovered') == 0
+
+    (d / 'appendix.md').write_text(
+        "# Appendix A — Revision history\nRev 1.0 first release.\n")
+    both = _lint(tmp_path, ['--strict', str(d / 'a.md'), str(d / 'appendix.md')])
+    assert both.returncode == 1
+    assert both.stdout.count('corner-case-uncovered') == 4

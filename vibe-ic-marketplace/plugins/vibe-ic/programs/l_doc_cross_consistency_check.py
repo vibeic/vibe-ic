@@ -2,6 +2,8 @@
 """l_doc_cross_consistency_check.py — D3 program-first capture of the
 ``phase1-output-verify`` skill's "Cross-doc consistency" checklist (item 3).
 
+ENFORCEMENT: advisory
+
 Background
 ==========
 ``skills/phase1-output-verify/SKILL.md`` asked the AI to perform, *by eye*,
@@ -59,9 +61,23 @@ Usage
 
 Exit codes
 ==========
-    0  PASS / N/A-only / VACUOUS_PASS (generated_docs absent)
+    0  PASS (>=1 relation actually judged and none violated)
+    0  VACUOUS_PASS — generated_docs absent, OR every relation came back
+       N/A so the gate judged NOTHING. Both print the ``VACUOUS_PASS:``
+       line-start sentinel that ``flow_compliance_check`` reads, so the
+       step is credited in the VACUOUS_PASS tier rather than as a plain
+       PASS. rc is 0 because neither case is a failure.
     1  FAIL (a real cross-doc subset violation)
     2  argument or I/O error
+
+Wiring
+======
+ADVISORY at flow step D1 (``advisory_program_exit_zero``). It is not
+blocking because it reddens published runs whose L1 ``pin_table`` carries
+extractor pollution rather than genuinely lost pins; see the PR that wired
+it for the measured per-run split. Promotion to ``program_exit_zero``
+requires the L1 extractor repair, then a re-measurement — not a judgement
+call.
 """
 from __future__ import annotations
 
@@ -335,7 +351,21 @@ def check(target: Path) -> Tuple[str, List[RelationFinding], Dict[str, Any]]:
         _rel_otp_bytes_subset_layout(l11, l4),
     ]
     fails = [f for f in findings if f.verdict == "FAIL"]
-    verdict = "FAIL" if fails else "PASS"
+    passes = [f for f in findings if f.verdict == "PASS"]
+    if fails:
+        verdict = "FAIL"
+    elif passes:
+        verdict = "PASS"
+    else:
+        # EVERY relation came back N/A — the gate examined nothing. Awarding a
+        # plain PASS here credits the ordinary verdict tier over zero relations,
+        # which is the "empty scan mistaken for a clean one" defect this family
+        # exists to prevent. Reachable on any IC that legitimately carries no
+        # pin_table and no OTP. rc stays 0 (this is not a failure); the
+        # `VACUOUS_PASS` line-start sentinel is what
+        # `flow_compliance_check._stdout_signals_vacuous` reads to promote the
+        # step to the VACUOUS_PASS tier instead of PASS.
+        verdict = "VACUOUS_PASS"
     summary = {
         "generated_docs": str(gen_dir),
         "relations_checked": len(findings),

@@ -102,3 +102,43 @@ def test_direct_generated_docs_dir(tmp_path: Path) -> None:
     verdict, findings, summary = scan(gd)
     assert verdict == "FAIL"
     assert summary["total_todo"] == 1
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#693 — this gate is NOT superseded by `gameable_placeholder_scan`.
+#
+# That program scans the same L*.json for a strictly larger TOKEN set, which
+# makes "delete this one" look safe. It is not: the two accept different INPUT
+# SHAPES. Handed the generated_docs directory itself — the shape
+# skills/phase1-output-verify/SKILL.md documents, and the shape the test above
+# pins — `gameable_placeholder_scan` resolves no docs dir and reports
+# NO_GENERATED_DOCS / rc 1 on a corpus containing zero placeholders.
+#
+# This test exists so that a future "consolidate the placeholder scanners"
+# change has to confront the fabricated red rather than discover it in a run.
+# ---------------------------------------------------------------------------
+def test_not_superseded_generated_docs_dir_shape(tmp_path: Path) -> None:
+    import subprocess
+    import sys as _sys
+
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    (gd / "L1_DATASHEET.json").write_text(json.dumps({"ic": "x"}))  # CLEAN
+
+    # this gate: judges the clean corpus correctly
+    verdict, _, summary = scan(gd)
+    assert verdict == "PASS"
+    assert summary["l_docs_scanned"] == 1 and summary["total_todo"] == 0
+
+    # the candidate superset, same target: a red produced by not looking
+    other = Path(__file__).parent.parent / "gameable_placeholder_scan.py"
+    res = subprocess.run([_sys.executable, str(other), str(gd)],
+                         capture_output=True, text=True)
+    assert res.returncode == 1
+    assert "NO_GENERATED_DOCS" in res.stdout
+
+    # ...and it is right on the PROJECT-dir shape, which is what the flow passes
+    res = subprocess.run([_sys.executable, str(other), str(tmp_path)],
+                         capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "CLEAN" in res.stdout

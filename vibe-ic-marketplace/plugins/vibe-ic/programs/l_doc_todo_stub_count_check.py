@@ -44,6 +44,36 @@ Exit codes
     0  PASS (zero __TODO__ across all L docs) / VACUOUS_PASS
     1  FAIL (>= 1 __TODO__ in some L doc)
     2  argument or I/O error
+
+Wiring
+======
+BLOCKING (`program_exit_zero`) at flow step D1. Measured over the 16 published
+runs tracked under `benchmark-data/ic/**/phase1/generated_docs` before wiring:
+0 red, 24-28 L docs scanned each. Blocking is affordable precisely because the
+blast radius is empty, and the VACUOUS_PASS branch below is covered by the
+sibling `phase1_all_l_docs_present_check`, which blocks the docs-absent case
+at the same step.
+
+NOT superseded by `gameable_placeholder_scan` — measured, not assumed
+=====================================================================
+`gameable_placeholder_scan` scans the same `L*.json` for a strictly larger
+token set (`__TODO__` PLUS `<unknown>`, AUTO_ALIAS and VERDICT_PLACEHOLDER),
+which invites the conclusion that this program is redundant. It is not, and the
+difference is in the ACCEPTED INPUT SHAPE, not the token set:
+
+    target                        this program        gameable_placeholder_scan
+    project dir, clean            rc 0 PASS           rc 0 CLEAN
+    project dir + one __TODO__    rc 1 FAIL           rc 1 FAIL
+    generated_docs DIR, clean     rc 0 PASS (24 docs) rc 1 NO_GENERATED_DOCS
+    empty project                 rc 0 VACUOUS_PASS   rc 1 NO_GENERATED_DOCS
+
+`gameable_placeholder_scan._generated_docs_dir` resolves only
+`<project>/phase1/generated_docs` and `<project>/generated_docs`, so handed the
+generated_docs directory ITSELF — the shape `skills/phase1-output-verify/
+SKILL.md` documents and this program accepts — it reports a FABRICATED red on a
+corpus containing zero placeholders. Deleting this program in favour of that one
+would therefore trade a real check for a false alarm on a documented input
+shape. The two are complementary; neither is a superset.
 """
 from __future__ import annotations
 

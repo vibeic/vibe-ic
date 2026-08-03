@@ -3,6 +3,34 @@
 
 since v0.2.14.
 
+ENFORCEMENT: advisory
+
+Wiring
+------
+ADVISORY at flow step D1, invoked as
+``spec_review_lint --strict input/docs/*.md input/docs/*.rst input/*.md``.
+
+Two parts of that invocation are load-bearing and must not be "simplified":
+
+  * ``--strict`` — without it every finding is a WARN and the program exits 0
+    unconditionally, so a gate wired without it could never fail. It is
+    therefore wired strict AND advisory, never non-strict and blocking.
+  * the GLOB LIST, never a directory — measured, ``spec_review_lint .`` exits 2
+    forever (a directory is not a file), which the flow reads as a permanent
+    VACUOUS_PASS. Wired somewhere it can never execute is the same defect as
+    not being wired.
+
+WHY ADVISORY, AND WHAT WOULD PROMOTE IT
+Measured over the 16 published runs before wiring: 12 red under ``--strict``,
+0 red without it, 4 vacuous (no ``input/`` at all). Of 422 WARNs, 329 (78%) are
+``corner-case-uncovered`` — and that check is evaluated PER FILE, so a spec
+split across 18 chapter files scores up to 72 of them even when all four corner
+cases ARE covered by the corpus as a whole. Proven directly: a complete
+single-file spec scores 0 findings alone, and 4 corner-case WARNs the moment an
+unrelated one-line appendix joins the same invocation. Promotion to blocking
+requires that check to aggregate per CORPUS rather than per file, followed by a
+re-measurement — not a judgement call.
+
 The `spec-review` skill screens a natural-language hardware spec for defects
 BEFORE `/spec-to-rtl` turns the defects into RTL. Most of that review is genuine
 AI judgment (ambiguity wording, suggested rewrites, internal-consistency of prose).
@@ -155,6 +183,20 @@ _EXIT = re.compile(r'\bexit(?:s|ed|ing)?\b|\bleave(?:s)?\b|\bdeactivat'
                    r'|\buntil\b|\bclears?\b|\bdisabl', re.I)
 
 _MIN_SPEC_CHARS = 20   # length-floor: below this there is nothing to lint
+
+# ── denominator disclosure ──────────────────────────────────────────────────
+# A caller reaches this program through a GLOB (the flow gate passes
+# `input/docs/*.md input/docs/*.rst input/*.md`). A glob that matches one file
+# in a directory holding eighteen spec chapters still produces a verdict, and
+# the old output — "[1 spec(s) linted]" — read exactly like a verdict over the
+# whole corpus. MEASURED: one published run ships 17 `.rst` spec chapters plus
+# 2 `.md`; a `*.md`-only glob linted 1 of them and reported a verdict.
+#
+# This is a DISCLOSURE, not a threshold: the unread siblings are reported at
+# INFO severity, which by construction cannot move the exit code (only ERROR,
+# and WARN under --strict, do). It exists so a verdict can never again hide
+# how much of the corpus produced it.
+_SPEC_SUFFIXES = {".md", ".rst", ".txt", ".json", ".v", ".sv"}
 
 
 @dataclass
@@ -366,6 +408,34 @@ def _read_spec(path: Path) -> Tuple[str, bool]:
     return text, path.suffix.lower() == ".json"
 
 
+def _unread_siblings(files: List[Path],
+                     exclude: Optional[Path] = None) -> List[Path]:
+    """Spec-shaped files sitting in the SAME directories as the ones we were
+    given, which were not given to us. Non-recursive on purpose: the question
+    is "did the caller's pattern under-select this directory?", not "is there
+    a spec anywhere on disk".
+
+    `exclude` drops this program's OWN --json report, which is `.json` and can
+    land beside a spec — a report is an output, never an unread input."""
+    given = {f.resolve() for f in files}
+    if exclude is not None:
+        try:
+            given.add(exclude.resolve())
+        except OSError:
+            pass
+    out: List[Path] = []
+    for d in sorted({f.resolve().parent for f in files}):
+        try:
+            entries = sorted(d.iterdir())
+        except OSError:
+            continue
+        for p in entries:
+            if (p.is_file() and p.suffix.lower() in _SPEC_SUFFIXES
+                    and p.resolve() not in given):
+                out.append(p)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -403,12 +473,28 @@ def main() -> int:
             all_findings.append({"code": "parse-error", "severity": "ERROR",
                                  "message": str(e), "spec": str(f)})
 
+    # Denominator disclosure — INFO only, cannot move the exit code.
+    unread = _unread_siblings(
+        files, Path(a.json_out) if a.json_out else None)
+    if unread:
+        all_findings.append({
+            "code": "spec-corpus-partial", "severity": "INFO",
+            "message": (
+                f"{len(unread)} spec-shaped file(s) in the same directory(ies) "
+                f"were NOT linted, so this verdict covers {len(files)} of "
+                f"{len(files) + len(unread)} candidate spec files: "
+                + ", ".join(str(p) for p in unread[:12])
+                + (" …" if len(unread) > 12 else "")
+                + " — widen the caller's pattern if these are part of the spec."),
+            "spec": "(corpus)"})
+
     n_err = sum(1 for d in all_findings if d["severity"] == "ERROR")
     n_warn = sum(1 for d in all_findings if d["severity"] == "WARN")
     fail = n_err > 0 or (a.strict and n_warn > 0)
     verdict = "FAIL" if fail else "PASS"
     print(f"spec_review_lint: {verdict} — findings: {len(all_findings)} "
-          f"({n_err} error, {n_warn} warn) [{parsed} spec(s) linted]")
+          f"({n_err} error, {n_warn} warn) "
+          f"[{parsed} spec(s) linted of {len(files) + len(unread)} candidate(s)]")
     for d in all_findings:
         print(f"  [{d['severity']}] {d['code']}: {d['message']}")
 
