@@ -291,6 +291,55 @@ steps:
         # condition is stated in the program's own docstring and is a
         # re-measurement, not a judgement call.
         - advisory_program_exit_zero: "cross_layer_reference_check ."
+        # ── doc-spec family (vibe-ic#693) ─────────────────────────────────
+        # Three gates that existed with passing unit tests and no executable
+        # caller: they had never judged real data. Each was run over the 16
+        # published runs tracked under `benchmark-data/ic/**/phase1/
+        # generated_docs` BEFORE wiring, and the measured blast radius is
+        # recorded here so the next reader does not have to re-derive it.
+        #
+        # BLOCKING. Counts `__TODO__` — the phase1 runner's own "I could not
+        # extract this" sentinel — across every L*.json, threshold == 0 (the
+        # threshold is the skill's, not invented). MEASURED: 0 of 16 published
+        # runs red, 24-28 L docs scanned each. Blocking is affordable because
+        # the blast radius is empty and the sibling
+        # `phase1_all_l_docs_present_check` above already blocks the
+        # docs-absent case this one VACUOUS_PASSes on.
+        - program_exit_zero: "l_doc_todo_stub_count_check ."
+        # ADVISORY. L1 pin_table ⊂ L9 ports, and L11 otp_bytes ⊂ L4 otp_layout.
+        # MEASURED: 10 of 16 red — but the reds are NOT evenly distributed and
+        # the split is the whole reason this is advisory. Splitting by producer
+        # vintage (the commit date of each run's own L1 doc):
+        #   * 6 runs produced at v1.0.x (2026-06-14/15): 5 red, 45 violating
+        #     entries. These are FOSSILS — re-runs of the same ICs at v1.4.22+
+        #     from byte-identical inputs pass or carry far fewer violations.
+        #   * 10 runs produced at v1.4.22 or later: 5 red, 7 violating entries,
+        #     and ZERO genuinely lost functional pins.
+        # So the modern producer reddens 5 runs over 7 entries: 2 are an L1
+        # extractor harvesting non-pins out of prose (a parameter name, a top-
+        # module name), 1 is a wildcard glob, and 4 are supply pads absent from
+        # a port list by convention. None is a pin that vanished from a design.
+        # BLOCKING would fail half the corpus for defects in the DOC PRODUCER,
+        # not in the designs. Promotion requires the extractor repair first,
+        # then a re-measurement.
+        - advisory_program_exit_zero: "l_doc_cross_consistency_check ."
+        # ADVISORY, and `--strict` is load-bearing: without it every WARN exits
+        # 0 and the gate cannot fail at all — a blocking gate that cannot fail
+        # is a fake gate, so it is wired strict AND advisory rather than
+        # non-strict and blocking.
+        # The argument is a GLOB LIST, never `.` — measured, `spec_review_lint .`
+        # returns rc 2 forever (a directory is not a file), i.e. a permanent
+        # __VACUOUS_HINT__: wired somewhere it can never execute, which is the
+        # same defect as being unwired. `*.rst` is in the list because one
+        # published run ships 17 `.rst` spec chapters and an `*.md`-only glob
+        # linted 1 of 19 candidate files and still printed a verdict.
+        # MEASURED: 12 of 16 red under --strict, 0 of 16 red without it, 4
+        # VACUOUS (no input/ dir at all). 422 WARNs, of which 329 (78%) are
+        # `corner-case-uncovered` — which is evaluated PER FILE, so an 18-file
+        # spec set can score 72 of them even when the corner cases ARE covered.
+        # Promotion to blocking requires that per-file/per-corpus bug fixed
+        # first; until then --strict is only honest as an advisory signal.
+        - advisory_program_exit_zero: "spec_review_lint --strict input/docs/*.md input/docs/*.rst input/*.md"
     blocks_on: []
 
   - id: 1
@@ -759,6 +808,10 @@ steps:
       # human-written FPGA verification report must be traceable to
       # a tool-generated artefact (sim summary + coverage_actual.json).
       - fpga_verification_audit
+      # vibe-ic#693 — WIRED BELOW as `advisory_program_exit_zero`. Enforces the
+      # four LED-probe anti-patterns of skills/fpga-led-probe-allocation. See
+      # the gate leg for why it is advisory and what would make it blocking.
+      - fpga_led_probe_lint
     required_outputs:
       - "phase2/stage1/fpga/output_files/*.sof"
       - "phase2/stage1/fpga/output_files/*.map.rpt"
@@ -788,6 +841,53 @@ steps:
         - optional_program_exit_zero:
             command: "fpga_verification_audit --report reports/fpga_verification_report.md --summary phase2/stage1/sim/work/summary.txt --coverage reports/phase2/coverage/coverage_actual.json --out reports/phase2/gates/fpga_verification_audit.json"
             condition_files_exist: ["reports/fpga_verification_report.md"]
+        # ── vibe-ic#693 — `fpga_led_probe_lint`, wired for the first time ────
+        #
+        # WHAT IT ASSERTS. The four deterministic anti-patterns of
+        # skills/fpga-led-probe-allocation/SKILL.md over the FPGA top RTL:
+        # instantaneous-on-pulse, sticky-without-reset-clear,
+        # mode-mix-without-table, and — the one no other wired gate covers —
+        # per-BIT shared-pin-vs-QSF. (`fpga_port_qsf_consistency_check` IS
+        # wired, in _STRUCTURAL_RTL_GATES, but it normalises bus indices to the
+        # base name `LEDR`; measured on the corpus's only real FPGA top it does
+        # not even reach that code, because `find_fpga_top` requires an `inout`
+        # port and that top has none, so it prints "no FPGA top module found"
+        # and exits 0. Per-bit LED allocation is covered by nothing.)
+        #
+        # WHY `advisory_`, NOT `optional_`. Two separate reasons, both measured
+        # on the published sha256 run in its as-shipped state:
+        #   1. `optional_program_exit_zero` NEVER EXECUTES here. `_evaluate_gate`
+        #      short-circuits `all_of` on the first failing leg and re-runs ONLY
+        #      `advisory_program_exit_zero` legs afterwards. Leg 1 is
+        #      `files_exist: phase2/stage1/fpga/output_files/*.sof`, and ZERO
+        #      .sof files exist anywhere in benchmark-data — the FPGA build has
+        #      never run in the published corpus (28/28 run roots report
+        #      quartus_map_audit verdict=SKIP). Wired as `optional_`, no
+        #      reports/phase2/gates/fpga_led_probe_lint.json was written at all:
+        #      a gate wired somewhere it never runs is the same defect moved.
+        #      Wired as `advisory_`, it executes and writes its JSON.
+        #   2. `optional_program_exit_zero` is BLOCKING — `_evaluate_gate`
+        #      returns its `passed` verbatim into `all_of`. With a forged .sof
+        #      + .map.rpt + audit JSON to reach the leg, step 6 went from
+        #      WAIVED-DEFERRED to a hard FAIL. "Non-blocking" and that slot are
+        #      incompatible; `advisory_` is the slot that records without
+        #      blocking.
+        #
+        # BLAST RADIUS, MEASURED (28 published run roots: 16 under
+        # benchmark-data/ic + 12 under benchmark-data/evaluation).
+        #   executes on  1  — ic/sha256, the only run with a .qsf
+        #   RED          0  — after the repairs in this change; it reports
+        #                     1 WARNING (`test_done`, a held handshake level)
+        #   silent      27  — condition_files_exist has no match, so the leg
+        #                     returns without running: no vacuous PASS is
+        #                     credited anywhere
+        #
+        # WHAT WOULD MAKE IT BLOCKING. A run where Quartus genuinely built (so
+        # legs 1-3 pass and the step is not already WAIVED-DEFERRED), plus a
+        # second FPGA top in the corpus to measure against. Today there is one.
+        - advisory_program_exit_zero:
+            command: "fpga_led_probe_lint phase2/stage1/fpga --qsf phase2/stage1/fpga/*.qsf --json reports/phase2/gates/fpga_led_probe_lint.json"
+            condition_files_exist: ["phase2/stage1/fpga/*.qsf"]
     blocks_on: [2, 4, 5]
 
   - id: 7
@@ -2699,7 +2799,22 @@ steps:
         # directory scope would hand step 21's evidence to step 31 — the very
         # cross-step confusion `--under` exists to end, pointing the other way.
         # Step 21 scopes by directory AND names its file for the same reason.
-        - program_exit_zero: "drc_report_check . --mode drc --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
+        # `--signoff` is THIS step's policy and step 21 must never get it: the
+        # producer that is exactly right there (the router's own detailed-route
+        # DRC) is the one disqualified here. MEASURED on origin/main, a project
+        # with ZERO GDS files whose drc_signoff.rpt is a 19,162-byte OpenROAD
+        # detailed_route projection re-staged by the runner's own alias writer:
+        # rc=0, passed:true, tool_authentic:true, determined_files:1,
+        # real_violation_total:0 — a sign-off DRC certificate issued by the
+        # router over a layout that was never streamed. `--signoff` requires
+        # (a) a PRODUCER that is a rule deck applied to a layout (KLayout report
+        # database naming its <generator> deck / SVRF-native per-rule tally /
+        # Magic transcript; the router's projection is refused) and (b) evidence
+        # of a streamed design layout, disclosed by tier
+        # (invocation > declared > on_disk; `none` is rc 1).
+        # BLAST RADIUS over the 13 published runs carrying this artefact: 0.
+        # All 6 runs green on this gate today stay green.
+        - program_exit_zero: "drc_report_check . --mode drc --signoff --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
         - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
         # 每一條宣告的電源/地軌都必須至少帶一段佈線幾何。MEASURED on a real
         # tapeout run with a third-party hard macro on a second supply: the DEF
@@ -2730,7 +2845,19 @@ steps:
         # NetlistComparer for LVS — v1.3.94: the geometric KLayout comparer is a
         # legitimate authoritative LVS engine for a symmetric-bus design netgen
         # cannot pin-match, so lvs.rpt may be attributed to klayout).
-        - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,openroad"
+        # `openroad` is OUT and `svrfdrc` is IN — but ONLY because the runner's
+        # provenance back-fill now derives the sign-off DRC report's tool from
+        # the ARTEFACT instead of hardcoding "klayout". DO NOT re-add
+        # `openroad` and do not read this list as the thing that closed the
+        # hole: MEASURED on origin/main, with the attribution still laundered,
+        # a router projection at this path passed under EVERY list tried —
+        # klayout,magic,openroad -> rc 0; klayout,magic,svrfdrc -> rc 0;
+        # klayout,magic -> rc 0. An allow-list cannot filter a tool name that
+        # was never derived from the file. `svrfdrc` joins because it is the
+        # runner's own HIGHEST authority tier (svrfdrc > klayout > openroad,
+        # `_signoff_drc_tool`) and, once attribution is honest, it is the tier
+        # that would otherwise go red.
+        - program_exit_zero: "provenance_check . --output reports/phase3/drc_signoff.rpt --tool klayout,magic,svrfdrc"
         - program_exit_zero: "provenance_check . --output reports/phase3/lvs.rpt --tool netgen,magic,klayout"
         # Step-31 ERC + sign-off density substance (replaces the dangling
         # density_check that referenced a non-existent program). This is a
@@ -3196,7 +3323,7 @@ steps:
   - id: 39
     name: "FPGA final sign-off (recompile + on-board test)"
     stage: stage4
-    skills: [fpga-test-harness]
+    skills: [fpga-test-harness, fpga-signaltap]
     programs:
       # Wave 82 — `bringup_plan_gen` emits the bring-up plan from
       # L13_LAB_CALIBRATION before the on-board attestation runs;
@@ -3204,6 +3331,61 @@ steps:
       # board-up sequence (probe order / supply ramp / safe-states).
       - bringup_plan_gen
       - fpga_on_board_attestation_check
+      # ── vibe-ic#693 — the two SignalTap gates: REGISTERED, NOT WIRED ──────
+      #
+      # Both are shipped, gate-shaped, and (as of 2026-08-03) referenced from
+      # no executable location at all. Being listed HERE is the DISCLOSURE
+      # #693 asks for, not permission: it puts them in an executable location's
+      # `programs:` list with the reason recorded next to the step they belong
+      # to, exactly as `fpga_test_harness_gen` and `debug_first_pass` are
+      # registered at step 6. Neither appears in this step's `gate:` block, and
+      # that is deliberate; the measurement is below. Both are driven EXPLICITLY
+      # by the agent following skills/fpga-signaltap/SKILL.md with a board on
+      # the bench.
+      #
+      # `_UNROUTED_INVENTORY` in gate_skip_routing_check.py is NOT the right
+      # register for either, and putting them there was tried and measured:
+      # that table counts UNROUTED SKIP PATHS, not unwired gates, and injecting
+      # a gate makes the ratchet exit 1 ("[RATCHET-FIXED] ...: 1 -> 0; delete
+      # the inventory entry"). After the rc 0 -> 2 repair in this same change
+      # their skip paths are ROUTED, so they can never legitimately appear
+      # there. `_SEMANTIC_ARGV_UNDRIVABLE` / `_NOT_A_PROJECT_GATE` /
+      # `_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA` are all wrong too: each carries a
+      # parametrized test asserting membership in `_STRUCTURAL_RTL_GATES`, and
+      # neither gate is registered there.
+      #
+      # signaltap_recompile_sequence_check
+      #   ASSERTS: quartus_stp -> quartus_map -> quartus_fit -> quartus_asm all
+      #   present, in canonical order, with --stp_file=<x>.stp. The defect is
+      #   real and expensive: omit quartus_stp and you get a perfectly valid
+      #   SOF containing NO logic analyzer, discovered only after programming
+      #   the board.
+      #   WHY NOT WIRED: the flow does not emit that sequence. Its only FPGA
+      #   command line is `quartus_sh --flow compile <base>`
+      #   (design_one_shot_runner), which contains none of the four tokens and
+      #   returns SKIP. Repo-wide there are 0 compile.log, 0 *.map.rpt and 0
+      #   *.sof files, and grep for `quartus_stp` outside docs returns only
+      #   tools/signaltap_gen.py, the gate, and its test. Wired at step 6 or
+      #   here it would be rc=2 NOT-CHECKED on 28/28 published run roots — a
+      #   permanently silent gate. Its subject exists only when an engineer is
+      #   re-fitting a SignalTap image at the bench.
+      #
+      # signaltap_stp_completeness_check
+      #   ASSERTS: a generated .stp captures every DUT port plus the four
+      #   BIST-engine signals, and defines a trigger, a positive sample depth
+      #   and a capture clock.
+      #   WHY NOT WIRED: no flow step produces a .stp, and 0 exist in the
+      #   published corpus, so any automatic wiring is rc=2 on 28/28. It is
+      #   ALSO not yet safe as a post-condition of its own producer: the MCP
+      #   tool `eda_rtl_signaltap_autogen`, which this gate's header and
+      #   skills/fpga-signaltap/SKILL.md both name as THE generator, fails it
+      #   on its default invocation (measured against the published sha256 RTL:
+      #   one signal emitted, 4 x MISSING_BIST_SIGNAL + 8 x MISSING_PORT +
+      #   NO_TRIGGER). The other shipped producer, tools/signaltap_gen.py,
+      #   PASSES it. Making the gate blocking before that producer split is
+      #   settled would break the declared generator 100% of the time.
+      - signaltap_recompile_sequence_check
+      - signaltap_stp_completeness_check
     required_outputs:
       - "phase2/stage1/fpga/final/*.sof"
       - "reports/phase2/fpga/on_board_pass.json"

@@ -1974,6 +1974,11 @@ _PIN_TABLE_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A whitespace-delimited token carrying a path separator: a file path, never a
+# port declaration nor a port name. Masked out of the narrative line-scan
+# before the direction anchor is searched and before names are tokenised.
+_PATHLIKE_TOKEN_RE = re.compile(r"\S*[/\\]\S*")
+
 # v1.6.252 — for #111 ORGANIC. CSR / regmap / ISA-spec / bit-field
 # docs must NEVER trigger OTP-evidence extraction. The L4/L11 OTP
 # bracket-field scanner used a loose filename gate (`otp|table|
@@ -8690,14 +8695,30 @@ def _pdk_declared_value_token(value: str) -> Optional[str]:
     return head[:_PDK_DECL_MAX_TOKEN].strip()
 
 
-def _labelled_pdk_declaration(project: Path):
+def _labelled_pdk_declaration(project: Path, scope: str = "all"):
     """(pdk_target, snippet, source_rel, line) from a LABELLED PDK
-    declaration in the design's own inputs, or (None, None, None, None).
+    declaration, or (None, None, None, None).
 
     Scans the same input-doc roots the prose reader uses PLUS the
     documents inside the design's own staged PDK tree, which is where a
     PDK bridge/README naturally lives and which no current reader opens.
     Deterministic: files sorted, per-file read capped, file count capped.
+
+    ORGANIC-20260803 — `scope` splits those two populations, because they
+    are not the same kind of evidence and must not have the same rank:
+
+      "design"  the design's OWN documents. A labelled declaration here is
+                the design speaking about itself, so it outranks a bare
+                MENTION of a name off a closed list.
+      "staged"  documents that ship INSIDE the staged PDK tree. These
+                describe the PDK, not the design's intent. Promoting them
+                would let a PDK's own README answer "what does this design
+                target?", which is exactly the question a declared-vs-used
+                gate needs the design to answer for itself. Measured: on a
+                real run whose docs still named an open PDK, reading the
+                staged tree at high rank replaced the design's answer with
+                the staged PDK's README title. So this half stays last.
+      "all"     both, in the historical order (design roots first).
     """
     seen: set = set()
     per_file: List[Tuple[str, str]] = []
@@ -8720,21 +8741,24 @@ def _labelled_pdk_declaration(project: Path):
             rel = f.name
         per_file.append((rel, t))
 
-    for base in (project / "phase1" / "input_doc",
-                 project / "input" / "docs", project / "input_doc"):
-        if not base.is_dir():
-            continue
-        for f in sorted(base.rglob("*")):
-            if f.suffix.lower() in (".png", ".jpg", ".pdf", ".gds", ".zip"):
+    if scope in ("design", "all"):
+        for base in (project / "phase1" / "input_doc",
+                     project / "input" / "docs", project / "input_doc"):
+            if not base.is_dir():
                 continue
-            _add(f)
-            if len(per_file) >= _PDK_DECL_MAX_FILES:
-                break
-    for pat in _PDK_DECL_DOC_GLOBS:
-        for f in sorted(project.glob(pat)):
-            _add(f)
-            if len(per_file) >= _PDK_DECL_MAX_FILES:
-                break
+            for f in sorted(base.rglob("*")):
+                if f.suffix.lower() in (".png", ".jpg", ".pdf", ".gds",
+                                        ".zip"):
+                    continue
+                _add(f)
+                if len(per_file) >= _PDK_DECL_MAX_FILES:
+                    break
+    if scope in ("staged", "all"):
+        for pat in _PDK_DECL_DOC_GLOBS:
+            for f in sorted(project.glob(pat)):
+                _add(f)
+                if len(per_file) >= _PDK_DECL_MAX_FILES:
+                    break
 
     for rel, text in per_file:
         for m in _PDK_DECL_RE.finditer(text):
@@ -9298,11 +9322,78 @@ def _extract_pdk_target_with_provenance(project: Path):
     def _snip(text, lo, hi):
         return text[max(0, lo):hi].replace("\n", " ")[:160]
 
+    # ORGANIC-20260801 — SOURCE 1b: a LABELLED PDK DECLARATION.
+    # It reads a declaration (`^<label>: <value>`) rather than recognising a
+    # name, so it extends to any foundry instead of the six in
+    # `_FOUNDRY_CTX_RE`, and it keeps the #457 negation + numeric-node guards
+    # on the declared value.
+    #
+    # ORGANIC-20260803 — ORDER. This tier used to run LAST, after both
+    # name-list prose tiers. That ordering means a design's own labelled
+    # declaration can never outrank a bare MENTION of a name the extractor
+    # happens to know, and the note this tier was written with says why that
+    # is wrong: "A mention carries no field label. A declaration does."
+    #
+    # Measured, on a real design being moved off an open process: its L1 says
+    #     line 27  ... <competitor>'s demo chip (<open-pdk>, 100 MHz, ...)
+    #     line 33  | target PDK | <open-pdk> |
+    # and Phase 1 adopted line 27 — a sentence about somebody else's chip —
+    # as this design's pdk_target, because the open-PDK tier fires on the
+    # first occurrence anywhere in the document. Once that design declares a
+    # different process with a label, the stale sentence still won.
+    #
+    # BLAST RADIUS IS NARROW, because `_pdk_declared_value_token` already
+    # refuses almost everything: the declared value must carry a numeric node
+    # AND still name something once the node is removed AND be negation-free.
+    # A document that declares `PDK: <open-pdk-name>` has no node in the
+    # value, so this tier still returns nothing and the answer is unchanged.
+    # The answer changes only where a document carries a deliberate, explicit,
+    # node-bearing process declaration — exactly where it should win.
+    #
+    # NARROWED, from a measured regression. The first cut of this promotion
+    # returned the declared VALUE whatever it said, and two existing fixtures
+    # went from `sg13g2` to `IHP SG13G2 130nm SiGe` — the same process, but as
+    # prose instead of the normalised token that `pdk_registry` and
+    # `l19_pdk_floorplan_contract_check` match on. A declaration that names a
+    # process the name list ALREADY knows is therefore handed back to the
+    # name-list tier, which normalises it. The promotion applies only where
+    # the declaration names something no tier below can name — which is the
+    # whole reason the labelled tier exists.
+    decl_tok, decl_snip, decl_rel, decl_line = _labelled_pdk_declaration(
+        project, scope="design")
+    if decl_tok and not _OPEN_PDK_TOKEN_RE.search(decl_tok):
+        return decl_tok, decl_snip, decl_rel, decl_line
     # Open-PDK tokens are unambiguous bare — scan each file in turn so
     # the first match's provenance (file + line) is preserved.
+    #
+    # ORGANIC-20260803 — POLARITY. The #457 negation guard was added to the
+    # commercial tier below and never to this one, so the two tiers read the
+    # SAME sentence shape with opposite results. Measured on a two-file control
+    # whose only difference is which vendor the negated sentence names:
+    #
+    #   "This block is NOT targeted at <open-pdk>."   + a labelled declaration
+    #        -> pdk_target = <open-pdk>          (the negated mention WON)
+    #   "This block is NOT fabricated at a <foundry> 180nm process."
+    #                                            + the same labelled declaration
+    #        -> pdk_target = the declared value  (the negation DENIED it)
+    #
+    # The first line is a design saying which process it does not use, and the
+    # extractor adopted it as the process the design targets — over the
+    # design's own labelled declaration three lines below, because this tier
+    # runs first. The same file's ORGANIC-20260801 note already argues that a
+    # MENTION must not become a declaration; that argument applies here.
+    #
+    # The guard is the negation half of `_foundry_match_trustworthy` and only
+    # that half: the dual-evidence numeric-node half must NOT be carried over,
+    # because an open-PDK name identifies a process on its own and carries no
+    # node. Scanning continues past a negated match instead of returning, so a
+    # document that first says "not <A>" and later declares <A> plainly still
+    # resolves to <A> — only the negated occurrence is skipped.
     for rel, text in per_file:
-        m = _OPEN_PDK_TOKEN_RE.search(text)
-        if m:
+        for m in _OPEN_PDK_TOKEN_RE.finditer(text):
+            span = text[max(0, m.start() - 24):m.end()]
+            if _FOUNDRY_NEGATION_RE.search(span):
+                continue            # polarity-aware deny (negated mention)
             tok = re.sub(r"^ihp[- ]?", "",
                          m.group(1).lower()).replace(" ", "")
             line = text.count("\n", 0, m.start()) + 1
@@ -9320,16 +9411,12 @@ def _extract_pdk_target_with_provenance(project: Path):
             line = text.count("\n", 0, m.start()) + 1
             return (tok, _snip(text, m.start() - 20, m.end() + 40),
                     rel, line)
-    # ORGANIC-20260801 — SOURCE 1b: a LABELLED PDK DECLARATION.
-    # Reached only after BOTH name-list prose tiers above have yielded
-    # nothing, so every answer they can produce is byte-identical to
-    # pre-fix; this tier can only turn a null into a value. It reads a
-    # declaration (`^<label>: <value>`) rather than recognising a name,
-    # so it extends to any foundry instead of the six in
-    # `_FOUNDRY_CTX_RE`, and it keeps the #457 negation + numeric-node
-    # guards on the declared value.
+    # ORGANIC-20260801 / -20260803 — SOURCE 1b (staged half): a labelled
+    # declaration inside the staged PDK tree's own README / bridge document.
+    # Kept at its original last-resort rank: it describes the PDK, not the
+    # design's intent, so it must not displace what the design says.
     decl_tok, decl_snip, decl_rel, decl_line = _labelled_pdk_declaration(
-        project)
+        project, scope="staged")
     if decl_tok:
         return decl_tok, decl_snip, decl_rel, decl_line
     # #513 — SOURCE 2: the PDK the design stages rather than describes.
@@ -21107,7 +21194,23 @@ def gen_l1_datasheet(project: Path,
             # may not have a trailing \n but offset error is
             # bounded and never causes a wrong range hit).
             _running_offset += len(line) + 1
-            ml = _PIN_TABLE_LINE_RE.search(line)
+            # ORGANIC — a FILE PATH is not a port declaration. The direction
+            # anchor `\b(input|output|inout|...)\b` was searched over the RAW
+            # line, and `/` is a word boundary, so a document that cites its
+            # own staged PDK by path — `input/pdk/lef/.../STD/<lib>.lef`, the
+            # very path this flow MANDATES for a staged PDK — matched
+            # `\binput\b` INSIDE the path. The line then promoted every
+            # capitalised token on it to a port with `mode=input`. Measured on
+            # a CPU cell whose L1/L3 cite their staged PDK in the ordinary
+            # way: `PDK`, `STD` and `IO` were emitted into L1.pin_table as
+            # phantom input ports, and `l9_rtl_pin_consistency_check` then
+            # correctly FAILed the design for declaring a pin its RTL top does
+            # not have. Mask whitespace-delimited path-like tokens for BOTH
+            # the anchor search and the name tokenisation: a directory name is
+            # never a port direction and a path fragment is never a port name.
+            # chip-AGNOSTIC — pure token shape, no path, vendor or PDK literal.
+            scan_line = _PATHLIKE_TOKEN_RE.sub(" ", line)
+            ml = _PIN_TABLE_LINE_RE.search(scan_line)
             if not ml:
                 continue
             # v1.6.264 — for #122 ORGANIC. Lines inside RST grid-
@@ -21144,7 +21247,7 @@ def gen_l1_datasheet(project: Path,
             mode_token = ml.group(1).lower()
             if mode_token not in {"input", "output", "inout"}:
                 continue
-            tokens = re.split(r"[\s\t\|,]+", line.strip())
+            tokens = re.split(r"[\s\t\|,]+", scan_line.strip())
             tokens = [t for t in tokens if t]
             if len(tokens) < 2:
                 continue
@@ -48501,10 +48604,45 @@ def _harvest_test_cases_from_input_tables(
                         # the absence so it is visible to any consumer instead
                         # of masquerading as a graded case.
                         _oracle_absent = bool(exp_i is not None and not last)
+                        # ORGANIC — the STIMULUS cell was picked purely
+                        # POSITIONALLY (`cells[1]` on any >=3-column table)
+                        # while `expected` is picked by HEADER SEMANTICS. On
+                        # every table whose oracle column happens to sit at
+                        # index 1 — e.g. `| test firmware | expected | covers |`
+                        # — those two resolve to the SAME cell, so the emitted
+                        # case restates its own stimulus as its golden value.
+                        # `l10_test_case_oracle_anchor_check` correctly calls
+                        # that EXPECTED_RESTATES_STIMULUS: a comparison of a
+                        # value against itself is trivially true, so the
+                        # generated testbench can never fail. Measured on a
+                        # CPU cell: 2 of 10 harvested cases were this shape,
+                        # and the source table was WELL-FORMED — the stimulus
+                        # (the firmware name) sat in column 0 all along.
+                        # Resolve by header semantics, and ONLY when the
+                        # positional pick collides with the oracle column, so
+                        # every table that was already correct is byte-identical.
+                        _stim_i = 1 if len(cells) >= 3 else 0
+                        if exp_i is not None and _stim_i == exp_i:
+                            _stim_i = next(
+                                (ci for ci, h in enumerate(hdr)
+                                 if ci < len(cells) and ci != exp_i
+                                 and _L10_TC_IN_COL.search(h.replace('_', ' '))),
+                                None)
+                            if _stim_i is None:
+                                _stim_i = next(
+                                    (ci for ci, h in enumerate(hdr)
+                                     if ci < len(cells) and ci != exp_i
+                                     and _L10_TC_TEST_COL.search(
+                                         h.replace('_', ' '))),
+                                    None)
+                            if _stim_i is None:
+                                _stim_i = 0 if exp_i != 0 else min(
+                                    1, len(cells) - 1)
                         _case = {
                             "name": name,
                             "kind": "functional_vector",
-                            "stimulus": cells[1] if len(cells) >= 3 else cells[0],
+                            "stimulus": re.sub(
+                                r'[`*]', '', cells[_stim_i]).strip(),
                             "expected": last,
                             "evidence": (f"input/docs/{fname} "
                                          "(verification-plan table)"),

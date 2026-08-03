@@ -64,6 +64,7 @@ import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — 
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
+import _signoff_drc_format as _sdf  # sign-off DRC producer classification (ONE answer)
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
 
@@ -4990,6 +4991,31 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
     if not enabled_ns:
         return tech_lef, notes
 
+    # PAIRED GUARD: the deck's `Mt.*` family is the THICK-TOP-METAL rule set —
+    # it applies to the stack's TOPMOST routing layer, not to whatever layer
+    # happens to share its index. If the LEF in hand declares MORE routing
+    # layers than the deck's enabled TOPMETAL_N, then METn is an INTERMEDIATE
+    # layer here and raising its width to the top-metal minimum silently
+    # corrupts a thin routing layer (measured on a staged commercial PDK: the
+    # deck's TOPMETAL_5 Mt.W.1=0.44um was applied to MET5 of a SIX-layer LEF
+    # whose MET5 is a plain 0.28um layer and whose real top metal is MET6).
+    # The LEF and the deck describe different stacks; say so and change
+    # nothing rather than "fixing" the wrong layer.
+    _lef_layers = _techlef_routing_layers(lef_text)
+    _lef_top = _lef_layers[-1][0] if _lef_layers else None
+    for n in list(enabled_ns):
+        if _lef_top is not None and len(_lef_layers) != int(n):
+            notes.append(
+                f"[topmetal-width-fix] SKIPPED: deck enables TOPMETAL_{n} "
+                f"(top-metal rules target MET{n}) but {tech_lef_p.name} "
+                f"declares {len(_lef_layers)} routing layers with "
+                f"{_lef_top} on top — the deck and this tech LEF describe "
+                f"DIFFERENT metal stacks, so no width was changed. Harden on "
+                f"the tech LEF the deck is written for, or the sign-off DRC "
+                f"result does not describe the stack that was routed.")
+            enabled_ns = []
+            break
+
     fixed_any = False
     for n in enabled_ns:
         met = f"MET{n}"
@@ -6206,6 +6232,122 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
     )
 
 
+def _lef_top_routing_layer(tech_lef: Path) -> Optional[str]:
+    """Name of the TOPMOST ``TYPE ROUTING`` layer declared by a tech LEF, or
+    ``None`` when the file will not parse. Pure LEF grammar (delegates to
+    ``_techlef_routing_layers``), so no layer-naming convention is assumed."""
+    try:
+        layers = _techlef_routing_layers(
+            tech_lef.read_text(errors="ignore"))
+    except OSError:
+        return None
+    return layers[-1][0] if layers else None
+
+
+def _select_tech_lef(pdk_dir: Path, candidates: List[Path]) -> Path:
+    """Pick the ONE tech LEF a project-staged PDK is to be hardened on.
+
+    WHY THIS EXISTS (measured, not hypothetical). A commercial PDK commonly
+    ships its metal stack as a MATRIX of tech LEFs — one per (layer-count x
+    top-metal flavour) combination — and the stack is a DESIGN CHOICE, not a
+    property of the PDK. The previous code took ``rglob("*tech*.lef")[0]``:
+    filesystem order, so (a) the pick was arbitrary, (b) it was not even
+    reproducible across machines, and (c) nothing anywhere recorded which
+    stack a sign-off number was produced against. Measured on a staged
+    commercial 180nm PDK with 25 tech LEFs: the arbitrary pick was a
+    SIX-layer THICK-top-metal stack while both the design's own L9 and the
+    PDK's own sign-off DRC deck specify a FIVE-layer thin-top stack. Every
+    downstream number — route, STA, DRC, GDS — would have been produced
+    against a stack the design does not build on.
+
+    RESOLUTION ORDER, most-authoritative first:
+
+    1. **Declared.** ``input/pdk/bridge/signoff_config.json`` -> ``tech_lef``
+       (a path relative to ``input/pdk/``). An explicit integrator statement
+       always wins.
+    2. **Only one candidate.** Every open PDK this flow ships against
+       (sky130A, gf180mcu, ihp-sg13g2, nangate45, asap7) declares exactly one
+       tech LEF, so this is the path they take and their behaviour is
+       byte-for-byte unchanged.
+    3. **Narrowed by the PDK's own sign-off deck.** A foundry DRC deck states
+       the stack it is written for as an enabled ``#DEFINE TOPMETAL_<N>``
+       runtime option. Keep only the LEFs whose TOPMOST routing layer is that
+       layer. Purely structural: the layer index comes from the deck, the top
+       layer from LEF grammar, and no name, flavour or path is matched.
+    4. **Otherwise REFUSE.** If more than one candidate survives, raise —
+       enumerating them and naming the key to set. Silently picking one is
+       precisely the failure this function was written to remove: it produces
+       a full green sign-off against a stack nobody chose.
+    """
+    if len(candidates) == 1:
+        return candidates[0]
+
+    cfg_f = pdk_dir / "bridge" / "signoff_config.json"
+    if cfg_f.is_file():
+        try:
+            declared = (json.loads(cfg_f.read_text()) or {}).get("tech_lef")
+        except Exception:
+            declared = None
+        if declared:
+            p = (pdk_dir / declared) if not os.path.isabs(str(declared)) \
+                else Path(str(declared))
+            if not p.is_file():
+                raise SystemExit(
+                    f"[FAIL] bridge signoff_config declares tech_lef="
+                    f"{declared!r} but {p} does not exist. REFUSING to fall "
+                    f"back to an arbitrary stack — a sign-off produced "
+                    f"against an unintended metal stack looks identical to a "
+                    f"correct one.")
+            print(f"[tech-lef] DECLARED by bridge signoff_config: "
+                  f"{p.relative_to(pdk_dir)}", file=sys.stderr)
+            return p
+
+    # Narrow by the sign-off deck's own enabled top-metal option.
+    survivors = list(candidates)
+    calibre_dir = pdk_dir / "calibre"
+    deck = next(iter(sorted(calibre_dir.glob("*DRC*.rule"))), None) \
+        if calibre_dir.is_dir() else None
+    deck_note = ""
+    if deck is not None:
+        try:
+            deck_text = deck.read_text(errors="ignore")
+        except OSError:
+            deck_text = ""
+        enabled = sorted(set(
+            m.group(1) for m in re.finditer(
+                r"(?m)^#DEFINE\s+TOPMETAL_(\d+)\s*$", deck_text)))
+        if len(enabled) == 1:
+            n = int(enabled[0])
+            keep = [c for c in candidates
+                    if (_lef_top_routing_layer(c) or "").upper().endswith(
+                        str(n))
+                    and len(_techlef_routing_layers(
+                        c.read_text(errors="ignore"))) == n]
+            if keep:
+                survivors = keep
+                deck_note = (f" (narrowed from {len(candidates)} by the "
+                             f"sign-off deck's enabled #DEFINE TOPMETAL_{n}: "
+                             f"{n} routing layers)")
+
+    if len(survivors) == 1:
+        print(f"[tech-lef] {survivors[0].relative_to(pdk_dir)}{deck_note}",
+              file=sys.stderr)
+        return survivors[0]
+
+    listing = "\n".join(
+        f"    {c.relative_to(pdk_dir)}  (top routing layer "
+        f"{_lef_top_routing_layer(c)})" for c in sorted(survivors))
+    raise SystemExit(
+        f"[FAIL] the staged PDK ships {len(candidates)} tech LEF(s) and "
+        f"{len(survivors)} of them remain after narrowing{deck_note or ''}. "
+        f"The metal stack is a DESIGN CHOICE, so this flow will not pick one "
+        f"for you — an arbitrary pick yields a fully green sign-off against a "
+        f"stack nobody chose, which is indistinguishable from a correct one. "
+        f"Declare it: set \"tech_lef\" (a path relative to input/pdk/) in "
+        f"{cfg_f.relative_to(pdk_dir.parent.parent) if pdk_dir.parent.parent in cfg_f.parents else cfg_f}."
+        f"\n  candidates:\n{listing}")
+
+
 def _detect_pdk(project: Path, override: Optional[str] = None
                 ) -> Optional[PdkConfig]:
     """Detect which PDK to use. chip-AGNOSTIC: looks at project's input/pdk/
@@ -6426,8 +6568,8 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                                if f not in tech_candidates]
             if not cell_candidates:
                 return None
-            tech_lef = (tech_candidates[0] if tech_candidates
-                        else cell_candidates[0])
+            tech_lef = (_select_tech_lef(pdk_dir, tech_candidates)
+                        if tech_candidates else cell_candidates[0])
             cell_lef = cell_candidates[0]
             # The PDK's std-cell GDS LIBRARY dir is input/pdk/gds (parallel to
             # input/pdk/{lef,liberty}). NOT _pl.gds_dir() — that returns the
@@ -22673,7 +22815,8 @@ def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
     # SIGNAL-net mismatch is untouched by globalisation and still FAILs. Emitted
     # AFTER `source`, so a foundry-declared global is harmlessly re-affirmed.
     try:
-        body += "\n" + _lvs_setup.build_supplementary_setup_tcl(pdk.name)
+        body += "\n" + _lvs_setup.build_supplementary_setup_tcl(
+            pdk.name, cell_lef=getattr(pdk, "cell_lef", None))
     except Exception:  # nosec — power-net globalisation is best-effort; a bad
         pass          # PDK name must never break the (already-working) compare
     ext_dir = _pl.extracted_dir(project)
@@ -22759,8 +22902,13 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
         suffix = "pwraware_welltied" if tie_wells else "pwraware"
         pa_nl = ext_dir / f"{top}_{suffix}.v"
         try:
+            # cell_lef: consulted ONLY when pdk.name resolves to no table
+            # entry — i.e. a project-staged (commercial) PDK, whose power
+            # model is then derived from its own std-cell LEF instead of the
+            # emitter skipping and leaving the netlist power-blind.
             st = _lvs_pa.emit_to_file(netlist, pdk.name, pa_nl, top=top,
-                                      tie_wells_to_rails=tie_wells)
+                                      tie_wells_to_rails=tie_wells,
+                                      cell_lef=getattr(pdk, "cell_lef", None))
         except Exception as exc:  # nosec — a bad netlist must never break the plain path
             attempt_log.append({"model": model, "rejected_at": "emit",
                                 "reason": f"{type(exc).__name__}: {exc}"})
@@ -23283,7 +23431,8 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     try:
         _def_txt = def_file.read_text(errors="replace")
         _pa_tcl, _pa_ext_stats = _lvs_paext.build_power_aware_extraction_tcl(
-            _MAGIC_EXT2SPICE_TCL, pdk.name, _def_txt, top=top)
+            _MAGIC_EXT2SPICE_TCL, pdk.name, _def_txt, top=top,
+            cell_lef=getattr(pdk, "cell_lef", None))
         if _pa_ext_stats.get("power_aware"):
             extract_tcl = _pa_tcl
     except Exception:  # nosec — a bad DEF/PDK must never break the plain path
@@ -23871,9 +24020,63 @@ def _select_signoff_corners(libs: List[Tuple[str, str]],
     return corners
 
 
+#: How the runner names each sign-off DRC producer in provenance, and the
+#: command string that describes it. Derived from the ARTEFACT — see
+#: `_signoff_drc_tool` — never from a caller default.
+_SIGNOFF_DRC_COMMANDS = {
+    _sdf.KLAYOUT: "klayout -b -r <pdk drc deck> (sign-off DRC)",
+    _sdf.SVRFDRC: "svrfdrc <foundry .rule deck> (sign-off DRC, SVRF-native)",
+    _sdf.MAGIC: "magic -dnull drc (sign-off DRC)",
+    _sdf.OPENROAD: "openroad detailed_route DRC projection "
+                   "(ROUTER-level, NOT a sign-off deck)",
+}
+
+
+def _signoff_drc_tool(path: Path) -> Optional[Tuple[str, str]]:
+    """`(tool, command)` for a sign-off DRC report, decided from its BYTES.
+
+    THE DEFECT THIS CLOSES. `_v1_6_620_append_pv_signoff_provenance` used to
+    hardcode `("reports/phase3/drc_signoff.rpt", "klayout",
+    "klayout -b -r drc (sign-off DRC)")` for whatever happened to be at that
+    path. The alias writer 3000 lines below already computes the REAL source
+    tier (`svrfdrc` > `klayout` > `openroad`) — and that value reached the
+    human-readable `# Tool:` header and NOTHING else.
+
+    MEASURED on origin/main, on a project whose sign-off report is the router's
+    own detailed-route projection::
+
+        _v1_6_620_append_pv_signoff_provenance(proj, top)
+          -> provenance.jsonl: {"tool": "klayout",
+                "command": "klayout -b -r drc (sign-off DRC) (phase3_...)"}
+
+    describing an invocation that never happened. The consequence is that the
+    Step-31 provenance ALLOW-LIST could not do its job: with the same fixture,
+    `--tool klayout,magic,openroad`, `--tool klayout,magic,svrfdrc` and
+    `--tool klayout,magic` ALL returned rc 0. Removing `openroad` from the list
+    closes nothing while the attribution is laundered; this is the half that
+    has to land first.
+
+    An artefact matching no known producer is attributed `unknown`, NOT
+    guessed and NOT silently dropped. The ledger's job is to record what
+    exists with its real digest; deciding what COUNTS is the allow-list's job,
+    and conflating the two is how "klayout" came to be stamped on a router log
+    in the first place. `unknown` is in no allow-list, so the provenance gate
+    still FAILs — with the readable reason "tool 'unknown' not in allowed
+    [...]" rather than "no entry declares this path", which would wrongly read
+    as "the file was never produced"."""
+    p = _sdf.classify_file(path)
+    if p.kind is None:
+        return "unknown", ("sign-off DRC report present but its PRODUCER could "
+                           "not be determined from its content")
+    cmd = _SIGNOFF_DRC_COMMANDS[p.kind]
+    if p.deck:
+        cmd += f" [deck: {p.deck}]"
+    return p.kind, cmd
+
+
 def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]:
-    """ORGANIC #620 — idempotently declare the Step-31 Physical-Verification
-    sign-off outputs (sign-off DRC report, LVS report, streamout GDS) in
+    """ORGANIC #620 — declare the Step-31 Physical-Verification sign-off
+    outputs (sign-off DRC report, LVS report, streamout GDS) in
     provenance.jsonl, mirroring the SPEF provenance append (#509/#590).
     step_canonicalize_artefacts previously declared only the synth netlist,
     routed.def, and the SPEF — so flow_compliance Step 31 ran
@@ -23883,9 +24086,34 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
 
     Anti-fabrication: only outputs that EXIST on disk are declared, each with
     its REAL sha256 + tool attribution; a genuinely-absent report is NOT
-    fabricated (its provenance gate then still FAILs, correctly). Idempotent: a
-    path already present in provenance.jsonl is skipped. Returns the list of
-    newly-declared rel paths. chip-AGNOSTIC: canonical PV paths, no chip name."""
+    fabricated (its provenance gate then still FAILs, correctly). Returns the
+    list of newly-declared rel paths. chip-AGNOSTIC: canonical PV paths, no
+    chip name.
+
+    IDEMPOTENCE IS NOW CONTENT-AWARE, NOT PATH-AWARE. The old skip test was
+    `rel not in existing` — a raw substring search over the whole log — so the
+    FIRST stamp for a path was the last one ever written. MEASURED on the real
+    function::
+
+        call 1                          -> ['reports/phase3/drc_signoff.rpt']
+        <artefact replaced on disk>
+        call 2                          -> []          # nothing re-stamped
+        log carries the NEW sha: False   log carries the OLD sha: True
+
+    That silently breaks the emit-site comment three thousand lines below,
+    which promises the declarer is re-run "ALWAYS after a (re)write, so a
+    svrfdrc force-refresh re-stamps the new sha". It does not: the svrfdrc
+    refresh is the one path that rewrites an EXISTING drc_signoff.rpt, so the
+    highest-authority producer is exactly the one guaranteed to end up with a
+    stale digest — and `provenance_check` then FAILs the run on `hash mismatch`
+    (measured), a correct verdict for an incorrect reason.
+
+    A new entry is therefore appended whenever the newest entry declaring a
+    path disagrees with the artefact on its DIGEST or on its TOOL. The ledger
+    stays append-only — provenance is a history, and rewriting history to make
+    a gate pass is the thing this file exists to prevent — so the correction is
+    a superseding record, which is what `provenance_check` reads (it sorts the
+    matching entries by timestamp and takes the most recent)."""
     import hashlib as _hl
     import datetime as _dt
     prov_path = project / "provenance.jsonl"
@@ -23897,7 +24125,29 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
                 h.update(ch)
         return "sha256:" + h.hexdigest()
 
-    existing = prov_path.read_text() if prov_path.is_file() else ""
+    # The ledger, parsed. The prior substring test also matched a path that
+    # appeared anywhere in ANY field (a command line, a note), not only as a
+    # declared output.
+    _ledger: List[dict] = []
+    if prov_path.is_file():
+        for _line in prov_path.read_text(errors="replace").splitlines():
+            _line = _line.strip()
+            if not _line:
+                continue
+            try:
+                _doc = json.loads(_line)
+            except ValueError:
+                continue
+            if isinstance(_doc, dict):
+                _ledger.append(_doc)
+
+    def _newest(rel: str) -> Optional[dict]:
+        cands = [e for e in _ledger if rel in (e.get("outputs") or {})]
+        if not cands:
+            return None
+        cands.sort(key=lambda e: str(e.get("timestamp", "")))
+        return cands[-1]
+
     # v1.3.94 — the LVS report's authoring tool depends on the deciding engine:
     # for a symmetric-bus design the KLayout NetlistComparer is authoritative
     # and lvs.rpt is rendered from ITS verdict (not netgen's transcript), so
@@ -23913,42 +24163,69 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
             _lvs_cmd = "klayout NetlistComparer lvs (sign-off LVS)"
     except Exception:
         pass
+    # The sign-off DRC report is attributed from ITS OWN BYTES, never from a
+    # caller default — a guess here is the whole defect. An unrecognised
+    # producer becomes `unknown`, which no allow-list contains.
+    _drc_rel = "reports/phase3/drc_signoff.rpt"
     pv_outputs = [
-        ("reports/phase3/drc_signoff.rpt", "klayout",
-         "klayout -b -r drc (sign-off DRC)"),
         ("reports/phase3/lvs.rpt", _lvs_tool, _lvs_cmd),
         (f"phase3/stage3/pnr/{top}.gds", "magic", "magic gds write (streamout)"),
         (f"phase3/stage4/gds/{top}.gds", "klayout",
          "klayout streamout (canonical GDS)"),
     ]
+    _drc_attr = _signoff_drc_tool(project / _drc_rel) \
+        if (project / _drc_rel).is_file() else None
+    if _drc_attr is not None:
+        pv_outputs.insert(0, (_drc_rel, _drc_attr[0], _drc_attr[1]))
     declared: List[str] = []
     for rel, tool, cmd in pv_outputs:
         fp = project / rel
-        if fp.is_file() and rel not in existing:
-            entry = {
-                "tool": tool,
-                "command": f"{cmd} (phase3_one_shot_runner)",
-                "exit_code": 0,
-                # #365 — NOT measured. These provenance entries are
-                # BACK-FILLED: the runner writes them for artifacts it finds
-                # on disk, having never observed the invocation that made
-                # them. `0` is a VALUE and reads as "took no time", i.e. a
-                # measurement claim with no measurement behind it — the
-                # anti-fabrication rule this ledger exists to serve. `null`
-                # says "not measured", which is the truth. (`exit_code: 0`
-                # stays: the artifact exists and is hashed, which IS evidence
-                # the tool produced it, and `provenance_check` reads that
-                # field.)
-                "duration_ms": None,
-                "reconstructed": True,
-                "timestamp": _dt.datetime.now(_dt.timezone.utc)
-                                .strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "outputs": {rel: _sha(fp)},
-            }
-            with prov_path.open("a") as f:
-                f.write(json.dumps(entry) + "\n")
-            existing += "\n" + rel  # de-dup within this loop
-            declared.append(rel)
+        if not fp.is_file():
+            continue
+        _prev = _newest(rel)
+        if _prev is not None:
+            # A BACK-FILL MUST NEVER SUPERSEDE A MEASUREMENT. When the newest
+            # declaration came from `_log_invocation` — a run that was actually
+            # observed — leave it alone even if the file has since changed:
+            # `provenance_check` then reports `hash mismatch`, which is the
+            # correct and much stronger verdict ("the artefact is not the one
+            # the measured run produced"). Overwriting it with a reconstructed
+            # entry carrying the CURRENT digest would turn that FAIL into a
+            # PASS, which is the same class of defect this change closes.
+            if _prev.get("measured") or _prev.get("record") == "invocation":
+                continue
+            _prev_sha = str((_prev.get("outputs") or {}).get(rel, ""))
+            if _prev_sha == _sha(fp) and str(_prev.get("tool")) == tool:
+                continue        # the ledger already says exactly this
+        entry = {
+            "tool": tool,
+            "command": f"{cmd} (phase3_one_shot_runner)",
+            "exit_code": 0,
+            # #365 — NOT measured. These provenance entries are
+            # BACK-FILLED: the runner writes them for artifacts it finds
+            # on disk, having never observed the invocation that made
+            # them. `0` is a VALUE and reads as "took no time", i.e. a
+            # measurement claim with no measurement behind it — the
+            # anti-fabrication rule this ledger exists to serve. `null`
+            # says "not measured", which is the truth. (`exit_code: 0`
+            # stays: the artifact exists and is hashed, which IS evidence
+            # the tool produced it, and `provenance_check` reads that
+            # field.)
+            "duration_ms": None,
+            "reconstructed": True,
+            "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "outputs": {rel: _sha(fp)},
+        }
+        if _prev is not None:
+            # A superseding record says so, so a reader is never left to guess
+            # which of two entries for one path is current.
+            entry["supersedes"] = {"timestamp": _prev.get("timestamp"),
+                                   "tool": _prev.get("tool")}
+        with prov_path.open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+        _ledger.append(entry)   # de-dup within this loop
+        declared.append(rel)
     return declared
 
 
