@@ -245,6 +245,13 @@ run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.
 run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_wiring_audit.py"
+# vibe-ic#693 — and the question NOTHING was asking: is a gate CONSULTED AT ALL?
+# `gate_skip_routing_check` reports "98 unrouted skip path(s) in 53 gate(s);
+# published inventory holds 98 in 53" — balanced, over a 53-gate population that
+# contains none of the 35 gates no automatic verdict invokes. Its scope is its
+# coverage. A gate nothing runs produces no verdict, and the tree looks the same
+# either way.
+run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check.py"
 # ORGANIC #686 — a macro OBS is the vendor's statement of where the integrator
 # may not put metal. It is not in the PDK deck, so sign-off DRC cannot see a
 # crossing; and the wire is on the right net, so a connectivity audit cannot
@@ -254,6 +261,14 @@ for _cell in "$ROOT"/benchmark-data/ic/*/*/; do
   [ -f "$_cell/phase3/stage3/pnr/routed.def" ] || continue
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
+  # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
+  # certificate over an empty layout is the strongest form of an absence
+  # rendering as a pass, and the gate written for it was reachable only if an
+  # agent read a skill and remembered to run it. MEASURED on the published
+  # cells: it parses real geometry (8290 shapes, 35 violations) — a live
+  # verdict, not a shape that can only ever say "nothing to look at".
+  run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$(dirname "$_cell")"))" \
+    "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
 done
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
