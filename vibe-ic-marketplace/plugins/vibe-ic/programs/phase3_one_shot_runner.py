@@ -14883,6 +14883,42 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         "    set _sdr_mwl [expr {int(min($_sdr_w,$_sdr_h)/8.0)}]\n"
         "  } _sdr_e]} { puts \"SDR_DIE_NONFATAL: $_sdr_e\"; set _sdr_ok 0 }\n"
         f"  if {{$_sdr_mwl < {lo}}} {{ set _sdr_mwl {lo} }}\n"
+        # WHETHER A WIRE IS TOO LONG IS ELECTRICAL, NOT GEOMETRIC. The seed
+        # above is a fraction of the die; the resizer knows the real answer for
+        # THIS process and prints it on every pass it disagrees with:
+        #   [WARNING RSZ-0065] max wire length less than 7936u increases wire
+        #   delays.
+        # MEASURED, three consecutive rounds of subservient x gf180mcuD: seed
+        # 150 um against a 7936 um critical length (53x), and on sky130A the
+        # same seed against 4109 um (27x). Repairing to 53x tighter than the
+        # process needs makes `repair_design` insert repeaters into nets that
+        # do not need them, and the pass that follows died with SIGSEGV inside
+        # `repair_timing -setup` (`Signal 11`, on the same endpoint each time).
+        # `catch` cannot survive a segfault, so the whole PnR dies with it.
+        #
+        # So: RAISE the seed to the tool's own electrical floor when it is
+        # higher. FLOOR-ONLY — this can never tighten a run, only loosen one
+        # that is tighter than the process requires. NONFATAL: an OpenROAD
+        # without `rsz::find_max_wire_length`, or one that answers
+        # non-positively, keeps the geometric seed and behaves exactly as
+        # before. `ceil` not `int`, so the raised value is never one micron
+        # short of the floor and RSZ-0065 stops firing.
+        "  if {[catch {\n"
+        "    set _sdr_crit [rsz::find_max_wire_length]\n"
+        # The resizer works in SI and the RSZ-0065 text is in microns. Accept
+        # either by sanity-checking against the die: a critical length is never
+        # below a micron, and a metre-valued answer is < 1. No unit is assumed.
+        "    if {$_sdr_crit > 0 && $_sdr_crit < 1.0} "
+        "{ set _sdr_crit [expr {$_sdr_crit * 1.0e6}] }\n"
+        "    set _sdr_crit [expr {int(ceil($_sdr_crit))}]\n"
+        "    puts \"SDR_CRIT_WIRE_LEN_UM: $_sdr_crit (geometric seed "
+        "$_sdr_mwl um)\"\n"
+        "    if {$_sdr_crit > $_sdr_mwl} {\n"
+        "      puts \"SDR_MWL_RAISED_TO_ELECTRICAL_FLOOR: $_sdr_mwl -> "
+        "$_sdr_crit um\"\n"
+        "      set _sdr_mwl $_sdr_crit\n"
+        "    }\n"
+        "  } _sdr_cw]} { puts \"SDR_CRIT_WIRE_LEN_NONFATAL: $_sdr_cw\" }\n"
         "  if {$_sdr_ok} {\n"
         f"  for {{set _sdr_p 1}} {{$_sdr_p <= {n}}} {{incr _sdr_p}} {{\n"
         "    catch {define_process_corner -ext_model_index 0 X}\n"
