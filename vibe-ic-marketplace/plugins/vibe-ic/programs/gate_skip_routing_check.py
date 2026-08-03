@@ -580,16 +580,56 @@ def _literals(node: ast.AST) -> List[str]:
             if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 
 
-def _leading_literal(call: ast.Call) -> Optional[str]:
+#: Returned when the line's verdict word is COMPUTED, so this scanner cannot
+#: read it out of the source at all. Distinct from None ("no literal here"),
+#: because the two must not be tallied the same way — see `_leading_literal`.
+_INTERPOLATED = object()
+
+
+def _verdict_is_interpolated(arg: ast.AST) -> bool:
+    """Does this argument begin with an interpolation, or with punctuation
+    followed by one?
+
+    `print(f"[{label}] some_check ...")` renders its verdict word from `label`.
+    The leading STRING constant is `"["`, which carries no token, so a scanner
+    reading literals sees nothing and — before this — recorded neither a skip
+    nor an uncertainty. Measured (vibe-ic#707) across the analog-hil family:
+    `skip_paths=0 unresolved=0` for four gates that plainly have skip paths.
+
+    That is the shape #693 is about, one level down: the ratchet's `98 == 98`
+    balance was computed over a population that STRUCTURALLY excluded them, so
+    it reported balance for lines it could not see.
+    """
+    if not isinstance(arg, ast.JoinedStr):
+        return False
+    for v in arg.values:
+        if isinstance(v, ast.FormattedValue):
+            return True
+        if isinstance(v, ast.Constant) and isinstance(v.value, str):
+            # punctuation/whitespace before the first interpolation is a prefix,
+            # not a verdict; anything else is a real leading literal.
+            if v.value.strip(" \t[(<-—|") == "":
+                continue
+            return False
+    return False
+
+
+def _leading_literal(call: ast.Call):
     """The first string constant of a `print` call's FIRST positional arg.
 
     The first argument is what lands at the start of the line, and line-START
     is exactly what the consumer's matcher requires. Taking any literal in the
     call would let a `VACUOUS_PASS` appearing mid-sentence read as a routed
     disclosure it is not.
+
+    Returns `_INTERPOLATED` when the verdict word is computed rather than
+    written — an answer this scanner cannot give, which must be COUNTED as
+    such rather than pass for "there is no skip here".
     """
     if not call.args:
         return None
+    if _verdict_is_interpolated(call.args[0]):
+        return _INTERPOLATED
     lits = _literals(call.args[0])
     return lits[0] if lits else None
 
@@ -681,6 +721,25 @@ def scan_skip_paths(fn: ast.FunctionDef) -> Tuple[List[SkipPath], List[int]]:
     """
     paths: List[SkipPath] = []
     unresolved: List[int] = []
+    #: `print` calls whose VERDICT WORD is computed (vibe-ic#707). Paired at
+    #: FUNCTION scope, not block scope, and that is what makes the count mean
+    #: something. The real shape is
+    #:
+    #:     label = "NOT CHECKED" if verdict == "SKIP" else verdict
+    #:     print(f"[{label}] some_check ...")
+    #:     for b in report["blocks"]: ...
+    #:     if verdict == "SKIP":
+    #:         return 2
+    #:
+    #: — announce, then unrelated statements, then a skip-tier return nested in
+    #: an `if`. Block-local pairing never sees it (measured: 0 unresolved for
+    #: all four analog-hil gates), and counting every interpolated print instead
+    #: took the unanalysable tally from 9 to 311, which is noise rather than
+    #: disclosure. A function that announces a COMPUTED verdict AND returns a
+    #: skip tier has a skip path this scanner cannot read — that pair, once per
+    #: function, is the honest unit.
+    interpolated_announce: List[int] = []
+    skip_tier_return = False
 
     def walk(block: List[ast.stmt]) -> None:
         pending: Optional[Tuple[int, str, str]] = None   # lineno, token, text
@@ -688,7 +747,9 @@ def scan_skip_paths(fn: ast.FunctionDef) -> Tuple[List[SkipPath], List[int]]:
             call = _is_print(stmt)
             if call is not None:
                 text = _leading_literal(call)
-                if text is not None:
+                if text is _INTERPOLATED:
+                    interpolated_announce.append(stmt.lineno)
+                elif text is not None:
                     tok = _skip_token(text)
                     if tok:
                         pending = (stmt.lineno, tok, text)
@@ -699,6 +760,9 @@ def scan_skip_paths(fn: ast.FunctionDef) -> Tuple[List[SkipPath], List[int]]:
             if term is not None:
                 lineno, value = term
                 rc, routed = _static_rc(value)
+                if rc == 2:
+                    nonlocal skip_tier_return
+                    skip_tier_return = True
                 if pending is not None:
                     p_line, p_tok, p_text = pending
                     if routed:
@@ -729,6 +793,12 @@ def scan_skip_paths(fn: ast.FunctionDef) -> Tuple[List[SkipPath], List[int]]:
                 walk(handler.body)
 
     walk(fn.body)
+    # vibe-ic#707 — a function that announces a COMPUTED verdict and returns a
+    # skip tier has a skip path whose word this scanner never read. Recorded
+    # ONCE, and only when both halves are present, so the tally stays a
+    # disclosure rather than a count of every f-string in the tree.
+    if interpolated_announce and skip_tier_return:
+        unresolved.append(interpolated_announce[0])
     return paths, unresolved
 
 
