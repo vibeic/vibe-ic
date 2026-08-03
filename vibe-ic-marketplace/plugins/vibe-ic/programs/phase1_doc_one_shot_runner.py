@@ -10637,7 +10637,9 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
 
 
 def _v455_sanitize_and_merge_pins(pins: List[dict],
-                                  extracted: Dict[str, str]) -> List[dict]:
+                                  extracted: Dict[str, str],
+                                  self_name: Optional[str] = None
+                                  ) -> List[dict]:
     """#455 final pin pass: drop uncorroborated ALL-CAPS prose pins,
     merge the backticked-interface pins (banked ranges expanded)."""
     bodies = [b for b in (extracted or {}).values() if b]
@@ -10669,6 +10671,41 @@ def _v455_sanitize_and_merge_pins(pins: List[dict],
                         return True
         return False
 
+    # A design's own TOP-MODULE name is not one of its ports. An external-
+    # interface doc that states "Top module name: `<top>`" puts a backticked
+    # identifier inside a port-context heading range, and the backtick walker
+    # promoted it to a pin with `mode=unspecified` — a sentence that NAMES THE
+    # MODULE read as a sentence that declares a port. The resulting phantom pin
+    # lands in L1.pin_table but not in L9.ports (the consumed layer), so
+    # `l_doc_cross_consistency_check R_pin_table_subset_ports` FAILs on a pin
+    # the design never had.
+    #
+    # The invariant is already encoded in this file for the submodule
+    # back-walker (`_v1_6_478_reject_top_module_name`, #343 P2); this wires the
+    # SAME rejector into the pin merge — one more consumer of an existing rule,
+    # not a new one.
+    #
+    # Deliberately NARROW so it cannot mask a real missing port: the drop fires
+    # only when the candidate ALSO carries no direction. Every genuine port
+    # reaches this pass with mode ∈ {input, output, inout} (a port-table row
+    # carries its own direction cell; a prose bullet resolves one per clause).
+    # `mode=unspecified` means no walker ever established a direction — the
+    # signature of a bare identifier mention. chip-AGNOSTIC: the comparison is
+    # against the design's OWN extracted top-module / ic_name, no literal.
+    # `self_name` is the caller's already-resolved chip name (which honours the
+    # authoritative `--ic-name` CLI override); the doc heuristics are a
+    # fallback for callers that have not resolved one yet.
+    _self_names = set()
+    if isinstance(self_name, str) and self_name and self_name != "UNKNOWN_IC":
+        _self_names.add(self_name)
+    for _fn in (_extract_top_module_from_docs, _ic_name_from_docs):
+        try:
+            _nm = _fn(extracted)
+        except Exception:  # nosec — a name heuristic must never break the pass
+            _nm = None
+        if isinstance(_nm, str) and _nm and _nm != "UNKNOWN_IC":
+            _self_names.add(_nm)
+
     kept: List[dict] = []
     for entry in pins:
         name = str(entry.get("name") or "")
@@ -10680,6 +10717,11 @@ def _v455_sanitize_and_merge_pins(pins: List[dict],
         # SHAPE-only predicates → chip-AGNOSTIC; no chip/vendor literal.
         if _is_sdc_directive_token(name) or _is_stdcell_lib_shape_token(name):
             continue
+        if (str(entry.get("mode") or "").lower()
+                not in ("input", "output", "inout")):
+            if any(_v1_6_478_reject_top_module_name(name, _s)
+                   for _s in _self_names):
+                continue  # the module's own name, with no direction
         if name.isupper() and name.isalpha():
             if name in _PIN_PROSE_DENY and name not in backticked:
                 continue  # ALL-CAPS English prose word — hallucination
@@ -10689,9 +10731,18 @@ def _v455_sanitize_and_merge_pins(pins: List[dict],
 
     have = {str(e.get("name")) for e in kept}
     for extra in _v455_interface_pins(extracted):
-        if extra["name"] not in have:
-            have.add(extra["name"])
-            kept.append(extra)
+        if extra["name"] in have:
+            continue
+        # Same self-name guard on the re-add path — this walker is where the
+        # top-module mention is promoted in the first place, so a drop above
+        # that is not repeated here would be undone one loop later.
+        if (str(extra.get("mode") or "").lower()
+                not in ("input", "output", "inout")
+                and any(_v1_6_478_reject_top_module_name(extra["name"], _s)
+                        for _s in _self_names)):
+            continue
+        have.add(extra["name"])
+        kept.append(extra)
     return kept
 
 
@@ -21619,7 +21670,7 @@ def gen_l1_datasheet(project: Path,
 
     # ORGANIC-20260606 #455 — final pin pass: ALL-CAPS-prose deny +
     # banked-range backticked-interface merge (analog-datasheet shape).
-    pins = _v455_sanitize_and_merge_pins(pins, extracted)
+    pins = _v455_sanitize_and_merge_pins(pins, extracted, ic_name)
 
     content = {
         "schema_version": 2,
