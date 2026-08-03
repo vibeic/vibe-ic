@@ -73,6 +73,95 @@ _DIE_LABELLED_WXH_RE = re.compile(
     r"\s*(?:um|\u00b5m|micron)",
     re.IGNORECASE)
 
+# A prose die statement can be NEGATED, and until this guard the extractor could
+# not tell. Measured on a real retarget: a design moving to a different process
+# wrote, in its own L9 constraints document,
+#
+#     "The origin project's fixed die rectangle of <W> x <H> um is the die of an
+#      external harness on a different process. It has NO meaning here and is
+#      REMOVED, not translated."
+#
+# `_DIE_LABELLED_WXH_RE` matched "die ... <W> x <H> um" inside that statement and
+# the extractor published <W>x<H> as `L19.fields.die_area_budget_um` — i.e. as
+# that design's MANDATED fixed die, which `phase3_one_shot_runner` then treats as
+# an absolute floorplan. The document said the opposite of what was recorded, and
+# nothing in the flow could notice: a run would have been hard-sized onto a die
+# belonging to a different chip on a different process. The design had no way to
+# say "this die does not apply" — every phrasing of the denial re-declared it.
+#
+# THE SAME DEFECT WAS ALREADY FIXED ONCE, ELSEWHERE. `pdk_target` extraction
+# carries `_FOUNDRY_NEGATION_RE` + `_foundry_match_trustworthy` for exactly this
+# ("prose like 'fabbed at <foundry> but NOT as a process target' mis-extracts").
+# That hardening was never extended to the floorplan contract, so the identical
+# polarity blindness survived in the neighbouring field of the same document.
+#
+# WHY NOT A PLAIN NEGATION SEARCH — two ways that goes wrong, both handled:
+#
+#   * Real die statements carry harmless negations as PARENTHETICAL qualifiers:
+#     "1300 x 1300 um (no seal ring)", "2200 x 1600 um (not including scribe)".
+#     Vetoing those would turn a silent wrong value into a silent missing value,
+#     which is no better. So bracketed spans that do NOT contain the matched
+#     dimensions are blanked before looking for a negation.
+#
+#   * The denial usually does not live in the same SENTENCE as the number — it
+#     follows it ("... is the die of an external harness. It has NO meaning
+#     here."). Sentence scope therefore misses the common case. But paragraph
+#     scope would over-trigger on a markdown TABLE, where an unrelated row
+#     ("| Status | not final |") sits in the same block as a real die row. So
+#     the scope is the LINE for a table row and the PARAGRAPH for prose.
+#
+# Chip-, PDK- and vendor-AGNOSTIC: the vocabulary is structural negation only.
+_DIE_NEGATION_RE = re.compile(
+    r"(?:\bnot\b|\bno\b|\bnone\b|\bwithout\b|\bexclud\w*\b|\bnever\b|\bnon-?\b|"
+    r"\bremoved\b|\bobsolete\b|\bsupersed\w*\b|\bn/a\b|\binapplicable\b|"
+    r"非|无|無|不|否)",
+    re.IGNORECASE)
+_BRACKETED_RE = re.compile(r"\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}")
+
+
+def _die_statement_scope(text: str, start: int, end: int) -> Tuple[int, int]:
+    """The span of text whose polarity governs the die figure at [start, end).
+
+    A markdown TABLE ROW is a self-contained record, so its scope is its own
+    line — otherwise an unrelated cell in a neighbouring row would veto a valid
+    die. Prose is scoped to its PARAGRAPH, because a denial is normally written
+    as the sentence AFTER the one carrying the number.
+    """
+    line_lo = text.rfind("\n", 0, start) + 1
+    line_hi = text.find("\n", end)
+    line_hi = len(text) if line_hi < 0 else line_hi
+    if "|" in text[line_lo:line_hi]:
+        return line_lo, line_hi
+    para_lo = text.rfind("\n\n", 0, start)
+    para_lo = 0 if para_lo < 0 else para_lo + 2
+    para_hi = text.find("\n\n", end)
+    para_hi = len(text) if para_hi < 0 else para_hi
+    return para_lo, para_hi
+
+
+def _die_statement_negated(text: str, start: int, end: int) -> bool:
+    """True when the die VALUE spanning [start, end) sits in a statement that
+    denies it — so the document states what the design is NOT, and the figure
+    must not be recorded as a mandate.
+
+    `start`/`end` must bound the NUMERIC VALUE, not the whole regex match, so
+    that a bracket sitting inside the match but beside the number (a label such
+    as "Core die (no seal ring)") is still recognised as a qualifier.
+    """
+    lo, hi = _die_statement_scope(text, start, end)
+    span = text[lo:hi]
+    rel_s, rel_e = start - lo, end - lo
+
+    def _blank(m):
+        # Keep any bracket that CONTAINS the value (e.g. "DIE_AREA = [0,0,W,H]");
+        # blank the ones that merely sit beside it.
+        if m.start() <= rel_s and m.end() >= rel_e:
+            return m.group(0)
+        return " " * (m.end() - m.start())
+
+    return bool(_DIE_NEGATION_RE.search(_BRACKETED_RE.sub(_blank, span)))
+
+
 _FP_SIZING_PROSE_RE = re.compile(
     r"FP_SIZING\b[\s:=|`'\")(]{0,6}(absolute|relative)", re.IGNORECASE)
 
@@ -287,17 +376,27 @@ def _prose_die_area(project: Path,
     L9/constraint/floorplan prose docs first, then any input doc. Returns
     (die_wxh, source_rel) or None."""
     def _scan(text: str) -> Optional[str]:
+        # Every recogniser below iterates ALL of its matches and skips the
+        # negated ones, so a statement that denies a die ("... is REMOVED, not
+        # translated") can neither be recorded as a mandate nor poison a genuine
+        # affirmative statement later in the same document. Same doctrine as the
+        # #457 pdk_target loop. The span handed to the guard is the NUMERIC
+        # VALUE, not the whole match — see `_die_statement_negated`.
         for m in _DIE_AREA_RECT_RE.finditer(text):
             wxh = _rect_to_wxh(*(float(m.group(i)) for i in (1, 2, 3, 4)))
-            if wxh:
+            if wxh and not _die_statement_negated(text, m.start(1), m.end(4)):
                 return wxh
         mw, mh = _DIE_WIDTH_RE.search(text), _DIE_HEIGHT_RE.search(text)
-        if mw and mh:
+        if (mw and mh
+                and not _die_statement_negated(text, mw.start(1), mw.end(1))
+                and not _die_statement_negated(text, mh.start(1), mh.end(1))):
             return _rect_to_wxh(0.0, 0.0, float(mw.group(1)),
                                 float(mh.group(1)))
-        m = _DIE_LABELLED_WXH_RE.search(text)
-        if m:
-            return _rect_to_wxh(0.0, 0.0, float(m.group(2)), float(m.group(3)))
+        for m in _DIE_LABELLED_WXH_RE.finditer(text):
+            if _die_statement_negated(text, m.start(2), m.end(3)):
+                continue
+            return _rect_to_wxh(0.0, 0.0, float(m.group(2)),
+                                float(m.group(3)))
         return None
 
     prose = [(r, t) for (r, p, t) in files
