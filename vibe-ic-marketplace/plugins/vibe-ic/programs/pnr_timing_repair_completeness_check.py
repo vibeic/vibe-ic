@@ -55,16 +55,49 @@ Honest-FAIL contract
   * A real PnR script missing a req   -> exit 1 (FAIL) with the missing list.
   * Only PASS when all 3 required commands are genuinely present.
 
+DIRECTORY MODE (added when this gate was wired into Step 17)
+-----------------------------------------------------------
+A positional argument that is a DIRECTORY is expanded to every ``pnr*.tcl``
+inside it, and the worst verdict across them is returned. Two measured reasons,
+both about the same failure — a gate wired onto a path that the corpus does not
+use is a gate that never runs:
+
+  * the published run whose silicon-DOA this gate was WRITTEN for names its
+    script ``pnr_fixed.tcl``, not ``pnr.tcl``. Wired on the literal
+    ``phase3/stage3/pnr/pnr.tcl`` the gate would have returned the
+    input-missing tier on exactly that run.
+  * the flow's gate commands are evaluated with bash-nullglob semantics, so a
+    ``pnr*.tcl`` pattern that matches nothing is DROPPED from argv entirely and
+    argparse's own "missing argument" exit happens to be 2. Relying on that
+    coincidence to produce the disclosed-skip tier is not a contract.
+
+A directory holding no ``pnr*.tcl`` (a run that never reached P&R) is the
+DISCLOSED-SKIP tier, exit 2 — not a pass and not a failure. That is what lets
+the gate be wired UNCONDITIONALLY: a `condition_files_exist` on the very script
+whose absence would be interesting is the self-disabling shape
+`flow_condition_reachability_check` exists to refuse.
+
+KNOWN HARDENING GAP (disclosed, not fixed here)
+-----------------------------------------------
+This is a token audit, not a Tcl interpreter. Two shapes still read as present:
+a chain inside a disabled ``if {0} { ... }`` block, and the command names
+quoted inside a ``puts "TODO: add set_wire_rc …"`` string. Both are false
+PASSes on a script a human wrote to be obviously dead. The gate is still the
+declared inverse of ``openroad_tcl_deprecation_check`` and still catches the
+absence it was written for (see the negative control in the PR that wired it).
+
 CLI::
 
     python3 pnr_timing_repair_completeness_check.py pnr.tcl
+    python3 pnr_timing_repair_completeness_check.py phase3/stage3/pnr
     python3 pnr_timing_repair_completeness_check.py pnr.tcl --json out.json
 
 Exit codes::
 
     0 — PASS: all required setup-repair commands present.
     1 — FAIL: at least one required command missing (or hold-only anti-pattern).
-    2 — error: file missing / unreadable / empty / no Tcl content.
+    2 — error / disclosed skip: file missing / unreadable / empty / no Tcl
+        content / a directory that holds no P&R script at all.
 """
 from __future__ import annotations
 
@@ -190,62 +223,121 @@ def audit(script_path: Path) -> Tuple[str, List[TokenFinding], Dict[str, Any]]:
     return verdict, findings, summary
 
 
+#: What a DIRECTORY positional expands to. `pnr_fixed.tcl` is a real published
+#: name; `sta_one.tcl` / `magic_stream_out.tcl` / `metal_fill_*.tcl` sit in the
+#: same directory and are NOT P&R flows, so the glob is deliberately narrow.
+_PNR_SCRIPT_GLOB = "pnr*.tcl"
+
+_WORST = {"PASS": 0, "WARN": 1, "FAIL": 2}
+
+
+def _expand(paths: List[str]) -> Tuple[List[Path], List[str]]:
+    """Resolve positionals to concrete scripts. Returns (scripts, skips)."""
+    scripts: List[Path] = []
+    skips: List[str] = []
+    for raw in paths:
+        p = Path(raw)
+        if p.is_dir():
+            hits = sorted(p.glob(_PNR_SCRIPT_GLOB))
+            if not hits:
+                skips.append(f"{p}: no {_PNR_SCRIPT_GLOB} in this directory")
+            scripts.extend(hits)
+        elif p.is_file():
+            scripts.append(p)
+        else:
+            skips.append(f"{p}: not found")
+    # de-dup, order-stable
+    seen, out = set(), []
+    for s in scripts:
+        r = s.resolve()
+        if r not in seen:
+            seen.add(r)
+            out.append(s)
+    return out, skips
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Audit an OpenROAD P&R Tcl script for the mandatory "
                     "setup-timing-repair sequence (set_wire_rc + "
                     "repair_design + repair_timing -setup). Catches the "
-                    "hold-only silicon-DOA anti-pattern.")
-    ap.add_argument("script", help="path to the PnR Tcl script (or a file "
-                                    "with an embedded Tcl flow)")
+                    "hold-only silicon-DOA anti-pattern. A DIRECTORY "
+                    "positional expands to every pnr*.tcl inside it.")
+    ap.add_argument("script", nargs="+",
+                    help="PnR Tcl script(s), or a directory holding pnr*.tcl")
     ap.add_argument("--json", help="write JSON report to this path")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args(argv)
 
-    path = Path(args.script)
-    if not path.is_file():
-        print(f"error: script not found: {path}", file=sys.stderr)
-        return 2
-    try:
-        raw = path.read_text(errors="replace")
-    except OSError as exc:
-        print(f"error: cannot read {path}: {exc}", file=sys.stderr)
-        return 2
-    if not raw.strip():
-        print(f"error: empty file, no PnR flow to audit: {path}", file=sys.stderr)
-        return 2
-    if not _looks_like_tcl_pnr(raw):
-        print(f"error: no OpenROAD P&R Tcl flow detected in {path} "
-              f"(no read_verilog/global_placement/repair_* anchors)",
-              file=sys.stderr)
+    scripts, skips = _expand(args.script)
+    single = len(args.script) == 1 and Path(args.script[0]).is_file()
+
+    audited: List[Dict[str, Any]] = []
+    for path in scripts:
+        try:
+            raw = path.read_text(errors="replace")
+        except OSError as exc:
+            skips.append(f"{path}: cannot read ({exc})")
+            continue
+        if not raw.strip():
+            skips.append(f"{path}: empty file, no PnR flow to audit")
+            continue
+        if not _looks_like_tcl_pnr(raw):
+            skips.append(f"{path}: no OpenROAD P&R Tcl flow detected "
+                         f"(no read_verilog/global_placement/repair_* anchors)")
+            continue
+        verdict, findings, summary = audit(path)
+        audited.append({"script": str(path), "verdict": verdict,
+                        "summary": summary,
+                        "findings": [asdict(f) for f in findings]})
+
+    if not audited:
+        # DISCLOSED SKIP (exit 2), never a vacuous PASS: nothing auditable was
+        # found, and "no P&R script here" is a different fact from "the P&R
+        # script is complete".
+        for s in skips:
+            print(f"error: {s}", file=sys.stderr)
+        if not skips:
+            print("error: no P&R Tcl script to audit", file=sys.stderr)
+        print("VACUOUS_PASS: pnr_timing_repair_completeness_check — "
+              "no OpenROAD P&R Tcl flow to audit (NOT CHECKED)")
         return 2
 
-    verdict, findings, summary = audit(path)
+    worst = max(audited, key=lambda a: _WORST[a["verdict"]])
+    verdict = worst["verdict"]
+    summary = worst["summary"]
     report = {
         "gate": "pnr_timing_repair_completeness_check",
         "verdict": verdict,
-        "script": str(path),
+        "script": worst["script"],
         "summary": summary,
-        "findings": [asdict(f) for f in findings],
+        "findings": worst["findings"],
+        "audited": audited,
+        "skipped": skips,
     }
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(report, indent=2) + "\n")
 
-    print(f"{verdict}: pnr_timing_repair_completeness_check — "
-          f"setup_chain={'yes' if summary['setup_repair_chain_present'] else 'NO'}; "
-          f"hold={'yes' if summary['hold_repair_present'] else 'no'}; "
-          f"missing_required={summary['missing_required'] or 'none'}")
-    if summary["hold_only_antipattern"]:
-        print("  [hold_only_antipattern] script runs `repair_timing -hold` but "
-              "NONE of {set_wire_rc, repair_design, repair_timing -setup} — "
-              "this is the sha256 silicon-DOA shape (optimistic STA, "
-              "unbuffered high-fanout nets).")
-    if args.verbose or verdict != "PASS":
-        for f in findings:
-            mark = "ok" if f.present else "MISSING"
-            print(f"  [{f.severity}] {f.label}: {mark}")
+    for a in audited:
+        s = a["summary"]
+        scope = "" if single else f" [{a['script']}]"
+        print(f"{a['verdict']}: pnr_timing_repair_completeness_check{scope} — "
+              f"setup_chain={'yes' if s['setup_repair_chain_present'] else 'NO'}; "
+              f"hold={'yes' if s['hold_repair_present'] else 'no'}; "
+              f"missing_required={s['missing_required'] or 'none'}")
+        if s["hold_only_antipattern"]:
+            print("  [hold_only_antipattern] script runs `repair_timing -hold` "
+                  "but NONE of {set_wire_rc, repair_design, "
+                  "repair_timing -setup} — this is the silicon-DOA shape "
+                  "(optimistic STA, unbuffered high-fanout nets).")
+        if args.verbose or a["verdict"] != "PASS":
+            for f in a["findings"]:
+                mark = "ok" if f["present"] else "MISSING"
+                print(f"  [{f['severity']}] {f['label']}: {mark}")
+    for s in skips:
+        print(f"  skipped: {s}")
 
     return 0 if verdict in ("PASS", "WARN") else 1
 

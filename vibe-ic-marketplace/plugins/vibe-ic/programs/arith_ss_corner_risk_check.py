@@ -1,16 +1,38 @@
 #!/usr/bin/env python3
 """arith_ss_corner_risk_check.py — slow-corner arithmetic-architecture advisor.
 
-Predicts the timing-closure re-architectures that the spm and sha256 benchmark
-ICs both needed: a wide single-cycle ripple-carry add / accumulate / compare
-chain closes at TT but blows the SS (slow-slow, cold, low-V) corner, forcing a
-carry-save / carry-select / pipelined rebuild. Today that is only discovered
-*after* a full multi-corner STA round-trip. This surfaces the risk from RTL,
-before synthesis.
+Predicts a timing-closure re-architecture: a wide single-cycle ripple-carry
+add / accumulate / compare chain closes at TT but blows the SS (slow-slow,
+cold, low-V) corner, forcing a carry-save / carry-select / pipelined rebuild.
+Today that is only discovered *after* a full multi-corner STA round-trip. This
+surfaces the risk from RTL, before synthesis.
+
+CORRECTION, measured when this was wired (it previously claimed BOTH the spm
+and sha256 benchmark ICs as motivating cases): on sha256 it fires — 21 HIGH on
+the published RTL, on the real 32-bit round adders. On spm it finds NOTHING,
+and NOT because a mitigation marker silences it: stripping every marker from
+the published spm RTL still yields 0 findings, because that datapath is an
+XOR/AND carry-save array containing no `+`, `-` or `*` at all. The rebuild spm
+needed is therefore outside what this heuristic can see. Only the sha256 half
+of the original claim is demonstrable from the published corpus.
 
 It is an ADVISORY lint (a risk predictor, not a proof): default exit is 0 and
 findings are WARN/INFO. `--strict` makes a HIGH-risk finding fail (exit 1) so
 it can act as a gate where desired.
+
+ENFORCEMENT: advisory
+
+HOW `--strict` IS USED IN THE FLOW, and why it is not a promotion
+-----------------------------------------------------------------
+Wired at Step 2 in the `advisory_program_exit_zero` slot, which RUNS the
+program, RECORDS the verdict and returns True unconditionally. That slot judges
+by EXIT CODE ONLY: rc=0 is recorded as the single word `ok`. Without `--strict`
+this program always exits 0, so a run with ninety-odd HIGH findings and a run
+with none would produce byte-identical evidence — the disclosure the wiring
+exists for would be discarded at the moment of recording. `--strict` is
+therefore the RECORDING channel here, not a tightening: rc=1 is the only way the
+findings reach the compliance report, and the advisory slot still cannot fail
+the step.
 
 Heuristic, per module (chip-AGNOSTIC, purely structural):
   1. Build a width table from `reg/wire/logic [H:L] name` declarations.
@@ -156,6 +178,42 @@ def _strip_index_math(expr: str) -> str:
     return expr
 
 
+#: A parenthesised SHIFT AMOUNT. Same principle as `_strip_index_math`: the
+#: operand of `<<` / `>>` is a shift distance of at most log2(width) bits, so
+#: arithmetic inside it is not a datapath carry chain.
+#:
+#: MEASURED FALSE POSITIVE this removes, on real published RTL — a rotate
+#: helper written as
+#:     function [31:0] rotr; input [31:0] x; input [4:0] n;
+#:         begin rotr = (x >> n) | (x << (6'd32 - n)); end
+#: was reported as a "32-bit add/compare chain feeding 'rotr'". The only `-` in
+#: it is a 6-bit shift-amount subtraction; the datapath is two shifts and an OR.
+_SHIFT_AMOUNT = re.compile(r'(<<<?|>>>?)\s*\(([^()]*)\)')
+
+
+def _strip_shift_amount_math(expr: str) -> str:
+    """Blank out arithmetic that only computes a shift distance."""
+    prev = None
+    while prev != expr:
+        prev = expr
+        expr = _SHIFT_AMOUNT.sub(r'\1 0', expr)
+    return expr
+
+
+def _paren_depths(text: str) -> List[int]:
+    """Depth of `(` nesting at each character index."""
+    depths = [0] * (len(text) + 1)
+    d = 0
+    for i, ch in enumerate(text):
+        if ch == '(':
+            d += 1
+        depths[i] = d
+        if ch == ')':
+            d = max(0, d - 1)
+    depths[len(text)] = d
+    return depths
+
+
 def _expr_carry_width(lhs: str, rhs: str, widths: Dict[str, int]) -> int:
     """Effective carry-chain width of `rhs`: widest operand used WHOLE, or the
     declared width of a `[H:L]` slice. A name used only as an index target
@@ -188,14 +246,29 @@ def analyse_module(name: str, body: str, base_line: int, path: str,
     header_end = body.find(';')
     if header_end < 0:
         header_end = 0
+    depths = _paren_depths(body)
     findings: List[Finding] = []
     for m in _ASSIGN.finditer(body):
         if m.start() < header_end:
             continue
+        # A non-blocking assignment and an `assign` are STATEMENTS: their
+        # operator sits at paren depth 0. A `<=` at depth > 0 is a COMPARISON —
+        # inside an assertion macro, a function call argument, an `if (…)`.
+        #
+        # MEASURED FALSE POSITIVE this removes, on real published RTL:
+        #   `ASSERT_INIT(MaxLfsrWidth_A, LfsrDw <= $high(LFSR_COEFFS)+LUT_OFF)
+        # has no terminating `;`, so `([^;]*);` swallowed every following line
+        # until the next statement and reported a "168-bit add/compare chain
+        # feeding 'LfsrDw'" — for a parameter, in an assertion, that is not a
+        # datapath at all.
+        if depths[m.start(2)] != 0:
+            continue
         lhs, _op, rhs = m.group(1), m.group(2), m.group(3)
         if '"' in rhs or re.search(r'\b(?:parameter|localparam)\b', rhs):
             continue   # string-valued / over-ran into a parameter list
-        ops = _ARITH.findall(_strip_index_math(rhs))   # ignore index math
+        # ignore index math and shift-distance math
+        ops = _ARITH.findall(
+            _strip_shift_amount_math(_strip_index_math(rhs)))
         if not ops:
             continue
         has_mul = '*' in ops
@@ -281,8 +354,9 @@ def main(argv: List[str] | None = None) -> int:
     for fd in sorted(findings, key=lambda x: (x.file, x.line)):
         print(f"  {fd.file}:{fd.line}: [{fd.risk}] {fd.rule}: {fd.message}")
     if args.json:
-        Path(args.json).write_text(json.dumps([asdict(f) for f in findings],
-                                              indent=2))
+        outp = Path(args.json)
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        outp.write_text(json.dumps([asdict(f) for f in findings], indent=2))
     return 1 if fail else 0
 
 

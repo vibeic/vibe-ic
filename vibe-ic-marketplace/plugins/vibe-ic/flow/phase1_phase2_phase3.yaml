@@ -344,6 +344,10 @@ steps:
       - memory_read_pipeline_check          # Memory modules must
                                             # document 1-cycle read
                                             # latency or expose _valid.
+      - arith_ss_corner_risk_check          # ADVISORY: a wide single-cycle
+                                            # ripple add/compare chain is a
+                                            # slow-corner (SS) closure risk.
+                                            # Reports, never blocks.
     required_outputs:
       - "reports/phase2/lint/rtl_hygiene.json"
       - "reports/phase2/lint/rom_init_lint.json"
@@ -397,6 +401,32 @@ steps:
         - optional_program_exit_zero:
             command: "fpga_wrapper_input_polluter_check --rtl phase2/stage1/rtl --json reports/phase2/gates/fpga_input_polluter.json"
             condition_files_exist: ["phase2/stage1/rtl"]
+        # Slow-corner arithmetic-architecture ADVISORY (a risk predictor from
+        # RTL, not a proof). A wide single-cycle ripple add/accumulate/compare
+        # chain closes at TT and blows SS, forcing a carry-save / carry-select /
+        # pipelined rebuild — today discovered only after a full multi-corner
+        # STA round trip. It declares `ENFORCEMENT: advisory` and was wired
+        # NOWHERE; its only automatic caller was an MCP tool that nothing in
+        # the flow invokes.
+        #
+        # The `advisory_program_exit_zero` slot RUNS it and RECORDS the verdict
+        # and can never fail the step. `--strict` is present because that slot
+        # judges by EXIT CODE ONLY: without it the program always exits 0 and
+        # the compliance record reads the single word `ok` whether the design
+        # has 0 findings or 85 — the disclosure would be discarded at the
+        # moment of recording. rc=1 is the only channel that emits a FINDING
+        # line, and it still cannot block. It is a sub-gate of `all_of` rather
+        # than a sibling key, because `_evaluate_gate` returns inside the
+        # blocking branch and an advisory beside a blocking key never runs.
+        #
+        # DISCLOSED FINDING COUNT, measured over all 40 published RTL roots
+        # (every `phase2/stage1/rtl` under benchmark-data): 11 roots emit at
+        # least one HIGH, 85 HIGH findings in total; 0 roots block, by
+        # construction. WHAT WOULD MAKE IT BLOCKING, in order: a per-design
+        # waiver channel (3 of the 11 are third-party vendor RTL the flow does
+        # not author), then a re-measure, then a per-step promotion with the
+        # new number stated.
+        - advisory_program_exit_zero: "arith_ss_corner_risk_check --strict phase2/stage1/rtl --json reports/phase2/gates/arith_ss_corner_risk.json"
     blocks_on: [1]
 
   - id: 3
@@ -1659,11 +1689,45 @@ steps:
     skills: [placement-optimize]
     programs:
       - placement_legality_check
+      - pnr_timing_repair_completeness_check
     mcp_tools: [eda_pnr]
     required_outputs:
       - "phase3/stage3/pnr/placed.def"
     gate:
       all_of:
+        # The DECLARED INVERSE of `openroad_tcl_deprecation_check` (which flags
+        # the PRESENCE of removed tokens; this flags the ABSENCE of required
+        # ones), and it was wired NOWHERE — its own unit test was the only
+        # thing that had ever run it. It asserts the P&R script carries
+        # `set_wire_rc` + `repair_design` + `repair_timing -setup`. Without
+        # set_wire_rc OpenSTA has no per-layer R/C, so STA is optimistic and
+        # `repair_timing -setup` aborts; a script that runs ONLY
+        # `repair_timing -hold` ships unbuffered high-fanout nets. That is a
+        # measured silicon-DOA shape, not a hypothetical: on one published
+        # benchmark run post-route WNS was -102.76 ns and was mis-attributed to
+        # the algorithm; adding the chain gave +10.95 ns on the SAME RTL.
+        #
+        # THREE deliberate wiring choices, each measured:
+        #   * FIRST in the `all_of`, not last. `_evaluate_gate` SHORT-CIRCUITS:
+        #     it returns on the first failing sub-gate and only later ADVISORY
+        #     sub-gates still run. Wired last, this gate ran on 0 of 5 sampled
+        #     published runs. It carries an rc=2 NOT-CHECKED tier and measures
+        #     0 red over the whole corpus, so ordering it first cannot turn a
+        #     green run red — it only guarantees the gate executes whenever
+        #     the step is evaluated at all.
+        #   * UNCONDITIONAL. `condition_files_exist: [phase3/stage3/pnr/pnr.tcl]`
+        #     is the self-disabling shape `flow_condition_reachability_check`
+        #     refuses — measured: patching it in makes that gate FAIL with
+        #     "step 17 predicate pnr_timing_repair_completeness_check: no
+        #     trigger survives". The rc=2 tier does the same job without a hole.
+        #   * the argument is the P&R DIRECTORY, because the published run
+        #     whose defect this gate was written for names its script
+        #     `pnr_fixed.tcl`. On the literal `pnr.tcl` the gate reached 5 of
+        #     34 run roots and MISSED exactly that one; on the directory it
+        #     reaches 6 and includes it.
+        # BLAST RADIUS, measured over all 34 published phase-3 run roots:
+        # 0 FAIL / 6 PASS / 28 rc=2 NOT CHECKED. No published run turns red.
+        - program_exit_zero: "pnr_timing_repair_completeness_check phase3/stage3/pnr --json reports/phase3/pnr/timing_repair_completeness.json"
         - files_exist: ["phase3/stage3/pnr/placed.def"]
         - program_exit_zero: "placement_legality_check . --json reports/phase3/placement_legality.json"
     blocks_on: [16]
@@ -1775,10 +1839,40 @@ steps:
     skills: [hold-fix]
     programs:
       - hold_closure_check
+      - hold_area_budget_check
     required_outputs:
       - "phase3/stage3/pnr/post_hold.def"
     gate:
       all_of:
+        # The hold-fix SKILL's guardrail #2 — "hold buffers should not exceed
+        # 5% of total cell area" — is enforced at NEITHER end of the flow, and
+        # this wiring exists to SAY SO on every run rather than in a list.
+        # Measured: 0 files under benchmark-data carry hold_buffer_area /
+        # total_cell_area / a before-after total pair, 0 area*.rpt exist,
+        # `max_buffer_percent` appears 0 times in phase3_one_shot_runner.py and
+        # 0 times in all 8 published pnr*.tcl, and the flow's only area
+        # emission is a single post-P&R report_design_area with no bracket
+        # around the hold-repair step. `hold_closure_check` below covers slack
+        # and inserted-INSTANCE delta; nothing covers AREA.
+        #
+        # So this gate cannot judge today and says NOT CHECKED (rc=2, the
+        # disclosed-skip tier) with the missing producer named, on all 34
+        # published run roots — 0 red. It is wired rather than inventoried
+        # because a per-run disclosure cannot rot the way a static list can,
+        # and because the day a producer lands the same wiring judges it with
+        # no further change. It is NOT added to `gate_skip_routing_check`'s
+        # `_UNROUTED_INVENTORY`: that list ratchets counts of unrouted SKIP
+        # PATHS, this gate measures 0 of them, and an inventory entry absent
+        # from the measured set is reported by `ratchet()` as
+        # `fixed -> delete the inventory entry`, i.e. adding it there FAILs
+        # that gate.
+        #
+        # FIRST in the `all_of` for the same reason as Step 17's addition:
+        # `_evaluate_gate` short-circuits on the first failing sub-gate, so a
+        # disclosure wired last is a disclosure that is skipped on exactly the
+        # runs that needed it. It can only ever return rc=2 today, so the
+        # position costs nothing.
+        - program_exit_zero: "hold_area_budget_check . --json reports/phase3/pnr/hold_area_budget.json"
         # File-presence precondition (kept, consistent with sibling Steps 21/23).
         - files_exist: ["phase3/stage3/pnr/post_hold.def"]
         # Substance: prove the Step-20 hold-FIXING step did real work — either a
@@ -2088,6 +2182,45 @@ steps:
       #     SPEF, and extraction has a documented tool-unavailable waiver path.
     gate:
       all_of:
+        # HOLD IS WORST AT THE FAST CORNER. `sta_corner_record_completeness_check`
+        # below judges each declared corner "for the ROLE it was declared to
+        # serve" — it never asks whether assigning the HOLD role to a non-fast
+        # corner is legitimate in the first place. Nothing wired did, and this
+        # gate — which asks exactly that — had never run outside its own unit
+        # test. Measured consequence on a real published run: the runner's
+        # fallback `hold_label = "FF" if "FF" in corner_libs else "TT" if "TT"
+        # ...` resolved to TT on a PDK with no fast liberty, the run recorded
+        # `hold_process_corner: "TT"`, and every wired gate accepted the role.
+        #
+        # UNCONDITIONAL, for the reason this step's own comment already gives
+        # about its sibling: gating a corner gate on the corner artefact is how
+        # an unreported corner became indistinguishable from a met one. The
+        # gate carries an rc=2 NOT-CHECKED tier for a run that produced no hold
+        # sign-off record at all, so the unconditional wire costs nothing;
+        # without that tier an unconditional wire reddened 31 of 33 roots for
+        # INPUT_MISSING, which is why the tier was added in the same change.
+        # It judges the DECLARED stance (reports/phase3/mcorner_ocv_stance.json)
+        # first and a hold STA script only as a fallback — the stance is
+        # durable when the Tcl is pruned from a published run, and it is what
+        # the run actually decided.
+        #
+        # FIRST in the `all_of`, deliberately, and this one HAS a cost worth
+        # stating: `_evaluate_gate` short-circuits on the first failing
+        # sub-gate, so wired last this gate did not execute on 4 of 5 sampled
+        # published runs — including the one run it has something to say about,
+        # whose `files_exist` below fails first. Wired first it executes
+        # whenever step 23 is evaluated. On the 33 roots where it PASSes or
+        # returns rc=2 every sibling still runs exactly as before; on the ONE
+        # root where it FAILs (benchmark-data/ic/edge_llm_accel) the siblings
+        # no longer report, so that run's step-23 reason becomes HOLD_NOT_AT_FF
+        # instead of the missing post_route_timing.rpt. Both are true and the
+        # step is FAIL either way.
+        # BLAST RADIUS over all 34 published phase-3 run roots: 1 FAIL /
+        # 7 PASS / 26 rc=2 NOT CHECKED. The single FAIL is
+        # benchmark-data/ic/edge_llm_accel, where step 23 was ALREADY FAIL on
+        # `sta_report_check` and `sta_corner_record_completeness_check`, so no
+        # published run changes its step VERDICT.
+        - program_exit_zero: "hold_corner_coverage_check . --json reports/phase3/sta/hold_corner_coverage.json"
         - files_exist: ["phase3/stage3/sta/post_route_timing.rpt"]
         # `--mode` is a report CLASS, not a directory — see step 10. The
         # declared `phase3/stage3/sta` is not an eda_report_audit choice and
