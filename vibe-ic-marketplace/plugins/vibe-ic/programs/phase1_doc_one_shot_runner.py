@@ -47895,6 +47895,90 @@ def gen_l9_integration_spec(project: Path,
                     break
         if top_module:
             break
+    # === THE STAGED RTL TREE WAS INVISIBLE TO PHASE 1 ===
+    #
+    # The scan above needs BOTH a directory named `input/rtl/` or `rtl/` AND a
+    # file named chip_top/top/dut. A Path-A run stages its sources under
+    # `input/design_src/`, which matches neither. `grep -n design_src` over this
+    # file returns NOTHING: the staged RTL tree is read only by Phase 2
+    # (`design_one_shot_runner`, `reused_ip_rtl_consume`, `floorplan_contract`),
+    # so Phase 1 infers the top module from prose while the `module`
+    # declaration sits unread in the run's own input tree.
+    #
+    # MEASURED (caravel_user_project x sky130A, v1.9.71):
+    #     input/design_src/verilog/rtl/user_project_wrapper.v:32
+    #         module user_project_wrapper #(
+    #     L9_INTEGRATION_SPEC.json
+    #         "top_module": "caravel_user_project",
+    #         "top_module_extraction_strategy": "l1_ic_name_fallback",
+    #         "no_top_module_in_input": false
+    # The weak last-resort fallback hashed the PRODUCT name into a module that
+    # exists nowhere, while recording that the input DID name a top. The run
+    # only synthesized the right cell because `--top-name` was passed on the
+    # command line; without it that name goes into Phase 2.
+    #
+    # WHY A STRUCTURAL RULE AND NOT MORE FILENAMES. `top.v` is a convention, and
+    # a convention that has already failed once here. The top of an RTL tree has
+    # a definition that needs no convention: it is DECLARED and no other module
+    # in the same tree INSTANTIATES it. That is what is computed below.
+    #
+    # FAIL-OPEN BY CONSTRUCTION. The answer is taken ONLY when exactly one
+    # declared module is uninstantiated. Zero (every module instantiated —
+    # a cyclic or partial tree) or several (testbenches, sibling tops, an
+    # unpruned staging set) falls through to the existing cascade unchanged, so
+    # this can add a top module where there was none but can never replace a
+    # confidently-extracted one with a guess. chip-AGNOSTIC: Verilog tokens only.
+    if top_module is None:
+        _src_root = project / "input" / "design_src"
+        if _src_root.is_dir():
+            _decl: Dict[str, int] = {}
+            _inst: set = set()
+            _mod_re = re.compile(
+                r"^\s*module\s+([A-Za-z_][A-Za-z0-9_]{0,63})", re.MULTILINE)
+            # `<master> <instance> (` / `<master> #(...) <instance> (` — the two
+            # Verilog instantiation forms. Anchored at line start so a bare
+            # identifier inside an expression cannot look like an instance.
+            _inst_re = re.compile(
+                r"^\s*([A-Za-z_][A-Za-z0-9_]{0,63})\s*"
+                r"(?:#\s*\([^;]*?\)\s*)?"
+                r"([A-Za-z_][A-Za-z0-9_]{0,63})\s*\(",
+                re.MULTILINE | re.DOTALL)
+            _KEYWORDS = {
+                "module", "endmodule", "input", "output", "inout", "wire",
+                "reg", "logic", "assign", "always", "always_ff", "always_comb",
+                "always_latch", "initial", "generate", "endgenerate", "if",
+                "else", "case", "casex", "casez", "endcase", "for", "while",
+                "function", "endfunction", "task", "endtask", "begin", "end",
+                "parameter", "localparam", "define", "include", "timescale",
+                "ifdef", "ifndef", "endif", "default", "posedge", "negedge",
+                "return", "typedef", "struct", "package", "endpackage",
+            }
+            try:
+                _files = [p for p in sorted(_src_root.rglob("*"))
+                          if p.is_file() and p.suffix.lower() in (".v", ".sv")]
+            except OSError:
+                _files = []
+            for _f in _files:
+                try:
+                    _txt = _f.read_text(errors="ignore")
+                except OSError:
+                    continue
+                # Strip comments before either scan — a commented-out
+                # instantiation must not make a real top look instantiated.
+                _txt = re.sub(r"//[^\n]*", " ", _txt)
+                _txt = re.sub(r"/\*.*?\*/", " ", _txt, flags=re.DOTALL)
+                for _m in _mod_re.finditer(_txt):
+                    _decl.setdefault(_m.group(1), 0)
+                for _m in _inst_re.finditer(_txt):
+                    _master, _inst_name = _m.group(1), _m.group(2)
+                    if (_master in _KEYWORDS or _inst_name in _KEYWORDS
+                            or _master.startswith("`")):
+                        continue
+                    _inst.add(_master)
+            _roots = sorted(n for n in _decl if n not in _inst)
+            if len(_roots) == 1:
+                top_module = _roots[0]
+                top_module_extraction_strategy = "staged_rtl_structural_top"
     # v1.6.273 — for #135 ORGANIC. Doc-side top-module fallback chain.
     # Pre-v1.6.273 the only extractor scanned `input/rtl/` for module
     # declarations; doc-only Phase 1 (doc-extraction) inputs always emitted the sentinel
