@@ -91,19 +91,68 @@ def _load_reused(project: Path) -> Tuple[bool, bool]:
     return doc.get("reused_ip") is True, True
 
 
+# A file's own copyright header. SPDX-FileCopyrightText is a machine-readable
+# assertion, BY A NAMED PARTY, that they wrote this file — the one piece of
+# per-file authorship evidence a staged tree reliably carries.
+_SPDX_COPYRIGHT = re.compile(r"^\s*(?://|/\*|\*|#)?\s*SPDX-FileCopyrightText:\s*(\S.*?)\s*$",
+                             re.MULTILINE)
+
+#: How far into a file a copyright header can appear. Bounded so a copyright
+#: NOTICE quoted in the body of a long file is not read as this file's header.
+_HEADER_LINES = 40
+
+
+def third_party_copyright(path: Path) -> Optional[str]:
+    """The copyright holder this file's own header names, or None.
+
+    Read from the header region only. This is EVIDENCE, not inference: the
+    file states who wrote it."""
+    try:
+        head = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace").splitlines()[:_HEADER_LINES])
+    except OSError:
+        return None
+    m = _SPDX_COPYRIGHT.search(head)
+    return m.group(1) if m else None
+
+
 def collect(project: Path) -> List[Tuple[str, str, str]]:
     """Walk phase2/stage1/rtl and tag each module. Returns a sorted list of
     (module, tag, relative_file) where tag is 'REUSED-IP' or 'GENERATED'.
 
-    DESIGN-LEVEL provenance (the only faithful split the artifacts carry): a
-    ``reused_ip:true`` manifest → every staged module is REUSED-IP; no reused
-    manifest → every module is GENERATED (the runner authored the RTL). This
-    never falsely tags vendor RTL as generated, nor generated RTL as vendor."""
+    DESIGN-LEVEL provenance is the DEFAULT: a ``reused_ip:true`` manifest →
+    REUSED-IP; no reused manifest → GENERATED.
+
+    PER-FILE EVIDENCE OVERRIDES THAT DEFAULT. The design-level rule used to be
+    the whole answer, and its docstring claimed it "never falsely tags vendor
+    RTL as generated". MEASURED, that claim was false: on a run where
+    ``ip_catalog_query`` REFUSED the catalog match and no reused manifest was
+    written, 21 of 27 staged files carried a third-party
+    ``SPDX-FileCopyrightText`` header and every one of them was tagged
+    GENERATED. The emitted manifest read:
+
+        - Reused from catalog / vendor RTL: 0
+        - Authored this run: 27
+
+    while 21 of those files name someone else as their author, in their own
+    first 12 lines. The program asserted authorship without ever opening the
+    file. That manifest is what ``benchmark_verify_report`` consumes, so a
+    false attribution reached a published report.
+
+    A file whose own header names a copyright holder was not authored by this
+    run, whatever the design-level default says.
+
+    THIS IS A LOWER BOUND, and deliberately so: a vendored file whose header
+    was stripped still counts as authored. Measured across the corpus, 2 of 7
+    ICs with staged RTL carry SPDX headers at all. Closing the rest needs
+    evidence this tree does not carry; converting a groundless "0" into a
+    true-but-incomplete count is the improvement available here, and the
+    incompleteness is disclosed in the rendered manifest rather than hidden."""
     rtl = _rtl_dir(project)
     if not rtl.is_dir():
         return []
     is_reused, _present = _load_reused(project)
-    tag = "REUSED-IP" if is_reused else "GENERATED"
+    default_tag = "REUSED-IP" if is_reused else "GENERATED"
     rows: Dict[str, Tuple[str, str]] = {}
     files = sorted(rtl.rglob("*.v")) + sorted(rtl.rglob("*.sv"))
     for f in files:
@@ -113,6 +162,9 @@ def collect(project: Path) -> List[Tuple[str, str, str]]:
             rel = str(f.relative_to(project))
         except ValueError:
             rel = f.name
+        tag = default_tag
+        if tag == "GENERATED" and third_party_copyright(f) is not None:
+            tag = "REUSED-IP"
         for mod in _module_names(f):
             rows.setdefault(mod, (tag, rel))  # first declaration wins
     return sorted((m, t, r) for m, (t, r) in rows.items())
@@ -140,6 +192,16 @@ def render_md(project: Path) -> Optional[str]:
     L.append("")
     L.append(f"- Reused from catalog / vendor RTL: {n_reused}")
     L.append(f"- Authored this run: {n_gen}")
+    L.append("")
+    # The authored-this-run count is an UPPER bound and says so. A staged file
+    # whose copyright header was stripped is indistinguishable here from one
+    # the run wrote, so silence about that limit would be the same groundless
+    # assertion this program used to make.
+    L.append("_Provenance evidence: a module is counted as reused when its own "
+             "file header carries an `SPDX-FileCopyrightText` naming an author, "
+             "or when the reused-IP manifest lists it. A vendored file with no "
+             "such header cannot be told apart from an authored one, so "
+             "**`Authored this run` is an upper bound**._")
     L.append("")
     L.append("| Module | Source | File |")
     L.append("|---|---|---|")
