@@ -11013,27 +11013,89 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
 
     chip-AGNOSTIC: no design literal; the emitter derives every field from
     the run's own RTL / L-docs / measured oracle framing.
+
+    WHICH EMITTER SPEAKS, AND WHY THAT ORDER MATTERS. The step above was wired
+    to `arith_declaration_emit.py` ALONE. That emitter resolves an
+    ARITHMETIC-PRIMITIVE field set — `bit_order`, `size_param`,
+    `multiplier_algorithm`, `integer_encoding`. But the artifact it produces is
+    the one `spec_required_artifact_check` demands whenever ANY design's own
+    spec declares it, and a spec is free to declare an entirely different field
+    set. MEASURED on a processor-class design whose spec declares an 8-field
+    contract (top module, memory size, reset polarity, clock port, bus
+    protocol, ...): the wired emitter fail-closed naming `bit_order`,
+    `size_param`, `multiplier_algorithm` and `integer_encoding` — four fields
+    that design's spec never mentions — so no file was written, the
+    required-artifact gate FAILed, and the whole flow halted in Phase 2 with a
+    remediation hint the author could not act on because it named the wrong
+    contract.
+
+    `spec_declaration_emit.py` is the CONTRACT-DRIVEN emitter for exactly this:
+    it reads the field list out of the PROJECT'S OWN Phase-1 documents. It was
+    wired in `--contract` mode only (the authoring hint), never as a producer.
+    So the general emitter existed, was tested, and could not write; the
+    arithmetic-only emitter was the sole producer and could not know the
+    contract.
+
+    Order: ask the contract-driven emitter FIRST. It exits 3 (NO_CONTRACT) when
+    the spec declares no declaration contract at all, which is precisely the
+    arithmetic-primitive case — so that rc falls through to the previous
+    behaviour, unchanged. When a contract IS declared, its fail-closed reason
+    names THAT SPEC'S fields, which is the reason an author can act on.
+
+    STILL NON-BLOCKING BY CONSTRUCTION: every path here returns PASS or SKIP,
+    never FAIL, so no IC that passes today can newly fail.
     """
     t0 = time.time()
     out_p = project / "plugin_output" / "declaration.json"
+
+    def _fields_of(p: Path) -> str:
+        try:
+            return ", ".join(sorted(json.loads(p.read_text()).keys()))
+        except Exception:
+            return "(unreadable)"
+
+    def _run(prog_name: str) -> Optional[subprocess.CompletedProcess]:
+        prog = PROGRAMS_DIR / prog_name
+        if not prog.is_file():
+            return None
+        try:
+            return subprocess.run([sys.executable, str(prog), str(project)],
+                                  capture_output=True, text=True, timeout=120)
+        except Exception:
+            return None
+
+    # 1. The contract-driven emitter: the field list comes from THIS project's
+    #    spec, so it is the only one that can satisfy a spec-declared contract.
+    #    rc 3 = NO_CONTRACT and rc 4 = NOTHING_TO_DECLARE both mean "this spec
+    #    declares no machine-readable contract", i.e. fall through.
+    spec_cp = _run("spec_declaration_emit.py")
+    if spec_cp is not None and spec_cp.returncode not in (3, 4):
+        if spec_cp.returncode == 0 and out_p.is_file():
+            return StepResult("arith_declaration_emit", "PASS",
+                              time.time() - t0,
+                              f"spec_declaration_emit emitted "
+                              f"plugin_output/declaration.json "
+                              f"[{_fields_of(out_p)}]", [str(out_p)])
+        reason = (spec_cp.stderr or spec_cp.stdout
+                  or "").strip().replace("\n", " ")[:400]
+        return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
+                          f"spec_declaration_emit fail-closed "
+                          f"(rc={spec_cp.returncode}); no file written — "
+                          f"{reason}")
+
+    # 2. No spec-declared contract — the previous behaviour, byte for byte.
     prog = PROGRAMS_DIR / "arith_declaration_emit.py"
     if not prog.is_file():
         return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
                           f"emitter not present at {prog}")
-    try:
-        cp = subprocess.run([sys.executable, str(prog), str(project)],
-                            capture_output=True, text=True, timeout=120)
-    except Exception as exc:
+    cp = _run("arith_declaration_emit.py")
+    if cp is None:
         return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
-                          f"emitter did not run: {exc}")
+                          "emitter did not run")
     if cp.returncode == 0 and out_p.is_file():
-        try:
-            fields = ", ".join(sorted(json.loads(out_p.read_text()).keys()))
-        except Exception:
-            fields = "(unreadable)"
         return StepResult("arith_declaration_emit", "PASS", time.time() - t0,
-                          f"emitted plugin_output/declaration.json [{fields}]",
-                          [str(out_p)])
+                          f"emitted plugin_output/declaration.json "
+                          f"[{_fields_of(out_p)}]", [str(out_p)])
     reason = (cp.stderr or cp.stdout or "").strip().replace("\n", " ")[:400]
     return StepResult("arith_declaration_emit", "SKIP", time.time() - t0,
                       f"emitter fail-closed (rc={cp.returncode}); no file "
