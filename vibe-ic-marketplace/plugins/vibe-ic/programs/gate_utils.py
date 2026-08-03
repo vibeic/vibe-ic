@@ -22,10 +22,39 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+# `steps` and `oracle_run` are the two names this set was missing relative to
+# `rtl_scan_scope.EXCLUDED_DIR_NAMES`, the tree's other RTL-scope contract.
+#
+# `steps/` is the flow's own PUBLICATION VIEW: `step_canonicalize_artefacts`
+# re-publishes each stage's output under a directory named for the flow STEP,
+# so the same emitted gate-level netlist appears there under two different step
+# names. `synth` is already excluded here, but the publication view does not
+# contain the token `synth` in its path, so the entry never matched and the
+# netlist was read anyway — twice.
+#
+# MEASURED, edge_llm_accel x nangate45, the three collectors run over the SAME
+# project at the SAME moment (imported from disk and executed, not read):
+#
+#     rtl_scan_scope.authoritative_rtl_files      6 files       51,587 bytes
+#     gate_utils.find_rtl_files                  11 files  696,685,033 bytes
+#     dispatch_..._check.collect_files           35 files  1,735,802,924 bytes
+#
+# 696 MB of the 696.7 MB here is ONE 348 MB netlist counted twice, via
+# `steps/phase2/stage2/9_synthesis_yosys_mapped_netlist/netlist.v` and
+# `steps/phase2/stage2/14_synthesis_handoff_gate_pre_pnr_yosys_script_netl/netlist.v`
+# — a factor of 13,506 over the authoritative scope. Three gates driven by this
+# collector TIMED OUT under the phase-2 umbrella's per-gate budget, the umbrella
+# FAILed, and the flow halted at phase 2 before place-and-route ever started.
+#
+# `input` is deliberately NOT added. `rtl_scan_scope` excludes it because staged
+# vendor/PDK enablement is not the design's authoritative RTL; these lint gates
+# legitimately want to see a staged macro stub, and it is small. Adding it would
+# be a silent coverage change, not a performance fix. The two names added here
+# are exactly the ones whose contents are the flow's OWN output.
 EXCLUDED_DIRS: frozenset[str] = frozenset({
     "db", "incremental_db", "output_files", "build", "sim", "synth",
     "formal", "dft", "pnr", "gds", "reports", ".git", "__pycache__",
-    "node_modules",
+    "node_modules", "steps", "oracle_run",
 })
 
 
