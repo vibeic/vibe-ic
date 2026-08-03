@@ -48176,10 +48176,45 @@ def _harvest_test_cases_from_input_tables(
                         # the absence so it is visible to any consumer instead
                         # of masquerading as a graded case.
                         _oracle_absent = bool(exp_i is not None and not last)
+                        # ORGANIC — the STIMULUS cell was picked purely
+                        # POSITIONALLY (`cells[1]` on any >=3-column table)
+                        # while `expected` is picked by HEADER SEMANTICS. On
+                        # every table whose oracle column happens to sit at
+                        # index 1 — e.g. `| test firmware | expected | covers |`
+                        # — those two resolve to the SAME cell, so the emitted
+                        # case restates its own stimulus as its golden value.
+                        # `l10_test_case_oracle_anchor_check` correctly calls
+                        # that EXPECTED_RESTATES_STIMULUS: a comparison of a
+                        # value against itself is trivially true, so the
+                        # generated testbench can never fail. Measured on a
+                        # CPU cell: 2 of 10 harvested cases were this shape,
+                        # and the source table was WELL-FORMED — the stimulus
+                        # (the firmware name) sat in column 0 all along.
+                        # Resolve by header semantics, and ONLY when the
+                        # positional pick collides with the oracle column, so
+                        # every table that was already correct is byte-identical.
+                        _stim_i = 1 if len(cells) >= 3 else 0
+                        if exp_i is not None and _stim_i == exp_i:
+                            _stim_i = next(
+                                (ci for ci, h in enumerate(hdr)
+                                 if ci < len(cells) and ci != exp_i
+                                 and _L10_TC_IN_COL.search(h.replace('_', ' '))),
+                                None)
+                            if _stim_i is None:
+                                _stim_i = next(
+                                    (ci for ci, h in enumerate(hdr)
+                                     if ci < len(cells) and ci != exp_i
+                                     and _L10_TC_TEST_COL.search(
+                                         h.replace('_', ' '))),
+                                    None)
+                            if _stim_i is None:
+                                _stim_i = 0 if exp_i != 0 else min(
+                                    1, len(cells) - 1)
                         _case = {
                             "name": name,
                             "kind": "functional_vector",
-                            "stimulus": cells[1] if len(cells) >= 3 else cells[0],
+                            "stimulus": re.sub(
+                                r'[`*]', '', cells[_stim_i]).strip(),
                             "expected": last,
                             "evidence": (f"input/docs/{fname} "
                                          "(verification-plan table)"),
