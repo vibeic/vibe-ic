@@ -22243,8 +22243,25 @@ def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
     because the token must START with `fill`: gf180's own functional tie
     cells `__tieh` / `__tiel` (and sg13g2_tiehi / sg13g2_tielo) still do not
     match and are still compared."""
-    pdk_setup = (f"{PDKS_IN_CONTAINER}/{pdk.name}/libs.tech/netgen/"
-                 f"{pdk.name}_setup.tcl")
+    # A PROJECT-STAGED PDK has no tree under the container's OSS PDK mount, and
+    # its `pdk.name` is the synthetic `custom:<dir>` — so deriving the setup
+    # path from the name yields e.g. `/foss/pdks/custom:pdk/libs.tech/netgen/
+    # custom:pdk_setup.tcl`, which cannot exist. netgen reports
+    # `couldn't read file ... (ignoring)` and CONTINUES, so `$cells1`/`$cells2`
+    # are never defined and EVERY `ignore class` below silently no-ops: the
+    # physical-only fill / decap / tap cells then compare as real subcircuits
+    # and netgen reports a mismatch that is an artefact of the missing setup,
+    # not a layout defect. The bridge setup the PDK actually ships was already
+    # resolved into `pdk.bridge_netgen_setup` (and the sibling Magic+netgen
+    # path at the `bridge_magicrc` call site already prefers it) — use it here
+    # too so the two LVS entry points cannot disagree about which setup is in
+    # force. chip-AGNOSTIC: prefers whatever the PDK bridge declared, falls
+    # back to the container convention only for an in-image PDK.
+    if pdk.bridge_netgen_setup:
+        pdk_setup = _to_container_path(pdk.bridge_netgen_setup, container)
+    else:
+        pdk_setup = (f"{PDKS_IN_CONTAINER}/{pdk.name}/libs.tech/netgen/"
+                     f"{pdk.name}_setup.tcl")
     # Family-token regexes (TCL ERE). Anchored at a `_` separator or the
     # start of the name, and at the end (with an optional numeric drive
     # suffix), so `..._fill_8`, `..._decap_4`, `..._tapvpwrvgnd_1` and
