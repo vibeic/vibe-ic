@@ -8,8 +8,8 @@ WHY IT EXISTS
 A gate's entire purpose is to produce a verdict. One that nothing invokes
 produces none, and the tree looks exactly the same either way.
 
-MEASURED over `programs/`: 558 gates (`*_check`, `*_lint`, `*_audit`,
-`*_guard`), of which 38 are referenced from NO executable location — not the
+MEASURED over `programs/`: 559 gates (`*_check`, `*_lint`, `*_audit`,
+`*_guard`), of which 73 are reachable from NO executable location — not the
 flow yaml, not CAPTURE_ROUTING.json, not another program, not `hooks/`, not
 `tools/ci/`. Among them:
 
@@ -25,11 +25,22 @@ Every one of those is the gate that would have caught a defect found by hand.
 layout, the strongest form of this defect — was a fifth, and is now run per
 published cell from `tools/ci/repo_hygiene_gates.sh`.
 
-A NOTE ON THIS FILE'S OWN NAMES. The paragraph above is why `wiring()` skips
-this program when it looks for callers. Counting an auditor's examples as
-wiring made all of them read as consulted — 34 unwired instead of 38 — and the
-gate committed the exact defect it exists to find. Pinned by
-`test_the_auditor_does_not_wire_its_own_subjects`.
+A NAME IS NOT A CALL, AND THIS GATE LEARNED IT TWICE.
+
+  1. Its own docstring names its subjects, and counting that as wiring made all
+     of them read as consulted: 34 instead of 38.
+  2. Patched for THIS FILE ONLY, which fixed the instance and left the rule.
+     vibe-ic#702 then repaired `handoff_bundle_check` and deliberately left it
+     off a rail, and this gate reported it newly WIRED — on one line of another
+     program: `#: reproduced end-to-end through handoff_bundle_check, ...`,
+     a comment. The baseline would have shrunk by one over a gate that still
+     runs nowhere.
+
+`executable_text()` is the rule: comments and docstrings are removed before
+anything is searched, in `.py`, `.yaml` and shell alike. Applying it moved the
+count from 29 to 73 — 44 gates had been held up by a comment somewhere. The
+tree did not get worse; the measurement stopped being generous. Every gate the
+tree really does invoke still reads as wired, verified by name.
 
 WHY THE EXISTING RATCHET DID NOT SEE THEM. `gate_skip_routing_check` tracks
 gates whose SKIP path does not reach a verdict, and reports `98 unrouted skip
@@ -54,7 +65,7 @@ not thereby run by anything.
 
 BASELINE, AND WHY IT MAY ONLY SHRINK
 ------------------------------------
-38 gates are unwired today. Failing the tree on all of them would make this gate
+73 gates are unwired today. Failing the tree on all of them would make this gate
 un-landable and it would be turned off, which is how a gate ends up reporting
 FAIL while blocking nothing. The known set is a baseline that may only shrink;
 anything NEW fails from the first run.
@@ -72,9 +83,12 @@ USAGE
 from __future__ import annotations
 
 import argparse
+import ast
+import io
 import json
 import re
 import sys
+import tokenize
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -102,6 +116,69 @@ def gates(plugin: Path) -> Set[str]:
             if p.name != "__init__.py" and _GATE_RE.search(p.stem)}
 
 
+def executable_text(path: Path, text: str) -> str:
+    """`text` with everything that CANNOT invoke anything removed.
+
+    A comment naming a gate is not a caller. MEASURED: vibe-ic#702 repaired
+    `handoff_bundle_check` and deliberately left it OFF a rail, and this gate
+    reported it newly wired — on the strength of one line in another program,
+
+        #: reproduced end-to-end through `handoff_bundle_check`, where the …
+
+    which is a comment. Believing it would have quietly shrunk the baseline by
+    one and hidden a gate that still runs nowhere. Same shape as counting this
+    program's own docstring; that was patched for this file alone, which fixed
+    the instance and not the rule.
+
+    A STRING is kept: `subprocess.run(["python3", "foo_check.py"])` is a real
+    call and the name only ever appears there as a literal. A DOCSTRING is
+    dropped — it is a string in expression position, executed for no effect.
+    """
+    if path.suffix == ".py":
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return text
+        drop: List[Tuple[int, int]] = []
+        for node in ast.walk(tree):
+            body = getattr(node, "body", None)
+            if not isinstance(body, list) or not isinstance(
+                    node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                           ast.ClassDef)):
+                continue
+            first = body[0] if body else None
+            if (isinstance(first, ast.Expr)
+                    and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                drop.append((first.lineno, first.end_lineno or first.lineno))
+        lines = text.splitlines()
+        for lo, hi in drop:
+            for i in range(lo - 1, min(hi, len(lines))):
+                lines[i] = ""
+        try:                                     # then the comments
+            for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+                if tok.type == tokenize.COMMENT:
+                    r, c = tok.start
+                    if r - 1 < len(lines) and lines[r - 1]:
+                        lines[r - 1] = lines[r - 1][:c]
+        except (tokenize.TokenError, IndentationError, SyntaxError):
+            pass
+        return "\n".join(lines)
+    if path.suffix in (".yaml", ".yml", ".sh") or path.suffix == "":
+        # `#` starts a comment at line start or after whitespace; a `#` inside
+        # a quoted scalar does not. Conservative: keep the line whole when the
+        # `#` sits inside a quote that opened earlier on the same line.
+        out = []
+        for ln in text.splitlines():
+            m = re.search(r'(?:^|\s)#', ln)
+            if m and ln[:m.start()].count('"') % 2 == 0 \
+                  and ln[:m.start()].count("'") % 2 == 0:
+                ln = ln[:m.start()]
+            out.append(ln)
+        return "\n".join(out)
+    return text
+
+
 def _texts(plugin: Path, repo: Path, globs, repo_globs=()) -> List[Tuple[Path, str]]:
     out = []
     for base, pats in ((plugin, globs), (repo, repo_globs)):
@@ -110,7 +187,7 @@ def _texts(plugin: Path, repo: Path, globs, repo_globs=()) -> List[Tuple[Path, s
                 if not f.is_file():
                     continue
                 try:
-                    out.append((f, f.read_text(errors="replace")))
+                    out.append((f, executable_text(f, f.read_text(errors="replace"))))
                 except OSError:
                     continue
     return out

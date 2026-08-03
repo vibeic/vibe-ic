@@ -95,6 +95,58 @@ def test_the_auditor_does_not_wire_its_own_subjects(tmp_path):
         f"read as consulted")
 
 
+def test_a_COMMENT_naming_a_gate_is_not_a_caller(tmp_path):
+    """MEASURED, and the gate got this wrong on real incoming work.
+
+    vibe-ic#702 repaired `handoff_bundle_check` and deliberately left it OFF a
+    rail. This gate reported it newly WIRED on the strength of one line in
+    another program:
+
+        #: reproduced end-to-end through `handoff_bundle_check`, where the …
+
+    a comment. Believing it would have shrunk the baseline by one over a gate
+    that still runs nowhere. Applying the rule generally moved the count from
+    29 to 73 — 44 gates had been held up by a comment somewhere.
+    """
+    root = _tree(tmp_path, gates=["a_check"])
+    (root / "programs" / "other.py").write_text(
+        "# a_check is the gate that would have caught this\n"
+        "'''module docstring mentioning a_check too'''\n"
+        "def f():\n"
+        "    '''and a function docstring naming a_check'''\n"
+        "    return 1  # a_check again\n")
+    assert giw.unwired(root, root)[0] == ["a_check"]
+
+
+def test_a_STRING_naming_a_gate_IS_a_caller(tmp_path):
+    """The other half of the same rule: a subprocess argv is a string literal,
+    and that is the ONLY form a real call takes. Dropping strings along with
+    comments would report every genuinely-wired gate as unwired."""
+    root = _tree(tmp_path, gates=["a_check"])
+    (root / "programs" / "runner.py").write_text(
+        "import subprocess\n"
+        "def go():\n"
+        "    subprocess.run(['python3', 'a_check.py'])\n")
+    assert giw.unwired(root, root)[0] == []
+
+
+def test_a_yaml_comment_is_not_a_caller(tmp_path):
+    root = _tree(tmp_path, gates=["a_check"])
+    (root / "flow" / "phase1_phase2_phase3.yaml").write_text(
+        "steps:\n  # a_check would go here one day\n  - id: s1\n")
+    assert giw.unwired(root, root)[0] == ["a_check"]
+
+
+def test_a_hash_inside_a_quoted_shell_string_does_not_truncate_the_line(tmp_path):
+    """The comment strip must not eat a real invocation that happens to sit
+    after a quoted `#` — that would report a wired gate as unwired, the
+    opposite error and just as wrong."""
+    root = _tree(tmp_path, gates=["a_check"])
+    (root / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+        'echo "issue #693"; python3 "$PG/a_check.py"\n')
+    assert giw.unwired(root, root)[0] == []
+
+
 def test_only_gate_suffixes_are_in_scope(tmp_path):
     root = _tree(tmp_path, gates=["a_check", "b_lint", "c_audit", "d_guard"])
     (root / "programs" / "helper.py").write_text("# not a gate\n")
