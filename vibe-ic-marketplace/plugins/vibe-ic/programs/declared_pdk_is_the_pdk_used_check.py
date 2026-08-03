@@ -57,7 +57,19 @@ EXIT
     2  no target declared AND no cell library loaded AND the staged PDK, if
        any, was nameable — there was no physical implementation to judge. A
        run that DID load libraries without a declared target exits 1, because
-       it cannot show it used the intended process.
+       it cannot show it used the intended process. A design that writes down
+       an explicit "not applicable" IS in this state and is judged in it, with
+       the written words carried in `declared_not_applicable` so the record
+       distinguishes "said so" from "never populated the field".
+
+WHERE THE DECLARATION IS READ FROM
+==================================
+`declared_target` reads the canonical L-doc through the tree's shared accessor
+(`l_doc_consumer_contract`), so the LEVEL (payload under `fields`) and the
+LOCATION (`phase1/generated_docs/`) are the shared contract's answer and not a
+private copy in this file. Both were wrong here, independently, and between
+them the gate resolved a target on 0 of 106 tracked projects — see
+`declared_target.__doc__` for the measurement.
 """
 from __future__ import annotations
 
@@ -66,7 +78,20 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+
+# WHERE AN L-DOC IS, AND WHERE ITS PAYLOAD IS, ARE NOT THIS FILE'S TO DECIDE.
+#
+# `l_doc_consumer_contract` is the tree's existing shared L-doc accessor:
+# `load_l_doc(project, code)` resolves the canonical emit location by glob (so
+# a filename disagreement between `schema.py` and `l_doc_taxonomy.py` cannot
+# hide a document), and `l_doc_fields(doc)` returns the payload from EITHER
+# schema shape. Both are used here instead of a local re-implementation, so
+# this gate cannot drift from every other L-doc consumer.
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:                      # pragma: no cover - path setup
+    sys.path.insert(0, str(_HERE))
+from l_doc_consumer_contract import l_doc_fields, load_l_doc  # noqa: E402
 
 LIB_RE = re.compile(r"[A-Za-z0-9_./+-]+\.(?:lef|lib)\b")
 # A declared target is prose ("Some Foundry ABC123-X1.2"), a loaded library is a
@@ -189,51 +214,152 @@ def contradicting_named_pdks(target: str, libs: List[str]) -> List[str]:
                              or c.replace("-", "") in n.lower() for n in libs))
 
 
+#: The two spellings Phase 1 uses for the declaration inside L19.
+_L19_KEYS = ("pdk_target", "pdk")
+
+#: A declaration whose whole content is "there is no target". Anchored at the
+#: START of the value, so a real declaration cannot be dismissed by the word
+#: appearing later in a sentence.
+_NOT_APPLICABLE_RE = re.compile(
+    r"^\s*(?:n/?a|none|nil|not[\s_-]*applicable|no[\s_-]*pdk)\b", re.IGNORECASE)
+
+
+def declares_no_target(target: str) -> bool:
+    """Is this declaration an explicit statement that there IS no target?
+
+    NOT A COSMETIC TIER. The gate's own docstring reserves rc=2 for "the design
+    declares no target at all, so there is nothing to disagree with". A design
+    that writes that down explicitly is in exactly that state — writing it down
+    is more honest than leaving the field null, and must not be punished for it.
+    Measured on the tracked corpus: 12 of the 28 non-empty L19 declarations are
+    of this form, every one of them on an IP whose own text says it is not a
+    tapeout. Read as targets they produce a FAIL that says the design cannot
+    show which process it used, about a design that says it has none.
+
+    A NAMED PDK OUTRANKS THE PREFIX. If the same declaration also names a
+    process this repo can check, the sentence does name a target and is judged
+    as one — so "N/A, defaults to <named process>" is NOT dismissed here.
+
+    Chip-, PDK- and vendor-AGNOSTIC: the vocabulary is the English of absence,
+    and the override consults the same `_NAMED_PDK_RE` table the rest of the
+    file already uses.
+    """
+    if not _NOT_APPLICABLE_RE.match(target or ""):
+        return False
+    return not _NAMED_PDK_RE.search(target or "")
+
+
+def _probe(base: Path, kind: str, rel: str) -> Iterator[Tuple[str, dict]]:
+    """The one document a probe resolves to, as (source_label, parsed).
+
+    Yields nothing when the probe finds no readable JSON object, so a caller
+    can iterate the probes in precedence order without special-casing
+    absence. At most one document is ever yielded.
+    """
+    if kind == "l-doc-canonical":
+        p, doc = load_l_doc(base, rel)
+        if p is None or not isinstance(doc, dict):
+            return
+        try:
+            yield str(p.relative_to(base)), doc
+        except ValueError:                          # pragma: no cover - defensive
+            yield p.name, doc
+        return
+    p = base / rel
+    if not p.is_file():
+        return
+    try:
+        doc = json.loads(p.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return
+    if isinstance(doc, dict):
+        yield rel, doc
+
+
 def declared_target(run: Path) -> Tuple[Optional[str], Optional[str]]:
     """What the design says it targets, and where that was read from.
 
     Phase 1 already derives this from the input documents and writes it down; this
     reads the record rather than re-deriving it, so the two cannot drift.
+
+    TWO INDEPENDENT DEFECTS MADE THIS READ NOTHING (vibe-ic#736 and this change)
+    ===========================================================================
+    Measured on the tracked corpus at the time of writing — 106 projects that
+    carry a `phase1/generated_docs/L19_CONSTRAINTS_PDK.json`, 20 of which
+    declare a non-empty target — this function returned ``(None, None)`` for
+    **all 106**. Four of them had loaded cell libraries, so they were told:
+
+        declared_pdk_is_the_pdk_used: FAIL — this run loaded cell libraries
+        but declares no PDK target
+
+    The one gate that exists to prove the process was the intended one reported
+    that designs which name a process had named none. The other 102 fell to
+    rc=2 NOT CHECKED, the tier the module docstring reserves for "the design
+    declares no target at all" — a state the reader was manufacturing.
+
+    THE LEVEL. Schema-v2 L-docs are ``{doc_id, doc_name, applicability,
+    fields: {...}, schema_version}`` and the payload lives under ``fields``.
+    The producer is explicit: `phase1_doc_one_shot_runner._emit_l19_to_l23_
+    skeletons` writes ``skeleton["fields"]["pdk_target"] = _pdk_tgt``, and
+    `phase1_post_process._skeleton_fields_for` carries `pdk_target` in the L19
+    template. Corpus: `pdk_target` occurs **0 times at the top level and 106
+    times under `fields`**. A top-level read could not see it, ever.
+
+    THE PATH, and it is why fixing the level alone is not enough. The probe
+    table below reached `phase1/merged_docs/` and `phase1/` — the canonical
+    emit location is `phase1/generated_docs/`, which `_write_l_doc` and
+    `_path_layout.generated_docs_dir` both name. Corpus: 106 L19 documents in
+    `generated_docs/`, **1** in `merged_docs/`, 0 directly under `phase1/`.
+    `merged_docs` appears in exactly one non-test file in the whole tree — this
+    one — so nothing writes it. An envelope-only fix would have moved 1 of 107
+    projects and left the gate blind on the other 106, still reporting that
+    they name no process.
+
+    Precedence is unchanged for every path that already resolved, and the
+    canonical probe is inserted BELOW the two records that predate it, so no
+    run that resolves a target today can resolve a different one. Only runs
+    that resolved NOTHING can now resolve something. The source label records
+    which shape and which file answered, so a reader can see where the value
+    came from without re-deriving it.
     """
-    for rel, keys in (
-        ("phase1/pdk_staging_read.json", ("adopted_pdk_target", "staged_identifier")),
-        ("phase1/merged_docs/L19_CONSTRAINTS_PDK.json", ("pdk_target", "pdk")),
-        ("phase1/L19_CONSTRAINTS_PDK.json", ("pdk_target", "pdk")),
-        ("input/project.json", ("pdk", "target_pdk", "pdk_target")),
+    for kind, rel, keys in (
+        ("record", "phase1/pdk_staging_read.json",
+         ("adopted_pdk_target", "staged_identifier")),
+        ("l-doc", "phase1/merged_docs/L19_CONSTRAINTS_PDK.json", _L19_KEYS),
+        # The canonical emit location. Resolved by the shared loader's glob,
+        # not by a hardcoded filename.
+        ("l-doc-canonical", "L19", _L19_KEYS),
+        ("l-doc", "phase1/L19_CONSTRAINTS_PDK.json", _L19_KEYS),
+        ("record", "input/project.json", ("pdk", "target_pdk", "pdk_target")),
     ):
         for base in (run, run / "run"):
-            p = base / rel
-            if not p.is_file():
-                continue
-            try:
-                d = json.loads(p.read_text(errors="replace"))
-            except (OSError, ValueError):
-                continue
-            if not isinstance(d, dict):
-                continue
-            # THE L-DOC SCHEMA NESTS THE VALUE UNDER `fields`.
-            #
-            # Schema-v2 L-docs are `{doc_id, doc_name, applicability, fields:
-            # {...}, schema_version: 2, ...}` — the payload lives in `fields`,
-            # NOT at the top level. Reading only the top level made this gate
-            # blind to the canonical shape phase 1 emits, and the failure was
-            # SILENT AND INVERTED: with a real target declared and the right
-            # library loaded, `declared_target()` returned None and the gate
-            # exited 1 with "loaded cell libraries but declares NO PDK target".
-            # The one gate that exists to prove the process was the intended
-            # one reported that the design had named no process at all.
-            #
-            # Top level is tried FIRST so any flat producer keeps its exact
-            # precedence; `fields` is a fallback, so no currently-passing run
-            # can change verdict. The source label records which shape matched,
-            # so a reader can see where the value came from.
-            for scope, label in ((d, ""), (d.get("fields"), "fields.")):
-                if not isinstance(scope, dict):
-                    continue
+            for label, doc in _probe(base, kind, rel):
+                # `l_doc_fields` is the tree's shared accessor and returns the
+                # payload from EITHER shape. It is applied only to L-doc
+                # probes: the two `record` probes are not L-docs and have no
+                # envelope to unwrap, so their reads stay exactly as they were.
+                payload: Dict[str, Any] = (
+                    l_doc_fields(doc) if kind.startswith("l-doc") else doc)
+                inner = doc.get("fields") if kind.startswith("l-doc") else None
+                # A NULL IN THE ENVELOPE MUST NOT SHADOW A VALUE AT THE ROOT.
+                # `l_doc_fields` gives the envelope precedence, which is right
+                # for a document that carries the key in both places. But a
+                # MERGED document — program-track payload at the root, extras
+                # added under `fields` — can carry `pdk_target: null` in the
+                # envelope over a real value at the root; 28 of the tracked
+                # L1-L13 documents have exactly that root+extras shape. Falling
+                # back to the raw document costs one lookup and means this can
+                # only ever turn "resolved nothing" into "resolved something",
+                # never one value into another. `doc` IS `payload` for the two
+                # non-L-doc probes, so their reads are unchanged.
                 for k in keys:
-                    v = scope.get(k)
-                    if isinstance(v, str) and v.strip():
-                        return v.strip(), f"{rel}:{label}{k}"
+                    for scope in (payload, doc):
+                        v = scope.get(k)
+                        if isinstance(v, str) and v.strip():
+                            where = ("fields." if isinstance(inner, dict)
+                                     and isinstance(inner.get(k), str)
+                                     and inner[k].strip() else "")
+                            return v.strip(), f"{label}:{where}{k}"
     return None, None
 
 
@@ -303,8 +429,29 @@ def main(argv=None) -> int:
     staged = staged_pdk_files(run)
     unnameable = unnameable_staged_pdk(run)
 
+    # AN EXPLICIT "NOT APPLICABLE" IS A DECLARATION THAT THERE IS NO TARGET.
+    #
+    # It is folded into the no-target state rather than given a branch of its
+    # own, so every existing rule applies to it unchanged: with no library load
+    # it is rc=2 NOT CHECKED, and with libraries loaded it is still the FAIL
+    # below — a design that says it is not a tapeout and then loaded cell
+    # libraries has not shown which process it used either.
+    #
+    # The written value is NOT discarded. It is carried in its own field so a
+    # reader can tell "the field was never populated" from "the design said, in
+    # so many words, that it has no target" — two different states that would
+    # otherwise both print as `declared_target: null`.
+    not_applicable = target is not None and declares_no_target(target)
+    if not_applicable:
+        declared_not_applicable, declared_not_applicable_source = target, source
+        target, source = None, None
+    else:
+        declared_not_applicable = declared_not_applicable_source = None
+
     rec: Dict[str, object] = {
         "declared_target": target, "declared_source": source,
+        "declared_not_applicable": declared_not_applicable,
+        "declared_not_applicable_source": declared_not_applicable_source,
         "staged_pdk_files": staged, "logs_scanned": scanned,
         "unnameable_staged_pdk": unnameable,
         "libraries_loaded": sorted(libs)[:40],
@@ -363,11 +510,15 @@ def main(argv=None) -> int:
                 print(f"        {n}")
             return 1
         rec["verdict"] = "NOT CHECKED"
-        rec["reason"] = ("the design declares no PDK target and no cell library was "
-                         "loaded — no physical implementation to judge")
+        rec["reason"] = (
+            ("the design declares its PDK target NOT APPLICABLE "
+             f"({declared_not_applicable!r}) and no cell library was loaded — "
+             "no physical implementation to judge")
+            if not_applicable else
+            ("the design declares no PDK target and no cell library was "
+             "loaded — no physical implementation to judge"))
         _emit(a.json, rec)
-        print("declared_pdk_is_the_pdk_used: rc=2 NOT CHECKED — no declared target "
-              "and no library loaded")
+        print(f"declared_pdk_is_the_pdk_used: rc=2 NOT CHECKED — {rec['reason']}")
         return 2
 
     want = tokens(target)
@@ -381,7 +532,21 @@ def main(argv=None) -> int:
     # sentence disagree, and the half that names a different process is the one
     # this gate exists to catch — it cannot be outvoted by a token that happens
     # to match.
-    contradicted = contradicting_named_pdks(target, libs)
+    #
+    # A CONTRADICTION NEEDS A LOAD TO CONTRADICT. With `libs` empty every named
+    # PDK is trivially "uncorroborated", so this test would fire on EVERY run
+    # that declares a named process and has not run a tool yet, and would print
+    # "no loaded library carries that identity" over `loaded: 0`. That is the
+    # unsupported accusation the `if not libs` branch below exists to remove,
+    # arriving one branch earlier. The verdict for that state is unchanged —
+    # still FAIL, from that branch, with `no_library_load_recorded: true` and
+    # the reason that is actually true. So `contradicting_named_pdks: []` here
+    # means "no contradiction was ESTABLISHED", and the flag beside it says
+    # whether there was any evidence to establish one from.
+    #
+    # Unreachable before the `declared_target` repair in this same change: the
+    # reader resolved nothing, so no run ever got this far.
+    contradicted = contradicting_named_pdks(target, libs) if libs else []
     rec["contradicting_named_pdks"] = contradicted
     if contradicted:
         rec["verdict"] = "FAIL"

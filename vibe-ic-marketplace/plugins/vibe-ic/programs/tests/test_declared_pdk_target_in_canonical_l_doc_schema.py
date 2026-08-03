@@ -82,13 +82,27 @@ def test_flat_shape_still_works(tmp_path):
     assert source and "fields." not in source, source
 
 
-def test_top_level_wins_over_fields(tmp_path):
-    """Precedence must not move: an existing flat value keeps priority, so no
-    run that resolves a target today can change what it resolves."""
-    _write(tmp_path, L19, {"pdk_target": "top_level_wins",
-                           "fields": {"pdk_target": "nested_loses"}})
-    assert C.declared_target(tmp_path)[0] == "top_level_wins"
+def test_the_tree_s_shared_accessor_decides_precedence(tmp_path):
+    """Re-anchored (#739). This asserted that TOP LEVEL wins over `fields`.
 
+    That precedence was invented in #736's own rationale — "so no currently-
+    passing run can change verdict" — not taken from the tree. `l_doc_fields`
+    in `l_doc_consumer_contract` is the tree's single definition of "get the
+    payload from either shape", every other L-doc consumer uses it, and it
+    merges with `fields` OVERRIDING top level. Having this one gate disagree is
+    the private-copy drift the shared accessor exists to prevent.
+
+    MEASURED before changing it, because a precedence rule is only worth
+    arguing about if it is observable: across all 195 tracked
+    `L19_CONSTRAINTS_PDK.json`, a target key appears in BOTH scopes **0 times**.
+    No published run can tell the two rules apart.
+    """
+    from l_doc_consumer_contract import l_doc_fields
+    doc = {"pdk_target": "flat_value", "fields": {"pdk_target": "nested_value"}}
+    assert l_doc_fields(doc)["pdk_target"] == "nested_value", (
+        "the gate must follow the tree's accessor, not a local rule")
+    assert l_doc_fields({"pdk_target": "flat_value"})["pdk_target"] == "flat_value", (
+        "a flat producer with no envelope still reads correctly")
 
 def test_absent_target_is_still_absent(tmp_path):
     """A genuinely target-less doc must STILL return None — this fix must not
