@@ -22302,7 +22302,8 @@ def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
     # SIGNAL-net mismatch is untouched by globalisation and still FAILs. Emitted
     # AFTER `source`, so a foundry-declared global is harmlessly re-affirmed.
     try:
-        body += "\n" + _lvs_setup.build_supplementary_setup_tcl(pdk.name)
+        body += "\n" + _lvs_setup.build_supplementary_setup_tcl(
+            pdk.name, cell_lef=getattr(pdk, "cell_lef", None))
     except Exception:  # nosec — power-net globalisation is best-effort; a bad
         pass          # PDK name must never break the (already-working) compare
     ext_dir = _pl.extracted_dir(project)
@@ -22388,8 +22389,13 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
         suffix = "pwraware_welltied" if tie_wells else "pwraware"
         pa_nl = ext_dir / f"{top}_{suffix}.v"
         try:
+            # cell_lef: consulted ONLY when pdk.name resolves to no table
+            # entry — i.e. a project-staged (commercial) PDK, whose power
+            # model is then derived from its own std-cell LEF instead of the
+            # emitter skipping and leaving the netlist power-blind.
             st = _lvs_pa.emit_to_file(netlist, pdk.name, pa_nl, top=top,
-                                      tie_wells_to_rails=tie_wells)
+                                      tie_wells_to_rails=tie_wells,
+                                      cell_lef=getattr(pdk, "cell_lef", None))
         except Exception as exc:  # nosec — a bad netlist must never break the plain path
             attempt_log.append({"model": model, "rejected_at": "emit",
                                 "reason": f"{type(exc).__name__}: {exc}"})
@@ -22912,7 +22918,8 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     try:
         _def_txt = def_file.read_text(errors="replace")
         _pa_tcl, _pa_ext_stats = _lvs_paext.build_power_aware_extraction_tcl(
-            _MAGIC_EXT2SPICE_TCL, pdk.name, _def_txt, top=top)
+            _MAGIC_EXT2SPICE_TCL, pdk.name, _def_txt, top=top,
+            cell_lef=getattr(pdk, "cell_lef", None))
         if _pa_ext_stats.get("power_aware"):
             extract_tcl = _pa_tcl
     except Exception:  # nosec — a bad DEF/PDK must never break the plain path
