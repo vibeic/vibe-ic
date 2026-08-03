@@ -429,6 +429,73 @@ _SHELL_PROLOGUE = frozenset((
 ))
 
 
+def _split_shell_chain(text: str) -> List[str]:
+    """Split a shell command on its `&&` / `||` / `;` separators, IGNORING
+    any that fall inside quotes.
+
+    A plain `re.split` on those tokens does not know about quoting, and this
+    runner itself builds commands where it matters: it joins multi-valued
+    arguments with `;` and then wraps them in double quotes —
+    `VAR="/a/one.ext;/a/two.ext"`. The naive split cuts THROUGH that value,
+    leaving one dangling quote in each half, which then makes `shlex.split`
+    raise and fall back to whitespace splitting. The second half of the
+    assignment — a bare path — is then read as the command word.
+
+    MEASURED consequence on a real run: the ledger recorded a data file as
+    the tool that ran (`tool: "<something>.ext\\""`, quote and all), and the
+    version probe then executed that string in the container, so `version`
+    became the shell's `command not found` diagnostic — while
+    `version_capture` still said `probed`. The provenance chain is the
+    anti-fabrication backbone; a row naming the wrong program with a fake
+    version is exactly the failure mode it exists to prevent.
+
+    Pure shell grammar, chip-AGNOSTIC.
+    """
+    parts: List[str] = []
+    buf: List[str] = []
+    quote: Optional[str] = None
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            buf.append(ch)
+            # Inside double quotes a backslash escapes; inside single quotes
+            # it does not. Mirror the shell rather than approximating it.
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                i += 1
+                buf.append(text[i])
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            buf.append(ch)
+            i += 1
+            buf.append(text[i])
+            i += 1
+            continue
+        if text.startswith("&&", i) or text.startswith("||", i):
+            parts.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        if ch == ";":
+            parts.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    parts.append("".join(buf))
+    return [p.strip() for p in parts if p.strip()]
+
+
 def _tool_from_command(cmd: str) -> str:
     """The FIRST REAL PROGRAM in a shell command chain.
 
@@ -447,10 +514,7 @@ def _tool_from_command(cmd: str) -> str:
     text = (cmd or "").strip()
     if not text:
         return "sh"
-    try:
-        parts = re.split(r"\s*(?:&&|\|\||;)\s*", text)
-    except (TypeError, ValueError):
-        parts = [text]
+    parts = _split_shell_chain(text)
     first = ""
     for seg in parts:
         seg = seg.strip()
@@ -502,14 +566,24 @@ def _tool_version(container: Optional[str], tool: str) -> Optional[str]:
     out: Optional[str] = None
     for flag in _VERSION_FLAGS:
         try:
+            # NO PIPELINE. `<tool> --version 2>&1 | head -3` returns `head`'s
+            # exit status, which is 0 whenever head runs at all — so the
+            # `rc != 0` guard below could never fire, and a shell
+            # `command not found` was accepted as this tool's version string
+            # (MEASURED: a real ledger row carried
+            # `version: "bash: line 1: ...: command not found"` alongside
+            # `version_capture: "probed"`). Ask the tool directly and take
+            # the first lines here, so the rc under test is the TOOL's.
             rc, so, se = _docker_exec_raw(
-                container, f"{shlex.quote(tool)} {flag} 2>&1 | head -3",
-                timeout=25)
+                container, f"{shlex.quote(tool)} {flag} 2>&1", timeout=25)
         except Exception:  # noqa: BLE001 — a probe must never break the run
             break
         if rc != 0:
             continue
-        for line in (so or se or "").splitlines():
+        # `[:3]` keeps the window the removed `head -3` had, so this change is
+        # ONLY about which process's exit status is tested. A probe that
+        # captured a version before still captures the same string.
+        for line in (so or se or "").splitlines()[:3]:
             s = line.strip()
             # The image prints a login banner on every shell; a banner line is
             # not a version. This is the same `[LEVEL]` filter provenance_logger
