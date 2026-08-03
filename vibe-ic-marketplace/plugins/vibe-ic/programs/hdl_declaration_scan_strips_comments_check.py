@@ -82,7 +82,31 @@ _META = re.compile(r"\\[a-zA-Z]|\(\?[^)]*\)|[\[\]()+*?{}^$|]")
 _KW = re.compile(r"\b(?:module|input|output|inout)\b")
 #: A name that means "comments are gone".
 _STRIPPER = re.compile(r"strip.*comment|_strip_hdl|decomment|no_comment", re.I)
+#: A regex SOURCE that removes comments by naming a comment INTRODUCER. Stripping
+#: is an operation, not a function name: `re.sub(r"//[^\n]*", " ", txt)` removes
+#: comments just as surely as a helper called `strip_comments`, and recognising
+#: only the latter made this gate report a call site that was already correct.
+#:
+#: Backslashes are dropped before the search because the pattern is read as
+#: SOURCE: `/\*.*?\*/` carries `/\*`, not `/*`. Reading it from the AST Constant
+#: rather than `ast.unparse` matters for the same reason — unparse re-escapes.
+#:
+#: HONEST LIMIT: this accepts a call that strips only ONE comment form. A site
+#: that removes `//` but never `/* */` will read as stripped here and is not.
+#: That is a narrower hole than the one it closes, and naming it is better than
+#: a stricter rule that fails every file whose HDL has only line comments.
+_COMMENT_PAT = re.compile(r"//|/\*|\*/")
 _SCAN = {"search", "finditer", "findall", "match", "fullmatch", "split", "sub"}
+
+
+def _strips_comments_inline(call: ast.Call) -> bool:
+    """`re.sub(<a comment pattern>, ...)` — a strip written in place."""
+    fn = call.func
+    if not (isinstance(fn, ast.Attribute) and fn.attr == "sub" and call.args):
+        return False
+    src = "".join(n.value for n in ast.walk(call.args[0])
+                  if isinstance(n, ast.Constant) and isinstance(n.value, str))
+    return bool(_COMMENT_PAT.search(src.replace("\\", "")))
 
 
 def declares_hdl(pattern: str) -> bool:
@@ -132,7 +156,7 @@ def stripped_locals(fn: ast.AST) -> Set[str]:
                         fname = ast.unparse(sub.func)
                     except Exception:
                         fname = ""
-                    if _STRIPPER.search(fname):
+                    if _STRIPPER.search(fname) or _strips_comments_inline(sub):
                         ok.add(t); grew = True
                         break
                 if isinstance(sub, ast.Name) and sub.id in ok:

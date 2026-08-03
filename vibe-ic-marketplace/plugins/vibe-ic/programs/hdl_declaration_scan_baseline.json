@@ -103,7 +103,6 @@
     "phase1_parity_source_tier_check::_cited_paths::CITED_INPUT_RE(s)",
     "phase1_port_extract::_looks_like_verilog::_VERILOG_MODULE_HDR(region)",
     "phase1_port_extract::_verilog_regions::_MODULE_SPAN(text)",
-    "phase3_one_shot_runner::_c4_top_module_ports::_C4_MODULE_HEADER_RE(txt)",
     "phase3_one_shot_runner::_instantiated::pat(b)",
     "phase3_one_shot_runner::_resolve_asic_top_structural::pat(b)",
     "phase3_one_shot_runner::_v0_3_14_apply_top_port_aliases::pat(ln)",

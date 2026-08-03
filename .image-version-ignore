@@ -124,3 +124,13 @@ benchmark-data/*
 #     difference IS the defect being pinned. Setting both to the anchor makes the
 #     test pass on the broken code it was written to catch.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_run_image_propagates_to_child_docker_run.py
+
+# vibe-ic#749 — the docstring records the run the spare-net measurement came from
+# (`net spare_tielo: 38 connections on 27 instances`, span 2.6 mm), and names the
+# image that produced it: 0.2.62. The numbers and the tag are one statement. The
+# anchor moved to 0.2.63 in the same landing that reviewed this PR, and advancing
+# the tag with it would claim a DEF was read on an image that never routed it —
+# the measurement-honesty rule the entries above all restate. The run is history;
+# what the test asserts about the emitted TCL is not, and that part follows the
+# code, not the anchor.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_spare_tieoff_one_driver_per_spare.py

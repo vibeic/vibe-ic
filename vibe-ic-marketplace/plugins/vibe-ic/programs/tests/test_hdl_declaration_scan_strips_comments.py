@@ -143,3 +143,62 @@ def test_the_keyword_test_is_SHALLOW_and_that_is_why_the_baseline_is_large():
     work and should be measured against the same controls above."""
     assert G.declares_hdl(r"^\s*Chip area for module\s+'(.+)':"), (
         "if this ever stops matching, the baseline can be re-cut smaller")
+
+
+# ── stripping is an OPERATION, not a function name ──────────────────────────
+#
+# The gate first shipped recognising strippers only by NAME (`strip_comments`,
+# `_strip_hdl`, ...). Two call sites in this tree remove comments with an inline
+# `re.sub` and were reported as unstripped when they were already correct —
+# `phase1_doc_one_shot_runner.gen_l9_integration_spec` (caught blocking a PR)
+# and `phase3_one_shot_runner._c4_top_module_ports` (sat in the baseline as a
+# false positive from day one). A gate that fails correct code gets switched
+# off, so this is the same severity as missing a defect.
+
+_INLINE_SUB = '''
+import re
+_MODULE_RE = re.compile(r"\\bmodule\\s+([A-Za-z_]\\w*)")
+def read(f):
+    txt = f.read_text()
+    txt = re.sub(r"//[^\\n]*", " ", txt)
+    txt = re.sub(r"/\\*.*?\\*/", " ", txt, flags=re.S)
+    return _MODULE_RE.findall(txt)
+'''
+
+_INLINE_SUB_NOT_A_COMMENT = '''
+import re
+_MODULE_RE = re.compile(r"\\bmodule\\s+([A-Za-z_]\\w*)")
+def read(f):
+    txt = f.read_text()
+    txt = re.sub(r"\\s+", " ", txt)
+    return _MODULE_RE.findall(txt)
+'''
+
+
+def test_inline_re_sub_of_a_comment_pattern_counts_as_stripped():
+    """`txt = re.sub(r"//[^\\n]*", ...)` removes comments as surely as a helper."""
+    assert G.scan_source(_INLINE_SUB, "m") == [], (
+        "an inline comment-strip is not recognised, so a correct call site is "
+        "reported — the false positive that made this fix necessary")
+
+
+def test_a_non_comment_re_sub_does_NOT_count_as_stripped():
+    """The guard: the rule is 'a comment pattern', not 'any re.sub'.
+
+    Whitespace collapsing leaves every comment in place. If this passes as
+    stripped, the fix above has blinded the gate rather than sharpened it."""
+    hits = G.scan_source(_INLINE_SUB_NOT_A_COMMENT, "m")
+    assert any("_MODULE_RE" in h for h in hits), (
+        f"collapsing whitespace was accepted as removing comments — any "
+        f"re.sub now silences the gate. got: {hits}")
+
+
+def test_the_comment_pattern_is_read_from_the_ast_constant():
+    """`/\\*.*?\\*/` carries `/\\*` in SOURCE, not `/*`.
+
+    Reading it via `ast.unparse` re-escapes and the match is lost — the exact
+    trap that produced two retracted populations for this gate."""
+    assert G._strips_comments_inline(
+        __import__("ast").parse('re.sub(r"/\\*.*?\\*/", " ", t)').body[0].value)
+    assert not G._strips_comments_inline(
+        __import__("ast").parse('re.sub(r"\\s+", " ", t)').body[0].value)
