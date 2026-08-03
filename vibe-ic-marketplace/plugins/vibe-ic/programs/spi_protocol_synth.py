@@ -143,7 +143,9 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
         d = _read(p)
         d.setdefault("otp_present", False)
         d.setdefault("notes",
-            "No OTP / fuse / configuration-ROM content in the serial-peripheral protocol block guide. All configuration is via the run-time register file.")
+            "No OTP / fuse / configuration-ROM content in the serial-peripheral protocol block guide. All configuration is via the run-time register file."
+            if is_spi else
+            "No OTP / fuse / configuration-ROM content in the spec. All configuration is via the run-time register file.")
         _write(p, d)
     # L13 lab cal N/A
     p = gd / "L13_LAB_CALIBRATION.json"
@@ -187,23 +189,61 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
             "Error and fault condition detection and handling",
             "Reset behavior verification",
             "Back-to-back / sustained operation"]
+    # H4 (continued): the canned `notes` were peripheral/SPI-flavored even for
+    # a non-SPI IC -- "Block-level peripheral spec", "The peripheral register
+    # file", "for the serial peripheral" -- so an IC that is not a peripheral
+    # at all was described as one. Same treatment the category lists already
+    # got: SPI wording behind `is_spi`, neutral wording otherwise.
+    if is_spi:
+        _l19_notes = ("Block-level peripheral spec does not include PDK / timing "
+                      "constraints; these are deferred to the SoC integration spec.")
+        _l20_notes = ("Block guide does not specify DFT/scan topology; this is "
+                      "deferred to SoC integration. The peripheral register file "
+                      "is amenable to standard scan insertion at the SoC level.")
+        _l23_notes = ("Block guide does not specify confidentiality / integrity / "
+                      "authentication requirements for the serial peripheral. Any "
+                      "access-control (e.g. privileged-mode register access) is "
+                      "deferred to SoC integration.")
+    else:
+        _l19_notes = ("Spec does not state PDK / timing constraints; these are "
+                      "deferred to integration.")
+        _l20_notes = ("Spec does not specify DFT/scan topology; this is deferred "
+                      "to integration. The register state of this design is "
+                      "amenable to standard scan insertion.")
+        _l23_notes = ("Spec does not specify confidentiality / integrity / "
+                      "authentication requirements. Any access control is "
+                      "deferred to integration.")
     for ld_name, payload in [
         ("L19_CONSTRAINTS_PDK.json", {
             "constraints_present": False,
-            "notes": "Block-level peripheral spec does not include PDK / timing constraints; these are deferred to the SoC integration spec."}),
+            "notes": _l19_notes}),
         ("L20_DFT_SCAN_TOPOLOGY.json", {
             "dft_present": False,
-            "notes": "Block guide does not specify DFT/scan topology; this is deferred to SoC integration. The peripheral register file is amenable to standard scan insertion at the SoC level."}),
+            "notes": _l20_notes}),
         ("L22_VERIFICATION_PLAN.json", _l22_payload),
         ("L23_SECURITY_REQUIREMENTS.json", {
             "security_requirements_present": False,
-            "notes": "Block guide does not specify confidentiality / integrity / authentication requirements for the serial peripheral. Any access-control (e.g. privileged-mode register access) is deferred to SoC integration."}),
+            "notes": _l23_notes}),
     ]:
         q = gd / ld_name
         if q.is_file():
             d = _read(q)
             f = d.get("fields") or {}
+            # Each canned `notes` string EXPLAINS the canned fact beside it
+            # ("... does not specify X"). Both were installed with the same
+            # unconditional `setdefault`, so a real extraction could take the
+            # FACT while the PROSE still landed -- leaving a document whose
+            # notes assert the opposite of its own fields. Measured: an IC
+            # whose L19 carried an extracted `pdk_target` and an
+            # `sdc_constraints_path`, with `constraints_present: true`, was
+            # still emitted with "does not include PDK / timing constraints".
+            # The prose is only true of the fact it describes, so drop it when
+            # the document already contradicts that fact.
+            contradicted = any(k in f and f[k] != v
+                               for k, v in payload.items() if k != "notes")
             for k, v in payload.items():
+                if k == "notes" and contradicted:
+                    continue
                 f.setdefault(k, v)
             d["fields"] = f
             _write(q, d)
