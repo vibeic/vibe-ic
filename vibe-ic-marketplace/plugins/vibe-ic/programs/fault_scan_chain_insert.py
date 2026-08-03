@@ -348,8 +348,15 @@ _SKIP_BOUNDARY_UNSUPPORTED_RE = re.compile(
 
 def skip_boundary_unsupported_in_log(log: str) -> bool:
     """True iff `fault chain`'s output shows it rejected `--skip-boundary` as an
-    unsupported option (this build of `fault` predates the flag).  PURE — a
-    string check on the tool's own error, unit-testable without Docker."""
+    unsupported option.  PURE — a string check on the tool's own error,
+    unit-testable without Docker.
+
+    This detects the SYMPTOM only.  It does NOT establish the cause: the same
+    error is produced both by a build that genuinely predates the flag and by a
+    step that ran a DIFFERENT IMAGE than the run declared (measured: a run
+    pinned to and verifying 0.2.58 executed this step in stock
+    `hpretl/iic-osic-tools:latest`).  The caller names the image it used and
+    lists both causes; do not re-collapse them to one here."""
     return bool(_SKIP_BOUNDARY_UNSUPPORTED_RE.search(log or ""))
 
 
@@ -519,16 +526,48 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
             # it. Say the cause and BOTH remedies, so the next blind run's
             # failure is self-explaining instead of a generic "no scan netlist".
             err_report["skip_boundary_unsupported_by_binary"] = True
+            # NAME THE IMAGE THAT ACTUALLY RAN. The previous wording asserted a
+            # cause it never measured — "this build of the `fault` binary
+            # predates the flag" — and the first thing a reader does with that
+            # is check their image and find it is new enough. MEASURED on
+            # caravel_user_project x sky130A (v1.9.65): the run was pinned to,
+            # and reports/container_image.json VERIFIED,
+            # the vibeic-eda fork at tag 0.2.58 (spelled without the registry
+            # prefix on purpose: this is a HISTORICAL MEASUREMENT, not a live
+            # image pointer for `sync_image_version.py` to keep in step), whose
+            # `fault chain --help` DOES
+            # list `--skip-boundary` — while this step resolved its own image
+            # independently and ran stock hpretl/iic-osic-tools:latest, which
+            # does not. "Your image is too old" was false; "a different image
+            # ran than the one you pinned" was true. A diagnostic that names the
+            # wrong cause costs more than one that names none, so this states
+            # the image identity as the FIRST fact and offers the version
+            # explanation only as one of the possibilities.
+            err_report["image_used"] = _fatpg.DOCKER_IMAGE
             err_report["error"] = (
-                "`fault chain` rejected `--skip-boundary` — this build of the "
-                "`fault` binary predates the flag (MEASURED: absent on image "
-                "0.2.52, present on 0.2.54+). The fixed-pinout wrapper's correct "
-                "DFT is internal-scan-only, which needs `--skip-boundary`. "
-                "Remedies: (a) run in an image whose `fault chain --help` lists "
-                "`--skip-boundary` (>=0.2.54); or (b) set "
-                "VIBEIC_DFT_SKIP_BOUNDARY=off to accept legacy boundary-scan "
-                "insertion — but on a fixed-pinout wrapper that re-introduces "
-                "the SS-corner setup violation (#604) and a large area blow-up.")
+                f"`fault chain` rejected `--skip-boundary`. The image this step "
+                f"ran in was {_fatpg.DOCKER_IMAGE!r} — verify it with "
+                f"`docker run --rm --entrypoint bash {_fatpg.DOCKER_IMAGE} -lc "
+                f"'fault chain --help' | grep skip-boundary` before concluding "
+                f"anything about the binary's age. TWO distinct causes produce "
+                f"this exact error: (1) the image is a build that predates the "
+                f"flag (added to the fork after 0.2.52; MEASURED absent on "
+                f"0.2.52, present on 0.2.54+); or (2) THIS STEP RAN A DIFFERENT "
+                f"IMAGE THAN THE RUN DECLARED — it resolves an image of its own "
+                f"by local-tag presence and falls back to the upstream "
+                f"distribution, which ships stock tools without this project's "
+                f"forks, so a run pinned to a new-enough image can still land "
+                f"here. Compare the value above against "
+                f"reports/container_image.json:image_ref. The fixed-pinout "
+                f"wrapper's correct DFT is internal-scan-only, which needs "
+                f"`--skip-boundary`. Remedies: (a) make this step use the run's "
+                f"image — set VIBEIC_fatpg.DOCKER_IMAGE to it (the one-shot runner now "
+                f"exports this automatically from the verified container); "
+                f"(b) run in an image whose `fault chain --help` lists the flag "
+                f"(>=0.2.54); or (c) set VIBEIC_DFT_SKIP_BOUNDARY=off to accept "
+                f"legacy boundary-scan insertion — but on a fixed-pinout wrapper "
+                f"that re-introduces the SS-corner setup violation (#604) and a "
+                f"large area blow-up.")
             return 1, err_report
         _missing_hdr = chain_resynth_missing_header_ports(log)
         if _missing_hdr:

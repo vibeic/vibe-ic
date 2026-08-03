@@ -9114,9 +9114,35 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # legacy synth flow is preserved (post-synth rename pass below
     # still cleans named ties defence-in-depth). Chip-AGNOSTIC:
     # liberty-vocabulary heuristic; no chip-class string literal.
+    # RULE 1 of the tie-cell recipe (`yosys_tiecell_recipe_order_check.py`):
+    # `setundef -zero` MUST run BEFORE `hilomap`. `hilomap` maps constant
+    # 1'b0 / 1'b1 bits to tie cells; it does NOT map `x`. A bit that no
+    # driver reaches — an unconnected chip-top output, an unconnected
+    # output-enable, a don't-care in framing/CRC logic — leaves yosys as
+    # `1'hx` and survives `hilomap` untied. OpenROAD's `read_verilog` then
+    # materialises the whole set as ONE driverless net `zero_` with SigType
+    # GROUND, and the design ships an output pin with no driver on it.
+    #
+    # That gate has been ADVISORY because "the flow already mitigates the
+    # routing symptom downstream" — the PG cleanup pass retyped `zero_` to
+    # SIGNAL and the run routed. vibe-ic#687 REMOVED that retype (correctly:
+    # it was also hiding genuinely unrouted supplies), so the mitigation is
+    # gone and the untied-x path now reaches `PG_CLEANUP_UNROUTED_SUPPLY` and
+    # hard-FAILs PnR — reported as a power/ground rail, which it is not.
+    # Emitting `setundef -zero` here resolves the x bits to 0 so `hilomap`
+    # ties them with real tie cells, which is what the recipe always said to
+    # do and what makes the netlist structurally honest: every port has a
+    # driver, and the tie value is decided by the synthesis recipe instead of
+    # by a downstream cleanup pass.
+    #
+    # Gated on the hilomap directive on purpose. Without discoverable tie
+    # cells, `setundef -zero` alone would convert `x` into a bare `1'b0`
+    # constant net with no tie-cell driver — the same driverless-net shape,
+    # just spelled differently. No tie cells ⇒ no resolution ⇒ leave the
+    # legacy path alone. Chip-AGNOSTIC: no PDK or design literal.
     hilomap_directive = _v1_6_596_build_hilomap_directive(
         pdk.liberty, container)
-    hilomap_clause = (f"{hilomap_directive}; "
+    hilomap_clause = (f"setundef -zero; {hilomap_directive}; "
                       if hilomap_directive else "")
     # chip-AGNOSTIC latch mapping: abc / dfflibmap map FFs but NOT
     # transparent D-latches (sky130's dlxtn/dlxtp latch cells carry a
