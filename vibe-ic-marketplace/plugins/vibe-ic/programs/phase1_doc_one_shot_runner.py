@@ -8821,10 +8821,11 @@ def _staged_pdk_enablement_files(project: Path) -> List[str]:
 # the open-PDK token table nor the foundry-context rule matched". Both
 # tiers above test the tokenised PATH against a CLOSED NAME LIST, so the
 # staged read can only ever name a PDK whose name is already compiled in.
-# Across every staged tree reachable on the run fleet the path tiers
-# derived an identifier for 14 of 110 recorded reads — and the 96 that
-# failed were not all commercial: an open-PDK design whose enablement is
-# filed under vendor-neutral directory names fails identically.
+# Across every staged tree still on disk on the run fleet (51 of the 110
+# reads recorded there) the path tiers derived an identifier for 7 — and
+# the 44 that failed were not all commercial: an open-PDK design whose
+# enablement is filed under vendor-neutral directory names fails
+# identically.
 #
 # So the flow could STAGE a process it could not NAME, and a process it
 # cannot name becomes an unnamed input to sign-off:
