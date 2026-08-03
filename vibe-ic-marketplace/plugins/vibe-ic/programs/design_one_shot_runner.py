@@ -6777,14 +6777,38 @@ def _chip_top_match_paren(s: str, open_idx: int) -> int:
 
 
 def _chip_top_extract_param_and_ports(scan: str, start: int):
-    """From `start` (index of the '(' or '#' right after the module name),
-    return (param_block, port_block): param_block is the optional `#( … )`
-    (or ''), port_block is the `( … )` port list. (None, None) if unbounded.
-    `scan` MUST be comment-masked."""
+    """From `start` (index right after the module NAME, i.e. the first char
+    of whatever follows `module <name>`), return (param_block, port_block):
+    param_block is the optional `#( … )` (or ''), port_block is the `( … )`
+    port list. (None, None) if unbounded. `scan` MUST be comment-masked.
+
+    SV-2012 ANSI grammar puts zero-or-more `package_import_declaration`s
+    (`import <pkg>::*;`, `import <pkg>::<sym>;`) BETWEEN the module name and
+    the `#(parameter …)` / port list — e.g. OpenTitan's `module aes import
+    aes_pkg::*; import aes_reg_pkg::*; #( … ) ( … );`. The header scan skips
+    them here so a module whose real port list sits behind an import clause is
+    still discovered; before this, the DUT selector saw `import` where it
+    required `#`/`(` and the design's true top was invisible (it then wrapped
+    an unrelated leaf that DID match). Chip-AGNOSTIC: pure LEF-free SV header
+    grammar, keyed on the `import` keyword and its `;` terminator, no
+    chip/vendor/package literal."""
     n = len(scan)
     i = start
-    while i < n and scan[i] in ' \t\r\n':
-        i += 1
+    while True:
+        while i < n and scan[i] in ' \t\r\n':
+            i += 1
+        # A `package_import_declaration` is `import ...;`; one statement may
+        # chain several packages (`import a::*, b::*;`) and a header may carry
+        # several statements — consume each up to its `;`. `import` must be a
+        # whole token (a port named `importfoo` must not be eaten).
+        if (scan[i:i + 6] == 'import'
+                and (i + 6 >= n or scan[i + 6] in ' \t\r\n')):
+            semi = scan.find(';', i + 6)
+            if semi < 0:
+                return None, None
+            i = semi + 1
+            continue
+        break
     param_block = ''
     if i < n and scan[i] == '#':
         pj = scan.find('(', i)
@@ -6803,6 +6827,44 @@ def _chip_top_extract_param_and_ports(scan: str, start: int):
     if pe < 0:
         return None, None
     return param_block, scan[i:pe + 1]
+
+
+def _chip_top_extract_header_imports(scan: str, original: str,
+                                     start: int) -> str:
+    """Return the DUT header's `package_import_declaration`s verbatim (from
+    `original`), or '' if there are none.
+
+    When the auto-emitted pass-through wrapper wraps a module whose parameter
+    types / defaults or port types are PACKAGE-SCOPED (e.g. OpenTitan's `aes`:
+    `parameter sbox_impl_e SecSBoxImpl = SBoxImplDom`, `input tlul_pkg::tl_h2d_t
+    tl_i`), the wrapper must carry the SAME `import <pkg>::*;` clauses the DUT
+    declared — otherwise `sbox_impl_e` / `SBoxImplDom` / `NumAlerts` / … are
+    undeclared identifiers in the wrapper's scope and slang rejects it, even
+    though the DUT itself elaborates cleanly. `scan` MUST be comment-masked and
+    the SAME length as `original` (offsets are shared); `start` is the index
+    right after the module NAME. Chip-AGNOSTIC: pure `import`-keyword grammar,
+    no chip/vendor/package literal."""
+    n = len(scan)
+    i = start
+    first = None
+    last = None
+    while True:
+        while i < n and scan[i] in ' \t\r\n':
+            i += 1
+        if (scan[i:i + 6] == 'import'
+                and (i + 6 >= n or scan[i + 6] in ' \t\r\n')):
+            semi = scan.find(';', i + 6)
+            if semi < 0:
+                break
+            if first is None:
+                first = i
+            last = semi + 1
+            i = semi + 1
+            continue
+        break
+    if first is None or last is None:
+        return ''
+    return original[first:last]
 
 
 # IP/provenance header for flow-GENERATED design artifacts (README
@@ -7635,7 +7697,13 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
     # (we already checked above). Skip obvious helper / sub-module files
     # (no _asic, _wrapper, _tb, _test names — those are not the L9 top).
     import re as _re
-    mod_re = _re.compile(r"^\s*module\s+([A-Za-z_]\w*)\s*[(#]", _re.M)
+    # Name-only: `module <name>` may be followed by SV-2012 `import <pkg>::*;`
+    # clauses before the `#(params)` / port list, so we cannot require `#`/`(`
+    # to immediately follow the name here. `_extract_param_and_ports` skips the
+    # imports and enforces that a real `(port list)` follows (returns None
+    # otherwise), so a portless `module foo;` is still excluded exactly as
+    # before — only the import-behind-header case is newly reached.
+    mod_re = _re.compile(r"^\s*module\s+([A-Za-z_]\w*)\b", _re.M)
 
     # v0.1.62 fix (Bucket A — spm benchmark, chip_top auto-emit) — the
     # paren-matching walker that extracts the port list used to count `(`
@@ -7693,7 +7761,7 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
             if mod_name == synth_top:
                 return None  # already in some file
             param_block, port_block = _extract_param_and_ports(
-                text_scan, m.end() - 1)
+                text_scan, m.end())
             if port_block is not None:
                 file_mods.append((mod_name, param_block, port_block, f))
         if not file_mods:
@@ -7818,6 +7886,25 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
     # wrapper (so widths like `[size-1:0]` resolve in the wrapper port list)
     # AND propagate them by name to the instance.
     param_header = f" {param_block.strip()}" if param_block.strip() else ""
+    # Re-emit the DUT header's package imports on the wrapper so package-scoped
+    # param types/defaults (`sbox_impl_e SecSBoxImpl = SBoxImplDom`) and port
+    # types (`tlul_pkg::tl_h2d_t tl_i`) resolve in the wrapper's own scope. A
+    # wrapper that copies the param/port block but not the imports fails slang
+    # with "use of undeclared identifier" on every package symbol. '' for a
+    # module that imports nothing (byte-identical to the historical wrapper).
+    import_header = ""
+    try:
+        _dut_txt = src_file.read_text(errors="ignore")
+        _dut_scan = _mask_comments(_dut_txt)
+        _dm = _re.search(r"\bmodule\s+" + _re.escape(mod_name) + r"\b",
+                         _dut_scan)
+        if _dm:
+            _imp = _chip_top_extract_header_imports(
+                _dut_scan, _dut_txt, _dm.end())
+            if _imp.strip():
+                import_header = "\n  " + _imp.strip() + "\n"
+    except Exception:
+        import_header = ""
     inst_params = ""
     if param_block.strip():
         pnames = []
@@ -7919,7 +8006,7 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
         f"// (in {src_file.name}). This thin pass-through lets yosys synth\n"
         f"// against L9's expected top without modifying the authored RTL.\n"
         f"`default_nettype none\n"
-        f"module {synth_top}{param_header} {wrapper_port_block};\n"
+        f"module {synth_top}{import_header}{param_header} {wrapper_port_block};\n"
         f"{nonansi_decls}"
         f"  {mod_name}{inst_params} u_dut (\n    {connects}\n  );\n"
         f"endmodule\n"
@@ -8195,14 +8282,64 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                       "full flat glob to synth)"
                       if _verdict == "STAGED_DUPLICATE"
                       else " in the reachable closure")
-            return StepResult(
-                "yosys_synth", "FAIL",
-                time.time() - t0,
-                (f"CATALOG_GLUE_CLOSURE ({_issue}): vendor bundle "
-                 f"duplicate-module defect{_facet} of the staged synth "
-                 f"set — yosys-slang would crash with a raw 'duplicate "
-                 f"definition' abort. {_msg}{_prune_note}"),
-                extras={"catalog_glue_closure": _cg_report})
+            # ORGANIC — a duplicate whose variant file(s) are BYTE-IDENTICAL to
+            # the canonical are pure redundant copies (the same source staged
+            # under two names or two paths — the common vendor-bundle shape,
+            # e.g. an `_shim` alias that is a verbatim copy). Dropping a
+            # byte-identical copy CANNOT change synthesis: the module stays
+            # defined by the canonical, so no dependency is lost. That makes it
+            # categorically safe — unlike the reachability-PRUNE this gate
+            # deliberately never auto-applies (an unreachable-looking file may
+            # still be a needed dep via an include/import edge the graph missed).
+            # So de-dup the identical copies and PROCEED; the crash-gate still
+            # fires the moment a variant DIFFERS from its canonical (a real shim
+            # whose content only the author can adjudicate). chip-AGNOSTIC: pure
+            # byte-compare of the resolver's own canonical/variant paths.
+            _dedup_drop = set()
+            _dedup_unsafe = False
+            for _d in _dups:
+                try:
+                    _canon_bytes = Path(_d.get("canonical", "")).read_bytes()
+                except Exception:
+                    _canon_bytes = None
+                for _vs in _d.get("variants", []):
+                    _vp = Path(_vs)
+                    try:
+                        _same = (_canon_bytes is not None
+                                 and _vp.read_bytes() == _canon_bytes)
+                    except Exception:
+                        _same = False
+                    if _same:
+                        _dedup_drop.add(_vp.resolve())
+                    else:
+                        _dedup_unsafe = True
+            if _dedup_drop and not _dedup_unsafe:
+                _before_n = len(rtl_files)
+                rtl_files = [f for f in rtl_files
+                             if Path(str(f)).resolve() not in _dedup_drop]
+                _dedup_log = (
+                    f"[ADVISORY] CATALOG_GLUE_CLOSURE ({_issue}): auto-dropped "
+                    f"{_before_n - len(rtl_files)} BYTE-IDENTICAL redundant "
+                    f"duplicate-module file(s) from the synth set (canonical "
+                    f"kept; a byte-identical copy cannot change synthesis) — "
+                    f"{_msg}")
+                print(_dedup_log, file=sys.stderr)
+                _prune_advisory = {
+                    "issue": _issue,
+                    "auto_dropped_identical": sorted(
+                        str(p) for p in _dedup_drop),
+                    "catalog_glue_closure": _cg_report,
+                }
+                # fall through to synth on the de-duplicated set
+            else:
+                return StepResult(
+                    "yosys_synth", "FAIL",
+                    time.time() - t0,
+                    (f"CATALOG_GLUE_CLOSURE ({_issue}): vendor bundle "
+                     f"duplicate-module defect{_facet} of the staged synth "
+                     f"set — yosys-slang would crash with a raw 'duplicate "
+                     f"definition' abort. {_msg}{_prune_note}"),
+                    extras={"catalog_glue_closure": _cg_report})
         else:
             # ORGANIC #778 — NON-duplicate (PASS) verdict: the runner still feeds
             # the full flat glob to synth. If the closure flags an over-broad
