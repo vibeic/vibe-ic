@@ -117,3 +117,59 @@ def test_the_plugins_own_tree_is_not_mistaken_for_the_run(tmp_path):
     rc, out = _run(r)
     assert rc == 0, out
     assert "othernode" not in out
+
+
+def test_no_library_load_is_fail_but_not_an_accusation(tmp_path):
+    """A target declared, a PDK staged, and NOTHING loaded.
+
+    Reproduces the state a Phase-1-only / retarget run is in. Before this was
+    split out, the gate printed "the staged PDK was not the one used" directly
+    above its own "loaded : 0 distinct librar(ies)" — a claim about a load that
+    never happened. It must still FAIL (nothing was demonstrated) and it must
+    not say a different PDK was used.
+    """
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
+            staged=["zq42k3_sc.lib"], loaded=[])
+    rc, out = _run(r)
+    assert rc == 1, out
+    assert "was not the one used" not in out, out
+    assert "whatever library was available" not in out, out
+    assert "no cell-library load at all" in out, out
+
+
+def test_no_library_load_is_machine_readable(tmp_path):
+    """A caller must not have to parse prose to tell the two FAILs apart."""
+    rec = tmp_path / "rec.json"
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
+            staged=["zq42k3_sc.lib"], loaded=[])
+    p = subprocess.run([sys.executable, str(GATE), str(r), "--json", str(rec)],
+                       capture_output=True, text=True, timeout=30)
+    assert p.returncode == 1, p.stdout + p.stderr
+    d = json.loads(rec.read_text())
+    assert d["verdict"] == "FAIL"
+    assert d["no_library_load_recorded"] is True
+    assert d["libraries_loaded"] == []
+
+
+def test_a_wrong_pdk_still_reports_a_wrong_pdk(tmp_path):
+    """Control: the new branch must not swallow the case it sits in front of."""
+    rec = tmp_path / "rec.json"
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
+            staged=["zq42k3_sc.lib"], loaded=["othernode_fd_sc_hd.lef"])
+    p = subprocess.run([sys.executable, str(GATE), str(r), "--json", str(rec)],
+                       capture_output=True, text=True, timeout=30)
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert "was not the one used" in p.stdout
+    d = json.loads(rec.read_text())
+    assert d["no_library_load_recorded"] is False
+
+
+def test_a_pass_records_the_field_too(tmp_path):
+    """The field is present on every answered verdict, not only on the new one."""
+    rec = tmp_path / "rec.json"
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
+            staged=["zq42k3_sc.lib"], loaded=["zq42k3_sc.lef"])
+    p = subprocess.run([sys.executable, str(GATE), str(r), "--json", str(rec)],
+                       capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert json.loads(rec.read_text())["no_library_load_recorded"] is False

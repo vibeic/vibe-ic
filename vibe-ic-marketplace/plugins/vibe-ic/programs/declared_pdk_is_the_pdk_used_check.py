@@ -45,7 +45,12 @@ identifier of any process, foundry or design is written here.
 
 EXIT
     0  the libraries the tools loaded are consistent with the declared target
-    1  they are not — including "a target is declared and no PDK is staged"
+    1  they are not — including "a target is declared and no PDK is staged",
+       and "a target is declared and this run recorded no library load at all"
+       (`no_library_load_recorded: true` in the JSON record). The latter is a
+       FAIL because nothing was demonstrated, NOT because a different PDK was
+       shown to have been used — the two are reported apart so a caller is
+       never told a load happened when none did.
     2  no target declared AND no cell library loaded — there was no physical
        implementation to judge. A run that DID load libraries without a declared
        target exits 1, because it cannot show it used the intended process.
@@ -224,12 +229,49 @@ def main(argv=None) -> int:
 
     if hits:
         rec["verdict"] = "PASS"
+        rec["no_library_load_recorded"] = False
         _emit(a.json, rec)
         print(f"declared_pdk_is_the_pdk_used: PASS — {len(hits)} of {len(libs)} loaded "
               f"librar(ies) match the declared target ({source})")
         return 0
 
+    if not libs:
+        # A CHECK MUST NOT STATE A CONCLUSION ITS OWN EVIDENCE CONTRADICTS.
+        #
+        # Both reasons below assert that some OTHER library was used instead —
+        # "the flow ran on whatever library was available", "the staged PDK was
+        # not the one used". Each is a claim about a load that happened. With
+        # `libs` empty NO load was recorded at all, so the run's own logs carry
+        # neither sentence. Measured on a real run: a design that had just
+        # declared its target and staged 11521 enablement files, with no tool
+        # step yet, was told "the staged PDK was not the one used" over
+        # `loaded : 0 distinct librar(ies)` printed on the very next line.
+        #
+        # THE VERDICT DOES NOT SOFTEN. It stays FAIL, for the reason this file
+        # exists: a run that declares a process and cannot show a single library
+        # load has not demonstrated it implemented against that process, and the
+        # motivating defect — a staged PDK that silently went missing — is just
+        # as capable of producing logs that name nothing as logs that name the
+        # wrong thing. Only the REASON changes, from an unsupported accusation
+        # to the true one, plus a machine-readable field so a caller can tell
+        # "not established yet" from "established, and it was the wrong PDK"
+        # without parsing prose.
+        rec["verdict"] = "FAIL"
+        rec["no_library_load_recorded"] = True
+        rec["reason"] = ("a PDK target is declared and this run's logs record no "
+                         "cell-library load at all, so which process the tools "
+                         "used cannot be established from this run. This is not "
+                         "evidence that a different PDK was used — it is the "
+                         "absence of the evidence the question needs.")
+        _emit(a.json, rec)
+        print(f"declared_pdk_is_the_pdk_used: FAIL — {rec['reason']}")
+        print(f"    declared : {target}   (from {source})")
+        print(f"    staged   : {staged} file(s) under input/pdk/")
+        print(f"    loaded   : 0 librar(ies) across {scanned} log(s) — nothing to compare")
+        return 1
+
     rec["verdict"] = "FAIL"
+    rec["no_library_load_recorded"] = False
     if staged == 0:
         rec["reason"] = ("a PDK target is declared and NO PDK is staged under "
                          "input/pdk/. The flow ran on whatever library was available "
