@@ -566,11 +566,108 @@ _DRC_FOUNDRY_STDCELL_RULE_PREFIXES = (
 def _drc_rule_is_foundry_stdcell(rule: Optional[str]) -> bool:
     """True iff `rule` names a foundry-qualified std-cell-INTERNAL rule family
     that the phase-3 drc step waives — but NEVER for a met2+/via2+ user-routing
-    rule (the honesty gate takes precedence). chip-AGNOSTIC."""
+    rule (the honesty gate takes precedence). chip-AGNOSTIC.
+
+    NOTE this answers only "is the RULE FAMILY one that CAN be waived". It does
+    NOT establish that a given violation is actually std-cell-internal — that is
+    a claim about WHERE the geometry is, and only the report's own `<cell>`
+    attribution can support it. See `_drc_item_is_foundry_stdcell`.
+    """
     r = (rule or "").strip().strip("'\"").lower()
     if any(r.startswith(p) for p in _DRC_USER_ROUTING_RULE_PREFIXES):
         return False
     return any(r.startswith(p) for p in _DRC_FOUNDRY_STDCELL_RULE_PREFIXES)
+
+
+# A waiver that says "std-cell-INTERNAL" is a claim about WHERE the geometry
+# sits, and a KLayout RDB states that on every item in a `<cell>` element. The
+# rule-prefix test alone never read it — proxy instead of property.
+#
+# MEASURED on the tracked corpus, over the 85,593 items the prefix test waives
+# across six real Phase-3 runs::
+#
+#     run A   40240 items   39805 (98.9%) attributed to `chip_top`
+#     run B   19145 items   18875 (98.6%) attributed to `chip_top`
+#     run C    7284 items    6896 (94.7%) attributed to `chip_top`
+#     run D    5293 items    5062 (95.6%) attributed to `chip_top`
+#
+# `chip_top` is the design's OWN top cell — the RDB says so in its `<top-cell>`
+# element. Only 1.1%–5.3% of the waived items are attributed to an actual
+# foundry std-cell master. The attribution is informative rather than
+# universally flattened, precisely BECAUSE those few hundred per run DO resolve
+# to `sky130_fd_sc_hd__*` masters: KLayout kept the hierarchy it could.
+#
+# So the waiver's stated premise is contradicted by the report's own field on
+# ~95% of what it waives. The rule family stays necessary — the met2+/via2+
+# honesty gate is untouched — but it is no longer SUFFICIENT: a waiver must now
+# be backed by the attribution it claims. An item the report places at the
+# design's own top cell is user geometry and is COUNTED.
+#
+# chip-AGNOSTIC: matches the foundry cell-library NAMESPACE grammar shipped by
+# the open PDKs, never a design/part/vendor literal.
+_FOUNDRY_CELL_NAMESPACE_RE = re.compile(
+    r"^(?:sky130_(?:fd|ef)_(?:sc|pr|io)\w*__|gf180mcu_fd_\w+__|sg13g2_\w+_)",
+    re.I)
+
+
+def _drc_cell_is_foundry_master(cell: Optional[str]) -> bool:
+    """True iff `cell` names a foundry cell-library master (the only place
+    std-cell-INTERNAL geometry can be). chip-AGNOSTIC namespace grammar."""
+    c = (cell or "").strip().strip("'\"")
+    return bool(c) and bool(_FOUNDRY_CELL_NAMESPACE_RE.match(c))
+
+
+def _drc_item_is_foundry_stdcell(rule: Optional[str],
+                                 cell: Optional[str]) -> bool:
+    """True iff this violation may be tiered out as foundry std-cell-internal.
+
+    BOTH must hold: the rule family must be waivable (never met2+/via2+), AND
+    the report must itself attribute the item to a foundry cell master. When
+    the report carries no attribution at all, the claim is unsupported and the
+    item COUNTS — an absent field is not evidence.
+    """
+    return (_drc_rule_is_foundry_stdcell(rule)
+            and _drc_cell_is_foundry_master(cell))
+
+
+def _strip_leading_comment_block(text: str) -> str:
+    """Drop a leading run of blank and `#`-comment lines, returning the body.
+
+    THE DEFECT THIS CLOSES. `phase3_one_shot_runner.step_canonicalize_artefacts`
+    publishes the Step-31 sign-off DRC certificate by PREPENDING a 4-line `#`
+    provenance preamble to the KLayout RDB::
+
+        # Sign-off DRC report (... Step 31 alias).
+        # Source: phase3/reports/drc.rpt
+        # Tool: klayout
+        #
+        <?xml version="1.0" encoding="utf-8"?>
+
+    The dialect sniff below is `text.lstrip().startswith(...)`, anchored to the
+    first non-WHITESPACE character of the whole file. `#` is not whitespace, so
+    both prefix tests failed, `ET.fromstring` was NEVER CALLED, and the three
+    text regexes then ran over 2–12 MB of RDB — which carries rule names and
+    coordinates but no summary count (`grep -ic violation` over one such report
+    returns 0). Every branch missed and the function returned None.
+
+    Scoped as the flow declares it — step 31 is `drc_report_check . --mode drc
+    --under reports/phase3/drc_signoff.rpt`, a SINGLE-FILE scope — that one
+    file is the entire discovery set, so `determined_files == 0` and the gate
+    reported DRC_VIOLATION_COUNT_UNDETERMINED on eight tracked runs.
+
+    NOT "the header breaks parsing" — 22 other tracked reports carry a `#`
+    preamble and read fine, because their bodies are text and the text greps
+    never cared. The failure needs the preamble AND an XML-only body. Stripping
+    the preamble unconditionally would be the wrong fix shape for that reason;
+    it is stripped here only to find the dialect, and the text greps still run
+    on the original bytes.
+    """
+    lines = text.splitlines(keepends=True)
+    for idx, line in enumerate(lines):
+        s = line.strip()
+        if s and not s.startswith("#"):
+            return "".join(lines[idx:])
+    return ""
 
 
 def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
@@ -611,6 +708,22 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
 
     Returns None (never (0,0)) when NEITHER dialect yields a number — an
     unreadable or unrecognised report must not be credited as clean.
+                               SPLIT by each item's <category> rule AND its
+                               <cell> attribution into user-routing (the gating
+                               count) vs foundry-qualified std-cell-internal
+                               (disclosed, waived). Recognised whether the RDB
+                               starts at byte 0 or behind a `#` preamble.
+      plain-text summary       an anchored summary line ("violation count
+                               summary: N", "violation report: N", "total
+                               violations: N", the magic-style "DRC errors
+                               found: N"), else a bare "N violations" — no
+                               per-item rule, so the whole N is treated as
+                               user-routing (conservative: never auto-waived).
+
+    Returns None (never (0,0)) when no dialect yields a trustworthy number — an
+    unreadable or unrecognised report must not be credited as clean. THE CALLER
+    MUST TREAT None AS "NOT READABLE" AND FAIL, never as an absence of
+    violations; `_check_drc` does, per file, and says which file.
 
     MEASURED, the reason this function exists: the prior check counted which
     RULE-CATEGORY WORDS merely appeared anywhere in the text; counting real
@@ -620,38 +733,67 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
     deck's foundry-cell false-positives — the honesty gate keeps every met2+
     signal-stack defect gating.
     """
-    stripped = text.lstrip()
+    body = _strip_leading_comment_block(text)
+    stripped = body.lstrip()
     if stripped.startswith("<?xml") or stripped.startswith("<report-database"):
+        # THE XML BRANCH IS TERMINAL. A body that ANNOUNCED itself as a KLayout
+        # RDB and then could not be counted is UNREADABLE — it must never fall
+        # through to the text greps below.
+        #
+        # MEASURED, why this matters (real corpus RDB, 7,284 items):
+        #     intact                                          -> (0, 7284)
+        #     truncated mid-file                              -> None
+        #     truncated + "<!-- summary: 0 violations -->"     -> (0, 0)  CLEAN
+        # and a well-formed `<report-database>` with `<items>` ABSENT:
+        #     bare                                            -> None
+        #     + "0 violations"                                -> (0, 0)  CLEAN
+        # A KLayout run killed mid-write (disk/OOM/timeout) on a dirty design
+        # was graded CLEAN if any "N violations"-shaped sentence existed
+        # anywhere in the bytes — the exact injection this function was written
+        # to close, re-entered through the parse-failure door.
         try:
-            root = ET.fromstring(text)
+            root = ET.fromstring(body)
         except ET.ParseError:
-            root = None
-        if root is not None:
-            items = root.find(".//items")
-            if items is not None:
-                user = 0
-                stdcell = 0
-                for _it in items.findall("item"):
-                    _cat = _it.find("category")
-                    _rule = _cat.text if _cat is not None else ""
-                    if _drc_rule_is_foundry_stdcell(_rule):
-                        stdcell += 1
-                    else:
-                        user += 1
-                return (user, stdcell)
-    # SVRF-native: a per-rule tally, no summary line. Tried BEFORE the text
-    # regexes because a rule NAME can contain the word "violation" and the
-    # generic patterns would then read a rule name as a count.
+            return None
+        items = root.find(".//items")
+        if items is None:
+            return None
+        user = 0
+        stdcell = 0
+        for _it in items.findall("item"):
+            _cat = _it.find("category")
+            _rule = _cat.text if _cat is not None else ""
+            _cel = _it.find("cell")
+            _cell = _cel.text if _cel is not None else ""
+            if _drc_item_is_foundry_stdcell(_rule, _cell):
+                stdcell += 1
+            else:
+                user += 1
+        return (user, stdcell)
+    # SVRF FIRST (#705). The flow's own authority order for the sign-off DRC
+    # alias puts the foundry's native rule-deck report ABOVE the KLayout
+    # OSS-deck report, and this function never learned that dialect: measured on
+    # a clean 4533-PASS sign-off, the HIGHEST-authority producer was the one the
+    # Step-31 substance gate could not read (rc=1, determined_files:0) while the
+    # router's projection — the LOWEST — measured rc=0. The grammar is imported
+    # from `_signoff_drc_format`, not re-authored; three private copies of it is
+    # how the divergence happened.
     _svrf = _sdf.svrf_fail_count(text)
     if _svrf is not None:
         return (_svrf, 0)
-    m = re.search(r"total\s+violations?\s*[:=]?\s*(\d+)", text, re.I)
-    if m:
-        return (int(m.group(1)), 0)
+    # Text dialects. ANCHORED summary patterns are tried FIRST, so a real
+    # summary line wins over an incidental "N violations" phrase regardless of
+    # where each sits in the file. The text greps run on the ORIGINAL text, so
+    # the 22 corpus reports that carry a `#` preamble AND a text body are
+    # byte-for-byte unaffected (measured: 22/22 identical).
+    for _rx in (r"violation\s+count\s+summary\s*:\s*(\d+)",
+                r"violation\s+report\s*:\s*(\d+)",
+                r"total\s+violations?\s*[:=]?\s*(\d+)",
+                r"DRC errors? found:\s*(\d+)"):
+        m = re.search(_rx, text, re.I)
+        if m:
+            return (int(m.group(1)), 0)
     m = re.search(r"(\d+)\s+(?:total\s+)?violations?\b", text, re.I)
-    if m:
-        return (int(m.group(1)), 0)
-    m = re.search(r"DRC errors? found:\s*(\d+)", text, re.I)
     if m:
         return (int(m.group(1)), 0)
     return None
@@ -691,11 +833,18 @@ def _check_drc(project_dir: Path) -> AuditResult:
     # cannot be judged at this level — only recorded, so the caller that owns
     # the sign-off policy can judge it. See `drc_report_check --signoff`.
     producers: List[dict] = []
+    unreadable: List[str] = []
 
     for fp in files:
         try:
             text = fp.read_text(errors="replace")
-        except OSError:
+        except OSError as exc:
+            # A DISCOVERED report that cannot be opened at all — a dangling
+            # symlink, a permission error, a vanished file. Previously a bare
+            # `continue`: the file was dropped from the denominator with no
+            # finding of any severity, and the verdict was formed from whatever
+            # siblings happened to parse.
+            unreadable.append(f"{fp} ({type(exc).__name__})")
             continue
         _p = _sdf.classify_text(text)
         _prod = _p.as_dict()
@@ -710,6 +859,8 @@ def _check_drc(project_dir: Path) -> AuditResult:
         if not best_file:
             best_file = str(fp)
         n = _drc_real_violation_count(text)
+        if n is None:
+            unreadable.append(str(fp))
         if n is not None:
             determined_files += 1
             _user_n, _std_n = n
@@ -739,6 +890,37 @@ def _check_drc(project_dir: Path) -> AuditResult:
             message="No violation count pattern found in DRC report",
             file=best_file))
 
+    # NOT READABLE IS NOT A MEASUREMENT — and it is not zero.
+    #
+    # This is the defect that let the sign-off preamble survive: `passed` only
+    # ever required `determined_files > 0`, never `determined_files ==
+    # files_found`, and DRC_VIOLATION_COUNT_UNDETERMINED only fired when NOT ONE
+    # file parsed. So in any multi-file scope an unreadable report was dropped
+    # SILENTLY — no finding, at any severity — and the verdict was formed from
+    # whatever siblings happened to parse.
+    #
+    # MEASURED on tracked data, `benchmark-data/ic/edge_llm_accel` project-wide:
+    #     passed=True  files_found=2  determined_files=1  ERRORs: []
+    # where the second "file" is a DANGLING SYMLINK at a Step-31 evidence path —
+    # a green DRC verdict over a sign-off certificate that does not exist.
+    #
+    # Every unreadable report is now named at ERROR and gates. rc stays 1, not
+    # 2: `flow_compliance_check._check_program_exit_zero` credits rc 2 as a
+    # VACUOUS_PASS and returns passed=True UNCONDITIONALLY, so a refusal exiting
+    # 2 would turn this gate GREEN — a cheaper false certificate than the one
+    # being closed. "Nothing was certified" on a blocking sign-off gate is a
+    # FAIL, not a skip.
+    if unreadable:
+        _shown = ", ".join(unreadable[:5])
+        _more = f" (+{len(unreadable) - 5} more)" if len(unreadable) > 5 else ""
+        result.findings.append(Finding(
+            rule="DRC_REPORT_NOT_READABLE", severity="ERROR",
+            message=(f"{len(unreadable)} of {len(files)} discovered DRC "
+                     f"report(s) yielded NO determinable violation count and "
+                     f"were NOT MEASURED — not zero, not clean: {_shown}"
+                     f"{_more}"),
+            file=unreadable[0].split(" (")[0]))
+
     # THE GATING CHECK — the real count, not the vocabulary.
     if determined_files == 0:
         result.findings.append(Finding(
@@ -761,23 +943,37 @@ def _check_drc(project_dir: Path) -> AuditResult:
     # DISCLOSE (never silent) the foundry-qualified std-cell-internal count that
     # was tiered out of the gating total — same waiver the phase-3 drc step
     # applies. A reader sees exactly how many violations were set aside and why.
+    #
+    # Severity is WARNING, not INFO. A waiver is a decision to not look at
+    # something; the number of things not looked at is the single most
+    # review-relevant fact a sign-off audit carries, and INFO is the tier a
+    # reader skims. The phase-3 runner records these same runs with
+    # `review_required: true` in its own step_drc record — an audit that
+    # disclosed the same set at INFO was quieter than the runner it echoes.
+    # WARNING is non-gating, so no verdict changes; only the volume does.
     if stdcell_excluded > 0:
         result.findings.append(Finding(
-            rule="DRC_FOUNDRY_STDCELL_EXCLUDED", severity="INFO",
-            message=(f"{stdcell_excluded} foundry-qualified std-cell-internal "
-                     f"DRC violation(s) (li./ct./licon/m1./met1./mcon — below "
-                     f"the router's met2 signal stack) tiered out of the "
-                     f"sign-off gating total, same as the phase-3 drc step; "
-                     f"the met2+/via2+ honesty gate still counts "
-                     f"{real_total} user-routing violation(s)"),
+            rule="DRC_FOUNDRY_STDCELL_EXCLUDED", severity="WARNING",
+            message=(f"{stdcell_excluded} DRC violation(s) tiered out of the "
+                     f"sign-off gating total as foundry-qualified std-cell-"
+                     f"INTERNAL: a waivable rule family (li./ct./licon/m1./"
+                     f"met1./mcon — below the router's met2 signal stack) AND "
+                     f"attributed by the report itself to a foundry cell "
+                     f"master. Items in the same rule families attributed to "
+                     f"the design's own cells are NOT waived and are counted "
+                     f"in the {real_total} user-routing violation(s) the "
+                     f"met2+/via2+ honesty gate reports. REVIEW REQUIRED."),
             file=best_file))
-    result.passed = determined_files > 0 and real_total == 0 and authentic
+    result.passed = (determined_files > 0 and real_total == 0 and authentic
+                     and not unreadable)
     result.summary = {"files_found": len(files), "categories_found": cats_found,
                       "has_count": has_count, "tool_authentic": authentic,
                       "determined_files": determined_files,
                       "real_violation_total": real_total,
                       "foundry_stdcell_excluded": stdcell_excluded,
-                      "producers": producers}
+                      "producers": producers,
+                      "unreadable_files": len(unreadable),
+                      "unreadable": unreadable[:20]}
     return result
 
 
