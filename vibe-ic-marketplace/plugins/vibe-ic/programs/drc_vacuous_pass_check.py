@@ -314,14 +314,36 @@ def _discover_layouts(path: Path) -> List[Path]:
 
 
 def _bind_layouts(cands: List[Path], log_text: str) -> Tuple[List[Path], bool]:
-    """Bind the layout(s) the report actually names. A report that cites its
-    input file tells us WHICH artifact to measure; returning `bound=True` lets a
-    measured 0 be decisive. With no citation we fall back to every candidate and
-    demand unanimity, so an unrelated empty file cannot mask a real one."""
+    """Bind the layout(s) the report actually names.
+
+    CITATION IS A FILENAME, NOT A DESIGN NAME (vibe-ic#693). This used to also
+    match `p.stem.split(".")[0]`, i.e. the bare design name. A KLayout sign-off
+    database opens with `<top-cell>spm</top-cell>`, so on a real run EVERY file
+    called `spm.*` bound — the sign-off GDS, the router's scratch DEF, a
+    snapshot copy — and the decisive `any(shapes == 0)` rule below then let ANY
+    one of them condemn the run.
+
+    MEASURED, reproduced on a passing published run (9050 shapes, rc=0): adding
+    one 0-component `spm.def` under a `phase3/stage3/pnr_d8/` scratch directory
+    flipped it to rc=1 with the message "the layout the run consumed holds 0
+    shapes" — a statement that was factually false about the layout the run
+    consumed. `pnr_d8/`, `pnr_d8s/` and `_snapshot_orig_rtl_*/` already exist in
+    published trees, so the trigger is not hypothetical.
+
+    So a citation is the FILENAME. And a filename that resolves to several
+    distinct paths is not a citation of one artifact, so it does not license
+    the decisive rule either: `bound` is True only when exactly one path is
+    named. Everything else falls back to unanimity over all candidates, where a
+    single stray empty file cannot condemn and a genuinely empty tree still can.
+    """
     named = [p for p in cands
-             if re.search(r"\b" + re.escape(p.name) + r"\b", log_text)
-             or re.search(r"\b" + re.escape(p.stem.split(".")[0]) + r"\b", log_text)]
-    return (named, True) if named else (cands, False)
+             if re.search(r"(?<![\w.-])" + re.escape(p.name) + r"(?![\w-])",
+                          log_text)]
+    if len(named) == 1:
+        return named, True
+    if named:
+        return named, False       # ambiguous citation — unanimity, not decision
+    return cands, False
 
 
 def _is_drc_log(text: str) -> bool:
@@ -329,20 +351,40 @@ def _is_drc_log(text: str) -> bool:
     return bool(re.search(r"\bdrc\b|\bviolation|\berror", text, re.I))
 
 
-def _discover(path: Path) -> List[Path]:
-    """Return DRC log files. If `path` is a file, use it directly."""
+def _discover(path: Path, under: Optional[List[str]] = None) -> List[Path]:
+    """Return DRC log files. If `path` is a file, use it directly.
+
+    `under` restricts discovery to project-relative subtrees or FILES, the same
+    mechanism and the same flag name `eda_report_audit` uses (#584). Without it
+    discovery is a project-wide `rglob` — which at step 31 sweeps in step 21's
+    `reports/phase3/drc_router.rpt`, the pre-signoff `phase3/reports/drc.rpt`,
+    the router's `phase3/stage3/pnr/routed.drc.rpt` and every `_snapshot_*`
+    copy. The flow's own comment at step 31 records that exactly this
+    project-wide rglob produced a 3x miscount in a sibling gate, and that
+    `--under` exists to stop step 21's evidence reaching step 31.
+    """
     if path.is_file():
         return [path]
     if not path.is_dir():
         return []
+    roots: List[Path] = ([path / rel for rel in under] if under else [path])
     out: List[Path] = []
     seen = set()
-    for g in _DRC_GLOBS:
-        for fp in sorted(path.rglob(g)):
-            rp = fp.resolve()
-            if rp not in seen and fp.is_file():
+    for root in roots:
+        if root.is_file():
+            rp = root.resolve()
+            if rp not in seen:
                 seen.add(rp)
-                out.append(fp)
+                out.append(root)
+            continue
+        if not root.is_dir():
+            continue
+        for g in _DRC_GLOBS:
+            for fp in sorted(root.rglob(g)):
+                rp = fp.resolve()
+                if rp not in seen and fp.is_file():
+                    seen.add(rp)
+                    out.append(fp)
     return out
 
 
@@ -387,16 +429,24 @@ def _classify_one(text: str) -> dict:
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
-def audit(path: Path, layout: Optional[Path] = None) -> AuditResult:
+def audit(path: Path, layout: Optional[Path] = None,
+          under: Optional[List[str]] = None) -> AuditResult:
     result = AuditResult()
-    files = _discover(path)
+    files = _discover(path, under)
+    scope = {"scoped_under": list(under)} if under else {}
+    if under:
+        # WHICH declared scopes do not exist. Without this a typo'd `--under`
+        # is byte-identical to a genuinely absent report.
+        scope["scoped_under_missing"] = [rel for rel in under
+                                         if not (path / rel).exists()]
     if not files:
         result.verdict = "SKIP"
         result.passed = False
         result.findings.append(Finding(
             rule="DRC_LOG_EXISTS", severity="ERROR",
-            message="No DRC log found — nothing to vet (SKIP, never a PASS)."))
-        result.summary = {"files_found": 0}
+            message="No DRC log found — nothing to vet (SKIP, never a PASS)."
+                    + (f" Scope: {under}." if under else "")))
+        result.summary = {"files_found": 0, **scope}
         return result
 
     per_file = []
@@ -520,7 +570,7 @@ def audit(path: Path, layout: Optional[Path] = None) -> AuditResult:
                         f"requires positive evidence.{hint}",
                 file=str(fp)))
 
-    result.summary = {"files_found": len(files), "per_file": per_file}
+    result.summary = {"files_found": len(files), "per_file": per_file, **scope}
 
     if not any_drc_log:
         result.verdict = "SKIP"
@@ -556,10 +606,18 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--layout", default=None,
                         help="The layout the DRC ran on (.gds/.gds.gz/.oas/.def). "
                              "Overrides discovery — measure THIS artifact.")
+    parser.add_argument("--under", action="append", default=None, metavar="REL",
+                        help="restrict DRC-report discovery to this "
+                             "project-relative subtree or FILE (repeatable). "
+                             "Omitted, discovery is project-wide. Use it to "
+                             "scope a step's gate to the artefact that step "
+                             "declares, so another step's DRC report cannot "
+                             "carry — or condemn — this one.")
     args = parser.parse_args(argv)
 
     result = audit(Path(args.path),
-                   Path(args.layout) if args.layout else None)
+                   Path(args.layout) if args.layout else None,
+                   args.under)
     report = asdict(result)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
 
@@ -568,6 +626,13 @@ def main(argv: Optional[list] = None) -> int:
         Path(args.json).write_text(report_json)
 
     print(report_json)
+    if result.verdict == "SKIP":
+        # NOT CHECKED, disclosed at line start so the flow's verdict tier reads
+        # it rather than inferring a pass from a bare rc.
+        print(f"VACUOUS_PASS: drc_vacuous_pass_check examined "
+              f"{result.summary.get('files_found', 0)} DRC report(s)"
+              + (f" under {args.under}" if args.under else "")
+              + " — nothing was vetted.")
     return _EXIT.get(result.verdict, 2)
 
 

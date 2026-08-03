@@ -21,22 +21,76 @@ Audit shape (chip-AGNOSTIC, no per-step ID hardcoded)
 For every `reports/**/*.json` whose `verdict` field is in
 {FAIL, MISSING}:
 
-  1. Derive a set of "name candidates" from the report's filepath:
-     basename without extension, basename split on `_`, parent
-     directory name. Example for `reports/phase3/ir_drop.json`:
-     candidates = {ir_drop, ir, drop, phase3, ir-drop, ir drop}.
+  1. Derive the report's IDENTITY from its path: the stem, the
+     basename, and the project-relative path. Example for
+     `reports/phase3/ir_drop.json`: {ir_drop, ir drop, ir_drop.json,
+     reports/phase3/ir_drop.json}.
 
   2. Acknowledge the FAIL by either:
 
      (a) WAIVER MATCH — `waivers.json::waived_steps[*]` contains an
-         entry whose `reason`, `ticket`, or `evidence` text mentions
-         any candidate (case-insensitive, normalised across `_`/`-`/space).
+         entry whose `reason`, `ticket`, or `evidence` text names the
+         report (case-insensitive, normalised across `_`/`-`/space).
 
      (b) BUBBLED — any other JSON under `reports/orchestrator/` or
-         `reports/<phase>/<pass.flag-anchored-step>/` records a
-         matching FAIL/MISSING verdict for the same name.
+         `reports/audit/` records a matching FAIL/MISSING verdict
+         naming the same report.
 
   3. If neither (a) nor (b), flag `STEP_FAIL_NOT_BUBBLED`.
+
+IDENTITY, NOT A FRAGMENT (vibe-ic#693)
+--------------------------------------
+The candidate set used to also carry the PARENT DIRECTORY NAME and every
+`_`-split token of length >= 3. Those are categories, not identities, and a
+word-bounded search for them hits ordinary prose.
+
+MEASURED over the 46 run trees on a working checkout: 107 reports declare
+verdict FAIL/MISSING and the previous matcher flagged 5. Identity matching
+flags 33. The 28 it recovers were each "acknowledged" by a token that names a
+CATEGORY rather than the report — measured, the granting token was `analog`
+(7), `corner` (6), `gates` (5), `coverage` (4), `cell` (2), `phase3` (2),
+`audit` (1), `signoff` (1).
+
+The clearest instance, and the reason this is a defect rather than a tuning
+preference — a published run's
+
+    reports/phase2/gates/ip_integration.json   verdict=FAIL
+
+was ACKNOWLEDGED by the candidate `gates`, matched against its own
+orchestrator roll-up at
+
+    reports/audit/phase23_completion_audit.json:9:    "gates": [],
+    reports/audit/phase23_completion_audit.json:10:   "failed_gates": [],
+
+An EMPTY gates list was read as evidence that the failure had been bubbled up.
+A gate whose PASS can be granted by a line asserting the opposite is not
+measuring acknowledgment; it is measuring vocabulary. So the match is now on
+identity only.
+
+`verdict_mode: ADVISES` IS AN ANSWER, NOT A SILENCE
+---------------------------------------------------
+A report that declares `"verdict_mode": "ADVISES"` alongside `FAIL` has
+already said its verdict does not gate — that is the repo's own convention
+(`flow_gate_enforcement_audit` parses exactly this key, and
+`cross_layer_reference_check` / `dfm_screen_check` / three L-layer gates emit
+it). Demanding a waiver for an advisory finding would require every run to
+waive a gate that is not blocking. MEASURED: 10 of the 107 FAIL reports carry
+it, all 10 of them `reports/phase1/cross_layer_reference_check.json`.
+
+ENFORCEMENT
+-----------
+PROJECT mode is BLOCKING and stays that way: an unacknowledged FAIL is rc 1.
+(`--strict` is accepted as an explicit spelling of the same thing. The
+verdict -> exit-code mapping is the property
+`test_an_unacknowledged_fail_exits_1` exists to hold, and weakening it would
+reproduce, in this gate, the defect it audits.)
+
+CORPUS mode is the non-blocking form, and it is non-blocking by RATCHET rather
+than by being toothless. `--corpus <dir>` sweeps the PUBLISHED (git-tracked)
+run trees and compares against a recorded baseline: the count may shrink
+freely, growth is rc 1. That is what CI runs, because `--strict` over every run
+tree on a working checkout reddens 16 of 46 on 33 findings this change did not
+create.
 
 Files audited:
   reports/**/*.json  (excluding files inside reports/audit/ which are
@@ -53,11 +107,13 @@ VACUOUS_PASS conditions:
 
 Usage:
     python3 step_internal_fail_bubble_up_check.py <project_dir>
-                                                   [--json <out>]
+                                                   [--json <out>] [--strict]
+    python3 step_internal_fail_bubble_up_check.py --corpus benchmark-data/ic
+                                                   [--baseline <f>] [--write-baseline]
 
 Exit codes:
-    0  PASS / VACUOUS_PASS
-    1  FAIL — at least one FAIL report is not bubbled / waivered
+    0  PASS / VACUOUS_PASS / report-only run / corpus at-or-below baseline
+    1  FAIL — an unacknowledged FAIL under --strict, or corpus GROWTH
     2  argument or I/O error
 
 chip-AGNOSTIC. No vendor / IC / specific filename hardcoded.
@@ -70,7 +126,7 @@ import re
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple  # noqa: F401
 
 
 _FAIL_VERDICTS = {"FAIL", "MISSING"}
@@ -104,21 +160,25 @@ def _normalise(s: str) -> str:
 
 
 def _name_candidates(report_path: Path, project: Path) -> Set[str]:
-    """Derive name candidates that a waiver / bubble-up record might
-    use to identify this report."""
+    """The report's IDENTITY — the strings that name THIS report and no other.
+
+    Deliberately NOT: the parent directory (`gates`, `phase3`, `safety`) or the
+    `_`-split fragments (`check`, `cell`, `post`, `coverage`). Those are
+    categories shared by dozens of reports, and a word-bounded search for them
+    hits ordinary prose in any orchestrator blob — including, measured, the
+    line `"failed_gates": []`, which asserts the OPPOSITE of an acknowledgment.
+    See the module docstring for the full measurement.
+    """
     cand: Set[str] = set()
     stem = report_path.stem
     cand.add(stem)
     cand.add(_normalise(stem))
-    # Split on `_` and `-`
-    for tok in re.split(r"[_\-]", stem):
-        if len(tok) >= 3:
-            cand.add(tok.lower())
-    # Parent directory name (e.g. phase3 / phase2 / orchestrator)
-    parent = report_path.parent.name
-    if parent and parent not in {"reports", "."}:
-        cand.add(parent.lower())
-    return cand
+    cand.add(report_path.name)
+    try:
+        cand.add(report_path.relative_to(project).as_posix())
+    except ValueError:
+        pass
+    return {c for c in cand if c}
 
 
 def _read_json(p: Path) -> Optional[Any]:
@@ -231,6 +291,12 @@ def audit(project: Path) -> Tuple[str, List[BubbleFinding]]:
             continue
         if verdict not in _FAIL_VERDICTS:
             continue
+        # A report that declares itself advisory has ALREADY said its verdict
+        # does not gate. Demanding a waiver for it would require every run to
+        # waive a gate that is not blocking. `verdict_mode` is the repo's own
+        # BLOCKS/ADVISES key (flow_gate_enforcement_audit parses it).
+        if str(d.get("verdict_mode", "")).strip().upper() == "ADVISES":
+            continue
         saw_any_fail = True
 
         cands = _name_candidates(rp, project)
@@ -264,15 +330,146 @@ def audit(project: Path) -> Tuple[str, List[BubbleFinding]]:
     return ("FAIL" if findings else "PASS"), findings
 
 
+BASELINE_NAME = "step_internal_fail_bubble_up_baseline.json"
+_HERE = Path(__file__).resolve().parent
+
+
+def _published_run_trees(corpus: Path) -> List[Path]:
+    """The PUBLISHED run trees, not whatever this machine happens to hold.
+
+    `.gitignore` excludes `benchmark-data/ic/*/clean_run_*/` and re-admits only
+    `reports/`, `RESULT.md` and `.gitignore`. MEASURED at this commit: 46 run
+    trees on a working checkout, 17 tracked. A baseline recorded against 46
+    would fail in CI and for every fresh clone — the exact host-dependence
+    `_published_tree` exists to remove. So the corpus is what git tracks.
+
+    Outside a repository (a run tree handed over on its own) tracked-ness is
+    not a question that applies, and the disk is the honest answer.
+    """
+    try:
+        sys.path.insert(0, str(_HERE))
+        import _published_tree                      # noqa: PLC0415
+        published = _published_tree.published_paths(corpus)
+    except Exception:                               # noqa: BLE001
+        published = None
+    on_disk = sorted(p for p in corpus.glob("*/clean_run_*") if p.is_dir())
+    if published is None:
+        return on_disk
+    root = corpus.resolve()
+    keep = []
+    for d in on_disk:
+        rel = d.resolve().relative_to(root).as_posix()
+        if any(t.startswith(rel + "/") for t in published):
+            keep.append(d)
+    return keep
+
+
+def check_corpus(corpus: Path) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"gate": "step_internal_fail_bubble_up_check",
+                           "mode": "corpus", "corpus": str(corpus),
+                           "runs_swept": 0, "runs_with_reports": 0,
+                           "findings_total": 0, "per_run": {}, "findings": []}
+    for run in _published_run_trees(corpus):
+        out["runs_swept"] += 1
+        if not (run / "reports").is_dir():
+            continue
+        out["runs_with_reports"] += 1
+        _v, fs = audit(run)
+        rel = run.relative_to(corpus).as_posix()
+        if fs:
+            out["per_run"][rel] = len(fs)
+            out["findings_total"] += len(fs)
+            for f in fs:
+                out["findings"].append({"run": rel, **asdict(f)})
+    return out
+
+
+def _load_baseline(p: Path) -> Optional[int]:
+    if not p.is_file():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    n = d.get("findings_total")
+    return n if isinstance(n, int) else None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Doctrine rule #4 — every step-internal "
                     "verdict=FAIL must be acknowledged (waivered or "
                     "bubbled up).")
-    ap.add_argument("project_dir")
+    ap.add_argument("project_dir", nargs="?", default=None)
     ap.add_argument("--json", help="write JSON report to this path")
+    ap.add_argument("--strict", action="store_true",
+                    help="accepted and explicit; the project verdict is "
+                         "ALREADY blocking (an unacknowledged FAIL is exit 1) "
+                         "and this change does not weaken that. The "
+                         "non-blocking form is --corpus, which ratchets.")
+    ap.add_argument("--corpus", default=None, metavar="DIR",
+                    help="sweep the PUBLISHED (git-tracked) run trees under "
+                         "DIR and ratchet against the recorded baseline: the "
+                         "count may shrink freely, growth is rc 1.")
+    ap.add_argument("--baseline", default=None)
+    ap.add_argument("--write-baseline", action="store_true")
     args = ap.parse_args(argv)
 
+    if args.corpus:
+        corpus = Path(args.corpus)
+        if not corpus.is_dir():
+            print(f"error: not a directory: {corpus}", file=sys.stderr)
+            return 2
+        rep = check_corpus(corpus)
+        if args.json:
+            out = Path(args.json)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(rep, indent=2) + "\n")
+        bl = Path(args.baseline) if args.baseline else _HERE / BASELINE_NAME
+        now = rep["findings_total"]
+        if args.write_baseline:
+            bl.write_text(json.dumps(
+                {"_comment": (
+                    "Unacknowledged step-internal FAIL/MISSING reports across "
+                    "the PUBLISHED (git-tracked) run trees. MAY ONLY SHRINK — "
+                    "each one is a report declaring FAIL that no waiver and no "
+                    "orchestrator record names. The wrong repair is to loosen "
+                    "the matcher until the number falls (vibe-ic#693)."),
+                 "findings_total": now,
+                 "runs_swept": rep["runs_swept"],
+                 "runs_with_reports": rep["runs_with_reports"],
+                 "per_run": rep["per_run"]}, indent=2) + "\n")
+            print(f"wrote {bl} (findings_total={now})")
+            return 0
+        base = _load_baseline(bl)
+        print(f"corpus sweep: {rep['runs_swept']} published run tree(s), "
+              f"{rep['runs_with_reports']} with a reports/ tree, "
+              f"{now} unacknowledged step-internal FAIL(s)")
+        if rep["runs_with_reports"] == 0:
+            print("VACUOUS_PASS: no published run tree carries a reports/ "
+                  "directory — the sweep examined nothing.")
+            return 2
+        if base is None:
+            print(f"[NOT CHECKED] no baseline at {bl} — record one with "
+                  f"--write-baseline before this can ratchet.")
+            return 2
+        for run, n in sorted(rep["per_run"].items()):
+            print(f"   {run}: {n}")
+        if now > base:
+            print(f"[FAIL] unacknowledged step-internal FAILs GREW "
+                  f"{base} -> {now}: a step shipped a verdict=FAIL report that "
+                  f"no waiver and no orchestrator record names.")
+            return 1
+        if now < base:
+            print(f"[PASS] {base} -> {now}; lower the baseline so the recorded "
+                  f"number stops claiming debt that is paid.")
+            return 0
+        print(f"[PASS] no NEW unacknowledged step-internal FAIL ({now} recorded)")
+        return 0
+
+    if args.project_dir is None:
+        ap.error("give a project_dir or --corpus")
+        return 2
     proj = Path(args.project_dir).resolve()
     if not proj.is_dir():
         print(f"error: not a directory: {proj}", file=sys.stderr)

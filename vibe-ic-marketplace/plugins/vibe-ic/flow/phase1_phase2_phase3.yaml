@@ -2578,8 +2578,52 @@ steps:
         # directory scope would hand step 21's evidence to step 31 — the very
         # cross-step confusion `--under` exists to end, pointing the other way.
         # Step 21 scopes by directory AND names its file for the same reason.
+        # vibe-ic#693 — a 0-violation DRC verdict is a PASS only if the layout
+        # the run consumed actually CONTAINED geometry. Magic/KLayout report
+        # "0 errors" just as happily on a GDS that streamed in with zero
+        # geometry, and the count gate below reads that as DRC-CLEAN. This
+        # sits IN FRONT of it and decides on a MEASURED observable — a
+        # pure-Python GDSII record walk, or the DEF section headers — never on
+        # the tool's prose. rc 2 (no DRC report in scope) is a disclosed
+        # VACUOUS pass, not a stop.
+        #
+        # SCOPED with the same `--under` and for the same reason as the gate
+        # below: unscoped it is a project-wide rglob that also judges step 21's
+        # `reports/phase3/drc_router.rpt`, the pre-signoff
+        # `phase3/reports/drc.rpt` and every `_snapshot_*` copy — MEASURED,
+        # 3 reports judged instead of 1 on a real run.
+        #
+        # BLAST RADIUS, measured over the 46 run trees on a working checkout before
+        # landing: 15 PASS / 2 INCONCLUSIVE / 29 rc-2. The two are
+        # sha256/clean_run_v1422_20260715 and sha256/clean_run_v1427_20260715,
+        # both of which ship a KLayout sign-off database and NO layout artefact
+        # anywhere in the tree, so geometry cannot be established at all. Both
+        # are superseded by later sha256 runs that PASS.
+        - program_exit_zero: "drc_vacuous_pass_check . --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_vacuous.json"
         - program_exit_zero: "drc_report_check . --mode drc --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
         - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
+        # vibe-ic#693 — the LVS counterpart, and a DIFFERENT question from the
+        # gate above: not "did netgen say match" but "could netgen's match mean
+        # anything". When the Magic-extracted layout top `.subckt` has no ports
+        # (labels never promoted), netgen has no anchor to seed top-level pin
+        # matching and a naive wrapper still reports matched=true. A silent
+        # false-positive LVS is worse than an explicit fail: the fail blocks and
+        # forces investigation, the match flows a wrong design toward tape-out.
+        #
+        # OVERLAP, disclosed: `gds_port_label_check` (step 37, #613) covers the
+        # upstream predictor — DEF PINS vs GDS text labels. This covers the
+        # TERMINAL artefact netgen actually consumed. Complementary, and neither
+        # supersedes the other.
+        #
+        # The top is DERIVED (the .subckt no other instantiates), never "the
+        # first subckt": measured on 13/13 extracted netlists in the corpus the
+        # first .subckt is a standard cell, whose pins always exist, so the
+        # default made the guard incapable of failing.
+        #
+        # BLAST RADIUS: 0 of 46. 13 runs carry an extracted netlist and all 13
+        # anchor on a design top with 38-639 ports; the other 33 return rc 2
+        # (disclosed VACUOUS, nothing to guard).
+        - program_exit_zero: "lvs_signoff_guard . --verdict-file reports/phase3/lvs.rpt"
         # 每一條宣告的電源/地軌都必須至少帶一段佈線幾何。MEASURED on a real
         # tapeout run with a third-party hard macro on a second supply: the DEF
         # declared the rail, bound the macro's supply pin to it, and the rail
