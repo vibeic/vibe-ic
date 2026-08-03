@@ -92,6 +92,42 @@ PRODUCER_PATTERNS = [
 # into a consumer (the #602-round-1 "prose word" failure mode). Tokens that
 # read as code identifiers (verdict / classify / emit / msg / triage) keep
 # their substring form.
+#: The repo's canonical verdict vocabulary, taken from the one place that
+#: defines it rather than re-listed here — a second copy would drift, and a
+#: verdict word this file had not heard of is exactly how the gap below opened.
+#: A changed line that adds or removes one of these tokens is re-labelling an
+#: already-persisted artefact, which is the definition of a consumer change.
+#:
+#: MEASURED: the `NEUTRAL_FILE_PATTERNS` note below records that #599/#600/#597
+#: "all wrongly returned MIXED" and were fixed. #599 went back to MIXED, on ONE
+#: hunk — `phase1_expert_parse_track.py::main`, which changes a printed
+#: `VACUOUS_PASS:` to `INCOMPLETE:` and nothing else. No pattern above matches
+#: it (the file is not `*_check.py`, and the lines carry no `verdict` /
+#: `classif` / `_emit` identifier), so the single most on-the-nose consumer
+#: change in the commit read as `unknown` -> ambiguous -> MIXED.
+try:                                       # pragma: no cover - import shim
+    from _flow_verdict_tiers import PRODUCER_STATUSES as _VERDICT_TOKENS
+except ImportError:                        # pragma: no cover
+    import sys as _sys, pathlib as _pl
+    _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
+    from _flow_verdict_tiers import PRODUCER_STATUSES as _VERDICT_TOKENS
+
+#: Both spellings: the flow tier table writes `VACUOUS-PASS`, a program prints
+#: `VACUOUS_PASS:`. Anchored to a token boundary so `PASS` cannot match inside
+#: `PASSED_COUNT`.
+#:
+#: `(?-i:...)` is load-bearing and not decoration. `_any()` searches with
+#: `re.IGNORECASE`, so without it `pass`, `missing`, `fail` and `incomplete` —
+#: four of the commonest words in a code comment — all match, and the sentence
+#: "this pass is incomplete and may fail" classifies a hunk as a consumer.
+#: MEASURED: the first draft of this rule did exactly that, and the comment
+#: claiming an UPPERCASE-only form was asserting a property the code did not
+#: have. Scoped inline so it survives being read through any caller's flags —
+#: the same code-form-only rule the note above states for note/finding/report.
+_VERDICT_TOKEN_RE = r"(?-i:\b(?:%s)\b)" % "|".join(
+    sorted((t.replace("-", "[-_]") for t in _VERDICT_TOKENS), key=len,
+           reverse=True))
+
 CONSUMER_PATTERNS = [
     r"classif\w*", r"_count_\w+", r"_parse\w*", r"verdict",
     r"_scan\b", r"_audit\b", r"\bcheck\b", r"\bmsg\b", r"\bmessage\b",
@@ -170,6 +206,19 @@ def classify_hunk(path: Optional[str], symbol: Optional[str],
     blob = " ".join([symbol or "", changed_text])
     prod = _any(PRODUCER_PATTERNS, blob)
     cons = _any(CONSUMER_PATTERNS, blob) or _consumer_file(path)
+    if not prod and not cons:
+        # TIE-BREAK ONLY, and only for a hunk no other rule recognised. A
+        # changed line that adds or removes a canonical verdict token is
+        # re-labelling an already-persisted artefact.
+        #
+        # Deliberately NOT a first-class consumer pattern: as one, it also
+        # matched hunks that DO carry producer evidence — a producer that
+        # happens to print `FAIL:` — and reclassified them consumer, which is
+        # the unsafe direction (a producer read as consumer skips a re-run
+        # that was needed). MEASURED: as a plain pattern it moved #600 off
+        # PRODUCER. Here it can only turn `unknown` into `consumer`, so it
+        # can never overrule evidence another rule found.
+        cons = _any([_VERDICT_TOKEN_RE], blob)
     if prod and not cons:
         cls = "producer"
     elif cons and not prod:
