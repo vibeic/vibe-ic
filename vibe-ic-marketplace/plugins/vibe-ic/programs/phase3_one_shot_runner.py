@@ -2233,6 +2233,131 @@ def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
         slew, cap, note, max_fanout=fanout, fanout_note=_fanout_note), info
 
 
+def _resolve_staged_silicon_sdc(project: Path) -> Optional[Path]:
+    """Return the design-staged silicon SDC, or ``None`` when the design stages
+    none (the caller then emits :func:`_build_auto_silicon_sdc`).
+
+    Resolution goes through the tree's SHARED contract,
+    :func:`sdc_constraints.collect_sdc_files`, which defines the ground truth as
+    ``input/constraints/*.sdc`` then ``input/reference_flow/**/*.sdc`` and
+    documents ``extra_dirs`` as appending AFTER that ground truth.
+
+    THE DEFECT THIS REPLACES. ``step_pnr`` resolved the staged SDC inline, by
+    globbing ``constraints/*.sdc`` (project ROOT) and then
+    ``phase2/stage2/constraints/*.sdc``. Neither is the ground truth, and every
+    OTHER staged-SDC consumer in this same file already used the shared
+    accessor — ``_resolve_clock_spec`` and ``_staged_timing_exceptions`` both
+    read ``input/constraints``, and the call at the ``collect_sdc_files`` site
+    is even annotated "input/constraints + input/reference_flow ONLY". Two
+    collectors in one file disagreed about where a design's SDC lives.
+
+    MEASURED, all 10 projects on the authoring host:
+
+      * project-root ``constraints/*.sdc`` matched on 0 of 10 — that probe has
+        never resolved anything.
+      * ``phase2/stage2/constraints/<top>.sdc`` DID match, because
+        ``step_canonicalize_artefacts`` writes the runner's OWN auto-SDC there.
+        Its first line is literally ``# Auto-generated minimal SDC for silicon
+        top (no constraints/*.sdc supplied; ...)``.
+
+    So the miss LAUNDERED the runner's fabricated SDC into "design-staged" on
+    every subsequent run, and a design's real SDC never reached PnR or STA at
+    any point. On the authoring cell the design declares
+    ``create_clock -name core_clock -period 10.0`` and sign-off ran against an
+    invented ``create_clock -name clk`` — the period matched only because
+    :func:`_resolve_clock_spec` independently read the same staged file for the
+    NUMBER, which is precisely what hid the defect from review.
+
+    The two legacy directories are RETAINED as lower-priority fallbacks, so a
+    project that resolved an SDC before resolves the same one; only a project
+    that stages its SDC in the canonical input location changes, and it changes
+    from the runner's own fabrication to its own file.
+
+    chip-AGNOSTIC: path contract only; no chip, PDK or vendor literal."""
+    return next(iter(_sdc.collect_sdc_files(
+        project,
+        extra_dirs=[project / "constraints", _pl.constraints_dir(project)],
+    )), None)
+
+
+_SDC_IN_DELAY_RE = re.compile(r"^\s*set_input_delay\b", re.MULTILINE)
+_SDC_OUT_DELAY_RE = re.compile(r"^\s*set_output_delay\b", re.MULTILINE)
+
+
+def _ensure_staged_sdc_io_delay(sdc_text: str, project: Path,
+                                io_delay: str = "2",
+                                clock_name: str = "") -> Tuple[str, Dict[str, object]]:
+    """Append I/O-delay constraints to a staged SDC that declares none, so
+    honoring the design's own SDC never LOOSENS sign-off.
+
+    Same doctrine as :func:`_ensure_staged_sdc_drv`, for the other half of the
+    auto-SDC. The auto-SDC branch has always emitted ``set_input_delay`` /
+    ``set_output_delay``; the staged branch never did. Without this, resolving
+    the design's SDC (which typically declares only ``create_clock``) would
+    leave every primary input and output UNCONSTRAINED — every I/O path would
+    report no violation because it is no longer timed, and a red sign-off would
+    go green by SUBTRACTION. That is the one outcome this change must not have.
+
+    The delay is referenced to the clock the STAGED SDC itself names (a design
+    that calls its clock ``core_clock`` gets ``-clock core_clock``), so the
+    supplied constraint attaches to the design's own clock object rather than
+    to a clock this file invented.
+
+    Returns ``(sdc_text, info)``. BYTE-IDENTICAL when the design already
+    declares both delays, or when no clock name is resolvable (nothing real to
+    reference — disclosed, never fabricated)."""
+    info: Dict[str, object] = {
+        "added_input_delay": None, "added_output_delay": None,
+        "design_declared": [], "clock_name": clock_name or None, "note": "",
+    }
+    text = sdc_text or ""
+    have_in = bool(_SDC_IN_DELAY_RE.search(text))
+    have_out = bool(_SDC_OUT_DELAY_RE.search(text))
+    for name, present in (("set_input_delay", have_in),
+                          ("set_output_delay", have_out)):
+        if present:
+            info["design_declared"].append(name)
+    if have_in and have_out:
+        info["note"] = ("design SDC already declares both I/O delays — left "
+                        "byte-identical (a design-declared delay is never "
+                        "overridden)")
+        return text, info
+
+    if not clock_name:
+        try:
+            primary = _sdc.primary_clock(project)
+            clock_name = str((primary or {}).get("name") or "")
+        except Exception:
+            clock_name = ""
+    info["clock_name"] = clock_name or None
+    if not clock_name:
+        info["note"] = ("no I/O delay supplied: the staged SDC names no "
+                        "create_clock this file can reference — NOT fabricated "
+                        "against an invented clock (§4.05)")
+        return text, info
+
+    lines = []
+    if not have_in:
+        info["added_input_delay"] = io_delay
+        lines.append(f"set_input_delay  {io_delay} -clock {clock_name} [all_inputs]")
+    if not have_out:
+        info["added_output_delay"] = io_delay
+        lines.append(f"set_output_delay {io_delay} -clock {clock_name} [all_outputs]")
+    supplied = [n for n, v in (("set_input_delay", info["added_input_delay"]),
+                               ("set_output_delay", info["added_output_delay"]))
+                if v is not None]
+    info["note"] = (
+        "I/O-delay parity for a design-supplied SDC: the staged SDC declared "
+        + (", ".join(info["design_declared"]) if info["design_declared"]
+           else "neither I/O delay")
+        + f"; supplied {', '.join(supplied)} against the design's own clock "
+          f"'{clock_name}' so honoring the staged SDC does not leave the I/O "
+          "boundary untimed (a design-declared delay is never overridden).")
+    block = ("\n# I/O-delay parity (staged-SDC branch) — " + str(info["note"])
+             + "\n" + "\n".join(lines) + "\n")
+    return text + block, info
+
+
 def _build_auto_silicon_sdc(project: Path, top: str = "",
                             drv_slew_ns: Optional[float] = None,
                             drv_cap_pf: Optional[float] = None,
@@ -15760,12 +15885,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # commands (derive_pll_clocks). For silicon synth (top=chip_top), use
     # a generic minimal SDC tied to chip_top's actual clk port.
     sdc = out_dir / "constraint.sdc"
-    project_sdc_silicon = (
-        next(iter(sorted(project.glob("constraints/*.sdc"))), None)
-        or next(iter(sorted((_pl.constraints_dir(project)).glob("*.sdc")
-                            if (_pl.constraints_dir(project)).is_dir()
-                            else [])), None)
-    )
+    project_sdc_silicon = _resolve_staged_silicon_sdc(project)
     if project_sdc_silicon and project_sdc_silicon.is_file():
         # benchmark-spm-asap7 — staged SDCs are ns/pF-authored; rescale
         # numerics into the ACTIVE PDK liberty's declared units (ASAP7:
@@ -15794,6 +15914,21 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         try:
             (out_dir / "sdc_drv_parity.json").write_text(
                 json.dumps(_drv_parity, indent=2, default=str))
+        except Exception:
+            pass
+        # I/O-delay parity — the staged branch must not be LOOSER than the
+        # auto-SDC branch it now takes precedence over. A design SDC that
+        # declares only `create_clock` would otherwise leave every primary I/O
+        # untimed, and a real violation would vanish by subtraction rather than
+        # by repair. Supplies ONLY the absent delays, against the design's OWN
+        # clock name; a design-declared delay is never overridden.
+        _staged_sdc, _io_parity = _ensure_staged_sdc_io_delay(
+            _staged_sdc, project)
+        if _io_parity.get("note"):
+            print(f"[phase3][sdc-io] {_io_parity['note']}", file=sys.stderr)
+        try:
+            (out_dir / "sdc_io_delay_parity.json").write_text(
+                json.dumps(_io_parity, indent=2, default=str))
         except Exception:
             pass
         sdc.write_text(_staged_sdc)
