@@ -92,7 +92,7 @@ def _sdc_project(tmp_path: Path, l9_pins) -> Path:
 def _run_sdc_gen(proj: Path):
     return subprocess.run(
         [sys.executable, str(PROGRAMS / "sdc_gen.py"), str(proj), "--force"],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 def _emitted_sdc(proj: Path) -> str:
@@ -223,7 +223,7 @@ def _run_pdk_gate(proj: Path):
     return subprocess.run(
         [sys.executable,
          str(PROGRAMS / "declared_pdk_is_the_pdk_used_check.py"), str(proj)],
-        capture_output=True, text=True, timeout=300)
+        capture_output=True, text=True, timeout=60)
 
 
 @pytest.mark.parametrize("alternates,loaded,want_rc", [
