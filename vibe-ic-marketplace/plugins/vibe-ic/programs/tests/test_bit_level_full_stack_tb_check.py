@@ -261,6 +261,186 @@ def test_explicit_top_overrides_discovery(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# #760 — a declared top the design does not declare
+#
+# Phase 1 harvested a protocol name out of prose in a register description and
+# published it as `L9.top_module`. No module of that name exists anywhere in
+# the design; the testbench correctly instantiates the real top, which the rest
+# of the run honours throughout. The gate used to demand the testbench
+# instantiate the harvested name — a requirement no testbench could satisfy,
+# reported as a testbench defect.
+# ---------------------------------------------------------------------------
+_HIER_TOP = "chip_top_asic"
+_HIER_CHILD = "core"
+
+_HIER_TB = """\
+`timescale 1ns/1ps
+module tb_chip_top_asic_full;
+    wire acc_id;
+    reg  drive;
+    chip_top_asic u_dut(.acc_id(acc_id), .clk(clk), .rstn(rstn));
+    integer bit_count;
+    initial begin
+        drive = 0; #1800;
+        drive = 1; #7100;
+        $finish;
+    end
+endmodule
+"""
+
+
+def _make_hierarchical_project(tmp_path, l9_top=None, tb_text=_HIER_TB):
+    """A design whose real top is `chip_top_asic` — a name NO filename
+    convention (`chip_top.v` / `*_top.v` / `top.v`) matches, so the top is
+    knowable only from the design's own hierarchy: `chip_top_asic` instantiates
+    `core`, and nothing instantiates `chip_top_asic`.
+    """
+    proj = tmp_path
+    rtl = proj / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True, exist_ok=True)
+    (rtl / f"{_HIER_TOP}.v").write_text(
+        f"module {_HIER_TOP}(input clk, input rstn, inout acc_id);\n"
+        f"    {_HIER_CHILD} u_core(.clk(clk), .rstn(rstn), .acc_id(acc_id));\n"
+        f"endmodule\n")
+    (rtl / f"{_HIER_CHILD}.v").write_text(
+        f"module {_HIER_CHILD}(input clk, input rstn, inout acc_id);\n"
+        f"endmodule\n")
+    if l9_top is not None:
+        gen = proj / "phase1" / "generated_docs"
+        gen.mkdir(parents=True, exist_ok=True)
+        (gen / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+            "top_module": l9_top,
+            "irq": "Single SPI interrupt request line back to MCU",
+        }))
+    sim = proj / "phase2" / "stage1" / "sim_full_stack"
+    sim.mkdir(parents=True, exist_ok=True)
+    if tb_text is not None:
+        (sim / f"tb_{_HIER_TOP}_full.v").write_text(tb_text)
+    time.sleep(0.05)
+    results = dict(GOOD_RESULTS)
+    results["tb"] = f"tb_{_HIER_TOP}_full.v"
+    results["dut"] = _HIER_TOP
+    (sim / "results.json").write_text(json.dumps(results, indent=2))
+    return proj, rtl, sim
+
+
+def test_l9_top_absent_from_module_set_blames_l9_not_the_tb(tmp_path):
+    """#760 — the FAIL must name the declaration, never the testbench."""
+    proj, rtl, sim = _make_hierarchical_project(tmp_path, l9_top="SPI")
+    result = gate.check(proj, rtl, sim, top=None,
+                        min_distinct=10, min_opcodes=3, do_run=False)
+    rules = [f["rule"] for f in result["findings"]]
+    # The testbench instantiates the design's real top, so blaming it is the
+    # defect this test pins.
+    assert "TB_INSTANTIATES_TOP" not in rules, result
+    assert "TOP_MODULE_NOT_IN_MODULE_SET" in rules, result
+    bad = next(f for f in result["findings"]
+               if f["rule"] == "TOP_MODULE_NOT_IN_MODULE_SET")
+    assert bad["declared_top"] == "SPI"
+    assert "L9_INTEGRATION_SPEC.json" in bad["source"]
+    # …and the requirement is restated against the top the DESIGN implies.
+    assert result["top_module"] == _HIER_TOP, result
+    assert result["top_module_resolution"]["source"] == \
+        "design instantiation root"
+
+
+def test_refuted_l9_top_still_bites_a_tb_that_instantiates_nothing(tmp_path):
+    """The gate's real purpose survives: the pad path must still be bound."""
+    empty_tb = """\
+module tb_chip_top_asic_full;
+    wire acc_id;
+    reg  drive;
+    initial begin
+        drive = 0; #1800;
+        drive = 1; #7100;
+        $finish;
+    end
+endmodule
+"""
+    proj, rtl, sim = _make_hierarchical_project(tmp_path, l9_top="SPI",
+                                                tb_text=empty_tb)
+    result = gate.check(proj, rtl, sim, top=None,
+                        min_distinct=10, min_opcodes=3, do_run=False)
+    assert result["pass"] is False, result
+    rules = [f["rule"] for f in result["findings"]]
+    assert "TB_INSTANTIATES_TOP" in rules, result
+    tb_fail = next(f for f in result["findings"]
+                   if f["rule"] == "TB_INSTANTIATES_TOP")
+    assert f"`{_HIER_TOP}`" in tb_fail["message"], tb_fail
+
+
+def test_refuted_l9_top_still_bites_a_tb_that_binds_only_a_child(tmp_path):
+    """A testbench may not self-certify by binding an arbitrary submodule."""
+    child_tb = _HIER_TB.replace(f"{_HIER_TOP} u_dut", f"{_HIER_CHILD} u_dut")
+    proj, rtl, sim = _make_hierarchical_project(tmp_path, l9_top="SPI",
+                                                tb_text=child_tb)
+    result = gate.check(proj, rtl, sim, top=None,
+                        min_distinct=10, min_opcodes=3, do_run=False)
+    assert result["pass"] is False, result
+    assert any(f["rule"] == "TB_INSTANTIATES_TOP"
+               for f in result["findings"]), result
+
+
+def test_l9_top_present_in_module_set_is_untouched(tmp_path):
+    """NO-RELAXATION invariant: a declaration the design backs still rules."""
+    proj, rtl, sim = _make_hierarchical_project(tmp_path, l9_top=_HIER_CHILD)
+    result = gate.check(proj, rtl, sim, top=None,
+                        min_distinct=10, min_opcodes=3, do_run=False)
+    # L9 names a real (if wrong-role) module, so the gate does NOT second-guess
+    # it — and the testbench, which binds chip_top_asic, fails against it.
+    assert result["top_module"] == _HIER_CHILD, result
+    assert not any(f["rule"] == "TOP_MODULE_NOT_IN_MODULE_SET"
+                   for f in result["findings"]), result
+    assert any(f["rule"] == "TB_INSTANTIATES_TOP"
+               for f in result["findings"]), result
+
+
+def test_explicit_top_absent_from_module_set_names_the_flag(tmp_path):
+    """An operator flag is a declaration too, and is refuted the same way."""
+    proj, rtl, sim = _make_hierarchical_project(tmp_path)
+    result = gate.check(proj, rtl, sim, top="not_a_module",
+                        min_distinct=10, min_opcodes=3, do_run=False)
+    bad = [f for f in result["findings"]
+           if f["rule"] == "TOP_MODULE_NOT_IN_MODULE_SET"]
+    assert bad, result
+    assert bad[0]["source"] == "--top"
+    assert bad[0]["declared_top"] == "not_a_module"
+    assert not any(f["rule"] == "TB_INSTANTIATES_TOP"
+                   for f in result["findings"]), result
+
+
+def test_empty_module_set_refutes_nothing(tmp_path):
+    """An unreadable design must not become a finding against a declaration."""
+    proj, rtl, sim = _make_project(tmp_path, top="aid_top", write_rtl=False)
+    gen = proj / "phase1" / "generated_docs"
+    gen.mkdir(parents=True, exist_ok=True)
+    (gen / "L9_INTEGRATION_SPEC.json").write_text(
+        json.dumps({"top_module": "aid_top"}))
+    result = gate.check(proj, rtl, sim, top=None,
+                        min_distinct=10, min_opcodes=3, do_run=False)
+    assert result["top_module"] == "aid_top", result
+    assert not any(f["rule"] == "TOP_MODULE_NOT_IN_MODULE_SET"
+                   for f in result["findings"]), result
+    assert result["top_module_resolution"]["verdict"] == "unverifiable"
+
+
+def test_ambiguous_hierarchy_states_no_top_requirement(tmp_path):
+    """Two roots is a non-answer — the gate says so, it does not guess."""
+    proj, rtl, sim = _make_hierarchical_project(tmp_path, l9_top="SPI")
+    (rtl / "other_root.v").write_text(
+        "module other_root(input clk);\nendmodule\n")
+    result = gate.check(proj, rtl, sim, top=None,
+                        min_distinct=10, min_opcodes=3, do_run=False)
+    rules = [f["rule"] for f in result["findings"]]
+    assert "TOP_MODULE_NOT_IN_MODULE_SET" in rules, result
+    assert "TOP_MODULE_RESOLVED" in rules, result
+    assert "TB_INSTANTIATES_TOP" not in rules, result
+    unresolved = next(f for f in result["findings"]
+                      if f["rule"] == "TOP_MODULE_RESOLVED")
+    assert "SPI" in unresolved["message"], unresolved
+
+
+# ---------------------------------------------------------------------------
 # CLI integration
 # ---------------------------------------------------------------------------
 def test_cli_writes_json_report(tmp_path):
