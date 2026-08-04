@@ -8585,6 +8585,105 @@ def _track_of(sid: Any) -> Optional[str]:
     return None
 
 
+# ── vibe-ic#776 — the declared-dependency relation ──────────────────────────
+# `blocks_on` is an ORDERING edge and nothing more. The flow does have a way to
+# say "this step reads that artefact", and it is used: a step DECLARES what it
+# must produce (`required_outputs`) and its gate DECLARES what it reads
+# (`condition_files_exist` / `files_exist` / `json_field_true.file`). A waiver
+# may only be inherited across an edge where those two declarations MEET.
+#
+# MEASURED on the canonical 63-step flow (`flow/phase1_phase2_phase3.yaml`):
+# 1221 (step, transitive-blocks_on-ancestor) pairs exist; exactly 6 carry a
+# declared dependency —
+#   2, 4, 8 <- D1   named L*.json docs, via `condition_files_exist`
+#   2       <- 1    `phase2/stage1/rtl/*.sv` / `*.v`, via the lint gate's argv
+#   14      <- 9    `phase2/stage2/synth/netlist.v`
+#   34      <- 18   `phase3/stage3/pnr/spare_cells.json`
+# Replaying every single-waiver scenario over an otherwise-all-MISSING run:
+# the pre-#776 code converted 1153 (step, ancestor) pairs to
+# DEFERRED-BY-UPSTREAM; this code converts the 6 above. (1153 rather than 1215
+# because #600's known-gap stop was already refusing some of them.)
+_FLOW_GATE_INPUT_KEYS = ("condition_files_exist", "files_exist", "file")
+_FLOW_GATE_COMMAND_KEYS = ("program_exit_zero", "advisory_program_exit_zero",
+                           "optional_program_exit_zero", "command")
+
+
+def _flow_command_input_atoms(command: str) -> List[str]:
+    """Path-shaped POSITIONAL arguments of a gate command — files the gate
+    declares it reads.
+
+    Conservative by construction: a token is taken only when it contains `/`,
+    does not start with `-`, and is not the value of a `--option` (which is
+    where this flow puts gate OUTPUTS, `--json` / `--out` / `--report`).
+
+    MEASURED against the alternative of ignoring commands entirely: on the
+    canonical flow this rule adds exactly ONE (step, ancestor) relation,
+    `2 <- 1` on `phase2/stage1/rtl/*.sv` and `*.v` — the lint gate is literally
+    spelled `rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v` and
+    step 1 declares producing exactly those two patterns. It adds no other
+    pair, so on today's flow the heuristic admits no relation that is not an
+    exact string match. A future flow edit that makes it admit a loose one is
+    visible as a new pair in `test_declared_dependency_relation_is_small`.
+    """
+    tokens = command.split()
+    out: List[str] = []
+    for idx, tok in enumerate(tokens):
+        if tok.startswith("-"):
+            continue
+        if idx > 0 and tokens[idx - 1].startswith("--"):
+            continue
+        if "/" in tok:
+            out.append(tok)
+    return out
+
+
+def _flow_path_atoms(value: Any) -> List[str]:
+    """Split the flow's own ` OR ` alternation notation into path atoms.
+
+    Same reading `_check_files_exist` gives these patterns, so the relation is
+    derived from the strings the checker itself resolves.
+    """
+    out: List[str] = []
+    items = value if isinstance(value, (list, tuple)) else [value]
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        for atom in item.split(" OR "):
+            atom = atom.strip()
+            if atom and atom != ".":
+                out.append(atom)
+    return out
+
+
+@functools.lru_cache(maxsize=None)
+def _flow_glob_re(pattern: str) -> "re.Pattern[str]":
+    """`**` crosses `/`, `*` and `?` do not — `pathlib.Path.glob` semantics,
+    which is what `_glob_first` actually runs."""
+    parts: List[str] = []
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("**", i):
+            parts.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            parts.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            parts.append("[^/]")
+            i += 1
+        else:
+            parts.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("^" + "".join(parts) + "$")
+
+
+def _flow_paths_meet(a: str, b: str) -> bool:
+    """True when two declared path patterns can name the same artefact."""
+    if a == b:
+        return True
+    return bool(_flow_glob_re(a).match(b) or _flow_glob_re(b).match(a))
+
+
 def _attribute_cascade_verdicts(
         results: List["StepResult"],
         steps: List[Dict[str, Any]],
@@ -8617,13 +8716,22 @@ def _attribute_cascade_verdicts(
     chip literal. A GENUINE M-step FAIL (real counter-evidence) is NOT
     touched, and the skip only fires when --skip-analog is DISCLOSED.
 
-    #502 (waiver chain must propagate): a MISSING step whose
-    `blocks_on` ancestry (transitive) reaches a WAIVED-DEFERRED step is
-    the inevitable consequence of that SAME waiver — its inputs are
-    exactly what the parent's waiver deferred. Verdict becomes
-    DEFERRED-BY-UPSTREAM(parent, ticket): counted separately, excluded
-    from strict MISSING (one waiver = one deduction, not two).
-    A FAIL never converts — real counter-evidence always survives.
+    #502 (waiver chain must propagate), as narrowed by #776: a MISSING
+    step whose `blocks_on` ancestry (transitive) reaches a
+    WAIVED-DEFERRED step **and which the flow DECLARES reads what that
+    step must write** is the inevitable consequence of that SAME waiver.
+    Verdict becomes DEFERRED-BY-UPSTREAM(parent, ticket): counted
+    separately, excluded from strict MISSING (one waiver = one deduction,
+    not two). A FAIL never converts — real counter-evidence survives.
+
+    #776: `blocks_on` alone is NOT enough and never was. It is an
+    ORDERING edge; on the canonical flow it makes 1221 transitive
+    (step, ancestor) pairs of which exactly 6 carry a declared
+    dependency. Waiving step 13 (LEC, whose declared outputs
+    `reports/lec.{rpt,json}` no other step reads or produces) discounted
+    37 downstream steps — the entire tail of the flow — on ordering
+    alone. A waived ancestor with no declared relation is now recorded
+    as `waived-ancestor-undeclared(<id>)` and the verdict stays MISSING.
 
     #503 (mid-chain FAIL cascade): within each declared chain (main /
     analog / mixed, in YAML declaration order) every MISSING step AFTER
@@ -8723,6 +8831,112 @@ def _attribute_cascade_verdicts(
         if sid is not None and isinstance(kg, str) and kg.strip():
             known_gap_of[sid] = " ".join(kg.split())
 
+    # vibe-ic#776 — the DECLARED-DEPENDENCY relation, built from the flow.
+    # `produces[s]` = what step s must write; `consumes[s]` = what step s's own
+    # gate reads, PLUS its own required_outputs (a step required to deliver the
+    # very artefact an ancestor is required to write cannot deliver without it —
+    # that is the (14 <- 9) netlist.v shape).
+    produces: Dict[Any, List[str]] = {}
+    consumes: Dict[Any, List[str]] = {}
+    for st in steps:
+        sid = st.get("id")
+        if sid is None or str(sid) == "P0":
+            continue
+        own_out = _flow_path_atoms(st.get("required_outputs") or [])
+        produces[sid] = own_out
+        reads: List[str] = list(own_out)
+
+        def _harvest(node: Any) -> None:
+            if isinstance(node, dict):
+                for key, val in node.items():
+                    if key in _FLOW_GATE_INPUT_KEYS:
+                        reads.extend(_flow_path_atoms(val))
+                    elif (key in _FLOW_GATE_COMMAND_KEYS
+                          and isinstance(val, str)):
+                        reads.extend(_flow_command_input_atoms(val))
+                    else:
+                        _harvest(val)
+            elif isinstance(node, list):
+                for item in node:
+                    _harvest(item)
+
+        _harvest(st.get("gate"))
+        consumes[sid] = reads
+
+    def _declares_dependency(child: Any, ancestor: Any) -> bool:
+        """Does the FLOW say `child` reads something `ancestor` writes?"""
+        anc_out = produces.get(ancestor) or []
+        if not anc_out:
+            return False
+        for want in consumes.get(child) or []:
+            for made in anc_out:
+                if _flow_paths_meet(want, made):
+                    return True
+        return False
+
+    _ord_anc_cache: Dict[Any, List[Any]] = {}
+
+    def _ordering_ancestors(sid: Any) -> List[Any]:
+        """Transitive blocks_on ancestors, nearest first (BFS order)."""
+        cached = _ord_anc_cache.get(sid)
+        if cached is not None:
+            return cached
+        out: List[Any] = []
+        queue = list(parents_of.get(sid, []))
+        seen: set = set()
+        while queue:
+            pid = queue.pop(0)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            out.append(pid)
+            queue.extend(parents_of.get(pid, []))
+        _ord_anc_cache[sid] = out
+        return out
+
+    _dep_parent_cache: Dict[Any, List[Any]] = {}
+
+    def _dependency_parents(sid: Any) -> List[Any]:
+        """Ancestors this step DECLARES a dependency on, nearest first.
+
+        The relation is checked against every transitive ordering ancestor, not
+        only direct `blocks_on` parents: the flow routinely orders a consumer
+        several hops behind its producer (step 2's gate reads the L*.json docs
+        step D1 writes, but reaches D1 through step 1). Chaining edge-by-edge
+        would drop exactly those real relations.
+        """
+        cached = _dep_parent_cache.get(sid)
+        if cached is not None:
+            return cached
+        out = [a for a in _ordering_ancestors(sid)
+               if _declares_dependency(sid, a)]
+        _dep_parent_cache[sid] = out
+        return out
+
+    def _first_blocking_ancestor(sid: Any, declared_only: bool):
+        """Walk ancestry; return ("gap"|"waiver", id) or (None, None).
+
+        A declared known gap is nearer to the truth than any waiver behind it,
+        so whichever is reached FIRST wins and a known gap stops the walk.
+        With `declared_only` the walk follows the DECLARED-DEPENDENCY relation
+        instead of the raw ordering edges.
+        """
+        step_of = _dependency_parents if declared_only else (
+            lambda x: parents_of.get(x, []))
+        queue: List[Any] = list(step_of(sid))
+        seen: set = set()
+        while queue:
+            pid = queue.pop(0)
+            if pid in seen:
+                continue
+            seen.add(pid)
+            if pid in known_gap_of:
+                return "gap", pid
+            if pid in deferred_ids:
+                return "waiver", pid
+            queue.extend(step_of(pid))
+        return None, None
+
     for r in results:
         if r.status != "MISSING":
             continue
@@ -8735,25 +8949,10 @@ def _attribute_cascade_verdicts(
                 f"{own_gap}"))
             info.setdefault("known_gap", []).append((r.id, own_gap))
             continue
-        # BFS over blocks_on ancestry. A declared known gap is nearer to the
-        # truth than any waiver behind it, so whichever is reached FIRST wins
-        # and a known gap stops the walk.
-        queue = list(parents_of.get(r.id, []))
-        seen: set = set()
-        hit = None
-        gap_hit = None
-        while queue:
-            pid = queue.pop(0)
-            if pid in seen:
-                continue
-            seen.add(pid)
-            if pid in known_gap_of:
-                gap_hit = pid
-                break
-            if pid in deferred_ids:
-                hit = pid
-                break
-            queue.extend(parents_of.get(pid, []))
+        # BFS over blocks_on ancestry, for ATTRIBUTION.
+        kind, near = _first_blocking_ancestor(r.id, declared_only=False)
+        hit = near if kind == "waiver" else None
+        gap_hit = near if kind == "gap" else None
         if gap_hit is not None:
             # Attribution WITHOUT softening: the status stays MISSING, because
             # the ancestor's gap is not a waiver and nothing is deferred.
@@ -8766,21 +8965,41 @@ def _attribute_cascade_verdicts(
             continue
         if hit is None:
             continue
+        # vibe-ic#776 — SOFTENING NEEDS MORE THAN ORDER. The reason below used
+        # to be printed with the softer status attached, and it contains its own
+        # refutation: it says the flow does not establish that this step's
+        # artefacts depend on the waived ancestor's, and then discounts the step
+        # as though it had. Re-walk the SAME ancestry admitting only edges the
+        # flow DECLARES — the near end's gate reads, or its own
+        # required_outputs are, something the far end must write. Only a waiver
+        # reached that way may soften; otherwise the ordering fact is recorded
+        # and the verdict stays MISSING.
+        dep_kind, dep_hit = _first_blocking_ancestor(r.id, declared_only=True)
+        if dep_kind != "waiver":
+            r.cascade_note = f"waived-ancestor-undeclared({hit})"
+            r.reasons.insert(0, (
+                f"waived-ancestor-undeclared({hit}): step {hit} is a waived "
+                f"ancestor of this step in the declared blocks_on ORDER, but "
+                f"neither this step's gate nor its required_outputs declares "
+                f"reading anything {hit} is required to write — blocks_on is "
+                f"an ORDERING edge, so nothing establishes that {hit}'s waiver "
+                f"explains this gap. The phase that writes this step's "
+                f"evidence never completed; the verdict stays MISSING. If the "
+                f"dependency is real, DECLARE it: give this step's gate a "
+                f"`condition_files_exist` naming the artefact {hit} produces."))
+            info.setdefault("waived_ancestor_undeclared", []).append(
+                (r.id, hit))
+            continue
+        hit = dep_hit
         ticket = _ticket_for(hit)
         r.status = "DEFERRED-BY-UPSTREAM"
         r.cascade_note = f"deferred-by-upstream({hit}, ticket={ticket})"
-        # WHAT IS KNOWN, and no more. The old wording asserted "this step
-        # consumes outputs that step X's waiver deferred", and nothing in the
-        # flow establishes that: `blocks_on` is an ORDERING edge, the flow
-        # declares `inputs:` ZERO times, and over 1221 (step, ancestor) pairs
-        # exactly ONE shares a declared output. The ordering fact is real and
-        # is what this says.
         r.reasons.insert(0, (
             f"deferred-by-upstream({hit}, ticket={ticket}): step {hit} is a "
-            f"waived ancestor of this step in the declared blocks_on ORDER, so "
-            f"this step never ran. The flow declares no inputs, so whether its "
-            f"artefacts would have appeared had {hit} run is not established "
-            f"from the flow — one waiver, one deduction"
+            f"waived ancestor of this step in the declared blocks_on ORDER, "
+            f"AND the flow declares this step reads what {hit} is required to "
+            f"write, so the waiver that stopped {hit} is what stopped this "
+            f"step — one waiver, one deduction"
         ))
         info["deferred_by_upstream"].append((r.id, hit, ticket))
 
@@ -9614,10 +9833,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     # glance; #502: surface the waiver-chain bucket separately.
     missing_str = f"MISSING={counts['MISSING']}"
     _blocked = cascade_info.get("blocked_by_upstream") or {}
-    if _blocked:
-        missing_str += " (" + ", ".join(
-            f"{n} blocked-by-upstream of step {sid}"
-            for sid, n in _blocked.items()) + ")"
+    _clauses = [f"{n} blocked-by-upstream of step {sid}"
+                for sid, n in _blocked.items()]
+    # vibe-ic#776 — these MISSING steps used to be DEFERRED-BY-UPSTREAM and
+    # were subtracted from the denominator on an ORDERING edge alone. They are
+    # counted here now, and the reader is told WHY they are all one shape, so
+    # the honest MISSING does not read as N independent gaps. This is an
+    # ATTRIBUTION over the MISSING bucket, not an additional bucket.
+    _undeclared: Dict[Any, int] = {}
+    for _sid, _anc in (cascade_info.get("waived_ancestor_undeclared") or []):
+        _undeclared[_anc] = _undeclared.get(_anc, 0) + 1
+    _clauses += [
+        f"{n} ordered behind waived step {sid}, which declares no artefact "
+        f"they read — MISSING, not deferred"
+        for sid, n in _undeclared.items()]
+    if _clauses:
+        missing_str += " (" + "; ".join(_clauses) + ")"
     dbu_str = (f"  DEFERRED-BY-UPSTREAM={counts['DEFERRED-BY-UPSTREAM']}"
                if counts.get("DEFERRED-BY-UPSTREAM") else "")
     # THE THIRD DISPOSITION, ON THE LINE. Two shapes, because the fact is true

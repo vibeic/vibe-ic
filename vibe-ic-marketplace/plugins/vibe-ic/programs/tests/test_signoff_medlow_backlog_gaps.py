@@ -983,31 +983,40 @@ def _all_missing_results(fcc, waived=(), failed=()):
     return out
 
 
-def test_step39_inherits_a_step6_waiver_as_deferred_by_upstream(fcc):
-    """DISCLOSED SECOND EFFECT of `blocks_on: [6, 13]`.
+def test_step39_does_not_inherit_a_step6_waiver(fcc):
+    """RETIRED SECOND EFFECT of `blocks_on: [6, 13]` — vibe-ic#776.
 
-    blocks_on is also the waiver-inheritance graph (#502): a MISSING step whose
-    ancestry reaches a WAIVED step becomes DEFERRED-BY-UPSTREAM, and
-    `total_required` subtracts that bucket. So a waiver written for step 6
-    alone now moves step 39 out of the final sign-off's required denominator.
-    Measured on an empty project waiving step 6 only: MISSING 39 -> 38 with
-    DEFERRED-BY-UPSTREAM=1.
+    This test used to pin the opposite: a waiver written for step 6 alone moved
+    step 39 out of the final sign-off's required denominator, because #502 read
+    `blocks_on` as the waiver-inheritance graph. Its own justification was "39
+    signs off the bitstream 6 builds — one waiver, one deduction".
 
-    That is the intended reading (39 signs off the bitstream 6 builds — one
-    waiver, one deduction), which is exactly why it must be pinned: it is the
-    ordering edge's cost, and a later change to either graph should have to
-    come past this test.
+    RE-MEASURED against what the flow declares, that justification does not
+    hold. Step 6 is required to produce `phase2/stage1/fpga/output_files/*.sof`;
+    step 39 RECOMPILES and is required to produce
+    `phase2/stage1/fpga/final/*.sof` plus `reports/phase2/fpga/
+    on_board_pass.json`, and its gate reads only its own artefacts. Different
+    directory, different artefact, no declared read — so nothing in the flow
+    says step 6's waiver is what stopped step 39.
+
+    The real reason an on-board sign-off does not run is usually "no board",
+    and the flow's answer to that is step 39's OWN ENV_UNAVAILABLE disclosure
+    with its own ticket and `review_required`, which stays available and is
+    reviewed on its own merits. Inheriting the discount silently off an
+    ordering edge is the mechanism #776 removed: on this flow it made 1153
+    such deductions, of which 6 are declared.
     """
     results = _all_missing_results(fcc, waived=(6,))
     info = fcc._attribute_cascade_verdicts(
         results, _flow_steps(), {6: {"ticket": "TKT-FPGA-6"}})
     by_id = {r.id: r for r in results}
 
-    assert by_id[39].status == "DEFERRED-BY-UPSTREAM", by_id[39].status
-    assert "TKT-FPGA-6" in by_id[39].cascade_note, by_id[39].cascade_note
-    deferred = sorted(str(sid) for sid, _p, _t in info["deferred_by_upstream"])
-    assert deferred == ["39"], (
-        f"a step-6 waiver defers more than the one step it should: {deferred}")
+    assert by_id[39].status == "MISSING", by_id[39].status
+    assert by_id[39].cascade_note == "waived-ancestor-undeclared(6)", (
+        by_id[39].cascade_note)
+    assert info["deferred_by_upstream"] == [], (
+        f"a step-6 waiver defers steps the flow does not connect to it: "
+        f"{info['deferred_by_upstream']}")
 
 
 def test_no_waiver_leaves_step39_in_the_denominator(fcc):
