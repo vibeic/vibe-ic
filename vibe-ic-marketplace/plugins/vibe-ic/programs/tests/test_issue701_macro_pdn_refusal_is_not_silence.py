@@ -492,6 +492,35 @@ def test_no_reachable_path_returns_no_grid_with_no_explanation():
     assert built["plan"] is not None and built["refusals"] == []
 
 
+def test_a_multi_macro_refusal_over_names_rather_than_under_names(tmp_path):
+    """MEASURED LIMITATION, pinned so it is a known state and not a surprise.
+
+    The planner has always built ONE plan for all macro LEFs together: the OBS
+    reader merges every master's blocked layers into a single candidate filter
+    (#685). So one macro that blocks every candidate takes the macro grid away
+    from a second, unblocked macro too — which was ALSO silent before this fix,
+    and is the same defect wearing a second hat.
+
+    The refusal therefore names every master with a supply port, not only the
+    one whose OBS caused it. That over-names rather than under-names, which is
+    the conservative direction for a report: a reader is pointed at a macro that
+    turns out to be fine, rather than not told about one that is not.
+
+    Narrowing it means per-macro plans — a different change, with its own
+    blast radius, and not one to smuggle in behind a reporting fix."""
+    two = _macro(obs_layers=("M4", "M5")) + SIGNAL_ONLY_MACRO.replace(
+        "USE SIGNAL", "USE POWER").replace(
+        "RECT 0 0 1 1", "RECT 0 0 12 12").replace("SIZE 10 BY 10", "SIZE 400 BY 140")
+    tcl = _pdn(tmp_path, two, tag="mm")
+    got = mod._parse_macro_pdn_grid_refusals(tcl)
+    named = {r["master"] for r in got}
+    assert MACRO_NAME in named, "the macro that caused it must be named"
+    assert "SIGBLOCK" in named, (
+        "the second macro also lost its grid to the first one's OBS and must "
+        "be named too — that loss was silent before this fix as well")
+    assert "define_pdn_grid -macro" not in tcl
+
+
 def test_the_refusal_is_reported_and_does_not_fail_the_run():
     """DELIBERATE. This planner reads `pdk.macro_lefs` — a CONFIG list — and
     never the netlist or the placement, so it cannot tell whether the master is
