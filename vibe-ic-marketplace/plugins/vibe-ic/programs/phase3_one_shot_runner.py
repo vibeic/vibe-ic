@@ -29616,7 +29616,42 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
             f"SPEF-based STA prerequisites missing ({', '.join(missing)}); "
             f"Step-23 falls back to the estimate-based sta.rpt (#527)")
         return False
-    lib_c = _to_container_path(pdk.liberty, container)
+    # SETUP SIGN-OFF CORNER, not the nominal library.
+    #
+    # MEASURED DEFECT: this report is copied verbatim to
+    # `phase3/stage3/sta/post_route_timing.rpt`, which is the ONE STA artefact
+    # Step 23 ("Post-route STA (multi-corner multi-mode SIGN-OFF)") declares in
+    # `required_outputs`. Reading `pdk.liberty` times the routed design at the
+    # NOMINAL/typical process corner, so on a design that closes at TT and
+    # violates at SS the declared sign-off artefact stamps a clean summary:
+    #
+    #     wns max 0.00 / tns max 0.00 / worst slack max 5.24 (MET)
+    #
+    # while the same routed netlist + same SPEF at the slow corner reports a
+    # real -0.93 ns setup violation. The gate only catches that today because
+    # its discovery is UNSCOPED and sweeps the whole project; scope it to the
+    # artefact the step declares — as steps 21/31 already correctly do with
+    # `--under` — and the SIGN-OFF step returns exit 0 on a design that misses
+    # setup. The nominal corner answers a question ADJACENT to the one Step 23
+    # asks.
+    #
+    # DEGRADES LOUDLY, NEVER SILENTLY: when the PDK exposes no distinct slow
+    # process library, `_resolve_signoff_corner_libs` returns no SS entry and
+    # this falls back to `pdk.liberty` — the pre-fix behaviour, preserved for
+    # single-liberty PDKs — and the basis stamp below records `NOMINAL` so the
+    # degraded case is visible in the report instead of being indistinguishable
+    # from a real sign-off corner.
+    _corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    _signoff_lib_c = _corner_libs.get("SS")
+    if _signoff_lib_c:
+        lib_c, _signoff_corner = _signoff_lib_c, "SS"
+    else:
+        lib_c, _signoff_corner = _to_container_path(pdk.liberty, container), "NOMINAL"
+        notes.append(
+            "SPEF-based post-route STA: the active PDK exposed no distinct SS "
+            "(slow) process liberty, so Step-23's declared artefact is timed at "
+            "the NOMINAL corner — a single-corner basis, NOT multi-corner "
+            "sign-off (stamped STA_SIGNOFF_CORNER=NOMINAL in the report)")
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
         for f in (pdk.macro_libs or []))
@@ -29683,6 +29718,19 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"report_tns >> {rpt_c}\n"
         f"report_wns >> {rpt_c}\n"
         f"report_worst_slack -max >> {rpt_c}\n"
+        # BASIS STAMP — every sibling STA emitter in this runner stamps what it
+        # timed (`per_corner/*` stamp PRE_LAYOUT_ESTIMATE; the aging report
+        # stamps POST_ROUTE_SPEF + its liberty). This one stamped NOTHING, so an
+        # unstamped single-corner report was indistinguishable, to any consumer,
+        # from multi-corner sign-off evidence. State the corner outright.
+        f"set _bf [open {rpt_c} a]\n"
+        f"puts $_bf \"STA_BASIS: POST_ROUTE_SPEF\"\n"
+        f"puts $_bf \"STA_SIGNOFF_CORNER: {_signoff_corner}\"\n"
+        f"puts $_bf \"STA_BASIS_LIBERTY: {lib_c}\"\n"
+        f"puts $_bf \"STA_SIGNOFF_CORNER_COUNT: 1\"\n"
+        f"puts $_bf \"STA_SIGNOFF_CORNER_SEMANTICS this report times ONE process "
+        f"corner; it is NOT by itself multi-corner sign-off evidence\"\n"
+        f"close $_bf\n"
         f"{flat_marker_tcl}"
         # recovery/removal (async-reset de-assert) + min-pulse-width + max-slew +
         # max-cap sign-off check types, guarded + marked (this OpenSTA build's
