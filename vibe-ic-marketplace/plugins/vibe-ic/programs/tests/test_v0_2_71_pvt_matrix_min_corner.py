@@ -132,7 +132,7 @@ def test_sta_single_corner_disclosure(tmp_path):
     assert r.summary["multi_corner_executed"] is False
     disc = [f for f in r.findings if f.rule == "STA_SINGLE_CORNER_ONLY"]
     assert disc and disc[0].severity == "WARNING"  # advisory, not ERROR
-    assert r.summary["multi_corner_substantiated"] is True  # no broken claim
+    assert r.summary["multi_corner_claim_not_broken"] is True  # no broken claim
 
 
 def test_sta_two_distinct_corners_no_disclosure(tmp_path):
