@@ -4494,14 +4494,17 @@ _CLASS_SKIPPABLE_ANALOG_GATES: frozenset[str] = frozenset({
 })
 
 
-# ORGANIC-20260614 (#632) — structural-name prefixes that identify the
-# analog / mixed-signal sub-gates inside the P0 structural-RTL umbrella.
-# Derived from the canonical gate FILE names (analog_*, mixed_signal_*,
-# pdk_analog_*, spice_correlation_*), NOT from any chip / vendor / SKU
-# literal — so it auto-extends as new analog gates are registered in
-# `_STRUCTURAL_RTL_GATES` and stays chip-AGNOSTIC. This is the same
-# naming convention `_CLASS_SKIPPABLE_ANALOG_GATES` (above) already keys
-# off and that the A-step (A1..A9) suppression uses.
+# ORGANIC-20260614 (#632) — the analog / mixed-signal NAMING CONVENTION for
+# gates in the P0 structural-RTL umbrella: the canonical gate FILE names
+# (analog_*, mixed_signal_*, pdk_analog_*, spice_correlation_*), NOT any
+# chip / vendor / SKU literal.
+#
+# THIS TUPLE NO LONGER DECIDES ANY SKIP. It used to: `_skip_analog_p0_gates()`
+# derived the `--skip-analog` suppression set from it, so a gate was silenced
+# by how it was SPELLED. See `_ANALOG_TRACK_OWNS` below for the record that
+# decides now, and for the gate that measurably lost its verdict to the prefix.
+# What the convention is still for: demanding that a newly-registered
+# analog-named gate DECLARE which side of that record it is on.
 _ANALOG_STRUCTURAL_GATE_PREFIXES: tuple[str, ...] = (
     "analog_",
     "mixed_signal_",
@@ -4511,30 +4514,126 @@ _ANALOG_STRUCTURAL_GATE_PREFIXES: tuple[str, ...] = (
 
 
 def _is_analog_structural_gate(gate_name: str) -> bool:
-    """True when `gate_name` is an analog / mixed-signal sub-gate of the
-    P0 structural-RTL umbrella (by canonical file-name prefix).
+    """True when `gate_name` FOLLOWS the analog / mixed-signal naming
+    convention (canonical file-name prefix).
 
-    chip-AGNOSTIC: matches on the gate program's own name prefix, never
-    on a chip / vendor / SKU string. `_skip_analog_p0_gates()` filters
-    this against the registered `_STRUCTURAL_RTL_GATES` tuple so only
-    real, registered gates are ever returned.
+    NOT A SKIP PREDICATE, and it stopped being one deliberately — see
+    `_ANALOG_TRACK_OWNS`. A name says how a gate is spelled; it does not say
+    which track's deferral owns the gate's verdict, and the two diverge (a
+    gate that POLICES whether an analog deferral is legitimate is spelled
+    exactly like the gates that deferral covers). Its one remaining use is
+    `_undeclared_analog_named_gates`, which uses it to DEMAND an ownership
+    declaration for a newly-registered analog-named gate.
+
+    chip-AGNOSTIC: matches on the gate program's own name prefix, never on a
+    chip / vendor / SKU string.
     """
     return any(gate_name.startswith(p)
                for p in _ANALOG_STRUCTURAL_GATE_PREFIXES)
 
 
-def _skip_analog_p0_gates() -> frozenset[str]:
-    """The set of analog / mixed-signal structural-RTL gates suppressed
-    by `--skip-analog` inside the P0 umbrella.
+# ── OWNERSHIP, NOT RESEMBLANCE, DECIDES A DEFERRED-TRACK SKIP ───────────────
+#
+# THE DEFECT THIS REPLACES, MEASURED. `_skip_analog_p0_gates()` used to be
+# `_STRUCTURAL_RTL_GATES` filtered by `_is_analog_structural_gate` — the name
+# prefix above. So the question "may `--skip-analog` silence this gate?" was
+# answered by how the gate is SPELLED. On a project whose input docs document
+# an LDO and a bandgap while `L5_ADI_SPEC.json` carries `analog_blocks: []`,
+# the SAME tree gives:
+#
+#   skip_analog=False  analog_content_detected_must_emit_l5_check  FAIL (rc 1)
+#   skip_analog=True   analog_content_detected_must_emit_l5_check  SKIP
+#                      ("analog track deferred via --skip-analog")
+#
+# That gate does not own the analog-track deferral. Its subject is the PHASE-1
+# L5 RECORD: "the docs describe analog content that L5 never wrote down". It
+# reads `input/docs/` + `generated_docs/L5_*.json` and no A-step artefact, so
+# deferring A1..A9 does not make it unanswerable. It is the gate that decides
+# whether an analog deferral is even REVIEWABLE — a deferred track whose
+# content was never recorded is an open item nobody can cost. Silencing it
+# because its file name starts with `analog_` means the one run that defers
+# the analog track is the one run that never has to admit it has any.
+#
+# THE RULE. A gate is skipped for a deferred track only when the deferral
+# record NAMES it as owned. Resemblance never decides. `_ANALOG_TRACK_OWNS`
+# is that record: every entry is a gate whose VERDICT IS PRODUCED BY the
+# deferred A1..A9 / M1..M4 work, so deferring the track legitimately defers
+# the gate. chip-AGNOSTIC — the entries are checker program names and the
+# rationale is track membership, never a chip / vendor / SKU / PDK literal.
+_ANALOG_TRACK_OWNS: frozenset[str] = frozenset({
+    # Per-block A1..A9 artefact + substance gates — the deferred steps' own
+    # deliverables.
+    "analog_a1_spec_extract_check",
+    "analog_a2_topology_select_check",
+    "analog_a3_netlist_gen_check",
+    "analog_a4_corner_sweep_check",
+    "analog_a5_layout_check",
+    "analog_a6_block_pv_check",
+    "analog_a7_post_layout_resim_check",
+    "analog_a8_hardmacro_gen_check",
+    "analog_a9_hw_verify_check",
+    "analog_artefact_substance_check",     # substance OF those deliverables
+    # Project-wide gates that read A-step outputs and can answer nothing
+    # without them.
+    "analog_block_coverage_check",         # per-block A5-A8 coverage
+    "analog_corner_sweep_check",           # A4 PVT sweep
+    "analog_netlist_pdk_check",            # A3 deck vs PDK
+    "analog_pre_vs_post_layout_check",     # A5 vs A7
+    "analog_hardmacro_check",              # A8 LEF/Liberty/GDS/Verilog
+    "analog_flow_compliance_check",        # A1-A9 closure
+    "analog_digital_interface_check",      # per-block interface contract
+    "pdk_analog_completeness_check",       # PDK views A3/A4/A6 consume
+    "spice_correlation_check",             # post-layout SPICE deck (A7)
+    "analog_hw_spice_correlation_check",   # A9 bench vs SPICE
+    "analog_hw_tb_de10lite_budget_check",  # A9 hardware TB
+    # Mixed-signal merge — downstream of the A8 hardmacros.
+    "mixed_signal_cosim_check",
+})
 
-    Derived from `_STRUCTURAL_RTL_GATES` (the single source of truth for
-    which gates the umbrella runs) by analog name-prefix — so it can
-    never name a gate that the umbrella does not actually run, and it
-    auto-extends when new analog gates are added. chip-AGNOSTIC.
+# The other half of the SAME record, stated rather than left to be inferred
+# from an absence. A gate here matches the analog naming convention and is
+# deliberately NOT owned by the track deferral: it stays runnable, and stays
+# required, on a run that defers the analog track. Keeping the reason beside
+# the name is what stops the next reader from "restoring" the prefix rule.
+_ANALOG_NAMED_NOT_OWNED: Dict[str, str] = {
+    "analog_content_detected_must_emit_l5_check": (
+        "subject is the Phase-1 L5 RECORD, not the A1..A9 work: it asks "
+        "whether the input docs describe analog content that L5 never "
+        "recorded. It reads input/docs + generated_docs only, so a deferred "
+        "analog track leaves it fully answerable — and it is the gate that "
+        "makes the deferral reviewable, because an unrecorded analog block "
+        "is an open item nobody can cost."),
+}
+
+
+def _undeclared_analog_named_gates() -> tuple[str, ...]:
+    """Registered gates that LOOK analog by name but carry NO ownership
+    declaration, in canonical registry order.
+
+    The naming convention is used here for ONE purpose — to demand a
+    declaration — and never to decide a skip. At runtime such a gate is
+    fail-closed: absent from `_skip_analog_p0_gates()`, so it RUNS. A
+    non-empty result is registry drift (a new analog gate was registered
+    without saying whether the track deferral owns it) and the regression
+    suite pins it to empty, so the drift is loud instead of silent.
     """
-    return frozenset(
-        g for g in _STRUCTURAL_RTL_GATES if _is_analog_structural_gate(g)
-    )
+    declared = _ANALOG_TRACK_OWNS | frozenset(_ANALOG_NAMED_NOT_OWNED)
+    return tuple(g for g in _STRUCTURAL_RTL_GATES
+                 if _is_analog_structural_gate(g) and g not in declared)
+
+
+def _skip_analog_p0_gates() -> frozenset[str]:
+    """The set of structural-RTL gates suppressed by `--skip-analog` inside
+    the P0 umbrella: the OWNERSHIP record intersected with the registry.
+
+    Two independent conditions, both required. `_ANALOG_TRACK_OWNS` says the
+    analog-track deferral owns the gate's verdict; `_STRUCTURAL_RTL_GATES`
+    says the umbrella actually runs it. The intersection can therefore never
+    name a gate the umbrella does not run, and — the point of this function —
+    never a gate that merely SPELLS like one the deferral owns. chip-AGNOSTIC.
+    """
+    return frozenset(g for g in _STRUCTURAL_RTL_GATES
+                     if g in _ANALOG_TRACK_OWNS)
 
 
 def _class_skipped_gates(project: Path) -> Dict[str, str]:
@@ -4617,6 +4716,31 @@ def _class_skipped_gates(project: Path) -> Dict[str, str]:
 _PURE_ANALOG_NA_STAGES: frozenset = frozenset({
     "stage1", "stage2", "stage3", "stage4", "stage_mixed_signal",
 })
+
+# The flow's OWN record of which steps belong to the analog track: the stage a
+# step declares in `flow/phase1_phase2_phase3.yaml`. Same rule as
+# `_ANALOG_TRACK_OWNS` one level up — a step is deferred by `--skip-analog`
+# because the flow SAYS it is on the analog track, never because its id is
+# spelled a certain way. See `_step_owned_by_analog_track`.
+_ANALOG_TRACK_STAGE = "stage_analog"
+
+
+def _step_owned_by_analog_track(step: Dict[str, Any]) -> bool:
+    """True iff the FLOW DECLARES this step a member of the analog track.
+
+    Replaces `str(sid).startswith("A")`. The old test read the first letter
+    of the step id, which is name resemblance doing a skip's job: the analog
+    track's membership is recorded — every A1..A9 step in the shipped flow
+    carries `stage: stage_analog` — and the record was simply not consulted.
+    Any future step whose id merely begins with "A" (an `AXI_*` lint step, an
+    `ATPG*` step, an `AUDIT` step) was silently deferred by `--skip-analog`
+    while owning none of that deferral.
+
+    Fail-CLOSED: a step that declares no stage is NOT owned, so it runs and
+    gates normally. An absent record is not a claim of ownership.
+    chip-AGNOSTIC: reads the flow's stage field, never a chip / vendor name.
+    """
+    return str(step.get("stage") or "") == _ANALOG_TRACK_STAGE
 
 # Memoization cache keyed by resolved project path (string).
 _PURE_ANALOG_CACHE: Dict[str, Tuple[bool, str]] = {}
@@ -8122,7 +8246,11 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         status="MISSING",
     )
 
-    if skip_analog and isinstance(sid, str) and sid.startswith("A"):
+    # Ownership, not resemblance: the flow's declared `stage`, not the first
+    # letter of the id. Byte-identical on the shipped flow (A1..A9 all declare
+    # `stage: stage_analog`); tightening only — a step that merely SPELLS like
+    # an analog one keeps gating. See `_step_owned_by_analog_track`.
+    if skip_analog and _step_owned_by_analog_track(step):
         result.status = "SKIPPED-CONDITION"
         result.reasons.append("analog track skipped via --skip-analog")
         return result
