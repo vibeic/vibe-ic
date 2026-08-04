@@ -5417,6 +5417,117 @@ _UNDRIVABLE_BY_STRUCTURAL_UMBRELLA: Dict[str, Dict[str, str]] = {
             "KEEP registered, driven at backlog-submission time, not per "
             "project."),
     },
+
+    # -----------------------------------------------------------------------
+    # vibe-ic#559 (round 7) — THE FOUR THE RATCHET COULD NOT SEE.
+    #
+    # Everything above was found by `p0_gate_invocability_drift_check`, whose
+    # discriminator was `rc == 2 and "usage:" in stderr` — `_gate_invocation`'s
+    # RULE A, and only Rule A. The umbrella has always classified with
+    # `classify_not_invocable`, which is Rule A **plus** RULE B: a gate that
+    # hand-rolls its own required-argument check never reaches argparse, so no
+    # `usage:` block is ever printed. Measured at v1.9.74 over the 246
+    # registered gates, both arms driven from `_structural_gate_argv` against
+    # the same empty probe: the umbrella 36, the ratchet 32.
+    #
+    # These four are that gap. They are NOT new silences — `_gate_invocation`'s
+    # own docstring has named them as the Rule-B-only four since #492 — they are
+    # four silences no PROGRAM could see, so they were neither licensed nor
+    # flagged. They are recorded here rather than in `_SEMANTIC_ARGV_UNDRIVABLE`
+    # because that table's re-derivation test asserts `usage:` on stderr, i.e.
+    # it is a Rule-A-only table by construction and cannot hold a Rule-B gate.
+    #
+    # Each row below is measured against the same corpus as the twelve above.
+    # -----------------------------------------------------------------------
+    "mask_application_check": {
+        "category": "semantic-design-value",
+        "requires": "--masks/--mask (a spec's AND-mask table)",
+        "measured": (
+            "Rule B: exits 2 with its own `error: no masks supplied (--masks or "
+            "--mask)`, no argparse usage block, on the umbrella's own argv. Its "
+            "parser takes exactly `rtl` (positional), `--masks`, `--mask` and "
+            "`--json` (mask_application_check.py:188-192), so unlike "
+            "`payload_bit_position_check` below there is no project-artifact "
+            "route to measure at all: the only input path is a caller-supplied "
+            "value. That value is a list of {signal, and_mask} pairs — which "
+            "RTL signal the spec masks and with what constant. Both halves are "
+            "spec facts; a scan for `& 8'hXX` returns the masks the RTL DOES "
+            "apply, which is the thing the gate exists to check, so deriving "
+            "the argument from the RTL would make the check confirm its own "
+            "input."),
+        "disposition": (
+            "KEEP registered, driven explicitly from the L-layer spec that "
+            "declares the mask. NOT_INVOCABLE under the umbrella is the correct "
+            "verdict and now has a reason a program can read."),
+    },
+    "periodic_signal_required_check": {
+        "category": "semantic-design-value",
+        "requires": "--periodic/--required (a periodic-signal manifest)",
+        "measured": (
+            "Rule B: exits 2 with its own `error: no required signals supplied "
+            "(--periodic or --required)`, no argparse usage block, on the "
+            "umbrella's own argv. Its parser takes exactly `rtl` (positional), "
+            "`--periodic`, `--required` and `--json` "
+            "(periodic_signal_required_check.py:182-186) — no project-artifact "
+            "reader exists. The manifest is {name, period_const, output_port} "
+            "per protocol-mandated periodic activity, and the gate's whole "
+            "premise is that the RTL may DECLARE the period constant while no "
+            "generator drives the signal. Harvesting the manifest from the RTL "
+            "would therefore only ever list activities the RTL already "
+            "implements, and the missing one — the defect — is invisible to "
+            "exactly the scan that would build the argument."),
+        "disposition": (
+            "KEEP registered, driven explicitly from the L-layer spec that "
+            "states the protocol's periodic obligations, not from the RTL that "
+            "is under test."),
+    },
+    "payload_bit_position_check": {
+        "category": "cross-layer-contract",
+        "requires": "--bitmap, or --layer-l3/--layer-l4 (umbrella-suppliable)",
+        "measured": (
+            "Rule B: exits 2 with its own `error: empty bitmap (give --bitmap "
+            "or --layer-l3/--layer-l4)`, no argparse usage block. Unlike the "
+            "two above it DOES have an umbrella-suppliable route — the corpus "
+            "ships 107 L3 and 107 L4 documents — so it was driven with them "
+            "rather than judged. Denominator rule stated so it can be "
+            "reproduced: the 107 distinct `<...>/rtl` prefixes of `git "
+            "ls-files` paths containing `/rtl/`. Of those, 36 have a reachable "
+            "phase1/generated_docs/L3_CMD_PROTOCOL.json; driven with "
+            "--layer-l3 and --layer-l4 supplied: rc=2 on 36/36 and "
+            "`checked_pairs` 0 on 36/36. Wiring it would not even stop it being "
+            "NOT_INVOCABLE. Cause, not symptom: `_load_bitmap_from_layer` "
+            "(payload_bit_position_check.py:80-88) reads a top-level "
+            "`bit_layouts` object, and 0 of 108 L3 documents and 0 of 108 L4 "
+            "documents under benchmark-data carry that key — phase1 emits "
+            "`opcodes` and `payload_semantics`, never a byte->bit->signal map."),
+        "disposition": (
+            "KEEP registered, unwired. This is a schema question before it is a "
+            "wiring question: which L-layer document owns the payload bitmap, "
+            "and in what shape. Settle that and the wiring is one adapter row; "
+            "wiring it first supplies a file that cannot answer the gate."),
+    },
+    "fpga_async_input_synchronizer_check": {
+        "category": "later-flow-artifact",
+        "requires": "--top or --qsf (an FPGA top-level entity)",
+        "measured": (
+            "Rule B: exits 2 with its own `error: top module not resolved (give "
+            "--top or --qsf)` at fpga_async_input_synchronizer_check.py:265-268, "
+            "no argparse usage block. `--qsf` is a Quartus settings file, an "
+            "FPGA-compile artefact: exactly ONE .qsf is tracked in the whole "
+            "repo (a phase2/stage1/fpga/ output), and 0 of the 107 tracked rtl "
+            "directories holds one — the same measurement already recorded for "
+            "its twin `fpga_qsf_lint` above, which the ratchet COULD see. "
+            "`--top` is the other route and the umbrella has no top-module to "
+            "give: `_structural_gate_argv` takes a gate name, a project, an rtl "
+            "dir and a strict-timing flag, and computes no top. "
+            "UMBRELLA_SUPPLIABLE lists --top-module aspirationally; nothing "
+            "produces one at the structural stage."),
+        "disposition": (
+            "KEEP registered, driven from the FPGA-compile step that emits the "
+            ".qsf — identical disposition to `fpga_qsf_lint`. Recording it "
+            "beside its twin is the point: one of the pair was licensed and the "
+            "other was invisible, for no reason but the discriminator."),
+    },
 }
 
 
