@@ -10,22 +10,35 @@ quasi-static solve yields ~2x the static drop)." — unconditionally, including
 the quasi-static (no-decap) case.
 
 But under the fork's `quasi-static` capacitance model the transient solve
-degenerates to a DETERMINISTIC scaling of the static drop. The tool itself
-prints `Dynamic/static ratio : 2.00`, and in every captured run the dynamic
-number is EXACTLY 2.00x the static one:
+degenerates to a DETERMINISTIC scaling of the static drop. Measured over the
+tracked corpus (8 `dynamic_ir.json`; 5 carry a capacitance model, all of them
+`quasi-static`, 3 carry none):
 
-  benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/reports/phase3/
-      dynamic_ir.json : max_dynamic_drop_mv 0.0728 = 2.00 x 0.0364  (sky130A, 1.8V, 25ns)
-  benchmark-data/ic/spm/v1.5.66_gf180mcuD/reports/phase3/
-      dynamic_ir.json : max_dynamic_drop_mv 14.3   = 2.00 x 7.15    (gf180,  5.0V, 10ns)
+  dynamic_static_ratio — the tool's OWN printed Dynamic/static figure —
+  is 2.0 in 5 of 5, across different designs, PDKs, supplies and periods:
 
-The SAME 2.00 to three significant figures across two different designs, PDKs,
-supplies and clock periods is the signature of a fixed multiplier, not a di/dt
-solve — a real transient droop's ratio varies with the RC network, decap and
-activity. So the number answers the STATIC question scaled by a constant; a
-reader taking it as a transient result is taking a scaled static result. The
-artefact's disclosure pre-excused exactly that ratio ("a quasi-static solve
-yields ~2x") while asserting the number was "not a static echo".
+    caravel_user_project/v1.9.43_sky130A   ratio 2.0   0.0728 mv / 0.0364 mv
+    spm/v1.5.66_gf180mcuD                  ratio 2.0   14.3   mv / 7.15   mv
+    spm/v1.5.58_ihp-sg13g2                 ratio 2.0   2.21   mv / 1.1    mv
+    spm/v1.5.65_sky130A                    ratio 2.0   (no static_from_transient_mv)
+    sha256/clean_run_v1461_0223            ratio 2.0   48.6   mv / 0.0243 mv
+
+A constant to three significant figures across that spread is the signature of
+a fixed multiplier, not a di/dt solve — a real transient droop's ratio varies
+with the RC network, decap and activity. So the number answers the STATIC
+question scaled by a constant; a reader taking it as a transient result is
+taking a scaled static result. The artefact's disclosure pre-excused exactly
+that ratio ("a quasi-static solve yields ~2x") while asserting the number was
+"not a static echo".
+
+Stated precisely because the last two rows do NOT support the stronger claim.
+`max_dynamic_drop_mv` equals 2.00x `static_from_transient_mv` in 3 of the 5:
+one row carries no `static_from_transient_mv` at all, and one is 2000x, not
+2x — its two fields plainly do not come from the same solve. That is a
+separate, unrelated defect in what the emitter writes into those two keys, and
+this file does not claim to have fixed it. The evidence that the quasi-static
+tier is a scaling of the static solve is the tool's own constant ratio field,
+which is 2.0 in all 5.
 
 The observable property
 -----------------------
@@ -47,6 +60,21 @@ The tempting over-correction is to flag EVERYTHING as a scaled-static bound
 a bound" caveat on a genuine decap-aware transient solve and understate the
 tool's real capability. `test_reverse_decap_aware_solve_stays_genuine` fails if
 that happens.
+
+WHAT REMAINS UNMEASURED (disclosed, not fixed)
+----------------------------------------------
+The branch that still CLAIMS genuineness — `cap_model.startswith("on-die-cap")`
+— has 0 of 8 tracked artefacts behind it. Nothing in the corpus has ever run
+decap-aware: 5 artefacts declare `quasi-static`, 3 declare no capacitance model
+at all, and none declares an on-die-cap model. So the surviving genuineness
+assertion is the one no real run has ever exercised, and the tests below drive
+it only through a synthetic `cap_model` string.
+
+That is the honest shape of this change: it removes an unconditional claim that
+was measurably false on every artefact that exists, and leaves a conditional
+claim whose condition has never yet been true. Should a decap-aware solve ever
+land, whether ITS number is a genuine di/dt result is a separate question this
+file does not answer.
 
 chip-AGNOSTIC: keyed on the tool's own capacitance-model string; no design,
 PDK, vendor, SKU, process-node or part-number literal.
@@ -92,22 +120,28 @@ def _mk(cap_model, worst_dyn_mv=106.0, static_tr_mv=53.0, vdd_v=1.8, ratio=2.0):
 
 
 # --------------------------------------------------------------------------
-# THE DEFECT (bidirectional negative control) — a quasi-static payload must be
-# flagged as a bound and must NOT claim genuineness. Pre-fix, build_result
-# emitted "genuine dynamic droop, not a static echo" here and carried no
-# scaled_static_bound key, so BOTH asserts fail against the byte-identical
-# pre-fix source.
+# THE DEFECT (bidirectional negative control) — a quasi-static payload must NOT
+# claim genuineness, and must be flagged as a bound.
+#
+# ASSERT ORDER IS LOAD-BEARING HERE AND IN EVERY TEST BELOW. The substantive
+# assertion — the false prose — comes FIRST; the new-key assertion comes
+# second. Reversed, every one of these tests died pre-fix on
+# `KeyError: 'scaled_static_bound'`, which demonstrates only that a key was
+# added. A missing-attribute death is not a demonstration of the defect: it
+# would look identical if the prose had never been wrong at all. In this order
+# the pre-fix failure is `assert not _asserts_genuine(r)`, i.e. the artefact
+# caught in the act of calling a scaled static number genuine.
 # --------------------------------------------------------------------------
 def test_quasi_static_is_flagged_and_not_called_genuine():
     r = _mk("quasi-static")
-    assert r["scaled_static_bound"] is True, (
-        "a quasi-static (no-decap) transient number is a fixed scaling of the "
-        "static solve; the payload must flag it as a scaled-static bound"
-    )
     assert not _asserts_genuine(r), (
         "the artefact still claims the quasi-static number is a genuine "
         "dynamic droop / 'not a static echo' — the exact misrepresentation "
         f"measured on caravel and spm. payload strings: {_string_values(r)!r}"
+    )
+    assert r["scaled_static_bound"] is True, (
+        "a quasi-static (no-decap) transient number is a fixed scaling of the "
+        "static solve; the payload must flag it as a scaled-static bound"
     )
 
 
@@ -116,13 +150,39 @@ def test_quasi_static_is_flagged_and_not_called_genuine():
 # over-corrects into "flag everything as a bound", this flips.
 # --------------------------------------------------------------------------
 def test_reverse_decap_aware_solve_stays_genuine():
+    """PASSES IN BOTH DIRECTIONS, deliberately.
+
+    An over-correction guard that dies on `KeyError` against the pre-fix
+    source guards nothing: it cannot distinguish "the fix over-corrected"
+    from "the fix is not applied yet". So both assertions are written to hold
+    pre-fix AND post-fix, and to fail ONLY on the over-correction:
+
+      * pre-fix  — the disclosure said "genuine" unconditionally, and
+        `scaled_static_bound` did not exist, so `.get()` is None;
+      * post-fix — the decap branch says "genuine", and the flag is False;
+      * over-corrected (flag everything / strip "genuine" everywhere) —
+        the flag is True and/or the word is gone. Both assertions fire.
+
+    `is not True` rather than `is False` is what buys the pre-fix direction;
+    the strict `is False` pin lives in
+    `test_two_tiers_are_machine_distinguishable`, which is a post-fix
+    assertion by construction.
+
+    The prose assertion is `_asserts_genuine`, not a bare `"genuine" in ...`:
+    the undetermined branch's own text contains the substring "genuine" inside
+    the words "not a genuine di/dt result", so a bare substring test would have
+    read an explicit DENIAL of genuineness as an assertion of it. Measured —
+    under the over-correction mutation the bare form passed and only the flag
+    assertion fired.
+    """
     r = _mk("on-die-cap 1e-12F")
-    assert r["scaled_static_bound"] is False, (
+    assert _asserts_genuine(r), (
+        "the decap-aware payload dropped its genuine-di/dt presentation: "
+        f"{_string_values(r)!r}"
+    )
+    assert r.get("scaled_static_bound") is not True, (
         "a decap-aware transient solve is genuine; flagging it as a "
         "scaled-static bound fabricates a caveat and understates the tool"
-    )
-    assert "genuine" in " ".join(_string_values(r)).lower(), (
-        "the decap-aware payload dropped its genuine-di/dt presentation"
     )
 
 
@@ -130,8 +190,8 @@ def test_undetermined_cap_model_is_conservatively_a_bound():
     """capacitance model unreadable -> genuineness cannot be asserted -> the
     conservative direction is to label a bound, never to claim genuine."""
     r = _mk(None)
+    assert not _asserts_genuine(r), _string_values(r)
     assert r["scaled_static_bound"] is True
-    assert not _asserts_genuine(r)
 
 
 # --------------------------------------------------------------------------
@@ -141,7 +201,17 @@ def test_undetermined_cap_model_is_conservatively_a_bound():
 def test_two_tiers_are_machine_distinguishable():
     quasi = _mk("quasi-static")
     decap = _mk("on-die-cap 1e-12F")
-    assert quasi["scaled_static_bound"] != decap["scaled_static_bound"]
+    # Behavioural first, and it is the whole defect in one line: pre-fix the
+    # disclosure was a CONSTANT, so these two payloads were indistinguishable
+    # in every string they carried. That assertion fails pre-fix on a real
+    # comparison, not on a missing key.
+    assert quasi["disclosure"] != decap["disclosure"], (
+        "both tiers carry the identical disclosure string; a reader cannot "
+        "tell a scaled static bound from a genuine di/dt solve at all")
+    # ... and the tiers must be told apart by a MACHINE-READABLE field, not by
+    # parsing that prose. Strict values, post-fix.
+    assert quasi["scaled_static_bound"] is True
+    assert decap["scaled_static_bound"] is False
 
 
 # --------------------------------------------------------------------------
@@ -152,15 +222,15 @@ def test_measured_caravel_capture_is_flagged():
     r = _mk("quasi-static", worst_dyn_mv=0.0728, static_tr_mv=0.0364, vdd_v=1.8)
     # sanity: this IS the 2.00x relationship, i.e. a scaled static echo
     assert abs(r["max_dynamic_drop_mv"] / r["static_from_transient_mv"] - 2.0) < 1e-6
+    assert not _asserts_genuine(r), _string_values(r)
     assert r["scaled_static_bound"] is True
-    assert not _asserts_genuine(r)
 
 
 def test_measured_spm_capture_is_flagged():
     r = _mk("quasi-static", worst_dyn_mv=14.3, static_tr_mv=7.15, vdd_v=5.0)
     assert abs(r["max_dynamic_drop_mv"] / r["static_from_transient_mv"] - 2.0) < 1e-6
+    assert not _asserts_genuine(r), _string_values(r)
     assert r["scaled_static_bound"] is True
-    assert not _asserts_genuine(r)
 
 
 # --------------------------------------------------------------------------
