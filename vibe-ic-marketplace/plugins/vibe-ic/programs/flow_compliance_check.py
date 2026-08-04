@@ -7533,22 +7533,32 @@ def _check_condition(project: Path, condition: Dict[str, Any]) -> bool:
         return True
     if files:
         for pat in files:
+            # The analog block-list trigger is CONTENT-defined, not
+            # existence-defined. An empty `{"blocks": []}` file explicitly
+            # declares a PURE-DIGITAL design (no analog blocks) — the same
+            # meaning as an absent file — yet `_glob_first`'s canonical-
+            # analog-dir tolerance (v0.2.55) matches that empty file by mere
+            # EXISTENCE, so the old bare `if _glob_first(...)` short-circuit
+            # marked the analog A1..A9 track APPLICABLE off a marker that says
+            # the opposite. Every A-step then reported MISSING and voided every
+            # downstream physical step that declares `blocks_on:[A*]` (15..31),
+            # turning a converged pure-digital backend into a wall of PASS-
+            # VOIDED. `_has_canonical_analog_blocks` is already the single
+            # source of truth for "does this project have analog blocks" (it
+            # requires a non-empty blocks[] and honours L5.no_analog, and is
+            # what `_project_is_pure_analog` / `_digital_backend_is_na`
+            # consult); the condition must consult CONTENT the same way, so an
+            # empty marker no longer differs from an absent one — while the L9
+            # `analog_modules` auto-trigger path (v0.113) is preserved.
+            # chip-AGNOSTIC: keyed on the pattern name + block-list CONTENT,
+            # never a chip literal.
+            if "analog_block_list" in pat:
+                if (_has_canonical_analog_blocks(project)
+                        or _l9_has_analog_modules(project)):
+                    continue
+                return False
             if _glob_first(project, pat):
                 continue
-            # Auto-derive analog block list from L9 if requested
-            if "analog_block_list" in pat:
-                if _l9_has_analog_modules(project):
-                    continue
-                # v0.2.55 — canonical-path tolerance. The analog runner
-                # writes the block list to the canonical analog dir
-                # (`_pl.analog_dir` = phase3/analog/), but the flow-def
-                # condition historically pins `phase1/analog/`. Accept the
-                # canonical location too, and fall back to L5_ADI_SPEC's
-                # `analog_blocks` array (Phase-1 doc-extraction emits it).
-                # chip-AGNOSTIC: existence of an analog block list anywhere
-                # canonical, never a chip name.
-                if _has_canonical_analog_blocks(project):
-                    continue
             return False
     return True
 
