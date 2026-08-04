@@ -72,9 +72,9 @@ def _cascade(steps, results, waivers=None):
     return FC._attribute_cascade_verdicts(results, steps, waivers or {})
 
 
-# vibe-ic#802 — softening now requires a DECLARED dependency, not just a
+# vibe-ic#776 — softening now requires a DECLARED dependency, not just a
 # `blocks_on` edge, so the fixtures below say which step writes the artefact
-# and which step's gate reads it. Before #802 these specs carried no
+# and which step's gate reads it. Before #776 these specs carried no
 # declaration at all and softened anyway; `test_the_same_chain_without_the_
 # declaration_does_not_soften` is the control that pins the difference.
 _ART = "reports/phase2/some_artifact.json"
@@ -134,7 +134,7 @@ def test_the_softer_verdict_is_not_reachable_through_a_declared_gap():
 def test_a_plain_waived_ancestor_still_defers():
     """THE ACCEPT CASE. #502's intent is real: a step whose predecessor was
     deferred never ran — when the flow DECLARES the step reads what the
-    predecessor writes (#802)."""
+    predecessor writes (#776)."""
     steps = _steps(_writes(12), _reads(13, [12]))
     results = [_res(12, "WAIVED"), _res(13, "MISSING")]
     _cascade(steps, results, {12: {"ticket": "T-1"}})
@@ -143,7 +143,7 @@ def test_a_plain_waived_ancestor_still_defers():
 
 
 def test_the_same_chain_without_the_declaration_does_not_soften():
-    """#802 CONTROL for the test above — identical `blocks_on`, identical
+    """#776 CONTROL for the test above — identical `blocks_on`, identical
     waiver, only the declaration removed. This is the shape that produced
     `DEFERRED-BY-UPSTREAM(13)` on 1153 of the flow's 1221 ancestor pairs."""
     steps = _steps({"id": 12}, {"id": 13, "blocks_on": [12]})
@@ -156,7 +156,7 @@ def test_the_same_chain_without_the_declaration_does_not_soften():
 
 def test_the_deferral_reason_no_longer_asserts_what_it_cannot_check():
     """It used to say the step "consumes outputs that step X's waiver
-    deferred" off an ORDERING edge alone. #802: it may say so only where the
+    deferred" off an ORDERING edge alone. #776: it may say so only where the
     flow declares the read, and it must still never use the old phrasing."""
     steps = _steps(_writes(12), _reads(13, [12]))
     results = [_res(12, "WAIVED"), _res(13, "MISSING")]

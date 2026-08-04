@@ -984,7 +984,7 @@ def _all_missing_results(fcc, waived=(), failed=()):
 
 
 def test_step39_does_not_inherit_a_step6_waiver(fcc):
-    """RETIRED SECOND EFFECT of `blocks_on: [6, 13]` — vibe-ic#802.
+    """RETIRED SECOND EFFECT of `blocks_on: [6, 13]` — vibe-ic#776.
 
     This test used to pin the opposite: a waiver written for step 6 alone moved
     step 39 out of the final sign-off's required denominator, because #502 read
@@ -1003,7 +1003,7 @@ def test_step39_does_not_inherit_a_step6_waiver(fcc):
     and the flow's answer to that is step 39's OWN ENV_UNAVAILABLE disclosure
     with its own ticket and `review_required`, which stays available and is
     reviewed on its own merits. Inheriting the discount silently off an
-    ordering edge is the mechanism #802 removed: on this flow it made 1153
+    ordering edge is the mechanism #776 removed: on this flow it made 1153
     such deductions, of which 6 are declared.
     """
     results = _all_missing_results(fcc, waived=(6,))

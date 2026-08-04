@@ -190,9 +190,9 @@ def test_legitimate_phase1_states_raise_no_violation(d1_status, graph):
 # be mistaken for an accident.
 
 def test_waived_phase1_defers_only_what_declares_it_reads_phase1(graph):
-    """vibe-ic#802 NARROWED THIS, and the narrowing is the point.
+    """vibe-ic#776 NARROWED THIS, and the narrowing is the point.
 
-    Before #802 a waiver on D1 absorbed 49 downstream MISSING steps on this
+    Before #776 a waiver on D1 absorbed 49 downstream MISSING steps on this
     flow — every step ordered behind it. It now absorbs the three that DECLARE
     they read a Phase-1 doc: steps 2, 4 and 8, whose gates name
     `phase1/generated_docs/L{3,8,10,11,12}*.json` in `condition_files_exist`.

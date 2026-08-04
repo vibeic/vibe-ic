@@ -8474,7 +8474,7 @@ def _track_of(sid: Any) -> Optional[str]:
     return None
 
 
-# ── vibe-ic#802 — the declared-dependency relation ──────────────────────────
+# ── vibe-ic#776 — the declared-dependency relation ──────────────────────────
 # `blocks_on` is an ORDERING edge and nothing more. The flow does have a way to
 # say "this step reads that artefact", and it is used: a step DECLARES what it
 # must produce (`required_outputs`) and its gate DECLARES what it reads
@@ -8489,7 +8489,7 @@ def _track_of(sid: Any) -> Optional[str]:
 #   14      <- 9    `phase2/stage2/synth/netlist.v`
 #   34      <- 18   `phase3/stage3/pnr/spare_cells.json`
 # Replaying every single-waiver scenario over an otherwise-all-MISSING run:
-# the pre-#802 code converted 1153 (step, ancestor) pairs to
+# the pre-#776 code converted 1153 (step, ancestor) pairs to
 # DEFERRED-BY-UPSTREAM; this code converts the 6 above. (1153 rather than 1215
 # because #600's known-gap stop was already refusing some of them.)
 _FLOW_GATE_INPUT_KEYS = ("condition_files_exist", "files_exist", "file")
@@ -8605,7 +8605,7 @@ def _attribute_cascade_verdicts(
     chip literal. A GENUINE M-step FAIL (real counter-evidence) is NOT
     touched, and the skip only fires when --skip-analog is DISCLOSED.
 
-    #502 (waiver chain must propagate), as narrowed by #802: a MISSING
+    #502 (waiver chain must propagate), as narrowed by #776: a MISSING
     step whose `blocks_on` ancestry (transitive) reaches a
     WAIVED-DEFERRED step **and which the flow DECLARES reads what that
     step must write** is the inevitable consequence of that SAME waiver.
@@ -8613,7 +8613,7 @@ def _attribute_cascade_verdicts(
     separately, excluded from strict MISSING (one waiver = one deduction,
     not two). A FAIL never converts — real counter-evidence survives.
 
-    #802: `blocks_on` alone is NOT enough and never was. It is an
+    #776: `blocks_on` alone is NOT enough and never was. It is an
     ORDERING edge; on the canonical flow it makes 1221 transitive
     (step, ancestor) pairs of which exactly 6 carry a declared
     dependency. Waiving step 13 (LEC, whose declared outputs
@@ -8720,7 +8720,7 @@ def _attribute_cascade_verdicts(
         if sid is not None and isinstance(kg, str) and kg.strip():
             known_gap_of[sid] = " ".join(kg.split())
 
-    # vibe-ic#802 — the DECLARED-DEPENDENCY relation, built from the flow.
+    # vibe-ic#776 — the DECLARED-DEPENDENCY relation, built from the flow.
     # `produces[s]` = what step s must write; `consumes[s]` = what step s's own
     # gate reads, PLUS its own required_outputs (a step required to deliver the
     # very artefact an ancestor is required to write cannot deliver without it —
@@ -8854,7 +8854,7 @@ def _attribute_cascade_verdicts(
             continue
         if hit is None:
             continue
-        # vibe-ic#802 — SOFTENING NEEDS MORE THAN ORDER. The reason below used
+        # vibe-ic#776 — SOFTENING NEEDS MORE THAN ORDER. The reason below used
         # to be printed with the softer status attached, and it contains its own
         # refutation: it says the flow does not establish that this step's
         # artefacts depend on the waived ancestor's, and then discounts the step
@@ -8870,15 +8870,12 @@ def _attribute_cascade_verdicts(
                 f"waived-ancestor-undeclared({hit}): step {hit} is a waived "
                 f"ancestor of this step in the declared blocks_on ORDER, but "
                 f"neither this step's gate nor its required_outputs declares "
-                f"reading anything {hit} is required to write, so nothing "
-                f"establishes that {hit}'s waiver explains this gap — the "
-                f"phase that writes this step's evidence never completed and "
-                f"the verdict stays MISSING. blocks_on is an ORDERING edge: on "
-                f"the canonical flow it makes 1221 (step, ancestor) pairs and "
-                f"only 6 of them carry a declared dependency. If the "
-                f"dependency is real, DECLARE it — give this step's gate a "
-                f"`condition_files_exist` naming the artefact {hit} produces — "
-                f"and this becomes a deferral again"))
+                f"reading anything {hit} is required to write — blocks_on is "
+                f"an ORDERING edge, so nothing establishes that {hit}'s waiver "
+                f"explains this gap. The phase that writes this step's "
+                f"evidence never completed; the verdict stays MISSING. If the "
+                f"dependency is real, DECLARE it: give this step's gate a "
+                f"`condition_files_exist` naming the artefact {hit} produces."))
             info.setdefault("waived_ancestor_undeclared", []).append(
                 (r.id, hit))
             continue
@@ -9727,7 +9724,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     _blocked = cascade_info.get("blocked_by_upstream") or {}
     _clauses = [f"{n} blocked-by-upstream of step {sid}"
                 for sid, n in _blocked.items()]
-    # vibe-ic#802 — these MISSING steps used to be DEFERRED-BY-UPSTREAM and
+    # vibe-ic#776 — these MISSING steps used to be DEFERRED-BY-UPSTREAM and
     # were subtracted from the denominator on an ORDERING edge alone. They are
     # counted here now, and the reader is told WHY they are all one shape, so
     # the honest MISSING does not read as N independent gaps. This is an

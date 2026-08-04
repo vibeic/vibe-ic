@@ -283,7 +283,7 @@ def _compliance(project: Path, out_json: Path):
 def _declared_formal_dependents() -> set:
     """Steps the flow DECLARES depend on Step 5's artefacts.
 
-    vibe-ic#802 — this used to return the transitive `blocks_on` closure, which
+    vibe-ic#776 — this used to return the transitive `blocks_on` closure, which
     is the very thing the test below calls "an over-broad cascade would itself
     be the defect". `blocks_on` is an ORDERING edge: on this flow it makes 1221
     (step, ancestor) pairs and only 6 of them carry a declared dependency. The
@@ -360,7 +360,7 @@ def test_cascade_defers_only_genuinely_dependent_steps(tmp_path):
         if s["status"] == "DEFERRED-BY-UPSTREAM":
             assert "deferred-by-upstream(5" in s["cascade_note"]
 
-    # #802 — the ordering fact is not thrown away, it is recorded WITHOUT
+    # #776 — the ordering fact is not thrown away, it is recorded WITHOUT
     # softening: the steps ordered behind step 5 say so and stay MISSING. This
     # is what keeps the assertions above from passing vacuously.
     ordered_behind = {s["id"] for s in waived["steps"]

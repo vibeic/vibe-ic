@@ -49,7 +49,7 @@ def test_deferred_parent_converts_dependent_missing():
     # required to deliver `phase2/stage2/synth/netlist.v`, the artefact 9 is
     # required to write — so 9's waiver is what stopped 14.
     #
-    # vibe-ic#802 — this used to be A5 -> A6 (analog layout -> per-block PV).
+    # vibe-ic#776 — this used to be A5 -> A6 (analog layout -> per-block PV).
     # That deferral was real in the WORLD and absent from the FLOW: A6's gate
     # is `analog_a6_block_pv_check . --json ...` and declares no input at all,
     # so nothing in the flow said A6 reads A5's layout. It softened on ORDER.
@@ -95,7 +95,7 @@ def test_deferral_is_transitive_over_the_declared_relation():
 
 
 def test_a_waived_ancestor_with_no_declared_relation_does_not_soften():
-    """#802 NEGATIVE CONTROL, and the whole defect in one assertion.
+    """#776 NEGATIVE CONTROL, and the whole defect in one assertion.
 
     Step 13 is the LEC equivalence check. Its declared outputs are
     `reports/lec.rpt` / `reports/lec.json`, which NO other step in the flow
@@ -194,14 +194,14 @@ def test_no_fail_no_annotation():
     assert info["blocked_by_upstream"] == {}
 
 
-# ── #802: the softening surface, pinned ──────────────────────────────────────
+# ── #776: the softening surface, pinned ──────────────────────────────────────
 
 def test_declared_dependency_relation_is_small():
     """ANTI-DRIFT. Every entry here is a licence to discount a MISSING step
     behind someone else's waiver, so the whole list must be reviewable in one
     screen and must not grow without a reviewer seeing it.
 
-    MEASURED on the canonical flow at the time of #802:
+    MEASURED on the canonical flow at the time of #776:
       * 1221 (step, transitive-blocks_on-ancestor) pairs
       *    6 of them carry a declared dependency
 
