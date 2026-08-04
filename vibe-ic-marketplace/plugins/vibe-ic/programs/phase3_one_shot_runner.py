@@ -10689,20 +10689,56 @@ _AUTO_DIE_TARGET_UTIL = 0.25         # routing-headroom target for --die-um auto
 
 
 def _parse_site_area_um2(cell_lef_text: str) -> Optional[float]:
-    """Parse the placement SITE's area (µm²) from a cell LEF's
-    `SITE <name> ... SIZE w BY h ;`. Returns w*h, or None if absent/malformed.
-    chip-AGNOSTIC: every std-cell LEF declares its row site geometry."""
+    """Parse the placement SITE's area (µm²) from a cell LEF's SITE DEFINITION
+    block (`SITE <name> … SIZE w BY h ; END <name>`). Returns w*h, or None if
+    absent/malformed. chip-AGNOSTIC: every std-cell LEF declares its row site.
+
+    A cell LEF holds TWO kinds of `SITE` token and only one of them is a
+    definition:
+
+      - the definition   ``SITE unithd``  (bare, then SYMMETRY/CLASS/SIZE/END)
+      - a reference      ``SITE unithd ;``  — one inside EVERY macro
+
+    The previous pattern was ``SITE .*? SIZE w BY h ;`` with DOTALL, which
+    matches the FIRST `SITE` token anywhere and then the first `SIZE` after
+    it. In a LEF whose macros precede the site definition, that first token is
+    a macro's SITE REFERENCE and the `SIZE` it then captures is THAT MACRO's
+    footprint, not the site's. MEASURED on sky130A
+    ``sky130_fd_sc_hd.lef``: it returned 4.14 x 2.72 = 11.26 µm² (a cell) in
+    place of the real ``SITE unithd`` 0.46 x 2.72 = 1.2512 µm² — 9x high,
+    which propagates straight into ``--die-um auto`` as a 9x die AREA.
+
+    Anchor on the definition instead: a bare ``SITE <name>`` line, bounded by
+    its ``END <name>``, preferring a ``CLASS CORE`` site (the placement row
+    site) when the LEF declares several.
+    """
     if not isinstance(cell_lef_text, str) or not cell_lef_text:
         return None
-    m = re.search(r"\bSITE\b.*?\bSIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)\s*;",
-                  cell_lef_text, re.DOTALL | re.IGNORECASE)
-    if not m:
-        return None
-    try:
-        w, h = float(m.group(1)), float(m.group(2))
-    except ValueError:
-        return None
-    return w * h if (w > 0 and h > 0) else None
+    best = None
+    for m in re.finditer(r"^[ \t]*SITE[ \t]+(\S+)[ \t]*$",
+                         cell_lef_text, re.MULTILINE | re.IGNORECASE):
+        name = m.group(1)
+        blk = cell_lef_text[m.end():]
+        end = re.search(rf"^[ \t]*END[ \t]+{re.escape(name)}[ \t]*$",
+                        blk, re.MULTILINE | re.IGNORECASE)
+        if end:
+            blk = blk[:end.start()]
+        sm = re.search(r"\bSIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)\s*;",
+                       blk, re.IGNORECASE)
+        if not sm:
+            continue
+        try:
+            w, h = float(sm.group(1)), float(sm.group(2))
+        except ValueError:
+            continue
+        if not (w > 0 and h > 0):
+            continue
+        is_core = re.search(r"\bCLASS\s+CORE\s*;", blk, re.IGNORECASE)
+        if is_core:
+            return w * h
+        if best is None:
+            best = w * h
+    return best
 
 
 def _auto_die_side_um(cell_count: int, util_frac: float,
@@ -11420,6 +11456,34 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
             Path(pdk.cell_lef).read_text(errors="ignore"))
     except Exception:
         site_area = None
+    if site_area is None and container:
+        # TWO defects kept this branch dead on every containerised run:
+        #
+        # (1) the read cannot succeed — the PDK ships INSIDE the EDA image, so
+        #     `pdk.cell_lef` is an in-container path and the host-side
+        #     `read_text` above always raises FileNotFoundError (MEASURED on
+        #     sky130A: cell_lef=/foss/pdks/sky130A/.../sky130_fd_sc_hd.lef,
+        #     `is_file()` on the host = False);
+        # (2) the CELL lef is the wrong file — it carries only SITE
+        #     REFERENCES (`SITE unithd ;`, one per macro). The SITE DEFINITION
+        #     that owns the row geometry lives in the TECH lef (MEASURED on
+        #     sky130A: 0 site definitions in the cell lef, 2 in
+        #     `techlef/sky130_fd_sc_hd__nom.tlef`).
+        #
+        # Read through the container, TECH lef first (where the definition
+        # belongs), then the cell lef for PDKs that inline it there.
+        for _lef in (getattr(pdk, "tech_lef", "") or "", pdk.cell_lef or ""):
+            if not _lef:
+                continue
+            try:
+                _rc, _out, _ = _docker_exec(
+                    container, f"cat {shlex.quote(str(_lef))}", timeout=120)
+            except Exception:
+                continue
+            if _rc == 0 and _out:
+                site_area = _parse_site_area_um2(_out)
+                if site_area:
+                    break
     # DEGRADE LOUDLY, NEVER SILENTLY.
     #
     # `pdk.cell_lef` is an IN-CONTAINER path (the PDK lives in the EDA image,
