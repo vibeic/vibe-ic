@@ -115,5 +115,93 @@ endmodule
     assert any(x['rule'] == 'wide-mult-comb' and x['risk'] == 'HIGH' for x in f)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# FALSE POSITIVES measured on REAL published RTL when this advisory was
+# wired into the flow. Each fixture is the offending construct copied from
+# the run that produced it, so the regression is pinned to the shape that
+# actually occurred rather than to one an author imagined.
+# ─────────────────────────────────────────────────────────────────────────
+
+# A `<=` inside an assertion MACRO argument is a COMPARISON, and the macro
+# call carries no terminating `;` — so `([^;]*);` swallowed every following
+# line and reported a 168-bit "add/compare chain feeding 'LfsrDw'", for a
+# PARAMETER, in an assertion, which is not a datapath at all.
+ASSERT_MACRO_COMPARISON = """
+module prim_lfsr #(parameter int LfsrDw = 32) (input clk_i, input rst_ni,
+                   output logic [LfsrDw-1:0] state_o);
+  logic [LfsrDw-1:0] coeffs;
+  logic [LfsrDw-1:0] lfsr_q;
+  `ASSERT_INIT(MaxLfsrWidth_A, LfsrDw <= $high(LFSR_COEFFS)+LUT_OFF)
+  assign state_o = lfsr_q ^ coeffs;
+endmodule
+"""
+
+
+def test_assertion_macro_comparison_is_not_an_assignment(tmp_path):
+    res, f = run(tmp_path, ASSERT_MACRO_COMPARISON, '--strict')
+    assert res.returncode == 0, res.stdout
+    assert not any(x['symbol'] == 'LfsrDw' for x in f), f
+
+
+# The same class in ordinary RTL: an `else if (addr <= (BASE + 8'd7))`
+# comparison, not a registered assignment.
+IF_COMPARISON = """
+module regfile(input clk, input [7:0] address, output reg [31:0] read_data);
+  always @(posedge clk)
+    if (address >= 8'h10 && address <= (8'h10 + 8'd7))
+      read_data <= 32'h0;
+endmodule
+"""
+
+
+def test_if_condition_comparison_is_not_an_assignment(tmp_path):
+    res, f = run(tmp_path, IF_COMPARISON, '--strict')
+    assert res.returncode == 0, res.stdout
+    assert not any(x['symbol'] == 'address' for x in f), f
+
+
+# Arithmetic that only computes a SHIFT DISTANCE is at most log2(width)
+# bits wide. A rotate helper was reported as a "32-bit add/compare chain".
+SHIFT_AMOUNT_MATH = """
+module hashcore(input clk, input [31:0] x, output reg [31:0] y);
+  function [31:0] rotr; input [31:0] x; input [4:0] n;
+      begin rotr = (x >> n) | (x << (6'd32 - n)); end
+  endfunction
+  always @(posedge clk) y <= rotr(x, 5'd7);
+endmodule
+"""
+
+
+def test_shift_amount_math_is_not_a_carry_chain(tmp_path):
+    res, f = run(tmp_path, SHIFT_AMOUNT_MATH, '--strict')
+    assert res.returncode == 0, res.stdout
+    assert not any(x['symbol'] == 'rotr' for x in f), f
+
+
+def test_the_real_wide_adder_still_fires_under_strict(tmp_path):
+    """The two repairs above must not silence the thing the gate is for."""
+    res, f = run(tmp_path, WIDE_RIPPLE, '--strict')
+    assert res.returncode == 1, res.stdout
+    assert any(x['risk'] == 'HIGH' for x in f)
+    assert 'wide-ripple-add' in res.stdout
+
+
+def test_the_finding_does_not_claim_the_case_it_cannot_reproduce(tmp_path):
+    """The message shipped on EVERY HIGH finding used to end "(This is the
+    spm/sha256 re-architecture pattern.)" — while this program's own measured
+    CORRECTION records that only the sha256 half reproduces: on the other
+    design it finds nothing even with every mitigation marker stripped,
+    because that datapath is a carry-save array with no `+`, `-` or `*` in it.
+    A user-facing message must not carry a claim the program has retracted."""
+    _res, f = run(tmp_path, WIDE_RIPPLE, '--strict')
+    msgs = [x['message'] for x in f if x['risk'] == 'HIGH']
+    assert msgs
+    for m in msgs:
+        assert 're-architecture pattern' not in m, m
+        # and it still says what the finding IS, and that it is a prediction
+        assert 'slow-corner (SS) timing risk' in m
+        assert 'not measured' in m
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

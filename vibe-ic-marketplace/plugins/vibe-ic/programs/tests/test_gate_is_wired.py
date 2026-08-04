@@ -249,3 +249,87 @@ def test_the_real_repo_is_consistent_with_its_own_recorded_set():
     assert giw.gates(plugin), "no gate found at all — the glob is wrong"
     assert "gate_is_wired_check" not in names, (
         "the gate that finds unwired gates must itself be wired")
+
+
+# ---- the four timing-signoff gates this change wired, on the REAL tree ----
+
+_NEWLY_WIRED = ("arith_ss_corner_risk_check",
+                "hold_area_budget_check",
+                "hold_corner_coverage_check",
+                "pnr_timing_repair_completeness_check")
+
+
+def _real_plugin():
+    plugin = PROGRAMS.parent
+    if not (plugin / "flow").is_dir():
+        pytest.skip("not running inside the plugin tree")
+    return plugin
+
+
+def _real_repo(plugin):
+    """The SAME walk `main()` does. Resolving the repo root differently gives
+    a different `tools/ci` sweep and therefore a different unwired set — which
+    is exactly how the first draft of the GROW test silently compared 61
+    against 60 and concluded the ratchet was gone."""
+    repo = plugin
+    for _ in range(6):
+        if (repo / ".git").exists() or (repo / "tools" / "ci").is_dir():
+            break
+        repo = repo.parent
+    return repo
+
+
+def test_the_shipped_register_no_longer_holds_the_four_wired_gates():
+    """A debt register may only SHRINK, and an entry that describes nothing is
+    debt the register is not carrying. These four are now named in the flow
+    yaml's gate clauses, so leaving them recorded would have the tool print
+    `Re-run with --write-baseline` on every run — a standing instruction
+    nobody executes, which is how a ratchet stops being one."""
+    plugin = _real_plugin()
+    recorded = json.loads(
+        (plugin / "programs" / "gate_is_wired_baseline.json").read_text(
+            encoding="utf-8"))
+    for name in _NEWLY_WIRED:
+        assert name not in recorded["unwired"], name
+        assert name not in recorded["skill_only"], name
+
+
+def test_the_four_are_reachable_from_an_executable_location():
+    """The register shrank because the tree changed, not because the entry was
+    deleted. Measured through the gate's own `wiring()`, whose
+    `executable_text()` strips comments and docstrings first — so a gate named
+    only in the prose beside its wiring would still read as unwired here."""
+    plugin = _real_plugin()
+    w = giw.wiring(plugin, _real_repo(plugin))
+    for name in _NEWLY_WIRED:
+        assert w[name]["executable"], (
+            f"{name} is recorded as wired but is named in no executable "
+            f"location")
+
+
+def test_the_shipped_register_still_refuses_to_GROW(tmp_path):
+    """The shrink must not have spent the ratchet. Drive the REAL tree against
+    a baseline one entry SHORTER than the truth: the tool must refuse, both in
+    check mode (a name it has never seen) and in write mode (a count that
+    grew). No file in the repo is touched — `--baseline` points elsewhere."""
+    plugin = _real_plugin()
+    now, _ = giw.unwired(plugin, _real_repo(plugin))
+    assert len(now) > 1
+    short = tmp_path / "short_baseline.json"
+    short.write_text(json.dumps({"unwired": sorted(now)[1:]}))
+
+    r = subprocess.run(
+        [sys.executable, str(GATE), "--root", str(plugin),
+         "--baseline", str(short)],
+        capture_output=True, text=True, timeout=55)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert sorted(now)[0] in r.stdout + r.stderr
+
+    r2 = subprocess.run(
+        [sys.executable, str(GATE), "--root", str(plugin),
+         "--baseline", str(short), "--write-baseline"],
+        capture_output=True, text=True, timeout=55)
+    assert r2.returncode == 1, r2.stdout + r2.stderr
+    assert "GREW" in r2.stdout + r2.stderr
+    # the refusal left the register it was pointed at untouched
+    assert json.loads(short.read_text())["unwired"] == sorted(now)[1:]

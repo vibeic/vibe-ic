@@ -101,3 +101,243 @@ class TestCli:
         rc = mod.main([str(tmp_path / "nope.tcl"), "--json", str(out)])
         assert rc == 1
         assert json.loads(out.read_text())["verdict"] == "FAIL"
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Added when this gate was first WIRED (Step 23, unconditional).
+# ═════════════════════════════════════════════════════════════════════════
+
+# The flow's own emitter writes the sign-off corner liberty and then
+# interpolates one `read_liberty` per HARD-MACRO liberty into the SAME hold
+# script, narrowing multi-corner macro libs to the TYPICAL ones on purpose.
+# The first version of this gate demanded that EVERY designator classify FF,
+# so every macro-bearing design was failed `HOLD_NOT_AT_FF ['FF','TT']` for a
+# hold sign-off that was in fact at FF. The corpus hid it: the only two runs
+# that retained the script belong to a macro-free design.
+_HOLD_TCL_WITH_MACRO = """\
+read_liberty /pdk/lib/stdcells__ff_n40C_1v95.lib
+read_liberty /proj/input/pdk_local/sram_1rw_64x32/lib/sram_1rw_64x32_tt_1p80V_25C.lib
+read_verilog top_pnr.v
+link_design top
+read_sdc constraint.sdc
+puts $_f "=== HOLD corner: process=FF liberty=/pdk/lib/stdcells__ff_n40C_1v95.lib ==="
+report_worst_slack -min
+report_checks -path_delay min
+"""
+
+
+class TestMacroLibrariesAreNotTheSignoffCorner:
+    def test_typ_macro_liberty_does_not_fail_an_ff_hold_run(self):
+        verdict, rc, report = mod.evaluate(_HOLD_TCL_WITH_MACRO)
+        assert verdict == "PASS", report
+        assert rc == 0
+
+    def test_a_declared_hold_view_outranks_other_libraries(self):
+        _v, _rc, report = mod.evaluate(_HOLD_TCL_WITH_MACRO)
+        assert report["corner_basis"] == "declared_hold_view"
+        assert report["judged_corners"] == ["FF"]
+
+    def test_no_fast_corner_anywhere_is_still_a_fail(self):
+        """The repair must not silence the defect: strip the FF liberty and
+        only slow/typical libraries feed the hold analysis."""
+        txt = _HOLD_TCL_WITH_MACRO.replace("__ff_n40C_1v95", "__ss_100C_1v60") \
+                                  .replace("process=FF", "process=SS")
+        verdict, rc, report = mod.evaluate(txt)
+        assert verdict == "FAIL"
+        assert rc == 1
+        assert report["reason"] == "HOLD_NOT_AT_FF"
+
+
+class TestDeclaredStance:
+    """The DURABLE record: `hold_process_corner` in mcorner_ocv_stance.json.
+    It survives when the Tcl is pruned from a published run, and it is what
+    the run actually decided."""
+
+    def test_ff_stance_passes(self):
+        verdict, rc, report = mod.evaluate_stance(
+            {"setup_process_corner": "SS", "hold_process_corner": "FF",
+             "multi_process_corner": True})
+        assert (verdict, rc) == ("PASS", 0)
+
+    def test_tt_stance_fails(self):
+        """The runner falls back to TT when the PDK has no fast liberty. A
+        hold role assigned to TT under-reports hold violations, and no wired
+        gate asked whether that assignment was legitimate."""
+        verdict, rc, report = mod.evaluate_stance(
+            {"setup_process_corner": "TT", "hold_process_corner": "TT",
+             "multi_process_corner": False, "report": None})
+        assert (verdict, rc) == ("FAIL", 1)
+        assert report["reason"] == "HOLD_NOT_AT_FF"
+
+    def test_no_declared_corner_is_not_checked(self):
+        verdict, rc, report = mod.evaluate_stance(
+            {"setup_process_corner": None, "hold_process_corner": None})
+        assert rc == 2
+        assert report["reason"] == "NO_DECLARED_HOLD_CORNER"
+
+    def test_unreadable_stance_is_not_checked(self):
+        verdict, rc, report = mod.evaluate_stance(None)
+        assert rc == 2
+
+
+class TestProjectDirectoryMode:
+    """rc=2 is what lets the gate be wired UNCONDITIONALLY: gating a corner
+    gate on the corner artefact is how an unreported corner became
+    indistinguishable from a met one."""
+
+    def test_project_without_any_hold_record_is_not_checked(self, tmp_path):
+        rc = mod.main([str(tmp_path)])
+        assert rc == 2
+
+    def test_a_bad_stance_fails_even_beside_a_good_tcl(self, tmp_path):
+        """WORST wins in BOTH directions. The declared field is the defective
+        one here and the script is clean; the run is still FAILed, because the
+        stance is what the run signed off with."""
+        import json
+        (tmp_path / "reports/phase3").mkdir(parents=True)
+        (tmp_path / "reports/phase3/mcorner_ocv_stance.json").write_text(
+            json.dumps({"hold_process_corner": "TT",
+                        "multi_process_corner": False, "report": None}))
+        (tmp_path / "phase3/stage3/sta").mkdir(parents=True)
+        (tmp_path / "phase3/stage3/sta/sta_mcorner_ocv_hold.tcl").write_text(
+            _FF_TCL)
+        out = tmp_path / "r.json"
+        rc = mod.main([str(tmp_path), "--json", str(out)])
+        assert rc == 1
+        rep = json.loads(out.read_text())
+        assert rep["deciding_source"] == "stance"
+        assert rep["reason"] == "HOLD_NOT_AT_FF"
+        assert rep["contradiction"] is True
+        assert {s["source"]: s["verdict"] for s in rep["sources"]} == {
+            "stance": "FAIL", "tcl": "PASS"}
+
+    def test_project_falls_back_to_the_hold_tcl(self, tmp_path):
+        import json
+        (tmp_path / "phase3/stage3/sta").mkdir(parents=True)
+        (tmp_path / "phase3/stage3/sta/sta_mcorner_ocv_hold.tcl").write_text(
+            _FF_TCL)
+        out = tmp_path / "r.json"
+        rc = mod.main([str(tmp_path), "--json", str(out)])
+        assert rc == 0
+        assert json.loads(out.read_text())["verdict"] == "PASS"
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# A DECLARED FIELD DOES NOT OUTRANK THE EVIDENCE IT CLAIMS TO SUMMARISE.
+#
+# `_discover` used to return the FIRST source it found and the stance was
+# first, so a hold script that CONTRADICTED the declared field was never
+# opened. Reproduced verbatim below: rc=0 PASS on the project directory,
+# rc=1 FAIL on the identical Tcl. Two published roots
+# (sha256/clean_run_v1422_20260715, …v1427…) carry BOTH artefacts.
+# ═════════════════════════════════════════════════════════════════════════
+
+_STANCE_SAYS_FF = {"hold_process_corner": "FF", "setup_process_corner": "SS",
+                   "multi_process_corner": True,
+                   "report": "phase3/stage3/sta/mcorner_ocv.rpt"}
+
+_TCL_SAYS_SS = """\
+# === HOLD corner: process=SS liberty=/pdk/lib/stdcells__ss_100C_1v60.lib ===
+read_liberty /pdk/lib/stdcells__ss_100C_1v60.lib
+read_verilog netlist.v
+link_design top
+report_checks -path_delay min -digits 4
+"""
+
+_TCL_SAYS_FF = _TCL_SAYS_SS.replace("__ss_100C_1v60", "__ff_n40C_1v95") \
+                           .replace("process=SS", "process=FF")
+
+
+def _project(tmp_path, *, stance=None, tcl=None):
+    import json
+    if stance is not None:
+        (tmp_path / "reports/phase3").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "reports/phase3/mcorner_ocv_stance.json").write_text(
+            json.dumps(stance))
+    if tcl is not None:
+        (tmp_path / "phase3/stage3/sta").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "phase3/stage3/sta/sta_mcorner_ocv_hold.tcl").write_text(
+            tcl)
+    return tmp_path
+
+
+class TestTheStanceCannotOutrankTheScript:
+
+    def test_the_tcl_is_still_judged_when_a_stance_exists(self, tmp_path):
+        """THE DEFECT. Pre-fix this returned rc=0 PASS on the strength of the
+        declared `hold_process_corner: "FF"` while the only liberty the hold
+        script reads is `…__ss_…` and its own banner says `process=SS`."""
+        proj = _project(tmp_path, stance=_STANCE_SAYS_FF, tcl=_TCL_SAYS_SS)
+        verdict, rc, rep = mod.judge_project(proj)
+        assert (verdict, rc) == ("FAIL", 1), rep
+        assert rep["deciding_source"] == "tcl"
+        assert rep["reason"] == "HOLD_NOT_AT_FF"
+
+    def test_the_same_tcl_alone_reaches_the_same_verdict(self, tmp_path):
+        """The two readings that disagreed pre-fix now agree — which is the
+        only way to know the project mode is reading the script at all."""
+        direct_v, direct_rc, _ = mod.evaluate(_TCL_SAYS_SS)
+        proj = _project(tmp_path, stance=_STANCE_SAYS_FF, tcl=_TCL_SAYS_SS)
+        proj_v, proj_rc, _ = mod.judge_project(proj)
+        assert (direct_v, direct_rc) == (proj_v, proj_rc) == ("FAIL", 1)
+
+    def test_the_contradiction_is_published_not_just_the_winner(self, tmp_path):
+        proj = _project(tmp_path, stance=_STANCE_SAYS_FF, tcl=_TCL_SAYS_SS)
+        _v, _rc, rep = mod.judge_project(proj)
+        assert rep["contradiction"] is True
+        assert {s["source"]: s["verdict"] for s in rep["sources"]} == {
+            "stance": "PASS", "tcl": "FAIL"}
+        assert "CONTRADICTION" in rep["message"]
+
+    def test_an_honest_stance_and_tcl_pair_still_PASSES(self, tmp_path):
+        """NEGATIVE CONTROL — the repair must not redden agreeing evidence.
+        This is the shape of the only 2 published roots that carry both."""
+        proj = _project(tmp_path, stance=_STANCE_SAYS_FF, tcl=_TCL_SAYS_FF)
+        verdict, rc, rep = mod.judge_project(proj)
+        assert (verdict, rc) == ("PASS", 0), rep
+        assert "contradiction" not in rep
+        assert [s["verdict"] for s in rep["sources"]] == ["PASS", "PASS"]
+
+    def test_a_stance_that_declares_nothing_cannot_mask_a_passing_tcl(
+            self, tmp_path):
+        """`FAIL > PASS > NOT CHECKED` is "worst of the verdicts REACHED".
+        A stance with no `hold_process_corner` reached none, so it must not
+        drag a real PASS down to rc=2 — that would discard evidence in the
+        other direction, which is the same defect mirrored."""
+        proj = _project(tmp_path, stance={"setup_process_corner": "SS"},
+                        tcl=_TCL_SAYS_FF)
+        verdict, rc, rep = mod.judge_project(proj)
+        assert (verdict, rc) == ("PASS", 0), rep
+        assert rep["deciding_source"] == "tcl"
+
+    def test_a_stance_that_declares_nothing_cannot_mask_a_failing_tcl(
+            self, tmp_path):
+        proj = _project(tmp_path, stance={"setup_process_corner": "SS"},
+                        tcl=_TCL_SAYS_SS)
+        verdict, rc, _rep = mod.judge_project(proj)
+        assert (verdict, rc) == ("FAIL", 1)
+
+    def test_discover_returns_every_source_not_the_first(self, tmp_path):
+        proj = _project(tmp_path, stance=_STANCE_SAYS_FF, tcl=_TCL_SAYS_SS)
+        assert [k for k, _p in mod._discover(proj)] == ["stance", "tcl"]
+
+    def test_neither_source_is_still_rc2(self, tmp_path):
+        verdict, rc, rep = mod.judge_project(tmp_path)
+        assert (verdict, rc) == ("NOT CHECKED", 2)
+        assert rep["reason"] == "NO_HOLD_SIGNOFF_ARTEFACT"
+        assert rep["sources"] == []
+
+    def test_the_cli_surfaces_the_worst_verdict_end_to_end(self, tmp_path,
+                                                           capsys):
+        """Through `main`, not the helper: a wiring defect in the CLI branch
+        must not hide behind a green unit test of `judge_project`."""
+        import json
+        proj = _project(tmp_path, stance=_STANCE_SAYS_FF, tcl=_TCL_SAYS_SS)
+        out = tmp_path / "r.json"
+        rc = mod.main([str(proj), "--json", str(out)])
+        assert rc == 1
+        printed = capsys.readouterr().out
+        assert "source[stance] PASS" in printed
+        assert "source[tcl] FAIL" in printed
+        assert "CONTRADICTION" in printed
+        assert json.loads(out.read_text())["contradiction"] is True

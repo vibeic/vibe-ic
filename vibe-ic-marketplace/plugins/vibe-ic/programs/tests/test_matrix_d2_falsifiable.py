@@ -406,6 +406,107 @@ def _f_pnr_bad(p: Path) -> None:
     _w(p, "phase3/stage3/extracted/top.spef", "*SPEF\n")
 
 
+def _f_pnr_tcl_hold_only(p: Path) -> None:
+    """The hold-only P&R script — the measured silicon-DOA shape.
+
+    `pnr_timing_repair_completeness_check` was wired into step 17 as a blocking
+    clause, and neither EMPTY nor PNR_BAD can redden it: it audits the P&R
+    SCRIPT, and PNR_BAD writes only DEFs. Both answer rc=2 — a disclosed skip,
+    not a falsification. MEASURED, verbatim:
+
+        EMPTY    rc 2  VACUOUS_PASS: … no OpenROAD P&R Tcl flow to audit
+                       error: phase3/stage3/pnr: not found
+        PNR_BAD  rc 2  VACUOUS_PASS: … no OpenROAD P&R Tcl flow to audit
+                       error: phase3/stage3/pnr: no pnr*.tcl in this directory
+
+    Presence alone is not enough either: a script carrying `set_wire_rc` +
+    `repair_design` + `repair_timing -setup` PASSes, which is the whole point.
+    The smallest input that reaches the verdict and fails it is a script that
+    repairs HOLD and nothing else — without `set_wire_rc` OpenSTA has no
+    per-layer R/C, so `repair_timing -setup` aborts and high-fanout nets ship
+    unbuffered. MEASURED on THIS fixture through the exact clause command:
+
+        rc 1  FAIL: … [phase3/stage3/pnr/pnr.tcl] — setup_chain=NO; hold=yes;
+              [hold_only_antipattern] script runs `repair_timing -hold` but
+              NONE of {set_wire_rc, repair_design, repair_timing -setup}
+
+    NEGATIVE CONTROL, same tree, only the script's content changed to the
+    complete chain:
+
+        rc 0  PASS: … setup_chain=yes; hold=yes; missing_required=none
+
+    so the red is the verdict and not the tree shape. The DEFs are here so the
+    fixture is a plausible post-placement tree rather than a lone Tcl; the
+    script is what the gate judges.
+    """
+    for n in ("floorplan.def", "placed.def"):
+        _w(p, f"phase3/stage3/pnr/{n}", "VERSION 5.8 ;\nEND DESIGN\n")
+    _w(p, "phase3/stage3/pnr/pnr.tcl",
+       "read_lef merged.lef\n"
+       "read_def floorplan.def\n"
+       "global_placement\n"
+       "detailed_placement\n"
+       "repair_timing -hold\n"
+       "write_def placed.def\n")
+
+
+def _f_hold_corner_contradicted(p: Path) -> None:
+    """A hold sign-off whose DECLARED corner contradicts its own script.
+
+    `hold_corner_coverage_check` was wired into step 23 as a blocking clause
+    and EMPTY answers rc=2 NOT CHECKED by design: a run that produced no hold
+    sign-off record at all has no corner to judge, and that disclosed skip is
+    what lets the clause be wired unconditionally. So the fixture has to
+    produce a hold sign-off AND make it wrong.
+
+    MEASURED, EMPTY, verbatim:
+
+        rc 2  VACUOUS_PASS: … NOT CHECKED [NO_HOLD_SIGNOFF_ARTEFACT]
+
+    It is wrong in the way that MATTERS, not the easy way. The easy fixture is
+    a stance declaring `hold_process_corner: "TT"`, which reddens through the
+    declared field alone. This one declares "FF" — the CORRECT label — beside a
+    script whose only `read_liberty` is `..._ss_...` and whose own banner says
+    `process=SS`. Until the worst-of repair, project mode returned the moment
+    the stance existed and never opened the script, and reddening this clause
+    with a bare TT stance would have proved the gate blocks while leaving the
+    arm that was actually broken — a declared field outranking the evidence it
+    summarises — unmeasured. Two published roots carry BOTH artefacts, so the
+    discarded input was not hypothetical.
+
+    MEASURED on THIS fixture through the exact clause command:
+
+        rc 1  verdict: FAIL   judged corners: ['SS'] (basis: declared_hold_view)
+              source[stance] PASS [HOLD_AT_FF]  reports/…/mcorner_ocv_stance.json
+              source[tcl] FAIL [HOLD_NOT_AT_FF] phase3/…/sta_mcorner_ocv_hold.tcl
+                                                                     <- DECIDES
+
+    TWO CONTROLS, both on this same fixture, because one alone would not
+    separate "the gate blocks" from "the repair is what blocks it":
+
+      * the stance ALONE — the input the pre-repair project mode judged, still
+        reachable as the shipped `--stance` mode:
+            rc 0  verdict: PASS   declared hold_process_corner: 'FF'
+        so this tree is exactly the false PASS, and the red below is the
+        worst-of repair doing the work.
+      * the script rewritten to AGREE with the label (ff liberty, banner
+        `process=FF`), everything else untouched:
+            rc 0  verdict: PASS
+        so agreeing evidence is not reddened.
+    """
+    _w(p, "reports/phase3/mcorner_ocv_stance.json",
+       {"hold_process_corner": "FF", "setup_process_corner": "SS",
+        "multi_process_corner": True,
+        "report": "phase3/stage3/sta/mcorner_ocv.rpt"})
+    _w(p, "phase3/stage3/sta/sta_mcorner_ocv_hold.tcl",
+       "# === HOLD corner: process=SS "
+       "liberty=/pdk/lib/stdcells__ss_100C_1v60.lib ===\n"
+       "read_liberty /pdk/lib/stdcells__ss_100C_1v60.lib\n"
+       "read_verilog top_pnr.v\n"
+       "link_design top\n"
+       "report_checks -path_delay min -digits 4\n")
+
+
 def _f_gds_bad(p: Path) -> None:
     """A 0-byte GDS deliverable and a 0-byte member inside the handoff pack."""
     _w(p, "phase3/stage4/gds/top.gds", "")
@@ -539,6 +640,8 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "SYNTH_BAD": _f_synth_bad,
     "SDC_BAD": _f_sdc_bad,
     "PNR_BAD": _f_pnr_bad,
+    "PNR_TCL_HOLD_ONLY": _f_pnr_tcl_hold_only,
+    "HOLD_CORNER_CONTRADICTED": _f_hold_corner_contradicted,
     "GDS_BAD": _f_gds_bad,
     "GDS_NO_LABELS": _f_gds_no_labels,
     "MFG_BAD": _f_mfg_bad,
@@ -583,6 +686,22 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # would go unproven while the register recorded the clause as falsifiable.
     ("3", "clock_domain_reg_crossing_check . --json "
           "reports/phase2/gates/cdc_reg_crossing.json"): "RTL_BAD",
+    # Wired into step 17 as a BLOCKING clause with this branch. It audits the
+    # P&R SCRIPT, so neither EMPTY nor PNR_BAD (DEFs only) reaches its verdict
+    # — both answer rc=2 NOT CHECKED. The fixture supplies the hold-only
+    # script, which is the shape the gate exists to refuse.
+    ("17", "pnr_timing_repair_completeness_check phase3/stage3/pnr --json "
+           "reports/phase3/pnr/timing_repair_completeness.json"):
+        "PNR_TCL_HOLD_ONLY",
+    # Wired into step 23 as a BLOCKING clause with this branch. EMPTY answers
+    # rc=2 NOT CHECKED by design — a run with no hold sign-off record has no
+    # corner to judge, and that tier is what lets the clause be unconditional.
+    # The fixture states a hold sign-off whose declared corner CONTRADICTS its
+    # own script, so the arm it reddens is the declared-field-over-evidence
+    # one rather than the easier bare-bad-label one.
+    ("23", "hold_corner_coverage_check . --json "
+           "reports/phase3/sta/hold_corner_coverage.json"):
+        "HOLD_CORNER_CONTRADICTED",
     ("4", "vacuous_testbench_check . --json "
           "reports/phase2/gates/vacuous_testbench.json"): "TB_BAD",
     ("4", "professional_tb_check . --json "
@@ -1205,6 +1324,87 @@ def test_d2_fixture_names_all_resolve():
     assert not unused, (
         f"fixtures defined but assigned to no clause: {unused} — an unused "
         f"fixture is untested scaffolding")
+
+
+#: The two clauses this branch wired into a BLOCKING slot, with the fixture
+#: that reddens each. Kept beside the controls below so a fixture that stops
+#: reddening for the RIGHT reason is caught here as well as in the matrix.
+_WIRED_BLOCKING = (
+    ("17", "pnr_timing_repair_completeness_check phase3/stage3/pnr --json "
+           "reports/phase3/pnr/timing_repair_completeness.json",
+     "PNR_TCL_HOLD_ONLY"),
+    ("23", "hold_corner_coverage_check . --json "
+           "reports/phase3/sta/hold_corner_coverage.json",
+     "HOLD_CORNER_CONTRADICTED"),
+)
+
+
+def _tier(project: Path, command: str) -> Tuple[str, str]:
+    """The matrix's own consumer, so a control cannot pass by a softer path."""
+    _prepare_report_dirs(project, command)
+    passed, out = FCC._check_program_exit_zero(project, command)
+    return _classify(passed, out), out
+
+
+def test_d2_the_two_newly_wired_blocking_clauses_redden_and_only_on_content(
+        tmp_path, _gate_timeout):
+    """The claims written into the two new fixtures' docstrings, RUN.
+
+    A fixture docstring that narrates a measurement nobody re-runs is the
+    "baseline that outlives its truth" shape at the granularity of one comment.
+    Each arm below is the smallest edit to the SAME tree that flips the verdict,
+    so a red that came from the tree's shape — a missing directory, an
+    unparseable file, an argument error — cannot be mistaken for the gate's
+    verdict.
+    """
+    for key, command, fixture in _WIRED_BLOCKING:
+        red, out_red = _tier(_build_project(tmp_path, f"red{key}", fixture),
+                             command)
+        assert red == RED, (
+            f"step {key}: fixture {fixture} no longer reddens "
+            f"{command!r} -> {red} :: {out_red[-300:]}")
+        empty, out_empty = _tier(_build_project(tmp_path, f"e{key}", "EMPTY"),
+                                 command)
+        assert empty != RED, (
+            f"step {key}: EMPTY now reddens {command!r}, so the dedicated "
+            f"fixture is measuring nothing the bare tree does not :: "
+            f"{out_empty[-300:]}")
+
+    # ── step 17, negative control: same tree, complete repair chain ──────
+    p17 = _build_project(tmp_path, "ctl17", "PNR_TCL_HOLD_ONLY")
+    (p17 / "phase3/stage3/pnr/pnr.tcl").write_text(
+        "read_lef merged.lef\nread_def floorplan.def\nglobal_placement\n"
+        "set_wire_rc -layer met3\nestimate_parasitics -placement\n"
+        "repair_design\nrepair_timing -setup\nrepair_timing -hold\n"
+        "detailed_placement\nwrite_def placed.def\n", encoding="utf-8")
+    tier, out = _tier(p17, _WIRED_BLOCKING[0][1])
+    assert tier == PASS, (
+        "the complete setup-repair chain must PASS on the identical tree, "
+        f"else the red above is the tree and not the script :: {out[-300:]}")
+
+    # ── step 23, control A: the stance ALONE — the input the pre-repair
+    #    project mode judged, still reachable as the shipped --stance mode.
+    p23 = _build_project(tmp_path, "ctl23a", "HOLD_CORNER_CONTRADICTED")
+    tier, out = _tier(
+        p23, "hold_corner_coverage_check --stance "
+             "reports/phase3/mcorner_ocv_stance.json")
+    assert tier == PASS, (
+        "the declared stance of this fixture must read PASS on its own — that "
+        "is what makes the tree a false PASS before the worst-of repair, and "
+        f"what the matrix red proves the repair now catches :: {out[-300:]}")
+
+    # ── step 23, control B: same stance, script rewritten to AGREE ───────
+    p23b = _build_project(tmp_path, "ctl23b", "HOLD_CORNER_CONTRADICTED")
+    (p23b / "phase3/stage3/sta/sta_mcorner_ocv_hold.tcl").write_text(
+        "# === HOLD corner: process=FF "
+        "liberty=/pdk/lib/stdcells__ff_n40C_1v95.lib ===\n"
+        "read_liberty /pdk/lib/stdcells__ff_n40C_1v95.lib\n"
+        "read_verilog top_pnr.v\nlink_design top\n"
+        "report_checks -path_delay min -digits 4\n", encoding="utf-8")
+    tier, out = _tier(p23b, _WIRED_BLOCKING[1][1])
+    assert tier == PASS, (
+        "agreeing evidence must not be reddened: worst-of is worst-of the "
+        f"verdicts REACHED, not a second way to fail :: {out[-300:]}")
 
 
 def test_d2_unreddened_reasons_are_substantive():
