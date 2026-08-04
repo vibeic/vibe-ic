@@ -3694,10 +3694,18 @@ def step_l10_unit_tb_gen(project: Path,
     """ORGANIC #797 — run the testbench_gen PRODUCER so L10 `functional_vector`
     cases get unit-TB skeletons under sim/tb/ (the id-substring trace evidence
     the Step-4 l10_tb_conformance gate counts). The producer was dormant — never
-    called by any one-shot runner. KIND-SCOPED to functional_vector so a
-    `cmd_response` case (opcode/summary oracle) never gets manufactured evidence
-    (§4.05 no-leak). SKIPs cleanly when there is no L10 / no functional_vector
-    case (arithmetic-DEFER / no-L10 ICs are unaffected)."""
+    called by any one-shot runner. The substance-floor SCAFFOLD is KIND-SCOPED
+    so a `cmd_response` case (opcode/summary oracle) never gets manufactured
+    evidence (§4.05 no-leak). SKIPs cleanly when there is no L10 / nothing this
+    producer can write (arithmetic-DEFER / no-L10 ICs are unaffected).
+
+    ORGANIC #761 — every SKIP here now states the LAYER fact, not the FILTER
+    fact. `no functional_vector L10 cases — nothing to produce` was true of the
+    filter and false of the layer: 95 cases existed, `l10_tb_conformance_check`
+    graded all 95, and nothing in the run connected the two numbers. The detail
+    line carries the case count, the kind histogram, this producer's own scope
+    and the named consequence, so the Step-4 FAIL cannot read as an extraction
+    gap when it is a scope mismatch."""
     t0 = time.time()
     try:
         import sys as _sys
@@ -3709,11 +3717,23 @@ def step_l10_unit_tb_gen(project: Path,
                           f"producer unavailable: {e}")
     _tb_report: dict = {}
     try:
-        emitted = _tbg.emit_unit_tbs(project, top_name, kind="functional_vector",
+        emitted = _tbg.emit_unit_tbs(project, top_name,
+                                     kind=_tbg.DEFAULT_SCAFFOLD_KIND,
                                      report=_tb_report)
     except Exception as e:
         return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
                           f"L10 unreadable: {e}")
+
+    def _consequence(scope: dict) -> str:
+        """#761 — name the CONSUMER and what it will do with the cases this
+        producer did not write a TB for. A SKIP that does not say who grades
+        the remainder is what made the two scopes look like one."""
+        ungraded = int(scope.get("total") or 0)
+        if not ungraded:
+            return ""
+        return (f"; all {ungraded} will be graded by l10_tb_conformance_check "
+                f"and any without a TB will FAIL Step 4")
+
     if emitted == -1:
         return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
                           "no L10_TEST_CASES.json — nothing to produce")
@@ -3724,18 +3744,31 @@ def step_l10_unit_tb_gen(project: Path,
         # commented out, which fabricated Step-4 evidence. Emitting nothing
         # leaves the downstream l10_tb_conformance gate to fail honestly on
         # missing coverage rather than pass on manufactured coverage.
+        _scope = _tb_report.get("scope") or {}
         return StepResult(
             "l10_unit_tb_gen", "SKIP", time.time() - t0,
-            f"no TB emitted (refused to fabricate): {_tb_report.get('reason')}")
+            f"no TB emitted (refused to fabricate): {_tb_report.get('reason')}"
+            + (f" [{_tbg.describe_scope(_scope)}{_consequence(_scope)}]"
+               if _scope else ""))
     if emitted == 0:
-        return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
-                          "no functional_vector L10 cases — nothing to produce")
+        _scope = _tb_report.get("scope") or {}
+        return StepResult(
+            "l10_unit_tb_gen", "SKIP", time.time() - t0,
+            (f"no TB produced — {_tbg.describe_scope(_scope)}"
+             f"{_consequence(_scope)}")
+            if _scope else "no L10 test case — nothing to produce")
     out_dir = _pl.sim_dir(project) / "tb"
+    _scope = _tb_report.get("scope") or {}
+    _total = int(_scope.get("total") or 0)
     return StepResult(
         "l10_unit_tb_gen", "PASS", time.time() - t0,
-        f"emitted {emitted} functional_vector unit TB(s) instantiating DUT "
-        f"{_tb_report.get('dut_module')!r} under {out_dir} for Step-4 "
-        f"l10_tb_conformance evidence",
+        # #761 — report emitted AGAINST the layer total. "emitted N TB(s)" alone
+        # is the same half-a-fact the SKIP message used to be: N of how many?
+        f"emitted {emitted}"
+        + (f"/{_total}" if _total else "")
+        + f" unit TB(s) instantiating DUT {_tb_report.get('dut_module')!r} "
+        f"under {out_dir} for Step-4 l10_tb_conformance evidence"
+        + (f"; {_tbg.describe_scope(_scope)}" if _scope else ""),
         [str(out_dir)])
 
 

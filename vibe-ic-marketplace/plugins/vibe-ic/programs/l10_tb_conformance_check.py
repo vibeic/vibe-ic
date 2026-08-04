@@ -81,8 +81,38 @@ try:
 except Exception:  # pragma: no cover — never let a helper import break the gate
     _vtb = None
 
+# ORGANIC #761 — this gate and the TB PRODUCER read the SAME L10 layer with two
+# private scopes: the producer filtered on the single literal `functional_vector`
+# and SKIPped ("no functional_vector L10 cases — nothing to produce"), while this
+# gate graded every case in the layer and FAILed all 95. Neither statement was
+# false; together they were unreadable, because the SKIP stated a fact about the
+# FILTER in the shape of a fact about the LAYER.
+#
+# The scope is now DECLARED once, in the producer (`testbench_gen.SCAFFOLD_KINDS`
+# / `producer_scope`), and imported here. This gate's VERDICT is unchanged — it
+# still grades every case and a case with no TB evidence still FAILs — but its
+# output now NAMES BOTH SCOPES, so a Step-4 FAIL that is a scope mismatch can no
+# longer read as an extraction gap. Narrowing this gate to the producer's scope
+# was considered and rejected: a design that ships no testbench for 95 declared
+# cases must still be marked down.
+try:
+    import testbench_gen as _tbg
+except Exception:  # pragma: no cover — never let a helper import break the gate
+    _tbg = None
+
 
 # ----- helpers ------------------------------------------------------
+
+
+#: ORGANIC #761 — the keys an L10 may carry its case list under, taken from the
+#: PRODUCER so the two readers cannot disagree about where the cases ARE while
+#: agreeing about how to grade them. The producer read only `test_cases`/`cases`
+#: and this gate read all five, so an L10 keyed `vectors` was 0 cases to one and
+#: N to the other — the same defect this issue is about, one field over. The
+#: literal is the import-failure fallback only.
+_L10_CASE_LIST_KEYS = tuple(
+    getattr(_tbg, "L10_CASE_LIST_KEYS", None)
+    or ("test_cases", "cases", "vectors", "cmd_response", "tests"))
 
 
 def load_l10(path: str) -> List[Dict[str, Any]]:
@@ -90,7 +120,7 @@ def load_l10(path: str) -> List[Dict[str, Any]]:
     # Accept either a flat list or a dict with "test_cases" / "cases" / "vectors"
     if isinstance(data, list):
         return data
-    for key in ("test_cases", "cases", "vectors", "cmd_response", "tests"):
+    for key in _L10_CASE_LIST_KEYS:
         if key in data and isinstance(data[key], list):
             return data[key]
     raise ValueError("L10 JSON did not contain a recognisable test-case list")
@@ -253,13 +283,20 @@ def is_verification_intent(case: Dict[str, Any]) -> bool:
 # evidence never reaches this waiver at all).
 CAP_CPU_FUNCTIONAL_ORACLE = "cap:cpu_functional_oracle"
 
-_FUNCTIONAL_VECTOR_KINDS = frozenset({
-    "functional_vector",
-    "functional",
-    "functional_test",
-    "instruction_test",
-    "cpu_functional",
-})
+# ORGANIC #761 — ONE definition, imported from the producer. The literal below is
+# the import-failure fallback only, and is the same five tokens; a divergence
+# between this set and `testbench_gen.SCAFFOLD_KINDS` is exactly the two-private-
+# scopes defect #761 was filed for, so
+# `tests/test_issue761_l10_producer_checker_scope.py` asserts they are equal by
+# importing and running both modules.
+_FUNCTIONAL_VECTOR_KINDS = frozenset(
+    getattr(_tbg, "SCAFFOLD_KINDS", None) or {
+        "functional_vector",
+        "functional",
+        "functional_test",
+        "instruction_test",
+        "cpu_functional",
+    })
 
 
 def is_functional_vector(case: Dict[str, Any]) -> bool:
@@ -514,6 +551,40 @@ def analog_skip_anchor(project_root: Optional[str], anchor_path: Optional[str]) 
 # ----- CLI ----------------------------------------------------------
 
 
+def producer_scope_report(
+        cases: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """ORGANIC #761 — the TB PRODUCER's own scope record over the SAME case
+    list this gate grades, read from the producer's single definition
+    (`testbench_gen.producer_scope`). None when the producer module is not
+    importable — the gate then runs exactly as before, minus the scope
+    annotation; it NEVER changes a verdict on the strength of this record."""
+    if _tbg is None:
+        return None
+    try:
+        return _tbg.producer_scope(cases)
+    except Exception:  # pragma: no cover — a helper must not break the gate
+        return None
+
+
+def scaffold_kinds_of(scope: Optional[Dict[str, Any]]) -> Optional[frozenset]:
+    """The producer's scaffold kind scope from a `producer_scope` record."""
+    if not scope:
+        return None
+    kinds = scope.get("scaffold_kinds")
+    return frozenset(kinds) if kinds else None
+
+
+def count_producer_scope_gap(results: List[Dict[str, Any]]) -> int:
+    """ORGANIC #761 — FAILing cases the TB producer was never scoped to write a
+    testbench for. These are STILL failures (this gate does not stop caring);
+    the count exists so the disagreement between the two readers of L10 is a
+    first-class number in the artefact instead of something a reader has to
+    reconstruct from a SKIP line and a gate JSON."""
+    return sum(1 for r in results
+               if r.get("status") == "fail"
+               and r.get("producer_scaffold_scope") == "out")
+
+
 def evaluate(
     cases: List[Dict[str, Any]],
     tb_blob: str,
@@ -522,6 +593,7 @@ def evaluate(
     analog_anchor: Optional[str] = None,
     cpu_oracle_anchor_desc: Optional[str] = None,
     project_root: Optional[str] = None,
+    producer_scaffold_kinds: Optional[frozenset] = None,
 ) -> Tuple[List[Dict[str, Any]], int, int]:
     """Return (results, ok_count, fail_count).
 
@@ -547,13 +619,32 @@ def evaluate(
     (anything NOT `verification_intent`) with no tb evidence STILL FAILs even
     under --skip-analog, and an UNANCHORED verification_intent case (no
     reviewable bridge) also still FAILs — the relaxation is kind-scoped and
-    anchor-gated so it can never mask a missing digital testbench."""
+    anchor-gated so it can never mask a missing digital testbench.
+
+    ORGANIC #761 — ``producer_scaffold_kinds`` is the TB producer's own scaffold
+    scope (`testbench_gen.SCAFFOLD_KINDS`, passed in by ``main``). It is pure
+    ANNOTATION: each result gains ``kind`` and ``producer_scaffold_scope``
+    ("in"/"out"), and an out-of-scope FAILure gains a `NO PRODUCER:` evidence
+    line naming both scopes. NO verdict reads it — passing it or omitting it
+    yields byte-identical ``status`` for every case. That is deliberate: the
+    fix for two readers disagreeing about one layer's scope is to make the
+    disagreement legible, not to let the consumer stop grading."""
     results: List[Dict[str, Any]] = []
     ok_count = 0
     fail_count = 0
     checklist_gap_count = 0
     waiver_active = bool(skip_analog) and bool(analog_anchor)
     cpu_waiver_active = bool(cpu_oracle_anchor_desc)
+
+    def _scaffold_scope(case: Dict[str, Any]) -> Optional[str]:
+        """ORGANIC #761 — "in" / "out" of the TB producer's scaffold scope, or
+        None when the producer's scope could not be read. ANNOTATION ONLY: it
+        is recorded on the result and never consulted by the pass/fail
+        decision, so it cannot become a back door that waives a case."""
+        if producer_scaffold_kinds is None:
+            return None
+        return "in" if case_kind(case) in producer_scaffold_kinds else "out"
+
     for c in cases:
         case_id = str(c.get("id", c.get("name", "")))
         category = c.get("category", c.get("type", c.get("kind", "")))
@@ -596,6 +687,7 @@ def evaluate(
                     "checklist_gap": False,
                     "review_required": False,
                     "capability_gap": None,
+                    "producer_scaffold_scope": _scaffold_scope(c),
                 })
                 ok_count += 1
             else:
@@ -614,6 +706,7 @@ def evaluate(
                     "checklist_gap": True,
                     "review_required": True,
                     "capability_gap": None,
+                    "producer_scaffold_scope": _scaffold_scope(c),
                 })
                 checklist_gap_count += 1
             continue
@@ -692,10 +785,26 @@ def evaluate(
                     f"deferred (capability gap); reviewable anchor: "
                     f"{cpu_oracle_anchor_desc}"
                 ]
+        # ORGANIC #761 — record WHICH scope this case fell in, and, when it
+        # FAILs outside the producer's scaffold scope, say so in the case's own
+        # evidence list. The verdict is untouched: `status` was decided above
+        # and this only appends the sentence a reader previously had to
+        # reconstruct from a SKIP line one step up the pipeline.
+        _scope_side = _scaffold_scope(c)
+        if status == "fail" and _scope_side == "out":
+            evidence = list(evidence) + [
+                f"NO PRODUCER: kind={case_kind(c) or '(none)'} is outside the TB "
+                f"producer's scaffold scope "
+                f"({', '.join(sorted(producer_scaffold_kinds))}); this gate "
+                f"grades every L10 case, so the case FAILs — no testbench was "
+                f"written for it and none was fabricated (ORGANIC #761)"
+            ]
         results.append(
             {
                 "id": case_id,
                 "category": category,
+                "kind": case_kind(c),
+                "producer_scaffold_scope": _scope_side,
                 "evidence": evidence,
                 "pass": ok,
                 "status": status,
@@ -869,11 +978,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     # cpu_functional_oracle_waiver_check.
     cpu_anchor = cpu_oracle_anchor(project_root)
 
+    # ORGANIC #761 — read the PRODUCER's own scope over this same case list, so
+    # the artefact and the stderr can name BOTH scopes. Annotation only: the
+    # verdict below is computed exactly as before.
+    prod_scope = producer_scope_report(cases)
+
     results, ok_count, fail_count = evaluate(
         cases, tb_blob, summary,
         skip_analog=args.skip_analog, analog_anchor=analog_anchor,
         cpu_oracle_anchor_desc=cpu_anchor, project_root=project_root,
+        producer_scaffold_kinds=scaffold_kinds_of(prod_scope),
     )
+    scope_gap = count_producer_scope_gap(results)
     waive_count = count_waived(results)
     checklist_gap_count = count_checklist_gaps(results)
     waiver_caps = sorted({
@@ -891,6 +1007,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "capability_gaps": waiver_caps or None,
         "analog_anchor": analog_anchor,
         "cpu_oracle_anchor": cpu_anchor,
+        # ORGANIC #761 — the OTHER reader of this same L10 layer. `producer_scope`
+        # is the TB producer's own record (case total, kind histogram, the kinds
+        # its scaffold covers); `producer_scope_gap` counts the FAILures that are
+        # cases no producer in the flow was scoped to write a testbench for.
+        # A non-zero gap does NOT soften the verdict — it explains it.
+        "producer_scope": prod_scope,
+        "producer_scope_gap": scope_gap,
         # #206 — the substance verdict the gate judged on: whether the sim tree
         # actually drives the DUT, and (when it does not) the offending vacuous
         # testbench files. Emitted so this verdict can be cross-checked from the
@@ -906,6 +1029,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     if fail_count:
         # A genuine FAIL dominates — even if some cases were waived, an
         # un-waivable digital miss is still a hard FAIL (§4.05 NO-LEAK).
+        #
+        # ORGANIC #761 — when the failures are cases the TB producer was never
+        # scoped to write for, say BOTH scopes here, at the point of the FAIL.
+        # The verdict is unchanged (fail_count still dominates, rc still 1);
+        # what changes is that the reader no longer has to pair this number with
+        # a `SKIP  no functional_vector L10 cases` line further up the run to
+        # find out that the two readers of one layer disagreed about its scope.
+        if scope_gap:
+            hist = (prod_scope or {}).get("kind_histogram") or {}
+            scaffold = (prod_scope or {}).get("scaffold_kinds") or []
+            print(
+                f"[l10-tb-conformance] SCOPE DISAGREEMENT — the L10 layer "
+                f"carries {len(cases)} case(s) of kind(s) "
+                f"{{{', '.join(f'{k} {v}' for k, v in hist.items())}}}; the TB "
+                f"producer (testbench_gen) auto-emits a scaffold ONLY for "
+                f"{{{', '.join(scaffold)}}}. This gate grades ALL {len(cases)}. "
+                f"{scope_gap} of the {fail_count} failure(s) are cases NO "
+                f"producer in the flow was scoped to write a testbench for — "
+                f"they FAIL because no testbench exists, not because one was "
+                f"written and did not pass. Fix the scope, not the gate: a "
+                f"design that ships no testbench for a declared case is still "
+                f"marked down.",
+                file=sys.stderr,
+            )
         if vacuous_sim_tree:
             print(
                 f"[l10-tb-conformance] VACUOUS sim tree — none of "
