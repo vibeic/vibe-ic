@@ -32,6 +32,15 @@ Usage:
                   [--spare-density 0.02]   # Design-for-ECO spare-cell density
 
 Exit codes: 0 PASS / PASS_WITH_WAIVERS, 1 FAIL, 2 IO/arg error.
+
+Environment:
+    VIBEIC_ALLOW_STALE_PRODUCER_CACHE=1
+        Reuse cached synth/PnR/GDS artefacts even when they were produced by a
+        DIFFERENT build of this runner. OFF by default, because that reuse is
+        how a landed recipe fix becomes a silent no-op — see
+        `_producer_cache_valid_for`. When set, every reused step's `detail`
+        carries the token PRODUCER-STALE, so the reuse is visible in the
+        published report and can never look like a fresh measurement.
 """
 from __future__ import annotations
 
@@ -10414,6 +10423,183 @@ def _pnr_cache_valid_for(out_dir: Path, die_um: str,
     return (False, f"cached run requested die={cached['die_um']} "
             f"util={cached['util']}{_eff}; now requested die={die_um} "
             f"util={util:g} — re-running to apply the new geometry")
+
+
+# ── PRODUCER IDENTITY — which BUILD of the recipe wrote a cached artefact ────
+# The phase-3 synth/PnR/GDS caches were keyed on the DESIGN INPUTS only:
+#   * `_netlist_matches_liberty` — the PDK the netlist was mapped to (PR-A3)
+#   * `_stale_rtl_by_fingerprint` / `_stale_rtl_vs_netlist` — the RTL (#289/#349)
+#   * `_pnr_cache_valid_for` — the requested floorplan geometry (#593/#596)
+# Every one of those asks "did the INPUT change?". None asks "did the RECIPE
+# change?" — i.e. is the cached artefact the product of THIS build of the
+# runner, or of some earlier one. So a landed fix to the synth/PnR/GDS recipe
+# is a SILENT NO-OP on any tree that already holds an artefact: the flow reuses
+# the artefact the OLD code produced and reports PASS for code that never ran.
+#
+# MEASURED, three independent times in one convergence round:
+#   * a landed tie-cell fix left two steps failing with the exact message it
+#     was written to eliminate, until the netlist was moved aside BY HAND;
+#   * three staged files had to be deleted by hand before fixed emitters ran
+#     at all;
+#   * "synth netlist already present ... (skipped re-run to preserve
+#     provenance)" was followed by PnR reading the PREVIOUS DAY's DEF.
+# The failure mode is worse than a wrong number: it makes "we landed the fix,
+# re-run to confirm" structurally unable to confirm anything, so a whole round
+# of re-runs measures the code it was supposed to replace.
+#
+# The key is the producer's IDENTITY, recorded at write time and compared at
+# reuse time:
+#   plugin_version  the released identity of the recipe. Within one version
+#                   the recipe is fixed BY DEFINITION (it is the shipped
+#                   artefact); across versions it may have changed, so a
+#                   difference invalidates. This is the key that closes the
+#                   measured harm — every landed fix ships under a new version.
+#   recipe_sha256   sha256 of the runner source that AUTHORS the synth/PnR/GDS
+#                   recipes (the yosys script, the OpenROAD Tcl and the
+#                   stream-out are all built as f-strings in this one file).
+#                   Catches an in-tree edit that has not been version-bumped —
+#                   the working-copy case a released version number cannot see.
+# RESIDUAL, disclosed rather than hidden: an in-tree edit to a HELPER module
+# (`synth_frontend.py`, `_yosys_stat.py`, `floorplan_contract.py`, …) with no
+# version bump and no edit to this file is NOT detected. Released trees are
+# fully covered because any landed change bumps the version.
+#
+# FAILS CLOSED, in both directions: no record (every artefact predating this
+# change), an unreadable record, or an unresolvable CURRENT identity all mean
+# "the producer cannot be proven to be this build" → re-run. Reuse requires
+# positive proof, never the absence of evidence.
+# Keyed by KIND ("synth" / "pnr" / "gds"). `pnr` and `gds` share pnr_dir but
+# are recorded SEPARATELY: a run that re-derived the DEF and reused the GDS is
+# exactly the #593 shape, and one shared record could not express it.
+_PRODUCER_SIDECAR = "producer_identity.json"
+_STALE_PRODUCER_ENV = "VIBEIC_ALLOW_STALE_PRODUCER_CACHE"
+
+
+def _plugin_version() -> str:
+    """The vibe-ic plugin version that this runner belongs to, or "" when it
+    cannot be resolved. Delegates to `plugin_manifest_discovery`, the repo's
+    ONE plugin-version reader — a second reader here is how the two drift
+    apart (#309/#312/#348). "" means UNKNOWN and is never treated as a match.
+    """
+    try:
+        import plugin_manifest_discovery as _pmd  # noqa: PLC0415
+        v = _pmd.read_plugin_version(Path(__file__).resolve().parent.parent)
+        return "" if v is None else str(v)
+    except Exception:
+        return ""
+
+
+def _recipe_sha256() -> str:
+    """sha256 of the runner source that authors the synth/PnR/GDS recipes, or
+    "" when unreadable. "" means UNKNOWN and never matches."""
+    try:
+        return hashlib.sha256(
+            Path(__file__).resolve().read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _producer_identity_now() -> Dict[str, str]:
+    return {"plugin_version": _plugin_version(),
+            "recipe_sha256": _recipe_sha256()}
+
+
+def _write_producer_identity(out_dir: Path, kind: str) -> None:
+    """Stamp the build that just produced ``kind``'s artefact in ``out_dir``.
+
+    Best-effort, exactly like the sibling sidecars: a stamp failure must never
+    fail a step that succeeded. The reader treats an absent stamp as
+    'producer unknown' → re-run, which is the honest reading and is also the
+    pre-change behaviour's superset (it can only cause MORE work, never a
+    reuse that was not already happening)."""
+    try:
+        p = out_dir / _PRODUCER_SIDECAR
+        doc: Dict[str, Any] = {}
+        if p.is_file():
+            try:
+                loaded = json.loads(p.read_text())
+                if isinstance(loaded, dict):
+                    doc = loaded
+            except (OSError, ValueError):
+                doc = {}
+        rec = _producer_identity_now()
+        rec["written_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                           time.gmtime())
+        doc[kind] = rec
+        out_dir.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+    except Exception:  # nosec — sidecar is best-effort
+        pass
+
+
+def _read_producer_identity(out_dir: Path,
+                            kind: str) -> Optional[Dict[str, str]]:
+    """The recorded producer of ``kind``'s artefact, or None when there is no
+    usable record (absent file, unreadable JSON, or no entry for this kind)."""
+    p = out_dir / _PRODUCER_SIDECAR
+    if not p.is_file():
+        return None
+    try:
+        doc = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    rec = doc.get(kind)
+    return rec if isinstance(rec, dict) else None
+
+
+def _producer_cache_valid_for(out_dir: Path, kind: str) -> Tuple[bool, str]:
+    """May a cached ``kind`` artefact in ``out_dir`` be reused by THIS build?
+
+    Returns (valid, disclosure). The disclosure is carried into the step's own
+    ``detail`` — not only to stderr — so the published report says which build
+    produced a reused artefact. A banner in a log is lost; the JSON report is
+    what every downstream gate and every human reads.
+
+    chip-AGNOSTIC: plugin version + source digest, no design/PDK/vendor token.
+    """
+    now = _producer_identity_now()
+    cur_v, cur_r = now["plugin_version"], now["recipe_sha256"]
+    rec = _read_producer_identity(out_dir, kind)
+
+    def _deny_unless_forced(msg: str) -> Tuple[bool, str]:
+        if os.environ.get(_STALE_PRODUCER_ENV) == "1":
+            # The reuse still happens, but it can never LOOK fresh: the token
+            # PRODUCER-STALE is in the step detail, in the published JSON.
+            return (True, f"PRODUCER-STALE reuse FORCED by "
+                          f"{_STALE_PRODUCER_ENV}=1 — {msg}")
+        return (False, msg)
+
+    if not cur_v or not cur_r:
+        return _deny_unless_forced(
+            f"the producer of the cached {kind} artefact cannot be compared: "
+            f"THIS build's identity is unresolvable "
+            f"(plugin_version={cur_v or '<unknown>'}, "
+            f"recipe_sha256={(cur_r or '<unknown>')[:12]}) — re-running "
+            f"rather than reusing an artefact whose provenance cannot be "
+            f"established")
+    if rec is None:
+        return _deny_unless_forced(
+            f"the cached {kind} artefact carries NO producer stamp — it was "
+            f"written by an unknown build of the recipe (any run predating "
+            f"{_PRODUCER_SIDECAR}); re-running so this build's recipe "
+            f"actually applies")
+    old_v = str(rec.get("plugin_version") or "")
+    old_r = str(rec.get("recipe_sha256") or "")
+    if old_v == cur_v and old_r == cur_r:
+        return (True, f"producer unchanged (plugin {cur_v}, "
+                      f"recipe {cur_r[:12]})")
+    why = []
+    if old_v != cur_v:
+        why.append(f"plugin {old_v or '<unknown>'} -> {cur_v}")
+    if old_r != cur_r:
+        why.append(f"recipe {(old_r or '<unknown>')[:12]} -> {cur_r[:12]}")
+    return _deny_unless_forced(
+        f"the cached {kind} artefact was produced by a DIFFERENT build "
+        f"({'; '.join(why)}) — re-running so the landed recipe changes "
+        f"actually execute instead of being reported as a PASS they never "
+        f"ran")
 
 
 def _extract_overutil_pct(log_text: str) -> Optional[float]:
@@ -34013,6 +34199,17 @@ def main() -> int:
                   f" — re-running synth. Reusing it would PnR the PREVIOUS "
                   f"design and report PASS for RTL that was never "
                   f"synthesised.", file=sys.stderr)
+        # PRODUCER-IDENTITY key (call site 1 of 3). Every key above asks "did
+        # the INPUT change?"; none asks "did the RECIPE change?". A landed
+        # synth fix is a silent no-op on a tree that already holds a netlist —
+        # measured, and it cost a whole convergence round. See
+        # `_producer_cache_valid_for`.
+        _synth_dir = _pl.synth_dir(project)
+        _synth_prod_ok, _synth_prod_msg = _producer_cache_valid_for(
+            _synth_dir, "synth")
+        if _nl_pdk_ok and not _synth_prod_ok:
+            _nl_pdk_ok = False
+            print(f"[synth] {_synth_prod_msg}", file=sys.stderr)
         if _nl_pdk_ok:
             # The reuse decision answers "is this netlist CURRENT?"
             # (PDK-keyed, RTL fingerprint, mtime) and never "is it a file
@@ -34037,10 +34234,17 @@ def main() -> int:
                       file=sys.stderr)
             plan.append(StepResult(
                 "synth", "PASS", 0.0,
-                f"netlist already present: {netlist_existing.name} (skipped re-run to preserve provenance){_reuse_note}",
+                f"netlist already present: {netlist_existing.name} (skipped re-run to preserve provenance; {_synth_prod_msg}){_reuse_note}",
                 [str(netlist_existing)]))
         else:
             plan.append(step_synth(project, effective_top, pdk, args.container))
+            # Stamp the producer at the CALL SITE, not inside the step:
+            # step_gds alone has two PASS returns and step_synth/step_pnr have
+            # many, so a per-return stamp is a class of missed sites waiting to
+            # happen. One stamp per producing call covers every internal path.
+            # Appends NOTHING, so the `plan[-1]` idiom below is untouched.
+            if plan[-1].status == "PASS":
+                _write_producer_identity(_synth_dir, "synth")
         if plan[-1].status == "PASS":
             # ── canonical Step 11 (DFT / stuck-at ATPG) ────────────────────
             # The phase-2/phase-3 ORDERING repair. Placed HERE because this is
@@ -34085,6 +34289,14 @@ def main() -> int:
             _pnr_out = _pl.pnr_dir(project)
             _cache_ok, _cache_msg = _pnr_cache_valid_for(
                 _pnr_out, args.die_um, args.util)
+            # PRODUCER-IDENTITY key (call site 2 of 3). Folded into
+            # `_cache_ok` rather than added as a separate conjunct so the ONE
+            # variable the reuse decision reads carries BOTH keys — a second
+            # conjunct is how a later edit reinstates the geometry-only test.
+            _pnr_prod_ok, _pnr_prod_msg = _producer_cache_valid_for(
+                _pnr_out, "pnr")
+            _cache_ok = _cache_ok and _pnr_prod_ok
+            _cache_msg = f"{_cache_msg}; {_pnr_prod_msg}"
             if def_existing.is_file() and _cache_ok:
                 plan.append(StepResult(
                     "pnr", "PASS", 0.0,
@@ -34098,6 +34310,10 @@ def main() -> int:
                 plan.append(step_pnr(project, effective_top, pdk, args.container,
                                      args.die_um, args.util,
                                      spare_density=args.spare_density))
+                # Appends NOTHING — the provenance snapshot below still finds
+                # the PnR row where it expects it.
+                if plan[-1].status == "PASS":
+                    _write_producer_identity(_pnr_out, "pnr")
         # ── PROVENANCE SNAPSHOT of the PnR outcome ─────────────────────────
         # Everything downstream (the #527 SPEF repair, the DRV escalation and
         # — critically — the ORGANIC #593 stale-GDS guard) used to read
@@ -34201,13 +34417,23 @@ def main() -> int:
             _pnr_out = _pl.pnr_dir(project)
             _cache_ok, _ = _pnr_cache_valid_for(
                 _pnr_out, args.die_um, args.util)
+            # PRODUCER-IDENTITY key (call site 3 of 3). Recorded under its OWN
+            # kind, not the PnR one: the stream-out recipe (grid snap, density
+            # fill, label restore, substance gate) can change while the router
+            # does not, and a shared record could not express that.
+            _gds_prod_ok, _gds_prod_msg = _producer_cache_valid_for(
+                _pnr_out, "gds")
+            _cache_ok = _cache_ok and _gds_prod_ok
             if gds_existing.is_file() and _cache_ok and not _pnr_reran:
                 plan.append(StepResult(
                     "gds", "PASS", 0.0,
-                    f"GDS already present: {gds_existing.name} (skipped re-run)",
+                    f"GDS already present: {gds_existing.name} (skipped "
+                    f"re-run; {_gds_prod_msg})",
                     [str(gds_existing)]))
             else:
                 plan.append(step_gds(project, effective_top, pdk, args.container))
+                if plan[-1].status == "PASS":
+                    _write_producer_identity(_pnr_out, "gds")
         plan.append(step_drc(project, effective_top, pdk, args.container))
         # ORGANIC #590 — hand step_lvs the pnr outcome so an upstream
         # mid-tcl death SKIPs the compare instead of mislabelling the
@@ -34358,6 +34584,14 @@ def main() -> int:
         "project": str(project),
         "pdk": pdk.name,
         "top": args.top_name,
+        # WHICH BUILD produced this record. Reading a published report, there
+        # was previously no way to tell whether a run exercised the code the
+        # reader believes it did — and with the pre-change caches a run could
+        # reuse artefacts from an arbitrarily older build while every row read
+        # PASS. Additive field; nothing consumes it yet, and the per-step
+        # `detail` remains the authority for a REUSED artefact's producer,
+        # which may differ from this one.
+        "producer": _producer_identity_now(),
         "steps": [asdict(s) for s in plan],
         # #437(f): the headline DERIVES FROM the full-flow completion
         # audit — the orchestrator never reports PASS* beside an audit

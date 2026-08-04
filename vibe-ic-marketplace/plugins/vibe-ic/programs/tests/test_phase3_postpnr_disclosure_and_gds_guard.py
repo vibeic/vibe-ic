@@ -70,6 +70,15 @@ def _project(tmp_path: Path, *, cached_die: str, cached_util: float) -> Path:
         "DIEAREA ( 0 0 ) ( 1233000 1233000 ) ;\nPINS 0 ;\nEND PINS\n")
     (pnr / f"{TOP}.gds").write_text("STALE GDS FROM THE PREVIOUS DIE\n")
     R._write_pnr_args_sidecar(pnr, cached_die, cached_util)
+    # The fixture's premise is "a PREVIOUS RUN produced these", and a previous
+    # run is now IDENTIFIED — the cache is keyed on the producing build as well
+    # as on the design inputs (see `_producer_cache_valid_for`). Stamping the
+    # current build keeps this file testing what it was written to test, the
+    # #593 GEOMETRY guard, instead of tripping on the producer guard first.
+    # test_phase3_cache_producer_identity.py owns the producer key's coverage.
+    R._write_producer_identity(synth, "synth")
+    R._write_producer_identity(pnr, "pnr")
+    R._write_producer_identity(pnr, "gds")
     return tmp_path
 
 
