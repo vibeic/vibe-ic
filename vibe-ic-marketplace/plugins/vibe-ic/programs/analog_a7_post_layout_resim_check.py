@@ -24,6 +24,12 @@ Failure rules:
   A7_POSTSIM_INVALID_JSON   — present but unparsable
   A7_POSTSIM_NO_SPECS       — neither specs[] nor pre/post dict
   A7_POSTSIM_DELTA_TOO_BIG  — abs(delta_pct) > --max-delta-pct
+  A7_POSTSIM_ALL_ZERO_DELTA_UNEVIDENCED
+                            — every compared spec's post value is IDENTICAL to
+                              its pre value and no post-layout artefact is
+                              named that resolves on disk. The rule, and what
+                              it deliberately does not catch, live at
+                              `_analog_a_check_common.pre_vs_post_zero_delta`.
   A7_POSTSIM_NO_A4_SIM      — A4 says SPICE never ran (escape link)
   A7_DESIGN_CONTENT_UNDECLARED
                             — nothing says what circuit was re-simulated
@@ -55,7 +61,7 @@ from _analog_a_check_common import (
     BLOCK_LIST_ABSENT_REASON, CONTENT_GATE_OF_RECORD_ARTEFACT,
     CONTENT_STRUCTURE_ONLY,
     CONTENT_UNDISCLOSED, PRE_VS_POST_DERIVED_ARTEFACT, STRUCTURE_ONLY_TOKEN,
-    pre_vs_post_content,
+    pre_vs_post_content, pre_vs_post_zero_delta, zero_delta_refusal_detail,
     load_block_list, select_blocks, make_argparser, vacuous_pass,
     artefact_missing_for_block, emit_pass, emit_fail,
     emit_incomplete,
@@ -166,10 +172,20 @@ def _a4_simulator_ran(project: Path, block: str) -> Optional[bool]:
     return any(f is not False for f in flags)
 
 
-def _check_specs(specs: list) -> list[float]:
-    """Return list of |delta_pct| values for entries that carry both
-    pre_value and post_value. Skips ill-formed entries."""
+def _check_specs(specs: list) -> tuple[list[float], list[tuple]]:
+    """``(deltas, pairs)`` for entries that carry both pre_value and
+    post_value. Skips ill-formed entries.
+
+    `deltas` keeps this gate's historical reading, which PREFERS a `delta_pct`
+    the artefact declares about itself over the one the values imply. `pairs`
+    is the raw ``(pre, post)`` sequence, carried separately because the shared
+    zero-delta rule must read the VALUES: a rule reading the declared field
+    would let an author write a non-zero `delta_pct` beside a copied pair and
+    put this gate back into disagreement with the gate the flow declares over
+    the same file.
+    """
     deltas: list[float] = []
+    pairs: list[tuple] = []
     for s in specs:
         if not isinstance(s, dict):
             continue
@@ -182,6 +198,8 @@ def _check_specs(specs: list) -> list[float]:
             post_f = float(post)
         except (TypeError, ValueError):
             continue
+        if pre_f != 0:
+            pairs.append((pre_f, post_f))
         if "delta_pct" in s:
             try:
                 deltas.append(abs(float(s["delta_pct"])))
@@ -192,7 +210,7 @@ def _check_specs(specs: list) -> list[float]:
             deltas.append(float("inf"))
             continue
         deltas.append(abs(100.0 * (post_f - pre_f) / pre_f))
-    return deltas
+    return deltas, pairs
 
 
 def _check_block(project: Path, block: str, max_delta_pct: float
@@ -230,8 +248,9 @@ def _check_block(project: Path, block: str, max_delta_pct: float
 
     specs = data.get("specs")
     deltas: list[float]
+    pairs: list[tuple]
     if isinstance(specs, list) and specs:
-        deltas = _check_specs(specs)
+        deltas, pairs = _check_specs(specs)
     else:
         # Flat pre/post layout: {"pre": {...}, "post": {...}}
         pre = data.get("pre")
@@ -246,7 +265,7 @@ def _check_block(project: Path, block: str, max_delta_pct: float
                                   "post_value": float(post[k])})
                 except (TypeError, ValueError):
                     continue
-            deltas = _check_specs(built)
+            deltas, pairs = _check_specs(built)
             if not built:
                 return "FAIL", [{
                     "block": block, "rule": "A7_POSTSIM_NO_SPECS",
@@ -275,6 +294,23 @@ def _check_block(project: Path, block: str, max_delta_pct: float
             "rel_path": rel,
             "detail": (f"{len(bad)}/{len(deltas)} spec(s) drift > "
                        f"{max_delta_pct}% (max={max(deltas):.2f}%)"),
+        }]
+
+    # ── did a SECOND simulation happen at all? ────────────────────────────
+    # Asked after every value rule above — a comparison whose specs really
+    # moved cannot be degenerate, so none of them compete with this one — and
+    # BEFORE the content question, which names a shallower cause: what circuit
+    # was re-simulated does not matter yet if the post column is the pre
+    # column. The rule itself lives at ONE site, shared with the gate the FLOW
+    # declares for this step, so the two cannot drift into disagreeing about
+    # this one file.
+    zd = pre_vs_post_zero_delta(path.parent, pairs, project=project,
+                                doc=data)
+    if not zd.certifies:
+        return "FAIL", [{
+            "block": block, "rule": "A7_POSTSIM_ALL_ZERO_DELTA_UNEVIDENCED",
+            "rel_path": rel,
+            "detail": zero_delta_refusal_detail(zd),
         }]
 
     # ── the certification question, asked LAST ────────────────────────────

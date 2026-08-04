@@ -21,7 +21,11 @@ Exit codes:
         and the artefact chain names what was compared. PASS_STRUCTURE_ONLY —
         also rc 0, in its own disclosed tier — when what was compared is a
         library default and the chain says so.
-    1 = FAIL (severe degradation, or nothing anywhere names what was compared)
+    1 = FAIL (severe degradation; or every compared spec compared a number
+        against ITSELF and no post-layout artefact is named that resolves on
+        disk — `PRE_VS_POST_ALL_ZERO_DELTA_UNEVIDENCED`, the rule and its
+        deliberate limits live at `_analog_a_check_common
+        .pre_vs_post_zero_delta`; or nothing anywhere names what was compared)
     2 = VACUOUS: nothing was examined — no analog/ directory, or no
         pre_vs_post.json at all, so no parasitic degradation was ever
         compared. #521: both used to be rc 0, on 199 of the 200 tracked
@@ -175,6 +179,11 @@ def run_audit(project: Path) -> AuditResult:
     structure_only: List[str] = []
     design_bound: List[str] = []
     undisclosed: List[str] = []
+    # Blocks whose every compared spec compared a number against ITSELF, with
+    # no post-layout artefact named that resolves on disk. See
+    # `_analog_a_check_common.pre_vs_post_zero_delta` for the rule and for what
+    # it deliberately does not catch.
+    unevidenced_zero: List[str] = []
     # Blocks whose pre_vs_post.json parsed as JSON but exposed NO container
     # under a key this gate reads. Kept so the zero-compared verdict can name
     # the cause (schema drift) instead of implying the file held no data.
@@ -184,6 +193,10 @@ def run_audit(project: Path) -> AuditResult:
         block = pvp_path.parent.name
         block_errors = 0
         block_specs = 0
+        # The (pre, post) pairs THIS gate actually compared, handed to the
+        # shared zero-delta rule so both gates over this artefact stay bounded
+        # by the same reading of it.
+        block_pairs: List[tuple] = []
         try:
             data = json.loads(pvp_path.read_text(errors="replace"))
         except (json.JSONDecodeError, OSError):
@@ -232,6 +245,7 @@ def run_audit(project: Path) -> AuditResult:
 
             total_specs += 1
             block_specs += 1
+            block_pairs.append((pre_val, post_val))
             pct = abs(post_val - pre_val) / abs(pre_val) * 100
             max_degradation = max(max_degradation, pct)
 
@@ -273,6 +287,26 @@ def run_audit(project: Path) -> AuditResult:
         # degradation, or with nothing comparable in it at all, already has a
         # deeper finding of its own and that finding is the one to fix first.
         if block_errors or block_specs == 0:
+            continue
+
+        # ── did a SECOND measurement happen at all? ───────────────────────
+        # Asked after the degradation tiers — a block whose specs really moved
+        # cannot be degenerate, so the tiers and this rule never compete — and
+        # BEFORE the content question, because it names the deeper cause: what
+        # circuit was compared does not matter yet if the post column is the
+        # pre column. A reader told "say what you compared" about a file that
+        # compared nothing twice would fix the wrong thing first.
+        zd = _acc.pre_vs_post_zero_delta(pvp_path.parent, block_pairs,
+                                         project=project, doc=data)
+        if not zd.certifies:
+            unevidenced_zero.append(block)
+            result.findings.append(Finding(
+                rule="PRE_VS_POST_ALL_ZERO_DELTA_UNEVIDENCED",
+                severity="ERROR",
+                message=(f"Block '{block}': "
+                         + _acc.zero_delta_refusal_detail(zd)),
+                file=str(pvp_path),
+            ))
             continue
 
         bounded = _acc.pre_vs_post_content(pvp_path.parent)
@@ -342,7 +376,7 @@ def run_audit(project: Path) -> AuditResult:
                 file=str(pvp_path),
             ))
 
-    if errors or undisclosed:
+    if errors or undisclosed or unevidenced_zero:
         result.passed = False
 
     # ORGANIC-20260606 #438(c): pre_vs_post.json existed (past the
@@ -385,6 +419,7 @@ def run_audit(project: Path) -> AuditResult:
         "design_bound_blocks": design_bound,
         "structure_only_blocks": structure_only,
         "undisclosed_blocks": undisclosed,
+        "unevidenced_zero_delta_blocks": unevidenced_zero,
         "verdict_tier": verdict_tier,
         "pass": result.passed,
     }

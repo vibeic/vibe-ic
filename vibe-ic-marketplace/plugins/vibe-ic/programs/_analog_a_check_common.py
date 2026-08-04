@@ -640,6 +640,254 @@ def pre_vs_post_content(block_dir) -> BoundedContent:
         [d / PRE_VS_POST_DERIVED_ARTEFACT])
 
 
+# ── WHEN A COMPARISON COMPARES EVERY NUMBER AGAINST ITSELF ────────────────
+# THE RULE, with no tool, step or block name in it:
+#
+#   A measurement that reports NO CHANGE AT ALL, on every quantity it measured,
+#   has produced the one result that is indistinguishable from not having
+#   measured a second time. It may certify only if it NAMES the second
+#   measurement's own artefact, and that artefact RESOLVES ON THE DISK the gate
+#   is reading. A named file that is not there is a claim, not evidence.
+#
+# WHY NO EXISTING RULE CAN SEE IT. The consumer of this artefact is a
+# DEGRADATION gate: it computes `|post - pre| / |pre|` and tiers the answer.
+# Fed a file whose post column is a COPY of its pre column it can only ever
+# compute 0 %, which is its MOST ACCEPTABLE tier — so the copied artefact scores
+# strictly better than every honest one, and the gate is at its weakest exactly
+# where it is asked to mean the most. The zero-compared rule does not see it
+# either: a copy is not `items_compared == 0`, it is N comparisons of a number
+# against itself, and it reports N. Nor does the content rule above: that one
+# asks WHAT was compared, and the copy answers it perfectly well — the circuit
+# is named, its baseline is design-bound, and both halves of every row are that
+# circuit's. What is missing is not the subject, it is the SECOND MEASUREMENT.
+#
+# MEASURED, on a converged tree whose `post_value` equalled `pre_value` on all
+# nine specs and whose own note said the post column was inherited:
+#
+#     the gate the flow declares     rc 0  PASS  — 9 specs, max degradation 0.0 %
+#     the gate the step runner runs  rc 0  PASS  — 1/1 block(s) clean
+#
+# WHY THE TRIGGER IS EXACTLY ZERO AND NOTHING WIDER — the narrowness is the
+# deliberate part, and it is a measurement rather than a preference:
+#
+#   * A WIDER TRIGGER WOULD NEED A THRESHOLD, and a threshold is the heuristic
+#     this rule exists not to be. "Every delta is suspiciously small" cannot be
+#     stated without picking a number that some honest layout is under.
+#   * THE ONE THRESHOLD-FREE WIDENING DOES NOT EXIST IN FLOATING POINT. "Every
+#     spec drifted by the SAME amount" sounds exact and is not: measured on this
+#     repo's own shared cross-gate fixture, two specs both authored to drift
+#     1 % compute to 1.0000000000000009 % and 0.9999999999999963 %. An equality
+#     test over those never fires; a tolerance test is a threshold again.
+#
+# SO, PLAINLY, WHAT THIS DOES NOT CATCH: a fabricator who perturbs the post
+# column instead of copying it — writes 0.0001 %, or any other non-zero
+# difference, on every spec — produces numbers this rule cannot distinguish
+# from a measurement, because at that point the artefact is not a copy of
+# anything and nothing in the file is self-refuting. Catching THAT needs the
+# evidence requirement to be UNCONDITIONAL rather than triggered, which is a
+# different change with a different blast radius: it fails every honest artefact
+# whose post column came from a modelled parasitic bump rather than an extracted
+# netlist, and those exist on disk today and disclose themselves honestly. What
+# this rule does close is the case where the artefact's OWN NUMBERS say no
+# second measurement happened — and that case cannot be argued about.
+#
+# WHY THE EVIDENCE MUST RESOLVE. A string is free. Requiring the named artefact
+# to be a real, non-empty file inside the project raises the price of the copy
+# from "write a note" to "produce the extraction", and it is the same shape as
+# every other rule here: a claim is graded against something a producer actually
+# wrote, never against itself.
+
+#: The keys a post-layout comparison may name its second measurement under.
+#: `post_layout_file` is the spelling the authoring skill's own documented
+#: example uses; the others name the extraction directly. Read as a WHITELIST,
+#: for the same reason `content_disclosed` is one.
+POST_LAYOUT_EVIDENCE_KEYS = (
+    "extracted_netlist",
+    "post_layout_netlist",
+    "post_layout_corner_results",
+    "post_layout_file",
+)
+
+#: The object producers in this tree already stamp their provenance record
+#: into — the same `_provenance` convention `NETLIST_CONTENT_KEYS` reads one
+#: artefact over. Nested first, top level second; a second convention for the
+#: same kind of claim is how two readers of one record come to disagree.
+PROVENANCE_KEY = "_provenance"
+
+
+class PostLayoutEvidence(NamedTuple):
+    """What a comparison artefact NAMED as its post-layout measurement, and
+    which of those names is a file on disk.
+
+    ``resolved``  the first named artefact that resolves, or ``None``.
+    ``key``       the key path that named it (e.g. ``_provenance.
+                  extracted_netlist``), or ``None``.
+    ``rejected``  ``(key, raw, why)`` for every name that did NOT resolve, so a
+                  finding can say what was claimed instead of only that nothing
+                  was.
+    """
+    resolved: Optional[Path]
+    key: Optional[str]
+    rejected: Tuple[Tuple[str, str, str], ...]
+
+
+def _evidence_claims(doc) -> List[Tuple[str, str]]:
+    """Ordered ``(key_path, raw_value)`` claims of post-layout evidence."""
+    out: List[Tuple[str, str]] = []
+    prov = doc.get(PROVENANCE_KEY) if isinstance(doc, dict) else None
+    for prefix, obj in ((f"{PROVENANCE_KEY}.", prov), ("", doc)):
+        if not isinstance(obj, dict):
+            continue
+        for k in POST_LAYOUT_EVIDENCE_KEYS:
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                out.append((prefix + k, v.strip()))
+            elif isinstance(v, (list, tuple)):
+                for i, e in enumerate(v):
+                    if isinstance(e, str) and e.strip():
+                        out.append((f"{prefix}{k}[{i}]", e.strip()))
+    return out
+
+
+def _resolve_evidence(raw: str, block_dir: Path,
+                      project: Optional[Path]) -> Tuple[Optional[Path], str]:
+    """``(path, "")`` when *raw* names real post-layout evidence, else
+    ``(None, reason)``.
+
+    Every disqualifier below is a way of naming something that is NOT a second
+    measurement, and each was reachable: a path that is simply absent; a file
+    created empty to satisfy an existence check; a path outside the project,
+    which would let any file anywhere on the host stand in; and the two
+    artefacts of the comparison ITSELF — the comparison document and the
+    pre-layout baseline it is compared against. Neither of those is post-layout
+    evidence, and both are guaranteed to exist wherever this rule runs.
+    """
+    p = Path(raw)
+    cands: List[Path] = [p] if p.is_absolute() else [block_dir / raw]
+    if not p.is_absolute() and project is not None:
+        cands.append(Path(project) / raw)
+
+    hit: Optional[Path] = None
+    for cand in cands:
+        try:
+            rp = cand.resolve()
+        except OSError:                                   # pragma: no cover
+            continue
+        if rp.is_file():
+            hit = rp
+            break
+    if hit is None:
+        return None, "no such file"
+
+    try:
+        if hit.stat().st_size <= 0:
+            return None, "resolves to an EMPTY file"
+    except OSError:                                       # pragma: no cover
+        return None, "unreadable"
+
+    if project is not None:
+        try:
+            hit.relative_to(Path(project).resolve())
+        except ValueError:
+            return None, "resolves OUTSIDE the project"
+
+    for own, what in ((PRE_VS_POST_DERIVED_ARTEFACT,
+                       "the comparison artefact itself"),
+                      (CONTENT_GATE_OF_RECORD_ARTEFACT,
+                       "the PRE-layout baseline it is compared against")):
+        try:
+            if hit == (Path(block_dir) / own).resolve():
+                return None, f"resolves to {what}"
+        except OSError:                                   # pragma: no cover
+            continue
+    return hit, ""
+
+
+def post_layout_evidence(block_dir, project=None,
+                         doc=None) -> PostLayoutEvidence:
+    """THE post-layout-evidence rule for `pre_vs_post.json`, for every gate
+    that certifies it. *block_dir* is the per-block analog directory; *doc* is
+    the already-parsed artefact when the caller has it.
+    """
+    d = Path(block_dir)
+    if doc is None:
+        try:
+            doc = json.loads((d / PRE_VS_POST_DERIVED_ARTEFACT).read_text(
+                encoding="utf-8", errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            doc = {}
+    rejected: List[Tuple[str, str, str]] = []
+    for key, raw in _evidence_claims(doc):
+        got, why = _resolve_evidence(raw, d, project)
+        if got is not None:
+            return PostLayoutEvidence(got, key, tuple(rejected))
+        rejected.append((key, raw, why))
+    return PostLayoutEvidence(None, None, tuple(rejected))
+
+
+class ZeroDeltaVerdict(NamedTuple):
+    """Whether a comparison compared every number against itself, and whether
+    it named post-layout evidence that resolves.
+
+    ``certifies`` is False for exactly one combination — degenerate AND
+    unevidenced — so an honest all-zero measurement that carries its provenance
+    still passes, and a non-degenerate one is untouched.
+    """
+    degenerate: bool
+    compared: int
+    evidence: PostLayoutEvidence
+
+    @property
+    def certifies(self) -> bool:
+        return (not self.degenerate) or self.evidence.resolved is not None
+
+
+def pre_vs_post_zero_delta(block_dir, pairs, project=None,
+                           doc=None) -> ZeroDeltaVerdict:
+    """THE zero-delta rule for `pre_vs_post.json`, for every gate that
+    certifies it.
+
+    *pairs* is the ``(pre, post)`` sequence the CALLING gate actually compared,
+    so the two gates over this artefact stay bounded by the same reading of it.
+    The comparison is DEGENERATE when at least one pair was compared and NO
+    pair's post value differs from its pre value.
+
+    Computed from the VALUES, never from a `delta_pct` the artefact declares
+    about itself: one of the two gates prefers the declared field, so a rule
+    reading it would let an author write `delta_pct: 1.7` beside a copied pair
+    and put the two gates back into disagreement about one file.
+    """
+    seq = [(a, b) for a, b in pairs]
+    degenerate = bool(seq) and all(b == a for a, b in seq)
+    ev = (post_layout_evidence(block_dir, project=project, doc=doc)
+          if degenerate else PostLayoutEvidence(None, None, ()))
+    return ZeroDeltaVerdict(degenerate, len(seq), ev)
+
+
+def zero_delta_refusal_detail(verdict: ZeroDeltaVerdict) -> str:
+    """The ONE sentence both gates refuse with, so a reader who sees it from
+    either of them is told the same thing and sent to the same fix."""
+    ev = verdict.evidence
+    if ev.rejected:
+        claimed = "; ".join(f"`{k}` -> `{raw}` ({why})"
+                            for k, raw, why in ev.rejected)
+        said = (f"the artefact NAMES post-layout evidence that does not "
+                f"resolve: {claimed}")
+    else:
+        said = (f"the artefact names no post-layout evidence at all "
+                f"(looked for {list(POST_LAYOUT_EVIDENCE_KEYS)}, at "
+                f"`{PROVENANCE_KEY}.<key>` and at the top level)")
+    return (f"every one of the {verdict.compared} compared spec(s) has a post "
+            f"value IDENTICAL to its pre value, so the measured degradation is "
+            f"0.0 % everywhere — the one result a copy of the pre-layout column "
+            f"produces, and the most acceptable tier this gate has — and "
+            f"{said}. An all-zero comparison is a legitimate measurement only "
+            f"when it can name the post-layout artefact its post column was "
+            f"simulated from and that artefact is on disk; point one of those "
+            f"keys at the extracted netlist (or the post-layout corner result) "
+            f"and this certifies.")
+
+
 #: The sidecar the A3 producer writes BESIDE the netlist, and the key path to
 #: the record inside it. Nothing writes JSON into a SPICE deck, so the whole
 #: answer for `<block>.sp` is this file's — the same reason the hardmacro

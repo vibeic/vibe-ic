@@ -100,6 +100,45 @@ is not counted. A file in which NO metric is comparable FAILs
 `PRE_VS_POST_ZERO_COMPARED` — a comparison gate must never report PASS having
 compared nothing.
 
+### Naming the post-layout measurement (required when every delta is zero)
+
+If **every** compared metric's post value is exactly equal to its pre value,
+the artefact must NAME the post-layout artefact its post column was simulated
+from, and that artefact must exist on disk. Otherwise both gates over this file
+FAIL `*_ALL_ZERO_DELTA_UNEVIDENCED`.
+
+This is not a style rule. A degradation gate fed a post column copied from the
+pre column can only ever compute 0 %, which is its most acceptable tier — so a
+copy scores better than every honest comparison, and `PRE_VS_POST_ZERO_COMPARED`
+does not see it (a copy is N comparisons of a number against itself, not zero
+comparisons). An all-zero result that carries its provenance is a legitimate
+(if surprising) measurement and still passes.
+
+Accepted evidence keys, read at `_provenance.<key>` and at the top level:
+
+| key | what it should point at |
+|---|---|
+| `extracted_netlist` | `<block>_extracted.spice` from step 1 |
+| `post_layout_netlist` | same, alternative spelling |
+| `post_layout_corner_results` | `post_layout_corner_results.json` from step 2 |
+| `post_layout_file` | either of the above (the spelling used in the example) |
+
+```json
+{
+  "_provenance": {"extracted_netlist": "ldo_1v8_extracted.spice"},
+  "comparisons": { "...": {} }
+}
+```
+
+Relative paths resolve against the block directory, then the project root. The
+named file must be non-empty, inside the project, and must not be
+`pre_vs_post.json` itself or the pre-layout `corner_results.json` it is compared
+against — neither of those is a post-layout measurement.
+
+If the layout is a placement-only PV vehicle and no extraction was run, do NOT
+copy the pre-layout column into the post column: A7 has not happened, and an
+artefact that says it has is worse than an absent one.
+
 ## Degradation thresholds
 
 Enforced by `programs/analog_pre_vs_post_layout_check.py` (single source of
