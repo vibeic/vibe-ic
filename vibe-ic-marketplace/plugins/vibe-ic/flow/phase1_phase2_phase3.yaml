@@ -1081,7 +1081,52 @@ steps:
         # That same discard is why `reports/phase3/sta/pre_pnr_summary.json`
         # above — a required_output whose ONLY declared producer is this line
         # — was never written by anything, on any run.
-        - program_exit_zero: "sta_report_check . --mode sta --json reports/phase3/sta/pre_pnr_summary.json"
+        #
+        # STEP-SCOPED, for the same reason and by the same mechanism as step
+        # 21's router-DRC gate below. `eda_report_audit` discovers reports by
+        # project-wide rglob with no relationship to the step asking, and STA
+        # mode globs `*sta*.rpt`/`*timing*.rpt`/`*STA*.rpt`/`*timing*.log` —
+        # which matches EVERY STA artefact the whole flow ever writes. The
+        # `--under` seam that ends this landed with the DRC fix and was wired
+        # for DRC only: before this change all 10 `--under` occurrences in this
+        # file were DRC, and both STA call sites were project-wide.
+        #
+        # MEASURED, on the published run `benchmark-data/ic/sha256/
+        # clean_run_v1427_20260715`: this PRE-LAYOUT gate discovered 13 files
+        # and reported STA_REAL_VIOLATION_FOUND — sourced from
+        # `phase3/stage3/sta/sta_mcorner_ocv.rpt` (step 23's sign-off corner
+        # report, setup -67.61 ns), `sta_mcorner_ocv_posteco.rpt` (step 32's
+        # POST-ECO artefact) and `reports/phase3/aging_sta.rpt`. Step 10's own
+        # declared report is clean. A pre-layout gate was being failed by a
+        # post-ECO artefact, and `pre_pnr_summary.json` and
+        # `post_route_summary.json` came out BYTE-IDENTICAL because both gates
+        # read the same 13 files. Scoped, this gate reads 2 (the declared
+        # report and the `steps/10_*/` symlink to it) and rc goes 1 -> 0.
+        #
+        # The scope names the ONE artefact this step declares. The canonical
+        # per-step mirror `steps/10_*/pre_pnr_timing.rpt` is a symlink to it and
+        # `_in_scope` resolves before comparing, so it needs no second `--under`
+        # (this is why files_found is 2, not 1). `pre_pnr_power_preview.rpt` is
+        # deliberately out: it is advisory (see required_outputs above) and STA
+        # mode excludes `power`-named reports anyway.
+        #
+        # BLAST RADIUS, measured over the 52 phase-3 roots under
+        # `benchmark-data` (every directory carrying a `phase3/`, the same
+        # enumeration shape step 21 used): 13 roots change this gate's rc.
+        # 11 move 0 -> 1 and 2 move 1 -> 0.
+        #   * The 11 are roots that carry NO `phase3/stage3/sta/
+        #     pre_pnr_timing.rpt` at all and passed today on ANOTHER step's STA
+        #     report. rc 1 with SCOPE_NOT_FOUND is the honest verdict, and it
+        #     changes no step verdict: the `files_exist` clause immediately
+        #     above already fails on the same absent file, so step 10 is
+        #     already MISSING/FAIL on all 11.
+        #   * The 2 are `benchmark-data/ic/sha256/clean_run_v142{2,7}_20260715`,
+        #     whose step 10 moves FAIL -> PASS. That is the correct verdict and
+        #     it launders nothing: their step 23 stays FAIL on the real corner
+        #     violations (`post_route_signoff_corner_check` -8.830 / -1.710 ns,
+        #     `sta_corner_record_completeness_check` -67.610 / -51.460 ns) and
+        #     both runs stay `overall: FAIL`.
+        - program_exit_zero: "sta_report_check . --mode sta --under phase3/stage3/sta/pre_pnr_timing.rpt --json reports/phase3/sta/pre_pnr_summary.json"
     blocks_on: [9]
 
   - id: 11
@@ -2342,7 +2387,29 @@ steps:
         # survived only because the wrapper discarded the caller's argv, which
         # is also why the `reports/phase3/sta/post_route_summary.json`
         # required_output above had no producer anywhere in the plugin.
-        - program_exit_zero: "sta_report_check . --mode sta --json reports/phase3/sta/post_route_summary.json"
+        #
+        # STEP-SCOPED — see step 10 for the mechanism and the measurement.
+        # This clause is the NOMINAL-corner gate; the comment directly below
+        # says so in its own words ("the nominal-corner gate above never
+        # consumes the ABSOLUTE worst-setup / worst-hold slack across ALL
+        # sign-off corners"). Unscoped it was silently doing the multi-corner
+        # job too, by accident, over every STA report in the project —
+        # including step 10's pre-layout report and step 32's POST-ECO
+        # `sta_mcorner_ocv_posteco.rpt`. That is why this gate and step 10's
+        # produced byte-identical summaries on a real run.
+        #
+        # WHAT THIS LICENSES, stated before the change and then verified:
+        # the multi-corner responsibility moves entirely onto the two clauses
+        # below, which is where the flow already declared it. VERIFIED per
+        # root, not assumed — on both `benchmark-data/ic/sha256/
+        # clean_run_v142{2,7}_20260715` this clause moves rc 1 -> 0 and step 23
+        # STAYS FAIL, because `post_route_signoff_corner_check` returns rc 1
+        # ("setup worst-slack -8.830 / -1.710 ns at the sign-off (max-RC)
+        # corner is VIOLATED") and `sta_corner_record_completeness_check`
+        # returns rc 1 ("SIGN-OFF corner 'SS' ... setup -67.610 / -51.460 ns").
+        # No root in the corpus moves step 23 from FAIL to PASS. If a future
+        # root ever does, the fix is wrong and must be reverted, not waived.
+        - program_exit_zero: "sta_report_check . --mode sta --under phase3/stage3/sta/post_route_timing.rpt --json reports/phase3/sta/post_route_summary.json"
         # #147 — the nominal-corner gate above never consumes the ABSOLUTE
         # worst-setup / worst-hold slack across ALL sign-off corners, so a slow
         # (max-RC) corner setup violation could ship as a PASS while the flow's

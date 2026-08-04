@@ -25776,11 +25776,31 @@ def _step37_declare_streamout_gds_provenance(project: Path, top: str) -> None:
 # the condition's false branch: with no multicorner report `check()` returns
 # NOT_APPLICABLE → rc 0, i.e. exactly what the unrun conditional gate produced.
 # Measured on all 14 run-roots; the 12 without a multicorner report all return 0.
+#
+# STEP SCOPE — THE THIRD CALL SITE, and the one that would have made a
+# yaml-only fix a no-op. `sta_signoff` here writes
+# `reports/phase3/sta/post_route_summary.json`, which is the SAME artefact
+# step 23's yaml clause writes. Scoping only the yaml would have left this
+# executor discovering project-wide and overwriting the scoped verdict with an
+# unscoped one on every real run — the #755 shape ("fixed one site" is not
+# "fixed the class"). The `--under` here is byte-identical to step 23's, and
+# `test_sta_gate_step_scope.py` asserts the two cannot drift apart.
+#
+# `em_signoff` is deliberately NOT scoped in this change. EM mode has its own
+# discovery-collision question and its own blast radius, and bundling it would
+# have shipped a measurement this change did not make.
 # ---------------------------------------------------------------------------
+
+#: The `--under` scope step 23's yaml clause declares, kept here so the runner's
+#: inline invocation of the same gate reads the same artefacts. Any change must
+#: be made in both places; the test named above fails if they diverge.
+_STEP23_STA_SCOPE = ("--under", "phase3/stage3/sta/post_route_timing.rpt")
+
 _DECLARED_SIGNOFF_GATES = (
     # (step name, program, output path relative to <project>, extra argv)
     ("sta_signoff", "sta_report_check.py",
-     "reports/phase3/sta/post_route_summary.json", ("--mode", "sta")),
+     "reports/phase3/sta/post_route_summary.json",
+     ("--mode", "sta") + _STEP23_STA_SCOPE),
     ("sta_corner", "post_route_signoff_corner_check.py",
      "reports/phase3/sta/post_route_signoff_corner.json", ()),
     ("sta_record", "sta_corner_record_completeness_check.py",
