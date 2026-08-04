@@ -14038,6 +14038,32 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "# odb. (verified live on ibex: full repair+reroute completes.)\n"
         f"read_def {pnr_dir_c}/post_hold.def\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
+        # THE ECO IS TRIGGERED BY A NUMBER IT CANNOT SEE.
+        #
+        # The auto-trigger fires on the sign-off multi-corner OCV measurement,
+        # and every deck that produces that measurement applies TWO things this
+        # deck did not: the flat-OCV derate and a PROPAGATED clock. Without
+        # them the resizer analyses a different, more optimistic design than the
+        # one that failed, so it is asked to repair a violation its own timing
+        # view does not contain.
+        #
+        # MEASURED (subservient x gf180mcuD, r7/r8): the trigger fired on
+        # `setup_worst_slack_ns: -0.09` and this deck answered
+        #   [INFO RSZ-0098] No setup violations found      (both repair passes)
+        # in `eco_repair.log`, making ZERO setup repairs. The same netlist reads
+        # `+0.53 ns` with an ideal clock and no derate, and `-0.09 ns` with the
+        # sign-off view — so `RSZ-0098` was literally correct about the wrong
+        # design. `grep -c set_timing_derate eco_timing_repair.tcl` = 0 against
+        # 3 sign-off decks that all carry it.
+        #
+        # A clock tree EXISTS in post_hold.def (post-CTS, hold-fixed), so an
+        # ideal clock is not a defensible view here either. Both are emitted
+        # AFTER read_sdc so a design SDC that already sets them is not
+        # contradicted (both commands are idempotent).
+        + _propagated_clock_tcl(
+            reason="post_hold.def is POST-CTS, so the clock tree exists in "
+                   "this netlist and an ideal clock cannot describe it")
+        + _flat_ocv_derate_tcl()
         # #543 -- the ECO resizes too, and it also ran without the v1.2.86
         # cell-pool exclusion: 1 instance of `sky130_fd_sc_hd__probe_p_8` reached
         # the ECO netlist on the measured ibex run. THREE resizing paths existed
@@ -27931,7 +27957,7 @@ def _flat_ocv_derate_tcl(indent: str = "") -> str:
             f"{indent}set_timing_derate -late {_FLAT_OCV_DERATE_LATE}\n")
 
 
-def _propagated_clock_tcl(indent: str = "") -> str:
+def _propagated_clock_tcl(indent: str = "", reason: str = "") -> str:
     """Emit `set_propagated_clock [all_clocks]` for a deck that annotates REAL
     extracted parasitics.
 
@@ -27950,8 +27976,9 @@ def _propagated_clock_tcl(indent: str = "") -> str:
     same netlist. So this is emitted only where a SPEF is annotated — a
     pre-layout / no-SPEF deck is untouched and renders as before.
     chip/PDK-AGNOSTIC: no design, PDK or vendor literal."""
-    return (f"{indent}# Post-route parasitics are annotated, so the clock TREE "
-            f"exists in this netlist:\n"
+    why = reason or ("Post-route parasitics are annotated, so the clock TREE "
+                     "exists in this netlist")
+    return (f"{indent}# {why}:\n"
             f"{indent}# report against the PROPAGATED clock, not an ideal one "
             f"(insertion delay + skew).\n"
             f"{indent}set_propagated_clock [all_clocks]\n")
