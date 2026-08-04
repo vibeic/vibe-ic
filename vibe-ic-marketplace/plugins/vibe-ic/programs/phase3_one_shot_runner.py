@@ -26841,14 +26841,31 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
 
     Placed at the first instant its inputs exist (immediately after synth —
     the flow's own order, since Steps 7/10 precede Step 15 Floorplan), exactly
-    as ``run_step11_dft_after_synth`` is. PURELY ADDITIVE: fires only when the
-    design STAGES its own >=2 corner libs under ``input/pdk/liberty`` (the
-    measured opentitan_aes case). Projects that rely on the container built-in
-    PDK are a no-op here and keep the existing post-route canonicalize path
-    unchanged — zero regression. ``step_canonicalize_artefacts`` keeps its
-    ``if not <file>.is_file()`` guards, so it now no-ops on the three files
-    this step already wrote and every post-route artefact is untouched.
-    chip/PDK-AGNOSTIC.
+    as ``run_step11_dft_after_synth`` is.
+
+    CORNER SOURCE (fixed): corners come from ``input/pdk/liberty`` when the
+    design stages its own, ELSE from the container's built-in PDK via the same
+    ``_discover_container_corner_libs`` + ``_select_signoff_corners`` pair the
+    ``pvt_matrix`` emitter and ``_corner_libs()`` already use. Requiring
+    STAGED libs made this step inert on every container-built-in-PDK project —
+    which ORGANIC #565 records as the majority case — so the very scenario the
+    step exists to cover (a backend that dies before
+    ``step_canonicalize_artefacts``, leaving Step 10 MISSING and VOIDING every
+    step that depends on it) was the one it did not cover. Measured on
+    subservient × sky130A: the container ships 18 ``sky130_fd_sc_hd`` corner
+    libs resolving to distinct SS/TT/FF, yet this step reported "no >=2 staged
+    corner libs" and skipped. Deferral remains when fewer than 2 distinct
+    corners exist ANYWHERE — a 1-corner PDK cannot substantiate multi-corner
+    sign-off. ``step_canonicalize_artefacts`` keeps its
+    ``if not <file>.is_file()`` guards, so it still no-ops on the files this
+    step wrote and every post-route artefact is untouched. chip/PDK-AGNOSTIC.
+
+    SDC SOURCE (fixed): the design SDC comes from
+    :func:`_resolve_staged_silicon_sdc` — the shared ground truth, which reads
+    ``input/constraints`` — and goes through the SAME unit-rescale + DRV + I/O
+    parity chain ``step_pnr`` applies, so the deck the pre-layout STA reads is
+    the deck PnR will read. The canonical ``constraints/<top>.sdc`` copy is
+    written ONLY when the SDC is genuinely design-staged; see Steps 7a/7b.
     """
     t0 = time.time()
     written: List[str] = []
@@ -26857,15 +26874,38 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
     staged_lib_dir = project / "input" / "pdk" / "liberty"
     staged_libs = (sorted(staged_lib_dir.glob("*.lib"))
                    if staged_lib_dir.is_dir() else [])
+    corner_source = "staged input/pdk/liberty"
     if len(staged_libs) < 2:
-        # Container-built-in-PDK project (or single staged corner): leave the
-        # pre-layout emit to the existing post-route canonicalize path so this
-        # change cannot regress a project that does not stage its own corners.
-        return StepResult(
-            "prelayout_signoff", "SKIP", time.time() - t0,
-            "no >=2 staged corner libs under input/pdk/liberty — pre-layout "
-            "stage-2 sign-off deferred to step_canonicalize_artefacts "
-            "(no-op; no regression)", [])
+        # ORGANIC #565 — a project that stages no corners of its own is the
+        # MAJORITY case, not an exotic one: it uses the container's built-in
+        # PDK. `pvt_matrix` and `_corner_libs()` ALREADY fall back to the
+        # container's corner libs for exactly that reason; this step did not,
+        # so it SKIPped on every built-in-PDK project — inert precisely where
+        # its own docstring says it is needed (a backend that dies before
+        # `step_canonicalize_artefacts` then leaves Step 10 MISSING, which
+        # VOIDS every step declaring 10 as a dependency). Reuse the SAME
+        # discovery, so one PDK cannot answer "which corners do you ship?"
+        # two different ways inside one runner.
+        _pdk_lib_dir = str(Path(getattr(pdk, "liberty", "") or "").parent)
+        _found = _select_signoff_corners(
+            _discover_container_corner_libs(container, _pdk_lib_dir),
+            container, _pdk_lib_dir)
+        if len(_found) >= 2:
+            staged_libs = [Path(c["liberty"]) for c in _found]
+            corner_source = (f"container built-in PDK {_pdk_lib_dir} "
+                             f"({len(_found)} sign-off corners: "
+                             f"{'/'.join(c['label'] for c in _found)})")
+        else:
+            # Genuinely fewer than 2 distinct corners ANYWHERE (staged or
+            # built-in): a single-corner PDK cannot substantiate multi-corner
+            # sign-off, so defer rather than emit a 1-corner "matrix".
+            return StepResult(
+                "prelayout_signoff", "SKIP", time.time() - t0,
+                f"fewer than 2 corner libs available — staged "
+                f"input/pdk/liberty={len(staged_libs)}, container built-in "
+                f"PDK={len(_found)} — pre-layout stage-2 sign-off deferred "
+                f"to step_canonicalize_artefacts (no-op; no regression)", [])
+    notes.append(f"corner source: {corner_source}")
 
     constraints_out = _pl.constraints_dir(project)
     sta_out = _pl.sta_dir(project)
@@ -26874,15 +26914,63 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         d.mkdir(parents=True, exist_ok=True)
 
     # --- Step 7a: SDC (pnr/constraint.sdc is what the STA helpers read) ---
-    # step_pnr overwrites this later with byte-identical content, so writing
-    # it early is safe and is what lets the pre-layout STA run before PnR.
+    # step_pnr overwrites this later, so writing it early is safe and is what
+    # lets the pre-layout STA run before PnR.
+    #
+    # RESOLVER: `_resolve_staged_silicon_sdc`, NOT a private probe. The probe
+    # that stood here globbed `phase2/stage2/constraints/*.sdc` then the
+    # project-root `constraints/*.sdc` and never looked at `input/constraints`
+    # — the tree's SHARED ground truth (`sdc_constraints.collect_sdc_files`).
+    # That is the exact probe `_resolve_staged_silicon_sdc` was written to
+    # kill, and its docstring records what the miss does: it LAUNDERS the
+    # runner's own fabricated SDC into "design-staged", so the design's real
+    # SDC never reaches PnR or STA. While this step SKIPped on built-in-PDK
+    # projects the stale probe was unreachable in the majority case; firing
+    # the step there PROMOTES it to the default path. Measured on a fixture
+    # carrying `benchmark-data/ic/edge_llm_accel`'s own staged
+    # `input/constraints/clock.sdc` (`create_clock ... -name core_clock
+    # -period 10.0`): the resolver found that file, this step wrote
+    # `create_clock -name clk` under an "# Auto-generated minimal SDC ... (no
+    # constraints/*.sdc supplied" header into BOTH artefacts, and — because
+    # `step_canonicalize_artefacts` guards on `not canon_sdc.is_file()` — the
+    # canonical Step-7 copy was never refreshed, so it disagreed permanently
+    # with the `pnr/constraint.sdc` step_pnr rewrites from the real file.
+    # The shared resolver is a STRICT SUPERSET of the probe it replaces: it
+    # appends `project/constraints` and `_pl.constraints_dir(project)` as
+    # lower-priority fallbacks, so any project that resolved an SDC before
+    # resolves one now.
+    #
+    # UNITS/DRV: apply the SAME chain `step_pnr` applies to a staged SDC.
+    # A pre-layout STA against an unscaled SDC is a WRONG number, not a
+    # missing one — on a liberty declaring `time_unit : "1ps"` a verbatim
+    # ns-authored deck reads 1000x too tight — and a staged SDC that declares
+    # only `create_clock` leaves every primary I/O UNTIMED, which turns a red
+    # sign-off green by SUBTRACTION. Same four calls, same order, same
+    # arguments as `step_pnr`, so the SDC the pre-layout STA reads is the SDC
+    # PnR will read.
     runner_sdc = pnr_out / "constraint.sdc"
+    staged_sdc = _resolve_staged_silicon_sdc(project)
+    design_staged = bool(staged_sdc and staged_sdc.is_file())
     if not runner_sdc.is_file():
-        staged_sdc = (
-            next(iter(sorted(constraints_out.glob("*.sdc"))), None)
-            or next(iter(sorted(project.glob("constraints/*.sdc"))), None))
-        if staged_sdc and staged_sdc.is_file():
-            runner_sdc.write_text(staged_sdc.read_text())
+        if design_staged:
+            _txt = _scale_sdc_to_liberty_units(
+                staged_sdc.read_text(), str(pdk.liberty))
+            _txt = _reconcile_staged_sdc_drv(
+                _txt, str(pdk.name), str(pdk.liberty), container)
+            _txt, _drv_parity = _ensure_staged_sdc_drv(
+                _txt, str(pdk.liberty), container, project,
+                pdk_name=str(pdk.name))
+            _txt, _io_parity = _ensure_staged_sdc_io_delay(_txt, project)
+            runner_sdc.write_text(_txt)
+            # Carry the parity DISCLOSURES, not just the fact of the chain:
+            # "supplied set_output_delay against the design's own clock" is
+            # the sentence that makes a later reader able to tell a
+            # design-declared limit from one this step added.
+            notes.append(
+                f"SDC: design-staged {staged_sdc} — unit-rescaled + DRV/IO "
+                f"parity (same chain as step_pnr). "
+                + " ".join(str(p.get("note") or "")
+                           for p in (_drv_parity, _io_parity)).strip())
         else:
             _drv = _liberty_drv_limits(str(pdk.liberty), container)
             runner_sdc.write_text(_build_auto_silicon_sdc(
@@ -26892,11 +26980,29 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                 drv_note=str(_drv.get("note") or ""),
                 liberty_path=str(pdk.liberty),
                 pdk_name=str(pdk.name)))
+            notes.append("SDC: design staged none — runner auto-SDC")
         written.append(str(runner_sdc))
 
     # --- Step 7b: canonical staged SDC copy (constraints/<top>.sdc) -------
+    # ONLY when the SDC is genuinely DESIGN-staged. `canon_sdc` lands in
+    # `phase2/stage2/constraints`, which is the LAST fallback
+    # `_resolve_staged_silicon_sdc` searches — so copying the runner's OWN
+    # auto-SDC there hands step_pnr, later in this same run, a file it will
+    # resolve as "design-staged" and put through the staged branch. MEASURED
+    # on a liberty declaring `time_unit : "1ps"` and a project staging no SDC:
+    # `_build_auto_silicon_sdc` already scales into lib units and emits
+    # `-period 20000`; re-resolved as staged, `_scale_sdc_to_liberty_units`
+    # scales it a SECOND time to `-period 2e+07` — 1000x too LOOSE, i.e. every
+    # path passes. `staged_sdc_survey.json` would also record `consumed:
+    # phase2/stage2/constraints/<top>.sdc`, asserting the design staged an SDC
+    # when it staged none. A design-staged SDC cannot be laundered this way:
+    # `input/constraints` outranks `phase2/stage2/constraints` in the shared
+    # resolver, so the design's own file still wins. When the runner
+    # fabricated the deck, authoring the canonical copy is left to
+    # `step_canonicalize_artefacts` — the step that owns it — which runs after
+    # step_pnr has settled what the SDC actually is.
     canon_sdc = constraints_out / f"{top}.sdc"
-    if runner_sdc.is_file() and not canon_sdc.is_file():
+    if design_staged and runner_sdc.is_file() and not canon_sdc.is_file():
         canon_sdc.write_text(
             _stamp_sdc_provenance(runner_sdc.read_text(), pdk.name))
         written.append(str(canon_sdc))
@@ -26904,12 +27010,21 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
     # --- Step 7c: pvt_matrix.json (design-staged Liberty corners) --------
     pvt_path = constraints_out / "pvt_matrix.json"
     if not pvt_path.is_file():
-        corners = [
-            {"name": lib.stem,
-             "label": _classify_corner_from_name(lib.name),
-             "liberty": str(lib.relative_to(project))}
-            for lib in staged_libs
-        ]
+        corners = []
+        for lib in staged_libs:
+            try:
+                _lib_ref = str(lib.relative_to(project))
+            except ValueError:
+                # Container built-in PDK corner: absolute container path, not
+                # under the project. Record it verbatim so the matrix names
+                # the file actually read rather than a path that does not
+                # resolve from either side.
+                _lib_ref = str(lib)
+            corners.append({
+                "name": lib.stem,
+                "label": _classify_corner_from_name(lib.name),
+                "liberty": _lib_ref,
+            })
         pvt = dict(_PVT_MATRIX_TEMPLATE)
         pvt["corners"] = corners
         pvt["primary_corner"] = "TT"
@@ -26948,7 +27063,13 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
             notes.append("pre-layout STA produced no corner report — "
                          "pre_pnr_timing.rpt deferred (sta tool unavailable?)")
 
-    ok = canon_sdc.is_file() and pvt_path.is_file()
+    # `canon_sdc` is deliberately NOT part of this predicate when the design
+    # staged no SDC (see Step 7b): the artefact this step owns pre-layout is
+    # the deck the pre-layout STA actually read plus the PVT matrix. Asserting
+    # on `canon_sdc` would make the honest "left to the owning step" path
+    # report WARN.
+    ok = runner_sdc.is_file() and pvt_path.is_file() and (
+        canon_sdc.is_file() or not design_staged)
     detail = (f"pre-layout stage-2 sign-off emitted BEFORE PnR: "
               f"{len(written)} artefact(s)"
               + ("; " + "; ".join(notes[-2:]) if notes else ""))
