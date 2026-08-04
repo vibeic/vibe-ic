@@ -7533,24 +7533,81 @@ def _check_condition(project: Path, condition: Dict[str, Any]) -> bool:
         return True
     if files:
         for pat in files:
+            # An analog-track TRIGGER is decided on the block list's CONTENT,
+            # never on the file's existence. Every producer emits a block list
+            # unconditionally; on a digital-only project that list reads
+            # `{"blocks": [], "no_analog": true}` — an explicit statement that
+            # the design has NO analog blocks. Treating its mere presence as
+            # "the analog track applies" answers a question ADJACENT to the one
+            # the condition asks, and reports "no analog work to DO" as "analog
+            # work NOT DONE" for every step in the track.
+            #
+            # This is the contract the A-step gates themselves already use:
+            # analog_a1..a9_*_check each VACUOUS_PASS when the block list is
+            # "missing OR EMPTY (digital-only project)". Only the flow-level
+            # condition was existence-based, so the gates and the flow
+            # disagreed about the same project.
+            #
+            # Checked BEFORE the plain `_glob_first` existence probe because
+            # `_glob_first` itself remaps `phase{1,2}/analog/` onto the
+            # canonical analog dir; that remap makes the pinned path HIT
+            # whenever a runner wrote a list there, which shadowed the
+            # content-aware predicate below and left it unreachable.
+            #
+            # Polarity is fail-OPEN: the track is skipped ONLY on an
+            # AFFIRMATIVE declaration of no blocks. An unreadable list, or one
+            # carrying neither array, still runs the track so the absence
+            # surfaces as a real verdict instead of a silent skip.
+            if "analog_block_list" in pat:
+                if (_analog_block_list_declares_blocks(project, pat)
+                        or _l9_has_analog_modules(project)
+                        or _has_canonical_analog_blocks(project)):
+                    continue
+                return False
             if _glob_first(project, pat):
                 continue
-            # Auto-derive analog block list from L9 if requested
-            if "analog_block_list" in pat:
-                if _l9_has_analog_modules(project):
-                    continue
-                # v0.2.55 — canonical-path tolerance. The analog runner
-                # writes the block list to the canonical analog dir
-                # (`_pl.analog_dir` = phase3/analog/), but the flow-def
-                # condition historically pins `phase1/analog/`. Accept the
-                # canonical location too, and fall back to L5_ADI_SPEC's
-                # `analog_blocks` array (Phase-1 doc-extraction emits it).
-                # chip-AGNOSTIC: existence of an analog block list anywhere
-                # canonical, never a chip name.
-                if _has_canonical_analog_blocks(project):
-                    continue
             return False
     return True
+
+
+def _analog_block_list_declares_blocks(project: Path, pattern: str) -> bool:
+    """True when an analog block list reachable from ``pattern`` declares at
+    least one analog block.
+
+    Answers the question the analog-track condition actually asks — "does this
+    design have analog blocks?" — from the block list's CONTENT rather than
+    from the file's existence. Returns False only on an AFFIRMATIVE
+    declaration of none: `no_analog: true`, or a `blocks` / `analog_blocks`
+    array that is present and empty.
+
+    Fail-open by construction — an unreadable list, a non-object payload, or
+    one carrying neither array returns True, so a corrupt or unexpected
+    trigger runs the analog track and reports rather than vanishing.
+
+    chip-AGNOSTIC: reads only the structural `blocks` / `analog_blocks` arrays
+    and the `no_analog` flag. No design, vendor, SKU or PDK literal.
+    """
+    reachable = _glob_first(project, pattern)
+    if not reachable:
+        return False
+    for rel in reachable:
+        try:
+            data = json.loads((project / rel).read_text())
+        except Exception:
+            return True  # unreadable trigger -> run the track, never hide it
+        if not isinstance(data, dict):
+            return True
+        blocks = data.get("blocks")
+        if blocks is None:
+            blocks = data.get("analog_blocks")
+        if isinstance(blocks, list):
+            if blocks:
+                return True
+            continue  # affirmative "no blocks" from this list
+        if data.get("no_analog") is True:
+            continue  # affirmative "no analog" from this list
+        return True  # neither array nor flag -> run the track
+    return False
 
 
 def _has_canonical_analog_blocks(project: Path) -> bool:
