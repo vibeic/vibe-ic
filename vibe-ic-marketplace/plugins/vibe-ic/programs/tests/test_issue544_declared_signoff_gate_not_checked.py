@@ -88,6 +88,16 @@ _STA_RPT = (
     "data arrival time: 2.34 ns\n" + _PAD
 )
 
+#: The same report with THIS STEP'S OWN path violated. Needed since step 23's
+#: `sta_report_check` became step-scoped (`--under
+#: phase3/stage3/sta/post_route_timing.rpt`): before that it discovered
+#: project-wide and so failed on the multi-corner report below, which belongs
+#: to the corner gates, not to it. A fixture that wants `sta_signoff` to FAIL
+#: must now violate the artefact `sta_signoff` actually reads.
+_STA_RPT_VIOLATED = _STA_RPT.replace(
+    "WNS = 0.15 ns\nTNS = 0.0 ns\nslack (MET)\nsetup check: PASS",
+    "WNS = -3.28 ns\nTNS = -91.4 ns\nslack (VIOLATED)\nsetup check: FAIL")
+
 _EM_RPT = (
     "OpenROAD Electromigration Analysis\n"
     "EM lifetime: 10 years worst-case\n"
@@ -114,11 +124,21 @@ def runner():
     return R
 
 
-def _project(tmp: Path, *, violated_corner: bool = False) -> Path:
-    """A minimal but tool-authentic post-route project."""
+def _project(tmp: Path, *, violated_corner: bool = False,
+             violated_own_report: bool = False) -> Path:
+    """A minimal but tool-authentic post-route project.
+
+    `violated_corner` violates the MULTI-CORNER report — the artefact
+    `post_route_signoff_corner_check` and `sta_corner_record_completeness_check`
+    read. `violated_own_report` violates step 23's OWN declared report, which
+    since the step-scoping change is the only artefact `sta_report_check`
+    reads. They are separate flags because they are separate defects, and
+    conflating them is what let a pre-layout gate be failed by a post-ECO file.
+    """
     sta = tmp / "phase3" / "stage3" / "sta"
     sta.mkdir(parents=True)
-    (sta / "post_route_timing.rpt").write_text(_STA_RPT)
+    (sta / "post_route_timing.rpt").write_text(
+        _STA_RPT_VIOLATED if violated_own_report else _STA_RPT)
     if violated_corner:
         (sta / "sta_spef_multicorner.rpt").write_text(_MULTICORNER_VIOLATED)
     rpt = tmp / "reports" / "phase3"
@@ -232,10 +252,18 @@ def test_the_absent_gates_are_the_only_reason_the_run_did_not_release(
     deployment, the run is red for the RIGHT reason — the corner really is at
     -72.07 ns — rather than because the fixture is broken in some other way.
 
-    It also records something the reproduction alone would hide: three of the
-    four gates independently detect this corner, because all three read the
-    same multi-corner report. The field case was expensive precisely because
-    the deployment fault removed all three at once.
+    It also records something the reproduction alone would hide: the corner
+    gates independently detect this corner, because they read the same
+    multi-corner report. The field case was expensive precisely because the
+    deployment fault removed all of them at once.
+
+    CORRECTED with the step-scoping change: `sta_report_check` used to be a
+    THIRD independent detector here, but only by discovering project-wide —
+    it was reading the corner gates' artefact, not its own. That is the same
+    mechanism that let step 10's PRE-LAYOUT gate be failed by step 32's
+    post-ECO report, so the redundancy was never real coverage. The corner
+    detection asserted below is unchanged; only the count of accidental
+    detectors is.
     """
     proj = _project(tmp_path / "proj", violated_corner=True)
     monkeypatch.setattr(runner, "PROGRAMS_DIR", _deployment(tmp_path))
@@ -409,8 +437,15 @@ def test_the_rollup_names_a_failing_gate_apart_from_an_unchecked_one(
         tmp_path, runner, monkeypatch):
     """"3 of 4 passed" is not enough on its own: a reader must be able to tell
     a gate that found a violation from one that never spoke. #538's line keeps
-    them in separate clauses and so does this one."""
-    proj = _project(tmp_path / "proj", violated_corner=True)
+    them in separate clauses and so does this one.
+
+    `violated_own_report=True` is what makes `sta_signoff` one of the two
+    failures now that it is step-scoped. Before scoping this fixture got the
+    same two failures for free — because `sta_signoff` was reading the corner
+    gates' multi-corner report rather than its own declared artefact.
+    """
+    proj = _project(tmp_path / "proj", violated_corner=True,
+                    violated_own_report=True)
     monkeypatch.setattr(
         runner, "PROGRAMS_DIR",
         _deployment(tmp_path, omit=("post_route_signoff_corner_check.py",)))

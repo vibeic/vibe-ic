@@ -365,12 +365,14 @@
       ".",
       "--mode",
       "sta",
+      "--under",
+      "phase3/stage3/sta/pre_pnr_timing.rpt",
       "--json",
       "reports/phase3/sta/pre_pnr_summary.json"
      ],
      "writes": "reports/phase3/sta/pre_pnr_summary.json",
      "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "size_bytes": 955
+     "size_bytes": 861
     }
    }
   },
@@ -761,12 +763,14 @@
       ".",
       "--mode",
       "sta",
+      "--under",
+      "phase3/stage3/sta/post_route_timing.rpt",
       "--json",
       "reports/phase3/sta/post_route_summary.json"
      ],
      "writes": "reports/phase3/sta/post_route_summary.json",
      "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "size_bytes": 955
+     "size_bytes": 870
     },
     "reports/phase3/sta/sta_corner_record_completeness.json": {
      "status": "PRODUCED_BY_RUN",
