@@ -34340,6 +34340,53 @@ def _v1_6_613_input_has_digital_serial_readout(extracted: Dict[str, str]) -> boo
     return False
 
 
+#: Start of a markdown list item: `1.` / `2)` / `-` / `*` / `+`, at the head of
+#: a line, with optional indent. Structural markdown only — no vocabulary.
+_RE_MD_LIST_ITEM_START = re.compile(r"(?m)^[ \t]*(?:\d+[.)]|[-*+])[ \t]+")
+
+
+def _evidence_span_for_keyword(text: str, kw_pos: int) -> Tuple[int, int]:
+    """Span of the text that EVIDENCES a keyword found at `kw_pos`.
+
+    The blank-line paragraph is the right unit for prose, but a markdown list
+    carries no blank line between its items, so an entire list reads as ONE
+    paragraph. Two things then go wrong at once, and both were measured:
+
+      * the stored `evidence_paragraph` is cut to a fixed width from the
+        paragraph START, so for a keyword in item 2 the reader is shown item 1
+        and the stored evidence never contains the keyword it evidences;
+      * `_analog_spec_from_paragraph` harvests numeric+unit tokens from that
+        same span, so a block's spec can be assembled from a SIBLING item's
+        numbers — values that appear nowhere in its own subject matter.
+
+    So when the keyword sits inside a list item, the item is the span. Same
+    reasoning as the table-CELL scope in `_v0_1_62_analog_kw_negated`: a row is
+    not a sentence, and an item is not the list.
+
+    chip-AGNOSTIC: markdown structure only.
+    """
+    # Blank-line paragraph first — the outer bound, and the whole answer for
+    # ordinary prose.
+    p_start = text.rfind("\n\n", 0, kw_pos)
+    p_start = 0 if p_start < 0 else p_start + 2
+    p_end = text.find("\n\n", kw_pos)
+    if p_end < 0:
+        p_end = len(text)
+
+    # Narrow to the list item containing the keyword, when there is one.
+    item_start = None
+    for m in _RE_MD_LIST_ITEM_START.finditer(text, p_start, p_end):
+        if m.start() > kw_pos:
+            # The next item begins: the span ends here. This also scopes a
+            # keyword sitting in the text ABOVE the list to that lead-in.
+            p_end = m.start()
+            break
+        item_start = m.start()
+    if item_start is not None and item_start > p_start:
+        p_start = item_start
+    return p_start, p_end
+
+
 def gen_l5_adi_spec(project: Path,
                     extracted: Dict[str, str]) -> LDocResult:
     """L5: analog block discovery via Wave-47 keyword scan + chip-AGNOSTIC
@@ -34416,12 +34463,13 @@ def gen_l5_adi_spec(project: Path,
             # pure-prose mentions — closed by replacing it with
             # `_analog_spec_from_paragraph`.
             kw_pos = m.start()
-            # Paragraph = block between consecutive blank lines.
-            p_start = text.rfind("\n\n", 0, kw_pos)
-            p_start = 0 if p_start < 0 else p_start + 2
-            p_end = text.find("\n\n", kw_pos)
-            if p_end < 0:
-                p_end = len(text)
+            # Paragraph = block between consecutive blank lines, narrowed to
+            # the markdown list ITEM the keyword sits in when there is one.
+            # A list has no blank line between items, so without the narrowing
+            # the whole list is one paragraph: the stored evidence shows a
+            # sibling item and the spec harvester reads a sibling item's
+            # numbers. See `_evidence_span_for_keyword`.
+            p_start, p_end = _evidence_span_for_keyword(text, kw_pos)
             paragraph = text[p_start:p_end]
             # R6-FIX-1: `spec` is now the STRUCTURED payload (or None), and it
             # is scoped to the block TYPE so the consumer's per-type symbol
