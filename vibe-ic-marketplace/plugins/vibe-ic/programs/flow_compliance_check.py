@@ -1937,7 +1937,34 @@ _DECLARED_CAPABILITY_GAP_FLAGS: Mapping[str, Tuple[str, ...]] = MappingProxyType
         "reports/phase2/dft/path_delay_coverage.json",
         "reports/phase2/dft/sdd_coverage.json",
     ),
-    # A CPU-class design has no reference ISA model to check results against.
+    # The design's own spec binds no reference OUTPUT for the case, so there is
+    # nothing to check a produced result against. ORGANIC #786 r5 — the
+    # sentence used to read "a CPU-class design has no reference ISA model to
+    # check results against", which was wider than what the waiver reaches and
+    # narrower than why. It reaches exactly two populations, both CPU-class and
+    # both anchored on `sim/results.xml`:
+    #   (a) a `functional_vector` L10 case (Phase 1 lifts these out of an input
+    #       verification-plan table; they carry no opcode), whose oracle is the
+    #       instruction-set model this pass did not author; and
+    #   (b) an opcode-derived L10 case whose entry in the design's OWN L3 RECORD
+    #       binds no concrete response template AND carries no document-derived
+    #       response extraction. `l10_tb_conformance_check` RESOLVES that
+    #       pointer in L3 and REFUSES the waiver when the record does bind a
+    #       reference output, when the document-derived sibling exists, or when
+    #       the entry holds document bytes the record cannot attribute to a
+    #       side.
+    #
+    # ORGANIC #786 r7 — SCOPE OF (b), stated because absence does not establish
+    # it: this is a claim about the design's L3 RECORD, NOT about the input
+    # document. Whether the document stated a response is NOT established here
+    # — the extraction that would record one runs at one of seven
+    # opcode-construction sites in `gen_l3_cmd_protocol`, and 0 of 203 corpus
+    # entries carry it, so its absence is equally consistent with a document
+    # that states the response somewhere the extractor does not look. The gate
+    # emits `cpu_oracle_binding_census.document_derived_records` ("k/N") next
+    # to every such waiver so a reviewer can see how much input the refusal
+    # arms had. An earlier revision of this sentence read "a fact read off the
+    # design's document" and was wrong.
     # Carried as a `capability_gap` FIELD on TB-conformance evidence
     # (l10_tb_conformance_check, arith_oracle_tb_gen, bit_level_full_stack_tb_
     # check); no producer ever pairs it with `skips_required_output`.
