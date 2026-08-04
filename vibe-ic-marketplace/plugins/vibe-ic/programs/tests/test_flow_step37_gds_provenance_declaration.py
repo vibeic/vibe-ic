@@ -221,28 +221,47 @@ def test_producer_declares_the_pnr_streamout_too(tmp_path):
     assert passed, out
 
 
-def test_producer_patches_in_place_never_appends_a_contradiction(tmp_path):
-    """Appending a second entry would trade PROVENANCE_HASH_MISMATCH for
-    PROVENANCE_HASH_INCONSISTENT — both FAIL."""
+def test_producer_supersedes_a_stale_record_without_amending_it(tmp_path):
+    """The producer appends a record of the bytes it just shipped; the stale
+    record stays in the ledger as history.
+
+    This used to require patching IN PLACE, on the grounds that appending
+    "would trade PROVENANCE_HASH_MISMATCH for PROVENANCE_HASH_INCONSISTENT —
+    both FAIL". That was a property of the old checker, and paying for it with
+    an in-place edit is what made a tampered artefact indistinguishable from a
+    re-emitted one. The checker now judges a path by its NEWEST record."""
     from provenance_output_hash_completeness_check import audit
     project = _shipped_project(tmp_path, stale=True)
+    before = (project / "provenance.jsonl").read_text().splitlines()
     _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
-    text = (project / "provenance.jsonl").read_text()
-    assert text.count("phase3/stage4/gds/chip_top.gds") == 1, text
+    lines = [l for l in (project / "provenance.jsonl")
+             .read_text().splitlines() if l.strip()]
+    assert lines[:len(before)] == before, "history was amended"
+    assert len(lines) > len(before), "no superseding record was appended"
+    rel = "phase3/stage4/gds/chip_top.gds"
+    declared = [json.loads(l)["outputs"][rel] for l in lines
+                if rel in json.loads(l).get("outputs", {})]
+    assert declared[-1] != declared[0], (
+        "the stale declaration must have been superseded by a newer one")
+    assert declared[-1] == "sha256:" + hashlib.sha256(
+        (project / rel).read_bytes()).hexdigest(), (
+        "the NEWEST declaration must carry the digest of the shipped bytes")
     verdict, findings = audit(project)
-    assert not [f for f in findings
-                if f.rule == "PROVENANCE_HASH_INCONSISTENT"], findings
+    assert not [f for f in findings if f.severity == "ERROR"], findings
     assert verdict == "PASS", [(f.rule, f.detail) for f in findings]
 
 
 def test_producer_is_idempotent(tmp_path):
+    """A second call must add nothing. A producer that appends unconditionally
+    would grow the ledger on every pass."""
     project = _shipped_project(tmp_path, stale=True)
     _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
     first = (project / "provenance.jsonl").read_text()
     _runner._step37_declare_streamout_gds_provenance(project, "chip_top")
     second = (project / "provenance.jsonl").read_text()
-    assert first.count("phase3/stage4/gds/chip_top.gds") == \
-        second.count("phase3/stage4/gds/chip_top.gds") == 1
+    assert second == first, "the second call must be a no-op"
+    assert first.count("phase3/stage4/gds/chip_top.gds") == 2, (
+        "expected the superseded declaration plus the current one")
 
 
 def test_producer_never_declares_a_file_that_does_not_exist(tmp_path):
