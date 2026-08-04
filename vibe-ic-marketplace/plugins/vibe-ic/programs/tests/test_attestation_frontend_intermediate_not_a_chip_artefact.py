@@ -24,6 +24,16 @@ byte-identical pre-fix file and pass after. The REVERSE tests must pass
 in BOTH directions: they are what proves the fix did not simply tighten
 the glob until nothing matched, which would silently stop the gate
 demanding attestation for every real netlist in the repo.
+
+THE END-TO-END EXIT CODE IS rc 2, NOT rc 0 — SEE THE LAST TEST. This
+file was authored against a gate that returned 0 for `VACUOUS_PASS`;
+#834 fixed that half (VACUOUS now routes through
+`_vacuous_exit.exit_code(passed=True, skipped=True)`). The two changes
+merge with ZERO textual conflict and contradicted each other on exactly
+one line. #834 is the side that is right and the reason is recorded on
+`test_gate_exits_vacuous_when_only_the_intermediate_is_present` below.
+Escaping the FAIL and being counted as an executed PASS are different
+outcomes; this file needs the first, and only the first.
 """
 from __future__ import annotations
 
@@ -31,9 +41,22 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import _vacuous_exit as _vx
+
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 _GATE = _PROGRAMS / "agent_report_sha256_attestation_check.py"
+
+#: Bound for every subprocess launch below, and it is NOT a round number
+#: picked by feel. `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the
+#: pytest harness bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any one blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict, including files that
+#: had already passed. Spelled once, as a named constant, so lowering it is one
+#: edit rather than one per call site.
+_GATE_TIMEOUT_S = 60
 
 
 def _load():
@@ -231,17 +254,59 @@ def test_reverse_gate_still_exits_1_for_an_unattested_real_netlist(tmp_path):
     import subprocess
     r = subprocess.run(
         [sys.executable, str(_GATE), str(proj)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=_GATE_TIMEOUT_S)
     assert r.returncode == 1, (
         f"unattested real netlist must still FAIL; got rc={r.returncode}\n"
         f"{r.stdout}\n{r.stderr}")
 
 
-def test_gate_exits_0_when_only_the_intermediate_is_present(tmp_path):
+def test_gate_exits_vacuous_when_only_the_intermediate_is_present(tmp_path):
     """Forward end-to-end: the measured case, on the exit code.
 
     PRE-FIX this is rc 1 (the false positive). POST-FIX the project has
-    no chip artefact, so the documented pre-output escape applies.
+    no chip artefact, so the documented pre-output escape applies — and
+    that escape is rc 2, not rc 0.
+
+    WHY rc 2 AND NOT rc 0 (this file x #834, decided 2026-08-05)
+    -----------------------------------------------------------
+    This assertion was authored as `r.returncode == 0`, against a gate
+    whose `VACUOUS_PASS` branch returned 0. #834 changed that branch to
+    `_vacuous_exit.exit_code(passed=True, skipped=True)` == 2. Both
+    changes touch this gate, both merge with no textual conflict, and
+    they disagree here and nowhere else.
+
+    #834 wins, established by DRIVING the real umbrella
+    (`flow_compliance_check._run_structural_rtl_gates`, which registers
+    this gate in `_STRUCTURAL_RTL_GATES`) over this exact fixture — the
+    shape of `benchmark-data/ic/ibex`, whose synth dir holds
+    `chip_top_sv2v.v`, `sv2v.err`, `yosys.log` and NO netlist because
+    synthesis failed:
+
+        rc 0 -> {"verdict": "PASS", "exit_code": 0}
+                umbrella executed-PASS count 143
+        rc 2 -> {"verdict": "SKIP", "exit_code": 2,
+                 "skip_kind": "input-missing"}
+                umbrella executed-PASS count 142
+
+    That driver reads the EXIT CODE and nothing else — it never opens
+    the JSON report and never scans stdout. So under rc 0 a project that
+    produced no chip artefact, and whose report carries zero sha256
+    tokens, is credited in the executed-PASS numerator: indistinguishable
+    to every automated consumer from a project whose every SOF / GDS /
+    netlist is attested and whose hashes all match. That is this file's
+    own defect — a rule meant to make reports verifiable rewarding an
+    unverifiable one — resurfacing one layer up.
+
+    What this file needs from the fix is that a synthesis INPUT stops
+    being demanded as a chip artefact (rc 1 -> not rc 1). It does not
+    need, and must not claim, that the project passed. The two forward
+    tests above carry that half on their own: they FAIL against the
+    byte-identical pre-fix gate whatever the vacuous rc is, because they
+    assert on `_collect_canonical_artefacts` and not on an exit code.
+
+    This assertion is now a bidirectional control over BOTH halves —
+    revert the glob exclusion and it sees rc 1; revert #834's rc and it
+    sees rc 0; only both together give rc 2.
     """
     proj = _mkproject(
         tmp_path,
@@ -251,7 +316,10 @@ def test_gate_exits_0_when_only_the_intermediate_is_present(tmp_path):
     import subprocess
     r = subprocess.run(
         [sys.executable, str(_GATE), str(proj)],
-        capture_output=True, text=True, timeout=120)
-    assert r.returncode == 0, (
+        capture_output=True, text=True, timeout=_GATE_TIMEOUT_S)
+    assert r.returncode == _vx.RC_VACUOUS, (
         f"a pre-output project must not be told to attest a synthesis "
-        f"input; got rc={r.returncode}\n{r.stdout}\n{r.stderr}")
+        f"input (rc 1), and must not be credited as an executed PASS "
+        f"either (rc 0) — it examined nothing, which is "
+        f"rc {_vx.RC_VACUOUS}; got rc={r.returncode}\n"
+        f"{r.stdout}\n{r.stderr}")

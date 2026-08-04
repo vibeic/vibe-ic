@@ -66,14 +66,45 @@ VACUOUS_PASS conditions:
 * No canonical artefacts exist on disk — pre-output project,
   attestation gate inapplicable.
 
+WHY VACUOUS_PASS EXITS 2 AND NOT 0 (#834)
+-----------------------------------------
+The umbrella that consumes this gate reads its EXIT CODE and nothing
+else. `flow_compliance_check._run_structural_rtl_gates` — the driver
+for the `_STRUCTURAL_RTL_GATES` tuple this gate is registered in
+(line ~1409) — maps rc 0 -> a `PASS` gate record, rc 1 -> `FAIL`,
+rc 2 -> a `SKIP` record carrying `skip_kind: input-missing`. It never
+opens the JSON report and never scans stdout, so the
+`VACUOUS_PASS:` line printed below reaches NO automated consumer on
+that path: it is read by a human or by nobody.
+
+This gate computed `VACUOUS_PASS` and then returned 0 anyway, so
+"there was nothing to look at" was credited in the executed-PASS
+numerator, indistinguishable from "every canonical artefact on disk
+is attested and the hashes match". The two halves of one contract
+disagreed; this side is the one that was wrong, because the umbrella's
+convention (rc 2 = examined nothing) is the shared one and is what
+`_vacuous_exit` exists to route.
+
+The `VACUOUS_PASS:` stdout line is KEPT. It is the second, weaker
+channel (`flow_compliance_check._stdout_signals_vacuous`), it is what
+`_check_program_exit_zero` reads on the per-step path, and dropping it
+would trade one disclosure for another instead of adding one.
+
 Usage:
     python3 agent_report_sha256_attestation_check.py <project_dir>
                                                       [--json <out>]
 
 Exit codes:
-    0  PASS / VACUOUS_PASS
+    0  PASS — every canonical artefact on disk is attested
     1  no attestation table OR canonical artefact lacks attestation
-    2  argument or I/O error
+    2  VACUOUS_PASS (examined nothing: no report file, or no canonical
+       artefact on disk) — the repo-wide `_vacuous_exit.RC_VACUOUS`
+       convention. Also the rc for an unusable project argument, which
+       is the same overload every gate routed through `_vacuous_exit`
+       carries (see `reports_subfolder_taxonomy_check`): the umbrella
+       never invokes a gate on a path it did not just walk, and
+       `_gate_invocation` separates a genuine argparse rejection from a
+       verdict by reading the callee's own error protocol.
 
 chip-AGNOSTIC. No vendor / IC / specific filename hardcoded.
 """
@@ -87,6 +118,8 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
+
+import _vacuous_exit as _vx
 
 
 _RE_SHA256_TOKEN = re.compile(r"sha256:([0-9a-fA-F]{64})", re.IGNORECASE)
@@ -326,8 +359,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.write_text(json.dumps(report, indent=2) + "\n")
 
     if verdict == "VACUOUS_PASS":
+        # Both channels, from the same conclusion (#834). The stdout line
+        # is the pre-existing human/`_stdout_signals_vacuous` disclosure;
+        # `exit_code(passed=True, skipped=True)` is rc 2, the ONLY channel
+        # the P0 structural umbrella reads. Before this, the gate said
+        # "examined nothing" in the one place the umbrella cannot hear.
         print(f"VACUOUS_PASS: {report['reason']}")
-        return 0
+        return _vx.exit_code(passed=True, skipped=True)
     if verdict == "PASS":
         rep = _resolve_report_files(project)
         rep_str = " / ".join(str(p.relative_to(project)) for p in rep)
