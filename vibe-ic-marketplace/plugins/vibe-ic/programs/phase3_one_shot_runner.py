@@ -26589,14 +26589,24 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
 
     Placed at the first instant its inputs exist (immediately after synth —
     the flow's own order, since Steps 7/10 precede Step 15 Floorplan), exactly
-    as ``run_step11_dft_after_synth`` is. PURELY ADDITIVE: fires only when the
-    design STAGES its own >=2 corner libs under ``input/pdk/liberty`` (the
-    measured opentitan_aes case). Projects that rely on the container built-in
-    PDK are a no-op here and keep the existing post-route canonicalize path
-    unchanged — zero regression. ``step_canonicalize_artefacts`` keeps its
-    ``if not <file>.is_file()`` guards, so it now no-ops on the three files
-    this step already wrote and every post-route artefact is untouched.
-    chip/PDK-AGNOSTIC.
+    as ``run_step11_dft_after_synth`` is.
+
+    CORNER SOURCE (fixed): corners come from ``input/pdk/liberty`` when the
+    design stages its own, ELSE from the container's built-in PDK via the same
+    ``_discover_container_corner_libs`` + ``_select_signoff_corners`` pair the
+    ``pvt_matrix`` emitter and ``_corner_libs()`` already use. Requiring
+    STAGED libs made this step inert on every container-built-in-PDK project —
+    which ORGANIC #565 records as the majority case — so the very scenario the
+    step exists to cover (a backend that dies before
+    ``step_canonicalize_artefacts``, leaving Step 10 MISSING and VOIDING every
+    step that depends on it) was the one it did not cover. Measured on
+    subservient × sky130A: the container ships 18 ``sky130_fd_sc_hd`` corner
+    libs resolving to distinct SS/TT/FF, yet this step reported "no >=2 staged
+    corner libs" and skipped. Deferral remains when fewer than 2 distinct
+    corners exist ANYWHERE — a 1-corner PDK cannot substantiate multi-corner
+    sign-off. ``step_canonicalize_artefacts`` keeps its
+    ``if not <file>.is_file()`` guards, so it still no-ops on the files this
+    step wrote and every post-route artefact is untouched. chip/PDK-AGNOSTIC.
     """
     t0 = time.time()
     written: List[str] = []
@@ -26605,15 +26615,38 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
     staged_lib_dir = project / "input" / "pdk" / "liberty"
     staged_libs = (sorted(staged_lib_dir.glob("*.lib"))
                    if staged_lib_dir.is_dir() else [])
+    corner_source = "staged input/pdk/liberty"
     if len(staged_libs) < 2:
-        # Container-built-in-PDK project (or single staged corner): leave the
-        # pre-layout emit to the existing post-route canonicalize path so this
-        # change cannot regress a project that does not stage its own corners.
-        return StepResult(
-            "prelayout_signoff", "SKIP", time.time() - t0,
-            "no >=2 staged corner libs under input/pdk/liberty — pre-layout "
-            "stage-2 sign-off deferred to step_canonicalize_artefacts "
-            "(no-op; no regression)", [])
+        # ORGANIC #565 — a project that stages no corners of its own is the
+        # MAJORITY case, not an exotic one: it uses the container's built-in
+        # PDK. `pvt_matrix` and `_corner_libs()` ALREADY fall back to the
+        # container's corner libs for exactly that reason; this step did not,
+        # so it SKIPped on every built-in-PDK project — inert precisely where
+        # its own docstring says it is needed (a backend that dies before
+        # `step_canonicalize_artefacts` then leaves Step 10 MISSING, which
+        # VOIDS every step declaring 10 as a dependency). Reuse the SAME
+        # discovery, so one PDK cannot answer "which corners do you ship?"
+        # two different ways inside one runner.
+        _pdk_lib_dir = str(Path(getattr(pdk, "liberty", "") or "").parent)
+        _found = _select_signoff_corners(
+            _discover_container_corner_libs(container, _pdk_lib_dir),
+            container, _pdk_lib_dir)
+        if len(_found) >= 2:
+            staged_libs = [Path(c["liberty"]) for c in _found]
+            corner_source = (f"container built-in PDK {_pdk_lib_dir} "
+                             f"({len(_found)} sign-off corners: "
+                             f"{'/'.join(c['label'] for c in _found)})")
+        else:
+            # Genuinely fewer than 2 distinct corners ANYWHERE (staged or
+            # built-in): a single-corner PDK cannot substantiate multi-corner
+            # sign-off, so defer rather than emit a 1-corner "matrix".
+            return StepResult(
+                "prelayout_signoff", "SKIP", time.time() - t0,
+                f"fewer than 2 corner libs available — staged "
+                f"input/pdk/liberty={len(staged_libs)}, container built-in "
+                f"PDK={len(_found)} — pre-layout stage-2 sign-off deferred "
+                f"to step_canonicalize_artefacts (no-op; no regression)", [])
+    notes.append(f"corner source: {corner_source}")
 
     constraints_out = _pl.constraints_dir(project)
     sta_out = _pl.sta_dir(project)
@@ -26652,12 +26685,21 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
     # --- Step 7c: pvt_matrix.json (design-staged Liberty corners) --------
     pvt_path = constraints_out / "pvt_matrix.json"
     if not pvt_path.is_file():
-        corners = [
-            {"name": lib.stem,
-             "label": _classify_corner_from_name(lib.name),
-             "liberty": str(lib.relative_to(project))}
-            for lib in staged_libs
-        ]
+        corners = []
+        for lib in staged_libs:
+            try:
+                _lib_ref = str(lib.relative_to(project))
+            except ValueError:
+                # Container built-in PDK corner: absolute container path, not
+                # under the project. Record it verbatim so the matrix names
+                # the file actually read rather than a path that does not
+                # resolve from either side.
+                _lib_ref = str(lib)
+            corners.append({
+                "name": lib.stem,
+                "label": _classify_corner_from_name(lib.name),
+                "liberty": _lib_ref,
+            })
         pvt = dict(_PVT_MATRIX_TEMPLATE)
         pvt["corners"] = corners
         pvt["primary_corner"] = "TT"

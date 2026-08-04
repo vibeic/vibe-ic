@@ -18,6 +18,7 @@ before step_pnr, and main() wires it there. This test proves:
      step_pnr (the whole point: the pre-layout emit must not sit behind PnR).
 """
 import ast
+import json
 import sys
 from pathlib import Path
 
@@ -48,6 +49,72 @@ def test_no_op_skip_when_no_staged_corners(tmp_path):
     (proj / "input" / "pdk" / "liberty" / "tt.lib").write_text("library(tt){}")
     res1 = R.step_prelayout_signoff(proj, "chip_top", _Pdk(), "no-such-container")
     assert res1.status == "SKIP", res1.status
+
+
+def test_container_builtin_corners_are_used_when_none_are_staged(tmp_path,
+                                                                 monkeypatch):
+    """ORGANIC #565 — a project that stages NO corners must still get Step 10.
+
+    Pre-fix this step required >=2 libs under ``input/pdk/liberty`` and SKIPped
+    otherwise, so it was inert on every container-built-in-PDK project — the
+    majority case, and precisely the case its own docstring exists to cover (a
+    backend that dies before ``step_canonicalize_artefacts`` leaves Step 10
+    MISSING, VOIDING every step that depends on it).
+
+    MEASURED (subservient x sky130A, plugin 1.9.76): the container shipped 18
+    ``sky130_fd_sc_hd`` corner libs resolving to distinct SS/TT/FF, the
+    ``pvt_matrix`` emitter in the SAME run recorded ``multi_corner: true,
+    corner_count: 3`` from them — and this step still reported "no >=2 staged
+    corner libs" and skipped.
+
+    NEGATIVE CONTROL: against the pre-fix body this asserts SKIP and FAILS.
+    """
+    proj = tmp_path / "proj"
+    (proj / "input" / "pdk" / "liberty").mkdir(parents=True)  # staged: ZERO
+
+    class _Pdk:
+        name = "sky130A"
+        liberty = "/foss/pdks/sky130A/libs.ref/lib/x__tt_025C_1v80.lib"
+        macro_libs: list = []
+
+    # The container exposes two distinct process corners. Patch the SAME
+    # discovery pair the pvt_matrix emitter uses, so the test proves the step
+    # consults it — without needing a live container.
+    monkeypatch.setattr(R, "_discover_container_corner_libs",
+                        lambda c, d: [("x__ss_100C_1v60", d + "/x__ss.lib"),
+                                      ("x__tt_025C_1v80", d + "/x__tt.lib")])
+    # Keep the step hermetic: no container round-trips past the gate.
+    monkeypatch.setattr(R, "_liberty_drv_limits", lambda *a, **k: {})
+    monkeypatch.setattr(R, "_emit_multi_corner_sta", lambda *a, **k: False)
+
+    res = R.step_prelayout_signoff(proj, "chip_top", _Pdk(), "some-container")
+
+    assert res.status != "SKIP", (
+        "step SKIPped despite the container exposing >=2 sign-off corners — "
+        f"detail={res.detail!r}")
+    pvt = proj / "phase2" / "stage2" / "constraints" / "pvt_matrix.json"
+    assert pvt.is_file(), "no pvt_matrix.json emitted from built-in corners"
+    labels = {c["label"] for c in json.loads(pvt.read_text())["corners"]}
+    assert {"SS", "TT"} <= labels, labels
+
+
+def test_skip_message_names_both_corner_sources(tmp_path):
+    """When it DOES defer, the message must state what it searched.
+
+    A bare "no staged corner libs" reads as "this PDK has no corners"; the
+    measured defect was that the container had 18. The deferral must name both
+    sources and both counts so the reader can tell which one was empty.
+    """
+    proj = tmp_path / "proj"
+    (proj / "input" / "pdk" / "liberty").mkdir(parents=True)
+
+    class _Pdk:
+        name = "sky130A"
+        liberty = "/foss/pdks/x/nom.lib"
+
+    res = R.step_prelayout_signoff(proj, "chip_top", _Pdk(), "no-such-container")
+    assert res.status == "SKIP"
+    assert "staged" in res.detail and "container built-in" in res.detail, res.detail
 
 
 def test_function_exists_and_returns_stepresult():
