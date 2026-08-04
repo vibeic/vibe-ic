@@ -45,13 +45,54 @@ Mapping rules (each keyword class → required L5 / L4 pattern):
   trim         → L5 type matches /trim/i
                  OR L4.otp_layout.trim_registers has any entry
 
+WHY "NO ANALOG KEYWORDS" EXITS 2 AND NOT 0 (#833)
+-------------------------------------------------
+This gate is registered in ``flow_compliance_check._STRUCTURAL_RTL_GATES``.
+The driver for that tuple, ``_run_structural_rtl_gates``, reads the EXIT
+CODE and nothing else:
+
+    rc 0 -> a PASS gate record, counted by ``_p0_passed_count``
+    rc 1 -> FAIL
+    rc 2 -> a SKIP record, ``skip_kind: input-missing``
+
+The gate printed ``[SKIP] ... no analog keywords found`` and returned 0, so
+"there was no analog content to check" was credited in the executed-PASS
+numerator, indistinguishable from "the docs describe analog content and
+every class of it is recorded in L5". ``gate_skip_routing_check`` had this
+exact skip path in its published unrouted inventory.
+
+Three states, and the third is not the first:
+
+    analog content found and recorded in L5 / L4   -> PASS  (rc 0)
+    analog content found and NOT recorded          -> FAIL  (rc 1)
+    nothing to compare                             -> rc 2, never a PASS
+
+"Nothing to compare" has two shapes and the disclosure names which one
+happened, because they are different facts about the project: no scannable
+input document existed at all, or documents were read and none mentions
+analog content. Both are vacuous for THIS gate — its subject is the
+correspondence between doc evidence and the L5 record, and with no doc
+evidence there is no correspondence to judge.
+
 Usage:
     python3 analog_content_detected_must_emit_l5_check.py <project_dir>
 
 Exit codes:
-    0 = PASS / SKIP (no analog content OR all classes mapped)
+    0 = PASS (analog content found and mapped to L5 / L4, or waived)
     1 = FAIL (analog content but L5 missing matching entry)
-    2 = IO / parse error
+    2 = VACUOUS_PASS — examined nothing (no input doc, or no analog keyword
+        in the docs that were read). Also the rc for an unusable project
+        argument, the same overload every gate routed through
+        ``_vacuous_exit`` carries; ``_gate_invocation`` separates a genuine
+        command-line rejection from a verdict by the callee's own error
+        protocol.
+
+        (The word for the stdlib argument parser is deliberately not written
+        anywhere in this file: ``gate_skip_routing_check.argument_shape``
+        classifies a module by a bare substring search over its whole source,
+        so a mention in prose would move this gate into a bucket describing a
+        parser it does not use. That column is reported, never used to select
+        — but a reported column that a comment can falsify is still wrong.)
 """
 from __future__ import annotations
 
@@ -60,6 +101,10 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import _vacuous_exit as _vx
+
+_GATE = "analog_content_detected_must_emit_l5_check"
 
 
 WAIVER_KEY = "analog_block_in_docs_intentionally_omitted_from_l5"
@@ -379,17 +424,23 @@ def _waiver_count(project: Path) -> int:
     return 0
 
 
-def _scan_docs(project: Path) -> Dict[str, List[Tuple[str, int, str]]]:
-    """Scan docs for analog keywords; return {class_id: [(file, line, text)]}."""
-    hits: Dict[str, List[Tuple[str, int, str]]] = {
-        cid: [] for cid in _KEYWORD_CLASSES
-    }
+def _scannable_docs(project: Path) -> List[Path]:
+    """Every input document this gate would read, in stable order.
+
+    #833 — extracted from `_scan_docs` (which used to inline the same walk)
+    so the gate can state its DENOMINATOR when it finds nothing: "no input
+    document existed" and "12 documents were read and none mentions analog"
+    are different facts about the project, and a skip that does not say
+    which one happened is unreviewable. Behaviour of `_scan_docs` is
+    unchanged — it now iterates this list instead of rebuilding it.
+    """
     seen: set = set()
+    out: List[Path] = []
     for sub in _DOC_DIRS:
         d = project / sub
         if not d.is_dir():
             continue
-        for f in d.iterdir():
+        for f in sorted(d.iterdir()):
             if not f.is_file():
                 continue
             if f.suffix.lower() not in (".txt", ".md", ".json"):
@@ -397,29 +448,39 @@ def _scan_docs(project: Path) -> Dict[str, List[Tuple[str, int, str]]]:
             if f in seen:
                 continue
             seen.add(f)
-            try:
-                text = f.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
+            out.append(f)
+    return out
+
+
+def _scan_docs(project: Path) -> Dict[str, List[Tuple[str, int, str]]]:
+    """Scan docs for analog keywords; return {class_id: [(file, line, text)]}."""
+    hits: Dict[str, List[Tuple[str, int, str]]] = {
+        cid: [] for cid in _KEYWORD_CLASSES
+    }
+    for f in _scannable_docs(project):
+        try:
+            text = f.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        rel = str(f.relative_to(project))
+        for i, line in enumerate(text.splitlines(), start=1):
+            if _NEGATION_RE.search(line):
                 continue
-            rel = str(f.relative_to(project))
-            for i, line in enumerate(text.splitlines(), start=1):
-                if _NEGATION_RE.search(line):
-                    continue
-                for cid, (pat, _) in _KEYWORD_CLASSES.items():
-                    # v1.6.523 — per-keyword negation awareness. A hit is
-                    # only counted if at least one OCCURRENCE on the line
-                    # is NOT inside a negation / exclusion / crossed-out
-                    # context. A keyword that appears only as "no DAC" /
-                    # "does not need" / "❌ LDO" / "~~bandgap~~" does not
-                    # count and must not force an L5 analog block.
-                    positive_hit = False
-                    for m in pat.finditer(line):
-                        if not _keyword_is_negated(line, m.start(), m.end()):
-                            positive_hit = True
-                            break
-                    if positive_hit:
-                        if len(hits[cid]) < 50:
-                            hits[cid].append((rel, i, line.strip()[:120]))
+            for cid, (pat, _) in _KEYWORD_CLASSES.items():
+                # v1.6.523 — per-keyword negation awareness. A hit is
+                # only counted if at least one OCCURRENCE on the line
+                # is NOT inside a negation / exclusion / crossed-out
+                # context. A keyword that appears only as "no DAC" /
+                # "does not need" / "❌ LDO" / "~~bandgap~~" does not
+                # count and must not force an L5 analog block.
+                positive_hit = False
+                for m in pat.finditer(line):
+                    if not _keyword_is_negated(line, m.start(), m.end()):
+                        positive_hit = True
+                        break
+                if positive_hit:
+                    if len(hits[cid]) < 50:
+                        hits[cid].append((rel, i, line.strip()[:120]))
     return hits
 
 
@@ -497,14 +558,35 @@ def main() -> int:
         print(f"ERROR: {project} not a directory", file=sys.stderr)
         return 2
 
+    docs = _scannable_docs(project)
     hits = _scan_docs(project)
     classes_with_hits = [cid for cid, lst in hits.items() if lst]
 
     if not classes_with_hits:
-        print("[SKIP] analog_content_detected_must_emit_l5_check: "
-              "no analog keywords found in input/docs or "
-              "phase1/input_doc")
-        return 0
+        # #833 — the gate examined nothing it can compare. Before this it
+        # returned 0, and the P0 structural umbrella (which reads the exit
+        # code and nothing else) recorded a full executed PASS for a run
+        # that compared no doc evidence against any L5 record.
+        #
+        # The reason token names WHICH vacuity happened, with the
+        # denominator: a project with no input document at all is a
+        # different fact from a project whose documents were read and
+        # describe no analog content.
+        where = " / ".join(_DOC_DIRS)
+        if not docs:
+            reason = "no-input-doc"
+            detail = f"no scannable input document under {where}"
+        else:
+            reason = f"no-analog-keyword-in-{len(docs)}-doc(s)"
+            detail = (f"{len(docs)} input document(s) scanned under "
+                      f"{where}; none carries a positive analog keyword")
+        print(f"[SKIP] {_GATE}: {detail} — nothing to compare against "
+              f"L5.analog_blocks[] / L4.otp_layout.trim_registers")
+        # Both channels from the one conclusion: the line-start sentinel
+        # `flow_compliance_check._stdout_signals_vacuous` matches, and the
+        # rc the P0 umbrella actually reads.
+        _vx.announce_vacuous(_GATE, reason)
+        return _vx.exit_code(passed=True, skipped=True)
 
     l5_blocks = _load_l5_blocks(project)
     l4_trim = _load_l4_trim_registers(project)

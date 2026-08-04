@@ -5,9 +5,16 @@ Verifies:
   - oscillator in docs + L5 has osc entry → PASS
   - oscillator in docs + L5 empty → FAIL
   - trim mention + L4 trim_registers → PASS (no L5 trim entry needed)
-  - pure-digital docs → SKIP/PASS
+  - pure-digital docs → VACUOUS (rc 2, #833 — NOT a pass)
   - waiver covers all missing classes → PASS
-  - "no analog" line negation → SKIP
+  - "no analog" line negation → VACUOUS (rc 2, #833)
+
+#833 moved the "nothing to compare" branch off rc 0. This file used to
+assert rc 0 for it, i.e. it pinned the very credit the defect handed out:
+the P0 structural umbrella reads the exit code and nothing else, so a
+project whose docs mention no analog content held a full executed PASS for
+a gate that had examined nothing. The keyword/negation SUBJECTS below are
+unchanged; only the rc those branches leave behind moved.
 """
 from __future__ import annotations
 
@@ -18,8 +25,13 @@ from pathlib import Path
 
 import pytest
 
-PROG = (Path(__file__).resolve().parent.parent /
-        "analog_content_detected_must_emit_l5_check.py")
+PROGRAMS = Path(__file__).resolve().parent.parent
+if str(PROGRAMS) not in sys.path:
+    sys.path.insert(0, str(PROGRAMS))
+
+import _vacuous_exit as _vx  # noqa: E402
+
+PROG = PROGRAMS / "analog_content_detected_must_emit_l5_check.py"
 
 
 def _run(project: Path) -> subprocess.CompletedProcess:
@@ -102,12 +114,17 @@ def test_trim_in_docs_l4_trim_registers_pass(tmp_path):
 
 
 def test_no_analog_keywords_skip(tmp_path):
-    """Pure-digital docs (only counters, FSM, registers) → SKIP/PASS."""
+    """Pure-digital docs (only counters, FSM, registers) → VACUOUS, not PASS.
+
+    #833: the docs were read and none of them describes analog content, so
+    there is no doc-evidence-to-L5 correspondence for this gate to judge.
+    That is `_vx.RC_VACUOUS`, never rc 0.
+    """
     doc = "Counter module increments by 1 every clock. FSM has 5 states."
     _setup(tmp_path, doc)
     r = _run(tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "SKIP" in r.stdout or "PASS" in r.stdout
+    assert r.returncode == _vx.RC_VACUOUS, r.stdout + r.stderr
+    assert "SKIP" in r.stdout
 
 
 def test_with_waiver_pass(tmp_path):
@@ -132,14 +149,19 @@ def test_with_waiver_pass(tmp_path):
 
 
 def test_keyword_negation_skip(tmp_path):
-    """'no analog' / 'digital only' line → not classified as analog hit."""
+    """'no analog' / 'digital only' line → not classified as analog hit.
+
+    Negation still suppresses the hit (the subject of this test). With no
+    class claimed there is nothing to compare, so #833 makes the rc
+    `_vx.RC_VACUOUS`.
+    """
     doc = ("This block is digital only.\n"
            "No analog content.\n"
            "Pure digital counter chain.")
     _setup(tmp_path, doc)
     r = _run(tmp_path)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "SKIP" in r.stdout or "PASS" in r.stdout
+    assert r.returncode == _vx.RC_VACUOUS, r.stdout + r.stderr
+    assert "SKIP" in r.stdout
 
 
 def test_pull_down_in_docs_l5_has_pull_entry_pass(tmp_path):
