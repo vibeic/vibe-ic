@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1054
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1054)
+- **Total programs (excluding helpers / shims):** 1055
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1055)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1045 |
+| `any` | 1046 |
 
 ## Alphabetical listing
 
@@ -400,6 +400,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gameable_placeholder_scan` | any | — | deterministic half of the compliance-gate-spot-check "gameability scan" (Step 3, first three bullets). |
 | `gap_reset_granularity_check` | any | — | deterministic compliance check derived from <chip-class> v041 fresh-agent debug (bug #6, the final blocker). |
 | `gate_cli_mutation_probe` | any | — | Does anything notice when a gate is made unable to fail? |
+| `gate_declared_argv_parses_check` | any | — | a gate the CI umbrella declares but cannot validly invoke. |
 | `gate_directed_rtl_repair` | any | — | act on a blocking gate's OWN verdict instead of giving up. |
 | `gate_discloses_denominator_check` | any | — | a PASS must say how much it looked at. |
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
@@ -1126,7 +1127,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1045 programs)
+### `any` (1046 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1498,6 +1499,7 @@ _(no programs in this group)_
 - `gameable_placeholder_scan` — deterministic half of the compliance-gate-spot-check "gameability scan" (Step 3, first three bullets).
 - `gap_reset_granularity_check` — deterministic compliance check derived from <chip-class> v041 fresh-agent debug (bug #6, the final blocker).
 - `gate_cli_mutation_probe` — Does anything notice when a gate is made unable to fail?
+- `gate_declared_argv_parses_check` — a gate the CI umbrella declares but cannot validly invoke.
 - `gate_directed_rtl_repair` — act on a blocking gate's OWN verdict instead of giving up.
 - `gate_discloses_denominator_check` — a PASS must say how much it looked at.
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_

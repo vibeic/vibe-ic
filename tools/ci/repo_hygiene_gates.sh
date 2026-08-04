@@ -237,6 +237,23 @@ run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_en
 # predicate stops tracking it AND looks authoritative. ~4s.
 run "P0 gate invocability drift"        "$PLUGIN" python3 programs/p0_gate_invocability_drift_check.py
 
+# The gate above asserts that property for the P0 structural umbrella. THIS
+# script is an umbrella too, and nothing asserted it here: every `run` line
+# below and above declares the argv a gate will be handed, and the declaration
+# and the program are edited independently. The drift surfaces only when CI
+# executes the gate — and for a `run_tolerating_uncheckable` gate it does not
+# surface even then, because argparse's rejection is rc 2 and `_gate_dispatch.sh`
+# reads rc 2 as NOT_CHECKED, non-fatal, suite exit 0. That is #492's finding
+# ("no input to check" and "you called me wrongly" share one exit code) one
+# level up. MEASURED by renaming one flag on the `image-version pins resolve`
+# declaration: `error: unrecognized arguments`, `^^ NOT CHECKED (rc 2,
+# non-fatal)`, SUITE EXIT 0.
+#
+# It stops each gate at its own argument parser, so no gate body runs and the
+# whole set costs ~1s — cheap enough to sit at the front of every landing
+# rather than being discovered by a red suite.
+run "declared gate argv parses"         "$PLUGIN" python3 programs/gate_declared_argv_parses_check.py
+
 run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_parses_check.py" --root "$ROOT"
 
 # vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log
