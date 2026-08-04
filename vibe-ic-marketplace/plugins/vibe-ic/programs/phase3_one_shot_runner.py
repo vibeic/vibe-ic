@@ -18333,6 +18333,27 @@ try:
     _cfg = _def_opts.lefdef_config
     if lefs and any(p.strip() for p in lefs):
         _cfg.lef_files = [p.strip() for p in lefs if p.strip()]
+    if _lefdef_map and not os.path.exists(_lefdef_map):
+        # DEGRADE LOUDLY, NEVER SILENTLY. A streamout layermap was CONFIGURED
+        # (the PDK bridge set lefdef_layermap to this path) yet the file is
+        # ABSENT on disk. Falling through to the `else` legacy/compact numbering
+        # here ships a mis-numbered GDS: every DEF-sourced routing/via/PDN shape
+        # lands on a GDS number the sign-off deck reads as an FEOL device layer,
+        # so DRC reports a WALL of phantom implant/VT/well violations that are
+        # numbering ARTEFACTS, not design defects. The surrounding comments were
+        # written to prevent exactly that silent fallback; before this guard it
+        # was only reachable when NO map was configured, so a PDK branch whose
+        # lefdef_layermap points at a *.map the container image does not ship
+        # slipped straight through to legacy numbering with a PASS. Refuse it.
+        # chip-AGNOSTIC: keyed purely on 'configured path that does not exist',
+        # no PDK/vendor literal.
+        print(f"LEFDEF_MAP_CONFIGURED_BUT_ABSENT: the PDK configured a "
+              f"LEF/DEF->GDS streamout layermap at {_lefdef_map!r} but no such "
+              f"file exists. Refusing to silently stream legacy (compact) "
+              f"numbering, which a sign-off DRC deck misreads as phantom FEOL "
+              f"geometry. Ship the map asset, or have the PDK branch synthesize "
+              f"one (see _synthesize_streamout_layermap).", file=sys.stderr)
+        sys.exit(7)
     if _lefdef_map and os.path.exists(_lefdef_map):
         _cfg.map_file = [_lefdef_map]
         print(f"LEFDEF_MAP applied: {_lefdef_map}")
@@ -18364,7 +18385,7 @@ try:
                   f"disabled (deck-synthesized map — no FEOL-colliding "
                   f"outline/region/placement-blockage shapes)")
     else:
-        print("LEFDEF_MAP not applied (none/missing) — legacy numbering")
+        print("LEFDEF_MAP not applied (none configured) — legacy numbering")
     # FEOL substitution for the DEF cell instances is done MANUALLY after the
     # read (see the `_manual_substitute` block below), NOT via the LEF/DEF
     # reader's `macro_resolution_mode`. Both approaches make the instances
