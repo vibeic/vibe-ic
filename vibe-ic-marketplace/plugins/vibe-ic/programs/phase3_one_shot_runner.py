@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -5464,13 +5465,21 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
     fixed_any = False
     for n in enabled_ns:
         met = f"MET{n}"
-        via = f"VIA{n}"  # the via BELOW METn connects MET(n-1) <-> METn
-        wm = re.search(
-            r"@Mt\.W\.1:[^\n]*\n\s*INTERNAL\s+__" + re.escape(met.lower()) +
-            r"__\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
-        if not wm:
-            continue  # this deck doesn't gate METn's width via Mt.W.1 -> no-op
-        deck_width_um = float(wm.group(1))
+        # The deck NAMES its own top-via on the Mt.EN.1 line ("Min. enclosure
+        # of Vt-1 by Mt <v> METn VIAm"), so READ it instead of computing it.
+        # The pre-existing code built the via name as VIA{n}, which on a deck
+        # whose "Vt-1" is the via BELOW the top metal (measured: `... 0.09
+        # MET5 VIA4`) never matched, so the enclosure lookup found nothing
+        # every time. Deriving VIA{n-1} instead would only swap one guess for
+        # another; taking the deck's own token is guess-free and works for
+        # either convention.
+        enm = re.search(
+            r"@Mt\.EN\.1:[^\n]*?([0-9.]+)\s+" + re.escape(met) +
+            r"\s+(\w+)\b[^\n]*\n(?:.*\n)*?\s*ENCLOSURE\s+\S+\s+\S+\s*<\s*"
+            r"([0-9.]+)", deck_text, re.IGNORECASE)
+        via = enm.group(2) if enm else ""
+        enc_note = (f", Mt.EN.1 {met}/{via} enclosure={enm.group(3)}um"
+                    if enm else "")
 
         lblock = re.search(
             r"(?ms)^LAYER\s+" + re.escape(met) + r"\s*\n(.*?)^END\s+" +
@@ -5478,38 +5487,127 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
         if not lblock:
             continue
         block = lblock.group(1)
-        wmatch = re.search(r"(?m)^(\s*WIDTH\s+)([0-9.]+)(\s*;)", block)
-        mwmatch = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", block)
-        lef_width_um = min(
-            float(wmatch.group(2)) if wmatch else 1e9,
-            float(mwmatch.group(2)) if mwmatch else 1e9)
-        if lef_width_um >= deck_width_um:
-            continue  # LEF already honors the deck's real minimum
-
-        enm = re.search(
-            r"@Mt\.EN\.1:[^\n]*\b" + re.escape(met) + r"\s+" +
-            re.escape(via) + r"\b[^\n]*\n(?:.*\n)*?\s*ENCLOSURE\s+\S+\s+\S+"
-            r"\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
-        enc_note = f", Mt.EN.1 enclosure={enm.group(1)}um" if enm else ""
-
         fixed_block = block
-        if wmatch:
-            fixed_block = (fixed_block[:wmatch.start()] +
-                           f"{wmatch.group(1)}{deck_width_um}{wmatch.group(3)}" +
-                           fixed_block[wmatch.end():])
-        # re-locate MINWIDTH after the WIDTH edit may have shifted offsets
-        mwmatch2 = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", fixed_block)
-        if mwmatch2:
-            fixed_block = (fixed_block[:mwmatch2.start()] +
-                            f"{mwmatch2.group(1)}{deck_width_um}{mwmatch2.group(3)}" +
-                            fixed_block[mwmatch2.end():])
-        lef_text = (lef_text[:lblock.start(1)] + fixed_block +
-                    lef_text[lblock.end(1):])
+        changed: List[str] = []
+
+        # -- (1) min WIDTH -- Mt.W.1 -------------------------------------
+        wm = re.search(
+            r"@Mt\.W\.1:[^\n]*\n\s*INTERNAL\s+__" + re.escape(met.lower()) +
+            r"__\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
+        if wm:
+            deck_width_um = float(wm.group(1))
+            wmatch = re.search(r"(?m)^(\s*WIDTH\s+)([0-9.]+)(\s*;)", block)
+            mwmatch = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", block)
+            lef_width_um = min(
+                float(wmatch.group(2)) if wmatch else 1e9,
+                float(mwmatch.group(2)) if mwmatch else 1e9)
+            if lef_width_um < deck_width_um:
+                if wmatch:
+                    fixed_block = (
+                        fixed_block[:wmatch.start()] +
+                        f"{wmatch.group(1)}{deck_width_um}{wmatch.group(3)}" +
+                        fixed_block[wmatch.end():])
+                # re-locate MINWIDTH: the WIDTH edit may have shifted offsets
+                mw2 = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)",
+                                fixed_block)
+                if mw2:
+                    fixed_block = (
+                        fixed_block[:mw2.start()] +
+                        f"{mw2.group(1)}{deck_width_um}{mw2.group(3)}" +
+                        fixed_block[mw2.end():])
+                changed.append(
+                    f"WIDTH/MINWIDTH {lef_width_um} -> {deck_width_um} "
+                    f"(Mt.W.1)")
+
+        # -- (2) min SPACING -- Mt.S.1. The defect this whole branch existed
+        # for but only half-closed: the deck's THICK-TOP option makes the top
+        # metal both WIDER and further APART, and only the width half was
+        # reconciled. Measured on a real sign-off run: LEF SPACING 0.28um vs
+        # the deck's Mt.S.1 >= 0.46um -- the router, which can only see the
+        # LEF, drew legal-per-LEF metal that the deck then failed 141 times.
+        # Take the number from the deck's EXECUTABLE `EXTERNAL ... <v` line
+        # (not from its @comment) and take the STRICTEST when a deck repeats
+        # the rule under several names. Only the BASE `SPACING <v> ;` is
+        # touched: a `SPACING <v> RANGE ...` line is the wide-metal rule and
+        # is a different constraint. Never lowered.
+        deck_sp_um = max(
+            [float(m2.group(1)) for m2 in re.finditer(
+                r"@Mt\.S\.1:[^\n]*\b" + re.escape(met) +
+                r"\b[^\n]*\n\s*EXTERNAL\s+\S+\s*<\s*([0-9.]+)",
+                deck_text, re.IGNORECASE)] or [0.0])
+        if deck_sp_um > 0.0:
+            spm = re.search(r"(?m)^(\s*SPACING\s+)([0-9.]+)(\s*;)", fixed_block)
+            if spm and float(spm.group(2)) < deck_sp_um:
+                changed.append(
+                    f"SPACING {spm.group(2)} -> {deck_sp_um} (Mt.S.1)")
+                fixed_block = (
+                    fixed_block[:spm.start()] +
+                    f"{spm.group(1)}{deck_sp_um}{spm.group(3)}" +
+                    fixed_block[spm.end():])
+
+        # -- (3) PITCH -- not a deck rule but an ARITHMETIC consequence of
+        # the two above. A routing track grid finer than width+space cannot
+        # hold a legal wire on every track; the router will happily use
+        # adjacent tracks and the result is a spacing violation BY
+        # CONSTRUCTION. Raising WIDTH alone and leaving PITCH produced
+        # exactly that: width 0.44 + space 0.28 = 0.72um of demand on a
+        # 0.61um pitch -- the fix for one rule manufacturing violations of
+        # another. Raise PITCH to width+space when it is short. Derived
+        # entirely from the two reconciled numbers -- nothing hardcoded.
+        pm = re.search(r"(?m)^(\s*PITCH\s+)([0-9.]+)(\s*;)", fixed_block)
+        wnow = re.search(r"(?m)^\s*WIDTH\s+([0-9.]+)\s*;", fixed_block)
+        snow = re.search(r"(?m)^\s*SPACING\s+([0-9.]+)\s*;", fixed_block)
+        if pm and wnow and snow:
+            need = round(float(wnow.group(1)) + float(snow.group(1)), 6)
+            if float(pm.group(2)) < need:
+                changed.append(
+                    f"PITCH {pm.group(2)} -> {need} (= WIDTH+SPACING; a "
+                    f"finer track grid cannot hold a legal wire per track)")
+                fixed_block = (fixed_block[:pm.start()] +
+                               f"{pm.group(1)}{need}{pm.group(3)}" +
+                               fixed_block[pm.end():])
+
+        if changed:
+            lef_text = (lef_text[:lblock.start(1)] + fixed_block +
+                        lef_text[lblock.end(1):])
+            notes.append(
+                f"[topmetal-deck-lef-fix] deck enables TOPMETAL_{n}: {met} "
+                f"{'; '.join(changed)}{enc_note} -> staged a corrected LEF "
+                f"(raised only; the real PDK LEF is untouched)")
+            fixed_any = True
+
+        # -- (4) the CUT layer below METn -- Vt1.S.1. Same class, different
+        # layer: the deck's thick-top option also spaces the top via further
+        # apart than the LEF declares (measured: LEF 0.26um vs deck >= 0.35um,
+        # 7593 sign-off violations). A cut layer has no PITCH/track grid, so
+        # only SPACING applies. The via's NAME comes from the deck's own
+        # Mt.EN.1 token above, never from arithmetic on `n`.
+        vdeck = max(
+            [float(m2.group(1)) for m2 in re.finditer(
+                r"@Vt1\.S\.1:[^\n]*\b" + re.escape(via) +
+                r"\b[^\n]*\n\s*EXTERNAL\s+\S+\s*<\s*([0-9.]+)",
+                deck_text, re.IGNORECASE)] or [0.0]) if via else 0.0
+        if vdeck <= 0.0:
+            continue
+        vblock = re.search(
+            r"(?ms)^LAYER\s+" + re.escape(via) + r"\s*\n(.*?)^END\s+" +
+            re.escape(via) + r"\s*$", lef_text)
+        if not vblock:
+            continue
+        vsp = re.search(r"(?m)^(\s*SPACING\s+)([0-9.]+)(\s*;)",
+                        vblock.group(1))
+        if not vsp or float(vsp.group(2)) >= vdeck:
+            continue
+        vfixed = (vblock.group(1)[:vsp.start()] +
+                  f"{vsp.group(1)}{vdeck}{vsp.group(3)}" +
+                  vblock.group(1)[vsp.end():])
+        lef_text = (lef_text[:vblock.start(1)] + vfixed +
+                    lef_text[vblock.end(1):])
         notes.append(
-            f"[topmetal-width-fix] deck enables TOPMETAL_{n}: {met} Mt.W.1 "
-            f"min-width={deck_width_um}um{enc_note} > LEF WIDTH/MINWIDTH="
-            f"{lef_width_um}um -> staged a corrected LEF (WIDTH/MINWIDTH "
-            f"raised to {deck_width_um}um; the real PDK LEF is untouched)")
+            f"[topmetal-deck-lef-fix] deck enables TOPMETAL_{n}: {via} "
+            f"(the cut below {met}) SPACING {vsp.group(2)} -> {vdeck} "
+            f"(Vt1.S.1) -> staged a corrected LEF (raised only; the real "
+            f"PDK LEF is untouched)")
         fixed_any = True
 
     if not fixed_any:
@@ -13554,29 +13652,395 @@ def _dont_use_family_fallback_tcl() -> str:
     delay family makes `buffer_ports` insert the normal `buf_1`, so the SS setup
     path closes IN THE BASE ROUTE (0-DRC, no ECO) — measured −0.56 → +2.25 ns MET.
     Delay macros are ONLY legitimate for deliberate hold padding, never as
-    signal/port slew buffers, in ANY PDK — hence GENERAL, not a chip literal."""
+    signal/port slew buffers, in ANY PDK — hence GENERAL, not a chip literal.
+
+    NAMING-CONVENTION-AGNOSTIC + never-empty-the-pool. Two chip-AGNOSTIC
+    defects, both found on a commercial 180 nm cell library:
+
+    (1) EVERY pattern above is anchored on the OPEN-PDK ``<lib>__<fn>``
+        double-underscore convention (``sky130_fd_sc_hd__dlygate4sd3``). A
+        commercial library names the SAME delay family with BARE names —
+        ``DLY1D1`` … ``DLY4D1`` — so ``*__dly*`` matched ZERO cells and the
+        block printed ``DONT_USE_FALLBACK_APPLIED: 0`` while the delay family
+        stayed in the pool. The paragraph above calls itself "PDK-family-
+        GENERAL (any library using the ``<lib>__<fn>`` convention)"; that
+        qualifier IS the defect — the convention is an open-PDK habit, not a
+        liberty rule, and a library that does not follow it gets no protection
+        while the log still says the guard ran. Measured consequence: with the
+        pattern list unmatched, ``repair_design`` selected a 4-stage delay
+        macro as the slew-fix buffer on a hard-macro supply pin. Fix: match the
+        family STEM (``dly`` / ``delay`` / ``probe_`` / ``lpflow`` /
+        ``clkdly``) case-insensitively, which subsumes BOTH the
+        ``<lib>__<fn>`` and the bare spellings and both letter cases (open PDKs
+        spell these lower-case, commercial ones upper-case).
+
+    (2) A wider net could, on a pathological library, exclude EVERY buffer and
+        leave the resizer/CTS with nothing to insert — a silent failure worse
+        than the one being fixed. The exclusion is therefore GUARDED: count the
+        cells OpenSTA ITSELF calls buffers (``get_property $c is_buffer`` — the
+        exact pool ``repair_design`` / ``buffer_ports`` draw from) before and
+        after; if the exclusion would leave ZERO usable buffers, revert the
+        whole set with ``unset_dont_use`` and say so out loud. Measure, then
+        decide — never a blanket weakening, never silent.
+
+    The (1) fix did NOT work on its first cut, and said it did. It asked for
+    case-insensitive matching with ``get_lib_cells -nocase`` while still
+    passing GLOB patterns. OpenSTA honours ``-nocase`` ONLY together with
+    ``-regexp``; in glob mode it emits ``[WARNING STA-0358] -nocase ignored
+    without -regexp`` and matches case-SENSITIVELY. Measured in-container
+    against the same commercial 180 nm liberty::
+
+        get_lib_cells -nocase -quiet *dly*   ->  n=0
+        get_lib_cells         -quiet *DLY*   ->  n=4   (DLY1D1 … DLY4D1)
+
+    so the delay family STAYED in the pool and the run still printed
+    ``DONT_USE_FALLBACK_APPLIED: 0 … usable buffer cells 63 -> 63`` — the
+    guard reporting that it ran while protecting nothing, which is the exact
+    failure mode (1) was written to remove, one layer down. Fixed by switching
+    to ``-regexp -nocase``. OpenSTA anchors a regexp to the WHOLE cell name, so
+    the patterns carry explicit ``.*`` on both sides (measured: bare ``dly``
+    -> 0, ``.*dly.*`` -> 4). A ``-nocase`` without ``-regexp`` anywhere in this
+    block is a regression, and is pinned as such by the tests.
+
+    No design, PDK or vendor literal appears in the emitted Tcl."""
     return (
-        "# === v1.2.86 — GENERAL characterization/lpflow do-not-use fallback ===\n"
+        "# === v1.2.86 — GENERAL characterization/lpflow/delay do-not-use "
+        "fallback ===\n"
         "# Works even when the PDK ships no drc_exclude.cells (iic-osic-tools):\n"
-        "# excludes __probe/__probec/__lpflow_ (unroutable → DRT-0085) + __clkdlybuf\n"
-        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer) +\n"
-        "# __dly*/__delay* (SIGNAL DELAY macros — dlya/b/c/d, dlygate, dlymetal…:\n"
-        "# high-intrinsic-delay cells the resizer/buffer_ports must never insert as\n"
-        "# a signal/port buffer, or they dominate the SLOW-corner setup path).\n"
-        "# via OpenROAD's own get_lib_cells over the loaded liberty. PDK-family-\n"
-        "# GENERAL (matches the <lib>__<fn> naming, no design literal).\n"
+        "# excludes probe/probec/lpflow (unroutable → DRT-0085) + clkdly*\n"
+        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer)\n"
+        "# + dly*/delay* (SIGNAL DELAY macros — dlya/b/c/d, dlygate, dlymetal,\n"
+        "# DLY1D1…DLY4D1: high-intrinsic-delay cells the resizer/buffer_ports\n"
+        "# must never insert as a signal/port buffer, or they dominate the\n"
+        "# SLOW-corner setup path / get chosen as a slew-fix buffer).\n"
+        "# Family STEMS matched case-insensitively via OpenROAD's own\n"
+        "# get_lib_cells, so BOTH the open-PDK <lib>__<fn> spelling AND bare\n"
+        "# commercial names are caught; GUARDED so the buffer pool can never be\n"
+        "# emptied. NAMING-CONVENTION-AGNOSTIC, no design literal.\n"
+        "# -regexp is MANDATORY here, not stylistic: OpenSTA honours -nocase\n"
+        "# ONLY in regexp mode -- in glob mode it warns\n"
+        "# `[WARNING STA-0358] -nocase ignored without -regexp` and matches\n"
+        "# case-SENSITIVELY. Measured in-container on a commercial 180nm\n"
+        "# library: `get_lib_cells -nocase -quiet *dly*` -> 0 cells, while\n"
+        "# `-quiet *DLY*` -> 4 (DLY1D1..DLY4D1). The block then printed\n"
+        "# DONT_USE_FALLBACK_APPLIED: 0 -- announcing that the guard had run\n"
+        "# while it excluded nothing. Patterns are therefore REGEXES, and\n"
+        "# OpenSTA anchors them to the WHOLE cell name, so each needs the\n"
+        "# leading/trailing `.*` (measured: `dly` -> 0, `.*dly.*` -> 4).\n"
+        "proc _du_nbuf {} {\n"
+        "  set _n 0\n"
+        "  foreach _c [get_lib_cells -quiet *] {\n"
+        "    if {[catch {set _b [get_property $_c is_buffer]}]} { continue }\n"
+        "    if {!$_b} { continue }\n"
+        "    if {[catch {set _d [get_property $_c dont_use]}]} { set _d 0 }\n"
+        "    if {!$_d} { incr _n }\n"
+        "  }\n"
+        "  return $_n\n"
+        "}\n"
+        "set _du_before 0\n"
+        "catch {set _du_before [_du_nbuf]}\n"
         "set _duf 0\n"
-        "foreach _du_pat {*__probe_* *__probec_* *__lpflow_* *__clkdlybuf*"
-        " *__dly* *__delay*} {\n"
-        "  set _du_cells [get_lib_cells -quiet $_du_pat]\n"
+        "set _du_all {}\n"
+        "foreach _du_pat {.*probe_.* .*probec_.* .*lpflow.* .*clkdly.* "
+        ".*dly.* .*delay.*} {\n"
+        "  set _du_cells [get_lib_cells -regexp -nocase -quiet $_du_pat]\n"
         "  if {[llength $_du_cells] > 0} {\n"
         "    if {[catch {set_dont_use $_du_cells} _duf_e]} {\n"
         "      puts \"DONT_USE_FALLBACK_NONFATAL: $_du_pat -- $_duf_e\"\n"
-        "    } else { incr _duf [llength $_du_cells] }\n"
+        "    } else {\n"
+        "      incr _duf [llength $_du_cells]\n"
+        "      set _du_all [concat $_du_all $_du_cells]\n"
+        "    }\n"
         "  }\n"
         "}\n"
-        "puts \"DONT_USE_FALLBACK_APPLIED: $_duf characterization/lpflow cell(s) "
-        "excluded by family-name fallback\"\n")
+        "set _du_after $_du_before\n"
+        "catch {set _du_after [_du_nbuf]}\n"
+        "if {$_du_before > 0 && $_du_after == 0} {\n"
+        "  catch {unset_dont_use $_du_all}\n"
+        "  puts \"DONT_USE_FALLBACK_REVERTED: the exclusion would have left 0 "
+        "usable buffer cells (was $_du_before) -- reverted so the resizer/CTS "
+        "keep a pool; reported, never silently applied\"\n"
+        "  set _duf 0\n"
+        "  set _du_after $_du_before\n"
+        "}\n"
+        "puts \"DONT_USE_FALLBACK_APPLIED: $_duf characterization/lpflow/delay "
+        "cell(s) excluded by family-name fallback; usable buffer cells "
+        "$_du_before -> $_du_after\"\n")
+
+
+# ── resizer sizing limits derived from the library's OWN buffer span ──────────
+# `Resizer::getSwappableCells` filters every sizing candidate against
+# `sizing_area_limit_` / `sizing_leakage_limit_`, both defaulting to 4.0 (see
+# rsz/src/Resizer.cc): a candidate whose area — or leakage — is more than 4.0X
+# the CURRENT cell's is dropped from the swap pool. That default is an implicit
+# assumption about how wide a cell library's drive ladder is, and `PreChecks::
+# checkSlewLimit` (rsz/src/PreChecks.cc) makes it load-bearing: it computes the
+# BEST ACHIEVABLE transition over `getSwappableCells(buffer_lowest_drive_)` —
+# the swap pool of the WEAKEST buffer — and if the declared max_transition is
+# below that, it raises `[ERROR RSZ-0090] Max transition time from SDC is …
+# Best achievable transition time is …`, which ABORTS repair_design.
+#
+# So on a library whose buffer family is wider than 4.0X, the strong buffers are
+# invisible to that pre-check, the "best achievable" slew is computed from a
+# crippled pool, and repair_design refuses to run — while the cell that would
+# have met the limit sits in the library, legal and un-excluded. Measured on a
+# commercial 180 nm library: buffer family spans 4.25X area / 15.82X leakage
+# (slow corner) over 22 structurally-identified buffers. Measured on the open
+# PDKs shipped in the EDA image, the same way: sky130_fd_sc_hd 10.67X / 16.47X
+# (42 buffers), nangate45 16.33X / 61.44X (9 buffers) — i.e. NO real library
+# measured here fits inside the 4.0X default. The default is narrower than the
+# libraries it is applied to; that is the chip-AGNOSTIC defect.
+#
+# The fix must NOT be a hardcoded larger number (same mistake, new constant) and
+# must NOT be derived from the violation (that is widening a limit until the
+# violation disappears). Two properties:
+#
+#   VALUE  — derived from the LIBRARY's own buffer family: parse the liberty the
+#            flow actually reads, identify buffers STRUCTURALLY the way OpenSTA
+#            does (exactly one input pin, exactly one output pin, and the
+#            output's `function` IS that input — `LibertyCell::hasBufferFunc`),
+#            and take max/min of `area` and `cell_leakage_power` over that
+#            family across EVERY corner liberty. That ratio is the widest
+#            legitimate swap INSIDE the family; x1.1 absorbs rounding.
+#   SCOPE  — nothing is emitted when the family already fits inside OpenROAD's
+#            own default, so a library the default suits keeps a BYTE-IDENTICAL
+#            pnr.tcl and no second repair pass.
+#
+# chip-AGNOSTIC and PDK-AGNOSTIC: every number comes from whatever liberty is on
+# the command line, never from a table.
+_LIB_CELL_HDR_RE = re.compile(
+    r"\bcell\s*\(\s*\"?([A-Za-z0-9_./\[\]-]+)\"?\s*\)\s*\{")
+_LIB_PIN_HDR_RE = re.compile(
+    r"\bpin\s*\(\s*\"?([A-Za-z0-9_./\[\]-]+)\"?\s*\)\s*\{")
+_LIB_ATTR_RE = re.compile(
+    r"\b(area|cell_leakage_power|direction|function)\s*:\s*"
+    r"\"?([^\";]*?)\"?\s*;")
+# OpenROAD's own defaults (rsz/src/Resizer.cc sizing_area_limit_ /
+# sizing_leakage_limit_). Emit nothing when the library fits inside them.
+_RSZ_DEFAULT_SIZING_LIMIT = 4.0
+
+
+def _lib_block_end(text: str, open_brace: int) -> int:
+    """Index just past the '}' matching ``text[open_brace] == '{'``."""
+    depth = 0
+    n = len(text)
+    i = open_brace
+    while i < n:
+        c = text[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def _lib_depth0(s: str) -> str:
+    """``s`` with every ``{...}`` sub-block removed (depth-0 text only)."""
+    out: List[str] = []
+    depth = 0
+    for ch in s:
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            continue
+        if depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
+def _liberty_buffer_family(lib_text: str) -> List[Tuple[str, float, float]]:
+    """Every BUFFER in ``lib_text`` as ``(name, area, cell_leakage_power)``.
+
+    Buffer identification is STRUCTURAL, mirroring OpenSTA
+    ``LibertyCell::hasBufferFunc``: exactly one input pin, exactly one output
+    pin, and the output pin's ``function`` is that input pin. No name matching,
+    so it is independent of any library's naming convention.
+    """
+    out: List[Tuple[str, float, float]] = []
+    for m in _LIB_CELL_HDR_RE.finditer(lib_text):
+        end = _lib_block_end(lib_text, m.end() - 1)
+        body = lib_text[m.end():end - 1]
+        ins: List[str] = []
+        outs: List[Tuple[str, str]] = []
+        i = 0
+        seg = 0
+        n = len(body)
+        while i < n:
+            if body[i] == "{":
+                hdr = body[seg:i + 1]
+                sub_end = _lib_block_end(body, i)
+                pm = _LIB_PIN_HDR_RE.search(hdr)
+                if pm and pm.end() == len(hdr):
+                    flat = _lib_depth0(body[i + 1:sub_end - 1])
+                    d = fn = ""
+                    for am in _LIB_ATTR_RE.finditer(flat):
+                        if am.group(1) == "direction":
+                            d = am.group(2).strip()
+                        elif am.group(1) == "function":
+                            fn = am.group(2).strip()
+                    if d == "input":
+                        ins.append(pm.group(1))
+                    elif d == "output":
+                        outs.append((pm.group(1), fn))
+                i = sub_end
+                seg = i
+                continue
+            i += 1
+        if len(ins) != 1 or len(outs) != 1:
+            continue
+        if outs[0][1].replace("(", "").replace(")", "").strip() != ins[0]:
+            continue
+        area = leak = 0.0
+        for am in _LIB_ATTR_RE.finditer(_lib_depth0(body)):
+            try:
+                if am.group(1) == "area":
+                    area = float(am.group(2))
+                elif am.group(1) == "cell_leakage_power":
+                    leak = float(am.group(2))
+            except ValueError:
+                pass
+        out.append((m.group(1), area, leak))
+    return out
+
+
+def _buffer_family_sizing_spans(
+        lib_texts: List[str]) -> Tuple[float, float, int]:
+    """``(area_ratio, leakage_ratio, n_buffers)`` — the widest max/min inside
+    the buffer family across all supplied liberty texts. ``0.0`` for a span
+    that cannot be measured (attribute absent / single member)."""
+    area_ratio = leak_ratio = 0.0
+    n_buf = 0
+    for t in lib_texts:
+        if not t:
+            continue
+        fam = _liberty_buffer_family(t)
+        n_buf = max(n_buf, len(fam))
+        areas = [a for (_n, a, _l) in fam if a > 0]
+        leaks = [lk for (_n, _a, lk) in fam if lk > 0]
+        if len(areas) >= 2 and min(areas) > 0:
+            area_ratio = max(area_ratio, max(areas) / min(areas))
+        if len(leaks) >= 2 and min(leaks) > 0:
+            leak_ratio = max(leak_ratio, max(leaks) / min(leaks))
+    return area_ratio, leak_ratio, n_buf
+
+
+def _sizing_limits_args(lib_texts: List[str],
+                        margin: float = 1.1,
+                        spans: Optional[Tuple[float, float, int]] = None
+                        ) -> Tuple[str, str]:
+    """``(set_opt_config_args, human_span)`` — the resizer sizing limits this
+    library's OWN buffer family requires, or ``("", "")`` when the family fits
+    inside OpenROAD's 4.0X default and there is nothing to widen.
+
+    ``spans`` is a PRE-MEASURED ``_buffer_family_sizing_spans`` result. The
+    parse is O(liberty bytes) and a sign-off corner set is large: measured on
+    the real 3-corner sky130_fd_sc_hd set (96.9 MB), one pass costs 26.6 s. The
+    two emitters below plus the caller's own reporting each needed the same
+    number, so the naive wiring parsed the SAME texts three times — 81.5 s, of
+    which 54.9 s was recomputing a value already in hand. Passing the measured
+    spans in makes the extra passes unnecessary rather than merely faster.
+    Omitted, it is measured here, so every existing caller and test is
+    unchanged."""
+    a_ratio, l_ratio, n_buf = (
+        spans if spans is not None else _buffer_family_sizing_spans(lib_texts))
+    a_lim = math.ceil(a_ratio * margin * 100.0) / 100.0 if a_ratio else 0.0
+    l_lim = math.ceil(l_ratio * margin * 100.0) / 100.0 if l_ratio else 0.0
+    args = ""
+    if a_lim > _RSZ_DEFAULT_SIZING_LIMIT:
+        args += f" -limit_sizing_area {a_lim:g}"
+    if l_lim > _RSZ_DEFAULT_SIZING_LIMIT:
+        args += f" -limit_sizing_leakage {l_lim:g}"
+    if not args:
+        return "", ""
+    return args, (f"buffer family n={n_buf}, measured area span "
+                  f"{a_ratio:.4g}X, leakage span {l_ratio:.4g}X, margin "
+                  f"x{margin:g}; OpenROAD default "
+                  f"{_RSZ_DEFAULT_SIZING_LIMIT:g}X")
+
+
+def _sizing_limits_preamble_tcl(lib_texts: List[str],
+                                margin: float = 1.1,
+                                spans: Optional[Tuple[float, float, int]] = None
+                                ) -> str:
+    """OpenROAD Tcl that restores the resizer's swap pool to THIS library's own
+    buffer family, emitted BEFORE the first timing-driven step. ``""`` when the
+    family already fits inside OpenROAD's 4.0X default.
+
+    WHY BEFORE, and why not gated on a violation count: the check that fails is
+    ``PreChecks::checkSlewLimit``, and it is reached from ``global_placement
+    -timing_driven`` — gpl's Nesterov loop calls ``TimingBase::
+    executeTimingDriven`` -> ``Resizer::findResizeSlacks`` -> ``RepairDesign::
+    repairNetLoad`` -> ``checkSlewLimit`` — long before any explicit
+    ``repair_design``. It raises ``logger_->error(RSZ, 90)``, which ABORTS the
+    script. So there is no point at which a violator count could be read and
+    used as a gate: the run is already dead.
+
+    WHY THIS IS NOT A RELAXATION. ``max_transition`` is NOT touched. What is
+    widened is ``getSwappableCells``' area/leakage ratio cut-off, which drops
+    any equivalent cell more than ``sizing_area_limit_`` / ``sizing_leakage_
+    limit_`` (both default 4.0) times the SOURCE cell. Those defaults are a
+    heuristic about the power/area cost of upsizing; they are not a statement
+    about what the library contains. On a family whose own ladder is wider than
+    4.0X, the strongest buffers are invisible to ``checkSlewLimit``, which then
+    reports a "best achievable transition" that the library can in fact beat —
+    an infeasibility that does not exist. The limits emitted here are the
+    family's OWN measured span, so the pool becomes exactly what the vendor
+    shipped and no more."""
+    args, span = _sizing_limits_args(lib_texts, margin, spans)
+    if not args:
+        return ""
+    return (
+        "# === restore the resizer swap pool to THIS library's own buffer\n"
+        "# family, BEFORE the first timing-driven step.\n"
+        "# getSwappableCells drops any equivalent cell more than 4.0X the\n"
+        "# source cell in area OR leakage, and PreChecks::checkSlewLimit\n"
+        "# computes the BEST ACHIEVABLE transition over the WEAKEST buffer's\n"
+        "# surviving pool. On a family wider than 4.0X the strong buffers are\n"
+        "# invisible, so the check reports an infeasible slew target that the\n"
+        "# library can actually meet, and aborts with RSZ-0090. That abort is\n"
+        "# reached from global_placement -timing_driven (gpl -> TimingBase ->\n"
+        "# findResizeSlacks -> RepairDesign -> checkSlewLimit), NOT only from\n"
+        "# an explicit repair_design — hence this runs first.\n"
+        f"# Measured here: {span}.\n"
+        "# max_transition is NOT modified; only the cell pool is restored.\n"
+        f"if {{[catch {{set_opt_config{args}}} _sl_e]}} {{\n"
+        "  puts \"SIZING_LIMITS_NONFATAL: $_sl_e\"\n"
+        "} else {\n"
+        f"  puts \"SIZING_LIMITS_APPLIED:{args} ({span})\"\n"
+        "}\n")
+
+
+def _sizing_limits_drv_report_tcl(lib_texts: List[str],
+                                  margin: float = 1.1,
+                                  spans: Optional[Tuple[float, float, int]] = None
+                                  ) -> str:
+    """Report-only companion to :func:`_sizing_limits_preamble_tcl`, emitted
+    AFTER ``repair_design``. Prints the surviving max_slew/max_capacitance
+    violator count so a reader can see what the restored pool actually bought.
+    It CHANGES NOTHING — the number is evidence, not a gate."""
+    args, span = _sizing_limits_args(lib_texts, margin, spans)
+    if not args:
+        return ""
+    return (
+        "# Evidence for the sizing-limit restoration above: the DRV violators\n"
+        "# that survive repair_design with the library's own pool available.\n"
+        "# Report-only — this block changes nothing.\n"
+        "set _sl_v -1\n"
+        "catch {set _sl_v [expr {[sta::max_slew_violation_count]"
+        " + [sta::max_capacitance_violation_count]}]}\n"
+        "if {$_sl_v < 0} {\n"
+        "  puts \"SIZING_LIMITS_DRV_UNMEASURED: OpenSTA violator counters "
+        "unavailable\"\n"
+        "} else {\n"
+        f"  puts \"SIZING_LIMITS_DRV_AFTER_REPAIR: $_sl_v max_slew"
+        "+max_capacitance violator(s) after repair_design with the measured "
+        f"pool ({span})\"\n"
+        "}\n")
 
 
 # ── R8 (v1.3.50 fork-adapt) — librelane-first PnR cell-exclusion resolution ──────
@@ -16871,7 +17335,9 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         openroad_threads: int = 0,
                         repair_tns_percent: Optional[int] = None,
                         cts_cluster_size: Optional[int] = None,
-                        cts_cluster_diameter: Optional[float] = None) -> str:
+                        cts_cluster_diameter: Optional[float] = None,
+                        sizing_limits_block: str = "",
+                        sizing_drv_report_block: str = "") -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
     (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
     regression tests pin them). The #557 SPEF-repair block shipped with
@@ -17017,7 +17483,7 @@ read_sdc {sdc_c}
 # before any optimization). Prevents OpenROAD from inserting PnR-forbidden cells
 # (probe / lpflow / DRC-failed) that TritonRoute then cannot route (DRT-0085).
 # See _dont_use_tcl. ===
-{dont_use_block}# === v0.1.26 wire-RC model ===
+{dont_use_block}{sizing_limits_block}# === v0.1.26 wire-RC model ===
 # Without set_wire_rc, OpenROAD has no per-layer R/C, so (a) STA ignores
 # interconnect delay (optimistic) and (b) repair_timing -setup aborts with
 # RSZ-0089 "Could not find a resistance value for any corner" because it
@@ -17108,7 +17574,7 @@ if {{[catch {{buffer_ports -inputs}} _bp_err]}} {{
 if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
   puts "EST_PARASITICS_PLACEMENT_NONFATAL: $_pe_pl"
 }}
-{_rd_margin_placement}if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
+{_rd_margin_placement}{sizing_drv_report_block}if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
   puts "REPAIR_TIMING_SETUP_NONFATAL: $_rts_err"
 }}
 if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
@@ -18110,6 +18576,45 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     antenna_repair_block = _antenna_repair_tcl(pdk)
     pg_cleanup_block = _pg_net_cleanup_tcl()
     dont_use_block = _dont_use_tcl(pdk)
+    # Measure THIS library's buffer-family span so pnr.tcl can restore the
+    # resizer swap pool to it BEFORE the first timing-driven step. OpenROAD's
+    # 4.0X area/leakage sizing cut-off is narrower than every real library
+    # measured; PreChecks::checkSlewLimit then reports a "best achievable
+    # transition" that only the TRUNCATED pool cannot reach and aborts with
+    # RSZ-0090 — from global_placement -timing_driven, not just from an
+    # explicit repair_design. Emits "" when the library fits the default, so
+    # such a design keeps a byte-identical pnr.tcl. See
+    # `_sizing_limits_preamble_tcl`.
+    try:
+        _sl_corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    except Exception:  # noqa: BLE001 — a measurement, never a dependency
+        _sl_corner_libs = {}
+    _sl_paths = sorted({p for p in _sl_corner_libs.values() if p})
+    if pdk.liberty and pdk.liberty not in _sl_paths:
+        _sl_paths.append(pdk.liberty)
+    _sl_texts = [t for t in (_read_pdk_text(p, container) for p in _sl_paths)
+                 if t]
+    # MEASURE ONCE. Three consumers need the same number — the preamble, the
+    # DRV-report companion, and the disclosure printed below — and the parse is
+    # O(liberty bytes) over a whole sign-off corner set. Measured on the real
+    # 3-corner sky130_fd_sc_hd set (96.9 MB): one pass 26.6 s, three passes
+    # 81.5 s. Handing the measured spans to both emitters removes 54.9 s of
+    # recomputation from every PnR, and removes it by construction rather than
+    # by caching something that could go stale.
+    _sl_spans = _buffer_family_sizing_spans(_sl_texts)
+    sizing_limits_block = _sizing_limits_preamble_tcl(_sl_texts, spans=_sl_spans)
+    sizing_drv_report_block = _sizing_limits_drv_report_tcl(_sl_texts,
+                                                           spans=_sl_spans)
+    if sizing_limits_block:
+        _sl_a, _sl_l, _sl_n = _sl_spans
+        print("[phase3] RESIZER SIZING LIMITS: this library's buffer family "
+              f"({_sl_n} cells over {len(_sl_texts)} corner liberty file(s)) "
+              f"spans {_sl_a:.4g}X area / {_sl_l:.4g}X leakage — wider than "
+              "OpenROAD's 4.0X swap-pool cut-off, which hides the strong "
+              "buffers from PreChecks::checkSlewLimit and makes it report an "
+              "infeasible slew target. pnr.tcl restores the pool to the "
+              "MEASURED span before the first timing-driven step; "
+              "max_transition is NOT modified.", file=sys.stderr)
     # #147 — PROBE the running OpenROAD once (cached) for the fork's post-route
     # repair fix (`estimate_parasitics -detailed_routing`, vibeic/OpenROAD
     # cf06074139 — LIVE in vibeic-eda:0.2.17). R9 moved the probe UP to here:
@@ -18317,7 +18822,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         openroad_threads=_openroad_thread_count(),
         repair_tns_percent=_rf_map.get("repair_tns_percent"),
         cts_cluster_size=_rf_map.get("cts_cluster_size"),
-        cts_cluster_diameter=_rf_map.get("cts_cluster_diameter")))
+        cts_cluster_diameter=_rf_map.get("cts_cluster_diameter"),
+        sizing_limits_block=sizing_limits_block,
+        sizing_drv_report_block=sizing_drv_report_block))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "
@@ -25885,6 +26392,66 @@ def _run_asap7_device_lvs(project: Path, top: str, pdk: PdkConfig,
         extras={**common, "finding": finding, "lvs_verdict": verdict})
 
 
+def _strip_nonlayer_blockages(def_text: str) -> Tuple[str, List[str]]:
+    """Return (def_text_without_layerless_BLOCKAGES, dropped_entry_summaries).
+
+    A DEF `BLOCKAGES` section may hold two unrelated kinds of entry:
+
+      - LAYER MET1 RECT ( x1 y1 ) ( x2 y2 ) ;              <- has geometry
+      - PLACEMENT + SOFT + COMPONENT <inst> RECT ( ... ) ; <- placer directive
+
+    The second kind names NO layer: it is an instruction to the PLACER not to
+    put cells in a region, and it carries no conductor. Magic's DEF reader has
+    no layer to bind that RECT to and emits
+
+        LEF read, Line NNNN (Error): No layer defined for RECT.
+
+    and -- measured, not assumed -- then terminates the DEF read part of the
+    time: the SAME command on the SAME byte-identical DEF succeeded 2 of 5
+    runs and died inside the BLOCKAGES section the other 3. Magic exits 0
+    either way, so the step reported only the vague downstream symptom
+    "produced no extracted netlist (rc=0)" and LVS was unrunnable at random.
+
+    So: drop only the entries magic cannot bind (no LAYER), keep every entry
+    that does name a layer, and leave the DEF used by every OTHER consumer
+    untouched -- this staged copy is for extraction alone. The removal is
+    LOSS-FREE for extraction by construction (a placement blockage has no
+    conductor to extract) and was verified as such: on a run where the intact
+    DEF happened to survive, the extracted netlists from the intact and the
+    stripped DEF were byte-identical (same md5).
+
+    Strict fall-through: a DEF with no BLOCKAGES section, or one whose
+    blockages ALL name a layer, comes back unchanged with an empty list, so
+    the caller keeps using the original file. chip-AGNOSTIC: pure DEF syntax,
+    no PDK/design knowledge."""
+    m = re.search(r"(?m)^[ \t]*BLOCKAGES[ \t]+(\d+)[ \t]*;[ \t]*$", def_text)
+    if not m:
+        return def_text, []
+    end = re.search(r"(?m)^[ \t]*END[ \t]+BLOCKAGES[ \t]*$", def_text[m.end():])
+    if not end:
+        return def_text, []
+    body = def_text[m.end():m.end() + end.start()]
+    entries = re.findall(r"-[ \t\r\n].*?;", body, re.S)
+    if not entries:
+        return def_text, []
+    kept = [e for e in entries if re.match(r"-\s+LAYER\b", e)]
+    dropped = [" ".join(e.split())[:120] for e in entries if e not in kept]
+    if not dropped:
+        return def_text, []
+    if kept:
+        new_section = (f"BLOCKAGES {len(kept)} ;\n"
+                       + "".join(f"    {' '.join(e.split())}\n" for e in kept)
+                       + "END BLOCKAGES")
+    else:
+        # An empty `BLOCKAGES 0 ;` block is legal DEF, but emitting nothing is
+        # simpler and equally legal; the section is optional.
+        new_section = ""
+    tail = def_text[m.end() + end.start():]
+    tail = re.sub(r"(?m)\A[ \t]*END[ \t]+BLOCKAGES[ \t]*\n?", "", tail)
+    return def_text[:m.start()] + new_section + ("\n" if new_section else "") \
+        + tail, dropped
+
+
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                         container: str, def_file: Path, netlist: Path,
                         magicrc: str, netgen_setup: str,
@@ -25931,6 +26498,31 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     except Exception:  # nosec — a bad DEF/PDK must never break the plain path
         pass
     tcl.write_text(extract_tcl)
+    # ── LVS ROOT FIX (input side) — layer-less BLOCKAGES break magic's DEF
+    # read (see `_strip_nonlayer_blockages` for the measured 2-of-5 failure
+    # rate). Stage an EXTRACTION-ONLY copy of the DEF with those entries
+    # removed; the signed-off DEF that GDS/DRC/every other consumer reads is
+    # left untouched. Strict fall-through: nothing to strip -> original file.
+    extract_def = def_file
+    try:
+        _stripped, _dropped_blk = _strip_nonlayer_blockages(
+            def_file.read_text(errors="replace"))
+        if _dropped_blk:
+            extract_def = ext_dir / f"{top}_extract.def"
+            extract_def.write_text(_stripped)
+            (ext_dir / "extract_def_provenance.json").write_text(json.dumps({
+                "signed_off_def": str(def_file),
+                "extraction_def": str(extract_def),
+                "dropped_blockage_entries": _dropped_blk,
+                "reason": ("magic's DEF reader cannot bind a RECT that names "
+                           "no layer ('No layer defined for RECT') and aborts "
+                           "the read on it, non-deterministically; a placement "
+                           "blockage carries no conductor, so removing it from "
+                           "the EXTRACTION copy is loss-free. The signed-off "
+                           "DEF is untouched."),
+            }, indent=2) + "\n")
+    except OSError:
+        pass
     tlef_c = _to_container_path(str(pdk.tech_lef), container)
     clef_c = _to_container_path(str(pdk.cell_lef), container)
     # `eval`-ed inside the TCL; empty string → no-op when no macro LEFs.
@@ -25954,7 +26546,7 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"export TLEF={shlex.quote(tlef_c)} "
         f"CLEF={shlex.quote(clef_c)} "
         f"MACRO_LEF_READS={shlex.quote(macro_lef_reads)} "
-        f"DEF={_to_container_path(str(def_file), container)} "
+        f"DEF={_to_container_path(str(extract_def), container)} "
         f"TOP={top} "
         f"SPICE_OUT={_to_container_path(str(spice_out), container)} && "
         f"cd {_to_container_path(str(ext_dir), container)} && ")
@@ -25989,17 +26581,51 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                     "lvs_verdict": verdict,
                     "transcript_tail": (out + err)[-600:]})
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
+        # Say WHERE it stopped instead of only that a file is missing.
+        # MEASURED in the image: `magic` exits 0 even when a `lef read` /
+        # `def read` fails outright, so rc carries NO signal for this tool
+        # (openroad/sta/yosys do return 1 on an uncaught error; magic does
+        # not) — and that is true even now the pipeline's status is magic's
+        # own (`_tool_status_not_the_log_sinks`), because 0 is what magic
+        # itself returns. The recipe's own `MAGIC_EXT2SPICE_DONE` sentinel is
+        # therefore the only honest completion signal, and its ABSENCE plus
+        # the last tool line pins the abort to a recipe stage. Without this
+        # the step reported "produced no extracted netlist (rc=0)", which
+        # states the file is missing while implying the tool was fine.
+        _mlog = ""
+        try:
+            _mlog = (ext_dir / "ext2spice.log").read_text(errors="replace")
+        except OSError:
+            _mlog = out + err
+        _done = "MAGIC_EXT2SPICE_DONE" in _mlog
+        _ports = "PORTS_PROMOTED" in _mlog
+        _last = [ln for ln in _mlog.splitlines() if ln.strip()][-1:] or [""]
+        _err_ln = [ln for ln in _mlog.splitlines()
+                   if re.search(r"\(Error\)|error:", ln, re.I)][-3:]
+        _stage = ("completed the recipe but wrote no file" if _done else
+                  "aborted AFTER port promotion (extract/ext2spice stage)"
+                  if _ports else
+                  "aborted BEFORE port promotion (lef/def read stage)")
+        _detail = (
+            f"Magic ext2spice produced no extracted netlist: magic {_stage}. "
+            f"Its own completion sentinel MAGIC_EXT2SPICE_DONE is "
+            f"{'present' if _done else 'ABSENT'} in ext2spice.log. NOTE rc="
+            f"{rc} is not evidence here — magic exits 0 even on a fatal "
+            f"lef/def read failure. Last tool line: {_last[0].strip()[:200]!r}"
+            + (f"; last error line(s): {_err_ln}" if _err_ln else "")
+            + ". See phase3/stage3/extracted/ext2spice.log (#443).")
         verdict = _write_lvs_verdict(
-            project, "FAIL", "LVS_EXTRACTION_NO_NETLIST",
-            f"Magic ext2spice produced no extracted netlist (rc={rc}); "
-            f"see phase3/stage3/extracted/ext2spice.log (#443).",
-            extras={"transcript_tail": (out + err)[-600:]})
+            project, "FAIL", "LVS_EXTRACTION_NO_NETLIST", _detail,
+            extras={"magic_completion_sentinel": _done,
+                    "magic_aborted_stage": _stage,
+                    "magic_rc_is_uninformative": True,
+                    "transcript_tail": (out + err)[-600:]})
         return StepResult(
-            "lvs", "FAIL", time.time() - t0,
-            f"Magic ext2spice produced no extracted netlist (rc={rc}); "
-            f"see phase3/stage3/extracted/ext2spice.log (#443)",
+            "lvs", "FAIL", time.time() - t0, _detail,
             extras={"finding": "LVS_EXTRACTION_NO_NETLIST",
                     "lvs_verdict": verdict,
+                    "magic_completion_sentinel": _done,
+                    "magic_aborted_stage": _stage,
                     "transcript_tail": (out + err)[-600:]})
     # v0.3.14 — ORGANIC #509 round-3 + #685 round-6: re-add same-net top
     # ports that ext2spice dropped, joined by 0-ohm resistors (netgen
