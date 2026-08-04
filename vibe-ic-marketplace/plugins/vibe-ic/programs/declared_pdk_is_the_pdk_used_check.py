@@ -62,6 +62,56 @@ EXIT
        the written words carried in `declared_not_applicable` so the record
        distinguishes "said so" from "never populated the field".
 
+PROVENANCE COMES FROM THE RESOLVED LOAD PATH, NOT FROM A LIBRARY FILENAME
+=========================================================================
+This gate's own PASS record said what it could not answer:
+
+    verified     : "library identity only"
+    not_verified : "foundry / process node (not derivable from a library filename)"
+
+That sentence is true of a FILENAME and it was the whole of the evidence,
+because `loaded_libraries` kept `m.rsplit("/", 1)[-1]` and threw the directory
+chain away. The tool had already resolved the full path — the kit's own
+directory is in every load line it wrote — and the gate discarded it before
+deciding anything.
+
+MEASURED on this repo's own tracked corpus, one project (`benchmark-data/ic/
+caravel_user_project`): the gate reported
+
+    PASS — 2 of 2 loaded librar(ies) match the declared target
+
+while a grep of that same run resolves **5** distinct library load paths, every
+one of them under a single kit directory. Two of the three it missed are timing
+corners; the third is the TECHNOLOGY LEF — `.tlef`, the file that describes the
+metal stack, which `LIB_RE` did not match at all. So the most process-identifying
+load in the run was invisible to the gate whose job is to identify the process,
+and "2 of 2" printed a sample as if it were a population.
+
+WHAT THIS CHANGE DOES AND DOES NOT RECOVER THERE, precisely: keeping the path
+and matching `.tlef` takes that project from 2 to 3 out of the 5, all three from
+its `*.log` files. The two corner libraries are named only in that project's
+`.rpt` and `.tcl` artefacts, which this program deliberately does not read — a
+configuration that was ignored is the failure being looked for, so it must not
+be trusted as evidence of a load. For those the change is not a recovery but a
+denominator: the record now states how many load paths were examined, out of how
+many log files, out of how many exist, instead of leaving a reader to assume.
+
+Three things change, and they are one rule:
+
+  * the RESOLVED PATH is kept and is what provenance is decided from. A load
+    corroborates the declaration by its filename OR by the directory the tool
+    resolved — the second is the stronger fact, and it is the only one available
+    for a kit whose libraries are named for a family rather than a process.
+  * a named process in a load-path directory that the declaration does NOT name,
+    and no declared alternate names, is a FAIL (`foreign_named_pdk_roots`). This
+    is the direction the defect at the top of this file runs in and the one
+    `contradicting_named_pdks` structurally cannot see, because a proprietary
+    declaration names nothing checkable for it to test.
+  * every count is printed against its denominator, and both truncations this
+    program applies — the 400-log scan cap and the 40-entry record list — are
+    flagged (`logs_found`, `logs_scan_truncated`, `libraries_examined`,
+    `libraries_loaded_truncated`). A partial sample must not read as a full one.
+
 WHERE THE DECLARATION IS READ FROM
 ==================================
 `declared_target` reads the canonical L-doc through the tree's shared accessor
@@ -93,7 +143,12 @@ if str(_HERE) not in sys.path:                      # pragma: no cover - path se
     sys.path.insert(0, str(_HERE))
 from l_doc_consumer_contract import l_doc_fields, load_l_doc  # noqa: E402
 
-LIB_RE = re.compile(r"[A-Za-z0-9_./+-]+\.(?:lef|lib)\b")
+#: `.tlef` is a LEF — the TECHNOLOGY LEF, the one file in the set that describes
+#: the metal stack itself. It was outside this pattern, so the single most
+#: process-identifying load in a run was invisible to the gate that exists to
+#: identify the process. Measured on the tracked corpus below. `t?lef` is a
+#: FILE-FORMAT suffix, not a PDK literal, so the file stays chip-AGNOSTIC.
+LIB_RE = re.compile(r"[A-Za-z0-9_./+-]+\.(?:t?lef|lib)\b")
 # A declared target is prose ("Some Foundry ABC123-X1.2"), a loaded library is a
 # filename ("abc123xyz_sc_hd.lef"). Comparing them needs the alphanumeric runs they
 # share, not string equality — so reduce both to lowercase tokens of >=3 chars.
@@ -101,7 +156,9 @@ TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
 
 # Tokens that carry no identity: every PDK has cells and corners.
 STOPWORDS = {
-    "the", "and", "for", "lib", "lef", "gds", "cdl", "spi", "sch", "typ", "min",
+    # `tlef` joins `lef`/`lib` for the same reason they are here: it is a file
+    # format, and every kit that ships one ships it under that suffix.
+    "the", "and", "for", "lib", "lef", "tlef", "gds", "cdl", "spi", "sch", "typ", "min",
     "max", "std", "cell", "cells", "stdcell", "tech", "merged", "liberty",
     "library", "libs", "pdk", "process", "node", "foundry", "technology", "kit",
     "design", "target", "open", "source", "version", "rev",
@@ -275,10 +332,15 @@ def contradicting_named_pdks(target: str, libs: List[str]) -> List[str]:
     libraries from `<family>` — the declaration says an open-source process ran,
     a different one did, and this gate exists for exactly that.
 
-    Only NAMED PDKs are judged, because only they are checkable from a library
-    filename. A foundry or a node in the same sentence ("Foundry R, 55nm") is
-    not derivable from a LEF name, and the caller DISCLOSES that rather than
-    letting a PASS imply it was verified.
+    Only NAMED PDKs are judged, because only they are checkable from the run's
+    own load evidence. A foundry or a node in the same sentence ("Foundry R,
+    55nm") is not derivable from a load path either, and the caller DISCLOSES
+    that rather than letting a PASS imply it was verified.
+
+    ``libs`` is now the evidence STRINGS, basename AND resolved-path provenance,
+    not basenames alone. A kit whose filenames never spell it out is corroborated
+    by the directory it was read from, which is what stops this from reporting a
+    contradiction against a load that plainly corroborates the declaration.
 
     Chip-AGNOSTIC: the table is this repo's own open-PDK vocabulary, already
     spelled the same way in `phase1_doc_one_shot_runner._OPEN_PDK_TOKEN_RE`. No
@@ -480,26 +542,173 @@ def declared_alternates(run: Path) -> List[str]:
     return []
 
 
-def loaded_libraries(run: Path, cap: int = 400) -> Tuple[Set[str], int]:
-    """Every .lef/.lib basename the tools actually read, from their own logs.
+def loaded_libraries(run: Path, cap: int = 400) -> Tuple[Set[str], int, int]:
+    """Every RESOLVED library load path the tools read, from their own logs.
 
     The tool's log is used rather than the flow's configuration because the
     question is what RAN, and a configuration that was ignored is precisely the
     failure being looked for.
+
+    THE PATH IS THE EVIDENCE, AND IT WAS BEING THROWN AWAY
+    =====================================================
+    This returned `m.rsplit("/", 1)[-1]` — the BASENAME — and discarded the
+    directory chain the tool had just resolved. A basename is a name a vendor
+    chose; the resolved path is where the bytes came from, which is the only
+    thing in the run that answers "which process kit did this tool read".
+
+    Two consequences, both measured:
+
+      * A library whose filename carries no process identity at all
+        (`NangateOpenCellLibrary.lef`, `merged.lef`, `cells.lib`) contributed
+        NOTHING, even when the directory that held it named the process
+        outright. `shares_stem_identity` exists in this file solely to
+        reconstruct, from CamelCase guesswork on a filename, an identity the
+        path was carrying literally one component up.
+      * Distinct load paths that happen to share a basename collapsed into one
+        entry, so the count the gate reported was a count of NAMES, not of
+        LOADS — and the same basename read out of two different kits (a staged
+        copy and the image's built-in) is exactly the substitution this file
+        was written to catch, reduced to a single indistinguishable string.
+
+    Returns (resolved paths, logs scanned, logs eligible). The last two are
+    returned SEPARATELY and reported separately because the `cap` silently
+    truncates: `scanned` was printed as though it were the whole run.
+
+    Chip-AGNOSTIC: no process, foundry or vendor literal — only path structure.
     """
-    names: Set[str] = set()
+    eligible = [p for p in sorted(run.rglob("*.log"))
+                # the plugin's own tree is not the run
+                if "/plugin_work/" not in str(p) and "/plugin_" not in str(p)]
+    paths: Set[str] = set()
     scanned = 0
-    for log in sorted(run.rglob("*.log"))[:cap]:
-        if "/plugin_work/" in str(log) or "/plugin_" in str(log):
-            continue                       # the plugin's own tree is not the run
+    for log in eligible[:cap]:
         try:
             text = log.read_text(errors="replace")
         except OSError:
             continue
         scanned += 1
         for m in LIB_RE.findall(text):
-            names.add(m.rsplit("/", 1)[-1])
-    return names, scanned
+            paths.add(m)
+    return paths, scanned, len(eligible)
+
+
+def basename_of(path: str) -> str:
+    """The filename at the end of a resolved load path."""
+    return path.rsplit("/", 1)[-1]
+
+
+def provenance_of(path: str, run_tokens: Set[str], run_abs: str = "") -> str:
+    """The directory chain of a load path, with the RUN's own filing removed.
+
+    WHY ANYTHING IS REMOVED. Provenance means "where did these bytes come
+    from", and the answer is only informative for the part of the path the RUN
+    did not author. A run directory is very often named for a process
+    (`<design>_<process>/`, `clean_run_<...>_<process>_<date>/` — this repo's own
+    corpus is full of both). If the whole path counted, a run stored under such a
+    directory would corroborate its own declaration out of its own folder name.
+    The reasoning would be circular and the gate would report that it had
+    confirmed the kit when it had confirmed the filing system.
+
+    Two removals, and they cover the two ways a path can be the run's own:
+
+      CONTAINMENT  a load that resolves INSIDE the run directory carries no
+                   provenance at all. The flow put those bytes there — a staged
+                   copy, a per-round working tree — so the directory names are
+                   the flow's, not a kit's. Such a load is still judged, by its
+                   FILENAME, exactly as it was before this function existed.
+                   MEASURED: without this, a per-round directory named for the
+                   process corroborated two memory-macro loads whose filenames
+                   carry no process identity, out of a folder the run made.
+      NAME         a component whose every identity token is also a token of the
+                   run root's own absolute path. Containment cannot see this one:
+                   tools log CONTAINER paths (`/run/<name>/...`), so the host run
+                   root never appears as a prefix even though it is the same
+                   directory.
+
+    A component that carries no identity tokens at all (`..`, `lef`, a
+    two-character directory) is kept and simply contributes nothing downstream.
+    Case is preserved, because `shares_stem_identity` reads CamelCase segments.
+
+    Chip-AGNOSTIC: pure path structure, no PDK/vendor/foundry literal.
+    """
+    if run_abs and (path == run_abs or path.startswith(run_abs.rstrip("/") + "/")):
+        return ""                    # the run's own tree is not provenance
+    head = path.rsplit("/", 1)[0] if "/" in path else ""
+    if not head:
+        return ""
+    keep = []
+    for comp in head.split("/"):
+        if not comp:
+            continue
+        t = tokens(comp)
+        if t and t <= run_tokens:
+            continue                 # this component identifies the run, not a kit
+        keep.append(comp)
+    return "/".join(keep)
+
+
+def run_path_tokens(run: Path) -> Set[str]:
+    """Identity tokens of the run root's own absolute path."""
+    try:
+        return tokens(str(run.resolve()))
+    except OSError:                                 # pragma: no cover - defensive
+        return tokens(str(run))
+
+
+def foreign_named_pdk_roots(target: str, alternates: List[str],
+                            provenances: Dict[str, str]) -> Dict[str, str]:
+    """Named PDKs a LOAD PATH names that the declaration does not account for.
+
+    THE OTHER DIRECTION, AND THE ONE THE MOTIVATING DEFECT IS IN.
+    `contradicting_named_pdks` asks whether everything the DECLARATION names was
+    corroborated by a load. It cannot see the reverse — a run that reached into
+    a kit the declaration never mentions — because a declaration written as
+    prose about a proprietary process names no checkable PDK at all, so that
+    function returns [] and the gate falls through to whatever the filenames
+    happened to match.
+
+    That is precisely the run this file's header describes: the staged kit went
+    missing, the tools read the open kit baked into the image, and the flow
+    completed. From a BASENAME that substitution is invisible whenever the
+    vendor's filenames do not spell the kit out. From the resolved path it is
+    not invisible at all — the kit's own directory is in every load line.
+
+    ACCOUNTED-FOR is deliberately generous, because a false accusation here is
+    worse than a missed one: a root is cleared when the declaration or ANY
+    co-declared alternate names it, when the two names are the same identifier
+    under `shares_identity` in EITHER direction (so a declaration of the family
+    covers a load from the lettered variant of that family, and a bare kit name
+    covers the vendor-prefixed spelling of it), or when a declared token carries
+    its identity. Only a root that survives all of that is reported.
+
+    ``provenances`` maps each distinct provenance string to one resolved load
+    path that carries it. Returns {named pdk: that example load path}, so the
+    finding always ships the evidence that produced it.
+
+    Chip-AGNOSTIC: the vocabulary is `_NAMED_PDK_RE`, this repo's existing
+    open-PDK table, already used by `contradicting_named_pdks`.
+    """
+    def _norm(s: str) -> str:
+        return s.lower().replace(" ", "-").replace("-", "")
+
+    accounted = set()
+    for text in [target or ""] + list(alternates or []):
+        accounted |= {_norm(m.group(1)) for m in _NAMED_PDK_RE.finditer(text)}
+    want = tokens(target or "")
+
+    out: Dict[str, str] = {}
+    for prov in sorted(provenances):
+        for m in _NAMED_PDK_RE.finditer(prov):
+            name = _norm(m.group(1))
+            if name in out or name in accounted:
+                continue
+            if any(shares_identity({name}, a) or shares_identity({a}, name)
+                   for a in accounted):
+                continue
+            if shares_identity(want, name) or shares_stem_identity(want, name):
+                continue
+            out[name] = provenances[prov]
+    return out
 
 
 def staged_pdk_files(run: Path) -> int:
@@ -542,9 +751,42 @@ def main(argv=None) -> int:
 
     run = a.run_dir
     target, source = declared_target(run)
-    libs, scanned = loaded_libraries(run)
+    libs, scanned, logs_found = loaded_libraries(run)
     staged = staged_pdk_files(run)
     unnameable = unnameable_staged_pdk(run)
+
+    # PROVENANCE, PER RESOLVED LOAD PATH. `basenames` keeps the old signal for
+    # any consumer that wants it; `prov` is the directory chain the tool reached
+    # into, with the run's own path components removed (see `provenance_of`).
+    run_tokens = run_path_tokens(run)
+    try:
+        run_abs = str(run.resolve())
+    except OSError:                                 # pragma: no cover - defensive
+        run_abs = str(run)
+    basenames = {p: basename_of(p) for p in libs}
+    prov = {p: provenance_of(p, run_tokens, run_abs) for p in libs}
+    # distinct provenance -> one example load path that carries it
+    prov_examples: Dict[str, str] = {}
+    for p in sorted(libs):
+        prov_examples.setdefault(prov[p], p)
+    prov_examples.pop("", None)
+
+    # A SAMPLE MUST NOT READ AS A POPULATION. Every count the record and the
+    # printed lines quote is stated against the total it was drawn from, and the
+    # two truncations this program applies — the 400-log scan cap and the 40-entry
+    # record list — are flagged instead of being invisible. The gate that reported
+    # "2 of 2 loaded librar(ies) match" on a run whose logs resolve five distinct
+    # load paths was not lying about the 2; it was silent about the denominator.
+    logs_truncated = logs_found > scanned
+    listed = sorted(libs)[:40]
+
+    def _examined() -> str:
+        """The one sentence every verdict prints, denominators included."""
+        s = (f"{len(libs)} distinct resolved load path(s) "
+             f"/ {len(set(basenames.values()))} distinct filename(s), "
+             f"from {scanned} of {logs_found} log file(s)")
+        return s + (" — SAMPLE: the log scan hit its cap, this is not the "
+                    "whole run" if logs_truncated else "")
 
     # AN EXPLICIT "NOT APPLICABLE" IS A DECLARATION THAT THERE IS NO TARGET.
     #
@@ -570,8 +812,16 @@ def main(argv=None) -> int:
         "declared_not_applicable": declared_not_applicable,
         "declared_not_applicable_source": declared_not_applicable_source,
         "staged_pdk_files": staged, "logs_scanned": scanned,
+        "logs_found": logs_found, "logs_scan_truncated": logs_truncated,
         "unnameable_staged_pdk": unnameable,
-        "libraries_loaded": sorted(libs)[:40],
+        # `libraries_loaded` is now RESOLVED LOAD PATHS, and it is a SAMPLE:
+        # `_total` is the population it was drawn from and `_truncated` says
+        # whether the list below it is the whole of that population.
+        "libraries_loaded": listed,
+        "libraries_examined": len(libs),
+        "libraries_loaded_truncated": len(libs) > len(listed),
+        "libraries_loaded_basenames": sorted(set(basenames.values())),
+        "load_path_provenances": sorted(prov_examples),
     }
 
     # A PDK THAT CANNOT BE NAMED MUST NOT BECOME AN UNNAMED INPUT.
@@ -596,7 +846,7 @@ def main(argv=None) -> int:
         _emit(a.json, rec)
         print(f"declared_pdk_is_the_pdk_used: FAIL — {rec['reason']}")
         print(f"    staged : {staged} file(s) under input/pdk/, identifier NOT DERIVABLE")
-        print(f"    loaded : {len(libs)} distinct librar(ies) across {scanned} log(s)")
+        print(f"    examined : {_examined()}")
         return 1
 
     if not target:
@@ -622,8 +872,8 @@ def main(argv=None) -> int:
             _emit(a.json, rec)
             print(f"declared_pdk_is_the_pdk_used: FAIL — {rec['reason']}")
             print(f"    staged : {staged} file(s) under input/pdk/")
-            print(f"    loaded : {len(libs)} distinct librar(ies) across {scanned} log(s)")
-            for n in sorted(libs)[:8]:
+            print(f"    examined : {_examined()}")
+            for n in listed[:8]:
                 print(f"        {n}")
             return 1
         rec["verdict"] = "NOT CHECKED"
@@ -639,10 +889,38 @@ def main(argv=None) -> int:
         return 2
 
     want = tokens(target)
-    hits = sorted({n for n in libs
-                   if shares_identity(want, n) or shares_stem_identity(want, n)})
+
+    # PROVENANCE IS DECIDED FROM THE RESOLVED LOAD PATH, NOT FROM A FILENAME.
+    #
+    # A load corroborates the declaration when the declared identity is in the
+    # FILENAME (what this gate used to be able to see) or in the DIRECTORY CHAIN
+    # the tool resolved (what it threw away). The path is the stronger evidence
+    # of the two: a filename is a name a vendor chose and need not carry the kit
+    # at all, while the directory is where the bytes came from.
+    #
+    # This can only ADD corroboration, never remove it — every filename match
+    # that passed before still passes, byte for byte. What it adds is the case
+    # the old gate could not answer: a kit whose libraries are named for the
+    # FAMILY and not the process, read out of a directory that names the process
+    # outright. `shares_stem_identity` was reconstructing that identity from
+    # CamelCase guesswork on the filename; the path states it.
+    def _matches(p: str) -> Tuple[bool, bool]:
+        base, pv = basenames[p], prov[p]
+        on_name = shares_identity(want, base) or shares_stem_identity(want, base)
+        on_path = bool(pv) and (shares_identity(want, pv)
+                                or shares_stem_identity(want, pv))
+        return on_name, on_path
+
+    match = {p: _matches(p) for p in libs}
+    hits = sorted(p for p in libs if any(match[p]))
+    by_path_only = sorted(p for p in libs if match[p][1] and not match[p][0])
     rec["declared_tokens"] = sorted(want)
     rec["matching_libraries"] = hits
+    rec["matching_libraries_total"] = len(hits)
+    rec["matched_by_load_path_only"] = by_path_only
+
+    # The evidence strings the named-PDK tests read: BOTH halves of every load.
+    evidence = sorted({basenames[p] for p in libs} | {prov[p] for p in libs if prov[p]})
 
     # A CONTRADICTION OUTRANKS A PARTIAL MATCH (vibe-ic#713). `hits` only says
     # SOME declared token matched SOME library. If the same declaration also
@@ -664,7 +942,7 @@ def main(argv=None) -> int:
     #
     # Unreachable before the `declared_target` repair in this same change: the
     # reader resolved nothing, so no run ever got this far.
-    contradicted = contradicting_named_pdks(target, libs) if libs else []
+    contradicted = contradicting_named_pdks(target, evidence) if libs else []
 
     # A CO-DECLARED SECOND TARGET IS NOT A CONTRADICTION.
     #
@@ -683,11 +961,14 @@ def main(argv=None) -> int:
     # library corroborates that alternate. A process merely listed and never
     # built clears nothing, and a design with no alternates (every
     # single-target design) takes the identical path it did before.
-    alternates = declared_alternates(run) if contradicted else []
+    # Read once and reused by the foreign-root test below, which needs the same
+    # "what did the design actually declare" answer. `contradicted` no longer
+    # gates the read, because a run can have a foreign root with no contradiction.
+    alternates = declared_alternates(run) if libs else []
     rec["declared_alternates"] = alternates
     corroborated_alt = sorted(
         {a for a in alternates
-         if any(shares_identity(tokens(a), n) for n in libs)})
+         if any(shares_identity(tokens(a), n) for n in evidence)})
     if contradicted and corroborated_alt:
         rec["contradiction_cleared_by_alternate"] = corroborated_alt
         rec["not_built"] = contradicted
@@ -696,11 +977,13 @@ def main(argv=None) -> int:
         # this declaration too — otherwise the run falls through to "declared a
         # target and no loaded library matches it", which is the same false
         # accusation one branch later.
-        alt_hits = sorted({n for n in libs
+        alt_hits = sorted({p for p in libs
                            for a in corroborated_alt
-                           if shares_identity(tokens(a), n)})
+                           if shares_identity(tokens(a), basenames[p])
+                           or (prov[p] and shares_identity(tokens(a), prov[p]))})
         hits = sorted(set(hits) | set(alt_hits))
         rec["matching_libraries"] = hits
+        rec["matching_libraries_total"] = len(hits)
 
     rec["contradicting_named_pdks"] = contradicted
     if contradicted:
@@ -718,27 +1001,83 @@ def main(argv=None) -> int:
                   f"declaration that names another process.", file=sys.stderr)
         return 1
 
+    # A KIT THE DECLARATION NEVER MENTIONS, READ FROM ITS OWN DIRECTORY.
+    #
+    # This is the reverse of `contradicting_named_pdks` and it is the direction
+    # the defect at the top of this file actually runs in. That test asks whether
+    # everything the DECLARATION names was corroborated; it is silent whenever
+    # the declaration names nothing checkable — which is every design whose
+    # target is proprietary prose. So a run that declared such a target and then
+    # read a recognisable open kit out of the image reached the `hits` branch
+    # below on whatever its filenames happened to match, and PASSed.
+    #
+    # From a basename that substitution is invisible unless the vendor spelled
+    # the kit into every filename. From the resolved path it is in every load
+    # line the tool wrote. This test is only possible at all because the path is
+    # now kept.
+    #
+    # It is checked AFTER `contradicted` (that finding is more specific: the
+    # declaration's own words are unsupported) and BEFORE `hits`, because a
+    # filename match must not outvote a directory that names another process —
+    # the same precedence argument #713 made for contradictions.
+    foreign = (foreign_named_pdk_roots(target, alternates, prov_examples)
+               if libs else {})
+    rec["foreign_named_pdk_roots"] = foreign
+    if foreign:
+        rec["verdict"] = "FAIL"
+        rec["reason"] = (
+            "the tools read cell libraries out of "
+            + ", ".join(f"{k} ({v})" for k, v in sorted(foreign.items()))
+            + " — a process kit the declaration does not name, and no declared "
+              "alternate names either. The declaration and the load path "
+              "disagree about which process this run implemented against.")
+        _emit(a.json, rec)
+        print(f"declared_pdk_is_the_pdk_used: FAIL — {rec['reason']}",
+              file=sys.stderr)
+        print(f"    declared : {target}   (from {source})", file=sys.stderr)
+        print(f"    examined : {_examined()}", file=sys.stderr)
+        for k, v in sorted(foreign.items()):
+            print(f"        {k}  <-  {v}", file=sys.stderr)
+        return 1
+
     if hits:
         rec["verdict"] = "PASS"
         rec["no_library_load_recorded"] = False
-        # WHAT THIS PASS DOES NOT COVER, said out loud. The match is on library
-        # IDENTITY. A foundry or a process node in the same declaration is not
-        # derivable from a LEF filename, so it was not checked — and a PASS that
-        # stays silent about that reads as though it had been.
-        rec["verified"] = "library identity only"
+        # WHAT THIS PASS DOES NOT COVER, said out loud. A foundry or a process
+        # node in the same declaration is derivable from neither a filename nor
+        # a load path, so it was not checked — and a PASS that stays silent
+        # about that reads as though it had been.
+        #
+        # WHICH EVIDENCE ANSWERED is now recorded too. "library identity only"
+        # is kept verbatim for the case it was written for — a match the
+        # FILENAME alone supports — so a reader (and this file's own tests) can
+        # still tell that state apart. When the directory the tool resolved
+        # carried the identity, that is the stronger fact and it is named.
+        rec["verified"] = ("library identity + load-path provenance"
+                           if by_path_only else "library identity only")
+        rec["provenance_source"] = ("load path" if by_path_only
+                                    else "library filename")
         if rec.get("contradiction_cleared_by_alternate"):
             print("    the design declares more than one target; this run built "
                   f"{rec['contradiction_cleared_by_alternate']} and NOT "
                   f"{rec['not_built']} — both are named on the design's own "
                   "target row (pdk_target_alternates), so this is a choice "
                   "among declared targets, not a substitution.")
-        rec["not_verified"] = "foundry / process node (not derivable from a library filename)"
+        rec["not_verified"] = ("foundry / process node (not derivable from a "
+                               "library filename)")
         _emit(a.json, rec)
-        print(f"declared_pdk_is_the_pdk_used: PASS — {len(hits)} of {len(libs)} loaded "
-              f"librar(ies) match the declared target ({source})")
-        print(f"    verified: library identity. NOT verified: any foundry or "
-              f"process-node claim in the same declaration — a LEF filename "
-              f"does not carry either.")
+        print(f"declared_pdk_is_the_pdk_used: PASS — {len(hits)} of {len(libs)} "
+              f"resolved library load path(s) match the declared target ({source})")
+        print(f"    examined : {_examined()}")
+        if by_path_only:
+            print(f"    provenance: LOAD PATH — {len(by_path_only)} of these "
+                  f"carry the declared identity in the directory the tool "
+                  f"resolved, not in the filename, e.g. {by_path_only[0]}")
+        print(f"    verified: library identity"
+              + (" + load-path provenance" if by_path_only else "")
+              + ". NOT verified: any foundry or process-node claim in the same "
+                "declaration — neither a filename nor a load path carries "
+                "either.")
         return 0
 
     if not libs:
@@ -773,7 +1112,7 @@ def main(argv=None) -> int:
         print(f"declared_pdk_is_the_pdk_used: FAIL — {rec['reason']}")
         print(f"    declared : {target}   (from {source})")
         print(f"    staged   : {staged} file(s) under input/pdk/")
-        print(f"    loaded   : 0 librar(ies) across {scanned} log(s) — nothing to compare")
+        print(f"    examined : {_examined()} — nothing to compare")
         return 1
 
     rec["verdict"] = "FAIL"
@@ -790,9 +1129,8 @@ def main(argv=None) -> int:
     print(f"declared_pdk_is_the_pdk_used: FAIL — {rec['reason']}")
     print(f"    declared : {target}   (from {source})")
     print(f"    staged   : {staged} file(s) under input/pdk/")
-    print(f"    loaded   : {len(libs)} distinct librar(ies) across {scanned} log(s), "
-          f"none matching")
-    for n in sorted(libs)[:8]:
+    print(f"    examined : {_examined()}, none matching")
+    for n in listed[:8]:
         print(f"        {n}")
     return 1
 
