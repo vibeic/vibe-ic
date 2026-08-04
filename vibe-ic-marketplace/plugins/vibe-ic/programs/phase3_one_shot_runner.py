@@ -25915,10 +25915,20 @@ def _restamp_provenance_output(project: Path, rel: str, path: Path,
     """Make provenance.jsonl declare `rel` with the REAL current sha256 of
     `path`.
 
-    * patches EVERY existing entry that declares `rel` IN PLACE (appending a
-      second entry with a different hash would only trade
-      PROVENANCE_HASH_MISMATCH for PROVENANCE_HASH_INCONSISTENT);
+    * APPENDS a fresh entry when the newest record of `rel` declares a
+      different hash — the earlier record is superseded, never amended;
     * appends one fresh entry when no prior entry declares it.
+
+    This used to patch every existing entry that declares `rel` IN PLACE,
+    because appending "would only trade PROVENANCE_HASH_MISMATCH for
+    PROVENANCE_HASH_INCONSISTENT". That was true, and it was a defect in
+    the checker, not a reason to edit history: amending the ledger to
+    agree with the disk makes the one question the hash check exists to
+    answer — are these the bytes the recorded tool produced? —
+    permanently unanswerable, because a hand-edited artefact and a
+    legitimately re-run one both end PASS. provenance_output_hash_
+    completeness_check now resolves a path to its NEWEST record, so an
+    append is both honest and sufficient.
 
     Anti-fabrication (#365): the record declares the REAL sha256 of a file that
     EXISTS on disk, is flagged `reconstructed: true` and carries
@@ -25938,27 +25948,38 @@ def _restamp_provenance_output(project: Path, rel: str, path: Path,
             for _ch in iter(lambda: _f.read(65536), b""):
                 _h.update(_ch)
         _sha = "sha256:" + _h.hexdigest()
-        _patched = False
+        # The newest record of `rel` is the one that describes the bytes
+        # on disk. If it disagrees, APPEND a record of what is there now
+        # — never edit the earlier record. Amending history is what made
+        # a hand-edited artefact indistinguishable from a re-run one;
+        # see the re-emit note in the OpenROAD provenance block.
         _found = False
-        _new_lines: List[str] = []
+        _newest_sha = None
         for _ln in prov_path.read_text().splitlines():
             if not _ln.strip():
-                _new_lines.append(_ln)
                 continue
             try:
                 _rec = json.loads(_ln)
             except Exception:
-                _new_lines.append(_ln)
                 continue
             _outs = _rec.get("outputs", {})
             if isinstance(_outs, dict) and rel in _outs:
                 _found = True
-                if _outs[rel] != _sha:
-                    _outs[rel] = _sha
-                    _patched = True
-            _new_lines.append(json.dumps(_rec))
-        if _patched:
-            prov_path.write_text("\n".join(_new_lines) + "\n")
+                _newest_sha = _outs[rel]
+        if _found and _newest_sha != _sha:
+            with prov_path.open("a") as _f:
+                _f.write(json.dumps({
+                    "tool": tool,
+                    "command": command,
+                    "exit_code": 0,
+                    "duration_ms": None,
+                    "reconstructed": True,
+                    "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "note": "output re-emitted; the earlier record of "
+                            "this path is superseded, not amended",
+                    "outputs": {rel: _sha},
+                }) + "\n")
         if not _found:
             _entry = {
                 "tool": tool,
@@ -28313,12 +28334,25 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             "Re-run phase3_one_shot_runner from scratch (delete "
             "phase3/stage3/pnr/) so v1.6.36's per-stage write_def fires.")
 
-    # --- Provenance: refresh on-disk hashes + append OpenROAD entry ---
+    # --- Provenance: record re-emitted outputs + append OpenROAD entry ---
     # When the runner re-emits a file (synth.log, routed.def, GDS, etc.)
     # the previously-recorded hash in provenance.jsonl no longer matches
-    # the new on-disk hash, breaking provenance_output_hash_completeness_check.
-    # We refresh in place — this is honest provenance because the runner
-    # IS the tool invoker for these outputs.
+    # the new on-disk hash.
+    #
+    # This used to be reconciled by REWRITING the historical record's
+    # declared hash to whatever was on disk. Being the tool invoker
+    # justifies APPENDING a record of what we just produced; it does not
+    # justify editing a record of what some earlier invocation produced.
+    # The rewrite destroyed the only evidence the hash check reads: it
+    # made "the bytes on disk are not the bytes the recorded tool
+    # produced" unobservable, because any disagreement was resolved by
+    # amending the ledger. A hand-edited artefact and a legitimately
+    # re-run one are indistinguishable to it — both end PASS.
+    #
+    # So: append a new record instead. The ledger stays append-only, the
+    # newest record describes the current bytes (which is what
+    # provenance_output_hash_completeness_check verifies), and the
+    # earlier record survives as the history it was written to be.
     # Also: ensure routed.def has an entry attributed to openroad so
     # provenance_check (Step 21) finds the tool attribution.
     prov_path = project / "provenance.jsonl"
@@ -28330,33 +28364,49 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 h.update(ch)
         return "sha256:" + h.hexdigest()
 
-    # 1. Refresh existing provenance entry hashes for any output that
-    #    still exists on disk but whose hash drifted.
+    # 1. Record any declared output that still exists on disk but whose
+    #    bytes no longer match its newest record — by APPENDING a fresh
+    #    record of what is there now, never by editing an older one.
     if prov_path.is_file():
         try:
-            lines = prov_path.read_text().splitlines()
-            patched_lines = []
-            for line in lines:
+            newest: Dict[str, str] = {}
+            for line in prov_path.read_text().splitlines():
                 if not line.strip():
-                    patched_lines.append(line)
                     continue
                 try:
                     rec = json.loads(line)
                 except Exception:
-                    patched_lines.append(line)
                     continue
                 outs = rec.get("outputs", {})
                 if isinstance(outs, dict):
-                    for rel, declared_sha in list(outs.items()):
-                        fp = project / rel
-                        if fp.is_file():
-                            cur = _sha(fp)
-                            if cur != declared_sha:
-                                outs[rel] = cur
-                patched_lines.append(json.dumps(rec))
-            prov_path.write_text("\n".join(patched_lines) + "\n")
+                    for rel, declared_sha in outs.items():
+                        if isinstance(rel, str) and isinstance(
+                                declared_sha, str):
+                            newest[rel] = declared_sha
+            drifted = {}
+            for rel, declared_sha in newest.items():
+                fp = project / rel
+                if fp.is_file():
+                    cur = _sha(fp)
+                    if cur != declared_sha:
+                        drifted[rel] = cur
+            if drifted:
+                with prov_path.open("a") as f:
+                    f.write(json.dumps({
+                        "tool": "phase3_one_shot_runner",
+                        "command": "re-emit (phase3 iteration)",
+                        "exit_code": 0,
+                        "duration_ms": None,
+                        "reconstructed": True,
+                        "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "note": "outputs re-emitted by a re-run of this "
+                                "runner; the earlier record of each path "
+                                "is superseded, not amended",
+                        "outputs": drifted,
+                    }) + "\n")
         except Exception as exc:
-            notes.append(f"provenance refresh failed: {exc}")
+            notes.append(f"provenance re-emit record failed: {exc}")
 
     # 2. Append openroad entry for routed.def if missing.
     routed_def = pnr_out / "routed.def"
