@@ -312,7 +312,11 @@ _EXCLUDED: Dict[str, str] = {
 # `rc != 0 -> RED` reader, and its own tests updated. `--strict` reports the
 # residual as a FAIL for whoever does that.
 _UNROUTED_INVENTORY: Dict[str, int] = {
-    "analog_content_detected_must_emit_l5_check": 1,
+    # analog_content_detected_must_emit_l5_check: DRAINED (#833). Its one
+    # unrouted branch ("no analog keywords found" -> rc 0) now routes through
+    # `_vacuous_exit`. The entry is DELETED rather than zeroed, because the
+    # ratchet's "fixed" direction demands exactly that: a list that keeps
+    # claiming what is already fixed is a baseline outliving its truth.
     "bram_init_file_actually_loaded_check": 1,
     # buffer_occupancy_flag_latency_check (empty/full stale-pointer latency
     # gate) SKIPs (exit 0) on any design with no occupancy flag — an unrouted
