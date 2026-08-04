@@ -53,6 +53,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +147,7 @@ class AuditReport:
             "pass_count": self.pass_count,
             "unknown_count": self.unknown_count,
             "verdict": "ERROR" if self.error_count else "PASS",
-            "emitted_by": "protocol_turnaround_audit v0.1.50",
+            "emitted_by": _pmd.emitted_by("protocol_turnaround_audit"),
         }
 
 
@@ -409,7 +410,8 @@ def report_to_markdown(rep: AuditReport) -> str:
     out.append("")
     out.append(
         f"_Emitted by `protocol_turnaround_audit.py` "
-        f"(Vibe-IC plugin v0.1.50). Algorithm verbatim from the retired "
+        f"(Vibe-IC plugin v{_pmd.running_plugin_version()}). Algorithm "
+        f"verbatim from the retired "
         f"`atpg-name-harmonize`-style skill; refuse to overclaim the "
         f"verdict._")
     out.append("")

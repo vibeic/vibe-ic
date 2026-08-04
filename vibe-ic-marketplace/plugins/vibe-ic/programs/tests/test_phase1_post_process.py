@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("phase1_post_process")
 
 
@@ -176,7 +177,9 @@ class TestSkeletonEmission:
 
     def test_skeleton_attribution(self):
         sk = mod.emit_l_doc_skeleton("L14", "bus_interconnect_protocol")
-        assert "v0.1.51" in sk["emitted_by"]
+        assert sk["emitted_by"] == (
+            "phase1_post_process.emit_l_doc_skeleton "
+            f"v{shipped_plugin_version()}")
 
 
 class TestPostProcessIntegration:
@@ -272,4 +275,5 @@ class TestDoctrineCompliance:
             scrubbed_count=0, scrub_log=[], skeleton_emitted=[],
             na_stubs_emitted=[], verdict="PASS")
         d = rep.as_dict()
-        assert "v0.1.51" in d["emitted_by"]
+        assert d["emitted_by"] == \
+            f"phase1_post_process v{shipped_plugin_version()}"

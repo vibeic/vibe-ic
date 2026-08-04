@@ -33,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 import _published_tree  # noqa: E402
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 def _read_text(p: Path) -> str:
@@ -523,7 +524,7 @@ def main(argv=None) -> int:
     # layer table is foundry-specific so we mark it TODO.
     mask_spec = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.1",
+        "generated_by": _pmd.emitted_by("foundry_handoff_pack_gen"),
         "design_identity": _ident,
         "design_top": design_top,
         "process_node_nm": process_nm,
@@ -555,7 +556,7 @@ def main(argv=None) -> int:
     # genuinely foundry-supplied content.
     wat_plan = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.1",
+        "generated_by": _pmd.emitted_by("foundry_handoff_pack_gen"),
         "design_identity": _ident,
         "design_top": design_top,
         "pdk": pdk_name,
@@ -585,7 +586,7 @@ def main(argv=None) -> int:
     l10_ids = _l10_test_pattern_ids(project)
     corner_kit = {
         "schema_version": "1.0",
-        "generated_by": "foundry_handoff_pack_gen v1.1",
+        "generated_by": _pmd.emitted_by("foundry_handoff_pack_gen"),
         "design_identity": _ident,
         "design_top": design_top,
         "pdk": pdk_name,

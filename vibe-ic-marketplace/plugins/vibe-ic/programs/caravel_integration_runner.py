@@ -36,6 +36,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # Hard-macro Caravel signoff floor (what spm pilot proved):
@@ -392,7 +393,7 @@ class IntegrationReport:
             "pin_map": self.pin_map,
             "steps": [s.as_dict() for s in self.steps],
             "overall_verdict": self.overall_verdict,
-            "emitted_by": "caravel_integration_runner v0.1.51",
+            "emitted_by": _pmd.emitted_by("caravel_integration_runner"),
         }
 
 

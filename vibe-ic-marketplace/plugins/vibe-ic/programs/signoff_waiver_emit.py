@@ -53,6 +53,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +257,7 @@ def build_waiver_entry(
         "approver": entry.approver,
         "signed_at": entry.signed_at or _today_iso(),
         # Reproducibility hint: which program emitted this entry.
-        "emitted_by": "vibe-ic plugin lvs_signoff_waiver_emit v0.1.49",
+        "emitted_by": _pmd.emitted_by("vibe-ic plugin signoff_waiver_emit"),
     }
     # Drop optional empty fields so the JSON stays clean.
     if not d["sub_check_detail"]:

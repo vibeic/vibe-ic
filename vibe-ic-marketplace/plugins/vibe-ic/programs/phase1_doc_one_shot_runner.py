@@ -200,6 +200,7 @@ from _code_literal import (  # noqa: E402
 from _electrical_mention import (  # noqa: E402
     scan_electrical_mentions as _scan_electrical_mentions,
 )
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 # ─── `typedef enum` harvester for staged HDL inputs (#499) ────────────
 import _hdl_enum as _hdlenum  # noqa: E402
 # ─── Was the input actually READ? (#499) ──────────────────────────────
@@ -9824,8 +9825,8 @@ def _emit_l14_to_l18_via_extractor(
                 payload = {"extracted": payload}
             payload.setdefault("schema_version", "v0.1.62")
             payload.setdefault("doc_class", doc_name.split("_", 1)[0])
-            payload.setdefault("emitted_by",
-                                f"phase1_protocol_spec_extract.{fn_name} v0.1.62")
+            payload.setdefault("emitted_by", _pmd.emitted_by(
+                f"phase1_protocol_spec_extract.{fn_name}"))
             # _write_l_doc will run R11 scrub + R13 applicability gate.
             # Evidence is per-extractor; pass empty if the extractor
             # didn't carry one (gate-internal evidence sanitiser handles it).

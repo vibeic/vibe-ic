@@ -45,6 +45,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +348,7 @@ class ReviewReport:
             "total_errors": self.total_errors,
             "total_warns": self.total_warns,
             "total_infos": self.total_infos,
-            "emitted_by": "rtl_review_aggregate v0.1.50",
+            "emitted_by": _pmd.emitted_by("rtl_review_aggregate"),
         }
 
 
@@ -441,7 +442,8 @@ def report_to_markdown(rep: ReviewReport) -> str:
     out: List[str] = []
     out.append(f"# RTL review — {rep.rtl_dir or 'unspecified'}")
     out.append("")
-    out.append(f"_Emitted by `rtl_review_aggregate.py` (Vibe-IC plugin v0.1.50). "
+    out.append(f"_Emitted by `rtl_review_aggregate.py` (Vibe-IC plugin "
+               f"v{_pmd.running_plugin_version()}). "
                f"Score and category counts are deterministic; refuse to claim "
                f"a higher score than this report._")
     out.append("")

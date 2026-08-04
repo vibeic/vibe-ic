@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("l_doc_parity_diff")
 
 
@@ -126,7 +127,7 @@ class TestMarkdownEmit:
     def test_includes_attribution(self):
         md = mod.report_to_markdown([], [])
         assert "l_doc_parity_diff.py" in md
-        assert "v0.1.51" in md
+        assert f"(v{shipped_plugin_version()})." in md
 
     def test_hallucination_section_when_present(self):
         s = mod.LDocStats("L1", 100, 100, 5, 5, 0, 1, 0, 0)

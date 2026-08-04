@@ -30,6 +30,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # Files that should always carry SPDX headers in a Caravel project.
@@ -85,7 +86,7 @@ class CleanupReport:
             "project_dir": self.project_dir,
             "fixes_applied": [f.as_dict() for f in self.fixes_applied],
             "verdict": self.verdict,
-            "emitted_by": "mpw_precheck_cleanup v0.1.51",
+            "emitted_by": _pmd.emitted_by("mpw_precheck_cleanup"),
         }
 
 

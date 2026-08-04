@@ -51,6 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 CRC8_DEFAULT_POLY_LSB = 0x8C
@@ -272,7 +273,7 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out = {
         "schema": "vibe-ic L10 oracle vectors v1",
-        "generated_by": "oracle_vector_gen.py v1.0.0",
+        "generated_by": _pmd.emitted_by("oracle_vector_gen.py"),
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source_layers": ["L8_RTL_CONSTANTS", "L9_INTEGRATION_SPEC", "L11_OTP_CONTENT"],
         "crc_params": {

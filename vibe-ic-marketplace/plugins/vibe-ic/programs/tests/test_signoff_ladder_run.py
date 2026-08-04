@@ -2,6 +2,7 @@
 import importlib
 import json
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("signoff_ladder_run")
 
 
@@ -384,7 +385,8 @@ class TestRunLadder:
 
     def test_attribution(self, tmp_path):
         rep = mod.run_ladder(tmp_path)
-        assert "v0.1.51" in rep.as_dict()["emitted_by"]
+        assert rep.as_dict()["emitted_by"] == (
+            f"signoff_ladder_run v{shipped_plugin_version()} (release-gate-wired)")
 
     def test_tapeout_adds_release_tiers(self, tmp_path):
         rep = mod.run_ladder(tmp_path, mode="tapeout")

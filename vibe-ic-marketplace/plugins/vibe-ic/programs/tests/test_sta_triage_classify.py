@@ -1,6 +1,7 @@
 """Unit tests for `sta_triage_classify.py`."""
 import importlib
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("sta_triage_classify")
 
 
@@ -73,4 +74,4 @@ class TestMarkdownEmit:
         rep = mod.build_report([], wns=0, tns=0)
         md = mod.report_to_markdown(rep)
         assert "sta_triage_classify.py" in md
-        assert "v0.1.50" in md
+        assert f"(v{shipped_plugin_version()})." in md

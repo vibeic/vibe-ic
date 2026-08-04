@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 CATEGORIES = (
@@ -64,7 +65,7 @@ class StaReport:
             "tns_ns": self.tns_ns,
             "counts_by_category": self.counts_by_category,
             "total_violations": self.total_violations,
-            "emitted_by": "sta_triage_classify v0.1.50",
+            "emitted_by": _pmd.emitted_by("sta_triage_classify"),
         }
 
 
@@ -138,7 +139,8 @@ def make_finding(endpoint: str, slack_ns: float,
 def report_to_markdown(rep: StaReport) -> str:
     out = ["# STA triage",
            "",
-           f"_Emitted by `sta_triage_classify.py` (v0.1.50)._",
+           f"_Emitted by `sta_triage_classify.py` "
+           f"(v{_pmd.running_plugin_version()})._",
            "",
            f"- WNS: {rep.wns_ns}",
            f"- TNS: {rep.tns_ns}",

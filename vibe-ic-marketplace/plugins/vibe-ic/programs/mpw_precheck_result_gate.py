@@ -52,9 +52,12 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
-ATTRIBUTION = "mpw_precheck_result_gate v1.2.76"
+# The TOOL half only. The release half is never restated here — #800: a
+# version literal is correct for exactly the release it was typed in.
+ATTRIBUTION = "mpw_precheck_result_gate"
 
 # ---------------------------------------------------------------------------
 # Canonical mpw_precheck stage ladder.
@@ -162,7 +165,7 @@ class PrecheckGateReport:
             "summary_line": self.summary_line,
             "logs_scanned": self.logs_scanned,
             "notes": self.notes,
-            "emitted_by": ATTRIBUTION,
+            "emitted_by": _pmd.emitted_by(ATTRIBUTION),
         }
 
 

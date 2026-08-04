@@ -1,6 +1,7 @@
 """Unit tests for `phase3_verify_aggregate.py`."""
 import importlib
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("phase3_verify_aggregate")
 
 
@@ -89,4 +90,5 @@ class TestAggregator:
         rep = mod.aggregate(mod.Path("/x"), [], [],
                              drc_violations=0, wns=0, tns=0)
         d = rep.as_dict()
-        assert "v0.1.50" in d["emitted_by"]
+        assert d["emitted_by"] == \
+            f"phase3_verify_aggregate v{shipped_plugin_version()}"

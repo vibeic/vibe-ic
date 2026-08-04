@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("phase1_verify_aggregate")
 
 
@@ -55,7 +56,8 @@ class TestAggregator:
         rep = mod.aggregate(mod.Path("/x"), [],
                              {d: True for d in mod.L_DOCS})
         d = rep.as_dict()
-        assert "v0.1.50" in d["emitted_by"]
+        assert d["emitted_by"] == \
+            f"phase1_verify_aggregate v{shipped_plugin_version()}"
 
 
 class TestMarkdownEmit:
