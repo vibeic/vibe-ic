@@ -22,4 +22,4 @@ requirements:
 cross_checks:
   - id: X_text_only_skill
     description: "Pure analysis/planning skill — no verifiable artifact. Compliance via regex only."
-    rule: postcheck_pass_only
+    rule: text_only_report

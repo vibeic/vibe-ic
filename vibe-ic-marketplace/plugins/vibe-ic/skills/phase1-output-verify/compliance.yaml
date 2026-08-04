@@ -27,4 +27,4 @@ requirements:
 cross_checks:
   - id: X_text_only_skill
     description: "Phase 1 output verification spot-check report skill."
-    rule: postcheck_pass_only
+    rule: text_only_report
