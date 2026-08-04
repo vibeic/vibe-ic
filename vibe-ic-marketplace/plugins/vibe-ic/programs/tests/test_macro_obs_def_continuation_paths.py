@@ -179,3 +179,76 @@ def test_metal_that_clears_the_macro_is_not_a_crossing(spelling):
 def test_a_def_with_no_special_nets_yields_nothing_rather_than_guessing():
     g = _gate()
     assert g.parse_routed_segments("VERSION 5.8 ;\nEND DESIGN\n") == []
+
+
+# ------------------------------------------------- a via changes the layer
+# LEF/DEF 5.8: "If you specify a via, layerName for the next routing coordinates
+# (if any) is implicitly changed to the other routing layer for the via."
+#
+# Reading every point of a path under the HEAD layer therefore puts upper-layer
+# metal on the lower layer. On a gate that BLOCKS, that is not a missed
+# violation — it is an invented one, against an obstruction the metal never came
+# near. A false accusation from a blocking gate costs more than a gap.
+
+_VIAS = """VIAS 1 ;
+- v12 + VIARULE VIA12 + CUTSIZE 260 260 + LAYERS MET1 VIA1 MET2
+  + CUTSPACING 260 260 + ENCLOSURE 60 270 10 60 ;
+END VIAS
+"""
+
+
+def _def_with_via(via_name: str = "v12", vias_section: str = _VIAS) -> str:
+    """A path that approaches on MET1, rises through a via, and only THEN
+    crosses the macro. The crossing metal is on MET2; the obstruction is on
+    MET1; so the correct answer is zero crossings."""
+    y = _Y_THROUGH[0]
+    body = (f"- VDD ( * VDD )\n"
+            f"  + ROUTED MET1 480 + SHAPE STRIPE ( {_X1} {y} ) ( 50000 * ) "
+            f"{via_name} ( {_X2} * )\n  + USE POWER ;")
+    return f"""VERSION 5.8 ;
+DESIGN t ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 400000 400000 ) ;
+{vias_section}COMPONENTS 1 ;
+- u_ip big_ip + PLACED ( 100000 100000 ) N ;
+END COMPONENTS
+SPECIALNETS 1 ;
+{body}
+END SPECIALNETS
+END DESIGN
+"""
+
+
+def test_metal_after_a_via_is_on_the_other_layer_not_the_head_layer():
+    """THE FABRICATION CASE. The segment that crosses the macro is MET2 metal;
+    the obstruction is MET1. Attributing it to the head layer reports a
+    violation that does not exist."""
+    g = _gate()
+    segs = g.parse_routed_segments(_def_with_via())
+    layers = [s["layer"] for s in segs]
+    assert layers == ["MET1", "MET2"], layers
+    assert _crossings(_def_with_via()) == 0
+
+
+def test_the_vias_section_supplies_the_layer_pair():
+    g = _gate()
+    assert g.parse_via_layers(_def_with_via()) == {"v12": ("MET1", "MET2")}
+
+
+def test_an_unresolvable_via_stops_rather_than_guessing_the_layer():
+    """A via defined in the tech LEF is not in this DEF, so its layers are
+    unknown. Continuing under the previous layer would attribute the metal to a
+    layer it may not be on — the same fabrication, just quieter. Stop instead,
+    and leave the gap visible."""
+    g = _gate()
+    d = _def_with_via(via_name="via_from_tech_lef", vias_section="")
+    segs = g.parse_routed_segments(d)
+    assert [s["layer"] for s in segs] == ["MET1"]
+    assert _crossings(d) == 0
+
+
+def test_def_keywords_in_a_path_are_not_read_as_vias():
+    """`SHAPE`, `FOLLOWPIN`, `USE`, `POWER` occupy the same syntactic slot as a
+    via name. Treating them as unresolvable vias abandons every path at its
+    first keyword — which reads as a clean result."""
+    assert _crossings(_def_new_continuations(ALL_YS)) == N_THROUGH
