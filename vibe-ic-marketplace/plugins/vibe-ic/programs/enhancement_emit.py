@@ -137,9 +137,55 @@ def _slug(s: str) -> str:
 #   - benchmark family tags: RTLLM, VerilogEval-{v2,Human,Machine}, CVDP, MetRex, …
 # When matched, emit_skill_section sanitizes them OUT of the worked-pattern field
 # so the captured skill stays general regardless of what the caller passed.
+#
+# #798 — both boundaries used to be `\b`, and `\b` treats `_` as a WORD
+# character, so the family branch fired only on a bare, standalone tag. It
+# missed every real benchmark cell id, which embeds the tag in an identifier:
+#   `cvdp_copilot_64b66b_encoder_0001`  — `\bCVDP\b` fails on the trailing `_`
+#   `base_cvdp_copilot_scrambler_0001`  — and on the leading `_`
+# HARVEST DEFINITION for every cell-id cardinal quoted in this file — quote it
+# with the definition or not at all, because the same corpus counts differently
+# under four defensible ones (126 / 148 / 369 / 391) and none of those is
+# "about 100":
+#     ids = { m for path in `git ls-files`                      # PATHS ONLY
+#             for m in re.findall(
+#                 r"cvdp_(?:copilot|agentic)_[A-Za-z0-9_]*?_\d{4}", path) }
+# File CONTENTS are deliberately excluded: this commit's own tests add cell-id
+# literals, so a contents-inclusive count measures itself and drifts commit to
+# commit. Paths-only yields |ids| = 126 on this tree. Measured over those 126:
+# the family rule caught 0, and 76 were refused at all — every one of the 76 by
+# the 30-char cap alone, and the other 50 accepted outright. Refusal by length
+# is an ACCIDENT, not leak detection, and it is the reason narrowing that cap
+# looked like a coverage loss. This branch refuses 126 of 126 as family leaks.
+# `_` is a SEPARATOR in every identifier convention this repo uses, so the
+# boundaries are alphanumeric-only: the tag must not be glued to a letter or a
+# digit, but an underscore-delimited segment is exactly how a real leak looks.
+# The `ProbNNN` branch already carried the identifier tail; it gets the same
+# leading boundary so `base_Prob089_…` is caught like `Prob089_…`.
+#
+# The tail is NOT open-ended, because a family tag also legitimately prefixes
+# this plugin's own thin benchmark ADAPTERS — `cvdp_gate.py`,
+# `cvdp_solve_pipeline.py`, `verilogeval_v2` — which the open-benchmark
+# doctrine says are correctly named that way (SKILL.md: "the `cvdp_` /
+# `rtllm_` / `verilogeval_` prefix is CORRECT for the record-IO shell").
+# Refusing those would just re-create the false-positive class this issue is
+# about. What separates a DATASET IDENTIFIER from an adapter is that the
+# dataset numbers things: a cell carries a 4-digit ordinal
+# (`cvdp_copilot_scrambler_0001`), a release carries a dotted version
+# (`cvdp_v1.1.0_nonagentic_….jsonl`). Requiring THREE digits anywhere in the
+# tail admits both and still excludes every adapter — `cvdp_gate.py` and
+# `cvdp_solve_pipeline.py` have none, `verilogeval_v2` and
+# `cvdp_phase1_entry.py` have one. A bare standalone tag is refused on its own.
+_TAG_L = r"(?<![A-Za-z0-9])"                # not glued to a letter/digit left
+_TAG = (r"(?:RTLLM|VerilogEval(?:-(?:v[12]|Human|Machine))?|CVDP|MetRex"
+        r"|ResBench|RTL-Repo|PyHDL-Eval)")
+#: dataset tail: any identifier/version run carrying >= 3 digit characters.
+_TAG_TAIL = r"_(?:[A-Za-z0-9_.\-]*\d){3}[A-Za-z0-9_.\-]*"
 _DESIGN_LEAK_PATTERN = (
-    r"\bProb\d+[A-Za-z0-9_]*"                                              # ProbNNN_xxx
-    r"|\b(?:RTLLM|VerilogEval(?:-(?:v[12]|Human|Machine))?|CVDP|MetRex|ResBench|RTL-Repo|PyHDL-Eval)\b"
+    _TAG_L + r"Prob\d+[A-Za-z0-9_]*"                    # ProbNNN_xxx
+    + r"|" + _TAG_L + _TAG + _TAG_TAIL                  # cvdp_copilot_…_0001
+                                                        # cvdp_v1.1.0_….jsonl
+    + r"|" + r"\b" + _TAG + r"\b"                       # the bare family tag
 )
 import re as _leak_re  # local alias to avoid clobbering caller's `re` if any
 
@@ -250,8 +296,17 @@ def _check_backtick_content(field_name: str, value: str) -> None:
     v0.1.43 distinguishes two legitimate uses of markdown backticks:
 
       (1) Single identifier (`rst_n`, `data_width`, `eda_cocotb`):
-          Apply strict identifier-shape rules. Refuse ProbNNN,
-          digit-embedded-in-lowercase (radix2div), over-long tokens.
+          Apply strict identifier-shape rules. Refuse ProbNNN, the
+          lowercase-then-digits leaf-name shape (radix2div, mux256to1,
+          lemmings1), and tokens carrying an over-long UNBROKEN alphanumeric
+          run (freqdivbyeven-style separator-stripped concatenations).
+          #798: the run, not the total length — the plugin's own program
+          filenames are long BY CONVENTION
+          (`declared_pdk_is_the_pdk_used_check.py`) and a total-length cap
+          refused 31.49% of them. The digit rule is NOT narrowed to
+          compensate; its false positives are finite industry vocabulary and
+          go in `industry_tech_allowlist.yaml`, because `ddr4` and
+          `lemmings1` have the same shape.
 
       (2) Multi-token CODE SNIPPET (`initial clk=X; always #(PERIOD/2) ...`,
           `assign MATCH = state == MATCH_STATE`):
@@ -295,22 +350,111 @@ def _check_backtick_content(field_name: str, value: str) -> None:
         # Reject digit-embedded-in-lowercase (radix2div, mux256to1 style)
         # — this is the exact shape Round-4 NEW-2 used to bypass v0.1.41.
         # Snake-case forms like `radix2_div` also match (the `2_` boundary
-        # makes the trailing `_div` not interfere with the `[a-z0-9]*$` tail).
+        # makes the trailing `_div` not interfere with the `[a-z0-9]*` tail).
+        #
+        # #798 — this shape DOES over-fire: it refused 11 of this plugin's own
+        # 86 shipped `*_protocol_synth.py` protocol names (12.8%) — `ddr4`,
+        # `ddr5`, `gddr6`, `hbm3`, `lpddr5`, `usb4`, `rs485`, `psi5`,
+        # `jesd204`, `arinc429`, `milstd1553` — plus `crc32`, `sha256`,
+        # `base64`, `utf8`, `axi4`, `int8`, `float32`.
+        #
+        # The tempting narrowing — require an alphabetic tail after the digit
+        # run, so a "generation suffix" like `ddr4` terminates at its digits
+        # while `radix2_div` continues — was AUTHORED AND REVERTED here,
+        # because it is a leak. Measured over `verilogeval_v2/problems.list`
+        # with the `ProbNNN_` prefix stripped (the leaf-name a leaking author
+        # would actually write), it takes the caught count from 85/156 to
+        # 38/156: `lemmings1`, `kmap1`..`kmap4`, `circuit1`..`circuit10`,
+        # `fsm1`..`fsm3`, `vector0`..`vector5`, `popcount255`, `rule90`,
+        # `rule110`, `lfsr32`, `dff8`, `count10`, `shift18` — 47 real design
+        # leaf-names, all terminating at their digits exactly like `ddr4`. The
+        # bare-text rule at step 1b already requires that alphabetic tail, so
+        # THIS rule is the only guard on the whole class.
+        #
+        # `ddr4` and `lemmings1` are structurally identical. This is therefore
+        # the same residue as `sg13g2` vs `radix2_div` below: no shape rule can
+        # separate them, and the honest discriminator is the finite, public,
+        # enumerable list in `industry_tech_allowlist.yaml` (checked above),
+        # whose `protocol_generation` + `encoding_and_width` categories carry
+        # these 50 terms and are pinned against collision with any benchmark
+        # leaf-name.
         if _leak_re.search(
                 r"^[a-z]{2,}\d+[a-z0-9_]*$", tok, _leak_re.ASCII):
             raise ValueError(
                 f"{field_name} contains a backtick-wrapped identifier "
                 f"that matches a benchmark-leaf-name shape (`{tok}`); "
                 f"refusing. Examples of this shape: radix2_div, "
-                f"freq_divbyeven, mux256to1. Wrap legitimate industry "
-                f"identifiers like `rst_n` (no digits) or use a generic "
-                f"description instead.")
-        # Cap length: real industry identifiers are short.
-        if len(tok) > 30:
+                f"freq_divbyeven, mux256to1, lemmings1, kmap4, circuit10. "
+                f"Wrap legitimate industry identifiers like `rst_n` (no "
+                f"digits) or use a generic description instead. If this is "
+                f"universal industry vocabulary (a protocol generation like "
+                f"ddr4, an encoding/width like sha256), propose it for "
+                f"industry_tech_allowlist.yaml with a standards citation.")
+        # Cap the longest UNBROKEN alphanumeric run, not the total length.
+        #
+        # #798 — the pre-fix rule was `len(tok) > 30`, which refused 348 of
+        # this plugin's own 1105 `programs/*.py` filenames (31.49%). Every one
+        # of them is a convention-conformant `descriptive_name_check.py`, and
+        # every one of them is a name the BARE-text rule at step 1 of
+        # `_validate_general_text` explicitly instructs the author to wrap in
+        # backticks — so `declared_pdk_is_the_pdk_used_check.py` could be
+        # written neither bare (step 1: "wrap it in markdown backticks") nor
+        # backticked (this rule: "longer than 30 chars"). Total length is not
+        # the concatenation signal; the ABSENCE of the convention's separators
+        # is. The outer step-4 rule already measures exactly that — it splits
+        # on non-alphanumerics via `findall(r"[A-Za-z][A-Za-z0-9]+")` — so
+        # this is the inner rule catching up to the outer one, on the same
+        # 30-char budget.
+        #
+        # Non-weakening FOR CONCATENATION: a token with no separators IS its
+        # own longest run, so every genuinely concatenated identifier the old
+        # rule refused is still refused. The tokens that change verdict are
+        # exactly those that carry separators.
+        #
+        # That is NOT the same as "tokens that were never benchmark names",
+        # and the difference is a real, measured coverage loss. Six CVDP
+        # DESIGN leaf-names carry separators AND are over 30 characters, so
+        # the old cap refused them and this one does not:
+        #     arithmetic_progression_generator          (32)
+        #     configurable_digital_low_pass_filter      (36)
+        #     reed_solomon_encoder_and_decoder          (32)
+        #     secure_read_write_register_bank           (31)
+        #     sequencial_binary_to_one_hot_decoder      (36)
+        #     write_through_data_direct_mapped_cache    (38)
+        # Over the 229 unique CVDP design leaf-names in tracked paths and file
+        # contents this is 14 caught -> 8. It is accepted, not repaired: the
+        # cap cannot tell them from `declared_pdk_is_the_pdk_used_check.py`
+        # (37) — no length or shape discriminator exists — and restoring it
+        # re-creates the 31.49% catch-22 that is the actual bug. The class is
+        # therefore UNGUARDED BY DESIGN at the identifier level; the cell IDs
+        # that carry these names are still caught in full by the family branch
+        # (126 of 126 under the harvest definition at the top of this file, and
+        # the two ids for these specific leaves are pinned as literals in the
+        # test module).
+        #
+        # WHICH FLOOR GUARDS THIS RULE — not `_CVDP_LEAF_FLOOR = 8`. Replace
+        # this `if` with `if False:`, deleting the cap outright, and that 8 is
+        # still 8: none of the 229 raw CVDP leaf-names has an unbroken run over
+        # 30 chars, so all 8 survivors come from the digit-shape rule above and
+        # the constant is BLIND to this one. `_VE_LEAF_FLOOR` (85) and
+        # `_VE_LEAF_CONCAT_FLOOR` (91) are blind for the same reason. The
+        # constants this cap can actually move are both measured on the
+        # separator-STRIPPED corpus, where the six names above become unbroken
+        # runs again: `_CVDP_LEAF_RUN_FLOOR = 3` counts only the leaves refused
+        # by THIS rule's own message, so no other rule can satisfy it, and
+        # `_CVDP_LEAF_CONCAT_FLOOR = 17` is 14 digit-shape + those 3. Under
+        # `if False:` they go 3 -> 0 and 17 -> 14 and both assertions fail.
+        runs = _leak_re.findall(r"[A-Za-z0-9]+", tok)
+        longest = max(runs, key=len) if runs else ""
+        if len(longest) > 30:
             raise ValueError(
-                f"{field_name} contains a backtick-wrapped identifier "
-                f"longer than 30 chars (`{tok}`); refusing as likely "
-                f"concatenated identifier.")
+                f"{field_name} contains a backtick-wrapped identifier with a "
+                f"{len(longest)}-character unbroken alphanumeric run "
+                f"({longest!r} inside `{tok}`); refusing as likely "
+                f"concatenated identifier. A separator-bearing name such as "
+                f"`a_b_c_check.py` is accepted at any total length — it is "
+                f"the unbroken run, not the length, that signals "
+                f"concatenation.")
 
 
 def _strip_backticks(text: str) -> str:
