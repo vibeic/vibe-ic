@@ -75,7 +75,7 @@ def test_a_present_output_that_hashes_is_still_verified(tmp_path):
                  [{"tool": "t", "outputs": {"synth.log": _sha(body)}}])
     verdict, findings, counts = G.audit_counted(cell)
     assert verdict == "PASS", _rules(findings)
-    assert counts == {"declared": 1, "verified_present": 1,
+    assert counts == {"declared": 1, "superseded": 0, "verified_present": 1,
                       "verified_relocated": 0, "not_verifiable_here": 0}
 
 
@@ -328,7 +328,8 @@ def test_the_json_report_carries_the_census_and_the_disclosed_count(tmp_path):
     assert G.main([str(cell), "--json", str(out)]) == 0
     rep = json.loads(out.read_text())
     assert rep["disclosed_count"] == 1
-    assert rep["outcome_census"] == {"declared": 2, "verified_present": 1,
+    assert rep["outcome_census"] == {"declared": 2, "superseded": 0,
+                                     "verified_present": 1,
                                      "verified_relocated": 0,
                                      "not_verifiable_here": 1}
 
@@ -368,7 +369,7 @@ def test_the_real_published_cell_passes_with_the_measured_census(tmp_path):
     shipped under a disclosed other name, 7 disclosed as not shipped."""
     verdict, findings, counts = G.audit_counted(_real_cell(tmp_path))
     assert verdict == "PASS", _rules(findings, "ERROR")
-    assert counts == {"declared": 17, "verified_present": 7,
+    assert counts == {"declared": 17, "superseded": 0, "verified_present": 7,
                       "verified_relocated": 3, "not_verifiable_here": 7}
 
 
@@ -491,7 +492,14 @@ def test_the_whole_tracked_corpus_now_agrees_with_the_414_ledger():
     if not leds:
         pytest.skip("benchmark-data not checked out")
     tot = {"declared": 0, "verified_present": 0,
-           "verified_relocated": 0, "not_verifiable_here": 0}
+           "verified_relocated": 0, "not_verifiable_here": 0,
+           # A record the ledger itself supersedes is ACCOUNTED FOR, in a
+           # bucket that is named on the verdict line — it is not an
+           # unexplained gap. It belongs in this sum for the same reason
+           # `not_verifiable_here` does: the invariant being defended is
+           # "no declaration is silently unaccounted for", not "every
+           # declaration was hashed against disk".
+           "superseded": 0}
     failed = []
     for led in leds:
         verdict, findings, counts = G.audit_counted(led.parent)
@@ -503,5 +511,6 @@ def test_the_whole_tracked_corpus_now_agrees_with_the_414_ledger():
     assert failed == []
     assert tot["declared"] >= 156, tot
     undisclosed = (tot["declared"] - tot["verified_present"]
-                   - tot["verified_relocated"] - tot["not_verifiable_here"])
+                   - tot["verified_relocated"] - tot["not_verifiable_here"]
+                   - tot["superseded"])
     assert undisclosed == 0, tot
