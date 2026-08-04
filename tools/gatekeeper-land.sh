@@ -92,6 +92,24 @@ if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
   # commits AFTER they existed, which is the artefact this script pushes.
   run "no collateral revert within the push" \
       python3 "$PROGRAMS/landing_collateral_revert_check.py" --repo "$ROOT" --rev-range "$RANGE"
+  # 2026-08-05 — THE OTHER HALF OF THE SAME QUESTION, and the half nothing here
+  # was asking. The gate above reads the commits INSIDE this push; this reads
+  # whether the tree being pushed actually contains the base it names as its
+  # parent.
+  #
+  # `1766746f6` named origin/main (v1.9.78) as its parent and carried v1.9.77's
+  # tree: 81 files, 9258 deletions, 13 commits reverted, 15 files deleted. It
+  # passed every shape check here — one commit ahead of the base, no in-range
+  # predecessor to revert, and `gatekeeper_stale_branch_check` itself said FRESH,
+  # because the head really does descend from the tip. Only a human read caught
+  # it, an hour before it would have landed.
+  #
+  # The checker was already blocking in `gatekeeper_review`; it had never been
+  # wired HERE, which is the script that writes the stamp the pre-push hook
+  # demands — so the landing path had no opinion on the landing method at all.
+  run "tree contains the base it claims as parent" \
+      python3 "$PROGRAMS/gatekeeper_stale_branch_check.py" --repo "$ROOT" \
+          --base "$BASE" --head HEAD
 else
   echo "  SKIP  range is empty — nothing new to land"
 fi
