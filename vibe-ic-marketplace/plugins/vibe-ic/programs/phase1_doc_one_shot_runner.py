@@ -43096,6 +43096,48 @@ def _is_real_submodule_name(name: str) -> bool:
     return True
 
 
+def _is_bullet_submodule_name(nm: str) -> bool:
+    """Heading-anchored bullet submodule name filter.
+
+    Deliberately relaxes `_is_real_submodule_name`'s RTL-shape gate: the
+    `Key sub-blocks:` / `Submodules:` heading anchor is strong evidence, so
+    bare-word names like `alu` / `regfile` are accepted here. The length
+    floor, the table-header deny, the verb deny, the reserved-word deny and
+    the vowel/consonant check all remain.
+
+    Module-level (was nested in the L9 emitter) so the deny lists it
+    enforces are directly testable, matching `_is_real_submodule_name`.
+    chip-AGNOSTIC: language keywords and English tokens only.
+    """
+    if not isinstance(nm, str):
+        return False
+    nm = nm.strip()
+    if len(nm) < 3:
+        return False
+    if nm.lower() in _DOC_TABLE_HEADER_TOKENS:
+        return False
+    if nm.lower() in _COMMON_ENGLISH_VERB_TOKENS:
+        return False
+    # A Verilog/SystemVerilog reserved word is never a module name — the
+    # language forbids it. Specs quote keywords in prose constantly
+    # ("do not use the `signed` keyword in a port declaration"), and the
+    # bullet walker harvests backticked identifiers, so without this the
+    # quoted keyword becomes a CONFIDENT L9 submodule (the bullet path
+    # does not tag `low_confidence`, unlike the heading path). Downstream
+    # `l9_submodule_conformance_check` then examines it and FAILs a
+    # correct design with SUBMODULE_FILE_MISSING. Exact match only, so a
+    # legitimate `signed_mult` / `case_decoder` is untouched.
+    if nm.lower() in _VERILOG_RESERVED_KEYWORDS:
+        return False
+    # vowel + consonant for bare-alphabetic names
+    if not any(c.isdigit() or c == "_" for c in nm):
+        has_v = any(c.lower() in "aeiou" for c in nm)
+        has_c = any(c.lower() in "bcdfghjklmnpqrstvwxyz" for c in nm)
+        if not (has_v and has_c):
+            return False
+    return True
+
+
 # v1.6.91 (#23 Bug 2 P2) — vendor-tool / EDA-environment doc patterns.
 # These docs (Intel User Guides, Application Notes, Terasic dev-kit
 # READMEs, EDA tool manuals) describe the dev-kit / EDA tools, not
@@ -47211,23 +47253,6 @@ def gen_l9_integration_spec(project: Path,
     # and `regfile` that are real submodules but lack underscore /
     # digit / stem). Keep length floor + table-header deny + verb
     # deny + vowel-consonant check — they remain valid here.
-    def _is_bullet_submodule_name(nm: str) -> bool:
-        if not isinstance(nm, str):
-            return False
-        nm = nm.strip()
-        if len(nm) < 3:
-            return False
-        if nm.lower() in _DOC_TABLE_HEADER_TOKENS:
-            return False
-        if nm.lower() in _COMMON_ENGLISH_VERB_TOKENS:
-            return False
-        # vowel + consonant for bare-alphabetic names
-        if not any(c.isdigit() or c == "_" for c in nm):
-            has_v = any(c.lower() in "aeiou" for c in nm)
-            has_c = any(c.lower() in "bcdfghjklmnpqrstvwxyz" for c in nm)
-            if not (has_v and has_c):
-                return False
-        return True
     # v1.6.415 — for #297 P2. DSL-class submodule provenance counter.
     _v1_6_415_dsl_class_filtered = 0
     for fname, text in extracted.items():
