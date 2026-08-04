@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1050
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1050)
+- **Total programs (excluding helpers / shims):** 1051
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1051)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1041 |
+| `any` | 1042 |
 
 ## Alphabetical listing
 
@@ -697,6 +697,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_registry_selectable_check` | any | — | a PDK the image ships must be SELECTABLE, and every asset the registry declares must RESOLVE. |
 | `pdk_table_coverage_check` | any | — | registering a PDK in one table registers it in none of the others, and nothing said so. |
 | `pdk_udp_synth_shim_gen` | any | — | v1.6.218 (ORGANIC-20260512-followup). |
+| `pdk_via_patch_meets_layer_min_width_check` | any | — | a via's metal patch must be at least as wide as that metal layer's own declared minimum WIDTH. |
 | `pdk_yosys_flatten_for_quartus` | any | — | v1.6.222 (ORGANIC-20260512-followup-2). |
 | `per_opcode_response_latency_table_check` | any | v0.119.30 | gate (LL-33) catching extractor failures on per-opcode response latency tables. |
 | `perc_corpus_sweep` | any | v0.2.4 | run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS of already-routed designs, deterministically, with NO container needed. |
@@ -1122,7 +1123,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1041 programs)
+### `any` (1042 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1790,6 +1791,7 @@ _(no programs in this group)_
 - `pdk_registry_selectable_check` — a PDK the image ships must be SELECTABLE, and every asset the registry declares must RESOLVE.
 - `pdk_table_coverage_check` — registering a PDK in one table registers it in none of the others, and nothing said so.
 - `pdk_udp_synth_shim_gen` — v1.6.218 (ORGANIC-20260512-followup).
+- `pdk_via_patch_meets_layer_min_width_check` — a via's metal patch must be at least as wide as that metal layer's own declared minimum WIDTH.
 - `pdk_yosys_flatten_for_quartus` — v1.6.222 (ORGANIC-20260512-followup-2).
 - `per_opcode_response_latency_table_check` — gate (LL-33) catching extractor failures on per-opcode response latency tables.  _[v0.119.30]_
 - `perc_corpus_sweep` — run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS of already-routed designs, deterministically, with NO container needed.  _[v0.2.4]_
