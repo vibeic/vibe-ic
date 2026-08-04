@@ -3624,11 +3624,11 @@ def _macro_pg_ports_from_lef(
     return out
 
 
-def _macro_pdn_grid_plan(
+def _macro_pdn_grid_outcome(
         macro_lef_texts: Sequence[str],
         tech_lef_text: Optional[str],
         stripes: Sequence[Dict[str, Any]],
-        followpin_layer: str) -> Optional[Dict[str, Any]]:
+        followpin_layer: str) -> Dict[str, Any]:
     """Plan the MACRO grid — the construct that puts a conductor on a placed
     hard macro's supply pins.
 
@@ -3672,9 +3672,49 @@ def _macro_pdn_grid_plan(
        2*width+spacing, so a port narrower than that CANNOT be reached by any
        legal pattern. Those ports are reported, not silently missed.
 
-    Returns None when there is nothing to do (no macros, no PG pins, no strap
-    layer above the pin layer, no port a legal pattern can cross) so a design
-    without hard macros produces a BYTE-IDENTICAL pnr.tcl.
+    WHY THIS RETURNS AN OUTCOME AND NOT JUST A PLAN (#701)
+    ======================================================
+    Through v1.9.78 this function returned `Optional[dict]`, and `None` carried
+    TWO different facts about the world:
+
+        "this design has no hard macros"                 -> nothing to do
+        "this design has a hard macro whose supply the
+         grid cannot reach on any legal layer"           -> something to do,
+                                                            and it was not done
+
+    `_build_macro_pdn_grid_tcl(None)` emits the empty string for both, so the
+    run's PDN note for the second case was BYTE-IDENTICAL to a macro-free
+    design. Reproduced on PUBLIC sky130A material (a 1kbyte SRAM macro + the
+    sky130_fd_sc_hd tech LEF): with the vendor also declaring the layers above
+    the pin layer unroutable across the whole footprint — an ordinary stance
+    for NVM and high-voltage macros — the planner returned None, 0 bytes of
+    Tcl and an empty note, exactly like a design containing no macro at all.
+    The dropped macro first surfaced several steps later as PSM-0038/0039/0069,
+    where nothing tied it back to the plan that refused it.
+
+    The `refused_for_blockage` field already existed to report precisely this,
+    and could only ever be populated on the SUCCESS path: when the rule that
+    removes unusable strap layers removed ALL of them, the plan was None and
+    the reason was discarded before anyone could report it.
+
+    So the return is now TOTAL — a dict, never None — and the two facts land on
+    two different values:
+
+        {"plan": <dict>, "refusals": []}       a macro grid was planned
+        {"plan": None,   "refusals": []}       NOTHING TO DO: no hard-macro
+                                               POWER/GROUND port exists at all
+        {"plan": None,   "refusals": [rec…]}   something to do, and it could
+                                               not be done — each record names
+                                               the master(s), a stable machine
+                                               `reason` token, and a sentence
+
+    "Something to do" is defined as: at least one POWER/GROUND port was read
+    off a macro LEF. That is the flow's own evidence that a hard macro needs
+    supply, and it is the only definition available at this point.
+
+    NOT a repair. The refusal is a REPORT — this deliberately does NOT route
+    over a macro whose OBS forbids it. See `_build_macro_pdn_refusal_tcl` for
+    why the refusal is loud but not fatal.
 
     chip-AGNOSTIC: masters, pin layers and every dimension come from the
     design's own LEFs; no PDK name, no layer-name convention, no literal."""
@@ -3687,25 +3727,62 @@ def _macro_pdn_grid_plan(
     for t in (macro_lef_texts or []):
         ports.extend(_macro_pg_ports_from_lef(t))
         obs.update(_macro_obs_layers_from_lef(t))
+    # NOTHING TO DO — and this is the ONLY branch that may say so. Every other
+    # exit below has already seen a hard-macro supply port, i.e. work the grid
+    # was supposed to do.
     if not ports:
-        return None
+        return {"plan": None, "refusals": []}
+    _masters = sorted({p["master"] for p in ports})
+
+    def _refuse(reason: str, detail: str, *, pin_layer: str = "",
+                candidates: Sequence[str] = (),
+                blocked: Sequence[str] = ()) -> Dict[str, Any]:
+        """One refusal record. `reason` is a STABLE machine token (grep-able,
+        never reworded); `detail` is the sentence a human reads. The masters
+        are named because "a macro was dropped" without a name is the same
+        silence this exists to end, one step quieter."""
+        return {"plan": None, "refusals": [{
+            "masters": list(_masters),
+            "reason": reason,
+            "detail": detail,
+            "pin_layer": pin_layer,
+            "candidate_layers": sorted(candidates),
+            "blocked_layers": sorted(blocked),
+        }]}
+
     layers = _techlef_routing_layers(tech_lef_text or "")
     if not layers:
-        return None
+        return _refuse(
+            "NO_ROUTING_LAYERS_IN_TECH_LEF",
+            "the tech LEF declares no parseable TYPE ROUTING layer, so no "
+            "strap layer can be chosen for the macro grid")
     order = {n.lower(): i for i, (n, _d, _p, _w) in enumerate(layers)}
     dirs = {n.lower(): d for n, d, _p, _w in layers}
     pin_layers = sorted({p["layer"] for p in ports},
                         key=lambda l: order.get(l.lower(), 10 ** 6))
     pin_layer = pin_layers[0]
     if pin_layer.lower() not in order:
-        return None
+        return _refuse(
+            "PIN_LAYER_NOT_A_ROUTING_LAYER",
+            f"the macro declares its supply pins on {pin_layer}, which the "
+            "tech LEF does not declare as a TYPE ROUTING layer, so no strap "
+            "can be connected down to them",
+            pin_layer=pin_layer)
     pin_i = order[pin_layer.lower()]
     strap_by_layer = {s.get("layer", "").lower(): s for s in (stripes or [])
                       if s.get("layer")}
     above = [s for s in (stripes or [])
              if order.get(str(s.get("layer", "")).lower(), -1) > pin_i]
     if not above:
-        return None
+        return _refuse(
+            "NO_CORE_STRAP_ABOVE_PIN_LAYER",
+            f"no core strap layer sits above the macro supply-pin layer "
+            f"{pin_layer} (core straps: "
+            f"{', '.join(str(s.get('layer')) for s in (stripes or [])) or 'none'}"
+            "), so the grid has nothing to drop onto the pins from",
+            pin_layer=pin_layer,
+            candidates=[str(s.get("layer")) for s in (stripes or [])
+                        if s.get("layer")])
     above.sort(key=lambda s: order[str(s["layer"]).lower()])
     # Rule 0 (ORGANIC #685): never strap a layer the macro declares BLOCKED
     # across its whole footprint. The planner read the macro's PIN entries and
@@ -3730,10 +3807,30 @@ def _macro_pdn_grid_plan(
                 _blocked_lc.add(_lay.lower())
     _refused = [s for s in above
                 if str(s.get("layer", "")).lower() in _blocked_lc]
+    _candidates_before_obs = [str(s.get("layer")) for s in above]
     above = [s for s in above
              if str(s.get("layer", "")).lower() not in _blocked_lc]
     if not above:
-        return None
+        # THE DEFECT (#701). Rule 0 just removed every remaining candidate, so
+        # this macro's supply cannot be reached on ANY layer the macro itself
+        # permits. Returning a bare None here made that fact indistinguishable
+        # from "there are no hard macros" for every observer downstream.
+        #
+        # The answer is still NO GRID — routing over an OBS the vendor drew
+        # across the whole footprint is not a repair, it is a violation — but
+        # the REASON now travels with it.
+        return _refuse(
+            "ALL_CANDIDATE_LAYERS_BLOCKED_BY_MACRO_OBS",
+            f"every core strap layer above the supply-pin layer {pin_layer} "
+            f"({', '.join(_candidates_before_obs)}) is declared blocked across "
+            f"the macro's whole footprint by its own OBS, so no legal strap "
+            f"can reach its supply pins. The macro grid is NOT built and the "
+            f"OBS is NOT overridden; this supply must be delivered by other "
+            f"means (a ring, a pre-routed shape, or a macro placement/abstract "
+            f"that leaves a routable layer)",
+            pin_layer=pin_layer,
+            candidates=_candidates_before_obs,
+            blocked=_blocked_layers)
     # Rule 1: the macro's strap must have a PARTNER strap layer of the opposite
     # direction in the core plan, and the macro grid must use only one of them.
     strap = None
@@ -3749,10 +3846,25 @@ def _macro_pdn_grid_plan(
         if strap:
             break
     if not strap:
-        return None
+        return _refuse(
+            "NO_PERPENDICULAR_PARTNER_STRAP",
+            f"no core strap layer runs perpendicular to a usable strap above "
+            f"{pin_layer} ({', '.join(str(s.get('layer')) for s in above)}), "
+            "so a macro grid built here would bond only to itself and leave "
+            "the macro supply on an electrical island",
+            pin_layer=pin_layer,
+            candidates=[str(s.get("layer")) for s in above],
+            blocked=_blocked_layers)
     sw = float(strap.get("width") or 0.0)
     if sw <= 0:
-        return None
+        return _refuse(
+            "STRAP_WIDTH_UNUSABLE",
+            f"the core strap plan gives layer {strap['layer']} a width of "
+            f"{strap.get('width')!r}, which cannot be rendered as a macro "
+            "strap",
+            pin_layer=pin_layer,
+            candidates=[str(s.get("layer")) for s in above],
+            blocked=_blocked_layers)
     s_dir = dirs.get(str(strap["layer"]).lower(), "")
     # min spacing of the strap layer, from the tech LEF's own WIDTH for it
     s_minw = next((w for n, _d, _p, w in layers
@@ -3765,9 +3877,21 @@ def _macro_pdn_grid_plan(
     reachable = [p for p in ports if _across(p) >= floor]
     unreachable = [p for p in ports if _across(p) < floor]
     if not reachable:
-        return None
+        # Same silence, different cause: EVERY supply port is narrower across
+        # the strap than the smallest legal pitch. The partial version of this
+        # is already reported as MACRO_PDN_PORT_UNREACHABLE — but that marker
+        # lives on the plan, so the total version emitted nothing at all.
+        return _refuse(
+            "NO_PORT_WIDE_ENOUGH_FOR_ANY_LEGAL_PITCH",
+            f"every macro supply port measures less than {floor}um across the "
+            f"{strap['layer']} strap direction, which is the smallest pitch "
+            f"pdngen will accept for that strap (2*width+spacing), so no strap "
+            f"pattern can be guaranteed to cross any of them",
+            pin_layer=pin_layer,
+            candidates=[str(strap["layer"])],
+            blocked=_blocked_layers)
     pitch = round(max(floor, min(_across(p) for p in reachable)), 3)
-    return {
+    return {"plan": {
         "masters": sorted({p["master"] for p in ports}),
         "pin_layer": pin_layer,
         "strap_layer": strap["layer"],
@@ -3781,12 +3905,82 @@ def _macro_pdn_grid_plan(
         "refused_for_blockage": sorted({str(s.get("layer")) for s in _refused}),
         "unreachable": sorted({(p["master"], p["pin"],
                                 round(_across(p), 3)) for p in unreachable}),
-    }
+    }, "refusals": []}
+
+
+def _macro_pdn_grid_plan(
+        macro_lef_texts: Sequence[str],
+        tech_lef_text: Optional[str],
+        stripes: Sequence[Dict[str, Any]],
+        followpin_layer: str) -> Optional[Dict[str, Any]]:
+    """The BUILDABLE macro-grid plan alone, or None.
+
+    NARROW ACCESSOR, kept because "give me the grid to render" is a real
+    question with a real answer. It is NOT the question a caller deciding what
+    to REPORT should ask: this `None` cannot distinguish "no hard macros" from
+    "a hard macro the grid could not reach", and that conflation is exactly the
+    defect #701 fixed. Anything that reports, notes or gates must call
+    `_macro_pdn_grid_outcome` and read `refusals`."""
+    return _macro_pdn_grid_outcome(
+        macro_lef_texts, tech_lef_text, stripes, followpin_layer)["plan"]
+
+
+def _tcl_puts_safe(s: Any) -> str:
+    """Strip the characters that make a bare `puts "..."` argument stop being
+    one literal string. Names in this marker come out of a third-party LEF, and
+    a `$`, `[`, `"` or backslash in one would turn a diagnostic line into a Tcl
+    substitution and take the whole pnr.tcl down with it."""
+    return re.sub(r'[\\"\[\]${}\r\n]', "_", str(s))
+
+
+# ── A refusal that reaches the run, or it did not happen ────────────────────
+#
+# REPORTED, LOUD, NAMED — and deliberately NOT FATAL. The argument is about
+# what the flow can know AT THIS POINT, and it can know less than it looks:
+#
+#   * `macro_lef_texts` comes from `pdk.macro_lefs`, a CONFIG list of LEFs made
+#     available to the run. Nothing here consults the netlist or the placement.
+#     A master whose LEF is on that list need not be instantiated at all, and
+#     failing the run for an unreachable supply on a macro the design never
+#     places would be a failure manufactured out of configuration.
+#   * the supply may legitimately arrive by a route this planner does not model
+#     — a PDN ring, a pre-routed shape carried in the macro's own abstract, or
+#     a wrapper that re-exposes the pins. This function models exactly one
+#     construct (`define_pdn_grid -macro`) and must not speak for the others.
+#   * there is a gate downstream that CAN see the truth, on geometry rather
+#     than on config: `_pnr_pdn_grid_verdict` reads the emitted DEF, and
+#     PSM-0038/0039/0069 fire on the real connectivity check. Those already
+#     block. What they could not do was explain themselves — which macro, and
+#     why. This marker is what makes them traceable.
+#
+# So: never green-washed, never silent, and never a stop the run cannot clear.
+# If a later change teaches this planner to read the PLACEMENT, the same record
+# is the right thing to escalate to a FAIL — the record is the part that was
+# missing, not the severity.
+def _build_macro_pdn_refusal_tcl(refusals: Sequence[Dict[str, Any]]) -> str:
+    """`puts` lines naming every macro whose supply the grid refused to reach,
+    and why. Empty string for no refusals, so a design with nothing to refuse
+    still emits a BYTE-IDENTICAL pnr.tcl."""
+    out = ""
+    for rec in (refusals or []):
+        for master in (rec.get("masters") or ["<unnamed>"]):
+            out += (
+                f"  puts \"MACRO_PDN_GRID_REFUSED: {_tcl_puts_safe(master)} "
+                f"pin_layer={_tcl_puts_safe(rec.get('pin_layer') or '?')} "
+                f"reason={_tcl_puts_safe(rec.get('reason') or 'UNSPECIFIED')} "
+                f"-- {_tcl_puts_safe(rec.get('detail') or '')}. NO macro PDN "
+                f"grid was built for this master and its OBS was NOT "
+                f"overridden; its supply pins are not reached by this grid.\"\n")
+    return out
 
 
 def _build_macro_pdn_grid_tcl(plan: Optional[Dict[str, Any]]) -> str:
     """Render `_macro_pdn_grid_plan` as Tcl. Empty string for an empty plan, so
-    a design with no hard macros emits a BYTE-IDENTICAL pnr.tcl."""
+    a design with no hard macros emits a BYTE-IDENTICAL pnr.tcl.
+
+    An empty plan is NOT on its own evidence that there was nothing to do —
+    see `_build_macro_pdn_refusal_tcl`, which is what says which of the two
+    happened."""
     if not plan:
         return ""
     cells = " ".join(plan["masters"])
@@ -3942,14 +4136,20 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
         _mg_tcl = ""
         _mg_note = ""
         _mg_plan = None
+        _mg_refusals: List[Dict[str, Any]] = []
         if _stripes:
             _mg_lefs = [t for t in
                         (_read_pdk_text(m, container)
                          for m in (getattr(pdk, "macro_lefs", None) or [])) if t]
-            _mg_plan = _macro_pdn_grid_plan(
+            # #701 — the OUTCOME, not the plan. `plan is None` alone cannot
+            # tell "no hard macros" from "a hard macro this grid cannot reach",
+            # and reading only the plan is how the second one shipped silent.
+            _mg_outcome = _macro_pdn_grid_outcome(
                 _mg_lefs, _read_pdk_text(getattr(pdk, "tech_lef", None),
                                          container),
                 _stripes, fpl)
+            _mg_plan = _mg_outcome["plan"]
+            _mg_refusals = _mg_outcome["refusals"]
             _mg_tcl = _build_macro_pdn_grid_tcl(_mg_plan)
             if _mg_plan:
                 _mg_note = (f" + macro_grid({_mg_plan['pin_layer']}->"
@@ -3957,6 +4157,16 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
                             + (f", {len(_mg_plan['unreachable'])} port(s) "
                                "narrower than any legal pitch"
                                if _mg_plan["unreachable"] else "") + ")")
+            elif _mg_refusals:
+                # The PDN note itself must differ from a macro-free design's.
+                # That byte-identity WAS the defect; a marker further down the
+                # log does not undo a headline that reads the same either way.
+                _mg_note = (" + macro_grid_REFUSED("
+                            + "; ".join(
+                                f"{m}:{r['reason']}"
+                                for r in _mg_refusals
+                                for m in (r.get("masters") or ["<unnamed>"]))
+                            + ")")
         # NEVER report success for a grid with no straps. `pdngen` returns 0
         # for a follow-pin-only grid, so the old code printed
         # PDN_INSERTED_ADAPTIVE and every downstream consumer read that as a
@@ -3984,6 +4194,11 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
             f"width={w}{well_note} — {_no_strap_why}, so the per-row rails "
             f"are ISOLATED (no straps, no vias). This is NOT a usable power "
             f"grid. Declare `pdn_straps` for this PDK to override.\"\n")
+        # #701 — appended OUTSIDE the strap_tcl conditional on purpose. A run
+        # that reached the planner and got a refusal must say so on BOTH
+        # markers; hanging it off the success branch alone would restore the
+        # silence for exactly the runs already in the worst shape.
+        _ok_marker += _build_macro_pdn_refusal_tcl(_mg_refusals)
         return (
             "# === PDK-adaptive PDN: discovered PG pins + met1 follow-pins"
             + (" + upper-metal straps ===\n" if strap_tcl else " ===\n")
@@ -4555,6 +4770,39 @@ def _parse_macro_pdn_unreachable(text: str) -> List[str]:
         if m.group(1) not in seen:
             seen.append(m.group(1))
     return seen
+
+
+# ── #701: the refusal the planner used to throw away ────────────────────────
+#
+# `_macro_pdn_grid_outcome` refuses to build a macro grid it cannot build
+# legally, and `_build_macro_pdn_refusal_tcl` prints one line per master. This
+# reads them back so the PnR step can state the refusal in its own detail
+# instead of leaving it to be rediscovered as a PSM-0038 three steps later.
+#
+# Deliberately parses the MASTER and the REASON TOKEN only. The trailing
+# sentence is for humans and will be reworded; a consumer keying off prose is a
+# consumer that breaks on an edit, which is how machine-readable evidence rots.
+_MACRO_PDN_GRID_REFUSED_RE = re.compile(
+    r"MACRO_PDN_GRID_REFUSED:\s*(\S+)\s+pin_layer=(\S+)\s+reason=(\S+)")
+
+
+def _parse_macro_pdn_grid_refusals(text: str) -> List[Dict[str, str]]:
+    """De-duplicated, ORDER-PRESERVING ``[{master, pin_layer, reason}]`` for
+    every hard macro the PDN planner declared it could not reach.
+
+    Empty list = the marker never appeared. On a design with no hard macros
+    that is the normal and correct state — and it is now a DIFFERENT state
+    from "a macro was refused", which is the whole point of the marker."""
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for m in _MACRO_PDN_GRID_REFUSED_RE.finditer(text or ""):
+        key = (m.group(1), m.group(3))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"master": m.group(1), "pin_layer": m.group(2),
+                    "reason": m.group(3)})
+    return out
 
 
 # ── A measurement names the database it was taken on ────────────────────────
@@ -18220,6 +18468,29 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "or lower a PDK pitch floor, so there is no in-flow repair. Those "
             "ports are counted as net-owned above; that number says nothing "
             "about them")
+    # #701 — the macro(s) whose supply the grid REFUSED to reach. Until now the
+    # planner returned the same `None` for this as for "the design has no hard
+    # macros", so the PnR detail for a dropped macro was byte-identical to a
+    # macro-free run and the failure was first seen as PSM-0038/0039/0069 with
+    # nothing pointing back. Stated here, on the step's own detail line, for the
+    # same reason the unreachable-port clause is: an observation nobody reads is
+    # the silence, one step quieter.
+    _mg_refused = _parse_macro_pdn_grid_refusals(_pg_log_txt)
+    if _mg_refused:
+        detail += (
+            f" | MACRO_PDN_GRID_REFUSED: {len(_mg_refused)} hard macro(s) "
+            + "; ".join(f"{r['master']} (pin_layer={r['pin_layer']}, "
+                        f"{r['reason']})" for r in _mg_refused[:5])
+            + (" …" if len(_mg_refused) > 5 else "")
+            + " — no macro PDN grid was built for them and no OBS was "
+              "overridden, so their supply pins are NOT reached by this power "
+              "grid. REPORTED, NOT BLOCKING here: this planner reads the PDK's "
+              "macro LEF list, not the placement, so it cannot tell whether "
+              "the master is instantiated, nor whether the supply arrives by a "
+              "construct it does not model (a ring, a pre-routed abstract). "
+              "The DEF-geometry verdict below and the tool's own connectivity "
+              "check are what block; this names the macro so they can be "
+              "traced back to it")
     spare_extras = {
         "pg_terminals_total": _pg_total,
         "pg_terminals_on_no_net": _pg_bad,
@@ -18231,6 +18502,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "carries no information about conductor presence or reachability"),
         "pg_conductor_measured": False,
         "macro_pdn_ports_unreachable": _pg_unreach,
+        # #701 — machine-readable, so a consumer need not parse the sentence
+        # above, and so "no macros" ([] with no marker) stays a different
+        # record from "a macro was refused".
+        "macro_pdn_grid_refusals": _mg_refused,
         "spare_density_target": round(spare_dens, 6),
         "spare_count": spare_plan.get("count", 0),
         "spare_types": spare_plan.get("types", {}),
