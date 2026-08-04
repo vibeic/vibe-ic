@@ -98,8 +98,12 @@ POPULATION and an unwired gate is not in any of those populations:
     lands it in `paid` -> rc 1. VERIFIED the same way.
   * `flow_compliance_check._UNDRIVABLE_BY_STRUCTURAL_UMBRELLA` requires
     membership in `_STRUCTURAL_RTL_GATES`, requires the gate to argparse-REJECT
-    the umbrella argv, and is anchored by test to exactly the twelve v1.9.8
-    gates. `checkpoint_gate_check` satisfies none of the three.
+    the umbrella argv, and anchors EVERY entry by test — registered, still
+    rejecting, and carrying a categorised measured reason. The population is
+    whatever that register holds (twelve at v1.9.8, and it has grown since);
+    stating the size here is a count in prose that stops tracking what it
+    counts, so it is not restated. `checkpoint_gate_check` satisfies none of
+    the three requirements.
 
 So the disclosure gets a home with its OWN rule, here, where a gate already
 runs in CI. An entry says: this checker is deliberately not machine-wired, and

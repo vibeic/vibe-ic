@@ -12,22 +12,30 @@ CANDIDATES. Repairing an argv must not turn a silent skip into a universal FAIL
 (the `l9_completeness_check` trap: 196/196). But it must also not turn a silent
 skip into a PASS OVER AN EMPTY DENOMINATOR, which is a false PASS and is worse
 than the skip it replaces — the umbrella would be certifying a check that
-examined nothing. Both halves were measured; only two gates clear both.
+examined nothing. Both halves were measured; only three gates clear both.
 
 MEASUREMENT PROVENANCE, stated so it reproduces rather than described. The
-denominator is 107:
+denominator is 108:
 
     git ls-files benchmark-data | grep -E '/rtl/[^/]+\\.(v|sv)$' \\
-        | sed -E 's#/rtl/[^/]+$##' | sort -u | wc -l      -> 107
+        | sed -E 's#/rtl/[^/]+$##' | sort -u | wc -l      -> 108
 
-The sweep itself covered 108 directories, because the filter used
-`flow_compliance_check`'s OWN rtl_dir alternation ("phase2/stage1/rtl", "rtl",
-"src", "hdl") rather than the name `rtl`, which additionally picks up
-`benchmark-data/ic/subservient/phase2/stage1/formal/subservient/src`. That
-directory is a vendored formal copy, not a project root the flow is pointed at,
-so every number here is quoted on the reproducible 107. Including the 108th
-changes no verdict for either converted gate (0 FAIL either way); it moves three
-of the REFUSAL counts by one, and those are recorded at their 107 values below.
+It was 107 when this was first measured at v1.7.69 and became 108 in cdc54d32f
+(2026-08-02), which added
+`benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage1/rtl`. The
+whole sweep was RE-RUN over the 108 rather than the pin raised to match: three
+rows claim "0 FAIL over ALL of them", and raising the number alone would assert
+that about a directory no gate had been pointed at. What moved, and why nine of
+the fifteen rows had rotted while this pin stayed green, is recorded in the
+comment block above `P0_RTL_DIR_GROUP_MEASUREMENT` in `flow_compliance_check`.
+
+Do not read this 108 as the v1.7.69 sweep's 108, which was a DIFFERENT set: that
+one applied `flow_compliance_check`'s OWN rtl_dir alternation ("phase2/stage1/
+rtl", "rtl", "src", "hdl") to a 107-dir corpus, and its extra member was
+`benchmark-data/ic/subservient/phase2/stage1/formal/subservient/src` — a
+vendored formal copy, not a project root the flow is pointed at. The numbers
+below are quoted on the 108 directories NAMED `rtl`, which is the set the test
+at the bottom of this file reconstructs.
 
 Every gate CLI was run against a scratch MIRROR of those directories, never
 against the tracked tree, which stays byte-clean.
@@ -119,14 +127,15 @@ def test_converted_gates_are_no_longer_reported_as_skipped(tmp_path):
 
 
 
-# Gates wanting ONLY `--rtl-dir` — a value the umbrella already derives. All 14
-# were measured over the 107 tracked RTL directories under benchmark-data, on a
-# scratch MIRROR of the corpus (no gate CLI was pointed at the tracked tree).
+# Gates wanting ONLY `--rtl-dir` — a value the umbrella already derives — plus the
+# one wanting `--rtl --strict`. All 15 were re-measured over the 108 tracked RTL
+# directories under benchmark-data, on a scratch MIRROR of the corpus (no gate CLI
+# was pointed at the tracked tree).
 # Two bars must BOTH be cleared: converting must not turn the gate red, and the
 # gate must actually EXAMINE something, because a PASS over an empty denominator
 # is a false PASS and is worse than the skip it replaces.
 #
-#   gate                              new FAIL/107   projects w/ denominator>0
+#   gate                              new FAIL/108   projects w/ denominator>0
 
 
 def _dangling_symlink_rtl_dir(tmp_path):

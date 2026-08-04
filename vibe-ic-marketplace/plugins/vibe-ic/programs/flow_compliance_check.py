@@ -4823,31 +4823,81 @@ def _digital_backend_is_na(project: Path) -> Tuple[bool, str]:
 #
 # One honest limit on the second column, worth stating because it is not visible in
 # the number: this gate's disclosed denominator counts FILES, while its subject is
-# modules carrying >=2 inout ports — measured at 8 modules across 4 of the 107. The
-# column means "the gate disclosed a non-zero denominator", which is the property the
-# rule was written against and which `sustained_vs_edge_check` is also judged on, so
-# the row is (0, 107) and not (0, 4). A gate disclosing a count whose subject is
-# absent is the #564 family, not the #492 one; recorded here so the next conversion
-# reads it instead of re-deriving it from the corpus a second time.
+# modules carrying >=2 inout ports — re-measured at 10 such modules across 5 of the
+# 108, using the gate's own parser. The column means "the gate disclosed a non-zero
+# denominator", which is the property the rule was written against and which
+# `sustained_vs_edge_check` is also judged on, so the row is (0, 108) and not (0, 5).
+# A gate disclosing a count whose subject is absent is the #564 family, not the #492
+# one; recorded here so the next conversion reads it instead of re-deriving it from
+# the corpus a second time.
 #
-#   gate                              new FAIL/107   projects w/ denominator>0
-P0_CORPUS_DENOMINATOR = 107
+# 2026-08-04 — RE-MEASURED OVER 108, AND THE PIN WAS WATCHING THE WRONG THING.
+#
+# `test_the_published_denominator_is_the_one_a_reader_reconstructs` went red because
+# the corpus grew: `benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/
+# stage1/rtl` landed in cdc54d32f (2026-08-02) and is the 108th. Raising the pin on
+# its own would have asserted "0 FAIL over ALL of them" about a directory no gate had
+# been pointed at, so the sweep was re-run instead: 15 gates x 108 directories = 1620
+# real subprocess runs, argv in the umbrella's own `_structural_gate_argv` shape, on a
+# scratch MIRROR of the corpus — no gate CLI was pointed at the tracked tree. THE
+# VERDICT IS UNCHANGED: the same three gates clear both bars, and on the 108th
+# directory all three are rc 0 with a non-zero denominator (5 files each).
+#
+# NINE of the fifteen rows had rotted, and only ONE of the nine moved because of the
+# corpus (`testbench_exists_check` 102 -> 103, the new directory shipping no
+# testbench). The other eight moved because the GATES changed underneath a table that
+# nothing but the corpus SIZE was pinned against:
+#
+#   v1.7.70 `090fe7128` ("make every zero say what it is") rewrote the denominator
+#     disclosure of eight of these gates — ONE COMMIT after this table was written.
+#     `cmd_arg_range_validation_check` went 4 -> 0, `pulse_decoder_edge_check` 0 -> 1,
+#     `tristate_self_rx_mask_check` now decides `inout port + OE companion` (5 dirs
+#     declare an inout, 0 pair it with a companion), `transient_signal_latch_check`
+#     went from disclosing NO denominator to disclosing an empty one, and
+#     `bit_count_modulo_check` started FINDING something: 0 -> 1 new FAIL, on
+#     `evaluation/phase1_parity/hdlc/phase2/stage1/rtl`. ATTRIBUTED, not assumed — the
+#     v1.7.69 gate is rc 0 on today's hdlc RTL and today's gate is rc 1 on the v1.7.69
+#     hdlc RTL, so that is a gate change, not a corpus one. It moves that gate's
+#     REASON for staying unconverted from "empty denominator" to "reddens the corpus";
+#     it does not move the verdict.
+#   v1.7.84 `d405db74b` (gate exit codes) made `pre_awake_silence_check` return rc 2
+#     VACUOUS instead of rc 0 on 107 of the 108, so its denominator is 1, not 107.
+#
+# The four reddening rows' second column had never been a measurement: it was the
+# corpus size, filled in because column 1 already disqualified them.
+# `packet_length_check_present` discloses `files_checked: 0` on 104 of the 108 and
+# always did, so 107 was not a reading of anything. Those cells now hold a measured
+# number, and EVERY ROW NAMES THE COUNT IT WAS READ FROM — the second column was
+# unreconstructable, which is how eight of them stayed wrong in plain sight.
+#
+# WHAT THIS PIN CANNOT SEE, recorded because it is the defect above: it compares a
+# corpus SIZE, so it fires when a directory is added and is silent when a gate's
+# behaviour moves. Eight rows were wrong for six minor versions with the pin green.
+# The pin is KEPT — it demanded this re-measurement and got it, which is exactly the
+# job, and a derived value could not have demanded anything — but a tripwire over the
+# measured GATES is the missing half, and it is not in this change.
+#
+#   gate                              new FAIL/108   projects w/ denominator>0
+P0_CORPUS_DENOMINATOR = 108
+#: Each row's comment names the count column 2 was read from, so a reader
+#: reconstructs it instead of trusting it. `denominator.examined` is the structured
+#: block v1.7.70 gave eight of these gates; the rest disclose one scalar.
 P0_RTL_DIR_GROUP_MEASUREMENT = {
-    "sustained_vs_edge_check":          (0, 107),   # CONVERTED
-    "timer_freeze_after_state_check":   (0, 107),   # CONVERTED
-    "fpga_wrapper_input_polluter_check": (0, 107),  # CONVERTED v1.8.82
-    "cmd_arg_range_validation_check":   (0, 4),     # examines 4/107 only
-    "bit_count_modulo_check":           (0, 0),     # `checked: 0` everywhere
-    "l12_sequence_implementation_check": (0, 0),    # `sequences_checked: 0`
-    "otp_write_lock_gate_check":        (0, 0),     # `write_enable_sites: 0`
-    "pulse_decoder_edge_check":         (0, 0),     # `files_checked: 0`
-    "response_payload_template_check":  (0, 0),     # `total_assignments: 0`
-    "tristate_self_rx_mask_check":      (0, 0),     # `inout_ports: []`
-    "transient_signal_latch_check":     (0, None),  # discloses NO denominator
-    "testbench_exists_check":           (102, 107),  # the l9-shaped trap
-    "rtl_precheck_gate":                (3, 107),
-    "packet_length_check_present":      (3, 107),
-    "pre_awake_silence_check":          (1, 107),
+    "sustained_vs_edge_check":          (0, 108),   # CONVERTED — `N files scanned`
+    "timer_freeze_after_state_check":   (0, 108),   # CONVERTED — `files_scanned`
+    "fpga_wrapper_input_polluter_check": (0, 108),  # CONVERTED v1.8.82 — `Files scanned`
+    "cmd_arg_range_validation_check":   (0, 0),     # `denominator.examined` — was 4/107
+    "bit_count_modulo_check":           (1, 2),     # `denominator.examined`; now REDDENS 1
+    "l12_sequence_implementation_check": (0, 0),    # `denominator.examined` (L12 sequences)
+    "otp_write_lock_gate_check":        (0, 0),     # `denominator.examined` (write-enable sites)
+    "pulse_decoder_edge_check":         (0, 1),     # `denominator.examined` (decoder files)
+    "response_payload_template_check":  (0, 0),     # `denominator.examined` (payload assignments)
+    "tristate_self_rx_mask_check":      (0, 0),     # `denominator.examined` (driven tristate buses)
+    "transient_signal_latch_check":     (0, 0),     # `examined N ... pairs` — was None
+    "testbench_exists_check":           (103, 108),  # the l9-shaped trap; subject = the dir itself
+    "rtl_precheck_gate":                (3, 108),   # `auditors_total: 7` on every project
+    "packet_length_check_present":      (3, 4),     # `files_checked` — 107 was never measured
+    "pre_awake_silence_check":          (1, 1),     # non-vacuous on 1 — 107 was never measured
 }
 
 
