@@ -10688,21 +10688,83 @@ _AUTO_DIE_DEFAULT_UTIL = 0.40        # internal safety fallback when a util is u
 _AUTO_DIE_TARGET_UTIL = 0.25         # routing-headroom target for --die-um auto
 
 
-def _parse_site_area_um2(cell_lef_text: str) -> Optional[float]:
-    """Parse the placement SITE's area (µm²) from a cell LEF's
-    `SITE <name> ... SIZE w BY h ;`. Returns w*h, or None if absent/malformed.
-    chip-AGNOSTIC: every std-cell LEF declares its row site geometry."""
+def _parse_site_area_um2(cell_lef_text: str,
+                         site_name: str = "") -> Optional[float]:
+    """Parse the placement SITE's area (µm²) from a cell LEF's SITE DEFINITION
+    block (`SITE <name> … SIZE w BY h ; END <name>`). Returns w*h, or None if
+    absent/malformed. chip-AGNOSTIC: every std-cell LEF declares its row site.
+
+    A cell LEF holds TWO kinds of `SITE` token and only one of them is a
+    definition:
+
+      - the definition   ``SITE unithd``  (bare, then SYMMETRY/CLASS/SIZE/END)
+      - a reference      ``SITE unithd ;``  — one inside EVERY macro
+
+    The previous pattern was ``SITE .*? SIZE w BY h ;`` with DOTALL, which
+    matches the FIRST `SITE` token anywhere and then the first `SIZE` after
+    it. In a LEF whose macros precede the site definition, that first token is
+    a macro's SITE REFERENCE and the `SIZE` it then captures is THAT MACRO's
+    footprint, not the site's. MEASURED on sky130A
+    ``sky130_fd_sc_hd.lef``: it returned 4.14 x 2.72 = 11.26 µm² (a cell) in
+    place of the real ``SITE unithd`` 0.46 x 2.72 = 1.2512 µm² — 9x high,
+    which propagates straight into ``--die-um auto`` as a 9x die AREA.
+
+    Anchor on the definition instead: a bare ``SITE <name>`` line, bounded by
+    its ``END <name>``.
+
+    SELECTION, in order:
+      1. the site literally NAMED by `site_name`. That is the PDK's OWN
+         declared row site, and it is what `initialize_floorplan -site <name>`
+         will actually build rows from — so it is the only choice that keeps
+         the die MODEL and the FLOORPLAN talking about the same geometry. A
+         PDK may declare a double-height CLASS CORE site next to the unit one
+         (sky130A declares `unithd` AND `unithddbl`); picking on declaration
+         order alone sizes the die for rows the floorplan never builds.
+      2. else the first ``CLASS CORE`` site (the placement row site) — a
+         pad/corner site declared first is not the row site.
+      3. else the first site that parses at all.
+
+    ANCHOR STRICTNESS — both bounds tolerate a trailing ``\\r`` (a vendor LEF
+    written with CRLF must not read as "declares no site", which would route
+    the die to the fallback CONSTANT), and the NAME excludes ``;`` so a macro's
+    reference written ``SITE unithd;`` cannot pass as a definition: ``\\S+``
+    would swallow the semicolon into the name, no ``END unithd;`` would then
+    bound the block, and it would run on into the next MACRO and hand back
+    THAT macro's footprint — the very defect above, in another spelling.
+    """
     if not isinstance(cell_lef_text, str) or not cell_lef_text:
         return None
-    m = re.search(r"\bSITE\b.*?\bSIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)\s*;",
-                  cell_lef_text, re.DOTALL | re.IGNORECASE)
-    if not m:
-        return None
-    try:
-        w, h = float(m.group(1)), float(m.group(2))
-    except ValueError:
-        return None
-    return w * h if (w > 0 and h > 0) else None
+    named = core = first = None
+    want = (site_name or "").strip().lower()
+    for m in re.finditer(r"^[ \t]*SITE[ \t]+([^\s;]+)[ \t\r]*$",
+                         cell_lef_text, re.MULTILINE | re.IGNORECASE):
+        name = m.group(1)
+        blk = cell_lef_text[m.end():]
+        end = re.search(rf"^[ \t]*END[ \t]+{re.escape(name)}[ \t\r]*$",
+                        blk, re.MULTILINE | re.IGNORECASE)
+        if end:
+            blk = blk[:end.start()]
+        sm = re.search(r"\bSIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)\s*;",
+                       blk, re.IGNORECASE)
+        if not sm:
+            continue
+        try:
+            w, h = float(sm.group(1)), float(sm.group(2))
+        except ValueError:
+            continue
+        if not (w > 0 and h > 0):
+            continue
+        area = w * h
+        if want and name.lower() == want and named is None:
+            named = area
+        if (core is None
+                and re.search(r"\bCLASS\s+CORE\s*;", blk, re.IGNORECASE)):
+            core = area
+        if first is None:
+            first = area
+    if named is not None:
+        return named
+    return core if core is not None else first
 
 
 def _auto_die_side_um(cell_count: int, util_frac: float,
@@ -11414,38 +11476,67 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
     except Exception:
         nl = ""
     cells = _count_placed_cells_from_netlist(nl)
+    # The PDK's OWN declared row site — the same name that is handed to
+    # `initialize_floorplan -site` below, so the die model measures the site
+    # the floorplan will actually build rows from.
+    _site_name = str(getattr(pdk, "site", "") or "")
     site_area = None
     try:
         site_area = _parse_site_area_um2(
-            Path(pdk.cell_lef).read_text(errors="ignore"))
+            Path(pdk.cell_lef).read_text(errors="ignore"), _site_name)
     except Exception:
         site_area = None
+    if site_area is None and container:
+        # TWO defects kept this branch dead on every containerised run:
+        #
+        # (1) the read cannot succeed — the PDK ships INSIDE the EDA image, so
+        #     `pdk.cell_lef` is an in-container path and the host-side
+        #     `read_text` above always raises FileNotFoundError (MEASURED on
+        #     sky130A: cell_lef=/foss/pdks/sky130A/.../sky130_fd_sc_hd.lef,
+        #     `is_file()` on the host = False);
+        # (2) the CELL lef is the wrong file — it carries only SITE
+        #     REFERENCES (`SITE unithd ;`, one per macro). The SITE DEFINITION
+        #     that owns the row geometry lives in the TECH lef (MEASURED on
+        #     sky130A: 0 site definitions in the cell lef, 2 in
+        #     `techlef/sky130_fd_sc_hd__nom.tlef`).
+        #
+        # Read through the container, TECH lef first (where the definition
+        # belongs), then the cell lef for PDKs that inline it there.
+        for _lef in (getattr(pdk, "tech_lef", "") or "", pdk.cell_lef or ""):
+            if not _lef:
+                continue
+            try:
+                _rc, _out, _ = _docker_exec(
+                    container, f"cat {shlex.quote(str(_lef))}", timeout=120)
+            except Exception:
+                continue
+            if _rc == 0 and _out:
+                site_area = _parse_site_area_um2(_out, _site_name)
+                if site_area:
+                    break
     # DEGRADE LOUDLY, NEVER SILENTLY.
     #
-    # `pdk.cell_lef` is an IN-CONTAINER path (the PDK lives in the EDA image,
-    # not on the host), so on a containerised run this host-side `read_text`
-    # raises FileNotFoundError, the `except` above swallows it, and every
-    # design silently falls back to `_AUTO_DIE_FALLBACK_CELL_UM2`. The log line
-    # then prints `avg_cell=<fallback>µm²` in exactly the format it uses for a
-    # MEASURED value, so nothing downstream — and no reader — can tell that the
-    # die was sized from a constant rather than from this PDK.
+    # The fallback prints `avg_cell=<constant>µm²` in exactly the format it
+    # uses for a MEASURED value, so without a source label nothing downstream —
+    # and no reader — can tell that the die was sized from a constant rather
+    # than from this PDK.
     #
     # Measured consequence on one real cell: the fallback over-estimated the
     # average cell area by 5.3x against the design's OWN post-synthesis report,
     # so `--die-um auto` produced a die 5.3x too large in area and OpenROAD
     # reported `Effective utilization: 0.064` against a 0.25 target.
     #
-    # This change does NOT alter the number or any die produced today — it only
-    # makes the estimate SAY which of its two sources it came from, so a
-    # mis-sized die is attributable instead of invisible.
+    # The two reads above (host, then through the container) are what make the
+    # measured branch REACHABLE; this label is what makes the other branch
+    # ADMIT it is not a measurement.
     _avg_cell_src = "site-LEF"
     if site_area:
         avg_cell = site_area * _AUTO_DIE_AVG_SITES_PER_CELL
     else:
         avg_cell = _AUTO_DIE_FALLBACK_CELL_UM2
-        _avg_cell_src = ("FALLBACK CONSTANT — the site could not be read from "
-                         "this PDK's cell LEF, so the die is NOT sized from "
-                         "this process; verify the die/utilization")
+        _avg_cell_src = ("FALLBACK CONSTANT — no SITE definition was found in "
+                         "this PDK's tech LEF or cell LEF, so the die is NOT "
+                         "sized from this process; verify the die/utilization")
     # die-util FIDELITY: honor the design's own declared core density; else the
     # routing-headroom default. `util` (placement) is deliberately unused here.
     # Precedence: L9 generated constraint (design's own authored target) > the
