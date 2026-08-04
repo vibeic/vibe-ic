@@ -11855,6 +11855,106 @@ def _byte_list_to_payload_template(
     return tmpl
 
 
+def _payload_template_entry_offset(entry: Any) -> Optional[int]:
+    """Return the int `byte_offset` of a payload-template entry, or None
+    when the entry is not a structurally usable typed byte spec.
+
+    Purely structural / chip-AGNOSTIC: no value, vendor or opcode literal
+    participates in the decision."""
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return int(entry.get("byte_offset"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _payload_template_entry_is_documented(entry: Any) -> bool:
+    """True when a payload-template entry carries a concrete byte the
+    SOURCE DOCUMENT stated (a non-empty `value`), as opposed to a
+    placeholder that only carries a `source` pointer.
+
+    Structural only — an int, or a non-empty string. chip-AGNOSTIC."""
+    if _payload_template_entry_offset(entry) is None:
+        return False
+    val = entry.get("value")
+    if isinstance(val, bool):          # bool is an int subclass; not a byte
+        return False
+    if isinstance(val, int):
+        return True
+    return isinstance(val, str) and val.strip() != ""
+
+
+def _merge_response_payload_template(
+    extracted: Any,
+    synthesised: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Merge the DOCUMENT-extracted response template over the synthesised
+    typed-shape placeholder, per `byte_offset`. FILL THE GAPS — never
+    overwrite what the document said.
+
+    #812 — the per-opcode enrichment pass used to assign the synthesised
+    placeholder straight onto `response_payload_template`, unconditionally.
+    That placeholder exists only to satisfy a downstream TYPED-SHAPE
+    requirement (a consumer needs a well-formed template even when the
+    document gives nothing), but it was also stamped over opcodes whose
+    document DID state the response bytes — those landed in the sibling
+    `response_payload_template_extracted`, which no consumer read. The
+    polarity was inverted: the better-documented the input, the more
+    information was discarded, and a documented response became
+    indistinguishable from an undocumented one.
+
+    Merge rule (chip-AGNOSTIC, purely positional — no vendor / SKU / IC
+    literal participates):
+
+      * the result spans the UNION of both `byte_offset` domains;
+      * at an offset the document documented, the document's entry wins,
+        verbatim, tagged `provenance="document"`;
+      * every remaining offset keeps the synthesised placeholder, tagged
+        `provenance="synthesised_placeholder"`, so the typed-shape
+        guarantee still holds for the bytes nobody documented;
+      * entries are emitted in ascending `byte_offset` order.
+
+    Structurally unusable extracted entries (not a dict, no int-parseable
+    `byte_offset`, no concrete `value`) are ignored, so a malformed
+    extraction can only ever leave the placeholder standing — it can never
+    replace it with something worse.
+
+    With no extracted bytes at all the output is the synthesised list
+    unchanged apart from the provenance tag, so the undocumented path
+    behaves exactly as it did before.
+    """
+    doc_by_offset: Dict[int, Dict[str, Any]] = {}
+    for ent in (extracted or []) if isinstance(extracted, list) else []:
+        if not _payload_template_entry_is_documented(ent):
+            continue
+        off = _payload_template_entry_offset(ent)
+        if off is None or off in doc_by_offset:
+            continue
+        doc_by_offset[off] = ent
+
+    synth_by_offset: Dict[int, Dict[str, Any]] = {}
+    for ent in synthesised or []:
+        off = _payload_template_entry_offset(ent)
+        if off is None or off in synth_by_offset:
+            continue
+        synth_by_offset[off] = ent
+
+    merged: List[Dict[str, Any]] = []
+    for off in sorted(set(doc_by_offset) | set(synth_by_offset)):
+        if off in doc_by_offset:
+            out = dict(doc_by_offset[off])
+            out["provenance"] = "document"
+        else:
+            out = dict(synth_by_offset[off])
+            out["provenance"] = "synthesised_placeholder"
+        merged.append(out)
+    # Defensive: never return an EMPTY template where the caller had a
+    # well-formed one — the typed-shape guarantee is the placeholder's
+    # whole reason to exist.
+    return merged or list(synthesised or [])
+
+
 def _extract_row_description(row_line: str,
                               op_hex_end: int) -> Optional[str]:
     """Strip every hex-byte-group / numeric column / pipe character
@@ -25094,6 +25194,10 @@ def gen_l3_cmd_protocol(project: Path,
     # Heuristic chip-AGNOSTIC default: response_opcode at byte_offset=0,
     # CRC residue at last byte_offset; intermediate bytes flagged TBD with
     # a `source` pointer so the gate's typed-shape requirement is met.
+    # #812 — this default is a FALLBACK, not the answer. It is merged
+    # UNDER whatever the source document stated (see
+    # `_merge_response_payload_template`): a documented byte always wins
+    # its offset, and the placeholder survives only in the gaps.
     # Each opcode also gains an argument_constraints[] block citing the
     # global addr_max/len_max when applicable.
     enriched_opcodes: List[Dict[str, Any]] = []
@@ -25130,7 +25234,16 @@ def gen_l3_cmd_protocol(project: Path,
             cons.append({"name": "len_max", "max_hex": len_max,
                          "rule": "length > len_max → no reply"})
         new_op = dict(op)
-        new_op["response_payload_template"] = tmpl
+        # #812 — FILL A GAP, do not OVERWRITE. `tmpl` above is the
+        # heuristic typed-shape placeholder; when the source document
+        # itself stated the response bytes they are already in
+        # `response_payload_template_extracted`, and the document must win
+        # at every offset it covers. Merging per byte_offset also makes a
+        # PARTIALLY documented response usable: documented bytes survive,
+        # `source` pointers remain only in the gaps.
+        new_op["response_payload_template"] = (
+            _merge_response_payload_template(
+                op.get("response_payload_template_extracted"), tmpl))
         new_op["argument_constraints"] = cons
         if addr_max:
             new_op["addr_max"] = addr_max
