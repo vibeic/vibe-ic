@@ -23,6 +23,14 @@ Failure rules:
   A3_NETLIST_TOO_SMALL      — < 200 bytes
   A3_NETLIST_NO_SUBCKT      — no .subckt declaration
   A3_NETLIST_NO_DEVICES     — .subckt body instantiates no device
+  A3_NETLIST_IDEAL_PRIMITIVE_IN_BLOCK
+                            — the block subcircuit instantiates an IDEAL SPICE
+                              primitive (`V`/`I` source, `R`/`C`/`L` with a
+                              literal value, or a controlled/behavioural
+                              `E`/`F`/`G`/`H`/`B` source). No PDK declares a
+                              drawn device for any of them, so the block cannot
+                              reach an LVS match at A6 no matter how well it is
+                              laid out. See `_ideal_primitive_cards`.
   A3_DESIGN_CONTENT_UNDECLARED
                             — the netlist is substantive and nothing says what
                               circuit is in it. LAST, behind every value rule.
@@ -107,6 +115,169 @@ _SUBCKT_END_RE = re.compile(r"(?i)^\.ends\b")
 _DEVICE_CARD_RE = re.compile(r"(?i)^[xmrcldqjzefghb]\S")
 
 
+# ── LAYOUT-REALIZABILITY: an ideal primitive inside the block subcircuit ──
+#
+# THE RULE, with no tool, PDK or design name in it:
+#
+#   A block netlist that instantiates a SPICE primitive for which no PDK
+#   declares a drawn device has made its own per-block physical verification
+#   unreachable, and it must be told so where the netlist is written — not
+#   three steps later where the compare fails.
+#
+# WHY IT BELONGS AT A3 AND NOT AT A6. A6 grades DRC == 0 AND a netgen LVS
+# match. The netgen PDK setup declares device classes for the PDK's own
+# `res_*`/`cap_*` subcircuits and declares NOTHING that equates an ideal SPICE
+# primitive to a drawn one, so a deck carrying one can never match — by
+# construction, before anyone draws anything. Measured on a deck built to the
+# authoring skill's own worked example (`Vbias nbias VSS 0.8`, `R1 VOUT FB
+# 100k`, `Cc nd2 VOUT 3p` inside `.subckt ota`): A3, A4 and A5 all certified
+# it, and the ONLY signal was an A6 LVS mismatch three steps downstream, which
+# reads as a layout defect. The failure now lands where the defect is
+# introduced.
+#
+# WHAT COUNTS AS IDEAL, as SPICE card grammar rather than as a name list:
+#
+#   * `V`/`I` — an independent source. There is no drawn voltage source in any
+#     PDK, so the CARD LETTER alone decides.
+#   * `E`/`F`/`G`/`H`/`B` — controlled and behavioural sources. Same argument,
+#     and covering them is what stops the rule being evaded by writing a
+#     resistor as a linear VCCS.
+#   * `R`/`C`/`L` — ideal ONLY when the value field holds a NUMBER or an
+#     expression. `R1 a b 100k` is an ideal resistor; `R1 a b <pdk_res_model>
+#     w=1u l=10u` names a model the PDK can (and does) declare a device class
+#     for, and is left alone. A SPICE identifier cannot begin with a digit, so
+#     the two are separable exactly, with no model-name list.
+#
+# WHAT IS DELIBERATELY OUT OF SCOPE:
+#
+#   * TOP-LEVEL cards (outside every `.subckt`). `<block>.sp` is `.include`d by
+#     its testbench and the flow's own contract puts stimulus in
+#     `tb_<block>.sp`; a card at file scope is not part of the block.
+#   * Anything inside a TESTBENCH subcircuit. Sources and loads are CORRECT
+#     there — the testbench is where the authoring skill's own remediations
+#     send them ("hoist the source to a port", "move the load to the TB"), so a
+#     rule that fired on them would push the fix back out again.
+#   * `M`/`Q`/`J`/`Z`/`D` — every one of them names a model and IS a drawn
+#     device. `X` — a subcircuit instance, which is the form every PDK device
+#     takes.
+_SUBCKT_DECL_RE = re.compile(r"(?i)^\.subckt\s+(\S+)")
+
+#: Cards whose LETTER alone settles it: no PDK draws a source.
+_IDEAL_SOURCE_LETTERS = frozenset("viefghb")
+#: Cards that are ideal only when they carry a value rather than a model name.
+_IDEAL_PASSIVE_LETTERS = frozenset("rcl")
+
+#: The testbench naming convention, and the ONLY name-shaped input in this
+#: rule. It is a SPICE/HDL-wide convention, not a design, chip or vendor
+#: token — and it can only ever SUPPRESS a finding, so a deck that does not
+#: follow it loses nothing but a false negative on its own stimulus.
+_TB_SUBCKT_RE = re.compile(
+    r"(?i)^(?:tb|testbench)(?:[_\-].*)?$|^.*[_\-](?:tb|testbench)$")
+
+_IDEAL_LETTER_MEANING = {
+    "v": "independent voltage source", "i": "independent current source",
+    "e": "VCVS (controlled source)", "f": "CCCS (controlled source)",
+    "g": "VCCS (controlled source)", "h": "CCVS (controlled source)",
+    "b": "behavioural source",
+    "r": "ideal resistor", "c": "ideal capacitor", "l": "ideal inductor",
+}
+
+
+def _is_value_token(tok: str) -> bool:
+    """True when `tok` is a VALUE rather than a model name.
+
+    Exact SPICE grammar, no list: an identifier may not begin with a digit, so
+    a leading digit / sign / decimal point is a number, and a leading brace or
+    quote is an expression. A token carrying `=` is a parameter assignment
+    (`R=100k`), which is the parametrised form of the same ideal element."""
+    if not tok:
+        return True
+    if "=" in tok:
+        return True
+    return tok[0].isdigit() or tok[0] in "+-.{'\"("
+
+
+def _passive_is_ideal(fields: List[str]) -> bool:
+    """`Rname n+ n- <value|model> ...` — ideal iff field 3 is a value.
+
+    A malformed card with no fourth field is treated as ideal: it names no
+    model, so nothing downstream can equate it to a drawn device either."""
+    if len(fields) < 4:
+        return True
+    return _is_value_token(fields[3])
+
+
+def _ideal_primitive_cards(text: str) -> List[dict]:
+    """Every ideal-primitive card instantiated inside a non-testbench
+    `.subckt` body, as `{subckt, card, letter, line}`.
+
+    Same walk discipline as `_subckt_device_count` — comments (`*`, `;`),
+    continuations (`+`) and dot-commands are skipped, and depth is tracked so
+    file-scope cards are out of scope. chip-AGNOSTIC: pure SPICE card
+    grammar."""
+    stack: List[str] = []
+    hits: List[dict] = []
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line[0] in "*;+":
+            continue
+        decl = _SUBCKT_DECL_RE.match(line)
+        if decl:
+            stack.append(decl.group(1))
+            continue
+        if _SUBCKT_END_RE.match(line):
+            if stack:
+                stack.pop()
+            continue
+        if not stack:
+            continue
+        if any(_TB_SUBCKT_RE.match(s) for s in stack):
+            continue
+        fields = line.split()
+        letter = fields[0][0].lower()
+        ideal = (letter in _IDEAL_SOURCE_LETTERS
+                 or (letter in _IDEAL_PASSIVE_LETTERS
+                     and _passive_is_ideal(fields)))
+        if ideal:
+            hits.append({"subckt": stack[-1], "card": fields[0],
+                         "letter": letter, "line": lineno})
+    return hits
+
+
+def _ideal_primitive_fail(block: str, rel: str, text: str) -> Optional[dict]:
+    """The finding, or None. Named remediations, because every one of them is
+    an EDIT SOMEWHERE ELSE — the netlist is the symptom's address, not its
+    cure."""
+    hits = _ideal_primitive_cards(text)
+    if not hits:
+        return None
+    shown = ", ".join(
+        f"`{h['card']}` ({_IDEAL_LETTER_MEANING[h['letter']]}) at "
+        f"{rel}:{h['line']} in `.subckt {h['subckt']}`"
+        for h in hits[:4])
+    more = f" (+{len(hits) - 4} more)" if len(hits) > 4 else ""
+    return {
+        "block": block, "rule": "A3_NETLIST_IDEAL_PRIMITIVE_IN_BLOCK",
+        "rel_path": rel,
+        "ideal_cards": hits,
+        "detail": (
+            f"{len(hits)} ideal SPICE primitive(s) inside the block "
+            f"subcircuit: {shown}{more}. No PDK declares a drawn device for "
+            f"any of them, so the per-block LVS compare at A6 cannot match "
+            f"however well the block is laid out — A6 is unreachable by "
+            f"construction, and A4 and A5 will certify the deck on the way "
+            f"there. Fix it HERE, before drawing anything: hoist an ideal "
+            f"bias source to a block PORT the testbench drives; replace an "
+            f"ideal R or C with the PDK's own resistor/capacitor device "
+            f"(instantiated as `X<name> ... <pdk_device> w= l=`, or as an "
+            f"R/C card naming a PDK model, both of which this rule leaves "
+            f"alone); move an ideal LOAD element to `tb_{block}.sp`, where "
+            f"it belongs and where this rule does not look. Then RE-RUN A4 "
+            f"on the revised deck — a netlist change that was never "
+            f"re-simulated is not a fix."),
+    }
+
+
 def _subckt_device_count(text: str) -> int:
     """Number of device cards instantiated inside `.subckt`/`.ends` bodies.
 
@@ -183,6 +354,24 @@ def _check_block(project: Path, block: str
         # must not reach it and turn a disclosed stub red — that would be the
         # inverted incentive one level up, charging for a disclosure.
         return "PASS", []
+
+    # ── LAYOUT-REALIZABILITY, asked after the stub short-circuit ──────────
+    # POSITION IS PART OF THE RULE, and it is not the one the value rules
+    # above take. Those fire on a stub too, because a 34-byte file is not a
+    # netlist whatever it says about itself. This one must NOT: the runner's
+    # own deterministic A3 stub is literally `.subckt <block> ... r_stub vin
+    # vout 1k ... .ends`, an ideal resistor inside a block subcircuit, and it
+    # already DISCLOSES that it is a placeholder. Failing it here would charge
+    # for the disclosure — the same inverted incentive the tier below exists
+    # to remove — and would replace an accurate PASS_WITH_STUB with a
+    # realizability complaint about a circuit nobody claims is real.
+    #
+    # And BEFORE the certification question, which is the standing order on
+    # this track: a value rule names a deeper cause and answers "what is in
+    # it?" as a side effect, never the other way round.
+    ideal = _ideal_primitive_fail(block, str(path.relative_to(project)), text)
+    if ideal is not None:
+        return "FAIL", [ideal]
 
     # ── the certification question, asked LAST ────────────────────────────
     # Behind every VALUE rule above, each of which names a deeper cause and

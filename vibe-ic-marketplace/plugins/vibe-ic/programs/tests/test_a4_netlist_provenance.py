@@ -26,6 +26,7 @@ PDK selector, no design content.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -283,11 +284,20 @@ def test_gate_passes_a3_derived_sweep(tmp_path: Path) -> None:
     # stays silent on its content is now its own finding
     # (A4_DESIGN_CONTENT_UNDECLARED), so this negative control states the
     # content it is a control for.
+    #
+    # `netlist_sha256` used to be `"0" * 64` here — a placeholder, because
+    # nothing re-computed it. That made this control assert something it never
+    # meant to: that a corner artefact may record a hash of the netlist it
+    # measured which is not that netlist's hash. Now that the recorded digest
+    # is verified against the bytes on disk, the control records the REAL one.
+    # Its subject is unchanged — an a3-derived deck still passes — and it no
+    # longer doubles as a shipped statement that a fabricated digest certifies.
+    netlist = project / "phase3" / "analog" / "vreg" / "vreg.sp"
     _corners(project, "vreg", _real_sim_doc(
         netlist_provenance="a3_netlist",
         netlist_source="phase3/analog/vreg/vreg.sp",
         design_content="structure_and_geometry",
-        netlist_sha256="0" * 64))
+        netlist_sha256=hashlib.sha256(netlist.read_bytes()).hexdigest()))
 
     r = _run_gate(project)
     assert r.returncode == 0, r.stdout + r.stderr
