@@ -692,6 +692,58 @@ def _log_invocation(cmd: str, rc: int, duration_ms: int,
         pass
 
 
+
+
+# ---------------------------------------------------------------------------
+# A LOG SINK MUST NOT BE ALLOWED TO ANSWER FOR THE TOOL.
+#
+# Every long tool run in this file is composed as
+#
+#     <tool> ... 2>&1 | tee <log>
+#
+# and a shell pipeline's exit status is the LAST command's. `tee` succeeds
+# whenever it can write its file, so the TOOL's status is discarded before the
+# runner ever sees it. Measured, with the exact wrapper this module uses
+# (`docker exec ... bash -lc`), on an OpenROAD run that aborts in link_design:
+#
+#     openroad -no_init -exit t.tcl 2>&1 | tee /tmp/or.log        ->  rc 0
+#     set -o pipefail; openroad ... 2>&1 | tee /tmp/or.log        ->  rc 1
+#     set -o pipefail; <same, on a design that links>              ->  rc 0
+#
+# What that cost, on a real run: `openroad -no_init -exit pnr.tcl` died in 15 s
+# with `[ERROR STA-0171] ... syntax error` / `Error: pnr.tcl, 8 STA-0171`, the
+# runner read rc 0, its second condition (`not def_file.is_file()`) was
+# satisfied by a DEF LEFT BY AN EARLIER RUN, and the step was reported as
+# `BLOCKED PG_NET_OWNERSHIP_UNMEASURED` — a power-grid audit gap. The next
+# reader spent a session on the power grid.
+#
+# This is the same defect the provenance version probe was fixed for
+# (`<tool> --version 2>&1 | head -3` reading `head`'s status): the class is
+# "a downstream filter answered for the tool", and it was fixed at one site.
+# Fixing it HERE, once, in the only place every container command passes
+# through, is what makes it a class fix rather than an eleventh instance.
+#
+# SCOPE, deliberately narrow: only a pipeline into `tee`. `tee` is a pure
+# logging sink — it never expresses a decision, so its exit status is never the
+# answer to anything. Pipelines into `head` / `grep` / `awk` are left alone;
+# there the filter's status can legitimately BE the question, and turning those
+# on is a separate change with a separate blast radius.
+_LOG_SINK_PIPE = "| tee "
+_PIPEFAIL_PREFIX = "set -o pipefail; "
+
+
+def _tool_status_not_the_log_sinks(cmd: str) -> str:
+    """Make the TOOL's exit status survive a `| tee` log sink.
+
+    Idempotent, and a no-op for every command that does not pipe into `tee`.
+    """
+    if _LOG_SINK_PIPE not in cmd:
+        return cmd
+    if cmd.lstrip().startswith(_PIPEFAIL_PREFIX.strip()):
+        return cmd
+    return _PIPEFAIL_PREFIX + cmd
+
+
 def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
                      ) -> Tuple[int, str, str]:
     """Run shell cmd inside a Docker container with a SIMPLE container-side
@@ -705,6 +757,7 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
     subprocess.TimeoutExpired so orphan processes stop writing partial files
     before the caller returns rc=124. Falls back gracefully if the container
     has no `timeout` binary. Chip-AGNOSTIC."""
+    cmd = _tool_status_not_the_log_sinks(cmd)
     _inner = max(1, timeout - 5)
     _wrapped = (
         f"if command -v timeout >/dev/null 2>&1; then "
@@ -777,6 +830,7 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
 
     # OUTER backstop only: wrap with a container-side `timeout` at the CEILING so
     # the in-container tool self-terminates even if the host watchdog dies.
+    cmd = _tool_status_not_the_log_sinks(cmd)
     _ceil_inner = max(1, int(ceiling) - 5)
     _wrapped = (
         f"if command -v timeout >/dev/null 2>&1; then "
