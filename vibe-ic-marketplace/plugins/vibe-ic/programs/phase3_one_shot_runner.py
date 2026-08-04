@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -2771,9 +2772,244 @@ def _def_pdn_evidence(def_text: str) -> Dict[str, Any]:
     }
 
 
-def _build_pdn_tcl(pdk: "PdkConfig") -> str:
+def _secondary_supply_gc_tcl(secondary: Sequence[Dict[str, str]]) -> str:
+    """Emit the per-instance `add_global_connection` for every SECONDARY-supply
+    macro pin, to run INSIDE the PDN block, BEFORE `global_connect`.
+
+    A hard macro can carry a supply pin that is NOT one of the design's core
+    rails — a programming/erase supply, an always-on domain, an analog bias.
+    The runner already binds such a pin to its declared rail, but it does so in
+    the hard-macro supply block, which is emitted AFTER the PDN block: by then
+    `pdngen` has already run, `set_voltage_domain` has already been told the
+    design has only the CORE rails, and the secondary net therefore never
+    receives one micron of metal. The pin ends up on a net that exists in the
+    netlist and nowhere in the layout — a floating supply terminal that every
+    connectivity check downstream reports as "connected" because the NET is
+    connected, while the RAIL has no geometry at all.
+
+    So the binding has to exist BEFORE the grid is defined. Instance names come
+    from the DB at runtime (regex-escaped) and the (master, pin, rail) triples
+    come from the design's own LEF USE records + declared power intent, so this
+    is chip-AGNOSTIC. Returns "" when the design declares no secondary supply,
+    which keeps the emitted PDN byte-identical for every existing design."""
+    by_master: Dict[str, List[Dict[str, str]]] = {}
+    for s in (secondary or []):
+        by_master.setdefault(s["master"], []).append(s)
+    if not by_master:
+        return ""
+    out: List[str] = [
+        "  # --- secondary-supply macro pins: bind BEFORE the grid is "
+        "defined ---\n",
+        "  foreach _sp_i [[ord::get_db_block] getInsts] {\n",
+        "    set _sp_re \"^[_sp_reesc [$_sp_i getName]]\\$\"\n",
+        "    switch -exact -- [[$_sp_i getMaster] getName] {\n",
+    ]
+    for master in sorted(by_master):
+        out.append(f"      \"{master}\" {{\n")
+        for s in by_master[master]:
+            flag = "-power" if s.get("use", "POWER") == "POWER" else "-ground"
+            out.append(
+                f"        add_global_connection -net {s['rail']} "
+                f"-inst_pattern $_sp_re -pin_pattern \"^{s['pin']}\\$\" "
+                f"{flag}\n")
+        out.append("      }\n")
+    out.append("      default {}\n")
+    out.append("    }\n")
+    out.append("  }\n")
+    return "".join(out)
+
+
+def _build_secondary_supply_pdn_tcl(
+        secondary: Sequence[Dict[str, str]],
+        stripes: Sequence[Dict[str, object]],
+        connects: Sequence[Sequence[str]]) -> str:
+    """Emit the PIN-ALIGNED macro-grid straps that give a secondary supply rail
+    REAL metal, to run inside the PDN block just before `pdngen`.
+
+    Why a dedicated grid and not just another net on the core grid: pdngen
+    culls a shape with too few connections (`Shape::isRemovable`), so a
+    secondary net added to the CORE grid is generated and then deleted again —
+    the run says nothing and the DEF holds no such net. And a secondary rail is
+    reached at ONE small macro terminal, not along a row, so a core-pitch mesh
+    almost never lands on it. What does work is a `-macro` grid scoped to the
+    instance, carrying a SINGLE strap whose offset is computed from the PLACED
+    pin bbox, so the strap is centred on the terminal by construction.
+
+    Everything geometric is computed at RUNTIME from the DB, never assumed:
+
+      * the pin's own metal layer          — from the master's MPin geometry
+      * the strap layer                    — the LOWEST layer in this PDK's own
+                                             strap plan that is strictly ABOVE
+                                             the pin layer (so a via stack can
+                                             exist between them)
+      * the strap axis                     — the strap layer's LEF direction
+      * the offset                         — placed-pin-bbox centre minus the
+                                             instance bbox origin on that axis
+                                             (pdngen measures a macro grid's
+                                             offset from the instance bbox)
+
+    Width and pitch are the CORE grid's own values for that layer, so no new
+    tuning knob is introduced. The macro grid also re-lays the core strap over
+    the macro (`-extend_to_boundary`), because a `-macro` grid otherwise blocks
+    the core mesh across the instance — measured: without it the core MET-strap
+    count over the die halves.
+
+    When a pin cannot be reached — no routing-layer metal in the LEF, or no
+    planned strap layer above it — the run SAYS so and builds nothing. A
+    secondary supply that this partition genuinely cannot feed is a finding to
+    report, not a rail to fabricate.
+
+    Returns "" when there is no secondary supply or no strap plan to reach it
+    with, so every existing design keeps a byte-identical PDN."""
+    if not secondary or not stripes:
+        return ""
+    plan: List[str] = []
+    lyrs: set = set()
+    for st in stripes:
+        lyr = st.get("layer")
+        sw = st.get("width")
+        sp = st.get("pitch")
+        if not (lyr and sw and sp):
+            continue
+        off = st.get("offset", 0)
+        plan.append(f"{{{lyr} {sw} {sp} {off}}}")
+        lyrs.add(str(lyr))
+    if not plan:
+        return ""
+    pins = " ".join(
+        f"{{{s['master']} {s['pin']} {s['rail']}}}" for s in secondary)
+    # Only strap-to-strap connects, so the macro grid is stitched into the same
+    # via stack the core mesh uses. A pair naming a layer this grid has no
+    # stripe on is dropped rather than emitted and silently ignored.
+    up = " ".join(
+        f"{{{p[0]} {p[1]}}}" for p in (connects or [])
+        if isinstance(p, (list, tuple)) and len(p) == 2
+        and str(p[0]) in lyrs and str(p[1]) in lyrs)
+    return (
+        "  # --- secondary-supply rails: pin-aligned macro-grid straps ---\n"
+        f"  set _sp_plan {{{' '.join(plan)}}}\n"
+        f"  set _sp_pins {{{pins}}}\n"
+        f"  set _sp_up {{{up}}}\n"
+        "  set _sp_tech [ord::get_db_tech]\n"
+        "  set _sp_n 0\n"
+        "  set _sp_skip 0\n"
+        "  foreach _sp_i [[ord::get_db_block] getInsts] {\n"
+        "    set _sp_m [[$_sp_i getMaster] getName]\n"
+        "    set _sp_hits {}\n"
+        "    foreach _sp_e $_sp_pins {\n"
+        "      if {[lindex $_sp_e 0] eq $_sp_m} { lappend _sp_hits $_sp_e }\n"
+        "    }\n"
+        "    if {[llength $_sp_hits] == 0} { continue }\n"
+        "    set _sp_iname [$_sp_i getName]\n"
+        "    set _sp_ib [$_sp_i getBBox]\n"
+        "    set _sp_str {}\n"
+        "    set _sp_dn {}\n"
+        "    set _sp_low -1\n"
+        "    set _sp_lowc {}\n"
+        "    foreach _sp_e $_sp_hits {\n"
+        "      set _sp_pin [lindex $_sp_e 1]\n"
+        "      set _sp_rail [lindex $_sp_e 2]\n"
+        "      set _sp_t [$_sp_i findITerm $_sp_pin]\n"
+        "      if {$_sp_t eq \"NULL\" || $_sp_t eq \"\"} {\n"
+        "        puts \"SECONDARY_PDN_UNREACHED: $_sp_iname has no terminal "
+        "$_sp_pin; no strap built\"\n"
+        "        incr _sp_skip ; continue\n"
+        "      }\n"
+        "      set _sp_plvl -1\n"
+        "      set _sp_pnm \"\"\n"
+        "      foreach _sp_mp [[$_sp_t getMTerm] getMPins] {\n"
+        "        foreach _sp_g [$_sp_mp getGeometry] {\n"
+        "          set _sp_gl [$_sp_g getTechLayer]\n"
+        "          if {$_sp_gl eq \"NULL\" || $_sp_gl eq \"\"} { continue }\n"
+        "          if {[$_sp_gl getType] ne \"ROUTING\"} { continue }\n"
+        "          set _sp_r [$_sp_gl getRoutingLevel]\n"
+        "          if {$_sp_r > $_sp_plvl} {\n"
+        "            set _sp_plvl $_sp_r ; set _sp_pnm [$_sp_gl getName]\n"
+        "          }\n"
+        "        }\n"
+        "      }\n"
+        "      if {$_sp_plvl < 0} {\n"
+        "        puts \"SECONDARY_PDN_UNREACHED: $_sp_iname/$_sp_pin presents "
+        "no routing-layer metal in its LEF, so no strap can be aligned to it "
+        "-- reported, not fabricated\"\n"
+        "        incr _sp_skip ; continue\n"
+        "      }\n"
+        "      set _sp_best -1\n"
+        "      set _sp_bc {}\n"
+        "      foreach _sp_c $_sp_plan {\n"
+        "        set _sp_o [$_sp_tech findLayer [lindex $_sp_c 0]]\n"
+        "        if {$_sp_o eq \"NULL\" || $_sp_o eq \"\"} { continue }\n"
+        "        set _sp_ol [$_sp_o getRoutingLevel]\n"
+        "        if {$_sp_ol <= $_sp_plvl} { continue }\n"
+        "        if {$_sp_best < 0 || $_sp_ol < $_sp_best} {\n"
+        "          set _sp_best $_sp_ol ; set _sp_bc $_sp_c\n"
+        "        }\n"
+        "      }\n"
+        "      if {$_sp_best < 0} {\n"
+        "        puts \"SECONDARY_PDN_UNREACHED: $_sp_iname/$_sp_pin sits on "
+        "$_sp_pnm and this PDK's strap plan has NO layer above it, so this "
+        "partition cannot feed rail $_sp_rail -- reported, not fabricated\"\n"
+        "        incr _sp_skip ; continue\n"
+        "      }\n"
+        "      set _sp_bl [lindex $_sp_bc 0]\n"
+        "      set _sp_dir [[$_sp_tech findLayer $_sp_bl] getDirection]\n"
+        "      set _sp_pb [$_sp_t getBBox]\n"
+        "      if {$_sp_dir eq \"VERTICAL\"} {\n"
+        "        set _sp_off [expr {([$_sp_pb xMin] + [$_sp_pb xMax]) / 2 "
+        "- [$_sp_ib xMin]}]\n"
+        "      } else {\n"
+        "        set _sp_off [expr {([$_sp_pb yMin] + [$_sp_pb yMax]) / 2 "
+        "- [$_sp_ib yMin]}]\n"
+        "      }\n"
+        "      lappend _sp_str [list $_sp_bl [lindex $_sp_bc 1] "
+        "[lindex $_sp_bc 2] [ord::dbu_to_microns $_sp_off] $_sp_rail "
+        "$_sp_pin $_sp_pnm]\n"
+        "      if {[lsearch -exact $_sp_dn [list $_sp_pnm $_sp_bl]] < 0} {\n"
+        "        lappend _sp_dn [list $_sp_pnm $_sp_bl]\n"
+        "      }\n"
+        "      if {$_sp_low < 0 || $_sp_best < $_sp_low} {\n"
+        "        set _sp_low $_sp_best ; set _sp_lowc $_sp_bc\n"
+        "      }\n"
+        "    }\n"
+        "    if {[llength $_sp_str] == 0} { continue }\n"
+        "    set _sp_g \"secpdn_$_sp_n\"\n"
+        "    define_pdn_grid -macro -name $_sp_g -instances [list $_sp_iname] "
+        "-voltage_domains CORE -grid_over_boundary\n"
+        "    add_pdn_stripe -grid $_sp_g -layer [lindex $_sp_lowc 0] "
+        "-width [lindex $_sp_lowc 1] -pitch [lindex $_sp_lowc 2] "
+        "-offset [lindex $_sp_lowc 3] -extend_to_boundary\n"
+        "    foreach _sp_s $_sp_str {\n"
+        "      add_pdn_stripe -grid $_sp_g -layer [lindex $_sp_s 0] "
+        "-width [lindex $_sp_s 1] -pitch [lindex $_sp_s 2] "
+        "-offset [lindex $_sp_s 3] -number_of_straps 1 "
+        "-nets [lindex $_sp_s 4] -allow_out_of_core\n"
+        "      puts \"SECONDARY_PDN_STRAP: $_sp_iname/[lindex $_sp_s 5] on "
+        "[lindex $_sp_s 6] -> net [lindex $_sp_s 4] strapped on "
+        "[lindex $_sp_s 0] width [lindex $_sp_s 1] offset "
+        "[lindex $_sp_s 3]um (centred on the PLACED pin bbox)\"\n"
+        "    }\n"
+        "    foreach _sp_c $_sp_dn { add_pdn_connect -grid $_sp_g "
+        "-layers $_sp_c }\n"
+        "    foreach _sp_c $_sp_up { add_pdn_connect -grid $_sp_g "
+        "-layers $_sp_c }\n"
+        "    incr _sp_n\n"
+        "  }\n"
+        "  puts \"SECONDARY_PDN: $_sp_n macro grid(s) built for the design's "
+        "secondary supply rail(s); $_sp_skip pin(s) UNREACHED\"\n")
+
+
+def _build_pdn_tcl(pdk: "PdkConfig",
+                   secondary: Optional[Sequence[Dict[str, str]]] = None
+                   ) -> str:
     """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
     `pdngen`) Tcl, NONFATAL-guarded.
+
+    ``secondary`` (v1.6.67) is the design's SECONDARY-supply plan —
+    ``[{master, pin, rail, use}, ...]`` for every hard-macro supply pin bound to
+    a rail that is NOT one of the two core rails. When present the emitted PDN
+    registers those rails on the voltage domain and builds pin-aligned macro
+    straps for them (see `_build_secondary_supply_pdn_tcl`); when absent — every
+    single-supply design — the emitted Tcl is byte-identical to before.
 
     Returns the inserted block when the PDK is sky130-style (probed by
     `tapcell_master` non-None), or a SKIPPED line otherwise. Without this
@@ -2907,9 +3143,28 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
         # be strapped (single-metal stack, or an unreadable/unparseable tech
         # LEF) the run emits a marker that `_pnr_pdn_status` treats as NOT-OK,
         # so the PnR step reports BLOCKED instead of passing hollow.
+        # v1.6.67 — SECONDARY supply. A macro supply pin bound to a rail that
+        # is neither `pwr` nor `gnd` gets registered on the voltage domain and
+        # given pin-aligned macro straps, so the rail carries real metal in
+        # THIS partition instead of being deferred to integration and leaving a
+        # physically floating supply terminal in the shipped layout.
+        _sec = [s for s in (secondary or [])
+                if s.get("rail") and s["rail"] not in (pwr, gnd)]
+        _sec_gc = _secondary_supply_gc_tcl(_sec)
+        _sec_pdn = _build_secondary_supply_pdn_tcl(_sec, _stripes, _connects)
+        _sec_rails = sorted({s["rail"] for s in _sec
+                             if (s.get("use") or "POWER") == "POWER"})
+        _sec_dom = (f" -secondary_power \"{' '.join(_sec_rails)}\""
+                    if _sec_rails and _sec_pdn else "")
+        _sec_note = (f" + secondary({','.join(_sec_rails)})"
+                     if _sec_dom else "")
+        _sec_proc = (
+            "proc _sp_reesc {s} { return "
+            "[regsub -all {[][{}().*+?^$\\\\|]} $s {\\\\&}] }\n"
+            if _sec_gc else "")
         _ok_marker = (
             f"  puts \"PDN_INSERTED_ADAPTIVE: {fpl} follow-pins "
-            f"net={pwr}/{gnd} width={w}{strap_note}{well_note}\"\n"
+            f"net={pwr}/{gnd} width={w}{strap_note}{well_note}{_sec_note}\"\n"
             if strap_tcl else
             f"  puts \"PDN_NO_STRAPS: {fpl} follow-pins net={pwr}/{gnd} "
             f"width={w}{well_note} — {_no_strap_why}, so the per-row rails "
@@ -2917,16 +3172,22 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
             f"grid. Declare `pdn_straps` for this PDK to override.\"\n")
         return (
             "# === PDK-adaptive PDN: discovered PG pins + met1 follow-pins"
-            + (" + upper-metal straps ===\n" if strap_tcl else " ===\n")
+            + (" + upper-metal straps" if strap_tcl else "")
+            + (" + secondary-supply macro straps ===\n" if _sec_dom
+               else " ===\n")
+            + _sec_proc
             + "if {[catch {\n"
             f"  add_global_connection -net {pwr} -pin_pattern \"^{pwr}$\" -power\n"
             f"  add_global_connection -net {gnd} -pin_pattern \"^{gnd}$\" -ground\n"
             + well_tcl
+            + _sec_gc
             + "  global_connect\n"
-            f"  set_voltage_domain -name CORE -power {pwr} -ground {gnd}\n"
+            f"  set_voltage_domain -name CORE -power {pwr} -ground {gnd}"
+            f"{_sec_dom}\n"
             "  define_pdn_grid -name grid -voltage_domains CORE\n"
             f"  add_pdn_stripe -grid grid -layer {fpl} -width {w} -followpins\n"
             + strap_tcl
+            + _sec_pdn
             + "  pdngen\n"
             "} _pdn_err]} {\n"
             "  puts \"PDN_NONFATAL: $_pdn_err\"\n"
@@ -4209,13 +4470,21 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
     fixed_any = False
     for n in enabled_ns:
         met = f"MET{n}"
-        via = f"VIA{n}"  # the via BELOW METn connects MET(n-1) <-> METn
-        wm = re.search(
-            r"@Mt\.W\.1:[^\n]*\n\s*INTERNAL\s+__" + re.escape(met.lower()) +
-            r"__\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
-        if not wm:
-            continue  # this deck doesn't gate METn's width via Mt.W.1 -> no-op
-        deck_width_um = float(wm.group(1))
+        # The deck NAMES its own top-via on the Mt.EN.1 line ("Min. enclosure
+        # of Vt-1 by Mt <v> METn VIAm"), so READ it instead of computing it.
+        # v1.6.68: the pre-existing code built the via name as VIA{n}, which
+        # on a deck whose "Vt-1" is the via BELOW the top metal (measured:
+        # `... 0.09 MET5 VIA4`) never matched, so the enclosure lookup found
+        # nothing every time. Deriving VIA{n-1} instead would only swap one
+        # guess for another; taking the deck's own token is guess-free and
+        # works for either convention.
+        enm = re.search(
+            r"@Mt\.EN\.1:[^\n]*?([0-9.]+)\s+" + re.escape(met) +
+            r"\s+(\w+)\b[^\n]*\n(?:.*\n)*?\s*ENCLOSURE\s+\S+\s+\S+\s*<\s*"
+            r"([0-9.]+)", deck_text, re.IGNORECASE)
+        via = enm.group(2) if enm else ""
+        enc_note = (f", Mt.EN.1 {met}/{via} enclosure={enm.group(3)}um"
+                    if enm else "")
 
         lblock = re.search(
             r"(?ms)^LAYER\s+" + re.escape(met) + r"\s*\n(.*?)^END\s+" +
@@ -4223,38 +4492,125 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
         if not lblock:
             continue
         block = lblock.group(1)
-        wmatch = re.search(r"(?m)^(\s*WIDTH\s+)([0-9.]+)(\s*;)", block)
-        mwmatch = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", block)
-        lef_width_um = min(
-            float(wmatch.group(2)) if wmatch else 1e9,
-            float(mwmatch.group(2)) if mwmatch else 1e9)
-        if lef_width_um >= deck_width_um:
-            continue  # LEF already honors the deck's real minimum
-
-        enm = re.search(
-            r"@Mt\.EN\.1:[^\n]*\b" + re.escape(met) + r"\s+" +
-            re.escape(via) + r"\b[^\n]*\n(?:.*\n)*?\s*ENCLOSURE\s+\S+\s+\S+"
-            r"\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
-        enc_note = f", Mt.EN.1 enclosure={enm.group(1)}um" if enm else ""
-
         fixed_block = block
-        if wmatch:
-            fixed_block = (fixed_block[:wmatch.start()] +
-                           f"{wmatch.group(1)}{deck_width_um}{wmatch.group(3)}" +
-                           fixed_block[wmatch.end():])
-        # re-locate MINWIDTH after the WIDTH edit may have shifted offsets
-        mwmatch2 = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", fixed_block)
-        if mwmatch2:
-            fixed_block = (fixed_block[:mwmatch2.start()] +
-                            f"{mwmatch2.group(1)}{deck_width_um}{mwmatch2.group(3)}" +
-                            fixed_block[mwmatch2.end():])
-        lef_text = (lef_text[:lblock.start(1)] + fixed_block +
-                    lef_text[lblock.end(1):])
+        changed: List[str] = []
+
+        # ── (1) min WIDTH — Mt.W.1 ───────────────────────────────────────
+        deck_width_um = None
+        wm = re.search(
+            r"@Mt\.W\.1:[^\n]*\n\s*INTERNAL\s+__" + re.escape(met.lower()) +
+            r"__\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
+        if wm:
+            deck_width_um = float(wm.group(1))
+            wmatch = re.search(r"(?m)^(\s*WIDTH\s+)([0-9.]+)(\s*;)", block)
+            mwmatch = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", block)
+            lef_width_um = min(
+                float(wmatch.group(2)) if wmatch else 1e9,
+                float(mwmatch.group(2)) if mwmatch else 1e9)
+            if lef_width_um < deck_width_um:
+                if wmatch:
+                    fixed_block = (
+                        fixed_block[:wmatch.start()] +
+                        f"{wmatch.group(1)}{deck_width_um}{wmatch.group(3)}" +
+                        fixed_block[wmatch.end():])
+                mw2 = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)",
+                                fixed_block)
+                if mw2:
+                    fixed_block = (
+                        fixed_block[:mw2.start()] +
+                        f"{mw2.group(1)}{deck_width_um}{mw2.group(3)}" +
+                        fixed_block[mw2.end():])
+                changed.append(
+                    f"WIDTH/MINWIDTH {lef_width_um} -> {deck_width_um} "
+                    f"(Mt.W.1)")
+
+        # ── (2) min SPACING — Mt.S.1. v1.6.68, the defect this whole branch
+        # existed for but only half-closed: the deck's THICK-TOP option makes
+        # the top metal both WIDER and further APART, and only the width half
+        # was reconciled. Measured on a real sign-off run: LEF SPACING 0.28um
+        # vs the deck's Mt.S.1 >= 0.46um — the router, which can only see the
+        # LEF, drew legal-per-LEF metal that the deck then failed 141 times.
+        # Take the number from the deck's EXECUTABLE `EXTERNAL ... <v` line
+        # (not from its @comment) and take the STRICTEST when a deck repeats
+        # the rule under several names. Only the BASE `SPACING <v> ;` is
+        # touched: a `SPACING <v> RANGE ...` line is the wide-metal rule and
+        # is a different constraint. Never lowered.
+        deck_sp_um = max(
+            [float(m2.group(1)) for m2 in re.finditer(
+                r"@Mt\.S\.1:[^\n]*\b" + re.escape(met) +
+                r"\b[^\n]*\n\s*EXTERNAL\s+\S+\s*<\s*([0-9.]+)",
+                deck_text, re.IGNORECASE)] or [0.0])
+        if deck_sp_um > 0.0:
+            spm = re.search(r"(?m)^(\s*SPACING\s+)([0-9.]+)(\s*;)", fixed_block)
+            if spm and float(spm.group(2)) < deck_sp_um:
+                changed.append(
+                    f"SPACING {spm.group(2)} -> {deck_sp_um} (Mt.S.1)")
+                fixed_block = (
+                    fixed_block[:spm.start()] +
+                    f"{spm.group(1)}{deck_sp_um}{spm.group(3)}" +
+                    fixed_block[spm.end():])
+
+        # ── (3) PITCH — not a deck rule but an ARITHMETIC consequence of the
+        # two above. A routing track grid finer than width+space cannot hold
+        # a legal wire on every track; the router will happily use adjacent
+        # tracks and the result is a spacing violation by construction. The
+        # pre-v1.6.68 code raised WIDTH alone and left PITCH, which produced
+        # exactly that: width 0.44 + space 0.28 = 0.72um of demand on a
+        # 0.61um pitch. Raise PITCH to width+space when it is short. Derived
+        # entirely from the two reconciled numbers — nothing hardcoded.
+        pm = re.search(r"(?m)^(\s*PITCH\s+)([0-9.]+)(\s*;)", fixed_block)
+        wnow = re.search(r"(?m)^\s*WIDTH\s+([0-9.]+)\s*;", fixed_block)
+        snow = re.search(r"(?m)^\s*SPACING\s+([0-9.]+)\s*;", fixed_block)
+        if pm and wnow and snow:
+            need = round(float(wnow.group(1)) + float(snow.group(1)), 6)
+            if float(pm.group(2)) < need:
+                changed.append(
+                    f"PITCH {pm.group(2)} -> {need} (= WIDTH+SPACING; a "
+                    f"finer track grid cannot hold a legal wire per track)")
+                fixed_block = (fixed_block[:pm.start()] +
+                               f"{pm.group(1)}{need}{pm.group(3)}" +
+                               fixed_block[pm.end():])
+
+        if changed:
+            lef_text = (lef_text[:lblock.start(1)] + fixed_block +
+                        lef_text[lblock.end(1):])
+            notes.append(
+                f"[topmetal-deck-lef-fix] deck enables TOPMETAL_{n}: {met} "
+                f"{'; '.join(changed)}{enc_note} -> staged a corrected LEF "
+                f"(raised only; the real PDK LEF is untouched)")
+            fixed_any = True
+
+        # ── (4) the CUT layer below METn — Vt1.S.1. Same class, different
+        # layer: the deck's thick-top option also spaces the top via further
+        # apart than the LEF declares (measured: LEF 0.26um vs deck >= 0.35um,
+        # 7593 sign-off violations). A cut layer has no PITCH/track grid, so
+        # only SPACING applies.
+        vdeck = max(
+            [float(m2.group(1)) for m2 in re.finditer(
+                r"@Vt1\.S\.1:[^\n]*\b" + re.escape(via) +
+                r"\b[^\n]*\n\s*EXTERNAL\s+\S+\s*<\s*([0-9.]+)",
+                deck_text, re.IGNORECASE)] or [0.0]) if via else 0.0
+        if vdeck <= 0.0:
+            continue
+        vblock = re.search(
+            r"(?ms)^LAYER\s+" + re.escape(via) + r"\s*\n(.*?)^END\s+" +
+            re.escape(via) + r"\s*$", lef_text)
+        if not vblock:
+            continue
+        vsp = re.search(r"(?m)^(\s*SPACING\s+)([0-9.]+)(\s*;)",
+                        vblock.group(1))
+        if not vsp or float(vsp.group(2)) >= vdeck:
+            continue
+        vfixed = (vblock.group(1)[:vsp.start()] +
+                  f"{vsp.group(1)}{vdeck}{vsp.group(3)}" +
+                  vblock.group(1)[vsp.end():])
+        lef_text = (lef_text[:vblock.start(1)] + vfixed +
+                    lef_text[vblock.end(1):])
         notes.append(
-            f"[topmetal-width-fix] deck enables TOPMETAL_{n}: {met} Mt.W.1 "
-            f"min-width={deck_width_um}um{enc_note} > LEF WIDTH/MINWIDTH="
-            f"{lef_width_um}um -> staged a corrected LEF (WIDTH/MINWIDTH "
-            f"raised to {deck_width_um}um; the real PDK LEF is untouched)")
+            f"[topmetal-deck-lef-fix] deck enables TOPMETAL_{n}: {via} "
+            f"(the cut below {met}) SPACING {vsp.group(2)} -> {vdeck} "
+            f"(Vt1.S.1) -> staged a corrected LEF (raised only; the real "
+            f"PDK LEF is untouched)")
         fixed_any = True
 
     if not fixed_any:
@@ -9458,29 +9814,385 @@ def _dont_use_family_fallback_tcl() -> str:
     delay family makes `buffer_ports` insert the normal `buf_1`, so the SS setup
     path closes IN THE BASE ROUTE (0-DRC, no ECO) — measured −0.56 → +2.25 ns MET.
     Delay macros are ONLY legitimate for deliberate hold padding, never as
-    signal/port slew buffers, in ANY PDK — hence GENERAL, not a chip literal."""
+    signal/port slew buffers, in ANY PDK — hence GENERAL, not a chip literal.
+
+    v1.6.67 — NAMING-CONVENTION-AGNOSTIC + never-empty-the-pool. Two
+    chip-AGNOSTIC defects, both found on a commercial 180 nm cell library:
+
+    (1) EVERY pattern above is anchored on the OPEN-PDK ``<lib>__<fn>``
+        double-underscore convention (``sky130_fd_sc_hd__dlygate4sd3``). A
+        commercial library names the SAME delay family with BARE names —
+        ``DLY1D1`` … ``DLY4D1`` — so ``*__dly*`` matched ZERO cells and the
+        block printed ``DONT_USE_FALLBACK_APPLIED: 0`` while the delay family
+        stayed in the pool. The docstring above calls itself "PDK-family-
+        GENERAL (any library using the ``<lib>__<fn>`` convention)"; that
+        qualifier IS the defect — the convention is an open-PDK habit, not a
+        liberty rule, and a library that does not follow it gets no protection
+        while the log still says the guard ran. Measured consequence: with the
+        pattern list unmatched, ``repair_design`` selected a 4-stage delay
+        macro as the slew-fix buffer on a hard-macro supply pin. Fix: match the
+        family STEM (``dly`` / ``delay`` / ``probe_`` / ``lpflow`` /
+        ``clkdly``) case-insensitively, which subsumes BOTH the
+        ``<lib>__<fn>`` and the bare spellings and both letter cases (open PDKs
+        spell these lower-case, commercial ones upper-case).
+
+    (2) A wider net could, on a pathological library, exclude EVERY buffer and
+        leave the resizer/CTS with nothing to insert — a silent failure worse
+        than the one being fixed. The exclusion is therefore GUARDED: count the
+        cells OpenSTA ITSELF calls buffers (``get_property $c is_buffer`` — the
+        exact pool ``repair_design`` / ``buffer_ports`` draw from) before and
+        after; if the exclusion would leave ZERO usable buffers, revert the
+        whole set with ``unset_dont_use`` and say so out loud. Measure, then
+        decide — never a blanket weakening, never silent.
+
+    v1.6.68 — the (1) fix above did NOT actually work, and said it did. It
+    asked for case-insensitive matching with ``get_lib_cells -nocase`` while
+    still passing GLOB patterns. OpenSTA honours ``-nocase`` ONLY together with
+    ``-regexp``; in glob mode it emits ``[WARNING STA-0358] -nocase ignored
+    without -regexp`` and matches case-SENSITIVELY. Measured in-container
+    against the same commercial 180 nm liberty:
+
+        get_lib_cells -nocase -quiet *dly*   ->  n=0
+        get_lib_cells         -quiet *DLY*   ->  n=4   (DLY1D1 … DLY4D1)
+
+    so the delay family STAYED in the pool and the run still printed
+    ``DONT_USE_FALLBACK_APPLIED: 0 … usable buffer cells 63 -> 63`` — the
+    guard reporting that it ran while protecting nothing, which is the exact
+    failure mode (1) was written to remove, one layer down. Fixed by switching
+    to ``-regexp -nocase``. OpenSTA anchors a regexp to the WHOLE cell name, so
+    the patterns carry explicit ``.*`` on both sides (measured: bare ``dly``
+    -> 0, ``.*dly.*`` -> 4). A ``-nocase`` without ``-regexp`` anywhere in this
+    block is a regression, and is pinned as such by the tests.
+
+    No design, PDK or vendor literal appears in the emitted Tcl."""
     return (
-        "# === v1.2.86 — GENERAL characterization/lpflow do-not-use fallback ===\n"
+        "# === v1.2.86 / v1.6.67 — GENERAL characterization/lpflow/delay "
+        "do-not-use fallback ===\n"
         "# Works even when the PDK ships no drc_exclude.cells (iic-osic-tools):\n"
-        "# excludes __probe/__probec/__lpflow_ (unroutable → DRT-0085) + __clkdlybuf\n"
-        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer) +\n"
-        "# __dly*/__delay* (SIGNAL DELAY macros — dlya/b/c/d, dlygate, dlymetal…:\n"
-        "# high-intrinsic-delay cells the resizer/buffer_ports must never insert as\n"
-        "# a signal/port buffer, or they dominate the SLOW-corner setup path).\n"
-        "# via OpenROAD's own get_lib_cells over the loaded liberty. PDK-family-\n"
-        "# GENERAL (matches the <lib>__<fn> naming, no design literal).\n"
+        "# excludes probe/probec/lpflow (unroutable → DRT-0085) + clkdly*\n"
+        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer)\n"
+        "# + dly*/delay* (SIGNAL DELAY macros — dlya/b/c/d, dlygate, dlymetal,\n"
+        "# DLY1D1…DLY4D1: high-intrinsic-delay cells the resizer/buffer_ports\n"
+        "# must never insert as a signal/port buffer, or they dominate the\n"
+        "# SLOW-corner setup path / get chosen as a slew-fix buffer).\n"
+        "# v1.6.68: family STEMS matched case-insensitively via OpenROAD's own\n"
+        "# get_lib_cells, so BOTH the open-PDK <lib>__<fn> spelling AND bare\n"
+        "# commercial names are caught; GUARDED so the buffer pool can never be\n"
+        "# emptied. NAMING-CONVENTION-AGNOSTIC, no design literal.\n"
+        "# -regexp is MANDATORY here, not stylistic: OpenSTA honours -nocase\n"
+        "# ONLY in regexp mode -- in glob mode it warns\n"
+        "# `[WARNING STA-0358] -nocase ignored without -regexp` and matches\n"
+        "# case-SENSITIVELY. Measured in-container on a commercial 180nm\n"
+        "# library: `get_lib_cells -nocase -quiet *dly*` -> 0 cells, while\n"
+        "# `-quiet *DLY*` -> 4 (DLY1D1..DLY4D1). The block then printed\n"
+        "# DONT_USE_FALLBACK_APPLIED: 0 -- announcing that the guard had run\n"
+        "# while it excluded nothing. Patterns are therefore REGEXES, and\n"
+        "# OpenSTA anchors them to the WHOLE cell name, so each needs the\n"
+        "# leading/trailing `.*` (measured: `dly` -> 0, `.*dly.*` -> 4).\n"
+        "proc _du_nbuf {} {\n"
+        "  set _n 0\n"
+        "  foreach _c [get_lib_cells -quiet *] {\n"
+        "    if {[catch {set _b [get_property $_c is_buffer]}]} { continue }\n"
+        "    if {!$_b} { continue }\n"
+        "    if {[catch {set _d [get_property $_c dont_use]}]} { set _d 0 }\n"
+        "    if {!$_d} { incr _n }\n"
+        "  }\n"
+        "  return $_n\n"
+        "}\n"
+        "set _du_before 0\n"
+        "catch {set _du_before [_du_nbuf]}\n"
         "set _duf 0\n"
-        "foreach _du_pat {*__probe_* *__probec_* *__lpflow_* *__clkdlybuf*"
-        " *__dly* *__delay*} {\n"
-        "  set _du_cells [get_lib_cells -quiet $_du_pat]\n"
+        "set _du_all {}\n"
+        "foreach _du_pat {.*probe_.* .*probec_.* .*lpflow.* .*clkdly.* "
+        ".*dly.* .*delay.*} {\n"
+        "  set _du_cells [get_lib_cells -regexp -nocase -quiet $_du_pat]\n"
         "  if {[llength $_du_cells] > 0} {\n"
         "    if {[catch {set_dont_use $_du_cells} _duf_e]} {\n"
         "      puts \"DONT_USE_FALLBACK_NONFATAL: $_du_pat -- $_duf_e\"\n"
-        "    } else { incr _duf [llength $_du_cells] }\n"
+        "    } else {\n"
+        "      incr _duf [llength $_du_cells]\n"
+        "      set _du_all [concat $_du_all $_du_cells]\n"
+        "    }\n"
         "  }\n"
         "}\n"
-        "puts \"DONT_USE_FALLBACK_APPLIED: $_duf characterization/lpflow cell(s) "
-        "excluded by family-name fallback\"\n")
+        "set _du_after $_du_before\n"
+        "catch {set _du_after [_du_nbuf]}\n"
+        "if {$_du_before > 0 && $_du_after == 0} {\n"
+        "  catch {unset_dont_use $_du_all}\n"
+        "  puts \"DONT_USE_FALLBACK_REVERTED: the exclusion would have left 0 "
+        "usable buffer cells (was $_du_before) -- reverted so the resizer/CTS "
+        "keep a pool; reported, never silently applied\"\n"
+        "  set _duf 0\n"
+        "  set _du_after $_du_before\n"
+        "}\n"
+        "puts \"DONT_USE_FALLBACK_APPLIED: $_duf characterization/lpflow/delay "
+        "cell(s) excluded by family-name fallback; usable buffer cells "
+        "$_du_before -> $_du_after\"\n")
+
+
+# ── v1.6.67 — resizer sizing limits derived from the library's OWN buffer span ──
+# `Resizer::getSwappableCells` filters every sizing candidate against
+# `sizing_area_limit_` / `sizing_leakage_limit_`, both defaulting to 4.0 (see
+# rsz/src/Resizer.cc): a candidate whose area — or leakage — is more than 4.0X
+# the CURRENT cell's is dropped from the swap pool. That default is an implicit
+# assumption about how wide a cell library's drive ladder is, and `PreChecks::
+# checkSlewLimit` (rsz/src/PreChecks.cc:36) makes it load-bearing: it computes
+# the BEST ACHIEVABLE transition over `getSwappableCells(buffer_lowest_drive_)`
+# — the swap pool of the WEAKEST buffer — and if the declared max_transition is
+# below that, it raises `[ERROR RSZ-0090] Max transition time from SDC is …
+# Best achievable transition time is …`, which ABORTS repair_design.
+#
+# So on a library whose buffer family is wider than 4.0X, the strong buffers are
+# invisible to that pre-check, the "best achievable" slew is computed from a
+# crippled pool, and repair_design refuses to run — while the cell that would
+# have met the limit sits in the library, legal and un-excluded. Measured on a
+# commercial 180 nm library: buffer family spans 4.25X area / 15.82X leakage
+# (slow corner) over 22 structurally-identified buffers. Measured on the open
+# PDKs shipped in the EDA image, the same way: sky130_fd_sc_hd 10.67X / 16.47X
+# (42 buffers), nangate45 16.33X / 61.44X (9 buffers) — i.e. NO real library
+# measured here fits inside the 4.0X default. The default is narrower than the
+# libraries it is applied to; that is the chip-AGNOSTIC defect.
+#
+# The fix must NOT be a hardcoded larger number (same mistake, new constant) and
+# must NOT be derived from the violation (that is widening a limit until the
+# violation disappears — exactly what the brief forbids). Two properties:
+#
+#   VALUE  — derived from the LIBRARY's own buffer family: parse the liberty the
+#            flow actually reads, identify buffers STRUCTURALLY the way OpenSTA
+#            does (exactly one input pin, exactly one output pin, and the
+#            output's `function` IS that input — `LibertyCell::hasBufferFunc`),
+#            and take max/min of `area` and `cell_leakage_power` over that
+#            family across EVERY corner liberty. That ratio is the widest
+#            legitimate swap INSIDE the family; x1.1 absorbs rounding.
+#   TRIGGER— applied only AFTER the default has demonstrably failed. The block
+#            is emitted after the first `repair_design`, counts the remaining
+#            `max_slew` + `max_capacitance` violators (`sta::
+#            max_slew_violation_count` / `sta::max_capacitance_violation_count`)
+#            and escalates ONLY when that count is > 0 — which is also the state
+#            left behind by an RSZ-0090 abort. A design that already closes at
+#            the default is untouched (two `puts`, no `set_opt_config`, no
+#            second repair). The before/after violator counts are printed, so a
+#            reader can see the escalation did WORK rather than move a goalpost.
+#
+# chip-AGNOSTIC and PDK-AGNOSTIC: every number comes from whatever liberty is on
+# the command line and from OpenSTA's own violator counters, never from a table.
+_LIB_CELL_HDR_RE = re.compile(
+    r"\bcell\s*\(\s*\"?([A-Za-z0-9_./\[\]-]+)\"?\s*\)\s*\{")
+_LIB_PIN_HDR_RE = re.compile(
+    r"\bpin\s*\(\s*\"?([A-Za-z0-9_./\[\]-]+)\"?\s*\)\s*\{")
+_LIB_ATTR_RE = re.compile(
+    r"\b(area|cell_leakage_power|direction|function)\s*:\s*"
+    r"\"?([^\";]*?)\"?\s*;")
+# OpenROAD's own defaults (rsz/src/Resizer.cc sizing_area_limit_ /
+# sizing_leakage_limit_). Emit nothing when the library fits inside them.
+_RSZ_DEFAULT_SIZING_LIMIT = 4.0
+
+
+def _lib_block_end(text: str, open_brace: int) -> int:
+    """Index just past the '}' matching ``text[open_brace] == '{'``."""
+    depth = 0
+    n = len(text)
+    i = open_brace
+    while i < n:
+        c = text[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def _lib_depth0(s: str) -> str:
+    """``s`` with every ``{...}`` sub-block removed (depth-0 text only)."""
+    out: List[str] = []
+    depth = 0
+    for ch in s:
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            continue
+        if depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
+def _liberty_buffer_family(lib_text: str) -> List[Tuple[str, float, float]]:
+    """Every BUFFER in ``lib_text`` as ``(name, area, cell_leakage_power)``.
+
+    Buffer identification is STRUCTURAL, mirroring OpenSTA
+    ``LibertyCell::hasBufferFunc``: exactly one input pin, exactly one output
+    pin, and the output pin's ``function`` is that input pin. No name matching,
+    so it is independent of any library's naming convention.
+    """
+    out: List[Tuple[str, float, float]] = []
+    for m in _LIB_CELL_HDR_RE.finditer(lib_text):
+        end = _lib_block_end(lib_text, m.end() - 1)
+        body = lib_text[m.end():end - 1]
+        ins: List[str] = []
+        outs: List[Tuple[str, str]] = []
+        i = 0
+        seg = 0
+        n = len(body)
+        while i < n:
+            if body[i] == "{":
+                hdr = body[seg:i + 1]
+                sub_end = _lib_block_end(body, i)
+                pm = _LIB_PIN_HDR_RE.search(hdr)
+                if pm and pm.end() == len(hdr):
+                    flat = _lib_depth0(body[i + 1:sub_end - 1])
+                    d = fn = ""
+                    for am in _LIB_ATTR_RE.finditer(flat):
+                        if am.group(1) == "direction":
+                            d = am.group(2).strip()
+                        elif am.group(1) == "function":
+                            fn = am.group(2).strip()
+                    if d == "input":
+                        ins.append(pm.group(1))
+                    elif d == "output":
+                        outs.append((pm.group(1), fn))
+                i = sub_end
+                seg = i
+                continue
+            i += 1
+        if len(ins) != 1 or len(outs) != 1:
+            continue
+        if outs[0][1].replace("(", "").replace(")", "").strip() != ins[0]:
+            continue
+        area = leak = 0.0
+        for am in _LIB_ATTR_RE.finditer(_lib_depth0(body)):
+            try:
+                if am.group(1) == "area":
+                    area = float(am.group(2))
+                elif am.group(1) == "cell_leakage_power":
+                    leak = float(am.group(2))
+            except ValueError:
+                pass
+        out.append((m.group(1), area, leak))
+    return out
+
+
+def _buffer_family_sizing_spans(
+        lib_texts: List[str]) -> Tuple[float, float, int]:
+    """``(area_ratio, leakage_ratio, n_buffers)`` — the widest max/min inside
+    the buffer family across all supplied liberty texts. ``0.0`` for a span
+    that cannot be measured (attribute absent / single member)."""
+    area_ratio = leak_ratio = 0.0
+    n_buf = 0
+    for t in lib_texts:
+        if not t:
+            continue
+        fam = _liberty_buffer_family(t)
+        n_buf = max(n_buf, len(fam))
+        areas = [a for (_n, a, _l) in fam if a > 0]
+        leaks = [l for (_n, _a, l) in fam if l > 0]
+        if len(areas) >= 2 and min(areas) > 0:
+            area_ratio = max(area_ratio, max(areas) / min(areas))
+        if len(leaks) >= 2 and min(leaks) > 0:
+            leak_ratio = max(leak_ratio, max(leaks) / min(leaks))
+    return area_ratio, leak_ratio, n_buf
+
+
+def _sizing_limits_args(lib_texts: List[str],
+                        margin: float = 1.1) -> Tuple[str, str]:
+    """``(set_opt_config_args, human_span)`` — the resizer sizing limits this
+    library's OWN buffer family requires, or ``("", "")`` when the family fits
+    inside OpenROAD's 4.0X default and there is nothing to widen."""
+    a_ratio, l_ratio, n_buf = _buffer_family_sizing_spans(lib_texts)
+    a_lim = math.ceil(a_ratio * margin * 100.0) / 100.0 if a_ratio else 0.0
+    l_lim = math.ceil(l_ratio * margin * 100.0) / 100.0 if l_ratio else 0.0
+    args = ""
+    if a_lim > _RSZ_DEFAULT_SIZING_LIMIT:
+        args += f" -limit_sizing_area {a_lim:g}"
+    if l_lim > _RSZ_DEFAULT_SIZING_LIMIT:
+        args += f" -limit_sizing_leakage {l_lim:g}"
+    if not args:
+        return "", ""
+    return args, (f"buffer family n={n_buf}, measured area span "
+                  f"{a_ratio:.4g}X, leakage span {l_ratio:.4g}X, margin "
+                  f"x{margin:g}; OpenROAD default "
+                  f"{_RSZ_DEFAULT_SIZING_LIMIT:g}X")
+
+
+def _sizing_limits_preamble_tcl(lib_texts: List[str],
+                                margin: float = 1.1) -> str:
+    """OpenROAD Tcl that restores the resizer's swap pool to THIS library's own
+    buffer family, emitted BEFORE the first timing-driven step. ``""`` when the
+    family already fits inside OpenROAD's 4.0X default.
+
+    WHY BEFORE, and why not gated on a violation count: the check that fails is
+    ``PreChecks::checkSlewLimit`` (rsz/src/PreChecks.cc:36-72), and it is
+    reached from ``global_placement -timing_driven`` — gpl's Nesterov loop calls
+    ``TimingBase::executeTimingDriven`` -> ``Resizer::findResizeSlacks`` ->
+    ``RepairDesign::repairNetLoad`` -> ``checkSlewLimit`` — long before any
+    explicit ``repair_design``. It raises ``logger_->error(RSZ, 90)``, which
+    ABORTS the script. So there is no point at which a violator count could be
+    read and used as a gate: the run is already dead.
+
+    WHY THIS IS NOT A RELAXATION. ``max_transition`` is NOT touched. What is
+    widened is ``getSwappableCells``' area/leakage ratio cut-off
+    (Resizer.cc:2188-2233), which drops any equivalent cell more than
+    ``sizing_area_limit_`` / ``sizing_leakage_limit_`` (both default 4.0) times
+    the SOURCE cell. Those defaults are a heuristic about the power/area cost of
+    upsizing; they are not a statement about what the library contains. On a
+    family whose own ladder is wider than 4.0X, the strongest buffers are
+    invisible to ``checkSlewLimit``, which then reports a "best achievable
+    transition" that the library can in fact beat — an infeasibility that does
+    not exist. The limits emitted here are the family's OWN measured span, so
+    the pool becomes exactly what the vendor shipped and no more."""
+    args, span = _sizing_limits_args(lib_texts, margin)
+    if not args:
+        return ""
+    return (
+        "# === v1.6.67 — restore the resizer swap pool to THIS library's own\n"
+        "# buffer family, BEFORE the first timing-driven step.\n"
+        "# getSwappableCells (Resizer.cc:2188-2233) drops any equivalent cell\n"
+        "# more than 4.0X the source cell in area OR leakage, and\n"
+        "# PreChecks::checkSlewLimit (PreChecks.cc:36-72) computes the BEST\n"
+        "# ACHIEVABLE transition over the WEAKEST buffer's surviving pool. On a\n"
+        "# family wider than 4.0X the strong buffers are invisible, so the\n"
+        "# check reports an infeasible slew target that the library can\n"
+        "# actually meet, and aborts with RSZ-0090. That abort is reached from\n"
+        "# global_placement -timing_driven (gpl -> TimingBase ->\n"
+        "# findResizeSlacks -> RepairDesign -> checkSlewLimit), NOT only from\n"
+        "# an explicit repair_design — hence this runs first.\n"
+        f"# Measured here: {span}.\n"
+        "# max_transition is NOT modified; only the cell pool is restored.\n"
+        f"if {{[catch {{set_opt_config{args}}} _sl_e]}} {{\n"
+        "  puts \"SIZING_LIMITS_NONFATAL: $_sl_e\"\n"
+        "} else {\n"
+        f"  puts \"SIZING_LIMITS_APPLIED:{args} ({span})\"\n"
+        "}\n")
+
+
+def _sizing_limits_drv_report_tcl(lib_texts: List[str],
+                                  margin: float = 1.1) -> str:
+    """Report-only companion to :func:`_sizing_limits_preamble_tcl`, emitted
+    AFTER ``repair_design``. Prints the surviving max_slew/max_capacitance
+    violator count so a reader can see what the restored pool actually bought.
+    It CHANGES NOTHING — the number is evidence, not a gate."""
+    args, span = _sizing_limits_args(lib_texts, margin)
+    if not args:
+        return ""
+    return (
+        "# Evidence for the sizing-limit restoration above: the DRV violators\n"
+        "# that survive repair_design with the library's own pool available.\n"
+        "# Report-only — this block changes nothing.\n"
+        "set _sl_v -1\n"
+        "catch {set _sl_v [expr {[sta::max_slew_violation_count]"
+        " + [sta::max_capacitance_violation_count]}]}\n"
+        "if {$_sl_v < 0} {\n"
+        "  puts \"SIZING_LIMITS_DRV_UNMEASURED: OpenSTA violator counters "
+        "unavailable\"\n"
+        "} else {\n"
+        f"  puts \"SIZING_LIMITS_DRV_AFTER_REPAIR: $_sl_v max_slew"
+        "+max_capacitance violator(s) after repair_design with the measured "
+        f"pool ({span})\"\n"
+        "}\n")
 
 
 # ── R8 (v1.3.50 fork-adapt) — librelane-first PnR cell-exclusion resolution ──────
@@ -10898,7 +11610,9 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         openroad_threads: int = 0,
                         repair_tns_percent: Optional[int] = None,
                         cts_cluster_size: Optional[int] = None,
-                        cts_cluster_diameter: Optional[float] = None) -> str:
+                        cts_cluster_diameter: Optional[float] = None,
+                        sizing_limits_block: str = "",
+                        sizing_drv_report_block: str = "") -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
     (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
     regression tests pin them). The #557 SPEF-repair block shipped with
@@ -11029,7 +11743,7 @@ read_sdc {sdc_c}
 # before any optimization). Prevents OpenROAD from inserting PnR-forbidden cells
 # (probe / lpflow / DRC-failed) that TritonRoute then cannot route (DRT-0085).
 # See _dont_use_tcl. ===
-{dont_use_block}# === v0.1.26 wire-RC model ===
+{dont_use_block}{sizing_limits_block}# === v0.1.26 wire-RC model ===
 # Without set_wire_rc, OpenROAD has no per-layer R/C, so (a) STA ignores
 # interconnect delay (optimistic) and (b) repair_timing -setup aborts with
 # RSZ-0089 "Could not find a resistance value for any corner" because it
@@ -11117,7 +11831,7 @@ if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
 if {{[catch {{repair_design}} _rd_err]}} {{
   puts "REPAIR_DESIGN_NONFATAL: $_rd_err"
 }}
-if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
+{sizing_drv_report_block}if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
   puts "REPAIR_TIMING_SETUP_NONFATAL: $_rts_err"
 }}
 if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
@@ -11547,7 +12261,6 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         for _si in spare_plan.get("instances", [])
         if _si.get("cell")]
     tapcell_prune_block = _build_tapcell_prune_tcl(pdk, _spare_pts_um)
-    pdn_block = _build_pdn_tcl(pdk)
     # === hard-macro supply-pin auto global-connect (before detailed routing) ===
     # A hard macro types its supply pins USE POWER/GROUND in its own LEF; when the
     # RTL constant-ties them, synthesis drives them with TIEHI/TIELO SIGNAL nets
@@ -11597,6 +12310,29 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                   f"{_u['master']}/{_u['pin']} (USE {_u['use']}) — this design "
                   "declares no matching rail; left unconnected, never faked.",
                   file=sys.stderr)
+    # v1.6.67 — the PDN is now built AFTER the hard-macro supply plan, and is
+    # given it. It used to be built BEFORE, which is why a macro supply pin
+    # bound to a NON-core rail could never receive metal: `pdngen` had already
+    # run by the time the binding was emitted, so `set_voltage_domain` had only
+    # ever heard of the two core rails and the secondary net was generated on
+    # no grid at all. Moving the call changes nothing for a design whose macro
+    # pins all bind to the core rails (`_build_pdn_tcl` ignores an empty
+    # secondary plan and emits the identical Tcl) — only the ORDER of two pure
+    # string-building statements. chip-AGNOSTIC.
+    _sec_plan = [c for c in _hm_connect
+                 if c.get("rail")
+                 and c["rail"] not in _hm_pwr_nets
+                 and c["rail"] not in _hm_gnd_nets]
+    pdn_block = _build_pdn_tcl(pdk, secondary=_sec_plan)
+    if _sec_plan:
+        print("[phase3] SECONDARY SUPPLY PDN: "
+              f"{len(_sec_plan)} macro supply pin(s) bind to "
+              f"{len(sorted({c['rail'] for c in _sec_plan}))} rail(s) outside "
+              "the CORE domain "
+              f"({', '.join(sorted({c['rail'] for c in _sec_plan}))}) — the "
+              "PDN registers them on the voltage domain and builds pin-aligned "
+              "macro straps, so the rail carries metal in THIS partition.",
+              file=sys.stderr)
     _filler_masters = _filler_masters_for_pdk(pdk)
     # #684 — sparse-die-aware fill: the full-die `filler_placement` is now
     # gated on post-place CORE utilization so a small design in a large
@@ -11621,6 +12357,35 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     antenna_repair_block = _antenna_repair_tcl(pdk)
     pg_cleanup_block = _pg_net_cleanup_tcl()
     dont_use_block = _dont_use_tcl(pdk)
+    # v1.6.67 — measure THIS library's buffer-family span so pnr.tcl can restore
+    # the resizer swap pool to it BEFORE the first timing-driven step.
+    # OpenROAD's 4.0X area/leakage sizing cut-off is narrower than every real
+    # library measured; PreChecks::checkSlewLimit then reports a "best
+    # achievable transition" that only the TRUNCATED pool cannot reach and
+    # aborts with RSZ-0090 — from global_placement -timing_driven, not just
+    # from an explicit repair_design. Emits "" when the library fits the
+    # default. See _sizing_limits_preamble_tcl.
+    try:
+        _sl_corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    except Exception:  # noqa: BLE001 — measurement is an enhancement, not a dep
+        _sl_corner_libs = {}
+    _sl_paths = sorted({p for p in _sl_corner_libs.values() if p})
+    if pdk.liberty and pdk.liberty not in _sl_paths:
+        _sl_paths.append(pdk.liberty)
+    _sl_texts = [t for t in (_read_pdk_text(p, container) for p in _sl_paths)
+                 if t]
+    sizing_limits_block = _sizing_limits_preamble_tcl(_sl_texts)
+    sizing_drv_report_block = _sizing_limits_drv_report_tcl(_sl_texts)
+    if sizing_limits_block:
+        _sl_a, _sl_l, _sl_n = _buffer_family_sizing_spans(_sl_texts)
+        print("[phase3] RESIZER SIZING LIMITS: this library's buffer family "
+              f"({_sl_n} cells over {len(_sl_texts)} corner liberty file(s)) "
+              f"spans {_sl_a:.4g}X area / {_sl_l:.4g}X leakage — wider than "
+              "OpenROAD's 4.0X swap-pool cut-off, which hides the strong "
+              "buffers from PreChecks::checkSlewLimit and makes it report an "
+              "infeasible slew target. pnr.tcl restores the pool to the "
+              "MEASURED span before the first timing-driven step; "
+              "max_transition is NOT modified.", file=sys.stderr)
     # ORGANIC #557 — post-route SPEF EXTRACTION (measure-only; pure helper so it
     # is unit-tested + the emitter/checker drift gate applies). Runs BEFORE
     # write_def so it MUST NOT modify the design.
@@ -11772,7 +12537,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         openroad_threads=_openroad_thread_count(),
         repair_tns_percent=_rf_map.get("repair_tns_percent"),
         cts_cluster_size=_rf_map.get("cts_cluster_size"),
-        cts_cluster_diameter=_rf_map.get("cts_cluster_diameter")))
+        cts_cluster_diameter=_rf_map.get("cts_cluster_diameter"),
+        sizing_limits_block=sizing_limits_block,
+        sizing_drv_report_block=sizing_drv_report_block))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "
@@ -15750,9 +16517,25 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     """Run the commercial Calibre/SVRF `.rule` DRC deck NATIVELY via the vibeic
     KLayout fork's `svrfdrc` buddy (native C++, no Python) — the license-free
     sign-off path when the `calibre` binary is absent. Returns a StepResult (PASS
-    iff 0 rules fire) on a real run, or None when the svrfdrc engine / GDS is
-    unavailable (caller then emits ENV_UNAVAILABLE). §4.05: native execution of the
-    real deck, NOT a golden-Calibre numerical cross-run — disclosed in the detail."""
+    iff 0 rules fire) on a real run. §4.05: native execution of the real deck, NOT
+    a golden-Calibre numerical cross-run — disclosed in the detail.
+
+    RETURN CONTRACT (v1.6.68 — this used to be ONE `None` for TWO different causes):
+      * ``None``        — the svrfdrc ENGINE is absent from the image PATH. That,
+                          and only that, is an environment gap, so the caller is
+                          right to raise ENV_UNAVAILABLE / "install the tool".
+      * ``SKIP`` result — the engine IS present but there is NO LAYOUT to check
+                          (upstream PnR never wrote ``{top}.gds``).
+
+    Returning ``None`` for the second case made the caller state, in the step
+    detail AND in the auto-emitted ``waivers.json``, that "the native `svrfdrc`
+    buddy was not found on PATH in container '<c>'" — a cause it had NOT probed on
+    that path, and which was FALSE (`command -v svrfdrc` resolves in the image).
+    ``reviewer_action`` then read "install `calibre|svrfdrc` … and re-run", aiming
+    the reviewer at the environment while the real defect was an upstream PnR
+    FAIL. It also disagreed with the KLayout-deck branch below, which already
+    returns SKIP for exactly this condition. A verdict must never assert a cause
+    it did not measure. chip-, PDK- and vendor-AGNOSTIC."""
     t0 = time.time()
     # Resolve the native buddy on PATH in the image (`svrfdrc`). No host-checkout
     # fallback: unlike the retired portable Python script, a compiled binary can't
@@ -15762,7 +16545,19 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
         return None
     gds = _pl.pnr_dir(project) / f"{top}.gds"
     if not gds.is_file():
-        return None
+        # Engine present, layout absent — say THAT, and use the same tier the
+        # KLayout-deck branch uses for the same condition.
+        return StepResult(
+            "drc", "SKIP", time.time() - t0,
+            f"sign-off DRC engine IS available ({bin_c} in container "
+            f"{container!r}) and the deck IS present ({pdk.calibre_drc}), but "
+            f"there is no layout to check: {gds} was never written (upstream "
+            f"PnR/GDS step did not complete). NOT an environment gap — re-run "
+            f"once PnR emits the GDS.",
+            extras={"calibre_drc_deck": pdk.calibre_drc,
+                    "svrfdrc_bin": bin_c,
+                    "gds": str(gds),
+                    "missing_input": "gds"})
     rpt = project / "phase3" / "reports" / "drc_svrf_calibre.rpt"
     rpt.parent.mkdir(parents=True, exist_ok=True)
     deck_c = _to_container_path(str(pdk.calibre_drc), container)
@@ -18109,6 +18904,66 @@ def _run_asap7_device_lvs(project: Path, top: str, pdk: PdkConfig,
         extras={**common, "finding": finding, "lvs_verdict": verdict})
 
 
+def _strip_nonlayer_blockages(def_text: str) -> Tuple[str, List[str]]:
+    """Return (def_text_without_layerless_BLOCKAGES, dropped_entry_summaries).
+
+    A DEF `BLOCKAGES` section may hold two unrelated kinds of entry:
+
+      - LAYER MET1 RECT ( x1 y1 ) ( x2 y2 ) ;              <- has geometry
+      - PLACEMENT + SOFT + COMPONENT <inst> RECT ( ... ) ; <- placer directive
+
+    The second kind names NO layer: it is an instruction to the PLACER not to
+    put cells in a region, and it carries no conductor. Magic's DEF reader has
+    no layer to bind that RECT to and emits
+
+        LEF read, Line NNNN (Error): No layer defined for RECT.
+
+    and — measured, not assumed — then terminates the DEF read part of the
+    time: the SAME command on the SAME byte-identical DEF succeeded 2 of 5
+    runs and died inside the BLOCKAGES section the other 3. Magic exits 0
+    either way, so the step reported only the vague downstream symptom
+    "produced no extracted netlist (rc=0)" and LVS was unrunnable at random.
+
+    So: drop only the entries magic cannot bind (no LAYER), keep every entry
+    that does name a layer, and leave the DEF used by every OTHER consumer
+    untouched — this staged copy is for extraction alone. The removal is
+    LOSS-FREE for extraction by construction (a placement blockage has no
+    conductor to extract) and was verified as such: on a run where the intact
+    DEF happened to survive, the extracted netlists from the intact and the
+    stripped DEF were byte-identical (same md5).
+
+    Strict fall-through: a DEF with no BLOCKAGES section, or one whose
+    blockages ALL name a layer, comes back unchanged with an empty list, so
+    the caller keeps using the original file. chip-AGNOSTIC: pure DEF syntax,
+    no PDK/design knowledge."""
+    m = re.search(r"(?m)^[ \t]*BLOCKAGES[ \t]+(\d+)[ \t]*;[ \t]*$", def_text)
+    if not m:
+        return def_text, []
+    end = re.search(r"(?m)^[ \t]*END[ \t]+BLOCKAGES[ \t]*$", def_text[m.end():])
+    if not end:
+        return def_text, []
+    body = def_text[m.end():m.end() + end.start()]
+    entries = re.findall(r"-[ \t\r\n].*?;", body, re.S)
+    if not entries:
+        return def_text, []
+    kept = [e for e in entries if re.match(r"-\s+LAYER\b", e)]
+    dropped = [" ".join(e.split())[:120] for e in entries if e not in kept]
+    if not dropped:
+        return def_text, []
+    if kept:
+        new_section = (f"BLOCKAGES {len(kept)} ;\n"
+                       + "".join(f"    {' '.join(e.split())}\n" for e in kept)
+                       + "END BLOCKAGES")
+    else:
+        # An empty `BLOCKAGES 0 ;` block is legal DEF, but emitting nothing is
+        # simpler and equally legal; the section is optional.
+        new_section = ""
+    tail = def_text[m.end() + end.start():]
+    tail = re.sub(r"(?m)\A[ \t]*END[ \t]+BLOCKAGES[ \t]*\n?", "", tail)
+    return def_text[:m.start()] + new_section + ("\n" if new_section else "") \
+        + tail, dropped
+
+
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                         container: str, def_file: Path, netlist: Path,
                         magicrc: str, netgen_setup: str,
@@ -18154,6 +19009,31 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     except Exception:  # nosec — a bad DEF/PDK must never break the plain path
         pass
     tcl.write_text(extract_tcl)
+    # ── LVS ROOT FIX (input side) — layer-less BLOCKAGES break magic's DEF
+    # read (see _strip_nonlayer_blockages for the measured 2-of-5 failure
+    # rate). Stage an EXTRACTION-ONLY copy of the DEF with those entries
+    # removed; the signed-off DEF that GDS/DRC/every other consumer reads is
+    # left untouched. Strict fall-through: nothing to strip -> original file.
+    extract_def = def_file
+    try:
+        _stripped, _dropped_blk = _strip_nonlayer_blockages(
+            def_file.read_text(errors="replace"))
+        if _dropped_blk:
+            extract_def = ext_dir / f"{top}_extract.def"
+            extract_def.write_text(_stripped)
+            (ext_dir / "extract_def_provenance.json").write_text(json.dumps({
+                "signed_off_def": str(def_file),
+                "extraction_def": str(extract_def),
+                "dropped_blockage_entries": _dropped_blk,
+                "reason": ("magic's DEF reader cannot bind a RECT that names "
+                           "no layer ('No layer defined for RECT') and aborts "
+                           "the read on it, non-deterministically; a placement "
+                           "blockage carries no conductor, so removing it from "
+                           "the EXTRACTION copy is loss-free. The signed-off "
+                           "DEF is untouched."),
+            }, indent=2) + "\n")
+    except OSError:
+        pass
     tlef_c = _to_container_path(str(pdk.tech_lef), container)
     clef_c = _to_container_path(str(pdk.cell_lef), container)
     # `eval`-ed inside the TCL; empty string → no-op when no macro LEFs.
@@ -18177,12 +19057,20 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"export TLEF={shlex.quote(tlef_c)} "
         f"CLEF={shlex.quote(clef_c)} "
         f"MACRO_LEF_READS={shlex.quote(macro_lef_reads)} "
-        f"DEF={_to_container_path(str(def_file), container)} "
+        f"DEF={_to_container_path(str(extract_def), container)} "
         f"TOP={top} "
         f"SPICE_OUT={_to_container_path(str(spice_out), container)} && "
         f"cd {_to_container_path(str(ext_dir), container)} && ")
     _magic_tcl_c = _to_container_path(str(tcl), container)
-    cmd = (env_prefix +
+    # `set -o pipefail` — WITHOUT it the exit status of `magic ... | tee ...`
+    # is tee's, which is 0 whatever magic did. Every magic failure on this
+    # path therefore surfaced as "produced no extracted netlist (rc=0)", which
+    # says the step found no file but asserts, wrongly, that the tool was
+    # happy. _docker_exec runs the command under `bash -lc`, so pipefail is
+    # available. rc is only used for MESSAGES and for the stall/ceiling test
+    # (_RC_STALLED/124), so making it truthful cannot change a verdict — it
+    # can only stop the transcript from lying about the tool.
+    cmd = ("set -o pipefail; " + env_prefix +
            f"magic -dnull -noconsole -rcfile {shlex.quote(magicrc)} "
            f"{_magic_tcl_c} 2>&1 | "
            f"tee {_to_container_path(str(ext_dir), container)}/ext2spice.log")
@@ -18212,17 +19100,49 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                     "lvs_verdict": verdict,
                     "transcript_tail": (out + err)[-600:]})
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
+        # v1.6.68 — say WHERE it stopped instead of only that a file is
+        # missing. Measured in the image: `magic` exits 0 even when a `lef
+        # read`/`def read` fails outright, so rc carries NO signal for this
+        # tool (openroad/sta/yosys do return 1 on an uncaught error; magic
+        # does not). The recipe's own `MAGIC_EXT2SPICE_DONE` sentinel is
+        # therefore the only honest completion signal, and its ABSENCE plus
+        # the last tool line pins the abort to a recipe stage. Without this
+        # the step reported "produced no extracted netlist (rc=0)", which
+        # states the file is missing while implying the tool was fine.
+        _mlog = ""
+        try:
+            _mlog = (ext_dir / "ext2spice.log").read_text(errors="replace")
+        except OSError:
+            _mlog = out + err
+        _done = "MAGIC_EXT2SPICE_DONE" in _mlog
+        _ports = "PORTS_PROMOTED" in _mlog
+        _last = [ln for ln in _mlog.splitlines() if ln.strip()][-1:] or [""]
+        _err_ln = [ln for ln in _mlog.splitlines()
+                   if re.search(r"\(Error\)|error:", ln, re.I)][-3:]
+        _stage = ("completed the recipe but wrote no file" if _done else
+                  "aborted AFTER port promotion (extract/ext2spice stage)"
+                  if _ports else
+                  "aborted BEFORE port promotion (lef/def read stage)")
+        _detail = (
+            f"Magic ext2spice produced no extracted netlist: magic {_stage}. "
+            f"Its own completion sentinel MAGIC_EXT2SPICE_DONE is "
+            f"{'present' if _done else 'ABSENT'} in ext2spice.log. NOTE rc="
+            f"{rc} is not evidence here — magic exits 0 even on a fatal "
+            f"lef/def read failure. Last tool line: {_last[0].strip()[:200]!r}"
+            + (f"; last error line(s): {_err_ln}" if _err_ln else "")
+            + ". See phase3/stage3/extracted/ext2spice.log (#443).")
         verdict = _write_lvs_verdict(
-            project, "FAIL", "LVS_EXTRACTION_NO_NETLIST",
-            f"Magic ext2spice produced no extracted netlist (rc={rc}); "
-            f"see phase3/stage3/extracted/ext2spice.log (#443).",
-            extras={"transcript_tail": (out + err)[-600:]})
+            project, "FAIL", "LVS_EXTRACTION_NO_NETLIST", _detail,
+            extras={"magic_completion_sentinel": _done,
+                    "magic_aborted_stage": _stage,
+                    "magic_rc_is_uninformative": True,
+                    "transcript_tail": (out + err)[-600:]})
         return StepResult(
-            "lvs", "FAIL", time.time() - t0,
-            f"Magic ext2spice produced no extracted netlist (rc={rc}); "
-            f"see phase3/stage3/extracted/ext2spice.log (#443)",
+            "lvs", "FAIL", time.time() - t0, _detail,
             extras={"finding": "LVS_EXTRACTION_NO_NETLIST",
                     "lvs_verdict": verdict,
+                    "magic_completion_sentinel": _done,
+                    "magic_aborted_stage": _stage,
                     "transcript_tail": (out + err)[-600:]})
     # v0.3.14 — ORGANIC #509 round-3 + #685 round-6: re-add same-net top
     # ports that ext2spice dropped, joined by 0-ohm resistors (netgen
@@ -22986,14 +23906,100 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         # PSM number is a CONSERVATIVE upper bound — a padless core is modelled
         # with PSM's default single-bump supply (PSM-0073), so the real
         # multi-bump/pad power-delivery IR is lower.
-        _vdd_m = re.search(r"Supply voltage\s*:\s*([0-9.eE+\-]+)\s*V", log)
-        try:
-            _vdd_v = float(_vdd_m.group(1)) if _vdd_m else 1.8
-        except ValueError:
-            _vdd_v = 1.8
+        # v1.6.68 — PER-NET attribution. PSM is invoked once per power net and
+        # the Tcl prints a `=== PSM_NET <net> ===` banner before each call, so
+        # the stdout carries ONE BLOCK PER NET. The reader used to `re.search`
+        # the WHOLE log for a single "Supply voltage" and divide the max drop
+        # over ALL nets by it — i.e. it took whichever net PSM happened to
+        # analyse FIRST and attributed every other net's drop to that net's
+        # voltage. Two consequences, both measured on a real multi-supply run:
+        #   * mis-attribution: a 1.8 V core rail and a separate programming
+        #     rail do not share a millivolt budget, yet one budget was applied;
+        #   * a hard CRASH: PSM has no voltage for a supply the liberty does
+        #     not characterise, so it prints `Supply voltage : 0.00e+00 V`; the
+        #     first-hit parse made `_vdd_v = 0.0` and the division raised
+        #     ZeroDivisionError, aborting the whole Phase 3 run AFTER a
+        #     completed, 0-DRC-violation PnR.
+        # So: split per net, compare each net against ITS OWN supply, and treat
+        # a net PSM had no voltage for as UNMEASURED — never as 0 V (which
+        # would silently read as "0 % drop, PASS"), never as fatal. A run with
+        # an unmeasured supply is REVIEW: nothing failed, but the rail was not
+        # covered, and a coverage gap must not be reported as coverage.
         _budget_pct = float(getattr(pdk, "ir_budget_pct", None) or 10.0)
-        _ir_budget_uv = (_budget_pct / 100.0) * _vdd_v * 1e6
-        _worst_ir_uv = worst_ir_v * 1e6
+        # Split on PSM's OWN "IR report" header and take the net name from the
+        # report's OWN `Net :` field, so the attribution is the tool's, not a
+        # banner this file printed. A log with no such header (single
+        # unheadered block) stays a single block, attributed to the one
+        # discovered power net when there is exactly one.
+        _blks = re.split(r"^#+ IR report #+\s*$", log, flags=re.M)[1:] or [log]
+        _measured: List[Dict[str, Any]] = []
+        _unmeasured: List[Dict[str, Any]] = []
+        for _blk in _blks:
+            _nm = re.search(r"^Net\s*:\s*(\S+)\s*$", _blk, re.M)
+            _net = (_nm.group(1) if _nm else
+                    (power_nets[0] if len(power_nets) == 1 else
+                     "(unattributed)"))
+            _sv = re.search(r"Supply voltage\s*:\s*([0-9.eE+\-]+)\s*V", _blk)
+            _wd = re.search(r"Worstcase IR drop\s*:\s*([0-9.eE+\-]+)\s*V", _blk)
+            try:
+                _v = float(_sv.group(1)) if _sv else None
+            except ValueError:
+                _v = None
+            try:
+                _d = abs(float(_wd.group(1))) if _wd else None
+            except ValueError:
+                _d = None
+            if not _v or _d is None:      # None or 0.0 -> nothing to divide by
+                _unmeasured.append({
+                    "net": _net,
+                    "supply_v": _v,
+                    "reason": (
+                        "PSM reported no usable supply voltage for this net "
+                        "(the liberty characterises no PG-pin voltage for it "
+                        "and none was asserted). Its IR numbers are therefore "
+                        "identically zero and mean NOTHING — this is a "
+                        "coverage gap, not a 0 mV result. To measure it the "
+                        "rail needs a voltage PSM can read: characterise the "
+                        "PG pin in the liberty, or assert it with OpenROAD "
+                        "PSM's per-net supply-voltage command before "
+                        "analyze_power_grid. This emitter deliberately "
+                        "asserts NO voltage of its own (see #362) — a "
+                        "fabricated supply would turn an unmeasured rail "
+                        "into a confident PASS."),
+                })
+                continue
+            _uv = _d * 1e6
+            _bud = (_budget_pct / 100.0) * _v * 1e6
+            _measured.append({
+                "net": _net, "supply_v": _v,
+                "worst_ir_uv": _uv,
+                "worst_ir_pct_vdd": round(_uv / (_v * 1e6) * 100.0, 3),
+                "budget_uv": _bud,
+                "verdict": "PASS" if _uv <= _bud else "FAIL",
+            })
+        _worst = max(_measured, key=lambda n: n["worst_ir_pct_vdd"],
+                     default=None)
+        _vdd_v = _worst["supply_v"] if _worst else None
+        _worst_ir_uv = _worst["worst_ir_uv"] if _worst else worst_ir_v * 1e6
+        _ir_budget_uv = _worst["budget_uv"] if _worst else None
+        if not _measured:
+            _verdict = "REVIEW"
+        elif any(n["verdict"] == "FAIL" for n in _measured):
+            _verdict = "FAIL"
+        elif _unmeasured:
+            _verdict = "REVIEW"
+        else:
+            _verdict = "PASS"
+        if _unmeasured:
+            notes.append(
+                "IR/EM: static IR is UNMEASURED on "
+                + ", ".join(n["net"] for n in _unmeasured)
+                + " — PSM had no supply voltage for "
+                + ("that net" if len(_unmeasured) == 1 else "those nets")
+                + ", so its reported drop is identically 0 V and carries no "
+                  "information. The rail IS built and connected (PSM-0040); "
+                  "what is missing is a voltage to analyse it at. IR verdict "
+                  "is REVIEW, not PASS.")
         _bump_m = re.search(r"PSM-0073.*?bump", log)
         (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
             "tool": "openroad-psm",
@@ -23001,18 +24007,24 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "power_nets": power_nets,
             "source": str(ir_rpt.relative_to(project)),
             "worst_ir_uv": _worst_ir_uv,
-            "worst_ir_pct_vdd": round(_worst_ir_uv / (_vdd_v * 1e6) * 100.0, 3),
+            "worst_ir_pct_vdd": (_worst["worst_ir_pct_vdd"] if _worst
+                                 else None),
+            "worst_net": (_worst["net"] if _worst else None),
             "budget_uv": _ir_budget_uv,
             "budget_pct_vdd": _budget_pct,
+            "supply_v": _vdd_v,
+            "per_net": _measured,
+            "unmeasured_nets": _unmeasured,
             "budget_basis": ("plugin ir_drop_budget_check default (10% VDD, the "
                              "loosest commonly-cited static budget; typical "
-                             "5-10%); override via pdk.ir_budget_pct"),
+                             "5-10%); override via pdk.ir_budget_pct. Applied "
+                             "PER NET against that net's OWN supply voltage."),
             "supply_model": ("PSM default single-bump (PSM-0073) on a padless "
                              "core -> CONSERVATIVE upper bound; real multi-bump "
                              "power delivery is lower" if _bump_m else
                              "PSM analyze_power_grid"),
-            "verdict": "PASS" if _worst_ir_uv <= _ir_budget_uv else "FAIL",
-            "evidence": "analyze_power_grid stdout",
+            "verdict": _verdict,
+            "evidence": "analyze_power_grid stdout, split per PSM_NET block",
         }, indent=2) + "\n")
         ir_ok = True
     else:

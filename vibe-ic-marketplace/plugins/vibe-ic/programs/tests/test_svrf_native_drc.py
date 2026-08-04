@@ -179,6 +179,42 @@ def test_step_drc_env_unavailable_names_buddy(tmp_path, monkeypatch):
     assert "svrfdrc" in res.detail
 
 
+def test_engine_present_but_no_layout_is_not_blamed_on_the_environment(
+        tmp_path, monkeypatch):
+    """THE defect-present test. `_try_svrf_native_drc` returned a bare None for
+    TWO unrelated causes — engine-absent and layout-absent — and step_drc printed
+    only the first. Measured on a real run: `command -v svrfdrc` resolved to
+    /foss/tools/bin/svrfdrc, yet the step detail AND the auto-emitted
+    waivers.json both said the buddy "was not found on PATH in container
+    'vpp_eda_030'", with reviewer_action "install `calibre|svrfdrc` … and
+    re-run". The true cause was an upstream PnR FAIL that never wrote the GDS.
+    ENV_UNAVAILABLE also contradicted the KLayout-deck branch, which returns SKIP
+    for exactly this condition. Restore the bare `return None` and this FAILS."""
+    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: False)   # no calibre
+    monkeypatch.setattr(R, "_svrfdrc_bin_container",
+                        lambda c: "/foss/tools/bin/svrfdrc")      # engine IS there
+    called = {"n": 0}
+
+    def _no_exec(c, cmd, **k):                 # nothing may be RUN with no layout
+        called["n"] += 1
+        return (0, "", "")
+    monkeypatch.setattr(R, "_docker_exec", _no_exec)
+    pdk = R.PdkConfig(name="custom:commercial_pdk", liberty="x", tech_lef="x",
+                      cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
+                      calibre_drc="/x/DRC.rule")
+    # deliberately do NOT create {top}.gds
+    res = R.step_drc(tmp_path, "spm", pdk, "vibeic-eda")
+
+    assert res.status != "ENV_UNAVAILABLE", (
+        "the engine was on PATH — calling this an environment gap sends the "
+        f"reviewer to install a tool that is already installed: {res.detail}")
+    assert res.status == "SKIP"               # same tier the KLayout branch uses
+    assert "not found on PATH" not in res.detail
+    assert res.extras.get("missing_input") == "gds"
+    assert res.extras.get("svrfdrc_bin") == "/foss/tools/bin/svrfdrc"
+    assert called["n"] == 0, "svrfdrc was invoked with no layout to check"
+
+
 # --------------------------------------------------------------------------
 # v1.4.38 — DRC wall-clock budget (ic2-sha256 commercial PDK sha256 floor): the stall
 # watchdog never kills a 100%-CPU tool, so svrfdrc's pathological single-thread

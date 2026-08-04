@@ -65,18 +65,26 @@ def test_runner_ir_emitter_writes_budget_verdict():
     # budget = configurable pct-of-VDD (v1.3.93: reconciled to the plugin's own
     # ir_drop_budget_check._DEFAULT_BUDGET_PCT, was a hardwired 5%), VDD parsed
     # from the PSM log.
-    i = _P3_SRC.index('_ir_budget_uv = (_budget_pct / 100.0) * _vdd_v * 1e6')
-    # v1.4.6 — widened both bounds: the configurable-budget refactor spread the
-    # #444 comment (-1449), the verdict (+1117) and MEASURED (+3995) apart; the
-    # window must span #444..verdict while still EXCLUDING the MEASURED emitter.
-    window = _P3_SRC[i - 1700:i + 2500]
+    #
+    # v1.6.68 — the budget is now applied PER NET against that net's OWN supply
+    # voltage, so the anchor moved from the single-rail `_ir_budget_uv = ...`
+    # to the per-net `_bud = ...`. A design with two supplies does not share
+    # one millivolt budget; pinning the per-net form is what keeps it that way.
+    i = _P3_SRC.index('_bud = (_budget_pct / 100.0) * _v * 1e6')
+    # Measured offsets from this anchor: #444 -5057, "Supply voltage" -1585,
+    # per-net verdict +275, worst_ir_uv +1753, EM's MEASURED +5633. The window
+    # must span #444..worst_ir_uv while still EXCLUDING the EM emitter.
+    window = _P3_SRC[i - 5100:i + 2500]
     assert "Supply voltage" in window
     assert '"worst_ir_uv": _worst_ir_uv' in window
-    assert '"verdict": "PASS" if _worst_ir_uv <= _ir_budget_uv else "FAIL"' \
-        in window
+    assert '"verdict": "PASS" if _uv <= _bud else "FAIL"' in window
     assert "#444" in window
     # the hardwired measurement-only verdict is gone from the IR emitter
     assert '"verdict": "MEASURED"' not in window
+    # ...and the per-net numbers travel with the verdict, so a reader can
+    # re-derive EVERY rail's result, not just the worst one.
+    assert '"per_net": _measured' in window
+    assert '"unmeasured_nets": _unmeasured' in window
 
 
 def test_perc_auto_maps_measured_to_incomplete():
