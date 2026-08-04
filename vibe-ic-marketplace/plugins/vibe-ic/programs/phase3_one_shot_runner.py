@@ -5489,7 +5489,102 @@ def _stdcell_exclusion_marker_warning(calibre_drc: Optional[str],
     return None
 
 
-def _discover_local_macros(project: Path) -> Tuple[
+def _macro_abstract_obs_layers(lef_path: Path) -> List[str]:
+    """Layer names declared inside a macro abstract's ``OBS`` section.
+
+    Pure LEF grammar, chip- and PDK-AGNOSTIC: no layer-naming convention is
+    assumed. Returns ``[]`` when the file will not read, which callers treat as
+    "cannot derive", never as "this abstract obstructs nothing"."""
+    try:
+        txt = lef_path.read_text(errors="ignore")
+    except OSError:
+        return []
+    out: List[str] = []
+    in_obs = False
+    for raw in txt.splitlines():
+        s = raw.strip()
+        if re.match(r"^OBS\b", s):
+            in_obs = True
+            continue
+        if not in_obs:
+            continue
+        if re.match(r"^END\b", s):
+            in_obs = False
+            continue
+        m = re.match(r"^LAYER\s+([A-Za-z_]\w*)", s)
+        if m and m.group(1) not in out:
+            out.append(m.group(1))
+    return out
+
+
+def _pick_macro_abstract(base: str, by_n: "Dict[int, Path]",
+                         routing_layers: int, notes: List[str]) -> Path:
+    """Pick ONE routing-layer-keyed hard-macro abstract for the stack in force.
+
+    A vendor that ships ``<macro>_M3.lef`` … ``<macro>_M7.lef`` is not offering
+    a preference. Each variant obstructs exactly the layers a stack of that
+    height must not route over the macro on, so the variant NUMBER is the
+    metal-stack design choice — the same choice the tech LEF already fixes.
+
+    This flow refuses to pick a tech LEF for the operator, on the stated ground
+    that the metal stack is a design choice ("an arbitrary pick yields a fully
+    green sign-off against a stack nobody chose"). Hard-preferring a fixed
+    macro variant answers that same question a SECOND time, silently, and
+    differently. Deriving it from the tech LEF keeps one answer in the run.
+
+    MEASURED consequence of the fixed preference, on a real commercial-PDK
+    Phase-3 run with a 5-routing-layer stack and a macro shipping ``_M3``…
+    ``_M7`` (the ``_M3`` variant was loaded because the preference is fixed):
+
+        the ``_M5`` abstract the stack calls for declares
+            LAYER <m4> ; RECT <the WHOLE macro footprint> ;
+            LAYER <m5> ; RECT <the WHOLE macro footprint> ;
+        the loaded ``_M3`` abstract declares neither, and the router put
+            42 power-stripe segments of <m4>, covering 9.3% of it
+             4 power-stripe segments of <m5>, covering 4.9% of it
+        over that footprint. On the one layer the loaded abstract DOES declare
+        the same PDN placed 0 segments — so the router honours what it is told
+        and the only reason it routed there is that it was told wrong.
+
+    ``routing_layers == 0`` means the count could not be read; the historical
+    lowest-variant pick then stands, and the guess is DISCLOSED rather than
+    made to look like a derivation."""
+    avail = sorted(by_n)
+    shipped = ", ".join("M%d" % n for n in avail)
+    if routing_layers and routing_layers in by_n:
+        pick = by_n[routing_layers]
+        notes.append(
+            f"[macro-lef] {base}: the tech LEF in force declares "
+            f"{routing_layers} routing layer(s) -> {pick.name} "
+            f"(variants shipped: {shipped})")
+        return pick
+    if routing_layers:
+        lower = [n for n in avail if n < routing_layers]
+        pick = by_n[max(lower)] if lower else by_n[min(avail)]
+        why = (f"this macro ships no _M{routing_layers} variant for the "
+               f"{routing_layers}-routing-layer stack in force")
+    else:
+        pick = by_n[min(avail)]
+        why = ("the routing-layer count of the tech LEF in force could not be "
+               "read, so the stack this abstract has to match is UNKNOWN")
+    tallest = by_n[max(avail)]
+    pick_obs = _macro_abstract_obs_layers(pick)
+    missing = [l for l in _macro_abstract_obs_layers(tallest)
+               if l not in pick_obs]
+    tail = (f" {tallest.name} obstructs {', '.join(missing)} over this "
+            f"macro's footprint and {pick.name} does not, so the router is "
+            f"free to route there." if missing else
+            " Every variant declares the same obstruction layers, so the pick "
+            "does not change what the router may route over the macro.")
+    notes.append(f"[macro-lef] DISCLOSED PICK {base}: {why} — loaded "
+                 f"{pick.name} of {{{shipped}}}.{tail}")
+    return pick
+
+
+def _discover_local_macros(
+        project: Path,
+        tech_lef: Optional[object] = None,
+        container: Optional[str] = None) -> Tuple[
         List[str], List[str], List[str], List[str]]:
     """Discover local IP macros (input/pdk_local/<vendor>/) — hard macros
     (OTP, RAM, ADC, …) MUST be integrated into all backend steps so the
@@ -5501,11 +5596,19 @@ def _discover_local_macros(project: Path) -> Tuple[
     identically: the named branches previously returned early with empty
     macro lists, silently DROPPING the design's SRAM/OTP/ADC macros from
     synth blackboxing, PnR read_lef, GDS streamout and the LVS reference.
+
+    ``tech_lef`` (a host path, a container path, or None) is read for ONE
+    purpose: to count the stack's ``TYPE ROUTING`` layers, which is what
+    selects a routing-layer-keyed macro abstract (``_pick_macro_abstract``).
+    Omitted, that selection falls back to the historical order and SAYS SO.
     """
     macro_libs: List[str] = []
     macro_lefs: List[str] = []
     macro_gds:  List[str] = []
     macro_v:    List[str] = []
+    notes: List[str] = []
+    routing_layers = (len(_techlef_routing_layers(
+        _read_pdk_text(str(tech_lef), container) or "")) if tech_lef else 0)
     pdk_local = project / "input" / "pdk_local"
     if pdk_local.is_dir():
         for vendor_dir in sorted(pdk_local.iterdir()):
@@ -5533,14 +5636,20 @@ def _discover_local_macros(project: Path) -> Tuple[
                 elif ext == ".v" and "_t" not in sub.stem:
                     # exclude *_t.v (truth-model variant)
                     macro_v.append(str(sub))
-            # Per-macro LEF: prefer M3, then M4, then any non-_ant.
-            for base, lefs in lef_by_macro.items():
+            # Per-macro LEF: the routing-layer-keyed variant the stack in
+            # force calls for; otherwise the historical order, for a macro
+            # that ships no such variants.
+            for base, lefs in sorted(lef_by_macro.items()):
                 ant = [f for f in lefs if "_ant" in f.stem]
                 nonant = [f for f in lefs if "_ant" not in f.stem]
-                m3 = [f for f in nonant if f.stem.endswith("_M3")]
-                m4 = [f for f in nonant if f.stem.endswith("_M4")]
-                pick = ((m3 or m4 or nonant or ant)[0]
-                        if (m3 or m4 or nonant or ant) else None)
+                by_n: Dict[int, Path] = {}
+                for f in nonant:
+                    mv = re.search(r"_M(\d+)(?:L\d+)?$", f.stem)
+                    if mv:
+                        by_n.setdefault(int(mv.group(1)), f)
+                pick = (_pick_macro_abstract(base, by_n, routing_layers, notes)
+                        if by_n else
+                        ((nonant or ant)[0] if (nonant or ant) else None))
                 if pick is not None:
                     macro_lefs.append(str(pick))
         # Dedup macro libs to typ-corner only when multiple corners
@@ -5551,6 +5660,8 @@ def _discover_local_macros(project: Path) -> Tuple[
                         or "_t." in f.lower()]
             if typ_only:
                 macro_libs = typ_only
+        for _n in notes:
+            print(_n, flush=True)
 
     # --- C4/2026-07-31 — the flow's OWN A8-generated hard macros. ---
     # Everything above harvests `input/pdk_local/` ONLY, i.e. VENDOR IP staged
@@ -6516,7 +6627,8 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
     def _opt(key: str) -> Optional[str]:
         return _registry_glob_one(container, root, reg.get(key))
 
-    _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(project)
+    _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(
+        project, tech_lef, container)
     return PdkConfig(
         name=reg.get("name") or "unknown",
         liberty=liberty,
@@ -6681,13 +6793,16 @@ def _detect_pdk(project: Path, override: Optional[str] = None
     _assert_pdk_name_resolvable(override)
     if override and override != "auto":
         if override == "sky130A":
-            _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(project)
+            _tlef_sky = (f"{PDKS_IN_CONTAINER}/sky130A/libs.ref/"
+                         "sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef")
+            _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(
+                project, _tlef_sky,
+                os.environ.get("EDA_CONTAINER", "vibeic-eda"))
             return PdkConfig(
                 name="sky130A",
                 liberty=f"{PDKS_IN_CONTAINER}/sky130A/libs.ref/sky130_fd_sc_hd/"
                         "lib/sky130_fd_sc_hd__tt_025C_1v80.lib",
-                tech_lef=f"{PDKS_IN_CONTAINER}/sky130A/libs.ref/sky130_fd_sc_hd/"
-                         "techlef/sky130_fd_sc_hd__nom.tlef",
+                tech_lef=_tlef_sky,
                 cell_lef=f"{PDKS_IN_CONTAINER}/sky130A/libs.ref/sky130_fd_sc_hd/"
                          "lef/sky130_fd_sc_hd.lef",
                 cell_gds=f"{PDKS_IN_CONTAINER}/sky130A/libs.ref/sky130_fd_sc_hd/"
@@ -6726,7 +6841,9 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             # the OpenROAD-flow-scripts nangate45 platform re-staged into the
             # open_pdks libs.ref/<scl>/ layout by the vibeic-eda Dockerfile.
             ng = f"{PDKS_IN_CONTAINER}/nangate45/libs.ref/NangateOpenCellLibrary"
-            _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(project)
+            _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(
+                project, f"{ng}/techlef/NangateOpenCellLibrary.tech.lef",
+                os.environ.get("EDA_CONTAINER", "vibeic-eda"))
             return PdkConfig(
                 name="nangate45",
                 liberty=f"{ng}/lib/NangateOpenCellLibrary_typical.lib",
@@ -6777,10 +6894,11 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                     "[FAIL] --pdk asap7: pdk_registry.json carries no "
                     "'asap7' entry (payload corrupt?) — REFUSING a silent "
                     "fallback to another PDK.")
-            _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(project)
             _container = os.environ.get("EDA_CONTAINER", "vibeic-eda")
             _lib = _stage_asap7_merged_liberty(project, _container, reg)
             _tlef = _stage_normalized_techlef(project, _container, reg)
+            _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(
+                project, _tlef, _container)
             _croot = reg["container_path"]
             return PdkConfig(
                 name="asap7",
@@ -6935,7 +7053,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             # into _discover_local_macros so the NAMED open-PDK overrides
             # integrate hard macros identically (see helper docstring).
             macro_libs, macro_lefs, macro_gds, macro_v = (
-                _discover_local_macros(project))
+                _discover_local_macros(project, tech_lef))
 
             # Foundry sign-off decks (Calibre format common in commercial
             # PDKs; KLayout ships .lydrc; Magic ships .magicrc).
