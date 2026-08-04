@@ -51,6 +51,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -10339,6 +10340,216 @@ def _pnr_last_checkpoint(out_dir: Path) -> Optional[str]:
     return last
 
 
+def _pnr_last_checkpoint_file(out_dir: Path) -> Optional[Path]:
+    """Companion to `_pnr_last_checkpoint`: the PATH of the last completed
+    checkpoint DEF, or None. Same ordered scan, same stop-at-first-gap rule.
+
+    Chip-AGNOSTIC: file-existence check only."""
+    last: Optional[Path] = None
+    for fname, _label in _PNR_CHECKPOINT_STAGES:
+        p = out_dir / fname
+        if p.is_file() and p.stat().st_size > 0:
+            last = p
+        else:
+            break
+    return last
+
+
+# ---------------------------------------------------------------------------
+# A TCL `catch` CANNOT CATCH A SIGNAL.
+# ---------------------------------------------------------------------------
+# Every optimization step in the post-route tail of `pnr.tcl` is written as
+#
+#     if {[catch {repair_timing -setup} e]} { puts "..._NONFATAL: $e" }
+#
+# and that guard is inert against the failure that actually happens. When
+# OpenROAD segfaults inside `repair_timing`, SIGSEGV terminates the whole
+# process: the Tcl interpreter is gone, so the `catch` failure branch never
+# runs, no NONFATAL marker is printed, and nothing after the crashing line
+# executes — including `write_def routed.def`.
+#
+# MEASURED (subservient x sky130A, two independent runs). Detailed routing
+# COMPLETED and converged:
+#     [INFO DRT-0199]   Number of violations = 0.
+#     [INFO DRT-0198] Complete detail routing.
+# and the process then died in the post-route DRV-repair loop:
+#     [INFO RSZ-0094] Found 1081 endpoints with setup violations.
+#          0* | ... |  -12.771 | ... | 1081 | __uuf__._12083_/D
+#     Signal 11 received
+# Because `_docker_exec` runs the tool under `set -o pipefail`, the shell
+# reports the signal death as 128+11 = 139, and the runner's only gate was the
+# combined "non-zero exit OR no final DEF" test, whose whole message was
+#     FAIL "rc=139 log_tail=<2000 characters of transcript>"
+# A naked `rc=139` on the PnR step reads as "routing failed". Routing did not
+# fail. Seven downstream steps then failed on the missing routed.def, and the
+# next reader has no way to tell any of that from the verdict.
+#
+# So the guard has to live HERE, at the only layer where a signal death is
+# observable at all: the runner, which sees the exit status.
+#
+# WHAT IS AND IS NOT A SIGNAL DEATH. POSIX shells report a signal-terminated
+# child as 128+N. Only N in 1..NSIG-1 is a real signal, which bounds the
+# encoding to 129..128+NSIG-1 (192 on Linux). The runner's own kill sentinels
+# (RC_CEILING 124, RC_ABORTED 198, RC_STALLED 199) are deliberately outside
+# that window and are excluded explicitly as well, so a watchdog kill can
+# never be mistaken for a tool crash.
+_RC_SIGNAL_BASE = 128
+_RC_NOT_A_SIGNAL = frozenset({_wd.RC_CEILING, _wd.RC_ABORTED, _wd.RC_STALLED})
+
+
+def _fatal_signal_from_rc(rc: int) -> Optional[int]:
+    """Return the signal number a 128+N exit status encodes, else None.
+
+    None for 0, for an ordinary non-zero exit (a tool that returned an error
+    code), and for every runner kill sentinel. Chip-AGNOSTIC: arithmetic on
+    the exit status only."""
+    if not isinstance(rc, int) or rc in _RC_NOT_A_SIGNAL:
+        return None
+    sig = rc - _RC_SIGNAL_BASE
+    if 1 <= sig < int(getattr(signal, "NSIG", 65)):
+        return sig
+    return None
+
+
+def _signal_name(sig: int) -> str:
+    """`SIGSEGV` for 11, `SIG<N>` when the platform does not name it."""
+    try:
+        return signal.Signals(sig).name
+    except (ValueError, AttributeError):
+        return f"SIG{sig}"
+
+
+# The breadcrumb `pnr.tcl` prints before each stage of the flow, and the
+# sentinel comments that delimit an omittable stage / the pre-route section.
+# The breadcrumb is what lets the runner NAME the stage the tool died in
+# instead of quoting 2000 characters of log tail at the reader.
+_PNR_STAGE_MARKER = "PNR_STAGE:"
+_PNR_RESUME_ELIDE_BEGIN = "# <<<PNR_RESUME_ELIDE_BEGIN>>>"
+_PNR_RESUME_ELIDE_END = "# <<<PNR_RESUME_ELIDE_END>>>"
+
+
+def _pnr_stage_begin(label: str) -> str:
+    return f"# <<<PNR_STAGE_BEGIN {label}>>>"
+
+
+def _pnr_stage_end(label: str) -> str:
+    return f"# <<<PNR_STAGE_END {label}>>>"
+
+
+# The stages `pnr.tcl` ITSELF declares best-effort: each is wrapped in a Tcl
+# `catch` whose failure branch prints a `*_NONFATAL:` marker and lets the flow
+# continue. Omitting one of these on a resume therefore honours the intent the
+# template already wrote down — it is the `catch` finally taking effect, not a
+# new decision to skip work. Every OTHER stage is load-bearing (its output is
+# an input to a shipped artifact), so a crash there is NOT resumable and is
+# reported as such. Chip-AGNOSTIC: stage identity, no design literal.
+_PNR_NONFATAL_STAGES = frozenset({
+    "postroute_drv_repair",
+    "postroute_drv_reconverge",
+    "postroute_setup_repair_estimate",
+})
+
+# Every stage the template breadcrumbs, in flow order. Used only to render a
+# stable, readable stage list in the diagnosis; membership is not a gate.
+_PNR_STAGE_ORDER = (
+    "floorplan", "placement", "cts", "hold_repair",
+    "global_route", "detailed_route",
+    "postroute_drv_repair", "postroute_antenna_repair",
+    "postroute_drv_reconverge", "postroute_fill",
+    "write_routed", "postroute_setup_repair_estimate",
+)
+
+
+def _pnr_stage_from_log(log_text: str) -> Optional[str]:
+    """The LAST stage breadcrumb in an OpenROAD log — i.e. the stage that was
+    running when the log stopped. None when the log carries no breadcrumb (a
+    log produced by an older pnr.tcl, or a run that died before the first
+    stage). Chip-AGNOSTIC: marker parsing only."""
+    last: Optional[str] = None
+    for m in re.finditer(rf"^{re.escape(_PNR_STAGE_MARKER)}\s*(\S+)",
+                         log_text or "", re.M):
+        last = m.group(1)
+    return last
+
+
+_DRT_COMPLETE_RE = re.compile(r"\[INFO DRT-0198\]\s*Complete detail routing")
+
+
+def _detail_route_completed(log_text: str) -> bool:
+    """True when the router printed its own completion line. This is the
+    evidence that separates "routing failed" from "routing succeeded and
+    something after it died". Chip-AGNOSTIC: tool marker only."""
+    return bool(_DRT_COMPLETE_RE.search(log_text or ""))
+
+
+_TOOL_SIGNAL_RE = re.compile(r"^Signal\s+(\d+)\s+received", re.M)
+
+
+def _tool_reported_signal(log_text: str) -> Optional[int]:
+    """The signal number OpenROAD's own crash handler printed, if it got that
+    far. Corroborates the exit status; never replaces it."""
+    m = None
+    for m in _TOOL_SIGNAL_RE.finditer(log_text or ""):
+        pass
+    return int(m.group(1)) if m else None
+
+
+def _pnr_fatal_signal_diagnosis(rc: int, log_text: str,
+                                out_dir: Path) -> Optional[Dict[str, Any]]:
+    """Classify a PnR exit as a TOOL CRASH and describe it, or return None.
+
+    The returned record answers the three questions the bare `rc=139` did not:
+    which signal killed the tool, which stage it was in, and whether routing
+    had already finished. Chip-AGNOSTIC: exit status + tool markers + file
+    existence; no design, PDK or vendor literal."""
+    sig = _fatal_signal_from_rc(rc)
+    if sig is None:
+        return None
+    stage = _pnr_stage_from_log(log_text)
+    ckpt = _pnr_last_checkpoint_file(out_dir)
+    return {
+        "finding": "PNR_TOOL_FATAL_SIGNAL",
+        "rc": rc,
+        "signal": sig,
+        "signal_name": _signal_name(sig),
+        "tool_reported_signal": _tool_reported_signal(log_text),
+        "stage": stage,
+        "stage_is_nonfatal_by_template": (stage in _PNR_NONFATAL_STAGES
+                                          if stage else False),
+        "detail_route_completed": _detail_route_completed(log_text),
+        "checkpoint": str(ckpt) if ckpt else None,
+        "checkpoint_stage": _pnr_last_checkpoint(out_dir),
+    }
+
+
+def _pnr_fatal_signal_message(diag: Dict[str, Any]) -> str:
+    """Render the diagnosis as the sentence the next reader needs. It must
+    never say "routing failed" when the router said it finished."""
+    sig = f"{diag['signal_name']} (signal {diag['signal']})"
+    stage = diag.get("stage") or "an unbreadcrumbed stage"
+    if diag.get("detail_route_completed"):
+        lead = (f"PNR_TOOL_FATAL_SIGNAL: routing SUCCEEDED — the router "
+                f"printed its own completion line (DRT-0198 Complete detail "
+                f"routing) — and OpenROAD was then killed by {sig} in "
+                f"{stage}. This is a TOOL CRASH after a completed route, not "
+                f"a routing failure")
+    else:
+        lead = (f"PNR_TOOL_FATAL_SIGNAL: OpenROAD was killed by {sig} in "
+                f"{stage}; the router did NOT print its completion line, so "
+                f"routing itself is not known to have finished")
+    lead += (f" (rc={diag['rc']} = 128+{diag['signal']}). A Tcl `catch` "
+             f"cannot trap a signal: the process dies, the interpreter never "
+             f"reaches the failure branch, and every line after the crashing "
+             f"one — including `write_def routed.def` — is never executed.")
+    ck = diag.get("checkpoint")
+    if ck:
+        lead += (f" Last completed checkpoint ({diag.get('checkpoint_stage')}"
+                 f"): {ck}")
+    else:
+        lead += " No usable stage checkpoint was written."
+    return lead
+
+
 # ORGANIC #593 — geometry-aware PnR/GDS cache. The cache-skip used to
 # key on artifact existence ALONE, so a re-run with a DIFFERENT
 # --die-um / --util (the canonical congestion-recovery for #585's
@@ -15478,7 +15689,18 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         # contain a Signal 11, so on stock OpenROAD it would kill the process
         # and the GDS would never be written. Probe-negative → this block is
         # byte-identical to the measure-only extraction it always was.
-        + (_v1_8_100_signoff_drv_repair_tcl(out_dir_c)
+        # The sentinels are what let the RUNNER omit exactly this loop when a
+        # resume from the route checkpoint follows a signal death inside it.
+        # They bracket the loop ALONE — the sign-off SPEF extraction below is
+        # outside them and always runs, so a resume never costs the Step-23
+        # STA its parasitics. The probe above is a PREDICTION that this
+        # OpenROAD will not crash here; it has been MEASURED wrong (0.2.58
+        # probed capable and still took Signal 11 on a design with a large
+        # setup violation), which is why a runner-level backstop exists at all.
+        + ((_pnr_stage_begin("postroute_drv_repair") + "\n"
+            + f"  puts \"{_PNR_STAGE_MARKER} postroute_drv_repair\"\n"
+            + _v1_8_100_signoff_drv_repair_tcl(out_dir_c)
+            + _pnr_stage_end("postroute_drv_repair") + "\n")
            if fork_repair_capable else
            "  puts \"SDR_SKIP_STOCK_OPENROAD: post-route SPEF DRV repair needs "
            "the fork post-detailed-route repair fix; extraction only\"\n")
@@ -16094,6 +16316,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         antenna_repair_block: str,
                         filler_block: str,
                         drv_reconverge_block: str = "",
+                        post_reconverge_antenna_block: str = "",
                         tapcell_prune_block: str = "",
                         pg_reconnect_block: str = "",
                         hardmacro_supply_gc_block: str = "",
@@ -16269,6 +16492,11 @@ if {{[catch {{set_wire_rc -signal -layer {metal_prefix}1}} _swr_sig]}} {{
 if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{
   puts "SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk"
 }}
+# <<<PNR_RESUME_ELIDE_BEGIN>>>
+# Everything between this sentinel and PNR_RESUME_ELIDE_END BUILDS the routed
+# database from the netlist. A resume replaces the whole region with a
+# `read_def` of the last stage checkpoint, so the work is never redone.
+puts "{_PNR_STAGE_MARKER} floorplan"
 initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
                       -core_area "{core_pad} {core_pad} {core_w} {core_h}" \\
                       -site {site}
@@ -16297,6 +16525,7 @@ write_def {out_dir_c}/floorplan.def
 # `set_placement_padding -global` (below, when
 # enabled) is an optional, version-correct extra congestion knob. Flag names
 # verified vs OpenROAD 26Q1 (`help global_placement`). chip-AGNOSTIC.
+puts "{_PNR_STAGE_MARKER} placement"
 {_placement_padding_block}global_placement{_routability_flag}{_timing_driven_flag} -density {util}
 {_initial_legalize}# === #684 sparse-die anti-flood tap prune (POST-placement, locality) ===
 # Runs here — after placement resolved the REAL logic geometry, BEFORE
@@ -16344,6 +16573,7 @@ if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
 if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
   puts "REPAIR_LEGALIZE_NONFATAL: $_rt_dp_err"
 }}
+puts "{_PNR_STAGE_MARKER} cts"
 if {{[catch {{clock_tree_synthesis -buf_list {{{clk_buf}}} -root_buf {clk_buf_root}{_cts_cluster}}} cts_err]}} {{
   puts "CTS_NONFATAL: $cts_err -- continuing without explicit CTS"
 }}
@@ -16353,6 +16583,7 @@ write_def {out_dir_c}/post_cts.def
 # post_cts.def (CTS may have left placement gaps that detailed_placement
 # closes). This prevents def_stage_progression_check from rejecting the
 # pair as identical fabrication.
+puts "{_PNR_STAGE_MARKER} hold_repair"
 if {{[catch {{repair_timing -hold}} hold_err]}} {{
   puts "HOLD_NONFATAL: $hold_err"
 }}
@@ -16390,6 +16621,7 @@ if {{[catch {{
 # makes TritonRoute abort ALL detailed routing; remove/reclassify it first so the
 # design actually routes instead of silently shipping unrouted. See
 # _pg_net_cleanup_tcl for the full rationale.
+puts "{_PNR_STAGE_MARKER} global_route"
 {pg_cleanup_block}global_route
 # === v0.1.26 post-global-route SETUP / DRV repair ===
 # Re-estimate RC from global routing and repair again so the final routed
@@ -16413,6 +16645,7 @@ if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
 # detailed_route fails (open-source iic-osic-tools has it; some custom
 # PDKs without RC files have detailed_route that completes without wire
 # geometry but at least the global_route step does write SPECIALNETS).
+puts "{_PNR_STAGE_MARKER} detailed_route"
 if {{[catch {{detailed_route}} dr_err]}} {{
   puts "DETAILED_ROUTE_NONFATAL: $dr_err"
 }}
@@ -16425,19 +16658,31 @@ if {{[catch {{detailed_route}} dr_err]}} {{
 if {{[catch {{write_def {out_dir_c}/routed_preantenna.def}} _cp_err]}} {{
   puts "ROUTED_CHECKPOINT_NONFATAL: $_cp_err"
 }}
+# <<<PNR_RESUME_ELIDE_END>>>
 # === ORGANIC #557 — post-route SPEF-domain repair loop ===
 # Runs OpenRCX extraction (when a captable exists) → read_spef → repair_design /
 # repair_timing → detailed_placement → incremental reroute.  Best-effort:
 # any exception leaves the routing unchanged and issues a NONFATAL marker.
+#
+# The `catch`es inside this block cannot trap a signal. `repair_timing -setup`
+# on a design with a large setup violation is where OpenROAD has been MEASURED
+# to segfault, and a segfault here used to discard a fully converged route. The
+# sentinels below let the RUNNER omit exactly this block on a resume from the
+# route checkpoint — which is what the NONFATAL guard was written to do and
+# cannot.
+puts "{_PNR_STAGE_MARKER} postroute_spef_extract"
 {spef_repair_block}# === v0.2.14 — antenna repair (diode insertion) after detailed_route ===
-{antenna_repair_block}{drv_reconverge_block}# === v0.1.48 — decap + filler insertion ===
+puts "{_PNR_STAGE_MARKER} postroute_antenna_repair"
+{antenna_repair_block}{drv_reconverge_block}{post_reconverge_antenna_block}# === v0.1.48 — decap + filler insertion ===
 # spm pilot Tier 2 EM/decap finding: prior runs (v0.1.25 → v0.1.47) emitted
 # ZERO decap or filler cells. Empty std-cell-row gaps left an MPW-rejecting
 # combination: no dynamic IR margin (no decap), open density-fill rules
 # (no filler in row gaps), and unused silicon area. SKY130 spm pilot added
 # 2079 decap + 150 fill cells; DRC still 0, worst IR 35 µV (2500× margin).
 # NONFATAL-guarded so PDKs without the masters degrade gracefully.
-{filler_block}{pg_reconnect_block}# v1.8.43 — min-area patch: LAST thing before the route is written, so it
+puts "{_PNR_STAGE_MARKER} postroute_fill"
+{filler_block}{pg_reconnect_block}puts "{_PNR_STAGE_MARKER} write_routed"
+# v1.8.43 — min-area patch: LAST thing before the route is written, so it
 # sees the final geometry (post antenna-repair, post filler) and every
 # downstream consumer (write_def / write_verilog / RCX / magic GDS / DRC /
 # LVS) reads the patched route.
@@ -16450,8 +16695,213 @@ report_design_area > {out_dir_c}/area.rpt
 # shipped artifact + the authoritative clean sta.rpt, so it can only MEASURE the
 # recoverable setup, never modify routed.def/<top>.def/<top>_pnr.v). Empty on
 # stock OpenROAD (probe-gated). ===
-{spef_repair_estimate_block}exit
+{_pnr_stage_begin("postroute_setup_repair_estimate")}
+puts "{_PNR_STAGE_MARKER} postroute_setup_repair_estimate"
+{spef_repair_estimate_block}{_pnr_stage_end("postroute_setup_repair_estimate")}
+exit
 """
+
+
+class PnrResumeUnavailable(Exception):
+    """Raised when a resume Tcl cannot be derived from a given pnr.tcl —
+    always with the reason, never silently. A resume that cannot be built
+    must degrade to a loud FAIL, not to a half-built one."""
+
+
+def _build_pnr_resume_tcl_text(pnr_tcl_text: str, *, checkpoint_def_c: str,
+                               omit_stages: Sequence[str] = ()) -> str:
+    """Derive a RESUME Tcl from the pnr.tcl that was actually run.
+
+    THE SOURCE OF THE TAIL IS pnr.tcl ITSELF. Re-emitting the post-route tail
+    from a second builder would put two copies of it in the tree, and two
+    copies drift — this repo has already paid for that once (the routing-clear
+    filter that existed inline and as a helper). So the resume is a
+    line-exact TRANSFORM of the file the crashed session ran:
+
+      1. `read_verilog <netlist>` + `link_design <top>`  ->  `read_def <ckpt>`
+         The checkpoint DEF carries the components, nets and routed geometry,
+         so the design is restored from it instead of rebuilt from the netlist.
+      2. Everything between PNR_RESUME_ELIDE_BEGIN/END is dropped: that is
+         floorplan through detailed route, i.e. exactly the work the
+         checkpoint already contains. Its per-stage `write_def`s go with it,
+         so no earlier checkpoint is overwritten.
+      3. Each stage in `omit_stages` is dropped between its PNR_STAGE_BEGIN /
+         PNR_STAGE_END sentinels and replaced by a PNR_STAGE_OMITTED marker,
+         so the omission is in the log rather than inferred from its absence.
+
+    The sentinels delimit whole emitted blocks, so every deletion removes a
+    brace-balanced region — the resume is valid Tcl whenever pnr.tcl is, which
+    the tclsh parse test asserts directly.
+
+    Chip-AGNOSTIC: sentinel-delimited line surgery; no design, PDK or vendor
+    literal is read or written."""
+    lines = pnr_tcl_text.splitlines()
+
+    def _index_of(pred, what: str) -> int:
+        for i, ln in enumerate(lines):
+            if pred(ln):
+                return i
+        raise PnrResumeUnavailable(
+            f"pnr.tcl carries no {what} — it was written by a pnr.tcl "
+            f"emitter that predates resume support, so a resume cannot be "
+            f"derived from it")
+
+    i_rv = _index_of(lambda ln: ln.startswith("read_verilog "), "read_verilog")
+    if not lines[i_rv + 1:i_rv + 2] or \
+            not lines[i_rv + 1].startswith("link_design "):
+        raise PnrResumeUnavailable(
+            "pnr.tcl does not follow read_verilog with link_design; the "
+            "design-load site could not be identified")
+    lines[i_rv:i_rv + 2] = [
+        "# RESUMED SESSION — the design is restored from the route checkpoint",
+        "# instead of rebuilt from the netlist (see _build_pnr_resume_tcl_text).",
+        f"read_def {checkpoint_def_c}",
+    ]
+
+    def _drop(begin: str, end: str, replacement: Sequence[str],
+              what: str) -> None:
+        i0 = _index_of(lambda ln: ln.strip() == begin, what + " begin marker")
+        i1 = _index_of(lambda ln: ln.strip() == end, what + " end marker")
+        if i1 < i0:
+            raise PnrResumeUnavailable(
+                f"{what} markers are out of order in pnr.tcl")
+        lines[i0:i1 + 1] = list(replacement)
+
+    _drop(_PNR_RESUME_ELIDE_BEGIN, _PNR_RESUME_ELIDE_END,
+          ["# --- floorplan..detailed_route elided: already in the checkpoint "
+           "---"],
+          "resume-elide")
+    for stage in omit_stages:
+        _drop(_pnr_stage_begin(stage), _pnr_stage_end(stage),
+              [f'puts "PNR_STAGE_OMITTED: {stage}"'],
+              f"stage {stage!r}")
+    return "\n".join(lines) + "\n"
+
+
+_PNR_RESUME_TCL = "pnr_resume.tcl"
+_PNR_RESUME_LOG = "openroad_resume.log"
+
+
+def _pnr_resume_after_fatal_signal(*, project: Path, top: str, container: str,
+                                   out_dir: Path, out_dir_c: str,
+                                   pnr_tcl: Path, diag: Dict[str, Any],
+                                   hard_ceiling_s: int) -> Dict[str, Any]:
+    """ONE bounded attempt to finish PnR from the last stage checkpoint after
+    the tool was killed by a signal.
+
+    This is the mechanism the flow's own advice ("resume from the checkpoint;
+    a from-scratch re-run is NOT required") described and did not have. It is
+    deliberately narrow, and every refusal is a RECORD, never a silent skip:
+
+      * no checkpoint on disk            -> NOT_ATTEMPTED
+      * the log carries no stage
+        breadcrumb, so what died is
+        unknown                          -> NOT_ATTEMPTED
+      * the stage that died is NOT one
+        the template itself declares
+        best-effort                      -> NOT_ATTEMPTED
+      * the resume session itself dies    -> FAILED (never retried)
+
+    The third guard is the load-bearing one. Omitting a stage is only honest
+    when the emitted Tcl already says that stage may be skipped — every stage
+    in `_PNR_NONFATAL_STAGES` is wrapped in a `catch` that prints a NONFATAL
+    marker and continues. Running the tail without it is that `catch` finally
+    taking effect. A crash in a stage whose output IS a shipped artifact
+    (routing, antenna repair, fill, the writes) is NOT resumable and is
+    reported as a failure.
+
+    Chip-AGNOSTIC: stage identity, exit status and file existence only."""
+    rec: Dict[str, Any] = {"status": "NOT_ATTEMPTED", "reason": "",
+                           "omitted_stages": []}
+    ckpt = diag.get("checkpoint")
+    stage = diag.get("stage")
+    if not ckpt:
+        rec["reason"] = (
+            "no stage checkpoint DEF exists in the PnR output directory, so "
+            "there is nothing to resume from")
+        return rec
+    if not stage:
+        rec["reason"] = (
+            "the OpenROAD log carries no stage breadcrumb, so the stage that "
+            "died cannot be named; resuming would have to guess which stage "
+            "to omit and it will not guess")
+        return rec
+    if stage not in _PNR_NONFATAL_STAGES:
+        rec["reason"] = (
+            f"the tool died in {stage}, which is load-bearing — its output "
+            f"feeds a shipped artifact, so omitting it would change what was "
+            f"built. Only the stages pnr.tcl itself declares best-effort "
+            f"({', '.join(sorted(_PNR_NONFATAL_STAGES))}) are omittable")
+        return rec
+    try:
+        resume_text = _build_pnr_resume_tcl_text(
+            pnr_tcl.read_text(errors="replace"),
+            checkpoint_def_c=_to_container_path(str(ckpt), container),
+            omit_stages=[stage])
+    except (PnrResumeUnavailable, OSError) as e:
+        rec["status"] = "NOT_ATTEMPTED"
+        rec["reason"] = f"resume Tcl could not be derived: {e}"
+        return rec
+    resume_tcl = out_dir / _PNR_RESUME_TCL
+    resume_tcl.write_text(resume_text)
+    resume_tcl_c = _to_container_path(str(resume_tcl), container)
+    rec["resume_tcl"] = str(resume_tcl)
+    rec["resume_log"] = str(out_dir / _PNR_RESUME_LOG)
+    rec["omitted_stages"] = [stage]
+    print(f"[pnr] RESUME: reading {ckpt} and re-running the post-route tail "
+          f"with {stage} omitted", file=sys.stderr)
+    cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+           f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+           f"openroad -no_init -exit {resume_tcl_c} 2>&1 | "
+           f"tee {out_dir_c}/{_PNR_RESUME_LOG}")
+    r_rc, r_out, r_err = _docker_exec(
+        container, cmd, marker=resume_tcl_c,
+        log_path=out_dir / _PNR_RESUME_LOG, hard_ceiling_s=hard_ceiling_s)
+    rec["rc"] = r_rc
+    rec["log_tail"] = ((r_out or "") + (r_err or ""))[-2000:]
+    # Fold the resume transcript into openroad.log so every gate that reads
+    # that one file sees the whole session. Appended under a banner, never
+    # overwriting: the crash transcript is evidence and stays.
+    try:
+        with (out_dir / "openroad.log").open("a") as fh:
+            fh.write(f"\n=== PNR RESUME (from {ckpt}, {stage} omitted) ===\n")
+            fh.write((out_dir / _PNR_RESUME_LOG).read_text(errors="replace"))
+    except OSError:
+        pass
+    r_sig = _fatal_signal_from_rc(r_rc)
+    if r_sig is not None:
+        rec["status"] = "FAILED"
+        rec["reason"] = (
+            f"the resumed session was ALSO killed by {_signal_name(r_sig)} "
+            f"(rc={r_rc}); not retried")
+        return rec
+    if r_rc != 0:
+        rec["status"] = "FAILED"
+        rec["reason"] = f"the resumed session exited {r_rc}"
+        return rec
+    if not (out_dir / f"{top}.def").is_file():
+        rec["status"] = "FAILED"
+        rec["reason"] = (
+            "the resumed session exited 0 but wrote no final DEF")
+        return rec
+    rec["status"] = "RESUMED"
+    return rec
+
+
+def _write_pnr_fatal_signal_attestation(project: Path,
+                                        diag: Dict[str, Any]) -> Optional[str]:
+    """Durable record of a PnR tool crash, next to the other phase-3 sign-off
+    evidence. A crash the runner resumed past is still a crash: it has to be
+    readable from the artifacts alone, not only from a step's detail string
+    that a later re-run overwrites. Best-effort; never fatal."""
+    try:
+        rpt = _pl.reports_dir(project) / "phase3"
+        rpt.mkdir(parents=True, exist_ok=True)
+        p = rpt / "pnr_fatal_signal.json"
+        p.write_text(json.dumps(diag, indent=2, default=str) + "\n")
+        return str(p)
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -17069,11 +17519,25 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # repair_design/repair_timing on a post-detailed-route SPEF-annotated
     # design. Probe-negative → SDR2 collapses to nothing but the (already
     # probe-gated) antenna repair, i.e. exactly the pre-R8 behaviour.
-    drv_reconverge_block = (('puts "SDR2_BEGIN"\n'
+    # The re-convergence loop and the antenna pass that follows it are now
+    # emitted as TWO template slots instead of one concatenated string. The
+    # emitted Tcl is unchanged (slot A then slot B, same order, same text);
+    # what changes is that the sentinels can bracket the LOOP alone, so a
+    # resume that omits the loop does not also silently drop the antenna
+    # repair — which is load-bearing and must never be omitted.
+    drv_reconverge_block = ((_pnr_stage_begin("postroute_drv_reconverge")
+                             + "\n"
+                             + f'puts "{_PNR_STAGE_MARKER} '
+                               'postroute_drv_reconverge"\n'
+                             + 'puts "SDR2_BEGIN"\n'
                              + _v1_8_100_signoff_drv_repair_tcl(out_dir_c)
                              + 'puts "SDR2_END"\n'
-                             if _fork_repair_capable else "")
-                            + antenna_repair_block)
+                             + _pnr_stage_end("postroute_drv_reconverge")
+                             + "\n")
+                            if _fork_repair_capable else "")
+    # UNCONDITIONAL, exactly as when it was concatenated onto the string
+    # above: the second antenna pass ran on both probe outcomes and still does.
+    post_reconverge_antenna_block = antenna_repair_block
     spef_repair_estimate_block = _postroute_repair_estimate_tcl(
         out_dir_c, _fork_repair_capable)
 
@@ -17201,6 +17665,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         pg_cleanup_block=pg_cleanup_block,
         spef_repair_block=spef_repair_block,
         drv_reconverge_block=drv_reconverge_block,
+        post_reconverge_antenna_block=post_reconverge_antenna_block,
         antenna_repair_block=antenna_repair_block,
         filler_block=filler_block,
         tapcell_prune_block=tapcell_prune_block,
@@ -17420,6 +17885,71 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         _write_sparse_die_skip_attestation(project, [_log_txt, out, err])
     except Exception:  # nosec — attestation is best-effort, never fatal
         pass
+    # ── TOOL CRASH vs TOOL ERROR ──────────────────────────────────────────
+    # A signal death is not an error return, and until this gate existed the
+    # runner could not tell them apart: both arrived as "rc != 0" and were
+    # reported as a bare `rc=<n>` with 2000 characters of log tail. See
+    # `_pnr_fatal_signal_diagnosis` for the measured case this is written
+    # from — a converged route discarded because the process was killed in a
+    # post-route optimization step whose Tcl `catch` could not catch a signal.
+    _pnr_log_all = ""
+    try:
+        _pnr_log_all = (out_dir / "openroad.log").read_text(errors="ignore")
+    except OSError:
+        _pnr_log_all = (out or "") + "\n" + (err or "")
+    _sig_diag = _pnr_fatal_signal_diagnosis(rc, _pnr_log_all, out_dir)
+    _resume_record: Optional[Dict[str, Any]] = None
+    if _sig_diag is not None:
+        print(f"[pnr] {_pnr_fatal_signal_message(_sig_diag)}", file=sys.stderr)
+    if _sig_diag is not None and def_file.is_file():
+        # A crash WITH a final DEF already on disk. The DEF cannot have come
+        # from this session — the crash preceded the write — so it is a
+        # LEFTOVER from an earlier run, and the most dangerous shape of all:
+        # the "no final DEF" half of the gate below is satisfied by a stale
+        # file and only the exit status is left to notice anything is wrong.
+        # It is named here rather than reported as a bare `rc=<n>`.
+        _write_pnr_fatal_signal_attestation(project, _sig_diag)
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            _pnr_fatal_signal_message(_sig_diag)
+            + f" A {def_file.name} is present but CANNOT be from this "
+              f"session — it predates the crash and must not be signed off.",
+            [str(out_dir / "openroad.log"), str(def_file)],
+            extras={"finding": "PNR_TOOL_FATAL_SIGNAL",
+                    "pnr_fatal_signal": _sig_diag,
+                    "non_signoff_outputs": [str(def_file)],
+                    "resize_history": resize_history,
+                    "loosen_declines": loosen_declines})
+    if _sig_diag is not None and not def_file.is_file():
+        _resume_record = _pnr_resume_after_fatal_signal(
+            project=project, top=top, container=container, out_dir=out_dir,
+            out_dir_c=out_dir_c, pnr_tcl=pnr_tcl, diag=_sig_diag,
+            hard_ceiling_s=_pnr_ceiling)
+        _sig_diag["resume"] = _resume_record
+        _write_pnr_fatal_signal_attestation(project, _sig_diag)
+        if _resume_record.get("status") == "RESUMED":
+            # The route was salvaged from the checkpoint and the tail
+            # re-ran. rc/out are re-pointed at the RESUMED session so every
+            # gate below judges the artifacts that actually exist, and the
+            # crash travels with the result in `extras` + the on-disk
+            # attestation — it is recorded, never dropped.
+            rc = int(_resume_record.get("rc", rc))
+            out = (out or "") + "\n" + str(_resume_record.get("log_tail", ""))
+            def_file = out_dir / f"{top}.def"
+        if not def_file.is_file():
+            _msg = _pnr_fatal_signal_message(_sig_diag)
+            _why = _resume_record.get("reason") or ""
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                f"{_msg} RESUME: {_resume_record.get('status')}"
+                + (f" — {_why}" if _why else ""),
+                [str(out_dir / "openroad.log")]
+                + [p for p in [_resume_record.get("resume_tcl"),
+                               _resume_record.get("resume_log")] if p],
+                extras={"finding": "PNR_TOOL_FATAL_SIGNAL",
+                        "pnr_fatal_signal": _sig_diag,
+                        "resize_history": resize_history,
+                        "loosen_declines": loosen_declines})
     if rc != 0 or not def_file.is_file():
         return StepResult("pnr", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-2000:]}",
@@ -17789,6 +18319,17 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _nl_extras = {"pnr_input_netlist": netlist.name,
                   "pnr_input_netlist_note": _nl_note,
                   "pnr_netlist_scan_inserted": _nl_is_scan}
+    # A PnR that only completed because the runner resumed it past a tool
+    # crash must never read as an ordinary PASS. The crash, the killed stage
+    # and the stage that was consequently NOT run travel with the verdict —
+    # in the detail line, in the extras, and in a durable attestation on disk.
+    if _resume_record and _resume_record.get("status") == "RESUMED":
+        detail += (" | " + _pnr_fatal_signal_message(_sig_diag)
+                   + " RESUMED from the checkpoint with "
+                   + ", ".join(_resume_record.get("omitted_stages") or ["-"])
+                   + " NOT RUN — those stages did not contribute to the "
+                     "artifacts below")
+        _nl_extras["pnr_fatal_signal"] = _sig_diag
     if resize_history:
         return StepResult("pnr", "PASS", time.time() - t0,
                           detail,
@@ -27581,6 +28122,15 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # post-route checkpoint without routed.def. Route-stage evidence is
     # therefore routed.def OR routed_preantenna.def — and the advice is
     # "resume from the checkpoint", never "re-run from scratch".
+    #
+    # That advice used to have no mechanism behind it: there was no resume
+    # flag and no resume code path anywhere in this file, so the note sent
+    # every reader looking for something that was never written. The resume
+    # now exists (`_pnr_resume_after_fatal_signal`, driven from step_pnr on a
+    # fatal-signal exit), and the note below names it so the reader can find
+    # it — and says plainly when it did NOT run, which is the case whenever
+    # this branch is reached with the checkpoint still standing in for
+    # routed.def.
     expected_def_stages = [fname for fname, _label in
                            _PNR_CHECKPOINT_STAGES
                            if fname != "routed_preantenna.def"] \
@@ -27594,9 +28144,17 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         missing_stages.remove("routed.def")
         notes.append(
             "route stage evidenced by checkpoint "
-            "routed_preantenna.def — final routed.def absent (mid-tcl "
-            "death after detailed route). Resume from the checkpoint "
-            "(#548); a from-scratch re-run is NOT required.")
+            f"{_route_checkpoint} — final routed.def absent (mid-tcl "
+            "death after detailed route). Resume from the checkpoint is "
+            "AUTOMATIC and a from-scratch re-run is NOT required: step_pnr "
+            "resumes from this checkpoint when the tool died on a signal in "
+            "a stage pnr.tcl declares best-effort (see "
+            "_pnr_resume_after_fatal_signal, and "
+            "reports/phase3/pnr_fatal_signal.json for whether it ran and "
+            "why). This note means the resume did NOT complete — the "
+            "checkpoint is standing in for routed.def, so no antenna "
+            "repair, fill or final write ran on it and it is NOT a "
+            "sign-off artifact.")
     if primary_def.is_file():
         # PDN done flag
         pdn_flag = pnr_out / "pdn.done"
