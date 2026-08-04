@@ -20830,8 +20830,20 @@ _RE_MAGIC_CELL_COUNT = re.compile(
 _RE_MAGIC_DRC_COUNT = re.compile(
     r"(?:Total\s+(?:DRC\s+)?errors?|^\s*count\s*=?\s*)\s*[:=]?\s*(\d+)",
     re.IGNORECASE | re.MULTILINE)
+# An empty Magic cell does NOT report `0 0 0 0`. `magic -dnull` on a cell it
+# could not read prints its default unit box — MEASURED verbatim on the real
+# tool: `MAGIC_BBOX 0 0 1 1`, beside `Cell <top> couldn't be read` and
+# `Tiles processed: 0/0`. A probe that only knows `0 0 0 0` scores that
+# transcript geometry_loaded=True, which is how a DRC of an empty cell was
+# once recorded as an authoritative 0-violation result. Both spellings of
+# "there is nothing here" are now the same answer.
+# The leading `\b` is deliberately absent. The runner's own TCL prints the
+# box as `MAGIC_BBOX 0 0 1 1`, and `_` is a word character — so a leading
+# word boundary made this probe unable to match the very line the emitter
+# beside it writes.
 _RE_MAGIC_EMPTY_BBOX = re.compile(
-    r"\b(?:box|bbox|bounding\s*box)\b.*\b0\s+0\s+0\s+0\b", re.IGNORECASE)
+    r"(?:box|bbox|bounding\s*box)\b.*?\b0\s+0\s+(?:0\s+0|1\s+1)\b",
+    re.IGNORECASE)
 
 
 def _detect_vacuous_magic(transcript: str,
@@ -20873,7 +20885,9 @@ def _detect_vacuous_magic(transcript: str,
         reasons.append("0 cells loaded")
     if empty_bbox:
         geometry_loaded = False
-        reasons.append("empty top bounding box (0 0 0 0)")
+        reasons.append("empty top bounding box (0 0 0 0, or Magic's "
+                       "default unit box 0 0 1 1 for a cell it could "
+                       "not read)")
     # A 0-violation result is vacuous when geometry never loaded.
     vacuous = (not geometry_loaded) and (drc_count in (None, 0))
     reason = ("Magic loaded geometry normally"
@@ -20935,6 +20949,53 @@ def _rule_is_spacing_or_width(rule: str) -> bool:
     if any(r.startswith(p) for p in _SPACING_WIDTH_LAYER_PREFIXES):
         return any(r.endswith(tok) for tok in (".1", ".2", ".3", ".4"))
     return False
+
+
+def _klayout_deck_exec(gds: Path, rpt: Path, top: str, pdk: PdkConfig,
+                       container: str) -> Tuple[int, str, str]:
+    """Run the PDK's KLayout sign-off deck on `gds`, writing RDB `rpt`.
+
+    ONE invocation site for the deck. Sign-off and any re-measurement
+    have to be the same command with the layout swapped, or their counts
+    are not comparable — the escape hatch this exists to serve used to
+    compare the sign-off deck against Magic's own `drc check` and read
+    the difference as evidence about the STREAMOUT.
+
+    Open `.lydrc` decks follow two -rd variable-name conventions for the
+    layout/report handoff: sky130A.lydrc reads $input/$report, the
+    klayoutmatthias FreePDK45.lydrc reads $in_gds/$report_file. Define
+    BOTH spellings — an extra -rd a deck never reads is inert, and the
+    deck's own `source(...)`/`report(...)` picks whichever it declares.
+    (First hit: nangate45 DRC died with "'source': No layout loaded".)
+    chip-AGNOSTIC."""
+    rpt.parent.mkdir(parents=True, exist_ok=True)
+    gds_c = _to_container_path(str(gds), container)
+    rpt_c = _to_container_path(str(rpt), container)
+    cmd = (
+        f"export QT_QPA_PLATFORM=offscreen && "
+        f"klayout -b -r {pdk.drc_deck} "
+        f"-rd input={gds_c} -rd report={rpt_c} "
+        f"-rd in_gds={gds_c} -rd report_file={rpt_c} "
+        f"-rd top_cell={top}"
+    )
+    return _docker_exec(container, cmd, marker=gds_c, outputs=[rpt])
+
+
+def _klayout_deck_violations_on(
+        gds: Path, rpt: Path, top: str, pdk: PdkConfig, container: str
+) -> Tuple[Optional[int], Dict[str, int]]:
+    """`(total, per_rule)` from running the sign-off deck on `gds`.
+
+    Returns `(None, {})` when the deck did not produce a readable report
+    — an unmeasured re-run must never be readable as "and it was clean".
+    chip-AGNOSTIC."""
+    rc, out, err = _klayout_deck_exec(gds, rpt, top, pdk, container)
+    if rc in (_RC_STALLED, 124) or not rpt.is_file():
+        return None, {}
+    try:
+        return _v1_6_597_count_klayout_xml_violations(rpt)
+    except Exception:
+        return None, {}
 
 
 def _klayout_streamout_false_positive_dominated(
@@ -21023,54 +21084,25 @@ def _read_openroad_drt_count(project: Path, top: str) -> Optional[int]:
     return None
 
 
-# Magic DRC TCL: load the merged GDS, run drc check, report the count.
-_MAGIC_DRC_TCL = """\
-crashbackups stop
-gds readonly true
-gds read $env(GDS)
-load $env(TOP)
-select top cell
-drc euclidean on
-drc style drc(full)
-drc check
-drc catchup
-set count [drc list count total]
-puts "MAGIC_DRC_COUNT $count"
-set bb [box values]
-puts "MAGIC_BBOX $bb"
-quit -noprompt
-"""
-
-
-def _magic_run_drc(gds: Path, top: str, container: str
-                   ) -> Tuple[Optional[int], str]:
-    """Run Magic DRC against `gds`. Returns (count_or_None, transcript).
-    count is None when the transcript is vacuous (Fix #2: geometry never
-    loaded). Best-effort. Chip-AGNOSTIC."""
-    if not _tool_in_path(container, "magic"):
-        return None, "magic binary not in container PATH"
-    tcl = gds.parent / "magic_drc.tcl"
-    try:
-        tcl.write_text(_MAGIC_DRC_TCL)
-    except Exception as exc:
-        return None, f"could not write magic_drc.tcl: {exc}"
-    gds_c = _to_container_path(str(gds), container)
-    tcl_c = _to_container_path(str(tcl), container)
-    cmd = (f"export GDS={gds_c} TOP={top} && "
-           f"magic -dnull -noconsole -rcfile /dev/null {tcl_c}")
-    rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
-    transcript = out + "\n" + err
-    raw_count: Optional[int] = None
-    m = re.search(r"MAGIC_DRC_COUNT\s+(\d+)", transcript)
-    if m:
-        try:
-            raw_count = int(m.group(1))
-        except ValueError:
-            raw_count = None
-    vac = _detect_vacuous_magic(transcript, drc_count=raw_count)
-    if vac["vacuous"] or not vac["geometry_loaded"]:
-        return None, transcript  # inconclusive — geometry not loaded
-    return raw_count, transcript
+# The Magic `drc check` cross-run that used to live here is GONE, and its
+# absence is the fix. It ran a DIFFERENT rule deck on a DIFFERENT file
+# from the one under sign-off, and step_drc adopted its (lower) number as
+# the sign-off verdict. Two decks disagreeing is not evidence about a
+# STREAMOUT. `_klayout_deck_violations_on` re-runs the PDK's own sign-off
+# deck on the re-stream instead, which is the comparison the hypothesis
+# actually needs.
+#
+# It was also vacuous by construction: it invoked
+#   magic -dnull -noconsole -rcfile /dev/null <tcl>
+# so Magic came up on `minimum.tech` and answered, verbatim:
+#   Nothing in "cifinput" section of tech file.
+#   Cell <top> couldn't be read
+#   Creating new cell
+#   "drc(full)" is not one of the DRC styles Magic knows.
+#   MAGIC_DRC_COUNT 0 / MAGIC_BBOX 0 0 1 1 / Tiles processed: 0/0
+# `_detect_vacuous_magic` scored that transcript geometry_loaded=True
+# (its empty-bbox probe looks for the literal `0 0 0 0`), so a DRC of an
+# empty cell by a rule-less engine was recorded as an authoritative 0.
 
 
 # ---------------------------------------------------------------------------
@@ -21651,24 +21683,10 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     # point is /foss/designs/). Fixes sha256 / spm / subservient pilot
     # DRC step FAIL with "Unable to open file: /home//... (errno=2)".
     gds_c = _to_container_path(str(gds), container)
-    rpt_c = _to_container_path(str(rpt), container)
-    # Open .lydrc decks follow two -rd variable-name conventions for the
-    # layout/report handoff: sky130A.lydrc reads $input/$report, the
-    # klayoutmatthias FreePDK45.lydrc reads $in_gds/$report_file. Define
-    # BOTH spellings — an extra -rd a deck never reads is inert, and the
-    # deck's own `source(...)`/`report(...)` picks whichever it declares.
-    # (First hit: nangate45 DRC died with "'source': No layout loaded".)
-    cmd = (
-        f"export QT_QPA_PLATFORM=offscreen && "
-        f"klayout -b -r {pdk.drc_deck} "
-        f"-rd input={gds_c} -rd report={rpt_c} "
-        f"-rd in_gds={gds_c} -rd report_file={rpt_c} "
-        f"-rd top_cell={top}"
-    )
     # v1.3.47 — progress-stall watchdog (not a fixed 3600s kill). A large-GDS
     # DRC that is still burning CPU / emitting progress is never killed; only a
     # genuinely hung run dies. marker = the input GDS path (in klayout's argv).
-    rc, out, err = _docker_exec(container, cmd, marker=gds_c, outputs=[rpt])
+    rc, out, err = _klayout_deck_exec(gds, rpt, top, pdk, container)
     # v1.3.47 — a stall/ceiling kill must NOT be scored from a partial or stale
     # report (a half-written RDB could parse as 0 violations = false DRC-clean).
     if rc in (_RC_STALLED, 124):
@@ -21710,13 +21728,36 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     drc_engine_extras["openroad_drt_violations"] = openroad_drt
     drc_engine_extras["drc_engine_discrepancy"] = \
         _format_drc_engine_discrepancy(openroad_drt, klayout_deck_count)
-    # Fix #3(b) — when the KLayout-streamed GDS DRC count is DOMINATED
-    # (>90%) by min-spacing / min-width edge-pairs (the signature of
-    # KLayout's non-merged abutting cell-boundary polygons), re-stream
-    # via Magic (which merges abutting same-layer geometry) and re-run
-    # DRC. Record BOTH counts. Only treat the Magic count as
-    # AUTHORITATIVE when Magic actually loaded the geometry (Fix #2:
-    # non-vacuous) — otherwise keep the KLayout count + flag inconclusive.
+    # Fix #3(b) — when the streamed GDS DRC count is DOMINATED (>90%) by
+    # min-spacing / min-width edge-pairs (the signature of a streamout
+    # that left abutting same-layer cell-boundary polygons split),
+    # re-stream via Magic (which merges) and re-measure. Record BOTH
+    # counts.
+    #
+    # THE RE-MEASUREMENT RUNS THE SAME SIGN-OFF DECK. It used to run
+    # Magic's own `drc check` instead, and then adopt that number as the
+    # sign-off verdict — a comparison between two different rule decks on
+    # two different files, whose difference therefore says nothing about
+    # the merge. Measured on a real run: the sign-off deck reported 11
+    # violations on the streamed GDS; Magic's `drc check` on the merged
+    # GDS reported 0 and was adopted, so the step recorded
+    # `violations=0` while the canonical `drc_signoff.rpt` beside it
+    # carried 11. Running the SAME deck on that same merged GDS returns
+    # 11 — the merge removed nothing, and the premise the override rested
+    # on was false for that design. (The 0 was also vacuous by
+    # construction: with `-rcfile /dev/null` Magic loads `minimum.tech`,
+    # whose transcript says `Nothing in "cifinput" section of tech file`
+    # and `Cell <top> couldn't be read`, so it DRC'd an empty new cell.
+    # `_detect_vacuous_magic` scored that transcript geometry_loaded.)
+    #
+    # AND THE VERDICT STAYS ON THE ARTEFACT THAT SHIPS. `gds` is the
+    # layout the rest of the flow hands on; a count measured on
+    # `<top>.magic_merged.gds`, which ships nowhere, cannot certify it.
+    # The re-stream is kept as EVIDENCE: a genuinely lower same-deck
+    # count is the measurement that shows the streamout inflated the
+    # number, and it names the action (ship the merged stream-out, then
+    # re-run) instead of silently substituting one file's number for
+    # another file's verdict.
     dominated, sw_frac = _klayout_streamout_false_positive_dominated(
         per_rule)
     drc_engine_extras["spacing_width_fraction"] = round(sw_frac, 4)
@@ -21726,41 +21767,59 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
             project, top, pdk, container, merged_gds)
         drc_engine_extras["magic_restream_attempted"] = True
         if m_ok and merged_gds.is_file():
-            m_count, m_drc_txt = _magic_run_drc(merged_gds, top, container)
-            m_vac = _detect_vacuous_magic(m_drc_txt, drc_count=m_count)
-            drc_engine_extras["magic_restream_violations"] = m_count
-            drc_engine_extras["magic_geometry_loaded"] = \
-                m_vac["geometry_loaded"]
-            if m_count is not None and not m_vac["vacuous"]:
-                # Magic re-stream is authoritative — it merged the
-                # abutting boundaries the KLayout streamout left split.
-                drc_engine_extras["streamout_engine"] = "magic"
-                drc_engine_extras["drc_authority"] = "magic-restream"
+            m_rpt = project / "phase3" / "reports" / "drc_restream.rpt"
+            m_count, m_per_rule = _klayout_deck_violations_on(
+                merged_gds, m_rpt, top, pdk, container)
+            drc_engine_extras["restream_deck_violations"] = m_count
+            drc_engine_extras["restream_violations_per_rule"] = \
+                dict(m_per_rule)
+            drc_engine_extras["restream_report"] = str(m_rpt)
+            drc_engine_extras["restream_deck"] = str(pdk.drc_deck)
+            drc_engine_extras["drc_authority"] = "signoff-deck-on-shipped-gds"
+            if m_count is None:
                 drc_engine_extras["note"] = (
-                    f"KLayout-streamout DRC count {klayout_deck_count} "
-                    f"was {sw_frac*100:.1f}% min-spacing/min-width "
-                    f"edge-pairs at cell boundaries (KLayout does not "
-                    f"merge abutting same-layer geometry). Re-streamed "
-                    f"via Magic (merges) → {m_count} violation(s); using "
-                    f"the Magic count as authoritative.")
-                vios = m_count
-                # Magic does not emit klayout rule names; preserve the
-                # original per-rule for KLayout but key the authoritative
-                # total off Magic. When Magic finds 0, per_rule→{}.
-                per_rule = {} if m_count == 0 else per_rule
+                    f"streamout DRC count {klayout_deck_count} was "
+                    f"{sw_frac*100:.1f}% min-spacing/min-width edge-pairs, "
+                    f"so the layout was re-streamed via Magic (merges "
+                    f"abutting same-layer geometry) — but the sign-off "
+                    f"deck could not be re-run on the re-stream, so the "
+                    f"boundary-artefact hypothesis is UNTESTED. The "
+                    f"verdict is the sign-off deck's count on the layout "
+                    f"that ships: {klayout_deck_count}.")
+            elif m_count < klayout_deck_count:
+                drc_engine_extras["note"] = (
+                    f"streamout DRC count {klayout_deck_count} was "
+                    f"{sw_frac*100:.1f}% min-spacing/min-width edge-pairs; "
+                    f"the SAME sign-off deck on the Magic re-stream "
+                    f"reports {m_count}, so {klayout_deck_count - m_count} "
+                    f"of them are streamout artefacts and not design "
+                    f"defects. The verdict remains {klayout_deck_count} "
+                    f"because that is the count for {gds.name} — the "
+                    f"layout this flow hands on. To sign off at "
+                    f"{m_count}, ship the merged stream-out "
+                    f"({merged_gds.name}) as the layout of record and "
+                    f"re-run; a count from a file that ships nowhere "
+                    f"cannot certify the file that does.")
             else:
-                drc_engine_extras["drc_authority"] = "klayout-deck"
                 drc_engine_extras["note"] = (
-                    "Magic re-stream produced a VACUOUS / inconclusive "
-                    "DRC (geometry not loaded); keeping the KLayout-deck "
-                    "count as the (conservative) verdict basis.")
+                    f"streamout DRC count {klayout_deck_count} was "
+                    f"{sw_frac*100:.1f}% min-spacing/min-width edge-pairs, "
+                    f"but the SAME sign-off deck on the Magic re-stream "
+                    f"(which merges abutting same-layer geometry) reports "
+                    f"{m_count} — the merge removed "
+                    f"{max(0, klayout_deck_count - m_count)}. The "
+                    f"boundary-artefact hypothesis is REFUTED by "
+                    f"measurement for this design; these are real "
+                    f"geometry violations.")
         else:
-            drc_engine_extras["magic_restream_violations"] = None
-            drc_engine_extras["drc_authority"] = "klayout-deck"
+            drc_engine_extras["restream_deck_violations"] = None
+            drc_engine_extras["drc_authority"] = "signoff-deck-on-shipped-gds"
             drc_engine_extras["note"] = (
-                "KLayout streamout DRC dominated by boundary spacing/"
-                "width edge-pairs but Magic re-stream failed / dropped "
-                "geometry; keeping KLayout-deck count (conservative).")
+                "streamout DRC dominated by boundary spacing/width "
+                "edge-pairs but the Magic re-stream failed / dropped "
+                "geometry, so the boundary-artefact hypothesis is "
+                "UNTESTED; the verdict is the sign-off deck's count on "
+                "the layout that ships.")
     # v1.6.604 — for STDCELL-DRC-WAIVER. Split per-rule counts into
     # (user_routing, stdcell_library) buckets. When 100 % of the
     # violations live in stdcell-library-internal layer rules
