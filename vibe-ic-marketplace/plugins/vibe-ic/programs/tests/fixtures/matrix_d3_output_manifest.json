@@ -367,12 +367,14 @@
       "sta",
       "--under",
       "phase3/stage3/sta/pre_pnr_timing.rpt",
+      "--under",
+      "phase3/stage3/sta/per_corner",
       "--json",
       "reports/phase3/sta/pre_pnr_summary.json"
      ],
      "writes": "reports/phase3/sta/pre_pnr_summary.json",
      "base_run": "benchmark-data/ic/spm/v1.5.66_gf180mcuD",
-     "size_bytes": 861
+     "size_bytes": 969
     }
    }
   },

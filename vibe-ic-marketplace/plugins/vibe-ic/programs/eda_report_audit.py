@@ -238,11 +238,28 @@ class scoped_discovery:  # noqa: N801 — a context manager, used as a verb
 
 
 def _in_scope(p: Path) -> bool:
+    """Is this path inside an active `--under` scope?
+
+    ONE question — membership. It deliberately does NOT ask whether the path
+    can be read: a dangling symlink at a step's declared evidence path must
+    stay DISCOVERABLE so the mode's own check can NAME it and gate on it
+    (`DRC_REPORT_NOT_READABLE`, and now `STA_REPORT_NOT_READABLE`). Dropping
+    it here instead would delete the finding and hand back a green verdict
+    over a certificate that does not exist — measured: making this predicate
+    reject unreadable paths flipped `edge_llm_accel --mode drc` from rc 1 to
+    rc 0 across the tracked corpus.
+
+    `Path.resolve()` on Python 3.12 raises **RuntimeError** — not OSError —
+    on a symlink LOOP (`pathlib.check_eloop`), and the `except OSError` guard
+    that stood here did not fire on it. REPRODUCED: two `.rpt` symlinks
+    pointing at each other under a `--under` scope crashed this program with
+    an uncaught traceback and no verdict at all.
+    """
     if not _SCOPE_ROOTS:
         return True
     try:
         rp = p.resolve()
-    except OSError:
+    except (OSError, RuntimeError):
         return False
     for root in _SCOPE_ROOTS:
         try:
@@ -1482,8 +1499,142 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
     return result
 
 
+# ---------------------------------------------------------------------------
+# STA BASIS — which SIDE of place-and-route a timing number came from.
+#
+# THE DEFECT THIS CLOSES. `phase3/stage3/sta/per_corner/` is ONE directory
+# written by TWO producers at TWO different bases: `step_prelayout_signoff`
+# fills it BEFORE PnR (every report stamped `STA_BASIS: PRE_LAYOUT_ESTIMATE`)
+# and `step_canonicalize_artefacts` fills it AFTER route (`POST_ROUTE_SPEF`).
+# `_emit_multi_corner_sta` skips a corner whose report already exists, so on
+# any project where the pre-layout producer ran first the directory holds
+# PRE-LAYOUT reports FOREVER — and the post-route sign-off gate counted them
+# as its own multi-corner substantiation. MEASURED (v1.9.77, three distinct
+# PRE_LAYOUT_ESTIMATE corner reports, post-route scope declared)::
+#
+#     rc=0  multi_corner_executed=True  corner_reports_distinct=3
+#     scoped_under=['phase3/stage3/sta/post_route_timing.rpt']
+#
+# `--under` did not reach this scan: `corner_dirs` is a raw project-wide
+# `glob.glob`. Routing it through `_in_scope` is the WRONG repair — under
+# single-file scopes it zeroes the corner evidence for step 10 AND step 23,
+# destroying the substantiation the pre-layout STA run exists to provide.
+#
+# So `--under` reaches the corner scan as a BASIS DECLARATION instead of a
+# path filter, and the counter is SPLIT by the basis each report discloses
+# about itself. A post-route summary cannot be substantiated by pre-layout
+# reports, and a pre-layout summary cannot be substantiated by post-route
+# ones. chip/PDK-AGNOSTIC: flow-stage vocabulary only, no chip or tool name.
+_STA_BASIS_SCOPE_TOKENS = {
+    "PRE_LAYOUT": ("pre_pnr", "pre-pnr", "prepnr", "pre_layout", "pre-layout",
+                   "prelayout", "pre_route", "pre-route", "pre_floorplan"),
+    "POST_ROUTE": ("post_route", "post-route", "postroute", "post_pnr",
+                   "post-pnr", "postpnr", "post_layout", "post-layout",
+                   "postlayout"),
+}
+#: The `STA_BASIS: <VALUE>` stamp `_emit_multi_corner_sta` / `_emit_spef_sta`
+#: write into the report body. Read as a PREFIX so a new suffix (the emitter
+#: already ships `POST_ROUTE_SPEF` and `POST_ROUTE_NO_SPEF`) needs no change.
+_STA_BASIS_STAMP_RE = re.compile(r"^\s*#?\s*STA_BASIS\s*:\s*([A-Z_]+)",
+                                 re.M)
+#: A report that says, in its own header, that its number was COPIED or
+#: APPROXIMATED from a post-PnR run. Keyed on the SELF-DISCLOSURE — both a
+#: derivation verb and a post-layout source — never on the emitter's version
+#: string, which rots the moment the emitter moves.
+_STA_DERIVATION_VERBS = ("approximat", "derived from", "derived by",
+                         "copy of", "copied from", "verbatim",
+                         "auto-staged", "autostaged", "staged from",
+                         "re-used from", "reused from", "taken from")
+_STA_POST_LAYOUT_SOURCES = ("post-pnr", "post pnr", "post_pnr",
+                            "post-route", "post route", "post_route",
+                            "post-layout", "post layout", "post_layout")
+
+
+def _scope_declared_basis(project_dir: Path) -> Optional[str]:
+    """The STA basis the ACTIVE `--under` scope declares, or None.
+
+    Read from the scope PROJECT-RELATIVE, which is how the flow declares it.
+    `_SCOPE_ROOTS` holds resolved ABSOLUTE paths, and matching tokens against
+    those means the project's OWN directory name decides the answer: a run
+    checked out at `.../post_route_backup/` made every scope look POST_ROUTE.
+    CAUGHT BY ITS OWN TEST — pytest's `tmp_path` is named after the test
+    function, and `test_a_stamped_post_route_report_...` produced a directory
+    containing "post_route", so a PRE_LAYOUT scope resolved to two hits and
+    silently degraded to "no basis declared".
+
+    None means "the caller declared no side of PnR" — an unscoped project-wide
+    invocation, an ambiguous scope, or a scope naming neither side. Every
+    basis-aware branch below is a no-op then, so a caller that states no scope
+    keeps exactly the pre-change behaviour.
+    """
+    if not _SCOPE_ROOTS:
+        return None
+    try:
+        base = project_dir.resolve()
+    except (OSError, RuntimeError):
+        base = project_dir
+    rels = []
+    for root in _SCOPE_ROOTS:
+        try:
+            rels.append(str(root.relative_to(base)).lower())
+        except ValueError:
+            # A scope outside the project: judge it on its own name only,
+            # never on the directories it happens to sit under.
+            rels.append(root.name.lower())
+    hits = {basis for basis, toks in _STA_BASIS_SCOPE_TOKENS.items()
+            for rel in rels if any(t in rel for t in toks)}
+    return hits.pop() if len(hits) == 1 else None
+
+
+def _report_declared_basis(text: str) -> Optional[str]:
+    """The basis a report DISCLOSES ABOUT ITSELF, from its `STA_BASIS:` stamp."""
+    m = _STA_BASIS_STAMP_RE.search(text)
+    if not m:
+        return None
+    val = m.group(1).upper()
+    for basis, toks in _STA_BASIS_SCOPE_TOKENS.items():
+        if any(val.startswith(t.replace("-", "_").upper()) for t in toks):
+            return basis
+    return None
+
+
+def _self_discloses_post_layout_derivation(text: str) -> bool:
+    """Does the report's own LEADING COMMENT BLOCK say the number was taken
+    from a post-PnR run?
+
+    MEASURED — the header on all EIGHT tracked corpus roots that carry a
+    `phase3/stage3/sta/pre_pnr_timing.rpt`, seven of which returned rc 0::
+
+        # Auto-staged by phase3_one_shot_runner v1.6.36
+        # Source: OpenROAD report_checks (post-link, pre-floorplan slack
+        # is approximated by the unconstrained slack in the post-PnR
+        # report below — for production sign-off, run a separate
+        # pre-floorplan STA pass).
+
+    A step named "Pre-layout STA" was certified on a report whose own header
+    says it is an approximation from the post-PnR run. The predicate needs a
+    derivation verb AND a post-layout source in the same leading comment
+    block, so step 23's `post_route_timing.rpt` header — which names
+    "post-route" with no derivation claim — does not trip it.
+    """
+    block = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            if block:
+                break
+            continue
+        if not s.startswith("#"):
+            break
+        block.append(s.lower())
+    head = " ".join(block)
+    return (any(v in head for v in _STA_DERIVATION_VERBS)
+            and any(s in head for s in _STA_POST_LAYOUT_SOURCES))
+
+
 def _check_sta(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:sta", passed=False)
+    declared_basis = _scope_declared_basis(project_dir)
     files = _discover(project_dir, ["*sta*.rpt", "*timing*.rpt",
                                      "*STA*.rpt", "*timing*.log"])
     # The `*sta*` glob substring-matches unrelated report classes whose names
@@ -1534,12 +1685,56 @@ def _check_sta(project_dir: Path) -> AuditResult:
     any_verdict_determined = False
     real_violation_found = False
     violation_evidence = ""
+    # PROVENANCE OF THE REPORT ITSELF (see `_self_discloses_post_layout_
+    # derivation`). Reports whose own disclosure contradicts the basis the
+    # scope declares, keyed by real path so a canonical file and its
+    # per-step symlink mirror are one offender, not two.
+    basis_offenders = {}          # realpath -> (as-discovered path, reason)
+    # "I FOUND A FILE" MUST MEAN A FILE THAT CAN BE READ. MEASURED on
+    # `benchmark-data/ic/edge_llm_accel`, step 10's scoped gate::
+    #
+    #     files_found: 1
+    #     scoped_under_missing: ["phase3/stage3/sta/pre_pnr_timing.rpt"]
+    #     findings: STA_SETUP_HOLD / STA_VALUE_UNDETERMINED / STA_WNS_TNS,
+    #               every one of them with file: ""
+    #
+    # `steps/10_pre_layout_sta_multi_corner/pre_pnr_timing.rpt` is a symlink
+    # to a file that does not exist. Being DANGLING it resolves to exactly
+    # the scope root, so `_in_scope` admits it — correctly, because a
+    # declared evidence path that is not there is a finding, not something to
+    # look away from. What was wrong is what happened NEXT: `read_text()`
+    # raised OSError into a bare `continue`, so the summary published one
+    # file found on ZERO readable bytes, beside a field naming that same path
+    # as MISSING and three findings that could cite no file at all.
+    #
+    # Same repair, same shape and same rule name as `_check_drc`'s
+    # DRC_REPORT_NOT_READABLE ("a green DRC verdict over a sign-off
+    # certificate that does not exist"): the unreadable path is NAMED, it is
+    # an ERROR, and `readable_files` is published beside `files_found` so the
+    # two can never again be read as the same number.
+    unreadable: List[str] = []
 
     for fp in files:
         try:
             text = fp.read_text(errors="replace")
-        except OSError:
+        except OSError as exc:
+            unreadable.append(f"{fp} ({exc.__class__.__name__})")
             continue
+        if declared_basis is not None:
+            stamped = _report_declared_basis(text)
+            why = ""
+            if stamped is not None and stamped != declared_basis:
+                why = f"its own STA_BASIS stamp says {stamped}"
+            elif (stamped is None and declared_basis == "PRE_LAYOUT"
+                    and _self_discloses_post_layout_derivation(text)):
+                why = ("its own header discloses the number as copied or "
+                       "approximated from the post-PnR run")
+            if why:
+                try:
+                    key = str(fp.resolve())
+                except (OSError, RuntimeError):
+                    key = str(fp)
+                basis_offenders.setdefault(key, (str(fp), why))
         has_pathtable = bool(pathtable_slack_re.search(text))
         if wns_tns_re.search(text) or has_pathtable:
             has_wns_tns = True
@@ -1592,6 +1787,32 @@ def _check_sta(project_dir: Path) -> AuditResult:
                     "STA report",
             file=violation_evidence))
 
+    if unreadable:
+        _shown = ", ".join(unreadable[:5])
+        _more = f" (+{len(unreadable) - 5} more)" if len(unreadable) > 5 else ""
+        result.findings.append(Finding(
+            rule="STA_REPORT_NOT_READABLE", severity="ERROR",
+            message=(f"{len(unreadable)} of {len(files)} discovered STA "
+                     f"report(s) could not be opened and were NOT MEASURED — "
+                     f"'files_found' counts a path, not evidence: {_shown}"
+                     f"{_more}"),
+            file=unreadable[0].split(" (")[0]))
+
+    # THE PROVENANCE PREDICATE. A step that declares a basis must not be
+    # certified on a report that says it is the OTHER basis. This is the one
+    # thing #778's scope could not do on its own: scoping decides WHICH file
+    # carries the verdict, not whether that file is what the step needs.
+    if basis_offenders:
+        _first, _why = sorted(basis_offenders.values())[0]
+        result.findings.append(Finding(
+            rule="STA_BASIS_CONTRADICTS_SCOPE", severity="ERROR",
+            message=(f"the declared scope is a {declared_basis} sign-off, but "
+                     f"{len(basis_offenders)} discovered report(s) disclose a "
+                     f"different basis — {_why}. A {declared_basis} verdict "
+                     f"reached over such a report is a verdict about the "
+                     f"other side of place-and-route"),
+            file=_first))
+
     authentic = _check_tool_authenticity(files, "sta", result)
 
     # #437(c) — multi-corner SUBSTANCE: a per_corner/ directory IS a
@@ -1603,6 +1824,13 @@ def _check_sta(project_dir: Path) -> AuditResult:
     corners_ok = True
     corner_reports = 0
     corner_distinct = 0
+    # Distinct corner reports SPLIT by the basis each one discloses about
+    # itself. `UNDECLARED` is the third tier: a report carrying no
+    # `STA_BASIS:` stamp does not say which side of PnR it came from, so it
+    # cannot substantiate a basis-specific claim — but it is not a
+    # CONTRADICTION either, so it warns rather than fails (the fail-safe
+    # exit for the "don't know" bucket).
+    basis_distinct = {"PRE_LAYOUT": 0, "POST_ROUTE": 0, "UNDECLARED": 0}
     corner_dirs = sorted({Path(p) for pat in
                           ("phase*/stage*/sta/per_corner",
                            "reports/phase*/sta/per_corner")
@@ -1622,6 +1850,20 @@ def _check_sta(project_dir: Path) -> AuditResult:
         digests = {hashlib.sha256(p.read_bytes()).hexdigest() for p in rpts}
         corner_reports += len(rpts)
         corner_distinct += len(digests)
+        # Same per-directory DISTINCT accounting as the line above, kept per
+        # basis: two byte-identical corner reports are one piece of evidence
+        # whichever basis they disclose.
+        _by_basis = {}
+        for p in rpts:
+            try:
+                _txt = p.read_text(errors="replace")
+            except OSError:
+                continue
+            _b = _report_declared_basis(_txt) or "UNDECLARED"
+            _by_basis.setdefault(_b, set()).add(
+                hashlib.sha256(p.read_bytes()).hexdigest())
+        for _b, _d in _by_basis.items():
+            basis_distinct[_b] = basis_distinct.get(_b, 0) + len(_d)
         if len(rpts) < 2 or len(digests) < 2:
             corners_ok = False
             result.findings.append(Finding(
@@ -1631,23 +1873,70 @@ def _check_sta(project_dir: Path) -> AuditResult:
                         f"{len(digests)} distinct (#437c)",
                 file=str(cd)))
 
+    # THE SPLIT COUNTER. When the scope declares a basis, only corner reports
+    # that disclose THAT basis substantiate it. Unscoped (`declared_basis is
+    # None`) this is the identical expression as before, so a caller that
+    # states no scope sees no behaviour change at all.
+    corner_distinct_matching = (corner_distinct if declared_basis is None
+                                else basis_distinct.get(declared_basis, 0))
+    _contradicting = (0 if declared_basis is None else sum(
+        n for b, n in basis_distinct.items()
+        if b not in (declared_basis, "UNDECLARED")))
+    if declared_basis is not None and _contradicting and corner_distinct_matching < 2:
+        # The item this closes: a POST_ROUTE summary substantiated by
+        # PRE_LAYOUT corner reports (and the mirror case). The per_corner
+        # directory IS a multi-corner claim — for THIS step it is a broken
+        # one, so it fails exactly as an empty dir or identical copies do.
+        corners_ok = False
+        result.findings.append(Finding(
+            rule="STA_CORNER_BASIS_MISMATCH", severity="ERROR",
+            message=(f"the declared scope is a {declared_basis} sign-off, but "
+                     f"the per_corner evidence is {_contradicting} distinct "
+                     f"report(s) of the OTHER basis and only "
+                     f"{corner_distinct_matching} of {declared_basis} — a "
+                     f"{declared_basis} multi-corner claim cannot be "
+                     f"substantiated by corner reports that disclose "
+                     f"themselves as the other side of place-and-route"),
+            file=str(corner_dirs[0]) if corner_dirs else ""))
+
     # ORGANIC-20260606 #442 — explicit single-corner DISCLOSURE: when no
     # per_corner evidence (>=2 distinct corner reports) exists, the STA
     # is single-corner and must say so — never silently wear the step's
     # "multi-corner sign-off" name. Advisory (does not flip passed); the
     # broken-claim cases above (empty dir / identical copies) still FAIL.
-    multi_corner_executed = corners_ok and corner_distinct >= 2
+    #
+    # A WARNING THAT IS ALWAYS ON IS A WARNING NOBODY READS. Step 10 is named
+    # "Pre-layout STA (multi-corner)" and, unlike step 23, has no dedicated
+    # corner gate of its own — so this advisory is its ONLY multi-corner
+    # statement. Measured on the 54 tracked phase-3 roots: all 7 that resolve
+    # a step-10 report emitted it, on `corner_dirs_found: 0`. It now counts
+    # the corner evidence of the step's OWN basis (step 10's scope names its
+    # own `per_corner/` directory alongside its summary report), so a genuine
+    # pre-layout multi-corner run silences it and its absence is the only
+    # thing that fires it.
+    multi_corner_executed = corners_ok and corner_distinct_matching >= 2
     if not multi_corner_executed and corners_ok:
+        _of = f" {declared_basis}" if declared_basis else ""
         result.findings.append(Finding(
             rule="STA_SINGLE_CORNER_ONLY", severity="WARNING",
-            message=("no multi-corner STA evidence (>=2 distinct "
-                     "per-corner reports) — this is a SINGLE-CORNER "
-                     "analysis and must not be presented as multi-corner "
-                     "sign-off (#442)")))
+            message=(f"no multi-corner{_of} STA evidence (>=2 distinct"
+                     f"{_of} per-corner reports) — this is a SINGLE-CORNER "
+                     f"analysis and must not be presented as multi-corner "
+                     f"sign-off (#442)")))
 
+    # `not basis_offenders` is part of the verdict, not a note beside it: a
+    # gate that emits an ERROR finding and still returns rc 0 is the "reported
+    # another question" failure one layer up.
     result.passed = (has_wns_tns and has_setup_hold and authentic and corners_ok
-                      and any_verdict_determined and not real_violation_found)
-    result.summary = {"files_found": len(files), "has_wns_tns": has_wns_tns,
+                      and any_verdict_determined and not real_violation_found
+                      and not basis_offenders and not unreadable)
+    result.summary = {"files_found": len(files),
+                      # `files_found` counts DISCOVERED PATHS; this counts the
+                      # ones that yielded bytes. They were the same number by
+                      # assumption, never by measurement.
+                      "readable_files": len(files) - len(unreadable),
+                      "unreadable_files": len(unreadable),
+                      "has_wns_tns": has_wns_tns,
                       "has_setup_hold": has_setup_hold,
                       "tool_authentic": authentic,
                       "corner_dirs_found": len(corner_dirs),
@@ -1672,6 +1961,19 @@ def _check_sta(project_dir: Path) -> AuditResult:
                       # reports another is worse than no check").
                       "multi_corner_claim_not_broken": corners_ok,
                       "multi_corner_executed": multi_corner_executed,
+                      # WHICH SIDE OF PnR THIS VERDICT IS ABOUT, and what the
+                      # corner evidence actually was. `multi_corner_executed`
+                      # above now counts only `corner_reports_distinct_of_
+                      # declared_basis`; the by-basis breakdown is published
+                      # beside it so a reader can see the reports that were
+                      # DISCARDED as belonging to the other side, rather than
+                      # reading a bare count and assuming it is all evidence.
+                      "declared_sta_basis": declared_basis,
+                      "corner_reports_distinct_by_basis": dict(basis_distinct),
+                      "corner_reports_distinct_of_declared_basis":
+                          corner_distinct_matching,
+                      "reports_contradicting_declared_basis":
+                          len(basis_offenders),
                       "any_verdict_determined": any_verdict_determined,
                       "real_violation_found": real_violation_found}
     return result

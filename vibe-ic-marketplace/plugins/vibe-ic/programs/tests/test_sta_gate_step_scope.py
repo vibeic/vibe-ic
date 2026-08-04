@@ -167,7 +167,15 @@ def test_every_flow_sta_gate_is_step_scoped():
 def test_each_sta_gate_scopes_to_the_report_its_own_step_declares():
     """The scope is only honest if it is the step's OWN declared artefact.
     Tie it to the `files_exist` clause in the same gate so it cannot drift to
-    an unrelated path (and so a `--under` pointing at nothing is caught)."""
+    an unrelated path (and so a `--under` pointing at nothing is caught).
+
+    AMENDED when step 10's scope gained `phase3/stage3/sta/per_corner`: the
+    invariant was "exactly one --under", which read as the rule but was only
+    the shape it happened to have. The rule is that the FIRST scope is the
+    step's own declared report, backed by `files_exist`; the rule for any
+    further scope is the sibling test below, which refuses anything that can
+    reach another step's artefacts.
+    """
     text = _FLOW.read_text(errors="replace")
     expected = {_STEP10_REPORT: "reports/phase3/sta/pre_pnr_summary.json",
                 _STEP23_REPORT: "reports/phase3/sta/post_route_summary.json"}
@@ -175,9 +183,7 @@ def test_each_sta_gate_scopes_to_the_report_its_own_step_declares():
         toks = cmd.split()
         json_target = toks[toks.index("--json") + 1]
         unders = _unders(cmd)
-        assert len(unders) == 1, (
-            f"{cmd!r}: expected exactly one --under (the step's own declared "
-            f"report), found {unders}")
+        assert unders, f"{cmd!r}: unscoped"
         assert expected.get(unders[0]) == json_target, (
             f"{cmd!r}: --under {unders[0]!r} is not the report the step that "
             f"writes {json_target!r} declares")
@@ -241,22 +247,59 @@ def test_the_two_sta_gates_no_longer_reach_one_verdict_over_one_file_set(
         "step 10's and step 23's summaries are identical documents; they are "
         "still being reached over the same file set")
     for d in docs:
+        # This fixture writes no `per_corner/`, so step 10's second scope is
+        # absent and each gate resolves exactly its own declared report.
         assert d["summary"]["files_found"] == 1, d["summary"]
-    assert docs[0]["summary"]["scoped_under"] == [_STEP10_REPORT]
+    assert docs[0]["summary"]["scoped_under"][0] == _STEP10_REPORT
     assert docs[1]["summary"]["scoped_under"] == [_STEP23_REPORT]
 
 
-def test_step10_scope_is_not_wide_enough_to_reach_the_post_route_reports():
-    """A directory scope (`--under phase3/stage3/sta`) would look like a fix
-    and change nothing: every later-step STA artefact lives in that same
-    directory, post-ECO report included. Refuse the widening explicitly."""
+def test_step10_scope_is_not_wide_enough_to_reach_the_post_route_reports(
+        project):
+    """A directory scope over `phase3/stage3/sta` would look like a fix and
+    change nothing: every later-step STA artefact lives in that same
+    directory, post-ECO report included.
+
+    AMENDED. The rule was spelled `u.endswith(".rpt")` — a syntactic stand-in
+    that also forbids a subdirectory holding NOTHING but the declaring step's
+    own artefacts. Step 10 is named "Pre-layout STA (multi-corner)" and its
+    corner reports live in `phase3/stage3/sta/per_corner/`; the syntactic rule
+    made the step structurally unable to declare the evidence it is named
+    after. What the rule protects is stated directly instead, and then RUN:
+    no scope may resolve any other step's STA report.
+    """
+    banned_dirs = {"phase3/stage3/sta", "phase3/stage3", "phase3", "."}
     for cmd in _flow_invocations("sta_report_check"):
         for u in _unders(cmd):
-            assert u.endswith(".rpt"), (
-                f"{cmd!r}: --under {u!r} is a directory scope. "
-                f"phase3/stage3/sta holds step 10's, step 23's AND step 32's "
-                f"post-ECO reports, so a directory scope restores exactly the "
-                f"cross-step contamination this change removes.")
+            assert u.rstrip("/") not in banned_dirs, (
+                f"{cmd!r}: --under {u!r} is the shared STA directory. It "
+                f"holds step 10's, step 23's AND step 32's post-ECO reports, "
+                f"so this restores exactly the cross-step contamination the "
+                f"scope removes.")
+
+    # EXECUTED, not asserted from the string. The fixture carries step 23's,
+    # step 32's (post-ECO) and step 33's (aging) artefacts; step 10's scope
+    # must reach none of them even with a genuine per_corner/ present.
+    pc = project / "phase3/stage3/sta/per_corner"
+    pc.mkdir(parents=True, exist_ok=True)
+    for corner in ("SS", "FF"):
+        (pc / f"sta_{corner}.rpt").write_text(
+            _MET + f"corner {corner}\nSTA_BASIS: PRE_LAYOUT_ESTIMATE\n")
+
+    cmd = [c for c in _flow_invocations("sta_report_check")
+           if "pre_pnr_summary.json" in c][0]
+    toks = cmd.split()[1:]
+    toks[0] = "."
+    cp = subprocess.run([sys.executable, str(_WRAPPER), *toks],
+                        cwd=str(project), capture_output=True, text=True)
+    doc = json.loads((project / toks[toks.index("--json") + 1]).read_text())
+    assert doc["summary"]["files_found"] == 3, doc["summary"]
+    blob = json.dumps(doc)
+    for foreign in ("post_route_timing.rpt", "sta_mcorner_ocv.rpt",
+                    "sta_mcorner_ocv_posteco.rpt", "aging_sta.rpt"):
+        assert foreign not in blob, (
+            f"step 10's scope reached {foreign!r}: {blob[:600]}")
+    assert cp.returncode == 0, doc
 
 
 # ===========================================================================

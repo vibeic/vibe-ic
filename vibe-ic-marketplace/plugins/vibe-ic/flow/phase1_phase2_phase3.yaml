@@ -1156,7 +1156,32 @@ steps:
         #     violations (`post_route_signoff_corner_check` -8.830 / -1.710 ns,
         #     `sta_corner_record_completeness_check` -67.610 / -51.460 ns) and
         #     both runs stay `overall: FAIL`.
-        - program_exit_zero: "sta_report_check . --mode sta --under phase3/stage3/sta/pre_pnr_timing.rpt --json reports/phase3/sta/pre_pnr_summary.json"
+        #
+        # SECOND SCOPE, `phase3/stage3/sta/per_corner`: this step is named
+        # "Pre-layout STA (MULTI-CORNER)" and, unlike step 23 (which has
+        # `post_route_signoff_corner_check` and
+        # `sta_corner_record_completeness_check` below it), has no dedicated
+        # corner gate at all — so this clause's own STA_SINGLE_CORNER_ONLY
+        # advisory is its ONLY multi-corner statement. With the single-file
+        # scope above, the step declared as its evidence a summary report that
+        # by construction can never hold two corners, while the corner reports
+        # it is COMPOSED FROM (`step_prelayout_signoff` writes per_corner/
+        # first, then copies the setup-worst corner into pre_pnr_timing.rpt)
+        # were outside the declared scope. MEASURED over the 54 tracked
+        # phase-3 roots: all 7 that resolve a step-10 report emitted
+        # STA_SINGLE_CORNER_ONLY, every one of them on `corner_dirs_found: 0`.
+        # A warning that is always on is a warning nobody reads.
+        #
+        # This does NOT reintroduce what #778 removed. The scope admits only
+        # this step's OWN pre-layout corner directory, and a corner report
+        # inside it that discloses `STA_BASIS: POST_ROUTE_*` now FAILs the
+        # clause (STA_BASIS_CONTRADICTS_SCOPE) rather than carrying it. Step
+        # 23's scope is deliberately NOT widened the same way: its corner
+        # responsibility already sits on the two dedicated gates, and adding
+        # per_corner/ there would let a PRE-layout corner report's negative
+        # slack fail the post-route clause — exactly the cross-step
+        # contamination #778 exists to prevent.
+        - program_exit_zero: "sta_report_check . --mode sta --under phase3/stage3/sta/pre_pnr_timing.rpt --under phase3/stage3/sta/per_corner --json reports/phase3/sta/pre_pnr_summary.json"
     blocks_on: [9]
 
   - id: 11
