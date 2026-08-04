@@ -185,7 +185,15 @@ def _run(project: Path, out: Path | None = None):
     argv = [sys.executable, str(GATE), str(project)]
     if out is not None:
         argv += ["--json", str(out)]
-    return subprocess.run(argv, capture_output=True, text=True, timeout=300)
+    # 55s, not 300s: the CI harness runs this file under `pytest --timeout=180`,
+    # so a 300s inner bound can never fire — the harness kills the SESSION first
+    # and the failure is reported against whatever test happened to be running.
+    # MEASURED on this file: the slowest test in it is 0.32s wall, and that one
+    # is a pure in-process parse; every `_run` here launches the gate over a
+    # tmp_path tree of a few hundred bytes. 55s is the bound the repo already
+    # uses for exactly this shape (9 other test modules), and it leaves ~170x
+    # headroom over the measured worst case.
+    return subprocess.run(argv, capture_output=True, text=True, timeout=55)
 
 
 # --------------------------------------------------------------------------- #
@@ -354,6 +362,57 @@ def test_std_cell_class_core_under_a_macro_root_is_not_judged(tmp_path):
     r = _run(proj)
     assert r.returncode == 2, r.stdout
     assert "[SKIP]" in r.stdout
+
+
+#: The SAME abstract, with its `CLASS CORE` denied by its own comment. A LEF is
+#: grammar interleaved with English and the annotation can retire the statement
+#: under it — vibe-ic#777 measured that on a shipped tech LEF.
+_STDCELL_LEF_DENIED = _STDCELL_LEF.replace(
+    "  CLASS CORE ;",
+    "  # superseded abstract: this master is NOT a core cell\n"
+    "  CLASS CORE ;")
+
+
+def test_a_denied_class_core_cannot_switch_this_gates_audit_off(tmp_path):
+    """`CLASS CORE` is SUBTRACTIVE — it removes a master from this gate's
+    scope. So a reader that honours a DENIED one hands the audited LEF the
+    switch that silences its own audit, which is the shape `_prose_polarity`
+    exists for (#712, #706/#711).
+
+    Same tree as the negative control above, one comment added. There the
+    undenied `CLASS CORE` skips the gate (rc 2); here the denied one must not
+    buy that exclusion, so the master stays in scope and its unrecorded
+    non-sequential arc is reported."""
+    proj = _project(tmp_path, lib_text=_STDCELL_LIB,
+                    lef_text=_STDCELL_LEF_DENIED,
+                    rtl=_RTL.replace("NEUTRAL_NVM_1024X8",
+                                     "NEUTRAL_CORE_DFSR"))
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "NEUTRAL_CORE_DFSR" in r.stdout, r.stdout
+
+
+def test_both_class_parsers_answer_the_same_thing_denials_included():
+    """The stand-alone fallback exists so the gate runs without its sibling —
+    not so it can hold a second opinion. If the two disagree, which answer
+    `_std_cell_masters` gets depends on whether an import succeeded."""
+    import macro_non_seq_arc_contract_check as m
+    from l21_macro_supply_rail_declared_check import _macro_classes as sib
+
+    assert m._local_macro_classes(_STDCELL_LEF) == {"NEUTRAL_CORE_DFSR": "CORE"}
+    assert sib(_STDCELL_LEF) == {"NEUTRAL_CORE_DFSR": "CORE"}
+    # denied -> not published by EITHER, so neither consumer can subtract on it
+    assert m._local_macro_classes(_STDCELL_LEF_DENIED) == {}
+    assert sib(_STDCELL_LEF_DENIED) == {}
+    # and the scope is the CLASS statement's OWN: a comment about a NEIGHBOURING
+    # statement is not evidence about the class. 126 of the 244188 MACRO blocks
+    # measured on the development host open under a denying lead comment, and
+    # every one of them denies a pin, a grid or an obstruction.
+    elsewhere = _STDCELL_LEF.replace(
+        "  SIZE 1.0 BY 2.0 ;",
+        "  # this abstract declares no PIN geometry\n  SIZE 1.0 BY 2.0 ;")
+    assert m._local_macro_classes(elsewhere) == {"NEUTRAL_CORE_DFSR": "CORE"}
+    assert sib(elsewhere) == {"NEUTRAL_CORE_DFSR": "CORE"}
 
 
 def test_pdk_standard_cell_library_root_is_out_of_scope(tmp_path):
@@ -529,7 +588,9 @@ def _run_hold(proj: Path, out: Path | None = None):
     argv = [sys.executable, str(HOLD_GATE), str(proj)]
     if out is not None:
         argv += ["--json", str(out)]
-    return subprocess.run(argv, capture_output=True, text=True, timeout=300)
+    # 55s for the same reason as `_run` above: an inner bound over the 60s
+    # per-call ceiling (180s harness / 3) cannot fire before the harness does.
+    return subprocess.run(argv, capture_output=True, text=True, timeout=55)
 
 
 def test_post_cts_hold_still_fails_and_now_names_the_non_sequential_arc(

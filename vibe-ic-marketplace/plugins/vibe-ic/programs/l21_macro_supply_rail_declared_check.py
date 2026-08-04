@@ -201,6 +201,14 @@ try:  # the SAME block parser the consumer's PG walk delegates to (#774)
 except Exception:  # pragma: no cover - fallback keeps the gate usable stand-alone
     _shared_lef_all_pins = None  # type: ignore
 
+# The ONE negation vocabulary (#712). `_macro_classes` reads a DECLARATION out
+# of a text file; see its docstring for why the polarity of that declaration is
+# not a formality here.
+from _prose_polarity import (  # type: ignore  # noqa: E402
+    blank_bracketed as _blank_bracketed,
+    is_denied as _is_denied,
+)
+
 WAIVER_KEY = "l21_macro_supply_rail_absent_disclosed"
 #: L21-5 has its OWN key. A waiver must name the defect it excuses; the
 #: rail-absence waiver above predates this defect class and must not absorb it.
@@ -325,23 +333,79 @@ def _parse_macro_supply_pins(lef_text: str) -> Dict[str, List[Tuple[str, str]]]:
 
 
 def _macro_classes(lef_text: str) -> Dict[str, str]:
-    """``{MACRO_NAME: CLASS}`` from a LEF. Pure LEF grammar."""
+    """``{MACRO_NAME: CLASS}`` from a LEF — minus any CLASS its own comment DENIES.
+
+    LEF grammar, and the grammar is INTERLEAVED WITH ENGLISH. That second half
+    is why `_prose_polarity` is consulted here rather than waved off as
+    ceremony: a LEF is a text file that authors annotate, and the annotation
+    can retire the statement under it. vibe-ic#777 measured exactly that on a
+    shipped tech LEF, which writes
+
+        # Centered via rule, we really do not want to use it
+        VIA <name> DEFAULT
+
+    directly above a block a gate publishes findings from.
+
+    AND THE VALUE READ HERE IS SUBTRACTIVE. `CLASS CORE` is what removes a
+    master from an audit's scope — here (a std-cell library staged under a
+    macro root is not a hard macro) and in `macro_non_seq_arc_contract_check`
+    (`_std_cell_masters`). So a reader that honours a DENIED `CLASS CORE`
+    hands the audited file the switch that silences its own audit, which is
+    the shape #706/#711 named and the one this vocabulary exists for.
+
+    SCOPE, and it is deliberately narrow. Only the CLASS statement's OWN
+    comment counts: the contiguous comment lines immediately above it inside
+    the macro (any statement or blank line clears them) plus its own trailing
+    `#` comment, with bracketed qualifiers blanked first per #711. MEASURED
+    over the 6199 LEF/tech-LEF files reachable on the development host
+    (244188 MACRO blocks, 251647 in-macro CLASS statements):
+
+        MACRO-block lead comments carrying a denial word : 126
+        CLASS statements denied in their OWN scope       :   0
+
+    Those 126 deny a PIN, a manufacturing grid or an obstruction — never the
+    class. Attaching them to CLASS would report 126 macros as unclassified on
+    evidence about something else, the same over-attribution #777 refused for
+    a file-header line. So the narrow scope is the measurement's answer, and
+    the consult changes NO shipped answer today; it closes the shape before a
+    vendor LEF writes `CLASS CORE ;  # deprecated, not a core cell`.
+
+    FAIL-SAFE, in the only direction that is safe: a denied CLASS is simply
+    not published. Both consumers already treat "no CLASS record" as "keep it
+    in scope", so an over-firing vocabulary costs one extra audited macro and
+    an under-firing one costs a silenced audit. The full vocabulary is used
+    unrefined for that reason.
+    """
     out: Dict[str, str] = {}
     cur: Optional[str] = None
+    lead: List[str] = []
     for raw in (lef_text or "").splitlines():
         s = raw.strip()
-        m = re.match(r"MACRO\s+(\S+)", s)
+        body, _, trail = s.partition("#")
+        body, trail = body.strip(), trail.strip()
+        if not body:
+            # A comment line joins the lead; anything else clears it.
+            lead = lead + [trail] if s.startswith("#") else []
+            continue
+        m = re.match(r"MACRO\s+(\S+)", body)
         if m:
             cur = m.group(1)
+            lead = []
             continue
-        if cur and s.startswith("END ") and s.split()[1:2] == [cur]:
+        if cur and body.startswith("END ") and body.split()[1:2] == [cur]:
             cur = None
+            lead = []
             continue
         if cur is None:
+            lead = []
             continue
-        m = re.match(r"CLASS\s+(\S+)", s)
+        m = re.match(r"CLASS\s+(\S+)", body)
         if m:
-            out[cur] = m.group(1).rstrip(";").upper()
+            span = _blank_bracketed(
+                " ".join(lead + ([trail] if trail else [])))
+            if not _is_denied(span):
+                out[cur] = m.group(1).rstrip(";").upper()
+        lead = []
     return out
 
 

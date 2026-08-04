@@ -126,8 +126,15 @@ def _drifted_specs(pct: float) -> list:
 
 
 def _run(gate: Path, project: Path, *args) -> subprocess.CompletedProcess:
+    # 55s, not 120s: the CI harness runs this file under `pytest --timeout=180`,
+    # which puts the per-call ceiling at 60s (180 // 3). A 120s inner bound can
+    # never fire — the harness ends the SESSION first, so the diagnosis lands on
+    # whichever test was running rather than on the call that hung. MEASURED on
+    # this file: the slowest test is 0.22s wall and every `_run` launches a gate
+    # over a tmp_path tree of a few hundred bytes. 55s is the bound the repo
+    # already uses for this shape.
     return subprocess.run([sys.executable, str(gate), str(project), *args],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=55)
 
 
 def _both(cp) -> str:

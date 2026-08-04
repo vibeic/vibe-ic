@@ -149,6 +149,14 @@ except Exception:  # pragma: no cover - keeps the gate usable stand-alone
     _sibling_instantiated_masters = None  # type: ignore
     _sibling_macro_classes = None  # type: ignore
 
+# The ONE negation vocabulary (#712), for the stand-alone fallback below. It
+# must answer what the sibling answers, denials included, or the fallback is a
+# second opinion rather than a fallback.
+from _prose_polarity import (  # type: ignore  # noqa: E402
+    blank_bracketed as _blank_bracketed,
+    is_denied as _is_denied,
+)
+
 GATE_NAME = "macro_non_seq_arc_contract_check"
 WAIVER_KEY = "macro_non_seq_arc_requirement_disclosed"
 WAIVER_MIN = 40
@@ -355,23 +363,47 @@ def _std_cell_masters(project: Path) -> Set[str]:
 
 
 def _local_macro_classes(lef_text: str) -> Dict[str, str]:
-    """Stand-alone fallback for the sibling gate's `_macro_classes`."""
+    """Stand-alone fallback for the sibling gate's `_macro_classes`.
+
+    Mirrors it EXACTLY, denial rule included — see that function for the
+    measurement and for why the polarity of a `CLASS` statement is not a
+    formality. A fallback that answered differently from the walk it stands in
+    for would make `_std_cell_masters` depend on whether an import succeeded.
+
+    The value is subtractive HERE too: a master read as `CLASS CORE` is dropped
+    from this gate's scope by `_std_cell_masters`, so honouring a denied one
+    would let the LEF being audited switch the audit off. A denied CLASS is not
+    published, and the master stays in scope.
+    """
     out: Dict[str, str] = {}
     cur: Optional[str] = None
+    lead: List[str] = []
     for raw in (lef_text or "").splitlines():
         s = raw.strip()
-        m = re.match(r"MACRO\s+(\S+)", s)
+        body, _, trail = s.partition("#")
+        body, trail = body.strip(), trail.strip()
+        if not body:
+            lead = lead + [trail] if s.startswith("#") else []
+            continue
+        m = re.match(r"MACRO\s+(\S+)", body)
         if m:
             cur = m.group(1)
+            lead = []
             continue
-        if cur and s.startswith("END ") and s.split()[1:2] == [cur]:
+        if cur and body.startswith("END ") and body.split()[1:2] == [cur]:
             cur = None
+            lead = []
             continue
         if cur is None:
+            lead = []
             continue
-        m = re.match(r"CLASS\s+(\S+)", s)
+        m = re.match(r"CLASS\s+(\S+)", body)
         if m:
-            out[cur] = m.group(1).rstrip(";").upper()
+            span = _blank_bracketed(
+                " ".join(lead + ([trail] if trail else [])))
+            if not _is_denied(span):
+                out[cur] = m.group(1).rstrip(";").upper()
+        lead = []
     return out
 
 
