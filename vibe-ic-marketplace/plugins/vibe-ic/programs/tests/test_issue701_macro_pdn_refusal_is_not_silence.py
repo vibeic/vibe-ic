@@ -227,11 +227,15 @@ def test_the_refusal_names_the_macro_and_why(tmp_path):
     The output must carry the MASTER and the LAYERS its OBS removed."""
     tcl = _pdn(tmp_path, _macro(obs_layers=("M4", "M5")), tag="b")
     assert MACRO_NAME in tcl, "the refused macro is not named"
-    # the layers the OBS took off the table, so a reader can act on it
-    assert "M4" in tcl and "M5" in tcl
-    # and the reason is stated, not merely implied by an absence
-    assert re.search(r"(?i)obs|block", tcl), \
-        "nothing in the emitted PDN says WHY no macro grid was built"
+    # NOT `"M4" in tcl`: the core strap lines mention M4 and M5 whatever
+    # happens, so that would pass on a completely silent build. The layers the
+    # OBS removed must appear on the text that NAMES the macro.
+    about_the_macro = "\n".join(ln for ln in tcl.splitlines()
+                                if MACRO_NAME in ln)
+    assert "M4" in about_the_macro and "M5" in about_the_macro, \
+        "the refusal does not say WHICH layers the OBS took off the table"
+    assert re.search(r"(?i)obs|block", about_the_macro), \
+        "the refusal does not say WHY no macro grid was built"
 
 
 def test_the_refusal_does_not_build_a_grid_in_defiance_of_the_OBS(tmp_path):
