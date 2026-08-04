@@ -134,3 +134,15 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_run_image_propagates_to_
 # what the test asserts about the emitted TCL is not, and that part follows the
 # code, not the anchor.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_spare_tieoff_one_driver_per_spare.py
+
+# The via-vs-min-width baseline records WHICH image the 108 findings were swept
+# from. The tag is half of the measurement: the findings are (tech LEF, VIA,
+# LAYER) triples read out of the tech LEFs that image ships, and a different
+# image can ship different PDK trees. It is deliberately NOT the anchor — the
+# host that took the sweep cannot pull the anchor image (`max depth exceeded`,
+# overlay2 layer cap), so 0.2.58 is the newest image that machine can
+# instantiate and is what was actually read. Advancing the tag would claim a
+# sweep of an image that was never opened, and would do it in the one file whose
+# entire purpose is to say what was measured. The baseline is history; the
+# checker beside it resolves nothing from this string.
+vibe-ic-marketplace/plugins/vibe-ic/programs/pdk_via_patch_min_width_baseline.json
