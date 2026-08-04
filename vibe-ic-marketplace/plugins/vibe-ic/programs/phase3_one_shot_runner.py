@@ -10618,10 +10618,13 @@ def _extract_overutil_pct(log_text: str) -> Optional[float]:
 
 # ORGANIC #585 — TritonRoute can run out of iterations and COMPLETE with
 # violations remaining (rc=0, `[INFO DRT-0199] Number of violations = N`).
-_RE_DRT_0199 = re.compile(
-    r"\[INFO DRT-0199\]\s*Number of violations\s*=\s*(\d+)")
-_RE_DRT_COMPLETING = re.compile(
-    r"Completing\s+100%\s+with\s+(\d+)\s+violations?")
+# The grammar now lives ONCE in `_signoff_drc_format` so the sign-off audit's
+# plain-text DRC reader and this reader cannot drift apart (they used to:
+# re.search-first there vs findall-last here). These names alias the shared
+# compiled patterns, so every DRT trajectory read in this file — here and in
+# `_drt_violation_trajectory` — goes through the same grammar.
+_RE_DRT_0199 = _sdf.RE_DRT_0199
+_RE_DRT_COMPLETING = _sdf.RE_DRT_COMPLETING
 
 
 def _drt_final_violations(log_text: str) -> Optional[int]:
@@ -10633,18 +10636,11 @@ def _drt_final_violations(log_text: str) -> Optional[int]:
     geometry that actually ships — is what gets judged. A route that
     "completes" with N>0 is NOT converged: streaming its GDS downstream
     recasts one congestion root-cause as hundreds of fake DRC/LVS/STA
-    findings. chip-AGNOSTIC: OpenROAD log grammar only."""
-    if not log_text:
-        return None
-    counts = _RE_DRT_0199.findall(log_text)
-    if not counts:
-        counts = _RE_DRT_COMPLETING.findall(log_text)
-    if not counts:
-        return None
-    try:
-        return int(counts[-1])
-    except ValueError:
-        return None
+    findings. chip-AGNOSTIC: OpenROAD log grammar only.
+
+    Delegates to the shared `_signoff_drc_format.router_iter_last_count`
+    so this reader and the sign-off audit read one grammar by construction."""
+    return _sdf.router_iter_last_count(log_text)
 
 
 def _compute_resized_die(die_w: int, die_h: int,

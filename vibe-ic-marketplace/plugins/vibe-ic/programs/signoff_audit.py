@@ -1420,6 +1420,21 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
         _svrf = _sdf.svrf_fail_count(txt)
         if _svrf is not None:
             return _svrf
+        # A router detailed-route DRC report is ITERATIVE — one count per repair
+        # iteration, and possibly across more than one route pass — so the
+        # sequence is non-monotone and only the LAST count is the geometry that
+        # ships. The generic `re.search` below returns the FIRST match, i.e. the
+        # pre-repair state, which can be larger than the final count (over-report
+        # → false FAIL on a clean design) or smaller (under-report → false PASS
+        # on a design that never converged). Read the final count through the
+        # SAME shared helper `phase3_one_shot_runner._drt_final_violations` uses,
+        # so the two readers of this grammar cannot drift apart (they used to:
+        # re.search-first here vs findall-last there). Returns None when the
+        # report has no router-iteration grammar, so a genuine summary-only
+        # report still falls through to the text fallback below.
+        _drt = _sdf.router_iter_last_count(txt)
+        if _drt is not None:
+            return _drt
         m = (re.search(r"(?i)\btotal\s+(?:errors|violations)\s*[:=]?\s*(\d+)", txt)
              or re.search(r"(?i)\bviolations?\s*[:=]\s*(\d+)", txt))
         return int(m.group(1)) if m else None

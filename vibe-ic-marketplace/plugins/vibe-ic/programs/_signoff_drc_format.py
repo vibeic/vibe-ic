@@ -125,6 +125,60 @@ def svrf_fail_count(text: str) -> Optional[int]:
     return None
 
 
+# --- the router's iterative violation trajectory ---------------------------
+# ORGANIC #585 grammar, lifted here so `signoff_audit`'s plain-text sign-off
+# reader and `phase3_one_shot_runner._drt_final_violations` share ONE
+# implementation and cannot return different numbers for one report.
+#
+# A detailed-route DRC report is ITERATIVE: the router emits one running count
+# per repair iteration — `[INFO DRT-0199]  Number of violations = N` (older
+# builds: `Completing 100% with N violations`) — and a single report may hold
+# more than one route pass (a later incremental reroute restarts the sequence),
+# so the trajectory is non-monotone in general. Only the LAST count describes
+# the geometry that actually ships. `re.search` returns the FIRST match — the
+# state BEFORE any repair — which can be LARGER than the final count (over-
+# report → false FAIL on a clean design) or SMALLER (under-report → false PASS
+# on a design that never converged). The reader must take the last, not the
+# first. chip-AGNOSTIC: OpenROAD/TritonRoute log grammar only.
+RE_DRT_0199 = re.compile(
+    r"\[INFO DRT-0199\]\s*Number of violations\s*=\s*(\d+)")
+RE_DRT_COMPLETING = re.compile(
+    r"Completing\s+100%\s+with\s+(\d+)\s+violations?")
+
+
+def router_iter_counts(text: str) -> List[int]:
+    """Every per-iteration router DRC count, in log order ([] when none).
+
+    Prefers the explicit `[INFO DRT-0199]` end-of-iteration tally; only when a
+    log has none does it fall back to the per-iteration `Completing 100% with N`
+    line. Mixing the two would double-count, so the fallback is exclusive.
+    """
+    if not text:
+        return []
+    raw = RE_DRT_0199.findall(text) or RE_DRT_COMPLETING.findall(text)
+    out: List[int] = []
+    for c in raw:
+        try:
+            out.append(int(c))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def router_iter_last_count(text: str) -> Optional[int]:
+    """The LAST per-iteration router DRC count — the shipped geometry's state —
+    or None when the report carries no router-iteration grammar at all.
+
+    None, never 0: a report with no DRT trajectory is UNDETERMINED here, not
+    clean. Collapsing that to 0 would turn "could not read this report" into
+    "this design is DRC-clean" — the exact false PASS this reader exists to
+    avoid — so the caller keeps its own no-match handling for that case.
+    Degrades correctly to "take the only match" for a single-count report.
+    """
+    counts = router_iter_counts(text)
+    return counts[-1] if counts else None
+
+
 # --- the router's own projection -------------------------------------------
 # DISQUALIFYING markers, checked FIRST. Each is a literal the router (or the
 # runner's projection of it) emits about ITSELF; none can appear in a rule
