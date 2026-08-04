@@ -7961,8 +7961,10 @@ def _analog_trigger_undecidable(project: Path, pat: str) -> bool:
 def _analog_block_list_declares_blocks(path: Path) -> Optional[bool]:
     """Does this analog block list declare at least one block?
 
-    True  — a non-empty `blocks` / `analog_blocks` array, and not `no_analog`.
-    False — parsed cleanly and positively declares none.
+    True  — a non-empty `blocks` / `analog_blocks` array.
+    False — parsed cleanly and positively declares none: an empty
+            `blocks` / `analog_blocks` array, OR a bare `no_analog: true`
+            with no block array at all.
     None  — could not be read or parsed; the caller must NOT read that as
             "no analog". Unreadable is not evidence of absence.
     """
@@ -7976,7 +7978,26 @@ def _analog_block_list_declares_blocks(path: Path) -> Optional[bool]:
     if blocks is None:
         blocks = d.get("analog_blocks")
     if not isinstance(blocks, list):
-        # No block array at all — this file is not the shape we can judge.
+        # No usable block array. A bare `no_analog: true` is nonetheless a
+        # PARSEABLE, AFFIRMATIVE declaration of none — the strongest one the
+        # schema has — so it is decidable, not undecidable. Reading it as
+        # "unknown shape" re-creates for the flag-only form the exact defect
+        # this whole guard exists to fix: the emitters' A-step gates already
+        # stand down on it (`_analog_a_check_common.load_block_list` yields
+        # [] -> VACUOUS_PASS "no analog blocks declared"), so the flow would
+        # hold thirteen steps applicable that every gate certifies as
+        # inapplicable, and each would land MISSING on a design with no
+        # analog work TO do.
+        #
+        # Scoped as narrowly as the evidence allows, to keep the fail-LOUD
+        # property intact: the flag decides ONLY when NEITHER block key is
+        # present (`blocks is None` after both lookups). A block array that
+        # is present but MALFORMED (`"blocks": "oops"`) contradicts the flag,
+        # and a self-contradictory list stays undecidable so somebody has to
+        # look at it — the same polarity as the named-block-beats-the-flag
+        # rule below.
+        if blocks is None and d.get("no_analog") is True:
+            return False
         return None
     # A named block WINS over a `no_analog` flag that contradicts it. The two
     # disagreeing is a Phase-1 defect, and the non-suppressive reading of a
