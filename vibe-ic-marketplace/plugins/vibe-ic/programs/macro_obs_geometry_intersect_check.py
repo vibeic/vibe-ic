@@ -146,12 +146,49 @@ def parse_placed_macros(def_text: str,
     return out
 
 
+# A wiring path inside a SPECIALNETS entry. DEF introduces the FIRST path of a
+# net with `+ ROUTED` (or FIXED / COVER) and every SUBSEQUENT path of that same
+# net with the bare keyword `NEW` — no `+`. Anchoring on `+` therefore sees one
+# path per net and silently discards the rest.
+_PATH_HEAD_RE = re.compile(
+    r"(?:\+\s*(?:ROUTED|FIXED|COVER|SHAPE\s+\w+)?\s*|\bNEW\s+)(\w+)\s+\d+",
+    re.I)
+
+# `( x y )`, with an optional third value (the wire extension). Either
+# coordinate may be `*`, which DEF defines as "repeat the one before it".
+_PATH_POINT_RE = re.compile(r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)(?:\s+-?\d+)?\s*\)")
+
+
+def _path_points(body: str) -> List[Tuple[int, int]]:
+    """The points of ONE wiring path, with `*` resolved against its predecessor.
+
+    A `*` is not a missing coordinate — it is the previous point's coordinate,
+    and it is how every real DEF writer spells an orthogonal segment. Dropping
+    those points drops the segments they describe."""
+    pts: List[Tuple[int, int]] = []
+    px: Optional[int] = None
+    py: Optional[int] = None
+    for pm in _PATH_POINT_RE.finditer(body):
+        a, b = pm.group(1), pm.group(2)
+        x = px if a == "*" else int(a)
+        y = py if b == "*" else int(b)
+        if x is None or y is None:
+            continue      # a `*` in a path's first point has nothing to repeat
+        px, py = x, y
+        pts.append((x, y))
+    return pts
+
+
 def parse_routed_segments(def_text: str) -> List[Dict[str, Any]]:
     """`[{layer, x1, y1, x2, y2, net, followpin}]` in DEF units.
 
     SPECIALNETS only: this gate is about supply metal crossing an obstruction,
     which is what follow-pins and straps are. A signal route over a blockage is
-    the router's business and the PDK deck's."""
+    the router's business and the PDK deck's.
+
+    A path is a POLYLINE: N points describe N-1 segments, and every one of them
+    is metal that can cross an obstruction. Reading only the first pair reports
+    on the first leg of each path and stays silent about the others."""
     segs: List[Dict[str, Any]] = []
     sec = re.search(r"^\s*SPECIALNETS\b(.*?)^\s*END\s+SPECIALNETS",
                     def_text, re.S | re.M)
@@ -161,18 +198,15 @@ def parse_routed_segments(def_text: str) -> List[Dict[str, Any]]:
         nm = re.match(r"\s*(\S+)", entry)
         net = nm.group(1) if nm else "?"
         fp = "FOLLOWPIN" in entry
-        for rm in re.finditer(
-                r"\+\s*(?:ROUTED|FIXED|COVER|SHAPE\s+\w+)?\s*(\w+)\s+\d+"
-                r"(?:\s+\+\s*SHAPE\s+\w+)?\s*"
-                r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)\s*\)\s*"
-                r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)\s*\)", entry):
-            layer, a, b, c, d = rm.groups()
-            if "*" in (a, b) or "*" in (c, d):
-                continue          # a `*` repeats the previous coordinate; skip
-            x1, y1, x2, y2 = int(a), int(b), int(c), int(d)
-            segs.append({"layer": layer, "net": net, "followpin": fp,
-                         "x1": min(x1, x2), "y1": min(y1, y2),
-                         "x2": max(x1, x2), "y2": max(y1, y2)})
+        heads = list(_PATH_HEAD_RE.finditer(entry))
+        for i, hm in enumerate(heads):
+            layer = hm.group(1)
+            end = heads[i + 1].start() if i + 1 < len(heads) else len(entry)
+            pts = _path_points(entry[hm.end():end])
+            for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
+                segs.append({"layer": layer, "net": net, "followpin": fp,
+                             "x1": min(x1, x2), "y1": min(y1, y2),
+                             "x2": max(x1, x2), "y2": max(y1, y2)})
     return segs
 
 
