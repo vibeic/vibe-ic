@@ -28095,7 +28095,13 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 34 metal fill (filler_placement) --------
     filled_def = pnr_out / "filled.def"
-    if primary_def.is_file() and not filled_def.is_file():
+    if primary_def.is_file() and _fill_output_needs_rerun(filled_def,
+                                                          primary_def):
+        if filled_def.is_file():
+            notes.append(
+                "metal fill RE-RUN: filled.def was older than the routed DEF "
+                "it derives from (superseded floorplan) — the stale fill and "
+                "its density report were NOT reused")
         if _emit_metal_fill(project, top, pdk, container, filled_def, notes):
             written.append(str(filled_def))
             written.append(str(pnr_out / "metal_fill.done"))
@@ -32752,6 +32758,42 @@ def _v0_3_9_parse_row_utilization(log: str):
         tok = m.group(1)
         val = None if tok == "NA" else float(tok)
     return val
+
+
+def _fill_output_needs_rerun(filled_def: Path, primary_def: Path) -> bool:
+    """True when Step 34's fill must run: its output is absent, or STALE with
+    respect to the routed DEF it is derived from.
+
+    `filled.def` (and its siblings `metal_fill.{log,done}` and
+    `reports/density.{rpt,json}`) are computed FROM the routed DEF. Gating the
+    emitter on existence alone made it reuse a previous round's fill whenever
+    the floorplan changed: PnR correctly invalidates its cache on a die/util
+    change and rewrites `<top>.def`, but the fill stage saw `filled.def`
+    present and skipped. Step 34 then reported the SUPERSEDED round's
+    utilization and filler count as this round's — a measurement of a layout
+    that is no longer the design — and every downstream consumer of
+    `filled.def` read the old layout.
+
+    Measured shape of the escape: after a die change the routed DEF was
+    rewritten while `filled.def`, `metal_fill.log` and `reports/density.json`
+    kept the previous round's mtime, and the density report still quoted the
+    old core's utilization to four significant figures. Nothing in the run
+    disclosed that the fill had not re-run.
+
+    An output older than the input it derives from is stale. If freshness
+    cannot be established (stat fails), re-run rather than reuse — the
+    conservative direction is to recompute, never to publish an unverifiable
+    artefact as current.
+
+    chip-AGNOSTIC: pure mtime comparison of two paths; no design, vendor, SKU,
+    process-node or PDK literal.
+    """
+    if not filled_def.is_file():
+        return True
+    try:
+        return filled_def.stat().st_mtime < primary_def.stat().st_mtime
+    except OSError:
+        return True
 
 
 def _emit_metal_fill(project: Path, top: str, pdk: PdkConfig,
