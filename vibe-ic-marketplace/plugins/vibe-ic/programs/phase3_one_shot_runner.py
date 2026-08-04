@@ -5616,30 +5616,71 @@ def _discover_supply_pin_dir_fix(project: Path, cell_lef: Optional[Path]
     return out_path, notes
 
 
-def _streamout_layermap_warning(calibre_drc: Optional[str],
-                                lefdef_layermap: Optional[str]) -> Optional[str]:
-    """FLOOR-STREAMOUT loud-WARN (ic1-spm commercial PDK clean-room, v1.4.34).
+def _signoff_drc_deck(calibre_drc: Optional[str],
+                      klayout_drc: Optional[str]) -> Optional[str]:
+    """The sign-off DRC deck this run will actually EXECUTE — whatever its
+    vendor or format — or None when the run has no deck at all.
 
-    When a commercial PDK ships a sign-off DRC deck (`calibre_drc`) but NO
-    discoverable Encounter/SoC LEF->GDS streamout layermap (`lefdef_layermap`
-    is None), GDS streams out on LEGACY (compact) layer numbering. A foundry
-    sign-off deck then MISREADS routing layers on those numbers and reports a
-    WALL of spurious FEOL violations that are numbering ARTEFACTS, not design
-    defects (spm commercial PDK: routing read as thick-gate-oxide). The fallback was
-    previously SILENT — the false-DRC wall looks like a design failure. Return a
-    loud operator warning in exactly that case (deck present AND map absent);
-    None otherwise. Chip-AGNOSTIC: keyed purely on deck-present + map-absent, no
-    vendor literal."""
-    if calibre_drc is not None and lefdef_layermap is None:
+    NO NEW DISCOVERY. The two arguments are the SAME two fields `step_drc`
+    dispatches on: `pdk.drc_deck` (the KLayout DSL deck found by the
+    `*.lydrc` / `*.drc` / `*.lyt` search) and `pdk.calibre_drc` (the
+    Calibre/SVRF `*DRC*.rule` deck). The preference order below is
+    `step_drc`'s own — it runs the KLayout deck whenever one exists and only
+    takes the Calibre/SVRF route when `pdk.drc_deck` is empty — so the deck
+    named here is the deck whose verdict the operator will read.
+
+    WHY "A DECK IS PRESENT" IS THE HONEST PREDICATE, AND WHY IT IS
+    PDK-AGNOSTIC. GDSII stores no layer NAMES: a shape carries only an
+    integer layer/datatype pair. Every DRC deck that consumes a GDS
+    therefore binds its rules to layer NUMBERS — KLayout DSL
+    `input(19, 0)` / `polygons(1, 0)`, SVRF `LAYER MAP <gds> DATATYPE <dt>`.
+    So "this run executes a sign-off DRC deck" IS "this run's DRC verdict
+    depends on the streamed GDS carrying the right layer numbers", and there
+    is no PDK for which a deck runs and the numbering is irrelevant.
+
+    The pre-existing predicate was `calibre_drc is not None`, i.e. *the deck
+    is a COMMERCIAL Calibre deck*. That is a vendor test, not a physical one:
+    a PDK whose sign-off deck is a KLayout `.lydrc` has `calibre_drc=None`
+    and slipped every layermap guard, so its GDS streamed on the LEF/DEF
+    reader's own compact numbering and the deck measured geometry the design
+    never drew — silently, with a PASS (vibe-ic#789). This predicate names no
+    PDK, vendor, layer or design: it is `is there a deck`."""
+    for deck in (klayout_drc, calibre_drc):
+        if deck:
+            return str(deck)
+    return None
+
+
+def _streamout_layermap_warning(signoff_drc_deck: Optional[str],
+                                lefdef_layermap: Optional[str]) -> Optional[str]:
+    """FLOOR-STREAMOUT loud-WARN (ic1-spm commercial PDK clean-room, v1.4.34;
+    widened to ANY sign-off deck for vibe-ic#789).
+
+    When the run executes a sign-off DRC deck (`signoff_drc_deck`, from
+    `_signoff_drc_deck` — Calibre/SVRF *or* KLayout, they are equally
+    layer-number-keyed) but NO LEF->GDS streamout layermap was resolved
+    (`lefdef_layermap` is None), GDS streams out on LEGACY (compact) layer
+    numbering. The deck then MISREADS routing layers on those numbers and
+    reports a WALL of spurious FEOL violations that are numbering ARTEFACTS,
+    not design defects (spm commercial PDK: routing read as thick-gate-oxide;
+    nangate45 FreePDK45.lydrc: 7.9M phantom IMPLANT/VT/CONTACT items). The
+    fallback was previously SILENT — the false-DRC wall looks like a design
+    failure. Return a loud operator warning in exactly that case (deck present
+    AND map absent); None otherwise.
+
+    Chip- and PDK-AGNOSTIC: keyed purely on deck-present + map-absent. It was
+    previously keyed on the deck being a COMMERCIAL Calibre deck, which is a
+    VENDOR test — a KLayout-deck PDK degraded silently through it."""
+    if signoff_drc_deck is not None and lefdef_layermap is None:
         return (
             "streamout: a sign-off DRC deck is present "
-            f"({Path(calibre_drc).name}) but NO Encounter/SoC LEF->GDS streamout "
+            f"({Path(signoff_drc_deck).name}) but NO LEF->GDS streamout "
             "layermap was found under the PDK — GDS will use LEGACY (compact) "
-            "layer numbering. A foundry sign-off deck MISREADS routing layers on "
+            "layer numbering. A sign-off deck MISREADS routing layers on "
             "legacy numbers and reports a WALL of spurious FEOL violations that "
             "are numbering ARTEFACTS, not design defects. Supply the PDK's "
-            "`*layermap*for*ncounter*` / `*layermap*SOC*` map (or set it in the "
-            "bridge config) before trusting DRC results.")
+            "`*layermap*for*ncounter*` / `*layermap*SOC*` / `<pdk>.map` map (or "
+            "set it in the bridge config) before trusting DRC results.")
     return None
 
 
@@ -7268,6 +7309,14 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             # routing vias read as fuse-open/thick-gate-oxide, firing a spurious
             # LMF/TG2 wall). chip-AGNOSTIC — nothing hardcoded. A staged foundry
             # map (found above) always wins; this is the fallback.
+            # NOTE the synthesizer stays keyed on `calibre_drc`, and that is
+            # not the vendor scoping vibe-ic#789 removes below: it parses the
+            # SVRF `LAYER <name> <id>` / `LAYER MAP <gds> DATATYPE <dt> <id>`
+            # indirection table, a Calibre-deck GRAMMAR. Handing it a KLayout
+            # `.lydrc` would return None after a wasted read while advertising
+            # a capability it does not have. The GUARD is what must be
+            # deck-agnostic; the REMEDIATION is honest about which deck
+            # formats it can actually read.
             if _lefdef_layermap is None and calibre_drc is not None:
                 _synth_map, _synth_notes = _synthesize_streamout_layermap(
                     str(calibre_drc), str(tech_lef) if tech_lef else None,
@@ -7276,10 +7325,6 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                     print(_n, file=sys.stderr)
                 if _synth_map:
                     _lefdef_layermap = _synth_map
-            _lm_warn = _streamout_layermap_warning(
-                str(calibre_drc) if calibre_drc else None, _lefdef_layermap)
-            if _lm_warn:
-                print(f"[WARN] {_lm_warn}", file=sys.stderr)
 
             # v1.6.53 — KLayout deck discovery. Custom PDKs that ship
             # ONLY a Calibre deck cannot run open-source DRC; but many
@@ -7299,6 +7344,20 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                         break
                 if klayout_drc:
                     break
+
+            # vibe-ic#789 — the missing-map WARN is evaluated HERE, after BOTH
+            # deck searches, not after the Calibre one alone. It used to sit
+            # above this block and be passed `calibre_drc` only, so a PDK whose
+            # sign-off deck is a KLayout `.lydrc` (the deck that will actually
+            # run: see `step_drc`) produced NO warning at all and streamed on
+            # legacy numbering in silence. `_signoff_drc_deck` reuses these two
+            # already-discovered fields; it invents no new search.
+            _lm_warn = _streamout_layermap_warning(
+                _signoff_drc_deck(str(calibre_drc) if calibre_drc else None,
+                                  klayout_drc),
+                _lefdef_layermap)
+            if _lm_warn:
+                print(f"[WARN] {_lm_warn}", file=sys.stderr)
 
             # v1.3.83 — sign-off bridge config (chip-AGNOSTIC, config-driven).
             # input/pdk/bridge/signoff_config.json declares the deck's
@@ -21356,19 +21415,36 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # vs 1 with it applied, and the foundry via layers were EMPTY in the
     # un-mapped GDS (the router's vias had been written elsewhere). A GDS in
     # that state cannot be fabricated, so shipping it as PASS is the defect.
-    # Scoped to foundry sign-off (a vendor deck is present); OSS PDKs either
-    # carry their own map or never reach this branch.
-    if pdk.calibre_drc and not lefdef_map_c:
+    #
+    # vibe-ic#789 — this gate was `pdk.calibre_drc and not lefdef_map_c`, i.e.
+    # scoped to a COMMERCIAL Calibre deck. That is a VENDOR test, and the
+    # physics it stands in for is vendor-free: GDSII carries no layer names, so
+    # EVERY deck that reads a GDS binds its rules to layer NUMBERS. A PDK whose
+    # sign-off deck is a KLayout `.lydrc` has `calibre_drc=None` and walked
+    # straight past it — measured on nangate45/FreePDK45.lydrc, whose DRC on a
+    # legacy-numbered GDS reported 7,911,144 phantom IMPLANT/VT/CONTACT items;
+    # and on asap7, whose `asap7.lydrc` selects every layer by NUMBER
+    # (`input(19, 0)` = M1 … `input(7, 0)` = GATE) while the image ships no
+    # asap7 `.map` and the registry configures none, so `lefdef_map_c` was ""
+    # and the run streamed legacy numbering with a PASS. `_signoff_drc_deck`
+    # reads the same two fields `step_drc` dispatches on — no new discovery,
+    # no PDK/vendor literal.
+    _signoff_deck = _signoff_drc_deck(pdk.calibre_drc, pdk.drc_deck)
+    if _signoff_deck and not lefdef_map_c:
         return StepResult(
             "gds", "FAIL", time.time() - t0,
-            "streamout layer map missing: this PDK ships a foundry sign-off "
-            "DRC deck, but no LEF/DEF->GDS streamout layermap was found. The "
-            "DEF reader would fall back to legacy numbering and every routed "
-            "shape would land on a non-foundry GDS layer, so the sign-off deck "
-            "reads the layout as geometry the design never drew. Stage the "
-            "vendor streamout map (`<name> <purpose> <layer> <datatype>`) "
-            "under input/pdk/, or declare its path as `lefdef_layermap` in the "
-            "PDK bridge signoff config.")
+            "streamout layer map missing: this run executes the sign-off DRC "
+            f"deck {Path(_signoff_deck).name}, but no LEF/DEF->GDS streamout "
+            "layermap was found. The DEF reader would fall back to legacy "
+            "numbering and every routed shape would land on a GDS layer the "
+            "deck does not read as that purpose, so the deck reads the layout "
+            "as geometry the design never drew — a DRC verdict computed on the "
+            "wrong layers is neither a pass nor a violation count. Stage the "
+            "streamout map (`<name> <purpose> <layer> <datatype>`) under "
+            "input/pdk/, or declare its path as `lefdef_layermap` in the "
+            "PDK bridge signoff config / the pdk_registry.json entry.",
+            extras={"signoff_drc_deck": _signoff_deck,
+                    "lefdef_layermap": None})
     # v1.3.83 — std-cell exclusion marker env (config-driven; empty → no-op).
     marker_arg = pdk.stdcell_marker_layer or ""
     cmd = (
@@ -21432,6 +21508,23 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # carrying shapes must be accounted for by the map, the library GDS or the
     # bridge config. Anything else is geometry on a layer no authority
     # recognises — the same defect, caught from the GDS itself.
+    #
+    # vibe-ic#789 — this one is DELIBERATELY still `pdk.calibre_drc`, unlike
+    # the pre-flight gate above. It is a DIFFERENT question (is the map
+    # COMPLETE?) from #789's (is there a map AT ALL?), and #789 is already
+    # answered pre-flight, so widening this adds no coverage for it. What
+    # widening WOULD add was measured, not guessed: running `audit()` over
+    # three real, currently-green sky130A streamed GDS artefacts
+    # (sha256 clean_run_v1342, sha256 chip_top, subservient) with the shipped
+    # sky130A.map + sky130_fd_sc_hd.gds yields ERROR/ORPHAN_LAYER on all three
+    # — 8, 8 and 9 orphans (1/0, 2/2, 2/3, 3/2, 3/3, 8/2, 9/2, 9/3 …), because
+    # the authority set (map targets | library GDS | macro GDS | bridge config)
+    # has no entry for the reader-produced outline/pin/label datatypes an OSS
+    # PDK draws and no bridge config declares. Widening here would therefore
+    # convert every sky130A run to FAIL on an incompleteness of THIS CHECK's
+    # authority set, not on any defect in the design or the numbering. That
+    # gap is real and needs its own issue + its own evidence; borrowing #789's
+    # widening to land it would be a silent, unrelated regression.
     if pdk.calibre_drc:
         try:
             import importlib

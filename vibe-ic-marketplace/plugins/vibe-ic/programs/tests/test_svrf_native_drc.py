@@ -294,11 +294,56 @@ def test_streamout_warn_silent_when_map_present():
         "/pdk/calibre/KF_DRC.rule", "/pdk/lef/KF_layermap_SOC.txt") is None
 
 
-def test_streamout_warn_silent_when_no_deck():
-    # No sign-off deck → legacy numbering is irrelevant (OSS PDK path); no warning
-    # even if the map is also absent.
+def test_streamout_warn_silent_when_no_deck_AT_ALL():
+    # NO sign-off deck of any kind will run — `_signoff_drc_deck` returned None
+    # because the PDK ships neither a Calibre `.rule` nor a KLayout deck. There
+    # is then no verdict for the numbering to corrupt, so no warning.
+    #
+    # vibe-ic#789: the comment here used to read "OSS PDK path", which was
+    # FALSE and is the reason this argument stayed Calibre-scoped for so long.
+    # `None` does NOT mean "an OSS PDK": an OSS PDK such as nangate45 or asap7
+    # ships a real KLayout `.lydrc` whose rules select layers BY NUMBER, so it
+    # is a deck-PRESENT case (pinned in the test below), not this one. `None`
+    # means one thing only — this run runs no sign-off DRC at all.
     assert R._streamout_layermap_warning(None, None) is None
     assert R._streamout_layermap_warning(None, "/pdk/lef/map.txt") is None
+
+
+def test_streamout_warn_fires_for_a_KLAYOUT_deck_too(tmp_path):
+    """vibe-ic#789 — the guard is keyed on DECK-PRESENT, not on the deck being
+    a commercial Calibre deck.
+
+    GDSII stores no layer names, so a KLayout `.lydrc` binds its rules to layer
+    NUMBERS exactly as an SVRF deck does (`input(19, 0)`, `polygons(1, 0)`).
+    A KLayout-deck PDK with no streamout map therefore has the SAME defect —
+    and used to get NO warning, because the argument was `calibre_drc`."""
+    w = R._streamout_layermap_warning("/pdk/klayout/drc/FreePDK45.lydrc", None)
+    assert w is not None
+    assert "FreePDK45.lydrc" in w
+    assert "LEGACY" in w and "ARTEFACTS" in w
+    # and a KLayout deck WITH a map stays silent, as the Calibre one does
+    assert R._streamout_layermap_warning(
+        "/pdk/klayout/drc/asap7.lydrc", "/pdk/tech/asap7.map") is None
+
+
+def test_signoff_drc_deck_is_deck_presence_not_vendor():
+    """`_signoff_drc_deck` names the deck the run will EXECUTE, from the same
+    two fields `step_drc` dispatches on — and returns None only when there is
+    no deck at all."""
+    # Calibre-only PDK
+    assert R._signoff_drc_deck("/pdk/calibre/KF_DRC.rule", None) == \
+        "/pdk/calibre/KF_DRC.rule"
+    # KLayout-only PDK (the case that used to read as "no deck")
+    assert R._signoff_drc_deck(None, "/pdk/klayout/drc/asap7.lydrc") == \
+        "/pdk/klayout/drc/asap7.lydrc"
+    # both present → the KLayout deck, mirroring step_drc's own dispatch
+    # (`if not pdk.drc_deck:` takes the Calibre route, so a KLayout deck wins)
+    assert R._signoff_drc_deck("/pdk/calibre/KF_DRC.rule",
+                               "/pdk/klayout/drc/x.lydrc") == \
+        "/pdk/klayout/drc/x.lydrc"
+    # genuinely deckless
+    assert R._signoff_drc_deck(None, None) is None
+    assert R._signoff_drc_deck("", "") is None
 
 
 # --------------------------------------------------------------------------
