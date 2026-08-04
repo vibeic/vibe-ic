@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1054
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1054)
+- **Total programs (excluding helpers / shims):** 1055
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1055)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1045 |
+| `any` | 1046 |
 
 ## Alphabetical listing
 
@@ -729,6 +729,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_no_waivers_used_check` | any | Wave 23 | gate (Wave 23, v0.119.55). |
 | `phase1_one_shot_runner` | any | — | Phase 1 unified dispatcher. |
 | `phase1_parity_source_tier_check` | any | — | Keep the Phase-1 parity source-tier record honest. |
+| `phase1_planned_consumer_starved_check` | any | — | an empty layer is only allowed to be empty when NOTHING LATER READS IT. |
 | `phase1_port_extract` | any | — | deterministic PORT / PARAM / RESET extraction for the Phase-1 NL ingester. |
 | `phase1_post_process` | any | v0.1.51 | phase1 output post-processor. |
 | `phase1_protocol_spec_extract` | any | v0.1.51 | Phase 1 protocol-spec extractor (L14-L18). |
@@ -1126,7 +1127,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1045 programs)
+### `any` (1046 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1826,6 +1827,7 @@ _(no programs in this group)_
 - `phase1_no_waivers_used_check` — gate (Wave 23, v0.119.55).  _[Wave 23]_
 - `phase1_one_shot_runner` — Phase 1 unified dispatcher.
 - `phase1_parity_source_tier_check` — Keep the Phase-1 parity source-tier record honest.
+- `phase1_planned_consumer_starved_check` — an empty layer is only allowed to be empty when NOTHING LATER READS IT.
 - `phase1_port_extract` — deterministic PORT / PARAM / RESET extraction for the Phase-1 NL ingester.
 - `phase1_post_process` — phase1 output post-processor.  _[v0.1.51]_
 - `phase1_protocol_spec_extract` — Phase 1 protocol-spec extractor (L14-L18).  _[v0.1.51]_
