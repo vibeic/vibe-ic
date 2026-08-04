@@ -142,7 +142,18 @@ def test_every_candidate_blocked_yields_no_plan_not_a_bad_one():
 
 def test_the_planner_reads_OBS_at_all():
     """The measurement the issue opened with, kept as a test: this returned
-    False for both functions."""
+    False for both functions.
+
+    #701 moved the planner BODY into `_macro_pdn_grid_outcome` and left
+    `_macro_pdn_grid_plan` as a one-line accessor onto it, so the source of the
+    entry point no longer holds the call. Follow the logic rather than the
+    name: the property is "the code that plans reads OBS", and it is checked
+    over the whole planning path — plus, below, behaviourally, which is the
+    check a rename cannot fool."""
     import inspect
-    src = inspect.getsource(R._macro_pdn_grid_plan)
+    src = (inspect.getsource(R._macro_pdn_grid_outcome)
+           + inspect.getsource(R._macro_pdn_grid_plan))
     assert "_macro_obs_layers_from_lef" in src
+    # and the same claim without any reference to source text at all
+    assert _plan(_with_obs(T.MACRO_LEF, ["L4"]))["strap_layer"] != "L4"
+    assert _plan(T.MACRO_LEF)["strap_layer"] == "L4"
