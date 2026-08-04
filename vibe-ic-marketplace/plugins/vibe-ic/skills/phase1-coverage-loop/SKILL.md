@@ -149,7 +149,11 @@ If it wrapped to 0, increment `rotation_passes_completed`.
 When the review agent reports concrete systematic gaps:
 
 1. For the top gap, write
-   `<plugin_root>/community/backlogs/ORGANIC-phase1-<YYYYMMDD>-<slug>.yaml`
+   `<repo_root>/vibe-ic-marketplace/community/backlogs/ORGANIC-phase1-<YYYYMMDD>-<slug>.yaml`
+   (ORGANIC #794 — this used to read `<plugin_root>/community/backlogs/`,
+   which resolves to `plugins/vibe-ic/community/backlogs/` and does not
+   exist. That is the ONE directory `agent_checkin_scope_guard.ZONE_BACKLOG`
+   and the `--audit tracked` hygiene gate watch.)
    using the schema in the `community-backlog-submit` skill. The
    `severity` field is **enforced by
    `programs/backlog_severity_classify.py`** (HIGH iff any affected

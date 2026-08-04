@@ -165,7 +165,12 @@ handoff** below), THEN file a complete verified bundle:
    A bundle that does not pass this gate is NOT filed — it is still
    a surface symptom, not a converged resolution.
 3. For the gap, write the backlog YAML
-   `<plugin_root>/community/backlogs/ORGANIC-<YYYYMMDD>-<slug>.yaml`
+   `<repo_root>/vibe-ic-marketplace/community/backlogs/ORGANIC-<YYYYMMDD>-<slug>.yaml`
+   (ORGANIC #794 — this used to read `<plugin_root>/community/backlogs/`,
+   which resolves to `plugins/vibe-ic/community/backlogs/` and does not
+   exist. That is the ONE directory `agent_checkin_scope_guard.ZONE_BACKLOG`
+   and the `--audit tracked` hygiene gate watch; a file written anywhere else
+   is watched by nothing.)
    using the schema in the `community-backlog-submit` skill, and
    describe **all** layers the bundle resolves (not just the surface
    one), so the gatekeeper reviews the converged whole.

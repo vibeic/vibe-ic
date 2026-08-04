@@ -279,6 +279,39 @@ gh issue create --repo vibeic/vibe-ic \
 
 If the user declines, the YAML file stays local — no data leaves.
 
+### Step 6 — Inside the vibe-ic repo: COMMIT it, or DELETE it (ORGANIC #794)
+
+Steps 1-5 create a file and never put it in git. That gap cost thirteen
+ORGANIC items written into `vibe-ic-marketplace/community/backlogs/` between
+2026-06-14 and 2026-07-12: they sat untracked beside twenty-five committed
+siblings, indistinguishable in `ls`, until the working tree that held them was
+cleaned and they were gone. Nobody can now say from the files which of the
+thirteen were still live.
+
+So when the backlogs directory you wrote into is **inside a git repository**,
+the file has exactly two honest end states:
+
+* **committed** — `git add <the file> && git commit` (explicit path; never
+  `git add -A`), or
+* **deleted** — you decided it was not worth filing, so remove it.
+
+"Left on disk, untracked" is neither, and it is the state that loses items.
+
+This is not left to memory: `repo_hygiene_gates.sh` runs
+
+```bash
+python3 <plugin_root>/programs/backlog_sanitize_check.py \
+    --dir vibe-ic-marketplace/community/backlogs --audit tracked
+```
+
+on every landing, and it FAILs (rc 1) naming any backlog YAML on disk that git
+does not track — or that a `.gitignore` rule hides. Run it yourself before you
+hand off; it prints the count it examined either way.
+
+> The rule is scoped to a git work tree. An end user filing a backlog in a
+> non-repo directory is untouched: the gate REFUSES (rc 2) rather than
+> pretending to have an opinion about a tree git cannot see.
+
 ## Do not
 
 - **Do not include ANY vendor/IC-specific data** in the backlog.
@@ -293,6 +326,8 @@ The skill produces:
 1. A YAML file in `community/backlogs/ORGANIC-<id>.yaml`
 2. A sanitization report from `backlog_sanitize_check`
 3. (Optional) A GitHub Issue URL if the user consents to submission
+4. Inside a git repo: that YAML **committed or deleted** — proven by
+   `backlog_sanitize_check.py --dir <backlogs_dir> --audit tracked` (#794)
 
 ## Compliance gate (mandatory)
 
