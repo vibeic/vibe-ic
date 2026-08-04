@@ -183,8 +183,30 @@ _TALLY_RE = re.compile(
     r"PASS\s*=\s*(\d+)\s+FAIL\s*=\s*(\d+)\s+MISSING\s*=\s*(\d+)",
     re.IGNORECASE,
 )
-#: Directories whose newest file dates the run this document reports on.
+#: Directories that MAY hold a run tree — used to decide `_is_run_tree`.
 _EVIDENCE_ROOTS = ("reports", "phase1", "phase2", "phase3")
+#: The compliance flow's OWN output root. The umbrella compliance check and its
+#: sub-checkers (re)write their gate/audit JSONs under `reports/` on EVERY
+#: invocation, so the newest mtime under `reports/` advances each run. A
+#: freshness judge must not treat the reports IT regenerates as "a newer round
+#: of the design": doing so made this gate's verdict depend on how many times
+#: the gate had been run.
+#:
+#: Measured (subservient_gf180mcuD, plugin 1.9.76): a fresh run tree passed on
+#: run 1 (newest evidence `reports/phase2/gates/cdc_reset_dep.json` sat 8s after
+#: RESULT.md, within grace) and FAILED on run 2+ (the umbrella re-stamped
+#: `reports/phase2/gates/spec_required_artifacts.json` to now, 7251s after
+#: RESULT.md's preserved mtime). Across 3 runs, 100% of the umbrella's file
+#: mutations — content AND mtime — landed under `reports/`; zero under phase*/
+#: or the project root. Excluding `reports/` from the freshness reference makes
+#: the newest-evidence mtime stable across runs, so the verdict no longer
+#: depends on the run count, while every DESIGN-round artefact (phase1/2/3 +
+#: root) a stale RESULT.md would actually contradict stays in scope.
+_FLOW_OUTPUT_ROOTS = ("reports",)
+#: Roots whose newest file dates the DESIGN round this document reports on —
+#: the evidence roots minus the flow's own regenerated output tree.
+_DESIGN_EVIDENCE_ROOTS = tuple(
+    r for r in _EVIDENCE_ROOTS if r not in _FLOW_OUTPUT_ROOTS)
 #: A document written within this many seconds of the newest artefact is part
 #: of the same round. Generous on purpose: the rule must fire on a stale
 #: ROUND, never on the ordinary case of writing the report a few minutes after
@@ -193,10 +215,18 @@ _STALE_GRACE_S = 3600
 
 
 def _newest_evidence(project: Path) -> Tuple[Optional[float], Optional[str]]:
-    """`(mtime, path)` of the newest artefact under the evidence roots."""
+    """`(mtime, path)` of the newest DESIGN-round artefact.
+
+    Walks `_DESIGN_EVIDENCE_ROOTS` — the evidence roots MINUS the compliance
+    flow's own output tree (`reports/`). The flow re-stamps `reports/` on every
+    run, so including it made this gate's verdict depend on the run count (PASS
+    on run 1, FAIL on run 2+). The design round's real artefacts live under
+    phase1/2/3 and the project root, which the flow does not mutate; keying the
+    freshness reference on those makes the verdict run-count-invariant.
+    """
     newest: Optional[float] = None
     newest_p: Optional[str] = None
-    for root in _EVIDENCE_ROOTS:
+    for root in _DESIGN_EVIDENCE_ROOTS:
         d = project / root
         if not d.is_dir():
             continue
