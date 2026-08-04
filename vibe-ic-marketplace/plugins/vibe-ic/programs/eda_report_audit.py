@@ -260,13 +260,23 @@ def _discover(project_dir: Path, patterns: List[str]) -> List[Path]:
     found: List[Path] = []
     for pat in patterns:
         found.extend(project_dir.rglob(pat))
-    # Deduplicate, preserve order
+    # Deduplicate, preserve order.
+    # Key on the RESOLVED target, not the literal path: the step runners
+    # publish each canonical report a second time as a symlink under
+    # steps/<phase>/<stage>/<step>/, so a path-keyed dedup lets the same
+    # physical file through twice and every per-file count (violations,
+    # errors) is summed twice. Keys on p.resolve() the way _in_scope already
+    # does, so a symlink and its target collapse to one entry.
     seen = set()
     unique = []
     for p in found:
-        if p in seen:
+        try:
+            key = p.resolve()
+        except OSError:
+            key = p
+        if key in seen:
             continue
-        seen.add(p)
+        seen.add(key)
         if _is_backup_path(p, project_dir):
             continue
         if _is_own_verdict_document(p):
