@@ -42,6 +42,14 @@ Failure rules:
                               (and at least one is FAIL or all blank)
   A4_NO_SIMULATOR_RUN      — every declared corner has
                               `simulator_run: false`. v10632 escape.
+  A4_NETLIST_SHA_MISMATCH  — the artefact records a `netlist_sha256` /
+                              `netlist_testbench_sha256`, but the file it
+                              names hashes differently NOW: the sweep
+                              measured a circuit that is no longer on disk.
+  A4_SHA_CLAIM_UNANCHORED  — a sha256 is recorded but the companion path
+                              field names no file to check it against.
+  A4_SHA_SOURCE_UNREADABLE — the recorded path cannot be read, so the
+                              recorded hash cannot be verified.
   A4_CORNER_MARGIN_FAIL    — the nominal corner is in-spec but a REAL
                               process/temp corner is outside the spec
                               window (#185): the sweep is graded on its
@@ -70,6 +78,7 @@ chip-AGNOSTIC.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -368,6 +377,84 @@ def _a3_netlist(project: Path, block: str) -> tuple:
     return rel, found
 
 
+
+# A corner artefact records `netlist_sha256` and `netlist_testbench_sha256`
+# next to the paths they are the hash OF. Nothing re-computed them, so the
+# fields were a claim, not evidence.
+#
+# MEASURED on a converged analog run before this change: a block's
+# corner_results.json recorded
+#   netlist_sha256 = 978f8936c27a3cc6eb0f2d38d7a561fab4e2b11029938b15fbeb18c971300546
+# while the file it names, `phase3/analog/<block>/<block>.sp`, hashed
+#   929f0980f941efcf472e74beeb2192bf93eea21c7aea2b2796841fd23088af0a
+# and this gate returned PASS. A second block in the same run disagreed the
+# same way. `grep -n "sha256" analog_a4_corner_sweep_check.py` had no hits.
+#
+# What that buys an escape: edit the netlist after the sweep and the sweep's
+# verdict still certifies A4 for a circuit that is no longer on disk — the
+# corner numbers describe one design, the netlist A5/A6 lay out is another,
+# and every downstream step reads the second while quoting the first.
+#
+# The rule verifies only what the artefact ASSERTS. An artefact that records
+# no hash makes no claim and is left alone here (other rules judge whether it
+# may certify while saying nothing); an artefact that records a hash must have
+# it hold. Silence is not upgraded to evidence, and disclosure is not punished.
+_SHA_CLAIMS = (
+    ("netlist_sha256", "netlist_source", "netlist"),
+    ("netlist_testbench_sha256", "netlist_testbench", "testbench"),
+)
+
+
+def _sha256_of(path: Path) -> Optional[str]:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _sha_claim_fail(project: Path, block: str, data: dict, rel: str
+                    ) -> Optional[dict]:
+    """Re-hash every file this artefact records a sha256 FOR. chip-AGNOSTIC:
+    field names and paths only, no design/tool literal."""
+    for sha_key, path_key, what in _SHA_CLAIMS:
+        claimed = data.get(sha_key)
+        if not isinstance(claimed, str) or not claimed.strip():
+            continue                       # no claim made → nothing to verify
+        named = data.get(path_key)
+        if not isinstance(named, str) or not named.strip():
+            return {
+                "block": block, "rule": "A4_SHA_CLAIM_UNANCHORED",
+                "rel_path": rel,
+                "detail": (f"{sha_key}={claimed[:16]}... is recorded but "
+                           f"{path_key!r} names no file, so the hash cannot "
+                           f"be checked against anything. A hash of an "
+                           f"unnamed input is not provenance."),
+            }
+        target = Path(named)
+        if not target.is_absolute():
+            target = project / named
+        actual = _sha256_of(target)
+        if actual is None:
+            return {
+                "block": block, "rule": "A4_SHA_SOURCE_UNREADABLE",
+                "rel_path": rel,
+                "detail": (f"{path_key}={named!r} is recorded as the {what} "
+                           f"this sweep measured, but it cannot be read now, "
+                           f"so {sha_key} cannot be verified."),
+            }
+        if actual.lower() != claimed.strip().lower():
+            return {
+                "block": block, "rule": "A4_NETLIST_SHA_MISMATCH",
+                "rel_path": rel,
+                "detail": (f"{sha_key} records {claimed} but {named!r} hashes "
+                           f"{actual} now — the {what} on disk is NOT the one "
+                           f"this corner sweep measured. Re-run the sweep on "
+                           f"the current {what}, or the corner verdict "
+                           f"certifies a circuit nothing downstream reads."),
+            }
+    return None
+
+
 def _check_block(project: Path, block: str
                  ) -> tuple[Optional[str], List[dict]]:
     path, found = resolve_block_artefact(
@@ -397,6 +484,10 @@ def _check_block(project: Path, block: str
     nl = _netlist_disclosed_fail(project, block, data, rel)
     if nl is not None:
         return "FAIL", [nl]
+    # Then the artefact's own hashes: a recorded sha256 must still hold.
+    sha = _sha_claim_fail(project, block, data, rel)
+    if sha is not None:
+        return "FAIL", [sha]
     corners = data.get("corners")
     if not isinstance(corners, list) or not corners:
         return "FAIL", [{

@@ -125,3 +125,101 @@ def test_no_block_list_vacuous(tmp_path: Path) -> None:
     assert r.returncode == 0
     rpt = json.loads((tmp_path / "report.json").read_text())
     assert rpt["verdict"] == "VACUOUS_PASS"
+
+
+# --- recorded-sha256 verification ---------------------------------------
+# A corner artefact records the sha256 of the netlist (and testbench) it
+# measured. Before these tests nothing re-computed it, so the field was a
+# claim; a run whose recorded hash disagreed with the file on disk PASSED.
+
+_CLEAN = {
+    "design_content": "structure_and_geometry",
+    "netlist_provenance": "a3_netlist",
+    "corners": [
+        {"process": "TT", "temp_c": 27, "vdd_v": 1.8, "simulator_run": True},
+        {"process": "SS", "temp_c": -40, "vdd_v": 1.62, "simulator_run": True},
+    ],
+    "spec_results": [{"spec": "vout", "status": "PASS"}],
+}
+
+
+def _sha_of(project: Path, rel: str) -> str:
+    import hashlib
+    return hashlib.sha256((project / rel).read_bytes()).hexdigest()
+
+
+def test_matching_netlist_sha_passes(tmp_path: Path) -> None:
+    _block_list(tmp_path, ["ldo"])
+    _a3_netlist(tmp_path, "ldo")
+    doc = dict(_CLEAN)
+    doc["netlist_source"] = "phase3/analog/ldo/ldo.sp"
+    doc["netlist_sha256"] = _sha_of(tmp_path, "phase3/analog/ldo/ldo.sp")
+    _corners(tmp_path, "ldo", doc)
+    assert _run(tmp_path).returncode == 0
+
+
+def test_stale_netlist_sha_fails(tmp_path: Path) -> None:
+    """The measured escape: the netlist was edited after the sweep, so the
+    corner verdict certifies a circuit no longer on disk."""
+    _block_list(tmp_path, ["ldo"])
+    _a3_netlist(tmp_path, "ldo")
+    doc = dict(_CLEAN)
+    doc["netlist_source"] = "phase3/analog/ldo/ldo.sp"
+    doc["netlist_sha256"] = "0" * 64
+    _corners(tmp_path, "ldo", doc)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert any("A4_NETLIST_SHA_MISMATCH" in f["rule"] for f in rpt["findings"])
+
+
+def test_sha_without_a_named_source_fails(tmp_path: Path) -> None:
+    _block_list(tmp_path, ["ldo"])
+    _a3_netlist(tmp_path, "ldo")
+    doc = dict(_CLEAN)
+    doc["netlist_sha256"] = "0" * 64
+    _corners(tmp_path, "ldo", doc)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert any("A4_SHA_CLAIM_UNANCHORED" in f["rule"] for f in rpt["findings"])
+
+
+def test_sha_naming_an_unreadable_source_fails(tmp_path: Path) -> None:
+    _block_list(tmp_path, ["ldo"])
+    _a3_netlist(tmp_path, "ldo")
+    doc = dict(_CLEAN)
+    doc["netlist_source"] = "phase3/analog/ldo/does_not_exist.sp"
+    doc["netlist_sha256"] = "0" * 64
+    _corners(tmp_path, "ldo", doc)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert any("A4_SHA_SOURCE_UNREADABLE" in f["rule"] for f in rpt["findings"])
+
+
+def test_stale_testbench_sha_fails(tmp_path: Path) -> None:
+    _block_list(tmp_path, ["ldo"])
+    _a3_netlist(tmp_path, "ldo")
+    (tmp_path / "phase3" / "analog" / "ldo" / "tb_ldo.sp").write_text("* tb\n")
+    doc = dict(_CLEAN)
+    doc["netlist_source"] = "phase3/analog/ldo/ldo.sp"
+    doc["netlist_sha256"] = _sha_of(tmp_path, "phase3/analog/ldo/ldo.sp")
+    doc["netlist_testbench"] = "phase3/analog/ldo/tb_ldo.sp"
+    doc["netlist_testbench_sha256"] = "1" * 64
+    _corners(tmp_path, "ldo", doc)
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    assert any("A4_NETLIST_SHA_MISMATCH" in f["rule"] for f in rpt["findings"])
+
+
+def test_artefact_recording_no_sha_is_left_alone(tmp_path: Path) -> None:
+    """Silence is not upgraded to evidence, and it is not newly punished
+    here either — other rules judge an artefact that discloses nothing."""
+    _block_list(tmp_path, ["ldo"])
+    _a3_netlist(tmp_path, "ldo")
+    doc = dict(_CLEAN)
+    doc["netlist_source"] = "phase3/analog/ldo/ldo.sp"
+    _corners(tmp_path, "ldo", doc)
+    assert _run(tmp_path).returncode == 0
