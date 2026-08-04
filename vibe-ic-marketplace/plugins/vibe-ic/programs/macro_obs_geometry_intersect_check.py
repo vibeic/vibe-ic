@@ -159,24 +159,106 @@ _PATH_HEAD_RE = re.compile(
 _PATH_POINT_RE = re.compile(r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)(?:\s+-?\d+)?\s*\)")
 
 
-def _path_points(body: str) -> List[Tuple[int, int]]:
-    """The points of ONE wiring path, with `*` resolved against its predecessor.
+# A via placed INSIDE a wiring path: a bare identifier sitting between two
+# coordinate groups. LEF/DEF 5.8: "If you specify a via, layerName for the next
+# routing coordinates (if any) is implicitly changed to the other routing layer
+# for the via." So the head layer governs only up to the first via.
+_PATH_TOKEN_RE = re.compile(
+    r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)(?:\s+-?\d+)?\s*\)"      # a point
+    r"|([A-Za-z_][A-Za-z0-9_]*)")                          # or a bare name
 
-    A `*` is not a missing coordinate — it is the previous point's coordinate,
-    and it is how every real DEF writer spells an orthogonal segment. Dropping
-    those points drops the segments they describe."""
-    pts: List[Tuple[int, int]] = []
+# `- <viaName> ... + LAYERS <lower> <cut> <upper> ...` in the DEF's own VIAS
+# section. That is where a via's two routing layers are stated.
+_VIAS_SEC_RE = re.compile(r"^\s*VIAS\s+\d+\s*;(.*?)^\s*END\s+VIAS",
+                          re.S | re.M)
+_VIA_LAYERS_RE = re.compile(r"\+\s*LAYERS\s+(\S+)\s+(\S+)\s+(\S+)", re.I)
+
+# DEF's own vocabulary, which occupies the same syntactic slot as a via name
+# inside a wiring path. Not vias.
+_PATH_KEYWORDS = {
+    "NEW", "ROUTED", "FIXED", "COVER", "SHAPE", "USE", "STYLE", "MASK",
+    "RECT", "VIRTUAL", "NONDEFAULTRULE", "TAPER", "TAPERRULE",
+    "FOLLOWPIN", "STRIPE", "IOWIRE", "COREWIRE", "BLOCKWIRE", "BLOCKAGEWIRE",
+    "FILLWIRE", "FILLWIREOPC", "DRCFILL", "RING", "PADRING", "BLOCKRING",
+    "POWER", "GROUND", "SIGNAL", "CLOCK", "TIEOFF", "ANALOG", "RESET", "SCAN",
+}
+
+
+def parse_via_layers(def_text: str) -> Dict[str, Tuple[str, str]]:
+    """{viaName: (lowerRoutingLayer, upperRoutingLayer)} from the VIAS section.
+
+    Only vias DEFINED IN THIS DEF are resolvable here. A via that comes from the
+    tech LEF is not, and the caller must treat it as unknown rather than guess —
+    see `_path_segments`."""
+    out: Dict[str, Tuple[str, str]] = {}
+    sec = _VIAS_SEC_RE.search(def_text)
+    if not sec:
+        return out
+    for entry in re.split(r"\n\s*-\s+", sec.group(1)):
+        nm = re.match(r"\s*(\S+)", entry)
+        lm = _VIA_LAYERS_RE.search(entry)
+        if nm and lm:
+            out[nm.group(1)] = (lm.group(1), lm.group(3))
+    return out
+
+
+def _path_segments(body: str, head_layer: str,
+                   via_layers: Dict[str, Tuple[str, str]]
+                   ) -> List[Tuple[str, int, int, int, int]]:
+    """`[(layer, x1, y1, x2, y2)]` for ONE wiring path.
+
+    Two things the head layer alone cannot tell you:
+
+    * `*` is not a missing coordinate — DEF defines it as the PREVIOUS point's
+      coordinate, and it is how every real writer spells an orthogonal segment.
+      Dropping those points drops the segments they describe.
+    * a via inside the path switches the layer for everything after it. Stamping
+      the whole path with the head layer puts upper-layer metal on the lower
+      layer, which on a BLOCKING gate does not merely miss a violation — it
+      FABRICATES one, against an obstruction the metal never went near.
+
+    When a via cannot be resolved (it is defined in the tech LEF, which this gate
+    does not read), the layer after it is UNKNOWN. This stops emitting rather
+    than continuing under the previous layer: an unreported segment is a gap, an
+    unreported segment attributed to the wrong layer is a false accusation, and
+    on a gate that blocks the second is strictly worse. `parse_routed_segments`
+    counts these so the caller can see the gap instead of inferring silence."""
+    segs: List[Tuple[str, int, int, int, int]] = []
+    layer = head_layer
     px: Optional[int] = None
     py: Optional[int] = None
-    for pm in _PATH_POINT_RE.finditer(body):
-        a, b = pm.group(1), pm.group(2)
+    for tm in _PATH_TOKEN_RE.finditer(body):
+        a, b, name = tm.group(1), tm.group(2), tm.group(3)
+        if name is not None:
+            # A via is an identifier sitting BETWEEN coordinates. The same
+            # position also carries DEF's own keywords (`+ SHAPE FOLLOWPIN`
+            # before the first point, `+ USE POWER ;` after the last), so a
+            # bare-identifier rule alone reads `SHAPE` as an unresolvable via
+            # and abandons the whole path. Require both: we are mid-path, and
+            # the token is not vocabulary.
+            if px is None or name.upper() in _PATH_KEYWORDS:
+                continue
+            pair = via_layers.get(name)
+            if pair is None:
+                return segs                      # unresolvable via: stop here
+            lo, hi = pair
+            # the via connects two routing layers; move to whichever is not the
+            # one we are on. If neither matches, the path is not describable.
+            if layer.lower() == lo.lower():
+                layer = hi
+            elif layer.lower() == hi.lower():
+                layer = lo
+            else:
+                return segs
+            continue
         x = px if a == "*" else int(a)
         y = py if b == "*" else int(b)
         if x is None or y is None:
             continue      # a `*` in a path's first point has nothing to repeat
+        if px is not None and py is not None:
+            segs.append((layer, px, py, x, y))
         px, py = x, y
-        pts.append((x, y))
-    return pts
+    return segs
 
 
 def parse_routed_segments(def_text: str) -> List[Dict[str, Any]]:
@@ -194,16 +276,16 @@ def parse_routed_segments(def_text: str) -> List[Dict[str, Any]]:
                     def_text, re.S | re.M)
     if not sec:
         return segs
+    via_layers = parse_via_layers(def_text)
     for entry in re.split(r"\n\s*-\s+", sec.group(1)):
         nm = re.match(r"\s*(\S+)", entry)
         net = nm.group(1) if nm else "?"
         fp = "FOLLOWPIN" in entry
         heads = list(_PATH_HEAD_RE.finditer(entry))
         for i, hm in enumerate(heads):
-            layer = hm.group(1)
             end = heads[i + 1].start() if i + 1 < len(heads) else len(entry)
-            pts = _path_points(entry[hm.end():end])
-            for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
+            for layer, x1, y1, x2, y2 in _path_segments(
+                    entry[hm.end():end], hm.group(1), via_layers):
                 segs.append({"layer": layer, "net": net, "followpin": fp,
                              "x1": min(x1, x2), "y1": min(y1, y2),
                              "x2": max(x1, x2), "y2": max(y1, y2)})
