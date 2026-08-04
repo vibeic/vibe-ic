@@ -87,19 +87,36 @@ to REPORT how much stimulus a run actually had, so that a comparison between
 two identical trees can never again be read as coverage. A run with no stimulus
 is NOT_CHECKED (rc 2), never a pass.
 
+THE SCRATCH WORKTREE OUTLIVES THE PROBE (measured 2026-08-04)
+=============================================================
+The comparison needs a second tree, so this program creates one — a `mkdtemp`
+plus a `git worktree add`, removed in a `finally`.  A `finally` does not run on
+`SIGKILL`, and in one parallel-agent session NINETEEN `/tmp/hostindep-*/wt`
+trees were left standing, each still REGISTERED as a worktree of the repository
+every agent shares.  `git worktree prune` cannot clear a registration whose
+directory still exists, so they do not age out; they accumulate.
+
+The repair is not a better `finally` — there is no code the killed process gets
+to run.  It is to make the NEXT run able to prove the previous one is dead and
+clean up for it: each scratch directory carries an `flock`'d sidecar, which the
+kernel releases on death however the process died, and `_crash_safe_scratch`
+reaps every sibling whose lock it can take.  A peer that is still running holds
+its lock, is skipped, and is NAMED in the output.
+
 chip-AGNOSTIC: it compares process output, nothing else.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
+
+import _crash_safe_scratch as _scratch
 
 _HERE = Path(__file__).resolve().parent
 _PLUGIN = _HERE.parent
@@ -113,8 +130,24 @@ if str(_HERE) not in sys.path:
 # at the inner quote, and neither folded `\` continuations. Fixing that in one
 # copy would have left the other still blind and the two readers disagreeing
 # about what the script says, which the #539 tests exist to forbid.
+#
+# THE COPY WAS RE-ADDED ONCE, IN A MERGE, AND THAT IS THE POINT. The crash-safe
+# scratch work landed a second `_RUN_RE` here — the very regex this file had
+# just stopped carrying — widened by one hand for `run_tolerating_uncheckable`
+# while the other hand was rewriting the shared reader. Driven against the
+# merged `tools/ci/repo_hygiene_gates.sh`, the regex saw 60 declarations and
+# `parse_declarations` saw 63: the three `$_cell` loop gates were invisible to
+# it, and `severity=ERROR is consumed` came back truncated at its `\`. The one
+# element the regex produced that the shared reader does not is that truncation
+# — same label, broken command — so nothing is lost by deleting it, and a
+# second copy is exactly how the last defect stayed invisible in both files.
 from gate_discloses_denominator_check import (            # noqa: E402
     parse_declarations)
+
+#: Scratch prefix.  UNCHANGED from the leaking version on purpose — the reaper
+#: keys on it, so the directories a pre-fix build already left behind are the
+#: first thing a fixed run cleans up.
+_SCRATCH_PREFIX = "hostindep-"
 
 #: A gate may DECLARE itself out of this comparison, on the line above its own
 #: `run` line, in the script where it is wired:
@@ -193,6 +226,11 @@ class Audit(NamedTuple):
     declared: int
     probed: int
     not_probed: List[Tuple[str, str]]   # (label, why)
+    #: What the scratch reaper did on the way in. Reported rather than silent:
+    #: a sweep that removes another agent's live worktree and says nothing is
+    #: the same class of damage as the leak it is fixing, so both the removals
+    #: and the SKIPS are named.
+    scratch: Optional[Dict] = None
 
 
 def corpus_gates(script: Path) -> List[Gate]:
@@ -322,29 +360,131 @@ def checkout_dirt(repo_root: Path, timeout: int = 600) -> Optional[Dirt]:
     return Dirt(tracked, untracked, ignored, ignored_reported)
 
 
+def _unregister_worktree(scratch: Path) -> None:
+    """Drop the git registration an abandoned scratch tree still holds.
+
+    Addressed THROUGH the worktree itself (`git -C <wt> worktree remove <wt>`)
+    rather than through the repo this run happens to be probing: a leftover may
+    belong to any checkout on the host, and pointing the wrong repository at it
+    would fail while looking like it worked.  The directory is what knows who
+    owns it.
+    """
+    wt = scratch / "wt"
+    if not wt.exists():
+        return
+    r = subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
+                        str(wt)], capture_output=True, text=True, timeout=120)
+    if r.returncode == 0:
+        return
+    # A worktree git considers LOCKED refuses a single `--force`. Measured: a
+    # run killed mid-`worktree add` left the lock behind, so the very state
+    # this reaper exists for is the one that can be locked. `unlock` then
+    # retry; if that still fails the directory is removed anyway and the
+    # registration is dropped by the `prune` the caller runs — never left
+    # standing because one git subcommand was fussy.
+    subprocess.run(["git", "-C", str(wt), "worktree", "unlock", str(wt)],
+                   capture_output=True, text=True, timeout=120)
+    subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
+                    str(wt)], capture_output=True, text=True, timeout=120)
+
+
+def _release_scratch(res, repo_root: Path) -> None:
+    """The CLEAN path: unregister, unlock, delete.
+
+    Correctness does not depend on reaching it — that is what the reaper is for
+    — but a run that exits normally should not leave work for the next one.
+    """
+    _unregister_worktree(res.path)
+    res.release()
+    # Only ever removes registrations whose DIRECTORY is gone, so a worktree a
+    # concurrent agent is sitting in cannot be pruned by this.
+    subprocess.run(["git", "-C", str(repo_root), "worktree", "prune"],
+                   capture_output=True, text=True, timeout=120)
+
+
 def _setup(verdict: str, kind: str, detail: str, dirt: Optional[Dirt],
-           declared: int) -> Audit:
+           declared: int, scratch: Optional[Dict] = None) -> Audit:
     """A result decided before any gate ran. 0 probed, and it says so."""
     return Audit(verdict,
                  [{"gate": "(setup)", "kind": kind, "detail": detail}],
-                 dirt, declared, 0, [])
+                 dirt, declared, 0, [], scratch)
+
+
+def peer_probes_running() -> List[int]:
+    """Other live processes running THIS program, by pid.
+
+    Needed only for the transition. A build that predates the lock sidecar
+    leaves a scratch directory this reaper cannot attribute, so it falls back
+    to age plus a `/proc` scan — and several agents demonstrably run against
+    one host, where a probe that has been alive longer than the age threshold
+    would be a candidate for deletion at the instant no child of it happens to
+    be sitting in the directory. While ANY peer is alive the unlockable
+    directories are simply kept; the guess is not made better, it is not made.
+    """
+    me = Path(__file__).name
+    pids: List[int] = []
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return [-1]                     # cannot look -> assume a peer exists
+    for entry in proc.iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            cmd = (entry / "cmdline").read_bytes().decode("utf-8", "replace")
+        except OSError:
+            continue
+        if me in cmd:
+            pids.append(int(entry.name))
+    return pids
+
+
+def sweep_abandoned_scratch(repo_root: Path,
+                            tmp_root: Optional[Path] = None,
+                            peers: Optional[List[int]] = None) -> Dict:
+    """Clean up after every PREVIOUS run of this program that was killed.
+
+    Runs before anything else, and on every exit path including the ones that
+    refuse to probe: a checkout too dirty to compare is exactly the state a
+    maintainer's tree is in while the leftovers pile up, so a reaper that only
+    ran on the happy path would almost never run at all.
+
+    `tmp_root` and `peers` are test seams, and they exist for a reason this
+    module is about: a test that drove this against the real `/tmp` would
+    create and delete directories other agents' probes are reading, and one
+    that depended on no peer being alive would either race them or skip
+    whenever the host is busy — which on this host is most of the time.
+    """
+    if peers is None:
+        peers = peer_probes_running()
+    rep = _scratch.reap(_SCRATCH_PREFIX, remover=_unregister_worktree,
+                        root=tmp_root, reap_unlocked=not peers)
+    if rep.reaped:
+        # `prune` after the removals, not instead of them: it drops the
+        # registrations whose directories this sweep has just deleted, and by
+        # construction cannot touch one whose directory still exists.
+        subprocess.run(["git", "-C", str(repo_root), "worktree", "prune"],
+                       capture_output=True, text=True, timeout=120)
+    return {"reaped": rep.reaped, "live_peers": rep.live,
+            "peer_probe_pids": peers,
+            "kept": [{"path": p, "why": w} for p, w in rep.kept]}
 
 
 def audit(repo_root: Path, timeout: int = 600) -> Audit:
+    scratch = sweep_abandoned_scratch(repo_root)
     script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
     gates = corpus_gates(script)
     declared = len(gates)
     if not gates:
         # This program's own denominator: reporting clean over an empty gate
         # list is the defect it exists to catch, one level up.
-        return Audit("NOTHING_SCANNED", [], None, 0, 0, [])
+        return Audit("NOTHING_SCANNED", [], None, 0, 0, [], scratch)
 
     dirt = checkout_dirt(repo_root, timeout)
     if dirt is None:
         return _setup("STATUS_UNAVAILABLE", "STATUS_UNAVAILABLE",
                       "`git status` did not answer, so the checkout could not "
                       "be characterised and no comparison was attempted",
-                      None, declared)
+                      None, declared, scratch)
 
     # MODIFIED TRACKED FILES make the comparison meaningless: the worktree is
     # at HEAD, so every uncommitted edit shows up as a "difference" that has
@@ -368,7 +508,7 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
             f"probe runs — untracked leftovers no longer block it "
             f"({len(dirt.untracked)} present). First few: "
             + ", ".join(x[3:][:40] for x in dirt.tracked[:4]),
-            dirt, declared)
+            dirt, declared, scratch)
 
     findings: List[Dict] = []
     not_probed: List[Tuple[str, str]] = []
@@ -381,8 +521,11 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
                        "reads another. Move it flush against its `run` line, "
                        "or delete it."),
             "checkout": text, "worktree": "-"})
-    td = tempfile.mkdtemp(prefix="hostindep-")
-    wt = Path(td) / "wt"
+    # A LOCKED scratch directory, not a bare `mkdtemp`. The lock is what a later
+    # run reads to decide this one is dead; the `finally` below is the tidy
+    # path, and the reaper is the one that holds under `SIGKILL`.
+    res, _ = _scratch.reserve(_SCRATCH_PREFIX, remover=_unregister_worktree)
+    wt = res.path / "wt"
     try:
         r = subprocess.run(
             ["git", "-C", str(repo_root), "worktree", "add", "-q",
@@ -392,7 +535,7 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
             # NEVER a silent pass — "I could not look" is its own state.
             return _setup("WORKTREE_UNAVAILABLE", "WORKTREE_UNAVAILABLE",
                           (r.stderr or r.stdout or "").strip()[:300],
-                          dirt, declared)
+                          dirt, declared, scratch)
 
         plugin_rel = Path("vibe-ic-marketplace") / "plugins" / "vibe-ic"
         me = Path(__file__).name
@@ -482,13 +625,12 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
                     "worktree": f"rc={b.returncode} {vb[:200]}",
                 })
     finally:
-        subprocess.run(["git", "-C", str(repo_root), "worktree", "remove",
-                        "--force", str(wt)], capture_output=True, text=True)
-        shutil.rmtree(td, ignore_errors=True)
+        _release_scratch(res, repo_root)
 
     probed = declared - len(not_probed)
     if findings:
-        return Audit("FAIL", findings, dirt, declared, probed, not_probed)
+        return Audit("FAIL", findings, dirt, declared, probed, not_probed,
+                     scratch)
     # NO STIMULUS IS NOT A PASS (#539). Every gate agreeing across two trees
     # that carry the same bytes is arithmetic, not evidence: the leftovers this
     # probe detects a gate READING were absent from both sides, so the run had
@@ -502,8 +644,9 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
     # keeps the PASS: we cannot then prove the stimulus was zero, and inventing
     # a NOT_CHECKED out of an unknown is the mirror of inventing a pass.
     if dirt is not None and dirt.ignored_reported and dirt.stimulus == 0:
-        return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed)
-    return Audit("PASS", findings, dirt, declared, probed, not_probed)
+        return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
+                     scratch)
+    return Audit("PASS", findings, dirt, declared, probed, not_probed, scratch)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -525,6 +668,8 @@ def main(argv: Optional[List[str]] = None) -> int:
              "gates_declared": res.declared,
              "gates_probed": res.probed,
              "not_probed": [{"gate": g, "why": w} for g, w in res.not_probed],
+             # What the entry sweep removed, and what it deliberately did not.
+             "scratch_sweep": res.scratch,
              "stimulus": (None if res.dirt is None else {
                  "untracked": len(res.dirt.untracked),
                  "ignored": len(res.dirt.ignored),
@@ -535,6 +680,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     # numerator without being named is how a set silently shrinks.
     for label, why in res.not_probed:
         print(f"  [NOT PROBED] {label} — {why}", file=sys.stderr)
+
+    # And say what the entry sweep did to other people's directories. A cleanup
+    # that runs silently is one nobody can audit when it removes the wrong
+    # thing, and this one deletes git worktrees.
+    if res.scratch:
+        for p in res.scratch.get("reaped", []):
+            print(f"  [REAPED] {p} — its owner was gone (the flock it held was "
+                  f"released), so an interrupted run's scratch worktree was "
+                  f"removed and unregistered", file=sys.stderr)
+        for p in res.scratch.get("live_peers", []):
+            print(f"  [LEFT ALONE] {p} — a live peer holds its lock",
+                  file=sys.stderr)
+        for k in res.scratch.get("kept", []):
+            print(f"  [LEFT ALONE] {k['path']} — {k['why']}", file=sys.stderr)
 
     if res.verdict == "NOTHING_SCANNED":
         print("NOTHING_SCANNED: no corpus-scanning gate parsed from "

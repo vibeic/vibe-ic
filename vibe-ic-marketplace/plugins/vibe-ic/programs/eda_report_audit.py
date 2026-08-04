@@ -29,12 +29,13 @@ import argparse
 import glob
 import hashlib
 import json
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
 import _signoff_drc_format as _sdf  # the ONE producer/dialect answer
@@ -218,11 +219,29 @@ def _is_own_verdict_document(p: Path) -> bool:
 _SCOPE_ROOTS: Optional[List[Path]] = None
 
 
+def _scope_root(r) -> Path:
+    """Canonical form of one `--under` root, without ever raising.
+
+    `Path.resolve()` is the SECOND place a symlink loop reaches — the root
+    itself is a declared artefact path, and `--under reports/phase3/
+    drc_signoff.rpt` naming a looping link aborted the run before discovery
+    even started. Degrading to the absolute literal path is fail-safe: a
+    candidate is admitted only if ITS resolved form sits under a root, and a
+    loop resolves to nothing, so the scope matches nothing and the gate
+    reports "no report under the declared scope" (rc 1) instead of crashing.
+    """
+    p = Path(r)
+    try:
+        return p.resolve()
+    except (OSError, RuntimeError):
+        return Path(os.path.abspath(str(p)))
+
+
 class scoped_discovery:  # noqa: N801 — a context manager, used as a verb
     """Restrict `_discover` to `roots` for the duration of the block."""
 
     def __init__(self, roots: Optional[List[Path]]):
-        self._roots = [Path(r).resolve() for r in roots] if roots else None
+        self._roots = [_scope_root(r) for r in roots] if roots else None
         self._prev = None
 
     def __enter__(self):
@@ -270,26 +289,102 @@ def _in_scope(p: Path) -> bool:
     return False
 
 
-def _discover(project_dir: Path, patterns: List[str]) -> List[Path]:
+def _identity(p: Path):
+    """The key two paths share when they are ONE physical file.
+
+    `(st_dev, st_ino)` from a link-following `stat()`, which is the identity
+    the defect is actually about: the step runners publish each canonical
+    report a second time as a symlink under `steps/<phase>/<stage>/<step>/`,
+    and `stat -L` shows one inode for the pair while the two literal `Path`
+    objects are two distinct keys. A path-keyed dedup therefore let the same
+    physical file through twice and every per-file quantity (violations,
+    errors) was summed twice.
+
+    Inode identity, not resolved-path identity, because it is the strictly
+    wider and strictly cheaper of the two and it costs nothing to be right
+    about the second case as well:
+
+        symlink / target        same inode   collapse   (the measured defect)
+        hard link pair          same inode   collapse   (resolve() keeps both)
+        independent copies      2 inodes     both kept
+        two BROKEN symlinks     stat fails   both kept  (see below)
+
+    A file `stat()` cannot reach is keyed on its LITERAL path — which is
+    exactly the pre-dedup behaviour for that path, so nothing an unreadable
+    path does can remove a readable report from the audit. That covers both
+    dangling symlinks (`FileNotFoundError`, and `resolve(strict=False)` would
+    have silently collapsed two DIFFERENT dangling links onto one shared
+    target) and symlink loops (`OSError: ELOOP` — note `Path.resolve()` raises
+    a bare `RuntimeError` there instead, which is the trap `_in_scope`
+    documents; `stat()` reports the errno straight, so the loop degrades here
+    rather than needing to be caught).
+    """
+    try:
+        st = p.stat()
+    except OSError:
+        return ("path", p)
+    return ("inode", st.st_dev, st.st_ino)
+
+
+def _discover(project_dir: Path, patterns: List[str],
+              exclude_name_tokens: Sequence[str] = ()) -> List[Path]:
     """Glob for files matching any of the given patterns recursively,
     skipping hidden / backup-flavored directories (#525), this program's own
-    verdict documents, and anything outside an active `--under` scope."""
+    verdict documents, names carrying any of `exclude_name_tokens`, and
+    anything outside an active `--under` scope. Aliases of one physical file
+    collapse to a single entry (see `_identity`)."""
     found: List[Path] = []
     for pat in patterns:
         found.extend(project_dir.rglob(pat))
-    # Deduplicate, preserve order
+    # THE KEY IS CLAIMED ONLY BY A PATH THAT SURVIVES EVERY FILTER.
+    # The filters key on the LITERAL path while `seen` keys on the physical
+    # file, so the two disagree about which alias is which. With `seen.add`
+    # above the filters, a backup/hidden/out-of-scope/excluded-name alias that
+    # `rglob` happens to reach FIRST claimed the key and was then dropped —
+    # and the canonical report behind it was skipped as a duplicate of a path
+    # that is not in the output. Measured, one real report plus one same-inode
+    # alias under a `*_bak/` directory::
+    #
+    #     alias reached first     _discover -> []            files_found=0
+    #     alias reached later     _discover -> [drc_signoff] files_found=1
+    #
+    # `rglob` walks shallower matches first and siblings in directory order, so
+    # which of the two the audit saw was decided by the alias's NAME AND DEPTH.
+    # Adding the key last makes the surviving path the one that owns it, and
+    # the filters idempotent with respect to walk order.
+    #
+    # `exclude_name_tokens` is here, rather than as a comprehension over the
+    # RETURNED list, for exactly that reason. STA's report-class exclusion
+    # (`crosstalk`/`drc`/`lvs`/... in the basename) used to run downstream of
+    # this loop, so an alias whose basename carried an excluded token could
+    # claim the key, evict the canonical report, and then be deleted by the
+    # name filter — leaving the mode with ZERO files and a fabricated
+    # `STA_REPORT_EXISTS` FAIL for a design whose STA report is right there::
+    #
+    #     alias `..._drc_alias.rpt` walked first, filter downstream
+    #                             passed=False files_found=0 [STA_REPORT_EXISTS]
+    #     same tree, filter inside _discover
+    #                             passed=True  files_found=1
+    #
+    # `step_output_collector` renames a mirrored artefact to
+    # `{parent.name}__{basename}` on a basename collision, so the flow itself
+    # can produce a basename the canonical report does not have.
     seen = set()
     unique = []
+    tokens = tuple(t.lower() for t in exclude_name_tokens)
     for p in found:
-        if p in seen:
+        key = _identity(p)
+        if key in seen:
             continue
-        seen.add(p)
         if _is_backup_path(p, project_dir):
             continue
         if _is_own_verdict_document(p):
             continue
+        if tokens and any(t in p.name.lower() for t in tokens):
+            continue
         if not _in_scope(p):
             continue
+        seen.add(key)
         unique.append(p)
     return unique
 
@@ -1635,8 +1730,6 @@ def _self_discloses_post_layout_derivation(text: str) -> bool:
 def _check_sta(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:sta", passed=False)
     declared_basis = _scope_declared_basis(project_dir)
-    files = _discover(project_dir, ["*sta*.rpt", "*timing*.rpt",
-                                     "*STA*.rpt", "*timing*.log"])
     # The `*sta*` glob substring-matches unrelated report classes whose names
     # merely CONTAIN "sta" — most notably "cro**sta**lk" (si_crosstalk.rpt).
     # A Signal-Integrity / crosstalk / noise report is NOT an STA timing
@@ -1645,10 +1738,16 @@ def _check_sta(project_dir: Path) -> AuditResult:
     # spurious STA_NO_TOOL_SIGNATURE FAIL for every project that emits an SI
     # report). Drop files whose names denote a different report class.
     # chip-AGNOSTIC: keyed on report-class name tokens, not any chip's signals.
+    #
+    # Passed INTO `_discover` rather than applied to its result: a name filter
+    # that runs downstream of the alias dedup lets an excluded alias claim the
+    # canonical report's key and then deletes the only survivor. See the
+    # `exclude_name_tokens` note in `_discover`.
     _STA_EXCLUDE = ("crosstalk", "si_", "_si.", "noise", "antenna", "drc",
                     "lvs", "_em.", "ir_drop", "power")
-    files = [f for f in files
-             if not any(tok in f.name.lower() for tok in _STA_EXCLUDE)]
+    files = _discover(project_dir, ["*sta*.rpt", "*timing*.rpt",
+                                     "*STA*.rpt", "*timing*.log"],
+                      exclude_name_tokens=_STA_EXCLUDE)
     if not files:
         result.findings.append(Finding(
             rule="STA_REPORT_EXISTS", severity="ERROR",

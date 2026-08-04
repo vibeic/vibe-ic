@@ -333,16 +333,100 @@ def test_a_scope_that_does_not_exist_is_not_a_pass(tmp_path):
     assert "STA_REPORT_EXISTS" in _rules(doc)
 
 
-def test_the_canonical_step_mirror_symlink_stays_in_scope(project):
-    """`steps/<n>_*/` holds symlinks to the declared artefacts. `_in_scope`
-    resolves before comparing, so the mirror needs no second `--under` — and
-    the count proves it is actually being read, not silently dropped."""
+def test_the_step_mirror_does_not_cost_the_gate_its_declared_report(project):
+    """`steps/<n>_*/` holds symlinks to the declared artefacts, so the mirror
+    needs no second `--under`.
+
+    THIS TEST USED TO ASSERT `files_found == 2`, reasoning that "the count
+    proves it is actually being read, not silently dropped". Since the alias
+    dedup the mirror and its target are ONE physical file, so 2 would now mean
+    the gate is summing one report's violations twice — the number stopped
+    being a witness for anything the moment it stopped being reachable. It was
+    never much of one either: 2 only ever proved that two PATHS survived
+    discovery, and said nothing about whether either one's bytes were read.
+
+    The concern it encoded — the declared report is genuinely read, not
+    silently dropped — is exactly what a dedup can break, so it is pinned
+    directly instead, three ways that are together strictly stronger than the
+    old number:
+
+      1. exactly ONE entry survives — the alias is collapsed, not summed;
+      2. the verdict with the mirror present is IDENTICAL to the verdict
+         without it — the mirror neither adds a count nor takes the report
+         away. This is the order-independent form of "which alias won": both
+         aliases are the same bytes, so the only two outcomes that are not
+         identical-to-canonical-only are the double count (2 files) and the
+         eviction (0 files, `STA_REPORT_EXISTS`);
+      3. the verdict still MOVES with the declared artefact's content while
+         the mirror is present — the only real proof the surviving path is
+         being read. Had the dedup let the mirror claim the key and then
+         dropped it, the rule would be `STA_REPORT_EXISTS`, not
+         `STA_REAL_VIOLATION_FOUND`.
+    """
+    rc_solo, doc_solo = _run(project, "--under", _STEP10_REPORT, out="solo.json")
+
     mirror = project / "steps/10_pre_layout_sta_multi_corner"
     mirror.mkdir(parents=True)
     (mirror / "pre_pnr_timing.rpt").symlink_to(project / _STEP10_REPORT)
+
     rc, doc = _run(project, "--under", _STEP10_REPORT, out="m.json")
     assert rc == 0, _rules(doc)
-    assert doc["summary"]["files_found"] == 2, doc["summary"]
+    assert doc["summary"]["files_found"] == 1, (
+        f"the mirror and its target are one physical file; discovering both "
+        f"sums every per-file quantity twice (got {doc['summary']})")
+    assert doc["summary"] == doc_solo["summary"] and rc == rc_solo, (
+        f"publishing the step mirror changed the gate's verdict: "
+        f"{doc_solo['summary']} -> {doc['summary']}")
+
+    (project / _STEP10_REPORT).write_text(_VIOLATED)
+    rc_v, doc_v = _run(project, "--under", _STEP10_REPORT, out="mv.json")
+    assert doc_v["summary"]["files_found"] == 1, doc_v["summary"]
+    assert rc_v == 1 and "STA_REAL_VIOLATION_FOUND" in _rules(doc_v), (
+        f"the declared report's own violation did not reach the gate with the "
+        f"mirror present — the report is not being read: {_rules(doc_v)}")
+
+
+def test_the_scope_is_matched_on_the_resolved_target_not_the_literal_path():
+    """`_in_scope` resolves before comparing. Once aliases of one file
+    collapse, the `steps/` mirror shape can no longer witness that: admitting
+    the mirror and dropping it both leave exactly one entry carrying exactly
+    the same bytes, so the two are indistinguishable in the verdict (measured
+    — a literal-prefix `_in_scope` returns the identical document there).
+
+    The shape where it IS observable is the one that motivated the resolve in
+    the first place: the DECLARED artefact is itself a published symlink over
+    the tool's raw output, whose own basename matches no discovery pattern. A
+    literal-prefix comparison then puts every glob-matching path outside a
+    scope naming the file they all are::
+
+        _in_scope resolves     rc=0  files_found=1
+        literal prefix         rc=1  files_found=0  [STA_REPORT_EXISTS]
+
+    i.e. the step's own report, present and clean, read as absent.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "proj"
+        (p / "phase3/stage3/sta").mkdir(parents=True)
+        # the tool's raw stdout: matches none of the STA discovery patterns
+        (p / "phase3/stage3/sta/opensta_pre_pnr.out").write_text(_MET)
+        # the flow publishes the DECLARED artefact as a symlink over it …
+        (p / _STEP10_REPORT).symlink_to("opensta_pre_pnr.out")
+        # … and the step mirror publishes it a third time
+        mirror = p / "steps/10_pre_layout_sta_multi_corner"
+        mirror.mkdir(parents=True)
+        (mirror / "pre_pnr_timing.rpt").symlink_to(p / _STEP10_REPORT)
+
+        assert sorted(q.name for q in p.rglob("*timing*.rpt")) == [
+            "pre_pnr_timing.rpt", "pre_pnr_timing.rpt"], (
+            "fixture precondition: the raw output must not be glob-matched, "
+            "so every candidate reaches the scope only by resolving")
+
+        rc, doc = _run(p, "--under", _STEP10_REPORT, out="r.json")
+        assert rc == 0, _rules(doc)
+        assert doc["summary"]["files_found"] == 1, doc["summary"]
+        assert "STA_REPORT_EXISTS" not in _rules(doc), _rules(doc)
 
 
 # ===========================================================================
