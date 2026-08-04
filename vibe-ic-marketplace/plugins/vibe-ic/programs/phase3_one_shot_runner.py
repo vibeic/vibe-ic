@@ -10004,11 +10004,20 @@ def _stale_rtl_vs_netlist(netlist: Path, rtl_dir: Path) -> List[str]:
     return stale
 
 
-def _signoff_regen(artifact: Path, layout: Path) -> bool:
-    """Must this phase-3 SIGN-OFF artefact be (re)produced from ``layout``?
+def _signoff_regen(artifact: Path, *layouts: Path) -> bool:
+    """Must this phase-3 SIGN-OFF artefact be (re)produced from ``layouts``?
 
-    True when it is MISSING **or** STALE — i.e. it exists but predates the
-    layout it claims to describe, so it characterises a DIFFERENT design.
+    True when it is MISSING **or** STALE — i.e. it exists but predates a
+    layout/source it claims to describe, so it characterises a DIFFERENT design.
+
+    VARIADIC: an artefact may be computed from more than one source (e.g. the
+    SI/crosstalk report derives from BOTH the routed DEF and the extracted
+    SPEF; the metal-density report from BOTH the GDS and the DEF). It is stale
+    when it predates ANY of the sources it derives from. A source that does not
+    yet exist is simply skipped (nothing to be stale against), which preserves
+    the single-source "no layout to compare against -> leave it alone" rule.
+    The MCF fold takes ``*spefs`` — stale if the newest of them is newer than
+    the fold; passing them all is equivalent to comparing against the newest.
 
     WHY: `_stale_rtl_vs_netlist` above fixed exactly this disease at the SYNTH
     boundary ("the flow placed-and-routed the PREVIOUS design and reported a
@@ -10046,13 +10055,19 @@ def _signoff_regen(artifact: Path, layout: Path) -> bool:
     try:
         if not artifact.is_file():
             return True
-        if not layout.is_file():
-            # No layout to compare against: leave an existing artefact alone
-            # (nothing downstream can be re-derived without the layout anyway).
-            return False
-        return artifact.stat().st_mtime < layout.stat().st_mtime
+        art_mtime = artifact.stat().st_mtime
     except OSError:
         return True
+    for layout in layouts:
+        try:
+            if layout.is_file() and art_mtime < layout.stat().st_mtime:
+                return True
+        except OSError:
+            # Freshness that cannot be PROVEN re-runs rather than reuses.
+            return True
+    # No source to compare against (or all older): leave the artefact alone —
+    # nothing downstream can be re-derived without a source anyway.
+    return False
 
 
 def step_synth(project: Path, top: str, pdk: PdkConfig,
@@ -29959,7 +29974,11 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 27 SI / crosstalk (real SPEF coupling caps) --
     si_rpt = rpt_phase3 / "si_crosstalk.rpt"
-    if _signoff_regen(si_rpt, primary_def):
+    # Dated against BOTH the routed DEF and the extracted SPEF: the SI/crosstalk
+    # report is folded from the SPEF coupling caps, so a re-extraction that
+    # refreshed only the SPEF (DEF untouched) must still re-emit it. main's
+    # landed gate dated SI against the DEF alone; the SPEF source is added here.
+    if _signoff_regen(si_rpt, primary_def, spef_out):
         # v0.2.35: pass pdk + container so the SI emitter can ALSO run the
         # timing-window-aware ADVISORY upgrade (OpenSTA SI timing JSON →
         # window-gated watch-list) when a routed SPEF + post-route STA exist.
@@ -29978,7 +29997,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 31 ERC sub-item (open-source path) ------
     erc_rpt = rpt_phase3 / "erc.rpt"
-    if primary_def.is_file() and not erc_rpt.is_file():
+    if primary_def.is_file() and _signoff_regen(erc_rpt, primary_def):
         if _emit_erc_report(project, top, pdk, container, erc_rpt, notes):
             written.append(str(erc_rpt))
             written.append(str(rpt_phase3 / "erc.json"))
@@ -29991,7 +30010,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # final netlist. §4.05: absent routed netlist -> honest SKIP; a non-proof
     # -> UNPROVEN (never a pass).
     lec_post_json = rpt_phase3 / "lec_post_layout.json"
-    if primary_def.is_file() and not lec_post_json.is_file():
+    if primary_def.is_file() and _signoff_regen(lec_post_json, primary_def):
         try:
             _lec_v = _emit_lec_post_layout(
                 project, top, pdk, container, lec_post_json,
@@ -30025,7 +30044,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # (a) Per-layer metal density (Efabless met_min_ca_density) — REAL KLayout
     #     measurement from the final GDS → reports/phase3/metal_density.json.
     metal_density_json = rpt_phase3 / "metal_density.json"
-    if not metal_density_json.is_file():
+    if _signoff_regen(metal_density_json, primary_gds, primary_def):
         try:
             if _emit_metal_density_report(project, top, pdk, container,
                                           metal_density_json, notes):
@@ -30036,7 +30055,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     #     aging margin → reports/phase3/aging_sta.{rpt,json}.
     aging_sta_rpt = rpt_phase3 / "aging_sta.rpt"
     aging_sta_json = rpt_phase3 / "aging_sta.json"
-    if primary_def.is_file() and not aging_sta_json.is_file():
+    if primary_def.is_file() and _signoff_regen(aging_sta_json, primary_def):
         try:
             if _emit_aging_sta_report(project, top, pdk, container,
                                       aging_sta_rpt, aging_sta_json, notes):
@@ -30056,7 +30075,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     #     missing-inputs (never a fabricated number). The per-instance VECTORED
     #     DVD (SAIF/VCD + package L·di/dt) is the accuracy tier tracked separately.
     dyn_ir_json = rpt_phase3 / "dynamic_ir.json"
-    if primary_def.is_file() and not dyn_ir_json.is_file():
+    if primary_def.is_file() and _signoff_regen(dyn_ir_json, primary_def):
         try:
             # Pass the design's ACTUAL tech/cell LEF + LIBERTY (the runner knows
             # them from the resolved PDK context) so the emitter never SKIPs on a
@@ -30090,7 +30109,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # (d) Thermal power-density screen — mostly WIRING (power report already
     #     exists) → reports/phase3/thermal_screen.json.
     thermal_json = rpt_phase3 / "thermal_screen.json"
-    if not thermal_json.is_file():
+    if _signoff_regen(thermal_json, primary_def):
         try:
             if _emit_thermal_screen(project, top, pdk, container,
                                     thermal_json, notes):
@@ -30103,7 +30122,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # reports/phase3/dfm_screen.json itself); best-effort like the other
     # canonicalize emitters — the gate re-runs it for the verdict.
     dfm_json = rpt_phase3 / "dfm_screen.json"
-    if primary_def.is_file() and not dfm_json.is_file():
+    if primary_def.is_file() and _signoff_regen(dfm_json, primary_def):
         try:
             subprocess.run(
                 [sys.executable, str(PROGRAMS_DIR / "dfm_screen_check.py"),
@@ -30120,7 +30139,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # Runs AFTER the antenna/ir/em/erc emitters above so it reads their
     # verdicts. Guarded like them (only when a routed DEF exists).
     perc_rpt = rpt_phase3 / "perc_equivalent.rpt"
-    if primary_def.is_file() and not perc_rpt.is_file():
+    if primary_def.is_file() and _signoff_regen(perc_rpt, primary_def):
         if _emit_perc_equivalent(project, top, pdk, container, notes):
             written.append(str(perc_rpt))
             written.append(str(rpt_phase3 / "perc_equivalent.json"))
@@ -30398,7 +30417,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # --- Step 29: SDF emit + honest SDF-sim self-report (#437d) --------
     # OpenROAD's `write_sdf` produces the SDF the gate's check looks for.
     sdf_out = sim_pl_out / f"{top}.sdf"
-    if primary_def.is_file() and not sdf_out.is_file():
+    if primary_def.is_file() and _signoff_regen(sdf_out, primary_def):
         _emit_sdf(project, top, pdk, container, sdf_out, notes)
         if sdf_out.is_file() and sdf_out.stat().st_size > 0:
             written.append(str(sdf_out))
@@ -30446,17 +30465,15 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     _mcf_json = project / "reports/phase3/si_mcf_sta.json"
     _mcf_spef = sorted((project / "phase3/stage3/extracted").glob("*.spef")) \
         if (project / "phase3/stage3/extracted").is_dir() else []
-    # Dated against the SPEF it folds, not against the bare existence of its own
-    # report. The MCF fold is a FUNCTION of that SPEF: `si_mcf_sta_check`
-    # re-derives the expected fold from whatever sits at the SPEF path NOW and
-    # compares it to the bounded SPEF emitted here, so an unrefreshed report
-    # leaves the gate comparing two files from different extractions. It then
-    # reports the mismatch as `FOLD_NOT_APPLIED` — a DESIGN defect ("the emitter
-    # dropped the fold") for what is really an unmatched artefact pair.
-    _mcf_newest_spef = max(_mcf_spef, key=lambda p: p.stat().st_mtime) \
-        if _mcf_spef else None
-    if (_mcf_newest_spef is not None
-            and _signoff_regen(_mcf_json, _mcf_newest_spef)
+    # Dated against the SPEFs it folds, not against the bare existence of its
+    # own report. The MCF fold is a FUNCTION of those SPEFs: `si_mcf_sta_check`
+    # re-derives the expected Cc*MCF fold from whatever sits at the SPEF path
+    # NOW and proves it against the bounded SPEF emitted here, so an unrefreshed
+    # report leaves the gate comparing two files from different extractions. It
+    # then reports the mismatch as `FOLD_NOT_APPLIED` — a DESIGN defect ("the
+    # emitter dropped the fold") for what is really an unmatched artefact pair.
+    # Passing every SPEF is equivalent to dating against the newest of them.
+    if (_signoff_regen(_mcf_json, *_mcf_spef) and _mcf_spef
             and (project / "phase3/stage3/pnr/constraint.sdc").is_file()):
         try:
             _mcf_cmd = [sys.executable,
@@ -30890,7 +30907,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- Step 33: power.rpt (OpenSTA report_power best-effort) ---------
     power_rpt = rpt_phase3 / "power.rpt"
-    if not power_rpt.is_file() and primary_def.is_file():
+    if _signoff_regen(power_rpt, primary_def) and primary_def.is_file():
         ok = _emit_power_report(project, top, pdk, container, power_rpt, notes)
         if ok:
             written.append(str(power_rpt))
