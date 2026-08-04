@@ -52,12 +52,28 @@ USAGE
     macro_obs_geometry_intersect_check.py <project_dir> [--json OUT]
                                           [--def PATH] [--macro-lef PATH ...]
 
-    exit 0 = no emitted metal spans a declared obstruction
+    exit 0 = no emitted metal spans a declared obstruction, AND every placed
+             master resolved to a LEF
     exit 1 = at least one does (BLOCKING)
     exit 2 = could not be determined — no DEF, no macro LEF, no placed macro,
-             or no OBS in any of them. NEVER a vacuous pass: this gate has been
-             wrong about nothing before, and "found no crossings" must not be
-             the same sentence as "had nothing to look at".
+             no OBS in any of them, or an INCOMPLETE LEF set (a master is
+             PLACED and no LEF read declares it, so its OBS — if it has one —
+             was never in the comparison). NEVER a vacuous pass: this gate has
+             been wrong about nothing before, and "found no crossings" must not
+             be the same sentence as "had nothing to look at".
+
+DISCOVERY (#828). With no `--macro-lef`, every `*.lef` under the project that
+DECLARES A MACRO is read. The previous default was `input/pdk/**/*.lef` +
+`phase3/**/macro*.lef`; an IP LEF legitimately lives outside `input/pdk/`, and
+a staged macro LEF need not be named `macro*`, so discovery decided the verdict
+at least as much as the geometry did. A file's content answers "does this
+define a MACRO" directly; its path and name only guess at it.
+
+WHAT THIS FILE DOES NOT DO. It is not registered in
+`flow/phase1_phase2_phase3.yaml` and no runner invokes it; its only caller is
+`tools/ci/repo_hygiene_gates.sh`, under `run_tolerating_uncheckable`, over the
+tracked cells carrying `phase3/stage3/pnr/routed.def`. See #828 part 2 — not
+addressed here.
 """
 from __future__ import annotations
 
@@ -66,7 +82,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 _MACRO_RE = re.compile(r"^\s*MACRO\s+(\S+)(.*?)^\s*END\s+\1\s*$", re.S | re.M)
 _SIZE_RE = re.compile(r"^\s*SIZE\s+([\d.-]+)\s+BY\s+([\d.-]+)\s*;", re.M)
@@ -77,6 +93,8 @@ _UNITS_RE = re.compile(r"^\s*UNITS\s+DISTANCE\s+MICRONS\s+(\d+)\s*;", re.M)
 _COMP_RE = re.compile(
     r"^\s*-\s+(\S+)\s+(\S+)[^;]*?\+\s*(?:FIXED|PLACED|COVER)\s*\(\s*"
     r"(-?\d+)\s+(-?\d+)\s*\)\s*(\w+)", re.M)
+_COMPONENTS_SEC_RE = re.compile(
+    r"^\s*COMPONENTS\b(.*?)^\s*END\s+COMPONENTS", re.S | re.M)
 
 
 def parse_macro_obs(lef_text: str) -> Dict[str, Dict[str, Any]]:
@@ -143,6 +161,50 @@ def parse_placed_macros(def_text: str,
         if master in want:
             out.append({"inst": inst, "master": master,
                         "x": int(x), "y": int(y), "orient": orient})
+    return out
+
+
+def parse_placed_masters(def_text: str) -> Set[str]:
+    """Every distinct master PLACED in this DEF, whether or not any LEF was
+    read for it.
+
+    `parse_placed_macros` answers "which instances of the masters I already
+    know about are placed". This answers the prior question — "what did the
+    DEF actually place" — which is what makes "I found no LEF for that
+    master" expressible at all.
+
+    Scoped to the COMPONENTS section, and the scoping is load-bearing.
+    `_COMP_RE` has `[^;]*?` between the master token and the placement, and
+    a negated character class matches newlines, so run over a whole routed
+    DEF it also reaches into the PINS section. A pin with a placed port —
+
+        - clk + NET clk + DIRECTION INPUT + USE SIGNAL
+          + PORT
+            + LAYER Metal2 ( -100 -360 ) ( 100 360 )
+            + PLACED ( 109920 360 ) N ;
+
+    matches with inst=`clk` and MASTER=`+`. Measured on the three tracked
+    DEFs, the whole-file scan over-counts by exactly 36 on each — one per
+    pin — and mints that single phantom master:
+
+        spm/v1.5.58_ihp-sg13g2  COMPONENTS 1826 ; -> whole 1862 / section 1826
+        spm/v1.5.65_sky130A     COMPONENTS  558 ; -> whole  594 / section  558
+        spm/v1.5.66_gf180mcuD   COMPONENTS 2007 ; -> whole 2043 / section 2007
+
+    Section-scoped, the match count equals the declared count exactly on all
+    three and the `+` artifact disappears. A phantom master would otherwise
+    be permanently unresolvable and would make this gate cry wolf on every
+    design. If the DEF has no delimited COMPONENTS section the whole text is
+    scanned, which is the pre-existing behaviour and no worse than it.
+
+    chip-AGNOSTIC: pure DEF grammar."""
+    if not isinstance(def_text, str):
+        return set()
+    sm = _COMPONENTS_SEC_RE.search(def_text)
+    body = sm.group(1) if sm else def_text
+    out: Set[str] = set()
+    for m in _COMP_RE.finditer(body):
+        out.add(m.group(2))
     return out
 
 
@@ -221,12 +283,68 @@ def audit(def_text: str, macro_lef_texts: Sequence[str]) -> Dict[str, Any]:
                         "followpin": s["followpin"],
                         "seg": [s["x1"], s["y1"], s["x2"], s["y2"]],
                     })
+    # #828 — the denominator this gate could not see. A master that is
+    # PLACED but that no supplied LEF declares at all is a master whose OBS,
+    # if it has one, was never in the comparison. Disclosed here rather than
+    # left for the reader to infer from a silent [PASS]; `main` refuses to
+    # call that a pass.
+    placed_masters = parse_placed_masters(def_text)
+    without_lef = sorted(placed_masters - set(obs_by_master))
     return {
         "masters_with_obs": sorted(with_obs),
         "placed_instances": len(placed),
         "special_segments": len(segs),
         "findings": findings,
+        "placed_masters": len(placed_masters),
+        "masters_declared_by_lef": sorted(obs_by_master),
+        "placed_masters_without_lef": without_lef,
     }
+
+
+def discover_macro_lefs(proj: Path) -> List[Path]:
+    """Every LEF under the project that DECLARES A MACRO, in a stable order.
+
+    #828 — the previous default was two globs,
+    `input/pdk/**/*.lef` + `phase3/**/macro*.lef`, and both miss by one
+    step: an IP LEF legitimately lives outside `input/pdk/` (e.g. under a
+    `pdk_local` tree, which is not `pdk`), and a macro LEF staged under
+    `phase3/` need not have a filename beginning `macro`. A file's LOCATION
+    and its NAME are weak proxies for "this file defines a MACRO"; its
+    CONTENT answers that question directly and cheaply, so that is what is
+    asked here.
+
+    The two original globs are searched FIRST and keep their relative order,
+    so every project that already resolved keeps resolving identically —
+    `audit` merges with `dict.update`, so discovery order decides which file
+    wins a master declared twice. Files that were previously invisible are
+    appended after; a master declared BOTH in a previously-visible file and
+    in a previously-invisible one therefore now resolves to the latter. That
+    is a deliberate consequence of no longer ignoring a file that is in the
+    project.
+
+    Only the DEFAULT discovery filters on content. An explicit `--macro-lef`
+    is the operator naming the file, and is honoured verbatim.
+
+    chip-AGNOSTIC: pure LEF grammar; no vendor, PDK or path literal beyond
+    the two legacy globs it preserves."""
+    ordered: List[Path] = []
+    seen = set()
+    for pat in ("input/pdk/**/*.lef", "phase3/**/macro*.lef", "**/*.lef"):
+        for p in sorted(proj.glob(pat)):
+            rp = p.resolve()
+            if rp in seen or not p.is_file():
+                continue
+            seen.add(rp)
+            ordered.append(p)
+    out: List[Path] = []
+    for p in ordered:
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        if _MACRO_RE.search(text):
+            out.append(p)
+    return out
 
 
 def main(argv=None) -> int:
@@ -250,8 +368,7 @@ def main(argv=None) -> int:
 
     lefs = list(a.macro_lefs or [])
     if not lefs:
-        lefs = sorted(proj.glob("input/pdk/**/*.lef")) + \
-               sorted(proj.glob("phase3/**/macro*.lef"))
+        lefs = discover_macro_lefs(proj)
     texts = []
     for p in lefs:
         try:
@@ -270,15 +387,29 @@ def main(argv=None) -> int:
         a.json_out.parent.mkdir(parents=True, exist_ok=True)
         a.json_out.write_text(json.dumps(rep, indent=2) + "\n")
 
+    unresolved = rep["placed_masters_without_lef"]
+    # #828 — when the LEF set is incomplete, say so in the SAME breath as the
+    # other two refusals. "No macro declares an OBS" reads as a statement
+    # about the design; if half the placed masters have no LEF at all it is a
+    # statement about the input, and the reader must not have to guess which.
+    _incomplete = (
+        f" {len(unresolved)} of {rep['placed_masters']} placed master(s) have "
+        f"NO LEF declaration in the set that was read "
+        f"({', '.join(unresolved[:6])}"
+        f"{f', +{len(unresolved) - 6} more' if len(unresolved) > 6 else ''}),"
+        f" so the LEF set is INCOMPLETE."
+    ) if unresolved else ""
+
     if not rep["masters_with_obs"]:
         print("[CANNOT DETERMINE] macro_obs_geometry_intersect: no macro in the "
               "supplied LEF(s) declares an OBS. NOT a pass — nothing was "
-              "checked.", file=sys.stderr)
+              f"checked.{_incomplete}", file=sys.stderr)
         return 2
     if not rep["placed_instances"]:
         print("[CANNOT DETERMINE] macro_obs_geometry_intersect: "
               f"{len(rep['masters_with_obs'])} master(s) declare an OBS and "
-              "none is PLACED in this DEF. NOT a pass.", file=sys.stderr)
+              f"none is PLACED in this DEF. NOT a pass.{_incomplete}",
+              file=sys.stderr)
         return 2
 
     f = rep["findings"]
@@ -297,10 +428,26 @@ def main(argv=None) -> int:
               "a connectivity audit cannot either.")
         return 1
 
+    # #828 — reached only when nothing was found to complain about. Whether
+    # that means "clean" or "I did not have the file that would have told me"
+    # is decided HERE, not left to the reader of a [PASS] line. A run in which
+    # a placed master has no OBS source is not a clean run.
+    if unresolved:
+        print("[CANNOT DETERMINE] macro_obs_geometry_intersect: no crossing "
+              f"found among {rep['placed_instances']} placed instance(s) of "
+              f"{len(rep['masters_with_obs'])} master(s) with OBS, but"
+              f"{_incomplete} An unread LEF may declare an OBS that is "
+              "being crossed, so this is not the same sentence as 'none spans "
+              "an obstruction'. NOT a pass. Name the missing LEF(s) with "
+              "--macro-lef, or stage them under the project.",
+              file=sys.stderr)
+        return 2
+
     print(f"[PASS] macro_obs_geometry_intersect: {rep['placed_instances']} placed "
           f"instance(s) of {len(rep['masters_with_obs'])} master(s) with OBS, "
           f"{rep['special_segments']} supply segment(s) — none spans an "
-          f"obstruction.")
+          f"obstruction. All {rep['placed_masters']} placed master(s) resolved "
+          f"to a LEF.")
     return 0
 
 
