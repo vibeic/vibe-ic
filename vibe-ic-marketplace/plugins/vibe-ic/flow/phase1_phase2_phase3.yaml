@@ -1054,7 +1054,24 @@ steps:
         # That same discard is why `reports/phase3/sta/pre_pnr_summary.json`
         # above — a required_output whose ONLY declared producer is this line
         # — was never written by anything, on any run.
-        - program_exit_zero: "sta_report_check . --mode sta --json reports/phase3/sta/pre_pnr_summary.json"
+        # SCOPED TO THE PRE-LAYOUT REPORT (#758). Without `--under` this gate
+        # discovers STA evidence with a project-wide rglob, so a stage-2 step was
+        # graded on artefacts that cannot exist until stage 3. MEASURED on
+        # edge_llm_accel x nangate45 (v1.9.74): step 10 FAILed with
+        # STA_REAL_VIOLATION_FOUND citing `reports/phase3/aging_sta.rpt` — a
+        # post-route, aging-derated report — among 12 candidates it walked, of
+        # which only `pre_pnr_timing.rpt` is pre-layout.
+        #
+        # A pre-layout gate that fails on post-route evidence is not reporting a
+        # pre-layout problem; it is reporting that nothing ever told it what it
+        # was looking at. `--under` is the mechanism this flow already uses for
+        # exactly this — step 31's sign-off DRC names a single file.
+        #
+        # Step 23 is deliberately NOT scoped. It is the sign-off gate, and
+        # narrowing what a sign-off gate may see is how a real violation gets
+        # hidden. Over-inclusion is the correct failure direction there and the
+        # wrong one here.
+        - program_exit_zero: "sta_report_check . --mode sta --under phase3/stage3/sta/pre_pnr_timing.rpt --json reports/phase3/sta/pre_pnr_summary.json"
     blocks_on: [9]
 
   - id: 11
