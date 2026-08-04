@@ -21,23 +21,61 @@ rejected: it produced 2 false comforts and 17 false alarms.  A guard that says
 "protected" about a gate that is not is the very failure this repo is trying to
 retire, so the expensive answer is the one that ships.
 
+THE SHIPPED TREE IS NEVER MUTATED (measured 2026-08-04)
+=======================================================
+It used to be, by default, in the API rather than in the CLI: `main()` copied
+the tree and `probe()` did not, so `PROBE.probe(name)` — which is how the
+regression test drives this — neutered the SHIPPED gate.  Twice in one parallel
+session a run was killed inside that window and left
+`hold_area_budget_check.py` / `hold_corner_coverage_check.py` carrying an
+injected early return beside a `.probe-orig` sidecar.  A neutered gate exits 0,
+which the flow reads as PASS, so every later reader of that checkout was
+measuring a gate that could no longer fail.  (The injected line is written out
+once, in `_ENTRIES` below, and quoted nowhere else in this file:
+`neutered_gate_tree_check` matches it as a WHOLE line, and prose that happened
+to wrap onto exactly that line would become a permanent finding.)
+
+The `finally` below is correct and was reached in neither case, because a
+`finally` does not run on `SIGKILL`.  Reproduced deliberately: kill the probe
+between `write_text(mutated)` and pytest and the tree is left in exactly the
+state that was found by hand.
+
+So the mutation moved OUT of the tree entirely.  Both entry points now probe a
+disposable COPY, and there is no flag that mutates the shipped file — the
+alternative, "keep `--in-place` and make the restore crash-safe", cannot be
+made to work: every mechanism that could restore the file is code the killed
+process would have had to run.  What is left is the cost of the copy, measured
+at ~1 s once per process, against a failure mode that is silent, green, and
+compounds one injected line per killed run.
+
 Exit codes: 0 CAUGHT, 1 SILENT, 2 could not probe (no entry point, no test).
 """
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import _crash_safe_scratch as _scratch
+
 PROGRAMS = Path(__file__).resolve().parent
 TESTS = PROGRAMS / "tests"
+
+#: Scratch prefix for the disposable copies.  Shared with the reaper below, so
+#: a copy a killed run left in /tmp is removed by the next run rather than
+#: accumulating — the same self-healing contract the worktree probe uses.
+_SCRATCH_PREFIX = "gate_cli_probe_"
+
+#: ONE copy per process, made lazily.  A per-call copy would multiply the only
+#: real cost of the copy-based design by the number of programs probed.
+_DISPOSABLE: Optional[Path] = None
 
 #: Entry shapes in this tree, in the order they are tried.  A wrapper that
 #: delegates through ``run()`` and one that works under ``__main__`` are as much
@@ -113,8 +151,34 @@ _NOT_DRIVERS = re.compile(r"^test_matrix_(d[13-8]_|63x8_)")
 
 
 def stale_backups() -> List[Path]:
-    """Sidecars a killed run left behind.  Non-empty means a gate may be neutered."""
+    """Sidecars a killed run left behind.  Non-empty means a gate may be neutered.
+
+    Kept after the move to copy-only probing, and NOT as decoration: it is what
+    a checkout carrying the damage from a build that predates this change still
+    reads by, and `neutered_gate_tree_check` — the gate wired into
+    `repo_hygiene_gates.sh` — is built on it.
+    """
     return sorted(PROGRAMS.glob("*" + _BACKUP_SUFFIX))
+
+
+def disposable_programs_root() -> Path:
+    """A throwaway copy of the shipped programs tree, made once per process.
+
+    Every mutation this module performs happens inside it, so a `SIGKILL` at
+    any instant leaves a stale directory under /tmp and a repository that is
+    byte-for-byte what it was.  The next call to `reserve` reaps that directory
+    once its owner's `flock` is released, which the kernel does on death.
+    """
+    global _DISPOSABLE
+    if _DISPOSABLE is None:
+        res, _report = _scratch.reserve(_SCRATCH_PREFIX)
+        root = res.path / "programs"
+        shutil.copytree(PROGRAMS, root,
+                        ignore=shutil.ignore_patterns("__pycache__",
+                                                      ".pytest_cache"))
+        atexit.register(res.release)
+        _DISPOSABLE = root
+    return _DISPOSABLE
 
 
 def probe(program: str, limit: Optional[int] = None, timeout: int = 240,
@@ -135,12 +199,15 @@ def probe(program: str, limit: Optional[int] = None, timeout: int = 240,
     # sessions against one checkout, and a green that is not real is worse than
     # a red that is not theirs (the shape measured at v1.7.97, where an injected
     # offender file made other sessions FAIL — wrong, but loud and self-
-    # announcing). The restore-and-verify below is still right and still here;
-    # it just cannot help a reader who looked during the window.
+    # announcing).
     #
-    # Default is unchanged so nothing that drives this in place breaks; the CLI
-    # and the test now pass a COPY.
-    root = programs_root or PROGRAMS
+    # 2026-08-04 — and the DEFAULT used to be `PROGRAMS`, so the concurrent
+    # reader above was not hypothetical and the killed run left the weakening
+    # behind permanently. The default is now a disposable copy: there is no
+    # argument value, and no CLI flag, that makes this function write inside the
+    # repository. The restore-and-verify below still runs, on the copy, so a
+    # second program probed by the same process starts from clean bytes.
+    root = Path(programs_root) if programs_root else disposable_programs_root()
     src = root / f"{program}.py"
     if not src.is_file():
         return {"program": program, "state": "NO_SOURCE"}
@@ -193,35 +260,22 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("program", nargs="+", help="gate program name, without .py")
     ap.add_argument("--json", default=None)
-    # #547 review — run against a DISPOSABLE COPY of the programs tree by
-    # default. In place is still reachable (--in-place) because a maintainer
-    # working alone may want it and the copy costs a second, but the default
-    # must be the one that cannot hand a concurrent session a PASS it did not
-    # earn. `--programs-root` takes a tree that is already a copy.
+    # #547 review — run against a DISPOSABLE COPY of the programs tree.
+    #
+    # `--in-place` USED TO EXIST HERE and is deliberately gone. It was justified
+    # by "a maintainer working alone may want it, and the copy costs a second";
+    # what it actually cost was two shipped gates left neutered in one session,
+    # because the thing that removes the mutation is code the killed process
+    # does not get to run. There is no crash-safe version of mutating a tracked
+    # file, so the option is not made safer — it is removed. `--programs-root`
+    # still takes a tree that is already a copy, which is how another repo's
+    # gates are probed.
     ap.add_argument("--programs-root", default=None,
                     help="probe this programs/ tree instead of the shipped one")
-    ap.add_argument("--in-place", action="store_true",
-                    help="mutate the SHIPPED tree (unsafe with concurrent "
-                         "sessions: a neutered gate returns 0 for anyone who "
-                         "reads it during the window)")
     a = ap.parse_args(argv)
 
-    tmp = None
-    if a.programs_root:
-        root = Path(a.programs_root)
-    elif a.in_place:
-        root = PROGRAMS
-    else:
-        tmp = tempfile.mkdtemp(prefix="gate_cli_probe_")
-        root = Path(tmp) / "programs"
-        shutil.copytree(PROGRAMS, root,
-                        ignore=shutil.ignore_patterns("__pycache__",
-                                                      ".pytest_cache"))
-    try:
-        results = [probe(p, programs_root=root) for p in a.program]
-    finally:
-        if tmp:
-            shutil.rmtree(tmp, ignore_errors=True)
+    root = Path(a.programs_root) if a.programs_root else None
+    results = [probe(p, programs_root=root) for p in a.program]
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
         Path(a.json).write_text(json.dumps(

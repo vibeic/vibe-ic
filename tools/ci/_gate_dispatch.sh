@@ -49,6 +49,38 @@
 #                  must not reach a reader as "I looked and it was clean".
 #                  This is the `_vacuous_exit` convention one level up.
 #     LISTED       declared but deliberately not executed (`--list`).
+#     WROTE_CORPUS the gate ran and CHANGED benchmark-data/ — see below.
+#
+# THE CORPUS-WRITE GUARD (measured 2026-08-04)
+# ============================================
+# A gate that only needs to READ a run tree must not write into it, and one that
+# does is invisible in the worst way: `flow_compliance_check` driven over a
+# published tree adds 25 files and rewrites 17 tracked ones, and a measured A/B
+# left 77 tracked files rewritten plus 64 untracked and 22 IGNORED artefacts
+# behind. The ignored class is the dangerous one — `git status` does not show it,
+# so the leftovers are invisible while still being read by the next gate. That is
+# what tripped `step FAIL bubbles up` and `gates are host-independent` in two
+# `gatekeeper_review` runs; the same 13 phantom FAILs reproduced on two unrelated
+# PRs, which is how the tree rather than the PRs was identified. The main
+# checkout was carrying 1078 such leftovers, which also inflated this script's
+# own declared-gate count from 68 to 169 through the per-cell loop.
+#
+# So every gate is now bracketed by a snapshot of
+# `git status --porcelain --ignored=traditional -- benchmark-data`, and a gate
+# that changes it is named, failed, and told which paths it touched. `--ignored`
+# is load-bearing: without it the guard cannot see the class that caused the
+# trouble, and would report clean over exactly the leftovers it exists to find.
+#
+# A GENUINE PRODUCER declares itself with `run_writing_the_corpus`, the same way
+# a gate that may legitimately refuse declares itself with
+# `run_tolerating_uncheckable`. Declared in the wrapper NAME and not in a comment
+# because two other programs PARSE this script for `run(?:_\w+)?` lines, so a new
+# wrapper is covered by both of them for free.
+#
+# MEASURED BEFORE LANDING BLOCKING: all 59 statically-declared gates and all 3
+# per-cell gates driven inside a throwaway worktree at HEAD, benchmark-data
+# diffed across each — zero writers. The ratchet ships with no debt, so nothing
+# has to be blessed for it to be green.
 #
 # chip-AGNOSTIC: nothing here reasons about any IC, vendor, SKU or process.
 
@@ -57,6 +89,15 @@ GATE_DISPATCH_SUMMARY_JSON=""
 GATE_DISPATCH_LIST_ONLY=0
 GATE_DISPATCH_FAIL=0
 GATE_DISPATCH_T0=0
+#: Repo whose corpus is watched, and the path inside it. Both overridable so a
+#: test can point the guard at a throwaway repository and drive the REAL
+#: dispatch rather than a fixture copy of it.
+GATE_DISPATCH_CORPUS_ROOT="${GATE_DISPATCH_CORPUS_ROOT:-}"
+GATE_DISPATCH_CORPUS_REL="${GATE_DISPATCH_CORPUS_REL:-benchmark-data}"
+#: 1 once the guard has reported that it cannot look. Said ONCE, and said —
+#: "the guard could not run" must never be indistinguishable from "no gate
+#: wrote", which is the vacuous pass this repo removes from gates one at a time.
+GATE_DISPATCH_CORPUS_BLIND=0
 # `declare -a ... =()` so `set -u` is safe while the lists are still empty.
 declare -a GATE_LABELS=() GATE_STATES=() GATE_SECONDS=()
 
@@ -81,10 +122,44 @@ gate_dispatch_init() {
   done
 }
 
-# `_dispatch <tolerate_rc2> <label> <cwd> <cmd...>` — the ONE place a gate is
-# executed and the ONE place its outcome is recorded.
+# The tree the corpus guard watches: the one the gates are being run against.
+#
+# `$ROOT` FIRST and this file's own location only as a fallback. Every caller of
+# this library sets `$ROOT` to the tree under test, and the two differ in the
+# case that matters — `gate_host_independence_check` drives the script inside a
+# scratch worktree, and a guard keyed on `BASH_SOURCE` would there watch the
+# ORIGINAL checkout while the gates wrote into the copy: it would attribute
+# another tree's changes to these gates, and miss the ones they really made.
+_gate_dispatch_corpus_root() {
+  if [ -z "$GATE_DISPATCH_CORPUS_ROOT" ]; then
+    local cand="${ROOT:-}"
+    [ -n "$cand" ] || cand="$(dirname "${BASH_SOURCE[0]}")"
+    GATE_DISPATCH_CORPUS_ROOT="$(git -C "$cand" rev-parse --show-toplevel \
+      2>/dev/null || true)"
+  fi
+  echo "$GATE_DISPATCH_CORPUS_ROOT"
+}
+
+# One snapshot of the corpus. `--ignored=traditional` is the whole point: an
+# ignored leftover is invisible to a bare `git status`, and the invisible ones
+# are what cost hours. `traditional` collapses an ignored DIRECTORY into one
+# entry rather than walking it, which keeps this at ~60 ms on a corpus carrying
+# large build output — measured, over 68 gates.
+#
+# Prints nothing and returns 1 when it cannot look, so the caller can say so
+# rather than read an empty snapshot as a clean one.
+_gate_dispatch_corpus_state() {
+  local root; root="$(_gate_dispatch_corpus_root)"
+  [ -n "$root" ] || return 1
+  [ -d "$root/$GATE_DISPATCH_CORPUS_REL" ] || return 1
+  git -C "$root" status --porcelain --ignored=traditional -- \
+      "$GATE_DISPATCH_CORPUS_REL" 2>/dev/null | LC_ALL=C sort
+}
+
+# `_dispatch <tolerate_rc2> <may_write_corpus> <label> <cwd> <cmd...>` — the ONE
+# place a gate is executed and the ONE place its outcome is recorded.
 _dispatch() {
-  local tolerate="$1" label="$2" wd="$3"; shift 3
+  local tolerate="$1" may_write="$2" label="$3" wd="$4"; shift 4
   GATE_LABELS+=("$label")
   if [ "$GATE_DISPATCH_LIST_ONLY" -eq 1 ]; then
     GATE_STATES+=("LISTED"); GATE_SECONDS+=("0")
@@ -92,13 +167,41 @@ _dispatch() {
     return 0
   fi
   echo "── $label"
-  local t0="$SECONDS" rc=0
+  local t0="$SECONDS" rc=0 before="" after="" watched=1
+  before="$(_gate_dispatch_corpus_state)" || watched=0
   # `|| rc=$?` and NOT a bare `( ... ); rc=$?` — the caller runs under `set -e`,
   # where a failing subshell aborts before the next line and the disclosure
   # below would never print.
   ( cd "$wd" && "$@" ) || rc=$?
   local secs=$(( SECONDS - t0 ))
   GATE_SECONDS+=("$secs")
+  if [ "$watched" -eq 0 ]; then
+    if [ "$GATE_DISPATCH_CORPUS_BLIND" -eq 0 ]; then
+      GATE_DISPATCH_CORPUS_BLIND=1
+      echo "   ^^ corpus-write guard NOT ACTIVE: no" \
+           "$GATE_DISPATCH_CORPUS_REL/ under a git repo reachable from" \
+           "$(dirname "${BASH_SOURCE[0]}") — a gate writing into the corpus" \
+           "would go unreported in this run" >&2
+    fi
+  elif [ "$may_write" -eq 0 ]; then
+    after="$(_gate_dispatch_corpus_state)" || after="$before"
+    if [ "$before" != "$after" ]; then
+      GATE_STATES+=("WROTE_CORPUS")
+      GATE_DISPATCH_FAIL=1
+      echo "   ^^ WROTE INTO THE CORPUS: $label [${secs}s]" >&2
+      echo "      This gate changed $GATE_DISPATCH_CORPUS_REL/ while" \
+           "auditing it. Every later gate then reads a tree this run" \
+           "modified, and the ignored part of it is invisible to a plain" \
+           "\`git status\` — which is how two gatekeeper_review runs were" \
+           "failed by leftovers rather than by the change under review." >&2
+      echo "      Make it read-only (preferred), send its output outside" \
+           "the corpus, or declare it with \`run_writing_the_corpus\` if it" \
+           "is genuinely a producer." >&2
+      diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") \
+        | sed -n '1,20p' | sed 's/^/      /' >&2 || true
+      return 0
+    fi
+  fi
   if [ "$rc" -eq 0 ]; then
     GATE_STATES+=("PASS")
   elif [ "$tolerate" -eq 1 ] && [ "$rc" -eq 2 ]; then
@@ -113,7 +216,7 @@ _dispatch() {
 }
 
 run() {                                   # run <label> <cwd> <cmd...>
-  _dispatch 0 "$@"
+  _dispatch 0 0 "$@"
 }
 
 # Same as `run`, but rc 2 means "could not check" rather than "found a defect".
@@ -122,7 +225,14 @@ run() {                                   # run <label> <cwd> <cmd...>
 # red and then ignored. rc 1 (a real finding) still fails; rc 2 is LOUD and
 # non-fatal, and CI checks out clean so it genuinely runs there.
 run_tolerating_uncheckable() {            # <label> <cwd> <cmd...>
-  _dispatch 1 "$@"
+  _dispatch 1 0 "$@"
+}
+
+# A gate that is genuinely a PRODUCER of corpus artefacts. There are none today
+# — the wrapper exists so that wiring one is a visible, reviewable act rather
+# than a silent regression of the guard above.
+run_writing_the_corpus() {                # <label> <cwd> <cmd...>
+  _dispatch 0 1 "$@"
 }
 
 # --- the record ------------------------------------------------------------
@@ -151,10 +261,14 @@ doc = {
     # not it was executed. A consumer reports coverage against THIS, never
     # against the number that happened to run.
     "declared": len(gates),
-    "ran": n("PASS") + n("FAIL") + n("NOT_CHECKED"),
+    "ran": n("PASS") + n("FAIL") + n("NOT_CHECKED") + n("WROTE_CORPUS"),
     "passed": n("PASS"),
     "failed": n("FAIL"),
     "not_checked": n("NOT_CHECKED"),   # never folded into `passed`
+    # Its own bucket, never folded into `failed`: the gate may well have found
+    # nothing. What it did was change the tree every later gate reads, and a
+    # consumer has to be able to tell those two apart.
+    "wrote_corpus": n("WROTE_CORPUS"),
     "deferred": n("LISTED"),
     "seconds": total,
     "gates": gates,
@@ -166,9 +280,9 @@ PY
 }
 
 gate_dispatch_finish() {
-  local declared=${#GATE_LABELS[@]} notchecked=0 passed=0 i
+  local declared=${#GATE_LABELS[@]} notchecked=0 passed=0 wrote=0 i
   local total=$(( SECONDS - GATE_DISPATCH_T0 ))
-  local refused=""
+  local refused="" writers=""
   [ -z "$GATE_DISPATCH_SUMMARY_JSON" ] \
     || _gate_dispatch_emit "$GATE_DISPATCH_SUMMARY_JSON"
 
@@ -191,12 +305,27 @@ gate_dispatch_finish() {
       NOT_CHECKED)
         notchecked=$(( notchecked + 1 ))
         refused="${refused:+$refused, }${GATE_LABELS[$i]}" ;;
+      WROTE_CORPUS)
+        wrote=$(( wrote + 1 ))
+        writers="${writers:+$writers, }${GATE_LABELS[$i]}" ;;
     esac
   done
 
+  if [ "$wrote" -ne 0 ]; then
+    # Named separately from a plain FAIL and BEFORE it: a gate that modified
+    # the corpus has changed what every gate after it read, so any other
+    # failure in this run may be about the leftovers rather than about the
+    # commit — which is precisely the hours-long misattribution this guard
+    # exists to stop.
+    echo "repo_hygiene_gates: $wrote gate(s) WROTE INTO" \
+         "$GATE_DISPATCH_CORPUS_REL/ — verdicts after them were taken over a" \
+         "tree this run modified: $writers" >&2
+  fi
+
   if [ "$GATE_DISPATCH_FAIL" -ne 0 ]; then
     echo "repo_hygiene_gates: at least one gate FAILED" \
-         "($declared declared, $notchecked NOT CHECKED, ${total}s)" >&2
+         "($declared declared, $notchecked NOT CHECKED, $wrote WROTE CORPUS," \
+         "${total}s)" >&2
     exit 1
   fi
 

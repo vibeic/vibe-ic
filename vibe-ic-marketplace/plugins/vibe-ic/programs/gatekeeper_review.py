@@ -969,6 +969,13 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
                           if g.get("state") == s]
     failed, not_checked = by_state("FAIL"), by_state("NOT_CHECKED")
     deferred = by_state("LISTED")
+    # 2026-08-04 — a gate that WROTE into benchmark-data while auditing it.
+    # Its own state, and read here rather than left to the fallback branch:
+    # the script exits 1 for it while naming no FAIL, which would otherwise be
+    # reported as "exited 1 while naming no failing gate" — an inconsistency
+    # message about a record that is perfectly consistent, pointing a reader
+    # away from the one thing that happened.
+    wrote = by_state("WROTE_CORPUS")
     ran = declared - len(deferred)
     secs = doc.get("seconds")
     where = f"{ran}/{declared} gate(s) ran"
@@ -981,11 +988,30 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
         where += (f"; {len(deferred)} DEFERRED, NOT run here: "
                   + ", ".join(sorted(deferred)[:6]))
 
+    if wrote:
+        where += (f"; {len(wrote)} WROTE INTO the corpus: "
+                  + ", ".join(sorted(wrote)[:4]))
+
     if declared == 0:
         # A hygiene script that wires nothing cannot certify anything.
         return GateResult(name, 2,
                           "ERROR — the hygiene script declared 0 gates; "
                           "nothing was checked and this is NOT a pass")
+    if wrote:
+        # BEFORE the FAIL branch. Every gate that ran after a corpus write read
+        # a tree this run modified, so any accompanying failure may be about
+        # the leftovers rather than about the change — which is the
+        # misattribution that cost hours and nearly produced a REQUEST_CHANGES
+        # on an innocent PR. The writer has to be the headline.
+        return GateResult(name, 1,
+                          f"{len(wrote)} hygiene gate(s) WROTE INTO the corpus "
+                          f"while auditing it: " + ", ".join(sorted(wrote)[:6])
+                          + (" …" if len(wrote) > 6 else "")
+                          + f". Verdicts taken after them are over a tree this "
+                            f"run changed"
+                          + (f"; {len(failed)} gate(s) also FAILED: "
+                             + ", ".join(sorted(failed)[:4]) if failed else "")
+                          + f" [{where}]")
     if failed:
         return GateResult(name, 1,
                           f"{len(failed)} hygiene gate(s) FAILED: "

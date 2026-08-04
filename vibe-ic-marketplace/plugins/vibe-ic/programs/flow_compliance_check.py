@@ -9139,6 +9139,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     p.add_argument("--json", help="Write JSON report to this path")
     p.add_argument(
+        "--read-only", action="store_true",
+        help=("2026-08-04: audit a run tree WITHOUT modifying it. This "
+              "program is a producer as well as a judge — it runs each "
+              "step's gates, and those gates write their own reports "
+              "into the project. MEASURED over a published run tree: 25 "
+              "files added and 17 tracked files rewritten by one "
+              "invocation, and a controlled A/B left 77 tracked files "
+              "rewritten plus 64 untracked and 22 IGNORED artefacts. The "
+              "ignored ones are invisible to `git status`, so the next "
+              "gate reads them without anyone seeing they arrived — the "
+              "shape that failed two gatekeeper_review runs on leftovers "
+              "rather than on the change under review. With this flag the "
+              "audit is performed against a disposable COPY and the "
+              "original is left byte-for-byte identical; any --json "
+              "report still lands where it was asked for. Use it whenever "
+              "the tree is EVIDENCE (a published corpus, another agent's "
+              "run) rather than the run in progress."),
+    )
+    p.add_argument(
         "--strict-structural", action="store_true",
         help=("v0.119.53 (Wave 21) — semantic fix: when --phase 2 is "
               "also set, the verdict is decided ONLY by gates registered "
@@ -9238,6 +9257,58 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not project.is_dir():
         print(f"flow_compliance_check: not a directory: {project}", file=sys.stderr)
         return 2
+
+    # ── --read-only: audit a COPY, never the tree the caller handed us ──────
+    #
+    # Redirecting the writes one at a time was considered and rejected. This
+    # program does not write once: it invokes ~250 sub-gates, each of which
+    # chooses its own `--json` destination inside the project, and a
+    # per-call-site redirect would be complete only for as long as nobody adds
+    # the 251st. Auditing a copy is complete BY CONSTRUCTION — the original
+    # path is never handed to any sub-gate, so there is no write site to miss.
+    #
+    # The copy is made where the caller's TMPDIR points, not beside the
+    # project: a sibling directory would itself be a corpus write.
+    _ro_scratch = None
+    if args.read_only:
+        import shutil as _shutil
+        import tempfile as _tempfile
+        # A --json destination INSIDE the tree would make the flag a lie: the
+        # one write left would be the audit's own report, landing in the
+        # evidence the caller asked us not to touch. Refused rather than
+        # silently redirected — the caller named that path and has to be told
+        # it cannot have it.
+        if args.json:
+            _rep = Path(args.json).resolve()
+            if _rep == project or project in _rep.parents:
+                print(f"flow_compliance_check: --read-only refuses to write "
+                      f"its --json report inside the tree it is auditing "
+                      f"({_rep}); choose a destination outside {project}",
+                      file=sys.stderr)
+                return 2
+        _ro_scratch = Path(_tempfile.mkdtemp(prefix="fcc-readonly-"))
+        _ro_copy = _ro_scratch / project.name
+        try:
+            _shutil.copytree(project, _ro_copy, symlinks=True)
+        # `shutil.Error` too, and not only `OSError`: copytree COLLECTS the
+        # per-file failures and raises its own aggregate type at the end, so an
+        # unreadable subdirectory — the ordinary way a copy of somebody else's
+        # run tree fails — would otherwise escape as a traceback.
+        except (OSError, _shutil.Error) as _exc:
+            _shutil.rmtree(_ro_scratch, ignore_errors=True)
+            print(f"flow_compliance_check: --read-only could not copy "
+                  f"{project}: {_exc}", file=sys.stderr)
+            # NOT a fallback to writing. A caller that asked for read-only
+            # got no audit rather than an audit that mutated its evidence.
+            return 2
+        project = _ro_copy
+        # `atexit` and not a `try/finally`: `main` returns from ~20 places
+        # below, and a finally wrapping all of them would be a 400-line
+        # re-indent whose only content is this one line. Leaking a temp dir if
+        # the process is killed is the harmless direction — the file this flag
+        # exists to protect is already untouched by then.
+        import atexit as _atexit
+        _atexit.register(_shutil.rmtree, str(_ro_scratch), True)
 
     flow_path = Path(args.flow_def) if args.flow_def else DEFAULT_FLOW_DEF
     if not flow_path.exists():

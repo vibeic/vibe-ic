@@ -43,7 +43,11 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
+
+import pytest
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
@@ -480,3 +484,196 @@ def test_a_real_difference_still_survives_normalisation(tmp_path):
     res = G.audit(r, timeout=_T)
     assert res.verdict == "FAIL", res
     assert res.findings[0]["kind"] == "HOST_DEPENDENT_VERDICT"
+
+
+# ==========================================================================
+# 2026-08-04 — THE SCRATCH WORKTREE MUST NOT OUTLIVE THE PROBE
+# ==========================================================================
+# One parallel-agent session left NINETEEN `/tmp/hostindep-*/wt` trees, each
+# still registered as a worktree of the repository every agent shares. The
+# `finally` that removes them is correct and does not run on `SIGKILL`.
+
+def test_a_clean_run_leaves_no_scratch_behind(tmp_path):
+    """The easy half, and the one a `finally` already satisfied. Kept as the
+    control: without it, a reaper that removes everything unconditionally
+    would pass the kill test below and destroy live peers in production."""
+    import tempfile
+    r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
+    before = set(Path(tempfile.gettempdir()).glob(G._SCRATCH_PREFIX + "*"))
+    G.audit(r, timeout=_T)
+    after = set(Path(tempfile.gettempdir()).glob(G._SCRATCH_PREFIX + "*"))
+    assert after - before == set(), (
+        "a clean run left scratch behind: %s" % (after - before))
+
+
+def test_a_SIGKILLED_run_is_cleaned_up_by_the_NEXT_run(tmp_path):
+    """The leak, and the repair, both driven.
+
+    A child is killed while it holds a reserved scratch directory containing a
+    real `git worktree` of a real repository — the exact state found on this
+    host 19 times. Nothing of the child's code runs after the kill. The next
+    call to the sweeper must remove the directory AND drop the registration,
+    or the repo keeps the entry forever (`git worktree prune` cannot clear one
+    whose directory still exists).
+    """
+    import os
+    import signal
+    import time
+
+    r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
+    child = subprocess.Popen(
+        [sys.executable, "-c",
+         "import subprocess, sys, time\n"
+         "sys.path.insert(0, %r)\n"
+         "import _crash_safe_scratch as S\n"
+         "res, _ = S.reserve(%r)\n"
+         "wt = res.path / 'wt'\n"
+         "subprocess.run(['git','-C',%r,'worktree','add','-q','--detach',"
+         "str(wt),'HEAD'], check=True)\n"
+         "print(res.path, flush=True)\n"
+         "time.sleep(600)\n"
+         % (str(_PROGRAMS), G._SCRATCH_PREFIX, str(r))],
+        stdout=subprocess.PIPE, text=True, start_new_session=True)
+    leaked = Path(child.stdout.readline().strip())
+    assert (leaked / "wt").is_dir(), "the fixture never created the worktree"
+    listed = subprocess.run(["git", "-C", str(r), "worktree", "list"],
+                            capture_output=True, text=True, timeout=_T).stdout
+    assert str(leaked) in listed, (
+        "the fixture's worktree is not registered, so this test cannot show "
+        "the registration being dropped:\n" + listed)
+
+    os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+    child.wait(timeout=_T)
+    time.sleep(0.2)
+    assert (leaked / "wt").is_dir(), (
+        "the kill itself removed the tree — then the leak this test is about "
+        "cannot be reproduced and nothing below is being measured")
+
+    rep = G.sweep_abandoned_scratch(r)
+    assert not leaked.exists(), (
+        "a killed probe's scratch survived the next run: %s" % (rep,))
+    assert str(leaked) in rep["reaped"], rep
+    listed = subprocess.run(["git", "-C", str(r), "worktree", "list"],
+                            capture_output=True, text=True, timeout=_T).stdout
+    assert str(leaked) not in listed, (
+        "the directory went but the git registration stayed, which is the "
+        "half `git worktree prune` cannot fix on its own:\n" + listed)
+
+
+def test_a_LIVE_peers_scratch_is_never_reaped(tmp_path):
+    """Several agents run in this repo at once. A sweep that cannot tell a
+    dead owner from a live one would delete a running probe's worktree — an
+    invisible leak traded for an invisible corruption."""
+    import time
+    r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
+    child = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys, time\n"
+         "sys.path.insert(0, %r)\n"
+         "import _crash_safe_scratch as S\n"
+         "res, _ = S.reserve(%r)\n"
+         "print(res.path, flush=True)\n"
+         "time.sleep(600)\n" % (str(_PROGRAMS), G._SCRATCH_PREFIX)],
+        stdout=subprocess.PIPE, text=True)
+    held = Path(child.stdout.readline().strip())
+    try:
+        rep = G.sweep_abandoned_scratch(r)
+        assert held.exists(), (
+            "a LIVE peer's scratch was reaped: %s" % (rep,))
+        assert str(held) in rep["live_peers"], (
+            "the live peer was skipped silently; a skip nobody can see is how "
+            "a sweep starts eating real work: %s" % (rep,))
+    finally:
+        child.kill()
+        child.wait(timeout=_T)
+        time.sleep(0.1)
+        G.sweep_abandoned_scratch(r)
+
+
+def test_the_sweep_runs_even_when_the_probe_refuses(tmp_path):
+    """A checkout too dirty to compare is exactly the state a maintainer's
+    tree is in while the leftovers accumulate. A reaper wired only into the
+    happy path would almost never run."""
+    r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n',
+                   tracked_edit=True)
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "DIRTY_CHECKOUT", res
+    assert res.scratch is not None and "reaped" in res.scratch, (
+        "the refusing path reports no sweep at all: %s" % (res.scratch,))
+
+
+def _legacy_leftover(root: Path, name: str) -> Path:
+    """A sidecar-less scratch directory a day old — what a PRE-LOCK build
+    leaves. In a PRIVATE tmp root, never the real `/tmp`: a test that planted
+    one there would be creating and deleting directories other agents' probes
+    are reading, which is this file's own subject."""
+    import os
+    d = root / (G._SCRATCH_PREFIX + name)
+    d.mkdir(parents=True, exist_ok=True)
+    old = time.time() - 86400
+    os.utime(d, (old, old))
+    return d
+
+
+def test_the_sweep_defers_the_unattributable_ones_while_a_peer_is_alive(
+        tmp_path):
+    """TRANSITION SAFETY. A peer running the PRE-LOCK build leaves a scratch
+    directory with no sidecar, which this reaper can only judge by age and a
+    `/proc` scan. Several agents demonstrably run against one host, so while
+    ANY peer probe is alive the unlockable directories are kept rather than
+    guessed at — a leak is recoverable, deleting a live agent's worktree
+    mid-probe is not."""
+    r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
+    tmp = tmp_path / "scratchroot"
+    tmp.mkdir()
+    legacy = _legacy_leftover(tmp, "legacyprobe")
+    rep = G.sweep_abandoned_scratch(r, tmp_root=tmp, peers=[999999])
+    assert legacy.exists(), (
+        "an unattributable directory was deleted while a peer probe was "
+        "alive: %s" % (rep,))
+    assert any("may be alive" in k["why"] for k in rep["kept"]
+               if k["path"] == str(legacy)), rep
+
+
+def test_with_no_peer_alive_the_unattributable_ones_are_reaped(tmp_path):
+    """The paired half: the deferral must be a deferral, not a permanent
+    exemption, or the pre-lock leaks would never be cleaned up at all."""
+    r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
+    tmp = tmp_path / "scratchroot"
+    tmp.mkdir()
+    legacy = _legacy_leftover(tmp, "legacyprobe")
+    rep = G.sweep_abandoned_scratch(r, tmp_root=tmp, peers=[])
+    assert not legacy.exists(), (
+        "with no peer alive, a day-old sidecar-less leftover was still kept — "
+        "the pre-lock leaks would never be cleaned up: %s" % (rep,))
+
+
+def test_the_peer_detector_sees_a_real_process():
+    """The seam above is only honest if the DEFAULT it stands in for works.
+
+    A real process whose argv names this program must be found, and the
+    detector must not count the pytest process itself — a detector that always
+    answered "a peer is alive" would silently disable the legacy sweep
+    forever, which looks exactly like a reaper that has nothing to do.
+    """
+    held = subprocess.Popen(
+        [sys.executable, "-c",
+         "import time; time.sleep(60)  # gate_host_independence_check.py"],
+        stdout=subprocess.DEVNULL)
+    try:
+        for _ in range(200):
+            if held.pid in G.peer_probes_running():
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("a live process naming this program was not detected, "
+                        "so the transition guard would never engage")
+    finally:
+        held.kill()
+        held.wait(timeout=_T)
+    for _ in range(200):
+        if held.pid not in G.peer_probes_running():
+            return
+        time.sleep(0.05)
+    pytest.fail("a DEAD process is still reported as a live peer, which would "
+                "disable the legacy sweep permanently")

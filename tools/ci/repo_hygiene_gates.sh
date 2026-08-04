@@ -276,8 +276,25 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # crossing; and the wire is on the right net, so a connectivity audit cannot
 # either. Runs over every published cell that has both a routed DEF and a
 # macro LEF; rc=2 (nothing to look at) is tolerated, rc=1 is not.
-for _cell in "$ROOT"/benchmark-data/ic/*/*/; do
-  [ -f "$_cell/phase3/stage3/pnr/routed.def" ] || continue
+#
+# THE CELL LIST IS THE PUBLISHED ONE, NOT WHAT IS ON THIS DISK (2026-08-04).
+# It used to be `for _cell in "$ROOT"/benchmark-data/ic/*/*/` with an `[ -f
+# routed.def ]` filter, i.e. a glob over the working directory. A checkout that
+# has been used carries run leftovers, and each leftover that happens to hold a
+# routed DEF adds THREE gate invocations. Measured on the main checkout: 1078
+# leftovers took this script's declared-gate count from 68 to 169 and produced
+# 13 FAILs that were about the leftovers and not about the commit — reproduced
+# identically on two unrelated PRs, which is how the tree rather than the PRs
+# was identified, after hours of looking at the wrong thing.
+#
+# `git ls-files` makes the denominator a property of the COMMIT: the same 68
+# gates in a working checkout, a fresh clone and a scratch worktree. Same
+# `_published_tree` reasoning as the corpus gate at line 408 ("46 vs 17 is
+# exactly the host-dependence `_published_tree` exists to remove from a
+# baseline"), applied to the loop that decides how many gates there ARE.
+while IFS= read -r _def; do
+  [ -n "$_def" ] || continue
+  _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
   # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
@@ -296,7 +313,11 @@ for _cell in "$ROOT"/benchmark-data/ic/*/*/; do
   # each, so this is a live verdict over a real denominator.
   run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
     "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
-done
+# `|| true` on the producer: `git ls-files` over a path that matches nothing is
+# not an error here, and under `pipefail` an empty result must not abort a
+# script whose remaining 60 gates have nothing to do with this corpus.
+done < <(git -C "$ROOT" ls-files -- \
+  'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def' 2>/dev/null || true)
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the
@@ -503,6 +524,20 @@ run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_c
 # previous ones. Refuses (rc 2) on a dirty checkout rather than reporting the
 # uncommitted work as findings.
 run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
+# 2026-08-04 — `gate_cli_mutation_probe` makes a gate unable to fail and then
+# restores it in a `finally`. A `finally` does not run on SIGKILL, and twice in
+# one parallel-agent session a killed run left `hold_area_budget_check.py` and
+# `hold_corner_coverage_check.py` carrying an injected early return beside a
+# `.probe-orig` sidecar. An injected early return exits 0, so the flow read
+# those gates as PASS — the failure is silent, green, and affects every step the
+# gate guards. Both were found by hand.
+#
+# The probe now mutates only a disposable copy, so nothing can create this state
+# afresh. A checkout can still be IN it (an older build, a restored backup, a
+# hand-edit), and until now nothing looked. ~2s over 3396 modules.
+#
+# host-independence: EXCLUDE — its subject is a fact about the CHECKOUT (what an interrupted probe left in it), which a fresh worktree by construction does not carry
+run "no gate is left neutered"          "$PLUGIN" python3 programs/neutered_gate_tree_check.py "$PLUGIN"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
 run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_health_audit.py

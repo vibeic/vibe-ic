@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1053
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1053)
+- **Total programs (excluding helpers / shims):** 1054
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1054)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1044 |
+| `any` | 1045 |
 
 ## Alphabetical listing
 
@@ -644,6 +644,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `nda_diff_scan_check` | any | — | NDA guard for a PR's DIFF CONTENT (added lines + added/renamed file PATHS), across the WHOLE change-set. |
 | `nda_tracked_tree_scan` | any | — | the NDA guards all scan CHANGES; nothing scanned what is already HERE. |
 | `netlist_src_coord_canonicalize` | any | — | make a synthesised netlist reproducible (ORGANIC-20260531-yosys-write-verilog-nondeterministic-line-tagged-net-names). |
+| `neutered_gate_tree_check` | any | — | is a gate in this checkout unable to fail? |
 | `nextstate_misc_synth` | any | — | deterministic SOLVER for the remaining mechanically- complete VerilogEval shapes the existing FSM / K-map family still SKIPs. |
 | `nfc_protocol_synth` | any | v0.1.84 | NFC / ISO 14443 contactless-protocol synth helper. |
 | `no_protocol_consistency_check` | any | v0.56 | v0.56 plugin gate |
@@ -1125,7 +1126,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1044 programs)
+### `any` (1045 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1740,6 +1741,7 @@ _(no programs in this group)_
 - `nda_diff_scan_check` — NDA guard for a PR's DIFF CONTENT (added lines + added/renamed file PATHS), across the WHOLE change-set.
 - `nda_tracked_tree_scan` — the NDA guards all scan CHANGES; nothing scanned what is already HERE.
 - `netlist_src_coord_canonicalize` — make a synthesised netlist reproducible (ORGANIC-20260531-yosys-write-verilog-nondeterministic-line-tagged-net-names).
+- `neutered_gate_tree_check` — is a gate in this checkout unable to fail?
 - `nextstate_misc_synth` — deterministic SOLVER for the remaining mechanically- complete VerilogEval shapes the existing FSM / K-map family still SKIPs.
 - `nfc_protocol_synth` — NFC / ISO 14443 contactless-protocol synth helper.  _[v0.1.84]_
 - `no_protocol_consistency_check` — v0.56 plugin gate  _[v0.56]_
