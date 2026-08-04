@@ -2349,6 +2349,36 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
            if rewired else ""), written)
 
 
+def _v_shipped_but_excluded(project: Path, module: str) -> bool:
+    """True iff the design SHIPPED an RTL source for `module` under ``input/``
+    that was DATASET-EXCLUDED (present under a name like ``<module>.sv.<suffix>``
+    / ``<module>.v.<suffix>`` rather than a plain ``.sv`` / ``.v`` that would
+    have been staged). Distinguishes a genuine staging/exclusion defect (the
+    module was shipped, then dropped) from an intentional black-box hard-macro /
+    std-cell (never shipped as RTL). chip-AGNOSTIC: pure filename structure; no
+    chip / vendor / SKU / exclusion-suffix literal — any extension AFTER a
+    ``.sv`` / ``.v`` stem counts."""
+    base = project / "input"
+    if not base.is_dir():
+        return False
+    try:
+        for cand in base.rglob(f"{module}.*"):
+            if not cand.is_file():
+                continue
+            n = cand.name
+            # a plain build source would already be staged → not "excluded";
+            # match only <module>.sv<something> / <module>.v<something> where
+            # <something> is a further extension (the exclusion tag).
+            if (n.startswith(f"{module}.sv") and n != f"{module}.sv") or \
+               (n.startswith(f"{module}.v") and n != f"{module}.v"
+                    and not n.startswith(f"{module}.vh")
+                    and not n.startswith(f"{module}.sv")):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def step_reused_ip_consume(project: Path,
                            top_name: str = "chip_top") -> StepResult:
     """Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP RTL CONSUME step.
@@ -2429,6 +2459,72 @@ def step_reused_ip_consume(project: Path,
             pass
     res["chip_top_emitted"] = chip_top_emitted
     res["synth_top_resolved"] = synth_top_resolved
+
+    # --- TRANSITIVE-CONE REDUCTION (chip-AGNOSTIC) ---------------------------
+    # A reused-IP bundle is staged FLAT as a whole LIBRARY (every module of the
+    # IP + a large shared-primitive pool), of which the declared top instantiates
+    # only a fraction. Keeping the whole bundle drags in ORPHAN files whose own
+    # unmet macro/package/include deps break single-unit elaboration, plus
+    # DUPLICATE (shim + real) module definitions. Reduce the staged set to the
+    # transitive cone of the resolved top: orphans and out-of-cone duplicates
+    # vanish, packages are topologically ordered, and a module the top
+    # INSTANTIATES but no staged file DEFINES (a dataset-excluded variant a
+    # parameter default selects) is surfaced LOUDLY rather than silently emitting
+    # a chip_top that references an absent module. See rtl_transitive_cone.py.
+    _cone_note = ""
+    _cone_status = "PASS"
+    try:
+        import rtl_transitive_cone as _cone
+        _cone_root = synth_top_resolved
+        if _cone_root and _cone_root in set(_v661_rtl_module_names(project)):
+            _cr = _cone.transitive_cone(_cone_root, rtl_dir)
+            _moved = _cone.prune_to_cone(rtl_dir, _cr) if _cr.reduced else []
+            res["cone_root"] = _cone_root
+            res["cone_files"] = len(_cr.cone_files)
+            res["cone_out_of_cone"] = _moved
+            res["cone_dropped_duplicates"] = _cr.dropped_duplicates
+            res["cone_unresolved_modules"] = _cr.unresolved_modules
+            if _moved:
+                _cone_note += (
+                    f" Cone-reduced to {len(_cr.cone_files)} file(s) "
+                    f"(moved {len(_moved)} out-of-cone aside).")
+            if _cr.dropped_duplicates:
+                _dups = ", ".join(f"{m}({lo}→{ke})"
+                                  for m, ke, lo in _cr.dropped_duplicates)
+                _cone_note += f" Resolved duplicate module def(s): {_dups}."
+            if _cr.unresolved_modules:
+                # Classify each unresolved instantiation. A module the design
+                # SHIPPED but that was dataset-EXCLUDED (an `input/**/<M>.sv.*`
+                # sibling exists) is a genuine STAGING defect — staging cannot
+                # make the design elaborate, and choosing a different PRESENT
+                # variant would silently rewrite a (security-relevant) parameter
+                # selection, so we DEGRADE LOUDLY (FAIL) with the exact name. A
+                # module NEVER shipped as RTL is an intentional black-box
+                # hard-macro / std-cell resolved downstream by a LIB/LEF — that
+                # is NOT a defect, so it stays a loud ADVISORY (PASS preserved).
+                _excluded = [m for m in _cr.unresolved_modules
+                             if _v_shipped_but_excluded(project, m)]
+                _blackbox = [m for m in _cr.unresolved_modules
+                             if m not in _excluded]
+                res["cone_unresolved_excluded"] = _excluded
+                res["cone_unresolved_blackbox"] = _blackbox
+                if _excluded:
+                    _cone_status = "FAIL"
+                    _cone_note += (
+                        f" UNRESOLVED (shipped-but-excluded): top "
+                        f"'{_cone_root}' instantiates {_excluded} whose source "
+                        f"the design SHIPS but was dataset-excluded — staging "
+                        f"cannot make this design elaborate; provide the absent "
+                        f"module or correct the top's variant selection. NOT "
+                        f"waiving a real structural defect.")
+                if _blackbox:
+                    _cone_note += (
+                        f" ADVISORY: top instantiates {_blackbox} with no "
+                        f"staged RTL source — treated as black-box hard-macro / "
+                        f"std-cell (resolved downstream by LIB/LEF).")
+    except Exception as _ce:  # never let cone reduction crash the step
+        res["cone_error"] = str(_ce)
+
     _sv = (f" {res['sv_ingest_note']}" if res.get("sv_ingest_note") else "")
     if chip_top_emitted:
         _ct = f" Auto-emitted {chip_top_emitted} (thin wrapper)."
@@ -2439,10 +2535,10 @@ def step_reused_ip_consume(project: Path,
         _ct = (" Top resolution deferred to synth (graph-root/auto-emit "
                "fallback).")
     return StepResult(
-        "reused_ip_consume", "PASS", time.time() - t0,
+        "reused_ip_consume", _cone_status, time.time() - t0,
         f"Staged {len(res['staged'])} design-provided build-RTL file(s) into "
         f"phase2/stage1/rtl/ so synth no longer halts on empty rtl/."
-        + _ct + _sv,
+        + _ct + _sv + _cone_note,
         extras=res)
 
 
