@@ -13319,13 +13319,18 @@ def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
 
 def _v466_strip_internal_fields(blocks) -> None:
     """Drop the private bookkeeping keys the #466 guards stashed on each
-    block before the block list is serialised. Idempotent."""
+    block before the block list is serialised. Idempotent.
+
+    PR #814 R2 also strips `_v814_evidence_span` here: it is emitter-internal
+    for the same reason the #466 keys are, and the L5 schema must not grow a
+    second copy of the evidence text."""
     if not isinstance(blocks, list):
         return
     for blk in blocks:
         if isinstance(blk, dict):
             blk.pop("_v466_kw_literal", None)
             blk.pop("_v466_src_fname", None)
+            blk.pop("_v814_evidence_span", None)
 
 
 # v1.6.66 — closes issue #7 Bug Z. Protocol-class acronyms harvested
@@ -33996,16 +34001,24 @@ def _v1_6_563_apply_subqualifier_guard(blocks):
     Idempotent: a second call observes that the parenthetical
     block's count no longer matches the head's, so it does nothing.
 
+    PR #814 R2 — this reads the FULL SPAN (`_v814_evidence_span_of`), not the
+    240-char `evidence_paragraph` display window. Grouping and prose-position
+    classification are semantics; a display width must not decide them. Reading
+    the window instead made the guard wrong in two opposite ways depending on
+    where the window sat — see `_v814_evidence_span_of` for both, and
+    `tests/test_l5_analog_evidence_contains_its_keyword.py` for the
+    end-to-end reproduction of each.
+
     Chip-AGNOSTIC: pure structural English; no chip-class literal.
     """
     if not isinstance(blocks, list):
         return
-    # Group blocks by their evidence_paragraph + head count.
+    # Group blocks by their evidence SPAN + head count.
     groups = {}
     for idx, blk in enumerate(blocks):
         if not isinstance(blk, dict):
             continue
-        para = blk.get("evidence_paragraph")
+        para = _v814_evidence_span_of(blk)
         if not isinstance(para, str) or not para:
             continue
         count = blk.get("count")
@@ -34454,6 +34467,119 @@ def _v1_6_613_input_has_digital_serial_readout(extracted: Dict[str, str]) -> boo
     return False
 
 
+#: Width of the stored `evidence_paragraph`. Unchanged; what changes below is
+#: WHERE the window sits, not how wide it is.
+_EVIDENCE_PARAGRAPH_WIDTH = 240
+#: When the window has to move to reach the keyword, how much of it is spent on
+#: text BEFORE the keyword. A quarter keeps enough left context to read the
+#: sentence the keyword is in while leaving the majority for what FOLLOWS it,
+#: which is where an attributed value normally sits ("the regulator drops
+#: 250 mV at full load").
+_EVIDENCE_KEYWORD_LEAD = _EVIDENCE_PARAGRAPH_WIDTH // 4
+
+
+def _evidence_window_containing_keyword(
+        paragraph: str,
+        kw_rel: int,
+        kw_len: int,
+        width: int = _EVIDENCE_PARAGRAPH_WIDTH) -> str:
+    """The <=`width` slice of `paragraph` that CONTAINS the keyword at
+    `kw_rel` (an offset into `paragraph`, before stripping).
+
+    THE DEFECT THIS CLOSES. `evidence_paragraph` was
+    `paragraph.strip()[:width]` — a fixed-width window anchored at the SPAN
+    START. A keyword further into
+    the span than `width` therefore never appeared in the evidence stored for
+    it: the reader was shown a prefix about some other subject, and only the
+    `evidence_paragraph_truncated` flag hinted that anything was missing.
+    Measured on the corpus: 10 of 27 detected blocks stored evidence that did
+    not contain their own keyword, every one of them by this truncation.
+
+    The span is NOT narrowed to fix this — narrowing is the direction that
+    silently destroys evidence, and the numbers a block's spec is harvested
+    from routinely sit in nested sub-items of the keyword's own list item. Only
+    the WINDOW moves, so `paragraph` (and therefore `spec`, `count` and the
+    detected block set) is byte-for-byte what it was.
+
+    The window stays at the span start whenever the keyword already fits inside
+    it, so a block whose evidence is already correct is not perturbed.
+
+    The window is a DISPLAY window and nothing else. Nothing downstream may
+    decide anything from it — see `_v814_evidence_span_of` for the field that
+    exists so the sub-qualifier guard reads the whole span instead.
+
+    chip-AGNOSTIC: pure offset arithmetic; no vocabulary participates.
+    """
+    lead_ws = len(paragraph) - len(paragraph.lstrip())
+    s = paragraph.strip()
+    if len(s) <= width:
+        # The whole span fits — nothing to choose.
+        return s
+    kw = kw_rel - lead_ws
+    if kw < 0 or kw >= len(s):
+        # Keyword outside the stripped text (only reachable if the caller
+        # passes a mismatched offset). Fail back to the historical window
+        # rather than emitting a wrong slice.
+        return s[:width]
+    if kw + kw_len <= width:
+        # Already inside the head window — leave it exactly where it was.
+        return s[:width]
+    start = kw - _EVIDENCE_KEYWORD_LEAD
+    # Lower clamp — this is what GUARANTEES containment rather than merely
+    # making it likely: the window must still reach the END of the literal.
+    # Only binds for a literal longer than `width - lead`.
+    earliest = kw + kw_len - width
+    if start < earliest:
+        start = earliest
+    if start > kw:
+        # Reachable only when the literal is itself wider than the window.
+        # Start at the literal: the most of it that can be shown.
+        start = kw
+    if start + width > len(s):
+        # Moves the window LEFT, so it still ends at the span end and still
+        # covers the keyword.
+        start = len(s) - width
+    if start < 0:
+        start = 0
+    return s[start:start + width]
+
+
+def _v814_evidence_span_of(block) -> str:
+    """The FULL span a block was detected in, for consumers that must reason
+    about prose the display window may have cut away.
+
+    WHY THIS EXISTS. `_v1_6_563_apply_subqualifier_guard` groups blocks by
+    `evidence_paragraph` EQUALITY and then locates each block's keyword inside
+    that string. Both operations were reading the 240-char display window, so
+    the window silently decided semantics:
+
+      * before the anchoring, a keyword past character 240 was simply not
+        findable in the window, so `_v1_6_564_classify_head_vs_paren` could not
+        annotate that block; the guard fell through to its dict-iteration-order
+        fallback and decremented the HEAD subject instead of the parenthetical
+        one — the exact inversion v1.6.564 was written to stop, re-entering
+        by the truncation door;
+      * after the anchoring, two blocks in one span get DIFFERENT windows
+        whenever one of their keywords sits past 240, so the group no longer
+        forms at all and the guard does not fire.
+
+    Reading the span makes both cases behave like the short-paragraph case that
+    was always correct. Private bookkeeping: stripped before serialisation by
+    `_v466_strip_internal_fields`, exactly like the #466 keys. Falls back to
+    the stored window for block shapes that never carried a span (the L5 parity
+    stub), so the guard never sees `None`.
+
+    chip-AGNOSTIC: field plumbing only; no vocabulary participates.
+    """
+    if not isinstance(block, dict):
+        return ""
+    span = block.get("_v814_evidence_span")
+    if isinstance(span, str) and span:
+        return span
+    para = block.get("evidence_paragraph")
+    return para if isinstance(para, str) else ""
+
+
 def gen_l5_adi_spec(project: Path,
                     extracted: Dict[str, str]) -> LDocResult:
     """L5: analog block discovery via Wave-47 keyword scan + chip-AGNOSTIC
@@ -34553,7 +34679,14 @@ def gen_l5_adi_spec(project: Path,
                 "spec": spec_str,
                 "low_confidence": (spec_str is None),
                 "evidence": f"input/docs/{fname} ({m.group(0)})",
-                "evidence_paragraph": paragraph.strip()[:240],
+                # The window is anchored on the KEYWORD, not on the span start,
+                # so the stored evidence always contains the keyword it
+                # evidences. It stays at the span start whenever the keyword
+                # already fits there, so evidence that was already correct is
+                # byte-for-byte unchanged. See
+                # `_evidence_window_containing_keyword`.
+                "evidence_paragraph": _evidence_window_containing_keyword(
+                    paragraph, kw_pos - p_start, m.end() - m.start()),
                 # R6-FIX-1 (provenance): the 240-char cut can drop the very
                 # text a spec value came from, which is how two blocks shipped
                 # numbers that appear nowhere in their own stored evidence.
@@ -34561,13 +34694,22 @@ def gen_l5_adi_spec(project: Path,
                 # the stored paragraph is the whole basis. Each attributed spec
                 # additionally carries its OWN `evidence_text` window, so a
                 # value is auditable even when this field is truncated.
+                # Meaning is unchanged by the anchoring: the flag says the
+                # stored text is not the whole span, whatever part of it the
+                # window shows.
                 "evidence_paragraph_truncated":
-                    len(paragraph.strip()) > 240,
+                    len(paragraph.strip()) > _EVIDENCE_PARAGRAPH_WIDTH,
                 # ORGANIC #466 R2 — private bookkeeping for the
                 # emitter-side spurious-block guard. Stripped before
                 # serialisation by `_v466_strip_internal_fields`.
                 "_v466_kw_literal": m.group(0),
                 "_v466_src_fname": fname,
+                # PR #814 R2 — private bookkeeping: the WHOLE span, so a
+                # downstream guard reasons about the prose rather than about
+                # whatever part of it the display window happens to show.
+                # Stripped before serialisation alongside the #466 keys; see
+                # `_v814_evidence_span_of`.
+                "_v814_evidence_span": paragraph.strip(),
             }
             # v1.6.402 — for #292 P3. Parse quantifier preceding
             # block type into `count` / `multiplicity` fields.
