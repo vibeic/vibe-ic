@@ -79,6 +79,38 @@ import argparse, json, datetime, sys
 from pathlib import Path
 
 ROUTING_FILE = Path(__file__).resolve().parent.parent / "benchmark" / "CAPTURE_ROUTING.json"
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+
+# The value emitted when the shipped version cannot be READ. It is deliberately
+# not a semver: a provenance field nobody measured must be visibly non-data, so
+# that it fails the first time anyone sorts or compares by it. A plausible
+# semver constant never fails, which is exactly how a stale one survives.
+UNRESOLVED_VERSION = "unknown"
+
+
+def resolved_plugin_version() -> str:
+    """The version of the plugin DOING the emitting, READ from the single source
+    of truth (``.claude-plugin/plugin.json`` — the same file
+    ``gatekeeper_assign_version.py`` writes).
+
+    Every provenance field this module stamps comes from here. It is never
+    restated as a literal anywhere in this file: a version that is restated
+    stops tracking the thing it names the moment the next release lands, and an
+    emitted record then claims a plugin generation it did not come from. That
+    failure is silent, plausible, and biased in one direction (always older),
+    so no reader can see it.
+
+    Returns ``UNRESOLVED_VERSION`` when the manifest cannot be read.
+    """
+    try:
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        import plugin_manifest_discovery as _pmd
+        v = _pmd.read_plugin_version(PLUGIN_ROOT)
+    except Exception:
+        v = None
+    return (str(v).strip() if v else "") or UNRESOLVED_VERSION
 
 
 def _load_routing() -> dict:
@@ -542,7 +574,8 @@ def emit_program_rule_sketch(rec: dict) -> str:
     docstring = _validate_general_text("docstring", rec.get("docstring", ""))
     fix_action = _validate_general_text("fix_action", rec.get("fix_action", ""))
     return (
-        f"# v0.1.34+ — auto-captured by benchmark-enhancement-capture\n"
+        f"# Auto-captured by benchmark-enhancement-capture at plugin "
+        f"v{resolved_plugin_version()}\n"
         f"# Pattern: {pattern}\n"
         f"# CORPUS-SWEEP REQUIRED before merging: zero false-positives across\n"
         f"# the open-benchmark corpora used by `score_iverilog_tb.py`.\n"
@@ -555,7 +588,14 @@ def emit_program_rule_sketch(rec: dict) -> str:
     )
 
 
-def emit_backlog(rec: dict, today: str):
+def emit_backlog(rec: dict, today: str, now: "datetime.datetime | None" = None):
+    """Emit one ORGANIC backlog YAML.
+
+    ``now`` is the tz-aware instant the record was submitted. It is a parameter
+    only so a caller can pass ONE instant for a whole batch (and so a test can
+    inject one); when omitted the real current instant is read. It is never a
+    constant — ``submitted_at`` is a measurement or it is nothing.
+    """
     # v0.1.39 (audit Finding 1) — REQUIRE backlog_slug; never default to the
     # design slug. Backlog filenames become part of the repo's permanent
     # record; a Prob ID baked into a filename can never be silently scrubbed
@@ -619,17 +659,33 @@ def emit_backlog(rec: dict, today: str):
             f"problem: |\n  {prob}\n"
             f"tool_enhancement: |\n  {tenh}\n"
         )
+    # PROVENANCE, NOT DECORATION (#795). Two fields below name WHICH plugin
+    # produced this record and WHEN. Both used to be constants: the version was
+    # a literal semver that stopped being current ~180 releases ago, and the
+    # time-of-day was a literal midnight. A constant in a field that is
+    # formatted like a measurement is unreadable as wrong — every emitted
+    # record looked measured, and `backlog_sanitize_check.py` (which requires
+    # the field) only checks that it is non-empty, while
+    # `tools/ci/staged_version_claim_check.py` exempts `community/backlogs/`
+    # outright. So nothing downstream could ever have caught it.
+    #
+    # An author-supplied `plugin_version` still wins — the record may be
+    # describing a version other than the one running the emitter, and the fix
+    # must not overwrite author intent.
+    version = str(rec.get("plugin_version") or "").strip() or resolved_plugin_version()
+    submitted = (now or datetime.datetime.now().astimezone()).isoformat(
+        timespec="seconds")
     body = (
         f"type: {rec.get('backlog_type', 'enhancement')}\n"
         f"severity: {rec.get('severity', 'P2')}\n"
         f"component: {rec.get('component', '')}\n"
-        f"plugin_version: \"{rec.get('plugin_version', '0.1.33')}\"\n\n"
+        f"plugin_version: \"{version}\"\n\n"
         f"title: >-\n  {_validate_general_text('title', rec.get('title', ''))}\n\n"
         + (tool_block + "\n" if tool_block else "")
         + f"pattern: |\n  {pat}\n\n"
         f"suggested_fix: |\n  {fix}\n\n"
         f"id: \"ORGANIC-{today.replace('-','')}-{slug}\"\n"
-        f"submitted_at: \"{today}T00:00:00+08:00\"\n"
+        f"submitted_at: \"{submitted}\"\n"
         f"session_context: >-\n  {ctx}\n"
     )
     return fname, body
@@ -833,7 +889,11 @@ def main():
 
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    today = datetime.date.today().isoformat()
+    # ONE instant for the whole batch, and the batch's date DERIVED from it, so
+    # a run that straddles midnight cannot file a record whose id says one day
+    # and whose submitted_at says the next.
+    now = datetime.datetime.now().astimezone()
+    today = now.date().isoformat()
     routing = _load_routing()
 
     by_bucket = {"A": [], "B": [], "C": [], "D": [], "T": []}
@@ -917,7 +977,7 @@ def main():
         d.mkdir(exist_ok=True)
         files = []
         for r in by_bucket["C"]:
-            fname, body = emit_backlog(r, today)
+            fname, body = emit_backlog(r, today, now)
             (d / fname).write_text(body)
             files.append(fname)
         summary["bucket_C_dir"] = str(d)
@@ -932,7 +992,7 @@ def main():
         d.mkdir(exist_ok=True)
         files = []
         for r in by_bucket["T"]:
-            fname, body = emit_backlog(r, today)
+            fname, body = emit_backlog(r, today, now)
             (d / fname).write_text(body)
             files.append(fname)
         summary["bucket_T_dir"] = str(d)

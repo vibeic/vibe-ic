@@ -768,3 +768,186 @@ def test_phase2_lec_routes_to_lec_program(tmp_path):
         f"phase2.lec Bucket A must route to lec_equivalence_check; got {a_files}"
     assert not summary.get("bucket_A_unrouted"), \
         "phase2.lec must NOT be unrouted now that it has a routing entry"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# #795 — the provenance fields this emitter stamps must be MEASUREMENTS.
+#
+# `plugin_version` was the literal "0.1.33" and `submitted_at`'s time-of-day
+# was the literal midnight. Both are formatted like data, so a wrong value is
+# invisible: no reader, and no gate, can tell a defaulted record from a
+# measured one. `backlog_sanitize_check.py` requires `plugin_version` but only
+# checks it is non-empty, and `tools/ci/staged_version_claim_check.py` exempts
+# `community/backlogs/` from version-claim checking entirely.
+#
+# The tests below therefore REFUSE to be satisfied by a constant. Each one
+# changes the thing the emitter is supposed to be reading and asserts the
+# emitted value FOLLOWED it. Swapping one hardcoded constant for another
+# cannot pass any of them.
+# ═══════════════════════════════════════════════════════════════════════════
+import datetime as _dt
+import importlib as _importlib
+import re as _re
+import time as _time
+
+_PROGRAMS_DIR = Path(__file__).resolve().parent.parent
+if str(_PROGRAMS_DIR) not in sys.path:
+    sys.path.insert(0, str(_PROGRAMS_DIR))
+EMIT = _importlib.import_module("enhancement_emit")
+
+# The single source of truth, read here INDEPENDENTLY of the program under
+# test — the test must not learn the expected version from the code that is
+# supposed to be reading it.
+_PLUGIN_JSON = _PROGRAMS_DIR.parent / ".claude-plugin" / "plugin.json"
+
+
+def _shipped_version() -> str:
+    return json.loads(_PLUGIN_JSON.read_text())["version"]
+
+
+def _bucket_c_record(**over) -> dict:
+    rec = {
+        "step": "phase2.rtl_gen", "design": "d1", "bucket": "C",
+        "why_not_bucket_a": "needs judgement no predicate can make",
+        "title": "a captured gap", "pattern": "a general pattern",
+        "suggested_fix": "a general fix", "backlog_slug": "provenance-probe",
+        "backlog_type": "bug", "severity": "P2",
+        "component": "program:enhancement_emit",
+        "session_context": "captured from a convergence run",
+    }
+    rec.update(over)
+    return rec
+
+
+def _yaml_field(body: str, key: str) -> str:
+    for line in body.splitlines():
+        if line.startswith(key + ":"):
+            return line.split(":", 1)[1].strip().strip('"')
+    raise AssertionError(f"field {key!r} absent from emitted backlog:\n{body}")
+
+
+def _fake_plugin_root(tmp_path: Path, version) -> Path:
+    """A minimal plugin tree whose manifest declares `version`."""
+    root = tmp_path / "fake_plugin"
+    (root / ".claude-plugin").mkdir(parents=True)
+    doc = {"name": "vibe-ic"}
+    if version is not None:
+        doc["version"] = version
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps(doc))
+    return root
+
+
+def test_emitted_plugin_version_tracks_the_manifest_it_reads(tmp_path,
+                                                             monkeypatch):
+    """A record with no `plugin_version` must carry the version READ from
+    `.claude-plugin/plugin.json`. Proven by pointing the emitter at a manifest
+    declaring a version no constant in the tree could be, and requiring the
+    emitted value to follow it — twice, to two different values."""
+    for declared in ("7.0.1", "42.13.9"):
+        monkeypatch.setattr(EMIT, "PLUGIN_ROOT",
+                            _fake_plugin_root(tmp_path / declared, declared))
+        _fname, body = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04")
+        assert _yaml_field(body, "plugin_version") == declared, (
+            f"emitted plugin_version must be the manifest's {declared!r}; "
+            f"got:\n{body}")
+
+
+def test_emitted_plugin_version_is_the_real_shipped_version():
+    """Against the REAL plugin tree (no monkeypatching), an undated capture
+    carries the shipped version — not any of the constants this emitter or its
+    siblings have historically stamped."""
+    _fname, body = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04")
+    got = _yaml_field(body, "plugin_version")
+    assert got == _shipped_version(), (
+        f"emitted plugin_version {got!r} != shipped {_shipped_version()!r}")
+    # Negative control: the historical constants, written out as literals so
+    # that deleting one cannot silently delete its own coverage.
+    for stale in ("0.1.33", "0.1.34", "0.1.50", "0.1.51", "0.1.2", "0.101"):
+        assert got != stale, (
+            f"emitted plugin_version is the hardcoded constant {stale!r} — a "
+            f"constant is not a measurement")
+
+
+def test_author_supplied_plugin_version_is_never_overridden(tmp_path,
+                                                            monkeypatch):
+    """The fix must not overwrite author intent: a record that STATES its
+    version emits exactly that, even though the running plugin is a different
+    version entirely."""
+    monkeypatch.setattr(EMIT, "PLUGIN_ROOT",
+                        _fake_plugin_root(tmp_path, "42.13.9"))
+    _fname, body = EMIT.emit_backlog(
+        _bucket_c_record(plugin_version="1.2.96"), "2026-08-04")
+    assert _yaml_field(body, "plugin_version") == "1.2.96"
+
+
+def test_unreadable_manifest_emits_visibly_non_data(tmp_path, monkeypatch):
+    """When the version cannot be READ, the emitted value must be visibly
+    non-data — it fails the first time anyone sorts by it. A plausible semver
+    fallback would never fail, which is the whole defect."""
+    for root in (tmp_path / "absent",                       # no manifest at all
+                 _fake_plugin_root(tmp_path, None)):        # manifest, no field
+        monkeypatch.setattr(EMIT, "PLUGIN_ROOT", root)
+        got = EMIT.resolved_plugin_version()
+        assert got == "unknown", f"expected a non-data marker; got {got!r}"
+        assert not _re.match(r"^\d+\.\d+\.\d+$", got), (
+            f"fallback {got!r} is semver-shaped — indistinguishable from a "
+            f"measured version")
+        _fname, body = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04")
+        assert _yaml_field(body, "plugin_version") == "unknown"
+
+
+def test_submitted_at_is_a_measurement_not_a_constant_time():
+    """`submitted_at` must be the real instant of submission. Negative control
+    per the issue: two invocations made seconds apart must NOT emit the same
+    value — a constant time-of-day emits the same string forever."""
+    _f1, b1 = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04")
+    _time.sleep(1.05)
+    _f2, b2 = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04")
+    t1, t2 = _yaml_field(b1, "submitted_at"), _yaml_field(b2, "submitted_at")
+    assert t1 != t2, (
+        f"two submissions a second apart emitted the same instant {t1!r} — "
+        f"the field is a constant, not a measurement")
+    parsed = _dt.datetime.fromisoformat(t2)
+    assert parsed.tzinfo is not None, f"{t2!r} carries no UTC offset"
+    delta = abs((_dt.datetime.now().astimezone() - parsed).total_seconds())
+    assert delta < 120, (
+        f"emitted submitted_at {t2!r} is {delta:.0f}s from now — not the "
+        f"instant of submission")
+
+
+def test_submitted_at_follows_the_instant_it_is_given():
+    """Injecting the instant proves the field is rendered FROM it (and pins the
+    exact midnight string the emitter used to hardcode)."""
+    inst = _dt.datetime(2026, 8, 4, 7, 38, 43,
+                        tzinfo=_dt.timezone(_dt.timedelta(hours=8)))
+    _fname, body = EMIT.emit_backlog(_bucket_c_record(), "2026-08-04", inst)
+    assert _yaml_field(body, "submitted_at") == "2026-08-04T07:38:43+08:00"
+    assert "2026-08-04T00:00:00+08:00" not in body, \
+        "the hardcoded midnight is back"
+
+
+def test_rule_sketch_header_carries_the_version_it_was_emitted_at(tmp_path,
+                                                                  monkeypatch):
+    """The Bucket-A sketch header stamps a version too — the third constant in
+    this file. It must track the manifest like the other two."""
+    monkeypatch.setattr(EMIT, "PLUGIN_ROOT",
+                        _fake_plugin_root(tmp_path, "42.13.9"))
+    sketch = EMIT.emit_program_rule_sketch({
+        "rule_name": "a-captured-rule", "pattern": "a general pattern",
+        "docstring": "a general docstring", "fix_action": "a general fix",
+        "expected_signal": "ERROR"})
+    assert "v42.13.9" in sketch, f"sketch header ignores the manifest:\n{sketch}"
+    assert "v0.1.34" not in sketch, "the hardcoded sketch version is back"
+
+
+def test_end_to_end_emit_stamps_no_stale_constant(tmp_path):
+    """Through the real CLI: the emitted backlog carries the shipped version and
+    an id whose date is derived from the SAME instant as submitted_at."""
+    res = run(tmp_path, [_bucket_c_record()])
+    body = (Path(res["summary"]["bucket_C_dir"]) /
+            res["summary"]["bucket_C_files"][0]).read_text()
+    assert _yaml_field(body, "plugin_version") == _shipped_version()
+    stamped = _dt.datetime.fromisoformat(_yaml_field(body, "submitted_at"))
+    assert stamped.tzinfo is not None
+    assert _yaml_field(body, "id").split("-")[1] == \
+        stamped.date().isoformat().replace("-", "")

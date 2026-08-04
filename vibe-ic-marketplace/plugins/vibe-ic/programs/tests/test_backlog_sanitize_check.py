@@ -3,6 +3,7 @@
 from __future__ import annotations
 import json
 import subprocess, sys
+import tempfile
 from pathlib import Path
 import pytest
 
@@ -163,3 +164,35 @@ def test_corpus_sweep_no_new_oss_warn():
     rep = json.loads(r.stdout)
     oss = [f for f in rep["findings"] if f["category"] == "oss_core_codename"]
     assert not oss, f"corpus sweep must be free of oss_core_codename WARNs; got {oss}"
+
+
+def test_skill_template_copied_verbatim_is_refused_on_plugin_version():
+    """#795, second site. `community-backlog-submit/SKILL.md` shows the YAML a
+    human copies. It used to ship a literal `plugin_version: "0.101"` — a
+    version that is not even X.Y.Z — so a copier who changed nothing filed a
+    record whose provenance was a decoration, and this gate PASSED it because
+    the field was present.
+
+    The template's `plugin_version` must now be a placeholder the gate REFUSES
+    by name, so forgetting to fill it in is loud instead of silent. This test
+    RUNS the gate over the template exactly as a copier would."""
+    import re
+    md = (PROG.parents[1] / "skills" / "community-backlog-submit" /
+          "SKILL.md")
+    if not md.is_file():
+        pytest.skip("skill not present in this checkout")
+    block = re.search(r"```yaml\n(.*?)```", md.read_text(), re.S)
+    assert block, "the skill no longer shows a YAML record template"
+    tpl = block.group(1)
+    assert "plugin_version:" in tpl, "template dropped plugin_version"
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "ORGANIC-20260804-template-copied-verbatim.yaml"
+        f.write_text(tpl)
+        r = _run(["--file", str(f)])
+        rep = json.loads(r.stdout)
+    named = [x for x in rep["findings"]
+             if x["field"] == "plugin_version"
+             and x["category"] == "MISSING_FIELD"]
+    assert r.returncode == 1 and named, (
+        "copying the documented template verbatim must FAIL naming "
+        f"plugin_version; got rc={r.returncode} findings={rep['findings']}")

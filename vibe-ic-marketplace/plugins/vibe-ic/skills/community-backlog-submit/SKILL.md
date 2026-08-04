@@ -152,11 +152,20 @@ Name the **component** using the format:
 
 Create a file in `community/backlogs/` named `ORGANIC-<YYYYMMDD>-<short_desc>.yaml`:
 
+> **`plugin_version` is a measurement, not a decoration (#795).** Read it from
+> `.claude-plugin/plugin.json` — the shipped value, at the moment you file. Do
+> NOT copy the placeholder below and do NOT reuse a version you saw in another
+> backlog: a maintainer dates a finding by that line, so a stale one makes a
+> live finding read as archaeology and is a reasonable thing to close unread.
+> The placeholder is deliberately not a version, so Step 4's sanitize gate
+> names the field if you forget. (Records emitted by
+> `benchmark-enhancement-capture` get this filled in for you.)
+
 ```yaml
 type: enhancement
 severity: P1
 component: program:pre_awake_silence_check
-plugin_version: "0.101"
+plugin_version: "<read from .claude-plugin/plugin.json>"
 
 title: >-
   Gate should escalate to ERROR when protocol has multiple wake-clearing
