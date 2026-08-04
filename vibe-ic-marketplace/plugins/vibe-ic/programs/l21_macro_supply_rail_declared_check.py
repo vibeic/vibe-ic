@@ -197,9 +197,13 @@ except Exception:  # pragma: no cover - fallback keeps the gate usable stand-alo
 try:  # the SAME block parser the consumer's PG walk delegates to (#774)
     from hardmacro_supply_intent import (  # type: ignore
         lef_all_pins as _shared_lef_all_pins,
+        liberty_pg_pins as _shared_liberty_pg_pins,
+        pg_type_to_use as _shared_pg_type_to_use,
     )
 except Exception:  # pragma: no cover - fallback keeps the gate usable stand-alone
     _shared_lef_all_pins = None  # type: ignore
+    _shared_liberty_pg_pins = None  # type: ignore
+    _shared_pg_type_to_use = None  # type: ignore
 
 # The ONE negation vocabulary (#712). `_macro_classes` reads a DECLARATION out
 # of a text file; see its docstring for why the polarity of that declaration is
@@ -464,7 +468,15 @@ def _pg_type_to_use(pg_type: str) -> str:
     """Liberty ``pg_type`` -> LEF ``USE``. Grammar-level mapping over Liberty's
     own enumeration (primary/backup/internal power|ground plus the well-bias
     types); ``""`` when the group declares no type — the pin is still a declared
-    supply terminal, its polarity is just not stated."""
+    supply terminal, its polarity is just not stated.
+
+    Delegates to `hardmacro_supply_intent.pg_type_to_use` (#785): the Liberty
+    walk moved beside the LEF walk once THREE more gates needed it, so there is
+    ONE Liberty grammar rather than a fourth private copy — the shape that gave
+    one copy of the LEF walk a one-line-pin blind spot the others did not have.
+    The body below is retained only as the stand-alone fallback."""
+    if _shared_pg_type_to_use is not None:
+        return _shared_pg_type_to_use(pg_type)
     v = (pg_type or "").strip().lower()
     if not v:
         return ""
@@ -477,7 +489,12 @@ def _pg_type_to_use(pg_type: str) -> str:
 
 def _liberty_pg_pins(lib_text: str) -> List[Dict[str, str]]:
     """``[{"cell", "pin", "use"}]`` for every ``pg_pin`` group a Liberty view
-    declares. Pure Liberty grammar; no PDK, vendor or cell literal."""
+    declares. Pure Liberty grammar; no PDK, vendor or cell literal.
+
+    Delegates to `hardmacro_supply_intent.liberty_pg_pins` — see
+    `_pg_type_to_use` for why. Body retained as the stand-alone fallback."""
+    if _shared_liberty_pg_pins is not None:
+        return _shared_liberty_pg_pins(lib_text)
     out: List[Dict[str, str]] = []
     if not lib_text:
         return out

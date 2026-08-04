@@ -19,6 +19,12 @@ checks per macro:
      macro's Liberty names a supply (`voltage_map`/related_power_pin),
      the supply must appear among the L21 domain supplies:
      IP_POWER_DOMAIN_MISMATCH (WARNING — L21 may legitimately lag).
+  4. SUPPLY-TERMINAL DECLARATION — a macro supply pin the power-intent
+     layer does not account for: IP_MACRO_SUPPLY_UNDECLARED /
+     IP_MACRO_SUPPLY_RAIL_UNDECLARED (WARNING, #309). An abstract that
+     types NO pin at all is reported on its own terms rather than read as
+     a macro with no supply terminal: IP_MACRO_ABSTRACT_UNTYPED
+     (WARNING, #785 — see the block at the foot of `audit`).
 
 Exit codes: 0 PASS / PASS_WITH_REVIEW, 1 FAIL (file-set incomplete),
 2 vacuous (no macros present — nothing to integrate).
@@ -144,11 +150,24 @@ def audit(project: Path) -> dict:
     # WARNING, not ERROR, and rc stays 0: the point is to make the requirement
     # flow into the power-intent layer NOW. Phase 3 is where it blocks — via
     # the SAME decision module, so this warning and that block cannot drift.
+    #
+    # #785 — AND THE SILENCE THAT INHERITED FROM IT. This block consumed
+    # `assess()["gaps"]` and nothing else, so it inherited that function's
+    # false-clean verbatim: MEASURED on ONE macro, two abstracts of the same
+    # layout, this check emitted `IP_MACRO_SUPPLY_UNDECLARED` from the
+    # hand-written LEF and NOTHING AT ALL from the same macro's abstract as
+    # `magic`'s `lef write` emits it (neither `DIRECTION` nor `USE` on any PIN).
+    # Regenerating the abstract HONESTLY silenced the integration checklist.
+    #
+    # `project` is now passed so `assess` can read the macro's own Liberty view,
+    # which is where the typing survives a `lef write`. Everything stays a
+    # WARNING for the reason above: this is Phase 1, the point is to make the
+    # requirement flow into the power-intent layer NOW.
     try:
         import hardmacro_supply_intent as _hmsi
         _lefs = _hmsi.load_macro_lefs(project)
         if _lefs:
-            _rep = _hmsi.assess(_lefs, _hmsi.load_l21(project))
+            _rep = _hmsi.assess(_lefs, _hmsi.load_l21(project), project=project)
             for _g in _rep["gaps"]:
                 _rule = ("IP_MACRO_SUPPLY_RAIL_UNDECLARED"
                          if _g["status"] == "rail_undeclared"
@@ -162,6 +181,56 @@ def audit(project: Path) -> dict:
                         f"and detailed routing aborts (DRT-0307). Declare the "
                         f"rail in L21.fields.hard_macro_supplies, or mark it "
                         f"integration_gap: true.")})
+            # The SAME finding, for a pin whose supply role was RECOVERED from
+            # the design's own independent view because its abstract types
+            # nothing. Same clause, same remedy — only the provenance differs,
+            # and it is named so a reader can check it.
+            for _g in _rep.get("recovered_gaps", []):
+                _rule = ("IP_MACRO_SUPPLY_RAIL_UNDECLARED"
+                         if _g["status"] == "rail_undeclared"
+                         else "IP_MACRO_SUPPLY_UNDECLARED")
+                findings.append({
+                    "severity": "WARNING", "rule": _rule,
+                    "message": (
+                        f"{_g['master']}/{_g['pin']}: this macro's own abstract "
+                        f"types NO pin at all, but {_g['typing_source']}, so it "
+                        f"is a {_g.get('use') or 'supply'} terminal — and "
+                        f"{_g['detail']}. If RTL ties this pin, synthesis "
+                        f"drives it with a TIE cell and detailed routing aborts "
+                        f"(DRT-0307). Declare the rail in "
+                        f"L21.fields.hard_macro_supplies, or mark it "
+                        f"integration_gap: true.")})
+            # And the abstract itself, whether or not anything corroborated it.
+            # A macro the binder cannot see is not a macro with nothing to bind.
+            for _a in _rep.get("untyped_abstracts", []):
+                _why = (
+                    "CORROBORATED: "
+                    + ", ".join(
+                        "{} ({}, via {})".format(
+                            r["pin"], r.get("use") or "polarity unstated",
+                            r["typing_source"])
+                        for r in _a["recovered"])
+                    + " — so this abstract is UNDER-DECLARED, not supply-less."
+                ) if _a["corroborated"] else (
+                    "No independent view of this macro is staged (no Liberty "
+                    "`pg_pin` beside the abstract, and the design declares no "
+                    "rail matching any of its pin names), so the supply "
+                    "contract is UNVERIFIABLE from either side — which is a "
+                    "different fact from a macro with no supply pin to "
+                    "declare.")
+                findings.append({
+                    "severity": "WARNING", "rule": "IP_MACRO_ABSTRACT_UNTYPED",
+                    "message": (
+                        f"{_a['master']}: the staged abstract declares "
+                        f"{len(_a['pins'])} PIN(s) and types NONE of them with "
+                        f"a `USE` record, so every consumer keyed on `USE "
+                        f"POWER`/`USE GROUND` — this checklist, the "
+                        f"global-connect binder, and the binder's own "
+                        f"HARDMACRO_SUPPLY_UNCONNECTED report — sees zero "
+                        f"supply terminals AND zero findings at once. A "
+                        f"tool-written abstract is the common case: `magic`'s "
+                        f"`lef write` emits neither `DIRECTION` nor `USE` on "
+                        f"any PIN, so re-attach the typing after it. {_why}")})
     except Exception:  # noqa: BLE001 — a Phase-1 advisory must never hard-fail
         pass
 
