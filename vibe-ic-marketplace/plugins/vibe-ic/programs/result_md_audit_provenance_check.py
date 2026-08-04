@@ -58,10 +58,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+# The gate that RENDERS a testbench into the project declares which paths it
+# regenerates; this program must not restate them (see _FLOW_REGENERATED_PATHS).
+import fmeda_fault_injection_coverage as _fmeda  # noqa: E402
 
 WAIVER_KEY = "result_md_audit_provenance_intentional"
 WAIVER_MIN_LEN = 40
@@ -183,8 +191,109 @@ _TALLY_RE = re.compile(
     r"PASS\s*=\s*(\d+)\s+FAIL\s*=\s*(\d+)\s+MISSING\s*=\s*(\d+)",
     re.IGNORECASE,
 )
-#: Directories whose newest file dates the run this document reports on.
+#: Directories that MAY hold a run tree — used to decide `_is_run_tree`.
 _EVIDENCE_ROOTS = ("reports", "phase1", "phase2", "phase3")
+#: THE COMPLIANCE FLOW'S OWN OUTPUT — excluded from the freshness reference.
+#:
+#: The umbrella compliance check and its sub-checkers (re)write their gate and
+#: audit DOCUMENTS on EVERY invocation, so the newest mtime under them advances
+#: each run. A freshness judge must not read the documents IT regenerates as "a
+#: newer round of the design": doing so made this gate's verdict depend on how
+#: many times the gate had been run — PASS on run 1, FAIL(STALE) on run 2 and
+#: after, on a tree nobody had touched in between.
+#:
+#: WHAT THE FLOW ACTUALLY WRITES — GROUND TRUTH, NOT INFERENCE.
+#: `flow_compliance_check.py` run on an untouched copy of two real completed
+#: run trees, censusing (mtime, size, md5) of EVERY file between runs::
+#:
+#:     ic/subservient  (369 files, 2 runs)   70 moved  .json 67  .md 3
+#:         outside reports/                   0
+#:         under reports/phase3/              9  (antenna_signoff, dfm_screen,
+#:                                               drc_vacuous, em_signoff,
+#:                                               foundry_handoff_audit,
+#:                                               ir_drop_signoff, sta/*.json)
+#:     ic/opentitan_aes (514 files, 1 run)   40 moved  .json 35  .md 3  .v 1  .vvp 1
+#:         outside reports/                   2  phase2/stage2/safety/
+#:                                               fmeda_fi_tb.v{,.vvp}
+#:
+#: THREE THINGS THAT CENSUS REFUTES, EACH OF WHICH WAS A CANDIDATE RULE:
+#:
+#:   1. "the flow writes nothing outside `reports/`" — FALSE. The fMEDA
+#:      fault-injection gate renders its testbench into
+#:      `phase2/stage2/safety/` and compiles it there on every run, so
+#:      `phase2/` — explicitly in scope — carried the run-count-dependent
+#:      verdict on `ic/opentitan_aes` (STALE=False before a re-run,
+#:      STALE=True after, newest=`…/fmeda_fi_tb.v.vvp`, one fixed point over
+#:      20 re-runs). Rule 3 below closes it, from the WRITER'S declaration.
+#:   2. "a gate verdict document is identifiable by a top-level `program`
+#:      key" — FALSE. Of the 35 flow-written JSONs on `ic/opentitan_aes`,
+#:      only 10 carry one; 25 carry neither `program` nor `tool`
+#:      (`nba_addr_race.json`, `bit_level_full_stack.json`, …). A content
+#:      rule in that direction leaves 25 flow documents in the reference.
+#:   3. "exempt `reports/phase3/**`" — FALSE. The flow writes 9 `.json`
+#:      there on `ic/subservient`. That exemption reinstates the defect.
+#:
+#: SO THE EXCLUSION IS PATH-AND-SUFFIX, WHICH THE CENSUS SHOWS IS COMPLETE FOR
+#: THE FLOW-OUTPUT DIRECTION (every one of the 110 measured rewrites is a
+#: `.json`/`.md` under `reports/`, or one of the two declared fMEDA files) —
+#: and the FALSE-POSITIVE direction is repaired by a narrow, SOUND rescue
+#: (`_is_tool_measurement`) rather than by widening a hole in the exclusion.
+#:
+#:   * `reports/audit/` — the flow's own audit bucket. `_path_layout.
+#:     report_path` files every unrecognised report name here, and it is where
+#:     `phase23_completion_audit.json` and the `flow_compliance_check.log`
+#:     transcript land. Measured: 0 of the corpus's tool-measurement documents
+#:     live under it.
+#:   * `.json` / `.md` anywhere under `reports/` — gate and audit documents,
+#:     UNLESS the document identifies itself as an EDA tool's measurement.
+#:   * the paths the compliance gates regenerate outside `reports/`, as
+#:     declared by the gate that writes them.
+#:
+#: EVERYTHING ELSE STAYS IN SCOPE, INCLUDING TOOL REPORTS UNDER `reports/`.
+#: `reports/phase3/drc_signoff.rpt` (phase3_one_shot_runner.py:22567, :28296)
+#: and `reports/phase3/lvs.rpt` (:24241, :24705) are DESIGN-round sign-off
+#: written by the tools and never re-stamped by the flow. Excluding all of
+#: `reports/` — the first shape of this fix — made a sign-off-only re-run
+#: invisible: it moves only `reports/` mtimes, so a stale RESULT.md beside it
+#: went unseen. That is the founding failure shape this rule exists to catch,
+#: so the wide exclusion disarmed the rule on its own motivating case::
+#:
+#:     case                                       wide excl.   this
+#:     reports/phase3/drc_signoff.rpt newer       pass         FAIL(STALE)
+#:     reports/phase3/lvs.rpt newer               pass         FAIL(STALE)
+#:     reports/phase3/metal_density.json newer    pass         FAIL(STALE)
+#:     reports/audit/*.json re-stamped by flow    pass         pass
+#:     phase2/…/fmeda_fi_tb.v.vvp re-stamped      FAIL(STALE)  pass
+#:
+#: NOTE ON A CLAIM THIS REPLACES: the first shape of this change said the
+#: reference was "phase1/2/3 + root" and that the flow "does not mutate the
+#: project root". The walked set was `('phase1','phase2','phase3')` — the root
+#: was never walked, then or now. Only `_EVIDENCE_ROOTS` are walked.
+#: Sub-paths under `reports/` that hold the compliance flow's own regenerated
+#: documents.
+_FLOW_OUTPUT_SUBTREES = ("reports/audit",)
+#: Suffixes that make a file under `reports/` a gate/audit DOCUMENT rather than
+#: a tool artefact.
+_FLOW_OUTPUT_SUFFIXES = (".json", ".md")
+#: The root under which the two rules above apply.
+_FLOW_OUTPUT_ROOT = "reports"
+#: Project-relative paths OUTSIDE `reports/` that a compliance gate regenerates
+#: on every run — taken from the GATE THAT WRITES THEM, not restated here, so
+#: the two cannot drift apart. `fmeda_fault_injection_coverage` renders its
+#: injection testbench into `phase2/stage2/safety/` and compiles it there,
+#: which is why `phase2/` being "a design-round tree the flow never writes to"
+#: was false.
+_FLOW_REGENERATED_PATHS = frozenset(_fmeda.REGENERATED_PROJECT_PATHS)
+#: Top-level keys that make a JSON document a GATE VERDICT rather than a tool
+#: measurement. A gate names the program that produced it; when that name
+#: resolves to a file in this plugin's `programs/` directory the document is
+#: the flow's own, whatever else it carries. MEASURED, the collision this
+#: catches: `reports/phase3/sta/hold_corner_coverage.json` is rewritten every
+#: run AND carries `"tool": "hold_corner_coverage_check"` — the gate's own
+#: name in the field an EDA tool would put `openroad` in.
+_PRODUCER_NAME_KEYS = ("tool", "program", "gate", "generated_by", "checker",
+                       "rule")
+_PROGRAMS_DIR = Path(__file__).resolve().parent
 #: A document written within this many seconds of the newest artefact is part
 #: of the same round. Generous on purpose: the rule must fire on a stale
 #: ROUND, never on the ordinary case of writing the report a few minutes after
@@ -192,8 +301,93 @@ _EVIDENCE_ROOTS = ("reports", "phase1", "phase2", "phase3")
 _STALE_GRACE_S = 3600
 
 
+def _names_a_flow_program(v) -> bool:
+    """True when `v` names one of this plugin's own gate programs."""
+    if not isinstance(v, str):
+        return False
+    stem = v.strip().split(":")[0].split()[0]
+    return bool(stem) and (_PROGRAMS_DIR / f"{stem}.py").is_file()
+
+
+def _is_tool_measurement(p: Path) -> bool:
+    """True when a `.json` under `reports/` is an EDA TOOL's measurement, and
+    so dates the DESIGN round even though it is a document by suffix.
+
+    THE ONE PLACE CONTENT IS CONSULTED, AND IT IS CONSULTED IN THE SAFE
+    DIRECTION. The path+suffix exclusion is measured COMPLETE for flow output
+    (110 rewrites over two real trees, every one of them a `.json`/`.md` under
+    `reports/` or a declared fMEDA path), so widening it is never needed and
+    narrowing it is where the risk is. This predicate can only RESCUE a file
+    into the reference, and it is deliberately conservative:
+
+      * the document must carry a top-level `"tool"` STRING — the field an EDA
+        tool's own emitter fills (`openroad`, `opensta`, `klayout`, `yosys`,
+        `verilator`, `iverilog`); and
+      * NONE of its producer-name fields may name a program in this plugin's
+        `programs/` directory, which is what a gate document does.
+
+    MEASURED against the ground-truth rewrite sets: 0 of the 110 files the
+    flow rewrites are rescued (the one document that would have been —
+    `hold_corner_coverage.json`, `"tool": "hold_corner_coverage_check"` — is
+    vetoed by the second clause). Corpus-wide it rescues 161 tool measurements
+    over 26 trees, including the 11 on `ic/sha256/clean_run_v1427_20260715`
+    that carried the regression this repairs (`reports/phase3/
+    metal_density.json` re-emitted alone, STALE no longer detected) and the 10
+    on `ic/sha256/clean_run_v1461_0223`, a results-only clean-room re-run with
+    no phase directories at all, which the suffix rule alone left with ZERO
+    datable artefacts.
+    """
+    if p.suffix.lower() != ".json":
+        return False
+    try:
+        d = json.loads(p.read_text(errors="replace"))
+    except Exception:
+        return False
+    if not isinstance(d, dict):
+        return False
+    if not isinstance(d.get("tool"), str) or not d["tool"].strip():
+        return False
+    return not any(_names_a_flow_program(d.get(k))
+                   for k in _PRODUCER_NAME_KEYS)
+
+
+def _is_flow_output(rel: str, path: Optional[Path] = None) -> bool:
+    """True when a project-relative path is something the COMPLIANCE FLOW
+    regenerates, and so cannot date the DESIGN round.
+
+    Three rules, all measured (see `_FLOW_OUTPUT_SUBTREES`): anything under
+    the flow's own audit bucket; any gate/audit document (`.json` / `.md`)
+    under `reports/` that is not an EDA tool's own measurement; and the paths
+    the compliance gates regenerate outside `reports/`, as declared by the
+    gate that writes them. Everything else — every tool sign-off report, and
+    the rest of `phase1/`, `phase2/`, `phase3/` — dates the design round.
+    """
+    rel = rel.replace(os.sep, "/")
+    if rel in _FLOW_REGENERATED_PATHS:
+        return True
+    for sub in _FLOW_OUTPUT_SUBTREES:
+        if rel == sub or rel.startswith(sub + "/"):
+            return True
+    head = rel.split("/", 1)[0]
+    if head != _FLOW_OUTPUT_ROOT or not rel.endswith(_FLOW_OUTPUT_SUFFIXES):
+        return False
+    return not (path is not None and _is_tool_measurement(path))
+
+
 def _newest_evidence(project: Path) -> Tuple[Optional[float], Optional[str]]:
-    """`(mtime, path)` of the newest artefact under the evidence roots."""
+    """`(mtime, path)` of the newest DESIGN-round artefact.
+
+    Walks every one of `_EVIDENCE_ROOTS` and skips only what `_is_flow_output`
+    identifies as the compliance flow's own regenerated document. Including the
+    flow's output made this gate's verdict depend on the run count (PASS on run
+    1, FAIL on run 2+); excluding the whole of `reports/` instead removed the
+    design round's own tool sign-off reports from the reference, which disarmed
+    the rule on a sign-off-only re-run — the shape it exists to catch.
+
+    Returns `(None, None)` when the tree holds no design-round artefact at all.
+    That is an ABSTENTION, not a finding, and the caller must disclose it as
+    one: "I could not look" must never be rendered as "there is nothing there".
+    """
     newest: Optional[float] = None
     newest_p: Optional[str] = None
     for root in _EVIDENCE_ROOTS:
@@ -204,11 +398,17 @@ def _newest_evidence(project: Path) -> Tuple[Optional[float], Optional[str]]:
             if not p.is_file():
                 continue
             try:
+                rel = str(p.relative_to(project))
+            except ValueError:
+                continue
+            if _is_flow_output(rel, p):
+                continue
+            try:
                 m = p.stat().st_mtime
             except OSError:
                 continue
             if newest is None or m > newest:
-                newest, newest_p = m, str(p.relative_to(project))
+                newest, newest_p = m, rel
     return newest, newest_p
 
 
@@ -307,6 +507,49 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
     summary["result_md_mtime"] = doc_m
     summary["newest_evidence"] = newest_p
     summary["newest_evidence_mtime"] = newest_m
+    # ── the abstention must GATE, not merely be visible ──────────────────
+    # `newest_evidence: null` alone reads as "there is nothing there", which
+    # is a claim about the tree. When the document asserts the run's numbers
+    # and this IS a run tree, a null reference means the opposite: the rule
+    # could not find anything to date the round against, so it did not judge.
+    # Silently returning null let the gate keep jurisdiction (`is_run_tree`
+    # still true) while the STALE rule could never fire — a rule that cannot
+    # fail, reported as a rule that passed.
+    #
+    # AND SAYING SO IS NOT ENOUGH. Disclosing it in `warnings` changed
+    # nothing a consumer can see: `main()` returns rc 0 for warnings and
+    # writes `"passed": true`, and the ONLY automated consumer —
+    # `flow_compliance_check.__check_program_exit_zero` — is rc-ONLY (rc 0
+    # PASS, rc 2 VACUOUS_PASS, rc 3+sentinel PASS_WITH_WAIVERS, else FAIL).
+    # Nothing anywhere reads `warnings` or `freshness_evaluated`, so
+    # `freshness_evaluated: false` was consumed as a plain PASS — the same
+    # false green, now with a paper trail. It is a FAILURE, on the umbrella's
+    # own doctrine that an unevaluated gate cannot pass (`__check_program_
+    # exit_zero`: "a timeout is NOT a verdict … INCONCLUSIVE (still FAILs the
+    # audit — an unevaluated gate cannot pass)"). The waiver remains the
+    # escape hatch for a tree that legitimately has nothing to date.
+    if tally and is_run_tree and newest_m is None:
+        summary["freshness_evaluated"] = False
+        summary["freshness_abstain_reason"] = (
+            "no design-round artefact found: every file under the evidence "
+            "roots is a document the compliance flow regenerates "
+            f"(under {'/, '.join(_FLOW_OUTPUT_SUBTREES)}/, a "
+            f"{'/'.join(_FLOW_OUTPUT_SUFFIXES)} under "
+            f"{_FLOW_OUTPUT_ROOT}/ that is not an EDA tool's own measurement, "
+            f"or a path a compliance gate regenerates)")
+        failures.append(
+            "RESULT_MD_FRESHNESS_NOT_EVALUATED — RESULT.md quotes a "
+            f"compliance tally (PASS={tally.group(1)} FAIL={tally.group(2)} "
+            f"MISSING={tally.group(3)}) and this IS a run tree, but nothing "
+            "in it dates the design round: every file under the evidence "
+            "roots is a document the compliance flow rewrites on every run. "
+            "The staleness rule did NOT evaluate — this is an ABSTENTION, "
+            "not a clean bill, and an unevaluated gate cannot pass. A tree "
+            "whose only artefacts are the flow's own reports cannot "
+            "substantiate the round the document reports."
+        )
+    elif tally and is_run_tree:
+        summary["freshness_evaluated"] = True
     if (tally and doc_m is not None and newest_m is not None
             and newest_m - doc_m > _STALE_GRACE_S):
         failures.append(

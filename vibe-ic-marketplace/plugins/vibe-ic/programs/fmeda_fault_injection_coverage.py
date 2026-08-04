@@ -101,6 +101,27 @@ if str(_HERE) not in sys.path:
 import _path_layout as _pl  # noqa: E402
 
 
+# ───────────── what this gate REGENERATES inside the project ────────────
+# This gate does not only READ the project — it RENDERS an injection
+# testbench into it and compiles that testbench there, on every run, so two
+# files under `phase2/` carry this gate's timestamp rather than the design
+# round's. Anything that dates a run by mtime has to know that, and the only
+# place that can state it without drifting is here, where the writing happens.
+#
+# MEASURED: `flow_compliance_check` on an untouched copy of
+# `benchmark-data/ic/opentitan_aes` moved 40 files; the only two outside
+# `reports/` are exactly these. `result_md_audit_provenance_check` read one of
+# them as "a newer round of the design" and reported the tree STALE from the
+# second run onward, on a tree nobody had touched.
+#: Where the rendered injection testbench is written, project-relative.
+FI_TB_RELPATH = "phase2/stage2/safety/fmeda_fi_tb.v"
+#: Every project-relative path this gate rewrites on a run. The compiled
+#: object is `<tb>.vvp` on BOTH injection backends (`_run_injection_host` and
+#: the container leg both build `f"{tb_rel}.vvp"`).
+REGENERATED_PROJECT_PATHS: Tuple[str, ...] = (
+    FI_TB_RELPATH, FI_TB_RELPATH + ".vvp")
+
+
 # ─────────────────────────── ASIL floors ────────────────────────────────
 # Measured-DC floor per ASIL, used as a defensible proxy for the ISO-26262
 # single-point-fault-metric target. Disclosed in the report; overridable.
@@ -1240,11 +1261,10 @@ def run(project: Path, args) -> Tuple[int, dict]:
 
     # 3) render TB + run the REAL injection
     tb = build_ecc_injection_tb(spec, max_vectors=args.max_vectors)
-    tb_dir = project / "phase2" / "stage2" / "safety"
-    tb_dir.mkdir(parents=True, exist_ok=True)
-    tb_path = tb_dir / "fmeda_fi_tb.v"
+    tb_rel = FI_TB_RELPATH                      # the DECLARED path, not a copy
+    tb_path = project / tb_rel
+    tb_path.parent.mkdir(parents=True, exist_ok=True)
     tb_path.write_text(tb)
-    tb_rel = str(tb_path.relative_to(project))
 
     ec, out, err = run_injection_iverilog(
         project, spec_rtl_rel, tb_rel, tb_top="fmeda_fi_tb",
