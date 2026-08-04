@@ -4831,12 +4831,32 @@ def _digital_backend_is_na(project: Path) -> Tuple[bool, str]:
 # reads it instead of re-deriving it from the corpus a second time.
 #
 #   gate                              new FAIL/107   projects w/ denominator>0
-P0_CORPUS_DENOMINATOR = 107
+# RE-MEASURED at 108, not re-derived. The corpus grew 105 -> 108 in the
+# 2026-07-25 spm restructure (`1bea1377d`, one spm dir replaced by three
+# per-version/PDK dirs) plus the caravel v1.9.43 run, and this pin sat at 107
+# through it. The staleness was invisible until #775/#776 touched
+# `flow_compliance_check`, which pulled the census test into the targeted set.
+#
+# The number is a LICENCE, not a label: three of the rows below claim "0 FAIL
+# over ALL of them", so raising the denominator without re-running would assert
+# coverage of directories nobody measured — the exact defect this table exists to
+# prevent. Each figure below was swept over the real 108 tracked `rtl/` dirs:
+#
+#     sustained_vs_edge_check              0 fail / 108
+#     timer_freeze_after_state_check       0 fail / 108
+#     fpga_wrapper_input_polluter_check    0 fail / 108   (--rtl, per file)
+#     testbench_exists_check             103 fail / 108   (was 102/107)
+#
+# `cmd_arg_range_validation_check` is DELIBERATELY UNCHANGED at 4. Its second
+# element is the gate's OWN examined-count, not an invocation count, so it does
+# not scale with the corpus and a sweep of invocations measures a different
+# quantity. The same is true of every `(0, 0)` row below.
+P0_CORPUS_DENOMINATOR = 108
 P0_RTL_DIR_GROUP_MEASUREMENT = {
-    "sustained_vs_edge_check":          (0, 107),   # CONVERTED
-    "timer_freeze_after_state_check":   (0, 107),   # CONVERTED
-    "fpga_wrapper_input_polluter_check": (0, 107),  # CONVERTED v1.8.82
-    "cmd_arg_range_validation_check":   (0, 4),     # examines 4/107 only
+    "sustained_vs_edge_check":          (0, 108),   # CONVERTED
+    "timer_freeze_after_state_check":   (0, 108),   # CONVERTED
+    "fpga_wrapper_input_polluter_check": (0, 108),  # CONVERTED v1.8.82
+    "cmd_arg_range_validation_check":   (0, 4),     # examines 4/108 only
     "bit_count_modulo_check":           (0, 0),     # `checked: 0` everywhere
     "l12_sequence_implementation_check": (0, 0),    # `sequences_checked: 0`
     "otp_write_lock_gate_check":        (0, 0),     # `write_enable_sites: 0`
@@ -4844,7 +4864,7 @@ P0_RTL_DIR_GROUP_MEASUREMENT = {
     "response_payload_template_check":  (0, 0),     # `total_assignments: 0`
     "tristate_self_rx_mask_check":      (0, 0),     # `inout_ports: []`
     "transient_signal_latch_check":     (0, None),  # discloses NO denominator
-    "testbench_exists_check":           (102, 107),  # the l9-shaped trap
+    "testbench_exists_check":           (103, 108),  # the l9-shaped trap
     "rtl_precheck_gate":                (3, 107),
     "packet_length_check_present":      (3, 107),
     "pre_awake_silence_check":          (1, 107),
