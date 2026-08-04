@@ -27,6 +27,34 @@ def test_empty_dir(tmp_path):
     assert r.returncode == 0
 
 
+# --- `pattern` is a REQUIRED field of the record, downstream of emit -------
+
+def test_required_fields_is_exactly_this_set():
+    """Pinned as literals + set equality (never by iterating the constant
+    under test). `pattern` sits in here — the downstream half of the
+    asymmetry that `enhancement_emit.emit_backlog` left unenforced at the
+    write site, where an omitted one emitted a plausible empty block."""
+    sys.path.insert(0, str(PROG.parent))
+    import backlog_sanitize_check as mod
+    assert set(mod.REQUIRED_FIELDS) == {
+        "type", "component", "title", "pattern", "plugin_version"}
+
+
+def test_empty_pattern_is_flagged_missing(tmp_path):
+    """Behavioural downstream half: the gate rejects the exact file an
+    unenforced emit used to be able to write."""
+    bf = tmp_path / "b.yaml"
+    bf.write_text("type: enhancement\ncomponent: skill:spec-to-rtl\n"
+                  "title: A gate accepts what it should refuse\n"
+                  "pattern: |\n  \n"
+                  "plugin_version: '0.115'\n")
+    r = _run(["--file", str(bf)])
+    assert r.returncode == 1
+    cats = [(f["category"], f["field"])
+            for f in json.loads(r.stdout)["findings"]]
+    assert ("MISSING_FIELD", "pattern") in cats, cats
+
+
 # --- OSS-core codename SOFT registry rule ---------------------------------
 
 def test_registry_data_file_exists_and_wellformed():

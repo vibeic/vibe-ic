@@ -52,6 +52,15 @@ recoveries.json schema (v0.1.35+):
     "fix_action": "...",
     # Bucket-C (backlog) fields:
     "title": "...",
+    # `pattern` is REQUIRED for Bucket C too — it is what
+    # `backlog_sanitize_check.REQUIRED_FIELDS` demands of the emitted YAML,
+    # and `emit_backlog` refuses without it. It states the CLASS of defect in
+    # terms that let a reader recognise a DIFFERENT instance: what shape of
+    # input meets what shape of handling, and what wrong outcome follows. It
+    # is NOT a restatement of `title` and NOT a description of this one
+    # symptom. It was previously documented only under Bucket B above, where
+    # a backlog author never looks.
+    "pattern": "...",
     "suggested_fix": "...",
     "backlog_slug": "...",
     "backlog_type": "bug"|"enhancement",
@@ -564,6 +573,28 @@ def emit_backlog(rec: dict, today: str):
     slug = _slug(slug)
     fname = f"ORGANIC-{today.replace('-','')}-{slug}.yaml"
     indent = "  "
+    # `pattern` is REQUIRED, and is refused here exactly as `backlog_slug` is
+    # refused above. It used to be read as `rec.get("pattern", "")`, and
+    # `_validate_general_text` returns the value unchanged when it is falsy —
+    # so an omitted pattern emitted well-formed YAML with an empty block and
+    # no error, while `backlog_sanitize_check.REQUIRED_FIELDS` demands the
+    # field of the very file this function writes. Required downstream,
+    # undefined upstream (the schema above documented it only under Bucket B)
+    # and unenforced here is the shape that let two authors an hour apart
+    # resolve the same field the two available wrong ways: one left it empty,
+    # one pasted in the text of an unrelated record.
+    if not str(rec.get("pattern") or "").strip():
+        raise ValueError(
+            "emit_backlog: rec missing 'pattern' — refusing to emit an empty "
+            "one. A pattern states the CLASS of defect: what shape of input "
+            "meets what shape of handling, and what wrong outcome follows — "
+            "written so a reader can recognise a DIFFERENT instance of it. "
+            "It is not a restatement of the title and not a description of "
+            "this one symptom; a sentence that only fits the record it sits "
+            "on cannot match the next occurrence, which is the only thing "
+            "the field is for. Do not copy one from another record: a "
+            "pattern that came from a different defect is worse than none, "
+            "because it reads as measured.")
     # v0.1.42 — structural validation across body fields (Round-4 NEW-4 fix).
     pat = _validate_general_text("pattern", rec.get("pattern", "")).replace("\n", "\n" + indent)
     fix = _validate_general_text("suggested_fix", rec.get("suggested_fix", "")).replace("\n", "\n" + indent)

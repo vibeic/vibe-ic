@@ -180,6 +180,23 @@ submitted_at: "2026-04-27T14:30:00+08:00"
 session_context: "Fresh-agent Phase 2+3 run; agent ignored WARN and shipped"
 ```
 
+> **What `pattern` must say — the rule the example above is only one
+> instance of.** A `pattern` states the **class** of defect: what shape of
+> input meets what shape of handling, and what wrong outcome follows. Write
+> it so a reader can use it to recognise a **different** instance — a case
+> you have not seen, in a different design, at a different step. It is NOT a
+> restatement of `title` (the title names this occurrence; the pattern names
+> the family it belongs to) and it is NOT a description of this one symptom.
+> Test it before you write it down: *if this sentence only fits the record it
+> sits on, it is not a pattern* — it cannot match the next occurrence, which
+> is the only thing the field is for.
+>
+> Do not imitate the shape of the example above without meeting that rule,
+> and never paste a `pattern` in from another record or from an issue body: a
+> pattern that came from a different defect is worse than an empty one,
+> because it reads as measured, and Step 4's gate — which only checks that
+> the field is non-empty — will pass it.
+
 ### Step 4 — Sanitize
 
 Run the sanitization gate:

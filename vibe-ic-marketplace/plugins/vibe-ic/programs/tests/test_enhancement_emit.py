@@ -210,6 +210,114 @@ def test_emit_backlog_refuses_missing_backlog_slug():
         _emit_mod.emit_backlog(rec, "2026-05-28")
 
 
+# ── `pattern` is required AT EMIT, not only downstream ───────────────────────
+#
+# Two backlog-landing PRs an hour apart shipped a broken `pattern` on a
+# required field — one byte-identical text copied off an unrelated defect, one
+# empty. One cause: `backlog_slug` above RAISES when absent, while `pattern`
+# was read as `rec.get("pattern", "")` and `_validate_general_text` returns
+# early on a falsy value. An omitted pattern emitted well-formed YAML with an
+# empty block and no error, while `backlog_sanitize_check.REQUIRED_FIELDS`
+# demands the field of that very file. Required downstream, undefined upstream,
+# unenforced here — so both ways of resolving it were available.
+
+_PATTERNLESS = {"title": "A gate accepts what it should refuse",
+                "suggested_fix": "Make the gate refuse.",
+                "backlog_slug": "generic-issue-category"}
+
+_REAL_PATTERN = ("A required field that is defaulted at its write site but "
+                 "demanded by a downstream gate: the write succeeds, the "
+                 "record looks complete, and the refusal lands on whoever "
+                 "reads it next.")
+
+
+def test_emit_backlog_refuses_missing_pattern():
+    """Behavioural: emit must REFUSE, not write a plausible empty block."""
+    with pytest.raises(ValueError, match="pattern"):
+        _emit_mod.emit_backlog(dict(_PATTERNLESS), "2026-05-28")
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n", "  \n \t "])
+def test_emit_backlog_refuses_blank_pattern(blank):
+    """A whitespace-only pattern emits the identical empty YAML block an
+    omitted one did, so it is the same defect and is refused the same way."""
+    with pytest.raises(ValueError, match="pattern"):
+        _emit_mod.emit_backlog(dict(_PATTERNLESS, pattern=blank), "2026-05-28")
+
+
+def test_emit_backlog_refusal_defines_what_a_pattern_is():
+    """A refusal that only says "required" is what produced the two defects:
+    an author who meets an undefined required field resolves it by imitation
+    or by leaving it blank. The message must state what the field IS."""
+    with pytest.raises(ValueError) as ei:
+        _emit_mod.emit_backlog(dict(_PATTERNLESS), "2026-05-28")
+    msg = str(ei.value).lower()
+    assert "class of defect" in msg, msg
+    assert "different instance" in msg, msg
+    assert "not a restatement of the title" in msg, msg
+    assert "do not copy one from another record" in msg, msg
+
+
+def test_emit_backlog_still_emits_when_a_pattern_is_present():
+    """No-leak, in-suite: a refusal that breaks valid input is worse than the
+    defect it prevents."""
+    fname, body = _emit_mod.emit_backlog(
+        dict(_PATTERNLESS, pattern=_REAL_PATTERN), "2026-05-28")
+    assert fname == "ORGANIC-20260528-generic-issue-category.yaml"
+    assert "pattern: |\n  A required field that is defaulted" in body
+
+
+def test_emit_backlog_required_fields_refuse_symmetrically():
+    """The mechanism itself: two required fields of one function, one
+    behaviour. The control proves the record is otherwise emittable, so each
+    refusal below is attributable to the field that was dropped."""
+    good = dict(_PATTERNLESS, pattern=_REAL_PATTERN)
+    _emit_mod.emit_backlog(dict(good), "2026-05-28")      # control: emits
+
+    no_slug = dict(good)
+    no_slug.pop("backlog_slug")
+    with pytest.raises(ValueError, match="backlog_slug"):
+        _emit_mod.emit_backlog(no_slug, "2026-05-28")
+
+    no_pattern = dict(good)
+    no_pattern.pop("pattern")
+    with pytest.raises(ValueError, match="pattern"):
+        _emit_mod.emit_backlog(no_pattern, "2026-05-28")
+
+
+def test_module_schema_documents_pattern_where_backlogs_are_written():
+    """The input schema listed `pattern` only under the Bucket-B (skill)
+    fields. A Bucket-C author reading the backlog field block met a field
+    that emit requires and the sanitize gate demands, and that the block they
+    were reading did not name."""
+    doc = _emit_mod.__doc__
+    start = doc.index("# Bucket-C (backlog) fields:")
+    end = doc.index("# Bucket-D fields:")
+    assert '"pattern"' in doc[start:end], (
+        "Bucket-C field block must list `pattern` — it is consumed there")
+
+
+def test_both_authoring_skills_define_what_a_pattern_is():
+    """Neither skill that tells an author to write a `pattern` defined one:
+    one listed it as a bare name in an enumeration, the other showed a worked
+    example — a shape to imitate, not a rule. Imitation is exactly what
+    produced the copied text."""
+    skills = SCRIPT.parent.parent / "skills"
+    capture = (skills / "benchmark-enhancement-capture" / "SKILL.md").read_text()
+    submit = (skills / "community-backlog-submit" / "SKILL.md").read_text()
+    import re as _re
+    for name, text in (("benchmark-enhancement-capture", capture),
+                       ("community-backlog-submit", submit)):
+        # Unwrap markdown blockquote continuations so a phrase that spans a
+        # line break still matches: the assertion is about the sentence, not
+        # about where the author happened to wrap it.
+        low = _re.sub(r"\s+", " ", text.replace("\n>", " ")).lower()
+        assert "what `pattern` must say" in low, (
+            f"{name} must DEFINE the field, not only name or exemplify it")
+        assert "recognise a **different** instance" in low, name
+        assert "not a restatement of `title`" in low, name
+
+
 def test_scrub_design_leak_removes_prob_ids():
     """Audit Finding 1: enumerated benchmark-identifier tokens are scrubbed
     from free-text fields no matter where they appear."""
