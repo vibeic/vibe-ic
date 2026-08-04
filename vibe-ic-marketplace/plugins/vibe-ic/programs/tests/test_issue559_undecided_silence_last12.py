@@ -112,15 +112,59 @@ def test_every_recorded_gate_is_now_licensed():
         f"— the drift check would still count these as undecided silence")
 
 
-def test_table_covers_exactly_the_v198_undecided_twelve():
-    """Anchors the round-6 scope. These are the 12 gates that had NO recorded
-    decision at v1.9.8. A change to this set is a real change to the triage
-    frontier and must be deliberate."""
-    assert set(REGISTER) == {
-        "backlog_sanitize_check", "cross_constant_invariant_check",
-        "fpga_qsf_lint", "fresh_agent_provenance_check",
-        "interface_encoding_audit", "json_schema_check",
-        "l9_completeness_check", "module_port_audit", "oe_pattern_check",
-        "output_artifact_check", "tester_oracle_health_check",
-        "warn_acceptance_policy_check",
-    }
+#: The 12 gates that had NO recorded decision at v1.9.8 (round 6).
+_ROUND6_TWELVE = {
+    "backlog_sanitize_check", "cross_constant_invariant_check",
+    "fpga_qsf_lint", "fresh_agent_provenance_check",
+    "interface_encoding_audit", "json_schema_check",
+    "l9_completeness_check", "module_port_audit", "oe_pattern_check",
+    "output_artifact_check", "tester_oracle_health_check",
+    "warn_acceptance_policy_check",
+}
+
+#: Round 7 — the four the RATCHET could not see, added deliberately.
+#:
+#: These were never undecided by anyone's choice. `p0_gate_invocability_drift_check`
+#: re-typed `_gate_invocation`'s Rule A (`rc == 2 and "usage:" in stderr`) and
+#: never had Rule B, so a gate that hand-rolls its required-argument check was
+#: invisible to the measurement entirely — neither licensed nor flagged. Measured
+#: at v1.9.74: the umbrella classified 36 of 246 registered gates NOT_INVOCABLE,
+#: the ratchet 32, and the difference is exactly this set.
+_ROUND7_RULE_B_FOUR = {
+    "fpga_async_input_synchronizer_check", "mask_application_check",
+    "payload_bit_position_check", "periodic_signal_required_check",
+}
+
+
+def test_table_covers_exactly_the_undecided_gates_found_so_far():
+    """Anchors the triage frontier. A change to this set is a real change to it
+    and must be deliberate.
+
+    Round 6 pinned twelve. Round 7 adds four MORE — not because four new gates
+    went silent, but because the program that was supposed to find them used a
+    narrower predicate than the umbrella that creates them. The split is kept
+    visible rather than merged into one flat set: the twelve were found by a
+    check that worked, the four were found by fixing the check.
+    """
+    assert set(REGISTER) == _ROUND6_TWELVE | _ROUND7_RULE_B_FOUR
+
+
+def test_the_round7_four_are_rule_b_and_would_be_invisible_to_rule_a():
+    """The reason round 7 exists, re-derived rather than asserted.
+
+    Each of these four exits 2 WITHOUT an argparse usage block. Any predicate
+    that keys on `usage:` — which is what the ratchet did until v1.9.74 — reports
+    them as invocable, so P0 stays green over gates that never ran and the check
+    built to notice that says `No new silent gate`.
+    """
+    import tempfile
+    for gate in sorted(_ROUND7_RULE_B_FOUR):
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = pathlib.Path(tmp)
+            argv = F._structural_gate_argv(gate, probe, rtl_dir=probe)
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=60)
+        assert proc.returncode == 2, gate
+        assert "usage:" not in (proc.stderr or ""), (
+            f"{gate} now prints an argparse usage block, so it is a Rule-A "
+            f"rejection and this round-7 record describes the wrong mechanism")
