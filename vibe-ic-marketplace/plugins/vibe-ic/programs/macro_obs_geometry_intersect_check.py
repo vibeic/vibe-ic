@@ -208,34 +208,185 @@ def parse_placed_masters(def_text: str) -> Set[str]:
     return out
 
 
-def parse_routed_segments(def_text: str) -> List[Dict[str, Any]]:
-    """`[{layer, x1, y1, x2, y2, net, followpin}]` in DEF units.
+# A wiring path inside a SPECIALNETS entry. DEF introduces the FIRST path of a
+# net with `+ ROUTED` (or FIXED / COVER) and every SUBSEQUENT path of that same
+# net with the bare keyword `NEW` — no `+`. Anchoring on `+` therefore sees one
+# path per net and silently discards the rest.
+_PATH_HEAD_RE = re.compile(
+    r"(?:\+\s*(?:ROUTED|FIXED|COVER|SHAPE\s+\w+)?\s*|\bNEW\s+)(\w+)\s+\d+",
+    re.I)
+
+# `( x y )`, with an optional third value (the wire extension). Either
+# coordinate may be `*`, which DEF defines as "repeat the one before it".
+_PATH_POINT_RE = re.compile(r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)(?:\s+-?\d+)?\s*\)")
+
+
+# A via placed INSIDE a wiring path: a bare identifier sitting between two
+# coordinate groups. LEF/DEF 5.8: "If you specify a via, layerName for the next
+# routing coordinates (if any) is implicitly changed to the other routing layer
+# for the via." So the head layer governs only up to the first via.
+_PATH_TOKEN_RE = re.compile(
+    r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)(?:\s+-?\d+)?\s*\)"      # a point
+    r"|([A-Za-z_][A-Za-z0-9_]*)")                          # or a bare name
+
+# `- <viaName> ... + LAYERS <lower> <cut> <upper> ...` in the DEF's own VIAS
+# section. That is where a via's two routing layers are stated.
+_VIAS_SEC_RE = re.compile(r"^\s*VIAS\s+\d+\s*;(.*?)^\s*END\s+VIAS",
+                          re.S | re.M)
+_VIA_LAYERS_RE = re.compile(r"\+\s*LAYERS\s+(\S+)\s+(\S+)\s+(\S+)", re.I)
+
+# DEF's own vocabulary, which occupies the same syntactic slot as a via name
+# inside a wiring path. Not vias.
+_PATH_KEYWORDS = {
+    "NEW", "ROUTED", "FIXED", "COVER", "SHAPE", "USE", "STYLE", "MASK",
+    "RECT", "VIRTUAL", "NONDEFAULTRULE", "TAPER", "TAPERRULE",
+    "FOLLOWPIN", "STRIPE", "IOWIRE", "COREWIRE", "BLOCKWIRE", "BLOCKAGEWIRE",
+    "FILLWIRE", "FILLWIREOPC", "DRCFILL", "RING", "PADRING", "BLOCKRING",
+    "POWER", "GROUND", "SIGNAL", "CLOCK", "TIEOFF", "ANALOG", "RESET", "SCAN",
+}
+
+
+def parse_via_layers(def_text: str) -> Dict[str, Tuple[str, str]]:
+    """{viaName: (lowerRoutingLayer, upperRoutingLayer)} from the VIAS section.
+
+    Only vias DEFINED IN THIS DEF are resolvable here. A via that comes from the
+    tech LEF is not, and the caller must treat it as unknown rather than guess —
+    see `_path_segments`."""
+    out: Dict[str, Tuple[str, str]] = {}
+    sec = _VIAS_SEC_RE.search(def_text)
+    if not sec:
+        return out
+    for entry in re.split(r"\n\s*-\s+", sec.group(1)):
+        nm = re.match(r"\s*(\S+)", entry)
+        lm = _VIA_LAYERS_RE.search(entry)
+        if nm and lm:
+            out[nm.group(1)] = (lm.group(1), lm.group(3))
+    return out
+
+
+def _path_segments(body: str, head_layer: str,
+                   via_layers: Dict[str, Tuple[str, str]]
+                   ) -> Tuple[List[Tuple[str, int, int, int, int]],
+                              Optional[Dict[str, Any]]]:
+    """`([(layer, x1, y1, x2, y2)], abandonment_or_None)` for ONE wiring path.
+
+    Two things the head layer alone cannot tell you:
+
+    * `*` is not a missing coordinate — DEF defines it as the PREVIOUS point's
+      coordinate, and it is how every real writer spells an orthogonal segment.
+      Dropping those points drops the segments they describe.
+    * a via inside the path switches the layer for everything after it. Stamping
+      the whole path with the head layer puts upper-layer metal on the lower
+      layer, which on a BLOCKING gate does not merely miss a violation — it
+      FABRICATES one, against an obstruction the metal never went near.
+
+    When a via cannot be resolved (it is defined in the tech LEF, which this gate
+    does not read), the layer after it is UNKNOWN. This stops emitting rather
+    than continuing under the previous layer: an unreported segment is a gap, an
+    unreported segment attributed to the wrong layer is a false accusation, and
+    on a gate that blocks the second is strictly worse.
+
+    The SECOND return value is what makes that choice survivable. Stopping is
+    only better than guessing if the stop is VISIBLE: a truncated path that
+    reports nothing is indistinguishable from a path with nothing to report, and
+    a partial denominator published as a clean verdict is the same defect this
+    gate exists to catch, one scale down. So the abandonment is returned —
+    `{via, layer_at_stop, points_read, points_unread}` — and every caller up to
+    the exit code carries it."""
+    segs: List[Tuple[str, int, int, int, int]] = []
+    layer = head_layer
+    px: Optional[int] = None
+    py: Optional[int] = None
+    read = 0
+
+    def _stop(via: str, why: str) -> Tuple[List[Any], Dict[str, Any]]:
+        total = len(_PATH_POINT_RE.findall(body))
+        return segs, {"via": via, "reason": why, "layer_at_stop": layer,
+                      "head_layer": head_layer, "points_read": read,
+                      "points_unread": max(0, total - read)}
+
+    for tm in _PATH_TOKEN_RE.finditer(body):
+        a, b, name = tm.group(1), tm.group(2), tm.group(3)
+        if name is not None:
+            # A via is an identifier sitting BETWEEN coordinates. The same
+            # position also carries DEF's own keywords (`+ SHAPE FOLLOWPIN`
+            # before the first point, `+ USE POWER ;` after the last), so a
+            # bare-identifier rule alone reads `SHAPE` as an unresolvable via
+            # and abandons the whole path. Require both: we are mid-path, and
+            # the token is not vocabulary.
+            if px is None or name.upper() in _PATH_KEYWORDS:
+                continue
+            pair = via_layers.get(name)
+            if pair is None:
+                return _stop(name, "via not defined in this DEF's VIAS section")
+            lo, hi = pair
+            # the via connects two routing layers; move to whichever is not the
+            # one we are on. If neither matches, the path is not describable.
+            if layer.lower() == lo.lower():
+                layer = hi
+            elif layer.lower() == hi.lower():
+                layer = lo
+            else:
+                return _stop(name, f"via connects {lo}/{hi}, path is on {layer}")
+            continue
+        x = px if a == "*" else int(a)
+        y = py if b == "*" else int(b)
+        if x is None or y is None:
+            continue      # a `*` in a path's first point has nothing to repeat
+        if px is not None and py is not None:
+            segs.append((layer, px, py, x, y))
+        px, py = x, y
+        read += 1
+    return segs, None
+
+
+def parse_routed_segments_with_gaps(
+        def_text: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """`(segments, abandoned_paths)` — the segments AND what was not read.
 
     SPECIALNETS only: this gate is about supply metal crossing an obstruction,
     which is what follow-pins and straps are. A signal route over a blockage is
-    the router's business and the PDK deck's."""
+    the router's business and the PDK deck's.
+
+    A path is a POLYLINE: N points describe N-1 segments, and every one of them
+    is metal that can cross an obstruction. Reading only the first pair reports
+    on the first leg of each path and stays silent about the others.
+
+    `abandoned_paths` is the honest denominator. A path this parser could not
+    follow to its end is metal it did not look at, and the caller must be able
+    to tell that from metal it looked at and cleared."""
     segs: List[Dict[str, Any]] = []
+    gaps: List[Dict[str, Any]] = []
     sec = re.search(r"^\s*SPECIALNETS\b(.*?)^\s*END\s+SPECIALNETS",
                     def_text, re.S | re.M)
     if not sec:
-        return segs
+        return segs, gaps
+    via_layers = parse_via_layers(def_text)
     for entry in re.split(r"\n\s*-\s+", sec.group(1)):
         nm = re.match(r"\s*(\S+)", entry)
         net = nm.group(1) if nm else "?"
         fp = "FOLLOWPIN" in entry
-        for rm in re.finditer(
-                r"\+\s*(?:ROUTED|FIXED|COVER|SHAPE\s+\w+)?\s*(\w+)\s+\d+"
-                r"(?:\s+\+\s*SHAPE\s+\w+)?\s*"
-                r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)\s*\)\s*"
-                r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)\s*\)", entry):
-            layer, a, b, c, d = rm.groups()
-            if "*" in (a, b) or "*" in (c, d):
-                continue          # a `*` repeats the previous coordinate; skip
-            x1, y1, x2, y2 = int(a), int(b), int(c), int(d)
-            segs.append({"layer": layer, "net": net, "followpin": fp,
-                         "x1": min(x1, x2), "y1": min(y1, y2),
-                         "x2": max(x1, x2), "y2": max(y1, y2)})
-    return segs
+        heads = list(_PATH_HEAD_RE.finditer(entry))
+        for i, hm in enumerate(heads):
+            end = heads[i + 1].start() if i + 1 < len(heads) else len(entry)
+            path_segs, gap = _path_segments(
+                entry[hm.end():end], hm.group(1), via_layers)
+            for layer, x1, y1, x2, y2 in path_segs:
+                segs.append({"layer": layer, "net": net, "followpin": fp,
+                             "x1": min(x1, x2), "y1": min(y1, y2),
+                             "x2": max(x1, x2), "y2": max(y1, y2)})
+            if gap is not None:
+                gaps.append({"net": net, **gap})
+    return segs, gaps
+
+
+def parse_routed_segments(def_text: str) -> List[Dict[str, Any]]:
+    """The segments only. `parse_routed_segments_with_gaps` for the denominator.
+
+    Kept because it is the shape every existing caller reads; a caller that
+    takes only this is asserting it does not care how much was read, and no
+    caller inside this program does that any more."""
+    return parse_routed_segments_with_gaps(def_text)[0]
 
 
 def spans(seg: Dict[str, Any], box: Tuple[float, float, float, float]) -> bool:
@@ -261,7 +412,7 @@ def audit(def_text: str, macro_lef_texts: Sequence[str]) -> Dict[str, Any]:
     um = _UNITS_RE.search(def_text)
     units = int(um.group(1)) if um else 1000
     placed = parse_placed_macros(def_text, list(with_obs))
-    segs = parse_routed_segments(def_text)
+    segs, gaps = parse_routed_segments_with_gaps(def_text)
 
     findings: List[Dict[str, Any]] = []
     for inst in placed:
@@ -294,6 +445,10 @@ def audit(def_text: str, macro_lef_texts: Sequence[str]) -> Dict[str, Any]:
         "masters_with_obs": sorted(with_obs),
         "placed_instances": len(placed),
         "special_segments": len(segs),
+        # The denominator's hole, named. Every entry is supply metal this gate
+        # did NOT look at; `findings` is a verdict over the rest.
+        "truncated_paths": gaps,
+        "unread_points": sum(g["points_unread"] for g in gaps),
         "findings": findings,
         "placed_masters": len(placed_masters),
         "masters_declared_by_lef": sorted(obs_by_master),
@@ -413,6 +568,21 @@ def main(argv=None) -> int:
         return 2
 
     f = rep["findings"]
+    gaps = rep["truncated_paths"]
+
+    def _name_the_gaps() -> None:
+        print(f"\n  {len(gaps)} wiring path(s) were ABANDONED before their end "
+              f"and NOT examined\n  ({rep['unread_points']} coordinate point(s) "
+              f"unread). A via that is not declared in\n  this DEF's own VIAS "
+              f"section comes from the tech LEF, which this gate does\n  not "
+              f"read, so the layer of everything after it is unknown:")
+        for gp in gaps[:8]:
+            print(f"   net {gp['net']}  path head {gp['head_layer']}  "
+                  f"stopped at via '{gp['via']}' — {gp['reason']}  "
+                  f"({gp['points_read']} read, {gp['points_unread']} unread)")
+        if len(gaps) > 8:
+            print(f"   … {len(gaps) - 8} more")
+
     if f:
         fp = sum(1 for x in f if x["followpin"])
         print(f"[FAIL] {len(f)} supply segment(s) SPAN a placed macro's declared "
@@ -426,6 +596,9 @@ def main(argv=None) -> int:
               "may not put\n  metal. It is not in the PDK deck, so sign-off DRC "
               "cannot see this; and the\n  wire is attached to the right net, so "
               "a connectivity audit cannot either.")
+        if gaps:
+            _name_the_gaps()
+            print("\n  So this count is a FLOOR, not the total.")
         return 1
 
     # #828 — reached only when nothing was found to complain about. Whether
@@ -443,11 +616,29 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
+    # No finding, but part of the supply metal was never read. "I could not
+    # look" must not share an exit code with "I looked and it was clean" — that
+    # is this gate's own rule, and a truncated path is exactly the first case.
+    # rc=2 is what `run_tolerating_uncheckable` is for; rc=0 here would be a
+    # partial denominator published as a clean verdict, which is the defect the
+    # gate exists to catch, one scale down.
+    if gaps:
+        print(f"[CANNOT DETERMINE] macro_obs_geometry_intersect: "
+              f"{rep['placed_instances']} placed instance(s) of "
+              f"{len(rep['masters_with_obs'])} master(s) with OBS; "
+              f"{rep['special_segments']} supply segment(s) examined and none "
+              f"spans an obstruction — but the read is INCOMPLETE. NOT a pass.",
+              file=sys.stderr)
+        _name_the_gaps()
+        print("\n  Remedy: pass the tech LEF's vias in the DEF's VIAS section, "
+              "or supply the\n  tech LEF, so the layer after each via is known.")
+        return 2
+
     print(f"[PASS] macro_obs_geometry_intersect: {rep['placed_instances']} placed "
           f"instance(s) of {len(rep['masters_with_obs'])} master(s) with OBS, "
-          f"{rep['special_segments']} supply segment(s) — none spans an "
-          f"obstruction. All {rep['placed_masters']} placed master(s) resolved "
-          f"to a LEF.")
+          f"{rep['special_segments']} supply segment(s), 0 path(s) abandoned — "
+          f"none spans an obstruction. All {rep['placed_masters']} placed "
+          f"master(s) resolved to a LEF.")
     return 0
 
 
