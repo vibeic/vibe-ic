@@ -699,7 +699,17 @@ def _log_invocation(cmd: str, rc: int, duration_ms: int,
             f.write(json.dumps(entry) + "\n")
     except Exception:  # noqa: BLE001 — logging must never break the run
         pass
-    if _outs:
+    # rc GATES THE RETIREMENT, and this guard was written from a measured
+    # miss, not from caution. `_hash_declared_outputs` hashes whatever sits at
+    # the declared path — it cannot know whether THIS invocation produced it.
+    # So a FAILED run over a pre-existing artefact declares that artefact's
+    # current digest and would, without this line, retire the declaration of
+    # the run that really did produce it. Observed exactly that: an openroad
+    # sign-off producer exited 1 having written nothing, adopted the previous
+    # run's report, and the older row's true declaration was retired — the
+    # gate going quiet because the measurement moved, not because the ledger
+    # got better. A failed invocation retires nothing.
+    if _outs and int(rc) == 0:
         _retire_superseded_declarations(sink, _outs)
 
 

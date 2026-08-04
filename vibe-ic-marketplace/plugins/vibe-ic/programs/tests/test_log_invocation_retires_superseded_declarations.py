@@ -37,6 +37,7 @@ REVERSE (must STILL hold after the fix — these are what stop this from being
        invocation row, is left alone — retiring must not trade
        HASH_MISMATCH for PROVENANCE_OUTPUTS_MISSING
   * R4 no re-run -> the ledger file is byte-identical afterwards
+  * R6 a FAILED invocation retires nothing
 
 GUARD case on the new mechanism (cannot run pre-fix — the helper does not
 exist there — so it is counted with the forward cases, not as a both-ways pass):
@@ -45,13 +46,16 @@ exist there — so it is counted with the forward cases, not as a both-ways pass
 Measured negative control (this file, unchanged, against the byte-identical
 pre-fix `phase3_one_shot_runner.py` restored from HEAD):
 
-    PRE-FIX   4 failed, 4 passed      <- the 3 forward cases + the R5 guard
-    POST-FIX  8 passed
+    PRE-FIX   4 failed, 5 passed      <- the 3 forward cases + the R5 guard
+    POST-FIX  9 passed
 
-The 4 that pass BOTH ways are the reverse cases. R1 and R3 are the load-bearing
-ones: R1 proves the gate's real catch is untouched, and R3 proves the fix
-refuses the case where it would have traded one fatal fault for another rather
-than quietly taking the green.
+(Reverting ONLY the runner — an earlier attempt at this control used `git stash`,
+which reverted the test file too and reported a meaningless 8-passed.)
+
+The 5 that pass BOTH ways are the reverse cases. R1, R3 and R6 are the
+load-bearing ones: R1 proves the gate's real catch is untouched, R3 proves the
+fix refuses the case where it would have traded one fatal fault for another, and
+R6 is the one this fix was measured to get WRONG before the rc gate was added.
 """
 from __future__ import annotations
 
@@ -107,11 +111,11 @@ def _fatal(rep):
     return sorted(f["rule"] for f in rep["findings"] if f["severity"] == "ERROR")
 
 
-def _relog(proj: Path, outputs, monkeypatch=None):
+def _relog(proj: Path, outputs, rc: int = 0):
     """Drive the REAL writer with the sink pointed at `proj`."""
     _runner._PROV_SINK = str(proj)
     try:
-        _runner._log_invocation("openroad -no_init -exit re-run", 0, 12,
+        _runner._log_invocation("openroad -no_init -exit re-run", rc, 12,
                                 marker="step.tcl", outputs=outputs)
     finally:
         _runner._PROV_SINK = None
@@ -278,4 +282,37 @@ def test_r5_retiring_never_leaves_an_artefact_undeclared(tmp_path):
         "an unbacked digest must not retire anything"
     rc, rep = _gate(tmp_path)
     assert rc == 1, "the artefact must still be accounted for by the gate"
+    assert "PROVENANCE_HASH_MISMATCH" in _fatal(rep)
+
+
+def test_r6_a_failed_invocation_retires_nothing(tmp_path):
+    """WRITTEN FROM A MEASURED MISS, not from caution.
+
+    `_hash_declared_outputs` hashes whatever sits at the declared path — it
+    cannot know whether THIS invocation produced it. So a run that FAILED over
+    a pre-existing artefact declares that artefact's current digest. Without an
+    rc gate, the older row that really did produce it gets its declaration
+    retired, and the gate goes quiet because the measurement moved rather than
+    because the ledger got better.
+
+    Observed on a real tree: an openroad sign-off producer exited 1 having
+    written nothing, adopted the previous run's report, and the true
+    declaration was retired. This is that case, refused.
+    """
+    rel = "reports/phase3/ir_em.log"
+    (tmp_path / "reports/phase3").mkdir(parents=True)
+    (tmp_path / rel).write_text("produced by the run that SUCCEEDED\n")
+    stale = _sha_text("an older production\n")
+    _write_ledger(tmp_path, [_invocation({rel: stale})])
+    before = (tmp_path / "provenance.jsonl").read_bytes()
+
+    _relog(tmp_path, [tmp_path / rel], rc=1)      # the run FAILED
+
+    rows = _read_ledger(tmp_path)
+    assert rows[0]["outputs"][rel] == stale, \
+        "a failed invocation must not retire anyone else's declaration"
+    assert "outputs_superseded" not in rows[0]
+    assert (tmp_path / "provenance.jsonl").read_bytes().startswith(before)
+    rc, rep = _gate(tmp_path)
+    assert rc == 1, "the real fault must still be visible"
     assert "PROVENANCE_HASH_MISMATCH" in _fatal(rep)
