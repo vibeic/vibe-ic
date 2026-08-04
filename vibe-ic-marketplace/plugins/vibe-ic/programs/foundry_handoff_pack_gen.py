@@ -81,7 +81,23 @@ def _count_netlist_instances(synth_dir: Path):
     """#446 fallback — count cell instantiations in the gate netlist
     when synth.log lacks the Yosys summary. Yosys names instances
     `_N_`; generic instantiations are `<cell> <inst> (`. Returns None
-    when no netlist / no instances found (never a fabricated count)."""
+    when no netlist / no instances found (never a fabricated count).
+
+    The count is the MAXIMUM over the candidate netlists, not the first
+    one that yields a hit. `sorted(glob("*.v"))` is FILESYSTEM ORDER, and
+    the synth directory holds more than the mapped netlist: yosys drops
+    techmap helper libraries (`_dlatch_map.v`, 192 bytes, ONE
+    instantiation) beside the design's own netlist, and `_` (0x5F) sorts
+    ahead of every lowercase letter. First-hit-wins therefore returned
+    `1` for a design whose routed DEF declares 79499 components, and that
+    `1` was written into `mask_spec.json` + the handoff `README.txt` as
+    the chip's cell count — the number a foundry reads.
+
+    MAX is the right reducer here and needs no threshold: a helper file
+    can only ever contribute FEWER instantiations than the netlist that
+    instantiates the design, so taking the largest candidate is monotone
+    in the real answer and stays `None` when nothing parses."""
+    best = None
     for nl in sorted(synth_dir.glob("*.v")):
         text = _read_text(nl)
         if not text:
@@ -90,9 +106,9 @@ def _count_netlist_instances(synth_dir: Path):
                            text, re.MULTILINE))
         # subtract module headers (they match the same shape)
         n -= len(re.findall(r"^\s*module\s+\w+\s*\(", text, re.MULTILINE))
-        if n > 0:
-            return n
-    return None
+        if n > 0 and (best is None or n > best):
+            best = n
+    return best
 
 
 def _detect_pdk_name(pdk_dir: Path):
