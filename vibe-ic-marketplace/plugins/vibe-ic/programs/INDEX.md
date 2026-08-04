@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1050
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1050)
+- **Total programs (excluding helpers / shims):** 1051
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1051)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1041 |
+| `any` | 1042 |
 
 ## Alphabetical listing
 
@@ -597,6 +597,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lvs_tapeout_signoff_check` | any | — | the TAPEOUT-tier LVS gate. |
 | `lvs_triage_classify` | any | v0.1.50 | LVS triage classifier (Pattern-B → program). |
 | `lvs_verdict_tokens` | any | — | single source of truth for netgen LVS terminal- verdict classification (ORGANIC #524, extends #507/#477). |
+| `macro_non_seq_arc_contract_check` | any | — | a staged macro's NON-SEQUENTIAL timing requirement must reach the integration BEFORE post-CTS. |
 | `macro_obs_geometry_intersect_check` | any | — | Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686. |
 | `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction TCL emitter + validator. |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
@@ -1122,7 +1123,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1041 programs)
+### `any` (1042 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1690,6 +1691,7 @@ _(no programs in this group)_
 - `lvs_tapeout_signoff_check` — the TAPEOUT-tier LVS gate.
 - `lvs_triage_classify` — LVS triage classifier (Pattern-B → program).  _[v0.1.50]_
 - `lvs_verdict_tokens` — single source of truth for netgen LVS terminal- verdict classification (ORGANIC #524, extends #507/#477).
+- `macro_non_seq_arc_contract_check` — a staged macro's NON-SEQUENTIAL timing requirement must reach the integration BEFORE post-CTS.
 - `macro_obs_geometry_intersect_check` — Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
 - `magic_extract_spice_emit` — Magic parasitic-RC extraction TCL emitter + validator.
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_

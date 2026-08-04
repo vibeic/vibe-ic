@@ -905,6 +905,33 @@ steps:
         # a PVT matrix; single-corner must be disclosed, never presented
         # as multi-corner.
         - program_exit_zero: "pvt_matrix_check . --json reports/phase2/gates/pvt_matrix.json"
+        # vibe-ic#762 — a staged hard macro's own Liberty may declare a
+        # NON-SEQUENTIAL stability window (`timing_type : non_seq_hold_*`)
+        # between two SIGNAL pins. Measured: a 9.00 ns address-around-strobe
+        # requirement reached NOTHING until Step 20 reported it as
+        # `HOLD_SLACK_NEGATIVE ... -8.68` — a verdict that points at the
+        # router, while the repair is at the integration level and has to land
+        # before synthesis (Step 9).
+        #
+        # POSITION. Step 7 is the FIRST step at which both halves of the
+        # reconciliation exist: the macro Liberty is a staged INPUT, and Step
+        # 7's `blocks_on: [1]` guarantees the design's own RTL + clock period
+        # exist, so the finding can name the instantiated macro, the pin pair,
+        # the window AND what the integration must do. Wired at D1 it would run
+        # before any integration existed and could only restate the input.
+        # Wired later than 7 it would land after synthesis, which is exactly
+        # the round the gate exists to save. It is the LAST entry of this
+        # `all_of` deliberately: `_evaluate_gate` re-runs advisory sub-gates
+        # that follow a failed one, so the disclosure survives a red step.
+        #
+        # ADVISORY. The finding is a DISCLOSURE that a requirement is
+        # unrecorded, not a proof that it is violated — proving violation early
+        # needs a pre-synthesis structural trace from the constrained pin to
+        # its driver's enable, which this gate does not do and must not pretend
+        # to. BLAST RADIUS: 0 of 9 published roots — exactly three
+        # design-staged macro Liberties exist in benchmark-data and none
+        # declares a non_seq_* arc, so every published cell SKIPs.
+        - advisory_program_exit_zero: "macro_non_seq_arc_contract_check . --json reports/phase2/gates/macro_non_seq_arcs.json"
     blocks_on: [1]
 
   - id: 8
