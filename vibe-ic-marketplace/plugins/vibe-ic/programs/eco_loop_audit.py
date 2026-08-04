@@ -246,6 +246,66 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
         findings.append(Finding("WARNING", "NO_AFFECTED_STEPS",
                                 "eco_log.json missing 'affected_steps' array"))
 
+    # #766 — DID THE REPAIR SEE THE VIOLATION IT WAS SENT TO FIX?
+    #
+    # An ECO fires because a sign-off measurement found NEGATIVE setup slack.
+    # A repair that answers `RSZ-0098 No setup violations found` to that has
+    # not repaired anything — it is analysing a different design, or different
+    # parasitics, or a different timing view. Every structural question above
+    # (`changes`, `re_verified`, `affected_steps`) is satisfied by exactly that
+    # run, and so was the delta guard below, because a repair that changed
+    # NOTHING cannot regress anything either. It passed.
+    #
+    # MEASURED (subservient x gf180mcuD, r8): trigger `setup_worst_slack_ns
+    # -0.09`, `eco_repair.log` `No setup violations found` on both passes, ZERO
+    # setup changes — while the same design repaired from the shipped
+    # post-route DEF with its own extracted SPEF closed with ONE buffer and one
+    # pin swap (-0.09 -> +0.14 ns).
+    #
+    # Keyed on the runner's own recorded contradiction (`eco_blind_to_violation`
+    # / the `eco_repair_log` sub-record beside a negative `eco_before`), so it
+    # fires only where BOTH sides were measured. A record that never measured
+    # one of them is untouched — absence is not the finding.
+    _before = (data.get("eco_before") or {}) if isinstance(
+        data.get("eco_before"), dict) else {}
+    _before_setup = _before.get("setup_worst_slack_ns")
+    _log_rec = data.get("eco_repair_log")
+    _saw_none = bool(isinstance(_log_rec, dict)
+                     and _log_rec.get("saw_no_setup_violations")
+                     and not _log_rec.get("saw_setup_violations"))
+    _blind = bool(data.get("eco_blind_to_violation")) or bool(
+        _saw_none and isinstance(_before_setup, (int, float))
+        and not isinstance(_before_setup, bool) and _before_setup < 0)
+    stats["eco_blind_to_violation"] = _blind
+    if _blind:
+        _b = (f"{_before_setup:+.3f} ns"
+              if isinstance(_before_setup, (int, float))
+              and not isinstance(_before_setup, bool) else "negative")
+        findings.append(Finding(
+            "ERROR", "ECO_BLIND_TO_VIOLATION",
+            "the ECO reported NO setup violations while the design it was "
+            f"asked to fix measured setup {_b} — the repair and the "
+            "measurement that fired it are not describing the same design, "
+            "parasitics or timing view, so nothing was repaired",
+            f"start point: {data.get('eco_start_point_basis')!r}; "
+            f"before parasitics: {data.get('eco_before_parasitics')!r}; "
+            f"after parasitics: {data.get('eco_after_parasitics')!r}"))
+
+    # #766 — the ECO's own reroute is what realizes the repair it just made.
+    # When it aborts, the ECO's DEF carries an unrouted net and its
+    # re-extraction does not describe a complete route, so every number
+    # measured on it is provisional. The runner already declines to use those
+    # parasitics; this makes the abort VISIBLE in the audit rather than only in
+    # a note. It does not block: the ECO artefacts are not the shipped ones, so
+    # a failed ECO reroute damages nothing — it just did not deliver.
+    if isinstance(_log_rec, dict) and _log_rec.get("reroute_failed"):
+        findings.append(Finding(
+            "WARNING", "ECO_REROUTE_INCOMPLETE",
+            "the ECO's own reroute aborted — the repair it made was never "
+            "realized as routing, so the ECO netlist/DEF beside this record "
+            "is not a complete implementation",
+            f"after parasitics: {data.get('eco_after_parasitics')!r}"))
+
     # The question this audit never asked: DID THE ECO HELP?
     # `changes`, `re_verified` and `affected_steps` are all structural — an ECO
     # that measurably made timing WORSE satisfies every one of them and passed.
@@ -255,17 +315,35 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
     # Keyed on the record's own measured delta, so this fires ONLY when the
     # runner itself measured a regression; an ECO that gained slack, or one
     # whose before/after was never measured, is untouched.
+    #
+    # #766 — AND ONLY WHEN THE DELTA IS A DELTA. `eco_before` is measured on
+    # the shipped post-route design; if the ECO started from a DIFFERENT design
+    # (the pre-route post_hold.def) or the "after" was measured on the BASE
+    # route's parasitics, the subtraction compares two implementations and its
+    # sign says nothing about the repair. The runner records that judgement as
+    # `eco_delta_comparable`; a record that does not carry the field is treated
+    # exactly as before (this cannot silence an existing finding by omission).
     _delta = data.get("eco_setup_delta_ns")
-    if data.get("eco_regressed") or (
-            isinstance(_delta, (int, float)) and _delta < -1e-9):
-        _d = (f" (setup {_delta:+.3f} ns)"
-              if isinstance(_delta, (int, float)) else "")
+    _comparable = data.get("eco_delta_comparable")
+    _negative = isinstance(_delta, (int, float)) and _delta < -1e-9
+    _d = (f" (setup {_delta:+.3f} ns)"
+          if isinstance(_delta, (int, float)) else "")
+    if _comparable is False and (_negative or data.get("eco_regressed")):
+        findings.append(Finding(
+            "WARNING", "ECO_DELTA_NOT_COMPARABLE",
+            "the recorded setup delta" + _d + " is NOT a before/after of one "
+            "design — " + str(data.get("eco_delta_comparable_reason")
+                              or "the runner recorded the two ends as "
+                                 "incomparable") +
+            "; it is reported, and it is NOT charged to the ECO as a regression"))
+    elif data.get("eco_regressed") or _negative:
         findings.append(Finding(
             "ERROR", "ECO_REGRESSED",
             "the ECO made timing measurably WORSE" + _d
             + " — a repair that regresses the design must not be recorded as "
               "applied; the pre-ECO artefacts are the better ones"))
     stats["eco_setup_delta_ns"] = _delta
+    stats["eco_delta_comparable"] = _comparable
 
     return findings, stats
 
@@ -284,6 +362,10 @@ def build_report(findings: List[Finding], stats: dict,
             "trigger_decision_eco_needed":
                 stats.get("trigger_decision_eco_needed"),
             "trigger_decision_action": stats.get("trigger_decision_action"),
+            # #766 — the two questions a repair step must answer beside "did it
+            # run": could it SEE the violation, and is its delta a delta.
+            "eco_blind_to_violation": stats.get("eco_blind_to_violation"),
+            "eco_delta_comparable": stats.get("eco_delta_comparable"),
             "findings_count": len(findings),
             "errors_count": sum(1 for f in findings if f.severity == "ERROR"),
             "pass": all(f.severity != "ERROR" for f in findings),

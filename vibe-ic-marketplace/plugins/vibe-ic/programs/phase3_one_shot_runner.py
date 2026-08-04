@@ -14449,12 +14449,116 @@ _SHIP_REROUTE_MAX_DROUTE_ITERS = 32
 
 
 
+#: #766 — the ECO start-point DEF, BEST FIRST.
+#:
+#: ``<top>.def`` is the canonical SHIPPED post-route DEF: it is what
+#: `step_signoff_spef_repair` promotes the repaired route onto, what
+#: `_emit_spef_corners` extracts the sign-off SPEFs from, and what `step_gds`
+#: streams. ``routed.def`` is the same design under its stage name (the
+#: fallback for a run whose ``<top>.def`` staging did not happen).
+#: ``post_hold.def`` is the PRE-ROUTE, hold-fixed DEF — the honest last resort
+#: for a run that never completed a route, and the ONLY case in which the ECO
+#: legitimately repairs something other than the shipped design.
+_ECO_START_DEF_PRECEDENCE = (
+    ("{top}.def", "post_route_shipped"),
+    ("routed.def", "post_route"),
+    ("post_hold.def", "pre_route_post_hold"),
+)
+
+
+def _eco_start_point(pnr_dir: Path, top: str) -> Tuple[Optional[Path], str]:
+    """#766 — ``(def_path, basis)`` for the design the ECO must repair.
+
+    The ECO's trigger number is measured on the SHIPPED post-route design, so
+    the repair has to start there or it is answering about a different netlist.
+    Returns ``(None, "none")`` when the PnR directory holds none of them —
+    absence is reported, never substituted.
+    """
+    pnr_dir = Path(pnr_dir)
+    for pattern, basis in _ECO_START_DEF_PRECEDENCE:
+        cand = pnr_dir / pattern.format(top=top)
+        if cand.is_file() and cand.stat().st_size > 0:
+            return cand, basis
+    return None, "none"
+
+
 def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                           liberty_c: str, pnr_dir_c: str, eco_dir_c: str,
                           metal_prefix: str,
-                          corner_libs: Optional[Dict[str, str]] = None) -> str:
+                          corner_libs: Optional[Dict[str, str]] = None,
+                          start_def_c: Optional[str] = None,
+                          post_route_start: bool = False,
+                          corner_spefs_c: Optional[Dict[str, str]] = None,
+                          captables_c: Optional[Dict[str, str]] = None,
+                          filler_masters: Optional[List[str]] = None) -> str:
     """ORGANIC #561 — generate a self-contained OpenROAD ECO timing-repair TCL
     that embeds the 4 proven workarounds discovered during the ibex pilot:
+
+    === #766: THE ECO MUST REPAIR THE DESIGN THAT FAILED ===================
+
+    The number that FIRES this ECO is the multi-corner OCV sign-off slack, and
+    `_emit_mcorner_ocv_sta` measures it on the SHIPPED POST-ROUTE design
+    (``<pnr>/<top>_pnr.v``, which `step_signoff_spef_repair` promotes from
+    ``<top>_pnr_repaired.v``) with that design's OWN extracted parasitics
+    (``extracted/spef_corners/<top>.max.spef`` at ss, ``.min`` at ff), a
+    propagated clock and the flat-OCV derate.
+
+    This deck used to read ``post_hold.def`` — the last PRE-route, hold-fixed
+    DEF — and ``estimate_parasitics``. Those are a DIFFERENT NETLIST with
+    DIFFERENT PARASITICS. MEASURED (subservient x gf180mcuD, r8): the shipped
+    netlist carries 9701 instances against the ECO start point's 9656, and
+    three instances differ in MASTER (`_3184_`/`_3186_` nor2_4 vs nor2_1,
+    `place1325` clkbuf_8 vs buf_2) — every one of them a DOWNSIZE the sign-off
+    DRV repair made and the ECO's start point never had. So:
+
+      * the repair answered ``RSZ-0098 No setup violations found`` while the
+        design it was asked to fix read ``WNS -0.09 / TNS -0.13``, and
+      * ``eco_setup_delta_ns = -8.220`` compared TWO IMPLEMENTATIONS, not a
+        before and an after, and `eco_loop_audit` failed the step for a
+        "regression" on a run whose ``repair_timing -setup`` made ZERO changes.
+
+    The parasitics term is the DOMINANT one and it is measurable on its own:
+    on the same netlist ``estimate_parasitics -placement`` reports RSZ-0098
+    while the extracted SPEF at ``-corner ss`` reports ``RSZ-0094 Found 2
+    endpoints with setup violations`` — and the design then CLOSES with ONE
+    buffer and one pin swap (WNS -0.09 -> +0.14, TNS -0.13 -> 0.00).
+    The corner scoping is load-bearing too: a plain ``read_spef`` on that
+    design read +0.04 where ``read_spef -corner ss`` read -0.09.
+
+    So when the caller resolves a post-route start point (``post_route_start``)
+    this deck reads THAT DEF, annotates the SAME per-corner extracted SPEFs the
+    sign-off measurement annotated, and pairs each PROCESS corner with the RC
+    corner the sign-off pairs it with (ss<->max, tt<->nom, ff<->min). Three
+    consequences follow and are emitted with it:
+
+      * ``remove_fillers`` FIRST — the shipped post-route DEF is fill-tiled, so
+        a resizer has no legal site (DPL) and removing instances AFTER
+        annotation invalidates the parasitics network (EST-0104). Fillers are
+        restored after the reroute, exactly as `_ship_signoff_spef_repair_tcl`
+        does it.
+      * NO ``estimate_parasitics -placement`` in pass 1 — it would overwrite the
+        annotated real parasitics with the optimistic wire-load estimate, i.e.
+        re-create the very blindness this closes.
+      * the signal routing is CLEARED before ``global_route`` — a post-route DEF
+        arrives with committed detailed routing, and OpenROAD's ``global_route``
+        no-ops on already-routed nets (0 guides -> ``DRT-0626 Guide loading
+        failed``) while TritonRoute re-reading those committed wires can abort on
+        one of its own (``DRT-1010 Unsupported non-orthogonal wire``, measured on
+        this design on a 45-degree Metal2 segment OpenROAD wrote itself). The
+        clear is the same one `_ship_signoff_spef_repair_tcl` uses to reroute
+        successfully FROM ``routed.def``; if a reroute still aborts, the ECO's
+        artefacts are not the shipped ones and the abort is recorded rather than
+        swallowed (`_eco_repair_log_verdict.reroute_failed`), so the "after"
+        measurement declines to use the ECO's incomplete extraction.
+
+    Finally the deck RE-EXTRACTS its own parasitics after the reroute into
+    ``<eco>/spef_corners/`` when the PDK ships captables, so the post-ECO
+    "after" is measured on parasitics that describe the ECO — not on the base
+    route's (see `_measure_posteco_mcorner_ocv`).
+
+    With no post-route DEF resolvable the emission is BYTE-IDENTICAL to the
+    pre-#766 one (the honest pre-route fallback: there is no shipped route to
+    repair).
 
     TAPEOUT-SIGNOFF (multi-corner ECO): when ``corner_libs`` supplies ≥2 distinct
     process corners (SS/TT/FF discovered from THIS PDK — see
@@ -14524,10 +14628,134 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     if len(_labels) >= 2:
         _sdf_corner = "tt" if "TT" in _labels else _labels[0].lower()
         _sdf_corner_flag = f" -corner {_sdf_corner}"
+    # ── #766 — the design, and the parasitics, that produced the number ────
+    _start_def = start_def_c or f"{pnr_dir_c}/post_hold.def"
+    _spefs = {k: v for k, v in (corner_spefs_c or {}).items() if v}
+    _annotated = bool(post_route_start and _spefs)
+    _start_comment = (
+        "#   (a) RSZ-0074: read post_hold.def, not routed.def\n"
+        if not post_route_start else
+        "#   (a) #766: read the SHIPPED post-route DEF + ITS extracted SPEF —\n"
+        "#       the same design, and the same parasitics, the trigger measured\n")
+    _start_rationale = (
+        "# ORGANIC #561 (a): RSZ-0074 — read post_hold.def as the ECO start-point,\n"
+        "# as the PRIMARY design source: the netlist, placement, ROWS and TRACKS\n"
+        "# all come from the DEF. post_hold.def is the last pre-route, hold-fixed\n"
+        "# DEF; routed.def would carry stale GR guides that trigger RSZ-0074 abort.\n"
+        if not post_route_start else
+        "# #766 — the ECO start-point is the SHIPPED POST-ROUTE DEF: the design\n"
+        "# the multi-corner OCV sign-off measured the violation on. The pre-route\n"
+        "# post_hold.def is a DIFFERENT NETLIST (measured: 9656 vs 9701 instances,\n"
+        "# 3 masters differing) so a repair run there answers about another design.\n"
+        "# The stale-GR-guide hazard RSZ-0074/DRT-0626 names is handled by the\n"
+        "# routing CLEAR before global_route below, the same way the shipped\n"
+        "# sign-off repair reroutes successfully from routed.def.\n")
+    # The shipped post-route DEF is fill-tiled and its parasitics are annotated
+    # below; both facts force `remove_fillers` to come FIRST (DPL: no legal site
+    # for an inserted buffer; EST-0104: removing instances after annotation
+    # invalidates the parasitics network). Restored after the reroute.
+    _remove_fillers = ("" if not post_route_start else
+                       "# #766 — fill-tiled post-route DEF: clear the tiling before any\n"
+                       "# parasitics annotation or resize (DPL legal-site / EST-0104).\n"
+                       "if {[catch {remove_fillers} _rf]} {\n"
+                       "  puts \"ECO_RMFILL_NONFATAL: $_rf\"\n"
+                       "}\n")
+    _refill = ("" if not post_route_start else
+               _build_sparse_die_aware_filler_tcl(filler_masters or []))
+    # RC corner the sign-off pairs with each PROCESS corner — the SAME pairing
+    # `_emit_mcorner_ocv_sta` uses (setup @ ss + max-RC, hold @ ff + min-RC).
+    _rc_for_process = {"ss": "max", "tt": "nom", "ff": "min"}
+
+    def _pick_spef(rc: str) -> str:
+        return (_spefs.get(rc) or _spefs.get("nom") or _spefs.get("max")
+                or _spefs[sorted(_spefs)[0]])
+
+    _spef_block = ""
+    if _annotated:
+        _reads = []
+        if len(_labels) >= 2:
+            for _lbl in _labels:
+                _l = _lbl.lower()
+                _reads.append(
+                    f"if {{[catch {{read_spef -corner {_l} "
+                    f"{_pick_spef(_rc_for_process.get(_l, 'nom'))}}} _rs_{_l}]}} {{\n"
+                    f"  puts \"ECO_READ_SPEF_NONFATAL {_l}: $_rs_{_l}\"\n"
+                    "}\n")
+        else:
+            _reads.append(
+                f"if {{[catch {{read_spef {_pick_spef('max')}}} _rs]}} {{\n"
+                "  puts \"ECO_READ_SPEF_NONFATAL: $_rs\"\n"
+                "}\n")
+        _spef_block = (
+            "\n"
+            "# #766 — annotate the EXTRACTED parasitics of the design that failed,\n"
+            "# per PROCESS corner, paired with the RC corner the sign-off pairs it\n"
+            "# with (ss<->max, tt<->nom, ff<->min). MEASURED on this design: a plain\n"
+            "# `read_spef` read +0.04 where `read_spef -corner ss` read -0.09, and\n"
+            "# `estimate_parasitics -placement` read NO violation at all — so both\n"
+            "# the SOURCE and the CORNER SCOPING of the parasitics are load-bearing.\n"
+            + "".join(_reads)
+            + "# EST-0027 — pin the resizer to the annotated detailed-route\n"
+              "# parasitics so repair_design/repair_timing cannot fall back to the\n"
+              "# optimistic set_wire_rc wire-load model. NONFATAL on stock builds.\n"
+              "if {[catch {estimate_parasitics -detailed_routing} _pe_dr]} {\n"
+              "  puts \"ECO_EST_PARASITICS_DR_NONFATAL: $_pe_dr\"\n"
+              "}\n")
+    # Pass 1 parasitics: an `estimate_parasitics -placement` here would OVERWRITE
+    # the annotation above with the optimistic estimate — the exact blindness
+    # #766 closes. It stays only on the un-annotated (pre-route) path.
+    _pass1_parasitics = (
+        "if {[catch {estimate_parasitics -placement} _pe_pl]} {\n"
+        "  puts \"ECO_EST_PARASITICS_PL_NONFATAL: $_pe_pl\"\n"
+        "}\n" if not _annotated else
+        "# #766 — NO estimate_parasitics here: the real extracted SPEF is already\n"
+        "# annotated above and re-estimating would overwrite it with the\n"
+        "# optimistic wire-load model the trigger number was NOT measured with.\n")
+    # A post-route DEF arrives with committed detailed routing. global_route
+    # no-ops on already-routed nets (0 guides -> DRT-0626) and TritonRoute can
+    # abort re-reading one of its own wires (DRT-1010 non-orthogonal, measured on
+    # this design). Clearing is what makes the reroute possible at all — it is
+    # the same clear the shipped sign-off repair uses to reroute from routed.def.
+    _routing_clear = ("" if not post_route_start else
+                      "# #766 — clear signal routing so global_route regenerates a\n"
+                      "# COMPLETE guide set (DRT-0626) and the reroute is not handed\n"
+                      "# back the base route's committed wires to re-parse — the\n"
+                      "# DRT-1010 abort measured on this design was raised on exactly\n"
+                      "# such a wire (a 45-degree Metal2 segment OpenROAD wrote\n"
+                      "# itself). PG/special nets and dont_touch nets are preserved.\n"
+                      + _spare_safe_routing_clear_tcl("ECO"))
+    # #766 (c) — the post-ECO "after" must be judged on parasitics that describe
+    # the ECO. Re-extract from the ECO's OWN route into <eco>/spef_corners/ for
+    # every captable the PDK ships; `_measure_posteco_mcorner_ocv` prefers these
+    # over the base route's extraction. Empty when the PDK ships no captable
+    # (then the after-measurement discloses it used the base parasitics).
+    _reextract = ""
+    if post_route_start and captables_c:
+        _re = ["\n"
+               "# #766 (c) — re-extract THIS route's parasitics: the base route's\n"
+               "# SPEF does not describe the design the ECO just produced, and\n"
+               "# judging the 'after' on it compares two different implementations.\n"
+               f"catch {{file mkdir {eco_dir_c}/spef_corners}}\n"
+               "catch {define_process_corner -ext_model_index 0 X}\n"]
+        for _c in sorted(captables_c):
+            _cap = captables_c[_c]
+            _sp = f"{eco_dir_c}/spef_corners/{top}.{_c}.spef"
+            _re.append(
+                f"if {{[catch {{extract_parasitics -ext_model_file {_cap} "
+                f"-corner_cnt 1 -max_res 50 -coupling_threshold 0.1}} _xe]}} {{\n"
+                f"  puts \"ECO_REEXTRACT_FAIL {_c}: $_xe\"\n"
+                "} else {\n"
+                f"  if {{[catch {{write_spef {_sp}}} _we]}} {{\n"
+                f"    puts \"ECO_REEXTRACT_WRITE_FAIL {_c}: $_we\"\n"
+                "  } else {\n"
+                f"    puts \"ECO_REEXTRACT_WROTE {_c}\"\n"
+                "  }\n"
+                "}\n")
+        _reextract = "".join(_re)
     return (
         "# === ORGANIC #561: ECO timing repair TCL ===\n"
         "# 4 OpenROAD workarounds for safe stand-alone ECO iteration:\n"
-        "#   (a) RSZ-0074: read post_hold.def, not routed.def\n"
+        + _start_comment +
         "#   (b) Signal-11: pass-2 repair is setup-only (no repair_design)\n"
         "#   (c) DRT-0305: PG net cleanup (zero_/one_ stubs) before global_route\n"
         "#   (d) DPL-0033: catch around check_placement\n"
@@ -14542,10 +14770,7 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"read_lef {tech_lef_c}\n"
         f"read_lef {cell_lef_c}\n"
         f"{liberty_block}"
-        "# ORGANIC #561 (a): RSZ-0074 — read post_hold.def as the ECO start-point,\n"
-        "# as the PRIMARY design source: the netlist, placement, ROWS and TRACKS\n"
-        "# all come from the DEF. post_hold.def is the last pre-route, hold-fixed\n"
-        "# DEF; routed.def would carry stale GR guides that trigger RSZ-0074 abort.\n"
+        + _start_rationale +
         "# Reading it as PRIMARY — NOT read_verilog+link_design followed by a second\n"
         "# read_def — is what makes this ECO runnable end-to-end: link_design from\n"
         "# the netlist leaves the block with no floorplan, so a later plain read_def\n"
@@ -14555,7 +14780,7 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "# carry the DEF's rows+tracks. The primary read carries them, so the\n"
         "# repair + reroute complete; write_verilog recovers the ECO netlist from\n"
         "# odb. (verified live on ibex: full repair+reroute completes.)\n"
-        f"read_def {pnr_dir_c}/post_hold.def\n"
+        f"read_def {_start_def}\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
         # THE ECO IS TRIGGERED BY A NUMBER IT CANNOT SEE.
         #
@@ -14580,8 +14805,12 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # AFTER read_sdc so a design SDC that already sets them is not
         # contradicted (both commands are idempotent).
         + _propagated_clock_tcl(
-            reason="post_hold.def is POST-CTS, so the clock tree exists in "
-                   "this netlist and an ideal clock cannot describe it")
+            reason=("the ECO start point is the SHIPPED POST-ROUTE design with "
+                    "its extracted parasitics annotated, exactly as the "
+                    "sign-off measurement that fired this ECO"
+                    if post_route_start else
+                    "post_hold.def is POST-CTS, so the clock tree exists in "
+                    "this netlist and an ideal clock cannot describe it"))
         + _flat_ocv_derate_tcl()
         # #543 -- the ECO resizes too, and it also ran without the v1.2.86
         # cell-pool exclusion: 1 instance of `sky130_fd_sc_hd__probe_p_8` reached
@@ -14598,11 +14827,11 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{\n"
         "  puts \"ECO_SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk\"\n"
         "}\n"
-        "\n"
+        + _remove_fillers
+        + _spef_block
+        + "\n"
         "# === ECO pass 1: placement-based repair ===\n"
-        "if {[catch {estimate_parasitics -placement} _pe_pl]} {\n"
-        "  puts \"ECO_EST_PARASITICS_PL_NONFATAL: $_pe_pl\"\n"
-        "}\n"
+        + _pass1_parasitics +
         "if {[catch {repair_design} _rd_err]} {\n"
         "  puts \"ECO_REPAIR_DESIGN_NONFATAL: $_rd_err\"\n"
         "}\n"
@@ -14624,6 +14853,7 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "# A dangling zero_/one_ constant-tie net with POWER/GROUND SigType in\n"
         "# regular NETS makes TritonRoute abort ALL detailed routing.\n"
         + pg_cleanup
+        + _routing_clear
         + "\n"
         "global_route\n"
         "\n"
@@ -14646,7 +14876,9 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"{_ECO_REROUTE_MAX_DROUTE_ITERS}}} _dr_err]}} {{\n"
         "  puts \"ECO_DETAILED_ROUTE_NONFATAL: $_dr_err\"\n"
         "}\n"
-        f"write_def {eco_dir_c}/eco_routed.def\n"
+        + _refill
+        + _reextract
+        + f"write_def {eco_dir_c}/eco_routed.def\n"
         f"write_verilog {eco_dir_c}/{top}_eco.v\n"
         f"if {{[catch {{write_sdf{_sdf_corner_flag} {eco_dir_c}/{top}_eco.sdf}} "
         "_sdf_err]} {\n"
@@ -27991,6 +28223,24 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         _eco_corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
     except Exception:
         _eco_corner_libs = {}
+    # #766 — the ECO must repair the design the trigger number was measured on,
+    # with THAT design's parasitics. Resolve both here (the emitter stays pure).
+    _eco_start_def, _eco_start_basis = _eco_start_point(pnr_out, top)
+    _eco_post_route = _eco_start_basis.startswith("post_route")
+    _eco_spefs_c: Dict[str, str] = {}
+    if _eco_post_route:
+        for _sp in sorted(mc_spef_dir.glob(f"{top}.*.spef")
+                          if mc_spef_dir.is_dir() else []):
+            _c = _sp.name[len(top) + 1:].split(".")[0]
+            if _c in _SPEF_CORNERS and _sp.stat().st_size > 0:
+                _eco_spefs_c[_c] = _to_container_path(str(_sp), container)
+        if not _eco_spefs_c and spef_out.is_file() and spef_out.stat().st_size > 0:
+            _eco_spefs_c["nom"] = _to_container_path(str(spef_out), container)
+    try:
+        _eco_captables_c = (_discover_openrcx_captables(pdk, container)
+                            if _eco_post_route else {})
+    except Exception:
+        _eco_captables_c = {}
     eco_tcl_path = eco_out / "eco_timing_repair.tcl"
     if not eco_tcl_path.is_file():
         try:
@@ -28004,10 +28254,21 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 _pnr_dir_c, _eco_dir_c,
                 pdk.metal_prefix,
                 corner_libs=_eco_corner_libs,
+                start_def_c=(_to_container_path(str(_eco_start_def), container)
+                             if _eco_start_def is not None else None),
+                post_route_start=_eco_post_route,
+                corner_spefs_c=_eco_spefs_c,
+                captables_c=_eco_captables_c,
+                filler_masters=_filler_masters_for_pdk(pdk),
             )
             eco_tcl_path.write_text(eco_tcl_content)
             written.append(str(eco_tcl_path))
-            notes.append("emitted eco_timing_repair.tcl (#561)")
+            notes.append(
+                "emitted eco_timing_repair.tcl (#561) — start point "
+                f"{_eco_start_def.name if _eco_start_def else '<none>'} "
+                f"({_eco_start_basis}), parasitics "
+                + (",".join(sorted(_eco_spefs_c)) + " extracted SPEF"
+                   if _eco_spefs_c else "ESTIMATED (no extraction on disk)"))
         except Exception as _eco_tcl_exc:
             notes.append(f"eco_timing_repair.tcl emit failed: {_eco_tcl_exc}")
 
@@ -28116,9 +28377,61 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             _eco_delta = (_eco_a - _eco_b
                           if isinstance(_eco_b, (int, float))
                           and isinstance(_eco_a, (int, float)) else None)
+            # ── #766 — DID THE REPAIR EVEN SEE THE VIOLATION? ──────────────
+            # The auto-trigger fires on a NEGATIVE setup slack. A repair that
+            # answers `RSZ-0098 No setup violations found` to that is not a
+            # clean pass — it is a repair looking at a different design, or
+            # different parasitics, or a different timing view. Measured on
+            # subservient x gf180mcuD (r8): trigger -0.09 ns, both repair
+            # passes RSZ-0098, ZERO changes — and a deck pointed at the
+            # shipped post-route design with its own SPEF closed it with ONE
+            # buffer. Recorded here so it is a LOUD failure downstream
+            # (eco_loop_audit ECO_BLIND_TO_VIOLATION) instead of a clean log.
+            _eco_run_log = eco_out / "eco_repair.log"
+            _eco_log_verdict = _eco_repair_log_verdict(
+                _eco_run_log.read_text(errors="replace")
+                if _eco_run_log.is_file() else "", _eco_b)
+            if _eco_log_verdict["blind_to_violation"]:
+                notes.append(
+                    f"ECO BLIND TO THE VIOLATION: the trigger measured setup "
+                    f"{_eco_b:+.3f} ns and the repair reported 'No setup "
+                    "violations found' — the repair and the measurement are "
+                    "not describing the same design/parasitics/timing view "
+                    "(see eco/eco_repair.log + eco_timing_repair.tcl).")
+            # ── #766 — IS THE DELTA A BEFORE/AFTER AT ALL? ─────────────────
+            # `eco_before` is measured on the SHIPPED post-route design with
+            # its extracted SPEF. The delta is only a before-and-after when the
+            # ECO started from THAT design AND the "after" was measured on the
+            # ECO's OWN re-extracted parasitics. Otherwise it compares two
+            # implementations — which is how a run whose repair_timing made
+            # ZERO changes recorded `eco_setup_delta_ns = -8.220` and failed
+            # for a "regression" it never made.
+            _eco_after_src = _eco_after.get("parasitics_source")
+            _eco_delta_comparable = bool(
+                _eco_post_route and _eco_after_src == "eco_reextracted")
+            _eco_delta_reason = (
+                "before and after are the same implementation measured on its "
+                "own parasitics" if _eco_delta_comparable else
+                f"ECO start point was {_eco_start_basis!r} and the after was "
+                f"measured on {_eco_after_src!r} parasitics — the two numbers "
+                "describe different implementations, so their difference is "
+                "not a repair delta")
             _eco_regressed = bool(_eco_delta is not None
-                                  and _eco_delta < -1e-9)
-            if _eco_regressed:
+                                  and _eco_delta < -1e-9
+                                  and _eco_delta_comparable)
+            if _eco_delta is not None and _eco_delta < -1e-9 \
+                    and not _eco_delta_comparable:
+                notes.append(
+                    f"ECO setup delta {_eco_delta:+.3f} ns is NOT a repair "
+                    f"delta: {_eco_delta_reason} — recorded, not charged to "
+                    "the ECO (#766 a/c).")
+            if _ran and _eco_log_verdict["blind_to_violation"]:
+                # #766 — a repair that could not SEE the violation has not
+                # repaired anything, whatever its exit status was. (A run that
+                # produced no netlist keeps its own `eco_fired_no_netlist`
+                # action — that failure is already named.)
+                _eco_decision["action"] = "eco_fired_blind_to_violation"
+            elif _eco_regressed:
                 # The ECO outputs stay on disk under their own names for
                 # debug; they are NOT adopted as the shipped artefacts.
                 _eco_decision["action"] = "eco_fired_reverted_regression"
@@ -28130,7 +28443,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             try:
                 _eco_log.write_text(json.dumps({
                     "program": "phase3_one_shot_runner.eco_auto_trigger",
-                    "verdict": (("ECO_REVERTED_REGRESSION" if _eco_regressed
+                    "verdict": (("ECO_BLIND_TO_VIOLATION"
+                                 if _eco_log_verdict["blind_to_violation"]
+                                 else "ECO_REVERTED_REGRESSION" if _eco_regressed
                                  else "ECO_APPLIED") if _ran
                                 else "ECO_ATTEMPTED"),
                     "trigger_basis": "multi_corner_ocv",
@@ -28154,6 +28469,22 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     "residual_violation": _eco_residual,
                     "eco_setup_delta_ns": _eco_delta,
                     "eco_regressed": _eco_regressed,
+                    # #766 — WHAT the ECO repaired, and on WHICH parasitics
+                    # both ends of the delta were measured. Without these the
+                    # delta cannot be told apart from a comparison of two
+                    # different implementations.
+                    "eco_start_point": (str(_eco_start_def.relative_to(project))
+                                        if _eco_start_def is not None else None),
+                    "eco_start_point_basis": _eco_start_basis,
+                    "eco_before_parasitics": (
+                        "extracted_spef_corners" if _eco_spefs_c
+                        else "estimated"),
+                    "eco_after_parasitics": _eco_after_src,
+                    "eco_delta_comparable": _eco_delta_comparable,
+                    "eco_delta_comparable_reason": _eco_delta_reason,
+                    "eco_repair_log": _eco_log_verdict,
+                    "eco_blind_to_violation":
+                        _eco_log_verdict["blind_to_violation"],
                     "residual_note": _eco_residual_note(
                         project, bool(_eco_residual), _eco_delta),
                 }, indent=2) + "\n")
@@ -28998,6 +29329,54 @@ def _run_eco_repair(project: Path, top: str, container: str,
     return ok
 
 
+#: OpenROAD's resizer says one of exactly two things about setup, and the
+#: message IDs are the stable part of the sentence.
+_RSZ_NO_SETUP_VIOLATIONS_RE = re.compile(
+    r"RSZ-0098|No setup violations found", re.I)
+_RSZ_FOUND_SETUP_ENDPOINTS_RE = re.compile(
+    r"Found\s+(\d+)\s+endpoints?\s+with\s+setup\s+violations", re.I)
+
+
+def _eco_repair_log_verdict(log_text: str,
+                            trigger_setup_wns: Optional[float]
+                            ) -> Dict[str, Any]:
+    """#766 — DID THE REPAIR SEE THE VIOLATION IT WAS SENT TO FIX?
+
+    An ECO fires because a sign-off measurement found negative setup slack. If
+    the repair that runs in response reports ``RSZ-0098 No setup violations
+    found`` and never reports finding any, then the two are looking at
+    different designs (or different parasitics, or a different timing view) —
+    and the run has produced a CLEAN-LOOKING ECO that repaired nothing. That is
+    the silent no-op, and it is exactly the shape #766 was filed for: the
+    trigger read ``setup_worst_slack_ns: -0.09`` and ``eco_repair.log`` read
+    ``No setup violations found`` on both passes, while a correct deck on the
+    same design closed it with ONE buffer.
+
+    "It ran without erroring" and "it could see the problem" are different
+    questions, and only the first was ever asked here.
+
+    ABSENCE IS NOT THE FINDING: a missing/empty log, or a trigger slack that
+    was never measured, yields ``blind_to_violation=False`` — this reports a
+    CONTRADICTION between two things that were both measured, nothing else.
+    """
+    txt = log_text or ""
+    saw_none = bool(_RSZ_NO_SETUP_VIOLATIONS_RE.search(txt))
+    endpoints = [int(m) for m in _RSZ_FOUND_SETUP_ENDPOINTS_RE.findall(txt)]
+    saw_violations = any(n > 0 for n in endpoints)
+    negative_trigger = bool(isinstance(trigger_setup_wns, (int, float))
+                            and not isinstance(trigger_setup_wns, bool)
+                            and trigger_setup_wns < 0)
+    return {
+        "log_read": bool(txt.strip()),
+        "saw_no_setup_violations": saw_none,
+        "saw_setup_violations": saw_violations,
+        "setup_endpoints_found": max(endpoints) if endpoints else 0,
+        "reroute_failed": "ECO_DETAILED_ROUTE_NONFATAL" in txt,
+        "blind_to_violation": bool(
+            negative_trigger and saw_none and not saw_violations),
+    }
+
+
 def _parse_mcorner_ocv_slacks(rpt_text: str) -> Tuple[Optional[float],
                                                       Optional[float]]:
     """Parse (setup_wns, hold_wns) from an ``sta_mcorner_ocv*.rpt`` body — the
@@ -29025,25 +29404,60 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
     §4.05: a genuine ss floor (ibex@20 ns) STILL shows VIOLATED afterwards — the
     multi-corner ECO RECOVERS what is recoverable, it does NOT fabricate closure.
     Returns the post-ECO per-corner worst slack (None values / measured=False on
-    any failure — never a fabricated MET)."""
+    any failure — never a fabricated MET).
+
+    #766 (c) — THE "AFTER" MUST BE MEASURED ON THE ECO'S OWN PARASITICS. This
+    used to hand `_emit_mcorner_ocv_sta` the ECO NETLIST while rediscovering the
+    SPEFs from ``mc_spef_dir`` — the BASE route's extraction. The ECO
+    independently re-routes to ``eco_routed.def`` and nothing re-extracted it,
+    so the report judged the ECO's netlist against parasitics that describe a
+    different route, and said so in its own banner
+    (``SPEF=<top>.max.spef`` while reporting on ``<top>_eco.v``). The ECO deck
+    now re-extracts into ``<eco>/spef_corners/`` after its reroute; those are
+    PREFERRED here. ``parasitics_source`` records which set was used, so the
+    before/after delta downstream knows whether it is comparing an implementation
+    against ITSELF-after-repair or against a different one.
+    """
     out: Dict[str, Any] = {
         "setup_worst_slack_ns": None, "hold_worst_slack_ns": None,
         "violated_corners": [], "report": None, "measured": False,
+        "parasitics_source": None,
     }
-    eco_v = _pl.eco_dir(project) / f"{top}_eco.v"
+    eco_dir = _pl.eco_dir(project)
+    eco_v = eco_dir / f"{top}_eco.v"
     if not (eco_v.is_file() and eco_v.stat().st_size > 0):
         return out
-    posteco_rpt = Path(sta_out) / "sta_mcorner_ocv_posteco.rpt"
-    if not (posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0):
-        # rediscover the per-corner SPEFs the same way the pre-ECO OCV pass did.
-        ocv_corner_spefs: Dict[str, Path] = {}
-        if mc_spef_dir and Path(mc_spef_dir).is_dir():
-            for _sp in sorted(Path(mc_spef_dir).glob(f"{top}.*.spef")):
+    # #766 (c) — the ECO's OWN re-extracted parasitics when its reroute produced
+    # them; the base route's only as the disclosed fallback.
+    eco_spef_dir = eco_dir / "spef_corners"
+    _reroute_failed = False
+    _eco_log_txt = ""
+    _eco_run_log = eco_dir / "eco_repair.log"
+    if _eco_run_log.is_file():
+        _eco_log_txt = _eco_run_log.read_text(errors="replace")
+        _reroute_failed = "ECO_DETAILED_ROUTE_NONFATAL" in _eco_log_txt
+
+    def _discover(dirpath: Path) -> Dict[str, Path]:
+        found: Dict[str, Path] = {}
+        if dirpath and Path(dirpath).is_dir():
+            for _sp in sorted(Path(dirpath).glob(f"{top}.*.spef")):
                 _c = _sp.name[len(top) + 1:].split(".")[0]
                 if _c in _SPEF_CORNERS and _sp.stat().st_size > 0:
-                    ocv_corner_spefs[_c] = _sp
+                    found[_c] = _sp
+        return found
+
+    eco_spefs = _discover(eco_spef_dir)
+    if eco_spefs and not _reroute_failed:
+        ocv_corner_spefs, _nom, _src = eco_spefs, None, "eco_reextracted"
+    else:
+        ocv_corner_spefs = _discover(mc_spef_dir)
         _nom = (nom_spef_path if (nom_spef_path
                                   and Path(nom_spef_path).is_file()) else None)
+        _src = ("base_route_spef_reroute_failed" if (eco_spefs and _reroute_failed)
+                else "base_route_spef")
+    out["parasitics_source"] = _src
+    posteco_rpt = Path(sta_out) / "sta_mcorner_ocv_posteco.rpt"
+    if not (posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0):
         _emit_mcorner_ocv_sta(
             project, top, pdk, container, corner_libs, ocv_corner_spefs,
             _nom, posteco_rpt, notes, netlist_override=eco_v)
@@ -29060,6 +29474,11 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
         "report": "phase3/stage3/sta/sta_mcorner_ocv_posteco.rpt",
         "measured": True,
     })
+    if _src != "eco_reextracted":
+        notes.append(
+            "post-ECO multi-corner OCV measured on the BASE route's parasitics "
+            f"({_src}) — they do not describe the ECO's own route, so the "
+            "before/after delta is NOT a like-for-like comparison (#766 c).")
     if viol:
         notes.append(
             f"post-ECO multi-corner OCV: STILL VIOLATED at {'/'.join(viol)} "
