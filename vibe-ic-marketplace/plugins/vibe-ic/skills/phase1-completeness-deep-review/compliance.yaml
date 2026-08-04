@@ -30,7 +30,7 @@ requirements:
 cross_checks:
   - id: X_text_only_skill
     description: "Phase 1 strong AI completeness double-check report skill."
-    rule: postcheck_pass_only
+    rule: text_only_report
   # v1.6.53 — surface volatile-storage path leaks in skill output before
   # they reach project_outputs_in_tree_check at burn time.
   - id: X_no_volatile_paths
