@@ -269,6 +269,50 @@ def is_functional_vector(case: Dict[str, Any]) -> bool:
     return case_kind(case) in _FUNCTIONAL_VECTOR_KINDS
 
 
+# ----- processor_cpu opcode-instruction oracle-case recognition -------------
+# INTERNAL-VOCABULARY RECONCILIATION (the defect this section fixes).
+#
+# The `is_functional_vector` whitelist above assumes a CPU core's L10 cases
+# carry `kind=functional_vector` (or a synonym). But Phase 1's actual L10
+# emitter (`gen_l10_test_cases` in phase1_doc_one_shot_runner) renders a
+# processor_cpu core's L3 opcodes as COMMAND-RESPONSE cases stamped with these
+# opcode-derived kinds — `happy_path` (per-opcode happy path), `pre_wake_false`
+# (send-without-wake negative), `addr_max` / `len_max` (boundary). NONE of
+# those kinds is in `_FUNCTIONAL_VECTOR_KINDS`, so for EVERY real CPU core the
+# `is_functional_vector` gate returned False and the `cap:cpu_functional_oracle`
+# waiver — which exists, is anchored, and books CPU instruction cases as
+# WAIVED-DEFERRED — was structurally UNREACHABLE: all its L10 cases hard-FAILed
+# Step 4 by construction, independent of RTL quality.
+#
+# The two vocabularies are reconciled HERE (match side), NOT by widening
+# `_FUNCTIONAL_VECTOR_KINDS` (which would fire for any generic_full_stack class,
+# and put a generic cmd_response token into a set meaning "instruction vector"),
+# and NOT by relabelling Phase 1's shared generic emitter (which a sibling gate,
+# l10_test_cases_cover_l3_constraints_check, REQUIRES to keep emitting
+# `pre_wake_false` verbatim). `is_cpu_instruction_oracle_case` below is
+# deliberately NARROWER than `is_functional_vector`: four independent gates must
+# ALL hold, so it can never fire for anything but a genuine processor_cpu
+# instruction case.
+_CPU_OPCODE_INSTRUCTION_KINDS = frozenset({
+    "happy_path",
+    "pre_wake_false",
+    "addr_max",
+    "len_max",
+})
+
+# Structured instruction/opcode signal fields (chip-AGNOSTIC FIELD NAMES, never
+# a chip/vendor/SKU literal). A case that carries one of these genuinely encodes
+# an instruction-execution stimulus — not an arbitrary happy case.
+_INSTRUCTION_SIGNAL_FIELDS = (
+    "opcode_hex",
+    "opcode",
+    "instruction",
+    "instr",
+    "instruction_hex",
+    "encoding_pattern",
+)
+
+
 def cpu_oracle_anchor(project_root: Optional[str]) -> Optional[str]:
     """Auto-detect the CPU functional-oracle capability gap from
     `sim/results.xml`. Returns a short, reviewable description string when
@@ -396,6 +440,65 @@ def _has_digital_signal(case: Dict[str, Any], is_cmd_rsp: bool) -> bool:
             return True
     cat = str(case.get("category", case.get("type", "")) or "").strip().lower()
     return cat in _DIGITAL_CLASS_TOKENS
+
+
+def resolve_ic_class(project_root: Optional[str]) -> str:
+    """Read the design's ic_class from ``reports/ic_class.json`` — the Phase-1
+    SINGLE-SOURCE-OF-TRUTH class label (the same artefact detect_ic_class
+    persists and _write_l_doc's R13 gate reads). Returns ``""`` when the file
+    is absent/unreadable, so the processor_cpu instruction-oracle path below
+    stays INERT (fails CLOSED — a missing class file can never activate a
+    waiver). chip-AGNOSTIC: reads a CLASS label, never a chip/vendor/SKU
+    literal."""
+    if not project_root:
+        return ""
+    p = Path(project_root) / "reports" / "ic_class.json"
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return ""
+    if isinstance(data, dict):
+        return str(data.get("ic_class", "") or "").strip().lower()
+    return ""
+
+
+def is_cpu_instruction_oracle_case(case: Dict[str, Any], ic_class: str) -> bool:
+    """True iff this case is a processor_cpu INSTRUCTION-EXECUTION oracle case
+    that the ``cap:cpu_functional_oracle`` waiver should DEFER. Deliberately
+    NARROWER than ``is_functional_vector`` — FOUR independent gates, ALL
+    required, so it can never fire for anything but a genuine CPU core's
+    instruction case:
+
+      (1) ``ic_class == 'processor_cpu'`` — the exact class the waiver is
+          intended for (single-source-of-truth class label). Any other class
+          (e.g. a digital_cmd_driven protocol chip whose opcodes ARE genuine
+          commands) is rejected here, so a non-processor_cpu opcode happy-path
+          with no evidence STILL FAILs.
+      (2) the case KIND is one of the opcode-instruction kinds Phase 1's
+          gen_l10_test_cases emits for a CPU core's L3 opcodes.
+      (3) §4.05 NO-LEAK — the case does NOT carry an EXPLICIT digital
+          cmd_response category/type. A genuine digital command the TB must
+          exercise is never masked, even for a processor_cpu under the anchor.
+      (4) the case carries a structured instruction/opcode SIGNAL — it is
+          genuinely an instruction-execution case, not an arbitrary happy case.
+
+    The runner's ``cap:cpu_functional_oracle`` anchor gate (``cpu_waiver_active``)
+    is applied by the caller, so a processor_cpu run WITHOUT that declaration
+    still FAILs. chip-AGNOSTIC throughout (a class label + kind vocabulary +
+    field names, never a chip/vendor/SKU literal)."""
+    if ic_class != "processor_cpu":
+        return False
+    if case_kind(case) not in _CPU_OPCODE_INSTRUCTION_KINDS:
+        return False
+    # §4.05 NO-LEAK: keyed on an EXPLICIT category/type (never the kind
+    # fall-back), so a case whose ONLY digital token is a `kind=happy_path`
+    # opcode label is still eligible, while a case explicitly categorised
+    # cmd_response / register_access / … is excluded and continues to FAIL.
+    explicit_cat = str(
+        case.get("category", case.get("type", "")) or "").strip().lower()
+    if explicit_cat in _DIGITAL_CLASS_TOKENS:
+        return False
+    return any(case.get(f) for f in _INSTRUCTION_SIGNAL_FIELDS)
 
 
 # ----- ORGANIC #808 — verification_checklist (DV-milestone) classification ----
@@ -554,6 +657,10 @@ def evaluate(
     checklist_gap_count = 0
     waiver_active = bool(skip_analog) and bool(analog_anchor)
     cpu_waiver_active = bool(cpu_oracle_anchor_desc)
+    # Single-source-of-truth class label — gates the processor_cpu opcode-
+    # instruction oracle path so it can never fire for another class (fails
+    # CLOSED to "" when unavailable).
+    ic_class = resolve_ic_class(project_root)
     for c in cases:
         case_id = str(c.get("id", c.get("name", "")))
         category = c.get("category", c.get("type", c.get("kind", "")))
@@ -691,6 +798,31 @@ def evaluate(
                     f"oracle ({CAP_CPU_FUNCTIONAL_ORACLE}); CPU oracle "
                     f"deferred (capability gap); reviewable anchor: "
                     f"{cpu_oracle_anchor_desc}"
+                ]
+            # INTERNAL-VOCABULARY RECONCILIATION — a processor_cpu core whose
+            # L3 opcodes Phase 1 rendered as command-response cases (kind=
+            # happy_path / pre_wake_false / addr_max / len_max, carrying an
+            # opcode/instruction signal) IS an instruction-execution oracle the
+            # runner could not bind. Under the anchored cap:cpu_functional_oracle
+            # gap it is credited WAIVED-DEFERRED — reaching the same waiver the
+            # `functional_vector`-kinded case above reaches, which was otherwise
+            # structurally UNREACHABLE for every real CPU core. §4.05 NO-LEAK:
+            # gated on ic_class==processor_cpu AND the anchor AND an opcode
+            # signal AND absence of an explicit digital cmd_response category,
+            # so a non-processor_cpu opcode case, an unanchored case, or a
+            # genuine cmd_response case all continue to FAIL.
+            elif cpu_waiver_active and is_cpu_instruction_oracle_case(
+                    c, ic_class):
+                waived = True
+                status = "waived"
+                cap_gap = CAP_CPU_FUNCTIONAL_ORACLE
+                evidence = [
+                    "WAIVED-DEFERRED: processor_cpu instruction-execution "
+                    f"oracle case ({CAP_CPU_FUNCTIONAL_ORACLE}); Phase 1 "
+                    f"rendered this CPU L3 opcode as a command-response case "
+                    f"(kind={case_kind(c)!r}) but it is a CPU instruction-set "
+                    f"oracle the runner could not bind — deferred (capability "
+                    f"gap); reviewable anchor: {cpu_oracle_anchor_desc}"
                 ]
         results.append(
             {
@@ -963,7 +1095,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"confirm selection)")
         if cpu_waived:
             bits.append(
-                f"{cpu_waived}/{len(cases)} functional_vector CPU-oracle "
+                f"{cpu_waived}/{len(cases)} CPU instruction-set oracle "
                 f"case(s) WAIVED-DEFERRED ({CAP_CPU_FUNCTIONAL_ORACLE}, "
                 f"review_required; anchor: {cpu_anchor})")
         if checklist_gap_count:
