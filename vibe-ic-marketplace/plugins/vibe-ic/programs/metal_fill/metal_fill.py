@@ -326,11 +326,42 @@ def run(gds, cfg, out_gds, cell_name=None):
         spec["_bbox"] = bbox
         layers.append(fill_layer(ly, top, spec, wd, max_passes, fill_dt, grid_dbu))
 
+    # A FILL CELL THAT WAS NEVER PLACED IS A SECOND TOP CELL, AND A SECOND TOP
+    # CELL STOPS SIGN-OFF DRC FROM RUNNING AT ALL.
+    #
+    # `fill_layer` creates one `FILL_<layer>_<size>` cell per ladder rung BEFORE
+    # it knows whether that rung fits anywhere. When a rung places nothing - the
+    # square is larger than any fillable channel on that layer - the cell stays
+    # in the layout with zero instances, and GDS has no notion of an "unused"
+    # cell: it is simply another root. gf180mcu's own sign-off deck then refuses
+    # the file outright, before a single rule executes:
+    #
+    #   ERROR: In .../gf180mcu.drc: 'source': The layout has multiple top cells
+    #          in Layout::top_cell
+    #
+    # MEASURED (r8, KLayout 0.30.10): a fill whose top rung did not fit on
+    # metal4 left `FILL_metal4_4` and `FILL_metal4_3` in the stream with
+    # `instances: 0`, and `klayout -b -r gf180mcu.drc` aborted with the error
+    # above and wrote NO report. A DRC that cannot start is indistinguishable
+    # from one that found nothing, so the failure mode is an ABSENT verdict,
+    # not a red one.
+    #
+    # Prune only cells this program created, and only when they were never
+    # instanced; a fill that placed something is byte-identical.
+    pruned = []
+    for _c in list(ly.each_cell()):
+        _n = _c.name
+        if not _n.startswith("FILL_"):
+            continue
+        if _c.parent_cells() == 0:
+            pruned.append(_n)
+            ly.delete_cell(_c.cell_index())
     ly.write(out_gds)
     reached_all = all(l.get("reached", False) for l in layers if "skipped" not in l)
     return {"verdict": "PASS" if reached_all else "PARTIAL",
             "gds_in": gds, "gds_out": out_gds,
             "window_um": cfg.get("window_um"), "mfg_grid_um": mfg_grid_um,
+            "unplaced_fill_cells_pruned": pruned,
             "layers": layers}
 
 
