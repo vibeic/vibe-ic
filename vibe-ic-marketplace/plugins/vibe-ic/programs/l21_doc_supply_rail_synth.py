@@ -365,6 +365,20 @@ def _doc_sources(proj: Path, doc_globs: Optional[List[str]] = None
     return out
 
 
+def doc_sources(proj: Path, doc_globs: Optional[List[str]] = None
+                ) -> List[Tuple[Path, str, str]]:
+    """Public name for the document set `derive` reads.
+
+    A second reader that wants to CORROBORATE `derive`'s answer has to read the
+    same documents it read. Reading a different set -- a wider glob, a different
+    de-duplication -- gives a denominator that is not the one being checked, and
+    the corroboration then reports on documents `derive` never saw. Exported so
+    `phase1_layer_demand_probe` can hold both readings to one corpus without
+    reaching for a private name.
+    """
+    return _doc_sources(proj, doc_globs)
+
+
 def derive(proj: Path, doc_globs: Optional[List[str]] = None
            ) -> Dict[str, Any]:
     """Every rail the design's own documents STATE, with evidence.

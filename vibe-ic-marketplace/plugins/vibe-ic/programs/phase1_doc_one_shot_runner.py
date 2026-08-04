@@ -50247,7 +50247,8 @@ def emit_coverage_report(project: Path,
         from phase1_layer_demand_probe import evaluate as _layer_demand_eval
         _layer_demand = _layer_demand_eval(project)
     except Exception:                                       # noqa: BLE001
-        _layer_demand = {"probes_run": 0, "layers": [], "silent_empty": []}
+        _layer_demand = {"probes_run": 0, "layers": [], "silent_empty": [],
+                         "zero_unexamined": []}
     if _layer_demand.get("silent_empty") and _status == "PASS":
         _status = "FAIL_LAYER_DEMANDED_BUT_EMPTY"
 
@@ -50269,6 +50270,12 @@ def emit_coverage_report(project: Path,
             "input_documents_unread": len(_unread_docs),
             "layers_demanded_but_empty": list(
                 _layer_demand.get("silent_empty") or []),
+            # A probe that returned zero WITHOUT examining anything. Carried
+            # beside the list above so an empty `layers_demanded_but_empty`
+            # cannot be read as "measured, and nothing found" when it is
+            # "nothing was read". Disclosure only — it does not FAIL the run.
+            "layers_zero_unexamined": list(
+                _layer_demand.get("zero_unexamined") or []),
             "measures": ("coverage of literals found in documents that "
                          "EXTRACTED; a document that did not extract "
                          "contributes to neither numerator nor "
