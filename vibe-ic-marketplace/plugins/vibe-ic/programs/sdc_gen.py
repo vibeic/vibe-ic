@@ -1197,10 +1197,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"(clock target(s)={clock_refs or ['<none>']}); STA would "
                     f"run with NO clock in effect")
             if unreached and _assert_coverage:
+                _covered_n = len(top_ports) - len(uncovered)
                 reasons.append(
-                    f"the I/O role split covered {len(top_ports) - len(uncovered)}"
-                    f" of the {len(top_ports)} port(s) top '{top}' declares and "
-                    f"never examined {len(unreached)} of them, which carry no "
+                    f"the I/O role split covered {_covered_n} of the "
+                    f"{len(top_ports)} port(s) top '{top}' declares and never "
+                    f"examined {len(unreached)} of them, which carry no "
                     f"constraint of any kind: {unreached}")
             # Keep the existing label verbatim for the existing two verdicts;
             # under-coverage is a different defect and gets its own name.
