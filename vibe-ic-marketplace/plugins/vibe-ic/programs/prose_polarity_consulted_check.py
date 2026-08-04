@@ -59,6 +59,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -87,6 +88,99 @@ def _aliases(tree: ast.Module) -> Set[str]:
                 if a.name.endswith(_POLARITY_MODULE):
                     out.add(a.asname or a.name)
     return out
+
+
+#: A pattern that parses a FORMAL GRAMMAR rather than a sentence: anchored at
+#: line start on an ALL-CAPS keyword, as LEF / DEF / Liberty / SPEF lines are.
+#: Polarity is a property of natural language — a `LAYER met4 ;` line has no
+#: clause that can DENY the value beside it, and asking a format parser to
+#: consult a negation vocabulary is asking it to look for something that cannot
+#: be there.
+#:
+#: WHY THIS EXISTS. Without it the gate reported `parse_tech_lef` — a LEF grammar
+#: parser whose every pattern is `^KEYWORD ... ;` — as a polarity-blind prose
+#: extractor, and blocked a PR that was correct. A gate that fails correct code
+#: gets switched off, which costs more than the case it was guarding.
+#: Regex metacharacter escapes, blanked before the letter test — `\\s` and
+#: `\\d` are punctuation wearing a letter, and counting them as words would
+#: make every pattern look like prose.
+_META_STRIP = re.compile(r"\\[a-zA-Z]")
+_FORMAT_GRAMMAR_RE = re.compile(r"\^\s*\\?s?\*?[A-Z][A-Z0-9_]{2,}\b")
+
+
+def _pattern_sources(fn: ast.AST, module_patterns: Dict[str, str]) -> List[str]:
+    """The regex SOURCES this function actually matches against."""
+    out: List[str] = []
+    for n in ast.walk(fn):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr in _SEARCH_ATTRS):
+            continue
+        recv = n.func.value
+        if isinstance(recv, ast.Name) and recv.id in module_patterns:
+            out.append(module_patterns[recv.id])
+        elif n.args:
+            out.append(_literal_or_none(n.args[0]))
+    return out
+
+
+def _literal_or_none(node: ast.AST) -> Optional[str]:
+    """The pattern SOURCE, or None when it is not fully literal.
+
+    A pattern assembled at runtime — `rf"\b{name}\b"` — cannot be judged from
+    its literal fragments. Reading only those gave `\b\b`, which contains no
+    letters and so passed the "not prose" test, silently excusing
+    `_extract_top_module_from_docs` — a function that mines DOCUMENTS for a
+    declared value, i.e. the exact thing this gate exists for. Unjudgeable must
+    mean "assume prose"; anything else lets an interpolated pattern buy silence.
+    """
+    parts = [c for c in ast.walk(node)
+             if isinstance(c, ast.Constant) and isinstance(c.value, str)]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if not parts:
+        return None
+    joined = "".join(c.value for c in parts)
+    # PARTIAL. An interpolated pattern is judged ONLY on a positive format
+    # anchor: `^WIDTH\s+({_NUM})\s*;` is a LEF line whatever `_NUM` expands to,
+    # because no substitution turns `^WIDTH` into a sentence. The letter-free
+    # shortcut is deliberately NOT available here — that is what let `\b` + `\b`
+    # (from `rf"\b{name}\b"`) read as "no words, therefore not prose" and excuse
+    # a function that mines documents.
+    return joined if _FORMAT_GRAMMAR_RE.search(joined) else None
+
+
+def _module_patterns(tree: ast.Module) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)
+                and isinstance(n.value, ast.Call)
+                and isinstance(n.value.func, ast.Attribute)
+                and n.value.func.attr == "compile" and n.value.args):
+            out[n.targets[0].id] = _literal_or_none(n.value.args[0])
+    return out
+
+
+def _parses_a_format(fn: ast.AST, module_patterns: Dict[str, str]) -> bool:
+    """Every pattern it matches is a format grammar, so none of them is prose.
+
+    ALL, not ANY: a function that reads one LEF keyword and one English sentence
+    is still reading a sentence, and that is the one that needs polarity."""
+    def _not_prose(src: Optional[str]) -> bool:
+        if src is None:          # unjudgeable -> assume prose, never excuse it
+            return False
+        if _FORMAT_GRAMMAR_RE.search(src):
+            return True
+        # A pattern with no LETTERS matches no words, and polarity is carried by
+        # words. `\s*$` is a whitespace trim; it can no more read a denial than
+        # it can read a value. Counting it as "prose" made the ALL-test below
+        # unsatisfiable for every real parser, which is how the first version of
+        # this discriminator silently did nothing.
+        body = _META_STRIP.sub(" ", src)
+        return not any(c.isalpha() for c in body)
+
+    pats = _pattern_sources(fn, module_patterns)
+    return bool(pats) and all(_not_prose(s) for s in pats)
 
 
 def _searches_prose(fn: ast.AST) -> bool:
@@ -174,10 +268,13 @@ def scan(root: Path) -> List[str]:
         except (OSError, SyntaxError):
             continue
         al = _aliases(tree)
+        mp = _module_patterns(tree)
         for n in ast.walk(tree):
             if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if not (_searches_prose(n) and _writes_a_declared_value(n)):
+                continue
+            if _parses_a_format(n, mp):
                 continue
             if _consults_polarity(n, al):
                 continue
