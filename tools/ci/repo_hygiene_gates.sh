@@ -317,6 +317,34 @@ run "NDA scan of the TRACKED tree"      "$ROOT" python3 "$PG/nda_tracked_tree_sc
 # container is reachable, which is the normal CI state.
 run "PDK registry selectable"           "$ROOT" python3 "$PG/pdk_registry_selectable_check.py"
 
+# vibe-ic#768 — a tech LEF that declares a routing layer's minimum width and,
+# in the same file, gives its own vias a NARROWER patch on that layer. Every
+# place a wire ENDS on such a via is a sign-off min-width violation, and the
+# router's in-loop DRC reports 0 for it. MEASURED on the image this repo pins:
+# 192 across 19 tech LEFs and 2 of the 3 PDK families it ships, in both the
+# `VIA ... RECT` and the `VIARULE ... GENERATE ... ENCLOSURE` form.
+#
+# `--advisory`, deliberately, and NOT because the finding is soft. It is 192
+# real ones. The fix lives in the EDA fork's PDK layer, in another repo — this
+# repo cannot land it, so a blocking gate here would leave main red on someone
+# else's change and get switched off, which is the failure this repo has
+# already measured with `container_exec_deadline_check`. `--advisory` lowers
+# the exit code and nothing else: every finding is still printed, and the line
+# under them says the verdict is FAIL. There is no baseline and no waiver file,
+# so the only thing that can make this print zero is the PDK being fixed.
+#
+# `run_tolerating_uncheckable`: reading the PDKs needs the image, and rc 2 —
+# "I could not look" — must never share an exit code with "I looked and it was
+# clean". Same shape as the asset half of the gate above.
+#
+# ONE LINE, no `\` continuation. Two OTHER gates PARSE this file — the
+# denominator probe and the host-independence probe — with a single-line
+# `^\s*run(?:_\w+)?\s+"label"\s+"$ROOT"\s+(.+)$`, so a continuation hands them
+# a command consisting of the backslash alone. Both reported GATE_UNRUNNABLE
+# (`No such file or directory: '\'`), which is not a failure of this gate but
+# of the script's readability by its own readers.
+run_tolerating_uncheckable "PDK via patch vs layer min width" "$ROOT" python3 "$PG/pdk_via_patch_meets_layer_min_width_check.py" --from-image --advisory
+
 # vibe-ic#419 — the size guard `.gitignore` promised in a comment and nobody
 # ever wrote. Ten untracked *.gds under benchmark-data/ic are 74–105 MB and
 # ACCEPTED by that file's negations; two are over GitHub's 100 MB hard limit,

@@ -15560,6 +15560,64 @@ def _v1_8_100_routing_layers(tech_lef_text: str) -> List[str]:
     return out
 
 
+def _via_patch_min_width_advisory(tlef_text: str, tech_lef_path: str,
+                                  routing_ceiling_name: Optional[str]
+                                  ) -> Tuple[str, dict]:
+    """`(note, payload)` for vibe-ic#768 — a via patch narrower than its own
+    layer's minimum width. `("", {})` when the PDK does not carry the defect.
+
+    ADVISORY BY CONSTRUCTION: it returns prose and data, and has no way to
+    reach a verdict. The severity choice lives here rather than in the caller
+    because it is a property of the finding, not of the step: a PDK defect is
+    fixed in the PDK, and the person running a design cannot do that. A gate
+    that failed every run over it would be switched off inside a week.
+
+    What it CAN say precisely is whether the defect is live for THIS run. A
+    narrow patch only fires where a wire ENDS on the via, so a layer outside
+    the run's own signal routing ceiling cannot produce one. Above the ceiling
+    the note says latent; at or below it, this run will terminate wires on
+    those vias and the note says that instead.
+
+    Pure: no I/O, no container, no verdict. The caller writes the artefact and
+    prints the line.
+    """
+    from _pdk_via_analyzer import _routing_index as _ridx      # noqa: PLC0415
+    from pdk_via_patch_meets_layer_min_width_check import (    # noqa: PLC0415
+        findings_for_text as _via_patch_findings)
+    name = Path(tech_lef_path).name
+    all_f = _via_patch_findings(tlef_text, name)
+    if not all_f:
+        return "", {}
+    ceil = _ridx(routing_ceiling_name) if routing_ceiling_name else None
+    hot = [f for f in all_f
+           if ceil is None or f["layer_index"] is None
+           or f["layer_index"] <= ceil]
+    layers = sorted({f["layer"] for f in (hot or all_f)})
+    where = (f"ceiling {routing_ceiling_name}" if routing_ceiling_name
+             else "no routing ceiling declared, so every layer is in range")
+    note = (f"{len(all_f)} via patch(es) narrower than their own layer's min "
+            f"width on {', '.join(layers)}"
+            + (f"; {len(hot)} of them on a layer THIS run routes signals on "
+               f"({where}) — a wire ending on one is a sign-off min-width "
+               f"violation the router's own in-loop DRC does not report"
+               if hot else
+               f"; none on a layer this run routes signals on ({where}) — "
+               f"latent"))
+    payload = {
+        "issue": "vibe-ic#768",
+        "tech_lef": tech_lef_path,
+        "routing_ceiling": routing_ceiling_name,
+        "findings": all_f,
+        "inside_routing_range": hot,
+        "severity": "ADVISORY",
+        "why_not_a_verdict": (
+            "a PDK defect the person running a design cannot fix; the fix is "
+            "to grow the patch in the PDK or to take the layer out of the "
+            "signal routing range"),
+    }
+    return note, payload
+
+
 def _v1_8_100_routing_layer_range(pdk, project, container
                                   ) -> Optional[Tuple[str, str, str, str]]:
     """(signal_floor, clock_floor, ceiling, why) or None when underivable.
@@ -17130,6 +17188,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     routing_upper = None
     routing_constraint_tcl = ""
     routing_audit_note = ""
+    # Hoisted out of the try: the tech LEF text and the layer the route is
+    # actually ceilinged at are read by the min-width advisory below, which
+    # must not re-resolve host-vs-container a second time.
+    tlef_text = None
+    routing_ceiling_name = None
     try:
         from _pdk_via_analyzer import routing_layer_upper_bound as _rub
         # #687 — pdk.tech_lef is a CONTAINER-side path (PDKS_IN_CONTAINER=
@@ -17168,6 +17231,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     f"single-cut via missing above M{routing_upper}; "
                     f"routing restricted to {lo}-{hi}"
                 )
+                routing_ceiling_name = hi
     except Exception as _e:  # nosec — analyzer is best-effort
         routing_audit_note = f"via-analyzer skipped: {_e}"
     # === v1.8.100 — SIGNAL ROUTING FLOOR / CEILING ===================
@@ -17201,6 +17265,50 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                 f"}}\n"
             )
             routing_audit_note = routing_audit_note or _why
+            routing_ceiling_name = _hi
+
+    # === vibe-ic#768 — A VIA PATCH NARROWER THAN ITS OWN LAYER'S MINIMUM ====
+    # The tech LEF states both halves of a contradiction: a routing layer's own
+    # minimum width, and the metal patch its vias drop on that layer. Where the
+    # patch is narrower, every place a wire ENDS on such a via is a sign-off
+    # min-width violation — and the router's in-loop DRC reports 0 for it, so
+    # nothing between here and the sign-off deck says anything.
+    #
+    # ADVISORY, NEVER A VERDICT, and the reason is who can act: this is a fact
+    # about the PDK, fixed by growing the patch in the PDK (the vibeic-eda fork
+    # carries that transform) or by taking the layer out of the routing range.
+    # A user running a design cannot do either, and a gate that fails every run
+    # over something the person in front of it cannot fix is a gate that gets
+    # switched off. So it does not move step_pnr's verdict.
+    #
+    # It is also not a whisper. It goes to THREE places every run it fires:
+    # stderr beside the route it affects, a `reports/` artefact a later audit
+    # can read, and the step detail that lands in the phase-3 record. There is
+    # no flag, no env var and no baseline that can make it print nothing — the
+    # only thing that silences it is the defect not being there.
+    #
+    # The ROUTING CEILING derived above is the one mitigation that is checkable
+    # here: a narrow patch on a layer this run does not route signals on cannot
+    # fire. Above the ceiling it is disclosed as latent; at or below it, this
+    # run WILL terminate wires on those vias and the wording says so.
+    via_patch_note = ""
+    if tlef_text:
+        try:
+            via_patch_note, _vp_payload = _via_patch_min_width_advisory(
+                tlef_text, str(pdk.tech_lef), routing_ceiling_name)
+            if via_patch_note:
+                _vp_path = project / "reports" / "pdk_via_patch_min_width.json"
+                _vp_path.parent.mkdir(parents=True, exist_ok=True)
+                _vp_path.write_text(
+                    json.dumps(_vp_payload, indent=2, ensure_ascii=False)
+                    + "\n")
+                print(f"[phase3] PDK ADVISORY (vibe-ic#768): {via_patch_note}",
+                      file=sys.stderr)
+        except Exception as _vpe:                            # nosec
+            via_patch_note = f"via-patch-min-width check skipped: {_vpe}"
+            print(f"[phase3] PDK ADVISORY NOT TAKEN: {via_patch_note}",
+                  file=sys.stderr)
+
     # make_tracks emits routing track grid for layers that don't have
     # TRACKS in the LEF (custom PDKs frequently omit these). chip-AGNOSTIC.
     macro_lefs_tcl = "\n".join(
@@ -18016,6 +18124,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         detail += f" | {decap_guard_note}"
     if routing_audit_note:
         detail += f" | via_audit: {routing_audit_note}"
+    if via_patch_note:
+        detail += f" | PDK ADVISORY #768: {via_patch_note}"
     if pin_order_note:
         detail += f" | pin_order: {pin_order_note}"  # ORGANIC #650
     if resize_history:

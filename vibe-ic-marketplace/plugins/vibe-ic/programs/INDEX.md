@@ -698,6 +698,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_registry_selectable_check` | any | — | a PDK the image ships must be SELECTABLE, and every asset the registry declares must RESOLVE. |
 | `pdk_table_coverage_check` | any | — | registering a PDK in one table registers it in none of the others, and nothing said so. |
 | `pdk_udp_synth_shim_gen` | any | — | v1.6.218 (ORGANIC-20260512-followup). |
+| `pdk_via_patch_meets_layer_min_width_check` | any | — | a via's metal patch must be at least as wide as that metal layer's own declared minimum width. |
 | `pdk_yosys_flatten_for_quartus` | any | — | v1.6.222 (ORGANIC-20260512-followup-2). |
 | `per_opcode_response_latency_table_check` | any | v0.119.30 | gate (LL-33) catching extractor failures on per-opcode response latency tables. |
 | `perc_corpus_sweep` | any | v0.2.4 | run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS of already-routed designs, deterministically, with NO container needed. |
@@ -1792,6 +1793,7 @@ _(no programs in this group)_
 - `pdk_registry_selectable_check` — a PDK the image ships must be SELECTABLE, and every asset the registry declares must RESOLVE.
 - `pdk_table_coverage_check` — registering a PDK in one table registers it in none of the others, and nothing said so.
 - `pdk_udp_synth_shim_gen` — v1.6.218 (ORGANIC-20260512-followup).
+- `pdk_via_patch_meets_layer_min_width_check` — a via's metal patch must be at least as wide as that metal layer's own declared minimum width.
 - `pdk_yosys_flatten_for_quartus` — v1.6.222 (ORGANIC-20260512-followup-2).
 - `per_opcode_response_latency_table_check` — gate (LL-33) catching extractor failures on per-opcode response latency tables.  _[v0.119.30]_
 - `perc_corpus_sweep` — run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS of already-routed designs, deterministically, with NO container needed.  _[v0.2.4]_

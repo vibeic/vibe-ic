@@ -97,6 +97,11 @@ INSTALL_DOC_CANDIDATES = [
     # matters: --check passes while the code keeps pulling the old image.
     "vibe-ic-marketplace/plugins/vibe-ic/programs/sta_engine_parity_check.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_extraction_input_capability_check.py",
+    # Same shape again: `DEFAULT_IMAGE` is the image whose PDK trees the via-
+    # patch min-width gate actually reads with `--from-image`. Registered when
+    # it was written, rather than after a bump left it reading a stale PDK —
+    # which is exactly what the two entries above were added for.
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/pdk_via_patch_meets_layer_min_width_check.py",
 ]
 
 # Files that legitimately carry OLD versions — never checked, never rewritten.

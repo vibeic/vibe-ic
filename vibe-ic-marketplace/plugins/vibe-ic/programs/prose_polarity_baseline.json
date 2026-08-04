@@ -1,7 +1,6 @@
 {
   "_comment": "Prose extractors that never consult the polarity of the sentence they read (vibe-ic#712). MAY ONLY SHRINK. A denied value published as a declaration is how a design gets hard-sized onto another chip's die while citing its own document as the authority.",
   "known": [
-    "_pdk_via_analyzer::via_transition_coverage",
     "_spef_coupling::parse_spef_name_map",
     "_spef_coupling::representative_nodes",
     "_yosys_stat::_histogram",
