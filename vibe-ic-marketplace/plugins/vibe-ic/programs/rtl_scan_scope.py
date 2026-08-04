@@ -71,9 +71,36 @@ EXCLUDED_DIR_NAMES = frozenset({
     "formal", "oracle_run", "input", "steps",
 })
 
+# The sidecar `rtl_transitive_cone.prune_to_cone` MOVES out-of-cone sources
+# into: `<rtl_dir>_out_of_cone/` beside the staged tree (currently
+# `phase2/stage1/rtl_out_of_cone/`). It is matched as a SUFFIX rather than by
+# exact name because the sidecar is derived from whatever the staged RTL
+# directory is called, and a second exact literal here would drift the moment
+# that name changes.
+#
+# WHY IT MUST BE EXCLUDED (vibe-ic#781 L8): a file in there has been declared
+# NOT PART OF THE BUILD SET. Leaving it in scope had project-root RTL gates
+# still linting it as authoritative RTL — reporting findings against sources the
+# flow does not compile, which is the exact contradiction "moved out of the
+# build set" is supposed to remove. It is a MOVE, not a delete, so the files
+# stay auditable and `--restore` puts them back in scope.
+#
+# THE RULE IS A PLAIN SUFFIX: a component ending in `_out_of_cone`. There is no
+# "…but not when the component IS the suffix" carve-out any more — that made
+# `analysis_out_of_cone/` excluded while a directory named exactly
+# `_out_of_cone` was not, which is not a rule anyone can state (vibe-ic#781
+# L-suffix). Breadth is acknowledged: any directory a user names `*_out_of_cone`
+# is excluded too. That is a LINT-SCOPE policy only — the build set is the
+# staged tree, decided by the filelist, never by this module — so the cost of
+# breadth here is at worst an unlinted directory that says in its own name that
+# it is not part of the cone.
+EXCLUDED_DIR_SUFFIXES = ("_out_of_cone",)
+
+
 def is_excluded_component(part: str) -> bool:
     """True when a single path component marks its subtree as non-authoritative
-    (build/output dir, dot-dir, or a sim/sim_*/input/oracle scratch dir).
+    (build/output dir, dot-dir, a sim/sim_*/input/oracle scratch dir, or the
+    out-of-cone sidecar).
 
     The `sim` family is matched as exactly `sim` OR a `sim_<...>` prefix
     (sim_full_stack, sim_work) — NOT a bare `sim*` prefix, so an unrelated
@@ -86,6 +113,8 @@ def is_excluded_component(part: str) -> bool:
     if part in EXCLUDED_DIR_NAMES:
         return True
     if part == "sim" or part.startswith("sim_"):
+        return True
+    if any(part.endswith(s) for s in EXCLUDED_DIR_SUFFIXES):
         return True
     return False
 

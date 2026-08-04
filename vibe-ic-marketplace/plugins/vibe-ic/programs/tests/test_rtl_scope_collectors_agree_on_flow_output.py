@@ -37,6 +37,18 @@ what these gates READ, never what they conclude.
 
 BIDIRECTIONAL NEGATIVE CONTROL: the first three tests FAIL pre-fix. The rest
 pass both ways and pin the blast radius.
+
+SECOND DRIFT, SAME SHAPE (vibe-ic#781 M1). The fix above put the policy in
+`gate_utils.EXCLUDED_DIRS`, and `break_handler_safety_check` imported THE NAME
+SET while keeping its own `& EXCLUDED_DIRS` comprehension. When the policy grew
+a SUFFIX rule (the `<rtl>_out_of_cone/` sidecar), the name set did not change,
+so this collector silently stayed out of the contract this file is named after —
+measured, three collectors saw `design.v` while it also read a moved-aside
+`orphan.v` and reported an ERROR against a file the flow does not compile. Two
+causes, one root: a collector that imports DATA instead of calling the POLICY,
+and a test that re-implemented the collector instead of driving it. Both are
+closed here — `gate_utils.dir_parts_excluded` is the single policy FUNCTION, all
+four collectors call it, and every test below drives the real one.
 """
 from __future__ import annotations
 
@@ -96,21 +108,31 @@ def test_dispatch_collector_skips_flow_output(proj):
 
 
 def test_break_handler_collector_skips_flow_output(proj):
-    """FAILS PRE-FIX. Same bare-rglob shape, a different file."""
+    """FAILS PRE-FIX. Same bare-rglob shape, a different file.
+
+    This test used to RE-IMPLEMENT the collector inline with the raw
+    `& EXCLUDED_DIRS` name set, so it asserted on a COPY and could never catch
+    the collector drifting from the shared policy — which is exactly what
+    happened when a SUFFIX rule was added to the policy and this gate, holding
+    only the name set, silently missed it. It now drives the real collector, and
+    the real audit reports what it actually read."""
+    assert _names(bhs.collect_files(proj)) == ["design.v"]
     res = bhs.audit(proj)
     # the fixture has no break signals, so the gate self-skips — but it must
-    # have self-skipped on ONE file, not on four.
+    # have self-skipped on ONE file, not on four, and it says which.
     assert res.summary.get("reason") in ("no_break_signals", None), res.summary
-    # the real assertion: the netlists were never opened
-    got = sorted(p for p in list(proj.rglob("*.v")) + list(proj.rglob("*.sv"))
-                 if not (set(p.relative_to(proj).parts[:-1])
-                         & gate_utils.EXCLUDED_DIRS))
-    assert _names(got) == ["design.v"]
+    assert res.summary.get("files_scanned") == ["design.v"], res.summary
 
 
 def test_the_collectors_now_agree(proj):
-    """FAILS PRE-FIX. Four policies was how the one-place fix stayed hidden."""
-    assert _names(gate_utils.find_rtl_files(proj)) == _names(drc.collect_files(proj))
+    """FAILS PRE-FIX. Four policies was how the one-place fix stayed hidden.
+
+    All FOUR, not two — a pairwise assertion is how the fourth one stayed out of
+    the contract it is named in."""
+    expect = _names(gate_utils.find_rtl_files(proj))
+    assert _names(drc.collect_files(proj)) == expect
+    assert _names(bhs.collect_files(proj)) == expect
+    assert _names(rtl_scan_scope.authoritative_rtl_files(proj)) == expect
 
 
 # ------------------------------------- guards (must pass BOTH ways)

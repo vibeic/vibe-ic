@@ -844,6 +844,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtl_review_aggregate` | any | v0.1.50 | rtl-review skill backing aggregator (Pattern-B → program). |
 | `rtl_scan_scope` | any | — | shared authoritative-RTL scan-scope policy (ORGANIC #545). |
 | `rtl_signal_name_semantic_check` | any | — | v1.6.232 (merged v229+v231). |
+| `rtl_transitive_cone` | any | — | Deterministic transitive-cone reduction for a staged RTL source tree. |
 | `rtl_unit_test_coverage_check` | any | v0.50.2 | v0.50.2 plugin gate |
 | `rtllm_iface_recover` | any | — | a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base rtllm_port_bridge does not yet read. |
 | `rtllm_port_bridge` | any | — | a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output... |
@@ -1938,6 +1939,7 @@ _(no programs in this group)_
 - `rtl_review_aggregate` — rtl-review skill backing aggregator (Pattern-B → program).  _[v0.1.50]_
 - `rtl_scan_scope` — shared authoritative-RTL scan-scope policy (ORGANIC #545).
 - `rtl_signal_name_semantic_check` — v1.6.232 (merged v229+v231).
+- `rtl_transitive_cone` — Deterministic transitive-cone reduction for a staged RTL source tree.
 - `rtl_unit_test_coverage_check` — v0.50.2 plugin gate  _[v0.50.2]_
 - `rtllm_iface_recover` — a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base rtllm_port_bridge does not yet read.
 - `rtllm_port_bridge` — a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output...

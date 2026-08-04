@@ -2349,6 +2349,65 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
            if rewired else ""), written)
 
 
+def _v_shipped_but_excluded(project: Path, module: str) -> Optional[str]:
+    """The project-relative path of a NON-STAGEABLE RTL source for `module` under
+    ``input/`` — a name like ``<module>.sv.<suffix>`` / ``<module>.v.<suffix>``
+    rather than a plain ``.sv`` / ``.v`` — else ``None``.
+
+    This is EVIDENCE FOR AN ADVISORY, NOT A VERDICT (vibe-ic#781 M2). The round-2
+    version returned a bool that FAILed the step, on the theory that such a
+    sibling proves "the design shipped the module and staging dropped it". It
+    does not: nothing in a filename distinguishes a dataset exclusion from an
+    editor backup (``<M>.sv.bak``), a patch reject (``<M>.v.rej``) or a
+    ``.orig``. Measured, a stray backup next to a legitimate BLACK-BOX macro
+    flipped its ADVISORY into a hard FAIL — a fabricated failure on a design
+    `origin/main` passes. The distinction is not provable from the text, so the
+    step now only NAMES the sibling and lets the missing module surface where it
+    always did: loudly, at elaboration.
+
+    §4.05 HYGIENE: the walk skips any path through an ORACLE / harness segment,
+    reusing `reused_ip_rtl_consume._is_oracle_parts` — the same policy the
+    consumer beside it already enforces — rather than a second private copy. A
+    file under ``input/tb/`` or ``input/golden/`` must never influence a step's
+    reported state at all.
+
+    chip-AGNOSTIC: pure filename structure; no chip / vendor / SKU /
+    exclusion-suffix literal — any FURTHER extension component after a ``.sv`` /
+    ``.v`` component counts.
+
+    The test is component-wise, NOT a string prefix (vibe-ic#781 H3). A
+    ``startswith(f"{module}.sv")`` prefix also matches ``<M>.svg``, ``<M>.sva``
+    and ``<M>.svh``. What follows ``.sv``/``.v`` must be a SEPARATE extension
+    component, so ``<M>.sv.unused`` matches while ``<M>.svg`` does not."""
+    base = project / "input"
+    if not base.is_dir():
+        return None
+    try:
+        from reused_ip_rtl_consume import _is_oracle_parts
+    except Exception:                                   # pragma: no cover
+        return None
+    try:
+        for cand in sorted(base.rglob(f"{module}.*")):
+            if not cand.is_file():
+                continue
+            rel = cand.relative_to(base)
+            if _is_oracle_parts(rel.parts[:-1]):
+                continue
+            # `module` can never contain a dot (Verilog identifier grammar), so
+            # splitting the basename on "." puts the module in parts[0], the
+            # source extension in parts[1] and the exclusion tag in parts[2:].
+            parts = cand.name.split(".")
+            if (len(parts) >= 3 and parts[0] == module
+                    and parts[1] in ("v", "sv")):
+                try:
+                    return str(cand.relative_to(project))
+                except ValueError:                      # pragma: no cover
+                    return cand.name
+    except OSError:
+        return None
+    return None
+
+
 def step_reused_ip_consume(project: Path,
                            top_name: str = "chip_top") -> StepResult:
     """Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP RTL CONSUME step.
@@ -2429,6 +2488,232 @@ def step_reused_ip_consume(project: Path,
             pass
     res["chip_top_emitted"] = chip_top_emitted
     res["synth_top_resolved"] = synth_top_resolved
+
+    # --- TRANSITIVE-CONE REDUCTION (chip-AGNOSTIC) ---------------------------
+    # A reused-IP bundle is staged FLAT as a whole LIBRARY (every module of the
+    # IP + a large shared-primitive pool), of which the declared top instantiates
+    # only a fraction. Keeping the whole bundle drags in ORPHAN files whose own
+    # unmet macro/package/include deps break single-unit elaboration, plus
+    # DUPLICATE (shim + real) module definitions. Reduce the staged set to the
+    # transitive cone of the resolved top: orphans and out-of-cone duplicates
+    # vanish, packages are topologically ordered, and a module the top
+    # INSTANTIATES but no staged file DEFINES (a dataset-excluded variant a
+    # parameter default selects) is surfaced LOUDLY rather than silently emitting
+    # a chip_top that references an absent module. See rtl_transitive_cone.py.
+    #
+    # THE FLOOR IS THE UNREDUCED FLOW (vibe-ic#781, rounds 1-3). Everything below
+    # obeys one rule: this step must never be WORSE than staging everything.
+    # Concretely that means it does not FAIL on anything the unreduced flow
+    # passes, and it never moves a file aside on a guess. Two rounds shipped a
+    # step that moved an IMPLEMENTATION aside, kept a STUB and returned GREEN;
+    # the loud `already been declared` error those rounds "fixed" is the correct
+    # outcome. The only FAIL this block can still raise is a cone file that went
+    # MISSING from the staged tree — the one condition that is strictly worse
+    # than not reducing, and it is checked against the tree, not inferred.
+    #
+    # SCOPE, STATED HONESTLY (vibe-ic#781 L6): the reduction runs ONLY when the
+    # top actually resolved. `_v661_resolve_dut_module` returns None when the
+    # instantiation graph has 0 or >1 roots — and orphan files ARE extra roots,
+    # so the very over-staging this reduces can be what defeats root resolution.
+    # A bundle with orphans and no L9/--top-name/synth-top naming a staged module
+    # is therefore NOT reduced; that case is recorded in `cone_skipped` and named
+    # in the step detail rather than passing silently as if it had been covered.
+    _cone_note = ""
+    _cone_status = "PASS"
+    _cr = None
+    try:
+        import rtl_transitive_cone as _cone
+        _cone_root = synth_top_resolved
+        if not _cone_root:
+            res["cone_skipped"] = (
+                "no top resolved (0 or >1 instantiation-graph roots and no "
+                "L9/--top-name/synth-top naming a staged module) — the staged "
+                "set was NOT cone-reduced")
+            _cone_note += (
+                " Cone reduction NOT APPLIED: no top could be resolved, so the "
+                "whole staged set is the build set (orphan files are themselves "
+                "graph roots, which is what prevents root resolution).")
+        elif _cone_root not in set(_v661_rtl_module_names(project)):
+            res["cone_skipped"] = (
+                f"resolved top '{_cone_root}' is not among the staged module "
+                f"names — the staged set was NOT cone-reduced")
+            _cone_note += (
+                f" Cone reduction NOT APPLIED: top '{_cone_root}' is not a "
+                f"staged module.")
+        else:
+            # PHASE A — ANALYSIS. Pure; touches nothing on disk.
+            _cr = _cone.transitive_cone(_cone_root, rtl_dir)
+            res["cone_root"] = _cone_root
+            res["cone_files"] = len(_cr.cone_files)
+            res["cone_duplicate_definers"] = _cr.duplicate_definers
+            res["cone_conditional_duplicates"] = _cr.conditional_duplicates
+            res["cone_unconditional_duplicates"] = _cr.hard_duplicates
+            res["cone_unresolved_modules"] = _cr.unresolved_modules
+            res["cone_unresolved_includes"] = _cr.unresolved_includes
+            res["cone_unparseable_refs"] = _cr.unparseable_refs
+            res["cone_unreducible"] = _cr.unreducible
+            # PHASE B — MUTATION. `transitive_cone` has already forced
+            # `dropped_files` empty for every case it could not prove safe, so
+            # this call moves nothing unless the reduction is trustworthy.
+            _moved = _cone.prune_to_cone(rtl_dir, _cr) if _cr.reduced else []
+            res["cone_out_of_cone"] = _moved
+            if _moved:
+                _cone_note += (
+                    f" Cone-reduced to {len(_cr.cone_files)} file(s) "
+                    f"(moved {len(_moved)} out-of-cone aside into "
+                    f"{rtl_dir.name}{_cone.SIDECAR_SUFFIX}/; undo with "
+                    f"`rtl_transitive_cone.py --restore {rtl_dir}`).")
+            if _cr.unreducible:
+                # FAIL CLOSED: the inventory or the directive grammar could not
+                # be trusted, so the staged set is exactly the unreduced one.
+                _cone_note += (
+                    f" Cone reduction NOT APPLIED (fail-closed): "
+                    f"{_cr.unreducible}. The staged set is the whole provided "
+                    f"package, exactly as without this step.")
+            if _cr.hard_duplicates:
+                # A duplicate module definition is NEVER resolved here
+                # (vibe-ic#781 H1). Every candidate stays staged, so the
+                # frontend raises its own `already been declared` — loud,
+                # unmissable, and never a wrong answer. The two tie-breaks that
+                # have been tried both moved the IMPLEMENTATION aside and left a
+                # STUB compiling GREEN, which is strictly worse than this error.
+                # The step does NOT fail: a FAIL here would be a verdict the
+                # unreduced flow does not pass either, and `\`ifdef`-guarded
+                # variants prove the grammar cannot tell a defect from a normal
+                # vendor pattern. The frontend is the judge; this is the notice.
+                _dups = "; ".join(f"{m} declared by {cands}"
+                                  for m, cands in _cr.hard_duplicates)
+                _cone_note += (
+                    f" ADVISORY — DUPLICATE module definition(s), all "
+                    f"candidates KEPT staged: {_dups}. Nothing in the text says "
+                    f"which declaration the design meant, so this reducer "
+                    f"refuses to choose (a wrong pick is silent and green); the "
+                    f"duplicate-definition error stays visible to the frontend. "
+                    f"Remove the redundant declaration, or guard the variants "
+                    f"with `ifdef.")
+            if _cr.conditional_duplicates:
+                _cone_note += (
+                    f" NOTE: {_cr.conditional_duplicates} are declared more "
+                    f"than once under conditional compilation "
+                    f"(`ifdef-guarded technology variants / `define macro "
+                    f"bodies) — the normal vendor pattern, not a duplicate "
+                    f"definition; all variants stay staged and the "
+                    f"preprocessor selects one.")
+            if _cr.unresolved_includes:
+                _cone_note += (
+                    f" ADVISORY: `include target(s) no staged file provides: "
+                    f"{_cr.unresolved_includes} — the build will report "
+                    f"'Include file ... not found' with or without reduction.")
+            if _cr.unparseable_refs:
+                # A reference this grammar structurally CANNOT read (an escaped
+                # identifier, a macro-valued `include). Nothing is dropped on
+                # account of it, but silence would hide a real blind spot
+                # (vibe-ic#781 H5).
+                _cone_note += (
+                    f" ADVISORY (unparseable by the structural grammar, "
+                    f"kept conservatively — the cone is an over-approximation "
+                    f"for these): {_cr.unparseable_refs}.")
+            if _cr.unresolved_modules:
+                # Classify each unresolved instantiation for the OPERATOR, not
+                # for the verdict (vibe-ic#781 M2). A `<M>.sv.<tag>` sibling
+                # under input/ is EVIDENCE that an RTL source for the module
+                # exists in a form staging cannot consume — but a filename
+                # cannot tell a dataset exclusion from an editor backup, so it
+                # does not decide PASS/FAIL. Either way the module is absent,
+                # and an absent module is caught, loudly, at elaboration —
+                # which is exactly what happens without this step.
+                _excluded, _blackbox = {}, []
+                for _m in _cr.unresolved_modules:
+                    _ev = _v_shipped_but_excluded(project, _m)
+                    if _ev:
+                        _excluded[_m] = _ev
+                    else:
+                        _blackbox.append(_m)
+                res["cone_unresolved_excluded"] = sorted(_excluded)
+                res["cone_unresolved_excluded_evidence"] = _excluded
+                res["cone_unresolved_blackbox"] = _blackbox
+                if _excluded:
+                    _cone_note += (
+                        f" ADVISORY: top '{_cone_root}' instantiates "
+                        f"{sorted(_excluded)}, which NO staged file defines, "
+                        f"while a non-stageable RTL sibling exists under "
+                        f"input/ ({_excluded}) — staging cannot make this "
+                        f"design elaborate; provide the absent module or "
+                        f"correct the top's variant selection. Choosing a "
+                        f"different PRESENT variant would silently rewrite a "
+                        f"parameter selection and is NOT done.")
+                if _blackbox:
+                    _cone_note += (
+                        f" ADVISORY: top instantiates {_blackbox} with no "
+                        f"staged RTL source — treated as black-box hard-macro / "
+                        f"std-cell (resolved downstream by LIB/LEF).")
+    except Exception as _ce:
+        # vibe-ic#781 L5 — a crashed cone must not be invisible in the VERDICT.
+        # It used to land in `extras` only, where nothing reads it, so every
+        # project could have crashed here and still reported a clean PASS.
+        #
+        # The verdict is decided by WHAT IS ON DISK, not by which function was
+        # executing (vibe-ic#781 M3). Round 2 inferred "half-moved" from
+        # `_cr is not None`, so a crash that happened AFTER a complete, correct
+        # move — a malformed pre-existing restore manifest — reported a
+        # HALF-MOVED tree while `rtl/` held the entire cone and the sidecar held
+        # exactly the out-of-cone files, and printed a recovery command that
+        # itself crashed. `prune_to_cone` only ever moves files OUT, and only
+        # ever files the analysis put in `dropped_files`, so the staged set
+        # after ANY partial move is between the cone and the full package — i.e.
+        # never smaller than the build needs. The one outcome that IS worse than
+        # not reducing is a CONE file that is no longer in `rtl/`, so that is
+        # what is checked, and it is the only FAIL.
+        import traceback as _tb
+        res["cone_error"] = str(_ce)
+        res["cone_error_type"] = type(_ce).__name__
+        res["cone_error_traceback"] = _tb.format_exc()[-2000:]
+        _missing: List[str] = []
+        if _cr is not None:
+            _phase = "MUTATION"
+            try:
+                _missing = sorted(p.name for p in _cr.cone_files
+                                  if not (rtl_dir / p.name).is_file())
+            except Exception:                              # pragma: no cover
+                _missing = ["<could not verify the staged tree>"]
+        else:
+            _phase = "ANALYSIS"
+        res["cone_error_phase"] = _phase
+        res["cone_error_missing_from_rtl"] = _missing
+        if _missing:
+            _cone_status = "FAIL"
+            _cone_note += (
+                f" CONE ERROR ({_phase}, plugin defect): "
+                f"{type(_ce).__name__}: {_ce} — and the staged tree is "
+                f"INCOMPLETE: {_missing} are in the cone but no longer in "
+                f"{rtl_dir.name}/. Restore with "
+                f"`rtl_transitive_cone.py --restore {rtl_dir}`.")
+        elif _phase == "MUTATION":
+            _cone_note += (
+                f" CONE ERROR ({_phase}, plugin defect): "
+                f"{type(_ce).__name__}: {_ce} — the reduction did not complete. "
+                f"VERIFIED against the tree: every cone file is still staged, so "
+                f"the build set is a SUPERSET of the cone (at worst the "
+                f"unreduced package). Undo any partial move with "
+                f"`rtl_transitive_cone.py --restore {rtl_dir}`.")
+        else:
+            _cone_note += (
+                f" CONE ERROR ({_phase}, plugin defect): "
+                f"{type(_ce).__name__}: {_ce} — cone reduction did NOT run; "
+                f"the staged set is the whole provided package, unreduced.")
+
+    if res.get("staged_name_collisions"):
+        # PRE-EXISTING in `reused_ip_rtl_consume` (not introduced by the cone
+        # reduction): staging is FLAT, so two source files with the same
+        # basename compete for one staged name and the second is discarded
+        # first-wins. The filenames are a contract several downstream steps
+        # read, so the flattening is not changed here — but a source that is
+        # NOT in the build must not be invisible (vibe-ic#781 L-collision).
+        _cone_note += (
+            f" ADVISORY: {len(res['staged_name_collisions'])} basename "
+            f"collision(s) while flattening the provided tree — only the FIRST "
+            f"source of each name is staged, the rest are NOT in the build set: "
+            f"{res['staged_name_collisions']}.")
     _sv = (f" {res['sv_ingest_note']}" if res.get("sv_ingest_note") else "")
     if chip_top_emitted:
         _ct = f" Auto-emitted {chip_top_emitted} (thin wrapper)."
@@ -2439,10 +2724,10 @@ def step_reused_ip_consume(project: Path,
         _ct = (" Top resolution deferred to synth (graph-root/auto-emit "
                "fallback).")
     return StepResult(
-        "reused_ip_consume", "PASS", time.time() - t0,
+        "reused_ip_consume", _cone_status, time.time() - t0,
         f"Staged {len(res['staged'])} design-provided build-RTL file(s) into "
         f"phase2/stage1/rtl/ so synth no longer halts on empty rtl/."
-        + _ct + _sv,
+        + _ct + _sv + _cone_note,
         extras=res)
 
 

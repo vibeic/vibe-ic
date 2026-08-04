@@ -322,14 +322,32 @@ def consume_reused_ip_rtl(project: Path) -> Dict:
     provenance: List[str] = []
     sv_files: List[str] = []
     vh_files: List[str] = []
+    collisions: Dict[str, List[str]] = {}
+    claimed: Dict[str, Path] = {}
     for src in provided:
         dst = rtl_dir / src.name
         if dst.exists():
+            # Staging is FLAT, so `a/m.sv` and `b/m.sv` compete for one name and
+            # the second one is discarded. That is a real loss of source — the
+            # discarded file's modules simply are not in the build — and it used
+            # to happen with no record anywhere. The flattening itself is not
+            # changed here (the staged FILENAMES are a contract several
+            # downstream steps read); what changes is that the loss is NAMED.
+            try:
+                _first = str(claimed[src.name].relative_to(project))
+            except (KeyError, ValueError):
+                _first = src.name
+            try:
+                _lost = str(src.relative_to(project))
+            except ValueError:
+                _lost = str(src)
+            collisions.setdefault(src.name, [_first]).append(_lost)
             continue  # deterministic first-wins on a name collision
         try:
             shutil.copy2(src, dst)
         except OSError:
             continue
+        claimed[src.name] = src
         staged.append(dst.name)
         staged_paths.append(dst)
         try:
@@ -351,6 +369,9 @@ def consume_reused_ip_rtl(project: Path) -> Dict:
     result["staged"] = sorted(staged)
     result["sv_files"] = sorted(sv_files)
     result["vh_files"] = sorted(vh_files)
+    if collisions:
+        result["staged_name_collisions"] = {
+            k: sorted(set(v)) for k, v in sorted(collisions.items())}
 
     # G-SV-INGEST honesty — never silently drop raw SystemVerilog.
     if sv_files:
