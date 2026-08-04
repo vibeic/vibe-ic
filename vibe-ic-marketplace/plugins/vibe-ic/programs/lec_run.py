@@ -1429,6 +1429,20 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         f"design -copy-from gate -as gate {top}\n"
         f"equiv_make gold gate equiv\n"
         f"hierarchy -top equiv\n"
+        # SAT-FREE structural pre-reduction BEFORE any SAT is spent. equiv_struct
+        # merges the $equiv key-points whose driving cones are structurally
+        # identical across gold and gate (the majority of a name-mapped
+        # RTL-vs-synth miter) by structural hashing alone — no solver call. This
+        # is SOUND: it only collapses provably-identical structure, so it can
+        # NEVER launder a real mismatch into a proof (a genuinely different cone
+        # survives to equiv_simple/equiv_induct below). Without it, equiv_simple
+        # SAT-hammers EVERY key-point including the trivially-identical ones, so a
+        # large design (measured: a 31 850-point AES miter) exhausts the wall
+        # clock mid-equiv_simple and yields a false INCONCLUSIVE. equiv_struct
+        # AUGMENTS, never REPLACES, the SAT stages that follow — it only shrinks
+        # the set they must decide (measured 31 850 -> 3 333, a 10x cut). This is
+        # the same pre-pass yosys's own `equiv_opt` runs. chip/PDK-AGNOSTIC.
+        f"equiv_struct\n"
         f"equiv_simple\n"
         f"equiv_induct -seq 4\n"
         f"equiv_induct -seq 16\n"

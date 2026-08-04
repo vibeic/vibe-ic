@@ -365,6 +365,53 @@ def test_build_equiv_script_omits_liberty_when_none():
 
 
 # ---------------------------------------------------------------------------
+# equiv_struct SAT-free pre-reduction — the deck must run structural hashing
+# BEFORE spending any SAT, so equiv_simple decides only the cones that are
+# genuinely restructured, not every trivially-identical key-point.
+#
+# MEASURED motivation (a large AES miter, container yosys 0.67+): after
+# equiv_make the miter had 31 850 unproven $equiv cells; a single equiv_struct
+# pass collapsed 28 517 of them structurally (28 403 merges), leaving 3 333 for
+# SAT — a 10x cut. Without equiv_struct the deck SAT-hammered all 31 850,
+# exhausted the wall clock mid-equiv_simple, and reported a FALSE INCONCLUSIVE.
+# ---------------------------------------------------------------------------
+def test_build_equiv_script_runs_equiv_struct_before_sat():
+    # FORWARD negative control: FAILS against the byte-identical pre-fix deck
+    # (which had no equiv_struct), PASSES after the pre-reduction is inserted.
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.v"], "/p/synth/netlist.v", "top", None)
+    assert "equiv_struct" in s, "SAT-free structural pre-reduction is missing"
+    # It must sit AFTER key-point mapping and BEFORE the first SAT proof, so the
+    # SAT stages see the reduced set — not before equiv_make (nothing to merge),
+    # not after equiv_simple (the saving is already spent).
+    assert (s.index("equiv_make gold gate equiv")
+            < s.index("equiv_struct")
+            < s.index("equiv_simple")), "equiv_struct out of order"
+
+
+def test_build_equiv_script_keeps_full_sat_ladder():
+    # REVERSE control — a STABLE INVARIANT that MUST PASS both before AND after
+    # the equiv_struct fix. equiv_struct is SOUND but only proves STRUCTURAL
+    # identity; it can never witness functional equivalence of a restructured
+    # cone. So the fix must AUGMENT, never REPLACE, the SAT proof ladder. This
+    # pins the exact cheat the prompt warns of: "greening" convergence by
+    # DELETING equiv_simple/equiv_induct (trivially fast AND blind). It makes NO
+    # reference to equiv_struct, so it holds on the pre-fix deck too — its only
+    # job is to fail the moment any SAT stage disappears or the ladder reorders.
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.v"], "/p/synth/netlist.v", "top", None)
+    for stage in ("equiv_simple", "equiv_induct -seq 4",
+                  "equiv_induct -seq 16", "equiv_induct -seq 64",
+                  "equiv_status"):
+        assert stage in s, f"SAT verification stage {stage!r} was removed"
+    assert (s.index("equiv_simple")
+            < s.index("equiv_induct -seq 4")
+            < s.index("equiv_induct -seq 16")
+            < s.index("equiv_induct -seq 64")
+            < s.index("equiv_status")), "SAT ladder order broken"
+
+
+# ---------------------------------------------------------------------------
 # v1.4.21 REGRESSION — a GENERIC pre-techmap `$_`-primitive gate netlist must be
 # read with `read_verilog -icells` (no Liberty), else `hierarchy -check` aborts
 # on an undefined `\$_DFF_P_` module before any $equiv point is built and the
