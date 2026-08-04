@@ -9128,6 +9128,47 @@ def _strip_signed_net_decls(nl_text: str) -> Tuple[str, int]:
     return _SIGNED_NET_DECL_RE.subn(r"\1", nl_text)
 
 
+def _ensure_structural_reader_readable(netlist: Path,
+                                       project: Optional[Path] = None) -> int:
+    """THE one place a netlist is normalised for OpenROAD's structural
+    Verilog reader. Returns how many `signed` qualifiers were stripped.
+
+    Called from BOTH paths that put a netlist at the path step_pnr reads:
+    the PRODUCE path (step_synth, right after yosys emits it) and the REUSE
+    path (the preserve-provenance cache hit in main()). A guard that lives on
+    one of the two is not a guard on the artefact — it is a guard on one way
+    of arriving at it, and the way it does not cover is the one that hands
+    OpenROAD a file the runner never inspected.
+
+    When bytes change and `project` is given, the netlist's provenance record
+    is restamped with the REAL new sha256 (the same `_restamp_provenance_output`
+    contract the runner already uses wherever it re-emits a declared output),
+    so the repair cannot leave a PROVENANCE_HASH_MISMATCH behind. Non-fatal on
+    IO error: a netlist that could not be read is left exactly as it was.
+    """
+    try:
+        nl_text = netlist.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return 0
+    new_text, n_signed = _strip_signed_net_decls(nl_text)
+    if n_signed <= 0:
+        return 0
+    try:
+        netlist.write_text(new_text, encoding="utf-8")
+    except Exception:
+        return 0
+    if project is not None:
+        try:
+            _restamp_provenance_output(
+                project, str(netlist.relative_to(project)), netlist,
+                "yosys",
+                "phase3_one_shot_runner: `signed` net qualifiers stripped for "
+                "the structural Verilog reader (syntactic no-op for PnR/STA)")
+        except Exception:
+            pass
+    return n_signed
+
+
 # Sidecar recording the sha256 of every RTL input the netlist was synthesised
 # from. Salvaged from closed #336 (tracked in #349): it closes the residual I
 # disclosed when landing #289 in v1.5.79 — the mtime test trusts a cache when
@@ -9840,13 +9881,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # stripping the qualifier is a pure-syntactic no-op for PnR/STA.
     # First hit: 3.1M-cell INT4 accelerator whose dequant-loop `integer`
     # survived flatten and killed link_design. Non-fatal on IO error.
-    try:
-        nl_text = netlist.read_text(encoding="utf-8", errors="ignore")
-        new_text, n_signed = _strip_signed_net_decls(nl_text)
-        if n_signed > 0:
-            netlist.write_text(new_text, encoding="utf-8")
-    except Exception:
-        pass
+    _ensure_structural_reader_readable(netlist, project)
     # Cell count from yosys stat
     cell_count = "?"
     cell_count_int = -1
@@ -33546,9 +33581,30 @@ def main() -> int:
                   f"design and report PASS for RTL that was never "
                   f"synthesised.", file=sys.stderr)
         if _nl_pdk_ok:
+            # The reuse decision answers "is this netlist CURRENT?"
+            # (PDK-keyed, RTL fingerprint, mtime) and never "is it a file
+            # the CONSUMER can read?". A cached netlist carrying `signed`
+            # net qualifiers is current and unusable: OpenROAD's
+            # structural Verilog reader rejects it (STA-0171) and PnR dies
+            # in link_design. step_synth has normalised its own output
+            # since v1.6.605; the reuse path never did, so the guard
+            # covered the netlist the runner had just inspected and not
+            # the one it had not. Same helper, both paths.
+            _n_signed_reuse = _ensure_structural_reader_readable(
+                netlist_existing, project)
+            _reuse_note = (
+                f"; {_n_signed_reuse} `signed` net qualifier(s) stripped "
+                f"for the structural Verilog reader (hash restamped)"
+                if _n_signed_reuse else "")
+            if _n_signed_reuse:
+                print(f"[synth] cached netlist carried {_n_signed_reuse} "
+                      f"`signed` net declaration(s) that OpenROAD's "
+                      f"structural Verilog reader rejects (STA-0171) — "
+                      f"normalised in place and provenance restamped.",
+                      file=sys.stderr)
             plan.append(StepResult(
                 "synth", "PASS", 0.0,
-                f"netlist already present: {netlist_existing.name} (skipped re-run to preserve provenance)",
+                f"netlist already present: {netlist_existing.name} (skipped re-run to preserve provenance){_reuse_note}",
                 [str(netlist_existing)]))
         else:
             plan.append(step_synth(project, effective_top, pdk, args.container))
