@@ -50248,9 +50248,40 @@ def emit_coverage_report(project: Path,
         from phase1_layer_demand_probe import evaluate as _layer_demand_eval
         _layer_demand = _layer_demand_eval(project)
     except Exception:                                       # noqa: BLE001
-        _layer_demand = {"probes_run": 0, "layers": [], "silent_empty": []}
+        _layer_demand = {"probes_run": 0, "layers": [], "silent_empty": [],
+                         "zero_unexamined": []}
     if _layer_demand.get("silent_empty") and _status == "PASS":
         _status = "FAIL_LAYER_DEMANDED_BUT_EMPTY"
+    # A probe that returned zero WITHOUT examining anything is not a finding
+    # about the design, but it is not a PASS about the design either — nothing
+    # was examined, so there is nothing to pass. `PASS` here is the same
+    # substitution this whole change is against, one level up: the artifact
+    # already carried `layers_zero_unexamined` while the WORD a consumer reads
+    # said the run was clean, and a list nobody is obliged to open cannot
+    # correct a verdict everybody reads.
+    #
+    # INCOMPLETE, not FAIL, and gated on `_status == "PASS"` exactly like the
+    # line above: a reading that did not happen accuses nobody, and a real FAIL
+    # outranks a disclosure. Named in this artifact's own dialect — its four
+    # existing words are `PASS` / `FAIL` / `FAIL_INPUT_NOT_FULLY_READ` /
+    # `FAIL_LAYER_DEMANDED_BUT_EMPTY`, so the bare `INCOMPLETE` that the P0
+    # umbrella uses would be the only unqualified word here.
+    #
+    # WHY A NEW WORD IS SAFE, MEASURED rather than assumed. Every reader of
+    # this field was enumerated: no allow-list, no enum and no JSON schema
+    # constrains it (the three status registries that exist —
+    # `_flow_verdict_tiers.PRODUCER_STATUSES`, `vibe_ic_log.VALID_STATUSES`,
+    # `analog_hil_report_schema_check._VALID_STATUS` — are each scoped to a
+    # different artifact). Exactly one consumer reads it as a verdict at all,
+    # `benchmark_evidence_publish._citations_under_a_pass`, and it fails OPEN:
+    # a word it does not recognise makes it assert LESS, never more, so it
+    # cannot turn a run red. Every other reader either reads `overall.pct` /
+    # `overall.total` only, or looks for a TOP-LEVEL `status` / `verdict` this
+    # artifact does not have. Across 114 published copies under
+    # `benchmark-data/` the field reads `PASS` x108 and `FAIL` x1, so no
+    # published verdict moves.
+    if _layer_demand.get("zero_unexamined") and _status == "PASS":
+        _status = "INCOMPLETE_ZERO_UNEXAMINED"
 
     report = {
         "layer_demand": _layer_demand,
@@ -50270,6 +50301,15 @@ def emit_coverage_report(project: Path,
             "input_documents_unread": len(_unread_docs),
             "layers_demanded_but_empty": list(
                 _layer_demand.get("silent_empty") or []),
+            # A probe that returned zero WITHOUT examining anything. Carried
+            # beside the list above so an empty `layers_demanded_but_empty`
+            # cannot be read as "measured, and nothing found" when it is
+            # "nothing was read". It does not FAIL the run — but it is no
+            # longer disclosure ONLY: a non-empty list degrades `status` to
+            # `INCOMPLETE_ZERO_UNEXAMINED`, because a list carried beside a
+            # verdict that says PASS is a correction nobody is obliged to read.
+            "layers_zero_unexamined": list(
+                _layer_demand.get("zero_unexamined") or []),
             "measures": ("coverage of literals found in documents that "
                          "EXTRACTED; a document that did not extract "
                          "contributes to neither numerator nor "
