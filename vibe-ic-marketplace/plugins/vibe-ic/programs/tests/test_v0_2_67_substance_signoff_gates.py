@@ -154,14 +154,14 @@ def test_sta_two_distinct_corners_pass(tmp_path):
     (pc / "sta_FF.rpt").write_text(
         "Startpoint: a\nPath Type: max\nslack (MET) 3.4\nOpenSTA\n")
     result = ERA._check_sta(tmp_path)
-    assert result.summary["multi_corner_substantiated"] is True
+    assert result.summary["multi_corner_claim_not_broken"] is True
 
 
 def test_sta_no_per_corner_dir_is_no_claim(tmp_path):
     _sta_base(tmp_path)
     result = ERA._check_sta(tmp_path)
     assert result.summary["corner_dirs_found"] == 0
-    assert result.summary["multi_corner_substantiated"] is True
+    assert result.summary["multi_corner_claim_not_broken"] is True
 
 
 # ── (d) runner source no longer fabricates sim_postlayout/pass.flag ───────

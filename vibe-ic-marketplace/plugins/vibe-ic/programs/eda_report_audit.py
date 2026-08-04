@@ -1653,7 +1653,24 @@ def _check_sta(project_dir: Path) -> AuditResult:
                       "corner_dirs_found": len(corner_dirs),
                       "corner_reports": corner_reports,
                       "corner_reports_distinct": corner_distinct,
-                      "multi_corner_substantiated": corners_ok,
+                      # NAME THE QUESTION THAT WAS ASKED. `corners_ok` is
+                      # "no BROKEN multi-corner claim was found" — it
+                      # starts True and only goes False when a per_corner
+                      # directory EXISTS and is empty or holds identical
+                      # copies. A project with no per_corner directory at
+                      # all therefore published
+                      #   "multi_corner_substantiated": true
+                      # beside "corner_dirs_found": 0, "corner_reports": 0,
+                      # "corner_reports_distinct": 0 and
+                      # "multi_corner_executed": false — a field asserting
+                      # substantiation on zero evidence, in the JSON a
+                      # compliance report prints as the step's evidence.
+                      # The property field is `multi_corner_executed`,
+                      # which was already correct; this one is renamed to
+                      # what it measures. Same repair as #699 on the PG
+                      # audit ("a check that answers one question and
+                      # reports another is worse than no check").
+                      "multi_corner_claim_not_broken": corners_ok,
                       "multi_corner_executed": multi_corner_executed,
                       "any_verdict_determined": any_verdict_determined,
                       "real_violation_found": real_violation_found}
