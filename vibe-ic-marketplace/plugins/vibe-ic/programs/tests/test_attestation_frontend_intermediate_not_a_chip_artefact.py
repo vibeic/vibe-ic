@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""A front-end pre-pass file is a synthesis INPUT, not a chip artefact.
+
+THE DEFECT — `agent_report_sha256_attestation_check` collects canonical
+artefacts with `phase2/stage2/synth/*.v` and `phase3/stage3/pnr/*.v`.
+That glob asks "is there a .v file in the netlist directory"; the gate
+reads the answer as "has this project produced a netlist". They are not
+the same question, and the flow's OWN front-end fallback separates them:
+when the SV front-end is unavailable the runner writes an sv2v pre-pass
+file into the very directory the glob watches
+(`design_one_shot_runner`: `synth_dir / f"{synth_top}_sv2v.v"`;
+`phase3_one_shot_runner`: `out_dir / f"{top}_sv2v.v"`) and then feeds it
+to yosys.
+
+Consequence on a project whose synthesis never completed: the gate finds
+1 "canonical artefact", skips its documented `no canonical artefacts ->
+pre-output project` escape, and FAILs demanding attestation. The cheapest
+way to clear that FAIL is to publish a SHA256 of a pre-synthesis
+intermediate under a chip-artefact heading — a rule meant to make reports
+verifiable rewarding a report that is falsely verifiable.
+
+BIDIRECTIONAL NEGATIVE CONTROL. The first two tests FAIL against the
+byte-identical pre-fix file and pass after. The REVERSE tests must pass
+in BOTH directions: they are what proves the fix did not simply tighten
+the glob until nothing matched, which would silently stop the gate
+demanding attestation for every real netlist in the repo.
+"""
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+
+_PROGRAMS = Path(__file__).resolve().parent.parent
+_GATE = _PROGRAMS / "agent_report_sha256_attestation_check.py"
+
+
+def _load():
+    spec = importlib.util.spec_from_file_location(
+        "_att_gate_frontend_intermediate", _GATE)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+MOD = _load()
+
+# A real gate-level netlist: cell instantiations, no `parameter`, no
+# `always`. Content is illustrative only — the gate keys on the name.
+_REAL_NETLIST = (
+    "module top (clk, rst_n, q);\n"
+    "  input clk;\n"
+    "  input rst_n;\n"
+    "  output q;\n"
+    "  wire n1;\n"
+    "  INVX1  u1 (.A(clk), .Y(n1));\n"
+    "  DFFRX1 u2 (.D(n1), .CK(clk), .RN(rst_n), .Q(q));\n"
+    "endmodule\n"
+)
+
+# The sv2v pre-pass output: still behavioural RTL. `parameter` and
+# `always` are exactly what a gate-level netlist does not have.
+_SV2V_INTERMEDIATE = (
+    "module top (clk, rst_n, q);\n"
+    "  parameter integer WIDTH = 8;\n"
+    "  input wire clk;\n"
+    "  input wire rst_n;\n"
+    "  output reg q;\n"
+    "  always @(posedge clk) q <= ~q;\n"
+    "endmodule\n"
+)
+
+_REPORT_NO_TABLE = "# Final Summary\n\nNo attestation table here.\n"
+
+
+def _mkproject(tmp_path: Path, files: dict, report: str) -> Path:
+    proj = tmp_path / "proj"
+    for rel, content in files.items():
+        p = proj / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+    rp = proj / "reports" / "final_summary.md"
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text(report)
+    return proj
+
+
+def _kinds(proj: Path):
+    return [k for k, _ in MOD._collect_canonical_artefacts(proj)]
+
+
+def _names(proj: Path):
+    return sorted(p.name for _, p in MOD._collect_canonical_artefacts(proj))
+
+
+# ── FORWARD: these FAIL against the pre-fix file ─────────────────────
+
+def test_sv2v_prepass_in_synth_dir_is_not_a_canonical_artefact(tmp_path):
+    """The measured case: synthesis never ran, only the pre-pass exists.
+
+    PRE-FIX: `_collect_canonical_artefacts` returns 1 ("synth netlist"),
+    so the gate skips its pre-output escape and FAILs.
+    """
+    proj = _mkproject(
+        tmp_path,
+        {"phase2/stage2/synth/top_sv2v.v": _SV2V_INTERMEDIATE},
+        _REPORT_NO_TABLE,
+    )
+    assert _collect_is_empty(proj), (
+        "a project whose only .v in the synth dir is the flow's own sv2v "
+        "pre-pass has produced NO chip artefact; it must take the "
+        "documented pre-output-project escape, not be told to attest an "
+        "input to synthesis")
+
+
+def _collect_is_empty(proj: Path) -> bool:
+    return MOD._collect_canonical_artefacts(proj) == []
+
+
+def test_sv2v_prepass_in_pnr_dir_is_not_a_canonical_artefact(tmp_path):
+    """Same emitter convention, the other *.v glob.
+
+    `phase3_one_shot_runner` writes `{top}_sv2v.v` too, so the PnR glob
+    carries the same defect and must get the same treatment.
+    """
+    proj = _mkproject(
+        tmp_path,
+        {"phase3/stage3/pnr/top_sv2v.v": _SV2V_INTERMEDIATE},
+        _REPORT_NO_TABLE,
+    )
+    assert _collect_is_empty(proj)
+
+
+# ── REVERSE CONTROLS: must hold in BOTH directions ───────────────────
+#
+# Without these, a fix that deleted the two *.v globs outright would
+# pass the two tests above while silently stopping the gate from ever
+# demanding attestation for a real netlist again.
+
+def test_reverse_real_synth_netlist_is_still_a_canonical_artefact(tmp_path):
+    """THE load-bearing reverse case.
+
+    An unattested real netlist must STILL be collected and must STILL
+    FAIL. If this ever passes-by-absence the fix has swallowed the rule.
+    """
+    proj = _mkproject(
+        tmp_path,
+        {"phase2/stage2/synth/netlist_yosys.v": _REAL_NETLIST},
+        _REPORT_NO_TABLE,
+    )
+    assert _kinds(proj) == ["synth netlist"]
+    assert _names(proj) == ["netlist_yosys.v"]
+
+
+def test_reverse_real_pnr_netlist_is_still_a_canonical_artefact(tmp_path):
+    proj = _mkproject(
+        tmp_path,
+        {"phase3/stage3/pnr/netlist_routed.v": _REAL_NETLIST},
+        _REPORT_NO_TABLE,
+    )
+    assert _kinds(proj) == ["PnR netlist"]
+
+
+def test_reverse_real_netlist_beside_the_intermediate_still_collected(tmp_path):
+    """The mixed case the real flow actually produces.
+
+    After synthesis completes, BOTH files sit in the synth directory.
+    The netlist must still be demanded; only the intermediate drops out.
+    A fix that keyed on "directory contains an sv2v file" instead of on
+    the file itself would wrongly exempt the whole directory here.
+    """
+    proj = _mkproject(
+        tmp_path,
+        {
+            "phase2/stage2/synth/top_sv2v.v": _SV2V_INTERMEDIATE,
+            "phase2/stage2/synth/netlist_yosys.v": _REAL_NETLIST,
+        },
+        _REPORT_NO_TABLE,
+    )
+    assert _names(proj) == ["netlist_yosys.v"]
+
+
+def test_reverse_suffix_is_exact_not_a_substring_search(tmp_path):
+    """Scope control: the rule matches the emitters' f-string, nothing more.
+
+    A hand-authored netlist that merely CONTAINS "sv2v" in its name is
+    not a name the flow generates, so it keeps requiring attestation.
+    This pins the narrowness of the rule so a later widening to
+    `"sv2v" in name` is a test failure rather than a silent loss of
+    coverage.
+    """
+    proj = _mkproject(
+        tmp_path,
+        {
+            "phase2/stage2/synth/sv2v_golden_netlist.v": _REAL_NETLIST,
+            "phase2/stage2/synth/top_sv2v_reviewed.v": _REAL_NETLIST,
+        },
+        _REPORT_NO_TABLE,
+    )
+    assert _names(proj) == ["sv2v_golden_netlist.v", "top_sv2v_reviewed.v"]
+
+
+def test_reverse_non_verilog_artefact_classes_are_untouched(tmp_path):
+    """The fix must not perturb the seven non-*.v globs at all."""
+    proj = _mkproject(
+        tmp_path,
+        {
+            "phase2/stage1/fpga/output_files/top.sof": "sof",
+            "phase3/stage4/gds/top.gds": "gds",
+            "phase3/analog/hardmacro/blk/blk.lef": "lef",
+        },
+        _REPORT_NO_TABLE,
+    )
+    assert sorted(_kinds(proj)) == ["FPGA SOF", "analog LEF", "chip GDS"]
+
+
+def test_reverse_gate_still_exits_1_for_an_unattested_real_netlist(tmp_path):
+    """End-to-end reverse control on the EXIT CODE, not just collection.
+
+    The gate's contract is rc 1 for an unattested canonical artefact.
+    Asserting the exit code is what proves the gate can still FAIL for
+    the reason it exists.
+    """
+    proj = _mkproject(
+        tmp_path,
+        {"phase2/stage2/synth/netlist_yosys.v": _REAL_NETLIST},
+        _REPORT_NO_TABLE,
+    )
+    import subprocess
+    r = subprocess.run(
+        [sys.executable, str(_GATE), str(proj)],
+        capture_output=True, text=True, timeout=120)
+    assert r.returncode == 1, (
+        f"unattested real netlist must still FAIL; got rc={r.returncode}\n"
+        f"{r.stdout}\n{r.stderr}")
+
+
+def test_gate_exits_0_when_only_the_intermediate_is_present(tmp_path):
+    """Forward end-to-end: the measured case, on the exit code.
+
+    PRE-FIX this is rc 1 (the false positive). POST-FIX the project has
+    no chip artefact, so the documented pre-output escape applies.
+    """
+    proj = _mkproject(
+        tmp_path,
+        {"phase2/stage2/synth/top_sv2v.v": _SV2V_INTERMEDIATE},
+        _REPORT_NO_TABLE,
+    )
+    import subprocess
+    r = subprocess.run(
+        [sys.executable, str(_GATE), str(proj)],
+        capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, (
+        f"a pre-output project must not be told to attest a synthesis "
+        f"input; got rc={r.returncode}\n{r.stdout}\n{r.stderr}")

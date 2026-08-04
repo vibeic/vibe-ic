@@ -54,6 +54,12 @@ Failure modes (chip-AGNOSTIC):
      phase3/analog/hardmacro/**/*.lef                (analog LEF)
      phase3/analog/hardmacro/**/*.lib                (analog Liberty)
 
+   EXCLUDED from the two *.v globs: front-end pre-pass files the
+   flow itself writes into the netlist directory (`*_sv2v.v`).
+   Those are synthesis INPUTS. See
+   `_FRONTEND_INTERMEDIATE_SUFFIXES` for why this is a name rule
+   over the flow's own generated names and not content sniffing.
+
 VACUOUS_PASS conditions:
 * AGENT_REPORT.md missing — `agent_report_presence_check` handles
   that as FAIL; this gate stays out of the way and emits VACUOUS.
@@ -105,6 +111,55 @@ _CANONICAL_ARTEFACT_GLOBS: Tuple[Tuple[str, str], ...] = (
 )
 
 
+#: Filenames the FLOW ITSELF deposits in a netlist directory that are
+#: synthesis INPUTS, not synthesis OUTPUTS.
+#:
+#: WHY THIS EXISTS — the two `*.v` globs above ask "is there a .v file in
+#: the netlist directory" and the gate reads the answer as "has this
+#: project produced a netlist". Those are not the same question, and the
+#: flow's own front-end fallback is what separates them: when the SV
+#: front-end is unavailable, the runner writes an sv2v pre-pass file
+#: INTO the very directory the glob watches, then feeds it to yosys.
+#:
+#:   design_one_shot_runner.py   `_host_conv = synth_dir / f"{synth_top}_sv2v.v"`
+#:   phase3_one_shot_runner.py   `sv2v_out_host = out_dir / f"{top}_sv2v.v"`
+#:
+#: So a project that has NOT completed synthesis can still present a
+#: `.v` file here, and the gate then demands the final report attest a
+#: pre-synthesis intermediate as a chip artefact. The cheapest way to
+#: clear that is to publish a SHA256 of an intermediate under a "chip
+#: artefact" heading — a rule meant to make reports verifiable rewarding
+#: a report that is falsely verifiable. Same shape as #802.
+#:
+#: A gate-level netlist is trivially distinguishable by CONTENT (no
+#: `parameter`, no `always`, only cell instantiations), but content
+#: sniffing fails OPEN in the dangerous direction: an unparsed real
+#: netlist would stop being demanded. This is a NAME rule over the
+#: flow's OWN generated names instead, which fails SAFE — anything the
+#: flow did not generate stays a canonical artefact and is still
+#: demanded. Reading the emitter's documented naming contract, not
+#: guessing at file content (same principle as `_gate_invocation`).
+#:
+#: SCOPE — deliberately narrow. It suppresses NOTHING but the front-end
+#: intermediate. A real netlist under any other name, including one that
+#: merely CONTAINS "sv2v", is still a canonical artefact: the rule is an
+#: exact suffix match on the emitters' f-string, not a substring search.
+_FRONTEND_INTERMEDIATE_SUFFIXES: Tuple[str, ...] = (
+    "_sv2v.v",
+)
+
+
+def _is_frontend_intermediate(path: Path) -> bool:
+    """True if `path` is a front-end pre-pass file the flow itself wrote.
+
+    Exact-suffix match on the runners' own f-string so a hand-authored
+    netlist named e.g. `sv2v_top.v` or `top_sv2v_golden.v` is NOT
+    suppressed — it is not a name the flow generates, so it keeps
+    requiring attestation."""
+    return any(path.name.endswith(sfx)
+               for sfx in _FRONTEND_INTERMEDIATE_SUFFIXES)
+
+
 @dataclass
 class AttestationFinding:
     rule: str
@@ -143,8 +198,13 @@ def _collect_canonical_artefacts(project: Path
     out: List[Tuple[str, Path]] = []
     for kind, pattern in _CANONICAL_ARTEFACT_GLOBS:
         for p in sorted(project.glob(pattern)):
-            if p.is_file():
-                out.append((kind, p))
+            if not p.is_file():
+                continue
+            # A front-end pre-pass file is an INPUT to synthesis. It is
+            # not a chip artefact and must not be attested as one.
+            if _is_frontend_intermediate(p):
+                continue
+            out.append((kind, p))
     return out
 
 
