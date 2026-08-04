@@ -92,6 +92,84 @@ def test_the_ceiling_is_a_fraction_of_the_bound(tmp_path):
         "19 test functions in this corpus make two bounded calls")
 
 
+# ── the resolver must not climb out of the checkout it was handed ────────────
+
+def _checkout(root: Path) -> Path:
+    """The minimum that makes a directory look like a checkout of this repo."""
+    (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic").mkdir(parents=True)
+    # A FILE, as in a `git worktree` — which is what every agent here works in.
+    (root / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+    return root
+
+
+def test_the_resolver_stops_at_its_own_checkout_root(tmp_path):
+    """THE NESTING DEFECT, reproduced.
+
+    Every subagent in this repo works in `.claude/worktrees/agent-*` under the
+    main checkout. The rule was "nearest ancestor holding `.github/workflows`",
+    and since #550 retired Actions no such directory exists in the repository —
+    only a stale empty one left behind in the outer checkout. So the walk left
+    the worktree, resolved the OUTER root, and answered PASS about a tree it had
+    never been pointed at: the outer `tools/` and the outer `programs/tests`.
+    """
+    outer = _workflow(tmp_path / "outer", "pytest --timeout=999")
+    inner = _checkout(outer / ".claude" / "worktrees" / "agent-x")
+    (inner / "tools").mkdir()
+    (inner / "tools" / "gatekeeper-land.sh").write_text(
+        "pytest -q --timeout=180\n", encoding="utf-8")
+
+    got = C.find_repo_root(inner / "vibe-ic-marketplace" / "plugins" /
+                           "vibe-ic")
+    assert got == inner, (
+        f"the resolver climbed out of its own checkout and answered about "
+        f"{got} — the outer tree it was never handed")
+    assert C.ci_harness_timeout_seconds(inner) == 180, (
+        "the bound came from the OUTER checkout's workflow")
+
+
+def test_a_checkout_with_no_harness_source_refuses_the_outer_ones(tmp_path):
+    """The other half, and it must NOT be repaired by climbing.
+
+    A checkout that declares no harness bound is CANNOT DETERMINE — an honest
+    rc 2 that names the missing input. Borrowing the enclosing checkout's bound
+    would produce a verdict about a number this tree does not have.
+    """
+    outer = _workflow(tmp_path / "outer", "pytest --timeout=999")
+    inner = _checkout(outer / "nested")
+    assert C.find_repo_root(inner) == inner
+    assert C.ci_harness_timeout_seconds(inner) is None
+    proc = subprocess.run([sys.executable, str(_PROG), str(inner)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "CANNOT DETERMINE" in proc.stdout
+
+
+def test_the_landing_script_alone_is_enough_to_resolve_the_bound(tmp_path):
+    """Actions is disabled at the account level (#550) and the harness that
+    really runs pytest is the local landing script. A fresh clone has no
+    `.github/workflows` at all, and before v1.9.78 that made the resolver
+    return None — so every test that depends on it SKIPPED, silently, on
+    exactly the tree a clean-room run uses."""
+    root = tmp_path / "clone"
+    (root / "tools").mkdir(parents=True)
+    (root / "tools" / "gatekeeper-land.sh").write_text(
+        "xargs -a /tmp/sel.txt pytest -q --maxfail=10 --timeout=180\n",
+        encoding="utf-8")
+    assert C.find_repo_root(root) == root
+    assert C.ci_harness_timeout_seconds(root) == 180
+
+
+def test_the_shipped_tree_resolves_to_the_checkout_this_file_is_in():
+    """No fixture can prove this one: the resolver has to answer about the tree
+    the test file actually lives in, which is what went wrong."""
+    mine = Path(__file__).resolve().parents[5]   # …/<root>/vibe-ic-marketplace
+    root = C.find_repo_root()                    # /plugins/vibe-ic/programs
+    assert root == mine, (root, mine)            # /tests/<this file>
+    # …and the trees it then scans are inside it, not an enclosing checkout's.
+    for scanned, _glob, _anchor in C._scan_roots(root, None):
+        assert str(scanned).startswith(str(mine)), scanned
+
+
 def test_the_shipped_workflows_declare_more_than_one_bound():
     """The measurement behind reading instead of restating: the repo really
     does declare several, and they really do disagree. If this ever collapses
@@ -406,34 +484,41 @@ def test_the_json_record_carries_what_the_text_says(tmp_path):
     assert len(doc["harness_bounds"]) >= 2
 
 
-#: The advisory residual on the shipped tree at wiring time, after every entry
-#: was opened and read. All ten are calls whose target is MONKEYPATCHED or does
-#: not launch anything, so the number they carry is data rather than a bound:
+#: The advisory residual on the shipped tree: ZERO, and the number is no longer
+#: a baseline anybody has to maintain.
 #:
-#:   * `tdf._build_batch_script(sat_timeout=...)` x3 — builds a solver script
-#:     as a STRING; nothing runs at the call;
-#:   * `lec_run.run_yosys_equiv(timeout=7200)` — `lec_run._docker` is patched to
-#:     a fake process, and 7200 is the value the test ASSERTS about (the budget
-#:     marker), so lowering it would change what the test means;
-#:   * `dosr._sim_run_or_reuse` x3 and `R._sim_run_or_reuse` x3 — the launcher
-#:     under them is patched out in every one of those tests.
+#: THE RESIDUAL WAS A DRIFTING COUNT AND THAT IS WHY IT WENT RED. It landed at
+#: 10 with a prose note explaining each entry, and it was 11 before this change
+#: — the eleventh (`S._bounded_vvp(timeout=120)`) arrived with a test that had
+#: no reason to know a count in a different file governed it. A count baseline
+#: cannot say WHICH entry is new, so the only way to answer that question was to
+#: re-read all of them; and "raise it to 11" is available at every step and
+#: never fails loudly. That is the shape #527/#530/#534 each spent a version
+#: removing from a waiver registry, reintroduced as a single integer.
 #:
-#: Three MORE were in this list and are not any more: two KLayout fixture runs
-#: and one container yosys cut, all genuinely blocking, all lowered to the
-#: ceiling. The count is a ratchet: it may shrink freely, and a rise means a new
-#: unresolvable callee arrived and nobody has read it.
-_REVIEWED_ADVISORY_RESIDUAL = 10
+#: So the eleven were read and every one was LOWERED to the ceiling instead,
+#: measured rather than argued: at each of those call sites the callee is
+#: monkeypatched (`R._run`, `dosr._run`/`_docker_exec`, `lec_run._docker`,
+#: `S.subprocess.run`) or builds a STRING and launches nothing
+#: (`tdf._build_batch_script`), so the worst case is microseconds and 60 s is
+#: not a constraint on any of them. Nothing was suppressed and no exemption
+#: survives: the population is unchanged and the numerator is empty.
+#:
+#: At zero the assertion below is also the strongest it can be. A NEW
+#: unresolvable bound above the ceiling turns it red with the file, line and
+#: callee named — which is the report the count could never produce.
+_REVIEWED_ADVISORY_RESIDUAL = 0
 
 
 def test_the_advisory_residual_does_not_grow_unreviewed(tmp_path):
     """An allowlist earns its exclusions by having them read.
 
-    A count, not a list of names: a hand-written list of the ten would be a
-    second registry beside the code, free to drift from it (#527/#530/#534).
+    The failure message NAMES each entry, because the one question a reader has
+    — which one is new — is the one a bare count cannot answer.
     """
     root = C.find_repo_root()
     if root is None:
-        pytest.skip("no .github/workflows in reach")
+        pytest.skip("no repo root in reach")
     out = tmp_path / "r.json"
     subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
                    capture_output=True, text=True, timeout=_T)

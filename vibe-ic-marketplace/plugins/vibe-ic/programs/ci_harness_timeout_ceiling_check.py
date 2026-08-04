@@ -108,6 +108,17 @@ see ``TOOLS_DIR_REL`` for the measurement behind it. Each root's file count is
 printed on every run, so a root that stops resolving shrinks a number a reader
 can see rather than quietly leaving the denominator.
 
+…AND THE ROOT IS THE CHECKOUT THIS FILE IS IN, WHICH IS NOT A DETAIL
+---------------------------------------------------------------------
+``find_repo_root`` used to climb until it found ``.github/workflows``. Since
+#550 that directory is not in the repository at all, so in a worktree nested
+under another checkout — which is where every agent in this project works — the
+walk left its own tree and answered about the ENCLOSING one, and in a fresh
+clone it answered ``None`` and every dependent test skipped. Neither symptom
+is visible in the verdict, and they point in opposite directions: one reports
+confidently about files the caller never touched, the other reports nothing at
+all. The walk now stops at a checkout boundary.
+
 chip-AGNOSTIC: pure Python/YAML structure. No design, PDK, vendor or process
 literal appears here.
 
@@ -271,11 +282,47 @@ def inner_timeout_ceiling(repo_root: Path) -> Optional[int]:
     return None if harness is None else harness // CEILING_DIVISOR
 
 
+#: A checkout root, recognised WITHOUT reference to the harness sources.
+#:
+#: `.git` is tested with `exists()` and not `is_dir()` ON PURPOSE: in a
+#: `git worktree` it is a FILE holding a `gitdir:` pointer, and a worktree is
+#: exactly the case this stop rule exists for.
+_ROOT_MARKERS = (".git", "vibe-ic-marketplace/plugins/vibe-ic")
+
+
+def _is_checkout_root(base: Path) -> bool:
+    return all((base / m).exists() for m in _ROOT_MARKERS)
+
+
 def find_repo_root(start: Optional[Path] = None) -> Optional[Path]:
-    """Nearest ancestor holding `.github/workflows`."""
+    """The root of the checkout `start` (or this file) belongs to.
+
+    IT MUST NOT CLIMB PAST ITS OWN ROOT, and until v1.9.78 it did. The rule was
+    "nearest ancestor holding `.github/workflows`", and since #550 retired
+    Actions that directory does not exist in the repository at all. Every agent
+    in this project works in `.claude/worktrees/agent-*` UNDER the main
+    checkout, so the walk left the worktree, found a stale empty
+    `.github/workflows` still sitting in the outer checkout, and answered about
+    a tree it had never been pointed at: it read the OUTER `tools/` and the
+    OUTER `programs/tests`, and reported PASS or FAIL about files the caller
+    was not changing. In a FRESH CLONE — no stale directory anywhere above — it
+    returned None instead, and every test that depends on it SKIPPED. One
+    defect, two opposite symptoms, neither of them visible in the verdict.
+    Fixing this is what makes the residual below measurable at all.
+    """
     here = (Path(start) if start else Path(__file__)).resolve()
     for base in [here] + list(here.parents):
+        # The harness sources first: a directory that carries them IS the root
+        # whether or not it looks like a checkout (`--tests-root` fixtures in
+        # the tests are exactly that shape).
         if (base / WORKFLOW_DIR_REL).is_dir():
+            return base
+        if any((base / rel).exists() for rel in EXTRA_HARNESS_RELS):
+            return base
+        # …and STOP at the checkout boundary regardless. A root with no harness
+        # source at all is reported as CANNOT DETERMINE, which is the honest
+        # answer; climbing on to borrow another checkout's is not.
+        if _is_checkout_root(base):
             return base
     return None
 
@@ -663,8 +710,9 @@ def _scan_roots(repo_root: Optional[Path], explicit: Optional[str]
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("root", nargs="?", default=None,
-                    help="repository root (default: nearest ancestor with "
-                         ".github/workflows)")
+                    help="repository root (default: the root of the checkout "
+                         "this file is in — the walk stops there and never "
+                         "borrows an enclosing checkout's workflows)")
     ap.add_argument("--tests-root", dest="tests_root", default=None,
                     help="directory to scan (default: the plugin's "
                          "programs/tests)")
@@ -689,7 +737,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # empty result.
     if harness is None:
         print("[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: no "
-              f"`pytest --timeout=N` found under {WORKFLOW_DIR_REL} "
+              f"`pytest --timeout=N` found in {WORKFLOW_DIR_REL} or "
+              f"{', '.join(EXTRA_HARNESS_RELS)} "
               f"(searched from {repo_root}). The bound this gate judges "
               "against is unknown, so nothing was checked -- this is NOT a "
               "pass.")

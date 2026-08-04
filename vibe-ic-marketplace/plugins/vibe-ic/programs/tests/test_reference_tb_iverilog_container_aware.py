@@ -31,6 +31,17 @@ sys.path.insert(0, str(PROGRAMS))
 
 import design_one_shot_runner as dosr  # noqa: E402
 
+#: The simulation bound handed to `_sim_run_or_reuse` in the tests below.
+#:
+#: Every one of those tests monkeypatches `dosr._run` AND `dosr._docker_exec`
+#: — several of them to a `pytest.fail` that asserts the launcher is not
+#: reached at all — so no process is started and the measured worst case at
+#: those call sites is a dictionary write. The value used to be 120, which is
+#: over `ci_harness_timeout_ceiling_check`'s per-call ceiling (the harness bound
+#: // 3 = 60 s) and therefore sat on that gate's advisory list of bounds it
+#: cannot resolve. A number inside the ceiling needs no exemption.
+_T_PATCHED = 60
+
 
 # --------------------------------------------------------------------------
 # _iverilog_available — container-first availability
@@ -175,7 +186,7 @@ def test_stage_runs_vvp_in_container_too(monkeypatch):
                         lambda *a, **k: pytest.fail("host _run must not be used"))
     rc, out, err = dosr._sim_run_or_reuse(
         "iverilog_g2012", Path("/p/run/x.vvp"), 0, "", "",
-        Path("/p/run"), timeout=120, container="cont")
+        Path("/p/run"), timeout=_T_PATCHED, container="cont")
     assert (rc, out) == (0, "VVP_OK")
     assert "vvp" in calls["cmd"] and "/p/run/x.vvp" in calls["cmd"]
 
@@ -193,7 +204,7 @@ def test_sim_run_or_reuse_host_default_is_backward_compatible(monkeypatch):
     monkeypatch.setattr(dosr, "_docker_exec",
                         lambda *a, **k: pytest.fail("host default must not dispatch"))
     dosr._sim_run_or_reuse("iverilog_g2012", Path("/p/run/x.vvp"),
-                           0, "", "", Path("/p/run"), timeout=120)
+                           0, "", "", Path("/p/run"), timeout=_T_PATCHED)
     assert seen["argv"] == ["vvp", "/p/run/x.vvp"]
 
 
@@ -206,7 +217,7 @@ def test_verilator_sva_reuse_never_runs_vvp(monkeypatch):
                         lambda *a, **k: pytest.fail("must not dispatch"))
     rc, out, err = dosr._sim_run_or_reuse(
         "verilator_sva", Path("/p/run/none.vvp"), 0, "RAN_IN_ESCAPE", "",
-        Path("/p/run"), timeout=120, container="cont")
+        Path("/p/run"), timeout=_T_PATCHED, container="cont")
     assert (rc, out) == (0, "RAN_IN_ESCAPE")
 
 

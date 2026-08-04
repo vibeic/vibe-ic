@@ -104,12 +104,17 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 _HERE = Path(__file__).resolve().parent
 _PLUGIN = _HERE.parent
 
-_RUN_RE = re.compile(
-    # Accepts BOTH `run` and its `run_*` variants. A wrapper added for one
-    # gate (`run_tolerating_uncheckable`) silently escaped this parser, so any
-    # gate wired through it would not be covered — a coverage hole in the very
-    # check that exists to close coverage holes.
-    r'^\s*run(?:_\w+)?\s+"([^"]+)"\s+"?(\$ROOT|\$PLUGIN)"?\s+(.+)$', re.M)
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+# THE SCRIPT IS PARSED IN ONE PLACE. This file used to carry a verbatim copy of
+# the other reader's regex, with a comment saying so — and the copy is what let
+# one defect hide in two files at once: neither could see a gate whose label
+# embeds `$(basename "$(dirname "$_cell")")`, because the label group stopped
+# at the inner quote, and neither folded `\` continuations. Fixing that in one
+# copy would have left the other still blind and the two readers disagreeing
+# about what the script says, which the #539 tests exist to forbid.
+from gate_discloses_denominator_check import (            # noqa: E402
+    parse_declarations)
 
 #: A gate may DECLARE itself out of this comparison, on the line above its own
 #: `run` line, in the script where it is wired:
@@ -146,6 +151,10 @@ class Gate(NamedTuple):
     cwd_token: str          # `$ROOT` or `$PLUGIN`
     cmd: str
     excluded: Optional[str]  # None = probed; a string = declared reason
+    #: Set when the declaration carries something only bash can resolve — a
+    #: loop variable, a command substitution. Such a gate is DECLARED here and
+    #: cannot be DRIVEN here, and the two are different facts.
+    runtime_expansion: Optional[str] = None
 
 
 class Dirt(NamedTuple):
@@ -195,7 +204,7 @@ def corpus_gates(script: Path) -> List[Gate]:
     produced 9 identical-error "findings". A probe that reports a defect
     because it could not run the subject is worse than no probe."""
     try:
-        text = script.read_text(errors="replace")
+        lines = script.read_text(errors="replace").splitlines()
     except OSError:
         return []
     # NO FILTER. A first version kept only gates whose argv names
@@ -207,24 +216,19 @@ def corpus_gates(script: Path) -> List[Gate]:
     # An EXCLUDED gate is still parsed and still counted in `declared`. It
     # leaves the numerator, never the denominator.
     out: List[Gate] = []
-    for m in _RUN_RE.finditer(text):
-        # THE LINE THE GATE IS ON, derived from the LABEL's offset and not from
-        # `m.start()`. `_RUN_RE` opens with `^\s*` under `re.M`, and `\s`
-        # matches a newline — so on a blank line followed by `run ...` the
-        # match STARTS at the blank line, and a naive "text before the match"
-        # would hand back the directive as if it were adjacent. Both that and
-        # a `.rstrip("\n")` (which swallows any number of blank lines) were
-        # written here and both were caught by the detached-directive test:
-        # the whole fail-safe claim above is that drift STOPS the exclusion.
-        line_start = text.rfind("\n", 0, m.start(1)) + 1
-        head = text[:line_start]
-        if head.endswith("\n"):
-            head = head[:-1]
-        d = _EXCLUDE_RE.match(head.rsplit("\n", 1)[-1])
+    for decl in parse_declarations(script):
+        # THE DIRECTIVE BINDS TO THE LINE IMMEDIATELY ABOVE THE `run` LINE.
+        # `lineno` is the first PHYSICAL line of the declaration, so a gate
+        # written across a `\` continuation still looks one line up from where
+        # a reader of the script sees it start. The adjacency rule is the whole
+        # fail-safe claim: if the directive drifts, the gate is probed again.
+        above = lines[decl.lineno - 2] if decl.lineno >= 2 else ""
+        d = _EXCLUDE_RE.match(above)
         reason = None
         if d:
             reason = d.group(1).strip() or "declared at the gate, no reason given"
-        out.append(Gate(m.group(1), m.group(2), m.group(3).strip(), reason))
+        out.append(Gate(decl.label, decl.cwd_token, decl.cmd, reason,
+                        decl.runtime_expansion))
     return out
 
 
@@ -392,7 +396,7 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
 
         plugin_rel = Path("vibe-ic-marketplace") / "plugins" / "vibe-ic"
         me = Path(__file__).name
-        for label, wd_tok, cmd, excluded in gates:
+        for label, wd_tok, cmd, excluded, templated in gates:
             # NEVER probe ITSELF. The gate list is unfiltered by design, so it
             # contains this program — and running it inside the worktree runs
             # it again, which creates another worktree, and so on.
@@ -412,6 +416,26 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
                 continue
             if excluded is not None:
                 not_probed.append((label, f"EXCLUDED by declaration: {excluded}"))
+                continue
+            # A GATE DECLARED INSIDE A LOOP CANNOT BE DRIVEN HERE, and saying
+            # so is the only honest option available. This probe's evidence is
+            # that ONE tree carries something the other does not; binding the
+            # loop variable to some fixed path would hand BOTH invocations the
+            # same input, they would agree by construction, and the agreement
+            # would be counted as coverage — the NO_STIMULUS defect #539 exists
+            # to refuse, reintroduced one gate at a time.
+            #
+            # It stays in `declared`. Before v1.9.78 the parser could not see
+            # these lines at all, so the three loop gates were absent from the
+            # denominator AND from this list: the verdict named neither, and a
+            # reader had no way to tell they existed.
+            if templated is not None:
+                not_probed.append((
+                    label,
+                    f"declared inside a shell loop — {templated}. Driving it "
+                    f"twice would need the loop's binding, and a fixed "
+                    f"substitute would make both trees identical, so the "
+                    f"agreement would prove nothing"))
                 continue
             ca = repo_root if wd_tok == "$ROOT" else repo_root / plugin_rel
             cb = wt if wd_tok == "$ROOT" else wt / plugin_rel

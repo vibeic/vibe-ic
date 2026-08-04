@@ -206,7 +206,13 @@ def test_container_timeout_rc_reattaches_budget_marker(monkeypatch, rc):
     # --kill-after, 124=SIGTERM expiry) arrives via the NORMAL return path.
     monkeypatch.setattr(lec_run, "_docker",
                         lambda *a, **k: _FakeProc(rc, _KILLED_MID_PROOF))
-    launched, out = lec_run.run_yosys_equiv("c", "/x.ys", timeout=7200)
+    # 60 and not the 7200 s production LEC budget: `lec_run._docker` is
+    # monkeypatched above, so this call launches nothing and the number never
+    # bounds anything — it was on `ci_harness_timeout_ceiling_check`'s advisory
+    # list as the largest unresolvable "bound" in the tree. What the test is
+    # about is the marker re-attachment on rc 137/124, which the value below
+    # does not enter.
+    launched, out = lec_run.run_yosys_equiv("c", "/x.ys", timeout=60)
     assert launched is True
     assert lec_run._TIMEOUT_MARKER in out          # marker re-attached
     # …and the parser now correctly classifies it, NOT a false FAIL:

@@ -43,6 +43,16 @@ FULL_STACK_ESCAPE_OUT = (
     "FULL_STACK_TB_DONE\n"
     "[verilator SVA escape: sv2v could not lower property]\n")
 
+#: The simulation bound handed to `_sim_run_or_reuse` below.
+#:
+#: `_patch_run` replaces `R._run` in every one of these tests, so nothing is
+#: executed and the measured worst case at those call sites is appending to a
+#: list. The values used to be 120 and 300, both above
+#: `ci_harness_timeout_ceiling_check`'s per-call ceiling (harness bound // 3 =
+#: 60 s), which put five entries on that gate's advisory list of bounds it
+#: cannot resolve — a list that can only be cleared here, not there.
+_T_PATCHED = 60
+
 
 def _patch_run(monkeypatch):
     """Patch R._run to RECORD every invocation and never actually exec vvp.
@@ -66,7 +76,7 @@ def test_verilator_sva_reuses_stdout_without_vvp(tmp_path, monkeypatch):
     rc, out, err = R._sim_run_or_reuse(
         "verilator_sva", tmp_path / "full_stack.vvp",
         compile_rc=0, compile_out=FULL_STACK_ESCAPE_OUT, compile_err="",
-        run_dir=tmp_path, timeout=120)
+        run_dir=tmp_path, timeout=_T_PATCHED)
     # The escape result is reused verbatim — and vvp was NEVER invoked.
     assert rc == 0
     assert "FULL_STACK_TB_DONE" in out
@@ -81,7 +91,7 @@ def test_verilator_sva_marker_check_in_caller_still_gates_pass(monkeypatch,
     _patch_run(monkeypatch)
     rc, out, _ = R._sim_run_or_reuse(
         "verilator_sva", tmp_path / "full_stack.vvp",
-        0, FULL_STACK_ESCAPE_OUT, "", tmp_path, 120)
+        0, FULL_STACK_ESCAPE_OUT, "", tmp_path, _T_PATCHED)
     # caller's gate:  rc == 0 and "FULL_STACK_TB_DONE" in out
     assert (rc == 0 and "FULL_STACK_TB_DONE" in out)
 
@@ -92,7 +102,7 @@ def test_iverilog_path_still_runs_vvp(tmp_path, monkeypatch):
     vvp_path = tmp_path / "oracle.vvp"
     R._sim_run_or_reuse("iverilog_g2012", vvp_path,
                         compile_rc=0, compile_out="", compile_err="",
-                        run_dir=tmp_path, timeout=300)
+                        run_dir=tmp_path, timeout=_T_PATCHED)
     assert any(c and c[0] == "vvp" and c[1] == str(vvp_path) for c in calls), \
         f"iverilog path MUST run vvp, got calls={calls}"
 
@@ -101,7 +111,7 @@ def test_iverilog_sv2v_path_still_runs_vvp(tmp_path, monkeypatch):
     calls = _patch_run(monkeypatch)
     vvp_path = tmp_path / "full_stack.vvp"
     R._sim_run_or_reuse("iverilog_sv2v", vvp_path,
-                        0, "", "", tmp_path, 120)
+                        0, "", "", tmp_path, _T_PATCHED)
     assert any(c and c[0] == "vvp" for c in calls)
 
 
@@ -116,7 +126,7 @@ def test_verilator_sva_without_marker_does_not_fake_pass(tmp_path,
     rc, out, err = R._sim_run_or_reuse(
         "verilator_sva", tmp_path / "full_stack.vvp",
         compile_rc=0, compile_out=no_marker_out, compile_err="",
-        run_dir=tmp_path, timeout=120)
+        run_dir=tmp_path, timeout=_T_PATCHED)
     # caller's gate:  rc == 0 and "FULL_STACK_TB_DONE" in out  → False here.
     assert "FULL_STACK_TB_DONE" not in out
     assert not (rc == 0 and "FULL_STACK_TB_DONE" in out)

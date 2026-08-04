@@ -208,8 +208,13 @@ def test_parse_batch_log_setup_absent():
 def test_build_batch_script_flattens_once_and_injects_on_flat_net():
     faults = [("_14803_", "STR", "1'b0", "1'b0"),
               ("_21044_", "STF", "1'b1", "1'b1")]
+    # 60 and not 90: `_build_batch_script` returns a STRING, so nothing is
+    # launched here and the measured worst case is the cost of formatting text.
+    # 90 sat above `ci_harness_timeout_ceiling_check`'s 60 s per-call ceiling,
+    # on the advisory list of bounds that gate cannot resolve — an exemption
+    # this call never needed.
     s = tdf._build_batch_script("flat.v", "miter.v", "sha256", faults, ["clk"],
-                                sat_timeout=90)
+                                sat_timeout=60)
     # The faulty copy + hierarchy + flatten + snapshot happen EXACTLY ONCE.
     assert s.count("copy sha256 sha256_f") == 1
     assert s.count("\nflatten\n") == 1
@@ -221,7 +226,7 @@ def test_build_batch_script_flattens_once_and_injects_on_flat_net():
     assert "connect -nomap -set fb._14803_ 1'b0" in s
     assert "connect -nomap -set fb._21044_ 1'b1" in s
     # sat still sets the launch frame on f1 and carries the per-fault -timeout.
-    assert "sat -prove trig 0 -timeout 90 -set f1._14803_ 1'b0" in s
+    assert "sat -prove trig 0 -timeout 60 -set f1._14803_ 1'b0" in s
     # the OLD per-fault re-flatten idiom is gone.
     assert "cd sha256_f" not in s
 

@@ -149,17 +149,94 @@ def test_an_empty_project_does_not_claim_a_phase(tmp_path):
 
 
 # ── the two real runs this was measured on ───────────────────────────────────
-@pytest.mark.parametrize("rel,must_not_say", [
-    ("benchmark-data/evaluation/phase1_parity/arm_aix", "DONE"),
-    ("benchmark-data/ic/sha256/clean_run_v1432int_commercial", "DONE"),
-])
-def test_the_corpus_runs_that_flipped(rel, must_not_say):
-    """Fixtures prove the logic; these are the artefacts. Skipped rather than
-    assumed when the corpus is absent — "I could not look" and "I looked and it
-    is fine" are different claims."""
-    d = _REPO / rel
+#
+# WHY THIS IS TWO TESTS AND NOT ONE PARAMETRIZED PAIR. The two artefacts do not
+# support the same claim, and asserting one sentence over both made the weaker
+# of them look like evidence it is not:
+#
+#   arm_aix          the run tree IS committed, so the flip #590 is about —
+#                    `auto` choosing phase2 over the phase1 that reported DONE —
+#                    can be measured directly.
+#   sha256/…commercial  the run tree is NOT committed. Its `.gitignore` is an
+#                    NDA whitelist ("ignore everything, re-include .gitignore
+#                    and RESULT.md"), so the phase3 tree the issue measured on
+#                    exists only on the author's disk. What a checkout can pin
+#                    is the OTHER half: over a directory it cannot see into,
+#                    the reader must claim nothing.
+#
+# AND WHY NEITHER ASSERTS AN EXIT CODE FROM A DEFAULT RUN. The liveness half of
+# this program compares file MTIMES against a silence window, and git does not
+# preserve mtimes: in a fresh clone every file is seconds old, so the same
+# artefact reads RUNNING (rc 0) for the first ten minutes of the checkout's life
+# and STUCK (rc 1) afterwards. The old assertion `r.returncode != 0` therefore
+# passed or failed on the AGE OF THE CHECKOUT — it was green on the author's
+# tree and red in every clean room. The claims below are either mtime-free, or
+# they pass `--max-silence-s 0`, which states the intent exactly: given ANY
+# observed silence, this run has no verdict to report.
+
+
+def _json(project, *extra):
+    """(CompletedProcess, machine record) for one probe."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        out = pathlib.Path(td) / "s.json"
+        r = _run(project, "--json", str(out), *extra)
+        return r, json.loads(out.read_text())
+
+
+def test_the_corpus_run_that_flipped_answers_about_the_furthest_phase():
+    """arm_aix: reached phase2, wrote no phase2 report, has no final verdict.
+
+    Before #590 `auto` answered `DONE — verdict=FAIL (phase1)`, because phase1
+    is the only phase that got far enough to leave a report. The contrast is
+    asserted here rather than described: phase1 really does still report DONE
+    with a verdict, and `auto` really does not.
+    """
+    d = _REPO / "benchmark-data/evaluation/phase1_parity/arm_aix"
+    if not (d / "phase2").is_dir():
+        pytest.skip("corpus absent: the arm_aix run tree is not in this tree")
+
+    _r, auto = _json(d)
+    assert auto["phase"] == "phase2", (
+        "auto did not select the FURTHEST phase the run reached")
+    assert auto["state"] != "DONE", auto
+    assert "verdict" not in auto, (
+        "auto reported a verdict for a phase that never wrote one")
+
+    _r1, phase1 = _json(d, "--phase", "phase1")
+    assert phase1["state"] == "DONE" and phase1.get("verdict"), (
+        "phase1 no longer reports DONE, so this artefact no longer exhibits "
+        "the flip and proves nothing", phase1)
+
+    # …and an operator's exit code says so. `--max-silence-s 0` removes the
+    # checkout-age dependence described above without weakening the claim.
+    r0, doc0 = _json(d, "--max-silence-s", "0")
+    assert doc0["state"] == "STUCK", doc0
+    assert r0.returncode == 1, r0.stdout
+    assert "DONE" not in r0.stdout.split("\n")[0], r0.stdout
+
+
+def test_the_corpus_run_whose_tree_is_NDA_excluded_claims_nothing():
+    """sha256/clean_run_v1432int_commercial: only RESULT.md is published.
+
+    A reader that cannot see a run must say so. This one used to print
+    `RUNNING — step 'None' (0 done), NO OUTPUT YET (no heartbeat file)` and
+    exit 0 — a run in flight, nothing wrong — over a directory in which it had
+    observed no report, no PID and no artifact whatsoever.
+    """
+    d = _REPO / "benchmark-data/ic/sha256/clean_run_v1432int_commercial"
     if not d.is_dir():
-        pytest.skip(f"corpus absent: {rel}")
-    r = _run(d)
-    assert must_not_say not in r.stdout.split("\n")[0], r.stdout
-    assert r.returncode != 0, r.stdout
+        pytest.skip("corpus absent")
+    # The premise, asserted: this is the NDA-whitelisted shape. If the run tree
+    # is ever published, the assertion below stops being the right one and this
+    # is what says so.
+    assert (d / "RESULT.md").is_file()
+    assert not (d / "reports").exists(), (
+        "the run tree is published now — assert the phase selection, as the "
+        "arm_aix test does, instead of the refusal below")
+
+    r, doc = _json(d)
+    assert doc["state"] == "UNKNOWN", doc
+    assert r.returncode == 3, r.stdout
+    assert "DONE" not in r.stdout.split("\n")[0], r.stdout
+    assert "RUNNING" not in r.stdout.split("\n")[0], r.stdout

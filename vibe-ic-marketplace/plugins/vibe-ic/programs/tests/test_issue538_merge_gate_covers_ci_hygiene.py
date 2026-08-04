@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import textwrap
@@ -136,18 +137,68 @@ def _probe(root: Path, name: str, body: str) -> Path:
 # ==========================================================================
 # 1. THE COVERAGE IS DERIVED, NOT DUPLICATED
 # ==========================================================================
-def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
-    """The denominator the merge gate reports == the gate list in the script.
+def _label_matcher(decl):
+    """A predicate accepting the labels one DECLARATION can produce.
 
-    This is the anti-drift assertion, and it is why nothing here says "34":
-    both sides are derived from the same file by different means — one by
-    EXECUTING it (`--list`, which records through the same `_dispatch` every
-    real run goes through) and one by PARSING it. A gate wired through a
-    wrapper that bypassed the recording would appear on the parser side only.
+    A literal label matches itself. A label carrying a shell expansion —
+    `"macro OBS not crossed ($(basename "$(dirname "$_cell")"))"` — is a
+    TEMPLATE: bash fills it in per iteration, so the concrete labels are only
+    knowable by running the loop. The expansion is replaced by a wildcard and
+    everything around it still has to match exactly, so two different
+    templates cannot claim each other's invocations.
     """
-    parsed = {label for label, _wd, _cmd in GD.parse_gates(_SCRIPT)}
-    assert parsed, "the parser found no gates in the real hygiene script"
+    label = decl.label
+    if "$" not in label:
+        return lambda got: got == label
+    pattern, i = [], 0
+    while i < len(label):
+        if label.startswith("$(", i):
+            depth, j = 1, i + 2
+            while j < len(label) and depth:
+                depth += (label[j] == "(") - (label[j] == ")")
+                j += 1
+            pattern.append("(?s:.*)")
+            i = j
+        elif label[i] == "$":
+            j = i + 1
+            while j < len(label) and (label[j].isalnum() or label[j] == "_"):
+                j += 1
+            pattern.append("(?s:.*)")
+            i = j
+        else:
+            pattern.append(re.escape(label[i]))
+            i += 1
+    rx = re.compile("".join(pattern) + r"\Z")
+    return lambda got: bool(rx.match(got))
 
+
+def reconcile(declarations, recorded_labels):
+    """(records no declaration explains, literal declarations never invoked).
+
+    A DECLARATION IS NOT AN INVOCATION. A `run` line inside a `for` is written
+    once and executed once per iteration, so the two counts differ by design
+    and comparing them for equality — which this file used to do — is red on a
+    correct script. What must hold is that every invocation traces back to a
+    declaration, and that a declaration OUTSIDE a loop actually fires. A
+    templated declaration may legitimately fire zero times: its loop's glob
+    matched nothing.
+    """
+    matchers = [(d, _label_matcher(d)) for d in declarations]
+    fired = {id(d): 0 for d in declarations}
+    unattributed = []
+    for got in recorded_labels:
+        hit = [d for d, m in matchers if m(got)]
+        if not hit:
+            unattributed.append(got)
+            continue
+        for d in hit:
+            fired[id(d)] += 1
+    silent = [d.label for d in declarations
+              if d.runtime_expansion is None and fired[id(d)] == 0]
+    return unattributed, silent
+
+
+def _list_record(script: Path, cwd: Path):
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         rec = Path(td) / "record.json"
@@ -155,17 +206,133 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
         # recovering the document by slicing at the first "{" would break the
         # moment a gate label contained one.
         out = subprocess.run(
-            ["bash", str(_SCRIPT), "--list", "--summary-json", str(rec)],
-            cwd=str(_REPO), capture_output=True, text=True, timeout=60)
+            ["bash", str(script), "--list", "--summary-json", str(rec)],
+            cwd=str(cwd), capture_output=True, text=True, timeout=60)
         assert out.returncode == 0, out.stderr
-        doc = json.loads(rec.read_text())
-    recorded = {g["label"] for g in doc["gates"]}
+        return json.loads(rec.read_text())
 
-    assert recorded == parsed, (
-        "the hygiene script's own coverage record and its `run` lines "
-        f"disagree; only-recorded={sorted(recorded - parsed)} "
-        f"only-parsed={sorted(parsed - recorded)}")
-    assert doc["declared"] == len(parsed)
+
+def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
+    """Every gate the dispatcher records traces to a `run` line, and every
+    unconditional `run` line reaches the dispatcher.
+
+    This is the anti-drift assertion, and it is why nothing here says "34":
+    both sides are derived from the same file by different means — one by
+    EXECUTING it (`--list`, which records through the same `_dispatch` every
+    real run goes through) and one by PARSING it. A gate wired through a
+    wrapper that bypassed the recording would appear on the parser side only.
+
+    IT USED TO ASSERT SET EQUALITY, and that was wrong in two directions at
+    once. Measured at v1.9.77: the dispatcher recorded 68 invocations and the
+    parser found 59 `run` lines, so the test was red — and BOTH numbers were
+    describing something real. Nine of the invocations come from three
+    `run_tolerating_uncheckable` lines inside `for _cell in …/benchmark-data/ic/
+    */*/`, executed once per published cell; those three lines were invisible
+    to the old regex (its label group `"([^"]+)"` stopped at the first inner
+    quote of `$(basename "$(dirname "$_cell")")`). Fixing the parser alone
+    would still have left the assertion red, because 62 declarations can never
+    equal 68 invocations. Both were repaired: the parser sees the loop lines,
+    and this reconciles rather than equates.
+    """
+    decls = GD.parse_declarations(_SCRIPT)
+    assert decls, "the parser found no gates in the real hygiene script"
+    doc = _list_record(_SCRIPT, _REPO)
+    recorded = [g["label"] for g in doc["gates"]]
+
+    unattributed, silent = reconcile(decls, recorded)
+    assert not unattributed, (
+        "the dispatcher recorded gate(s) no `run` line in the script "
+        f"explains: {sorted(set(unattributed))}")
+    assert not silent, (
+        "these `run` lines are declared outside any loop and never reached "
+        f"the dispatcher — they are wired through something that bypasses "
+        f"the recording: {silent}")
+    assert doc["declared"] == len(recorded)
+    assert len(recorded) >= len(decls), (recorded, decls)
+    # The loop really is what makes the two numbers differ, asserted so that a
+    # future script with no loop does not leave this test passing vacuously
+    # over an equality it no longer checks.
+    assert any(d.runtime_expansion for d in decls) == \
+        (len(recorded) > len(decls)), (len(recorded), len(decls))
+
+
+def test_a_continued_run_line_is_read_as_the_one_command_bash_runs():
+    """The second half of the same parser defect, and the one no label count
+    can see.
+
+    Four gates in the real script are written across a `\\` continuation. The
+    old regex captured only the first physical line, so `severity=ERROR is
+    consumed` was handed to both readers as `… error_diagnostic_consumed_check
+    .py . \\` — a trailing backslash where `--allow MACRO_STAGED_UNUSABLE`
+    should be. argparse rejected the stray argument with rc 2 in BOTH trees,
+    and the host-independence probe recorded the agreement as coverage of a
+    gate it had never actually run.
+    """
+    continued = [d for d in GD.parse_declarations(_SCRIPT)
+                 if d.label == "severity=ERROR is consumed"]
+    assert len(continued) == 1, "the gate this was measured on is gone"
+    assert continued[0].cmd.endswith("--allow MACRO_STAGED_UNUSABLE"), (
+        "the continuation was dropped — the command is truncated",
+        continued[0].cmd)
+    assert "\\" not in continued[0].cmd, continued[0].cmd
+
+
+def test_a_gate_wired_through_a_wrapper_that_skips_the_recording_is_CAUGHT():
+    """The mutation the assertion above exists to fail on.
+
+    Driven end to end against the REAL dispatch library, because the claim is
+    about what `_dispatch` records and a fixture copy of it would not be
+    evidence of anything.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _probe(root, "p_ok", 'print("PASS (0 item(s) examined)")\n')
+        # `run_sneaky` matches the parser's `run(?:_\w+)?` shape and never
+        # calls `_dispatch` — exactly the wrapper #538 is about.
+        script = _fixture_script(root, (
+            'run_sneaky() { ( cd "$2" && "${@:3}" ); }\n'
+            f'run "declared and recorded" "$ROOT" python3 "{root}/p_ok.py"\n'
+            f'run_sneaky "declared and INVISIBLE" "$ROOT" '
+            f'python3 "{root}/p_ok.py"\n'))
+        decls = GD.parse_declarations(script)
+        doc = _list_record(script, root)
+        recorded = [g["label"] for g in doc["gates"]]
+
+    assert len(decls) == 2 and recorded == ["declared and recorded"]
+    unattributed, silent = reconcile(decls, recorded)
+    assert unattributed == []
+    assert silent == ["declared and INVISIBLE"]
+
+
+def test_one_looping_declaration_covers_every_iteration_it_produced():
+    """The other direction, and the shape that was red.
+
+    Three invocations from one `run` line must reconcile, and the label a
+    template cannot predict must still be attributed to the line that wrote it.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _probe(root, "p_ok", 'print("PASS (0 item(s) examined)")\n')
+        for cell in ("alpha", "beta", "gamma"):
+            (root / "cells" / cell).mkdir(parents=True)
+        script = _fixture_script(root, (
+            'for _c in "$ROOT"/cells/*/; do\n'
+            '  run "per cell ($(basename "$(dirname "$_c/x")"))" "$ROOT" '
+            f'python3 "{root}/p_ok.py"\n'
+            'done\n'))
+        decls = GD.parse_declarations(script)
+        doc = _list_record(script, root)
+        recorded = [g["label"] for g in doc["gates"]]
+
+    assert len(decls) == 1 and decls[0].runtime_expansion
+    assert sorted(recorded) == ["per cell (alpha)", "per cell (beta)",
+                                "per cell (gamma)"]
+    assert reconcile(decls, recorded) == ([], [])
+    # …and a record the template does NOT explain is still caught.
+    assert reconcile(decls, recorded + ["something else"])[0] == \
+        ["something else"]
 
 
 def test_a_gate_added_to_ci_is_covered_with_no_edit_to_the_merge_gate():

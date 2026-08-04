@@ -298,6 +298,34 @@ def status(project: Path, phase: str, pid: Optional[int] = None,
     # (the log's mtime is the real timestamp of the last heartbeat).
     silent_too_long = (silence is not None and silence > silence_window)
 
+    # NO EVIDENCE OF A RUN AT ALL is its own answer, and until v1.9.78 this
+    # program did not have it — the `UNKNOWN` state its own docstring and
+    # `_EXIT` table promise (rc 3, "UNKNOWN/no-run") was unreachable, so a
+    # directory with no report, no recorded PID and no artifact of any kind
+    # fell through to `RUNNING` and exited 0.
+    #
+    # MEASURED on `benchmark-data/ic/sha256/clean_run_v1432int_commercial`,
+    # whose NDA whitelist publishes RESULT.md and nothing else: this printed
+    #     RUNNING — step 'None' (0 done), NO OUTPUT YET (no heartbeat file)
+    # and returned 0. Both halves are wrong in the same direction as #590: a
+    # caller that asks "is the runner done, hung or dead?" is told a run is in
+    # flight, and the exit code says nothing is wrong — over a directory in
+    # which nothing has ever been observed to run.
+    #
+    # A JUST-LAUNCHED RUN IS NOT THIS CASE and must not be caught by it: the
+    # runner records `run.pid` / `.runner.lock`, so `resolved_pid` is set and
+    # the RUNNING_ON_TIME branch below answers "running; no heartbeat artifact
+    # observed yet". The distinction is a live PID, which is exactly the
+    # difference between "started and quiet" and "nothing here".
+    if hb_mtime is None and resolved_pid is None:
+        base["state"] = "UNKNOWN"
+        base["reason"] = (
+            "no final verdict, no recorded PID and no log or artifact of any "
+            "kind under this project — there is no run here to report on. "
+            "This is NOT a pass and NOT a run in progress; it is the absence "
+            "of anything to look at")
+        return base
+
     if resolved_pid is None or alive is None:
         # No PID to probe liveness. Silence is still decisive evidence.
         if silent_too_long:
