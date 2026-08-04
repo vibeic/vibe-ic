@@ -291,6 +291,46 @@ steps:
         # condition is stated in the program's own docstring and is a
         # re-measurement, not a judgement call.
         - advisory_program_exit_zero: "cross_layer_reference_check ."
+        # Every row above judges a layer's CONTENT against a contract. This one
+        # judges a layer that has no content at all — and does it here, at the
+        # step that PRODUCES the layers, because that is the only place the
+        # emptiness is still cheap.
+        #
+        # WHY IT IS NOT COVERED BY THE THREE GATES ALREADY AT THIS STEP.
+        # `phase1_all_l_docs_present_check` asks whether the FILE is there.
+        # `phase1_structured_field_substance_check` compares named fields
+        # against named template DEFAULTS and mentions no consumer.
+        # `phase1_layer_demand_probe` asks the INPUT-side question and stays
+        # silent when the input states nothing. None of the three asks whether
+        # a LATER STEP READS the layer — and this flow answers that in writing:
+        # the predicates below at Steps 2 / 4 / 8 are conditioned on
+        # `condition_files_exist: [<the layer>]`, so an empty skeleton is
+        # strictly worse than an absent file. Absent, the step records a SKIP;
+        # present-but-empty, the consumer runs, reads zero elements and returns
+        # a verdict over nothing. `flow_condition_reachability_check` already
+        # classifies `phase1/generated_docs/` as a T1 DECLARATION trigger,
+        # which is right about PRESENCE and says nothing about CONTENT; this
+        # gate is the content half of that same trigger.
+        #
+        # BLAST RADIUS, MEASURED BEFORE WIRING, over every tracked root
+        # carrying `phase1/generated_docs/L*.json` (107 roots):
+        #   102 exit 0, 5 exit 1, 0 errors.
+        # Of the 77 empty layers those roots hold across the five layers this
+        # flow declares a consumer for, 72 carry the design's own emptiness
+        # declaration (`no_<field>_in_input` / `applicability`) and the gate
+        # stays quiet on all of them — the escape hatch is what 94% of the
+        # corpus already does, not a filter invented to lower a count.
+        #
+        # ADVISORY, for the same reason as l16/l17 and
+        # `l8_sta_clock_period_design_owned_check` above: the 5 are TRUE
+        # positives on PUBLISHED roots (one of them is the very cell whose
+        # published SDC carries `sdc_gen`'s hardcoded default period verbatim —
+        # the fabricated number a starved timing layer produces), so BLOCKING
+        # would turn shipped evidence red for a producer-side defect the corpus
+        # shares. Narrowing until the count reached zero would have required
+        # dropping the layer or accepting bare presence, and either one
+        # swallows the defect underneath.
+        - advisory_program_exit_zero: "phase1_planned_consumer_starved_check ."
         # ── doc-spec family (vibe-ic#693) ─────────────────────────────────
         # Three gates that existed with passing unit tests and no executable
         # caller: they had never judged real data. Each was run over the 16
