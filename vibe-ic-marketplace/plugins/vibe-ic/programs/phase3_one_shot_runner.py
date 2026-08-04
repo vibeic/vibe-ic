@@ -33096,6 +33096,42 @@ def _metal_density_recipe() -> str:
     return recipe
 
 
+def _freshest_gds(alias_gds: Path, source_gds: Path) -> Optional[Path]:
+    """Return the GDS that reflects the CURRENT round for a sign-off
+    measurement: the FRESHER (larger mtime) of the canonical stage4 alias and
+    the streamed pnr GDS, skipping absent files.
+
+    WHY. The canonical alias `phase3/stage4/gds/<top>.gds` is a byte copy of the
+    streamed pnr GDS, refreshed by "Step 37 GDS canonical alias" — which runs
+    LATER in the SAME `step_canonicalize_artefacts` pass than the metal-density
+    emit. A consumer reading the alias BEFORE that refresh sees, on a re-run,
+    the PREVIOUS round's bytes: the alias still holds last round's GDS when the
+    metal-density emit reads it, so it measures a superseded layout (measured:
+    the density report was written ~21s before the alias was rewritten; first
+    run reported the inherited density 0.19/0.11/0.08/0.06/0.05 for a GDS that
+    actually measured 0.21/0.24/0.28/0.36/0.38). On a first-ever run the alias
+    is absent and the streamed source is used — an honest measurement, not a
+    stale one.
+
+    Comparing mtimes selects the layout this round produced regardless of the
+    copy ordering: once Step 37 HAS refreshed the alias (alias newer-or-equal)
+    the canonical alias is returned; until then the streamed source is. Ties
+    prefer the canonical alias (byte-identical anyway). Unprovable freshness
+    (stat fails) prefers the source — the always-current-round streamed
+    artefact. chip-AGNOSTIC: pure mtime comparison of two paths; no design,
+    vendor, SKU, process-node or PDK literal."""
+    a = alias_gds if alias_gds.is_file() else None
+    s = source_gds if source_gds.is_file() else None
+    if a is None:
+        return s
+    if s is None:
+        return a
+    try:
+        return a if a.stat().st_mtime >= s.stat().st_mtime else s
+    except OSError:
+        return s
+
+
 def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
                                container: str, out_json: Path,
                                notes: List[str]) -> bool:
@@ -33105,14 +33141,19 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     report → the gate SKIPs honestly (never a fabricated density). Best-effort;
     returns True when metal_density.json is produced. Validated live on a real
     routed sky130 GDS (espi: met1 13% — below the 30% CMP min, exactly the
-    met_min_ca_density case)."""
-    gds = _pl.gds_dir(project) / f"{top}.gds"
-    if not gds.is_file():
-        gds = _pl.pnr_dir(project) / f"{top}.gds"
-    if not gds.is_file():
+    met_min_ca_density case).
+
+    Measures the CURRENT round's GDS — the fresher of the canonical stage4 alias
+    and the streamed pnr GDS — because the alias is refreshed by Step 37 LATER
+    in this same canonicalize pass, so reading it directly measured the previous
+    round's layout on every re-run (see `_freshest_gds`)."""
+    alias_gds = _pl.gds_dir(project) / f"{top}.gds"
+    source_gds = _pl.pnr_dir(project) / f"{top}.gds"
+    gds = _freshest_gds(alias_gds, source_gds)
+    if gds is None or not gds.is_file():
         hits = sorted(_pl.gds_dir(project).glob("*.gds")) if \
             _pl.gds_dir(project).is_dir() else []
-        gds = hits[0] if hits else gds
+        gds = hits[0] if hits else alias_gds
     if not gds.is_file():
         notes.append("metal density skipped: no streamed GDS found")
         return False
