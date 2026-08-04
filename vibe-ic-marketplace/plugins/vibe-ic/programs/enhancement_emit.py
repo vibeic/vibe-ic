@@ -709,6 +709,84 @@ def check_bucket_t(recs: list) -> list:
     return offenders
 
 
+# ── cross-record duplicate `pattern` (#822) ─────────────────────────────────
+# WHERE THIS LIVES, AND WHY IT LIVES HERE
+# A duplicate needs TWO records in ONE process to be arithmetically possible.
+# `backlog_sanitize_check` — the gate that reads the emitted YAML — is driven
+# `--file <one yaml>` by every caller in this repo (community-backlog-submit
+# SKILL.md Step 4, field-agent-loop SKILL.md, phase1-coverage-loop SKILL.md;
+# there is no `--dir` caller). It would therefore receive a one-element list
+# and report "0 duplicates" on every real run while reading as coverage — a
+# detector that exists is not a detector that is on the path. `main()` below
+# holds the whole batch in one process, which makes it the one place in the
+# repo where >=2 records provably co-occur, so the check is non-vacuous by
+# construction and needs no caller change.
+#
+# SCOPE, STATED — a duplicate detector is not a correctness check
+# CATCHES: the same `pattern` text on two or more records of a SINGLE emit
+#   batch. That is #796's shape exactly, where both records carried
+#   byte-identical text.
+# DOES NOT CATCH: a `pattern` copied from OUTSIDE the batch (an issue body, a
+#   skill's worked example, a chat message) onto exactly ONE record; a
+#   `pattern` that merely restates its own title in different words; or one
+#   that is populated, plausible, and about the wrong defect. Those are the
+#   judgment only a reader makes, and nothing here should read as covering
+#   them.
+#
+# POPULATION: the buckets that EMIT A BACKLOG — C and T. Both go through
+# `emit_backlog`, both write a `pattern:` block into a YAML whose required
+# fields `backlog_sanitize_check` then enforces, and for both a duplicate is
+# unambiguous: one backlog is one defect, so two backlogs sharing a pattern
+# means one of them was copied. Bucket B (skill sections) is DELIBERATELY
+# excluded: two B records at different steps route to different skill files on
+# purpose, and two instances of one general pattern captured at two steps is a
+# defensible authoring choice rather than a copy. Flagging it would be a guess
+# dressed as a finding.
+_BACKLOG_EMITTING_BUCKETS = ("C", "T")
+
+
+def _pattern_key(value) -> str:
+    """Whitespace-collapsed, case-folded. #796's two records were byte-identical,
+    but a copy that gained a newline or a capitalised first word is the same
+    defect and must not pass on the difference."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def check_duplicate_patterns(recs: list) -> list:
+    """Records of ONE batch that share a `pattern`. Returns human-readable
+    offender strings; empty list == pass.
+
+    A blank/missing `pattern` is SKIPPED here, not grouped. It is a different
+    defect with its own refusal at the write site, and grouping the blanks
+    would report them as duplicates of each other — naming the wrong bug and
+    burying the real one.
+    """
+    groups: dict = {}
+    for i, r in enumerate(recs):
+        if (r.get("bucket") or "D").upper() not in _BACKLOG_EMITTING_BUCKETS:
+            continue
+        key = _pattern_key(r.get("pattern"))
+        if not key:
+            continue
+        who = (r.get("title") or r.get("backlog_slug")
+               or r.get("design") or f"record[{i}]")
+        groups.setdefault(key, []).append(f"record[{i}] {who!r}")
+    offenders = []
+    for key, members in groups.items():
+        if len(members) < 2:
+            continue
+        excerpt = key if len(key) <= 120 else key[:117] + "..."
+        offenders.append(
+            f"{len(members)} records share ONE `pattern`: "
+            f"{', '.join(members)} — the shared text reads {excerpt!r}. A "
+            f"pattern states the CLASS of defect of the record it sits on; the "
+            f"same sentence cannot be the class of two different defects, so "
+            f"one of these was copied from the other and describes something "
+            f"it did not measure. Write each record its own, or merge them "
+            f"into the one record they actually are.")
+    return offenders
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--records", required=True)
@@ -738,6 +816,21 @@ def main():
         for o in t_offenders:
             print("  - " + o, file=sys.stderr)
         sys.exit(1)
+
+    # #822 — the cross-record check, on the ONE path where two records
+    # provably co-occur. It sits with the other pre-flight gates and BEFORE
+    # `out.mkdir`, so a refusal costs nothing: raising it later, mid-emit,
+    # would abort the batch after some artifacts were already written and
+    # leave a half-populated output dir — the failure mode the Bucket-A
+    # routing loop below carries a comment about.
+    dup_offenders = check_duplicate_patterns(recs)
+    if dup_offenders:
+        print("DUPLICATE-PATTERN GATE FAILED — one `pattern` on more than one "
+              "record of this batch:", file=sys.stderr)
+        for o in dup_offenders:
+            print("  - " + o, file=sys.stderr)
+        sys.exit(1)
+
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     today = datetime.date.today().isoformat()
