@@ -699,6 +699,114 @@ def _log_invocation(cmd: str, rc: int, duration_ms: int,
             f.write(json.dumps(entry) + "\n")
     except Exception:  # noqa: BLE001 — logging must never break the run
         pass
+    if _outs:
+        _retire_superseded_declarations(sink, _outs)
+
+
+def _retire_superseded_declarations(sink: str, fresh: Dict[str, str]) -> None:
+    """A producer that legitimately runs TWICE must not poison the ledger.
+
+    `provenance.jsonl` is append-only and
+    `provenance_output_hash_completeness_check` re-hashes every declared output
+    of every entry. So the moment any producer re-emits a path an EARLIER entry
+    declared, that earlier entry's digest can never match disk again — one
+    PROVENANCE_HASH_MISMATCH on the old row plus one
+    PROVENANCE_HASH_INCONSISTENT on the new one, and NO subsequent run can
+    clear either. The chain is punished for truthfully recording a second
+    production. Today that is rare only because the sign-off producers skip
+    when their own output exists; a freshness-aware producer re-emits after
+    every re-route, and then this fires on ordinary clean runs.
+
+    The repo already has the sanctioned remedy for one artefact —
+    `_restamp_provenance_output`, which patches the old row's digest IN PLACE
+    (its docstring: appending a second entry "would only trade
+    PROVENANCE_HASH_MISMATCH for PROVENANCE_HASH_INCONSISTENT"). This is that
+    remedy generalised to `_log_invocation`, the writer EVERY tool invocation
+    goes through, with one deliberate difference:
+
+        THE OLD DIGEST IS RETIRED, NOT OVERWRITTEN.
+
+    Restamping in place would make the old row claim bytes it did not produce —
+    a record edited to match the artefact it audits. Instead the superseded
+    digest MOVES to `outputs_superseded` on that row, so the row stops making a
+    claim it cannot back while the fact that an earlier production existed, and
+    what it hashed to, survives in the ledger. Nothing is deleted and nothing
+    is invented.
+
+    Only paths THIS invocation actually produced are touched, and only when the
+    older declaration differs. Never raises — a ledger that can break the run
+    it documents would be traded away the first time it did.
+    chip-AGNOSTIC: pure ledger bookkeeping, no chip/PDK/tool literal.
+    """
+    try:
+        prov = Path(sink) / "provenance.jsonl"
+        if not prov.is_file():
+            return
+        rows: List[object] = []
+        changed = False
+        raw = prov.read_text().splitlines()
+        # RETIRING MUST NEVER LEAVE AN ARTEFACT UNDECLARED. Retiring the only
+        # declaration of a path would make the gate PASS by having nothing left
+        # to check — a hole strictly worse than the mismatch it replaces. So a
+        # path is eligible ONLY when some row ALREADY declares this run's
+        # digest for it (in production that is the row `_log_invocation` just
+        # appended). Called with a digest no row backs, this helper is inert.
+        _backed = set()
+        for _ln in raw:
+            if not _ln.strip():
+                continue
+            try:
+                _r = json.loads(_ln)
+            except Exception:  # noqa: BLE001
+                continue
+            _o = _r.get("outputs")
+            if isinstance(_o, dict):
+                for rel, cur in fresh.items():
+                    if _o.get(rel) == cur:
+                        _backed.add(rel)
+        fresh = {k: v for k, v in fresh.items() if k in _backed}
+        if not fresh:
+            return
+        # The row this call just appended is the LAST one; it is the current
+        # declaration and must never retire itself.
+        for _idx, _ln in enumerate(raw):
+            if not _ln.strip():
+                rows.append(_ln)
+                continue
+            try:
+                rec = json.loads(_ln)
+            except Exception:  # noqa: BLE001 — a line we cannot read, we keep
+                rows.append(_ln)
+                continue
+            outs = rec.get("outputs")
+            if isinstance(outs, dict) and _idx < len(raw) - 1:
+                _stale = [rel for rel, cur in fresh.items()
+                          if isinstance(outs.get(rel), str)
+                          and outs.get(rel) != cur]
+                # RETIRING MUST NOT TRADE ONE FAULT FOR ANOTHER. An entry left
+                # with an EMPTY outputs dict is only honest for a command-audit
+                # invocation row — the checker's `record == "invocation"` +
+                # command/exit_code/version_capture predicate. For any other
+                # class an empty outputs is PROVENANCE_OUTPUTS_MISSING (ERROR),
+                # so such a row keeps its declaration and its mismatch: a fault
+                # that is visible beats a fault that has been reshaped.
+                if _stale and (len(_stale) < len(outs)
+                               or (rec.get("record") == "invocation"
+                                   and "command" in rec
+                                   and "exit_code" in rec
+                                   and "version_capture" in rec)):
+                    retired = rec.setdefault("outputs_superseded", {})
+                    if isinstance(retired, dict):
+                        for rel in _stale:
+                            retired[rel] = outs.pop(rel)
+                        changed = True
+            rows.append(rec)
+        if not changed:
+            return
+        prov.write_text("".join(
+            (json.dumps(r) if isinstance(r, dict) else r) + "\n" for r in rows))
+    except (OSError, ValueError):  # non-fatal: bookkeeping is best-effort
+        pass
 
 
 
