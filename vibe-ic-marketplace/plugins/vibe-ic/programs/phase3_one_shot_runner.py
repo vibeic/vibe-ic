@@ -2408,6 +2408,122 @@ def _resolve_staged_silicon_sdc(project: Path) -> Optional[Path]:
     )), None)
 
 
+# A flow-templated SDC parameterises the whole deck on ``::env(...)``
+# variables the STA engine never sets (the OpenLane idiom). Sourcing one into
+# OpenSTA raises `can't read "::env(CLOCK_PERIOD)": no such variable` and the
+# deck is abandoned mid-read, so such a file is NOT consumable as-is.
+# Restricted to ``::env`` on purpose: a plain ``$var`` is routinely bound by
+# the SDC's own `set` / `foreach` / `for` (the runner's own auto-SDC uses
+# `foreach _vibeic_p ...`), and flagging those would refuse valid decks.
+_SDC_ENV_REF_RE = re.compile(r"\$\{?::?env\((\w+)\)")
+_SDC_ENV_SET_RE = re.compile(r"^\s*set\s+::?env\((\w+)\)", re.MULTILINE)
+
+
+def _sdc_unevaluable_env_refs(text: str) -> List[str]:
+    """Return the ``::env(NAME)`` variables an SDC reads but never assigns.
+
+    Empty list ⇒ nothing in this file depends on a flow variable, so the STA
+    engine can read it standalone. chip-AGNOSTIC: standard-Tcl syntax only."""
+    assigned = set(_SDC_ENV_SET_RE.findall(text or ""))
+    out: List[str] = []
+    for name in _SDC_ENV_REF_RE.findall(text or ""):
+        if name not in assigned and name not in out:
+            out.append(name)
+    return out
+
+
+def _staged_sdc_survey(project: Path) -> List[Dict[str, object]]:
+    """Every SDC the DESIGN staged anywhere under ``input/``, with whether the
+    silicon-SDC resolver consumes it and, when it does not, WHY.
+
+    THE DEFECT THIS EXISTS FOR. :func:`_build_auto_silicon_sdc` prints
+    ``no constraints/*.sdc supplied`` — a claim about the DESIGN — on the sole
+    evidence that one glob came back empty. #742 corrected WHERE that glob
+    looks (``input/constraints`` then ``input/reference_flow``); it did not
+    make the sentence a measurement. A design that stages its constraints
+    anywhere else still gets a sign-off deck whose first line states it
+    supplied none.
+
+    MEASURED, all 7 projects with an ``input/`` tree on the authoring host:
+    4 stage at least one ``.sdc`` under ``input/`` that the resolver cannot
+    see, and on every one of them the emitted deck asserts none was supplied.
+    On the authoring cell the two invisible files are the design's OWN
+    ``signoff.sdc`` — 8 ``set_input_delay`` groups, 4 ``set_output_delay``
+    groups, 3 ``set_multicycle_path`` pairs, ``set_clock_latency``,
+    ``set_input_transition``, ``set_max_transition``, ``set_max_fanout`` and
+    ``set_load`` — none of which reached PnR or STA, and none of which the
+    record mentions.
+
+    This function does not change WHICH file is consumed. It changes what the
+    flow is allowed to SAY about the files it did not consume.
+
+    chip-AGNOSTIC: path + standard-Tcl contract only; no chip, PDK or vendor
+    literal."""
+    try:
+        consumed = _resolve_staged_silicon_sdc(project)
+    except Exception:
+        consumed = None
+    ground = set()
+    try:
+        ground = set(_sdc.collect_sdc_files(
+            project,
+            extra_dirs=[project / "constraints", _pl.constraints_dir(project)]))
+    except Exception:
+        pass
+    rows: List[Dict[str, object]] = []
+    try:
+        staged = sorted((project / "input").glob("**/*.sdc"))
+    except Exception:
+        staged = []
+    for p in staged:
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            text = ""
+        env_refs = _sdc_unevaluable_env_refs(text)
+        if consumed is not None and p == consumed:
+            reason = ""
+        elif p in ground:
+            reason = ("resolvable, but a higher-priority staged SDC was "
+                      "consumed first")
+        elif env_refs:
+            reason = ("staged outside the resolved locations AND flow-"
+                      "templated: reads ::env(" + ", ".join(env_refs[:8])
+                      + (", ..." if len(env_refs) > 8 else "")
+                      + ") which the STA engine never sets")
+        else:
+            reason = ("staged outside the locations the silicon-SDC resolver "
+                      "reads (input/constraints, input/reference_flow, "
+                      "constraints, " + str(_pl.constraints_dir(project).name)
+                      + ")")
+        rows.append({
+            "path": str(p.relative_to(project)),
+            "consumed": consumed is not None and p == consumed,
+            "unevaluable_env_refs": env_refs,
+            "reason_not_consumed": reason,
+        })
+    return rows
+
+
+def _staged_sdc_not_consumed_note(project: Path) -> str:
+    """The auto-SDC header/comment block describing staged SDCs this deck did
+    NOT consume. EMPTY STRING when the design staged none — the header line is
+    then byte-identical to before this change, on every project that has no
+    staged SDC to disclose."""
+    rows = [r for r in _staged_sdc_survey(project) if not r["consumed"]]
+    if not rows:
+        return ""
+    lines = ["# VIBEIC_STAGED_SDC_NOT_CONSUMED " + str(len(rows))
+             + " file(s) — the design staged these and this deck does NOT "
+               "carry their constraints:"]
+    for r in rows:
+        lines.append("#   - " + str(r["path"]) + " :: "
+                     + str(r["reason_not_consumed"]))
+    lines.append("# An UNCONSUMED staged SDC is not an ABSENT one. The "
+                 "constraints below are this runner's, not the design's.")
+    return "\n".join(lines) + "\n"
+
+
 _SDC_IN_DELAY_RE = re.compile(r"^\s*set_input_delay\b", re.MULTILINE)
 _SDC_OUT_DELAY_RE = re.compile(r"^\s*set_output_delay\b", re.MULTILINE)
 
@@ -2491,7 +2607,8 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
                             drv_cap_pf: Optional[float] = None,
                             drv_note: str = "",
                             liberty_path: str = "",
-                            pdk_name: str = "") -> str:
+                            pdk_name: str = "",
+                            staged_sdc_note: str = "") -> str:
     """Build the minimal silicon-top auto-SDC text emitted by ``step_pnr`` when
     the project stages no ``constraints/*.sdc`` for silicon.
 
@@ -2553,10 +2670,19 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     _tu_note = (f"# time-unit scaling: liberty declares a non-ns time_unit; "
                 f"period {clk_period_ns:g} ns emitted as {_period_str} "
                 f"lib-time-units\n" if _tu_scale != 1.0 else "")
+    # #742 follow-through: "no constraints/*.sdc supplied" is a claim about
+    # the DESIGN, and it was printed on the strength of one glob returning
+    # nothing. When the design DID stage SDCs the resolver does not read, say
+    # that instead — and name them. Byte-identical when it staged none.
+    _staged_note = staged_sdc_note or _staged_sdc_not_consumed_note(project)
+    _supplied_clause = ("no constraints/*.sdc supplied" if not _staged_note
+                        else "design-staged SDC(s) present but NOT consumed "
+                             "— see VIBEIC_STAGED_SDC_NOT_CONSUMED below")
     sdc_text = (
         "# Auto-generated minimal SDC for silicon top "
-        f"(no constraints/*.sdc supplied; clk_period_ns={clk_period_ns} "
+        f"({_supplied_clause}; clk_period_ns={clk_period_ns} "
         f"clk_port={clk_port_name})\n"
+        + _staged_note
         + _tu_note +
         f"create_clock -name clk -period {_period_str} "
         f"[get_ports {clk_port_name}]\n"
@@ -16364,6 +16490,19 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             drv_note=str(_drv.get("note") or ""),
             liberty_path=str(pdk.liberty),
             pdk_name=str(pdk.name)))
+    # Whichever branch ran, record what the DESIGN staged and what became of
+    # it. A machine-readable sibling of the deck's own comment block, so a
+    # later reader does not have to parse an SDC to learn that the design's
+    # constraints exist and were not used.
+    try:
+        (out_dir / "staged_sdc_survey.json").write_text(json.dumps({
+            "consumed": (str(project_sdc_silicon.relative_to(project))
+                         if project_sdc_silicon
+                         and project_sdc_silicon.is_file() else None),
+            "staged_under_input": _staged_sdc_survey(project),
+        }, indent=2, default=str))
+    except Exception:
+        pass
 
     # ORGANIC E2E (GAP-E2E-4/10) — resolve `--die-um auto` to a design-sized
     # WxH from the synth netlist cell count + PDK site area + target util, so a
