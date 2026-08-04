@@ -5892,6 +5892,111 @@ def _p0_verdict_count(records: List[Dict[str, Any]]) -> int:
     return sum(1 for r in records if r.get("verdict") != "NOT_INVOCABLE")
 
 
+def _p0_not_invocable_count(records: List[Dict[str, Any]]) -> int:
+    """How many registered gates were NEVER VALIDLY INVOKED.
+
+    The complement of `_p0_verdict_count` over the same records, written as its
+    own function rather than as `len(records) - verdict_count` at each caller:
+    the subtraction is only equal to this while every registered gate has
+    exactly one record, which is an invariant of the dispatch loop and not of
+    any caller that holds a records list.
+
+    THE SECOND OF THE TWO NUMBERS. `_p0_verdict_count` said how many gates
+    answered; nothing said how many did not, so the gap between the umbrella's
+    headline numerator and its denominator had no name and no field. A reader
+    could subtract, and a reader who did not subtract read the numerator as the
+    whole population — which is the reading the headline was reworded to stop.
+    """
+    return sum(1 for r in records if r.get("verdict") == "NOT_INVOCABLE")
+
+
+def _p0_umbrella_status(executed: Optional[bool],
+                        records: List[Dict[str, Any]]) -> str:
+    """THE ONE OWNER of the P0 umbrella's step verdict.
+
+    The four outcomes, and why the third one is not a PASS:
+
+      * ``executed is None``  -> ``SKIPPED-CONDITION``. #447: the umbrella
+        dispatched nothing (no RTL), and 0-of-N executed checkers is not a PASS.
+      * a gate FAILed          -> ``FAIL``. Unchanged; ``executed`` IS the
+        umbrella's own ``len(fails) == 0`` flag, so this branch re-derives
+        nothing and cannot disagree with the bucket it came from.
+      * no FAIL, but at least one registered gate returned NO VERDICT
+                               -> ``INCOMPLETE``.
+      * no FAIL, and NO gate returned any verdict at all (an empty ``records``)
+                               -> ``INCOMPLETE``. See THE EMPTY DENOMINATOR
+        below.
+      * no FAIL, every registered gate answered -> ``PASS``.
+
+    WHY THE THIRD BRANCH EXISTS.  The verdict was ``len(fails) == 0``, computed
+    over the gates that RETURNED a verdict, and published as a verdict over the
+    registered population. MEASURED at v1.9.78 by running this CLI end to end
+    over 49 tracked benchmark projects (every project root under
+    ``benchmark-data`` / ``benchmark_external`` carrying RTL, minus the
+    58-project ``run_v1333_knowledge_converge`` cvdp sub-corpus of
+    near-duplicates): 246 registered, 210 answering and 36 ``NOT_INVOCABLE`` on
+    ALL 49 — the un-invocable set is a property of the CALL, not of any
+    project's content. On a project whose 210
+    all came back clean, the umbrella printed PASS — a statement about 246
+    checkers, 36 of which had never been validly invoked, so what those 36
+    audit was UNAUDITED and the word `PASS` said otherwise. #492 made the
+    silence VISIBLE (`NOT_INVOCABLE` is a first-class verdict, disclosed by name
+    under its own heading); #559 put both numbers in the headline. Neither
+    reached the VERDICT, and the verdict is the field a consumer reads.
+
+    WHY ``INCOMPLETE`` AND NOT ``FAIL``.  A gate that never ran said nothing
+    about the design, so calling the run a failure is a second false claim in
+    the opposite direction — the same reason `_eval_gate_worker` does not
+    convert a `NOT_INVOCABLE` gate into a FAIL. `INCOMPLETE` (#599) is the tier
+    this repo already built for exactly this sentence: "the input WAS applicable
+    and was NOT examined... a vacuous step is one nobody needs to come back to;
+    this is one somebody does." It is a registered producer status
+    (`_flow_verdict_tiers.PRODUCER_STATUSES`), a DONE-CLAIM that is not a full
+    pass (`is_qualified_done`), and it is in none of `failing` / `missing` /
+    `setup_required_skipped` / `oss_blocked_skipped` — so it cannot make a run
+    non-green on its own, and it leaves the executed-PASS numerator, which is
+    the number a reviewer actually reads.
+
+    WHY NOT ``invoked < registered``.  That predicate is true of any records
+    list shorter than the registry, including a test stub that publishes none,
+    and it would fire on an umbrella that simply had nothing to dispatch. The
+    defect is a gate that WAS dispatched and rejected the argv, which is
+    `NOT_INVOCABLE` and nothing else. Narrow on purpose: a rule that fires on
+    every shape of missing record is a rule that gets read as noise.
+
+    THE EMPTY DENOMINATOR.  ``executed is True`` with an EMPTY ``records`` is
+    `len(fails) == 0` over a population of zero — the exact sentence this
+    function exists to stop, in its purest form: a clean sweep of nothing,
+    certifying nothing, published as PASS. It is not reachable from the one
+    production call site TODAY, because ``_run_structural_rtl_gates`` appends
+    one record per registered gate before it returns, so ``executed is not
+    None`` implies ``len(records) == len(_STRUCTURAL_RTL_GATES)``. That
+    reachability is an invariant of the CALLER, and this function is the ONE
+    OWNER of the verdict for EVERY caller — including the next one. A verdict
+    that is only correct because of a property held somewhere else is a verdict
+    waiting for a refactor, and a PASS pinned by a test outlives the invariant
+    that made it unreachable: the pin is what the refactor will trust. So the
+    guard is stated here, where the verdict is, and costs one comparison. Note
+    the deliberate redundancy of ``executed and``: the branch above already
+    proves ``executed`` is truthy, and the condition is written self-contained
+    anyway so that moving or reordering these branches cannot silently turn the
+    empty population back into a PASS.
+
+    ``INCOMPLETE`` rather than ``FAIL`` for the same reason as above — zero
+    gates answering said nothing about the design, so calling it a failure is
+    the opposite false claim.
+    """
+    if executed is None:
+        return "SKIPPED-CONDITION"
+    if not executed:
+        return "FAIL"
+    if executed and not records:
+        return "INCOMPLETE"
+    if _p0_not_invocable_count(records):
+        return "INCOMPLETE"
+    return "PASS"
+
+
 def _p0_passed_count(records: List[Dict[str, Any]]) -> int:
     """How many registered gates ran and PASSED.
 
@@ -9425,6 +9530,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     # distinct from "it ran and nothing passed". The audit JSON's
     # passed_gate_count reads this rather than scraping reasons prose.
     structural_passed_count: Optional[int] = None
+    # The umbrella's own coverage, as NUMBERS. `None` — not 0 — until the
+    # umbrella runs, for the same reason `structural_gate_records` is `None`
+    # below: on a stage-3/4 invocation there is no P0 step, and `0 registered`
+    # would read as "the registry is empty" while `246 registered / 0 invoked`
+    # would read as "246 checkers were supposed to run and none did". Neither is
+    # true, and a three-state field says so without inventing either.
+    structural_registered_count: Optional[int] = None
+    structural_invoked_count: Optional[int] = None
+    structural_not_invocable_count: Optional[int] = None
     # #497 step 1 — the P0 umbrella's structured per-gate payload. `None` until
     # the umbrella runs, so a stage-3/4 invocation (where P0 does not run at
     # all) publishes "no records" rather than an empty list that would read as
@@ -9508,13 +9622,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         # `checker_execution_wiring_audit`'s `checkers` field is its own JSON.
         _n_registered = len(_STRUCTURAL_RTL_GATES)
         _n_verdict = _p0_verdict_count(structural_gate_records)
+        # THE SAME TWO NUMBERS THE HEADLINE STATES, published as numbers.
+        # Until here they existed only inside a formatted English sentence, so
+        # the one machine-readable artifact — `phase23_completion_audit.json` —
+        # carried `passed_gate_count` and `failed_gate_count` over a denominator
+        # it never named. A consumer could not compute the coverage of the
+        # verdict it was reading, and a fraction whose denominator is not
+        # published is not a fraction. Assigned here rather than at the audit
+        # site so the artifact and the headline read the same variables.
+        structural_registered_count = _n_registered
+        structural_invoked_count = _n_verdict
+        structural_not_invocable_count = _p0_not_invocable_count(
+            structural_gate_records)
         structural_result = StepResult(
             id="P0",
             name=(f"Structural-RTL gates (P0 umbrella, {_n_verdict} of "
                   f"{_n_registered} checkers returned a verdict)"),
             stage="stage1",
-            status=("SKIPPED-CONDITION" if s_passed is None
-                    else "PASS" if s_passed else "FAIL"),
+            # ONE OWNER. The expression that stood here was
+            # `"SKIPPED-CONDITION" if s_passed is None else "PASS" if s_passed
+            # else "FAIL"` — a verdict over the gates that ANSWERED, published
+            # as a verdict over the gates that are REGISTERED. `_p0_umbrella_status`
+            # keeps both existing branches (#447's tri-state included, from the
+            # same `s_passed` flag) and adds the one the two numbers above imply:
+            # a clean sweep with a never-validly-invoked gate in it is
+            # INCOMPLETE, not PASS.
+            status=_p0_umbrella_status(s_passed, structural_gate_records),
             reasons=reasons_combined,
             evidence=[],
             # #497 step 1 — published ALONGSIDE `reasons`, which is unchanged.
@@ -10444,6 +10577,28 @@ def main(argv: Optional[List[str]] = None) -> int:
             "failed_gates": failed_gate_names,
             "failed_gate_count": len(failed_gate_names),
             "passed_gate_count": passed_gate_count,
+            # THE DENOMINATOR, and the part of it that never answered.
+            #
+            # Every gate count above is a NUMERATOR. The population they are
+            # counted out of appeared in this file only inside the P0 step's
+            # `name` string, so a consumer of this artifact — the mcp-eda
+            # pre-burn guard, any dashboard — could read `passed_gate_count: 6`
+            # and had nothing to divide it by. Worse, the number it would have
+            # guessed (the registry size) is the WRONG one: 36 of 246 registered
+            # gates reject the argv the umbrella builds, return no verdict at
+            # all, and are not in any of the three counts above.
+            #
+            # THREE FIELDS, not two, and `not_invocable` is not left to
+            # subtraction: `registered - invoked` is only equal to it while
+            # every registered gate has exactly one record, which is an
+            # invariant of the dispatch loop and not of this artifact. A reader
+            # who subtracts is re-deriving a fact the producer already knows.
+            #
+            # `null` on a stage-3/4 invocation, where the umbrella did not run —
+            # the same three-state `gate_records` publishes, for the same reason.
+            "registered_gate_count": structural_registered_count,
+            "invoked_gate_count": structural_invoked_count,
+            "not_invocable_gate_count": structural_not_invocable_count,
             "step_counts": counts,
             "structural_fail_lines": structural_fail_lines,
             "step_artifact_fail_lines": step_artifact_fail_lines,

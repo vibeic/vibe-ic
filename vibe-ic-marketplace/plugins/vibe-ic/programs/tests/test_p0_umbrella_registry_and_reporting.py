@@ -159,14 +159,34 @@ def _fail(name, msg):
     return _flow._p0_gate_record(name, "FAIL", msg, {"exit_code": 1})
 
 
+def _pass(name):
+    """A gate that RAN and came back clean.
+
+    A "clean sweep" fixture has to publish these. Building it from an empty
+    records list instead makes `executed` true by `len([]) == 0` — a clean
+    sweep of NOTHING — and the assertions below then pin the umbrella's word
+    for a population of zero, which is the case this file's own subject says
+    must never be a PASS."""
+    return _flow._p0_gate_record(name, "PASS", "", {"exit_code": 0})
+
+
 def _p0(report):
     hits = [s for s in report["steps"] if s["id"] == "P0"]
     return hits[0] if hits else None
 
 
 def test_all_gates_clean_still_emits_a_P0_step(tmp_path, monkeypatch, capsys):
-    """Clean sweep: P0 must appear as an explicit PASS, not disappear."""
-    rc, report = _run_main(tmp_path, monkeypatch, [], ("--lenient",))
+    """Clean sweep: P0 must appear as an explicit PASS, not disappear.
+
+    The sweep is stated with a gate that ANSWERED. It used to be stated with
+    an empty records list, which is not a clean sweep — it is a sweep of zero
+    gates whose `len(fails) == 0` is vacuously true — and this assertion was
+    therefore a second pin of the vacuous PASS, one level up from the truth
+    table. The claim under test is unchanged: an all-clean structural run
+    still renders P0 as an explicit PASS in the JSON and in the listing.
+    """
+    rc, report = _run_main(tmp_path, monkeypatch, [_pass("gate_ok")],
+                           ("--lenient",))
     p0 = _p0(report)
     assert p0 is not None, (
         "P0 missing from the JSON steps array on an all-clean structural run")
