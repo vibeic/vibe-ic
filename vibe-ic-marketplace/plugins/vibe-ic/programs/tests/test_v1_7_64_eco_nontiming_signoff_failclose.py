@@ -132,7 +132,20 @@ def test_step32_gate_goes_red_instead_of_certifying(tmp_path):
     assert rc_audit == 1, (
         "eco_loop_audit must report Step 32 red; got rc=0\n" + out_audit
     )
-    assert "NOT_REVERIFIED" in out_audit or "EMPTY_CHANGES" in out_audit
+    # This assertion used to pin the two finding CODES that happened to carry
+    # the redness (NOT_REVERIFIED / EMPTY_CHANGES). Those two describe an ECO
+    # that was APPLIED — which, in this very scenario, v1.7.64 guarantees never
+    # happened — so the audit now reports the blocking domain instead. The
+    # property this test exists for is UNCHANGED and is asserted above and
+    # below: rc==1 and pass==False. Asserting the reason is NAMED is strictly
+    # stronger than the old code list, which allowed a red step whose finding
+    # explained nothing.
+    payload = json.loads(out_audit[out_audit.index("{"):
+                                   out_audit.rindex("}") + 1])
+    assert payload["summary"]["pass"] is False, out_audit
+    assert "ir_drop" in out_audit, (
+        "a red Step 32 must name the sign-off domain that blocks it\n"
+        + out_audit)
 
 
 def test_no_repaired_eco_log_is_fabricated_for_a_nontiming_failure(tmp_path):
