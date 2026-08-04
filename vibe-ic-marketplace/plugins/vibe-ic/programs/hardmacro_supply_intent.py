@@ -57,25 +57,43 @@ from pathlib import Path
 import _path_layout as _pl
 from typing import Any, Dict, List, Optional, Tuple
 
-# `PIN <name>` ... `USE POWER|GROUND` ... `END <name>` — LEF is whitespace and
+# `PIN <name>` ... `USE <type>` ... `END <name>` — LEF is whitespace and
 # newline tolerant, so scan the pin block rather than assuming a line layout.
 _PIN_BLOCK_RE = re.compile(
     r"\bPIN\s+(?P<name>[A-Za-z_][\w\[\]\.$<>]*)\b(?P<body>.*?)\bEND\s+(?P=name)\b",
     re.S | re.IGNORECASE)
-_USE_RE = re.compile(r"\bUSE\s+(POWER|GROUND)\s*;", re.IGNORECASE)
+#: Any `USE` record, not only the supply ones. The difference between "this pin
+#: is typed SIGNAL" and "this pin carries no typing at all" is a fact about the
+#: ABSTRACT, and it is invisible to a scan that can only see POWER/GROUND.
+_ANY_USE_RE = re.compile(r"\bUSE\s+([A-Za-z]+)\s*;", re.IGNORECASE)
 _MACRO_RE = re.compile(r"\bMACRO\s+([A-Za-z_][\w\.$]*)", re.IGNORECASE)
 
 ACCOUNTED = {"declared_rail", "declared_gap", "rail_name_match"}
 
 
-def lef_pg_pins(lef_text: str) -> List[Dict[str, str]]:
-    """Every LEF-typed POWER/GROUND pin, with the MACRO it belongs to.
+def lef_all_pins(lef_text: str) -> List[Dict[str, Any]]:
+    """EVERY pin a LEF declares — typed or not — with the MACRO it belongs to.
 
-    Returns [{"master", "pin", "use"}]. Pure LEF grammar — this is the
-    AUTHORITATIVE statement that a pin is a supply terminal, and it is what
-    TritonRoute honours when it aborts.
+    Returns ``[{"master", "pin", "use", "uses"}]`` where ``uses`` is every
+    ``USE`` record found in the pin body (upper-cased, in file order) and
+    ``use`` is the first of them, or ``""`` when the abstract types the pin
+    with none.
+
+    WHY THIS IS THE PRIMITIVE AND `lef_pg_pins` IS THE FILTER (vibe-ic#774)
+    ----------------------------------------------------------------------
+    A reader that can only see POWER/GROUND-typed pins cannot tell these two
+    apart:
+
+        (a) a hard macro whose abstract types its pins and none is a supply pin
+        (b) a hard macro whose abstract types NOTHING
+
+    `magic`'s ``lef write`` emits neither ``DIRECTION`` nor ``USE`` on any PIN,
+    so (b) is what an HONESTLY regenerated abstract looks like — and every
+    consumer keyed on ``USE POWER``/``USE GROUND`` reads it as (a) and goes
+    quiet. The two facts have to be separable at the parser, or every consumer
+    re-derives the same blind spot. Pure LEF grammar; no PDK literal.
     """
-    out: List[Dict[str, str]] = []
+    out: List[Dict[str, Any]] = []
     if not lef_text:
         return out
     # Segment by MACRO so each pin is attributed to its own master.
@@ -85,10 +103,28 @@ def lef_pg_pins(lef_text: str) -> List[Dict[str, str]]:
     for i, (start, master) in enumerate(bounds):
         end = bounds[i + 1][0] if i + 1 < len(bounds) else len(lef_text)
         for pm in _PIN_BLOCK_RE.finditer(lef_text[start:end]):
-            um = _USE_RE.search(pm.group("body") or "")
-            if um:
-                out.append({"master": master, "pin": pm.group("name"),
-                            "use": um.group(1).upper()})
+            uses = [u.upper() for u in _ANY_USE_RE.findall(pm.group("body") or "")]
+            out.append({"master": master, "pin": pm.group("name"),
+                        "use": uses[0] if uses else "", "uses": uses})
+    return out
+
+
+def lef_pg_pins(lef_text: str) -> List[Dict[str, str]]:
+    """Every LEF-typed POWER/GROUND pin, with the MACRO it belongs to.
+
+    Returns [{"master", "pin", "use"}]. Pure LEF grammar — this is the
+    AUTHORITATIVE statement that a pin is a supply terminal, and it is what
+    TritonRoute honours when it aborts.
+
+    A FILTER over `lef_all_pins`, not a second walk: the two answers come from
+    one parse, so "which pins exist" and "which pins are typed supply" can never
+    disagree about the same file.
+    """
+    out: List[Dict[str, str]] = []
+    for rec in lef_all_pins(lef_text):
+        pg = next((u for u in rec["uses"] if u in ("POWER", "GROUND")), None)
+        if pg:
+            out.append({"master": rec["master"], "pin": rec["pin"], "use": pg})
     return out
 
 
