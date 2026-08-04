@@ -181,9 +181,15 @@ def _emit_real_l3(project, rows):
 #: A command-table row whose document ALSO gives the request and response byte
 #: groups. `_extract_hex_byte_groups` reads group[0] as TX-content and group[1]
 #: as RX-content, so Phase 1 extracts the response bytes verbatim into
-#: `response_payload_template_extracted` — and then stamps a placeholder over
-#: `response_payload_template` anyway. This is the row shape the r6 negative
+#: `response_payload_template_extracted` — and, since #812, MERGES them into
+#: `response_payload_template` at every byte_offset they cover instead of
+#: stamping a placeholder over them. This is the row shape the r6 negative
 #: control needs; a row without both groups cannot exercise it.
+#:
+#: NOTE for anyone isolating an arm with this helper: because the response
+#: group must land SECOND, a request group always lands FIRST and is filed as
+#: `request_payload_template`, so r7's `byte_record_unattributed` arm is armed
+#: on every entry this row produces. See `_without_the_positional_record`.
 def _documented_row(tx_len, op_hex, rx_bytes, name="LOAD"):
     return (f"4\t{tx_len}\t00\t{op_hex}\t[0x{op_hex},0x00]\t"
             f"[{','.join(rx_bytes)}]\t{name} word")
@@ -336,8 +342,9 @@ def test_the_real_emitters_split_two_byte_identical_expectations(tmp_path):
     assert res["send_load_happy"] == "unbound:response_payload_template"
     assert res["send_store_happy"] == "bound:response_payload_template=24", (
         "the waiver must be refused ON THE DATA — naming BOTH the field that "
-        "decided and the value it binds, because on a Phase-1-emitted L3 that "
-        "value is synthesised and the artefact must not imply otherwise")
+        "decided and the value it binds. Neither row here documents a response, "
+        "so post-#812 the merge is a no-op and `24` is still the synthesised "
+        "opcode+1 echo; the artefact must not imply the spec gave it")
     # …and the two declared-silence cases keep FAILing, from both opcodes.
     assert st["send_load_no_wake"] == st["send_store_no_wake"] == "fail"
     assert (data["fail"], data["waived"], rc) == (3, 1, 1), data
@@ -347,21 +354,34 @@ def test_the_real_emitters_split_two_byte_identical_expectations(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# r6 — THE FIELD r5 RESOLVED INTO IS SYNTHESISED, NOT THE DESIGN'S DOCUMENT
+# r6's TRIPWIRE, FIRED — #812 landed and `response_payload_template` now
+# TRACKS the design's document
 # ---------------------------------------------------------------------------
-def test_the_stamped_template_carries_no_information_about_the_design(tmp_path):
-    """THE MEASUREMENT THAT MAKES r5's RESOLUTION A PROXY.
+def test_the_stamped_template_now_tracks_the_document(tmp_path):
+    """r6's OWN MEASUREMENT, RE-RUN AND INVERTED.
 
-    `gen_l3_cmd_protocol`'s enrichment loop stamps `response_payload_template`
-    unconditionally from `tx_len` and `opcode+1`. Drive the REAL emitter over
-    three command tables whose DOCUMENTS differ — two different response byte
-    groups and one with none at all — and the field r5 resolved into comes out
-    BYTE-IDENTICAL. A field that is invariant across the documents cannot be
-    evidence about any of them.
+    This test used to be `test_the_stamped_template_carries_no_information_
+    about_the_design` and asserted `len(set(stamped)) == 1`. Its docstring left
+    a tripwire: *"If this ever goes red because the stamped field started
+    tracking the document, the upstream defect has been fixed and the
+    `bound_by_document` arm below can be reconsidered — but not before."* It
+    went red against #812. The arm was reconsidered — see
+    `test_812_did_not_retire_the_bound_by_document_arm`, which measures it —
+    and this assertion is repointed at the post-cure truth rather than pinned
+    to the defect.
 
-    If this ever goes red because the stamped field started tracking the
-    document, the upstream defect has been fixed and the `bound_by_document`
-    arm below can be reconsidered — but not before."""
+    PRE-#812 (history): `gen_l3_cmd_protocol`'s enrichment assigned the
+    `tx_len`/`opcode+1` placeholder onto `response_payload_template`
+    unconditionally, so three command tables whose DOCUMENTS differ produced a
+    BYTE-IDENTICAL field — a field invariant across the documents, and
+    therefore evidence about none of them.
+
+    POST-#812: `_merge_response_payload_template` lets the document win every
+    `byte_offset` it covers, so the same three documents now produce three
+    DIFFERENT templates. The FIELD IS NOW EVIDENCE. The negative half is
+    asserted too and is the load-bearing one: the document that says nothing
+    still gets the placeholder, so the typed-shape guarantee survives the
+    cure."""
     stamped = []
     extracted = []
     for i, rows in enumerate((
@@ -377,14 +397,29 @@ def test_the_stamped_template_carries_no_information_about_the_design(tmp_path):
 
     assert len(set(extracted)) == 3, (
         f"fixture invalid: the three documents must differ: {extracted}")
-    assert len(set(stamped)) == 1, (
-        f"the stamped template is supposed to be document-INSENSITIVE here; "
-        f"if it now varies, re-read the r6 block: {stamped}")
-    # …and the two the document DID answer are fully concrete, so "no concrete
-    # golden" was false of them all along.
+    assert len(set(stamped)) == 3, (
+        f"the canonical template must now VARY with the document — that is "
+        f"#812. If this is back to 1 the merge has been reverted and the "
+        f"`bound_by_document` arm is load-bearing again for the FULL case as "
+        f"well as the partial one: {stamped}")
+    # The two documented ones are fully concrete IN THE CANONICAL FIELD now —
+    # "the spec gives no answer" was false of them all along, and after #812
+    # the canonical field says so instead of hiding it in the sibling.
     assert gate.concrete_reference_output(json.loads(extracted[0])) \
         == "41,AA,BB,CC,DD,89"
-    assert gate.concrete_reference_output(json.loads(stamped[0])) is None
+    assert gate.concrete_reference_output(json.loads(stamped[0])) \
+        == "41,AA,BB,CC,DD,89", (
+        "post-#812 the canonical template must carry the document's bytes; "
+        "if this is None again the merge is not running")
+    # …and the NEGATIVE half: the document that gave nothing still gets the
+    # untouched placeholder, so #812 did not cost the typed-shape guarantee.
+    assert json.loads(extracted[2]) is None
+    assert gate.concrete_reference_output(json.loads(stamped[2])) is None, (
+        "an UNdocumented response must still resolve to no concrete golden, "
+        "or the merge has started inventing bytes")
+    assert {e["provenance"] for e in json.loads(stamped[2])} == {
+        "synthesised_placeholder"}
+    assert {e["provenance"] for e in json.loads(stamped[0])} == {"document"}
 
 
 def test_a_documented_response_refuses_the_waiver_on_the_real_emitters(tmp_path):
@@ -392,11 +427,18 @@ def test_a_documented_response_refuses_the_waiver_on_the_real_emitters(tmp_path)
     groups.
 
     The document gives the response bytes; Phase 1 extracts them into
-    `response_payload_template_extracted` and stamps a TBD placeholder over
-    `response_payload_template`; r5 resolved the placeholder and WAIVED. A
-    waiver justified by "the spec gives no answer" must not fire BECAUSE the
-    spec gave one — least of all with the polarity that the better-documented
-    the design, the more certainly it fires."""
+    `response_payload_template_extracted`; r5 resolved the (then-stamped)
+    canonical field and WAIVED. A waiver justified by "the spec gives no
+    answer" must not fire BECAUSE the spec gave one — least of all with the
+    polarity that the better-documented the design, the more certainly it
+    fires.
+
+    #812 — the canonical field is no longer a placeholder here; the merge lets
+    the document win all six offsets, so it now equals the sibling. The pin
+    below is repointed at that: the refusal still fires, still through the
+    `bound_by_document` arm, and the artefact still names the DOCUMENT's key —
+    which is the part #812 does not make redundant, because a concrete
+    canonical value alone cannot say whose byte it is."""
     l3, cases, l10, sim = _real_cpu_project(
         tmp_path, [_documented_row(6, "40", ["0x41", "0xAA", "0xBB", "0xCC",
                                              "0xDD", "0x89"])])
@@ -405,9 +447,10 @@ def test_a_documented_response_refuses_the_waiver_on_the_real_emitters(tmp_path)
         "fixture invalid: the emitter did not extract the document's response "
         "bytes, so this control is not exercising r6 at all")
     assert gate.concrete_reference_output(
-        op["response_payload_template"]) is None, (
-        "fixture invalid: the stamped template must be the TBD placeholder, or "
-        "r5 would have refused this case for an unrelated reason")
+        op["response_payload_template"]) == "41,AA,BB,CC,DD,89", (
+        "post-#812 the merge must have carried the document's six bytes into "
+        "the canonical field; None here means the placeholder is being "
+        "stamped over the document again")
 
     rc, data = _run(tmp_path, l10, sim / "tb", sim / "work" / "summary.txt")
     st = {r["id"]: r["status"] for r in data["results"]}
@@ -588,32 +631,208 @@ def test_a_document_record_refuses_on_PRESENCE_not_on_concreteness():
 
 
 def test_the_document_is_consulted_BEFORE_the_synthesised_sibling(tmp_path):
-    """ORDER GUARD, and the case where getting it wrong prints a falsehood.
+    """ORDER GUARD, on the REAL emitters, repointed to the post-#812 truth.
 
-    A `tx_len=1` row whose DOCUMENT gives a response byte of `0x99`: Phase 1
-    stamps `[{value: 0x41}]` (the synthesised `opcode+1` echo) over
-    `response_payload_template` and puts the document's `0x99` in the extracted
-    sibling. Both arms REFUSE, so a reordering is verdict-equivalent — but the
-    artefact would quote `41`, a golden the document explicitly contradicts.
-    A refusal that misreports what the design said is the same species of
-    defect as a waiver that misreports it, so the order is pinned."""
+    A `tx_len=1` row whose DOCUMENT gives a response byte of `0x99`. PRE-#812
+    Phase 1 stamped `[{value: 0x41}]` — the synthesised `opcode+1` echo — over
+    `response_payload_template` and put the document's `0x99` in the extracted
+    sibling, so the two fields DISAGREED and reading the wrong one printed
+    `41`, a golden the document explicitly contradicts.
+
+    POST-#812 the merge lets the document win offset 0, so the canonical field
+    is now `99` — THE DOCUMENTED BYTE RATHER THAN THE SYNTHESISED ECHO, which
+    is the whole point of the cure. The two fields agree, so on THIS fixture
+    the order is no longer observable through the bytes; what it still decides
+    is WHICH KEY the artefact names, and that is what is pinned here.
+    `test_a_pre_812_l3_still_makes_the_order_load_bearing` keeps the
+    bytes-level guard alive on the shape that still exhibits it."""
     l3 = _emit_real_l3(tmp_path, [_documented_row(1, "40", ["0x99"])])
     op = l3["opcodes"][0]
-    assert gate.concrete_reference_output(op["response_payload_template"]) == "41"
     assert gate.concrete_reference_output(
-        op["response_payload_template_extracted"]) == "99", (
+        op["response_payload_template"]) == "99", (
+        "post-#812 the canonical field must be the DOCUMENTED byte 99, not "
+        "the synthesised opcode+1 echo 41 — that substitution is the defect "
+        "#812 cures")
+    assert gate.concrete_reference_output(
+        op["response_payload_template_extracted"]) == "99"
+
+    c = {"opcode_hex": "0x40", "expected": EXP_DEFERRED}
+    verdict, detail = gate.resolve_case_oracle(c, l3["opcodes"])
+    assert verdict == "bound_by_document", (verdict, detail)
+    assert detail == "response_payload_template_extracted=99", (
+        f"the artefact quoted {detail!r} — the refusal must be attributed to "
+        f"the DOCUMENT's own key. Post-#812 the canonical field holds the same "
+        f"bytes, but a concrete value there may equally be the synthesised "
+        f"echo, so naming `response_payload_template` would drop the one bit "
+        f"of provenance the reader needs")
+    assert gate.is_cpu_instruction_oracle_case(
+        c, "processor_cpu", l3["opcodes"]) is False
+
+
+def test_a_pre_812_l3_still_makes_the_order_load_bearing():
+    """THE ORDER GUARD'S SURVIVING SUBJECT: an L3 written BEFORE #812.
+
+    The cure changed the EMITTER, not the artefacts already on disk. A
+    pre-#812 `L3_CMD_PROTOCOL.json` — and the tracked corpus is 107 such
+    documents — still carries the placeholder stamped over a documented
+    response, so its two fields still DISAGREE and reading the wrong one still
+    prints a golden the document contradicts. This gate reads whatever L3 is on
+    disk, so the guard is not historical.
+
+    Hand-built rather than emitter-driven ON PURPOSE: the post-#812 emitter can
+    no longer produce this shape, and a test that quietly re-derived its
+    fixture from the fixed emitter would be asserting nothing."""
+    entry = {"hex": "0x40", "name": "OP", "tx_len": 1,
+             # what `gen_l3_cmd_protocol` wrote before the merge landed
+             "response_payload_template": [{"byte_offset": 0, "value": "0x41"}],
+             "response_payload_template_extracted": [
+                 {"byte_offset": 0, "value": "0x99"}]}
+    assert gate.concrete_reference_output(
+        entry["response_payload_template"]) == "41"
+    assert gate.concrete_reference_output(
+        entry["response_payload_template_extracted"]) == "99", (
         "fixture invalid: the two fields must DISAGREE, or the order is not "
         "observable")
 
     c = {"opcode_hex": "0x40", "expected": EXP_DEFERRED}
-    verdict, detail = gate.resolve_case_oracle(c, l3["opcodes"])
+    verdict, detail = gate.resolve_case_oracle(c, [entry])
     assert verdict == "bound_by_document", (verdict, detail)
     assert detail == "response_payload_template_extracted=99", (
         f"the artefact quoted {detail!r} — the document said 99 and the "
         f"synthesised echo said 41; a refusal must report the design's own "
         f"bytes, not Phase 1's placeholder")
     assert gate.is_cpu_instruction_oracle_case(
-        c, "processor_cpu", l3["opcodes"]) is False
+        c, "processor_cpu", [entry]) is False
+
+
+def _without_the_positional_record(op):
+    """The same entry minus `request_payload_template`.
+
+    Needed to ISOLATE `bound_by_document`. On emitter output a response sibling
+    only ever exists when a SECOND byte group was found, which means a FIRST one
+    was found too and filed positionally as the request — so r7's
+    `byte_record_unattributed` arm would catch the case regardless and mask
+    whatever `bound_by_document` does or does not do. Stripping that one key
+    leaves the shape a hand-written or third-party L3 has, where
+    `bound_by_document` is on its own."""
+    return {k: v for k, v in op.items() if k != "request_payload_template"}
+
+
+def test_812_did_not_retire_the_bound_by_document_arm(tmp_path):
+    """THE RECONSIDERATION r6's TRIPWIRE ASKED FOR — MEASURED, ARM BY ARM.
+
+    r6 said the `bound_by_document` arm "can be reconsidered" once the canonical
+    field started tracking the document. It has. The answer is that the arm
+    STAYS, and this is the measurement rather than the opinion: each fixture is
+    built by the REAL post-#812 emitter, then `document_reference_output` is
+    neutered — which is exactly "the arm removed" — and the verdict is read
+    back.
+
+      FULL doc (6 of 6 bytes)  arm off -> `bound`, still refused, and its detail
+        is now TRUE. #812 DID make the arm redundant FOR THE VERDICT here.
+      PARTIAL doc (2 of 6)     arm off -> `unbound`, WAIVED. The merge leaves
+        `source` placeholders in the gaps, so `concrete_reference_output`
+        answers None and `bound` cannot fire — a waiver justified by "the record
+        binds no reference output" would fire on an opcode whose document stated
+        41,99. #812 did NOT close this. This is the arm's residual population.
+      NO doc                   arm off -> `unbound`, WAIVED, byte-identical
+        either way. Nothing about the waiver's reachability depends on the arm.
+
+    So the redundancy #812 creates is on the FULL case only, and removing the
+    arm on the strength of it would re-open the exact defect r6 closed, one
+    fixture over."""
+    fixtures = {}
+    for tag, rows in (
+            ("full", [_documented_row(6, "40", ["0x41", "0xAA", "0xBB", "0xCC",
+                                                "0xDD", "0x89"])]),
+            ("partial", [_documented_row(6, "40", ["0x41", "0x99"])]),
+            ("none", ["4\t6\t00\t40\tLOAD"])):
+        op = _emit_real_l3(tmp_path / tag, rows)["opcodes"][0]
+        fixtures[tag] = _without_the_positional_record(op)
+
+    # The fixtures are what the docstring says they are — asserted, not assumed.
+    assert gate.concrete_reference_output(
+        fixtures["full"]["response_payload_template"]) == "41,AA,BB,CC,DD,89"
+    assert gate.concrete_reference_output(
+        fixtures["partial"]["response_payload_template"]) is None, (
+        "fixture invalid: a PARTIALLY documented response must still leave "
+        "`source` placeholders in the merged template, or it is not the case "
+        "this test exists for")
+    assert gate.concrete_reference_output(
+        fixtures["partial"]["response_payload_template_extracted"]) == "41,99"
+    assert "response_payload_template_extracted" not in fixtures["none"]
+
+    c = {"opcode_hex": "0x40", "expected": EXP_DEFERRED}
+    live = {t: gate.resolve_case_oracle(c, [e])[0]
+            for t, e in fixtures.items()}
+    assert live == {"full": "bound_by_document",
+                    "partial": "bound_by_document",
+                    "none": "unbound"}, live
+
+    real = gate.document_reference_output
+    try:
+        gate.document_reference_output = lambda entry: (None, None)
+        off = {t: gate.resolve_case_oracle(c, [e])
+               for t, e in fixtures.items()}
+        waived_off = {t: gate.is_cpu_instruction_oracle_case(
+            c, "processor_cpu", [e]) for t, e in fixtures.items()}
+    finally:
+        gate.document_reference_output = real
+
+    assert off["full"][0] == "bound", off["full"]
+    assert off["full"][1] == "response_payload_template=41,AA,BB,CC,DD,89", (
+        "…and post-#812 that detail is TRUE, which it was not before the cure")
+    assert waived_off["full"] is False
+
+    assert off["partial"][0] == "unbound", off["partial"]
+    assert waived_off["partial"] is True, (
+        "REMOVING THE ARM MUST STILL LOSE A REFUSAL. If this is False the "
+        "partial case is being caught elsewhere and the arm really can go — "
+        "check `bound` before believing it")
+
+    assert off["none"][0] == "unbound"
+    assert waived_off["none"] is True
+
+    # …and with the arm LIVE the partial case is refused, naming the document.
+    verdict, detail = gate.resolve_case_oracle(c, [fixtures["partial"]])
+    assert (verdict, detail) == (
+        "bound_by_document", "response_payload_template_extracted=41,99")
+    assert gate.is_cpu_instruction_oracle_case(
+        c, "processor_cpu", [fixtures["partial"]]) is False
+
+
+def test_the_waiver_still_fires_when_the_document_gives_NOTHING(tmp_path):
+    """THE NEGATIVE CONTROL, AT THE LAYER VERDICT — the case the arm exists for.
+
+    Every refusal added by r6/r7 and every consequence of #812 moves in the
+    WITHHOLDING direction, so the risk they carry is that the waiver stops being
+    reachable at all and `cap:cpu_functional_oracle` quietly becomes dead. This
+    drives the REAL emitters over a command table that documents NO response
+    bytes and asserts the whole gate still books the case WAIVED-DEFERRED —
+    same verdict, same census, same rc as before the cure.
+
+    #812 must not have touched this path, and the assertions below are the
+    proof: no extraction to merge means the placeholder stands unchanged, so
+    `unbound` is reached exactly as it was."""
+    l3, cases, l10, sim = _real_cpu_project(tmp_path, ["4\t6\t00\t40\tLOAD"])
+    op = l3["opcodes"][0]
+    assert "response_payload_template_extracted" not in op, (
+        "fixture invalid: the document must give NOTHING for this control")
+    assert gate.concrete_reference_output(
+        op["response_payload_template"]) is None
+    assert {e.get("provenance") for e in op["response_payload_template"]} == {
+        "synthesised_placeholder"}, (
+        "#812 tags what it merged; an undocumented response must be ALL "
+        "placeholder or the merge is inventing document bytes")
+
+    rc, data = _run(tmp_path, l10, sim / "tb", sim / "work" / "summary.txt")
+    st = {r["id"]: r["status"] for r in data["results"]}
+    res = {r["id"]: r["oracle_resolution"] for r in data["results"]}
+    assert st["send_load_happy"] == "waived", (st, res)
+    assert res["send_load_happy"] == "unbound:response_payload_template"
+    assert (data["fail"], data["waived"], rc) == (1, 1, 1), data
+    assert data["cpu_oracle_binding_census"] == {
+        "unbound": 1, "absence": 1, "document_derived_records": "0/1"}, data
 
 
 def test_the_bound_detail_names_the_field_that_decided():

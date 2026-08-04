@@ -436,7 +436,10 @@ def is_functional_vector(case: Dict[str, Any]) -> bool:
 #   BOUND_BY_DOCUMENT
 #            — Phase 1 extracted response bytes for this opcode out of the
 #              design's own document. The spec DID give an answer. NEVER waived,
-#              and checked before the synthesised sibling can say otherwise.
+#              and checked FIRST so the artefact quotes the document's bytes
+#              under the document's own key. Post-#812 this arm is the ONLY one
+#              that catches a PARTIALLY documented response — see the block
+#              above, where that is measured arm-by-arm.
 #   BYTE_RECORD_UNATTRIBUTED
 #            — the entry holds document-derived bytes whose SIDE the record
 #              cannot establish (a single-group row is filed positionally as
@@ -531,47 +534,94 @@ _RESPONSE_TEMPLATE_KEYS = tuple(
         "response_byte_template", "tx_payload_template",
         "response_payload", "response_bytes"))
 
-# ORGANIC #786 r6 — THE FIELD ABOVE IS NOT THE DESIGN'S DOCUMENT.
+# ORGANIC #786 r6/r7 + #812 — WHAT `response_payload_template` IS, AND SINCE
+# WHEN.
 #
+# 🟢 THE UPSTREAM CURE LANDED. r6 shipped this block headed "THE FIELD ABOVE IS
+# NOT THE DESIGN'S DOCUMENT" and closed it with "THE CURE IS UPSTREAM, AND THIS
+# IS NOT IT", naming the fix it wanted: the enrichment should FILL a gap, not
+# overwrite an extracted value. #812
+# (`phase1_doc_one_shot_runner._merge_response_payload_template`) IS that fix.
+# Everything r6 wrote about this field in the present tense is now HISTORY, and
+# is labelled as such below — a comment still describing a defect that has been
+# fixed is worse than no comment, because the next reader acts on it.
+#
+# ── HISTORY (r5/r6, pre-#812). WHAT THE FIELD USED TO BE ────────────────────
 # r5 resolved the case's pointer into `response_payload_template` and called
-# that "reading the L-doc". It is not. On any L3 that `gen_l3_cmd_protocol`
-# produced, that field is SYNTHESISED: the enrichment loop
-# (`phase1_doc_one_shot_runner.py:25092-25137`) stamps
+# that "reading the L-doc". It was not. `gen_l3_cmd_protocol`'s per-opcode
+# enrichment ASSIGNED a synthesised placeholder onto that field
+# unconditionally:
 #
 #     tx_len >= 2 -> [{value: opcode+1}, {source: payload} …, {source: crc8}]
 #     otherwise   -> [{value: opcode+1}]
 #
-# unconditionally, and its own comment says so — "intermediate bytes flagged
-# TBD with a `source` pointer so the gate's typed-shape requirement is met".
-# MEASURED (`test_the_stamped_template_carries_no_information_about_the_design`):
-# three command tables whose documents give three DIFFERENT response byte
-# groups — and one that gives none — produce a BYTE-IDENTICAL
-# `response_payload_template`. The field carries zero information about the
-# design, so BOTH r5 arms were decided by `tx_len`, not by the document:
-#   * `unbound` fired for `tx_len >= 2` — whatever the document said;
-#   * `bound`  fired for `tx_len < 2` on the synthesised `opcode+1` echo, so
-#     with a documented response of `0x99` the gate reported `bound:41`.
-#     (That verdict is FAIL either way, so it is fail-closed — but the REASON
-#     it printed was false, and r6 makes the artefact say which field decided.)
+# Three command tables whose documents gave three DIFFERENT response byte
+# groups produced a BYTE-IDENTICAL field, so it carried zero information about
+# the design and BOTH r5 arms were decided by `tx_len` rather than by the
+# document: `unbound` fired for `tx_len >= 2` whatever the document said, and
+# `bound` fired for `tx_len < 2` on the synthesised `opcode+1` echo — so with a
+# documented response of `0x99` the gate reported `bound:41`. The document's
+# own bytes went to the sibling `response_payload_template_extracted`, which no
+# consumer read. The polarity was inverted: the more completely a design
+# documented its protocol, the more certainly r5 waived it.
 #
-# WHERE THE DOCUMENT ACTUALLY IS. When the row DOES give the response bytes,
-# Phase 1 extracts them VERBATIM into the sibling
-# `response_payload_template_extracted` (`:24448`) — and the enrichment then
-# stamps the placeholder over `response_payload_template` anyway. So the more
-# completely a design documents its protocol, the more certainly r5 waived it:
-# a waiver justified by "the spec gives no answer" fired BECAUSE the spec gave
-# one and Phase 1 overwrote it. That polarity is what makes this the fifth
-# instance of the species rounds 1-4 were sent back over — a proxy standing in
-# for the fact, this time one layer down, in an L3 field instead of the prose.
+# ── PRESENT (post-#812). WHAT THE FIELD IS NOW ──────────────────────────────
+# The enrichment MERGES per `byte_offset`
+# (`gen_l3_cmd_protocol` -> `_merge_response_payload_template`): the DOCUMENT
+# wins every offset it covers, the synthesised placeholder survives only in the
+# gaps, the result spans the union of both offset domains, and every entry is
+# tagged `provenance` = `document` | `synthesised_placeholder`. The extraction
+# site is unchanged — the document's bytes still land in
+# `response_payload_template_extracted` first — but they are no longer
+# discarded.
 #
-# THE CURE IS UPSTREAM, AND THIS IS NOT IT. The right fix is that the
-# enrichment should FILL a gap, not overwrite an extracted value; that is a
-# Phase-1 change with a different owner and a much wider blast radius (it moves
-# L3 content for every symmetric-opcode design, and therefore RTL generation,
-# `_golden_bytes_from_l3_opcode` and `l3_opcode_response_template_check`).
-# What this gate does is CONTAIN the consequence, on the withholding side, so
-# the invariant still holds: the document-derived sibling can only ever REFUSE
-# the waiver, never grant it.
+# `test_the_stamped_template_now_tracks_the_document` is r6's own measurement,
+# re-run and INVERTED: the same three documents now produce three DIFFERENT
+# `response_payload_template`s, and the one that documents nothing still gets
+# the placeholder, byte-for-byte as before.
+#
+# ── WHAT THAT DOES TO THE ARMS, MEASURED PER ARM ────────────────────────────
+# `test_812_did_not_retire_the_bound_by_document_arm` neuters one arm at a time
+# and reads the verdict back, on entries carrying the post-#812 canonical
+# shape:
+#
+#   * FULLY documented response -> the merged field is now fully concrete, so
+#     `bound` ALSO refuses and its detail is now TRUE. `bound_by_document` is
+#     redundant FOR THE VERDICT here — but not for the provenance, below.
+#   * PARTIALLY documented response (document gives 2 of 6 bytes) -> the merge
+#     leaves `source` placeholders in the gaps, so `concrete_reference_output`
+#     still answers None and `bound` CANNOT fire. With `bound_by_document`
+#     removed the case is WAIVED — a waiver justified by "the record binds no
+#     reference output" firing on an opcode whose document stated `41,99`.
+#     #812 did NOT close this; it is the arm's residual population and the
+#     measured reason the arm stays.
+#   * document gives NOTHING -> `unbound`, waivable, byte-identical with and
+#     without the arm. Unchanged by #812, and the control that keeps the waiver
+#     reachable at all.
+#
+# WHY THE ARM STILL RUNS FIRST. Post-#812 a concrete `response_payload_template`
+# may be the document's bytes OR the synthesised `opcode+1` echo (a `tx_len < 2`
+# opcode with no documented response is still stamped `[{value: opcode+1}]`),
+# and `concrete_reference_output` cannot tell them apart — it reads `value`, and
+# both have one. The `_extracted` sibling exists ONLY because the document
+# spoke, so consulting it first is what keeps
+# `bound_by_document:…_extracted=99` on the artefact rather than
+# `bound:response_payload_template=…`, which after #812 no longer says whose
+# bytes those are.
+#
+# This gate deliberately does NOT read #812's new `provenance` tag. The sibling
+# already carries the same fact, it is the field that survives on L3 artefacts
+# written BEFORE the cure, and adding a second reader of a brand-new key is
+# exactly how the #761 two-readers-disagree defect starts.
+#
+# LEGACY ARTEFACTS. An L3 emitted before #812 still carries the placeholder
+# stamped over a documented response. There the two fields DISAGREE and the
+# order is load-bearing for TRUTH, not merely for provenance —
+# `test_a_pre_812_l3_still_makes_the_order_load_bearing` pins it on exactly
+# that shape.
+#
+# The invariant r6 established is untouched by any of this: the
+# document-derived sibling can only ever REFUSE the waiver, never grant it.
 #
 # Refusal keys on PRESENCE, not on concreteness. The presence of the key is
 # itself the fact — `_byte_list_to_payload_template` is called only when the
@@ -605,6 +655,15 @@ _RESPONSE_TEMPLATE_KEYS = tuple(
 # a group landing SECOND on the same table row. 0 of 203 corpus entries carry
 # it. So the r6 refusal arm is skipped on 100% of the corpus, which is the
 # shape of a refusal that is an admitting path in disguise.
+#
+# #812 DID NOT MOVE EITHER NUMBER, and that was checked rather than assumed.
+# The cure changed the MERGE, not the EXTRACTION: re-counted by AST on the
+# post-#812 `gen_l3_cmd_protocol` the answer is still seven construction sites
+# and one write site, and re-counted over the tracked corpus
+# (`git ls-files benchmark-data` -> `phase1/generated_docs/L3_*.json`, 107 docs,
+# 203 opcode entries) still 0 carry the sibling. Both sentences above therefore
+# STAND as written; only the consequence drawn from them changed, because the
+# canonical field now testifies too — see the post-#812 section higher up.
 #
 # (An earlier draft of this block said NINE. That came from a substring grep
 #  for `opcodes.append(`, which also matches the two `enriched_opcodes.append(`
@@ -647,11 +706,15 @@ _RESPONSE_TEMPLATE_KEYS = tuple(
 # states none — so it does not claim to. Widening the extractor is what closes
 # it; asserting it here is what r6 did wrong.
 #
-# The admission also still rests on the synthesised `response_payload_template`
-# binding no determinate value, which per the measurement above is a fact about
-# `tx_len` and nothing else. It is retained ONLY because dropping it would
-# WIDEN the waiver (a `tx_len < 2` entry would become waivable), so it sits on
-# the fail-closed side and is never cited as evidence.
+# The admission also still rests on `response_payload_template` binding no
+# determinate value. Pre-#812 that was a fact about `tx_len` and nothing else,
+# which is why r6 refused to cite it as evidence. Post-#812 it is a fact about
+# `tx_len` AND about what the document said — strictly more information than r6
+# had — but it is STILL not cited as evidence, for the reason above: a concrete
+# value there may be document-derived or may be the synthesised `opcode+1` echo,
+# and this gate does not read the tag that separates them. It is retained ONLY
+# because dropping it would WIDEN the waiver (a `tx_len < 2` entry would become
+# waivable), so it sits on the fail-closed side.
 #
 # DERIVED from `_RESPONSE_TEMPLATE_KEYS`, never hand-listed, so the two sets
 # cannot drift apart the way the gate and the emitter already did once.
@@ -792,10 +855,13 @@ def document_reference_output(entry: Dict[str, Any]
     """``(key, concrete_golden)`` for the response bytes Phase 1 EXTRACTED FROM
     THE DESIGN'S DOCUMENT, else ``(None, None)``.
 
-    This is the only field on an opcode entry that testifies to what the
-    document said; its synthesised sibling does not (see the block above).
-    `key` being non-None is the load-bearing answer — the golden is reported
-    alongside it so the refusal can quote what the document gave."""
+    This is the only field on an opcode entry that testifies UNAMBIGUOUSLY to
+    what the document said. Post-#812 the canonical `response_payload_template`
+    carries the document's bytes too — but merged with the synthesised
+    placeholder, and a concrete `value` there may be either, so it cannot answer
+    this question on its own (see the block above). `key` being non-None is the
+    load-bearing answer — the golden is reported alongside it so the refusal can
+    quote what the document gave."""
     for key in _EXTRACTED_TEMPLATE_KEYS:
         if key in entry:
             return key, concrete_reference_output(entry.get(key))
@@ -824,12 +890,14 @@ def reference_output_binding(entry: Dict[str, Any]
     (None when it carries none); `concrete_golden` is the byte string that key
     binds (None when it binds no determinate answer, or when there is no key).
 
-    NOTE what this is and is not: it reads the L3 field AS WRITTEN. On a
-    `gen_l3_cmd_protocol`-produced L3 that field is synthesised, so a `bound`
-    answer from here is "the field the case points at names a determinate
-    value", NOT "the document gives this answer". `document_reference_output`
-    is the one that can say the latter, and `resolve_case_oracle` consults it
-    FIRST."""
+    NOTE what this is and is not: it reads the L3 field AS WRITTEN, and says
+    nothing about that value's PROVENANCE. On a `gen_l3_cmd_protocol`-produced
+    L3 the field is a MERGE (post-#812) of the document's bytes over a
+    synthesised placeholder, so a concrete answer from here may be the
+    document's or may be the synthesised `opcode+1` echo. A `bound` answer is
+    therefore "the field the case points at names a determinate value", NOT
+    "the document gives this answer". `document_reference_output` is the one
+    that can say the latter, and `resolve_case_oracle` consults it FIRST."""
     for key in _RESPONSE_TEMPLATE_KEYS:
         if key in entry:
             return key, concrete_reference_output(entry.get(key))
@@ -908,11 +976,14 @@ def resolve_case_oracle(case: Dict[str, Any],
     entry = opcode_entry_for_case(case, l3_opcodes)
     if entry is None:
         return "opcode_unresolved", f"{len(l3_opcodes)} L3 opcode(s), none match"
-    # ORGANIC #786 r6 — FIRST, and before anything Phase 1 synthesised: did the
-    # DESIGN'S DOCUMENT give the response bytes for this opcode? If it did, the
-    # waiver's registered justification is false no matter what the stamped
-    # sibling says, and the more completely the design is documented the more
-    # important it is that this arm runs first.
+    # ORGANIC #786 r6, still first after #812 — did the DESIGN'S DOCUMENT give
+    # the response bytes for this opcode? If it did, the waiver's registered
+    # justification is false, whatever the canonical template resolves to. It
+    # runs FIRST for two measured reasons: it is the ONLY arm that catches a
+    # PARTIALLY documented response (the merge leaves `source` placeholders in
+    # the gaps, so `bound` cannot fire), and it is what puts the document's own
+    # key and bytes on the artefact instead of a merged field that no longer
+    # says whose bytes it is holding.
     doc_key, doc_golden = document_reference_output(entry)
     if doc_key is not None:
         return "bound_by_document", f"{doc_key}={doc_golden or 'present'}"
@@ -929,10 +1000,14 @@ def resolve_case_oracle(case: Dict[str, Any],
     declared_key, golden = reference_output_binding(entry)
     if golden is not None:
         # The field the case points at names a determinate value. On a
-        # Phase-1-emitted L3 that value is synthesised, so the detail names the
-        # KEY as well as the bytes — a reader must be able to see WHICH field
-        # decided, not be told "the spec gives this answer" on this gate's
-        # say-so.
+        # Phase-1-emitted L3 that value may be synthesised (pre-#812 it always
+        # was; post-#812 it is whichever of the document and the placeholder
+        # covered the offset), so the detail names the KEY as well as the bytes
+        # — a reader must be able to see WHICH field decided, not be told "the
+        # spec gives this answer" on this gate's say-so. Where the DOCUMENT is
+        # what decided, the arm above has already fired and named the
+        # document's own key, so reaching here means the document did not
+        # speak for this opcode.
         return "bound", f"{declared_key}={golden}"
     named = _names_a_reference_output(expected, declared_key)
     if named is None:
@@ -1395,7 +1470,15 @@ def document_record_provenance(l3_opcodes: Optional[List[Dict[str, Any]]]
     A refusal arm that is skipped because its input is absent looks identical,
     from the verdict alone, to a refusal arm that ran and found nothing. This
     number is what tells those two apart, so it is emitted next to every
-    waiver instead of left to be reconstructed."""
+    waiver instead of left to be reconstructed.
+
+    #812 gave the same number a SECOND reading, at no cost: the sibling this
+    counts is exactly what `_merge_response_payload_template` merges into the
+    canonical template, so ``k`` is also how many of the design's opcodes have
+    a `response_payload_template` carrying any document-derived byte at all.
+    ``0/N`` now means both "the refusal arm had no input" and "the merge had
+    nothing to merge" — the corpus answer to both is still 0/N, re-measured
+    post-#812 over the same 203 tracked entries."""
     if not l3_opcodes:
         return "0/0"
     k = sum(1 for op in l3_opcodes if document_reference_output(op)[0])
