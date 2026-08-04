@@ -1,0 +1,18 @@
+type: bug
+severity: P1
+component: flow-compliance/p0-structural-gate-umbrella
+plugin_version: "1.9.76"
+
+title: >-
+  Close the P0 structural-gate coverage hole: 36 of 246 registered checkers return no verdict on every run
+
+pattern: |
+  
+
+suggested_fix: |
+  Work the never-invoked set down to zero one gate at a time, each with its own re-derived measurement rather than a bulk conversion. Per gate: build the argv from the umbrella's own builder (never a re-typed literal, which agrees with the umbrella only by coincidence), run it over the tracked corpus, and record three numbers — new failures introduced, how many projects see the gate disclose a non-empty denominator, and whether an injected defect of the kind the gate exists to catch still makes it exit non-zero. A gate clearing all three earns an adapter entry. A gate whose missing argument is a fact about the design earns a discovery mode that must report when its enumeration was incomplete, or stays explicitly driven from the step that owns the value. A gate whose subject occurs nowhere in the corpus is de-registered only alongside a written statement of what stopped being checked, so the denominator cannot shrink silently. The corpus-reddening gates are the real work and must be scheduled as such: the largest reddens 102 of 107 tracked directories, and each of those projects needs its own verdict on whether the gate or the project is wrong before the gate can be wired.
+
+id: "ORGANIC-20260804-p0-umbrella-uninvoked-gate-coverage-hole"
+submitted_at: "2026-08-04T23:55:17+08:00"
+session_context: >-
+  Five convergence runs across five distinct designs — three on a public open PDK, two cells on a commercial process — each disclosing 36 of 246 registered structural gates as never validly invoked (36 of 245 on the run whose registry was one smaller), at two plugin releases, with the step still reading PASS and counting toward the run's PASS tally. Reconfirmed against the current sources: 246 gates registered, 32 names pinned in the invocability ratchet, 35 gate names carrying a row across the in-tree decision tables with all 32 ratcheted silences among them, and 4 disclosed silences carrying no row anywhere. The four deterministic rules captured alongside this entry fix how the hole is labelled, disclosed, ratcheted and prioritised; none of them closes it, and shipping them without this entry would imply otherwise.
