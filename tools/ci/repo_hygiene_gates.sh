@@ -221,13 +221,20 @@ run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_tar
 # host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
 run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py
 
-# vibe-ic#559 — 33 of the P0 umbrella's 243 registered gates reject the argv it
+# vibe-ic#559 — 36 of the P0 umbrella's 246 registered gates reject the argv it
 # builds, so they return no verdict, and `_p0_buckets_from_records` folds
 # NOT_INVOCABLE in with SKIP while the umbrella's pass flag is `len(fails) == 0`
-# — P0 reports PASS over 33 checks that never ran. Fixing that is blocked on
-# triaging the 33 (only 8 carry a recorded decision). This stops a 34th arriving
-# while that happens: the predicate is `measured ⊆ recorded`, so a fix passes and
-# a new silent gate does not. ~4s.
+# — P0 reports PASS over 36 checks that never ran, i.e. its true coverage is 210
+# of 246. Fixing that is blocked on triaging the 36, each of which now carries a
+# recorded decision. This stops a 37th arriving while that happens: the predicate
+# is `measured ⊆ recorded`, so a fix passes and a new silent gate does not.
+#
+# The counts above were 33/243 and then 32/246 until round 7, and the second pair
+# was WRONG rather than stale: this program re-typed `_gate_invocation`'s Rule A
+# and never had Rule B, so four gates that hand-roll their required-argument
+# check were invisible to it while the umbrella counted them. A count written
+# into prose stops tracking what it counts; a count re-typed into a second
+# predicate stops tracking it AND looks authoritative. ~4s.
 run "P0 gate invocability drift"        "$PLUGIN" python3 programs/p0_gate_invocability_drift_check.py
 
 run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_parses_check.py" --root "$ROOT"
