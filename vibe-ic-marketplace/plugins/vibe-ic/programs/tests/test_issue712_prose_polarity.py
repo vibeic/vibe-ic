@@ -339,3 +339,95 @@ def test_a_NEW_polarity_blind_extractor_FAILS(tmp_path):
                        capture_output=True, text=True, timeout=55)
     assert r.returncode == 1
     assert "some_extract::extract" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# NOT PROSE: an exemption, and the two ways it must be able to go wrong
+#
+# The set exists because a DEF/LEF production has no negation form — there is no
+# way to write "this via does NOT connect MET1 and MET2" — so `_prose_polarity`
+# on a VIAS entry would be an unreachable branch, and an unreachable branch is a
+# green light rather than a check. That argument is only safe if the set cannot
+# quietly become a waiver list, so it is fenced in both directions and both
+# fences are exercised here.
+# ---------------------------------------------------------------------------
+def test_an_exemption_removes_the_name_without_touching_the_baseline(tmp_path):
+    """The property the whole design turns on: an exemption may NOT be a way of
+    raising the register. The count printed against the baseline must be the
+    count with the exempted name taken OUT, not a bigger baseline."""
+    root = _tree(tmp_path, "")
+    (root / "programs" / "some_extract.py").write_text(_BLIND)
+    prog = str(PROGRAMS / "prose_polarity_consulted_check.py")
+    assert subprocess.run([sys.executable, prog, "--root", str(root),
+                           "--write-baseline"], capture_output=True,
+                          text=True, timeout=55).returncode == 0
+    before = json.loads((root / "programs"
+                         / "prose_polarity_baseline.json").read_text())
+    assert before["known"] == ["some_extract::extract"]
+
+    saved = dict(G._NOT_PROSE)
+    try:
+        G._NOT_PROSE["some_extract::extract"] = "x" * G._EXEMPT_REASON_MIN
+        assert G.exemptions_in_scope(root) == ["some_extract::extract"]
+        assert G.exemption_audit(G.scan(root), root) == []
+    finally:
+        G._NOT_PROSE.clear()
+        G._NOT_PROSE.update(saved)
+    # and the baseline file on disk is untouched by any of it
+    after = json.loads((root / "programs"
+                        / "prose_polarity_baseline.json").read_text())
+    assert after == before
+
+
+def test_an_exemption_whose_function_stopped_being_a_finding_FAILS(tmp_path):
+    """REVERSE CASE. An entry that names something the scan no longer flags is
+    dead weight: it makes the set look larger than the argument behind it, and
+    the next reader cannot tell a live exemption from a fossil."""
+    root = _tree(tmp_path, "")
+    (root / "programs" / "some_extract.py").write_text(_AWARE)   # not blind
+    saved = dict(G._NOT_PROSE)
+    try:
+        G._NOT_PROSE["some_extract::extract"] = "y" * G._EXEMPT_REASON_MIN
+        problems = G.exemption_audit(G.scan(root), root)
+    finally:
+        G._NOT_PROSE.clear()
+        G._NOT_PROSE.update(saved)
+    assert len(problems) == 1, problems
+    assert "Delete the entry" in problems[0]
+
+
+def test_an_exemption_with_no_real_argument_FAILS(tmp_path):
+    """The other fence. A one-word reason is how a register becomes a waiver
+    list; the entry has to carry the argument, not a gesture at one."""
+    root = _tree(tmp_path, "")
+    (root / "programs" / "some_extract.py").write_text(_BLIND)
+    saved = dict(G._NOT_PROSE)
+    try:
+        G._NOT_PROSE["some_extract::extract"] = "n/a"
+        problems = G.exemption_audit(G.scan(root), root)
+    finally:
+        G._NOT_PROSE.clear()
+        G._NOT_PROSE.update(saved)
+    assert len(problems) == 1, problems
+    assert "chars" in problems[0]
+
+
+def test_an_exemption_for_a_module_this_tree_does_not_have_is_out_of_scope(
+        tmp_path):
+    """`--root` is aimed at synthetic trees by this file and could be aimed at
+    any checkout. An exemption whose module is simply absent is out of scope,
+    not stale — judging it would make the verdict depend on which tree the gate
+    was pointed at."""
+    root = _tree(tmp_path, _BLIND)
+    assert G.exemptions_in_scope(root) == []
+    assert G.exemption_audit(G.scan(root), root) == []
+
+
+def test_the_shipped_exemption_is_live_and_argued():
+    """Not a fixture — the entry that actually ships. If it ever stops being a
+    finding, or its argument is trimmed, this says so."""
+    real = Path(__file__).resolve().parents[1].parent
+    assert G.exemption_audit(G.scan(real), real) == []
+    assert G.exemptions_in_scope(real) == sorted(G._NOT_PROSE)
+    for reason in G._NOT_PROSE.values():
+        assert len(reason.strip()) >= G._EXEMPT_REASON_MIN

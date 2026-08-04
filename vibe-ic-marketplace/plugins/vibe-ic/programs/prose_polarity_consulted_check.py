@@ -74,6 +74,34 @@ _POLARITY_NAMES = {
 #: Calls that read prose.
 _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 
+#: NOT PROSE — the input is a FORMAL GRAMMAR with no negation form.
+#:
+#: This is not the baseline and must never become one. The baseline is a debt
+#: register of extractors that SHOULD consult polarity and do not; this is the
+#: much narrower claim that the question does not arise, because the text being
+#: read is machine-written syntax in which "not" cannot be spelled. Consulting
+#: `_prose_polarity` there would add a call that can never fire, and a call that
+#: can never fire is a green light rather than a check.
+#:
+#: Every entry pays for itself twice:
+#:   * the reason must be a real argument (>= _EXEMPT_REASON_MIN chars), and
+#:   * `main` FAILS if an exempted function has gone away or has stopped being
+#:     polarity-blind — so the set cannot rot into a waiver list, and cannot be
+#:     padded with names that were never findings.
+#: The count is printed on every run, clean or not.
+_EXEMPT_REASON_MIN = 80
+_NOT_PROSE: Dict[str, str] = {
+    "macro_obs_geometry_intersect_check::parse_via_layers":
+        "LEF/DEF 5.8 VIAS section. The matched text is `- <viaName> ... "
+        "+ LAYERS <lower> <cut> <upper> ;` — a production of the DEF grammar, "
+        "emitted by the router, in which there is no form that DENIES a via's "
+        "layer pair: DEF gives no way to write 'this via does NOT connect MET1 "
+        "and MET2'. The two defects this gate was built from (#706 pdk_target, "
+        "#711 die_area_budget_um) both read English design documents, where "
+        "denial is spellable and was spelled. Consulting `_prose_polarity` on "
+        "a VIAS entry would be an unreachable branch.",
+}
+
 
 def _aliases(tree: ast.Module) -> Set[str]:
     """Local names bound to something from the polarity module."""
@@ -185,6 +213,43 @@ def scan(root: Path) -> List[str]:
     return sorted(set(found))
 
 
+def exemption_audit(blind_incl_exempt: List[str], root: Path) -> List[str]:
+    """Why each `_NOT_PROSE` entry is no longer earning its place, if any.
+
+    An exemption that names a function which has been deleted, renamed, or has
+    since started consulting polarity is dead weight that makes the set look
+    larger than the argument behind it. Reported as a FAILURE, so the only way
+    the set changes size is deliberately.
+
+    SCOPED TO THE TREE BEING SCANNED. `--root` is pointed at synthetic trees by
+    this gate's own tests and could be pointed at any checkout; an exemption
+    whose module is simply not in THAT tree is out of scope, not stale. Judging
+    it would make the gate's verdict depend on which tree it was aimed at, which
+    is the property a gate must not have."""
+    problems: List[str] = []
+    live = set(blind_incl_exempt)
+    for name, reason in sorted(_NOT_PROSE.items()):
+        module = name.split("::", 1)[0]
+        if not (root / "programs" / f"{module}.py").is_file():
+            continue                       # not this tree's business
+        if len(reason.strip()) < _EXEMPT_REASON_MIN:
+            problems.append(f"{name}: reason is {len(reason.strip())} chars, "
+                            f"under the {_EXEMPT_REASON_MIN} this set requires")
+        if name not in live:
+            problems.append(
+                f"{name}: exempted, but the scan does not flag it — the "
+                f"function is gone, renamed, or now consults polarity. Delete "
+                f"the entry.")
+    return problems
+
+
+def exemptions_in_scope(root: Path) -> List[str]:
+    """The `_NOT_PROSE` names whose module is present in this tree."""
+    return sorted(n for n in _NOT_PROSE
+                  if (root / "programs"
+                      / f"{n.split('::', 1)[0]}.py").is_file())
+
+
 def _load(p: Path) -> Optional[List[str]]:
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
@@ -208,7 +273,10 @@ def main(argv=None) -> int:
               f"{root}. NOT a pass.", file=sys.stderr)
         return 2
 
-    now = scan(root)
+    now_all = scan(root)
+    exempt_problems = exemption_audit(now_all, root)
+    exempted = exemptions_in_scope(root)
+    now = [n for n in now_all if n not in set(exempted)]
     bpath = Path(a.baseline) if a.baseline else root / "programs" / _BASELINE_NAME
 
     if a.write_baseline:
@@ -242,7 +310,16 @@ def main(argv=None) -> int:
     new = sorted(set(now) - set(base))
     gone = sorted(set(base) - set(now))
     print(f"  prose extractors that write a declared value: polarity-blind "
-          f"{len(now)} (baseline {len(base)})")
+          f"{len(now)} (baseline {len(base)}); "
+          f"{len(exempted)} exempted as formal grammar, not prose")
+    for nm in exempted:
+        print(f"     NOT PROSE  {nm}")
+    if exempt_problems:
+        print(f"\n[FAIL] {len(exempt_problems)} exemption(s) no longer carry "
+              f"their argument:")
+        for p in exempt_problems:
+            print(f"   {p}")
+        return 1
     if gone:
         print(f"  [NOTE] baseline shrank — now polarity-aware: "
               f"{', '.join(gone[:6])}. Re-run with --write-baseline.")
