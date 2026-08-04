@@ -28061,9 +28061,18 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # --- ORGANIC-20260531: Steps 24/25 IR-drop + EM (OpenROAD PSM) ------
     # NOT cascade-blocked by SPEF — analyze_power_grid walks the routed
     # DEF power grid directly. Emits reports/phase3/{ir_drop,em}.{rpt,json}.
+    #
+    # GUARDED BY `_signoff_regen`, NOT BY `.is_file()`. These four producers
+    # (IR, EM, antenna, SI) were the ones the `_signoff_regen` change left
+    # behind: it converted extraction and every STA artefact below and stopped
+    # here, so a re-run that re-routed refreshed the SPEF and the STA reports
+    # and then signed the power, reliability and crosstalk axes off with the
+    # PREVIOUS layout's numbers. The reports it skipped are the ones no
+    # downstream gate can date, so the mixture is silent — see `_signoff_regen`.
     ir_rpt = rpt_phase3 / "ir_drop.rpt"
     em_rpt = rpt_phase3 / "em.rpt"
-    if primary_def.is_file() and not (ir_rpt.is_file() and em_rpt.is_file()):
+    if primary_def.is_file() and (_signoff_regen(ir_rpt, primary_def)
+                                  or _signoff_regen(em_rpt, primary_def)):
         ir_ok, em_ok = _emit_ir_em_reports(
             project, top, pdk, container, ir_rpt, em_rpt, notes)
         if ir_ok:
@@ -28075,7 +28084,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 26 antenna (re-emit to audit path) ------
     antenna_rpt = rpt_phase3 / "antenna.rpt"
-    if primary_def.is_file() and not antenna_rpt.is_file():
+    if primary_def.is_file() and _signoff_regen(antenna_rpt, primary_def):
         if _emit_antenna_report(project, top, pdk, container,
                                 antenna_rpt, notes):
             written.append(str(antenna_rpt))
@@ -28083,7 +28092,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 27 SI / crosstalk (real SPEF coupling caps) --
     si_rpt = rpt_phase3 / "si_crosstalk.rpt"
-    if not si_rpt.is_file():
+    if _signoff_regen(si_rpt, primary_def):
         # v0.2.35: pass pdk + container so the SI emitter can ALSO run the
         # timing-window-aware ADVISORY upgrade (OpenSTA SI timing JSON →
         # window-gated watch-list) when a routed SPEF + post-route STA exist.
@@ -28526,7 +28535,17 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     _mcf_json = project / "reports/phase3/si_mcf_sta.json"
     _mcf_spef = sorted((project / "phase3/stage3/extracted").glob("*.spef")) \
         if (project / "phase3/stage3/extracted").is_dir() else []
-    if (not _mcf_json.is_file() and _mcf_spef
+    # Dated against the SPEF it folds, not against the bare existence of its own
+    # report. The MCF fold is a FUNCTION of that SPEF: `si_mcf_sta_check`
+    # re-derives the expected fold from whatever sits at the SPEF path NOW and
+    # compares it to the bounded SPEF emitted here, so an unrefreshed report
+    # leaves the gate comparing two files from different extractions. It then
+    # reports the mismatch as `FOLD_NOT_APPLIED` — a DESIGN defect ("the emitter
+    # dropped the fold") for what is really an unmatched artefact pair.
+    _mcf_newest_spef = max(_mcf_spef, key=lambda p: p.stat().st_mtime) \
+        if _mcf_spef else None
+    if (_mcf_newest_spef is not None
+            and _signoff_regen(_mcf_json, _mcf_newest_spef)
             and (project / "phase3/stage3/pnr/constraint.sdc").is_file()):
         try:
             _mcf_cmd = [sys.executable,
