@@ -161,13 +161,62 @@ _FAST = {"ff", "fast_fast", "fastfast", "fast"}
 _SLOW = {"ss", "slow_slow", "slowslow", "slow"}
 _TYP = {"tt", "typical", "typ", "nom"}
 
+_CORNER_ALT = (r"ss|tt|ff|sf|fs|slow_slow|fast_fast|typical|slowslow|fastfast|"
+               r"slow_fast|fast_slow|slowfast|fastslow|slow|fast|typ|nom")
+
 _PROC_RE = re.compile(
-    r"(?:^|[_/\-.\s:,])"
-    r"(ss|tt|ff|sf|fs|slow_slow|fast_fast|typical|slowslow|fastfast|"
-    r"slow_fast|fast_slow|slowfast|fastslow|slow|fast|typ|nom)"
-    r"(?:[_/\-.\s:,]|$)",
+    r"(?:^|[_/\-.\s:,=])"
+    r"(" + _CORNER_ALT + r")"
+    r"(?:[_/\-.\s:,=\"']|$)",
     re.IGNORECASE,
 )
+
+#: An EXPLICIT corner ASSIGNMENT — `process=FF`, `corner: ss`, `pvt=tt`. This is
+#: the script STATING which corner the hold analysis runs at, as opposed to a
+#: corner designator that merely occurs somewhere on the line (most often inside
+#: a Liberty FILENAME, `…__ff_n40C_1v95.lib`).
+#:
+#: The two are not the same claim and they can disagree. MEASURED, on the
+#: emitter's own banner, with no PDK material involved:
+#:
+#:   read_liberty /pdk/lib/acme_sc__ff_n40C_1v95.lib
+#:   puts $_f "=== HOLD corner: process=SS liberty=/pdk/lib/acme_sc__ff_n40C_1v95.lib ==="
+#:   report_checks -path_delay min
+#:
+#: -> rc=0 PASS "HOLD_AT_FF", basis `declared_hold_view`. The script says SS —
+#: the defect this gate exists to catch — and the gate certified FF off the
+#: FILENAME while claiming to have judged the declaration. `=` was absent from
+#: the delimiter class above, so `=SS` was not merely outranked, it was
+#: invisible; the only corner the line yielded was the filename's.
+#:
+#: The mirror case cost a real run: a PDK whose Liberty filenames carry NO
+#: corner designator (a perfectly ordinary naming convention) produced
+#: `hold_feed_corners: []` and rc=1 `NO_FEED_CORNER` on a hold sign-off whose
+#: own banner reads `process=FF` and whose stance record independently declares
+#: HOLD_AT_FF. The gate reported "no corner could be identified" while quoting,
+#: in its own `hold_feed_lines`, the line that identifies it.
+#:
+#: So on a hold-view line an explicit assignment DECIDES and the incidental
+#: tokens are disclosed, not judged. This is narrower than the old behaviour in
+#: the direction that matters (a declared SS can no longer be masked by an ff
+#: filename) and wider only where the line said so itself. Lines with no
+#: assignment — `set_hold_view -corner ff_view` — are unaffected and still fall
+#: through to the union rule.
+_CORNER_ASSIGN_RE = re.compile(
+    r"\b(?:process|corner|pvt|view|mode|operating_condition|opcond)\s*[=:]\s*"
+    r"\"?'?(" + _CORNER_ALT + r")(?![\w-])",
+    re.IGNORECASE,
+)
+
+
+def _assigned_corners_in(text: str) -> List[str]:
+    """Corners named by an EXPLICIT `<key>=<corner>` assignment on this line."""
+    out = []
+    for m in _CORNER_ASSIGN_RE.finditer(text):
+        c = _classify_corner(m.group(1))
+        if c in ("FF", "SS", "TT"):
+            out.append(c)
+    return out
 
 # Lines that introduce a Liberty / operating-condition used by the MIN (hold)
 # analysis. We mine the Liberty read AND any min-path / hold view assignment.
@@ -236,9 +285,27 @@ def evaluate(text: Optional[str]) -> Tuple[str, int, dict]:
 
     # RULE 2 — a line that explicitly ties hold/min to a corner outranks every
     # other liberty in the file (see the module docstring).
+    #
+    # WITHIN such a line the same precedence applies again, and for the same
+    # reason: an explicit `process=<corner>` assignment is the script's own
+    # statement of the hold corner, while a designator sitting in a Liberty
+    # FILENAME on that line is the name of a file it happens to read. When both
+    # are present and they DISAGREE, judging their union lets the filename mask
+    # a declared SS — see `_CORNER_ASSIGN_RE`. The assignment decides; the rest
+    # of the line is disclosed under `view_line_incidental_corners`.
     view_corners: List[str] = []
+    view_assigned: List[str] = []
+    view_incidental: List[str] = []
     for line in view_lines:
-        view_corners.extend(_corners_in(line))
+        assigned = _assigned_corners_in(line)
+        incidental = [c for c in _corners_in(line) if c not in assigned]
+        view_assigned.extend(assigned)
+        view_incidental.extend(incidental)
+        view_corners.extend(assigned if assigned else _corners_in(line))
+    if view_assigned:
+        report["view_line_assigned_corners"] = sorted(set(view_assigned))
+        if view_incidental:
+            report["view_line_incidental_corners"] = sorted(set(view_incidental))
 
     feed_corners: List[str] = []
     for line in feed_lines:
