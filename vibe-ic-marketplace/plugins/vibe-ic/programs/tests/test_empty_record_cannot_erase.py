@@ -32,8 +32,19 @@ sys.path.insert(0, str(PROGRAMS))
 import atpg_untestable_fault_classify as auc            # noqa: E402
 import payload_bit_position_check as pbp                # noqa: E402
 import per_source_record_merge_check as guard           # noqa: E402
-from _source_record_merge import (DENIES, INDETERMINATE,  # noqa: E402
-                                  SILENT, merge_source_records)
+import _source_record_merge as _srm                     # noqa: E402
+from _source_record_merge import merge_source_records   # noqa: E402
+
+# The three stance names are read off the module rather than imported by name,
+# and this is not stylistic. Running this file against the PRE-FIX source is
+# how the fix is shown to be load-bearing, and a `from ... import DENIES`
+# against a module that has no `DENIES` yet fails at COLLECTION -- which runs
+# ZERO tests and therefore demonstrates nothing about any of them. With the
+# fallbacks the control still collects, every test still executes, and each one
+# fails (or does not) on its own terms where the reason can be read.
+SILENT = getattr(_srm, "SILENT", "silent")
+DENIES = getattr(_srm, "DENIES", "denies")
+INDETERMINATE = getattr(_srm, "INDETERMINATE", "indeterminate")
 
 
 # ══════════════════════════════════════════════════════════ 1. THE RULE ══════
@@ -591,6 +602,39 @@ def test_payload_bitmap_byte_named_without_bits_does_not_blank_the_other_layer(t
     swapped = pbp.parse_bitmap(None, l4, l3)
     assert both == swapped
     assert both["status_byte"] == {"bit0": "busy", "bit1": "err"}
+
+
+def test_payload_says_out_loud_which_empties_it_could_not_classify(tmp_path,
+                                                                   capsys):
+    """SITE 4, and the "cannot tell" state reaching a human.
+
+    The rows survived, which is the rule working. But the reason the empty
+    layer was empty is NOT recoverable from the JSON -- `"status_byte": {}` is
+    what an author writes both for "this byte has no bit-level meaning" and for
+    "the rows are in the other document" -- and a program that keeps the rows
+    and says nothing has quietly asserted the second reading.
+
+    So the byte is NAMED. The observable is the report, not the merge: the
+    answer is identical either way, which is precisely why the report is the
+    only place the difference can show up.
+    """
+    l3 = tmp_path / "l3.json"
+    l4 = tmp_path / "l4.json"
+    l3.write_text(json.dumps({"bit_layouts": {
+        "status_byte": {"bit0": "busy"}, "mode_byte": {"bit0": "run"}}}))
+    l4.write_text(json.dumps({"bit_layouts": {
+        "status_byte": {}, "cfg_byte": {"bit7": "en"}}}))
+
+    capsys.readouterr()
+    merged = pbp.parse_bitmap(None, l3, l4)
+    err = capsys.readouterr().err
+
+    assert merged["status_byte"] == {"bit0": "busy"}, "the rows must survive"
+    assert "[WARN]" in err, "an unclassifiable empty was merged in silence"
+    assert "status_byte" in err, err
+    # and ONLY the ambiguous one -- a warning that names every byte is a
+    # warning nobody reads, which is how this kind of report stops working
+    assert "mode_byte" not in err and "cfg_byte" not in err, err
 
 
 # ═══════════════════════════════════════════════ 2. THE REVERSE CASE ══════
