@@ -78,6 +78,7 @@ import metal_layer_density_check as _mld  # metal-layer NAME authority (producer
 import _signoff_drc_format as _sdf  # sign-off DRC producer classification (ONE answer)
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
+import _sta_basis  # the ONE reader of the `STA_BASIS:` stamp (no second copy)
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -29230,16 +29231,49 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
     # flags. A genuinely pre-layout report (or an absent one) is left alone.
     pre_pnr = sta_out / "pre_pnr_timing.rpt"
     _pre_pnr_stale = (pre_pnr.is_file()
-                      and "STA_BASIS: PRE_LAYOUT" not in pre_pnr.read_text())
+                      and _sta_basis.declared_basis(pre_pnr.read_text())
+                      != "PRE_LAYOUT")
     if not pre_pnr.is_file() or _pre_pnr_stale:
+        # BLOCKING-1 (2026-08-05 review). The source must be chosen by what the
+        # corner report DECLARES, not by its filename. Forcing the basis in
+        # `_emit_multi_corner_sta` only re-stamps the corners whose re-emit
+        # SUCCEEDED; a corner whose OpenSTA run failed contributes no fresh
+        # report, and — before the quarantine above — left its POST_ROUTE one
+        # sitting under the very name this loop reaches for first. Picking by
+        # name then composed a PRE-LAYOUT header over a POST_ROUTE body and the
+        # step still returned PASS: the could-not-measure state resolving to
+        # measured-clean. Only a report that declares PRE_LAYOUT may be the
+        # source of a pre-layout report; the belt goes with the braces because
+        # a mislabelled corner report can reach per_corner/ by routes this step
+        # does not own.
+        def _prelayout_src(cand: Path) -> bool:
+            try:
+                return (_sta_basis.declared_basis(cand.read_text())
+                        == "PRE_LAYOUT")
+            except OSError:
+                return False
+
         src = None
-        for cand in ("sta_SS.rpt", "sta_TT.rpt", "sta_FF.rpt"):
-            if (per_corner / cand).is_file():
-                src = per_corner / cand
+        _rejected: List[str] = []
+        _ordered = [per_corner / c
+                    for c in ("sta_SS.rpt", "sta_TT.rpt", "sta_FF.rpt")]
+        if per_corner.is_dir():
+            _ordered += [p for p in sorted(per_corner.glob("sta_*.rpt"))
+                         if p not in _ordered]
+        for cand in _ordered:
+            if not cand.is_file():
+                continue
+            if _prelayout_src(cand):
+                src = cand
                 break
-        if src is None and per_corner.is_dir():
-            _any = sorted(per_corner.glob("sta_*.rpt"))
-            src = _any[0] if _any else None
+            _rejected.append(cand.name)
+        if _rejected:
+            notes.append(
+                "pre-layout compose REFUSED corner report(s) "
+                + ", ".join(_rejected)
+                + " — they do not declare STA_BASIS PRE_LAYOUT, and a "
+                  "pre-layout report composed from a post-route body is the "
+                  "contradiction this step exists to remove")
         if src is not None:
             pre_pnr.write_text(
                 "# PRE-LAYOUT STA (Step 10) — genuine OpenSTA on the synth\n"
@@ -29252,16 +29286,73 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
             notes.append("pre-layout STA produced no corner report — "
                          "pre_pnr_timing.rpt deferred (sta tool unavailable?)")
 
+    # BLOCKING-1 (2026-08-05 review), second half. Refusing to COMPOSE from a
+    # post-route body is necessary but not sufficient: when nothing genuine was
+    # available the pre-existing `pre_pnr_timing.rpt` is simply LEFT — and it is
+    # the contradiction. Two distinct outcomes, deliberately not merged:
+    #
+    #   * POSITIVELY declares POST_ROUTE — the file states, about ITSELF, that
+    #     it is the wrong side of PnR while sitting at the pre-layout path. That
+    #     is a mislabel on its own testimony, so quarantine it (bytes kept under
+    #     a non-`.rpt` suffix) rather than publish it to Step 10.
+    #   * UNDECLARED (`declared_basis` -> None) — per `_sta_basis`'s stated
+    #     contract, None is neither basis; it is "the report stated no side".
+    #     Deleting a file on an absence would be acting on a question it never
+    #     answered, so it is LEFT ALONE and only reported.
+    #
+    # BOTH are a step that could not substantiate the pre-layout artefact it
+    # owns, so NEITHER may return PASS. Silently PASSing here is precisely the
+    # could-not-measure -> measured-clean collapse this PR is written about;
+    # Step 10 scoring MISSING against an absent report is the honest outcome,
+    # and a WARN says so where the run can see it.
+    _pre_pnr_basis: Optional[str] = None
+    _pre_pnr_ok = True
+    if pre_pnr.is_file():
+        _pre_pnr_basis = _sta_basis.declared_basis(pre_pnr.read_text())
+        if _pre_pnr_basis != "PRE_LAYOUT":
+            _pre_pnr_ok = False
+            if _pre_pnr_basis == "POST_ROUTE":
+                _q = pre_pnr.parent / (pre_pnr.name + ".stale_basis")
+                try:
+                    pre_pnr.replace(_q)
+                    notes.append(
+                        f"pre_pnr_timing.rpt declared STA_BASIS POST_ROUTE "
+                        f"under this step's PRE-LAYOUT header and no genuine "
+                        f"pre-layout corner report could replace it — "
+                        f"quarantined to {_q.name}; Step 10 is MISSING, which "
+                        f"is the honest state, NOT clean")
+                    if str(pre_pnr) in written:
+                        written.remove(str(pre_pnr))
+                except OSError as exc:
+                    notes.append(
+                        f"pre_pnr_timing.rpt declares POST_ROUTE and could "
+                        f"NOT be quarantined ({exc}) — a post-route body is "
+                        f"published under a PRE-LAYOUT header")
+            else:
+                notes.append(
+                    "pre_pnr_timing.rpt carries NO recognised STA_BASIS stamp "
+                    "— this step cannot substantiate it as pre-layout, and an "
+                    "undeclared report is not evidence of either basis; left "
+                    "in place, reported, NOT counted as clean")
+
     # `canon_sdc` is deliberately NOT part of this predicate when the design
     # staged no SDC (see Step 7b): the artefact this step owns pre-layout is
     # the deck the pre-layout STA actually read plus the PVT matrix. Asserting
     # on `canon_sdc` would make the honest "left to the owning step" path
     # report WARN.
     ok = runner_sdc.is_file() and pvt_path.is_file() and (
-        canon_sdc.is_file() or not design_staged)
+        canon_sdc.is_file() or not design_staged) and _pre_pnr_ok
     detail = (f"pre-layout stage-2 sign-off emitted BEFORE PnR: "
               f"{len(written)} artefact(s)"
               + ("; " + "; ".join(notes[-2:]) if notes else ""))
+    if not _pre_pnr_ok:
+        # Lead with WHY, not with the artefact count — a detail that opens
+        # "sign-off emitted" while the pre-layout basis is unsubstantiated
+        # reads clean at a glance, which is the whole failure mode.
+        detail = (f"pre-layout basis UNSUBSTANTIATED "
+                  f"(pre_pnr_timing.rpt declared "
+                  f"{_pre_pnr_basis or 'no STA_BASIS'}, not PRE_LAYOUT) — "
+                  + detail)
     return StepResult("prelayout_signoff", "PASS" if ok else "WARN",
                       time.time() - t0, detail, written)
 
@@ -32018,12 +32109,51 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         # earlier post-route round: on a re-run per_corner/ already holds
         # POST_ROUTE reports, and skipping them would preserve the exact
         # mislabel this forces away. Reuse only when the existing report already
-        # carries the basis we are about to stamp; otherwise fall through and
+        # DECLARES the basis we are about to stamp; otherwise fall through and
         # overwrite it.
-        if rpt.is_file() and (not force_prelayout
-                              or f"STA_BASIS: {basis}" in rpt.read_text()):
-            any_emitted = True
-            continue
+        #
+        # The stamp is read through `_sta_basis.declared_basis` — the tree's ONE
+        # reader — not by substring. A substring test (`f"STA_BASIS: {basis}"
+        # in text`) is a different, weaker question: it matches the emitter's
+        # exact spelling and spacing, so `#  STA_BASIS:   PRE_LAYOUT_ESTIMATE`
+        # reads as "not our basis" and a healthy report is re-run every time,
+        # while `STA_BASIS_NOTE: ... PRE_LAYOUT_ESTIMATE ...` reads as "ours"
+        # and a stale one is kept. The shared reader answers the question we
+        # mean — WHICH SIDE OF PnR does this report declare — and prefix-
+        # normalises `PRE_LAYOUT_ESTIMATE`/`POST_ROUTE_SPEF` to their canonical
+        # names.
+        _want = _sta_basis.normalise_basis(basis)
+        if rpt.is_file():
+            _have = _sta_basis.declared_basis(rpt.read_text())
+            if not force_prelayout or (_want is not None and _have == _want):
+                any_emitted = True
+                continue
+            # BLOCKING-1 (2026-08-05 review). A forced pre-layout re-emit that
+            # LEAVES the stale report in place until the tool overwrites it is
+            # only correct while the tool succeeds. When this corner's run
+            # fails, `rc != 0 or not rpt.is_file()` takes the failure branch —
+            # but the POST_ROUTE report is still on disk, so `per_corner/`
+            # keeps the very mislabel this call exists to remove, and the
+            # composer downstream happily picks it as the pre-layout source.
+            # Move the stale report ASIDE FIRST, so a failed re-emit degrades
+            # to ABSENT (honest: the estimate could not be substantiated)
+            # rather than to a surviving contradiction. The bytes are kept
+            # next to it under a non-`.rpt` suffix so nothing globbing
+            # `sta_*.rpt` can re-adopt them, and a reader can still see what
+            # was displaced.
+            _quar = rpt.parent / (rpt.name + ".stale_basis")
+            try:
+                rpt.replace(_quar)
+                notes.append(
+                    f"forced pre-layout STA: quarantined {corner} report "
+                    f"declaring basis {_have or 'UNDECLARED'} -> "
+                    f"{_quar.name} before re-emit (a failed re-emit must "
+                    f"leave NO report, never a mislabelled one)")
+            except OSError as exc:
+                notes.append(
+                    f"forced pre-layout STA: could NOT quarantine stale "
+                    f"{corner} report ({exc}) — refusing to re-emit over it")
+                continue
         # Build OpenSTA tcl: read_liberty + read_verilog + read_sdc +
         # report_checks. Container path translation for tool to find.
         netlist_c = _to_container_path(str(netlist), container)
@@ -32089,7 +32219,12 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         # #437(c): remove the work files + dir so an EMPTY per_corner
         # never stands as an unsubstantiated multi-corner claim. The
         # failure reasons live in `notes`.
-        for debris in list(out_dir.glob("sta_*.tcl")) + list(out_dir.glob("sta_*.log")):
+        # `.stale_basis` quarantines are debris too in this branch: nothing was
+        # substantiated, so there is no per_corner/ to keep them beside, and
+        # leaving them would block the rmdir and make the note below a lie.
+        for debris in (list(out_dir.glob("sta_*.tcl"))
+                       + list(out_dir.glob("sta_*.log"))
+                       + list(out_dir.glob("sta_*.rpt.stale_basis"))):
             try:
                 debris.unlink()
             except OSError:
