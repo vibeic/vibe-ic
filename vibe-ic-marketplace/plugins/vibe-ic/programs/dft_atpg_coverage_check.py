@@ -387,8 +387,9 @@ def evaluate(coverage_json: Optional[dict],
 
 # ── L20 gate applicability (vibe-ic#603 item 3) ────────────────────────
 # The 95 % foundry floor is a SIGN-OFF requirement for a design that DECLARES a
-# DFT topology. A design whose own inputs declare NO DFT requirement
-# (L20 dft_present=false, no scan chains / tap / compression / bist) should have
+# DFT topology. A design whose own inputs DECLARE no DFT requirement — L20
+# applicability NOT_APPLICABLE, or an EXTRACTED L20 carrying no chains / tap /
+# compression / bist — should have
 # its ATPG coverage reported as INFORMATIONAL, not FAILed against the floor —
 # otherwise the flow's auto-inserted scan chain produces a coverage number that
 # a design that never asked for DFT is then punished by. This reads the design's
@@ -415,7 +416,21 @@ def l20_dft_applicability(project: Path) -> dict:
 
     Returns ``{l20_present, applicable, asserts_dft, reason}``. When L20 is
     absent or unparseable the floor stands (``asserts_dft`` conservatively True-
-    equivalent: we return asserts_dft=None and the caller keeps the floor)."""
+    equivalent: we return asserts_dft=None and the caller keeps the floor).
+
+    An L20 that is PRESENT but has never claimed extraction is the SAME
+    uninformative state and gets the SAME conservative answer — its
+    ``dft_present: false`` is the emitter's field default, not a decision. Only
+    ``asserts_dft is False`` licenses disabling the foundry floor, and after
+    this change exactly ONE state produces it: ``applicability:
+    NOT_APPLICABLE`` — an explicit, human-authored declaration.
+
+    KNOWN AND DELIBERATELY UNTOUCHED, opposite direction: a layer that DOES
+    claim extraction and records no DFT is currently folded into
+    ``asserts_dft=True`` by the ``is_extraction_claimed`` term, so it keeps the
+    floor even though it is the one state that would legitimately earn the
+    downgrade. Correcting that LOOSENS the gate for some designs and is a
+    separate decision; it is not bundled here, where every change tightens."""
     out = {"l20_present": False, "applicable": None, "asserts_dft": None,
            "reason": None}
     if _l20c is None:
@@ -445,18 +460,51 @@ def l20_dft_applicability(project: Path) -> dict:
             if k in fields:
                 return fields[k]
         return None
-    asserts = (
+    declares_topology = (
         _truthy(_get(_L20_PRESENT_KEYS))
         or _truthy(_get(_L20_TAP_KEYS))
         or _truthy(_get(_L20_COMPRESSION_KEYS))
         or _truthy(_get(_L20_BIST_KEYS))
         or _truthy(_get(_L20_CHAIN_KEYS))
-        or _l20c.is_extraction_claimed(doc)
     )
-    out["asserts_dft"] = bool(asserts)
-    out["reason"] = ("L20 declares a DFT topology" if asserts
-                     else "L20 declares NO DFT requirement "
-                          "(dft_present false, no chains/tap/compression/bist)")
+    if declares_topology or _l20c.is_extraction_claimed(doc):
+        out["asserts_dft"] = True
+        out["reason"] = "L20 declares a DFT topology"
+        return out
+
+    # NOT-RUN IS NOT RAN-AND-EMPTY. What is left here is a layer that is
+    # present, asserts no DFT topology, AND has never claimed extraction — the
+    # emitter's untouched skeleton, whose `dft_present: false` is a FIELD
+    # DEFAULT, not a decision. `l_doc_consumer_contract.is_extraction_claimed`
+    # names this trap in its own docstring: the producer state is THREE-valued
+    # (NOT-RUN / RAN-AND-EMPTY / RAN-AND-FOUND) and only RAN-AND-EMPTY is a
+    # design saying "I need no DFT". Reading NOT-RUN as RAN-AND-EMPTY turns the
+    # ABSENCE of a stated requirement into a DECLARATION that the requirement is
+    # absent, and silently switches off a foundry sign-off floor on that basis.
+    #
+    # This function already fails safe for its other two uninformative states —
+    # see the docstring: "When L20 is absent or unparseable the floor stands".
+    # An un-extracted skeleton carries no more information than an absent file,
+    # so it must not buy a LOOSER verdict than deleting the file would. Before
+    # this change the gate was NON-MONOTONIC IN EVIDENCE: `rm L20_*.json` made
+    # it STRICTER than leaving the empty skeleton in place.
+    #
+    # asserts_dft=None is the value the caller already treats as "keep the
+    # floor" (`l20.get("asserts_dft") is False` gates the downgrade), so the
+    # unknown state now lands on the conservative side by construction. The two
+    # genuine downgrade paths are untouched: `applicability: NOT_APPLICABLE`
+    # (early return above) and a layer that claims extraction. chip-AGNOSTIC —
+    # no design, PDK, vendor or part literal is involved.
+    out["asserts_dft"] = None
+    out["reason"] = (
+        f"L20 is present but UN-EXTRACTED (extraction_status="
+        f"{str(doc.get('extraction_status') or 'unset')!r}, no chains/tap/"
+        f"compression/bist and no extraction_evidence), so whether this design "
+        f"requires DFT is UNKNOWN, not declared-absent. The foundry floor "
+        f"STANDS — an un-extracted layer must not buy a looser verdict than "
+        f"having no layer at all. To report ATPG coverage as informational, "
+        f"the design must actually declare it: set L20 applicability to "
+        f"NOT_APPLICABLE, or extract L20 and record the no-DFT decision.")
     return out
 
 
