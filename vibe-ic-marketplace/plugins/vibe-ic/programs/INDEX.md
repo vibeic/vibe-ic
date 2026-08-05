@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1055
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1055)
+- **Total programs (excluding helpers / shims):** 1056
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1056)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1046 |
+| `any` | 1047 |
 
 ## Alphabetical listing
 
@@ -143,6 +143,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `bitwidth_consistency_check` | any | — | flag Verilog bit-selects that exceed the register's declared width. |
 | `ble_protocol_synth` | any | v0.1.84 | Bluetooth Low Energy 5.2-class protocol synth helper. |
 | `blindness_audit` | any | — | deterministic prompt-only blindness audit. |
+| `blocker_classification_check` | any | — | Guard the classified blocker list's contract on a compliance report. |
 | `bram_init_file_actually_loaded_check` | any | Wave 16 | Catch the silent failure where BRAM/ROM init data declared in RTL |
 | `bram_init_portable_compat_check` | any | v0.116 | Detect `$readmemh` / `$readmemb` BRAM initialisation that is silently |
 | `bram_pdob_combinational_check` | any | v0.116 | BACKLOG-v11 P1.3 (WARNING-class). |
@@ -1127,7 +1128,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1046 programs)
+### `any` (1047 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1246,6 +1247,7 @@ _(no programs in this group)_
 - `bitwidth_consistency_check` — flag Verilog bit-selects that exceed the register's declared width.
 - `ble_protocol_synth` — Bluetooth Low Energy 5.2-class protocol synth helper.  _[v0.1.84]_
 - `blindness_audit` — deterministic prompt-only blindness audit.
+- `blocker_classification_check` — Guard the classified blocker list's contract on a compliance report.
 - `bram_init_file_actually_loaded_check` — Catch the silent failure where BRAM/ROM init data declared in RTL  _[Wave 16]_
 - `bram_init_portable_compat_check` — Detect `$readmemh` / `$readmemb` BRAM initialisation that is silently  _[v0.116]_
 - `bram_pdob_combinational_check` — BACKLOG-v11 P1.3 (WARNING-class).  _[v0.116]_

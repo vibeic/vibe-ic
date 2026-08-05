@@ -69,6 +69,7 @@ import fnmatch
 import functools
 import glob
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -88,6 +89,10 @@ import _gate_invocation
 # `flow_step_execution_coverage_check` so a tier added here cannot be
 # unknown to the guard that adjudicates dependency ordering.
 import _flow_verdict_tiers as _T
+# The classified blocker list emitted BESIDE the tally. Import-only-downward:
+# this module reads `_flow_verdict_tiers` and nothing from here, so the verdict
+# path above cannot acquire a dependency on a classification.
+import _blocker_classification as _bc
 import fpga_board_capability as _fpga_cap
 
 try:
@@ -7784,29 +7789,202 @@ def _check_condition(project: Path, condition: Dict[str, Any]) -> bool:
     # alongside its input lets an unrunnable step still reach its gate and say
     # so, instead of being skipped by condition and read as nothing to report.
     if files and condition.get("any_of", False):
-        if not any(_glob_first(project, pat) for pat in files):
+        if not any(_condition_pattern_satisfied(project, pat)
+                   for pat in files):
             return False
         return True
     if files:
         for pat in files:
-            if _glob_first(project, pat):
-                continue
-            # Auto-derive analog block list from L9 if requested
-            if "analog_block_list" in pat:
-                if _l9_has_analog_modules(project):
-                    continue
-                # v0.2.55 — canonical-path tolerance. The analog runner
-                # writes the block list to the canonical analog dir
-                # (`_pl.analog_dir` = phase3/analog/), but the flow-def
-                # condition historically pins `phase1/analog/`. Accept the
-                # canonical location too, and fall back to L5_ADI_SPEC's
-                # `analog_blocks` array (Phase-1 doc-extraction emits it).
-                # chip-AGNOSTIC: existence of an analog block list anywhere
-                # canonical, never a chip name.
-                if _has_canonical_analog_blocks(project):
-                    continue
-            return False
+            if not _condition_pattern_satisfied(project, pat):
+                return False
     return True
+
+
+def _condition_pattern_satisfied(project: Path, pat: str) -> bool:
+    """True when ONE `files_exist` condition pattern is satisfied.
+
+    For an ordinary pattern this is existence, unchanged.
+
+    THE ANALOG BLOCK LIST IS DECIDED ON CONTENT, NOT EXISTENCE.
+    The A1..A9 + M1..M4 stages are all triggered by
+    `files_exist: [<...>/analog_block_list.json]`. That trigger used to be
+    satisfied by the file merely BEING THERE, which asks "did anything write a
+    block list" — a question ADJACENT to the one the condition exists to answer,
+    "does this design have analog blocks to process". The two diverge on the
+    exact input the flow most wants to reward: a Phase-1 extraction that looked
+    for analog content, found none, and SAID SO by emitting
+
+        {"blocks": [], "no_analog": true}
+
+    Existence-only read that as "analog track applies", so all thirteen analog /
+    mixed-signal steps were expected, none could ever produce an artefact for a
+    design that has no analog block, and each landed as MISSING — i.e. as work
+    that should have happened and did not. A digital project whose Phase 1 wrote
+    NOTHING got SKIPPED-CONDITION for the same steps. The honest disclosure was
+    scored strictly worse than silence, which inverts the incentive the
+    disclosure exists to create.
+
+    Note this function does not introduce the content test; the same module
+    ALREADY has one (`_has_canonical_analog_blocks` requires a non-empty
+    `blocks`/`analog_blocks` and honours `no_analog`). It was sitting two lines
+    below as a FALLBACK, so it was only ever consulted when the file was absent
+    — never in the case it was written for. This makes the primary path agree
+    with the fallback that was already there.
+
+    Direction of the change: this NARROWS the trigger (existence -> existence
+    AND declares >=1 block). It cannot open an analog step that used to run:
+    a block list naming real blocks still triggers the whole track, at the
+    literal declared path or the canonical one, and an L9 `analog_modules`
+    array still triggers it with no block list at all.
+
+    Fail-LOUD on doubt: a block list that cannot be read or parsed is treated as
+    TRIGGERING, exactly as before. Only a list that positively and parseably
+    declares zero blocks stands the track down, so a corrupt or truncated list
+    can never silently delete the analog track.
+
+    chip-AGNOSTIC: JSON structure only — no chip, vendor, PDK or SKU literal.
+    """
+    hits = _glob_first(project, pat)
+    if "analog_block_list" not in pat:
+        return bool(hits)
+
+    # PRE-FIX semantics, computed FIRST and held as a ONE-WAY CEILING. This
+    # function is only ever allowed to NARROW: a project the existence-only
+    # read stood the track DOWN on must still stand it down, whatever the
+    # undecidable probe below finds. Without this the probe would WIDEN — a
+    # project whose only block list is a dangling symlink resolves to no hit
+    # (so pre-fix: SKIPPED-CONDITION) yet is present to `lexists` and
+    # unreadable, so an unscoped probe would newly OPEN thirteen steps on it.
+    # Restoring fail-loud must not become a licence to trigger.
+    pre_fix_satisfied = (bool(hits)
+                         or _l9_has_analog_modules(project)
+                         or _has_canonical_analog_blocks(project))
+    if not pre_fix_satisfied:
+        return False
+
+    for rel in hits:
+        decl = _analog_block_list_declares_blocks(project / rel)
+        if decl is not False:      # True (has blocks) or None (unreadable)
+            return True
+    # No resolved list declares blocks. The two historical fallbacks still
+    # apply, and both are already content-aware.
+    if _l9_has_analog_modules(project):
+        return True
+    # v0.2.55 — canonical-path tolerance. The analog runner writes the block
+    # list to the canonical analog dir (`_pl.analog_dir` = phase3/analog/), but
+    # the flow-def condition historically pins `phase1/analog/`. Accept the
+    # canonical location too, and fall back to L5_ADI_SPEC's `analog_blocks`
+    # array (Phase-1 doc-extraction emits it). chip-AGNOSTIC.
+    if _has_canonical_analog_blocks(project):
+        return True
+    # Every list `_glob_first` RESOLVED parses cleanly and declares zero
+    # blocks — but `_glob_first` short-circuits at the FIRST root that has a
+    # file, so a list at the sibling reachable root was never even opened.
+    # Before standing thirteen steps down, look there too.
+    if _analog_trigger_undecidable(project, pat):
+        return True
+    return False
+
+
+# ── Where an analog-block-list condition can actually SEE a list ────────────
+# `_glob_first` resolves such a pattern at exactly TWO roots: the literal root
+# the flow-def pins (`phase1/analog/`), and the canonical analog root
+# `_pl.analog_dir()` (`phase3/analog/`) it re-probes when the pinned path
+# misses. `phase2/analog/` and a bare `analog/` are remap SOURCES, never remap
+# TARGETS, so a block list written at either is invisible to this condition at
+# EVERY payload — measured False across the full payload grid.
+#
+# That deferral is deliberate and safe (it can only leave the track running,
+# never stand it down), and widening `_glob_first`'s remap to cover those roots
+# would touch every `phase{1,2,3}/analog/*` condition in the flow, so it is not
+# this change's business. But a deferral is only honest while it is PINNED:
+# this tuple, plus its characterization test, is that pin. If a future
+# `_glob_first` change opens or re-closes a root, the pin fails loudly instead
+# of the reachability silently drifting under the undecidable probe below.
+#
+# Only the DEFERRED set is a literal. The reachable set is pattern-relative and
+# is therefore computed, by `_analog_block_list_probe_paths` below — a second
+# hand-maintained list of it would be an unasserted constant free to drift from
+# the behaviour it claims to describe, which is the very failure being fixed.
+_ANALOG_BLOCK_LIST_ROOTS_DEFERRED = ("phase2/analog", "analog")
+
+
+def _analog_block_list_probe_paths(project: Path, pat: str) -> List[Path]:
+    """The block-list paths this pattern can reach.
+
+    See the reachability note above for why the set is exactly these two.
+    """
+    if any(c in pat for c in "*?["):
+        # A glob pattern has no single literal path to probe; `_glob_first`'s
+        # own resolution is the whole answer for it. No analog condition in the
+        # flow-def is a glob today; this is the honest degradation if one ever
+        # is, and it degrades to pre-fix behaviour, not past it.
+        return []
+    paths = [project / pat]
+    try:
+        paths.append(_pl.analog_dir(project) / Path(pat).name)
+    except Exception:
+        pass
+    out: List[Path] = []
+    for p in paths:                       # de-dupe, order-preserving
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def _analog_trigger_undecidable(project: Path, pat: str) -> bool:
+    """Is some REACHABLE analog block list present but impossible to judge?
+
+    `_glob_first` answers "which list did the pattern resolve to", and it
+    short-circuits: the pinned root winning means the canonical root is never
+    looked at. So a tree carrying BOTH a clean `{"blocks": []}` at the pinned
+    root AND a corrupt or dangling list at the canonical root reads, through
+    the resolved hit alone, as a positive declaration of no analog — and
+    thirteen steps stand down on the strength of a file nobody could read.
+
+    `lexists`, not `is_file`: a dangling symlink IS a list somebody put there
+    and IS unreadable, which is the definition of undecidable. `is_file()` on
+    it says False, i.e. "absent", which is precisely the wrong answer.
+
+    Returning True here only ever KEEPS the track running (the caller has
+    already established the pre-fix read was True), so this can add work to
+    look at, never remove any. chip-AGNOSTIC: paths and JSON shape only.
+    """
+    for probe in _analog_block_list_probe_paths(project, pat):
+        if not os.path.lexists(probe):
+            continue
+        if _analog_block_list_declares_blocks(probe) is None:
+            return True
+    return False
+
+
+def _analog_block_list_declares_blocks(path: Path) -> Optional[bool]:
+    """Does this analog block list declare at least one block?
+
+    True  — a non-empty `blocks` / `analog_blocks` array, and not `no_analog`.
+    False — parsed cleanly and positively declares none.
+    None  — could not be read or parsed; the caller must NOT read that as
+            "no analog". Unreadable is not evidence of absence.
+    """
+    try:
+        d = json.loads(path.read_text())
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    blocks = d.get("blocks")
+    if blocks is None:
+        blocks = d.get("analog_blocks")
+    if not isinstance(blocks, list):
+        # No block array at all — this file is not the shape we can judge.
+        return None
+    # A named block WINS over a `no_analog` flag that contradicts it. The two
+    # disagreeing is a Phase-1 defect, and the non-suppressive reading of a
+    # self-contradictory list is the one that keeps the analog track running so
+    # somebody has to look at it.
+    if len(blocks) > 0:
+        return True
+    return False
 
 
 def _has_canonical_analog_blocks(project: Path) -> bool:
@@ -10600,6 +10778,65 @@ def main(argv: Optional[List[str]] = None) -> int:
         for adv in advisories:
             print(f"  ⚠ {adv}")
 
+    # ── the classified blocker list, beside the tally ──────────────────────
+    #
+    # THE TALLY IS NOT A MEASUREMENT OF THE DESIGN and this is the part that
+    # is. Measured in one round on one cell: real post-route 3-corner STA —
+    # strictly BETTER evidence — scored 17 PASSes LOWER, and disabling a
+    # deliberate cross-step check scored 2 PASSes HIGHER with the design
+    # untouched. X/Y moved twice, in opposite directions, for reasons that had
+    # nothing to do with the design. What describes the design is which steps
+    # are not green and WHAT EACH ONE IS — plugin defect, design fact, missing
+    # capability — and until this block that classification existed only as
+    # prose an agent might write, in a shape no consumer could read.
+    #
+    # STRICTLY ADDITIVE, and the ordering here is the proof: `overall`,
+    # `counts`, every promotion tier and every exit-code decision are already
+    # settled above. Nothing below is read by any of them. A classification
+    # that could move a verdict would immediately be worth gaming, which is the
+    # disease this exists to diagnose.
+    #
+    # Wrapped, for the same reason the audit emission below is wrapped: a
+    # defect in the classifier must not be able to change what this program
+    # reports about a chip. It is NOT silent — the failure is printed and, when
+    # `--json` is on, recorded in the report, because an empty blocker list
+    # that means "the classifier crashed" and an empty one that means "nothing
+    # is blocked" must not be the same artifact.
+    blocker_list_error = ""
+    # ONLY the steps this run ACTUALLY routed into the open-source-constraints
+    # deferral — never bare membership of `_OPEN_SOURCE_CONTAINER_BLOCKED_STEPS`.
+    # The table says "this step would also need a commercial tool to SIGN OFF",
+    # which is true of steps that are on the blocker list for entirely other
+    # reasons. Measured before narrowing: table membership classified 10 of 41
+    # blockers on the reference run as MISSING_CAPABILITY, four of them
+    # PASS_VOIDED_BY_DEPENDENCY and one a step whose own gate program ran and
+    # returned a verdict. `oss_blocked_skipped` and `os_constraints_deferrals`
+    # are decisions this run made; the table is a lookup that answers a
+    # neighbouring question.
+    _oss_deferred: Dict[Any, str] = {}
+    for _r in oss_blocked_skipped:
+        _oss_deferred[_r.id] = _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS.get(
+            _r.id, "a commercial tool")
+    for _d in os_constraints_deferrals:
+        if _d.get("commercial_tool_required"):
+            _oss_deferred[_d["step_id"]] = _d["commercial_tool_required"]
+    try:
+        blockers = _bc.build_blockers(
+            results,
+            flow_steps=steps,
+            oss_blocked=_oss_deferred,
+            gate_summary_fn=_declared_gate_summary)
+        for _line in _bc.render_lines(blockers):
+            print(_line)
+    except Exception as _bc_exc:  # pragma: no cover - defence in depth
+        blockers = []
+        blocker_list_error = f"{type(_bc_exc).__name__}: {_bc_exc}"
+        print(f"flow_compliance_check: WARN — blocker classification failed "
+              f"({blocker_list_error}); the list below is EMPTY BECAUSE OF "
+              f"THAT, not because nothing is blocked", file=sys.stderr)
+    blocker_class_counts = _bc.class_counts(blockers)
+    blocker_sub_class_counts = _bc.sub_blocker_class_counts(blockers)
+
     if args.json:
         out = {
             "flow": args.flow,
@@ -10628,6 +10865,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             "allow_thin_input": bool(getattr(args, "allow_thin_input", False)),
             "input_doc_count": _count_input_docs(project),
             "ordering_violations": ordering_fail_lines,
+            # THE CLASSIFIED BLOCKER LIST, machine-readable, beside the tally.
+            # `counts` says how many; this says what each one IS, with the rule
+            # that decided it named in `basis` so a reader can audit the
+            # classification instead of trusting it. UNCLASSIFIED is a
+            # first-class answer here: an honest hole is workable, a wrong
+            # class is not.
+            "blocker_schema_version": _bc.SCHEMA_VERSION,
+            "blockers": blockers,
+            "blocker_class_counts": blocker_class_counts,
+            "blocker_sub_class_counts": blocker_sub_class_counts,
+            # Empty string on the normal path. Non-empty means the list above
+            # is empty because the classifier failed, which is a completely
+            # different fact from "nothing is blocked".
+            "blocker_list_error": blocker_list_error,
             "steps": [asdict(r) for r in results],
         }
         Path(args.json).write_text(json.dumps(out, indent=2))
@@ -10777,6 +11028,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "review_required": True}
                 for r in oss_blocked_skipped
             ],
+            # The classified blocker list, in the artifact the mcp-eda
+            # pre-burn guard and the dashboards already read. `failed_gates`
+            # here is a list of NAMES; this is the same population with the
+            # one fact a name does not carry — whether closing it is a plugin
+            # fix, a design FAIL that must never be greened, or a capability
+            # to name.
+            "blocker_schema_version": _bc.SCHEMA_VERSION,
+            "blockers": blockers,
+            "blocker_class_counts": blocker_class_counts,
+            "blocker_sub_class_counts": blocker_sub_class_counts,
+            "blocker_list_error": blocker_list_error,
             "command_argv": list(sys.argv),
         }
         # v1.6.27: route via auto-router so the audit lands at
