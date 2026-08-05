@@ -263,6 +263,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `defect_artifact_snapshot` | any | v0.2.98 | Filing-side helper for the field-agent / community-backlog filing flow |
 | `deliverable_verdict_consistency_check` | any | — | a deliverable may not contradict the orchestrator it claims to summarise. |
 | `derived_clock_sdc_required_check` | any | — | Verify any register-divided clock in the RTL has a matching `create_generated_clock` entry in the SDC. |
+| `derived_corpus_figure_check` | any | — | A checker's docstring may not state a corpus funnel it does not compute. |
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and flow-effort recommendation. |
 | `design_input_digest` | any | — | a published tally must carry a record of WHAT it was computed over, so a reader can tell "the design improved" from "the ruler changed". |
 | `design_one_shot_runner` | any | Wave 45 | the DESIGN one-shot runner (Phase 1 -> Phase 2: (doc|prompt) → L1-L27 JSON → RTL → SOF → <half-duplex-tester>). |
@@ -1367,6 +1368,7 @@ _(no programs in this group)_
 - `defect_artifact_snapshot` — Filing-side helper for the field-agent / community-backlog filing flow  _[v0.2.98]_
 - `deliverable_verdict_consistency_check` — a deliverable may not contradict the orchestrator it claims to summarise.
 - `derived_clock_sdc_required_check` — Verify any register-divided clock in the RTL has a matching `create_generated_clock` entry in the SDC.
+- `derived_corpus_figure_check` — A checker's docstring may not state a corpus funnel it does not compute.
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and flow-effort recommendation.
 - `design_input_digest` — a published tally must carry a record of WHAT it was computed over, so a reader can tell "the design improved" from "the ruler changed".
 - `design_one_shot_runner` — the DESIGN one-shot runner (Phase 1 -> Phase 2: (doc|prompt) → L1-L27 JSON → RTL → SOF → <half-duplex-tester>).  _[Wave 45]_
