@@ -271,6 +271,22 @@ _SIGNOFF_HEADER_RE = re.compile(
     r"([\w.+-]+?)(?:-RC)?\s*$", re.IGNORECASE)
 _CORNERS_AVAIL_RE = re.compile(r"#\s*corners_available:\s*(.+)", re.IGNORECASE)
 _PER_CORNER_RPT_RE = re.compile(r"^sta_(.+)\.rpt$", re.IGNORECASE)
+# A per_corner report that DISCLOSES a PRE_LAYOUT basis is Step-10 (pre-PnR)
+# evidence sharing the `per_corner/` directory — it is NOT a Step-23 post-route
+# sign-off corner. `_emit_multi_corner_sta`/`step_prelayout_signoff` stamp
+# `STA_BASIS: PRE_LAYOUT_ESTIMATE` into every pre-layout corner report; this gate
+# is the POST-ROUTE sign-off completeness gate, and `_merge_slack` keeps the
+# WORST datapoint per corner, so folding that pessimistic pre-layout estimate
+# into the PROCESS-axis sign-off corner is the #778 basis-contamination disease
+# in a reader #778 never reached. MEASURED on a post-route run whose per_corner/
+# also held Step-10 pre-layout evidence: a genuine pre-layout SS -0.57 masked
+# the true post-route SS -0.08 the OCV report recorded; on a design PnR lifts
+# past zero it would FALSE-FAIL a passing sign-off. Only an EXPLICIT PRE_LAYOUT
+# disclosure is excluded here — an
+# unstamped or POST_ROUTE-stamped per_corner report is read exactly as before,
+# so a real post-route per_corner violation is never swallowed.
+_STA_BASIS_PRE_LAYOUT_RE = re.compile(
+    r"STA_BASIS\s*:\s*PRE[_-]?LAYOUT", re.IGNORECASE)
 
 # ── R4: corner -> liberty resolution ───────────────────────────────────────
 # The emitter records which liberty each reported corner was actually analysed
@@ -837,9 +853,13 @@ def read_declarations(project: Path) -> Dict[str, object]:
 
 # ── record discovery ───────────────────────────────────────────────────────
 def read_records(project: Path,
-                 decl: Dict[str, object]) -> Dict[Tuple[str, str], Dict[str, object]]:
+                 decl: Dict[str, object],
+                 pre_layout_excluded: Optional[List[str]] = None,
+                 ) -> Dict[Tuple[str, str], Dict[str, object]]:
     """Every per-corner timing datapoint the run actually produced, keyed by
-    (axis, corner)."""
+    (axis, corner). `pre_layout_excluded`, when supplied, collects the paths of
+    per_corner reports skipped for disclosing a PRE_LAYOUT basis (see
+    `_STA_BASIS_PRE_LAYOUT_RE`) so the exclusion is surfaced, never silent."""
     recs: Dict[Tuple[str, str], Dict[str, object]] = {}
 
     def _put(axis: str, corner: str, source: str,
@@ -912,6 +932,15 @@ def read_records(project: Path,
                 body = rpt.read_text(errors="replace")
             except OSError:
                 body = ""
+            if _STA_BASIS_PRE_LAYOUT_RE.search(body):
+                # Step-10 pre-layout evidence living in the shared per_corner/
+                # dir. This is the POST-ROUTE sign-off completeness gate, so a
+                # pre-layout estimate is not a sign-off corner datapoint —
+                # excluded here, recorded (never a silent drop). Its own gate
+                # (`sta_report_check`, PRE_LAYOUT scope) still consumes it.
+                if pre_layout_excluded is not None:
+                    pre_layout_excluded.append(_rel(project, rpt))
+                continue
             _put(AXIS_PROCESS, m.group(1), _rel(project, rpt),
                  extract_slacks(body))
 
@@ -1067,7 +1096,8 @@ def evaluate(project: Path,
     """Pure evaluator over a run dir. ALWAYS returns the full per-corner
     evidence table under `corners`, whatever the verdict."""
     decl = read_declarations(project)
-    records = read_records(project, decl)
+    pre_layout_excluded: List[str] = []
+    records = read_records(project, decl, pre_layout_excluded)
     axes = read_axis_evidence(project, decl)
 
     declared: List[Dict[str, str]] = decl.get("declared") or []   # type: ignore[assignment]
@@ -1165,6 +1195,7 @@ def evaluate(project: Path,
             "corners": table, "primary_corner": primary,
             "declaration_sources": decl.get("sources"),
             "axis_evidence": axes,
+            "pre_layout_per_corner_excluded": pre_layout_excluded,
             "slack_tol_ns": slack_tol, "rules_violated": [],
         }
 
@@ -1452,6 +1483,7 @@ def evaluate(project: Path,
         "primary_corner": primary,
         "declaration_sources": decl.get("sources"),
         "axis_evidence": axes,
+        "pre_layout_per_corner_excluded": pre_layout_excluded,
         "single_corner_only": bool(degraded_disclosed),
         "corner_rows": _total_rows,
         "signoff_corner_rows": _signoff_rows,
