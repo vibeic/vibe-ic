@@ -34,7 +34,7 @@
     "opentitan_aes": "reproduction for #405 — its input/docs/ drives the real walker that returned null for everything; also read directly by tests under programs/tests/",
     "edge_llm_accel": "read directly by tests under programs/tests/ (its input/docs/ and its published-cell layer gates); provenance-defect row in #413",
     "caravel_user_project": "provenance-defect row in #413; inventory member of the #419/#426 layout-artefact audits",
-    "u_hawaii_adc": "read directly by tests under programs/tests/ (published-cell layer gates); the one cell whose audit and orchestrator verdicts contradict each other"
+    "u_hawaii_adc/v1.9.86_sky130A": "the converged analog cell, re-verified on plugin 1.9.86 (PASS=8 FAIL=0 MISSING=0, gate exit 0). It has no phase2/ because it runs the A-track, not the digital RTL->synth stage; the structure gate records that as a disclosed note rather than a silent pass. The IC's top level also keeps two non-cell trees that are NOT superseded evidence and must not be swept: `phase3/`, which eight tests under programs/tests/ read directly at phase3/analog/hardmacro/, and `clean_run_v1422_20260715`, whose path is named verbatim by the repro commands of #141/#142/#143."
   },
   "notes": [
     "**The `#235` attribution is weaker than this repo repeats.** PR #421 and issue #440 both state that `sha256/clean_run_v1422_20260715` IS the #235 reproduction. Checked: #235's own body and comments name no `benchmark-data/` path at all, and the run its landing comment cites as byte-identical evidence is `spm/v1.5.65_sky130A`. The cell is still load-bearing — #140/#145/#146/#147 itemise its files as evidence — but not for the reason most often given for keeping it. A citation repeated three times is not a citation checked once.",

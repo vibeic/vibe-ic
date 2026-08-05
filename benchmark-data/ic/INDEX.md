@@ -11,12 +11,12 @@ This tree holds converged evidence AND runs that did not converge, and the folde
 
 | classification | cells |
 |---|---|
-| CONVERGED EVIDENCE | 3 |
+| CONVERGED EVIDENCE | 4 |
 | RETAINED FAILURE | 13 |
-| UNAUDITED RECORD | 13 |
-| **total** | **29** |
+| UNAUDITED RECORD | 11 |
+| **total** | **28** |
 
-## CONVERGED EVIDENCE — 3
+## CONVERGED EVIDENCE — 4
 
 The cell's own audit artefact reads PASS or PASS_WITH_WAIVERS. This is what the project means when it says a cell converged.
 
@@ -25,6 +25,7 @@ The cell's own audit artefact reads PASS or PASS_WITH_WAIVERS. This is what the 
 | `spm/v1.5.58_ihp-sg13g2` | PASS_WITH_WAIVERS | P35 F0 M0 W3 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged; the real-GDS source for #287/#291 and the formal-evidence-chain repro for #412/#417/#418/#420 |
 | `spm/v1.5.65_sky130A` | PASS_WITH_WAIVERS | P35 F0 M0 W3 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged; the byte-identical witness run the #235 fix landed against, and the corpus #421/#441 measured gate coverage on |
 | `spm/v1.5.66_gf180mcuD` | PASS_WITH_WAIVERS | P33 F0 M0 W4 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged; repro for #363 (EM coordinates outside the die) and second site of the #366/#381 formal false-PASS |
+| `u_hawaii_adc/v1.9.86_sky130A` | PASS | P8 F0 M0 W0 | — | UNSTATED | yes | the converged analog cell, re-verified on plugin 1.9.86 (PASS=8 FAIL=0 MISSING=0, gate exit 0). It has no phase2/ because it runs the A-track, not the digital RTL->synth stage; the structure gate records that as a disclosed note rather than a silent pass. The IC's top level also keeps two non-cell trees that are NOT superseded evidence and must not be swept: `phase3/`, which eight tests under programs/tests/ read directly at phase3/analog/hardmacro/, and `clean_run_v1422_20260715`, whose path is named verbatim by the repro commands of #141/#142/#143. |
 
 ## RETAINED FAILURE — 13
 
@@ -42,11 +43,11 @@ An audit ran and did NOT converge. These are retained on purpose: deleting them 
 | `sha256/clean_run_v1422_20260715` | FAIL | P29 F3 M3 W1 | vibe_ic=FAIL; phase3=FAIL; phase2=FAIL | UNSTATED | yes | evidence artefact itemised by #140/#145/#146/#147 (closed) and #413; NOT named by #235 itself — see note below the tables |
 | `sha256/clean_run_v1427_20260715` | FAIL | P33 F3 M0 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | corpus member — walked by both blocking corpus gates |
 | `subservient` | FAIL | P24 F9 M0 W1 | vibe_ic=FAIL; phase3=FAIL; phase2=FAIL | PRODUCTION-READY | yes | reproduction for #414 (5 near-fabricated HASH_MISMATCHes) and #417 (a shipped formal PASS citing a log that does not exist); also read directly by tests under programs/tests/ |
-| `u_hawaii_adc` | FAIL | P0 F0 M9 W1 | vibe_ic=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | read directly by tests under programs/tests/ (published-cell layer gates); the one cell whose audit and orchestrator verdicts contradict each other |
+| `u_hawaii_adc` | FAIL | P0 F0 M9 W1 | vibe_ic=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | — | yes | corpus member — walked by both blocking corpus gates |
 | `u_hawaii_adc/clean_run_v1422_20260715` | FAIL | P3 F2 M8 W8 | vibe_ic=FAIL; phase2=FAIL | UNSTATED | yes | reproduction for #141/#142/#143 — their repro commands name this path verbatim |
-| `u_hawaii_adc/clean_run_v1427_20260715` | FAIL | P2 F1 M6 W1 | vibe_ic=FAIL; phase2=FAIL | UNSTATED | yes | corpus member — walked by both blocking corpus gates |
+| `u_hawaii_adc/v1.9.86_sky130A/reports` | FAIL | P0 F0 M40 W0 | — | — | no | record only |
 
-## UNAUDITED RECORD — 13
+## UNAUDITED RECORD — 11
 
 No `reports/audit/phase23_completion_audit.json` exists for this cell, so there is NO machine verdict either way. A claim made in its RESULT.md is unbacked by an audit artefact; that is not the same as a failure, and it is not a pass.
 
@@ -63,8 +64,6 @@ No `reports/audit/phase23_completion_audit.json` exists for this cell, so there 
 | `sha256/clean_run_v1461_0223` | — | — | — | UNSTATED | no | reproduction for #210 (sign-off corner declared with no record) and the #316 UNTYPED_STEPS discovery |
 | `subservient/clean_run_v1335` | — | — | — | UNSTATED | no | record only |
 | `subservient/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `u_hawaii_adc/clean_run_v1432_commercial` | — | — | — | UNSTATED | no | record only |
-| `u_hawaii_adc/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
 
 ## Reading the columns
 

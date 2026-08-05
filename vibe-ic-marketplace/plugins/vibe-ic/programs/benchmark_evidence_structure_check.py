@@ -159,14 +159,21 @@ class FolderResult:
     conforms: bool = True
     failures: List[str] = field(default_factory=list)   # "RULE: message"
     checks: Dict[str, bool] = field(default_factory=dict)
+    notes: List[str] = field(default_factory=list)     # "RULE: why it passed differently"
 
     def fail(self, rule: str, msg: str) -> None:
         self.conforms = False
         self.failures.append(f"{rule}: {msg}")
         self.checks[rule] = False
 
-    def ok(self, rule: str) -> None:
+    def ok(self, rule: str, note: str = "") -> None:
+        """Record a pass. `note` is for a rule that passed on a DIFFERENT basis
+        than its default — an escape that is silent is indistinguishable from a
+        rule that was simply met, which is the reading this whole check exists
+        to prevent."""
         self.checks.setdefault(rule, True)
+        if note:
+            self.notes.append(f"{rule}: {note}")
 
 
 # --------------------------------------------------------------------------
@@ -359,8 +366,29 @@ def check_folder(folder: Path, include_staged: bool = False) -> FolderResult:
         res.fail("PHASE1_DOCS", "phase1/generated_docs/ missing or empty")
 
     # ---- PHASE2 ----------------------------------------------------------
+    # `phase2/` is the RTL -> synth -> constraints stage of the DIGITAL flow. An
+    # analog cell does not have one: it runs the A-track (A1-A9) from the L docs
+    # to a layout, and its evidence lives in reports/analog*.
+    #
+    # This rule used to be unconditional, so it asked "does phase2/ exist" and
+    # its answer was read as "is this evidence folder complete". MEASURED on
+    # u_hawaii_adc x sky130A, a cell that had just PASSED its own flow gate with
+    # PASS=8 FAIL=0 MISSING=0 (exit 0): the run holds phase1/ and phase3/ only,
+    # `ic_class` is `data_converter`, and `reports/analog/` is populated. The
+    # structure gate nonetheless failed it for missing a stage its flow never
+    # runs — and so blocked publication of a converged cell.
+    #
+    # The escape is EVIDENCE-BOUND, not a waiver: it requires the folder to
+    # positively show an analog track. A DIGITAL cell with no phase2/ still
+    # fails, which is the case this rule exists for.
+    _analog_evidence = [p for p in (folder / "reports").glob("analog*")
+                        if p.exists()] if (folder / "reports").is_dir() else []
     if _has_file(folder / "phase2"):
         res.ok("PHASE2")
+    elif _analog_evidence:
+        res.ok("PHASE2",
+               "analog track: no phase2/ RTL stage, evidence in "
+               + ", ".join(sorted(p.name for p in _analog_evidence)))
     else:
         res.fail("PHASE2", "phase2/ missing or empty")
 
@@ -475,6 +503,11 @@ def _print_folder(res: FolderResult) -> None:
     print(f"[{tag}] {ident}"
           + (f"  (IC={res.ic} PDK={res.pdk} v{res.version} verdict={res.verdict})"
              if res.conforms else ""))
+    # Notes print on PASS too — a rule that passed on a different basis is
+    # exactly the thing a reader must be able to see, and only-on-failure
+    # printing would hide it in the case that matters.
+    for n in res.notes:
+        print(f"    ~ {n}")
     if not res.conforms:
         for f in res.failures:
             print(f"    x {f}")
