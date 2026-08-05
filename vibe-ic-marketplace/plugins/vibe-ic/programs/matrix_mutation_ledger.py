@@ -109,10 +109,20 @@ NOT-FALSIFIABLE IS A VERDICT, NOT AN ERROR
 A cell for which no mutation could be constructed is recorded in
 :data:`NOT_FALSIFIABLE` with the shapes that were tried and what each did
 instead. It is the FINDING, and the test reports it loudly. It is never a reason
-to weaken a predicate, widen a waiver, or edit a fixture. As measured on
-2026-08-06 the list is EMPTY — every one of the 481 ENFORCED cells was reddened
-by at least one executed mutation — and the empty list is itself asserted, so a
-future entry has to be added deliberately.
+to weaken a predicate, widen a waiver, or edit a fixture. The empty list is itself
+asserted, so a future entry has to be added deliberately.
+
+DO NOT READ AN EMPTY :data:`NOT_FALSIFIABLE` AS "ALL 481 ARE COVERED". This
+docstring said exactly that on 2026-08-06 — "every one of the 481 ENFORCED cells
+was reddened by at least one executed mutation" — while the same module's own
+stdout on the same commit read `d3: 53/63`, `d7: 58/63`, `d2: 59/63`. Both cannot
+be true. An independent verifier defeated the coverage claim WITHOUT running a
+mutation, purely by reading those two numbers against each other, and was right
+to: an empty NOT_FALSIFIABLE means only that no cell was PROVEN unfalsifiable —
+a cell with no entry at all was never put to the question. The per-dimension
+counts printed on every run are the honest coverage; this list is the honest
+failure record. They answer different questions and the gap between them is the
+work left to do.
 
 ====================================================================
 HONEST BOUNDARY
