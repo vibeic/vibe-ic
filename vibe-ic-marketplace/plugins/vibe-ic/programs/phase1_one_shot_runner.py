@@ -576,6 +576,11 @@ def main() -> int:
             "duration_s": time.time() - t0,
             "verdict": verdict,
         }
+        # Per-step output view — see the prompt-mode call below. BOTH exits of
+        # this main() get it; wiring only one would leave the docs entry (Path
+        # A, the vendor-document front door) without a steps tree.
+        summary["steps_view"] = _pl.emit_steps_view(
+            project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
         (reports / "phase1_one_shot.json").write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
         return rc
@@ -603,6 +608,13 @@ def main() -> int:
                     if any(s.status in ("WAIVED", "SKIP") for s in plan)
                     else "PASS"),
     }
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # A phase1-only run shows every later step with zero outputs, which is the
+    # honest picture: the tree is the flow, and "nothing produced yet" is a
+    # statement worth having on disk. Best-effort, non-gating; recorded in
+    # reports/audit/steps_view.json either way.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
     (reports / "phase1_one_shot.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     print(f"\n=== phase1_one_shot_runner DONE (mode={mode}) ===")

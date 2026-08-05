@@ -199,6 +199,13 @@ def main() -> int:
                                    if ran_p3 else None)},
         "verdict": verdict,
     }
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # The chained phase2→phase3 entry is a real front door (the /vibe-ic-phase23
+    # command) and used to leave no steps tree unless the run happened to be
+    # started from vibe_ic_one_shot_runner. Best-effort, non-gating; the outcome
+    # lands in reports/audit/steps_view.json either way.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="phase23_one_shot_runner")
     out = _pl.report_path(project, "phase23_one_shot.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")

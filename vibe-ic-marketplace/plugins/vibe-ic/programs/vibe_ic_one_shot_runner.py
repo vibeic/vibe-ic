@@ -964,15 +964,27 @@ def main() -> int:
     # the chained-end. Idempotent — generator overwrites.
     fs_ok = _pl.emit_final_summary(project, PROGRAMS_DIR)
 
-    # Per-step output subfolders: materialize <project>/steps/<id>_<slug>/
+    # Per-step output view: <project>/steps/<phase>/<stage>/<id>_<slug>/
     # (SYMLINK views + per-step outputs.json + steps/index.json) so EVERY
     # clean-run has a browsable per-step folder and the web dashboard's per-step
     # "📂 open" link resolves. Best-effort — a view builder must never fail a run.
-    try:
-        import step_output_collector as _soc
-        _soc.materialize(project)
-    except Exception:
-        pass
+    #
+    # Routed through the SHARED `_pl.emit_steps_view` (which every orchestrator
+    # now calls) instead of the raw collector import that used to live here and
+    # NOWHERE ELSE: the bare `except Exception: pass` also meant a failed build
+    # left no trace, so "this run has no steps/" could not be told apart from
+    # "this orchestrator never built one". The helper records the outcome in
+    # reports/audit/steps_view.json either way.
+    _sv = _pl.emit_steps_view(project, PROGRAMS_DIR,
+                              runner="vibe_ic_one_shot_runner")
+    if _sv.get("status") != "OK":
+        # Surface it in the top orchestrator's own report too — this is the
+        # record a reader actually opens. Non-gating (advisories never move
+        # the verdict); `advisories` is the list object already referenced by
+        # `summary`, which is serialized further down.
+        advisories.append(
+            f"steps view NOT built ({_sv.get('status')}): {_sv.get('error')} "
+            f"— see reports/audit/{_pl.STEPS_VIEW_REPORT_NAME}")
 
     # v1.3.51: FINALIZE deliverable self-check — record the completeness state
     # (non-gating) so a run that produces NO RESULT.md can never go silent.
