@@ -65,6 +65,45 @@ The decision is now layered, strongest evidence first:
      process corner of the sign-off). No FF anywhere -> FAIL: the hold analysis
      was run with only slow/typical libraries, which is the defect.
 
+THE CORNER A LIBERTY DECLARES, NOT THE ONE ITS FILENAME SPELLS
+---------------------------------------------------------------
+Rules 2 and 3 above mined the corner designator out of the TEXT of the line —
+in practice, out of the Liberty FILENAME. Two measured consequences:
+
+  * A PDK that does not spell `ff`/`ss`/`tt` in its Liberty filenames could not
+    be classified AT ALL. Measured on a hold script whose sole `read_liberty`
+    names a Liberty declaring `operating_conditions (fast)`, `nom_voltage`
+    high, `nom_temperature` low — an unambiguous FAST corner — this gate
+    answered `NO_FEED_CORNER: no Liberty / operating condition corner could be
+    identified feeding it`. It had the Liberty's path on the line it was
+    reading and never opened it. Best-case/worst-case corner naming,
+    vendor-internal corner names and customer renames are all ordinary, and
+    none of them spell `ff`/`ss`/`tt`.
+  * The delimiter class of `_PROC_RE` omitted `=`, so the emitter's OWN
+    hold-view banner — `=== HOLD corner: process=FF liberty=… ===`, cited as
+    the canonical rule-2 line thirty lines above — was invisible to the rule
+    that documents itself as reading it.
+
+Both are the same shape: a check measuring something ADJACENT to its question
+(does a corner token appear in this line's text) and publishing the answer to
+the question (no corner could be identified). So:
+
+  A line that NAMES a Liberty we can open is decided by the corner that
+  Liberty DECLARES (`default_operating_conditions`, else the
+  `operating_conditions` groups), and the line's own text tokens are discarded
+  as an unverified restatement of it.
+
+This is the SAME doctrine as the stance-vs-script arbitration below, pushed
+down one level to the banner-vs-Liberty pair, and it runs in BOTH directions:
+a banner reading `process=FF` beside a `read_liberty` of a Liberty declaring
+`operating_conditions (slow)` now FAILs `HOLD_NOT_AT_FF`, where before the
+filename token — or nothing at all — decided. Fail-SAFE, never fail-open: a
+Liberty that is absent, unreadable, or whose declared conditions do not
+classify contributes NOTHING and the line falls back to its text tokens,
+exactly as before. Every Liberty actually opened and classified is published
+under `liberty_declared_corners`, so a reader can tell a content-backed
+verdict from one that fell back to a filename.
+
 A DECLARED FIELD DOES NOT OUTRANK THE EVIDENCE IT CLAIMS TO SUMMARISE
 ---------------------------------------------------------------------
 The first wiring of this gate read the stance and STOPPED: in project-directory
@@ -162,10 +201,17 @@ _SLOW = {"ss", "slow_slow", "slowslow", "slow"}
 _TYP = {"tt", "typical", "typ", "nom"}
 
 _PROC_RE = re.compile(
-    r"(?:^|[_/\-.\s:,])"
+    # The delimiter class carries `=` and the bracket forms on purpose. The
+    # emitter's own hold-view banner is a key=value spelling
+    # (`=== HOLD corner: process=FF liberty=… ===`, cited as the canonical
+    # rule-2 line in the module docstring) and a Liberty declares its corner as
+    # `operating_conditions (fast) {`. Without `=`/`(`/`)` in the class this
+    # gate could not read either of the two lines it documents itself as
+    # reading, and answered NO_FEED_CORNER on evidence it was holding.
+    r"(?:^|[_/\-.\s:,=()\[\]{}\"'])"
     r"(ss|tt|ff|sf|fs|slow_slow|fast_fast|typical|slowslow|fastfast|"
     r"slow_fast|fast_slow|slowfast|fastslow|slow|fast|typ|nom)"
-    r"(?:[_/\-.\s:,]|$)",
+    r"(?:[_/\-.\s:,=()\[\]{}\"']|$)",
     re.IGNORECASE,
 )
 
@@ -202,7 +248,92 @@ def _corners_in(text: str) -> List[str]:
     return out
 
 
-def evaluate(text: Optional[str]) -> Tuple[str, int, dict]:
+# ─────────────── the corner a Liberty DECLARES, not the one its name spells ──
+#
+# A `.lib` states its own process corner in the library header, in the
+# `operating_conditions` group and the `default_operating_conditions` pointer.
+# That is the ground truth for "which corner feeds this analysis"; the corner
+# token in the FILENAME is a naming convention, and a great many PDKs do not
+# follow it (best-case/worst-case naming, vendor-internal corner names, a
+# customer rename). Reading only the filename is measuring something ADJACENT
+# to the question and publishing it as the answer.
+#
+# So: when a hold/feed line NAMES a Liberty we can open, the corner that
+# Liberty DECLARES decides that line, and the line's own text tokens are
+# discarded as an unverified restatement of it. That is the same doctrine the
+# stance-vs-script arbitration already applies one level up — a declared field
+# does not outrank the evidence it claims to summarise — pushed down to the
+# banner-vs-Liberty pair. It is also the direction that CATCHES a lie: a banner
+# reading `process=FF` beside a `read_liberty` of a Liberty declaring
+# `operating_conditions (slow)` now FAILS HOLD_NOT_AT_FF, where before the
+# filename token (or nothing at all) decided.
+#
+# Fail-SAFE, never fail-open: a Liberty that is absent, unreadable, or whose
+# declared conditions do not classify contributes NOTHING and the line falls
+# back to its text tokens — exactly the pre-existing behaviour.
+
+#: A Liberty path as it appears on a Tcl line, bare or quoted/braced.
+_LIB_PATH_RE = re.compile(r"[^\s\"'{}\[\]()=,;]+\.lib(?:\.gz)?\b", re.I)
+#: `operating_conditions (fast) {` — the group that names a corner.
+_OC_GROUP_RE = re.compile(
+    r"^[ \t]*operating_conditions\s*\(\s*([^)\s]+?)\s*\)", re.I | re.M)
+#: `default_operating_conditions : fast;` — which group is THE one.
+_DEFAULT_OC_RE = re.compile(
+    r"^[ \t]*default_operating_conditions\s*:\s*([^;\s]+)\s*;", re.I | re.M)
+#: Liberty files run to hundreds of MB of cell groups; every declaration we
+#: read lives in the library header, so bound the read instead of slurping.
+_LIB_HEAD_BYTES = 1 << 20
+
+
+def _liberty_declared_corners(path: Path) -> List[str]:
+    """The FF/SS/TT corners this Liberty DECLARES in its header. `[]` when the
+    file cannot be read or declares nothing we can classify — never a guess."""
+    try:
+        with path.open("r", errors="replace") as fh:
+            head = fh.read(_LIB_HEAD_BYTES)
+    except OSError:
+        return []
+    default = _DEFAULT_OC_RE.search(head)
+    if default:
+        got = _corners_in(default.group(1))
+        if got:
+            return got
+    out: List[str] = []
+    for m in _OC_GROUP_RE.finditer(head):
+        out.extend(_corners_in(m.group(1)))
+    return out
+
+
+def _line_corners(line: str, base: Optional[Path],
+                  cache: dict, named: list) -> List[str]:
+    """The corners this ONE line contributes. Liberty CONTENT when the line
+    names a Liberty we can open and classify; otherwise the line's own text
+    tokens (unchanged behaviour)."""
+    content: List[str] = []
+    for raw in _LIB_PATH_RE.findall(line):
+        p = Path(raw)
+        if not p.is_absolute():
+            if base is None:
+                continue
+            p = base / raw
+        key = str(p)
+        if key not in cache:
+            cache[key] = _liberty_declared_corners(p) if p.is_file() else []
+            if cache[key]:
+                named.append({"liberty": key, "declared_corners":
+                              sorted(set(cache[key]))})
+        content.extend(cache[key])
+    if content:
+        return content
+    return _corners_in(line)
+
+
+def evaluate(text: Optional[str],
+             base: Optional[Path] = None) -> Tuple[str, int, dict]:
+    """`base` is the directory a RELATIVE Liberty path on a feed line resolves
+    against (the hold script's own directory). Absolute paths resolve without
+    it; when it is None only absolute paths are opened, so a caller that has no
+    directory context keeps exactly the pre-existing text-token behaviour."""
     report = {"tool": _TOOL}
     if text is None:
         report.update(verdict="FAIL", reason="INPUT_MISSING",
@@ -236,15 +367,22 @@ def evaluate(text: Optional[str]) -> Tuple[str, int, dict]:
 
     # RULE 2 — a line that explicitly ties hold/min to a corner outranks every
     # other liberty in the file (see the module docstring).
+    lib_cache: dict = {}
+    libs_read: list = []
     view_corners: List[str] = []
     for line in view_lines:
-        view_corners.extend(_corners_in(line))
+        view_corners.extend(_line_corners(line, base, lib_cache, libs_read))
 
     feed_corners: List[str] = []
     for line in feed_lines:
-        feed_corners.extend(_corners_in(line))
+        feed_corners.extend(_line_corners(line, base, lib_cache, libs_read))
     report["hold_feed_corners"] = sorted(set(feed_corners))
     report["hold_feed_lines"] = feed_lines
+    # Publish EVERY Liberty whose declared conditions were actually opened and
+    # classified, so a reader can tell a content-backed verdict from one that
+    # fell back to a filename token.
+    if libs_read:
+        report["liberty_declared_corners"] = libs_read
 
     if view_corners:
         judged, basis = sorted(set(view_corners)), "declared_hold_view"
@@ -392,7 +530,7 @@ def _judge_source(kind: str, path: Path) -> Tuple[str, int, dict]:
             text: Optional[str] = path.read_text(errors="replace")
         except OSError:
             text = None
-        verdict, rc, report = evaluate(text)
+        verdict, rc, report = evaluate(text, base=path.parent)
         report["mode"] = "tcl"
     report["artefact"] = str(path)
     report["source"] = kind
@@ -488,7 +626,7 @@ def main(argv=None) -> int:
                     text = p.read_text(errors="replace")
                 except OSError:
                     text = None
-            verdict, rc, report = evaluate(text)
+            verdict, rc, report = evaluate(text, base=p.parent)
             report["artefact"] = str(p)
 
     if args.json:
