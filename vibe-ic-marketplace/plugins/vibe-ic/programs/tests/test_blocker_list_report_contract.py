@@ -108,6 +108,8 @@ def test_downstream_entries_name_their_root_cause(tmp_path):
     """41 blockers of which 36 are consequences of 4 is a different backlog
     from 41 independent ones. Fails pre-change: no report field carries it."""
     proc, doc = _run_probe(tmp_path, make_step1_pass=True)
+    assert "blockers" in doc, ("the report carries no blocker list, so nothing "
+                               "names a root cause")
     by_id = {b["step_id"]: b for b in doc["blockers"]}
     assert 1 not in by_id, "step 1 passed and must not be listed"
     assert by_id[2]["derived_from"] == []
@@ -122,16 +124,26 @@ def test_no_classification_can_move_a_verdict(tmp_path):
     the exit code must be byte-identical, and the report must SAY the list is
     empty because of the failure rather than letting an empty list read as a
     clean one.
+
+    The injected shim TOLERATES the classifier being absent on purpose, so
+    that on the pre-change tree this test still runs the program to completion
+    and fails on the two CONTENT assertions at the bottom rather than on an
+    import — a control that dies of a missing module measures the module's
+    existence, not the behaviour.
     """
     proc_ok, doc_ok = _run_probe(tmp_path / "ok", make_step1_pass=False)
 
     sitecustomize = tmp_path / "boom"
     sitecustomize.mkdir()
     (sitecustomize / "usercustomize.py").write_text(
-        "import _blocker_classification as b\n"
+        "try:\n"
+        "    import _blocker_classification as b\n"
+        "except Exception:\n"
+        "    b = None\n"
         "def _boom(*a, **k):\n"
         "    raise RuntimeError('forced classifier failure')\n"
-        "b.build_blockers = _boom\n")
+        "if b is not None:\n"
+        "    b.build_blockers = _boom\n")
     proj = tmp_path / "boomproj"
     (proj / "build").mkdir(parents=True)
     flow = tmp_path / "probe_flow2.yaml"
@@ -149,9 +161,16 @@ def test_no_classification_can_move_a_verdict(tmp_path):
         env={"PYTHONPATH": env_path, "PATH": "/usr/bin:/bin"})
     doc_boom = json.loads(out.read_text())
 
+    # the verdict half — true on BOTH trees, which is the point: a classifier
+    # that could move a verdict would break these, and nothing else would.
     assert doc_boom["overall"] == doc_ok["overall"]
     assert doc_boom["counts"] == doc_ok["counts"]
     assert proc_boom.returncode == proc_ok.returncode
-    assert doc_boom["blockers"] == []
-    assert "forced classifier failure" in doc_boom["blocker_list_error"]
+    # the disclosure half — content, and the part that fails pre-change
+    assert doc_boom.get("blockers") == [], (
+        "a run whose classifier raised must still publish an explicit empty "
+        "list, not silence")
+    assert "forced classifier failure" in doc_boom.get("blocker_list_error", ""), (
+        "an empty list produced by a crash must not be indistinguishable from "
+        "a clean one")
     assert "WARN" in proc_boom.stderr
