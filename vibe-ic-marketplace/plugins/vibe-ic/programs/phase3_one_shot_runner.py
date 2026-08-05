@@ -30328,25 +30328,28 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # number). These feed signoff_ladder_run --mode tapeout's new tiers.
     # (a) Per-layer metal density (Efabless met_min_ca_density) — REAL KLayout
     #     measurement from the final GDS → reports/phase3/metal_density.json.
-    #     DELIBERATELY NOT `_signoff_regen`-gated, unlike its neighbours here.
-    #     `_emit_metal_density_report` does not read a fixed path: it resolves
-    #     the FRESHER of {canonical alias, streamed pnr source} itself, because
-    #     the alias is rewritten LATER in this same pass. There is therefore no
-    #     single input path this call site could honestly date the report
-    #     against — `pnr_out/<top>.gds` is not necessarily the file the emitter
-    #     reads — and a guard dated against the wrong input is a worse claim
-    #     than no guard. The read-side currency of this report is owned by
-    #     `_freshest_gds` inside the emitter; if the SKIP-on-existence needs
-    #     closing too, it must be closed there, against the path that emitter
-    #     actually chose.
+    #     DELIBERATELY NOT `_signoff_regen`-gated, unlike its neighbours here,
+    #     and the SKIP-on-existence is gone for the reason the previous note
+    #     gave: `_emit_metal_density_report` does not read a fixed path — it
+    #     resolves the FRESHER of {canonical alias, streamed pnr source} itself,
+    #     because the alias is rewritten LATER in this same pass. There is no
+    #     single input path THIS call site could honestly date the report
+    #     against, and a guard dated against the wrong input is a worse claim
+    #     than no guard.
+    #
+    #     That note ended "if the SKIP-on-existence needs closing too, it must
+    #     be closed there, against the path that emitter actually chose." It
+    #     did need closing — an existence gate here meant a re-run that rewrote
+    #     the layout republished the PREVIOUS round's density — and it is now
+    #     closed THERE. The emitter is called unconditionally and decides for
+    #     itself, against the GDS it actually picked.
     metal_density_json = rpt_phase3 / "metal_density.json"
-    if not metal_density_json.is_file():
-        try:
-            if _emit_metal_density_report(project, top, pdk, container,
-                                          metal_density_json, notes):
-                written.append(str(metal_density_json))
-        except Exception as exc:
-            notes.append(f"metal density emit failed: {exc}")
+    try:
+        if _emit_metal_density_report(project, top, pdk, container,
+                                      metal_density_json, notes):
+            written.append(str(metal_density_json))
+    except Exception as exc:
+        notes.append(f"metal density emit failed: {exc}")
     # (b) Aging-corner STA — REAL derated OpenSTA run with a DISCLOSED generic
     #     aging margin → reports/phase3/aging_sta.{rpt,json}.
     aging_sta_rpt = rpt_phase3 / "aging_sta.rpt"
@@ -35669,6 +35672,20 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     if not gds.is_file():
         notes.append("metal density skipped: no streamed GDS found")
         return False
+    # FRESHNESS, decided here rather than at the call site — this is the only
+    # place that knows WHICH GDS was read. An existence gate upstream meant a
+    # re-run that rewrote the layout republished the previous round's density
+    # while the report still named the current GDS: the number described a
+    # design that no longer existed, and nothing in the artefact said so.
+    if out_json.is_file():
+        try:
+            if out_json.stat().st_mtime >= gds.stat().st_mtime:
+                return False          # current for the GDS actually read
+            notes.append(
+                f"metal density re-emitted: {out_json.name} predates the GDS it "
+                f"describes ({gds.name})")
+        except OSError:
+            pass                      # cannot date it -> re-emit rather than trust it
     layermap = pdk.lefdef_layermap
     if not layermap:
         notes.append(
