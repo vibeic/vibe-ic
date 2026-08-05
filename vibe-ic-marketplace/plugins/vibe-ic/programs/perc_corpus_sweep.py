@@ -28,12 +28,22 @@ structural signature of a STALE pre-tapcell-fix artifact (the whole lineage neve
 tapcell step), as opposed to a LIVE current-runner regression. It never fails a build; it is
 a triage WARN so a corpus PERC number is not mis-cited as a current-quality signal.
 
+REACH (v1.9.79+): a corpus sweep whose targets carry no routed DEF used to print a table of
+`no routed DEF` rows and exit 0 — the same exit code, to every automated consumer, as a sweep
+that ran the PERC chain on every IC and found nothing wrong. It now accounts for how many
+targets actually entered `sweep_one` (`_sweep_reach.SweepReach`) and routes rc 2 +
+`VACUOUS_PASS:` through the shipped `_vacuous_exit` convention when that count is ZERO. A
+PARTIAL sweep still exits 0: most corpora contain core macros and pre-layout blocks the chain
+genuinely cannot reach, and failing those would be a worse defect than the silence it replaces.
+
 Usage:
     python3 perc_corpus_sweep.py <design_dir> [<design_dir> ...]   # JSONL per IC + summary
     python3 perc_corpus_sweep.py --json <dir> ...                  # JSON array only, no summary
     python3 perc_corpus_sweep.py --def <routed.def> --name <id>    # single explicit DEF
     python3 perc_corpus_sweep.py --vintage <routed.def>            # ONLY the vintage guard, JSON
     python3 perc_corpus_sweep.py --no-vintage <dir> ...           # skip the vintage guard
+    python3 perc_corpus_sweep.py --report R.json <dir> ...        # rows + reach block, for
+                                                                  # sweep_reach_check --report
 """
 from __future__ import annotations
 
@@ -46,6 +56,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _sweep_reach as _sr  # noqa: E402  (aggregate reach disclosure)
 import phase3_one_shot_runner as _p  # noqa: E402  (shipped PERC functions — single source)
 
 
@@ -191,10 +202,16 @@ def sweep_one(def_path: str, name: Optional[str] = None,
     (suggested_fix #4) over the DEF's same-dir lineage and attaches the verdict, so a
     corpus PERC number is auto-flagged as stale-pre-tapcell vs a possible live regression."""
     p = Path(def_path)
-    out: Dict[str, Any] = {"name": name or p.stem, "def": str(def_path)}
+    out: Dict[str, Any] = {"name": name or p.stem, "def": str(def_path),
+                           "perc_chain_ran": False}
     if not p.is_file():
         out["error"] = "DEF not found"
         return out
+    # From here down the PERC decision point IS entered. The flag is set
+    # structurally, at the point of entry — never inferred later from the
+    # presence or absence of an `error` string, because deriving a reach claim
+    # from prose is the same defect one layer down (_vacuous_exit's rule).
+    out["perc_chain_ran"] = True
     comps = _p._parse_def_components(p)
     out["components"] = len(comps)
     esd = _p._esd_pad_ring_presence(comps)
@@ -228,10 +245,32 @@ def sweep_dirs(dirs: List[str], vintage: bool = True) -> List[Dict[str, Any]]:
         name = os.path.basename(d.rstrip("/"))
         dp = _pick_routed_def(d)
         if dp is None:
-            rows.append({"name": name, "def": None, "error": "no routed DEF"})
+            rows.append({"name": name, "def": None, "error": "no routed DEF",
+                         "perc_chain_ran": False})
             continue
         rows.append(sweep_one(dp, name=name, vintage=vintage))
     return rows
+
+
+def reach_of(rows: List[Dict[str, Any]]) -> "_sr.SweepReach":
+    """How many corpus targets actually entered the PERC chain.
+
+    Reads each row's structural `perc_chain_ran` flag — set inside `sweep_one`
+    at the point of entry — rather than re-deriving the answer from the row's
+    prose. A corpus of 21 ICs none of which carries a routed DEF produces 21
+    rows, a full table and, before this, rc 0.
+    """
+    reach = _sr.SweepReach(unit="design directory", decision_points=("perc_chain",))
+    for r in rows:
+        if r.get("perc_chain_ran"):
+            reach.reached(r.get("name") or r.get("def"), point="perc_chain")
+        else:
+            reach.not_reached(r.get("name") or r.get("def") or "<unnamed>",
+                              str(r.get("error") or "no routed DEF found"))
+    if not rows:
+        reach.declare_empty_corpus(
+            "no design directory or --def target was supplied to the sweep")
+    return reach
 
 
 def summarize(rows: List[Dict[str, Any]]) -> str:
@@ -255,6 +294,7 @@ def summarize(rows: List[Dict[str, Any]]) -> str:
                  if r.get("vintage", {}).get("verdict") == "SUSPECT_LIVE")
     lines += [
         "", "=== systemic ===",
+        f"  {reach_of(rows).line()}",
         f"  swept: {len(swept)}   no-DEF (excluded): {len(no_def)}",
         f"  welltap WELLTAP_GAP (0-tap latch-up exposure): {gap}/{len(swept)}",
         f"  ESD N/A (core macro, no pad ring): {na}/{len(swept)}",
@@ -282,9 +322,14 @@ def main(argv=None) -> int:
                     help="skip the artifact-vintage (stale-pre-tapcell) guard")
     ap.add_argument("--vintage", dest="vintage_def",
                     help="run ONLY the artifact-vintage guard on one routed DEF + print JSON")
+    ap.add_argument("--report", metavar="PATH",
+                    help="write {rows, reach} here — the document "
+                         "`sweep_reach_check.py --report` consumes")
     args = ap.parse_args(argv)
 
     if args.vintage_def:
+        # Single-target diagnostic mode, not a corpus sweep: there is no
+        # aggregate to be vacuous about, so the reach contract does not apply.
         print(json.dumps(artifact_vintage_guard(args.vintage_def), indent=2))
         return 0
 
@@ -297,13 +342,26 @@ def main(argv=None) -> int:
         ap.error("give one or more design dirs, or --def <routed.def>")
         return 2
 
+    reach = reach_of(rows)
     if args.json:
+        # The stdout document stays the ROW ARRAY its consumers already parse;
+        # the reach block rides on --report so adopting the contract cannot
+        # break a caller that indexes rows by position.
         print(json.dumps(rows, indent=2))
     else:
         for r in rows:
             print(json.dumps(r))
         print("\n" + summarize(rows), file=sys.stderr)
-    return 0
+    if args.report:
+        doc: Dict[str, Any] = {"sweep": "perc_corpus_sweep", "rows": rows}
+        _sr.attach(doc, reach)
+        Path(args.report).write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+
+    # A sweep that entered the PERC chain on NOTHING is not a clean corpus
+    # result; rc 2 + the sentinel are the two signals flow_compliance_check
+    # actually consumes. A partial sweep (>= 1 target reached) stays rc 0.
+    reach.announce("perc_corpus_sweep")
+    return reach.exit_code(passed=True)
 
 
 if __name__ == "__main__":

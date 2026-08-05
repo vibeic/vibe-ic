@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1056
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1056)
+- **Total programs (excluding helpers / shims):** 1058
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1058)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1047 |
+| `any` | 1049 |
 
 ## Alphabetical listing
 
@@ -984,6 +984,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sv_compat_check` | any | — | Check if Verilog files require the -sv flag for Yosys synthesis. |
 | `sv_package_closure_check` | any | — | SystemVerilog package-dependency closure gate (ORGANIC #549). |
 | `swd_protocol_synth` | any | — | ARM Serial Wire Debug (SWD) / ADIv5 deterministic L1-L23 synth. |
+| `sweep_reach_check` | any | — | refuse to read a sweep as clean when it reached nothing. |
+| `sweep_reach_survey` | any | — | how many of this tree's sweeps can tell you they fired? |
 | `synth_area_stats_emit` | any | — | publish the synthesis area figure as an artefact. |
 | `synth_doctor` | any | v0.1.96 | Yosys synthesis-log error classifier (synth-doctor Pattern-B → program). |
 | `synth_frontend` | any | — | Shared SystemVerilog-frontend selection logic. |
@@ -1128,7 +1130,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1047 programs)
+### `any` (1049 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2081,6 +2083,8 @@ _(no programs in this group)_
 - `sv_compat_check` — Check if Verilog files require the -sv flag for Yosys synthesis.
 - `sv_package_closure_check` — SystemVerilog package-dependency closure gate (ORGANIC #549).
 - `swd_protocol_synth` — ARM Serial Wire Debug (SWD) / ADIv5 deterministic L1-L23 synth.
+- `sweep_reach_check` — refuse to read a sweep as clean when it reached nothing.
+- `sweep_reach_survey` — how many of this tree's sweeps can tell you they fired?
 - `synth_area_stats_emit` — publish the synthesis area figure as an artefact.
 - `synth_doctor` — Yosys synthesis-log error classifier (synth-doctor Pattern-B → program).  _[v0.1.96]_
 - `synth_frontend` — Shared SystemVerilog-frontend selection logic.
