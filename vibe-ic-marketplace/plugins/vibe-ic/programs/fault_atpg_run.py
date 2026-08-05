@@ -1721,6 +1721,47 @@ def run_fault(
     # diagnostic grammar, because that convention is a shell's reporting
     # convention and not a property of the exit code. See
     # atpg_exit_is_signal_death() above.
+    # ── SIZE-SCALED WALL ────────────────────────────────────────────────────
+    # This was a fixed `timeout=1800`. A fixed wall asks "has 30 minutes
+    # passed", and is read as "can this engine grade this design" — two
+    # different questions that agree only on designs small enough for the
+    # answer not to matter.
+    #
+    # MEASURED (ibex x sky130A, 2026-08-05). `fault` ATPG on the sky130-mapped
+    # 31k-cell netlist RUNS: `fault chain` built a real scan chain from
+    # `ibex_core_synth.v` against the PDK liberty, with real scan DFFs, and the
+    # engine was mid-grade when the wall expired. Its own record says so —
+    # "the engine was running, not unable ... a BUDGET outcome, not a
+    # capability gap". A fixed 1800 s turned a large design's honest partial
+    # coverage into an absent measurement.
+    #
+    # The sibling at-speed engine already fixed this and its comment names
+    # "the old 1800 s" as the defect; the same constant was still live here.
+    # `_scaled_wall_budget` and `parse_cut_ports` are imported rather than
+    # copied, so the two engines cannot drift apart, and the size signal is the
+    # SAME quantity the coefficient was measured against: the pseudo-PI/PO
+    # pairs the cut exposed, i.e. the flop count.
+    #
+    # The caller's 1800 stays the FLOOR — a small design's wall is unchanged to
+    # the second. NOT MEASURED, and stated rather than hidden: the per-flop
+    # coefficient was measured for the 2-frame LOC miter of the at-speed
+    # engine, not for stuck-at. It is used here as a floor-RAISING term with
+    # the same campaign ceiling, which can only ever give a large design more
+    # room; the budget actually used is recorded below so the next round can
+    # measure the real stuck-at curve instead of inheriting this one.
+    _atpg_wall = 1800
+    _atpg_scan_flops = 0
+    try:
+        import transition_fault_atpg_run as _tdf
+        _cut_for_wall = project / cut_out
+        if _cut_for_wall.is_file():
+            _, _, _, _pairs = _tdf.parse_cut_ports(
+                _cut_for_wall.read_text(errors="replace"))
+            _atpg_scan_flops = len(_pairs)
+            _atpg_wall = _tdf._scaled_wall_budget(1800, _atpg_scan_flops)
+    except Exception:
+        pass          # unreadable cut -> the floor, never a guess
+
     _ATPG_MAX_ATTEMPTS = 3
     atpg_attempts: list[int] = []
     ec, out, err = -1, "", ""
@@ -1733,7 +1774,7 @@ def run_fault(
             (project / cov_out).unlink()
         except OSError:
             pass
-        ec, out, err = _run_docker(project, [atpg_shell], timeout=1800,
+        ec, out, err = _run_docker(project, [atpg_shell], timeout=_atpg_wall,
                                    pdk_dir=pdk_dir)
         atpg_attempts.append(ec)
         if not atpg_exit_is_signal_death(ec, out + "\n" + err):
@@ -1870,6 +1911,13 @@ def run_fault(
             # Retry history + crash classification, so a consumer can tell "the
             # engine crashed" from "the engine answered".
             "atpg_attempt_exits": atpg_attempts,
+            # The budget this run actually had, and the design size it was
+            # sized from. "exceeded its wall budget" without the number is a
+            # verdict nobody downstream can check or re-plan against.
+            "atpg_wall_budget_s": _atpg_wall,
+            "atpg_wall_budget_basis": (
+                f"floor 1800 s + per-flop term on {_atpg_scan_flops} scan flop(s)"
+                if _atpg_scan_flops else "floor 1800 s (no cut flops resolved)"),
             "atpg_signal_death": atpg_signal_death,
             "log_tail": atpg_log[-500:],
         }
