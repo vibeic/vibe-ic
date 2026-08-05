@@ -59,10 +59,21 @@ pin -- a gate that got wired and dropped out of the pin while its stale claim
 stayed behind, a register grown for an invocable gate -- was outside the loop
 entirely, so its broken promise could never be counted, printed, or failed on.
 Measured at b85d68ac the two sets happen to line up in the direction that
-matters (32 dispositions, all 36 pinned gates covered, 4 of them with no
-disposition written), and "they happen to line up today" is exactly the property
-a derived population does not have to depend on. `dispositions_outside_pin` is
-printed on every run so the day they diverge is visible rather than silent.
+matters (32 dispositions across four registers -- `_NOT_A_PROJECT_GATE` 4,
+`_SEMANTIC_ARGV_UNDRIVABLE` 4, `_ZERO_DENOMINATOR_CLASSIFICATION` 8,
+`_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA` 16 -- all 36 pinned gates covered, 4 of
+them with no disposition written), and "they happen to line up today" is exactly
+the property a derived population does not have to depend on.
+`dispositions_outside_pin` is printed on every run so the day they diverge is
+visible rather than silent.
+
+The promise is only ever written under the `disposition` key, checked and not
+assumed: the ten sub-keys the four registers use (`scope`, `measured`,
+`requires`, `design_value`, `why_no_umbrella`, `verdict`, `gate_denominator`,
+`corpus_probe`, `category`, `disposition`) were swept with `_ACTIVE_CLAIM` and
+**0** claim-shaped strings sit outside `disposition`. That is a measurement of
+today's tree, not a guarantee -- it is recorded here so the next reader can
+re-run it rather than assume it.
 
 THE PREDICATE, and the three ways it is easy to get wrong
 =========================================================
