@@ -209,17 +209,34 @@ def all_docstrings(tree: ast.AST) -> List[Tuple[str, str, int]]:
     return out
 
 
+def _assigns_figures(tree: ast.AST) -> bool:
+    """True only for a MODULE-LEVEL ``CORPUS_FIGURES = ...`` binding.
+
+    Decided from the AST, not from a substring. A test module that merely
+    quotes the name inside a fixture string mentions it too, and importing a
+    test module to discover it declared nothing is a side effect the sweep has
+    no business causing.
+    """
+    for node in getattr(tree, "body", []):
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, ast.AnnAssign) else [])
+        if any(isinstance(t, ast.Name) and t.id == FIGURES_ATTR for t in targets):
+            return True
+    return False
+
+
 def declared_figures(path: Path) -> Optional[CorpusFigures]:
     """Import ``path`` and return its ``CORPUS_FIGURES``, or None if it has none.
 
-    Only modules whose SOURCE mentions the attribute are imported, so the sweep
-    does not execute the corpus to find out that it declared nothing.
+    Only modules that actually BIND the attribute at module level are imported,
+    so the sweep does not execute the corpus to find out that it declared
+    nothing.
     """
     try:
         src = path.read_text(errors="replace")
-    except OSError:
-        return None
-    if FIGURES_ATTR not in src:
+        if not _assigns_figures(ast.parse(src)):
+            return None
+    except (OSError, SyntaxError):
         return None
     spec = importlib.util.spec_from_file_location(f"_dcf_{path.stem}", path)
     if spec is None or spec.loader is None:
@@ -260,7 +277,7 @@ def scan_module(path: Path, rel: str, root: Path,
     for _owner, doc, lineno in docs:
         named.extend(n for n in placeholder_names(doc) if n not in named)
 
-    figures = declared_figures(path) if (named or FIGURES_ATTR in src) else None
+    figures = declared_figures(path) if (named or _assigns_figures(tree)) else None
 
     if named and figures is None:
         out.append(_finding(
