@@ -49408,6 +49408,22 @@ def gen_l10_test_cases(project: Path,
     opcodes = l3.get("opcodes") or []
     addr_max = l3.get("addr_max")
     len_max = l3.get("len_max")
+    # A `pre_wake_false` case ("host sends opcode after POR with no preceding
+    # wake pulse -> DUT silent") asserts a WAKE-PULSE / command-response
+    # protocol. That protocol exists only when opcode synthesis was ENABLED by
+    # real half-duplex / command-table evidence. When the L3 records
+    # `opcode_synthesis_skipped_reason` (no half-duplex declared AND no
+    # command-table heading in input/docs), the opcodes were admitted SOLELY
+    # from an HDL `typedef enum` harvest (hdl_typedef_enum_opcode_v1_7_72) --
+    # i.e. the design's own ISA opcode table, NOT a wire command set. Such a
+    # design (e.g. a processor_cpu core) has no wake pulse and no response
+    # frame, so a pre-wake negative case is a category error: it fabricates a
+    # requirement the design does not have and hard-FAILs l10_tb_conformance's
+    # non-waivable "declared-silence" arm. chip-AGNOSTIC: gated on the L3's own
+    # opcode_synthesis_skipped_reason, never a chip/vendor/SKU literal. A real
+    # command-driven IC has opcode_synthesis_enabled -> no skip reason -> its
+    # pre_wake_false cases are still emitted and still FAIL without a TB.
+    _no_wake_protocol = bool(l3.get("opcode_synthesis_skipped_reason"))
     for op in opcodes[:24]:
         if not isinstance(op, dict) or op.get("hex") == "__TODO__":
             continue
@@ -49436,8 +49452,9 @@ def gen_l10_test_cases(project: Path,
         # a `pre_wake_false` (negative pre-wake) case per opcode that does
         # NOT carry pre_wake_allowed=true. The gate is chip-AGNOSTIC: any
         # opcode-class IC needs a "send opcode without prior wake → DUT
-        # silent" assertion in L10.
-        if not op.get("pre_wake_allowed"):
+        # silent" assertion in L10 -- BUT ONLY when a wake protocol exists
+        # (opcode synthesis enabled). See `_no_wake_protocol` above.
+        if not op.get("pre_wake_allowed") and not _no_wake_protocol:
             cases.append({
                 "name": f"send_{op.get('name','OP').lower()}_no_wake",
                 "kind": "pre_wake_false",
