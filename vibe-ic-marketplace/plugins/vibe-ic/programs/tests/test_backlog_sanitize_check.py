@@ -10,6 +10,16 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent / "backlog_sanitize_check.py"
 REGISTRY = PROG.parent / "oss_core_registry.json"
 
+
+def _shipped_version() -> str:
+    """The manifest's version. Hard-coded before, which made this fixture red on
+    every release bump for a reason nobody broke."""
+    import json as _j
+    here = Path(__file__).resolve().parent.parent.parent
+    return str(_j.loads((here / ".claude-plugin" / "plugin.json").read_text())["version"])
+
+
+
 def _run(args: list, **kw) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(PROG)] + args, capture_output=True, text=True, **kw)
 
@@ -19,7 +29,7 @@ def test_help():
 
 def test_pass_clean_yaml(tmp_path):
     bf = tmp_path / "backlog.yaml"
-    bf.write_text("type: enhancement\ncomponent: skill:spec-to-rtl\ntitle: Add SPI timeout\npattern: SPI clock recovery should handle jitter\nplugin_version: '0.115'\n")
+    bf.write_text("type: enhancement\ncomponent: skill:spec-to-rtl\ntitle: Add SPI timeout\npattern: SPI clock recovery should handle jitter\nplugin_version: '" + _shipped_version() + "'\n")
     r = _run(["--file", str(bf)])
     assert r.returncode == 0
 
@@ -48,7 +58,7 @@ def test_empty_pattern_is_flagged_missing(tmp_path):
     bf.write_text("type: enhancement\ncomponent: skill:spec-to-rtl\n"
                   "title: A gate accepts what it should refuse\n"
                   "pattern: |\n  \n"
-                  "plugin_version: '0.115'\n")
+                  "plugin_version: '" + _shipped_version() + "'\n")
     r = _run(["--file", str(bf)])
     assert r.returncode == 1
     cats = [(f["category"], f["field"])
@@ -79,7 +89,7 @@ def test_warn_oss_codename_in_title(tmp_path):
         "component: program:flow_compliance_check\n"
         "title: serv core fails the submodule-instantiation structural gate\n"
         "pattern: a bit-serial RISC-V core's look-ahead shift is flagged as a race\n"
-        "plugin_version: '0.225'\n"
+        "plugin_version: '" + _shipped_version() + "'\n"
     )
     r = _run(["--file", str(bf)])
     rep = json.loads(r.stdout)
@@ -105,7 +115,7 @@ def test_no_warn_oss_codename_in_pattern_or_context(tmp_path):
         "pattern: catalog-glue-author pulls cpu/serv@1.4.0 and three gates emit FAIL\n"
         "suggested_fix: regenerate subservient then darkriscv then picorv32 in order\n"
         "session_context: fresh field-agent run on the serv RV32I core; neorv32 control\n"
-        "plugin_version: '0.225'\n"
+        "plugin_version: '" + _shipped_version() + "'\n"
     )
     r = _run(["--file", str(bf)])
     rep = json.loads(r.stdout)
@@ -124,7 +134,7 @@ def test_word_boundary_no_false_fire_on_substrings(tmp_path):
         "component: program:phase3_runner\n"
         "title: subservient server service does not observe the reserved net\n"
         "pattern: a generic check\n"
-        "plugin_version: '0.225'\n"
+        "plugin_version: '" + _shipped_version() + "'\n"
     )
     r = _run(["--file", str(bf)])
     rep = json.loads(r.stdout)
@@ -168,7 +178,7 @@ def test_corpus_sweep_no_new_oss_warn():
 
 def test_skill_template_copied_verbatim_is_refused_on_plugin_version():
     """#795, second site. `community-backlog-submit/SKILL.md` shows the YAML a
-    human copies. It used to ship a literal `plugin_version: "0.101"` — a
+    human copies. It used to ship a literal `plugin_version: '" + _shipped_version() + "'` — a
     version that is not even X.Y.Z — so a copier who changed nothing filed a
     record whose provenance was a decoration, and this gate PASSED it because
     the field was present.

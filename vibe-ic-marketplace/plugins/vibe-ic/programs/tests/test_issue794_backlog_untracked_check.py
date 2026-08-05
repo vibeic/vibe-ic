@@ -30,11 +30,22 @@ import pytest
 
 PROG = Path(__file__).resolve().parent.parent / "backlog_sanitize_check.py"
 
-_ITEM = """\
+def _shipped_version() -> str:
+    """The version the manifest actually declares.
+
+    Hard-coded here before, which made this fixture go red on every release
+    bump for a reason nobody broke — the record under test is meant to be
+    CURRENT, and "current" is a property of the manifest, not a literal."""
+    import json as _j
+    here = Path(__file__).resolve().parent.parent.parent
+    return str(_j.loads((here / ".claude-plugin" / "plugin.json").read_text())["version"])
+
+
+_ITEM = f"""\
 type: bug
 severity: P1
 component: program:some_gate
-plugin_version: "1.9.77"
+plugin_version: "{_shipped_version()}"
 title: >-
   A generic gate mis-classifies a structural shape and blocks a correct design
 pattern: |
@@ -43,6 +54,8 @@ pattern: |
 suggested_fix: |
   Strip comments before the declaration scan.
 """
+
+
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:

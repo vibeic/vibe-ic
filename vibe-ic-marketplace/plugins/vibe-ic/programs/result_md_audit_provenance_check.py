@@ -199,6 +199,19 @@ _SELF_EMITTED_RES = tuple(
 )
 
 
+#: The compliance tally a RESULT.md is asked to quote VERBATIM. Quoting it is
+#: CITING the gate's output, not asserting a pass — the same reason this file
+#: already blanks its own diagnostic sentences before the claim scan.
+#:
+#: MEASURED (#832): a report quoting `PASS=148 FAIL=3 MISSING=0` was read as
+#: claiming a pass and returned rc=1, while three neighbouring shapes had
+#: already been closed. The tally cannot be a pass claim by construction here —
+#: it carries `FAIL=3` in the same breath — so reading it as one contradicts
+#: the doctrine that asked for the quote.
+_QUOTED_TALLY_RE = re.compile(
+    r"PASS\s*=\s*\d+\s+FAIL\s*=\s*\d+\s+MISSING\s*=\s*\d+[^\n]*", re.I)
+
+
 def _strip_self_emitted(text: str) -> str:
     """Blank out sentences THIS program emits, before scanning for a claim.
 
@@ -208,6 +221,8 @@ def _strip_self_emitted(text: str) -> str:
     """
     for rx in _SELF_EMITTED_RES:
         text = rx.sub(" ", text)
+    # A quoted tally is evidence the report cites, never a claim it makes.
+    text = _QUOTED_TALLY_RE.sub(" ", text)
     return text
 
 
