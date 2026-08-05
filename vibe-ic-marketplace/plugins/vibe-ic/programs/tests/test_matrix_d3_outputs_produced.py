@@ -120,13 +120,27 @@ recorded here as corroboration rather than relied upon.
 
 ADMISSIBLE RUN ROOTS
 ====================
-A run root must (a) live INSIDE this repository and (b) carry
-``provenance.jsonl`` or ``reports/orchestrator/`` — i.e. be a tree a flow
-runner actually wrote. Agent scratch trees are excluded on purpose: the only
-``phase3/analog/hardmacro/*/*.gds`` files on the campaign host were written by
-a throwaway ``mkgds.py`` seeding INPUTS for a backlog repro, and counting a
-seeded input as a produced output would be precisely the adjacent-measurement
-disease this campaign exists to remove.
+A run root must (a) live INSIDE this repository and (b) prove it is evidence
+rather than a directory. There are two ways to prove that, one per manifest
+``kind``, and they are kept apart on purpose (:data:`_ADMISSIBILITY`):
+
+``repo`` (:func:`_is_flow_run`)
+    carries ``provenance.jsonl`` or ``reports/orchestrator/`` — a tree a flow
+    runner actually wrote. Agent scratch trees are excluded on purpose: the
+    only ``phase3/analog/hardmacro/*/*.gds`` files on the campaign host were
+    written by a throwaway ``mkgds.py`` seeding INPUTS for a backlog repro, and
+    counting a seeded input as a produced output would be precisely the
+    adjacent-measurement disease this campaign exists to remove.
+
+``published`` (:func:`_is_published_cell`)
+    a ``benchmark-data/ic/<IC>/v<version>_<PDK>/`` cell that
+    ``benchmark_evidence_publish.py`` staged from a CONVERGED run. A published
+    cell is a curated COPY of a run tree, so it does not carry the runner's
+    marker; it carries instead the machine verdict the publisher REFUSES to
+    stage without. Added 2026-08-06 for A8, and added as a second predicate
+    rather than as two more strings in :data:`_RUNNER_MARKERS`, because
+    loosening one rule for all thirteen roots on the strength of one root is
+    how an admissibility rule stops admitting anything.
 
 STEP A8: THE PRODUCER LANDED, THE EVIDENCE DID NOT
 ==================================================
@@ -141,16 +155,35 @@ acceptance AUDITOR and an auditor that writes a declared ``required_output``
 into the project it audits certifies its own output
 (``test_d3_the_compliance_audit_does_not_create_declared_outputs``).
 
-The cell is nonetheless still WAIVED, with the reason narrowed from "nothing
-produces this" to "nothing can EVIDENCE it here". Magic writes the stream
-inside the EDA container, the producer's documented rc=2 names the gap
-(``A8GDS_NO_STAGE`` / ``A8GDS_NO_MAGIC`` / ``A8GDS_NO_TECH``), and neither CI
-— a plain runner with pytest and no docker — nor a fresh clone has that
-container. Marking the entry ``PRODUCED_LIVE`` would make the cell green on
-hosts with an EDA container and red everywhere else, which is the property
-#527 removed from this module. Committing a produced ``.gds`` into a run tree
-would close it host-independently and is refused for a different reason: it is
-a benchmark-data write made to turn a test green.
+Between 2026-07-28 and 2026-08-06 the cell was nonetheless still WAIVED, with
+the reason narrowed from "nothing produces this" to "nothing can EVIDENCE it
+here". Magic writes the stream inside the EDA container, the producer's
+documented rc=2 names the gap (``A8GDS_NO_STAGE`` / ``A8GDS_NO_MAGIC`` /
+``A8GDS_NO_TECH``), and neither CI — a plain runner with pytest and no docker
+— nor a fresh clone has that container. Marking the entry ``PRODUCED_LIVE``
+would have made the cell green on hosts with an EDA container and red
+everywhere else, which is the property #527 removed from this module.
+
+2026-08-06 — THE WAIVER IS GONE AND THE CELL IS ENFORCED, because the thing
+the waiver said it was waiting for happened. Its evidence field asserted that
+``git ls-tree -r --name-only HEAD`` matched ZERO paths against
+``phase3/analog/hardmacro/*/*.gds``; commit b1665ec8 published
+``benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A/phase3/analog/hardmacro/
+{delta_sigma,ldo}/*.gds`` (111096 B and 641262 B), the premise went false and
+``test_d3_waived_unproven_entries_have_no_committed_artefact`` turned the suite
+red on it. That is the anti-rot mechanism, not a nuisance: the waiver's own
+closing condition read "a published analog run whose A8 actually streamed the
+layout", and this is one.
+
+Reading a COMMITTED artefact needs no container, so the cell is now green on
+every checkout and red on none — the #527 property holds in the direction it
+is meant to. The entry is recorded ``PRODUCED_BY_RUN`` against the published
+cell, which this module admits as an evidence root under its own kind
+(:func:`_is_published_cell`) rather than by widening
+:data:`_RUNNER_MARKERS`. What was NOT done, and is worth stating because the
+2026-07-28 text refused it in these words: no ``.gds`` was written into a run
+tree to turn a test green. The artefacts were published by the benchmark
+publisher, from a converged run, in a commit that is not this one.
 
 What IS asserted, on every host: the producer exists and a FLOW PATH dispatches
 it (``test_d3_a8_producer_is_reachable_from_a_flow_path``, with
@@ -199,31 +232,89 @@ WHAT THIS MODULE DELIBERATELY DOES NOT DO
   looking at (or creating) the artefact, not by grepping for a string that
   might live in a comment.
 
-FIXTURE ATTESTATION, STATED OUT LOUD — AND NOW UNIFORM
-======================================================
+A FIXTURE ATTESTATION IS NOT EVIDENCE, AND NO LONGER COUNTS AS ONE
+=================================================================
 **114 of the 133 declared entries are decided live on every host** — 95
 archived in in-repo run trees, 6 produced on the spot, 13 searched for and
-genuinely absent. The other 19 were only ever proven from run trees outside
-this repository, so
-they fall back to the committed manifest's measured record and every assertion
-message says ``[FIXTURE]`` for that entry. Even then the record is
-cross-checked against the LIVE yaml — the recorded ``alternative`` must still
-be one of the entry's declared alternatives — so a yaml edit reddens the cell
-in fixture mode too.
+genuinely absent. The other 19 name a run tree outside this repository. Until
+2026-08-06 those 19 FELL BACK TO THE COMMITTED MANIFEST AND WERE REPORTED
+PRODUCED, which is the defect this section now records:
 
-Before #527 that split was the *degraded* mode and the campaign host decided
-every entry live, which is precisely why the suite's answer depended on the
-machine. It is now the ONLY mode: external trees are not consulted anywhere,
-there is no env-var escape hatch, and the live count is the same on the
-campaign host, on CI and on a fresh clone.
+    hit, _rejected = resolve_anywhere(entry)     # <- searched all 7 run roots
+    if hit is not None:
+        return EntryVerdict(True, LIVE, (...))
+    return EntryVerdict(True, FIXTURE, (         # <- ...found nothing: GREEN
+        f"[fixture-attested, run root {rec['run']!r} absent here] ...")
+
+A search that comes back EMPTY returned ``produced=True``. Measured on this
+checkout: step 17's ``phase3/stage3/pnr/placed.def`` matches nothing
+(``find benchmark-data -name placed.def`` = 0; ``git ls-tree -r --name-only
+HEAD | grep -c 'placed\\.def'`` = 0) and its cell was green. Because no
+lookup could change the answer, SEVEN cells marked ENFORCED with no waiver —
+17, 20, 29, 30, M2, M3, M4 — were unfalsifiable: nothing anyone did to the run
+tree could move their colour. That is the same disease #527 removed, in its
+purest form: *a verdict that reads the same whether or not the thing it claims
+actually happened*.
+
+A record dated 2026-07-27 is a claim about the past. It is not evidence that
+the artefact exists today, and it is now reported as what it is: the entry is
+UNEVIDENCED and NOT produced. The measurement is still printed — the reader
+sees the path, the size and the date it was taken — but it decides nothing.
+
+WHY A FAILURE AND NOT A WAIVER
+==============================
+The alternative was to move those cells to WAIVED, and it was rejected:
+
+* For steps 11 and 29 a waiver would be FALSE. Their declared artefacts ARE
+  tracked by this commit — ``benchmark-data/ic/caravel_user_project/
+  v1.9.43_sky130A/phase2/stage2/dft/*`` and ``benchmark-data/evaluation/
+  phase1_parity/*/phase3/stage3/sim_postlayout/pass.flag`` — merely in trees
+  the manifest never registered as run roots, so ``resolve_anywhere`` does not
+  look there. ``test_d3_waived_unproven_entries_have_no_committed_artefact``
+  would reject the premise, correctly.
+* For the other ten the gap is closed by ONE COMMIT — publish the run tree.
+  A waiver is a public admission that a gap is *accepted*; granting ten of
+  them would convert a one-commit fix into a standing excuse.
+* This module's own history is the argument. Its two FPGA waivers rested on a
+  ``find ~ -name '*.sof'`` count that was true on one day on one machine and
+  false a fortnight later; its A8 waiver existed in two copies telling two
+  different stories. A red cell cannot rot. A waiver can, and did.
+
+So the seven cells stop CLAIMING ENFORCED-and-green: they stay ENFORCED and
+they FAIL, with a message naming the entry, the run root that is missing and
+the one action that closes it. Twelve cells are red for this reason (the
+eleven above plus M1, whose waiver covers a different entry) and they are
+pinned in :data:`UNEVIDENCED_CELLS` so the population cannot grow quietly.
+Falsifiability is restored in BOTH directions and is asserted, not described:
+``test_d3_an_entry_that_resolves_nowhere_is_not_reported_as_produced`` plants
+step 17's ``placed.def`` in an admissible run root and the cell goes green
+again.
+
+Even in the unevidenced state the record is still cross-checked against the
+LIVE yaml — the recorded ``alternative`` must still be one of the entry's
+declared alternatives — so a yaml edit is caught before the entry is even
+searched for.
+
+Before #527 the fixture fallback was the *degraded* mode and the campaign host
+decided every entry live, which is precisely why the suite's answer depended
+on the machine. External trees are not consulted anywhere, there is no env-var
+escape hatch, and the live count is the same on the campaign host, on CI and
+on a fresh clone.
 
 2026-07-28: the count moved from 107/126 to 114/133. Every one of the seven
 new entries is a dimension-7 declaration that the in-repo run trees ALREADY
 carry — six archived, one (``reports/phase3/em_signoff.json``) produced on the
-spot by its own declared producer. A8's ``.gds`` did NOT move: it stays in the
-searched-and-absent bucket, waived, because its producer's evidence needs an
-EDA container this dimension may not depend on. The counts above are
+spot by its own declared producer. A8's ``.gds`` did NOT move then: it stayed
+in the searched-and-absent bucket, waived, because its producer's evidence
+needed an EDA container this dimension may not depend on. The counts above are
 re-measured, not carried forward.
+
+2026-08-06: the count is UNCHANGED at 114/133 and A8's ``.gds`` did move — from
+searched-and-absent to resolved, out of the ``UNPROVEN`` bucket (13 -> 12) and
+into ``PRODUCED_BY_RUN`` (95 -> 96). Both buckets are decided LIVE, so the
+total is flat; what changed is that the live search now finds a 641262 B
+artefact instead of nothing. Re-measured composition: 96 + 6 + 12 = 114 live,
+19 fixture, 133 declared.
 ``test_d3_evidence_is_live_wherever_the_run_root_exists`` forbids the fallback
 whenever an admissible run root actually resolves and holds the live count at
 its floor; ``test_d3_the_verdict_does_not_depend_on_the_host`` plants a
@@ -276,6 +367,15 @@ from analog_a5_layout_check import _gds_geometry_count  # noqa: E402
 # hardmacro apart from any other design's chip-top.
 from gds_topcell_name_check import parse_structures  # noqa: E402
 
+# The PUBLISH CONTRACT's own two programs, imported rather than re-stated, so a
+# published evidence cell is recognised here by exactly the rule that made it
+# publishable. `_audit_verdict` is what `benchmark_evidence_publish.publish`
+# calls before it will stage anything and `_CONVERGED` is the set it demands;
+# `_NAME_RE` is the canonical `v<version>_<PDK>` folder name that
+# `benchmark_evidence_structure_check` enforces afterwards.
+import benchmark_evidence_publish as _bep  # noqa: E402
+from benchmark_evidence_structure_check import _NAME_RE as _PUBLISHED_NAME_RE  # noqa: E402
+
 DIM = 3
 
 MANIFEST_PATH = Path(__file__).resolve().parent / "fixtures" / "matrix_d3_output_manifest.json"
@@ -287,6 +387,17 @@ _RUNNER_MARKERS = ("provenance.jsonl", "reports/orchestrator")
 #: Every other kind names a tree on some particular machine and is never
 #: consulted — see the module docstring (#527).
 _IN_REPO_KIND = "repo"
+
+#: The manifest's ``kind`` for a PUBLISHED EVIDENCE CELL —
+#: ``benchmark-data/ic/<IC>/v<version>_<PDK>/`` (``benchmark-data/PUBLISHING.md``).
+#: Also inside this repository, and admitted on a DIFFERENT proof of provenance
+#: from a run tree; :func:`_is_published_cell` states which and why.
+_PUBLISHED_KIND = "published"
+
+#: Both kinds live in the commit, so both are decided live on every checkout.
+#: Everywhere the question is "does the repository carry this root" rather than
+#: "how was its provenance proved", this pair is what is meant.
+_IN_REPO_KINDS: Tuple[str, ...] = (_IN_REPO_KIND, _PUBLISHED_KIND)
 
 #: Manifest run roots that live INSIDE this repository, so every checkout has
 #: them and their entries are always decided live. Derived from the manifest's
@@ -303,10 +414,11 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
 
 #: Steps whose EVERY declared entry is evidenced only by a run tree outside
 #: this repository, measured 2026-07-27. Since #527 those trees are not
-#: consulted on ANY host, so these seven cells are decided by the committed
-#: manifest rather than by the repository everywhere — the module's one soft
-#: spot, named here cell by cell rather than left inside an aggregate floor.
-#: Committing those run trees is what would close it. See
+#: consulted on ANY host. Until 2026-08-06 that made these seven cells green on
+#: the committed manifest and unfalsifiable from the repository; they are now
+#: RED (see :data:`UNEVIDENCED_CELLS` and the "WHY A FAILURE AND NOT A WAIVER"
+#: section above), and committing those run trees is what closes them. The set
+#: is still pinned so a cell joining it is a loud, named event. See
 #: ``test_d3_fixture_attested_cells_are_named_cell_by_cell``.
 EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
     "17", "20", "29", "30", "M2", "M3", "M4",
@@ -316,6 +428,16 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 #: EQUALITY, not a floor (#527): while external run trees were consulted the
 #: number ranged with the machine and a ``>=`` permitted the whole spread.
 #: Asserted by ``test_d3_evidence_is_live_wherever_the_run_root_exists``.
+#:
+#: 2026-08-06 — RE-MEASURED and UNCHANGED at 114, which is worth writing down
+#: because A8's ``.gds`` did move that day. It went from ``UNPROVEN`` to
+#: ``PRODUCED_BY_RUN``, and both of those are decided LIVE: the UNPROVEN branch
+#: searches every admissible root and the PRODUCED_BY_RUN branch resolves one.
+#: What changed is the ANSWER (a live search that came back empty now comes
+#: back with a 641262 B artefact), not the MODE, so the count is flat. The
+#: number is re-derived here rather than carried forward: 96 PRODUCED_BY_RUN +
+#: 6 PRODUCED_LIVE + 12 UNPROVEN-and-searched = 114 live, 19 fixture, 133
+#: declared.
 _LIVE_ENTRY_COUNT = 114
 
 #: Run roots the compliance-audit self-certification probe drives, and the
@@ -357,6 +479,13 @@ SELF_CERTIFYING_AUDIT_PROBE: Dict[str, Tuple[str, ...]] = {
         "25::reports/phase3/em_signoff.json",
         "26::reports/phase3/antenna_signoff.json",
     ),
+    # 2026-08-06 — the published cell that carries A8's hardmacro GDS. It is in
+    # the probe for the reason A8 is the reason the probe exists: this root is
+    # now an evidence source, so "could the auditor have written the artefact
+    # it then reports" has to be asked of it too. MEASURED empty — a
+    # `flow_compliance_check` run creates 0 files there of any kind — and
+    # pinned empty so it cannot start creating one silently.
+    "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A": (),
 }
 
 
@@ -369,7 +498,7 @@ def manifest() -> Dict:
     global _IN_REPO_RUN_ROOTS
     _IN_REPO_RUN_ROOTS = tuple(sorted(
         label for label, meta in doc["run_roots"].items()
-        if meta.get("kind") == "repo"))
+        if meta.get("kind") in _IN_REPO_KINDS))
     return doc
 
 
@@ -398,6 +527,59 @@ def _is_flow_run(path: Path) -> bool:
     return any((path / m).exists() for m in _RUNNER_MARKERS)
 
 
+def _is_published_cell(path: Path) -> bool:
+    """A cell ``benchmark_evidence_publish.py`` staged from a CONVERGED run.
+
+    ADDED 2026-08-06, and the reason it is a SECOND predicate rather than two
+    more strings in :data:`_RUNNER_MARKERS` is the whole point. A run tree is
+    admitted because a flow runner demonstrably wrote it — it dropped a marker
+    file. A published cell is a curated COPY of such a tree, made by a program
+    (``benchmark-data/PUBLISHING.md``), and the copy does not carry the
+    runner's marker: the analog reference cell has no ``provenance.jsonl`` and
+    no ``reports/orchestrator/``. Widening the marker list to let it in would
+    have loosened the rule for all thirteen roots on the strength of one, which
+    is how an admissibility rule stops admitting anything.
+
+    So the provenance is proved POSITIVELY, by the publish contract's own
+    precondition, using the contract's own two programs:
+
+    * the folder is named canonically, ``v<version>_<PDK>``
+      (``benchmark_evidence_structure_check._NAME_RE``), and
+    * it carries the machine verdict that made it publishable —
+      ``reports/audit/phase23_completion_audit.json``, read with
+      ``benchmark_evidence_publish._audit_verdict`` and required to be in
+      ``_CONVERGED`` — which is exactly what ``publish()`` reads before it will
+      stage a single file, and it REFUSES a FAIL or a missing one.
+
+    That is strictly stronger than "a marker file exists": a hand-assembled
+    directory, an agent scratch tree, or a cell staged from a run whose own
+    audit said FAIL is refused here, and refused for a stated reason rather
+    than by accident of naming.
+    ``test_d3_a_published_cell_must_show_a_converged_verdict`` asserts both
+    directions.
+    """
+    if not _PUBLISHED_NAME_RE.match(path.name):
+        return False
+    try:
+        verdict, _src = _bep._audit_verdict(path, None)
+    except Exception:
+        # `_audit_verdict` raises `Refuse` for "no audit artifact" and for an
+        # unparseable or verdict-less one. Both mean the same thing here: this
+        # directory cannot show the verdict that would have made it
+        # publishable, so it is not evidence.
+        return False
+    return verdict in _bep._CONVERGED
+
+
+#: How each in-repo ``kind`` proves it is evidence rather than a directory.
+#: One entry per kind, so a manifest ``kind`` nobody has taught this module
+#: about resolves to nothing instead of silently defaulting to admitted.
+_ADMISSIBILITY = {
+    _IN_REPO_KIND: _is_flow_run,
+    _PUBLISHED_KIND: _is_published_cell,
+}
+
+
 @lru_cache(maxsize=1)
 def run_roots() -> Dict[str, RunRoot]:
     """Every IN-REPO manifest run root that resolves HERE, keyed by label.
@@ -408,16 +590,22 @@ def run_roots() -> Dict[str, RunRoot]:
     carry cannot make this dimension's answer the same on two hosts. Their
     entries are fixture-attested everywhere instead, which is exactly what
     they already were on every host but one.
+
+    Two in-repo kinds, each with its OWN proof of provenance (``repo`` ->
+    :func:`_is_flow_run`, ``published`` -> :func:`_is_published_cell`). Neither
+    weakens the other: a ``repo`` root still has to carry a runner marker, and
+    a ``published`` root still has to carry a converged verdict.
     """
     out: Dict[str, RunRoot] = {}
     repo = _plugin_tree.repo_root()
     if repo is None:
         return out
     for label, meta in manifest()["run_roots"].items():
-        if meta["kind"] != _IN_REPO_KIND:
+        admits = _ADMISSIBILITY.get(meta["kind"])
+        if admits is None:
             continue
         cand = repo / meta["rel"]
-        if cand.is_dir() and _is_flow_run(cand):
+        if cand.is_dir() and admits(cand):
             out[label] = RunRoot(label=label, kind=meta["kind"], path=cand)
     return out
 
@@ -697,13 +885,24 @@ def produce_live(step_id, entry: str, rec: Dict) -> Tuple[bool, str]:
 # The per-entry verdict
 # ──────────────────────────────────────────────────────────────────────
 #: How an entry's verdict was reached. ``LIVE`` = the artefact was looked at
-#: (or created) here and now. ``FIXTURE`` = the run tree that carries it is not
-#: on this host and the committed measurement stood in. The distinction is
-#: surfaced (see :func:`test_d3_evidence_is_live_wherever_the_run_root_exists`)
-#: because a module that quietly slid from LIVE to FIXTURE everywhere would
-#: still be green while measuring nothing.
+#: (or created) here and now. ``FIXTURE`` = the run tree the manifest recorded
+#: is not on this host.
+#:
+#: ``FIXTURE`` NO LONGER MEANS "the committed measurement stood in" (2026-08-06)
+#: — a standing-in measurement is exactly the green that no measurement could
+#: move. It now means the entry could not be decided here, and every ``FIXTURE``
+#: verdict carries ``produced=False``. The mode is still surfaced (see
+#: :func:`test_d3_evidence_is_live_wherever_the_run_root_exists`) because a
+#: module that quietly slid from LIVE to FIXTURE everywhere would be measuring
+#: nothing — it would now be loudly red rather than quietly green, but the
+#: cause would still be discovery, not production, and the two must not be
+#: confused.
 LIVE = "LIVE"
 FIXTURE = "FIXTURE"
+
+#: The date every manifest record was measured on. Quoted in the UNEVIDENCED
+#: message so the reader sees how old the standing-in observation is.
+_MANIFEST_MEASURED_ON = "2026-07-27"
 
 
 @dataclass(frozen=True)
@@ -711,6 +910,29 @@ class EntryVerdict:
     produced: bool
     mode: str
     detail: str
+
+
+def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
+                        rejected: Dict[str, "Rejected"]) -> str:
+    """The message for an entry NOTHING on this checkout can resolve.
+
+    It states three things a reader needs and the old fixture message stated
+    none of: that the search happened and came back empty, what the manifest
+    record actually is (a dated observation of a tree that is not here), and
+    the ONE action that turns the cell green again.
+    """
+    return (
+        f"UNEVIDENCED: {which_root} is not carried by this repository, and "
+        f"nothing matching {entry!r} resolves in any of the "
+        f"{len(run_roots())} admissible run roots {sorted(run_roots())}"
+        f"{_rejected_note(rejected)}. The manifest records "
+        f"{rec.get('path') or rec.get('writes')!r} at "
+        f"{rec.get('size_bytes')} B measured on {_MANIFEST_MEASURED_ON} — that "
+        f"is a claim about a tree on one machine on one day, not evidence that "
+        f"this commit produces the artefact, and it must not be reported as "
+        f"produced. Commit (or register in the manifest) a run tree that "
+        f"carries it and this cell answers live again."
+    )
 
 
 def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
@@ -733,11 +955,19 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
 
     if status == "PRODUCED_LIVE":
         if rec["base_run"] not in run_roots():
-            return EntryVerdict(True, FIXTURE, (
-                f"[fixture-attested, base run {rec['base_run']!r} absent here] "
-                f"live production measured 2026-07-27: `{rec['producer']}` "
-                f"wrote {rec['writes']} at {rec['size_bytes']} B"
-            ))
+            # Same rule as the PRODUCED_BY_RUN fall-through below: the run tree
+            # the live production was measured in is not here, so this checkout
+            # cannot re-run the producer, and a record of somebody else having
+            # run it is a claim about the past, not an artefact.
+            hit, rejected = resolve_anywhere(entry)
+            if hit is not None:
+                return EntryVerdict(True, LIVE, (
+                    f"{hit.path} ({hit.size_bytes} B) in {hit.root!r} "
+                    f"[recorded base run {rec['base_run']!r} absent here]"
+                ))
+            return EntryVerdict(False, FIXTURE, _unevidenced_detail(
+                entry, rec, f"the recorded base run {rec['base_run']!r}",
+                rejected))
         ok, detail = produce_live(step_id, entry, rec)
         return EntryVerdict(ok, LIVE, detail)
 
@@ -762,16 +992,14 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
                 ))
             return EntryVerdict(True, LIVE,
                                 f"{hit.path} ({hit.size_bytes} B) in {rec['run']!r}")
-        hit, _rejected = resolve_anywhere(entry)
+        hit, rejected = resolve_anywhere(entry)
         if hit is not None:
             return EntryVerdict(True, LIVE, (
                 f"{hit.path} ({hit.size_bytes} B) in {hit.root!r} "
                 f"[recorded run {rec['run']!r} absent here]"
             ))
-        return EntryVerdict(True, FIXTURE, (
-            f"[fixture-attested, run root {rec['run']!r} absent here] "
-            f"{rec['path']} at {rec['size_bytes']} B, measured 2026-07-27"
-        ))
+        return EntryVerdict(False, FIXTURE, _unevidenced_detail(
+            entry, rec, f"the recorded run root {rec['run']!r}", rejected))
 
     return EntryVerdict(False, LIVE, f"unrecognised manifest status {status!r}")
 
@@ -960,14 +1188,29 @@ def test_d3_run_root_discovery_is_live():
 
 
 def test_d3_every_admissible_run_root_is_a_real_flow_run():
-    """The admissibility rule, re-applied live to every resolved root."""
-    bad = [
-        (label, str(rr.path)) for label, rr in run_roots().items()
-        if not _is_flow_run(rr.path)
-    ]
+    """The admissibility rule, re-applied live to every resolved root.
+
+    Each root is re-checked against the predicate for ITS OWN kind, never
+    against a union of the predicates. A union would mean every root only has
+    to satisfy the loosest rule in the table: a ``repo`` root that stopped
+    carrying a runner marker would be carried by the published-cell rule, and a
+    ``published`` cell whose verdict went FAIL would be carried by the marker
+    rule. Both must still fail, and they do.
+    """
+    bad = []
+    for label, rr in run_roots().items():
+        admits = _ADMISSIBILITY.get(rr.kind)
+        if admits is None:
+            bad.append((label, str(rr.path), f"unknown kind {rr.kind!r}"))
+        elif not admits(rr.path):
+            bad.append((label, str(rr.path), f"fails the {rr.kind!r} rule"))
     assert not bad, (
-        f"these run roots carry neither provenance.jsonl nor "
-        f"reports/orchestrator/ and must not be cited as evidence: {bad}"
+        f"these run roots no longer prove their own provenance and must not be "
+        f"cited as evidence: {bad}. A {_IN_REPO_KIND!r} root must carry one of "
+        f"{list(_RUNNER_MARKERS)}; a {_PUBLISHED_KIND!r} root must be a "
+        f"canonical v<version>_<PDK> cell whose "
+        f"reports/audit/phase23_completion_audit.json verdict is in "
+        f"{list(_bep._CONVERGED)}."
     )
 
 
@@ -1215,30 +1458,41 @@ def test_d3_cell_states_partition_all_63_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (52, 4, 7), (
+    assert (len(enforced), len(waived), len(na)) == (53, 3, 7), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(52, 4, 7) on 2026-07-27 and re-confirmed on 2026-07-28. A step "
-        f"moving between states is a real change in what dimension {DIM} "
-        f"enforces and must be re-reviewed, not absorbed.\n"
+        f"(53, 3, 7) on 2026-08-06. A step moving between states is a real "
+        f"change in what dimension {DIM} enforces and must be re-reviewed, not "
+        f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
         f"a new producer, steps 6/39 NA_TOOLCHAIN_ABSENT. Both were measured "
-        f"and reverted. A8's evidence needs Magic in an EDA container that CI "
-        f"does not have, and the 6/39 NA's own self-invalidating assertion "
-        f"fires on a host that HAS Quartus. Neither survives the "
-        f"host-independence rule (#527). The producer landed; the cell state "
-        f"did not move."
+        f"and reverted, leaving (52, 4, 7). A8's evidence needed Magic in an "
+        f"EDA container that CI does not have, and the 6/39 NA's own "
+        f"self-invalidating assertion fires on a host that HAS Quartus. "
+        f"Neither survived the host-independence rule (#527).\n"
+        f"2026-08-06: (52, 4, 7) -> (53, 3, 7) — A8 alone moved, from WAIVED "
+        f"to ENFORCED, and NOT on the 2026-07-28 argument. Commit b1665ec8 "
+        f"published benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A/phase3/"
+        f"analog/hardmacro/{{delta_sigma,ldo}}/*.gds, so A8's waiver premise "
+        f"('git ls-tree -r --name-only HEAD matches ZERO paths') became false "
+        f"and its own stated closing condition ('a published analog run whose "
+        f"A8 actually streamed the layout') was met. No container is needed to "
+        f"read a committed artefact, so the cell is host-independent in the "
+        f"direction #527 requires. Steps 6/39 and M1 are unchanged and still "
+        f"waived."
     )
 
 
 def test_d3_evidence_is_live_wherever_the_run_root_exists():
-    """No entry may fall back to the fixture while its run root IS present.
+    """No entry may read FIXTURE while its run root IS present.
 
-    The fixture fallback is the module's one soft spot: it lets a cell go green
-    on a machine that cannot see the run tree. That is acceptable only when the
-    tree is genuinely absent. If a recorded run root resolves and the entry
-    still reads FIXTURE, the resolver has stopped looking and every cell
-    downstream of it is hollow.
+    Since 2026-08-06 a FIXTURE entry is a FAILURE, not a green, so this test no
+    longer guards against a hollow pass — it guards against a false RED and
+    against a silent collapse of discovery. If a recorded run root resolves and
+    the entry still reads FIXTURE, the resolver has stopped looking, and a
+    module that reported 133 unevidenced entries because ``run_roots()`` broke
+    would be just as wrong as one that reported 133 produced ones. The
+    ``live == _LIVE_ENTRY_COUNT`` equality below is what pins that.
     """
     resolved = run_roots()
     wrong = []
@@ -1299,13 +1553,20 @@ def test_d3_fixture_attested_cells_are_named_cell_by_cell():
     cells are labelled ENFORCED while being unfalsifiable from the repository.
 
     #527 turned that from a *degraded* mode into the only mode: those external
-    trees are no longer consulted on any host, so the seven cells are now
+    trees are no longer consulted on any host, so the seven cells were
     fixture-attested everywhere — worse in absolute terms, and honest, where
     before they were live on exactly one machine and fixture on every other.
-    The soft spot is not removed here (the artefacts genuinely are not in the
-    repository; committing those run trees is what would remove it), but it is
-    SPECIFIC and machine-checkable: the set is pinned, so a cell silently
-    joining it reddens.
+
+    2026-08-06 finished the sentence #527 started. Recording the soft spot was
+    never a substitute for reporting it: a cell decided by the committed JSON
+    was still GREEN, so the pin below said "these seven are unfalsifiable" while
+    the cells themselves said "produced". ``check_entry`` now returns
+    ``produced=False`` for an entry no admissible run root can evidence, so the
+    seven are RED and answer live the moment a run tree carrying their artefact
+    is committed. This test's job is unchanged and still needed: the artefacts
+    genuinely are not in the repository, and the POPULATION must not grow
+    quietly, so the set stays pinned and a cell joining it reddens here as
+    well as in its own cell.
     """
     manifest()  # populates _IN_REPO_RUN_ROOTS from the manifest's own `kind`
     assert _IN_REPO_RUN_ROOTS, "manifest declares no in-repo run root"
@@ -1542,8 +1803,17 @@ def test_d3_a8_producer_is_reachable_from_a_flow_path():
 # `programs/tests/test_analog_hardmacro_gds_emit.py`; that a flow path
 # dispatches it is asserted above; and that whatever lands at A8's declared
 # path is a real layout for the right block is asserted by
-# `test_d3_a8_gds_in_a_run_root_is_a_real_hardmacro_layout`. What remains
-# unproven, and is what A8's waiver now names, is that a RUN produced one.
+# `test_d3_a8_gds_in_a_run_root_is_a_real_hardmacro_layout`.
+#
+# 2026-08-06: what those bindings left unproven — that a RUN produced one — is
+# no longer unproven and no longer waived. It is answered by an artefact rather
+# than by an execution: commit b1665ec8 published two hardmacro layouts into
+# `benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A/phase3/analog/hardmacro/`,
+# they are tracked at HEAD, and `test_matrix_a8_published_gds_control.py`
+# re-checks on every run that each one is a real GDSII stream defining a
+# structure named after its own block directory. The removed test is still the
+# right thing to leave removed: running Magic here would re-introduce exactly
+# the host-dependence the published artefact makes unnecessary.
 
 
 def test_d3_the_compliance_audit_does_not_create_declared_outputs():
@@ -1691,6 +1961,271 @@ def test_d3_zero_byte_artefacts_are_not_counted_as_produced():
         hit, rej = resolve(probe, "reports/drc.rpt")
         assert hit is not None and hit.size_bytes == 1, (hit, rej)
     assert all(rr.path.is_dir() for rr in roots.values())
+
+
+def _probe_only(monkeypatch, label: str, path: Path) -> None:
+    """Make *path* the ONE admissible run root for the duration of a test."""
+    monkeypatch.setattr(
+        sys.modules[__name__], "run_roots",
+        lambda: {label: RunRoot(label, _IN_REPO_KIND, path)})
+
+
+def test_d3_an_entry_that_resolves_nowhere_is_not_reported_as_produced(monkeypatch):
+    """THE CONTROL for "a lookup that returns nothing lights the green light".
+
+    Before this fix ``check_entry``'s ``PRODUCED_BY_RUN`` arm ended:
+
+        hit, _rejected = resolve_anywhere(entry)
+        if hit is not None:
+            return EntryVerdict(True, LIVE, (...))
+        return EntryVerdict(True, FIXTURE, (
+            f"[fixture-attested, run root {rec['run']!r} absent here] ...")
+
+    — a search of every admissible run root that came back EMPTY returned
+    ``produced=True`` anyway, on the strength of a line in the committed
+    manifest. Measured on this checkout: step 17's ``phase3/stage3/pnr/
+    placed.def`` matches nothing (``find benchmark-data -name placed.def`` = 0,
+    ``git ls-tree -r --name-only HEAD | grep -c 'placed\\.def'`` = 0) and its
+    cell was GREEN. 19 of the 133 declared entries took that route.
+
+    THREE CASES, AND THE MIDDLE ONE IS THE POINT.
+
+    * FORWARD — the artefact is in no admissible run root: NOT produced. This
+      is the assertion the pre-fix file fails.
+    * REVERSE A — the SAME entry, the SAME record whose recorded run root is
+      still absent, with the artefact planted and committed in an admissible
+      run root: produced, LIVE. This is what stops the fix degenerating into
+      "recorded run root absent => always False". It is also the property the
+      defect said was missing: the cell's colour now MOVES with the run tree.
+    * REVERSE B — the recorded run root itself resolves and carries it:
+      produced, LIVE, unchanged.
+
+    Both reverse cases pass against the pre-fix file too, by construction:
+    they go through the ``resolve_anywhere``/``resolve`` hit branches, which
+    this fix does not touch.
+    """
+    sid, entry = "17", "phase3/stage3/pnr/placed.def"
+    assert entry in F.required_outputs(sid), (
+        f"step {sid} no longer declares {entry!r}; this control is stale and "
+        f"must be re-pointed at an entry the flow actually declares")
+    rec = dict(step_record(sid)["entries"][entry])
+    assert rec["status"] == "PRODUCED_BY_RUN", rec
+    absent_root = rec["run"]
+
+    with _probe_run_root("d3_unevidenced_") as (probe, commit):
+        (probe / "reports" / "orchestrator").mkdir(parents=True)
+        (probe / "unrelated.txt").write_text("a run tree without the artefact\n")
+        commit("unrelated.txt")
+        assert _is_flow_run(probe), "the probe is not admissible as a run root"
+        _probe_only(monkeypatch, "probe", probe)
+        assert absent_root not in run_roots(), (
+            f"the recorded run root {absent_root!r} must NOT resolve for this "
+            f"control to exercise the fall-through")
+
+        # ---- FORWARD: nothing resolves anywhere ----------------------
+        v = check_entry(sid, entry, rec)
+        assert v.produced is False, (
+            f"an entry that resolves in NONE of the {len(run_roots())} "
+            f"admissible run roots was reported as produced: {v.detail}. A "
+            f"fixture attestation dated {_MANIFEST_MEASURED_ON} is a claim "
+            f"about the past; it is not evidence that the artefact exists now."
+        )
+        assert v.mode == FIXTURE and "UNEVIDENCED" in v.detail, v
+        assert absent_root in v.detail and entry in v.detail, (
+            "the failure must name the run root it wanted and the entry it "
+            "could not find, or nobody can act on it: " + v.detail)
+
+        # ---- REVERSE A: plant it, the SAME record must go green ------
+        target = probe / entry
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("VERSION 5.8 ;\nDESIGN probe ;\nEND DESIGN\n")
+        commit(entry)
+        v = check_entry(sid, entry, rec)
+        assert v.produced is True and v.mode == LIVE, (
+            f"the artefact was committed into an admissible run root and the "
+            f"verdict did not move: {v}. A rule that fires on everything is "
+            f"not a rule — and this cell would still be unfalsifiable, just "
+            f"red instead of green."
+        )
+        assert "probe" in v.detail, v.detail
+
+        # ---- REVERSE B: the RECORDED run root resolves and carries it -
+        rec_here = dict(rec, run="probe")
+        v = check_entry(sid, entry, rec_here)
+        assert v.produced is True and v.mode == LIVE, (
+            f"the ordinary in-repo path regressed: {v}")
+
+
+def test_d3_a_live_production_record_alone_is_not_evidence(monkeypatch):
+    """The same rule on the ``PRODUCED_LIVE`` arm, which had the same hole.
+
+    That arm returned ``EntryVerdict(True, FIXTURE, ...)`` the moment its
+    ``base_run`` was absent — without so much as a lookup. It is latent on this
+    checkout (all six live-produced entries name an in-repo base run, so the
+    branch is not reached today), and it is the identical defect: a recorded
+    production EVENT is not the artefact, and a checkout that cannot re-run the
+    producer has not observed one.
+
+    Reverse case, which must still pass: with the artefact actually present in
+    an admissible run root the entry is produced and LIVE, so this rejects the
+    ABSENCE of evidence and not the ``PRODUCED_LIVE`` status.
+    """
+    entry = "reports/probe/live_only.json"
+    rec = {
+        "status": "PRODUCED_LIVE",
+        "base_run": "a/run/tree/this/repo/does/not/carry",
+        "producer": "some_producer",
+        "writes": entry,
+        "argv": [],
+        "size_bytes": 1234,
+    }
+    with _probe_run_root("d3_liveonly_") as (probe, commit):
+        (probe / "reports" / "orchestrator").mkdir(parents=True)
+        (probe / "unrelated.txt").write_text("no artefact here\n")
+        commit("unrelated.txt")
+        _probe_only(monkeypatch, "probe", probe)
+
+        v = check_entry("A8", entry, rec)
+        assert v.produced is False, (
+            f"a PRODUCED_LIVE record whose base run is absent was reported as "
+            f"produced without looking for the artefact: {v.detail}")
+        assert v.mode == FIXTURE and "UNEVIDENCED" in v.detail, v
+
+        target = probe / entry
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('{"planted": true}\n')
+        commit(entry)
+        v = check_entry("A8", entry, rec)
+        assert v.produced is True and v.mode == LIVE, (
+            f"the artefact IS in an admissible run root and the entry still "
+            f"reads unproduced: {v}")
+
+
+def test_d3_a_present_artefact_still_reads_as_produced(monkeypatch):
+    """THE REVERSE CONTROL, standing alone so it can be run BOTH WAYS.
+
+    The two tests above assert a green that must go red. This one asserts the
+    green that must STAY green, and it is deliberately a separate test rather
+    than a trailing block inside them: a test whose first assertion has already
+    failed never reaches its own reverse case, so on the pre-fix file those
+    trailing blocks prove nothing. This one passes against the byte-identical
+    pre-fix file AND after, which is the only way to show the fix rejects the
+    ABSENCE of evidence rather than "an entry whose recorded run root is not
+    here" — the degenerate tightening that would fire on all 19 entries no
+    matter what the run tree held.
+
+    Two shapes, each with the artefact genuinely present and committed:
+
+      * ``PRODUCED_BY_RUN`` whose recorded run root is ABSENT, resolved in a
+        different admissible root (``resolve_anywhere``);
+      * ``PRODUCED_BY_RUN`` whose recorded run root IS the one that has it
+        (``resolve``).
+
+    The third obvious shape — ``PRODUCED_LIVE``, base run absent, artefact
+    present — is deliberately NOT here: measured against the pre-fix file it
+    returns ``EntryVerdict(True, 'FIXTURE', ...)`` because that arm returned
+    the fixture attestation without ever looking, so the mode genuinely
+    CHANGES with this fix and the assertion belongs in the forward control
+    (``test_d3_a_live_production_record_alone_is_not_evidence``) where it is
+    the reverse half. Putting it here would have made this "both ways" test
+    fail one of the two ways, which is how a reverse control stops being one.
+    """
+    sid, entry = "17", "phase3/stage3/pnr/placed.def"
+    assert entry in F.required_outputs(sid), "control is stale"
+    rec = dict(step_record(sid)["entries"][entry])
+
+    with _probe_run_root("d3_present_") as (probe, commit):
+        (probe / "reports" / "orchestrator").mkdir(parents=True)
+        target = probe / entry
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("VERSION 5.8 ;\nDESIGN probe ;\nEND DESIGN\n")
+        commit(entry)
+        _probe_only(monkeypatch, "probe", probe)
+        assert is_tracked(probe, entry) and target.stat().st_size > 0
+
+        v = check_entry(sid, entry, rec)          # recorded run root absent
+        assert v.produced is True and v.mode == LIVE, (
+            f"a committed, non-empty artefact sitting in an admissible run "
+            f"root was NOT counted as produced: {v}. The rule must reject the "
+            f"absence of evidence, not the shape of the manifest record.")
+
+        v = check_entry(sid, entry, dict(rec, run="probe"))
+        assert v.produced is True and v.mode == LIVE, (
+            f"the recorded-run-root path regressed: {v}")
+
+
+#: Every dimension-3 cell that declares at least one entry NO admissible run
+#: root can evidence, measured on this checkout. Before the fix all twelve were
+#: green — eleven of them ENFORCED with no waiver, and M1 green on the one entry
+#: its waiver does NOT cover. They are now RED, and each is closed by committing
+#: (or registering) a run tree that carries the entry, NOT by a waiver: see
+#: ``test_d3_unevidenced_cells_are_named_cell_by_cell``.
+UNEVIDENCED_CELLS: Tuple[str, ...] = (
+    "11", "15", "17", "19", "20", "29", "30", "32", "M1", "M2", "M3", "M4",
+)
+
+
+def test_d3_unevidenced_cells_are_named_cell_by_cell():
+    """Name the cells this dimension cannot answer, and pin the population.
+
+    WHY THESE ARE FAILURES AND NOT NEW WAIVERS. A waiver is a public admission
+    that a gap is ACCEPTED, and this module's own history is the argument
+    against granting twelve of them: its two FPGA waivers rested on a ``find
+    ~ -name '*.sof'`` count that was true on one day on one machine and false a
+    fortnight later, and its A8 waiver existed in two copies telling two
+    different stories. Every gap named here is closed by a commit — publish the
+    run tree, or register the one already in the repository — so waiving it
+    would convert a one-commit fix into a standing excuse. A red cell cannot
+    rot; a waiver can, and did.
+
+    The two kinds of gap are NOT the same and the difference is actionable:
+
+      * steps 11 and 29 declare artefacts THIS COMMIT ALREADY TRACKS, at
+        ``benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/
+        dft/*`` and ``benchmark-data/evaluation/phase1_parity/*/phase3/stage3/
+        sim_postlayout/pass.flag``. Neither tree is a manifest run root, so
+        ``resolve_anywhere`` never looks there. That is manifest staleness and
+        registering the tree closes it. (Out of this cell's scope: touching the
+        manifest to move a cell is the one edit this campaign may not make.)
+      * the other ten declare artefacts no path in this commit matches at all.
+        Only a published run tree closes those.
+
+    The pin is what keeps the population from growing quietly: a thirteenth
+    cell joining is a NEW loss of evidence and must be reported as its own
+    finding, not absorbed into a set that is already red.
+    """
+    measured = []
+    for cell in cells_for(DIM):
+        sid = cell.step_id
+        rec = step_record(sid)
+        if rec["verdict"].startswith("NA_"):
+            continue
+        bad = [
+            entry for entry, erec in rec["entries"].items()
+            if entry in F.required_outputs(sid)
+            and not check_entry(sid, entry, erec).produced
+            and check_entry(sid, entry, erec).mode == FIXTURE
+        ]
+        if bad:
+            measured.append(F.normalize_id(sid))
+    assert tuple(sorted(measured)) == tuple(sorted(UNEVIDENCED_CELLS)), (
+        f"the set of dimension-{DIM} cells with an UNEVIDENCED entry changed: "
+        f"measured {sorted(measured)!r}, pinned {sorted(UNEVIDENCED_CELLS)!r}. "
+        f"Newly unevidenced: {sorted(set(measured) - set(UNEVIDENCED_CELLS))}; "
+        f"newly evidenced (delete them from the pin and say which run tree "
+        f"closed them): {sorted(set(UNEVIDENCED_CELLS) - set(measured))}."
+    )
+    # ...and every one of them must be ENFORCED, not quietly waived later. A
+    # waiver added to silence one of these would be caught here rather than
+    # disappearing behind a strict xfail.
+    waived = sorted(s for s in UNEVIDENCED_CELLS if waiver_for(s) is not None)
+    assert waived == ["M1"], (
+        f"these unevidenced cells acquired a waiver: {waived}. M1 is the one "
+        f"pre-existing waiver in this set and it covers a DIFFERENT entry "
+        f"(``top_merged.gds``); its ``merge.json`` is unevidenced and unwaived. "
+        f"Every other cell here is closed by publishing a run tree, so a "
+        f"waiver would be a standing excuse for a one-commit fix."
+    )
 
 
 def test_d3_untracked_artefacts_are_not_counted_as_produced():

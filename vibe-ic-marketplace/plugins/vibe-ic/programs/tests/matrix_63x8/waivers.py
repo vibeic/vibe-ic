@@ -25,10 +25,11 @@ who has never seen the cell can check. ``evidence`` must be independently
 verifiable: a ``path:line``, a measured value with the command that produced
 it, or a decision reference.
 
-    GOOD  reason:   "The gate dispatches through __import__(f'{name}_protocol_synth');
-                     the set of reachable names is data-dependent on L3_CMD_PROTOCOL
-                     at runtime, so no static predicate can enumerate the call sites."
-          evidence: "programs/rtl_dispatch.py:214 — __import__(f'{proto}_protocol_synth')"
+    GOOD  reason:   "The artefact is emitted on only one branch of a real PDK
+                     condition, so an unconditional declaration converts every
+                     honest run of the other branch into MISSING."
+          evidence: "programs/mixed_signal_top_lvs_run.py:917 —
+                     (rpt_dir / 'top_lvs.json').write_text(...)"
 
     GOOD  reason:   "Deciding this needs a real converged project tree; the
                      required artefact is produced only by a tool absent from CI."
@@ -39,6 +40,53 @@ it, or a decision reference.
     BAD   "flaky"                        - names a symptom, not a cause
     BAD   "covered elsewhere"            - then point at it in `evidence`, or
                                            it is not covered
+
+====================================================================
+A CITATION MUST RESOLVE, AND `validate()` CHECKS THAT IT DOES
+====================================================================
+Everything above was true of this module for a fortnight while all four
+dimension-7 entries cited line numbers that had MOVED. ``validate()`` checked
+the dim range, the step id, and two length floors; it never opened a cited
+file. ``programs/mixed_signal_top_lvs_run.py:256`` — the M1/d7 producer
+citation — read ``chosen_path, chosen, chosen_ref = parsed[0]``; the write it
+names is 661 lines further down at :917. Step 23's six citations into
+``phase3_one_shot_runner.py`` were ~9,450 lines off. The docstring's own GOOD
+example named ``programs/rtl_dispatch.py``, a file this repository does not
+have. A citation nobody can follow is the same silent-absence disease the
+504-cell matrix exists to catch, one level up: in the mechanism that records
+why a cell is exempt.
+
+:func:`validate` now RESOLVES every citation, and an unresolvable one is a
+failure. Three things must hold.
+
+1. **The path must exist**, spelled relative to the plugin root, so anyone with
+   the commit can ``sed -n`` it. ``fmeda_coverage_check.py:3`` is not a
+   citation; ``programs/fmeda_coverage_check.py:3`` is. ``foo:12`` is accepted
+   only when ``programs/foo.py`` exists, and ``… :20638`` inherits the file
+   named before it — both forms are already in use here.
+2. **The lines must be inside the file**, and a citation may not span more than
+   :data:`MAX_CITATION_SPAN` lines. A range wide enough to contain anything
+   points at a chapter, not at a line.
+3. **The cited lines must contain something this waiver names.** The waiver's
+   own text is mined for code-shaped tokens — quoted fragments, dotted and
+   underscored identifiers, path tails — and at least one of them, at least
+   :data:`MIN_ANCHOR_LEN` characters long, must occur inside the cited span.
+
+Rule 3 is where "resolves" could have degenerated into "passes anything", and
+the guard against that is :data:`MAX_ANCHOR_LINE_HITS`: a token that occurs on
+more than that many lines of the cited file does not distinguish the cited line
+from any other, so it does not count as an anchor. The number is MEASURED, not
+picked. Over the citations this registry actually makes, the tightest anchor a
+true citation needs is ``top_lvs`` on 16 of the 166 lines of
+``programs/mixed_signal_merge_check.py``; the loosest tokens that must NOT
+count are ``merge`` (80 lines) and ``phase3`` (367 lines) in the files they are
+cited against. 20 sits in that gap with a measured margin on both sides. All
+ten of the stale citations this check was written to catch fail it at every
+threshold in 12..30, so the verdict does not hang on the exact value.
+
+A consequence worth stating plainly: a bare ``path:line`` with no statement of
+WHAT is there can no longer pass. The citation and the claim about it travel
+together, which is what makes the pair checkable at all.
 
 ====================================================================
 THIS TUPLE STARTS EMPTY AND IS APPLIED CENTRALLY
@@ -52,7 +100,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple, Union
+from functools import lru_cache
+from typing import Dict, Iterator, List, Optional, Tuple, Union
 
 from . import flowref
 from .flowref import StepId
@@ -105,6 +154,240 @@ _FORBIDDEN_RE = tuple(
 MIN_REASON_LEN = 40
 MIN_EVIDENCE_LEN = 8
 
+# ====================================================================
+# CITATION RESOLUTION — see "A CITATION MUST RESOLVE" in the module
+# docstring for why each of these exists and how the numbers were chosen.
+# ====================================================================
+
+#: An anchor shorter than this is a word, not a code landmark: ``json``,
+#: ``path``, ``file``, ``sta``. Six characters is the floor at which the
+#: registry's real anchors survive — ``top_lvs`` (7) and ``stance`` (6) are the
+#: shortest any true citation here depends on.
+MIN_ANCHOR_LEN = 6
+
+#: A token occurring on more than this many lines of the cited file does not
+#: distinguish the cited line from any other, so it is not an anchor. See the
+#: docstring for the measured gap this sits in (needed: <=16; must not count:
+#: >=80).
+MAX_ANCHOR_LINE_HITS = 20
+
+#: A citation wider than this is a chapter reference. The widest true citation
+#: in this registry is 29 lines.
+MAX_CITATION_SPAN = 40
+
+#: File suffixes a ``path:line`` citation may carry. The grammar is
+#: deliberately CLOSED: a token that merely looks like ``word:12`` — a ratio, a
+#: timestamp, a JSON fragment — must not be promoted into a claim that is then
+#: reported as unverifiable.
+_CITATION_SUFFIXES: Tuple[str, ...] = (
+    "py", "json", "yaml", "yml", "md", "txt", "cfg", "toml",
+    "v", "sv", "tcl", "sh", "lef", "lib", "sdc", "spef", "rpt", "def",
+)
+
+#: ``12``, ``12-30``, ``3,45``, ``3,45-50``. NO spaces are allowed: every
+#: citation in this registry is written without them, and permitting them would
+#: let "``…py:12``, and 30 tracked roots" parse ``30`` as a line number.
+_LINE_SPEC = r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*"
+
+_PATH_CITE_RE = re.compile(
+    r"(?P<path>(?:[A-Za-z0-9_.+-]+/)*[A-Za-z0-9_.+-]+"
+    r"\.(?:" + "|".join(_CITATION_SUFFIXES) + r"))"
+    r":(?P<lines>" + _LINE_SPEC + r")"
+)
+
+#: ``vibe_ic_one_shot_runner:928`` — a module citation with the suffix dropped.
+#: Accepted ONLY when ``programs/<stem>.py`` exists, so ordinary prose can never
+#: be mistaken for one. Without this form the whole check has a hole a future
+#: entry could walk through by leaving off ``.py``.
+_MODULE_CITE_RE = re.compile(
+    r"(?<![\w./:])(?P<stem>[a-z_][a-z0-9_]{3,}):(?P<lines>" + _LINE_SPEC + r")"
+)
+
+#: ``… and :20638`` — a continuation inheriting the last file named before it.
+_BARE_CITE_RE = re.compile(r"(?<![\w./:]):(?P<lines>" + _LINE_SPEC + r")")
+
+#: Quoted runs and code-shaped bare tokens: the two places a waiver states what
+#: is at the line it cites. A bare token must carry a ``_``, ``.`` or ``/`` —
+#: English words are not anchors.
+_QUOTED_RE = re.compile(r"'([^'\n]{3,160})'|\"([^\"\n]{3,160})\"|`([^`\n]{3,160})`")
+_CODEY_RE = re.compile(
+    r"[A-Za-z0-9_]+(?:[./][A-Za-z0-9_]+)+|[A-Za-z0-9]*_[A-Za-z0-9_]*"
+)
+
+_ANCHOR_SPLIT_RE = re.compile(r"[\s./,;:()\[\]{}<>]+")
+
+
+def _anchors(text: str) -> Tuple[str, ...]:
+    """Every code-shaped token *text* names, longest first.
+
+    Longest-first so the message a failure prints points at the most specific
+    thing the waiver said, not at the vaguest one that happened to match.
+    """
+    out = set()
+
+    def add(fragment: str) -> None:
+        fragment = fragment.strip()
+        if len(fragment) >= MIN_ANCHOR_LEN:
+            out.add(fragment)
+        for piece in _ANCHOR_SPLIT_RE.split(fragment):
+            if len(piece) >= MIN_ANCHOR_LEN:
+                out.add(piece)
+
+    for m in _QUOTED_RE.finditer(text):
+        add(next(g for g in m.groups() if g is not None))
+    for m in _CODEY_RE.finditer(text):
+        add(m.group(0))
+    return tuple(sorted(out, key=lambda s: (-len(s), s)))
+
+
+@lru_cache(maxsize=64)
+def _cited_file(rel: str) -> Optional[Tuple[Tuple[str, ...], Tuple[str, ...]]]:
+    """``(lines, lowercased lines)`` of ``PLUGIN_ROOT/rel``, or ``None``.
+
+    Paths are PLUGIN-ROOT-relative and nothing else. Resolving them against the
+    operator's cwd, or walking up to the repository root, would make a waiver's
+    validity a property of the machine — the host-dependence #527 removed from
+    dimension 3.
+    """
+    path = flowref.PLUGIN_ROOT / rel
+    if not path.is_file():
+        return None
+    lines = tuple(path.read_text(errors="replace").splitlines())
+    return lines, tuple(line.lower() for line in lines)
+
+
+def _iter_citations(text: str) -> Iterator[Tuple[str, int, int, str]]:
+    """Yield ``(rel_path, lo, hi, as_written)`` for every citation in *text*."""
+    spans: List[Tuple[int, int, Optional[str], str]] = []
+    for m in _PATH_CITE_RE.finditer(text):
+        spans.append((m.start(), m.end(), m.group("path"), m.group("lines")))
+    taken = [(s, e) for s, e, _p, _l in spans]
+    for m in _MODULE_CITE_RE.finditer(text):
+        if any(s <= m.start() < e for s, e in taken):
+            continue
+        rel = f"programs/{m.group('stem')}.py"
+        if _cited_file(rel) is None:
+            continue
+        spans.append((m.start(), m.end(), rel, m.group("lines")))
+    taken = [(s, e) for s, e, _p, _l in spans]
+    for m in _BARE_CITE_RE.finditer(text):
+        if any(s <= m.start() < e for s, e in taken):
+            continue
+        spans.append((m.start(), m.end(), None, m.group("lines")))
+    spans.sort()
+
+    last: Optional[str] = None
+    for _s, _e, path, lines in spans:
+        if path is not None:
+            last = path
+        elif last is None:
+            # A bare `:12` with no file named before it is prose, not a
+            # citation. Reporting it would red the registry over a ratio.
+            continue
+        rel = path or last
+        assert rel is not None
+        for part in lines.split(","):
+            lo, _dash, hi = part.partition("-")
+            yield rel, int(lo), int(hi or lo), f"{rel}:{part}"
+
+
+def _unanchored_problem(
+    raw: str,
+    rel: str,
+    lo: int,
+    hi: int,
+    lines: Tuple[str, ...],
+    lower: Tuple[str, ...],
+    anchors: Tuple[str, ...],
+    self_names: frozenset,
+) -> str:
+    """The failure message, WITH the lines the named anchors are really on.
+
+    Printing where the anchor actually is turns the repair into a lookup
+    instead of an investigation — the reason a stale citation survives is that
+    following it up is work.
+    """
+    shown = lines[lo - 1].strip()
+    hints: List[str] = []
+    for anchor in anchors:
+        low = anchor.lower()
+        if low in self_names:
+            continue
+        where = [i + 1 for i, line in enumerate(lower) if low in line]
+        if 0 < len(where) <= MAX_ANCHOR_LINE_HITS:
+            hints.append(f"{anchor!r} is at {where[:6]}")
+        if len(hints) == 3:
+            break
+    span = str(lo) if hi == lo else f"{lo}-{hi}"
+    head = (
+        f"citation {raw!r} does not resolve: {rel}:{span} reads "
+        f"{shown[:70]!r}, which contains nothing this waiver names"
+    )
+    if hints:
+        return head + " — " + "; ".join(hints)
+    return (
+        head + f"; and this waiver names no token of {MIN_ANCHOR_LEN}+ chars "
+        f"that occurs on at most {MAX_ANCHOR_LINE_HITS} lines of {rel}, so "
+        f"the citation says nothing that could be checked"
+    )
+
+
+def citation_problems(waiver: Waiver) -> Tuple[str, ...]:
+    """Every citation in *waiver* that cannot be followed. Empty means clean.
+
+    Reads BOTH fields. A ``path:line`` in a ``reason`` is exactly as much a
+    claim as one in ``evidence``; checking only the latter would leave the
+    obvious place to put an unchecked citation.
+    """
+    text = f"{waiver.reason or ''}\n{waiver.evidence or ''}"
+    anchors = _anchors(text)
+    problems: List[str] = []
+    for rel, lo, hi, raw in _iter_citations(text):
+        got = _cited_file(rel)
+        if got is None:
+            problems.append(
+                f"citation {raw!r} names no file — {rel} does not exist under "
+                f"the plugin root, so nobody can follow it"
+            )
+            continue
+        lines, lower = got
+        if lo < 1 or hi < lo or hi > len(lines):
+            problems.append(
+                f"citation {raw!r} is outside {rel}, which has {len(lines)} "
+                f"lines"
+            )
+            continue
+        if hi - lo + 1 > MAX_CITATION_SPAN:
+            problems.append(
+                f"citation {raw!r} spans {hi - lo + 1} lines, over the "
+                f"{MAX_CITATION_SPAN}-line ceiling — that is a chapter "
+                f"reference, and a range wide enough to contain anything "
+                f"cannot be checked against what the waiver claims"
+            )
+            continue
+        base = rel.rsplit("/", 1)[-1].lower()
+        self_names = frozenset(
+            {rel.lower(), base, base[:-3] if base.endswith(".py") else base}
+        )
+        span_text = "\n".join(lower[lo - 1:hi])
+        anchored = False
+        for anchor in anchors:
+            low = anchor.lower()
+            if low in self_names or low not in span_text:
+                continue
+            # DISCRIMINATION: an anchor spread over the whole file anchors
+            # nothing — with it, any line number at all would "resolve".
+            if sum(1 for line in lower if low in line) <= MAX_ANCHOR_LINE_HITS:
+                anchored = True
+                break
+        if not anchored:
+            problems.append(
+                _unanchored_problem(
+                    raw, rel, lo, hi, lines, lower, anchors, self_names
+                )
+            )
+    return tuple(problems)
+
 
 #: Applied 2026-07-27 by the close-out pass, from the eight dimension agents'
 #: reported ``waiver_requests``. Every entry names a SPECIFIC obstacle with
@@ -125,6 +408,126 @@ MIN_EVIDENCE_LEN = 8
 #: ``--out`` mismatch, 4/P0's unregisterable gate name) are among them: the
 #: flow WAS edited, and verified.
 WAIVERS: Tuple[Waiver, ...] = (
+    # ── dimension 2 — can the gate ever FAIL? ─────────────────────────
+    #
+    # 2026-08-06. Dimension 2 published 129 reds and 33 of them proved
+    # nothing: they were `files_exist` / `json_field_true` clauses measured on
+    # the default EMPTY fixture, whose builder is
+    # `test_matrix_d2_falsifiable._f_empty` ("""Nothing was produced at
+    # all.""", empty body). `flow_compliance_check._check_files_exist` is
+    # `passed = len(missing) == 0` and nothing else (:1841-1845), so on an
+    # empty directory that clause is RED by construction — 33/33, 100 %, zero
+    # exceptions — while the SAME clause PASSES against a stub: step 21's
+    # `files_exist: ['phase3/stage3/pnr/routed.def']` answers PASS to the 25
+    # bytes `VERSION 5.8 ;\nEND DESIGN\n`.
+    #
+    # SIX steps had NO OTHER RED: 1, 6, 12, 28, 30, 35. Three are now reddened
+    # for real, against projects that produced work and got it wrong — a
+    # Quartus build reporting success over a map report carrying stuck-at-GND
+    # (step 6), a PERC aggregate concluding an ESD FAIL (step 28), a design
+    # taken through SPEF and post-route STA with no SPICE correlation at all
+    # (step 30) — which also de-registered three UNREDDENED entries. Nothing
+    # was relaxed to get them: the count of clauses driven to a real FAIL went
+    # UP.
+    #
+    # The three below could not be closed and are not going to be closed by a
+    # fixture. Their gates consist of `files_exist` clauses and nothing else,
+    # so there is no input other than absence that reaches a FAIL — this is a
+    # property of the FLOW DEFINITION, not of the test suite, and the repair
+    # is to give the step a clause that judges what the artefact says. Each
+    # premise is a statement about this commit, re-derived live on every run
+    # by test_d2_the_waived_cells_are_gated_by_existence_alone (the clause
+    # census) and test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file
+    # (the zero-byte measurement over every such clause in the flow).
+    Waiver(
+        step_id="1",
+        dim=2,
+        reason=(
+            "Step 1's gate is ONE clause, `files_exist(any_of): "
+            "['phase2/stage1/rtl/*.sv', 'phase2/stage1/rtl/*.v']`, and a "
+            "files_exist clause has no predicate but path resolution — the "
+            "consumer computes `passed = len(found) > 0` and evaluates "
+            "nothing about the file. Its only FAIL is therefore the path not "
+            "being there, which is what an EMPTY project produces and what "
+            "every gate in the flow would refuse; it is not an answer to "
+            "'can this gate fail?'. Any RTL at all satisfies it, including "
+            "RTL that does not parse. Closing this needs the step to gain a "
+            "clause that judges the RTL — the flow already ships several "
+            "(rtl_hygiene_lint, cdc_async_input_check) wired into step 2 — "
+            "not a new fixture here, and choosing which one belongs on step 1 "
+            "is a change to the production flow definition."
+        ),
+        evidence=(
+            "programs/flow_compliance_check.py:1841-1845 (`passed = "
+            "len(found) > 0` on the any_of branch, then the return) is the "
+            "entire predicate. MEASURED 2026-08-06: this clause handed a "
+            "ZERO-BYTE "
+            "phase2/stage1/rtl/d2probe.sv answers PASS, and on the EMPTY "
+            "fixture it answers FAIL — the only two inputs it distinguishes. "
+            "Re-executed live by programs/tests/"
+            "test_matrix_d2_falsifiable.py::"
+            "test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file "
+            "and ::test_d2_the_waived_cells_are_gated_by_existence_alone."
+        ),
+    ),
+    Waiver(
+        step_id="12",
+        dim=2,
+        reason=(
+            "Step 12's gate is ONE clause, `files_exist: "
+            "['phase2/stage2/synth/post_dft_netlist.v']`, with the same "
+            "consequence: the step signs off on a path resolving. A "
+            "post-DFT netlist that is empty, that is the PRE-DFT netlist "
+            "copied over, or that contains no scan chain at all, satisfies "
+            "it — the very substitution a DFT step gets wrong. The flow "
+            "ships programs that could judge it (step 11 declares "
+            "atpg_coverage.rpt beside scan_netlist.v), so the repair is a "
+            "flow-definition change, not a test fixture."
+        ),
+        evidence=(
+            "programs/flow_compliance_check.py:1841-1845 (`passed = "
+            "len(missing) == 0`, then the return — the whole predicate). "
+            "MEASURED "
+            "2026-08-06: a ZERO-BYTE phase2/stage2/synth/post_dft_netlist.v "
+            "PASSES this clause; the EMPTY fixture FAILs it. Step 12 declares "
+            "exactly one blocking clause and zero advisory ones, re-derived "
+            "live from the flow yaml by programs/tests/"
+            "test_matrix_d2_falsifiable.py::"
+            "test_d2_the_waived_cells_are_gated_by_existence_alone."
+        ),
+    ),
+    Waiver(
+        step_id="35",
+        dim=2,
+        reason=(
+            "Step 35 is the sharpest case, because the judging program "
+            "EXISTS and cannot block. Its gate carries `files_exist: "
+            "['reports/phase3/dfm_screen.json']` plus `dfm_screen_check` "
+            "wired as `advisory_program_exit_zero` — an advisory clause runs "
+            "and reports and can never fail the step (flowref.GateClause."
+            "is_advisory), so the only blocking term is again path "
+            "resolution. A dfm_screen.json reporting a DFM violation and a "
+            "dfm_screen.json that is `{}` are the same verdict to this gate. "
+            "The repair is to promote the existing advisory clause to "
+            "blocking, which is a decision about the production flow and "
+            "about every project that would newly fail it, not a decision "
+            "this suite may take on its own."
+        ),
+        evidence=(
+            "programs/flow_compliance_check.py:1841-1845 (`passed = "
+            "len(missing) == 0`, then the return) for the blocking "
+            "term; the advisory clause is `dfm_screen_check . --json "
+            "reports/phase2/gates/dfm_screen.json` and is excluded from this "
+            "dimension by the module's own rule 1 (advisory clauses cannot "
+            "fail the step). MEASURED 2026-08-06: a ZERO-BYTE "
+            "reports/phase3/dfm_screen.json PASSES the blocking clause. "
+            "Both facts re-derived live by programs/tests/"
+            "test_matrix_d2_falsifiable.py::"
+            "test_d2_the_waived_cells_are_gated_by_existence_alone and "
+            "::test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file."
+        ),
+    ),
+
     # ── dimension 3 — are the declared outputs actually produced? ──────
     #
     # #527 — A WAIVER'S PREMISE MUST BE A STATEMENT ABOUT THIS COMMIT.
@@ -140,7 +543,7 @@ WAIVERS: Tuple[Waiver, ...] = (
     # every run by
     # `test_d3_waived_unproven_entries_have_no_committed_artefact`.
     #
-    # 2026-07-28: A8's waiver is NARROWED, not closed. Its `.gds` had no
+    # 2026-07-28: A8's waiver was NARROWED, not closed. Its `.gds` had no
     # producer anywhere in the plugin — `magic_port_extract_emit
     # .build_gds_write_tcl` shipped in v0.1.114 with a unit test and no caller
     # — so `programs/analog_hardmacro_gds_emit.py` was written, DECLARED in
@@ -150,10 +553,41 @@ WAIVERS: Tuple[Waiver, ...] = (
     # acceptance auditor and an auditor that writes a declared
     # `required_output` into the project it audits certifies its own output
     # (`test_d3_the_compliance_audit_does_not_create_declared_outputs` holds
-    # that line). What did NOT change is the cell's state: the producer needs
-    # Magic in the EDA container to stream anything, so on CI and on a fresh
-    # clone the entry is UNMEASURED, and a cell that is green only where a
-    # container runs is the host-dependence #527 removed.
+    # that line). What did NOT change then was the cell's state: the producer
+    # needs Magic in the EDA container to stream anything, so on CI and on a
+    # fresh clone the entry was UNMEASURED, and a cell that is green only
+    # where a container runs is the host-dependence #527 removed.
+    #
+    # 2026-08-06: **A8's WAIVER IS REMOVED, and the anti-rot mechanism is what
+    # removed it.** That waiver's evidence field asserted, verbatim, that
+    # "`git ls-tree -r --name-only HEAD` matches ZERO paths against
+    # phase3/analog/hardmacro/*/*.gds". Commit b1665ec8 made that false: it
+    # published
+    # `benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A/phase3/analog/hardmacro/
+    # {delta_sigma,ldo}/*.gds` (111096 B and 641262 B), so the same command now
+    # matches 2, and `test_d3_waived_unproven_entries_have_no_committed_
+    # artefact` turned the suite red exactly as designed.
+    #
+    # The reason was re-argued and did not survive, because the waiver had
+    # written down its own closing condition — "Closing this needs a published
+    # analog run whose A8 actually streamed the layout" — and that is
+    # precisely what b1665ec8 published. Re-arguing it on the technicality
+    # that the published cell is not one of the seven `provenance.jsonl` /
+    # `reports/orchestrator/` run trees would be measuring the marker instead
+    # of the property: the property this dimension asks about is whether the
+    # declared output is PRODUCED, and two real GDSII streams — valid HEADER,
+    # 1721 and 9997 geometry records, each defining a structure named after
+    # its own block directory, neither a symlink, both tracked at HEAD — are
+    # the answer. So the cell is ENFORCED and its `.gds` is recorded
+    # PRODUCED_BY_RUN against the published cell, which
+    # `test_matrix_d3_outputs_produced` admits as an evidence root on the
+    # publish contract's own precondition (`benchmark_evidence_publish.py`
+    # REFUSES a non-converged run) rather than by widening the marker list.
+    # Bidirectional control:
+    # `programs/tests/test_matrix_a8_published_gds_control.py` (the name
+    # deliberately avoids the `test_matrix_d[1-8]_*` prefix, which
+    # `test_matrix_63x8_coverage.DIMENSION_MODULE_GLOB` reserves for the eight
+    # dimension modules themselves).
     #
     # STEPS 6 AND 39 STAY WAIVED — the NA_TOOLCHAIN_ABSENT reclassification was
     # REFUTED BY ITS OWN ASSERTION. The proposal was to move both cells out of
@@ -166,8 +600,9 @@ WAIVERS: Tuple[Waiver, ...] = (
     # assertion FIRES and both cells go red. The premise is a property of the
     # machine, which is the exact host-dependence #527 removed from this
     # dimension; the premises below are properties of the COMMIT and are true
-    # everywhere. A8 stays waived for the same class of reason, narrowed: its
-    # producer now exists, and what is still out of reach is the evidence.
+    # everywhere. Re-checked 2026-08-06 against the same command that unseated
+    # A8: `git ls-tree -r --name-only HEAD` still matches 0 `*.sof` and 0
+    # `*.map.rpt` anywhere in the repository, so both premises hold.
     Waiver(
         step_id="6",
         dim=3,
@@ -217,48 +652,11 @@ WAIVERS: Tuple[Waiver, ...] = (
             "test_d3_waived_unproven_entries_have_no_committed_artefact"
         ),
     ),
-    Waiver(
-        step_id="A8",
-        dim=3,
-        reason=(
-            "NARROWED 2026-07-28, and the narrowing is a real repair: the "
-            "producer is no longer missing. Until this change the .gds entry "
-            "was emitted by NOTHING — magic_port_extract_emit."
-            "build_gds_write_tcl shipped in v0.1.114 with a unit test and no "
-            "caller — and programs/analog_hardmacro_gds_emit.py now streams "
-            "each block's A5 layout.mag to GDS, is declared in A8's "
-            "`programs:` and is dispatched by analog_one_shot_runner."
-            "step_for_block('A8_hardmacro_gen'). What is still unreachable is "
-            "the EVIDENCE, not the producer: Magic writes the stream inside "
-            "the EDA container, the producer's documented rc=2 names the gap, "
-            "and neither CI (a plain runner with pytest and no docker) nor a "
-            "fresh clone has that container — so this dimension cannot decide "
-            "the entry from the commit alone. Deliberately NOT closed by "
-            "committing a produced .gds into a run tree: that would be a "
-            "benchmark-data write made to turn a test green. Closing this "
-            "needs a published analog run whose A8 actually streamed the "
-            "layout."
-        ),
-        evidence=(
-            "`git ls-tree -r --name-only HEAD` matches ZERO paths against "
-            "phase3/analog/hardmacro/*/*.gds while matching 2 for the sibling "
-            "*.lef (benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A/phase3/analog/hardmacro/"
-            "{ldo,delta_sigma}/*.lef) — the step ran and only the .gds is "
-            "absent. Producer wiring is asserted live by "
-            "test_d3_a8_producer_is_reachable_from_a_flow_path (the runner "
-            "dispatch, with subprocess recorded) and the emitter itself by "
-            "programs/tests/test_analog_hardmacro_gds_emit.py (14 tests). "
-            "Capability gap re-measured 2026-07-28: `python3 programs/"
-            "analog_hardmacro_gds_emit.py .` on a copy of benchmark-data/ic/"
-            "u_hawaii_adc returns rc=2 A8GDS_NO_STAGE naming the absent EDA "
-            "container. Whatever a run root DOES carry at that path is still "
-            "checked to be a real layout defining the block's own structure "
-            "(test_d3_a8_gds_in_a_run_root_is_a_real_hardmacro_layout). "
-            "Re-executed live by programs/tests/"
-            "test_matrix_d3_outputs_produced.py::"
-            "test_d3_waived_unproven_entries_have_no_committed_artefact"
-        ),
-    ),
+    # A8/d3 STOOD HERE AND IS GONE — see the 2026-08-06 note above. It is
+    # deleted rather than re-argued because its own stated closing condition
+    # was met by commit b1665ec8, and because a waiver kept alive on a
+    # narrower story than the one it was written with is the rot this registry
+    # exists to prevent.
     Waiver(
         step_id="M1",
         dim=3,
@@ -266,7 +664,8 @@ WAIVERS: Tuple[Waiver, ...] = (
             "NARROWED 2026-07-28. The producer is NOT missing: "
             "mixed_signal_top_lvs_run.py writes phase3/mixed_signal/"
             "top_merged.gds (KLayout merge), ships, and is invoked twice — "
-            "M1's own advisory gate clause and vibe_ic_one_shot_runner:813. "
+            "M1's own advisory gate clause and "
+            "programs/vibe_ic_one_shot_runner.py:928. "
             "What is unreachable is an INPUT SET: the merge needs a digital "
             "sign-off GDS and analog hardmacro GDS in the SAME project, and "
             "no admissible run root is a mixed-signal project that got that "
@@ -275,8 +674,8 @@ WAIVERS: Tuple[Waiver, ...] = (
             "published mixed-signal run tree, not a code change."
         ),
         evidence=(
-            "programs/mixed_signal_top_lvs_run.py:184-199 writes top_merged."
-            "gds; :152-161 returns SKIP rc=2 naming the absent inputs. Asked "
+            "programs/mixed_signal_top_lvs_run.py:683 targets top_merged."
+            "gds; :707-708 returns SKIP rc=2 naming the absent inputs. Asked "
             "DIRECTLY (mixed_signal_top_lvs_run.run, tool probe stubbed) on "
             "all 12 admissible run roots, 2026-07-28: 12/12 return 'inputs "
             "missing'. Three lack only 'hardmacro GDS (A8)' (the spm-class "
@@ -285,7 +684,8 @@ WAIVERS: Tuple[Waiver, ...] = (
             "gate netlist' — intersection empty. The 2026-07-27 evidence for "
             "this waiver quoted 'Top-level GDS merge tool not shipped.' from "
             "an ARCHIVED merge.json; that string exists nowhere in the plugin "
-            "today (mixed_signal_merge_check.py:57 now reads 'Top-level "
+            "today (programs/mixed_signal_merge_check.py:57 now reads "
+            "'Top-level "
             "merge+LVS not runnable in this environment'), so the old reason "
             "was stale. Re-measured live by "
             "test_d3_m1_merge_inputs_are_absent_from_every_run_root."
@@ -424,8 +824,13 @@ WAIVERS: Tuple[Waiver, ...] = (
             "'fmeda_coverage_check ... --json "
             "reports/phase2/safety/fmeda_coverage_gate.json'. NO OTHER "
             "PRODUCER: `grep -rn fmeda_fault_injection_coverage programs/ "
-            "flow/` reaches only the program itself, fmeda_coverage_check.py:"
-            "3,45 (docstring + library import) and that one yaml gate line. "
+            "flow/` reaches exactly ONE invocation — that yaml gate line. "
+            "Re-measured 2026-08-06: everything else it reaches imports the "
+            "module as a library or names it in prose — "
+            "programs/fmeda_coverage_check.py:3,48 (docstring, then `import "
+            "fmeda_fault_injection_coverage as fi`), "
+            "programs/result_md_audit_provenance_check.py:72 (the same "
+            "import), plus comments and tests. "
             "All 7 tracked roots carrying reports/phase2/safety/"
             "fmeda_coverage.json hold the auditor's vacuous-skip document "
             "({'program': 'fmeda_fault_injection_coverage', 'verdict': "
@@ -453,9 +858,9 @@ WAIVERS: Tuple[Waiver, ...] = (
             "verification, not a declaration change."
         ),
         evidence=(
-            "producer programs/phase3_one_shot_runner.py:20321-20344 (the "
-            "`len(corners) < 2` guard around `rpt_phase3 / "
-            "'single_corner_stance.json'`); consumer "
+            "producer programs/phase3_one_shot_runner.py:29776-29796 (the "
+            "`len(corners) < 2` guard around the `rpt_phase3 / "
+            "'single_corner_stance.json'` write); consumer "
             "programs/pvt_matrix_check.py:44-45 then :105. MEASURED "
             "2026-07-28 with flow_compliance_check.check_step over the nine "
             "tracked roots holding phase2/stage2/constraints/pvt_matrix.json: "
@@ -486,7 +891,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "actually executed, then declare the artefact and record it."
         ),
         evidence=(
-            "producer programs/mixed_signal_top_lvs_run.py:256 "
+            "producer programs/mixed_signal_top_lvs_run.py:917 "
             "((rpt_dir / 'top_lvs.json').write_text(...), in the same block "
             "as the already-declared merge.json); consumer "
             "programs/mixed_signal_merge_check.py:88-90 then :107. MEASURED "
@@ -528,12 +933,14 @@ WAIVERS: Tuple[Waiver, ...] = (
             "first; then (b) follows as OR-pairs that can actually fail."
         ),
         evidence=(
-            "producers programs/phase3_one_shot_runner.py:20549 and :20638 "
+            "producers programs/phase3_one_shot_runner.py:30004 and :30121 "
             "(sta_out / 'sta_spef_based.rpt', sta_out / "
-            "'sta_mcorner_ocv.rpt') with mirrors at :20555 and :20668, and "
-            "the two stance writes at :20567 and :20639 both guarded by "
-            "`if primary_def.is_file() and _signoff_regen(...)`; consumer "
-            "programs/sta_corner_record_completeness_check.py:195-215 "
+            "'sta_mcorner_ocv.rpt') with mirrors at :30010 and :30151, and "
+            "the two stance emissions — 'multi_corner_spef_stance.json' at "
+            ":30022-30023, 'mcorner_ocv_stance.json' at :30122-30123 — both "
+            "guarded by `if primary_def.is_file() and _signoff_regen(...)`; "
+            "consumer "
+            "programs/sta_corner_record_completeness_check.py:194-223 "
             "(_PROCESS_STANCE_CANDIDATES / _RC_STANCE_CANDIDATES / "
             "_MULTICORNER_CANDIDATES / _MCORNER_OCV_CANDIDATES / "
             "_NOMINAL_SPEF_CANDIDATES). MEASURED 2026-07-28 with "
@@ -570,6 +977,12 @@ def validate(waiver: Waiver) -> Tuple[str, ...]:
     Used by the meta-test. Kept as a function (not an ``__post_init__``) so a
     bad waiver produces a readable aggregate failure instead of an import-time
     explosion that hides every other problem.
+
+    Reads the filesystem, via :func:`citation_problems`: a citation is a claim
+    about this commit, and the only way to grade it is to open the file. The
+    length floors below say a reason is long enough to be an argument; they
+    never said the argument was true, and for a fortnight every dimension-7
+    citation was false while this function returned ``()``.
     """
     problems = []
     if waiver.dim not in range(1, 9):
@@ -595,6 +1008,7 @@ def validate(waiver: Waiver) -> Tuple[str, ...]:
             f"evidence is {len(evidence)} chars — needs a path:line, a measured "
             f"value, or a decision reference"
         )
+    problems.extend(citation_problems(waiver))
     return tuple(problems)
 
 
@@ -634,7 +1048,11 @@ __all__ = [
     "waivers_for_dim",
     "is_waived",
     "validate",
+    "citation_problems",
     "FORBIDDEN_REASON_SUBSTRINGS",
     "MIN_REASON_LEN",
     "MIN_EVIDENCE_LEN",
+    "MIN_ANCHOR_LEN",
+    "MAX_ANCHOR_LINE_HITS",
+    "MAX_CITATION_SPAN",
 ]

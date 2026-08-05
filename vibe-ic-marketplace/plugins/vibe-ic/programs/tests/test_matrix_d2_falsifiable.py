@@ -73,19 +73,88 @@ environment problem masquerade as a working gate:
     UNWIRED   "program not found". That is a dimension-1 wiring defect; a
               missing program is not a falsifiable gate.
 
+A RED THAT ONLY MEANS "NOTHING IS THERE"
+----------------------------------------
+2026-08-06. A fifth outcome is refused, and this one was counting as proof
+for 33 of the 129 reds this module used to publish.
+
+Two of the five gate-clause kinds name no program at all. Their whole
+predicate is the consumer's, quoted verbatim from
+``flow_compliance_check._check_files_exist`` (programs/flow_compliance_check.py:1841-1844)::
+
+    if any_of:
+        passed = len(found) > 0
+    else:
+        passed = len(missing) == 0
+
+There is no other term. A ``files_exist`` clause asks whether a path resolves
+and asks nothing else, so its FAIL branch is reached by exactly one input —
+the path not being there — and the default fixture, ``_f_empty`` — whose
+entire body is the docstring "Nothing was produced at all." — is that input by
+construction. MEASURED before the repair: 33 of 129 reds were this shape
+(``('files_exist','FAIL') 32`` + ``('json_field_true','FAIL') 1``), 100% red
+rate, zero exceptions, every one of them on ``EMPTY``.
+
+"It rejects a project where nothing exists" does not answer "can this gate
+fail?", and the counter-example is in this file's own fixture library:
+step 21's ``files_exist: ['phase3/stage3/pnr/routed.def']`` measured against
+``PNR_BAD``, whose ``routed.def`` is the 25 bytes
+``VERSION 5.8 ;\\nEND DESIGN\\n``, answers **PASS**. A design with no
+placement, no routing and no geometry satisfies the clause; only an absent
+file does not.
+
+So such a red is graded :data:`ABSENCE_RED` and is NOT a demonstration:
+
+    ABSENCE_RED  the clause FAILed and the artefact it names is not there.
+                 For ``files_exist`` that is the only FAIL there is — proven
+                 by MEASUREMENT, not by reading the source, in
+                 :func:`test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file`,
+                 which satisfies every such clause in the live flow with a
+                 ZERO-BYTE file and requires all of them to PASS. The day one
+                 of them grows a content predicate, that test reddens and the
+                 exemption below is re-decided.
+                 For ``json_field_true`` it is NOT the only FAIL: a report
+                 that exists and states ``false`` is a content red and stays
+                 ``FAIL``. The two are separated by asking the consumer's own
+                 resolver whether the artefact resolves at all
+                 (:func:`_nonexec_artefact_present`), so nothing here
+                 re-implements the reports/ or analog/ path fallbacks.
+
+Consequences, both of them deliberate:
+
+  * a ``files_exist`` clause is exempt from the per-clause rule (2) below —
+    not excused, EXCLUDED: it has no FAIL a fixture could aim at, so
+    registering 32 of them in :data:`UNREDDENED` ("this file could not break
+    it") would misdescribe the fact. ``json_field_true`` gets no such
+    exemption and must reach a content red or be registered;
+  * a STEP whose gate reaches no content red is not falsified. Six did:
+    1, 6, 12, 28, 30 and 35 had NO OTHER RED. Three of them are now reddened
+    for real, by fixtures built for the purpose (:data:`FIXTURES`
+    ``QUARTUS_STUCK_AT``, ``PERC_ESD_FAIL``, ``POST_LAYOUT_NO_SPICE``), which
+    also de-registered three :data:`UNREDDENED` entries. The other three —
+    1, 12 and 35 — are gated by a file's existence and nothing else, and are
+    WAIVED in ``matrix_63x8/waivers.py`` with strict xfail, so the day one of
+    them acquires a gate that can judge content the waiver turns the suite red.
+
+Nothing here was made greener by weakening a check: no gate program, no
+waiver and no fixture was relaxed, and the count of clauses driven to a real
+FAIL went UP.
+
 THE PREDICATE, PER STEP
 -----------------------
 1. Every **blocking** clause of the step's gate is run against its assigned
    broken fixture. (``advisory_program_exit_zero`` clauses are excluded: they
    run, they report, and they CANNOT fail the step — grading an advisory
    clause as enforcement is measuring something adjacent.)
-2. At least one blocking clause must reach a genuine ``FAIL`` — the gate as a
-   whole is falsifiable.
+2. At least one blocking clause must reach a genuine ``FAIL`` **earned by
+   content** — a red graded :data:`ABSENCE_RED` does not satisfy this, so a
+   step gated only by "the file is there" is not falsified by this module.
 3. **Every** blocking clause must reach ``FAIL``, except the ones named in
    :data:`UNREDDENED` — the honest, per-clause register of what this file
-   could not break. Without (3), a step could hide an unfailable program
-   behind one trivially-failing sibling clause, which is the "at least one
-   green light is on" fallacy in miniature.
+   could not break — and except ``files_exist`` clauses, which have no FAIL
+   other than absence (see above). Without (3), a step could hide an
+   unfailable program behind one trivially-failing sibling clause, which is
+   the "at least one green light is on" fallacy in miniature.
 4. Anti-rot, both directions:
      * an :data:`UNREDDENED` entry whose command no longer appears in the live
        gate is STALE and fails the test — the register cannot outlive the
@@ -140,6 +209,7 @@ import re
 import shlex
 import shutil
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 from typing import Callable, Dict, Tuple
@@ -165,6 +235,17 @@ CRASH = "CRASH"
 TIMEOUT = "TIMEOUT"
 UNWIRED = "PROGRAM_NOT_FOUND"
 SKIPPED_COND = "SKIPPED_CONDITION"
+
+#: A FAIL whose whole cause is that the artefact the clause names is not
+#: there. Refused as a demonstration — see the module docstring. Its own tier
+#: rather than a boolean so it shows up, spelled out, in every failure message
+#: this module prints: "the red you were counting was the empty directory".
+ABSENCE_RED = "FAIL_ON_ABSENCE_ONLY"
+
+#: The tiers that are a genuine demonstration of falsifiability. Exactly one,
+#: kept as a named set so a future tier cannot be added to the accepted side by
+#: editing a comparison in one branch and forgetting the other three.
+DEMONSTRATIONS: Tuple[str, ...] = (RED,)
 
 #: The steps whose dimension-2 cell is NA because they declare no ``gate`` at
 #: all. Exactly one at time of writing: ``P0`` is a synthetic pre-flight whose
@@ -283,6 +364,74 @@ _VACUOUS_TB = (
     "  end\n"
     "endmodule\n"
 )
+
+
+#: A Quartus map report carrying two of the four silent-failure indicators
+#: ``quartus_map_audit`` scans for (programs/quartus_map_audit.py:12-27),
+#: inside a build the tool called successful. ``_MAP_RPT_CLEAN`` is the SAME
+#: report with those two lines removed and nothing else changed, so the
+#: negative control differs from the fixture in the findings alone.
+_MAP_RPT_HEAD = (
+    "Analysis & Synthesis report for top\n"
+    "Info (12128): Elaborating entity \"top\" for the top level hierarchy\n"
+)
+_MAP_RPT_TAIL = (
+    "Info: Quartus Prime Analysis & Synthesis was successful. "
+    "0 errors, 2 warnings\n"
+)
+_MAP_RPT_STUCK = _MAP_RPT_HEAD + (
+    "Warning (13410): Pin \"led[3]\" is stuck at GND\n"
+    "Warning (10030): Net \"cfg_reg[2]\" has no driver or initial value\n"
+) + _MAP_RPT_TAIL
+_MAP_RPT_CLEAN = _MAP_RPT_HEAD + _MAP_RPT_TAIL
+
+
+def _write_perc_signoff(p: Path, esd_result: str) -> None:
+    """Write step 28's three declared PERC artefacts as ONE coherent sign-off,
+    with the ESD category's conclusive result as the only variable.
+
+    A builder rather than two sets of literals because ``perc_signoff_check``
+    cross-checks the JSON against both human-readable projections
+    (programs/perc_signoff_check.py:78-126): a negative control that corrected
+    only the JSON would leave the .rpt and the memo asserting the old verdict
+    and would come back FAIL for a SECOND reason — measured, verbatim:
+    ``perc_equivalent.rpt states overall verdict 'FAIL' but
+    perc_equivalent.json states 'PASS'``. That control would have "passed" the
+    fixture while proving nothing about the ESD arm. Driving all three from
+    one argument means the fixture and its control differ in exactly the thing
+    the gate is being asked to judge.
+    """
+    verdict = "FAIL" if esd_result == "FAIL" else "PASS"
+    note = "2 of 14 pads have no ESD clamp on the VDDIO ring"
+    _w(p, "reports/phase3/perc_equivalent.json",
+       {"verdict": verdict,
+        "categories": [
+            {"category": "ESD_PAD_RING", "status": "AUTOMATED",
+             "result": esd_result, "note": note},
+            {"category": "LATCHUP_WELL_TAP", "status": "AUTOMATED",
+             "result": "PASS"},
+        ]})
+    _w(p, "reports/phase3/perc_equivalent.rpt",
+       "PERC-equivalent reliability sign-off\n"
+       f"ESD_PAD_RING: {esd_result}"
+       + (f" — {note}\n" if esd_result == "FAIL" else "\n")
+       + "LATCHUP_WELL_TAP: PASS\n"
+       f"OVERALL VERDICT: {verdict}\n")
+    _w(p, "reports/phase3/PERC_SIGNOFF_MEMO.md",
+       "# PERC sign-off memo\n\n"
+       f"**Overall verdict:** `{verdict}`\n\n"
+       f"- ESD_PAD_RING — {note if esd_result == 'FAIL' else 'clean'}\n"
+       "- LATCHUP_WELL_TAP — clean\n")
+
+
+def _write_quartus_build(p: Path, map_rpt: str) -> None:
+    """Write a finished Quartus build tree with the map report as the only
+    variable, and the hand-written audit JSON the gate exists to distrust
+    (programs/quartus_map_audit.py:43-58) always claiming a clean audit."""
+    _w(p, "phase2/stage1/fpga/output_files/top.sof", "sof-stub")
+    _w(p, "phase2/stage1/fpga/output_files/top.map.rpt", map_rpt)
+    _w(p, "reports/phase2/fpga/quartus_map_audit.json",
+       {"verdict": "PASS", "audited": True, "findings": []})
 
 
 def _w(root: Path, rel: str, content) -> Path:
@@ -630,6 +779,131 @@ def _f_hollow_reports(p: Path) -> None:
     _w(p, "reports/phase3/dynamic_ir.json", {})
 
 
+# ── The three fixtures that replaced an empty-directory red with a real one ──
+#
+# Steps 6, 28 and 30 each had exactly one red before 2026-08-06, and each of
+# those reds was a `files_exist` clause answering "nothing is there" on
+# ``EMPTY``. Their program clauses were all registered in :data:`UNREDDENED`.
+# The three fixtures below reach those programs' real verdicts, so the three
+# register entries are DELETED rather than re-worded, and each step's cell is
+# now carried by a project that produced work and got it WRONG.
+
+def _f_quartus_stuck_at(p: Path) -> None:
+    """A Quartus build that reports success while the map report says the
+    hardware is dead.
+
+    This is the defect ``quartus_map_audit`` was written from
+    (programs/quartus_map_audit.py:7-26): Quartus returns 0 errors having
+    optimised a pin to a constant and dropped a net with no driver, and the
+    hand-written ``quartus_map_audit.json`` beside it says ``PASS`` — the gate
+    re-scans the report on disk rather than trusting that JSON
+    (programs/quartus_map_audit.py:43-58).
+
+    Neither absence nor presence alone reaches it. MEASURED, verbatim:
+
+        EMPTY   rc 0  [NO_BUILD] quartus_map_audit: no phase2/stage1/fpga/
+                      output_files/*.sof — no Quartus build to audit in this run
+
+    and the same tree with a CLEAN map report — the negative control, run in
+    :func:`test_d2_the_three_replaced_empty_reds_are_earned_by_content` —
+
+        rc 0  [PASS] quartus_map_audit: scanned … — no silent-failure indicators
+
+    so the red below is the report's content and not the tree's shape:
+
+        rc 1  [FAIL] quartus_map_audit: 2 silent-failure indicator(s) in
+              phase2/stage1/fpga/output_files/top.map.rpt: no-driver,
+              stuck-at-gnd
+    """
+    _write_quartus_build(p, _MAP_RPT_STUCK)
+
+
+def _f_perc_esd_fail(p: Path) -> None:
+    """A PERC sign-off that ran, concluded, and concluded FAIL.
+
+    ``perc_signoff_check`` grades the runner's PERC-equivalent aggregate;
+    absence of it is an honest rc=2 skip
+    (programs/perc_signoff_check.py:136-139), so ``EMPTY`` cannot reach the
+    verdict. MEASURED, verbatim:
+
+        EMPTY  rc 2  __VACUOUS_HINT__: perc_signoff_check . --json …
+
+    The smallest input that reaches the verdict and fails it is an aggregate
+    carrying one AUTOMATED category whose result is FAIL — a conclusive
+    reliability defect, not an open item (INCOMPLETE / MANUAL_REVIEW are
+    named open items and exit 0, :150-:154, :189-:192):
+
+        rc 1  conclusive PERC reliability defect(s): ESD_PAD_RING: 2 of 14
+              pads have no ESD clamp on the VDDIO ring
+
+    Both human-readable projections are written and AGREE with the JSON, so
+    the red is the ESD category and not the memo cross-check (:78-:126) —
+    the negative control flips only the category's ``result`` to PASS and the
+    same tree reads ``rc 0 all AUTOMATED PERC categories conclusive PASS``.
+    """
+    _write_perc_signoff(p, "FAIL")
+
+
+def _f_post_layout_no_spice(p: Path) -> None:
+    """A design taken through extraction and post-route STA, whose timing
+    model was never corroborated by SPICE.
+
+    ``spice_correlation_check`` self-skips rc=2 when there is no SPEF (step 20
+    not reached) or no STA (step 21 not reached), and its docstring names the
+    DIFFERENT case as deliberately non-vacuous:
+
+        "the DIFFERENT case — SPEF and STA both present but no SPICE run at
+         all — is deliberately NOT vacuous: it sets `skipped: False` and FAILs
+         NO_SPICE_VERIFICATION"
+        (programs/spice_correlation_check.py:41-45)
+
+    So ``EMPTY`` measures the skip, not the gate. MEASURED, verbatim:
+
+        EMPTY  rc 2  __VACUOUS_HINT__: spice_correlation_check . --json …
+
+    and on THIS fixture — a project that produced parasitics and a post-route
+    timing report and stopped there:
+
+        rc 1  [ERROR] NO_SPICE_VERIFICATION: Post-layout SPICE verification
+              was not performed. SPEF extraction exists (Step 20) and STA ran
+              (Step 21), but no SPICE decks or results found …
+    """
+    _w(p, "phase3/stage3/extracted/top.spef",
+       '*SPEF "IEEE 1481-1998"\n*DESIGN "top"\n*DIVIDER /\n')
+    _w(p, "phase3/stage3/sta/post_route_timing.rpt",
+       "Startpoint: din_reg[0] (rising edge-triggered flip-flop clocked by clk)\n"
+       "Endpoint: dout_reg[0] (rising edge-triggered flip-flop clocked by clk)\n"
+       "  data arrival time      1.2043\n"
+       "  data required time     1.5000\n"
+       "  slack (MET)            0.2957\n")
+
+
+def _f_on_board_scenarios_failed(p: Path) -> None:
+    """The on-board sign-off record, PRESENT, stating that it did not pass.
+
+    Step 39's ``json_field_true`` clause is the one non-exec clause in the
+    whole flow that HAS a content predicate — ``_check_json_field_true``
+    compares the resolved field with the expected value
+    (programs/flow_compliance_check.py:6614) — so unlike every ``files_exist``
+    clause it can be reddened by something other than an empty directory, and
+    leaving it on ``EMPTY`` would have hidden that distinction behind a red
+    that meant "no such file".
+
+    MEASURED on ``EMPTY``:   ``json file missing: on_board_pass.json``
+                             -> graded FAIL_ON_ABSENCE_ONLY
+    MEASURED on THIS tree:   ``all_scenarios_passed = False`` -> FAIL
+
+    The reverse case is asserted in
+    :func:`test_d2_a_present_but_wrong_json_field_is_still_a_real_red`: the
+    same file with the field set True reads PASS, so the red is the recorded
+    board result and not the file's presence.
+    """
+    _w(p, "reports/phase2/fpga/on_board_pass.json",
+       {"all_scenarios_passed": False,
+        "scenarios": [{"name": "half_duplex_byte6", "passed": False,
+                       "observed": "0x00", "expected": "0xF2"}]})
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -650,6 +924,10 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "MS_BAD": _f_ms_bad,
     "TB_BAD": _f_tb_bad,
     "HOLLOW_REPORTS": _f_hollow_reports,
+    "QUARTUS_STUCK_AT": _f_quartus_stuck_at,
+    "PERC_ESD_FAIL": _f_perc_esd_fail,
+    "POST_LAYOUT_NO_SPICE": _f_post_layout_no_spice,
+    "ON_BOARD_FAILED": _f_on_board_scenarios_failed,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -702,6 +980,26 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     ("23", "hold_corner_coverage_check . --json "
            "reports/phase3/sta/hold_corner_coverage.json"):
         "HOLD_CORNER_CONTRADICTED",
+    # ── 2026-08-06: the three steps whose ONLY red was an empty directory ──
+    # Each of these programs was in UNREDDENED, so each step's cell rested
+    # entirely on its `files_exist` sibling answering "nothing is there". The
+    # register entries are deleted, not re-worded: the fixtures reach the
+    # programs' real verdicts. See each `_f_*` docstring for the measured
+    # EMPTY tier these replace and the negative control that separates the
+    # verdict from the tree's shape.
+    ("6", "quartus_map_audit --project . --json "
+          "reports/phase2/gates/quartus_map_audit.json"): "QUARTUS_STUCK_AT",
+    ("28", "perc_signoff_check . --json "
+           "reports/phase2/gates/perc_signoff.json"): "PERC_ESD_FAIL",
+    ("30", "spice_correlation_check . --json "
+           "reports/phase2/gates/spice_correlation.json"):
+        "POST_LAYOUT_NO_SPICE",
+    # The one non-exec clause in the flow that HAS a content predicate. On
+    # EMPTY it reddens with "json file missing", which is graded
+    # ABSENCE_RED and proves nothing; the fixture supplies the record the
+    # board run actually writes, stating that it did not pass.
+    ("39", "json_field_true: reports/phase2/fpga/on_board_pass.json:"
+           "all_scenarios_passed==True"): "ON_BOARD_FAILED",
     ("4", "vacuous_testbench_check . --json "
           "reports/phase2/gates/vacuous_testbench.json"): "TB_BAD",
     ("4", "professional_tb_check . --json "
@@ -870,10 +1168,18 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
           "reports/phase2/gates/assertion_property.json"):
         "VACUOUS: needs SVA properties present but non-substantive; the "
         "fixture ships no .sva/bind file for the gate to grade",
-    ("6", "quartus_map_audit --project . --json "
-          "reports/phase2/gates/quartus_map_audit.json"):
-        "PASS: needs a real Quartus map report tree (output_files/*.map.rpt) "
-        "with a defect; no fixture here synthesises one",
+    # ("6", "quartus_map_audit …") — DE-REGISTERED 2026-08-06. The entry read
+    # "PASS: needs a real Quartus map report tree (output_files/*.map.rpt)
+    # with a defect; no fixture here synthesises one". The premise was right
+    # and the conclusion was that nobody had written the fixture, so it was
+    # written: QUARTUS_STUCK_AT is a .sof beside a .map.rpt carrying
+    # Warning(13410) stuck-at-GND and Warning(10030) no-driver — the two
+    # indicators the program's own docstring names — under a build the tool
+    # called successful, with the hand-written quartus_map_audit.json beside
+    # it still claiming a clean audit. rc 1, deterministically. This mattered
+    # more than the entry suggested: step 6's ONLY other red was
+    # `files_exist: ['…/*.sof']` on the EMPTY fixture, so with this clause
+    # excused the cell's whole green rested on an empty directory.
     ("6", "fpga_verification_audit --report reports/"
           "fpga_verification_report.md --summary phase2/stage1/sim/work/"
           "summary.txt --coverage reports/phase2/coverage/"
@@ -931,14 +1237,28 @@ UNREDDENED: Dict[Tuple[str, str], str] = {
            "reports/phase2/gates/gate_oxide_geom_deck.json"):
         "VACUOUS: needs a real PDK antenna rule deck to grade; the check is "
         "inapplicable without one and no fixture can synthesise a PDK",
-    ("28", "perc_signoff_check . --json "
-           "reports/phase2/gates/perc_signoff.json"):
-        "PASS/VACUOUS: needs a PERC-equivalent report present but "
-        "non-substantive; a hollow report is read as 'PERC not applicable'",
-    ("30", "spice_correlation_check . --json "
-           "reports/phase2/gates/spice_correlation.json"):
-        "PASS: needs a SPICE-vs-STA correlation pair that disagrees; both "
-        "halves must exist and be populated for the FAIL arm to be reachable",
+    # ("28", "perc_signoff_check …") — DE-REGISTERED 2026-08-06. The entry
+    # read "PASS/VACUOUS: needs a PERC-equivalent report present but
+    # non-substantive; a hollow report is read as 'PERC not applicable'". It
+    # described the wrong input. A hollow aggregate IS read as inapplicable —
+    # that part was true — but the gate's FAIL arm is not reached by making
+    # the report emptier, it is reached by making it CONCLUDE: one AUTOMATED
+    # category with result=FAIL (perc_signoff_check.py:149, :182).
+    # PERC_ESD_FAIL states that, with both declared human-readable
+    # projections written and AGREEING, so the red is the ESD verdict and not
+    # the memo cross-check. Step 28's only other red was
+    # `files_exist: ['reports/phase3/perc_equivalent.json']` on EMPTY.
+    #
+    # ("30", "spice_correlation_check …") — DE-REGISTERED 2026-08-06. The
+    # entry read "PASS: needs a SPICE-vs-STA correlation pair that disagrees;
+    # both halves must exist and be populated for the FAIL arm to be
+    # reachable". That is one FAIL arm and not the only one: the program's
+    # own docstring names the other (spice_correlation_check.py:41-45) —
+    # SPEF and STA both present and NO SPICE run at all is deliberately not
+    # vacuous and FAILs NO_SPICE_VERIFICATION. POST_LAYOUT_NO_SPICE is that
+    # tree. The disagreeing-pair arm remains unmeasured by this suite and is
+    # named as such in the fix notes; step 30's only other red was
+    # `files_exist(any_of)` over the spice deck patterns, on EMPTY.
     ("31", "pg_rail_geometry_check . --json "
            "reports/phase3/pg_rail_geometry.json"):
         "VACUOUS: needs a routed DEF with real PG rail geometry; the stub DEF "
@@ -1101,8 +1421,40 @@ def _clause_signature(clause) -> str:
     return clause.raw
 
 
+def _nonexec_artefact_present(project: Path, rel: str) -> bool:
+    """Does the artefact a non-exec clause names RESOLVE in *project*?
+
+    Asked through ``flow_compliance_check._check_files_exist``, which is the
+    consumer's own resolver: it carries the ``reports/<subdir>/`` fallback and
+    the canonical-analog-dir remap (``_glob_first``,
+    programs/flow_compliance_check.py:1764-1824), and a second implementation
+    of those two remaps here is exactly the drift this module refuses
+    everywhere else. Nothing is parsed out of the consumer's prose.
+    """
+    ok, _found, _missing = FCC._check_files_exist(project, [rel], any_of=False)
+    return ok
+
+
 def _evaluate_clause(clause, project: Path) -> Tuple[str, str]:
-    """Run ONE gate clause against *project* through the real consumer."""
+    """Run ONE gate clause against *project* through the real consumer.
+
+    The two non-exec kinds are where a FAIL can mean nothing at all, so their
+    FAIL is split in two — see the module docstring for the measurement that
+    forced this.
+
+    ``files_exist``  — the consumer's entire predicate is
+        ``passed = len(missing) == 0`` (or ``len(found) > 0`` for any_of),
+        programs/flow_compliance_check.py:1841-1844. A FAIL therefore says one
+        named pattern matched nothing and says nothing else, so it is ALWAYS
+        :data:`ABSENCE_RED`. That is not an assumption: every such clause in
+        the live flow is satisfied by a ZERO-BYTE file in
+        :func:`test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file`.
+
+    ``json_field_true`` — has a real content predicate (``v == expect``,
+        programs/flow_compliance_check.py:6614), so its FAIL is split by
+        whether the artefact is there at all. Present and wrong is a genuine
+        demonstration; absent is not.
+    """
     if clause.command:
         if clause.is_conditional:
             _materialise_conditions(project, clause)
@@ -1119,12 +1471,23 @@ def _evaluate_clause(clause, project: Path) -> Tuple[str, str]:
     if clause.kind == F.K_FILES:
         ok, found, missing = FCC._check_files_exist(
             project, list(clause.files), any_of=clause.any_of)
-        return (PASS if ok else RED), f"found={found} missing={missing}"
+        if ok:
+            return PASS, f"found={found} missing={missing}"
+        return ABSENCE_RED, (
+            f"found={found} missing={missing} — a files_exist clause has no "
+            f"predicate but resolution, so this FAIL means the path is not "
+            f"there and nothing more")
     if clause.kind == F.K_JSON_FIELD:
         ok, out = FCC._check_json_field_true(
             project, {"file": clause.json_file, "field": clause.json_field,
                       "expect": clause.json_expect})
-        return (PASS if ok else RED), str(out)[-400:]
+        if ok:
+            return PASS, str(out)[-400:]
+        if _nonexec_artefact_present(project, clause.json_file):
+            return RED, str(out)[-400:]
+        return ABSENCE_RED, (
+            f"{str(out)[-300:]} — {clause.json_file} does not resolve at all, "
+            f"so this FAIL is the artefact's absence and not its content")
     return PASS, f"unhandled clause kind {clause.kind}"
 
 
@@ -1226,34 +1589,61 @@ def test_d2_gate_has_a_reachable_fail(cell, tmp_path, _gate_timeout):
         f"{dupes} — one of them would be measured and silently dropped")
 
     outcomes: Dict[str, Tuple[str, str, str]] = {}
+    kinds: Dict[str, str] = {}
     for idx, clause in enumerate(blocking):
         sig = _clause_signature(clause)
         fixture = CLAUSE_FIXTURE.get((key, sig), "EMPTY")
         project = _build_project(tmp_path, f"c{idx}", fixture)
         tier, detail = _evaluate_clause(clause, project)
         outcomes[sig] = (tier, fixture, detail)
+        kinds[sig] = clause.kind
 
-    reds = {s for s, (t, _, _) in outcomes.items() if t == RED}
+    reds = {s for s, (t, _, _) in outcomes.items() if t in DEMONSTRATIONS}
+    absence_only = {s for s, (t, _, _) in outcomes.items() if t == ABSENCE_RED}
 
-    # ── (1) the gate as a whole must be able to FAIL.
+    # ── (1) the gate as a whole must be able to FAIL **on content**.
+    #        A red graded ABSENCE_RED does not count: it says the project was
+    #        empty, which every gate in the flow would say. Six steps used to
+    #        be carried entirely by such a red; three of them still are and
+    #        are WAIVED in matrix_63x8/waivers.py, so this assertion is what
+    #        their strict xfail is satisfied by — and what turns the suite red
+    #        the day one of them gains a clause that can judge content.
     assert reds, (
-        f"step {key} gate CANNOT FAIL: all {len(blocking)} blocking clause(s) "
-        f"reached a non-FAIL tier on a deliberately-broken project — "
+        f"step {key} gate CANNOT FAIL on anything a project DID: all "
+        f"{len(blocking)} blocking clause(s) reached a non-FAIL tier on a "
+        f"deliberately-broken project"
+        + (f", and the {len(absence_only)} red(s) it does reach are "
+           f"{ABSENCE_RED} — earned by the artefact being absent, which is "
+           f"not an answer to 'can this gate fail?'" if absence_only else "")
+        + " — "
         + "; ".join(
             f"{s[:70]!r} -> {t} (fixture {fx}) :: "
             f"{d[:120].replace(chr(10), ' ')}"
             for s, (t, fx, d) in outcomes.items()))
 
     # ── (2) every blocking clause must be individually falsifiable, except
-    #        the ones the UNREDDENED register admits to.
+    #        the ones the UNREDDENED register admits to and the ones that
+    #        have no content predicate to reach.
+    #
+    #        `files_exist` is EXCLUDED, not excused. UNREDDENED means "this
+    #        file could not break it"; for a clause whose whole predicate is
+    #        `len(missing) == 0` the truth is stronger and different — there
+    #        is no other branch for a fixture to aim at — so registering 32 of
+    #        them would misdescribe the fact and bury the 5 real gaps that
+    #        register exists to publish. The exclusion is held live by
+    #        test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file.
+    #        `json_field_true` gets NO exclusion: it compares a value, so it
+    #        must reach a content red or be registered like any program.
     registered = {s for (st, s) in UNREDDENED if st == key}
+    excluded = {s for s in absence_only if kinds[s] == F.K_FILES}
     unproven = sorted(
         s for s, (t, _, _) in outcomes.items()
-        if t != RED and s not in registered)
+        if t not in DEMONSTRATIONS and s not in registered and s not in excluded)
     assert not unproven, (
-        f"step {key}: {len(unproven)} blocking clause(s) reached no FAIL and "
-        f"are not in UNREDDENED — either build a fixture that reddens them or "
-        f"register the gap with the tier measured: "
+        f"step {key}: {len(unproven)} blocking clause(s) reached no "
+        f"content-earned FAIL and are not in UNREDDENED — either build a "
+        f"fixture that reddens them or register the gap with the tier "
+        f"measured: "
         + "; ".join(
             f"{s[:70]!r} -> {outcomes[s][0]} (fixture {outcomes[s][1]}) :: "
             f"{outcomes[s][2][:120].replace(chr(10), ' ')}"
@@ -1405,6 +1795,358 @@ def test_d2_the_two_newly_wired_blocking_clauses_redden_and_only_on_content(
     assert tier == PASS, (
         "agreeing evidence must not be reddened: worst-of is worst-of the "
         f"verdicts REACHED, not a second way to fail :: {out[-300:]}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# The empty-directory red — the controls, both directions
+# ─────────────────────────────────────────────────────────────────────
+#: The step whose `files_exist` clause is the worked counter-example in the
+#: module docstring. Pinned so the control quotes a real cell rather than
+#: whichever clause happens to be first; if step 21's gate stops carrying
+#: exactly one `files_exist` clause, the control says so instead of drifting
+#: onto a different subject.
+_ABSENCE_COUNTEREXAMPLE_STEP = "21"
+
+#: The glob metacharacters this module's materialiser understands. The live
+#: flow uses only `*` (and the consumer's own " OR " alternation); a pattern
+#: with `?` or a character class would be materialised WRONG — silently
+#: producing a file the clause does not match — so the sweep refuses it out
+#: loud rather than reporting a PASS it did not measure.
+_SUPPORTED_GLOB_CHARS = "*"
+
+
+def _materialise_files_exist(project: Path, clause) -> list:
+    """Satisfy every pattern of a ``files_exist`` clause with a ZERO-BYTE file.
+
+    The emptiest artefact that can exist. Whatever a gate could want to say
+    about content, it cannot say it about nothing — so a clause that PASSES
+    against this has no content predicate, and its FAIL can only ever have
+    meant "the path is not there".
+
+    Returns the paths written, so a caller can show what was handed over.
+    """
+    written = []
+    for pat in clause.files:
+        # The consumer splits alternation on the literal " OR " (:1832-1833);
+        # satisfying the first alternative satisfies the entry.
+        first = pat.split(F.ANY_OF_SEP)[0].strip()
+        bad = [ch for ch in "?[" if ch in first]
+        assert not bad, (
+            f"pattern {first!r} uses glob metacharacter(s) {bad} that this "
+            f"materialiser does not model; it understands "
+            f"{_SUPPORTED_GLOB_CHARS!r} only, so it cannot state what it "
+            f"handed the clause")
+        target = project / first.replace("*", "d2probe")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"")
+        written.append(str(target.relative_to(project)))
+    return written
+
+
+def test_d2_an_absent_artefact_is_not_falsifiability_evidence(tmp_path):
+    """The red that proved nothing, run in both directions.
+
+    FORWARD — against the pre-repair file this assertion FAILS: the same
+    clause, the same empty tree, came back ``FAIL``, was counted among the
+    129 reds, and was the whole of step 21's neighbours' cells. 33 of 129
+    reds were this shape.
+
+    REVERSE — the same clause against a project that produced a routed.def
+    must still PASS, so the grading below is about what the clause can
+    DEMONSTRATE and not a second way to fail it. The stub is 25 bytes,
+    ``VERSION 5.8 ;\\nEND DESIGN\\n``: no placement, no routing, no geometry,
+    and the clause is satisfied. That contrast is the whole finding.
+    """
+    clauses = [c for c in F.gate_clauses(_ABSENCE_COUNTEREXAMPLE_STEP)
+               if c.is_blocking and c.kind == F.K_FILES]
+    assert len(clauses) == 1, (
+        f"step {_ABSENCE_COUNTEREXAMPLE_STEP} no longer carries exactly one "
+        f"blocking {F.K_FILES} clause ({len(clauses)} found), so this control "
+        f"has lost its subject and must be re-pointed, not deleted")
+    clause = clauses[0]
+
+    # ── (a) nothing was produced: FAIL, and the FAIL demonstrates nothing.
+    tier, detail = _evaluate_clause(
+        clause, _build_project(tmp_path, "absent", "EMPTY"))
+    assert tier == ABSENCE_RED, (
+        f"a {F.K_FILES} clause measured on a tree where nothing exists came "
+        f"back {tier!r}. Its whole predicate is `passed = len(missing) == 0` "
+        f"(flow_compliance_check.py:1841-1844), so this FAIL says the path is "
+        f"absent and says nothing else :: {detail}")
+    assert tier not in DEMONSTRATIONS, (
+        f"{ABSENCE_RED} is being counted as a demonstration of "
+        f"falsifiability, which is the defect this tier exists to name")
+
+    # ── (b) the reverse: a project that produced the file, badly, PASSES.
+    produced = _build_project(tmp_path, "stub", "PNR_BAD")
+    named = list(clause.files)
+    assert len(named) == 1, named
+    stub = produced / named[0]
+    assert stub.is_file(), (
+        f"the PNR_BAD fixture no longer produces {named[0]}, so the reverse "
+        f"arm below would pass for the wrong reason")
+    assert stub.read_bytes() == b"VERSION 5.8 ;\nEND DESIGN\n", (
+        f"the stub this control quotes has changed to "
+        f"{stub.read_bytes()!r}; re-measure the docstring before editing it")
+    tier2, detail2 = _evaluate_clause(clause, produced)
+    assert tier2 == PASS, (
+        f"a 25-byte DEF with no geometry must still SATISFY this clause — "
+        f"that is the counter-example, and if it stopped being true the "
+        f"grading above would be measuring something else :: {tier2} {detail2}")
+
+
+def test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file():
+    """The exclusion in rule (2), MEASURED over every such clause in the flow.
+
+    Rule (2) excludes ``files_exist`` clauses from "must reach a FAIL" on the
+    ground that they have no FAIL to reach other than absence. That ground is
+    a claim about the consumer, and a claim about the consumer that nobody
+    runs is how this dimension got into trouble in the first place — so it is
+    not read out of ``flow_compliance_check`` here, it is measured: every
+    blocking ``files_exist`` clause in the live flow is handed a ZERO-BYTE
+    file for each pattern it names, and every one of them must PASS.
+
+    The day a ``files_exist`` clause grows a content predicate — a size floor,
+    a parse — this reddens and the exclusion has to be re-decided rather than
+    silently continuing to excuse a clause that could now have been broken.
+    """
+    subjects = [(F.normalize_id(sid), c)
+                for sid in F.step_ids()
+                for c in F.gate_clauses(sid)
+                if c.is_blocking and c.kind == F.K_FILES]
+    assert subjects, (
+        "the flow declares no blocking files_exist clause at all — rule (2)'s "
+        "exclusion now excuses nothing and should be deleted with this test")
+
+    survivors = []
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        for idx, (key, clause) in enumerate(subjects):
+            project = root / f"z{idx}"
+            project.mkdir()
+            written = _materialise_files_exist(project, clause)
+            tier, detail = _evaluate_clause(clause, project)
+            if tier != PASS:
+                survivors.append(
+                    f"step {key} {_clause_signature(clause)[:70]!r} -> {tier} "
+                    f"given empty files {written} :: {detail[:160]}")
+    assert not survivors, (
+        f"{len(survivors)} of {len(subjects)} files_exist clause(s) refused a "
+        f"zero-byte artefact, so they DO judge something beyond resolution "
+        f"and rule (2) must stop excluding them: " + "; ".join(survivors))
+
+
+def test_d2_a_present_but_wrong_json_field_is_still_a_real_red(tmp_path):
+    """The tightening must not swallow the non-exec clause that DOES judge.
+
+    ``json_field_true`` compares a value (``v == expect``,
+    flow_compliance_check.py:6614), so unlike ``files_exist`` it can be
+    reddened by a project that produced its artefact and got the answer wrong.
+    Three arms on the one clause the flow declares, so "absent" and "present
+    and wrong" cannot be collapsed:
+
+      EMPTY            -> ABSENCE_RED   (json file missing)
+      field == False   -> FAIL          (the board run says it did not pass)
+      field == True    -> PASS          (agreeing evidence is not reddened)
+
+    Without the middle arm this repair would degenerate into "no non-exec
+    clause can ever demonstrate anything", which is a tightening that fires
+    on everything and distinguishes nothing.
+    """
+    subjects = [(F.normalize_id(sid), c)
+                for sid in F.step_ids()
+                for c in F.gate_clauses(sid)
+                if c.is_blocking and c.kind == F.K_JSON_FIELD]
+    assert subjects, (
+        "the flow declares no blocking json_field_true clause, so the "
+        "absent-vs-wrong distinction this test defends is unreachable; delete "
+        "the branch in _evaluate_clause in the same change that deletes this")
+    key, clause = subjects[0]
+    assert (key, _clause_signature(clause)) in CLAUSE_FIXTURE, (
+        f"step {key}'s json_field_true clause has no fixture and would fall "
+        f"back to EMPTY, where its red means only 'no such file'")
+
+    tier, detail = _evaluate_clause(
+        clause, _build_project(tmp_path, "j_absent", "EMPTY"))
+    assert tier == ABSENCE_RED, f"EMPTY -> {tier} :: {detail}"
+
+    wrong = _build_project(tmp_path, "j_wrong", "ON_BOARD_FAILED")
+    tier, detail = _evaluate_clause(clause, wrong)
+    assert tier == RED, (
+        f"a record that EXISTS and states the run did not pass must be a real "
+        f"FAIL — it is a project that did the work and got it wrong, which is "
+        f"exactly the input this dimension asks for :: {tier} {detail}")
+
+    # ── reverse: same file, same tree, the field flipped to the expected
+    #    value. Nothing else changes, so the red above is the value.
+    right = _build_project(tmp_path, "j_right", "ON_BOARD_FAILED")
+    payload = json.loads((right / clause.json_file).read_text())
+    payload[clause.json_field] = clause.json_expect
+    (right / clause.json_file).write_text(json.dumps(payload, indent=1))
+    tier, detail = _evaluate_clause(clause, right)
+    assert tier == PASS, (
+        f"flipping ONLY {clause.json_field!r} to {clause.json_expect!r} must "
+        f"PASS, else the red above is the tree and not the field :: "
+        f"{tier} {detail}")
+
+
+#: The three clauses whose fixtures replaced an empty-directory red, each with
+#: the tree that must NOT redden. ``corrected`` rewrites the fixture's whole
+#: artefact set through the SAME builder with the defect argument flipped, so
+#: the control differs from the fixture in the one thing the gate judges — and
+#: in a way that stays internally consistent.
+#:
+#: Correcting one FILE was tried and was wrong. ``perc_signoff_check`` also
+#: cross-checks the JSON against the .rpt and the memo
+#: (programs/perc_signoff_check.py:78-126), so a control that fixed only the
+#: JSON came back FAIL for a different reason — measured, verbatim:
+#: ``perc_equivalent.rpt states overall verdict 'FAIL' but
+#: perc_equivalent.json states 'PASS' — the signed record contradicts the
+#: machine record``. It would have "held" while proving nothing about the ESD
+#: arm, which is the degenerate control this campaign exists to remove.
+_CONTENT_REPLACEMENTS: Tuple[Tuple[str, str, str, Callable[[Path], None]], ...] = (
+    ("6", "quartus_map_audit --project . --json "
+          "reports/phase2/gates/quartus_map_audit.json",
+     "QUARTUS_STUCK_AT",
+     lambda p: _write_quartus_build(p, _MAP_RPT_CLEAN)),
+    ("28", "perc_signoff_check . --json "
+           "reports/phase2/gates/perc_signoff.json",
+     "PERC_ESD_FAIL",
+     lambda p: _write_perc_signoff(p, "PASS")),
+)
+
+
+def test_d2_the_three_replaced_empty_reds_are_earned_by_content(
+        tmp_path, _gate_timeout):
+    """Steps 6, 28 and 30: the red is the artefact's content, not the tree.
+
+    Each of these steps used to be certified falsifiable by one thing — a
+    ``files_exist`` clause answering "nothing is there" on the EMPTY fixture —
+    while its program clause sat in :data:`UNREDDENED`. Three claims are run
+    here for each:
+
+      * the fixture drives the program to a real FAIL;
+      * the EMPTY tree does NOT, so the fixture is measuring something the
+        bare tree does not (this is what makes the replacement a repair
+        rather than a relabelling);
+      * for the two that have a one-field negative control, the SAME tree with
+        that field corrected reads PASS.
+
+    Step 30 has no such control here: its FAIL arm is the ABSENCE of any SPICE
+    run in a tree that reached SPEF and STA, so the input that flips it is a
+    whole SPICE result set rather than one edited field. Its EMPTY arm below
+    is still the discriminator that matters — rc=2 there, rc=1 here — and the
+    fix notes record the arm this suite does not reach.
+    """
+    for key, command, fixture in (
+            ("6", _CONTENT_REPLACEMENTS[0][1], "QUARTUS_STUCK_AT"),
+            ("28", _CONTENT_REPLACEMENTS[1][1], "PERC_ESD_FAIL"),
+            ("30", "spice_correlation_check . --json "
+                   "reports/phase2/gates/spice_correlation.json",
+             "POST_LAYOUT_NO_SPICE")):
+        assert CLAUSE_FIXTURE.get((key, command)) == fixture, (
+            f"step {key}: {command!r} is no longer assigned {fixture!r}; this "
+            f"control and the matrix cell would be measuring different things")
+        tier, out = _tier(_build_project(tmp_path, f"r{key}", fixture), command)
+        assert tier == RED, (
+            f"step {key}: fixture {fixture} no longer reddens {command!r} -> "
+            f"{tier} :: {out[-300:]}")
+        tier, out = _tier(_build_project(tmp_path, f"n{key}", "EMPTY"), command)
+        assert tier != RED, (
+            f"step {key}: EMPTY now reddens {command!r}, so the dedicated "
+            f"fixture is measuring nothing the bare tree does not :: "
+            f"{out[-300:]}")
+
+    for key, command, fixture, correct in _CONTENT_REPLACEMENTS:
+        project = _build_project(tmp_path, f"ctl{key}", fixture)
+        correct(project)
+        tier, out = _tier(project, command)
+        assert tier == PASS, (
+            f"step {key}: the same tree with the defect corrected must PASS, "
+            f"else the red above is the tree's shape and not the content the "
+            f"gate judges :: {tier} {out[-300:]}")
+
+
+def test_d2_a_content_earned_program_red_is_still_a_real_red(
+        tmp_path, _gate_timeout):
+    """Non-degeneracy: the exec clauses this change did not touch still redden.
+
+    A repair that grades reds more strictly can pass its own forward control
+    by grading EVERYTHING as no-demonstration. These three are program clauses
+    whose fixtures judge content — a 0-byte GDS, a hollow IR report, a
+    testbench that prints a pass without driving the DUT — and all three must
+    still come back ``FAIL``.
+    """
+    subjects = (
+        ("37", "gds_size_check --gds-file phase3/stage4/gds/*.gds --json "
+               "reports/phase3/gds_size.json", "GDS_BAD"),
+        ("24", "dynamic_ir_drop_check reports/phase3/dynamic_ir.json "
+               "--budget-pct 10", "HOLLOW_REPORTS"),
+        ("4", "vacuous_testbench_check . --json "
+              "reports/phase2/gates/vacuous_testbench.json", "TB_BAD"),
+    )
+    for key, command, fixture in subjects:
+        assert CLAUSE_FIXTURE.get((key, command)) == fixture, (
+            f"step {key}: {command!r} is no longer assigned {fixture!r}")
+        tier, out = _tier(_build_project(tmp_path, f"nd{key}", fixture),
+                          command)
+        assert tier == RED, (
+            f"step {key}: {command!r} on {fixture} came back {tier!r}. The "
+            f"absence-red repair must not have reclassified content-earned "
+            f"program reds :: {out[-300:]}")
+
+
+#: The cells this repair could NOT close, and the reason, in one place.
+#:
+#: Each of these three steps declares a gate whose every BLOCKING clause is a
+#: ``files_exist`` — so by the measurement in
+#: :func:`test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file` the
+#: whole gate is satisfied by empty files and can fail on one input only, the
+#: file not being there. They are WAIVED in ``matrix_63x8/waivers.py`` with
+#: ``strict=True``, so the cell is published as an accepted gap and the waiver
+#: self-destructs the day the step gains a clause that judges content.
+ABSENCE_ONLY_STEPS: Tuple[str, ...] = ("1", "12", "35")
+
+
+def test_d2_the_waived_cells_are_gated_by_existence_alone():
+    """The honest record and the flow must say the same thing.
+
+    Both directions, because either alone rots:
+
+      * a step in :data:`ABSENCE_ONLY_STEPS` that acquires a blocking clause
+        able to judge content is no longer an accepted gap — the entry must go,
+        and until it does this test names it (the strict xfail catches the same
+        thing from the other side, one full matrix run later);
+      * a step whose gate is ALL ``files_exist`` and which is NOT registered
+        here is an unpublished absence-only cell — the exact shape that let
+        six steps report a green earned by an empty directory.
+
+    The registry side is checked too: every entry must carry a dimension-2
+    waiver, or the accepted gap is invisible in the one file that publishes
+    accepted gaps.
+    """
+    all_files_only = set()
+    for sid in F.step_ids():
+        key = F.normalize_id(sid)
+        if key in NA_STEPS or not F.has_gate(sid):
+            continue
+        blocking = [c for c in F.gate_clauses(sid) if c.is_blocking]
+        if blocking and all(c.kind == F.K_FILES for c in blocking):
+            all_files_only.add(key)
+
+    registered = set(ABSENCE_ONLY_STEPS)
+    assert all_files_only == registered, (
+        f"the flow's absence-only gates and this module's register disagree. "
+        f"Gated by files_exist alone but unregistered: "
+        f"{sorted(all_files_only - registered)}; registered but no longer "
+        f"absence-only: {sorted(registered - all_files_only)}")
+
+    unpublished = [k for k in sorted(registered) if W.waiver_for(k, DIM) is None]
+    assert not unpublished, (
+        f"{unpublished} are recorded here as not-yet-falsified but carry no "
+        f"dimension-{DIM} waiver in matrix_63x8/waivers.py, so the accepted "
+        f"gap is invisible where accepted gaps are published — and the cell "
+        f"would be RUN as if enforced")
 
 
 def test_d2_unreddened_reasons_are_substantive():

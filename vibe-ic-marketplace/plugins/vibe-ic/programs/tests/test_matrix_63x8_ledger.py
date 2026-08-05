@@ -570,17 +570,32 @@ def test_waiver_validator_actually_rejects_a_placeholder():
     assert any("not declared in the flow yaml" in p
                for p in W.validate(unknown_step))
 
+    # The GOOD example from the waivers module docstring, verbatim. It used to
+    # be `programs/rtl_dispatch.py:214` — a file this repository does not have.
+    # The documented model of a well-formed waiver cited a path nobody could
+    # follow, and `validate()` said it was fine; keeping the doc and this probe
+    # the same string is what stops that recurring.
     good = W.Waiver(
         step_id="D1",
         dim=1,
         reason=(
-            "The gate resolves its checker set through a runtime __import__ of "
-            "a name derived from L3_CMD_PROTOCOL, so no static predicate can "
-            "enumerate the reachable call sites."
+            "The artefact is emitted on only one branch of a real PDK "
+            "condition, so an unconditional declaration converts every honest "
+            "run of the other branch into MISSING."
         ),
-        evidence="programs/rtl_dispatch.py:214",
+        evidence=(
+            "programs/mixed_signal_top_lvs_run.py:917 — "
+            "(rpt_dir / 'top_lvs.json').write_text(...)"
+        ),
     )
     assert W.validate(good) == ()
+    # ...and the docstring says the same thing. Pinned, because the example a
+    # reader copies is the one that decides how the next waiver is written, and
+    # the old one pointed at `programs/rtl_dispatch.py`, which does not exist.
+    assert "programs/mixed_signal_top_lvs_run.py:917" in (W.__doc__ or ""), (
+        "the waivers module docstring no longer carries the GOOD example this "
+        "probe validates; if the cited line moved, update BOTH"
+    )
 
     # A legitimate reason containing a word that merely CONTAINS a forbidden
     # phrase must survive: substring matching would reject this.
@@ -594,6 +609,216 @@ def test_waiver_validator_actually_rejects_a_placeholder():
         evidence="programs/tests/fixtures/real_benchmark/README:3",
     )
     assert W.validate(not_a_placeholder) == ()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 3b. Citations must RESOLVE
+#
+# The registry carried four dimension-7 waivers whose every file:line had
+# moved — `mixed_signal_top_lvs_run.py:256` was 661 lines off, step 23's six
+# citations ~9,450 — and `validate()` returned `()` for all of them, because
+# it graded the LENGTH of the argument and never opened the file. These four
+# tests are the control: the first two must FAIL against the pre-fix
+# `waivers.py` and pass after; the last two must pass BOTH ways, which is what
+# stops the new rule from being tightened until it fires on nothing.
+# ──────────────────────────────────────────────────────────────────────
+#: These probes cite REAL files, so the line numbers are DERIVED from the files
+#: at run time and never written down here. A control that hard-coded them
+#: would go red the next time somebody edits above the line — which is the
+#: defect it exists to detect, not a defect in the mechanism, and it would
+#: teach the next reader that the check is flaky. (Measured the hard way: this
+#: test hard-coded `flow_compliance_check.py:1844` and reddened within the
+#: hour when a sibling agent edited that file.) The one place a literal line
+#: number is still correct is the registry itself, and the docstring example
+#: the probe above pins.
+_M1_CLAIM = "(rpt_dir / 'top_lvs.json').write_text(...)"
+_M1_FILE = "programs/mixed_signal_top_lvs_run.py"
+
+
+def _lines_of(rel: str) -> list:
+    return (F.PLUGIN_ROOT / rel).read_text(errors="replace").splitlines()
+
+
+def _line_holding(rel: str, needle: str) -> int:
+    """1-based line number of the only line of *rel* containing *needle*."""
+    hits = [i + 1 for i, ln in enumerate(_lines_of(rel)) if needle in ln]
+    assert len(hits) == 1, f"{needle!r} is on {len(hits)} lines of {rel}: {hits[:5]}"
+    return hits[0]
+
+
+def _line_holding_none_of(rel: str, tokens) -> int:
+    """A line of *rel* that mentions none of *tokens* — a wrong-line citation."""
+    for i, ln in enumerate(_lines_of(rel)):
+        low = ln.lower()
+        if ln.strip() and not any(t.lower() in low for t in tokens):
+            return i + 1
+    raise AssertionError(f"every line of {rel} mentions one of {tokens}")
+
+
+def _cite_probe(line: int) -> "W.Waiver":
+    return W.Waiver(
+        step_id="D1",
+        dim=1,
+        reason=(
+            "The artefact substantiates the step's PASS but is named by no "
+            "required_outputs entry, so nothing independently verifies that "
+            "it was ever written."
+        ),
+        evidence=f"producer {_M1_FILE}:{line} {_M1_CLAIM}",
+    )
+
+
+def test_a_citation_whose_line_has_moved_is_rejected():
+    """A real file, a real-looking line, and the claim is not there.
+
+    This is the whole defect in one assertion. Until 2026-08-06 the M1/d7
+    waiver cited `:256` for the `top_lvs.json` write, which is 661 lines
+    further down; `:256` read `chosen_path, chosen, chosen_ref = parsed[0]`.
+    Pre-fix, `validate()` returned `()` for that.
+    """
+    true_line = _line_holding(_M1_FILE, '(rpt_dir / "top_lvs.json").write_text(')
+    stale_line = _line_holding_none_of(_M1_FILE, ("top_lvs", "rpt_dir", "write_text"))
+    assert stale_line != true_line
+
+    problems = W.validate(_cite_probe(stale_line))
+    assert problems, (
+        f"a waiver citing {_M1_FILE}:{stale_line} for {_M1_CLAIM!r} — which "
+        f"is at :{true_line} — validated clean"
+    )
+    assert any("does not resolve" in p for p in problems), problems
+    # The message must carry the repair, or following it up stays the work
+    # that lets a stale citation survive.
+    assert any(str(true_line) in p for p in problems), problems
+
+    # ...and the same evidence with the RIGHT line is accepted. Asserted here,
+    # next to its negation, so the pair cannot drift apart.
+    assert W.validate(_cite_probe(true_line)) == ()
+
+    # ...and a path that does not exist at all. The module docstring's own
+    # GOOD example was `programs/rtl_dispatch.py:214` for a fortnight.
+    ghost = W.Waiver(
+        step_id="D1",
+        dim=1,
+        reason=(
+            "The gate resolves its checker set through a runtime __import__ "
+            "of a name derived from L3_CMD_PROTOCOL, so no static predicate "
+            "can enumerate the reachable call sites."
+        ),
+        evidence="programs/rtl_dispatch.py:214 — __import__(f'{proto}_protocol_synth')",
+    )
+    assert any("names no file" in p for p in W.validate(ghost)), W.validate(ghost)
+
+
+def test_an_anchor_too_common_to_locate_anything_is_not_an_anchor():
+    """The guard on "resolves" degenerating into "passes anything".
+
+    Both probes cite the SAME true line, derived from the file. One names a
+    token spread over hundreds of that file's lines, so it locates nothing and
+    the citation goes unchecked; the other names the predicate itself, which
+    occurs once. Without `MAX_ANCHOR_LINE_HITS` the first would pass and the
+    rule would be satisfied by any line number at all.
+    """
+    rel = "programs/flow_compliance_check.py"
+    predicate = "passed = len(missing) == 0"
+    line = _line_holding(rel, predicate)
+
+    # The premise of the pair, measured rather than asserted: `missing` must
+    # really be too common to locate anything, and the predicate must not be.
+    body = [ln.lower() for ln in _lines_of(rel)]
+    common = sum(1 for ln in body if "missing" in ln)
+    rare = sum(1 for ln in body if predicate.lower() in ln)
+    cap = getattr(W, "MAX_ANCHOR_LINE_HITS", 20)  # readable pre-fix too
+    assert common > cap >= rare, (common, rare)
+
+    vague = W.Waiver(
+        step_id="D1",
+        dim=1,
+        reason=(
+            "The step's only blocking term is path resolution, so no input "
+            "other than absence reaches a FAIL and the cell cannot be driven "
+            "to a verdict about content."
+        ),
+        evidence=f"{rel}:{line} — the `missing` list",
+    )
+    assert any("does not resolve" in p for p in W.validate(vague)), W.validate(vague)
+
+    precise = W.Waiver(
+        step_id="D1",
+        dim=1,
+        reason=vague.reason,
+        evidence=f"{rel}:{line} — `{predicate}`",
+    )
+    assert W.validate(precise) == (), W.validate(precise)
+
+
+def test_the_citation_check_leaves_a_resolving_citation_alone():
+    """REVERSE CASE — must pass before the fix and after.
+
+    A rule that rejected everything would also have made
+    `test_every_waiver_has_a_reason_and_evidence` green by emptying the
+    registry of anything it could grade. These four citations are real, in
+    four different files, in three different shapes (single line, range,
+    comma list), and none of them may be reported. Every line number is
+    derived, so this stays a statement about the CHECK and not about where a
+    sibling agent last left an unrelated file.
+    """
+    m1 = _line_holding(_M1_FILE, '(rpt_dir / "top_lvs.json").write_text(')
+    merge_rel = "programs/mixed_signal_merge_check.py"
+    merge_lo = _line_holding(merge_rel, 'for rel in ("reports/analog/mixed_signal/')
+    merge_pass = _line_holding(merge_rel, 'str(top_lvs.get("verdict")) == "PASS"')
+    fmeda_rel = "programs/fmeda_coverage_check.py"
+    fmeda_doc = _line_holding(fmeda_rel, "emitted by `fmeda_fault_injection_coverage")
+    fmeda_imp = _line_holding(fmeda_rel, "import fmeda_fault_injection_coverage as fi")
+    quartus = _line_holding("programs/fpga_board_capability.py", "no Quartus on host")
+
+    for evidence in (
+        f"producer {_M1_FILE}:{m1} {_M1_CLAIM}",
+        f"consumer {merge_rel}:{merge_lo}-{merge_lo + 2} then :{merge_pass} "
+        f"read reports/analog/mixed_signal/top_lvs.json",
+        f"{fmeda_rel}:{fmeda_doc},{fmeda_imp} — docstring, then "
+        f"`import fmeda_fault_injection_coverage as fi`",
+        f"programs/fpga_board_capability.py:{quartus} names "
+        f"'no Quartus on host' as the expected disclosed gap",
+    ):
+        probe = W.Waiver(
+            step_id="D1",
+            dim=1,
+            reason=(
+                "The artefact substantiates the step's PASS but is named by "
+                "no required_outputs entry, so nothing independently "
+                "verifies that it was ever written."
+            ),
+            evidence=evidence,
+        )
+        assert W.validate(probe) == (), (evidence, W.validate(probe))
+
+
+def test_prose_that_merely_looks_like_a_citation_is_not_graded():
+    """REVERSE CASE — must pass before the fix and after.
+
+    `12/12`, `rc 2`, `'Steps: 1 total'`, `…py::test_name` and a bare `:8` with
+    no file named before it are all in this registry's evidence today. A
+    citation parser that swept them up would report unresolvable citations
+    that were never citations, and the registry would be red for prose.
+    """
+    noise = W.Waiver(
+        step_id="D1",
+        dim=1,
+        reason=(
+            "Deciding this needs a converged project tree; the artefact is "
+            "produced only by a tool that is absent from CI, so the cell "
+            "cannot be decided from the commit alone."
+        ),
+        evidence=(
+            "Asked directly on all 12 admissible run roots: 12/12 return "
+            "'inputs missing', rc 2. The single-step run reports 'Steps: 1 "
+            "total (0/-1 executed PASS)' and 'Overall: PASS'. Re-executed by "
+            "programs/tests/test_matrix_d3_outputs_produced.py::"
+            "test_d3_waived_unproven_entries_have_no_committed_artefact; "
+            "see also :8 with no file named before it."
+        ),
+    )
+    assert W.validate(noise) == (), W.validate(noise)
 
 
 # ──────────────────────────────────────────────────────────────────────

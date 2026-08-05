@@ -44,6 +44,10 @@
    "kind": "repo",
    "rel": "benchmark-data/ic/u_hawaii_adc"
   },
+  "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A": {
+   "kind": "published",
+   "rel": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A"
+  },
   "campaign_pdk/spm/_aborted_tmpplugin_run": {
    "kind": "home",
    "rel": "campaign_pdk/spm/_aborted_tmpplugin_run"
@@ -562,7 +566,7 @@
    }
   },
   "A8": {
-   "verdict": "WAIVED",
+   "verdict": "ENFORCED",
    "entries": {
     "phase3/analog/hardmacro/*/*.lef": {
      "status": "PRODUCED_BY_RUN",
@@ -579,7 +583,11 @@
      "size_bytes": 766
     },
     "phase3/analog/hardmacro/*/*.gds": {
-     "status": "UNPROVEN"
+     "status": "PRODUCED_BY_RUN",
+     "run": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A",
+     "alternative": "phase3/analog/hardmacro/*/*.gds",
+     "path": "phase3/analog/hardmacro/ldo/ldo.gds",
+     "size_bytes": 641262
     },
     "phase3/analog/hardmacro/*/*.v": {
      "status": "PRODUCED_BY_RUN",
@@ -589,9 +597,7 @@
      "size_bytes": 822
     }
    },
-   "unproven": [
-    "phase3/analog/hardmacro/*/*.gds"
-   ]
+   "unproven": []
   },
   "A9": {
    "verdict": "ENFORCED",

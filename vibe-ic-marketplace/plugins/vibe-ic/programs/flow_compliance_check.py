@@ -1688,19 +1688,117 @@ _REPORTS_SUBDIR_FALLBACK = (
 )
 
 
+def _resolves_to_real_artefact(p: Path) -> bool:
+    """True when a glob hit is a path that ACTUALLY EXISTS once links are
+    followed — i.e. when something was really produced there.
+
+    `Path.glob` answers a question about DIRECTORY ENTRIES, not about files.
+    For a wildcard component it walks `os.scandir` and yields every matching
+    NAME without ever following it, so a symlink whose target was never
+    written — or was deleted afterwards — comes back as a match. `stat` (and
+    therefore `Path.exists`) follows the link and answers about the TARGET,
+    which is the thing the flow step was required to produce.
+
+    That split is already visible INSIDE `Path.glob` itself and is the whole
+    bug. A pattern with NO wildcard is served by pathlib's precise selector,
+    which existence-checks the name before yielding it, so a literal pattern
+    ALREADY drops a dangling link; a pattern with a wildcard is served by the
+    scandir selector and does not. Measured on CPython 3.10.12 with
+    `sub/chip.gds -> ./nowhere.gds`:
+
+        d.glob("sub/*.gds")    -> ['chip.gds']     # dangling link yielded
+        d.glob("sub/chip.gds") -> []               # dangling link dropped
+
+    So `phase3/stage4/gds/*.gds` (step 37's `required_outputs`) counted a
+    link-to-nowhere as a produced tape-out GDS while
+    `phase2/stage2/synth/post_dft_netlist.v` (step 12's, no wildcard) did not.
+    This predicate removes the inconsistency by giving every pattern the
+    literal pattern's already-correct behaviour.
+
+    Non-symlinks are returned True UNCONDITIONALLY and deliberately: `glob`
+    only yields entries `scandir` just reported, so re-stat'ing an ordinary
+    file could only ever manufacture a FALSE absence (EACCES on a parent, a
+    racing writer) for an artefact that is really there. Narrowing the new
+    rejection to `is_symlink()` is what keeps this fix from being able to
+    invent a new MISSING for any non-symlink path.
+
+    A symlink is NOT rejected for being a symlink — it is judged on what it
+    points at. Link -> real file (or real dir, or a chain ending at one) is
+    kept and every downstream read of it follows through to the target's own
+    bytes, size and mtime, because every such read goes through `stat`/`open`.
+    Only link -> nothing is dropped. A symlink LOOP resolves to nothing and is
+    therefore dropped too (`Path.exists` swallows the ELOOP `OSError` and
+    returns False).
+
+    This is the same rule `chip_gds_canonical_real_file_check.py` already
+    ships for the canonical GDS paths, quoted from its own module docstring:
+    "Existing `gds_size_check` follows symlinks transparently and reports the
+    target's size, so a symlink masking a missing tape-out artefact passes
+    audit." That gate is stricter — it bans symlinks at canonical GDS paths
+    outright. This one is the weakest rule that closes the falsely-green hole
+    everywhere, and it is deliberately weaker so that a symlink TREE stays
+    legal: see `_glob_first`.
+    """
+    try:
+        if not p.is_symlink():
+            return True
+        return p.exists()
+    except OSError:
+        return False
+
+
+def _glob_real(root: Path, pattern: str) -> List[Path]:
+    """`root.glob(pattern)`, sorted, with dangling symlinks removed.
+
+    Applied at EACH probe site in `_glob_first` rather than once over the
+    final result: a probe that matched nothing but dangling links must count
+    as a MISS so the `reports/<subdir>/` and canonical-analog fallbacks still
+    get their turn. Filtering only at the end would let a link-to-nowhere in
+    the first probe suppress the fallbacks and turn a findable artefact into
+    a spurious MISSING.
+    """
+    return sorted(m for m in root.glob(pattern)
+                  if _resolves_to_real_artefact(m))
+
+
 def _glob_first(project: Path, pattern: str) -> List[str]:
     """Return list of paths (relative to project) matching the glob pattern.
+
+    Only paths that RESOLVE are returned. A dangling symlink is a directory
+    entry, not a produced artefact, and this is the function every caller uses
+    to decide whether a flow step delivered what it declared: `check_step`'s
+    `required_outputs` probe and the `files_exist` gate
+    (`_check_files_exist`) both go through here. MEASURED before the fix on
+    the tracked run root `benchmark-data/ic/spm/v1.5.66_gf180mcuD`, step 1
+    (`required_outputs: phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v`,
+    gate `files_exist`): move every RTL file out of the project and leave a
+    symlink to a name that exists nowhere, and `check_step` returns
+    status='PASS' evidence=['phase2/stage1/rtl/spm.v']; delete those same
+    files outright and it returns 'FAIL'. Both trees contain no RTL, so
+    LEAVING A LINK TO NOTHING scored strictly BETTER than deleting the file —
+    the audit rewarded the tidier way of shipping nothing.
+
+    A symlink to a real file is kept and is judged on its target. That is not
+    a loophole, it is required: the owner's step-folder design IS a symlink
+    tree — `<run>/steps/<n>_<name>/<artefact> -> ../../phase2/...` — and the
+    tracked run roots carry 142 such links. 111 of them point at real files
+    and this function still returns every one; the 31 that point at files
+    which no longer exist (e.g.
+    `steps/9_synthesis_yosys_mapped_netlist/netlist.v ->
+    ../../phase2/stage2/synth/netlist.v`, target absent) are exactly the
+    artefacts-that-exist-nowhere this rule refuses to count. The step-folder
+    design is unaffected; only its broken entries stop counting as delivery.
 
     For patterns starting with ``reports/`` and finding no direct match,
     also probe ``reports/<subdir>/<rest>`` to accommodate the post-
     generate sweep that moves flat reports/ artefacts into category
     subdirs (sourced by `_REPORTS_SUBDIR_FALLBACK`).
     """
-    matches = sorted(project.glob(pattern))
+    matches = _glob_real(project, pattern)
     if not matches and pattern.startswith("reports/"):
         rest = pattern[len("reports/"):]
         for sd in _REPORTS_SUBDIR_FALLBACK:
-            matches = sorted(project.glob(f"reports/{sd}/{rest}"))
+            matches = _glob_real(project, f"reports/{sd}/{rest}")
             if matches:
                 break
     # v0.2.55 — canonical-analog-dir tolerance. The flow-def pins analog
@@ -1718,7 +1816,7 @@ def _glob_first(project: Path, pattern: str) -> List[str]:
                 tail = pattern[len(_pref):]
                 try:
                     canon = _pl.analog_dir(project)
-                    canon_matches = sorted(canon.glob(tail))
+                    canon_matches = _glob_real(canon, tail)
                     if canon_matches:
                         matches = canon_matches
                         break
