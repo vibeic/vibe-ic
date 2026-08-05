@@ -593,6 +593,58 @@ def is_generic_unmapped(netlist_text: str) -> bool:
     return bool(_GENERIC_PRIM_RE.search(netlist_text or ""))
 
 
+# Language keywords and Verilog PRIMITIVE gates. `instantiated_modules` is
+# deliberately over-inclusive (see `_INST_RE`), so the caller must subtract the
+# non-cell vocabulary itself. This is a LANGUAGE fact, not a library one — no
+# cell/vendor/PDK name appears here, and adding a PDK never touches this set.
+# The primitive gates (`and`/`nor`/`buf`/…) are excluded ON PURPOSE: a netlist
+# built from them is gate-level but NOT library-mapped.
+_NON_CELL_IDENTIFIERS = frozenset("""
+module endmodule input output inout wire reg assign always initial begin end
+if else case casex casez endcase for while repeat forever function endfunction
+task endtask generate endgenerate parameter localparam defparam integer real
+genvar supply0 supply1 tri triand trior wand wor time realtime event signed
+unsigned logic bit byte shortint int longint specify endspecify primitive
+endprimitive table endtable posedge negedge disable force release fork join
+and or not nand nor xor xnor buf bufif0 bufif1 notif0 notif1 pmos nmos cmos
+rpmos rnmos rcmos tran tranif0 tranif1 rtran rtranif0 rtranif1 pullup pulldown
+""".split())
+
+
+def netlist_is_library_mapped(netlist_text: str) -> bool:
+    """True iff `netlist_text` positively shows TECHNOLOGY-MAPPED cells —
+    i.e. instantiations of named library cells rather than Yosys generic
+    primitives or Verilog primitive gates.
+
+    This is the POSITIVE complement of `is_generic_unmapped`, and it exists
+    because callers were using "I could not NAME the PDK" as though it were
+    "there are no library-mapped cells". Those are different questions:
+    a netlist mapped to a library that is simply absent from `PDK_CONFIG`
+    (NanGate45, any foundry library the container does not ship) answers NO to
+    the first and YES to the second. Publishing the first as the second tells a
+    reader the netlist is unmapped when it is fully mapped, and — worse — that
+    label is an ATTESTATION downstream (`transition_coverage_check` grants the
+    ENGINE_LIMITED skip only on `pdk_detected == "generic_unmapped"`, precisely
+    so a MAPPED netlist cannot claim it).
+
+    The rule here is the one `transition_fault_atpg_run` already applies for
+    the same decision: require POSITIVE structural evidence, never infer from
+    the absence of a name.
+
+    FAIL-SAFE in the only direction that matters: every unclear case returns
+    False, which leaves the pre-existing `generic_unmapped` label in place and
+    moves no verdict. A False positive can only cause a self-skip to be
+    REFUSED, never granted — it can never fabricate a pass.
+
+    Pure; no I/O. chip/PDK-AGNOSTIC: no cell-name vocabulary.
+    """
+    if not netlist_text:
+        return False
+    if is_generic_unmapped(netlist_text):
+        return False
+    return bool(instantiated_modules(netlist_text) - _NON_CELL_IDENTIFIERS)
+
+
 def _first_module_name(netlist_text: str) -> str | None:
     m = _MODULE_DECL_RE.search(netlist_text or "")
     return m.group(1) if m else None
