@@ -450,6 +450,145 @@ Round B: PASS=19 FAIL=9 MISSING=1
                for d in rep.evidence["round_tally_distinct"])
 
 
+# ---------------------------------------------------------------------------
+# NARROWNESS — the ALL-CAPS restriction is LOAD-BEARING, so it is pinned.
+#
+# The two status vocabularies match ALL-CAPS only, and the module says why:
+# "caps is a deliberate machine marker, lowercase is prose". That sentence is
+# the whole defence against a SENTENCE deciding which round is live, and it is
+# a two-line edit away from being gone. Adding `re.IGNORECASE` to the two
+# vocabularies is the edit a later maintainer makes in good faith — authors
+# should not have to shout — and MEASURED 2026-08-05 it silences the guard on
+# `_LOWERCASE_PROSE_BOTH` below while every other test in this file still
+# passes. Three edits are possible (both vocabularies, or either one alone) and
+# the both-lowercase document only catches the first, so each vocabulary is
+# pinned on its own:
+#
+#   loosen BOTH             -> caught by all four tests below
+#   loosen CURRENT only     -> caught by test_only_a_CAPS_word_can_declare_…
+#                              and by test_the_narrowing_is_about_CASE_…
+#   loosen NOT-CURRENT only -> caught by test_only_a_CAPS_word_can_retire_…
+#
+# The two pair tests generate both documents from ONE template, so the only
+# thing that moves between the refused form and the accepted form is the CASE
+# of a single word. That states the property as a behaviour rather than as a
+# regex, and a different correct implementation of "caps is the marker" passes
+# them unchanged.
+# ---------------------------------------------------------------------------
+_LOWERCASE_PROSE_BOTH = """# RESULT
+
+Verdict: FAIL
+
+Round A (baseline figure carried over from the previous kit): PASS=26 FAIL=2 MISSING=1
+Round B — current thinking, still unconfirmed: PASS=19 FAIL=9 MISSING=1
+"""
+
+_CURRENT_VOCAB_PAIR = """# RESULT
+
+Verdict: FAIL
+
+Round B — {word} thinking, still unconfirmed: PASS=19 FAIL=9 MISSING=1
+Round A: PASS=26 FAIL=2 MISSING=1  [WITHDRAWN]
+"""
+
+_NOT_CURRENT_VOCAB_PAIR = """# RESULT
+
+Verdict: FAIL
+
+Round B: PASS=19 FAIL=9 MISSING=1  [CURRENT]
+Round A ({word} figure, carried over from the previous kit): PASS=26 FAIL=2 MISSING=1
+"""
+
+_TITLE_CASE_BOTH = """# RESULT
+
+Verdict: FAIL
+
+Round A (Baseline figure carried over from the previous kit): PASS=26 FAIL=2 MISSING=1
+Round B — Current thinking, still unconfirmed: PASS=19 FAIL=9 MISSING=1
+"""
+
+_CAPS_MARKERS_IN_LOWERCASE_PROSE = """# RESULT
+
+Verdict: FAIL
+
+Round B: PASS=19 FAIL=9 MISSING=1  [CURRENT] — current thinking, supersedes the baseline below
+Round A: PASS=26 FAIL=2 MISSING=1  [BASELINE] — a baseline figure, current only for the previous kit
+"""
+
+
+def test_lowercase_prose_cannot_silence_the_guard(tmp_path):
+    """Every status word here is lowercase PROSE, and BOTH sit behind a
+    delimiter — `(baseline` after a bracket, `— current` after a dash — so the
+    M1/M2 delimiter rule alone does not save this document. Only the caps
+    narrowing does.
+
+    MEASURED on the loosened build: `[PASS] COMPLETE rc=0`, the guard
+    swallowing exactly the defect it exists to catch. Shipped: refused.
+    """
+    rep = R.check(_run(tmp_path, _LOWERCASE_PROSE_BOTH))
+    assert rep.state == AMBIG and rep.rc == 1
+    assert all(d["status"] == "UNMARKED"
+               for d in rep.evidence["round_tally_distinct"])
+
+
+def test_only_a_CAPS_word_can_declare_the_current_round(tmp_path):
+    """The CURRENT vocabulary, pinned alone — loosening only this one leaves
+    `_LOWERCASE_PROSE_BOTH` still refused (the NOT-CURRENT half keeps needing
+    caps), so that document does not cover this edit and this pair does.
+
+    Both documents come from one template: the refused form and the accepted
+    form differ in the case of ONE word and in nothing else.
+    """
+    lower = R.check(_run(tmp_path, _CURRENT_VOCAB_PAIR.format(word="current"),
+                         name="lower"))
+    caps = R.check(_run(tmp_path, _CURRENT_VOCAB_PAIR.format(word="CURRENT"),
+                        name="caps"))
+    assert lower.state == AMBIG and lower.rc == 1
+    assert caps.state == "COMPLETE" and caps.rc == 0
+
+
+def test_only_a_CAPS_word_can_retire_a_tally(tmp_path):
+    """The mirror half — the NOT-CURRENT vocabulary, pinned alone. Loosening
+    only this one leaves `_LOWERCASE_PROSE_BOTH` refused as well; this is the
+    document that catches it. Same template, one word's case apart.
+
+    A lowercase "baseline" in a parenthetical is a description of a number.
+    Reading it as a machine marker lets an aside retire a live tally.
+    """
+    lower = R.check(_run(tmp_path,
+                         _NOT_CURRENT_VOCAB_PAIR.format(word="baseline"),
+                         name="lower"))
+    caps = R.check(_run(tmp_path,
+                        _NOT_CURRENT_VOCAB_PAIR.format(word="BASELINE"),
+                        name="caps"))
+    assert lower.state == AMBIG and lower.rc == 1
+    assert caps.state == "COMPLETE" and caps.rc == 0
+
+
+def test_capitalised_is_not_CAPS(tmp_path):
+    """A narrower widening than `re.IGNORECASE`: accepting Title Case, on the
+    theory that a capital letter signals intent. It does not — English
+    capitalises the first word of a clause. `Current` and `Baseline` here are
+    the same prose as the lowercase document, and must declare nothing."""
+    rep = R.check(_run(tmp_path, _TITLE_CASE_BOTH))
+    assert rep.state == AMBIG and rep.rc == 1
+
+
+def test_the_narrowing_is_about_CASE_not_about_the_words(tmp_path):
+    """The OVER-CORRECTION, and the reverse case that must STILL pass. Reading
+    the caps rule as "a document that says these words in prose is suspect"
+    would refuse a correctly declared report for explaining itself in English.
+    Here both tallies are declared in caps and both lines then use the same
+    words as lowercase prose; it signs off clean.
+
+    It is also the reverse control on the loosening: under `re.IGNORECASE` the
+    lowercase "current" after a comma on the BASELINE line becomes a second
+    marker, that tally reads CONFLICTED, and this correct document is refused.
+    """
+    rep = R.check(_run(tmp_path, _CAPS_MARKERS_IN_LOWERCASE_PROSE))
+    assert rep.state == "COMPLETE" and rep.rc == 0
+
+
 def test_supersede_written_about_the_live_round_does_not_kill_it(tmp_path):
     """"these numbers supersede everything below" is written ON the current
     round's line. Reading the verb as a withdrawal would mark the live number
@@ -537,6 +676,53 @@ def test_a_run_that_produced_only_inputs_keeps_its_own_diagnosis(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# THE CONSUMING GATE — an operator must be told which failure this is.
+# ---------------------------------------------------------------------------
+def test_the_merge_gate_does_not_call_an_ambiguous_deliverable_a_stub(tmp_path):
+    """`gatekeeper_review.run_deliverable_gate` is the operator-facing surface
+    for every FAIL state this program has, and it summarised all of them as
+    "empty/missing/stub". An ambiguous-current-round deliverable is none of the
+    three — it is a full, well-written report that does not say which of its
+    numbers is live — and an operator told it is a stub goes and pads it."""
+    import gatekeeper_review as G  # local: the gate module is not needed above
+    _run(tmp_path, _THREE_ROUNDS_NEWEST_TOP, name="cell")
+    res = G.run_deliverable_gate(tmp_path, ["cell/RESULT.md"])
+    assert res.rc == 1
+    assert AMBIG in res.summary, res.summary
+    assert "stub" not in res.summary.lower(), res.summary
+
+
+# ---------------------------------------------------------------------------
+# KNOWN LIMIT — carried as a STRICT xfail so that fixing it is LOUD.
+# ---------------------------------------------------------------------------
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "The rule cannot tell one round BROKEN DOWN BY SCOPE from two "
+        "ACCUMULATED rounds, and the vocabulary has no truthful word for the "
+        "first: marking a live per-phase number BASELINE or WITHDRAWN would "
+        "be exactly the lie this rule exists to avoid, and marking both "
+        "CURRENT is MULTIPLY_DECLARED. So there is no truthful form of this "
+        "document that the gate accepts. FORWARD risk only, not a present "
+        "false positive — no deliverable in this checkout, and none of the "
+        "tally-bearing run deliverables swept on this host, has this shape. "
+        "Pinned rather than papered over: when the rule learns the "
+        "difference this XPASSes, strict makes that a FAILURE, and the test "
+        "gets promoted to a plain assertion instead of quietly disappearing."),
+)
+def test_two_scopes_of_one_round_are_not_two_rounds(tmp_path):
+    body = """# RESULT
+
+Verdict: FAIL
+
+Phase 2 gate set: PASS=12 FAIL=0 MISSING=0
+Phase 3 gate set: PASS=20 FAIL=1 MISSING=2
+"""
+    rep = R.check(_run(tmp_path, body))
+    assert rep.state == "COMPLETE" and rep.rc == 0
+
+
+# ---------------------------------------------------------------------------
 # CORPUS SWEEP — the guard must not flag the state the repo already shipped.
 # ---------------------------------------------------------------------------
 def _repo_root() -> Path:
@@ -573,3 +759,15 @@ def test_no_published_result_md_is_flagged(tmp_path):
     assert not flagged, ("published RESULT.md flagged as ambiguous-current-"
                         "round: " + repr(flagged))
     assert len(files) >= 20, f"sweep saw only {len(files)} files — too thin"
+
+    # THE SWEEP MUST REACH ITS GUARD. "0 flagged" over N documents is a claim
+    # about a decision point that may never have been entered — a harness that
+    # cannot flag anything reports a clean corpus for free. A planted
+    # known-ambiguous document goes through the SAME call, on the same run dir,
+    # and must come back flagged; only then does the 0 above mean the guard
+    # looked at each of these files and said no.
+    planted = tmp_path / "planted_RESULT.md"
+    planted.write_text(_THREE_ROUNDS_NEWEST_TOP + "\n" + _FILLER)
+    assert R.check(run, result=planted).state == AMBIG, (
+        f"the sweep harness cannot flag even a known-ambiguous document, so "
+        f"'0 of {len(files)} flagged' above proves nothing")
