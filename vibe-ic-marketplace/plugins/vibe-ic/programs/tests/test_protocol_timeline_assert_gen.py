@@ -1,6 +1,7 @@
 """Unit tests for `protocol_timeline_assert_gen.py`."""
 import importlib
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("protocol_timeline_assert_gen")
 
 
@@ -59,7 +60,7 @@ class TestEmitTb:
 
     def test_attribution(self):
         tb = mod.emit_tb(self._params())
-        assert "v0.1.50" in tb
+        assert f"(Vibe-IC plugin v{shipped_plugin_version()})." in tb
         assert "protocol_timeline_assert_gen.py" in tb
         assert "Do not edit; regenerate" in tb
 

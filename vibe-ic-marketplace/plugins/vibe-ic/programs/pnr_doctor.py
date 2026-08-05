@@ -45,6 +45,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 PATTERNS = (
@@ -283,7 +284,7 @@ def diagnose(text: str, drc_text: str = "") -> Dict[str, Any]:
         "verdict": verdict,
         "findings": [f.as_dict() for f in findings],
         "count": len(findings),
-        "emitted_by": "pnr_doctor v0.1.96",
+        "emitted_by": _pmd.emitted_by("pnr_doctor"),
     }
 
 
@@ -316,7 +317,8 @@ def _cli(argv: Optional[List[str]] = None) -> int:
     if not args.log.is_file():
         print(f"pnr_doctor: MISSING — log not found: {args.log}", file=sys.stderr)
         result = {"tool": "pnr_doctor", "verdict": "MISSING",
-                  "findings": [], "count": 0, "emitted_by": "pnr_doctor v0.1.96"}
+                  "findings": [], "count": 0,
+                  "emitted_by": _pmd.emitted_by("pnr_doctor")}
         if args.json:
             print(json.dumps(result, indent=2))
         return 2

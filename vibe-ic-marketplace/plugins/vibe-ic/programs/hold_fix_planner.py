@@ -15,6 +15,7 @@ import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 STRATEGIES = (
@@ -69,14 +70,15 @@ def build_plan(endpoints: List[Dict[str, Any]]) -> Dict[str, Any]:
         "endpoint_count": len(out),
         "WHS_ps": worst_slack,
         "THS_ps": total_neg,
-        "emitted_by": "hold_fix_planner v0.1.50",
+        "emitted_by": _pmd.emitted_by("hold_fix_planner"),
     }
 
 
 def plan_to_markdown(plan: Dict[str, Any]) -> str:
     out = ["# Hold-fix plan",
            "",
-           f"_Emitted by `hold_fix_planner.py` (v0.1.50)._",
+           f"_Emitted by `hold_fix_planner.py` "
+           f"(v{_pmd.running_plugin_version()})._",
            "",
            f"- Violating endpoints: **{plan['endpoint_count']}**",
            f"- WHS: {plan['WHS_ps']} ps",

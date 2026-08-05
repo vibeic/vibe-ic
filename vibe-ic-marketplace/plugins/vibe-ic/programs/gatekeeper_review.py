@@ -497,6 +497,19 @@ def real_artefact_backing_gate(repo: Path, base: str, head: str) -> GateResult:
 # PR's own delta. rc 0 FRESH / stale-no-overlap; rc 1 stale WITH file overlap
 # (the real phantom-revert surface); rc 2 unresolvable ref. Unlike the other
 # gates this does not judge the CHANGE — only the safe way to LAND it.
+#
+# 2026-08-05 — its FRESH verdict now has to be EARNED. FRESH was decided by
+# ANCESTRY alone and then asserted a property about CONTENT ("an ordinary
+# squash-merge cannot phantom-revert anything"). A commit that named origin/main
+# as its parent while carrying the PREVIOUS version's TREE satisfied the
+# ancestry test exactly, and would have reverted 13 commits — 81 files, 9258
+# deletions, 15 files removed, plugin.json walked back a version. This roster
+# was green on it, because the two revert guards each disclaim that case IN
+# WRITING and hand it to the other: the collateral check's window is "this push"
+# (0 pairs on a one-commit branch) and this gate answered FRESH. Only a human
+# read caught it. The gate now checks, inside the FRESH branch, that no path the
+# head modifies holds a blob the base's own history has already superseded; that
+# rc 1 blocks here exactly as STALE_OVERLAP does.
 # --------------------------------------------------------------------------
 # --------------------------------------------------------------------------
 # landing_is_one_commit_check — the OTHER landing-method guard.

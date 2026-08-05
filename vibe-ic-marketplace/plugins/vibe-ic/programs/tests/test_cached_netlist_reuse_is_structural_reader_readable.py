@@ -138,10 +138,14 @@ def test_repair_restamps_the_declaring_provenance_entry(tmp_path):
     declared = [r["outputs"]["t_synth.v"] for r in rows
                 if "t_synth.v" in r.get("outputs", {})]
     assert declared, "the netlist lost its provenance declaration entirely"
-    assert set(declared) == {_sha(nl)}, (
+    # The repair APPENDS a record of the bytes it produced rather than
+    # amending the stale one, so the stale digest survives as history. What
+    # must hold is that the NEWEST declaration — the one the gate verifies
+    # against disk — carries the digest the file actually has.
+    assert declared[-1] == _sha(nl), (
         "the repaired netlist is still declared under a digest it no longer "
-        f"carries: declared={declared} real={_sha(nl)}")
-    assert stale not in declared
+        f"carries: newest={declared[-1]} real={_sha(nl)}")
+    assert declared[-1] != stale
 
 
 def test_the_reuse_branch_calls_the_same_helper_as_the_produce_path():

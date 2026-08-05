@@ -1,0 +1,28 @@
+type: bug
+severity: P1
+component: program:l_doc_cross_consistency_check
+plugin_version: "1.9.78"
+
+title: >-
+  The pin-table subset rule reports two different defects under one count
+
+pattern: |
+  A cross-layer consistency rule emits ONE count over a finding set that holds two
+  different defect classes, owned by different layers and needing opposite fixes: an
+  upstream extractor admitting members that were never of the checked kind, and a
+  downstream layer genuinely missing members that were. The rule is right that something
+  is wrong, and the count is well-formed, but it cannot be acted on — it does not say how
+  many of each class it holds, and clearing either class moves the number without saying
+  which one moved. A set-difference verdict is especially prone to this, because "absent
+  from the other side" is the same observation whether the name should never have entered
+  the set or should have been present in it.
+
+suggested_fix: |
+  The split itself has LANDED and is not the open work — commit `8d7bd76fb`, 2026-08-04 21:38, 72 minutes before this record was written and contained in the base it targets. Attribution is now machine-readable in three buckets: a non-pin token in the product-metadata layer (WARN, the design is intact), a declared port that never reached the integration layer (ERROR, the port is gone), and UNATTRIBUTED (WARN) where the typed corpus establishes neither side. RE-MEASURED for this record by driving the checker over every run root tracked at this base — 107 of them, 11 FAIL / 81 N/A / 15 PASS: of 57 absent pins, 19 / 5 / 33 respectively, and 10 of the 11 FAILing roots resolve to a single cause. The landed docstring states 108 roots, 12 FAIL, 58 pins, 20 / 5 / 33 and 11 of 12. Every difference is exactly one root, and the buckets that do NOT move — 81 N/A, 15 PASS, 5 genuinely-absent ports, 33 unattributed — pin its shape precisely: one FAILing root, single-cause, contributing one non-pin token. That root is not among the 107 tracked here and was not located on disk, so its identity is inferred from the arithmetic and NOT observed; do not repeat the docstring's totals as if they were reproducible at this base.
+  Do NOT key the extractor on STRUCTURE. That instruction was tested by the same commit and is measured-DEAD: the structural predicate (a register-map field definition, a member of an enum) is ABSENT from the corpus, because the register map does not declare those names either — keying on it would be a dead predicate, and inventing a field the documents never give is what this gate's own header forbids. The third UNATTRIBUTED bucket exists precisely because that key does not work, and it is the honest answer rather than a guess onto either side.
+  The residual that IS open: repair the L1 extractor so non-ports stop entering the pin table at the source, then RE-MEASURE. Only after that re-measurement can the ERROR half be promoted from ADVISORY to blocking, and that promotion reddens exactly 1 published root — confirmed in the same sweep: a single tracked root owns all 5 genuinely-absent-port findings, single-cause, and every other root is clean of them. That is a flow-wiring decision with its own measured blast radius, not a judgement call. The negative control must assert the real half still FAILS.
+
+id: "ORGANIC-20260804-pin-table-subset-ports-one-count-two-defects"
+submitted_at: "2026-08-04T22:50:25+08:00"
+session_context: >-
+  2026-08-04 commercial-PDK clean-run batch. Five designs hit the rule with four distinct contaminant grammars (a module parameter; register fields and enum members, 14 of 14; a direction keyword plus three layout-class keywords; a bare direction keyword) and one design where the rule was clean with real ports only. Filed as issue #791 with the per-design evidence.

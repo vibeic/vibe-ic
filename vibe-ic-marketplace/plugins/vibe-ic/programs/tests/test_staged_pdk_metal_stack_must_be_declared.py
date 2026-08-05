@@ -223,7 +223,13 @@ def test_topmetal_width_fix_still_fires_on_the_matching_stack(
     lef.write_text(_tech_lef(5, 0.28))         # top metal under the deck's 0.44
     out, notes = p3._discover_topmetal_width_fix(tmp_path, str(deck), lef)
     assert out != lef, "a corrected LEF should have been staged"
-    assert notes and "topmetal-width-fix" in notes[0]
+    # The note is tagged `[topmetal-deck-lef-fix]`: the pass reconciles the
+    # deck's WIDTH, SPACING, PITCH and top-cut SPACING, so the older
+    # `topmetal-width-fix` tag named one quarter of what it does. Asserted on
+    # the SUBSTANCE — which rule fired and on which layer — so a future
+    # re-tagging cannot make this test go quiet either.
+    assert notes and "TOPMETAL_5" in notes[0] and "MET5" in notes[0], notes
+    assert "Mt.W.1" in notes[0] and "0.44" in notes[0], notes
     assert "0.44" in Path(out).read_text()
 
 

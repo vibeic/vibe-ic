@@ -123,13 +123,20 @@ def test_defect_verdict_section_lead_emphasis_over_fail(tmp_path):
 
 
 def test_defect_fires_when_only_a_phase_report_carries_the_fail(tmp_path):
-    """No aggregate report — the newest phase report is the counterpart. The
-    escape must not be evadable by deleting the aggregate."""
+    """No aggregate report — a phase report is the counterpart. The escape must
+    not be evadable by deleting the aggregate.
+
+    The `source` label changed from `newest_phase` to `strictest_phase` in
+    2026-08-04's fix: the selection no longer consults `st_mtime`, because this
+    gate runs under an umbrella that rewrites the very files it would be
+    timing. The BEHAVIOUR this test pins — rc 1, counterpart taken from a phase
+    report rather than an aggregate — is unchanged."""
     run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="FAIL",
                  orch_name="phase3_one_shot.json")
     rep = G.check(run)
     assert rep.rc == 1
-    assert rep.orchestrator["source"] == "newest_phase"
+    assert rep.orchestrator["source"] == "strictest_phase"
+    assert rep.orchestrator["report"].endswith("phase3_one_shot.json")
 
 
 def test_defect_failure_names_both_sides_with_locations(tmp_path):
@@ -415,3 +422,130 @@ def test_the_verdict_vocabulary_is_NOT_widened():
     import deliverable_verdict_consistency_check as M
     for word in ("PRODUCTION-READY", "CONVERGED", "COMPLETE", "CLEAN"):
         assert M._TOKEN_RE.match(word) is None, word
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# #797 item 1 — A FRESHNESS JUDGEMENT THE JUDGE ITSELF PERTURBS.
+#
+# `read_orchestrator_verdict` used to take the per-phase report with the
+# greatest `st_mtime`. Two independent reasons that is not a measurement of
+# this run, either fatal on its own:
+#
+#   1. This gate is registered under `flow_compliance_check`, which is a
+#      producer as well as a judge — one invocation rewrites 17 tracked files
+#      and adds 25 (measured 2026-08-04; the measurement `--read-only` exists
+#      for). The orchestrator reports are inside that set, so the umbrella
+#      changes WHICH report this gate selects purely by having looked.
+#   2. On a fresh checkout git stamps every file with the checkout time, so
+#      `m > best[0]` is false for every candidate after the first and "newest"
+#      degrades silently to glob-then-alphabetical order.
+#
+# The tests below drive the REAL entry point and assert the property directly:
+# permuting only the mtimes of a fixed tree must not move the verdict.
+# ═══════════════════════════════════════════════════════════════════════════
+import os as _os
+
+
+def _phase_only_run(tmp_path: Path, verdicts: dict, mtimes: dict) -> Path:
+    """A run with NO aggregate report and several per-phase ones, so the
+    tie-break is what decides. `verdicts` and `mtimes` are keyed by filename."""
+    run = tmp_path / "run"
+    orch = run / "reports" / "orchestrator"
+    orch.mkdir(parents=True, exist_ok=True)
+    run.joinpath("RESULT.md").write_text(_PASS_MD)
+    for name, v in verdicts.items():
+        (orch / name).write_text(json.dumps({"verdict": v}))
+    for name, t in mtimes.items():
+        _os.utime(orch / name, (t, t))
+    return run
+
+
+def test_permuting_only_the_mtimes_cannot_move_the_verdict(tmp_path):
+    """THE property. Identical bytes, opposite mtime orderings: one verdict.
+
+    Before the fix this returned rc 1 with one ordering and rc 0 with the
+    other — the umbrella that drives this gate rewrites these very files, so
+    the run's verdict was decided by the order the auditor happened to touch
+    them."""
+    verdicts = {"phase2_one_shot.json": "PASS",
+                "phase3_one_shot.json": "FAIL"}
+    seen = []
+    for i, mt in enumerate(({"phase2_one_shot.json": 1000,
+                             "phase3_one_shot.json": 2000},
+                            {"phase2_one_shot.json": 2000,
+                             "phase3_one_shot.json": 1000})):
+        rep = G.check(_phase_only_run(tmp_path / f"p{i}", verdicts, mt))
+        seen.append((rep.rc, rep.state, Path(rep.orchestrator["report"]).name))
+    assert seen[0] == seen[1], (
+        f"the same tree gave two answers under two mtime orderings: {seen}")
+
+
+def test_all_equal_mtimes_still_reaches_the_failing_report(tmp_path):
+    """The fresh-checkout case, which the mtime rule could not express at all:
+    git gives every file the same stamp, so `newest` collapsed to glob order
+    and whichever directory a report happened to sit in decided the run."""
+    rep = G.check(_phase_only_run(
+        tmp_path, {"phase2_one_shot.json": "PASS",
+                   "phase3_one_shot.json": "FAIL"},
+        {"phase2_one_shot.json": 1000, "phase3_one_shot.json": 1000}))
+    assert rep.rc == 1, "a recorded phase FAIL must not be outvoted by a tie"
+    assert Path(rep.orchestrator["report"]).name == "phase3_one_shot.json"
+
+
+def test_a_disagreeing_set_is_disclosed_not_silently_resolved(tmp_path):
+    """A choice was made among reports that disagree; the evidence has to name
+    what it did NOT compare against, or a reader cannot tell a choice happened."""
+    rep = G.check(_phase_only_run(
+        tmp_path, {"phase2_one_shot.json": "PASS",
+                   "phase3_one_shot.json": "FAIL"},
+        {"phase2_one_shot.json": 1000, "phase3_one_shot.json": 2000}))
+    assert rep.orchestrator["source"] == "strictest_phase_of_disagreeing"
+    got = {(Path(c["report"]).name, c["verdict"])
+           for c in rep.orchestrator["candidates"]}
+    assert got == {("phase2_one_shot.json", "PASS"),
+                   ("phase3_one_shot.json", "FAIL")}, got
+
+
+def test_agreeing_reports_are_not_reported_as_a_disagreement(tmp_path):
+    """Negative control: when every candidate agrees there was no choice to
+    disclose, and the gate must not manufacture one."""
+    rep = G.check(_phase_only_run(
+        tmp_path, {"phase2_one_shot.json": "PASS",
+                   "phase3_one_shot.json": "PASS_WITH_WAIVERS"},
+        {"phase2_one_shot.json": 1000, "phase3_one_shot.json": 2000}))
+    assert rep.rc == 0
+    assert rep.orchestrator["source"] == "strictest_phase"
+    assert "candidates" not in rep.orchestrator
+
+
+def test_the_aggregate_still_wins_when_it_exists(tmp_path):
+    """Unchanged contract: an aggregate report is the deliverable's counterpart
+    and is taken WHOLE, disagreeing phase reports or not. The fix narrows only
+    the no-aggregate fallback."""
+    run = _phase_only_run(tmp_path, {"phase3_one_shot.json": "FAIL"},
+                          {"phase3_one_shot.json": 2000})
+    (run / "reports" / "orchestrator" / "vibe_ic_one_shot.json").write_text(
+        json.dumps({"verdict": "PASS"}))
+    rep = G.check(run)
+    assert rep.orchestrator["source"] == "aggregate"
+    assert rep.rc == 0
+
+
+def test_one_physical_report_reached_by_two_globs_is_not_a_disagreement(
+        tmp_path):
+    """`reports/orchestrator/*_one_shot.json` and `reports/*_one_shot.json` can
+    name ONE file through two paths. Counting it twice would invent a
+    disagreement out of a single report."""
+    run = tmp_path / "run"
+    orch = run / "reports" / "orchestrator"
+    orch.mkdir(parents=True)
+    run.joinpath("RESULT.md").write_text(_PASS_MD)
+    (orch / "phase3_one_shot.json").write_text(json.dumps({"verdict": "PASS"}))
+    link = run / "reports" / "phase3_one_shot.json"
+    try:
+        link.symlink_to(orch / "phase3_one_shot.json")
+    except OSError:
+        pytest.skip("symlinks unavailable on this filesystem")
+    rep = G.check(run)
+    assert rep.orchestrator["source"] == "strictest_phase"
+    assert "candidates" not in rep.orchestrator

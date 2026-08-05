@@ -346,9 +346,40 @@ def read_orchestrator_verdict(run_dir: Path) -> Dict[str, object]:
     """The RUN-LEVEL verdict the runner recorded.
 
     Preference order — the aggregate report first (a deliverable's headline
-    summarises the RUN, so the run-level aggregate is its counterpart), then the
-    newest per-phase report. The chosen path is always reported so the
-    comparison is auditable.
+    summarises the RUN, so the run-level aggregate is its counterpart), then,
+    when there is no aggregate, the STRICTEST of the per-phase reports. The
+    chosen path is always reported so the comparison is auditable, and when the
+    per-phase reports disagreed every candidate is reported too.
+
+    WHY NOT THE NEWEST (2026-08-04)
+    ===============================
+    This used to take ``max(st_mtime)``. A modification time is not a
+    measurement of this run, for two independent reasons, and either one alone
+    is fatal:
+
+    1. **The judge writes into the tree it judges.** This gate is registered
+       under ``flow_compliance_check``, which is a producer as well as a judge:
+       driving one project rewrites 17 tracked files and adds 25 (measured
+       2026-08-04; that measurement is what ``--read-only`` was added for). The
+       orchestrator reports are inside that set. So the umbrella can change
+       WHICH report this gate selects, purely by having looked — and with two
+       reports of opposite polarity, the same tree yields FAIL or PASS
+       depending on the order the auditor happened to touch them.
+
+    2. **On a fresh checkout there are no distinct mtimes at all.** git stamps
+       every file with the checkout time, so ``m > best[0]`` is false for every
+       candidate after the first and "newest" silently degrades to
+       glob-then-alphabetical order. The value read like a time and carried no
+       information.
+
+    The replacement removes the filesystem from the decision entirely. Among
+    candidates the run itself wrote, the STRICTEST is taken: a run in which any
+    phase recorded FAIL did have a phase fail, whatever the mtimes say. A
+    deliverable may be STRICTER than the orchestrator (that lane already exits
+    0); it may never be laxer, and picking the lax candidate out of a
+    disagreeing set is exactly how it becomes laxer without anyone choosing to.
+    Ties inside one polarity are broken by path so a fresh clone and a live run
+    give the same answer.
     """
     for rel in _ORCH_REPORT_PREFERENCE:
         d = _load_verdict_json(run_dir / rel)
@@ -357,23 +388,36 @@ def read_orchestrator_verdict(run_dir: Path) -> Dict[str, object]:
                     "polarity": polarity(normalise_token(str(d["verdict"]))),
                     "verdict_note": d.get("verdict_note"),
                     "halted_at": d.get("halted_at"), "source": "aggregate"}
-    best: Optional[Tuple[float, Path, dict]] = None
+    seen: Dict[str, Tuple[Path, dict]] = {}
     for pat in _ORCH_REPORT_GLOBS:
         for p in sorted(run_dir.glob(pat)):
             d = _load_verdict_json(p)
-            if not d:
-                continue
-            m = p.stat().st_mtime
-            if best is None or m > best[0]:
-                best = (m, p, d)
-    if best is None:
+            if d:
+                # `resolve()`: the two globs can name ONE physical file through
+                # two paths, and a file counted twice is not a disagreement.
+                seen.setdefault(str(p.resolve()), (p, d))
+    cands = sorted(seen.values(), key=lambda pd: str(pd[0]))
+    if not cands:
         return {"report": None, "verdict": None, "polarity": None,
                 "verdict_note": None, "halted_at": None, "source": None}
-    _, p, d = best
-    return {"report": str(p), "verdict": str(d["verdict"]),
-            "polarity": polarity(normalise_token(str(d["verdict"]))),
-            "verdict_note": d.get("verdict_note"),
-            "halted_at": d.get("halted_at"), "source": "newest_phase"}
+    # FAIL sorts before PASS, so `min` is the strictest. Deterministic and
+    # independent of anything the auditor can perturb.
+    p, d = min(cands, key=lambda pd: (
+        polarity(normalise_token(str(pd[1]["verdict"]))) != "FAIL",
+        str(pd[0])))
+    pols = {polarity(normalise_token(str(x["verdict"]))) for _, x in cands}
+    out = {"report": str(p), "verdict": str(d["verdict"]),
+           "polarity": polarity(normalise_token(str(d["verdict"]))),
+           "verdict_note": d.get("verdict_note"),
+           "halted_at": d.get("halted_at"), "source": "strictest_phase"}
+    if len(pols) > 1:
+        # DISCLOSED, not silently resolved: the evidence has to name what the
+        # comparison was NOT made against, or a reader cannot tell that a
+        # choice was made at all.
+        out["source"] = "strictest_phase_of_disagreeing"
+        out["candidates"] = [
+            {"report": str(q), "verdict": str(x["verdict"])} for q, x in cands]
+    return out
 
 
 # ---------------------------------------------------------------------------

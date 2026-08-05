@@ -30,6 +30,7 @@ import ic_class_profile as icp  # noqa: E402
 import design_one_shot_runner as p2  # noqa: E402
 import flow_compliance_check as fcc  # noqa: E402
 import analog_content_detected_must_emit_l5_check as acd  # noqa: E402
+import _vacuous_exit as _vx  # noqa: E402
 
 NBA_GATE = PROGRAMS / "nba_shift_register_same_cycle_read_check.py"
 
@@ -384,8 +385,15 @@ def test_mixed_line_negation_is_per_hit():
 
 
 def test_negated_analog_gate_skips_full_run(tmp_path):
-    """End-to-end: docs that ONLY negate analog content → gate SKIPs
-    (no analog keywords counted)."""
+    """End-to-end: docs that ONLY negate analog content → gate SKIPs.
+
+    The SUBJECT of this test — negation suppresses the keyword hit, so no
+    analog class is claimed — is unchanged. What changed in #833 is the rc
+    that "no analog class was claimed" leaves behind: it used to be 0, which
+    the P0 structural umbrella credited as an executed PASS for a gate that
+    had compared no doc evidence against any L5 record. It is now
+    `_vx.RC_VACUOUS`, so this file no longer pins the vacuous credit.
+    """
     proj = tmp_path
     docs = proj / "input" / "docs"
     docs.mkdir(parents=True)
@@ -397,7 +405,7 @@ def test_negated_analog_gate_skips_full_run(tmp_path):
     gate = PROGRAMS / "analog_content_detected_must_emit_l5_check.py"
     r = subprocess.run([sys.executable, str(gate), str(proj)],
                        capture_output=True, text=True)
-    assert r.returncode == 0
+    assert r.returncode == _vx.RC_VACUOUS, r.stdout + r.stderr
     assert "SKIP" in r.stdout
 
 

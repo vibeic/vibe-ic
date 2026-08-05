@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("signoff_waiver_md_emit")
 
 
@@ -186,7 +187,7 @@ class TestSectionPresence:
     def test_emitted_by_attribution(self):
         md = self._emit()
         assert "signoff_waiver_md_emit.py" in md
-        assert "v0.1.49" in md
+        assert f"(Vibe-IC plugin v{shipped_plugin_version()})." in md
 
     def test_idempotent_per_input(self):
         a = self._emit()

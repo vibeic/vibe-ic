@@ -413,3 +413,82 @@ def test_guard_flow_mode_threshold_is_still_4_of_4(tmp_path):
     assert r.summary["threshold"] == 4
     assert r.summary["stage_count"] == 4
     assert r.passed is True
+
+
+# ===========================================================================
+# #797 — THE RANKER MATERIALISED THE LARGEST ARTEFACT A RUN PRODUCES.
+#
+# `_drc_rank` was `p.read_text(errors="replace")[:2000]`: decode the WHOLE
+# file, then throw all but 2000 characters away. It is the `key=` of a
+# `sorted()` over every `*drc*.rpt|log` an rglob of the project finds, and a
+# router report is the biggest thing a run writes — measured 2026-08-04 at
+# 2.48 GB / 94.9M lines on one cell (the largest report tracked in THIS repo
+# is 11.7 MB, so the scale is not reproducible here; the mechanism is).
+#
+# Why that is a correctness bug and not a performance note: a checker that
+# cannot finish gets killed, and downstream a killed checker is
+# indistinguishable from one that ran and found nothing. The step's timeout
+# arrives as the step's verdict.
+#
+# The head that decides is unchanged, so these tests pin BOTH halves: the read
+# is bounded, and the ranking is byte-identical to what the unbounded read
+# produced.
+# ===========================================================================
+def test_drc_rank_does_not_materialise_the_report_it_ranks(tmp_path):
+    """THE property, measured rather than asserted about the source: rank a
+    32 MiB report and require peak allocation to stay near the bound.
+
+    Pre-fix this allocates the whole decoded file and fails."""
+    import tracemalloc
+
+    big = tmp_path / "drc_router.log"
+    big.parent.mkdir(parents=True, exist_ok=True)
+    with big.open("w") as fh:
+        fh.write("<report-database>\n")
+        chunk = "x" * 65536 + "\n"
+        for _ in range(512):            # ~32 MiB
+            fh.write(chunk)
+    assert big.stat().st_size > 32 * 1024 * 1024
+
+    tracemalloc.start()
+    try:
+        rank = sa._drc_rank(big)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert rank == 1, "the KLayout sign-off marker in the head must still rank 1"
+    assert peak < 4 * 1024 * 1024, (
+        f"ranking a {big.stat().st_size // (1024*1024)} MiB report peaked at "
+        f"{peak // 1024} KiB — the read is not bounded")
+
+
+def test_drc_rank_verdicts_are_unchanged(tmp_path):
+    """Every rank the unbounded read produced, written out as literals so that
+    deleting one deletes a visible line rather than silently shrinking a loop."""
+    named = _write(tmp_path / "drc_signoff.rpt", "anything at all\n")
+    klayout = _write(tmp_path / "a_drc.rpt", "<report-database>\n<items/>\n")
+    router = _write(tmp_path / "b_drc.rpt", "detailed_route\nviolations 0\n")
+    openroad = _write(tmp_path / "c_drc.rpt", "OpenROAD v2\nrouting\n")
+    plain = _write(tmp_path / "d_drc.rpt", "some other tool\n")
+    absent = tmp_path / "nope" / "e_drc.rpt"
+
+    assert sa._drc_rank(named) == 0
+    assert sa._drc_rank(klayout) == 1
+    assert sa._drc_rank(router) == 2
+    assert sa._drc_rank(openroad) == 2
+    assert sa._drc_rank(plain) == 2
+    assert sa._drc_rank(absent) == 3
+
+
+def test_drc_rank_head_bound_is_the_same_2000_characters(tmp_path):
+    """The bound is not widened by moving it into the read. A marker BEYOND
+    the head was invisible to `[:2000]` and must stay invisible — otherwise
+    this would be a silent behaviour change dressed as a resource fix."""
+    inside = _write(tmp_path / "in_drc.rpt",
+                    "z" * 1900 + "\n<report-database>\n")
+    beyond = _write(tmp_path / "out_drc.rpt",
+                    "z" * 5000 + "\n<report-database>\n")
+    assert sa._drc_rank(inside) == 1
+    assert sa._drc_rank(beyond) == 2
+    assert sa._DRC_RANK_HEAD_CHARS == 2000

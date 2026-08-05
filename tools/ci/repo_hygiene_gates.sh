@@ -194,6 +194,29 @@ run "tracked-symlink portability"       "$ROOT" python3 "$PG/tracked_symlink_por
 # is a missing FILE, which its own comment says is different — and for months
 # the count was reported on every run with nothing failing on it (#555, #556).
 run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_target_present_check.py" --root "$ROOT"
+# vibe-ic#794 — thirteen ORGANIC backlog items were WRITTEN into
+# `community/backlogs/` between 2026-06-14 and 2026-07-12 and never committed,
+# beside twenty-five siblings that were. Both populations look identical in
+# `ls`, so a reader could not tell a live backlog item from a dropped one, and
+# a fresh clone silently received only the tracked half. The write path
+# (`skills/community-backlog-submit` Step 3) creates the file, Step 4
+# sanitizes it and Step 5 optionally opens an issue — NOTHING commits it, and
+# until now nothing asked. Committing from the write path is not available
+# (the filing agent is often a benchmark-agent, which `agent_checkin_scope_
+# guard` bars from this zone) and failing at write time is wrong (the file is
+# legitimately untracked the moment it is written), so the repair is the third
+# option: OBSERVED by a gate that runs on every landing.
+#
+# `--audit tracked` and NOT the default content audit: measured 2026-08-04, the
+# CONTENT scan over the same 25 files is rc 1 with 18 pre-existing ERRORs, and
+# failing a legacy pile on day one is how a gate becomes one people route
+# around (the same reasoning as "container exec deadlines" above). The
+# trackedness lane is green today, so it is BLOCKING from its first run.
+#
+# ONE line, no `\` continuation: `gate_discloses_denominator_check.parse_gates`
+# is line-anchored, so a wrapped argv would reach its probe with the tail
+# silently missing — the gate it drove would not be the gate that runs here.
+run "backlog items are tracked" "$ROOT" python3 "$PG/backlog_sanitize_check.py" --dir "$ROOT/vibe-ic-marketplace/community/backlogs" --audit tracked
 
 # `ci.yml` and `gatekeeper-ci.yml` both ran "Validate all JSON + YAML". When
 # Actions was disabled in v1.8.40 and gatekeeper-land.sh took over, that step

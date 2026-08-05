@@ -152,11 +152,20 @@ Name the **component** using the format:
 
 Create a file in `community/backlogs/` named `ORGANIC-<YYYYMMDD>-<short_desc>.yaml`:
 
+> **`plugin_version` is a measurement, not a decoration (#795).** Read it from
+> `.claude-plugin/plugin.json` — the shipped value, at the moment you file. Do
+> NOT copy the placeholder below and do NOT reuse a version you saw in another
+> backlog: a maintainer dates a finding by that line, so a stale one makes a
+> live finding read as archaeology and is a reasonable thing to close unread.
+> The placeholder is deliberately not a version, so Step 4's sanitize gate
+> names the field if you forget. (Records emitted by
+> `benchmark-enhancement-capture` get this filled in for you.)
+
 ```yaml
 type: enhancement
 severity: P1
 component: program:pre_awake_silence_check
-plugin_version: "0.101"
+plugin_version: "<read from .claude-plugin/plugin.json>"
 
 title: >-
   Gate should escalate to ERROR when protocol has multiple wake-clearing
@@ -179,6 +188,23 @@ id: "ORGANIC-20260427-wake-clear-escalate"
 submitted_at: "2026-04-27T14:30:00+08:00"
 session_context: "Fresh-agent Phase 2+3 run; agent ignored WARN and shipped"
 ```
+
+> **What `pattern` must say — the rule the example above is only one
+> instance of.** A `pattern` states the **class** of defect: what shape of
+> input meets what shape of handling, and what wrong outcome follows. Write
+> it so a reader can use it to recognise a **different** instance — a case
+> you have not seen, in a different design, at a different step. It is NOT a
+> restatement of `title` (the title names this occurrence; the pattern names
+> the family it belongs to) and it is NOT a description of this one symptom.
+> Test it before you write it down: *if this sentence only fits the record it
+> sits on, it is not a pattern* — it cannot match the next occurrence, which
+> is the only thing the field is for.
+>
+> Do not imitate the shape of the example above without meeting that rule,
+> and never paste a `pattern` in from another record or from an issue body: a
+> pattern that came from a different defect is worse than an empty one,
+> because it reads as measured, and Step 4's gate — which only checks that
+> the field is non-empty — will pass it.
 
 ### Step 4 — Sanitize
 
@@ -262,6 +288,39 @@ gh issue create --repo vibeic/vibe-ic \
 
 If the user declines, the YAML file stays local — no data leaves.
 
+### Step 6 — Inside the vibe-ic repo: COMMIT it, or DELETE it (ORGANIC #794)
+
+Steps 1-5 create a file and never put it in git. That gap cost thirteen
+ORGANIC items written into `vibe-ic-marketplace/community/backlogs/` between
+2026-06-14 and 2026-07-12: they sat untracked beside twenty-five committed
+siblings, indistinguishable in `ls`, until the working tree that held them was
+cleaned and they were gone. Nobody can now say from the files which of the
+thirteen were still live.
+
+So when the backlogs directory you wrote into is **inside a git repository**,
+the file has exactly two honest end states:
+
+* **committed** — `git add <the file> && git commit` (explicit path; never
+  `git add -A`), or
+* **deleted** — you decided it was not worth filing, so remove it.
+
+"Left on disk, untracked" is neither, and it is the state that loses items.
+
+This is not left to memory: `repo_hygiene_gates.sh` runs
+
+```bash
+python3 <plugin_root>/programs/backlog_sanitize_check.py \
+    --dir vibe-ic-marketplace/community/backlogs --audit tracked
+```
+
+on every landing, and it FAILs (rc 1) naming any backlog YAML on disk that git
+does not track — or that a `.gitignore` rule hides. Run it yourself before you
+hand off; it prints the count it examined either way.
+
+> The rule is scoped to a git work tree. An end user filing a backlog in a
+> non-repo directory is untouched: the gate REFUSES (rc 2) rather than
+> pretending to have an opinion about a tree git cannot see.
+
 ## Do not
 
 - **Do not include ANY vendor/IC-specific data** in the backlog.
@@ -276,6 +335,8 @@ The skill produces:
 1. A YAML file in `community/backlogs/ORGANIC-<id>.yaml`
 2. A sanitization report from `backlog_sanitize_check`
 3. (Optional) A GitHub Issue URL if the user consents to submission
+4. Inside a git repo: that YAML **committed or deleted** — proven by
+   `backlog_sanitize_check.py --dir <backlogs_dir> --audit tracked` (#794)
 
 ## Compliance gate (mandatory)
 

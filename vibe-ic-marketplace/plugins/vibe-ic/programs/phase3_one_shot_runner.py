@@ -47,17 +47,19 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 import _path_layout as _pl
 import _reference_flow_boundary as _rfb
 import floorplan_contract as _fpc  # design-declared fixed floorplan + DRV limits
@@ -3624,11 +3626,11 @@ def _macro_pg_ports_from_lef(
     return out
 
 
-def _macro_pdn_grid_plan(
+def _macro_pdn_grid_outcome(
         macro_lef_texts: Sequence[str],
         tech_lef_text: Optional[str],
         stripes: Sequence[Dict[str, Any]],
-        followpin_layer: str) -> Optional[Dict[str, Any]]:
+        followpin_layer: str) -> Dict[str, Any]:
     """Plan the MACRO grid — the construct that puts a conductor on a placed
     hard macro's supply pins.
 
@@ -3672,9 +3674,49 @@ def _macro_pdn_grid_plan(
        2*width+spacing, so a port narrower than that CANNOT be reached by any
        legal pattern. Those ports are reported, not silently missed.
 
-    Returns None when there is nothing to do (no macros, no PG pins, no strap
-    layer above the pin layer, no port a legal pattern can cross) so a design
-    without hard macros produces a BYTE-IDENTICAL pnr.tcl.
+    WHY THIS RETURNS AN OUTCOME AND NOT JUST A PLAN (#701)
+    ======================================================
+    Through v1.9.78 this function returned `Optional[dict]`, and `None` carried
+    TWO different facts about the world:
+
+        "this design has no hard macros"                 -> nothing to do
+        "this design has a hard macro whose supply the
+         grid cannot reach on any legal layer"           -> something to do,
+                                                            and it was not done
+
+    `_build_macro_pdn_grid_tcl(None)` emits the empty string for both, so the
+    run's PDN note for the second case was BYTE-IDENTICAL to a macro-free
+    design. Reproduced on PUBLIC sky130A material (a 1kbyte SRAM macro + the
+    sky130_fd_sc_hd tech LEF): with the vendor also declaring the layers above
+    the pin layer unroutable across the whole footprint — an ordinary stance
+    for NVM and high-voltage macros — the planner returned None, 0 bytes of
+    Tcl and an empty note, exactly like a design containing no macro at all.
+    The dropped macro first surfaced several steps later as PSM-0038/0039/0069,
+    where nothing tied it back to the plan that refused it.
+
+    The `refused_for_blockage` field already existed to report precisely this,
+    and could only ever be populated on the SUCCESS path: when the rule that
+    removes unusable strap layers removed ALL of them, the plan was None and
+    the reason was discarded before anyone could report it.
+
+    So the return is now TOTAL — a dict, never None — and the two facts land on
+    two different values:
+
+        {"plan": <dict>, "refusals": []}       a macro grid was planned
+        {"plan": None,   "refusals": []}       NOTHING TO DO: no hard-macro
+                                               POWER/GROUND port exists at all
+        {"plan": None,   "refusals": [rec…]}   something to do, and it could
+                                               not be done — each record names
+                                               the master(s), a stable machine
+                                               `reason` token, and a sentence
+
+    "Something to do" is defined as: at least one POWER/GROUND port was read
+    off a macro LEF. That is the flow's own evidence that a hard macro needs
+    supply, and it is the only definition available at this point.
+
+    NOT a repair. The refusal is a REPORT — this deliberately does NOT route
+    over a macro whose OBS forbids it. See `_build_macro_pdn_refusal_tcl` for
+    why the refusal is loud but not fatal.
 
     chip-AGNOSTIC: masters, pin layers and every dimension come from the
     design's own LEFs; no PDK name, no layer-name convention, no literal."""
@@ -3687,25 +3729,62 @@ def _macro_pdn_grid_plan(
     for t in (macro_lef_texts or []):
         ports.extend(_macro_pg_ports_from_lef(t))
         obs.update(_macro_obs_layers_from_lef(t))
+    # NOTHING TO DO — and this is the ONLY branch that may say so. Every other
+    # exit below has already seen a hard-macro supply port, i.e. work the grid
+    # was supposed to do.
     if not ports:
-        return None
+        return {"plan": None, "refusals": []}
+    _masters = sorted({p["master"] for p in ports})
+
+    def _refuse(reason: str, detail: str, *, pin_layer: str = "",
+                candidates: Sequence[str] = (),
+                blocked: Sequence[str] = ()) -> Dict[str, Any]:
+        """One refusal record. `reason` is a STABLE machine token (grep-able,
+        never reworded); `detail` is the sentence a human reads. The masters
+        are named because "a macro was dropped" without a name is the same
+        silence this exists to end, one step quieter."""
+        return {"plan": None, "refusals": [{
+            "masters": list(_masters),
+            "reason": reason,
+            "detail": detail,
+            "pin_layer": pin_layer,
+            "candidate_layers": sorted(candidates),
+            "blocked_layers": sorted(blocked),
+        }]}
+
     layers = _techlef_routing_layers(tech_lef_text or "")
     if not layers:
-        return None
+        return _refuse(
+            "NO_ROUTING_LAYERS_IN_TECH_LEF",
+            "the tech LEF declares no parseable TYPE ROUTING layer, so no "
+            "strap layer can be chosen for the macro grid")
     order = {n.lower(): i for i, (n, _d, _p, _w) in enumerate(layers)}
     dirs = {n.lower(): d for n, d, _p, _w in layers}
     pin_layers = sorted({p["layer"] for p in ports},
                         key=lambda l: order.get(l.lower(), 10 ** 6))
     pin_layer = pin_layers[0]
     if pin_layer.lower() not in order:
-        return None
+        return _refuse(
+            "PIN_LAYER_NOT_A_ROUTING_LAYER",
+            f"the macro declares its supply pins on {pin_layer}, which the "
+            "tech LEF does not declare as a TYPE ROUTING layer, so no strap "
+            "can be connected down to them",
+            pin_layer=pin_layer)
     pin_i = order[pin_layer.lower()]
     strap_by_layer = {s.get("layer", "").lower(): s for s in (stripes or [])
                       if s.get("layer")}
     above = [s for s in (stripes or [])
              if order.get(str(s.get("layer", "")).lower(), -1) > pin_i]
     if not above:
-        return None
+        return _refuse(
+            "NO_CORE_STRAP_ABOVE_PIN_LAYER",
+            f"no core strap layer sits above the macro supply-pin layer "
+            f"{pin_layer} (core straps: "
+            f"{', '.join(str(s.get('layer')) for s in (stripes or [])) or 'none'}"
+            "), so the grid has nothing to drop onto the pins from",
+            pin_layer=pin_layer,
+            candidates=[str(s.get("layer")) for s in (stripes or [])
+                        if s.get("layer")])
     above.sort(key=lambda s: order[str(s["layer"]).lower()])
     # Rule 0 (ORGANIC #685): never strap a layer the macro declares BLOCKED
     # across its whole footprint. The planner read the macro's PIN entries and
@@ -3730,10 +3809,29 @@ def _macro_pdn_grid_plan(
                 _blocked_lc.add(_lay.lower())
     _refused = [s for s in above
                 if str(s.get("layer", "")).lower() in _blocked_lc]
+    _candidates_before_obs = [str(s.get("layer")) for s in above]
     above = [s for s in above
              if str(s.get("layer", "")).lower() not in _blocked_lc]
     if not above:
-        return None
+        # THE DEFECT (#701). Rule 0 just removed every remaining candidate, so
+        # this macro's supply cannot be reached on ANY layer the macro itself
+        # permits. Returning a bare None here made that fact indistinguishable
+        # from "there are no hard macros" for every observer downstream.
+        #
+        # The answer is still NO GRID — routing over an OBS the vendor drew
+        # across the whole footprint is not a repair, it is a violation — but
+        # the REASON now travels with it.
+        return _refuse(
+            "ALL_CANDIDATE_LAYERS_BLOCKED_BY_MACRO_OBS",
+            f"every core strap layer above the supply-pin layer {pin_layer} "
+            f"({', '.join(_candidates_before_obs)}) is declared blocked across "
+            f"the macro's whole footprint by its own OBS, so no legal strap "
+            f"can reach its supply pins -- this supply must be delivered by "
+            f"other means (a ring, a pre-routed shape, or a macro placement / "
+            f"abstract that leaves a routable layer)",
+            pin_layer=pin_layer,
+            candidates=_candidates_before_obs,
+            blocked=_blocked_layers)
     # Rule 1: the macro's strap must have a PARTNER strap layer of the opposite
     # direction in the core plan, and the macro grid must use only one of them.
     strap = None
@@ -3749,10 +3847,25 @@ def _macro_pdn_grid_plan(
         if strap:
             break
     if not strap:
-        return None
+        return _refuse(
+            "NO_PERPENDICULAR_PARTNER_STRAP",
+            f"no core strap layer runs perpendicular to a usable strap above "
+            f"{pin_layer} ({', '.join(str(s.get('layer')) for s in above)}), "
+            "so a macro grid built here would bond only to itself and leave "
+            "the macro supply on an electrical island",
+            pin_layer=pin_layer,
+            candidates=[str(s.get("layer")) for s in above],
+            blocked=_blocked_layers)
     sw = float(strap.get("width") or 0.0)
     if sw <= 0:
-        return None
+        return _refuse(
+            "STRAP_WIDTH_UNUSABLE",
+            f"the core strap plan gives layer {strap['layer']} a width of "
+            f"{strap.get('width')!r}, which cannot be rendered as a macro "
+            "strap",
+            pin_layer=pin_layer,
+            candidates=[str(s.get("layer")) for s in above],
+            blocked=_blocked_layers)
     s_dir = dirs.get(str(strap["layer"]).lower(), "")
     # min spacing of the strap layer, from the tech LEF's own WIDTH for it
     s_minw = next((w for n, _d, _p, w in layers
@@ -3765,9 +3878,21 @@ def _macro_pdn_grid_plan(
     reachable = [p for p in ports if _across(p) >= floor]
     unreachable = [p for p in ports if _across(p) < floor]
     if not reachable:
-        return None
+        # Same silence, different cause: EVERY supply port is narrower across
+        # the strap than the smallest legal pitch. The partial version of this
+        # is already reported as MACRO_PDN_PORT_UNREACHABLE — but that marker
+        # lives on the plan, so the total version emitted nothing at all.
+        return _refuse(
+            "NO_PORT_WIDE_ENOUGH_FOR_ANY_LEGAL_PITCH",
+            f"every macro supply port measures less than {floor}um across the "
+            f"{strap['layer']} strap direction, which is the smallest pitch "
+            f"pdngen will accept for that strap (2*width+spacing), so no strap "
+            f"pattern can be guaranteed to cross any of them",
+            pin_layer=pin_layer,
+            candidates=[str(strap["layer"])],
+            blocked=_blocked_layers)
     pitch = round(max(floor, min(_across(p) for p in reachable)), 3)
-    return {
+    return {"plan": {
         "masters": sorted({p["master"] for p in ports}),
         "pin_layer": pin_layer,
         "strap_layer": strap["layer"],
@@ -3781,12 +3906,82 @@ def _macro_pdn_grid_plan(
         "refused_for_blockage": sorted({str(s.get("layer")) for s in _refused}),
         "unreachable": sorted({(p["master"], p["pin"],
                                 round(_across(p), 3)) for p in unreachable}),
-    }
+    }, "refusals": []}
+
+
+def _macro_pdn_grid_plan(
+        macro_lef_texts: Sequence[str],
+        tech_lef_text: Optional[str],
+        stripes: Sequence[Dict[str, Any]],
+        followpin_layer: str) -> Optional[Dict[str, Any]]:
+    """The BUILDABLE macro-grid plan alone, or None.
+
+    NARROW ACCESSOR, kept because "give me the grid to render" is a real
+    question with a real answer. It is NOT the question a caller deciding what
+    to REPORT should ask: this `None` cannot distinguish "no hard macros" from
+    "a hard macro the grid could not reach", and that conflation is exactly the
+    defect #701 fixed. Anything that reports, notes or gates must call
+    `_macro_pdn_grid_outcome` and read `refusals`."""
+    return _macro_pdn_grid_outcome(
+        macro_lef_texts, tech_lef_text, stripes, followpin_layer)["plan"]
+
+
+def _tcl_puts_safe(s: Any) -> str:
+    """Strip the characters that make a bare `puts "..."` argument stop being
+    one literal string. Names in this marker come out of a third-party LEF, and
+    a `$`, `[`, `"` or backslash in one would turn a diagnostic line into a Tcl
+    substitution and take the whole pnr.tcl down with it."""
+    return re.sub(r'[\\"\[\]${}\r\n]', "_", str(s))
+
+
+# ── A refusal that reaches the run, or it did not happen ────────────────────
+#
+# REPORTED, LOUD, NAMED — and deliberately NOT FATAL. The argument is about
+# what the flow can know AT THIS POINT, and it can know less than it looks:
+#
+#   * `macro_lef_texts` comes from `pdk.macro_lefs`, a CONFIG list of LEFs made
+#     available to the run. Nothing here consults the netlist or the placement.
+#     A master whose LEF is on that list need not be instantiated at all, and
+#     failing the run for an unreachable supply on a macro the design never
+#     places would be a failure manufactured out of configuration.
+#   * the supply may legitimately arrive by a route this planner does not model
+#     — a PDN ring, a pre-routed shape carried in the macro's own abstract, or
+#     a wrapper that re-exposes the pins. This function models exactly one
+#     construct (`define_pdn_grid -macro`) and must not speak for the others.
+#   * there is a gate downstream that CAN see the truth, on geometry rather
+#     than on config: `_pnr_pdn_grid_verdict` reads the emitted DEF, and
+#     PSM-0038/0039/0069 fire on the real connectivity check. Those already
+#     block. What they could not do was explain themselves — which macro, and
+#     why. This marker is what makes them traceable.
+#
+# So: never green-washed, never silent, and never a stop the run cannot clear.
+# If a later change teaches this planner to read the PLACEMENT, the same record
+# is the right thing to escalate to a FAIL — the record is the part that was
+# missing, not the severity.
+def _build_macro_pdn_refusal_tcl(refusals: Sequence[Dict[str, Any]]) -> str:
+    """`puts` lines naming every macro whose supply the grid refused to reach,
+    and why. Empty string for no refusals, so a design with nothing to refuse
+    still emits a BYTE-IDENTICAL pnr.tcl."""
+    out = ""
+    for rec in (refusals or []):
+        for master in (rec.get("masters") or ["<unnamed>"]):
+            out += (
+                f"  puts \"MACRO_PDN_GRID_REFUSED: {_tcl_puts_safe(master)} "
+                f"pin_layer={_tcl_puts_safe(rec.get('pin_layer') or '?')} "
+                f"reason={_tcl_puts_safe(rec.get('reason') or 'UNSPECIFIED')} "
+                f"-- {_tcl_puts_safe(rec.get('detail') or '')}. NO macro PDN "
+                f"grid was built for this master and its OBS was NOT "
+                f"overridden; its supply pins are not reached by this grid.\"\n")
+    return out
 
 
 def _build_macro_pdn_grid_tcl(plan: Optional[Dict[str, Any]]) -> str:
     """Render `_macro_pdn_grid_plan` as Tcl. Empty string for an empty plan, so
-    a design with no hard macros emits a BYTE-IDENTICAL pnr.tcl."""
+    a design with no hard macros emits a BYTE-IDENTICAL pnr.tcl.
+
+    An empty plan is NOT on its own evidence that there was nothing to do —
+    see `_build_macro_pdn_refusal_tcl`, which is what says which of the two
+    happened."""
     if not plan:
         return ""
     cells = " ".join(plan["masters"])
@@ -3942,21 +4137,39 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
         _mg_tcl = ""
         _mg_note = ""
         _mg_plan = None
+        _mg_refusals: List[Dict[str, Any]] = []
         if _stripes:
             _mg_lefs = [t for t in
                         (_read_pdk_text(m, container)
                          for m in (getattr(pdk, "macro_lefs", None) or [])) if t]
-            _mg_plan = _macro_pdn_grid_plan(
+            # #701 — the OUTCOME, not the plan. `plan is None` alone cannot
+            # tell "no hard macros" from "a hard macro this grid cannot reach",
+            # and reading only the plan is how the second one shipped silent.
+            _mg_outcome = _macro_pdn_grid_outcome(
                 _mg_lefs, _read_pdk_text(getattr(pdk, "tech_lef", None),
                                          container),
                 _stripes, fpl)
+            _mg_plan = _mg_outcome["plan"]
+            _mg_refusals = _mg_outcome["refusals"]
             _mg_tcl = _build_macro_pdn_grid_tcl(_mg_plan)
             if _mg_plan:
-                _mg_note = (f" + macro_grid({_mg_plan['pin_layer']}->"
-                            f"{_mg_plan['strap_layer']}@{_mg_plan['pitch']}"
+                _mg_note = (f" + macro_grid("
+                            f"{_tcl_puts_safe(_mg_plan['pin_layer'])}->"
+                            f"{_tcl_puts_safe(_mg_plan['strap_layer'])}"
+                            f"@{_mg_plan['pitch']}"
                             + (f", {len(_mg_plan['unreachable'])} port(s) "
                                "narrower than any legal pitch"
                                if _mg_plan["unreachable"] else "") + ")")
+            elif _mg_refusals:
+                # The PDN note itself must differ from a macro-free design's.
+                # That byte-identity WAS the defect; a marker further down the
+                # log does not undo a headline that reads the same either way.
+                _mg_note = (" + macro_grid_REFUSED("
+                            + "; ".join(
+                                f"{_tcl_puts_safe(m)}:{r['reason']}"
+                                for r in _mg_refusals
+                                for m in (r.get("masters") or ["<unnamed>"]))
+                            + ")")
         # NEVER report success for a grid with no straps. `pdngen` returns 0
         # for a follow-pin-only grid, so the old code printed
         # PDN_INSERTED_ADAPTIVE and every downstream consumer read that as a
@@ -3969,9 +4182,17 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
         if _mg_plan and _mg_plan["unreachable"]:
             # A port a legal pitch cannot cross is reported, never left to be
             # discovered as a PSM-0038 three steps downstream.
+            #
+            # `_tcl_puts_safe` on the LEF-derived names is #701 incidental: a
+            # master or pin containing `$`, `[` or `"` made this `puts` a Tcl
+            # substitution and aborted pnr.tcl. MEASURED under a real tclsh
+            # while building the refusal marker below, on a macro renamed to
+            # `B$AD["x"]`: `can't read "AD": no such variable`. Same one-line
+            # scrub, same emitter, so it is fixed here rather than left live.
             for _m, _p, _ext in _mg_plan["unreachable"]:
                 _mg_unreach += (
-                    f"  puts \"MACRO_PDN_PORT_UNREACHABLE: {_m}/{_p} port "
+                    f"  puts \"MACRO_PDN_PORT_UNREACHABLE: "
+                    f"{_tcl_puts_safe(_m)}/{_tcl_puts_safe(_p)} port "
                     f"extent {_ext}um across the strap is below the smallest "
                     f"legal pitch {_mg_plan['pitch_floor']}um — no strap "
                     f"pattern can be guaranteed to cross it\"\n")
@@ -3984,6 +4205,11 @@ def _build_pdn_tcl(pdk: "PdkConfig", container: Optional[str] = None) -> str:
             f"width={w}{well_note} — {_no_strap_why}, so the per-row rails "
             f"are ISOLATED (no straps, no vias). This is NOT a usable power "
             f"grid. Declare `pdn_straps` for this PDK to override.\"\n")
+        # #701 — appended OUTSIDE the strap_tcl conditional on purpose. A run
+        # that reached the planner and got a refusal must say so on BOTH
+        # markers; hanging it off the success branch alone would restore the
+        # silence for exactly the runs already in the worst shape.
+        _ok_marker += _build_macro_pdn_refusal_tcl(_mg_refusals)
         return (
             "# === PDK-adaptive PDN: discovered PG pins + met1 follow-pins"
             + (" + upper-metal straps ===\n" if strap_tcl else " ===\n")
@@ -4555,6 +4781,39 @@ def _parse_macro_pdn_unreachable(text: str) -> List[str]:
         if m.group(1) not in seen:
             seen.append(m.group(1))
     return seen
+
+
+# ── #701: the refusal the planner used to throw away ────────────────────────
+#
+# `_macro_pdn_grid_outcome` refuses to build a macro grid it cannot build
+# legally, and `_build_macro_pdn_refusal_tcl` prints one line per master. This
+# reads them back so the PnR step can state the refusal in its own detail
+# instead of leaving it to be rediscovered as a PSM-0038 three steps later.
+#
+# Deliberately parses the MASTER and the REASON TOKEN only. The trailing
+# sentence is for humans and will be reworded; a consumer keying off prose is a
+# consumer that breaks on an edit, which is how machine-readable evidence rots.
+_MACRO_PDN_GRID_REFUSED_RE = re.compile(
+    r"MACRO_PDN_GRID_REFUSED:\s*(\S+)\s+pin_layer=(\S+)\s+reason=(\S+)")
+
+
+def _parse_macro_pdn_grid_refusals(text: str) -> List[Dict[str, str]]:
+    """De-duplicated, ORDER-PRESERVING ``[{master, pin_layer, reason}]`` for
+    every hard macro the PDN planner declared it could not reach.
+
+    Empty list = the marker never appeared. On a design with no hard macros
+    that is the normal and correct state — and it is now a DIFFERENT state
+    from "a macro was refused", which is the whole point of the marker."""
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for m in _MACRO_PDN_GRID_REFUSED_RE.finditer(text or ""):
+        key = (m.group(1), m.group(3))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"master": m.group(1), "pin_layer": m.group(2),
+                    "reason": m.group(3)})
+    return out
 
 
 # ── A measurement names the database it was taken on ────────────────────────
@@ -5463,13 +5722,21 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
     fixed_any = False
     for n in enabled_ns:
         met = f"MET{n}"
-        via = f"VIA{n}"  # the via BELOW METn connects MET(n-1) <-> METn
-        wm = re.search(
-            r"@Mt\.W\.1:[^\n]*\n\s*INTERNAL\s+__" + re.escape(met.lower()) +
-            r"__\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
-        if not wm:
-            continue  # this deck doesn't gate METn's width via Mt.W.1 -> no-op
-        deck_width_um = float(wm.group(1))
+        # The deck NAMES its own top-via on the Mt.EN.1 line ("Min. enclosure
+        # of Vt-1 by Mt <v> METn VIAm"), so READ it instead of computing it.
+        # The pre-existing code built the via name as VIA{n}, which on a deck
+        # whose "Vt-1" is the via BELOW the top metal (measured: `... 0.09
+        # MET5 VIA4`) never matched, so the enclosure lookup found nothing
+        # every time. Deriving VIA{n-1} instead would only swap one guess for
+        # another; taking the deck's own token is guess-free and works for
+        # either convention.
+        enm = re.search(
+            r"@Mt\.EN\.1:[^\n]*?([0-9.]+)\s+" + re.escape(met) +
+            r"\s+(\w+)\b[^\n]*\n(?:.*\n)*?\s*ENCLOSURE\s+\S+\s+\S+\s*<\s*"
+            r"([0-9.]+)", deck_text, re.IGNORECASE)
+        via = enm.group(2) if enm else ""
+        enc_note = (f", Mt.EN.1 {met}/{via} enclosure={enm.group(3)}um"
+                    if enm else "")
 
         lblock = re.search(
             r"(?ms)^LAYER\s+" + re.escape(met) + r"\s*\n(.*?)^END\s+" +
@@ -5477,38 +5744,127 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
         if not lblock:
             continue
         block = lblock.group(1)
-        wmatch = re.search(r"(?m)^(\s*WIDTH\s+)([0-9.]+)(\s*;)", block)
-        mwmatch = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", block)
-        lef_width_um = min(
-            float(wmatch.group(2)) if wmatch else 1e9,
-            float(mwmatch.group(2)) if mwmatch else 1e9)
-        if lef_width_um >= deck_width_um:
-            continue  # LEF already honors the deck's real minimum
-
-        enm = re.search(
-            r"@Mt\.EN\.1:[^\n]*\b" + re.escape(met) + r"\s+" +
-            re.escape(via) + r"\b[^\n]*\n(?:.*\n)*?\s*ENCLOSURE\s+\S+\s+\S+"
-            r"\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
-        enc_note = f", Mt.EN.1 enclosure={enm.group(1)}um" if enm else ""
-
         fixed_block = block
-        if wmatch:
-            fixed_block = (fixed_block[:wmatch.start()] +
-                           f"{wmatch.group(1)}{deck_width_um}{wmatch.group(3)}" +
-                           fixed_block[wmatch.end():])
-        # re-locate MINWIDTH after the WIDTH edit may have shifted offsets
-        mwmatch2 = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", fixed_block)
-        if mwmatch2:
-            fixed_block = (fixed_block[:mwmatch2.start()] +
-                            f"{mwmatch2.group(1)}{deck_width_um}{mwmatch2.group(3)}" +
-                            fixed_block[mwmatch2.end():])
-        lef_text = (lef_text[:lblock.start(1)] + fixed_block +
-                    lef_text[lblock.end(1):])
+        changed: List[str] = []
+
+        # -- (1) min WIDTH -- Mt.W.1 -------------------------------------
+        wm = re.search(
+            r"@Mt\.W\.1:[^\n]*\n\s*INTERNAL\s+__" + re.escape(met.lower()) +
+            r"__\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
+        if wm:
+            deck_width_um = float(wm.group(1))
+            wmatch = re.search(r"(?m)^(\s*WIDTH\s+)([0-9.]+)(\s*;)", block)
+            mwmatch = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", block)
+            lef_width_um = min(
+                float(wmatch.group(2)) if wmatch else 1e9,
+                float(mwmatch.group(2)) if mwmatch else 1e9)
+            if lef_width_um < deck_width_um:
+                if wmatch:
+                    fixed_block = (
+                        fixed_block[:wmatch.start()] +
+                        f"{wmatch.group(1)}{deck_width_um}{wmatch.group(3)}" +
+                        fixed_block[wmatch.end():])
+                # re-locate MINWIDTH: the WIDTH edit may have shifted offsets
+                mw2 = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)",
+                                fixed_block)
+                if mw2:
+                    fixed_block = (
+                        fixed_block[:mw2.start()] +
+                        f"{mw2.group(1)}{deck_width_um}{mw2.group(3)}" +
+                        fixed_block[mw2.end():])
+                changed.append(
+                    f"WIDTH/MINWIDTH {lef_width_um} -> {deck_width_um} "
+                    f"(Mt.W.1)")
+
+        # -- (2) min SPACING -- Mt.S.1. The defect this whole branch existed
+        # for but only half-closed: the deck's THICK-TOP option makes the top
+        # metal both WIDER and further APART, and only the width half was
+        # reconciled. Measured on a real sign-off run: LEF SPACING 0.28um vs
+        # the deck's Mt.S.1 >= 0.46um -- the router, which can only see the
+        # LEF, drew legal-per-LEF metal that the deck then failed 141 times.
+        # Take the number from the deck's EXECUTABLE `EXTERNAL ... <v` line
+        # (not from its @comment) and take the STRICTEST when a deck repeats
+        # the rule under several names. Only the BASE `SPACING <v> ;` is
+        # touched: a `SPACING <v> RANGE ...` line is the wide-metal rule and
+        # is a different constraint. Never lowered.
+        deck_sp_um = max(
+            [float(m2.group(1)) for m2 in re.finditer(
+                r"@Mt\.S\.1:[^\n]*\b" + re.escape(met) +
+                r"\b[^\n]*\n\s*EXTERNAL\s+\S+\s*<\s*([0-9.]+)",
+                deck_text, re.IGNORECASE)] or [0.0])
+        if deck_sp_um > 0.0:
+            spm = re.search(r"(?m)^(\s*SPACING\s+)([0-9.]+)(\s*;)", fixed_block)
+            if spm and float(spm.group(2)) < deck_sp_um:
+                changed.append(
+                    f"SPACING {spm.group(2)} -> {deck_sp_um} (Mt.S.1)")
+                fixed_block = (
+                    fixed_block[:spm.start()] +
+                    f"{spm.group(1)}{deck_sp_um}{spm.group(3)}" +
+                    fixed_block[spm.end():])
+
+        # -- (3) PITCH -- not a deck rule but an ARITHMETIC consequence of
+        # the two above. A routing track grid finer than width+space cannot
+        # hold a legal wire on every track; the router will happily use
+        # adjacent tracks and the result is a spacing violation BY
+        # CONSTRUCTION. Raising WIDTH alone and leaving PITCH produced
+        # exactly that: width 0.44 + space 0.28 = 0.72um of demand on a
+        # 0.61um pitch -- the fix for one rule manufacturing violations of
+        # another. Raise PITCH to width+space when it is short. Derived
+        # entirely from the two reconciled numbers -- nothing hardcoded.
+        pm = re.search(r"(?m)^(\s*PITCH\s+)([0-9.]+)(\s*;)", fixed_block)
+        wnow = re.search(r"(?m)^\s*WIDTH\s+([0-9.]+)\s*;", fixed_block)
+        snow = re.search(r"(?m)^\s*SPACING\s+([0-9.]+)\s*;", fixed_block)
+        if pm and wnow and snow:
+            need = round(float(wnow.group(1)) + float(snow.group(1)), 6)
+            if float(pm.group(2)) < need:
+                changed.append(
+                    f"PITCH {pm.group(2)} -> {need} (= WIDTH+SPACING; a "
+                    f"finer track grid cannot hold a legal wire per track)")
+                fixed_block = (fixed_block[:pm.start()] +
+                               f"{pm.group(1)}{need}{pm.group(3)}" +
+                               fixed_block[pm.end():])
+
+        if changed:
+            lef_text = (lef_text[:lblock.start(1)] + fixed_block +
+                        lef_text[lblock.end(1):])
+            notes.append(
+                f"[topmetal-deck-lef-fix] deck enables TOPMETAL_{n}: {met} "
+                f"{'; '.join(changed)}{enc_note} -> staged a corrected LEF "
+                f"(raised only; the real PDK LEF is untouched)")
+            fixed_any = True
+
+        # -- (4) the CUT layer below METn -- Vt1.S.1. Same class, different
+        # layer: the deck's thick-top option also spaces the top via further
+        # apart than the LEF declares (measured: LEF 0.26um vs deck >= 0.35um,
+        # 7593 sign-off violations). A cut layer has no PITCH/track grid, so
+        # only SPACING applies. The via's NAME comes from the deck's own
+        # Mt.EN.1 token above, never from arithmetic on `n`.
+        vdeck = max(
+            [float(m2.group(1)) for m2 in re.finditer(
+                r"@Vt1\.S\.1:[^\n]*\b" + re.escape(via) +
+                r"\b[^\n]*\n\s*EXTERNAL\s+\S+\s*<\s*([0-9.]+)",
+                deck_text, re.IGNORECASE)] or [0.0]) if via else 0.0
+        if vdeck <= 0.0:
+            continue
+        vblock = re.search(
+            r"(?ms)^LAYER\s+" + re.escape(via) + r"\s*\n(.*?)^END\s+" +
+            re.escape(via) + r"\s*$", lef_text)
+        if not vblock:
+            continue
+        vsp = re.search(r"(?m)^(\s*SPACING\s+)([0-9.]+)(\s*;)",
+                        vblock.group(1))
+        if not vsp or float(vsp.group(2)) >= vdeck:
+            continue
+        vfixed = (vblock.group(1)[:vsp.start()] +
+                  f"{vsp.group(1)}{vdeck}{vsp.group(3)}" +
+                  vblock.group(1)[vsp.end():])
+        lef_text = (lef_text[:vblock.start(1)] + vfixed +
+                    lef_text[vblock.end(1):])
         notes.append(
-            f"[topmetal-width-fix] deck enables TOPMETAL_{n}: {met} Mt.W.1 "
-            f"min-width={deck_width_um}um{enc_note} > LEF WIDTH/MINWIDTH="
-            f"{lef_width_um}um -> staged a corrected LEF (WIDTH/MINWIDTH "
-            f"raised to {deck_width_um}um; the real PDK LEF is untouched)")
+            f"[topmetal-deck-lef-fix] deck enables TOPMETAL_{n}: {via} "
+            f"(the cut below {met}) SPACING {vsp.group(2)} -> {vdeck} "
+            f"(Vt1.S.1) -> staged a corrected LEF (raised only; the real "
+            f"PDK LEF is untouched)")
         fixed_any = True
 
     if not fixed_any:
@@ -10364,6 +10720,14 @@ _PNR_CHECKPOINT_STAGES = [
     ("routed_preantenna.def","post_route"),
 ]
 
+# The ONLY stage a RESUME may start from — see `_pnr_resume_after_fatal_signal`.
+# `_build_pnr_resume_tcl_text` deletes floorplan..detailed_route wholesale on
+# the premise that the checkpoint already contains that work. Start it from an
+# earlier checkpoint and the premise is false: the post-route tail runs over a
+# design that was never routed, `write_def` succeeds, and the step signs off a
+# DEF with no routing in it. Anything before this stage is not a resume point.
+_PNR_ROUTE_CHECKPOINT_STAGE = "post_route"
+
 
 def _pnr_timeout_s(cells: int) -> int:
     """ORGANIC #548 (a) — size ESTIMATE from cell count. RETIRED (v1.3.47) as
@@ -10396,6 +10760,313 @@ def _pnr_last_checkpoint(out_dir: Path) -> Optional[str]:
         else:
             break
     return last
+
+
+def _pnr_last_checkpoint_file(out_dir: Path) -> Optional[Path]:
+    """Companion to `_pnr_last_checkpoint`: the PATH of the last completed
+    checkpoint DEF, or None. Same ordered scan, same stop-at-first-gap rule.
+
+    Chip-AGNOSTIC: file-existence check only."""
+    last: Optional[Path] = None
+    for fname, _label in _PNR_CHECKPOINT_STAGES:
+        p = out_dir / fname
+        if p.is_file() and p.stat().st_size > 0:
+            last = p
+        else:
+            break
+    return last
+
+
+# ---------------------------------------------------------------------------
+# A TCL `catch` CANNOT CATCH A SIGNAL.
+# ---------------------------------------------------------------------------
+# Every optimization step in the post-route tail of `pnr.tcl` is written as
+#
+#     if {[catch {repair_timing -setup} e]} { puts "..._NONFATAL: $e" }
+#
+# and that guard is inert against the failure that actually happens. When
+# OpenROAD segfaults inside `repair_timing`, SIGSEGV terminates the whole
+# process: the Tcl interpreter is gone, so the `catch` failure branch never
+# runs, no NONFATAL marker is printed, and nothing after the crashing line
+# executes — including `write_def routed.def`.
+#
+# MEASURED (subservient x sky130A, two independent runs). Detailed routing
+# COMPLETED and converged:
+#     [INFO DRT-0199]   Number of violations = 0.
+#     [INFO DRT-0198] Complete detail routing.
+# and the process then died in the post-route DRV-repair loop:
+#     [INFO RSZ-0094] Found 1081 endpoints with setup violations.
+#          0* | ... |  -12.771 | ... | 1081 | __uuf__._12083_/D
+#     Signal 11 received
+# Because `_docker_exec` runs the tool under `set -o pipefail`, the shell
+# reports the signal death as 128+11 = 139, and the runner's only gate was the
+# combined "non-zero exit OR no final DEF" test, whose whole message was
+#     FAIL "rc=139 log_tail=<2000 characters of transcript>"
+# A naked `rc=139` on the PnR step reads as "routing failed". Routing did not
+# fail. Seven downstream steps then failed on the missing routed.def, and the
+# next reader has no way to tell any of that from the verdict.
+#
+# So the guard has to live HERE, at the only layer where a signal death is
+# observable at all: the runner, which sees the exit status.
+#
+# WHAT IS AND IS NOT A SIGNAL DEATH. POSIX shells report a signal-terminated
+# child as 128+N. Only N in 1..NSIG-1 is a real signal, which bounds the
+# encoding to 129..128+NSIG-1 (192 on Linux). The runner's own kill sentinels
+# must never land inside that window, or a watchdog kill would be reported as
+# an OpenROAD segfault and send the next reader hunting a tool bug that is not
+# there.
+#
+# THE EXCLUSION IS READ FROM `_watchdog`, NOT COPIED HERE. It used to be the
+# hand-written triple `{RC_CEILING, RC_ABORTED, RC_STALLED}`, and that set was
+# BOTH inert and incomplete. Inert: with NSIG=65 the window is 129..192, and
+# 124 / 198 / 199 all sit outside it, so the membership test never changed a
+# single answer — deleting the whole frozenset left every test green, which is
+# the definition of a guard that only looks protective. Incomplete: a FOURTH
+# sentinel added to `_watchdog` later would not have been in the copy, and if
+# it landed in 129..192 the exclusion it needed would silently not exist.
+# Deriving the set from the module that OWNS the sentinels fixes both: the
+# guard now covers every sentinel there will ever be, and it is REACHABLE — a
+# sentinel inside the window IS excluded, which is a state a test can create
+# and this file's tests do.
+_RC_SIGNAL_BASE = 128
+
+
+def _runner_kill_sentinels() -> FrozenSet[int]:
+    """Every exit status the RUNNER uses to say that IT killed the tool.
+
+    Read from `_watchdog` at call time so the set cannot drift from the
+    sentinels it is supposed to cover. Chip-AGNOSTIC: module introspection."""
+    return frozenset(
+        v for n, v in vars(_wd).items()
+        if n.startswith("RC_") and type(v) is int)          # noqa: E721
+
+
+def _fatal_signal_from_rc(rc: int) -> Optional[int]:
+    """Return the signal number a 128+N exit status encodes, else None.
+
+    None for 0, for an ordinary non-zero exit (a tool that returned an error
+    code), and for every runner kill sentinel. Chip-AGNOSTIC: arithmetic on
+    the exit status only."""
+    if not isinstance(rc, int) or rc in _runner_kill_sentinels():
+        return None
+    sig = rc - _RC_SIGNAL_BASE
+    if 1 <= sig < int(getattr(signal, "NSIG", 65)):
+        return sig
+    return None
+
+
+def _signal_name(sig: int) -> str:
+    """`SIGSEGV` for 11, `SIG<N>` when the platform does not name it."""
+    try:
+        return signal.Signals(sig).name
+    except (ValueError, AttributeError):
+        return f"SIG{sig}"
+
+
+# The breadcrumb `pnr.tcl` prints before each stage of the flow, and the
+# sentinel comments that delimit an omittable stage / the pre-route section.
+# The breadcrumb is what lets the runner NAME the stage the tool died in
+# instead of quoting 2000 characters of log tail at the reader.
+_PNR_STAGE_MARKER = "PNR_STAGE:"
+_PNR_RESUME_ELIDE_BEGIN = "# <<<PNR_RESUME_ELIDE_BEGIN>>>"
+_PNR_RESUME_ELIDE_END = "# <<<PNR_RESUME_ELIDE_END>>>"
+
+
+def _pnr_stage_begin(label: str) -> str:
+    return f"# <<<PNR_STAGE_BEGIN {label}>>>"
+
+
+def _pnr_stage_end(label: str) -> str:
+    return f"# <<<PNR_STAGE_END {label}>>>"
+
+
+# The stages `pnr.tcl` ITSELF declares best-effort: each is wrapped in a Tcl
+# `catch` whose failure branch prints a `*_NONFATAL:` marker and lets the flow
+# continue. Omitting one of these on a resume therefore honours the intent the
+# template already wrote down — it is the `catch` finally taking effect, not a
+# new decision to skip work. Every OTHER stage is load-bearing (its output is
+# an input to a shipped artifact), so a crash there is NOT resumable and is
+# reported as such. Chip-AGNOSTIC: stage identity, no design literal.
+_PNR_NONFATAL_STAGES = frozenset({
+    "postroute_drv_repair",
+    "postroute_drv_reconverge",
+    "postroute_setup_repair_estimate",
+})
+
+# Every stage the template breadcrumbs, in flow order. Used only to render a
+# stable, readable stage list in the diagnosis; membership is not a gate.
+_PNR_STAGE_ORDER = (
+    "floorplan", "placement", "cts", "hold_repair",
+    "global_route", "detailed_route",
+    "postroute_drv_repair", "postroute_antenna_repair",
+    "postroute_drv_reconverge", "postroute_antenna_reconverge",
+    "postroute_fill",
+    "write_routed", "postroute_setup_repair_estimate",
+)
+
+
+def _pnr_stage_from_log(log_text: str) -> Optional[str]:
+    """The LAST stage breadcrumb in an OpenROAD log — i.e. the stage that was
+    running when the log stopped. None when the log carries no breadcrumb (a
+    log produced by an older pnr.tcl, or a run that died before the first
+    stage). Chip-AGNOSTIC: marker parsing only."""
+    last: Optional[str] = None
+    for m in re.finditer(rf"^{re.escape(_PNR_STAGE_MARKER)}\s*(\S+)",
+                         log_text or "", re.M):
+        last = m.group(1)
+    return last
+
+
+# ── WHERE IN pnr.tcl A STAGE SITS RELATIVE TO THE SIGN-OFF WRITES ──────────
+# Not every crash is a crash BEFORE the artifacts were written, and treating
+# every one as if it were produced the exact inversion of this fix: a crash in
+# the END-OF-FLOW estimate block — which the template places AFTER `write_def
+# routed.def` / `write_def <top>.def` / `write_verilog`, and whose own comment
+# says it "never modifies routed.def/<top>.def/<top>_pnr.v" — was reported as
+# "a <top>.def is present but CANNOT be from this session — it predates the
+# crash", and that false claim was written into the durable attestation. It is
+# the mirror image of the bug this file exists to fix.
+#
+# The relation is MEASURED off the emitted script, not asserted from a stage
+# table: a stage's breadcrumb is printed when the stage BEGINS, so every line
+# above that `puts` already executed. A stage whose `puts` sits below the LAST
+# sign-off write therefore began with those artifacts already on disk.
+#
+# `write_def` / `write_verilog` only — anchored at line start. The estimate
+# block emits its own `catch {report_checks > .../sta_spef_repaired.rpt}`,
+# which the template explicitly marks NON-authoritative; matching redirections
+# would put the anchor INSIDE the estimate block and make this predicate inert.
+_PNR_SIGNOFF_WRITE_RE = re.compile(
+    r"^[ \t]*(?:write_def|write_verilog)\b", re.M)
+_PNR_STAGE_PUTS_RE = re.compile(
+    rf'^[ \t]*puts\s+"{re.escape(_PNR_STAGE_MARKER)}\s*([^"\s]+)"', re.M)
+
+
+def _pnr_stages_after_signoff_writes(pnr_tcl_text: str) -> FrozenSet[str]:
+    """The stages whose breadcrumb pnr.tcl prints AFTER its last sign-off write.
+
+    FAIL-SAFE BY CONSTRUCTION: an empty script, an unreadable one, or one with
+    no `write_def`/`write_verilog` at all returns the EMPTY set, i.e. "no stage
+    is known to run after the writes" — which leaves every crash on the
+    conservative refuse-the-DEF path this predicate is here to narrow, never
+    widens one onto the sign-off path. Chip-AGNOSTIC: Tcl text offsets only."""
+    text = pnr_tcl_text or ""
+    last_write = -1
+    for m in _PNR_SIGNOFF_WRITE_RE.finditer(text):
+        last_write = m.start()
+    if last_write < 0:
+        return frozenset()
+    return frozenset(m.group(1)
+                     for m in _PNR_STAGE_PUTS_RE.finditer(text)
+                     if m.start() > last_write)
+
+
+# The artifacts pnr.tcl's own END-OF-FLOW comment names as the ones the
+# estimate block must never modify, plus the authoritative STA report it
+# declares itself to run after. A "the artifacts are complete" verdict states
+# a fact about the filesystem, so it is MEASURED against these, never inferred
+# from the stage name alone.
+def _pnr_signoff_artifacts(out_dir: Path, top: str) -> List[Path]:
+    return [out_dir / f"{top}.def", out_dir / "routed.def",
+            out_dir / f"{top}_pnr.v", out_dir / "sta.rpt"]
+
+
+_DRT_COMPLETE_RE = re.compile(r"\[INFO DRT-0198\]\s*Complete detail routing")
+
+
+def _detail_route_completed(log_text: str) -> bool:
+    """True when the router printed its own completion line. This is the
+    evidence that separates "routing failed" from "routing succeeded and
+    something after it died". Chip-AGNOSTIC: tool marker only."""
+    return bool(_DRT_COMPLETE_RE.search(log_text or ""))
+
+
+_TOOL_SIGNAL_RE = re.compile(r"^Signal\s+(\d+)\s+received", re.M)
+
+
+def _tool_reported_signal(log_text: str) -> Optional[int]:
+    """The signal number OpenROAD's own crash handler printed, if it got that
+    far. Corroborates the exit status; never replaces it."""
+    m = None
+    for m in _TOOL_SIGNAL_RE.finditer(log_text or ""):
+        pass
+    return int(m.group(1)) if m else None
+
+
+def _pnr_fatal_signal_diagnosis(rc: int, log_text: str, out_dir: Path,
+                                pnr_tcl_text: str = ""
+                                ) -> Optional[Dict[str, Any]]:
+    """Classify a PnR exit as a TOOL CRASH and describe it, or return None.
+
+    The returned record answers the four questions the bare `rc=139` did not:
+    which signal killed the tool, which stage it was in, whether routing had
+    already finished, and whether the sign-off artifacts had ALREADY BEEN
+    WRITTEN when the stage that died began. `pnr_tcl_text` is the script that
+    was actually run; omitting it makes the last answer False, which is the
+    conservative reading (the DEF is refused). Chip-AGNOSTIC: exit status +
+    tool markers + file existence; no design, PDK or vendor literal."""
+    sig = _fatal_signal_from_rc(rc)
+    if sig is None:
+        return None
+    stage = _pnr_stage_from_log(log_text)
+    ckpt = _pnr_last_checkpoint_file(out_dir)
+    post_signoff = _pnr_stages_after_signoff_writes(pnr_tcl_text)
+    return {
+        "finding": "PNR_TOOL_FATAL_SIGNAL",
+        "rc": rc,
+        "signal": sig,
+        "signal_name": _signal_name(sig),
+        "tool_reported_signal": _tool_reported_signal(log_text),
+        "stage": stage,
+        "stage_is_nonfatal_by_template": (stage in _PNR_NONFATAL_STAGES
+                                          if stage else False),
+        "crashed_after_signoff_writes": bool(stage and stage in post_signoff),
+        "detail_route_completed": _detail_route_completed(log_text),
+        "checkpoint": str(ckpt) if ckpt else None,
+        "checkpoint_stage": _pnr_last_checkpoint(out_dir),
+    }
+
+
+def _pnr_fatal_signal_message(diag: Dict[str, Any]) -> str:
+    """Render the diagnosis as the sentence the next reader needs. It must
+    never say "routing failed" when the router said it finished."""
+    sig = f"{diag['signal_name']} (signal {diag['signal']})"
+    stage = diag.get("stage") or "an unbreadcrumbed stage"
+    if diag.get("detail_route_completed"):
+        lead = (f"PNR_TOOL_FATAL_SIGNAL: routing SUCCEEDED — the router "
+                f"printed its own completion line (DRT-0198 Complete detail "
+                f"routing) — and OpenROAD was then killed by {sig} in "
+                f"{stage}. This is a TOOL CRASH after a completed route, not "
+                f"a routing failure")
+    else:
+        lead = (f"PNR_TOOL_FATAL_SIGNAL: OpenROAD was killed by {sig} in "
+                f"{stage}; the router did NOT print its completion line, so "
+                f"routing itself is not known to have finished")
+    lead += (f" (rc={diag['rc']} = 128+{diag['signal']}). A Tcl `catch` "
+             f"cannot trap a signal: the process dies, the interpreter never "
+             f"reaches the failure branch, and every line after the crashing "
+             f"one is never executed.")
+    # WHICH lines those are is the whole question, and answering it wrongly is
+    # how this message came to state the exact opposite of the truth for a
+    # crash in the END-OF-FLOW estimate block. The stage breadcrumb is printed
+    # when the stage BEGINS, so a stage that pnr.tcl puts BELOW its last
+    # `write_def`/`write_verilog` began with those artifacts already written.
+    if diag.get("crashed_after_signoff_writes"):
+        lead += (f" {stage} begins BELOW the last `write_def`/`write_verilog` "
+                 f"in pnr.tcl, so routed.def, the final DEF and the gate "
+                 f"netlist were all written BEFORE it started: they are from "
+                 f"THIS session, and the crash cost only the work of that "
+                 f"stage.")
+    else:
+        lead += (" Everything below the crashing line — `write_def "
+                 "routed.def` included — did NOT run.")
+    ck = diag.get("checkpoint")
+    if ck:
+        lead += (f" Last completed checkpoint ({diag.get('checkpoint_stage')}"
+                 f"): {ck}")
+    else:
+        lead += " No usable stage checkpoint was written."
+    return lead
 
 
 # ORGANIC #593 — geometry-aware PnR/GDS cache. The cache-skip used to
@@ -13238,29 +13909,395 @@ def _dont_use_family_fallback_tcl() -> str:
     delay family makes `buffer_ports` insert the normal `buf_1`, so the SS setup
     path closes IN THE BASE ROUTE (0-DRC, no ECO) — measured −0.56 → +2.25 ns MET.
     Delay macros are ONLY legitimate for deliberate hold padding, never as
-    signal/port slew buffers, in ANY PDK — hence GENERAL, not a chip literal."""
+    signal/port slew buffers, in ANY PDK — hence GENERAL, not a chip literal.
+
+    NAMING-CONVENTION-AGNOSTIC + never-empty-the-pool. Two chip-AGNOSTIC
+    defects, both found on a commercial 180 nm cell library:
+
+    (1) EVERY pattern above is anchored on the OPEN-PDK ``<lib>__<fn>``
+        double-underscore convention (``sky130_fd_sc_hd__dlygate4sd3``). A
+        commercial library names the SAME delay family with BARE names —
+        ``DLY1D1`` … ``DLY4D1`` — so ``*__dly*`` matched ZERO cells and the
+        block printed ``DONT_USE_FALLBACK_APPLIED: 0`` while the delay family
+        stayed in the pool. The paragraph above calls itself "PDK-family-
+        GENERAL (any library using the ``<lib>__<fn>`` convention)"; that
+        qualifier IS the defect — the convention is an open-PDK habit, not a
+        liberty rule, and a library that does not follow it gets no protection
+        while the log still says the guard ran. Measured consequence: with the
+        pattern list unmatched, ``repair_design`` selected a 4-stage delay
+        macro as the slew-fix buffer on a hard-macro supply pin. Fix: match the
+        family STEM (``dly`` / ``delay`` / ``probe_`` / ``lpflow`` /
+        ``clkdly``) case-insensitively, which subsumes BOTH the
+        ``<lib>__<fn>`` and the bare spellings and both letter cases (open PDKs
+        spell these lower-case, commercial ones upper-case).
+
+    (2) A wider net could, on a pathological library, exclude EVERY buffer and
+        leave the resizer/CTS with nothing to insert — a silent failure worse
+        than the one being fixed. The exclusion is therefore GUARDED: count the
+        cells OpenSTA ITSELF calls buffers (``get_property $c is_buffer`` — the
+        exact pool ``repair_design`` / ``buffer_ports`` draw from) before and
+        after; if the exclusion would leave ZERO usable buffers, revert the
+        whole set with ``unset_dont_use`` and say so out loud. Measure, then
+        decide — never a blanket weakening, never silent.
+
+    The (1) fix did NOT work on its first cut, and said it did. It asked for
+    case-insensitive matching with ``get_lib_cells -nocase`` while still
+    passing GLOB patterns. OpenSTA honours ``-nocase`` ONLY together with
+    ``-regexp``; in glob mode it emits ``[WARNING STA-0358] -nocase ignored
+    without -regexp`` and matches case-SENSITIVELY. Measured in-container
+    against the same commercial 180 nm liberty::
+
+        get_lib_cells -nocase -quiet *dly*   ->  n=0
+        get_lib_cells         -quiet *DLY*   ->  n=4   (DLY1D1 … DLY4D1)
+
+    so the delay family STAYED in the pool and the run still printed
+    ``DONT_USE_FALLBACK_APPLIED: 0 … usable buffer cells 63 -> 63`` — the
+    guard reporting that it ran while protecting nothing, which is the exact
+    failure mode (1) was written to remove, one layer down. Fixed by switching
+    to ``-regexp -nocase``. OpenSTA anchors a regexp to the WHOLE cell name, so
+    the patterns carry explicit ``.*`` on both sides (measured: bare ``dly``
+    -> 0, ``.*dly.*`` -> 4). A ``-nocase`` without ``-regexp`` anywhere in this
+    block is a regression, and is pinned as such by the tests.
+
+    No design, PDK or vendor literal appears in the emitted Tcl."""
     return (
-        "# === v1.2.86 — GENERAL characterization/lpflow do-not-use fallback ===\n"
+        "# === v1.2.86 — GENERAL characterization/lpflow/delay do-not-use "
+        "fallback ===\n"
         "# Works even when the PDK ships no drc_exclude.cells (iic-osic-tools):\n"
-        "# excludes __probe/__probec/__lpflow_ (unroutable → DRT-0085) + __clkdlybuf\n"
-        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer) +\n"
-        "# __dly*/__delay* (SIGNAL DELAY macros — dlya/b/c/d, dlygate, dlymetal…:\n"
-        "# high-intrinsic-delay cells the resizer/buffer_ports must never insert as\n"
-        "# a signal/port buffer, or they dominate the SLOW-corner setup path).\n"
-        "# via OpenROAD's own get_lib_cells over the loaded liberty. PDK-family-\n"
-        "# GENERAL (matches the <lib>__<fn> naming, no design literal).\n"
+        "# excludes probe/probec/lpflow (unroutable → DRT-0085) + clkdly*\n"
+        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer)\n"
+        "# + dly*/delay* (SIGNAL DELAY macros — dlya/b/c/d, dlygate, dlymetal,\n"
+        "# DLY1D1…DLY4D1: high-intrinsic-delay cells the resizer/buffer_ports\n"
+        "# must never insert as a signal/port buffer, or they dominate the\n"
+        "# SLOW-corner setup path / get chosen as a slew-fix buffer).\n"
+        "# Family STEMS matched case-insensitively via OpenROAD's own\n"
+        "# get_lib_cells, so BOTH the open-PDK <lib>__<fn> spelling AND bare\n"
+        "# commercial names are caught; GUARDED so the buffer pool can never be\n"
+        "# emptied. NAMING-CONVENTION-AGNOSTIC, no design literal.\n"
+        "# -regexp is MANDATORY here, not stylistic: OpenSTA honours -nocase\n"
+        "# ONLY in regexp mode -- in glob mode it warns\n"
+        "# `[WARNING STA-0358] -nocase ignored without -regexp` and matches\n"
+        "# case-SENSITIVELY. Measured in-container on a commercial 180nm\n"
+        "# library: `get_lib_cells -nocase -quiet *dly*` -> 0 cells, while\n"
+        "# `-quiet *DLY*` -> 4 (DLY1D1..DLY4D1). The block then printed\n"
+        "# DONT_USE_FALLBACK_APPLIED: 0 -- announcing that the guard had run\n"
+        "# while it excluded nothing. Patterns are therefore REGEXES, and\n"
+        "# OpenSTA anchors them to the WHOLE cell name, so each needs the\n"
+        "# leading/trailing `.*` (measured: `dly` -> 0, `.*dly.*` -> 4).\n"
+        "proc _du_nbuf {} {\n"
+        "  set _n 0\n"
+        "  foreach _c [get_lib_cells -quiet *] {\n"
+        "    if {[catch {set _b [get_property $_c is_buffer]}]} { continue }\n"
+        "    if {!$_b} { continue }\n"
+        "    if {[catch {set _d [get_property $_c dont_use]}]} { set _d 0 }\n"
+        "    if {!$_d} { incr _n }\n"
+        "  }\n"
+        "  return $_n\n"
+        "}\n"
+        "set _du_before 0\n"
+        "catch {set _du_before [_du_nbuf]}\n"
         "set _duf 0\n"
-        "foreach _du_pat {*__probe_* *__probec_* *__lpflow_* *__clkdlybuf*"
-        " *__dly* *__delay*} {\n"
-        "  set _du_cells [get_lib_cells -quiet $_du_pat]\n"
+        "set _du_all {}\n"
+        "foreach _du_pat {.*probe_.* .*probec_.* .*lpflow.* .*clkdly.* "
+        ".*dly.* .*delay.*} {\n"
+        "  set _du_cells [get_lib_cells -regexp -nocase -quiet $_du_pat]\n"
         "  if {[llength $_du_cells] > 0} {\n"
         "    if {[catch {set_dont_use $_du_cells} _duf_e]} {\n"
         "      puts \"DONT_USE_FALLBACK_NONFATAL: $_du_pat -- $_duf_e\"\n"
-        "    } else { incr _duf [llength $_du_cells] }\n"
+        "    } else {\n"
+        "      incr _duf [llength $_du_cells]\n"
+        "      set _du_all [concat $_du_all $_du_cells]\n"
+        "    }\n"
         "  }\n"
         "}\n"
-        "puts \"DONT_USE_FALLBACK_APPLIED: $_duf characterization/lpflow cell(s) "
-        "excluded by family-name fallback\"\n")
+        "set _du_after $_du_before\n"
+        "catch {set _du_after [_du_nbuf]}\n"
+        "if {$_du_before > 0 && $_du_after == 0} {\n"
+        "  catch {unset_dont_use $_du_all}\n"
+        "  puts \"DONT_USE_FALLBACK_REVERTED: the exclusion would have left 0 "
+        "usable buffer cells (was $_du_before) -- reverted so the resizer/CTS "
+        "keep a pool; reported, never silently applied\"\n"
+        "  set _duf 0\n"
+        "  set _du_after $_du_before\n"
+        "}\n"
+        "puts \"DONT_USE_FALLBACK_APPLIED: $_duf characterization/lpflow/delay "
+        "cell(s) excluded by family-name fallback; usable buffer cells "
+        "$_du_before -> $_du_after\"\n")
+
+
+# ── resizer sizing limits derived from the library's OWN buffer span ──────────
+# `Resizer::getSwappableCells` filters every sizing candidate against
+# `sizing_area_limit_` / `sizing_leakage_limit_`, both defaulting to 4.0 (see
+# rsz/src/Resizer.cc): a candidate whose area — or leakage — is more than 4.0X
+# the CURRENT cell's is dropped from the swap pool. That default is an implicit
+# assumption about how wide a cell library's drive ladder is, and `PreChecks::
+# checkSlewLimit` (rsz/src/PreChecks.cc) makes it load-bearing: it computes the
+# BEST ACHIEVABLE transition over `getSwappableCells(buffer_lowest_drive_)` —
+# the swap pool of the WEAKEST buffer — and if the declared max_transition is
+# below that, it raises `[ERROR RSZ-0090] Max transition time from SDC is …
+# Best achievable transition time is …`, which ABORTS repair_design.
+#
+# So on a library whose buffer family is wider than 4.0X, the strong buffers are
+# invisible to that pre-check, the "best achievable" slew is computed from a
+# crippled pool, and repair_design refuses to run — while the cell that would
+# have met the limit sits in the library, legal and un-excluded. Measured on a
+# commercial 180 nm library: buffer family spans 4.25X area / 15.82X leakage
+# (slow corner) over 22 structurally-identified buffers. Measured on the open
+# PDKs shipped in the EDA image, the same way: sky130_fd_sc_hd 10.67X / 16.47X
+# (42 buffers), nangate45 16.33X / 61.44X (9 buffers) — i.e. NO real library
+# measured here fits inside the 4.0X default. The default is narrower than the
+# libraries it is applied to; that is the chip-AGNOSTIC defect.
+#
+# The fix must NOT be a hardcoded larger number (same mistake, new constant) and
+# must NOT be derived from the violation (that is widening a limit until the
+# violation disappears). Two properties:
+#
+#   VALUE  — derived from the LIBRARY's own buffer family: parse the liberty the
+#            flow actually reads, identify buffers STRUCTURALLY the way OpenSTA
+#            does (exactly one input pin, exactly one output pin, and the
+#            output's `function` IS that input — `LibertyCell::hasBufferFunc`),
+#            and take max/min of `area` and `cell_leakage_power` over that
+#            family across EVERY corner liberty. That ratio is the widest
+#            legitimate swap INSIDE the family; x1.1 absorbs rounding.
+#   SCOPE  — nothing is emitted when the family already fits inside OpenROAD's
+#            own default, so a library the default suits keeps a BYTE-IDENTICAL
+#            pnr.tcl and no second repair pass.
+#
+# chip-AGNOSTIC and PDK-AGNOSTIC: every number comes from whatever liberty is on
+# the command line, never from a table.
+_LIB_CELL_HDR_RE = re.compile(
+    r"\bcell\s*\(\s*\"?([A-Za-z0-9_./\[\]-]+)\"?\s*\)\s*\{")
+_LIB_PIN_HDR_RE = re.compile(
+    r"\bpin\s*\(\s*\"?([A-Za-z0-9_./\[\]-]+)\"?\s*\)\s*\{")
+_LIB_ATTR_RE = re.compile(
+    r"\b(area|cell_leakage_power|direction|function)\s*:\s*"
+    r"\"?([^\";]*?)\"?\s*;")
+# OpenROAD's own defaults (rsz/src/Resizer.cc sizing_area_limit_ /
+# sizing_leakage_limit_). Emit nothing when the library fits inside them.
+_RSZ_DEFAULT_SIZING_LIMIT = 4.0
+
+
+def _lib_block_end(text: str, open_brace: int) -> int:
+    """Index just past the '}' matching ``text[open_brace] == '{'``."""
+    depth = 0
+    n = len(text)
+    i = open_brace
+    while i < n:
+        c = text[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def _lib_depth0(s: str) -> str:
+    """``s`` with every ``{...}`` sub-block removed (depth-0 text only)."""
+    out: List[str] = []
+    depth = 0
+    for ch in s:
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            continue
+        if depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
+def _liberty_buffer_family(lib_text: str) -> List[Tuple[str, float, float]]:
+    """Every BUFFER in ``lib_text`` as ``(name, area, cell_leakage_power)``.
+
+    Buffer identification is STRUCTURAL, mirroring OpenSTA
+    ``LibertyCell::hasBufferFunc``: exactly one input pin, exactly one output
+    pin, and the output pin's ``function`` is that input pin. No name matching,
+    so it is independent of any library's naming convention.
+    """
+    out: List[Tuple[str, float, float]] = []
+    for m in _LIB_CELL_HDR_RE.finditer(lib_text):
+        end = _lib_block_end(lib_text, m.end() - 1)
+        body = lib_text[m.end():end - 1]
+        ins: List[str] = []
+        outs: List[Tuple[str, str]] = []
+        i = 0
+        seg = 0
+        n = len(body)
+        while i < n:
+            if body[i] == "{":
+                hdr = body[seg:i + 1]
+                sub_end = _lib_block_end(body, i)
+                pm = _LIB_PIN_HDR_RE.search(hdr)
+                if pm and pm.end() == len(hdr):
+                    flat = _lib_depth0(body[i + 1:sub_end - 1])
+                    d = fn = ""
+                    for am in _LIB_ATTR_RE.finditer(flat):
+                        if am.group(1) == "direction":
+                            d = am.group(2).strip()
+                        elif am.group(1) == "function":
+                            fn = am.group(2).strip()
+                    if d == "input":
+                        ins.append(pm.group(1))
+                    elif d == "output":
+                        outs.append((pm.group(1), fn))
+                i = sub_end
+                seg = i
+                continue
+            i += 1
+        if len(ins) != 1 or len(outs) != 1:
+            continue
+        if outs[0][1].replace("(", "").replace(")", "").strip() != ins[0]:
+            continue
+        area = leak = 0.0
+        for am in _LIB_ATTR_RE.finditer(_lib_depth0(body)):
+            try:
+                if am.group(1) == "area":
+                    area = float(am.group(2))
+                elif am.group(1) == "cell_leakage_power":
+                    leak = float(am.group(2))
+            except ValueError:
+                pass
+        out.append((m.group(1), area, leak))
+    return out
+
+
+def _buffer_family_sizing_spans(
+        lib_texts: List[str]) -> Tuple[float, float, int]:
+    """``(area_ratio, leakage_ratio, n_buffers)`` — the widest max/min inside
+    the buffer family across all supplied liberty texts. ``0.0`` for a span
+    that cannot be measured (attribute absent / single member)."""
+    area_ratio = leak_ratio = 0.0
+    n_buf = 0
+    for t in lib_texts:
+        if not t:
+            continue
+        fam = _liberty_buffer_family(t)
+        n_buf = max(n_buf, len(fam))
+        areas = [a for (_n, a, _l) in fam if a > 0]
+        leaks = [lk for (_n, _a, lk) in fam if lk > 0]
+        if len(areas) >= 2 and min(areas) > 0:
+            area_ratio = max(area_ratio, max(areas) / min(areas))
+        if len(leaks) >= 2 and min(leaks) > 0:
+            leak_ratio = max(leak_ratio, max(leaks) / min(leaks))
+    return area_ratio, leak_ratio, n_buf
+
+
+def _sizing_limits_args(lib_texts: List[str],
+                        margin: float = 1.1,
+                        spans: Optional[Tuple[float, float, int]] = None
+                        ) -> Tuple[str, str]:
+    """``(set_opt_config_args, human_span)`` — the resizer sizing limits this
+    library's OWN buffer family requires, or ``("", "")`` when the family fits
+    inside OpenROAD's 4.0X default and there is nothing to widen.
+
+    ``spans`` is a PRE-MEASURED ``_buffer_family_sizing_spans`` result. The
+    parse is O(liberty bytes) and a sign-off corner set is large: measured on
+    the real 3-corner sky130_fd_sc_hd set (96.9 MB), one pass costs 26.6 s. The
+    two emitters below plus the caller's own reporting each needed the same
+    number, so the naive wiring parsed the SAME texts three times — 81.5 s, of
+    which 54.9 s was recomputing a value already in hand. Passing the measured
+    spans in makes the extra passes unnecessary rather than merely faster.
+    Omitted, it is measured here, so every existing caller and test is
+    unchanged."""
+    a_ratio, l_ratio, n_buf = (
+        spans if spans is not None else _buffer_family_sizing_spans(lib_texts))
+    a_lim = math.ceil(a_ratio * margin * 100.0) / 100.0 if a_ratio else 0.0
+    l_lim = math.ceil(l_ratio * margin * 100.0) / 100.0 if l_ratio else 0.0
+    args = ""
+    if a_lim > _RSZ_DEFAULT_SIZING_LIMIT:
+        args += f" -limit_sizing_area {a_lim:g}"
+    if l_lim > _RSZ_DEFAULT_SIZING_LIMIT:
+        args += f" -limit_sizing_leakage {l_lim:g}"
+    if not args:
+        return "", ""
+    return args, (f"buffer family n={n_buf}, measured area span "
+                  f"{a_ratio:.4g}X, leakage span {l_ratio:.4g}X, margin "
+                  f"x{margin:g}; OpenROAD default "
+                  f"{_RSZ_DEFAULT_SIZING_LIMIT:g}X")
+
+
+def _sizing_limits_preamble_tcl(lib_texts: List[str],
+                                margin: float = 1.1,
+                                spans: Optional[Tuple[float, float, int]] = None
+                                ) -> str:
+    """OpenROAD Tcl that restores the resizer's swap pool to THIS library's own
+    buffer family, emitted BEFORE the first timing-driven step. ``""`` when the
+    family already fits inside OpenROAD's 4.0X default.
+
+    WHY BEFORE, and why not gated on a violation count: the check that fails is
+    ``PreChecks::checkSlewLimit``, and it is reached from ``global_placement
+    -timing_driven`` — gpl's Nesterov loop calls ``TimingBase::
+    executeTimingDriven`` -> ``Resizer::findResizeSlacks`` -> ``RepairDesign::
+    repairNetLoad`` -> ``checkSlewLimit`` — long before any explicit
+    ``repair_design``. It raises ``logger_->error(RSZ, 90)``, which ABORTS the
+    script. So there is no point at which a violator count could be read and
+    used as a gate: the run is already dead.
+
+    WHY THIS IS NOT A RELAXATION. ``max_transition`` is NOT touched. What is
+    widened is ``getSwappableCells``' area/leakage ratio cut-off, which drops
+    any equivalent cell more than ``sizing_area_limit_`` / ``sizing_leakage_
+    limit_`` (both default 4.0) times the SOURCE cell. Those defaults are a
+    heuristic about the power/area cost of upsizing; they are not a statement
+    about what the library contains. On a family whose own ladder is wider than
+    4.0X, the strongest buffers are invisible to ``checkSlewLimit``, which then
+    reports a "best achievable transition" that the library can in fact beat —
+    an infeasibility that does not exist. The limits emitted here are the
+    family's OWN measured span, so the pool becomes exactly what the vendor
+    shipped and no more."""
+    args, span = _sizing_limits_args(lib_texts, margin, spans)
+    if not args:
+        return ""
+    return (
+        "# === restore the resizer swap pool to THIS library's own buffer\n"
+        "# family, BEFORE the first timing-driven step.\n"
+        "# getSwappableCells drops any equivalent cell more than 4.0X the\n"
+        "# source cell in area OR leakage, and PreChecks::checkSlewLimit\n"
+        "# computes the BEST ACHIEVABLE transition over the WEAKEST buffer's\n"
+        "# surviving pool. On a family wider than 4.0X the strong buffers are\n"
+        "# invisible, so the check reports an infeasible slew target that the\n"
+        "# library can actually meet, and aborts with RSZ-0090. That abort is\n"
+        "# reached from global_placement -timing_driven (gpl -> TimingBase ->\n"
+        "# findResizeSlacks -> RepairDesign -> checkSlewLimit), NOT only from\n"
+        "# an explicit repair_design — hence this runs first.\n"
+        f"# Measured here: {span}.\n"
+        "# max_transition is NOT modified; only the cell pool is restored.\n"
+        f"if {{[catch {{set_opt_config{args}}} _sl_e]}} {{\n"
+        "  puts \"SIZING_LIMITS_NONFATAL: $_sl_e\"\n"
+        "} else {\n"
+        f"  puts \"SIZING_LIMITS_APPLIED:{args} ({span})\"\n"
+        "}\n")
+
+
+def _sizing_limits_drv_report_tcl(lib_texts: List[str],
+                                  margin: float = 1.1,
+                                  spans: Optional[Tuple[float, float, int]] = None
+                                  ) -> str:
+    """Report-only companion to :func:`_sizing_limits_preamble_tcl`, emitted
+    AFTER ``repair_design``. Prints the surviving max_slew/max_capacitance
+    violator count so a reader can see what the restored pool actually bought.
+    It CHANGES NOTHING — the number is evidence, not a gate."""
+    args, span = _sizing_limits_args(lib_texts, margin, spans)
+    if not args:
+        return ""
+    return (
+        "# Evidence for the sizing-limit restoration above: the DRV violators\n"
+        "# that survive repair_design with the library's own pool available.\n"
+        "# Report-only — this block changes nothing.\n"
+        "set _sl_v -1\n"
+        "catch {set _sl_v [expr {[sta::max_slew_violation_count]"
+        " + [sta::max_capacitance_violation_count]}]}\n"
+        "if {$_sl_v < 0} {\n"
+        "  puts \"SIZING_LIMITS_DRV_UNMEASURED: OpenSTA violator counters "
+        "unavailable\"\n"
+        "} else {\n"
+        f"  puts \"SIZING_LIMITS_DRV_AFTER_REPAIR: $_sl_v max_slew"
+        "+max_capacitance violator(s) after repair_design with the measured "
+        f"pool ({span})\"\n"
+        "}\n")
 
 
 # ── R8 (v1.3.50 fork-adapt) — librelane-first PnR cell-exclusion resolution ──────
@@ -15914,7 +16951,18 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         # contain a Signal 11, so on stock OpenROAD it would kill the process
         # and the GDS would never be written. Probe-negative → this block is
         # byte-identical to the measure-only extraction it always was.
-        + (_v1_8_100_signoff_drv_repair_tcl(out_dir_c)
+        # The sentinels are what let the RUNNER omit exactly this loop when a
+        # resume from the route checkpoint follows a signal death inside it.
+        # They bracket the loop ALONE — the sign-off SPEF extraction below is
+        # outside them and always runs, so a resume never costs the Step-23
+        # STA its parasitics. The probe above is a PREDICTION that this
+        # OpenROAD will not crash here; it has been MEASURED wrong (0.2.58
+        # probed capable and still took Signal 11 on a design with a large
+        # setup violation), which is why a runner-level backstop exists at all.
+        + ((_pnr_stage_begin("postroute_drv_repair") + "\n"
+            + f"  puts \"{_PNR_STAGE_MARKER} postroute_drv_repair\"\n"
+            + _v1_8_100_signoff_drv_repair_tcl(out_dir_c)
+            + _pnr_stage_end("postroute_drv_repair") + "\n")
            if fork_repair_capable else
            "  puts \"SDR_SKIP_STOCK_OPENROAD: post-route SPEF DRV repair needs "
            "the fork post-detailed-route repair fix; extraction only\"\n")
@@ -16530,6 +17578,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         antenna_repair_block: str,
                         filler_block: str,
                         drv_reconverge_block: str = "",
+                        post_reconverge_antenna_block: str = "",
                         tapcell_prune_block: str = "",
                         pg_reconnect_block: str = "",
                         hardmacro_supply_gc_block: str = "",
@@ -16543,7 +17592,9 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         openroad_threads: int = 0,
                         repair_tns_percent: Optional[int] = None,
                         cts_cluster_size: Optional[int] = None,
-                        cts_cluster_diameter: Optional[float] = None) -> str:
+                        cts_cluster_diameter: Optional[float] = None,
+                        sizing_limits_block: str = "",
+                        sizing_drv_report_block: str = "") -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
     (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
     regression tests pin them). The #557 SPEF-repair block shipped with
@@ -16689,7 +17740,7 @@ read_sdc {sdc_c}
 # before any optimization). Prevents OpenROAD from inserting PnR-forbidden cells
 # (probe / lpflow / DRC-failed) that TritonRoute then cannot route (DRT-0085).
 # See _dont_use_tcl. ===
-{dont_use_block}# === v0.1.26 wire-RC model ===
+{dont_use_block}{sizing_limits_block}# === v0.1.26 wire-RC model ===
 # Without set_wire_rc, OpenROAD has no per-layer R/C, so (a) STA ignores
 # interconnect delay (optimistic) and (b) repair_timing -setup aborts with
 # RSZ-0089 "Could not find a resistance value for any corner" because it
@@ -16705,6 +17756,11 @@ if {{[catch {{set_wire_rc -signal -layer {metal_prefix}1}} _swr_sig]}} {{
 if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{
   puts "SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk"
 }}
+# <<<PNR_RESUME_ELIDE_BEGIN>>>
+# Everything between this sentinel and PNR_RESUME_ELIDE_END BUILDS the routed
+# database from the netlist. A resume replaces the whole region with a
+# `read_def` of the last stage checkpoint, so the work is never redone.
+puts "{_PNR_STAGE_MARKER} floorplan"
 initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
                       -core_area "{core_pad} {core_pad} {core_w} {core_h}" \\
                       -site {site}
@@ -16733,6 +17789,7 @@ write_def {out_dir_c}/floorplan.def
 # `set_placement_padding -global` (below, when
 # enabled) is an optional, version-correct extra congestion knob. Flag names
 # verified vs OpenROAD 26Q1 (`help global_placement`). chip-AGNOSTIC.
+puts "{_PNR_STAGE_MARKER} placement"
 {_placement_padding_block}global_placement{_routability_flag}{_timing_driven_flag} -density {util}
 {_initial_legalize}# === #684 sparse-die anti-flood tap prune (POST-placement, locality) ===
 # Runs here — after placement resolved the REAL logic geometry, BEFORE
@@ -16774,12 +17831,13 @@ if {{[catch {{buffer_ports -inputs}} _bp_err]}} {{
 if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
   puts "EST_PARASITICS_PLACEMENT_NONFATAL: $_pe_pl"
 }}
-{_rd_margin_placement}if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
+{_rd_margin_placement}{sizing_drv_report_block}if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
   puts "REPAIR_TIMING_SETUP_NONFATAL: $_rts_err"
 }}
 if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
   puts "REPAIR_LEGALIZE_NONFATAL: $_rt_dp_err"
 }}
+puts "{_PNR_STAGE_MARKER} cts"
 if {{[catch {{clock_tree_synthesis -buf_list {{{clk_buf}}} -root_buf {clk_buf_root}{_cts_cluster}}} cts_err]}} {{
   puts "CTS_NONFATAL: $cts_err -- continuing without explicit CTS"
 }}
@@ -16789,6 +17847,7 @@ write_def {out_dir_c}/post_cts.def
 # post_cts.def (CTS may have left placement gaps that detailed_placement
 # closes). This prevents def_stage_progression_check from rejecting the
 # pair as identical fabrication.
+puts "{_PNR_STAGE_MARKER} hold_repair"
 if {{[catch {{repair_timing -hold}} hold_err]}} {{
   puts "HOLD_NONFATAL: $hold_err"
 }}
@@ -16826,6 +17885,7 @@ if {{[catch {{
 # makes TritonRoute abort ALL detailed routing; remove/reclassify it first so the
 # design actually routes instead of silently shipping unrouted. See
 # _pg_net_cleanup_tcl for the full rationale.
+puts "{_PNR_STAGE_MARKER} global_route"
 {pg_cleanup_block}global_route
 # === v0.1.26 post-global-route SETUP / DRV repair ===
 # Re-estimate RC from global routing and repair again so the final routed
@@ -16849,6 +17909,7 @@ if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
 # detailed_route fails (open-source iic-osic-tools has it; some custom
 # PDKs without RC files have detailed_route that completes without wire
 # geometry but at least the global_route step does write SPECIALNETS).
+puts "{_PNR_STAGE_MARKER} detailed_route"
 if {{[catch {{detailed_route}} dr_err]}} {{
   puts "DETAILED_ROUTE_NONFATAL: $dr_err"
 }}
@@ -16861,19 +17922,32 @@ if {{[catch {{detailed_route}} dr_err]}} {{
 if {{[catch {{write_def {out_dir_c}/routed_preantenna.def}} _cp_err]}} {{
   puts "ROUTED_CHECKPOINT_NONFATAL: $_cp_err"
 }}
+# <<<PNR_RESUME_ELIDE_END>>>
 # === ORGANIC #557 — post-route SPEF-domain repair loop ===
 # Runs OpenRCX extraction (when a captable exists) → read_spef → repair_design /
 # repair_timing → detailed_placement → incremental reroute.  Best-effort:
 # any exception leaves the routing unchanged and issues a NONFATAL marker.
+#
+# The `catch`es inside this block cannot trap a signal. `repair_timing -setup`
+# on a design with a large setup violation is where OpenROAD has been MEASURED
+# to segfault, and a segfault here used to discard a fully converged route. The
+# sentinels below let the RUNNER omit exactly this block on a resume from the
+# route checkpoint — which is what the NONFATAL guard was written to do and
+# cannot.
+puts "{_PNR_STAGE_MARKER} postroute_spef_extract"
 {spef_repair_block}# === v0.2.14 — antenna repair (diode insertion) after detailed_route ===
-{antenna_repair_block}{drv_reconverge_block}# === v0.1.48 — decap + filler insertion ===
+puts "{_PNR_STAGE_MARKER} postroute_antenna_repair"
+{antenna_repair_block}{drv_reconverge_block}puts "{_PNR_STAGE_MARKER} postroute_antenna_reconverge"
+{post_reconverge_antenna_block}# === v0.1.48 — decap + filler insertion ===
 # spm pilot Tier 2 EM/decap finding: prior runs (v0.1.25 → v0.1.47) emitted
 # ZERO decap or filler cells. Empty std-cell-row gaps left an MPW-rejecting
 # combination: no dynamic IR margin (no decap), open density-fill rules
 # (no filler in row gaps), and unused silicon area. SKY130 spm pilot added
 # 2079 decap + 150 fill cells; DRC still 0, worst IR 35 µV (2500× margin).
 # NONFATAL-guarded so PDKs without the masters degrade gracefully.
-{filler_block}{pg_reconnect_block}# v1.8.43 — min-area patch: LAST thing before the route is written, so it
+puts "{_PNR_STAGE_MARKER} postroute_fill"
+{filler_block}{pg_reconnect_block}puts "{_PNR_STAGE_MARKER} write_routed"
+# v1.8.43 — min-area patch: LAST thing before the route is written, so it
 # sees the final geometry (post antenna-repair, post filler) and every
 # downstream consumer (write_def / write_verilog / RCX / magic GDS / DRC /
 # LVS) reads the patched route.
@@ -16886,8 +17960,252 @@ report_design_area > {out_dir_c}/area.rpt
 # shipped artifact + the authoritative clean sta.rpt, so it can only MEASURE the
 # recoverable setup, never modify routed.def/<top>.def/<top>_pnr.v). Empty on
 # stock OpenROAD (probe-gated). ===
-{spef_repair_estimate_block}exit
+{_pnr_stage_begin("postroute_setup_repair_estimate")}
+puts "{_PNR_STAGE_MARKER} postroute_setup_repair_estimate"
+{spef_repair_estimate_block}{_pnr_stage_end("postroute_setup_repair_estimate")}
+exit
 """
+
+
+class PnrResumeUnavailable(Exception):
+    """Raised when a resume Tcl cannot be derived from a given pnr.tcl —
+    always with the reason, never silently. A resume that cannot be built
+    must degrade to a loud FAIL, not to a half-built one."""
+
+
+def _build_pnr_resume_tcl_text(pnr_tcl_text: str, *, checkpoint_def_c: str,
+                               omit_stages: Sequence[str] = ()) -> str:
+    """Derive a RESUME Tcl from the pnr.tcl that was actually run.
+
+    THE SOURCE OF THE TAIL IS pnr.tcl ITSELF. Re-emitting the post-route tail
+    from a second builder would put two copies of it in the tree, and two
+    copies drift — this repo has already paid for that once (the routing-clear
+    filter that existed inline and as a helper). So the resume is a
+    line-exact TRANSFORM of the file the crashed session ran:
+
+      1. `read_verilog <netlist>` + `link_design <top>`  ->  `read_def <ckpt>`
+         The checkpoint DEF carries the components, nets and routed geometry,
+         so the design is restored from it instead of rebuilt from the netlist.
+      2. Everything between PNR_RESUME_ELIDE_BEGIN/END is dropped: that is
+         floorplan through detailed route, i.e. exactly the work the
+         checkpoint already contains. Its per-stage `write_def`s go with it,
+         so no earlier checkpoint is overwritten.
+      3. Each stage in `omit_stages` is dropped between its PNR_STAGE_BEGIN /
+         PNR_STAGE_END sentinels and replaced by a PNR_STAGE_OMITTED marker,
+         so the omission is in the log rather than inferred from its absence.
+
+    The sentinels delimit whole emitted blocks, so every deletion removes a
+    brace-balanced region — the resume is valid Tcl whenever pnr.tcl is, which
+    the tclsh parse test asserts directly.
+
+    Chip-AGNOSTIC: sentinel-delimited line surgery; no design, PDK or vendor
+    literal is read or written."""
+    lines = pnr_tcl_text.splitlines()
+
+    def _index_of(pred, what: str) -> int:
+        for i, ln in enumerate(lines):
+            if pred(ln):
+                return i
+        raise PnrResumeUnavailable(
+            f"pnr.tcl carries no {what} — it was written by a pnr.tcl "
+            f"emitter that predates resume support, so a resume cannot be "
+            f"derived from it")
+
+    i_rv = _index_of(lambda ln: ln.startswith("read_verilog "), "read_verilog")
+    if not lines[i_rv + 1:i_rv + 2] or \
+            not lines[i_rv + 1].startswith("link_design "):
+        raise PnrResumeUnavailable(
+            "pnr.tcl does not follow read_verilog with link_design; the "
+            "design-load site could not be identified")
+    lines[i_rv:i_rv + 2] = [
+        "# RESUMED SESSION — the design is restored from the route checkpoint",
+        "# instead of rebuilt from the netlist (see _build_pnr_resume_tcl_text).",
+        f"read_def {checkpoint_def_c}",
+    ]
+
+    def _drop(begin: str, end: str, replacement: Sequence[str],
+              what: str) -> None:
+        i0 = _index_of(lambda ln: ln.strip() == begin, what + " begin marker")
+        i1 = _index_of(lambda ln: ln.strip() == end, what + " end marker")
+        if i1 < i0:
+            raise PnrResumeUnavailable(
+                f"{what} markers are out of order in pnr.tcl")
+        lines[i0:i1 + 1] = list(replacement)
+
+    _drop(_PNR_RESUME_ELIDE_BEGIN, _PNR_RESUME_ELIDE_END,
+          ["# --- floorplan..detailed_route elided: already in the checkpoint "
+           "---"],
+          "resume-elide")
+    for stage in omit_stages:
+        _drop(_pnr_stage_begin(stage), _pnr_stage_end(stage),
+              [f'puts "PNR_STAGE_OMITTED: {stage}"'],
+              f"stage {stage!r}")
+    return "\n".join(lines) + "\n"
+
+
+_PNR_RESUME_TCL = "pnr_resume.tcl"
+_PNR_RESUME_LOG = "openroad_resume.log"
+
+
+def _pnr_resume_after_fatal_signal(*, project: Path, top: str, container: str,
+                                   out_dir: Path, out_dir_c: str,
+                                   pnr_tcl: Path, diag: Dict[str, Any],
+                                   hard_ceiling_s: int) -> Dict[str, Any]:
+    """ONE bounded attempt to finish PnR from the last stage checkpoint after
+    the tool was killed by a signal.
+
+    This is the mechanism the flow's own advice ("resume from the checkpoint;
+    a from-scratch re-run is NOT required") described and did not have. It is
+    deliberately narrow, and every refusal is a RECORD, never a silent skip:
+
+      * no checkpoint on disk            -> NOT_ATTEMPTED
+      * the log carries no stage
+        breadcrumb, so what died is
+        unknown                          -> NOT_ATTEMPTED
+      * the stage that died is NOT one
+        the template itself declares
+        best-effort                      -> NOT_ATTEMPTED
+      * the resume session itself dies    -> FAILED (never retried)
+
+    The third guard is the load-bearing one. Omitting a stage is only honest
+    when the emitted Tcl already says that stage may be skipped — every stage
+    in `_PNR_NONFATAL_STAGES` is wrapped in a `catch` that prints a NONFATAL
+    marker and continues. Running the tail without it is that `catch` finally
+    taking effect. A crash in a stage whose output IS a shipped artifact
+    (routing, antenna repair, fill, the writes) is NOT resumable and is
+    reported as a failure.
+
+    Chip-AGNOSTIC: stage identity, exit status and file existence only."""
+    rec: Dict[str, Any] = {"status": "NOT_ATTEMPTED", "reason": "",
+                           "omitted_stages": []}
+    ckpt = diag.get("checkpoint")
+    stage = diag.get("stage")
+    ckpt_stage = diag.get("checkpoint_stage")
+    if not ckpt:
+        rec["reason"] = (
+            "no stage checkpoint DEF exists in the PnR output directory, so "
+            "there is nothing to resume from")
+        return rec
+    if ckpt_stage != _PNR_ROUTE_CHECKPOINT_STAGE:
+        rec["reason"] = (
+            f"the newest checkpoint on disk is {ckpt_stage!r} "
+            f"({Path(ckpt).name}), which PREDATES routing. The resume Tcl "
+            f"elides floorplan..detailed_route because the checkpoint is "
+            f"supposed to already contain that work; started from a "
+            f"pre-route checkpoint it would run the post-route tail over an "
+            f"UNROUTED design and write THAT out as the final DEF. Only the "
+            f"{_PNR_ROUTE_CHECKPOINT_STAGE} checkpoint "
+            f"({_PNR_CHECKPOINT_STAGES[-1][0]}) is a resume point")
+        return rec
+    _ck_routed, _ck_nets = _def_signal_routing_stats(
+        Path(ckpt), unknown_is_routed=False)
+    if not _ck_routed:
+        rec["reason"] = (
+            f"the {_PNR_ROUTE_CHECKPOINT_STAGE} checkpoint "
+            f"{Path(ckpt).name} exists but carries NO routed signal geometry "
+            f"({_ck_nets} nets in its NETS section, no `+ ROUTED`/`+ FIXED`/`+ COVER`/`+ NOSHIELD`) — "
+            f"the same crash that killed the tool cut the checkpoint write "
+            f"short, so there is no routed design in it to resume from")
+        return rec
+    if not stage:
+        rec["reason"] = (
+            "the OpenROAD log carries no stage breadcrumb, so the stage that "
+            "died cannot be named; resuming would have to guess which stage "
+            "to omit and it will not guess")
+        return rec
+    if stage not in _PNR_NONFATAL_STAGES:
+        rec["reason"] = (
+            f"the tool died in {stage}, which is load-bearing — its output "
+            f"feeds a shipped artifact, so omitting it would change what was "
+            f"built. Only the stages pnr.tcl itself declares best-effort "
+            f"({', '.join(sorted(_PNR_NONFATAL_STAGES))}) are omittable")
+        return rec
+    try:
+        resume_text = _build_pnr_resume_tcl_text(
+            pnr_tcl.read_text(errors="replace"),
+            checkpoint_def_c=_to_container_path(str(ckpt), container),
+            omit_stages=[stage])
+    except (PnrResumeUnavailable, OSError) as e:
+        rec["status"] = "NOT_ATTEMPTED"
+        rec["reason"] = f"resume Tcl could not be derived: {e}"
+        return rec
+    resume_tcl = out_dir / _PNR_RESUME_TCL
+    resume_tcl.write_text(resume_text)
+    resume_tcl_c = _to_container_path(str(resume_tcl), container)
+    rec["resume_tcl"] = str(resume_tcl)
+    rec["resume_log"] = str(out_dir / _PNR_RESUME_LOG)
+    rec["omitted_stages"] = [stage]
+    print(f"[pnr] RESUME: reading {ckpt} and re-running the post-route tail "
+          f"with {stage} omitted", file=sys.stderr)
+    cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+           f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+           f"openroad -no_init -exit {resume_tcl_c} 2>&1 | "
+           f"tee {out_dir_c}/{_PNR_RESUME_LOG}")
+    r_rc, r_out, r_err = _docker_exec(
+        container, cmd, marker=resume_tcl_c,
+        log_path=out_dir / _PNR_RESUME_LOG, hard_ceiling_s=hard_ceiling_s)
+    rec["rc"] = r_rc
+    rec["log_tail"] = ((r_out or "") + (r_err or ""))[-2000:]
+    # Fold the resume transcript into openroad.log so every gate that reads
+    # that one file sees the whole session. Appended under a banner, never
+    # overwriting: the crash transcript is evidence and stays.
+    try:
+        with (out_dir / "openroad.log").open("a") as fh:
+            fh.write(f"\n=== PNR RESUME (from {ckpt}, {stage} omitted) ===\n")
+            fh.write((out_dir / _PNR_RESUME_LOG).read_text(errors="replace"))
+    except OSError:
+        pass
+    r_sig = _fatal_signal_from_rc(r_rc)
+    if r_sig is not None:
+        rec["status"] = "FAILED"
+        rec["reason"] = (
+            f"the resumed session was ALSO killed by {_signal_name(r_sig)} "
+            f"(rc={r_rc}); not retried")
+        return rec
+    if r_rc != 0:
+        rec["status"] = "FAILED"
+        rec["reason"] = f"the resumed session exited {r_rc}"
+        return rec
+    final_def = out_dir / f"{top}.def"
+    if not final_def.is_file():
+        rec["status"] = "FAILED"
+        rec["reason"] = (
+            "the resumed session exited 0 but wrote no final DEF")
+        return rec
+    # rc=0 PLUS a file on disk is not evidence that the file is routed. The
+    # resume runs the post-route TAIL only, so whatever routing the final DEF
+    # carries came in with the checkpoint — and the one thing this whole
+    # mechanism must never do is hand a signed-off, never-routed DEF to the
+    # seven downstream steps that read it. So the output is measured, not
+    # assumed, on the way out as well as on the way in.
+    _fd_routed, _fd_nets = _def_signal_routing_stats(
+        final_def, unknown_is_routed=False)
+    if not _fd_routed:
+        rec["status"] = "FAILED"
+        rec["reason"] = (
+            f"the resumed session exited 0 and wrote {final_def.name}, but "
+            f"that DEF carries NO routed signal geometry ({_fd_nets} nets in "
+            f"its NETS section, no `+ ROUTED`/`+ FIXED`/`+ COVER`/`+ NOSHIELD`). A resume that "
+            f"produces an unrouted final DEF has salvaged nothing")
+        return rec
+    rec["status"] = "RESUMED"
+    return rec
+
+
+def _write_pnr_fatal_signal_attestation(project: Path,
+                                        diag: Dict[str, Any]) -> Optional[str]:
+    """Durable record of a PnR tool crash, next to the other phase-3 sign-off
+    evidence. A crash the runner resumed past is still a crash: it has to be
+    readable from the artifacts alone, not only from a step's detail string
+    that a later re-run overwrites. Best-effort; never fatal."""
+    try:
+        rpt = _pl.reports_dir(project) / "phase3"
+        rpt.mkdir(parents=True, exist_ok=True)
+        p = rpt / "pnr_fatal_signal.json"
+        p.write_text(json.dumps(diag, indent=2, default=str) + "\n")
+        return str(p)
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -17515,6 +18833,45 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     antenna_repair_block = _antenna_repair_tcl(pdk)
     pg_cleanup_block = _pg_net_cleanup_tcl()
     dont_use_block = _dont_use_tcl(pdk)
+    # Measure THIS library's buffer-family span so pnr.tcl can restore the
+    # resizer swap pool to it BEFORE the first timing-driven step. OpenROAD's
+    # 4.0X area/leakage sizing cut-off is narrower than every real library
+    # measured; PreChecks::checkSlewLimit then reports a "best achievable
+    # transition" that only the TRUNCATED pool cannot reach and aborts with
+    # RSZ-0090 — from global_placement -timing_driven, not just from an
+    # explicit repair_design. Emits "" when the library fits the default, so
+    # such a design keeps a byte-identical pnr.tcl. See
+    # `_sizing_limits_preamble_tcl`.
+    try:
+        _sl_corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    except Exception:  # noqa: BLE001 — a measurement, never a dependency
+        _sl_corner_libs = {}
+    _sl_paths = sorted({p for p in _sl_corner_libs.values() if p})
+    if pdk.liberty and pdk.liberty not in _sl_paths:
+        _sl_paths.append(pdk.liberty)
+    _sl_texts = [t for t in (_read_pdk_text(p, container) for p in _sl_paths)
+                 if t]
+    # MEASURE ONCE. Three consumers need the same number — the preamble, the
+    # DRV-report companion, and the disclosure printed below — and the parse is
+    # O(liberty bytes) over a whole sign-off corner set. Measured on the real
+    # 3-corner sky130_fd_sc_hd set (96.9 MB): one pass 26.6 s, three passes
+    # 81.5 s. Handing the measured spans to both emitters removes 54.9 s of
+    # recomputation from every PnR, and removes it by construction rather than
+    # by caching something that could go stale.
+    _sl_spans = _buffer_family_sizing_spans(_sl_texts)
+    sizing_limits_block = _sizing_limits_preamble_tcl(_sl_texts, spans=_sl_spans)
+    sizing_drv_report_block = _sizing_limits_drv_report_tcl(_sl_texts,
+                                                           spans=_sl_spans)
+    if sizing_limits_block:
+        _sl_a, _sl_l, _sl_n = _sl_spans
+        print("[phase3] RESIZER SIZING LIMITS: this library's buffer family "
+              f"({_sl_n} cells over {len(_sl_texts)} corner liberty file(s)) "
+              f"spans {_sl_a:.4g}X area / {_sl_l:.4g}X leakage — wider than "
+              "OpenROAD's 4.0X swap-pool cut-off, which hides the strong "
+              "buffers from PreChecks::checkSlewLimit and makes it report an "
+              "infeasible slew target. pnr.tcl restores the pool to the "
+              "MEASURED span before the first timing-driven step; "
+              "max_transition is NOT modified.", file=sys.stderr)
     # #147 — PROBE the running OpenROAD once (cached) for the fork's post-route
     # repair fix (`estimate_parasitics -detailed_routing`, vibeic/OpenROAD
     # cf06074139 — LIVE in vibeic-eda:0.2.17). R9 moved the probe UP to here:
@@ -17555,11 +18912,34 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # repair_design/repair_timing on a post-detailed-route SPEF-annotated
     # design. Probe-negative → SDR2 collapses to nothing but the (already
     # probe-gated) antenna repair, i.e. exactly the pre-R8 behaviour.
-    drv_reconverge_block = (('puts "SDR2_BEGIN"\n'
+    # The re-convergence loop and the antenna pass that follows it are now
+    # emitted as TWO template slots instead of one concatenated string. The
+    # emitted Tcl is unchanged (slot A then slot B, same order, same text);
+    # what changes is that the sentinels can bracket the LOOP alone, so a
+    # resume that omits the loop does not also silently drop the antenna
+    # repair — which is load-bearing and must never be omitted.
+    drv_reconverge_block = ((_pnr_stage_begin("postroute_drv_reconverge")
+                             + "\n"
+                             + f'puts "{_PNR_STAGE_MARKER} '
+                               'postroute_drv_reconverge"\n'
+                             + 'puts "SDR2_BEGIN"\n'
                              + _v1_8_100_signoff_drv_repair_tcl(out_dir_c)
                              + 'puts "SDR2_END"\n'
-                             if _fork_repair_capable else "")
-                            + antenna_repair_block)
+                             + _pnr_stage_end("postroute_drv_reconverge")
+                             + "\n")
+                            if _fork_repair_capable else "")
+    # UNCONDITIONAL, exactly as when it was concatenated onto the string
+    # above: the second antenna pass ran on both probe outcomes and still does.
+    #
+    # It gets its OWN breadcrumb (`postroute_antenna_reconverge`, emitted by
+    # the template between the two slots). Without one, the last breadcrumb in
+    # force while this block runs is `postroute_drv_reconverge` — which IS in
+    # `_PNR_NONFATAL_STAGES`, so a crash in this LOAD-BEARING antenna pass was
+    # diagnosed as a crash in a best-effort stage and sent to the resume the
+    # load-bearing guard exists to refuse. The stage is deliberately NOT added
+    # to `_PNR_NONFATAL_STAGES` and carries no BEGIN/END sentinels, so it can
+    # neither be omitted nor resumed past.
+    post_reconverge_antenna_block = antenna_repair_block
     spef_repair_estimate_block = _postroute_repair_estimate_tcl(
         out_dir_c, _fork_repair_capable)
 
@@ -17687,6 +19067,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         pg_cleanup_block=pg_cleanup_block,
         spef_repair_block=spef_repair_block,
         drv_reconverge_block=drv_reconverge_block,
+        post_reconverge_antenna_block=post_reconverge_antenna_block,
         antenna_repair_block=antenna_repair_block,
         filler_block=filler_block,
         tapcell_prune_block=tapcell_prune_block,
@@ -17698,7 +19079,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         openroad_threads=_openroad_thread_count(),
         repair_tns_percent=_rf_map.get("repair_tns_percent"),
         cts_cluster_size=_rf_map.get("cts_cluster_size"),
-        cts_cluster_diameter=_rf_map.get("cts_cluster_diameter")))
+        cts_cluster_diameter=_rf_map.get("cts_cluster_diameter"),
+        sizing_limits_block=sizing_limits_block,
+        sizing_drv_report_block=sizing_drv_report_block))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "
@@ -17906,6 +19289,180 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         _write_sparse_die_skip_attestation(project, [_log_txt, out, err])
     except Exception:  # nosec — attestation is best-effort, never fatal
         pass
+    # ── TOOL CRASH vs TOOL ERROR ──────────────────────────────────────────
+    # A signal death is not an error return, and until this gate existed the
+    # runner could not tell them apart: both arrived as "rc != 0" and were
+    # reported as a bare `rc=<n>` with 2000 characters of log tail. See
+    # `_pnr_fatal_signal_diagnosis` for the measured case this is written
+    # from — a converged route discarded because the process was killed in a
+    # post-route optimization step whose Tcl `catch` could not catch a signal.
+    _pnr_log_all = ""
+    try:
+        _pnr_log_all = (out_dir / "openroad.log").read_text(errors="ignore")
+    except OSError:
+        _pnr_log_all = (out or "") + "\n" + (err or "")
+    try:
+        _pnr_tcl_text = pnr_tcl.read_text(errors="replace")
+    except OSError:
+        _pnr_tcl_text = ""          # unreadable → no stage is post-sign-off
+    _sig_diag = _pnr_fatal_signal_diagnosis(rc, _pnr_log_all, out_dir,
+                                            _pnr_tcl_text)
+    _resume_record: Optional[Dict[str, Any]] = None
+    _sig_survivable = False
+    if _sig_diag is not None:
+        print(f"[pnr] {_pnr_fatal_signal_message(_sig_diag)}", file=sys.stderr)
+    # ── A CRASH *AFTER* THE SIGN-OFF WRITES ───────────────────────────────
+    # The branch below refuses a final DEF found next to a crash because it
+    # "predates the crash". That is true only while the crash precedes the
+    # writes, and pnr.tcl's LAST stage — the #147 setup-repair ESTIMATE — runs
+    # after every one of them, on the very command (`repair_timing -setup`)
+    # this fix's own evidence shows segfaulting. Sent down that branch, the
+    # runner FAILed a completed run, named a correct sign-off DEF as
+    # non-sign-off, and wrote both false claims into the durable attestation.
+    #
+    # Three independent conditions, all measured, before a crash is survivable:
+    #   1. the stage began below the last `write_def`/`write_verilog`;
+    #   2. pnr.tcl ITSELF declares the stage best-effort — the same
+    #      `_PNR_NONFATAL_STAGES` gate the resume uses, so a load-bearing
+    #      stage added after the writes one day is still a FAIL;
+    #   3. every sign-off artifact is ON DISK. (1) says the writes were
+    #      reached; only this says they landed.
+    if _sig_diag is not None and _sig_diag.get("crashed_after_signoff_writes"):
+        _missing_signoff = [p.name for p in _pnr_signoff_artifacts(out_dir, top)
+                            if not p.is_file()]
+        _stage_nm = _sig_diag.get("stage")
+        if _missing_signoff:
+            _write_pnr_fatal_signal_attestation(project, _sig_diag)
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                _pnr_fatal_signal_message(_sig_diag)
+                + f" The sign-off artifact(s) {', '.join(_missing_signoff)} "
+                  f"are nevertheless MISSING, so the writes that precede "
+                  f"{_stage_nm} did not all land; what is on disk is a "
+                  f"partial write set and is not a sign-off.",
+                [str(out_dir / "openroad.log")],
+                extras={"finding": "PNR_TOOL_FATAL_SIGNAL",
+                        "pnr_fatal_signal": _sig_diag,
+                        "non_signoff_outputs": [
+                            str(p) for p in _pnr_signoff_artifacts(out_dir, top)
+                            if p.is_file()],
+                        "resize_history": resize_history,
+                        "loosen_declines": loosen_declines})
+        if not _sig_diag.get("stage_is_nonfatal_by_template"):
+            _write_pnr_fatal_signal_attestation(project, _sig_diag)
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                _pnr_fatal_signal_message(_sig_diag)
+                + f" Those artifacts are complete and from THIS session, but "
+                  f"{_stage_nm} is NOT one of the stages pnr.tcl declares "
+                  f"best-effort ({', '.join(sorted(_PNR_NONFATAL_STAGES))}): "
+                  f"its output is load-bearing and it did not run, so the "
+                  f"run is incomplete and nothing from it is signed off.",
+                [str(out_dir / "openroad.log")]
+                + [str(p) for p in _pnr_signoff_artifacts(out_dir, top)
+                   if p.is_file()],
+                extras={"finding": "PNR_TOOL_FATAL_SIGNAL",
+                        "pnr_fatal_signal": _sig_diag,
+                        "non_signoff_outputs": [
+                            str(p) for p in _pnr_signoff_artifacts(out_dir, top)
+                            if p.is_file()],
+                        "resize_history": resize_history,
+                        "loosen_declines": loosen_declines})
+        # Survivable: the artifacts are complete, they are this session's, and
+        # the block that died was declared best-effort and modifies none of
+        # them. The exit status is re-pointed so the gates below judge the
+        # artifacts that exist — and the crash travels with the verdict, in
+        # the detail line, the extras and the on-disk attestation, exactly as
+        # a resumed crash does. It is recorded, never dropped.
+        _sig_survivable = True
+        _write_pnr_fatal_signal_attestation(project, _sig_diag)
+        rc = 0
+    if _sig_diag is not None and not _sig_survivable and def_file.is_file():
+        # A crash WITH a final DEF already on disk. The DEF cannot have come
+        # from this session — the crash preceded the write — so it is a
+        # LEFTOVER from an earlier run, and the most dangerous shape of all:
+        # the "no final DEF" half of the gate below is satisfied by a stale
+        # file and only the exit status is left to notice anything is wrong.
+        # It is named here rather than reported as a bare `rc=<n>`.
+        _write_pnr_fatal_signal_attestation(project, _sig_diag)
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            _pnr_fatal_signal_message(_sig_diag)
+            + f" A {def_file.name} is present but CANNOT be from this "
+              f"session — it predates the crash and must not be signed off.",
+            [str(out_dir / "openroad.log"), str(def_file)],
+            extras={"finding": "PNR_TOOL_FATAL_SIGNAL",
+                    "pnr_fatal_signal": _sig_diag,
+                    "non_signoff_outputs": [str(def_file)],
+                    "resize_history": resize_history,
+                    "loosen_declines": loosen_declines})
+    if _sig_diag is not None and not _sig_survivable and not def_file.is_file():
+        _resume_record = _pnr_resume_after_fatal_signal(
+            project=project, top=top, container=container, out_dir=out_dir,
+            out_dir_c=out_dir_c, pnr_tcl=pnr_tcl, diag=_sig_diag,
+            hard_ceiling_s=_pnr_ceiling)
+        _sig_diag["resume"] = _resume_record
+        if _resume_record.get("status") == "RESUMED":
+            # The route was salvaged from the checkpoint and the tail
+            # re-ran. rc/out are re-pointed at the RESUMED session so every
+            # gate below judges the artifacts that actually exist, and the
+            # crash travels with the result in `extras` + the on-disk
+            # attestation — it is recorded, never dropped.
+            rc = int(_resume_record.get("rc", rc))
+            out = (out or "") + "\n" + str(_resume_record.get("log_tail", ""))
+            def_file = out_dir / f"{top}.def"
+        else:
+            # ── A RESUME THAT DID NOT SUCCEED IS A HALF-RUN ────────────────
+            # ORGANIC #570. The resume session runs the post-route TAIL, and
+            # the writes are the last thing in it — so a resume that exits
+            # non-zero, or exits 0 having produced an UNROUTED DEF, can still
+            # have left `<top>.def` and `routed.def` sitting on their
+            # CANONICAL paths. On origin/main those files did not exist in
+            # this situation at all; the resume is what put them there, and
+            # leaving them is precisely the state `_docker_timeout_isolate`
+            # was written for on the stall path two branches up: downstream
+            # steps keyed on "the file is there" would read a half-run
+            # artifact as the design. They are renamed off the canonical
+            # paths and NAMED in the verdict.
+            #
+            # Scoped to a resume that actually RAN (`rc` present in the
+            # record). A NOT_ATTEMPTED resume wrote nothing, so there is
+            # nothing of this session's to isolate and any leftover on disk
+            # is a different (pre-existing) hazard this branch must not
+            # silently start renaming.
+            _resume_orphans: List[Path] = []
+            if "rc" in _resume_record:
+                _resume_orphans = [p for p in (out_dir / f"{top}.def",
+                                               out_dir / "routed.def",
+                                               out_dir / f"{top}_pnr.v")
+                                   if p.is_file()]
+                _docker_timeout_isolate(_resume_orphans)
+                _resume_record["isolated_outputs"] = [str(p)
+                                                      for p in _resume_orphans]
+            def_file = out_dir / f"{top}.def"          # re-measure post-isolation
+        _write_pnr_fatal_signal_attestation(project, _sig_diag)
+        if not def_file.is_file():
+            _msg = _pnr_fatal_signal_message(_sig_diag)
+            _why = _resume_record.get("reason") or ""
+            _iso = _resume_record.get("isolated_outputs") or []
+            return StepResult(
+                "pnr", "FAIL", time.time() - t0,
+                f"{_msg} RESUME: {_resume_record.get('status')}"
+                + (f" — {_why}" if _why else "")
+                + (" The resumed session had already written "
+                   + ", ".join(Path(p).name for p in _iso)
+                   + " before it failed; those are HALF-RUN outputs and have "
+                     "been renamed off their canonical paths so no downstream "
+                     "step can read them as the design."
+                   if _iso else ""),
+                [str(out_dir / "openroad.log")]
+                + [p for p in [_resume_record.get("resume_tcl"),
+                               _resume_record.get("resume_log")] if p],
+                extras={"finding": "PNR_TOOL_FATAL_SIGNAL",
+                        "pnr_fatal_signal": _sig_diag,
+                        "non_signoff_outputs": _iso,
+                        "resize_history": resize_history,
+                        "loosen_declines": loosen_declines})
     if rc != 0 or not def_file.is_file():
         return StepResult("pnr", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-2000:]}",
@@ -18220,6 +19777,29 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "or lower a PDK pitch floor, so there is no in-flow repair. Those "
             "ports are counted as net-owned above; that number says nothing "
             "about them")
+    # #701 — the macro(s) whose supply the grid REFUSED to reach. Until now the
+    # planner returned the same `None` for this as for "the design has no hard
+    # macros", so the PnR detail for a dropped macro was byte-identical to a
+    # macro-free run and the failure was first seen as PSM-0038/0039/0069 with
+    # nothing pointing back. Stated here, on the step's own detail line, for the
+    # same reason the unreachable-port clause is: an observation nobody reads is
+    # the silence, one step quieter.
+    _mg_refused = _parse_macro_pdn_grid_refusals(_pg_log_txt)
+    if _mg_refused:
+        detail += (
+            f" | MACRO_PDN_GRID_REFUSED: {len(_mg_refused)} hard macro(s) "
+            + "; ".join(f"{r['master']} (pin_layer={r['pin_layer']}, "
+                        f"{r['reason']})" for r in _mg_refused[:5])
+            + (" …" if len(_mg_refused) > 5 else "")
+            + " — no macro PDN grid was built for them and no OBS was "
+              "overridden, so their supply pins are NOT reached by this power "
+              "grid. REPORTED, NOT BLOCKING here: this planner reads the PDK's "
+              "macro LEF list, not the placement, so it cannot tell whether "
+              "the master is instantiated, nor whether the supply arrives by a "
+              "construct it does not model (a ring, a pre-routed abstract). "
+              "The DEF-geometry verdict below and the tool's own connectivity "
+              "check are what block; this names the macro so they can be "
+              "traced back to it")
     spare_extras = {
         "pg_terminals_total": _pg_total,
         "pg_terminals_on_no_net": _pg_bad,
@@ -18231,6 +19811,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "carries no information about conductor presence or reachability"),
         "pg_conductor_measured": False,
         "macro_pdn_ports_unreachable": _pg_unreach,
+        # #701 — machine-readable, so a consumer need not parse the sentence
+        # above, and so "no macros" ([] with no marker) stays a different
+        # record from "a macro was refused".
+        "macro_pdn_grid_refusals": _mg_refused,
         "spare_density_target": round(spare_dens, 6),
         "spare_count": spare_plan.get("count", 0),
         "spare_types": spare_plan.get("types", {}),
@@ -18277,6 +19861,27 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _nl_extras = {"pnr_input_netlist": netlist.name,
                   "pnr_input_netlist_note": _nl_note,
                   "pnr_netlist_scan_inserted": _nl_is_scan}
+    # A PnR that only completed because the runner resumed it past a tool
+    # crash must never read as an ordinary PASS. The crash, the killed stage
+    # and the stage that was consequently NOT run travel with the verdict —
+    # in the detail line, in the extras, and in a durable attestation on disk.
+    if _resume_record and _resume_record.get("status") == "RESUMED":
+        detail += (" | " + _pnr_fatal_signal_message(_sig_diag)
+                   + " RESUMED from the checkpoint with "
+                   + ", ".join(_resume_record.get("omitted_stages") or ["-"])
+                   + " NOT RUN — those stages did not contribute to the "
+                     "artifacts below")
+        _nl_extras["pnr_fatal_signal"] = _sig_diag
+    elif _sig_survivable:
+        # Same rule, other side of the writes: a PnR that only reads as a PASS
+        # because the crash landed after every sign-off write must say so in
+        # the verdict, not only in the attestation.
+        detail += (" | " + _pnr_fatal_signal_message(_sig_diag)
+                   + f" {_sig_diag.get('stage')} is declared best-effort by "
+                     f"pnr.tcl and contributed NOTHING to the artifacts below "
+                     f"— they were written before it began and are unchanged "
+                     f"by its death")
+        _nl_extras["pnr_fatal_signal"] = _sig_diag
     if resize_history:
         return StepResult("pnr", "PASS", time.time() - t0,
                           detail,
@@ -23121,9 +24726,35 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
 # ---------------------------------------------------------------------------
 # Step 5: LVS (Netgen) — defer when no extracted SPICE netlist available
 # ---------------------------------------------------------------------------
+# ── ONE DEF wiring grammar, used by every routing predicate in this file ──
+# DEF 5.8 gives a net's `regularWiring` a STATUS token, and there are four of
+# them: ROUTED (the router wrote it), FIXED (pre-routed, must not move), COVER
+# (pre-routed, must not move or be re-shaped) and NOSHIELD. Only the STATUS is
+# introduced by `+`; the further wire segments of the SAME statement continue
+# with a BARE `NEW` and no plus sign.
+#
+# The predicates below used to hand-roll this as substring tests, and each one
+# rolled it differently: `_def_has_routing` accepted `"+ ROUTED"`/`"+ FIXED"`,
+# `_def_signal_routing_stats` accepted `"+ ROUTED"`/`"+ NEW"`. Two consequences,
+# both MEASURED on the tracked corpus:
+#   * `+ NEW` is DEAD — 0 occurrences in all three tracked routed DEFs, because
+#     the continuation is spelled `NEW`, never `+ NEW`. A token that can never
+#     match is not a widened grammar, it is a comment.
+#   * a DEF whose wiring is FIXED/COVER/NOSHIELD-only, or that writes `+  ROUTED`
+#     with two spaces (both legal DEF 5.8), read as UNROUTED. For the resume gate
+#     that is a false REFUSAL and for the LVS guard a false BLOCK — safe, but
+#     wrong, and it would have sent the reader hunting a routing bug that is not
+#     there.
+# One regex, both callers, and it only ever moves a DEF from "unrouted" to
+# "routed" — it can never turn a refusal into a sign-off it did not earn.
+# chip-AGNOSTIC: DEF 5.8 grammar only.
+_DEF_WIRING_RE = re.compile(r"\+\s+(?:ROUTED|FIXED|COVER|NOSHIELD)\b")
+
+
 def _def_has_routing(def_path: Path) -> bool:
     """ORGANIC #571 — True when a DEF carries actual routing geometry: a
-    NETS section with `+ ROUTED`/`+ FIXED` wiring, or a non-empty
+    NETS section with a `+ ROUTED`/`+ FIXED`/`+ COVER`/`+ NOSHIELD` wiring
+    statement, or a non-empty
     SPECIALNETS section (PG straps). A floorplan / placement-stage DEF has
     COMPONENTS + PINS but no routed wiring — feeding it to Magic ext2spice
     wastes hours on an interconnect-less extraction. Reads a bounded prefix
@@ -23133,7 +24764,7 @@ def _def_has_routing(def_path: Path) -> bool:
         # on the first positive.
         with def_path.open("r", errors="ignore") as fh:
             for line in fh:
-                if "+ ROUTED" in line or "+ FIXED" in line:
+                if _DEF_WIRING_RE.search(line):
                     return True
                 if line.lstrip().startswith("SPECIALNETS"):
                     # SPECIALNETS <n> ; — a positive count means PG routing
@@ -23151,8 +24782,18 @@ def _def_has_routing(def_path: Path) -> bool:
 _LVS_MIN_SIGNAL_NETS_FOR_ROUTING_CHECK = 16
 
 
-def _def_signal_routing_stats(def_path: Path) -> Tuple[bool, int]:
+def _def_signal_routing_stats(def_path: Path,
+                              unknown_is_routed: bool = True
+                              ) -> Tuple[bool, int]:
     """Return (has_signal_routing, signal_net_count) for the DEF's NETS section.
+
+    `unknown_is_routed` selects what an UNCLASSIFIABLE DEF (unreadable, or
+    carrying no NETS header at all) means. The default True is the fail-safe
+    the LVS guard needs: never block a DEF you could not read. A caller that
+    is asking for POSITIVE proof of routing — the crash-resume gate, which
+    must refuse unless it can show the checkpoint is routed — passes False so
+    that "could not tell" reads as "not proven", not as "fine". One scan, one
+    copy of the DEF grammar, two honestly-named policies.
 
     `_def_has_routing` conflates POWER routing (SPECIALNETS straps) with SIGNAL
     routing: a DEF that carries only power SPECIALNETS + placed cells (its signal
@@ -23164,12 +24805,13 @@ def _def_signal_routing_stats(def_path: Path) -> Tuple[bool, int]:
     SIGNAL_NET_MISMATCH but are really a routing / DEF-writing gap.
 
     This scans ONLY the `NETS ... END NETS` (signal) section — never SPECIALNETS
-    — counting `- <net>` entries and stopping EARLY on the first `+ ROUTED`/
-    `+ NEW` wiring marker (so a genuinely-routed DEF is classified in O(1) lines).
+    — counting `- <net>` entries and stopping EARLY on the first DEF 5.8 wiring
+    statement (`_DEF_WIRING_RE`, so a genuinely-routed DEF is classified in O(1)
+    lines).
     A signal-unrouted DEF is scanned to `END NETS` to confirm zero. chip-AGNOSTIC:
-    pure DEF-grammar counting, no chip literal. Fail-safe: on any read error, or
-    when no NETS header is found, returns (True, 0) so the guard never blocks a
-    DEF it could not classify."""
+    pure DEF-grammar counting, no chip literal. Fail-safe by DEFAULT: on any read
+    error, or when no NETS header is found, returns (`unknown_is_routed`, 0) so
+    the LVS guard never blocks a DEF it could not classify."""
     in_nets = False
     nets = 0
     try:
@@ -23185,12 +24827,12 @@ def _def_signal_routing_stats(def_path: Path) -> Tuple[bool, int]:
                     break
                 if s.startswith("- "):
                     nets += 1
-                if "+ ROUTED" in line or "+ NEW" in line:
+                if _DEF_WIRING_RE.search(line):
                     return True, nets            # signal routing present → routed
     except OSError:
-        return True, 0                            # unknown → do not block
+        return unknown_is_routed, 0               # unclassifiable → caller's policy
     if not in_nets:
-        return True, 0                            # no NETS header seen → do not block
+        return unknown_is_routed, 0               # no NETS header → caller's policy
     return False, nets
 
 
@@ -23612,7 +25254,7 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
     # interconnect-less netlist whose every signal net is disconnected, and the
     # DEF-direct netgen compare reports a flood of pin/net mismatches that LOOK
     # like a design SIGNAL_NET_MISMATCH but are really a ROUTING / DEF-writing
-    # gap. Detect it (a routed DEF has thousands of `+ ROUTED`/`+ NEW` signal-net
+    # gap. Detect it (a routed DEF has thousands of `+ ROUTED`/`+ FIXED`/`+ COVER`/`+ NOSHIELD` signal-net
     # markers; a signal-unrouted DEF has zero) and attribute HONESTLY instead of
     # burning hours in ext2spice and mis-blaming the design. Applies to the
     # NAMED DEF too (not only the fallback), because the runner's own
@@ -25034,6 +26676,66 @@ def _run_asap7_device_lvs(project: Path, top: str, pdk: PdkConfig,
         extras={**common, "finding": finding, "lvs_verdict": verdict})
 
 
+def _strip_nonlayer_blockages(def_text: str) -> Tuple[str, List[str]]:
+    """Return (def_text_without_layerless_BLOCKAGES, dropped_entry_summaries).
+
+    A DEF `BLOCKAGES` section may hold two unrelated kinds of entry:
+
+      - LAYER MET1 RECT ( x1 y1 ) ( x2 y2 ) ;              <- has geometry
+      - PLACEMENT + SOFT + COMPONENT <inst> RECT ( ... ) ; <- placer directive
+
+    The second kind names NO layer: it is an instruction to the PLACER not to
+    put cells in a region, and it carries no conductor. Magic's DEF reader has
+    no layer to bind that RECT to and emits
+
+        LEF read, Line NNNN (Error): No layer defined for RECT.
+
+    and -- measured, not assumed -- then terminates the DEF read part of the
+    time: the SAME command on the SAME byte-identical DEF succeeded 2 of 5
+    runs and died inside the BLOCKAGES section the other 3. Magic exits 0
+    either way, so the step reported only the vague downstream symptom
+    "produced no extracted netlist (rc=0)" and LVS was unrunnable at random.
+
+    So: drop only the entries magic cannot bind (no LAYER), keep every entry
+    that does name a layer, and leave the DEF used by every OTHER consumer
+    untouched -- this staged copy is for extraction alone. The removal is
+    LOSS-FREE for extraction by construction (a placement blockage has no
+    conductor to extract) and was verified as such: on a run where the intact
+    DEF happened to survive, the extracted netlists from the intact and the
+    stripped DEF were byte-identical (same md5).
+
+    Strict fall-through: a DEF with no BLOCKAGES section, or one whose
+    blockages ALL name a layer, comes back unchanged with an empty list, so
+    the caller keeps using the original file. chip-AGNOSTIC: pure DEF syntax,
+    no PDK/design knowledge."""
+    m = re.search(r"(?m)^[ \t]*BLOCKAGES[ \t]+(\d+)[ \t]*;[ \t]*$", def_text)
+    if not m:
+        return def_text, []
+    end = re.search(r"(?m)^[ \t]*END[ \t]+BLOCKAGES[ \t]*$", def_text[m.end():])
+    if not end:
+        return def_text, []
+    body = def_text[m.end():m.end() + end.start()]
+    entries = re.findall(r"-[ \t\r\n].*?;", body, re.S)
+    if not entries:
+        return def_text, []
+    kept = [e for e in entries if re.match(r"-\s+LAYER\b", e)]
+    dropped = [" ".join(e.split())[:120] for e in entries if e not in kept]
+    if not dropped:
+        return def_text, []
+    if kept:
+        new_section = (f"BLOCKAGES {len(kept)} ;\n"
+                       + "".join(f"    {' '.join(e.split())}\n" for e in kept)
+                       + "END BLOCKAGES")
+    else:
+        # An empty `BLOCKAGES 0 ;` block is legal DEF, but emitting nothing is
+        # simpler and equally legal; the section is optional.
+        new_section = ""
+    tail = def_text[m.end() + end.start():]
+    tail = re.sub(r"(?m)\A[ \t]*END[ \t]+BLOCKAGES[ \t]*\n?", "", tail)
+    return def_text[:m.start()] + new_section + ("\n" if new_section else "") \
+        + tail, dropped
+
+
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                         container: str, def_file: Path, netlist: Path,
                         magicrc: str, netgen_setup: str,
@@ -25080,6 +26782,31 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     except Exception:  # nosec — a bad DEF/PDK must never break the plain path
         pass
     tcl.write_text(extract_tcl)
+    # ── LVS ROOT FIX (input side) — layer-less BLOCKAGES break magic's DEF
+    # read (see `_strip_nonlayer_blockages` for the measured 2-of-5 failure
+    # rate). Stage an EXTRACTION-ONLY copy of the DEF with those entries
+    # removed; the signed-off DEF that GDS/DRC/every other consumer reads is
+    # left untouched. Strict fall-through: nothing to strip -> original file.
+    extract_def = def_file
+    try:
+        _stripped, _dropped_blk = _strip_nonlayer_blockages(
+            def_file.read_text(errors="replace"))
+        if _dropped_blk:
+            extract_def = ext_dir / f"{top}_extract.def"
+            extract_def.write_text(_stripped)
+            (ext_dir / "extract_def_provenance.json").write_text(json.dumps({
+                "signed_off_def": str(def_file),
+                "extraction_def": str(extract_def),
+                "dropped_blockage_entries": _dropped_blk,
+                "reason": ("magic's DEF reader cannot bind a RECT that names "
+                           "no layer ('No layer defined for RECT') and aborts "
+                           "the read on it, non-deterministically; a placement "
+                           "blockage carries no conductor, so removing it from "
+                           "the EXTRACTION copy is loss-free. The signed-off "
+                           "DEF is untouched."),
+            }, indent=2) + "\n")
+    except OSError:
+        pass
     tlef_c = _to_container_path(str(pdk.tech_lef), container)
     clef_c = _to_container_path(str(pdk.cell_lef), container)
     # `eval`-ed inside the TCL; empty string → no-op when no macro LEFs.
@@ -25103,7 +26830,7 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"export TLEF={shlex.quote(tlef_c)} "
         f"CLEF={shlex.quote(clef_c)} "
         f"MACRO_LEF_READS={shlex.quote(macro_lef_reads)} "
-        f"DEF={_to_container_path(str(def_file), container)} "
+        f"DEF={_to_container_path(str(extract_def), container)} "
         f"TOP={top} "
         f"SPICE_OUT={_to_container_path(str(spice_out), container)} && "
         f"cd {_to_container_path(str(ext_dir), container)} && ")
@@ -25138,17 +26865,51 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                     "lvs_verdict": verdict,
                     "transcript_tail": (out + err)[-600:]})
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
+        # Say WHERE it stopped instead of only that a file is missing.
+        # MEASURED in the image: `magic` exits 0 even when a `lef read` /
+        # `def read` fails outright, so rc carries NO signal for this tool
+        # (openroad/sta/yosys do return 1 on an uncaught error; magic does
+        # not) — and that is true even now the pipeline's status is magic's
+        # own (`_tool_status_not_the_log_sinks`), because 0 is what magic
+        # itself returns. The recipe's own `MAGIC_EXT2SPICE_DONE` sentinel is
+        # therefore the only honest completion signal, and its ABSENCE plus
+        # the last tool line pins the abort to a recipe stage. Without this
+        # the step reported "produced no extracted netlist (rc=0)", which
+        # states the file is missing while implying the tool was fine.
+        _mlog = ""
+        try:
+            _mlog = (ext_dir / "ext2spice.log").read_text(errors="replace")
+        except OSError:
+            _mlog = out + err
+        _done = "MAGIC_EXT2SPICE_DONE" in _mlog
+        _ports = "PORTS_PROMOTED" in _mlog
+        _last = [ln for ln in _mlog.splitlines() if ln.strip()][-1:] or [""]
+        _err_ln = [ln for ln in _mlog.splitlines()
+                   if re.search(r"\(Error\)|error:", ln, re.I)][-3:]
+        _stage = ("completed the recipe but wrote no file" if _done else
+                  "aborted AFTER port promotion (extract/ext2spice stage)"
+                  if _ports else
+                  "aborted BEFORE port promotion (lef/def read stage)")
+        _detail = (
+            f"Magic ext2spice produced no extracted netlist: magic {_stage}. "
+            f"Its own completion sentinel MAGIC_EXT2SPICE_DONE is "
+            f"{'present' if _done else 'ABSENT'} in ext2spice.log. NOTE rc="
+            f"{rc} is not evidence here — magic exits 0 even on a fatal "
+            f"lef/def read failure. Last tool line: {_last[0].strip()[:200]!r}"
+            + (f"; last error line(s): {_err_ln}" if _err_ln else "")
+            + ". See phase3/stage3/extracted/ext2spice.log (#443).")
         verdict = _write_lvs_verdict(
-            project, "FAIL", "LVS_EXTRACTION_NO_NETLIST",
-            f"Magic ext2spice produced no extracted netlist (rc={rc}); "
-            f"see phase3/stage3/extracted/ext2spice.log (#443).",
-            extras={"transcript_tail": (out + err)[-600:]})
+            project, "FAIL", "LVS_EXTRACTION_NO_NETLIST", _detail,
+            extras={"magic_completion_sentinel": _done,
+                    "magic_aborted_stage": _stage,
+                    "magic_rc_is_uninformative": True,
+                    "transcript_tail": (out + err)[-600:]})
         return StepResult(
-            "lvs", "FAIL", time.time() - t0,
-            f"Magic ext2spice produced no extracted netlist (rc={rc}); "
-            f"see phase3/stage3/extracted/ext2spice.log (#443)",
+            "lvs", "FAIL", time.time() - t0, _detail,
             extras={"finding": "LVS_EXTRACTION_NO_NETLIST",
                     "lvs_verdict": verdict,
+                    "magic_completion_sentinel": _done,
+                    "magic_aborted_stage": _stage,
                     "transcript_tail": (out + err)[-600:]})
     # v0.3.14 — ORGANIC #509 round-3 + #685 round-6: re-add same-net top
     # ports that ext2spice dropped, joined by 0-ohm resistors (netgen
@@ -25915,10 +27676,20 @@ def _restamp_provenance_output(project: Path, rel: str, path: Path,
     """Make provenance.jsonl declare `rel` with the REAL current sha256 of
     `path`.
 
-    * patches EVERY existing entry that declares `rel` IN PLACE (appending a
-      second entry with a different hash would only trade
-      PROVENANCE_HASH_MISMATCH for PROVENANCE_HASH_INCONSISTENT);
+    * APPENDS a fresh entry when the newest record of `rel` declares a
+      different hash — the earlier record is superseded, never amended;
     * appends one fresh entry when no prior entry declares it.
+
+    This used to patch every existing entry that declares `rel` IN PLACE,
+    because appending "would only trade PROVENANCE_HASH_MISMATCH for
+    PROVENANCE_HASH_INCONSISTENT". That was true, and it was a defect in
+    the checker, not a reason to edit history: amending the ledger to
+    agree with the disk makes the one question the hash check exists to
+    answer — are these the bytes the recorded tool produced? —
+    permanently unanswerable, because a hand-edited artefact and a
+    legitimately re-run one both end PASS. provenance_output_hash_
+    completeness_check now resolves a path to its NEWEST record, so an
+    append is both honest and sufficient.
 
     Anti-fabrication (#365): the record declares the REAL sha256 of a file that
     EXISTS on disk, is flagged `reconstructed: true` and carries
@@ -25938,27 +27709,38 @@ def _restamp_provenance_output(project: Path, rel: str, path: Path,
             for _ch in iter(lambda: _f.read(65536), b""):
                 _h.update(_ch)
         _sha = "sha256:" + _h.hexdigest()
-        _patched = False
+        # The newest record of `rel` is the one that describes the bytes
+        # on disk. If it disagrees, APPEND a record of what is there now
+        # — never edit the earlier record. Amending history is what made
+        # a hand-edited artefact indistinguishable from a re-run one;
+        # see the re-emit note in the OpenROAD provenance block.
         _found = False
-        _new_lines: List[str] = []
+        _newest_sha = None
         for _ln in prov_path.read_text().splitlines():
             if not _ln.strip():
-                _new_lines.append(_ln)
                 continue
             try:
                 _rec = json.loads(_ln)
             except Exception:
-                _new_lines.append(_ln)
                 continue
             _outs = _rec.get("outputs", {})
             if isinstance(_outs, dict) and rel in _outs:
                 _found = True
-                if _outs[rel] != _sha:
-                    _outs[rel] = _sha
-                    _patched = True
-            _new_lines.append(json.dumps(_rec))
-        if _patched:
-            prov_path.write_text("\n".join(_new_lines) + "\n")
+                _newest_sha = _outs[rel]
+        if _found and _newest_sha != _sha:
+            with prov_path.open("a") as _f:
+                _f.write(json.dumps({
+                    "tool": tool,
+                    "command": command,
+                    "exit_code": 0,
+                    "duration_ms": None,
+                    "reconstructed": True,
+                    "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "note": "output re-emitted; the earlier record of "
+                            "this path is superseded, not amended",
+                    "outputs": {rel: _sha},
+                }) + "\n")
         if not _found:
             _entry = {
                 "tool": tool,
@@ -25974,6 +27756,90 @@ def _restamp_provenance_output(project: Path, rel: str, path: Path,
                 _f.write(json.dumps(_entry) + "\n")
     except (OSError, ValueError):
         pass   # non-fatal: the provenance stamp is best-effort here
+
+
+def _record_reemitted_outputs(project: Path) -> Optional[str]:
+    """APPEND one record for every declared output whose bytes on disk no
+    longer match the newest record that PRODUCED it. Returns a note on
+    failure, `None` on success.
+
+    Pulled out of `step_canonicalize_artefacts` deliberately. Inline, this
+    was the second of the two places that reconciled a re-emit, and being
+    unreachable from a test is why its predecessor's anti-regression guard
+    was a grep of the source for `prov_path.write_text(` — a STRING used
+    as a proxy for a behaviour, which promptly missed a rewrite spelled
+    `prov.write_text(`. A named helper can be driven, so the guard can
+    assert the property that actually matters: after this runs, the bytes
+    that were in the ledger are still a PREFIX of the bytes in the ledger.
+
+    Rows from FAILED invocations are not consulted for "the newest record
+    of a path". `_log_invocation` hashes whatever sits at each declared
+    path regardless of exit code, so a run that exited non-zero having
+    written nothing carries the digest of what was already there; letting
+    that stand as the newest production record would make this helper
+    append a re-emit for drift that never happened, and would disagree
+    with `provenance_output_hash_completeness_check`, which excludes the
+    same rows (PROVENANCE_OUTPUT_UNPRODUCED).
+
+    chip-AGNOSTIC: pure ledger bookkeeping over project-relative paths.
+    """
+    import datetime as _dt          # function-local: `_dt` is a local alias
+    prov_path = project / "provenance.jsonl"   # everywhere else in this file
+    if not prov_path.is_file():
+        return None
+
+    def _sha(p: Path) -> str:
+        h = hashlib.sha256()
+        with p.open("rb") as f:
+            for ch in iter(lambda: f.read(65536), b""):
+                h.update(ch)
+        return "sha256:" + h.hexdigest()
+
+    try:
+        newest: Dict[str, str] = {}
+        for line in prov_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:  # noqa: BLE001 — a line we cannot read, we skip
+                continue
+            if "exit_code" in rec:
+                try:
+                    if int(rec["exit_code"]) != 0:
+                        continue      # observed, not produced
+                except (TypeError, ValueError):
+                    pass              # unreadable rc: treat as production
+            outs = rec.get("outputs", {})
+            if isinstance(outs, dict):
+                for rel, declared_sha in outs.items():
+                    if isinstance(rel, str) and isinstance(declared_sha, str):
+                        newest[rel] = declared_sha
+        drifted = {}
+        for rel, declared_sha in newest.items():
+            fp = project / rel
+            if fp.is_file():
+                cur = _sha(fp)
+                if cur != declared_sha:
+                    drifted[rel] = cur
+        if drifted:
+            with prov_path.open("a") as f:
+                f.write(json.dumps({
+                    "tool": "phase3_one_shot_runner",
+                    "command": "re-emit (phase3 iteration)",
+                    "exit_code": 0,
+                    "duration_ms": None,
+                    "reconstructed": True,
+                    "timestamp": _dt.datetime.now(_dt.timezone.utc)
+                                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "note": "outputs re-emitted by a re-run of this "
+                            "runner; the earlier record of each path "
+                            "is superseded, not amended",
+                    "outputs": drifted,
+                }) + "\n")
+    except Exception as exc:  # noqa: BLE001 — bookkeeping never breaks the run
+        return f"provenance re-emit record failed: {exc}"
+    return None
 
 
 def _step37_declare_streamout_gds_provenance(project: Path, top: str) -> None:
@@ -28061,9 +29927,18 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # --- ORGANIC-20260531: Steps 24/25 IR-drop + EM (OpenROAD PSM) ------
     # NOT cascade-blocked by SPEF — analyze_power_grid walks the routed
     # DEF power grid directly. Emits reports/phase3/{ir_drop,em}.{rpt,json}.
+    #
+    # GUARDED BY `_signoff_regen`, NOT BY `.is_file()`. These four producers
+    # (IR, EM, antenna, SI) were the ones the `_signoff_regen` change left
+    # behind: it converted extraction and every STA artefact below and stopped
+    # here, so a re-run that re-routed refreshed the SPEF and the STA reports
+    # and then signed the power, reliability and crosstalk axes off with the
+    # PREVIOUS layout's numbers. The reports it skipped are the ones no
+    # downstream gate can date, so the mixture is silent — see `_signoff_regen`.
     ir_rpt = rpt_phase3 / "ir_drop.rpt"
     em_rpt = rpt_phase3 / "em.rpt"
-    if primary_def.is_file() and not (ir_rpt.is_file() and em_rpt.is_file()):
+    if primary_def.is_file() and (_signoff_regen(ir_rpt, primary_def)
+                                  or _signoff_regen(em_rpt, primary_def)):
         ir_ok, em_ok = _emit_ir_em_reports(
             project, top, pdk, container, ir_rpt, em_rpt, notes)
         if ir_ok:
@@ -28075,7 +29950,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 26 antenna (re-emit to audit path) ------
     antenna_rpt = rpt_phase3 / "antenna.rpt"
-    if primary_def.is_file() and not antenna_rpt.is_file():
+    if primary_def.is_file() and _signoff_regen(antenna_rpt, primary_def):
         if _emit_antenna_report(project, top, pdk, container,
                                 antenna_rpt, notes):
             written.append(str(antenna_rpt))
@@ -28083,7 +29958,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- ORGANIC-20260531: Step 27 SI / crosstalk (real SPEF coupling caps) --
     si_rpt = rpt_phase3 / "si_crosstalk.rpt"
-    if not si_rpt.is_file():
+    if _signoff_regen(si_rpt, primary_def):
         # v0.2.35: pass pdk + container so the SI emitter can ALSO run the
         # timing-window-aware ADVISORY upgrade (OpenSTA SI timing JSON →
         # window-gated watch-list) when a routed SPEF + post-route STA exist.
@@ -28265,6 +30140,15 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # post-route checkpoint without routed.def. Route-stage evidence is
     # therefore routed.def OR routed_preantenna.def — and the advice is
     # "resume from the checkpoint", never "re-run from scratch".
+    #
+    # That advice used to have no mechanism behind it: there was no resume
+    # flag and no resume code path anywhere in this file, so the note sent
+    # every reader looking for something that was never written. The resume
+    # now exists (`_pnr_resume_after_fatal_signal`, driven from step_pnr on a
+    # fatal-signal exit), and the note below names it so the reader can find
+    # it — and says plainly when it did NOT run, which is the case whenever
+    # this branch is reached with the checkpoint still standing in for
+    # routed.def.
     expected_def_stages = [fname for fname, _label in
                            _PNR_CHECKPOINT_STAGES
                            if fname != "routed_preantenna.def"] \
@@ -28278,9 +30162,52 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         missing_stages.remove("routed.def")
         notes.append(
             "route stage evidenced by checkpoint "
-            "routed_preantenna.def — final routed.def absent (mid-tcl "
-            "death after detailed route). Resume from the checkpoint "
-            "(#548); a from-scratch re-run is NOT required.")
+            f"{_route_checkpoint} — final routed.def absent (mid-tcl "
+            "death after detailed route). Resume from the checkpoint is "
+            "AUTOMATIC and a from-scratch re-run is NOT required: step_pnr "
+            "resumes from this checkpoint when the tool died on a signal in "
+            "a stage pnr.tcl declares best-effort (see "
+            "_pnr_resume_after_fatal_signal, and "
+            "reports/phase3/pnr_fatal_signal.json for whether it ran and "
+            "why). This note means the resume did NOT complete — the "
+            "checkpoint is standing in for routed.def, so no antenna "
+            "repair, fill or final write ran on it and it is NOT a "
+            "sign-off artifact.")
+    # ── THE CRASH ATTESTATION HAS A READER ────────────────────────────────
+    # `reports/phase3/pnr_fatal_signal.json` used to be write-only: step_pnr
+    # emitted it, the note above pointed a HUMAN at it, and no program in the
+    # tree ever opened it. So the one shape it exists to make visible — a PnR
+    # that crashed and nevertheless left a COMPLETE per-stage DEF set (a crash
+    # after the sign-off writes, or a resume that finished the tail) — reached
+    # this step looking exactly like an ordinary clean run and drew no note at
+    # all. It is read here, so the crash is in the canonicalisation record
+    # too, not only in a step detail string a re-run overwrites.
+    _fatal_sig_json = rpt_phase3 / "pnr_fatal_signal.json"
+    if _fatal_sig_json.is_file():
+        try:
+            _fs = json.loads(_fatal_sig_json.read_text())
+        except (OSError, ValueError):
+            _fs = None
+        if isinstance(_fs, dict):
+            _fs_resume = _fs.get("resume")
+            _fs_resume_status = (_fs_resume.get("status")
+                                 if isinstance(_fs_resume, dict) else None)
+            notes.append(
+                f"PnR CRASHED in this project: OpenROAD was killed by "
+                f"{_fs.get('signal_name')} (rc={_fs.get('rc')}) in stage "
+                f"{_fs.get('stage')} — see {_fatal_sig_json}. "
+                + (f"The stage began AFTER pnr.tcl's last sign-off write, so "
+                   f"the DEF/netlist below were written before it and are "
+                   f"from that session. "
+                   if _fs.get("crashed_after_signoff_writes")
+                   else "The stage ran BEFORE pnr.tcl's sign-off writes. ")
+                + (f"Resume: {_fs_resume_status}"
+                   + (f" — {_fs_resume.get('reason')}"
+                      if _fs_resume.get("reason") else "")
+                   if _fs_resume_status
+                   else "No resume was recorded.")
+                + " A complete stage-DEF set here is therefore NOT evidence "
+                  "of an uninterrupted run.")
     if primary_def.is_file():
         # PDN done flag
         pdn_flag = pnr_out / "pdn.done"
@@ -28313,12 +30240,25 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             "Re-run phase3_one_shot_runner from scratch (delete "
             "phase3/stage3/pnr/) so v1.6.36's per-stage write_def fires.")
 
-    # --- Provenance: refresh on-disk hashes + append OpenROAD entry ---
+    # --- Provenance: record re-emitted outputs + append OpenROAD entry ---
     # When the runner re-emits a file (synth.log, routed.def, GDS, etc.)
     # the previously-recorded hash in provenance.jsonl no longer matches
-    # the new on-disk hash, breaking provenance_output_hash_completeness_check.
-    # We refresh in place — this is honest provenance because the runner
-    # IS the tool invoker for these outputs.
+    # the new on-disk hash.
+    #
+    # This used to be reconciled by REWRITING the historical record's
+    # declared hash to whatever was on disk. Being the tool invoker
+    # justifies APPENDING a record of what we just produced; it does not
+    # justify editing a record of what some earlier invocation produced.
+    # The rewrite destroyed the only evidence the hash check reads: it
+    # made "the bytes on disk are not the bytes the recorded tool
+    # produced" unobservable, because any disagreement was resolved by
+    # amending the ledger. A hand-edited artefact and a legitimately
+    # re-run one are indistinguishable to it — both end PASS.
+    #
+    # So: append a new record instead. The ledger stays append-only, the
+    # newest record describes the current bytes (which is what
+    # provenance_output_hash_completeness_check verifies), and the
+    # earlier record survives as the history it was written to be.
     # Also: ensure routed.def has an entry attributed to openroad so
     # provenance_check (Step 21) finds the tool attribution.
     prov_path = project / "provenance.jsonl"
@@ -28330,33 +30270,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 h.update(ch)
         return "sha256:" + h.hexdigest()
 
-    # 1. Refresh existing provenance entry hashes for any output that
-    #    still exists on disk but whose hash drifted.
-    if prov_path.is_file():
-        try:
-            lines = prov_path.read_text().splitlines()
-            patched_lines = []
-            for line in lines:
-                if not line.strip():
-                    patched_lines.append(line)
-                    continue
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    patched_lines.append(line)
-                    continue
-                outs = rec.get("outputs", {})
-                if isinstance(outs, dict):
-                    for rel, declared_sha in list(outs.items()):
-                        fp = project / rel
-                        if fp.is_file():
-                            cur = _sha(fp)
-                            if cur != declared_sha:
-                                outs[rel] = cur
-                patched_lines.append(json.dumps(rec))
-            prov_path.write_text("\n".join(patched_lines) + "\n")
-        except Exception as exc:
-            notes.append(f"provenance refresh failed: {exc}")
+    # 1. Record any declared output that still exists on disk but whose
+    #    bytes no longer match its newest record — by APPENDING a fresh
+    #    record of what is there now, never by editing an older one.
+    _reemit_note = _record_reemitted_outputs(project)
+    if _reemit_note:
+        notes.append(_reemit_note)
 
     # 2. Append openroad entry for routed.def if missing.
     routed_def = pnr_out / "routed.def"
@@ -28526,7 +30445,17 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     _mcf_json = project / "reports/phase3/si_mcf_sta.json"
     _mcf_spef = sorted((project / "phase3/stage3/extracted").glob("*.spef")) \
         if (project / "phase3/stage3/extracted").is_dir() else []
-    if (not _mcf_json.is_file() and _mcf_spef
+    # Dated against the SPEF it folds, not against the bare existence of its own
+    # report. The MCF fold is a FUNCTION of that SPEF: `si_mcf_sta_check`
+    # re-derives the expected fold from whatever sits at the SPEF path NOW and
+    # compares it to the bounded SPEF emitted here, so an unrefreshed report
+    # leaves the gate comparing two files from different extractions. It then
+    # reports the mismatch as `FOLD_NOT_APPLIED` — a DESIGN defect ("the emitter
+    # dropped the fold") for what is really an unmatched artefact pair.
+    _mcf_newest_spef = max(_mcf_spef, key=lambda p: p.stat().st_mtime) \
+        if _mcf_spef else None
+    if (_mcf_newest_spef is not None
+            and _signoff_regen(_mcf_json, _mcf_newest_spef)
             and (project / "phase3/stage3/pnr/constraint.sdc").is_file()):
         try:
             _mcf_cmd = [sys.executable,
@@ -33096,6 +35025,42 @@ def _metal_density_recipe() -> str:
     return recipe
 
 
+def _freshest_gds(alias_gds: Path, source_gds: Path) -> Optional[Path]:
+    """Return the GDS that reflects the CURRENT round for a sign-off
+    measurement: the FRESHER (larger mtime) of the canonical stage4 alias and
+    the streamed pnr GDS, skipping absent files.
+
+    WHY. The canonical alias `phase3/stage4/gds/<top>.gds` is a byte copy of the
+    streamed pnr GDS, refreshed by "Step 37 GDS canonical alias" — which runs
+    LATER in the SAME `step_canonicalize_artefacts` pass than the metal-density
+    emit. A consumer reading the alias BEFORE that refresh sees, on a re-run,
+    the PREVIOUS round's bytes: the alias still holds last round's GDS when the
+    metal-density emit reads it, so it measures a superseded layout (measured:
+    the density report was written ~21s before the alias was rewritten; first
+    run reported the inherited density 0.19/0.11/0.08/0.06/0.05 for a GDS that
+    actually measured 0.21/0.24/0.28/0.36/0.38). On a first-ever run the alias
+    is absent and the streamed source is used — an honest measurement, not a
+    stale one.
+
+    Comparing mtimes selects the layout this round produced regardless of the
+    copy ordering: once Step 37 HAS refreshed the alias (alias newer-or-equal)
+    the canonical alias is returned; until then the streamed source is. Ties
+    prefer the canonical alias (byte-identical anyway). Unprovable freshness
+    (stat fails) prefers the source — the always-current-round streamed
+    artefact. chip-AGNOSTIC: pure mtime comparison of two paths; no design,
+    vendor, SKU, process-node or PDK literal."""
+    a = alias_gds if alias_gds.is_file() else None
+    s = source_gds if source_gds.is_file() else None
+    if a is None:
+        return s
+    if s is None:
+        return a
+    try:
+        return a if a.stat().st_mtime >= s.stat().st_mtime else s
+    except OSError:
+        return s
+
+
 def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
                                container: str, out_json: Path,
                                notes: List[str]) -> bool:
@@ -33105,14 +35070,19 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     report → the gate SKIPs honestly (never a fabricated density). Best-effort;
     returns True when metal_density.json is produced. Validated live on a real
     routed sky130 GDS (espi: met1 13% — below the 30% CMP min, exactly the
-    met_min_ca_density case)."""
-    gds = _pl.gds_dir(project) / f"{top}.gds"
-    if not gds.is_file():
-        gds = _pl.pnr_dir(project) / f"{top}.gds"
-    if not gds.is_file():
+    met_min_ca_density case).
+
+    Measures the CURRENT round's GDS — the fresher of the canonical stage4 alias
+    and the streamed pnr GDS — because the alias is refreshed by Step 37 LATER
+    in this same canonicalize pass, so reading it directly measured the previous
+    round's layout on every re-run (see `_freshest_gds`)."""
+    alias_gds = _pl.gds_dir(project) / f"{top}.gds"
+    source_gds = _pl.pnr_dir(project) / f"{top}.gds"
+    gds = _freshest_gds(alias_gds, source_gds)
+    if gds is None or not gds.is_file():
         hits = sorted(_pl.gds_dir(project).glob("*.gds")) if \
             _pl.gds_dir(project).is_dir() else []
-        gds = hits[0] if hits else gds
+        gds = hits[0] if hits else alias_gds
     if not gds.is_file():
         notes.append("metal density skipped: no streamed GDS found")
         return False

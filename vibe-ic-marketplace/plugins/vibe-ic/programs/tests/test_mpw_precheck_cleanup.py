@@ -1,6 +1,7 @@
 """Unit tests for `mpw_precheck_cleanup.py`."""
 import importlib
 
+from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("mpw_precheck_cleanup")
 
 
@@ -180,4 +181,5 @@ class TestCleanupDriver:
     def test_attribution(self, tmp_path):
         rep = mod.cleanup_project(tmp_path, "x")
         d = rep.as_dict()
-        assert "v0.1.51" in d["emitted_by"]
+        assert d["emitted_by"] == \
+            f"mpw_precheck_cleanup v{shipped_plugin_version()}"

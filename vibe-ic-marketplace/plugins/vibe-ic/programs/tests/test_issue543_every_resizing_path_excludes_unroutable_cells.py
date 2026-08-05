@@ -37,6 +37,7 @@ sentence about a command.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -86,9 +87,33 @@ def test_the_fallback_still_excludes_the_family_that_broke_routing():
     pass while excluding nothing that matters."""
     tcl = R._dont_use_family_fallback_tcl()
     assert "set_dont_use" in tcl
-    assert "__probe_" in tcl, (
+    assert _probe_family_reached(tcl), (
         "the fallback no longer excludes the probe family — the cell that "
         "produced DRT-0085 would be back in every resizer's pool")
+
+
+def _probe_family_reached(tcl: str) -> bool:
+    """Does the do-not-use block in ``tcl`` actually reach the probe family?
+
+    Asserted on BEHAVIOUR, not on the `__probe_` spelling. The original pin was
+    the literal `"__probe_" in tcl`, and that literal is the OPEN-PDK
+    ``<lib>__<fn>`` convention — the very anchoring that made the pattern list
+    match ZERO cells on a commercial library while the run still printed
+    DONT_USE_FALLBACK_APPLIED. Pinning the spelling would have re-imposed the
+    defect on every emitter this file guards.
+
+    The two probe cells below are the SAME family in the two conventions the
+    flow has met: the exact master measured breaking the reroute on ibex, and a
+    bare upper-case commercial spelling. Both must be reached, and OpenSTA
+    fullmatches a ``-regexp`` pattern, hence ``fullmatch``.
+    """
+    m = re.search(r"foreach _du_pat \{([^}]*)\}", tcl)
+    if not m:
+        return False
+    pats = m.group(1).split()
+    return all(
+        any(re.fullmatch(p, cell, re.IGNORECASE) for p in pats)
+        for cell in ("sky130_fd_sc_hd__probe_p_8", "PROBE_X1"))
 
 
 @pytest.mark.parametrize("fn_name,kwargs", RESIZING_EMITTERS,
@@ -101,7 +126,7 @@ def test_resizing_path_excludes_unroutable_masters_before_it_resizes(fn_name, kw
         f"{fn_name} emits no set_dont_use: it can insert an unroutable "
         f"characterization master and detailed_route will die with DRT-0085")
 
-    assert "__probe_" in tcl, (
+    assert _probe_family_reached(tcl), (
         f"{fn_name} emits set_dont_use without the probe family — the specific "
         f"master measured breaking the reroute on ibex")
 

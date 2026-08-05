@@ -200,6 +200,7 @@ from _code_literal import (  # noqa: E402
 from _electrical_mention import (  # noqa: E402
     scan_electrical_mentions as _scan_electrical_mentions,
 )
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 # ─── `typedef enum` harvester for staged HDL inputs (#499) ────────────
 import _hdl_enum as _hdlenum  # noqa: E402
 # ─── Was the input actually READ? (#499) ──────────────────────────────
@@ -9824,8 +9825,8 @@ def _emit_l14_to_l18_via_extractor(
                 payload = {"extracted": payload}
             payload.setdefault("schema_version", "v0.1.62")
             payload.setdefault("doc_class", doc_name.split("_", 1)[0])
-            payload.setdefault("emitted_by",
-                                f"phase1_protocol_spec_extract.{fn_name} v0.1.62")
+            payload.setdefault("emitted_by", _pmd.emitted_by(
+                f"phase1_protocol_spec_extract.{fn_name}"))
             # _write_l_doc will run R11 scrub + R13 applicability gate.
             # Evidence is per-extractor; pass empty if the extractor
             # didn't carry one (gate-internal evidence sanitiser handles it).
@@ -11854,6 +11855,106 @@ def _byte_list_to_payload_template(
     return tmpl
 
 
+def _payload_template_entry_offset(entry: Any) -> Optional[int]:
+    """Return the int `byte_offset` of a payload-template entry, or None
+    when the entry is not a structurally usable typed byte spec.
+
+    Purely structural / chip-AGNOSTIC: no value, vendor or opcode literal
+    participates in the decision."""
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return int(entry.get("byte_offset"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _payload_template_entry_is_documented(entry: Any) -> bool:
+    """True when a payload-template entry carries a concrete byte the
+    SOURCE DOCUMENT stated (a non-empty `value`), as opposed to a
+    placeholder that only carries a `source` pointer.
+
+    Structural only — an int, or a non-empty string. chip-AGNOSTIC."""
+    if _payload_template_entry_offset(entry) is None:
+        return False
+    val = entry.get("value")
+    if isinstance(val, bool):          # bool is an int subclass; not a byte
+        return False
+    if isinstance(val, int):
+        return True
+    return isinstance(val, str) and val.strip() != ""
+
+
+def _merge_response_payload_template(
+    extracted: Any,
+    synthesised: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Merge the DOCUMENT-extracted response template over the synthesised
+    typed-shape placeholder, per `byte_offset`. FILL THE GAPS — never
+    overwrite what the document said.
+
+    #812 — the per-opcode enrichment pass used to assign the synthesised
+    placeholder straight onto `response_payload_template`, unconditionally.
+    That placeholder exists only to satisfy a downstream TYPED-SHAPE
+    requirement (a consumer needs a well-formed template even when the
+    document gives nothing), but it was also stamped over opcodes whose
+    document DID state the response bytes — those landed in the sibling
+    `response_payload_template_extracted`, which no consumer read. The
+    polarity was inverted: the better-documented the input, the more
+    information was discarded, and a documented response became
+    indistinguishable from an undocumented one.
+
+    Merge rule (chip-AGNOSTIC, purely positional — no vendor / SKU / IC
+    literal participates):
+
+      * the result spans the UNION of both `byte_offset` domains;
+      * at an offset the document documented, the document's entry wins,
+        verbatim, tagged `provenance="document"`;
+      * every remaining offset keeps the synthesised placeholder, tagged
+        `provenance="synthesised_placeholder"`, so the typed-shape
+        guarantee still holds for the bytes nobody documented;
+      * entries are emitted in ascending `byte_offset` order.
+
+    Structurally unusable extracted entries (not a dict, no int-parseable
+    `byte_offset`, no concrete `value`) are ignored, so a malformed
+    extraction can only ever leave the placeholder standing — it can never
+    replace it with something worse.
+
+    With no extracted bytes at all the output is the synthesised list
+    unchanged apart from the provenance tag, so the undocumented path
+    behaves exactly as it did before.
+    """
+    doc_by_offset: Dict[int, Dict[str, Any]] = {}
+    for ent in (extracted or []) if isinstance(extracted, list) else []:
+        if not _payload_template_entry_is_documented(ent):
+            continue
+        off = _payload_template_entry_offset(ent)
+        if off is None or off in doc_by_offset:
+            continue
+        doc_by_offset[off] = ent
+
+    synth_by_offset: Dict[int, Dict[str, Any]] = {}
+    for ent in synthesised or []:
+        off = _payload_template_entry_offset(ent)
+        if off is None or off in synth_by_offset:
+            continue
+        synth_by_offset[off] = ent
+
+    merged: List[Dict[str, Any]] = []
+    for off in sorted(set(doc_by_offset) | set(synth_by_offset)):
+        if off in doc_by_offset:
+            out = dict(doc_by_offset[off])
+            out["provenance"] = "document"
+        else:
+            out = dict(synth_by_offset[off])
+            out["provenance"] = "synthesised_placeholder"
+        merged.append(out)
+    # Defensive: never return an EMPTY template where the caller had a
+    # well-formed one — the typed-shape guarantee is the placeholder's
+    # whole reason to exist.
+    return merged or list(synthesised or [])
+
+
 def _extract_row_description(row_line: str,
                               op_hex_end: int) -> Optional[str]:
     """Strip every hex-byte-group / numeric column / pipe character
@@ -13218,13 +13319,18 @@ def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
 
 def _v466_strip_internal_fields(blocks) -> None:
     """Drop the private bookkeeping keys the #466 guards stashed on each
-    block before the block list is serialised. Idempotent."""
+    block before the block list is serialised. Idempotent.
+
+    PR #814 R2 also strips `_v814_evidence_span` here: it is emitter-internal
+    for the same reason the #466 keys are, and the L5 schema must not grow a
+    second copy of the evidence text."""
     if not isinstance(blocks, list):
         return
     for blk in blocks:
         if isinstance(blk, dict):
             blk.pop("_v466_kw_literal", None)
             blk.pop("_v466_src_fname", None)
+            blk.pop("_v814_evidence_span", None)
 
 
 # v1.6.66 — closes issue #7 Bug Z. Protocol-class acronyms harvested
@@ -25093,6 +25199,10 @@ def gen_l3_cmd_protocol(project: Path,
     # Heuristic chip-AGNOSTIC default: response_opcode at byte_offset=0,
     # CRC residue at last byte_offset; intermediate bytes flagged TBD with
     # a `source` pointer so the gate's typed-shape requirement is met.
+    # #812 — this default is a FALLBACK, not the answer. It is merged
+    # UNDER whatever the source document stated (see
+    # `_merge_response_payload_template`): a documented byte always wins
+    # its offset, and the placeholder survives only in the gaps.
     # Each opcode also gains an argument_constraints[] block citing the
     # global addr_max/len_max when applicable.
     enriched_opcodes: List[Dict[str, Any]] = []
@@ -25129,7 +25239,16 @@ def gen_l3_cmd_protocol(project: Path,
             cons.append({"name": "len_max", "max_hex": len_max,
                          "rule": "length > len_max → no reply"})
         new_op = dict(op)
-        new_op["response_payload_template"] = tmpl
+        # #812 — FILL A GAP, do not OVERWRITE. `tmpl` above is the
+        # heuristic typed-shape placeholder; when the source document
+        # itself stated the response bytes they are already in
+        # `response_payload_template_extracted`, and the document must win
+        # at every offset it covers. Merging per byte_offset also makes a
+        # PARTIALLY documented response usable: documented bytes survive,
+        # `source` pointers remain only in the gaps.
+        new_op["response_payload_template"] = (
+            _merge_response_payload_template(
+                op.get("response_payload_template_extracted"), tmpl))
         new_op["argument_constraints"] = cons
         if addr_max:
             new_op["addr_max"] = addr_max
@@ -33882,16 +34001,24 @@ def _v1_6_563_apply_subqualifier_guard(blocks):
     Idempotent: a second call observes that the parenthetical
     block's count no longer matches the head's, so it does nothing.
 
+    PR #814 R2 — this reads the FULL SPAN (`_v814_evidence_span_of`), not the
+    240-char `evidence_paragraph` display window. Grouping and prose-position
+    classification are semantics; a display width must not decide them. Reading
+    the window instead made the guard wrong in two opposite ways depending on
+    where the window sat — see `_v814_evidence_span_of` for both, and
+    `tests/test_l5_analog_evidence_contains_its_keyword.py` for the
+    end-to-end reproduction of each.
+
     Chip-AGNOSTIC: pure structural English; no chip-class literal.
     """
     if not isinstance(blocks, list):
         return
-    # Group blocks by their evidence_paragraph + head count.
+    # Group blocks by their evidence SPAN + head count.
     groups = {}
     for idx, blk in enumerate(blocks):
         if not isinstance(blk, dict):
             continue
-        para = blk.get("evidence_paragraph")
+        para = _v814_evidence_span_of(blk)
         if not isinstance(para, str) or not para:
             continue
         count = blk.get("count")
@@ -34340,6 +34467,119 @@ def _v1_6_613_input_has_digital_serial_readout(extracted: Dict[str, str]) -> boo
     return False
 
 
+#: Width of the stored `evidence_paragraph`. Unchanged; what changes below is
+#: WHERE the window sits, not how wide it is.
+_EVIDENCE_PARAGRAPH_WIDTH = 240
+#: When the window has to move to reach the keyword, how much of it is spent on
+#: text BEFORE the keyword. A quarter keeps enough left context to read the
+#: sentence the keyword is in while leaving the majority for what FOLLOWS it,
+#: which is where an attributed value normally sits ("the regulator drops
+#: 250 mV at full load").
+_EVIDENCE_KEYWORD_LEAD = _EVIDENCE_PARAGRAPH_WIDTH // 4
+
+
+def _evidence_window_containing_keyword(
+        paragraph: str,
+        kw_rel: int,
+        kw_len: int,
+        width: int = _EVIDENCE_PARAGRAPH_WIDTH) -> str:
+    """The <=`width` slice of `paragraph` that CONTAINS the keyword at
+    `kw_rel` (an offset into `paragraph`, before stripping).
+
+    THE DEFECT THIS CLOSES. `evidence_paragraph` was
+    `paragraph.strip()[:width]` — a fixed-width window anchored at the SPAN
+    START. A keyword further into
+    the span than `width` therefore never appeared in the evidence stored for
+    it: the reader was shown a prefix about some other subject, and only the
+    `evidence_paragraph_truncated` flag hinted that anything was missing.
+    Measured on the corpus: 10 of 27 detected blocks stored evidence that did
+    not contain their own keyword, every one of them by this truncation.
+
+    The span is NOT narrowed to fix this — narrowing is the direction that
+    silently destroys evidence, and the numbers a block's spec is harvested
+    from routinely sit in nested sub-items of the keyword's own list item. Only
+    the WINDOW moves, so `paragraph` (and therefore `spec`, `count` and the
+    detected block set) is byte-for-byte what it was.
+
+    The window stays at the span start whenever the keyword already fits inside
+    it, so a block whose evidence is already correct is not perturbed.
+
+    The window is a DISPLAY window and nothing else. Nothing downstream may
+    decide anything from it — see `_v814_evidence_span_of` for the field that
+    exists so the sub-qualifier guard reads the whole span instead.
+
+    chip-AGNOSTIC: pure offset arithmetic; no vocabulary participates.
+    """
+    lead_ws = len(paragraph) - len(paragraph.lstrip())
+    s = paragraph.strip()
+    if len(s) <= width:
+        # The whole span fits — nothing to choose.
+        return s
+    kw = kw_rel - lead_ws
+    if kw < 0 or kw >= len(s):
+        # Keyword outside the stripped text (only reachable if the caller
+        # passes a mismatched offset). Fail back to the historical window
+        # rather than emitting a wrong slice.
+        return s[:width]
+    if kw + kw_len <= width:
+        # Already inside the head window — leave it exactly where it was.
+        return s[:width]
+    start = kw - _EVIDENCE_KEYWORD_LEAD
+    # Lower clamp — this is what GUARANTEES containment rather than merely
+    # making it likely: the window must still reach the END of the literal.
+    # Only binds for a literal longer than `width - lead`.
+    earliest = kw + kw_len - width
+    if start < earliest:
+        start = earliest
+    if start > kw:
+        # Reachable only when the literal is itself wider than the window.
+        # Start at the literal: the most of it that can be shown.
+        start = kw
+    if start + width > len(s):
+        # Moves the window LEFT, so it still ends at the span end and still
+        # covers the keyword.
+        start = len(s) - width
+    if start < 0:
+        start = 0
+    return s[start:start + width]
+
+
+def _v814_evidence_span_of(block) -> str:
+    """The FULL span a block was detected in, for consumers that must reason
+    about prose the display window may have cut away.
+
+    WHY THIS EXISTS. `_v1_6_563_apply_subqualifier_guard` groups blocks by
+    `evidence_paragraph` EQUALITY and then locates each block's keyword inside
+    that string. Both operations were reading the 240-char display window, so
+    the window silently decided semantics:
+
+      * before the anchoring, a keyword past character 240 was simply not
+        findable in the window, so `_v1_6_564_classify_head_vs_paren` could not
+        annotate that block; the guard fell through to its dict-iteration-order
+        fallback and decremented the HEAD subject instead of the parenthetical
+        one — the exact inversion v1.6.564 was written to stop, re-entering
+        by the truncation door;
+      * after the anchoring, two blocks in one span get DIFFERENT windows
+        whenever one of their keywords sits past 240, so the group no longer
+        forms at all and the guard does not fire.
+
+    Reading the span makes both cases behave like the short-paragraph case that
+    was always correct. Private bookkeeping: stripped before serialisation by
+    `_v466_strip_internal_fields`, exactly like the #466 keys. Falls back to
+    the stored window for block shapes that never carried a span (the L5 parity
+    stub), so the guard never sees `None`.
+
+    chip-AGNOSTIC: field plumbing only; no vocabulary participates.
+    """
+    if not isinstance(block, dict):
+        return ""
+    span = block.get("_v814_evidence_span")
+    if isinstance(span, str) and span:
+        return span
+    para = block.get("evidence_paragraph")
+    return para if isinstance(para, str) else ""
+
+
 def gen_l5_adi_spec(project: Path,
                     extracted: Dict[str, str]) -> LDocResult:
     """L5: analog block discovery via Wave-47 keyword scan + chip-AGNOSTIC
@@ -34439,7 +34679,14 @@ def gen_l5_adi_spec(project: Path,
                 "spec": spec_str,
                 "low_confidence": (spec_str is None),
                 "evidence": f"input/docs/{fname} ({m.group(0)})",
-                "evidence_paragraph": paragraph.strip()[:240],
+                # The window is anchored on the KEYWORD, not on the span start,
+                # so the stored evidence always contains the keyword it
+                # evidences. It stays at the span start whenever the keyword
+                # already fits there, so evidence that was already correct is
+                # byte-for-byte unchanged. See
+                # `_evidence_window_containing_keyword`.
+                "evidence_paragraph": _evidence_window_containing_keyword(
+                    paragraph, kw_pos - p_start, m.end() - m.start()),
                 # R6-FIX-1 (provenance): the 240-char cut can drop the very
                 # text a spec value came from, which is how two blocks shipped
                 # numbers that appear nowhere in their own stored evidence.
@@ -34447,13 +34694,22 @@ def gen_l5_adi_spec(project: Path,
                 # the stored paragraph is the whole basis. Each attributed spec
                 # additionally carries its OWN `evidence_text` window, so a
                 # value is auditable even when this field is truncated.
+                # Meaning is unchanged by the anchoring: the flag says the
+                # stored text is not the whole span, whatever part of it the
+                # window shows.
                 "evidence_paragraph_truncated":
-                    len(paragraph.strip()) > 240,
+                    len(paragraph.strip()) > _EVIDENCE_PARAGRAPH_WIDTH,
                 # ORGANIC #466 R2 — private bookkeeping for the
                 # emitter-side spurious-block guard. Stripped before
                 # serialisation by `_v466_strip_internal_fields`.
                 "_v466_kw_literal": m.group(0),
                 "_v466_src_fname": fname,
+                # PR #814 R2 — private bookkeeping: the WHOLE span, so a
+                # downstream guard reasons about the prose rather than about
+                # whatever part of it the display window happens to show.
+                # Stripped before serialisation alongside the #466 keys; see
+                # `_v814_evidence_span_of`.
+                "_v814_evidence_span": paragraph.strip(),
             }
             # v1.6.402 — for #292 P3. Parse quantifier preceding
             # block type into `count` / `multiplicity` fields.
@@ -50247,9 +50503,40 @@ def emit_coverage_report(project: Path,
         from phase1_layer_demand_probe import evaluate as _layer_demand_eval
         _layer_demand = _layer_demand_eval(project)
     except Exception:                                       # noqa: BLE001
-        _layer_demand = {"probes_run": 0, "layers": [], "silent_empty": []}
+        _layer_demand = {"probes_run": 0, "layers": [], "silent_empty": [],
+                         "zero_unexamined": []}
     if _layer_demand.get("silent_empty") and _status == "PASS":
         _status = "FAIL_LAYER_DEMANDED_BUT_EMPTY"
+    # A probe that returned zero WITHOUT examining anything is not a finding
+    # about the design, but it is not a PASS about the design either — nothing
+    # was examined, so there is nothing to pass. `PASS` here is the same
+    # substitution this whole change is against, one level up: the artifact
+    # already carried `layers_zero_unexamined` while the WORD a consumer reads
+    # said the run was clean, and a list nobody is obliged to open cannot
+    # correct a verdict everybody reads.
+    #
+    # INCOMPLETE, not FAIL, and gated on `_status == "PASS"` exactly like the
+    # line above: a reading that did not happen accuses nobody, and a real FAIL
+    # outranks a disclosure. Named in this artifact's own dialect — its four
+    # existing words are `PASS` / `FAIL` / `FAIL_INPUT_NOT_FULLY_READ` /
+    # `FAIL_LAYER_DEMANDED_BUT_EMPTY`, so the bare `INCOMPLETE` that the P0
+    # umbrella uses would be the only unqualified word here.
+    #
+    # WHY A NEW WORD IS SAFE, MEASURED rather than assumed. Every reader of
+    # this field was enumerated: no allow-list, no enum and no JSON schema
+    # constrains it (the three status registries that exist —
+    # `_flow_verdict_tiers.PRODUCER_STATUSES`, `vibe_ic_log.VALID_STATUSES`,
+    # `analog_hil_report_schema_check._VALID_STATUS` — are each scoped to a
+    # different artifact). Exactly one consumer reads it as a verdict at all,
+    # `benchmark_evidence_publish._citations_under_a_pass`, and it fails OPEN:
+    # a word it does not recognise makes it assert LESS, never more, so it
+    # cannot turn a run red. Every other reader either reads `overall.pct` /
+    # `overall.total` only, or looks for a TOP-LEVEL `status` / `verdict` this
+    # artifact does not have. Across 114 published copies under
+    # `benchmark-data/` the field reads `PASS` x108 and `FAIL` x1, so no
+    # published verdict moves.
+    if _layer_demand.get("zero_unexamined") and _status == "PASS":
+        _status = "INCOMPLETE_ZERO_UNEXAMINED"
 
     report = {
         "layer_demand": _layer_demand,
@@ -50269,6 +50556,15 @@ def emit_coverage_report(project: Path,
             "input_documents_unread": len(_unread_docs),
             "layers_demanded_but_empty": list(
                 _layer_demand.get("silent_empty") or []),
+            # A probe that returned zero WITHOUT examining anything. Carried
+            # beside the list above so an empty `layers_demanded_but_empty`
+            # cannot be read as "measured, and nothing found" when it is
+            # "nothing was read". It does not FAIL the run — but it is no
+            # longer disclosure ONLY: a non-empty list degrades `status` to
+            # `INCOMPLETE_ZERO_UNEXAMINED`, because a list carried beside a
+            # verdict that says PASS is a correction nobody is obliged to read.
+            "layers_zero_unexamined": list(
+                _layer_demand.get("zero_unexamined") or []),
             "measures": ("coverage of literals found in documents that "
                          "EXTRACTED; a document that did not extract "
                          "contributes to neither numerator nor "

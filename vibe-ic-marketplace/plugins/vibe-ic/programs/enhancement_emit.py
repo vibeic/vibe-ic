@@ -52,6 +52,15 @@ recoveries.json schema (v0.1.35+):
     "fix_action": "...",
     # Bucket-C (backlog) fields:
     "title": "...",
+    # `pattern` is REQUIRED for Bucket C too — it is what
+    # `backlog_sanitize_check.REQUIRED_FIELDS` demands of the emitted YAML,
+    # and `emit_backlog` refuses without it. It states the CLASS of defect in
+    # terms that let a reader recognise a DIFFERENT instance: what shape of
+    # input meets what shape of handling, and what wrong outcome follows. It
+    # is NOT a restatement of `title` and NOT a description of this one
+    # symptom. It was previously documented only under Bucket B above, where
+    # a backlog author never looks.
+    "pattern": "...",
     "suggested_fix": "...",
     "backlog_slug": "...",
     "backlog_type": "bug"|"enhancement",
@@ -70,6 +79,38 @@ import argparse, json, datetime, sys
 from pathlib import Path
 
 ROUTING_FILE = Path(__file__).resolve().parent.parent / "benchmark" / "CAPTURE_ROUTING.json"
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+
+# The value emitted when the shipped version cannot be READ. It is deliberately
+# not a semver: a provenance field nobody measured must be visibly non-data, so
+# that it fails the first time anyone sorts or compares by it. A plausible
+# semver constant never fails, which is exactly how a stale one survives.
+UNRESOLVED_VERSION = "unknown"
+
+
+def resolved_plugin_version() -> str:
+    """The version of the plugin DOING the emitting, READ from the single source
+    of truth (``.claude-plugin/plugin.json`` — the same file
+    ``gatekeeper_assign_version.py`` writes).
+
+    Every provenance field this module stamps comes from here. It is never
+    restated as a literal anywhere in this file: a version that is restated
+    stops tracking the thing it names the moment the next release lands, and an
+    emitted record then claims a plugin generation it did not come from. That
+    failure is silent, plausible, and biased in one direction (always older),
+    so no reader can see it.
+
+    Returns ``UNRESOLVED_VERSION`` when the manifest cannot be read.
+    """
+    try:
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        import plugin_manifest_discovery as _pmd
+        v = _pmd.read_plugin_version(PLUGIN_ROOT)
+    except Exception:
+        v = None
+    return (str(v).strip() if v else "") or UNRESOLVED_VERSION
 
 
 def _load_routing() -> dict:
@@ -96,9 +137,55 @@ def _slug(s: str) -> str:
 #   - benchmark family tags: RTLLM, VerilogEval-{v2,Human,Machine}, CVDP, MetRex, …
 # When matched, emit_skill_section sanitizes them OUT of the worked-pattern field
 # so the captured skill stays general regardless of what the caller passed.
+#
+# #798 — both boundaries used to be `\b`, and `\b` treats `_` as a WORD
+# character, so the family branch fired only on a bare, standalone tag. It
+# missed every real benchmark cell id, which embeds the tag in an identifier:
+#   `cvdp_copilot_64b66b_encoder_0001`  — `\bCVDP\b` fails on the trailing `_`
+#   `base_cvdp_copilot_scrambler_0001`  — and on the leading `_`
+# HARVEST DEFINITION for every cell-id cardinal quoted in this file — quote it
+# with the definition or not at all, because the same corpus counts differently
+# under four defensible ones (126 / 148 / 369 / 391) and none of those is
+# "about 100":
+#     ids = { m for path in `git ls-files`                      # PATHS ONLY
+#             for m in re.findall(
+#                 r"cvdp_(?:copilot|agentic)_[A-Za-z0-9_]*?_\d{4}", path) }
+# File CONTENTS are deliberately excluded: this commit's own tests add cell-id
+# literals, so a contents-inclusive count measures itself and drifts commit to
+# commit. Paths-only yields |ids| = 126 on this tree. Measured over those 126:
+# the family rule caught 0, and 76 were refused at all — every one of the 76 by
+# the 30-char cap alone, and the other 50 accepted outright. Refusal by length
+# is an ACCIDENT, not leak detection, and it is the reason narrowing that cap
+# looked like a coverage loss. This branch refuses 126 of 126 as family leaks.
+# `_` is a SEPARATOR in every identifier convention this repo uses, so the
+# boundaries are alphanumeric-only: the tag must not be glued to a letter or a
+# digit, but an underscore-delimited segment is exactly how a real leak looks.
+# The `ProbNNN` branch already carried the identifier tail; it gets the same
+# leading boundary so `base_Prob089_…` is caught like `Prob089_…`.
+#
+# The tail is NOT open-ended, because a family tag also legitimately prefixes
+# this plugin's own thin benchmark ADAPTERS — `cvdp_gate.py`,
+# `cvdp_solve_pipeline.py`, `verilogeval_v2` — which the open-benchmark
+# doctrine says are correctly named that way (SKILL.md: "the `cvdp_` /
+# `rtllm_` / `verilogeval_` prefix is CORRECT for the record-IO shell").
+# Refusing those would just re-create the false-positive class this issue is
+# about. What separates a DATASET IDENTIFIER from an adapter is that the
+# dataset numbers things: a cell carries a 4-digit ordinal
+# (`cvdp_copilot_scrambler_0001`), a release carries a dotted version
+# (`cvdp_v1.1.0_nonagentic_….jsonl`). Requiring THREE digits anywhere in the
+# tail admits both and still excludes every adapter — `cvdp_gate.py` and
+# `cvdp_solve_pipeline.py` have none, `verilogeval_v2` and
+# `cvdp_phase1_entry.py` have one. A bare standalone tag is refused on its own.
+_TAG_L = r"(?<![A-Za-z0-9])"                # not glued to a letter/digit left
+_TAG = (r"(?:RTLLM|VerilogEval(?:-(?:v[12]|Human|Machine))?|CVDP|MetRex"
+        r"|ResBench|RTL-Repo|PyHDL-Eval)")
+#: dataset tail: any identifier/version run carrying >= 3 digit characters.
+_TAG_TAIL = r"_(?:[A-Za-z0-9_.\-]*\d){3}[A-Za-z0-9_.\-]*"
 _DESIGN_LEAK_PATTERN = (
-    r"\bProb\d+[A-Za-z0-9_]*"                                              # ProbNNN_xxx
-    r"|\b(?:RTLLM|VerilogEval(?:-(?:v[12]|Human|Machine))?|CVDP|MetRex|ResBench|RTL-Repo|PyHDL-Eval)\b"
+    _TAG_L + r"Prob\d+[A-Za-z0-9_]*"                    # ProbNNN_xxx
+    + r"|" + _TAG_L + _TAG + _TAG_TAIL                  # cvdp_copilot_…_0001
+                                                        # cvdp_v1.1.0_….jsonl
+    + r"|" + r"\b" + _TAG + r"\b"                       # the bare family tag
 )
 import re as _leak_re  # local alias to avoid clobbering caller's `re` if any
 
@@ -209,8 +296,17 @@ def _check_backtick_content(field_name: str, value: str) -> None:
     v0.1.43 distinguishes two legitimate uses of markdown backticks:
 
       (1) Single identifier (`rst_n`, `data_width`, `eda_cocotb`):
-          Apply strict identifier-shape rules. Refuse ProbNNN,
-          digit-embedded-in-lowercase (radix2div), over-long tokens.
+          Apply strict identifier-shape rules. Refuse ProbNNN, the
+          lowercase-then-digits leaf-name shape (radix2div, mux256to1,
+          lemmings1), and tokens carrying an over-long UNBROKEN alphanumeric
+          run (freqdivbyeven-style separator-stripped concatenations).
+          #798: the run, not the total length — the plugin's own program
+          filenames are long BY CONVENTION
+          (`declared_pdk_is_the_pdk_used_check.py`) and a total-length cap
+          refused 31.49% of them. The digit rule is NOT narrowed to
+          compensate; its false positives are finite industry vocabulary and
+          go in `industry_tech_allowlist.yaml`, because `ddr4` and
+          `lemmings1` have the same shape.
 
       (2) Multi-token CODE SNIPPET (`initial clk=X; always #(PERIOD/2) ...`,
           `assign MATCH = state == MATCH_STATE`):
@@ -254,22 +350,111 @@ def _check_backtick_content(field_name: str, value: str) -> None:
         # Reject digit-embedded-in-lowercase (radix2div, mux256to1 style)
         # — this is the exact shape Round-4 NEW-2 used to bypass v0.1.41.
         # Snake-case forms like `radix2_div` also match (the `2_` boundary
-        # makes the trailing `_div` not interfere with the `[a-z0-9]*$` tail).
+        # makes the trailing `_div` not interfere with the `[a-z0-9]*` tail).
+        #
+        # #798 — this shape DOES over-fire: it refused 11 of this plugin's own
+        # 86 shipped `*_protocol_synth.py` protocol names (12.8%) — `ddr4`,
+        # `ddr5`, `gddr6`, `hbm3`, `lpddr5`, `usb4`, `rs485`, `psi5`,
+        # `jesd204`, `arinc429`, `milstd1553` — plus `crc32`, `sha256`,
+        # `base64`, `utf8`, `axi4`, `int8`, `float32`.
+        #
+        # The tempting narrowing — require an alphabetic tail after the digit
+        # run, so a "generation suffix" like `ddr4` terminates at its digits
+        # while `radix2_div` continues — was AUTHORED AND REVERTED here,
+        # because it is a leak. Measured over `verilogeval_v2/problems.list`
+        # with the `ProbNNN_` prefix stripped (the leaf-name a leaking author
+        # would actually write), it takes the caught count from 85/156 to
+        # 38/156: `lemmings1`, `kmap1`..`kmap4`, `circuit1`..`circuit10`,
+        # `fsm1`..`fsm3`, `vector0`..`vector5`, `popcount255`, `rule90`,
+        # `rule110`, `lfsr32`, `dff8`, `count10`, `shift18` — 47 real design
+        # leaf-names, all terminating at their digits exactly like `ddr4`. The
+        # bare-text rule at step 1b already requires that alphabetic tail, so
+        # THIS rule is the only guard on the whole class.
+        #
+        # `ddr4` and `lemmings1` are structurally identical. This is therefore
+        # the same residue as `sg13g2` vs `radix2_div` below: no shape rule can
+        # separate them, and the honest discriminator is the finite, public,
+        # enumerable list in `industry_tech_allowlist.yaml` (checked above),
+        # whose `protocol_generation` + `encoding_and_width` categories carry
+        # these 50 terms and are pinned against collision with any benchmark
+        # leaf-name.
         if _leak_re.search(
                 r"^[a-z]{2,}\d+[a-z0-9_]*$", tok, _leak_re.ASCII):
             raise ValueError(
                 f"{field_name} contains a backtick-wrapped identifier "
                 f"that matches a benchmark-leaf-name shape (`{tok}`); "
                 f"refusing. Examples of this shape: radix2_div, "
-                f"freq_divbyeven, mux256to1. Wrap legitimate industry "
-                f"identifiers like `rst_n` (no digits) or use a generic "
-                f"description instead.")
-        # Cap length: real industry identifiers are short.
-        if len(tok) > 30:
+                f"freq_divbyeven, mux256to1, lemmings1, kmap4, circuit10. "
+                f"Wrap legitimate industry identifiers like `rst_n` (no "
+                f"digits) or use a generic description instead. If this is "
+                f"universal industry vocabulary (a protocol generation like "
+                f"ddr4, an encoding/width like sha256), propose it for "
+                f"industry_tech_allowlist.yaml with a standards citation.")
+        # Cap the longest UNBROKEN alphanumeric run, not the total length.
+        #
+        # #798 — the pre-fix rule was `len(tok) > 30`, which refused 348 of
+        # this plugin's own 1105 `programs/*.py` filenames (31.49%). Every one
+        # of them is a convention-conformant `descriptive_name_check.py`, and
+        # every one of them is a name the BARE-text rule at step 1 of
+        # `_validate_general_text` explicitly instructs the author to wrap in
+        # backticks — so `declared_pdk_is_the_pdk_used_check.py` could be
+        # written neither bare (step 1: "wrap it in markdown backticks") nor
+        # backticked (this rule: "longer than 30 chars"). Total length is not
+        # the concatenation signal; the ABSENCE of the convention's separators
+        # is. The outer step-4 rule already measures exactly that — it splits
+        # on non-alphanumerics via `findall(r"[A-Za-z][A-Za-z0-9]+")` — so
+        # this is the inner rule catching up to the outer one, on the same
+        # 30-char budget.
+        #
+        # Non-weakening FOR CONCATENATION: a token with no separators IS its
+        # own longest run, so every genuinely concatenated identifier the old
+        # rule refused is still refused. The tokens that change verdict are
+        # exactly those that carry separators.
+        #
+        # That is NOT the same as "tokens that were never benchmark names",
+        # and the difference is a real, measured coverage loss. Six CVDP
+        # DESIGN leaf-names carry separators AND are over 30 characters, so
+        # the old cap refused them and this one does not:
+        #     arithmetic_progression_generator          (32)
+        #     configurable_digital_low_pass_filter      (36)
+        #     reed_solomon_encoder_and_decoder          (32)
+        #     secure_read_write_register_bank           (31)
+        #     sequencial_binary_to_one_hot_decoder      (36)
+        #     write_through_data_direct_mapped_cache    (38)
+        # Over the 229 unique CVDP design leaf-names in tracked paths and file
+        # contents this is 14 caught -> 8. It is accepted, not repaired: the
+        # cap cannot tell them from `declared_pdk_is_the_pdk_used_check.py`
+        # (37) — no length or shape discriminator exists — and restoring it
+        # re-creates the 31.49% catch-22 that is the actual bug. The class is
+        # therefore UNGUARDED BY DESIGN at the identifier level; the cell IDs
+        # that carry these names are still caught in full by the family branch
+        # (126 of 126 under the harvest definition at the top of this file, and
+        # the two ids for these specific leaves are pinned as literals in the
+        # test module).
+        #
+        # WHICH FLOOR GUARDS THIS RULE — not `_CVDP_LEAF_FLOOR = 8`. Replace
+        # this `if` with `if False:`, deleting the cap outright, and that 8 is
+        # still 8: none of the 229 raw CVDP leaf-names has an unbroken run over
+        # 30 chars, so all 8 survivors come from the digit-shape rule above and
+        # the constant is BLIND to this one. `_VE_LEAF_FLOOR` (85) and
+        # `_VE_LEAF_CONCAT_FLOOR` (91) are blind for the same reason. The
+        # constants this cap can actually move are both measured on the
+        # separator-STRIPPED corpus, where the six names above become unbroken
+        # runs again: `_CVDP_LEAF_RUN_FLOOR = 3` counts only the leaves refused
+        # by THIS rule's own message, so no other rule can satisfy it, and
+        # `_CVDP_LEAF_CONCAT_FLOOR = 17` is 14 digit-shape + those 3. Under
+        # `if False:` they go 3 -> 0 and 17 -> 14 and both assertions fail.
+        runs = _leak_re.findall(r"[A-Za-z0-9]+", tok)
+        longest = max(runs, key=len) if runs else ""
+        if len(longest) > 30:
             raise ValueError(
-                f"{field_name} contains a backtick-wrapped identifier "
-                f"longer than 30 chars (`{tok}`); refusing as likely "
-                f"concatenated identifier.")
+                f"{field_name} contains a backtick-wrapped identifier with a "
+                f"{len(longest)}-character unbroken alphanumeric run "
+                f"({longest!r} inside `{tok}`); refusing as likely "
+                f"concatenated identifier. A separator-bearing name such as "
+                f"`a_b_c_check.py` is accepted at any total length — it is "
+                f"the unbroken run, not the length, that signals "
+                f"concatenation.")
 
 
 def _strip_backticks(text: str) -> str:
@@ -533,7 +718,8 @@ def emit_program_rule_sketch(rec: dict) -> str:
     docstring = _validate_general_text("docstring", rec.get("docstring", ""))
     fix_action = _validate_general_text("fix_action", rec.get("fix_action", ""))
     return (
-        f"# v0.1.34+ — auto-captured by benchmark-enhancement-capture\n"
+        f"# Auto-captured by benchmark-enhancement-capture at plugin "
+        f"v{resolved_plugin_version()}\n"
         f"# Pattern: {pattern}\n"
         f"# CORPUS-SWEEP REQUIRED before merging: zero false-positives across\n"
         f"# the open-benchmark corpora used by `score_iverilog_tb.py`.\n"
@@ -546,7 +732,14 @@ def emit_program_rule_sketch(rec: dict) -> str:
     )
 
 
-def emit_backlog(rec: dict, today: str):
+def emit_backlog(rec: dict, today: str, now: "datetime.datetime | None" = None):
+    """Emit one ORGANIC backlog YAML.
+
+    ``now`` is the tz-aware instant the record was submitted. It is a parameter
+    only so a caller can pass ONE instant for a whole batch (and so a test can
+    inject one); when omitted the real current instant is read. It is never a
+    constant — ``submitted_at`` is a measurement or it is nothing.
+    """
     # v0.1.39 (audit Finding 1) — REQUIRE backlog_slug; never default to the
     # design slug. Backlog filenames become part of the repo's permanent
     # record; a Prob ID baked into a filename can never be silently scrubbed
@@ -564,6 +757,28 @@ def emit_backlog(rec: dict, today: str):
     slug = _slug(slug)
     fname = f"ORGANIC-{today.replace('-','')}-{slug}.yaml"
     indent = "  "
+    # `pattern` is REQUIRED, and is refused here exactly as `backlog_slug` is
+    # refused above. It used to be read as `rec.get("pattern", "")`, and
+    # `_validate_general_text` returns the value unchanged when it is falsy —
+    # so an omitted pattern emitted well-formed YAML with an empty block and
+    # no error, while `backlog_sanitize_check.REQUIRED_FIELDS` demands the
+    # field of the very file this function writes. Required downstream,
+    # undefined upstream (the schema above documented it only under Bucket B)
+    # and unenforced here is the shape that let two authors an hour apart
+    # resolve the same field the two available wrong ways: one left it empty,
+    # one pasted in the text of an unrelated record.
+    if not str(rec.get("pattern") or "").strip():
+        raise ValueError(
+            "emit_backlog: rec missing 'pattern' — refusing to emit an empty "
+            "one. A pattern states the CLASS of defect: what shape of input "
+            "meets what shape of handling, and what wrong outcome follows — "
+            "written so a reader can recognise a DIFFERENT instance of it. "
+            "It is not a restatement of the title and not a description of "
+            "this one symptom; a sentence that only fits the record it sits "
+            "on cannot match the next occurrence, which is the only thing "
+            "the field is for. Do not copy one from another record: a "
+            "pattern that came from a different defect is worse than none, "
+            "because it reads as measured.")
     # v0.1.42 — structural validation across body fields (Round-4 NEW-4 fix).
     pat = _validate_general_text("pattern", rec.get("pattern", "")).replace("\n", "\n" + indent)
     fix = _validate_general_text("suggested_fix", rec.get("suggested_fix", "")).replace("\n", "\n" + indent)
@@ -588,17 +803,33 @@ def emit_backlog(rec: dict, today: str):
             f"problem: |\n  {prob}\n"
             f"tool_enhancement: |\n  {tenh}\n"
         )
+    # PROVENANCE, NOT DECORATION (#795). Two fields below name WHICH plugin
+    # produced this record and WHEN. Both used to be constants: the version was
+    # a literal semver that stopped being current ~180 releases ago, and the
+    # time-of-day was a literal midnight. A constant in a field that is
+    # formatted like a measurement is unreadable as wrong — every emitted
+    # record looked measured, and `backlog_sanitize_check.py` (which requires
+    # the field) only checks that it is non-empty, while
+    # `tools/ci/staged_version_claim_check.py` exempts `community/backlogs/`
+    # outright. So nothing downstream could ever have caught it.
+    #
+    # An author-supplied `plugin_version` still wins — the record may be
+    # describing a version other than the one running the emitter, and the fix
+    # must not overwrite author intent.
+    version = str(rec.get("plugin_version") or "").strip() or resolved_plugin_version()
+    submitted = (now or datetime.datetime.now().astimezone()).isoformat(
+        timespec="seconds")
     body = (
         f"type: {rec.get('backlog_type', 'enhancement')}\n"
         f"severity: {rec.get('severity', 'P2')}\n"
         f"component: {rec.get('component', '')}\n"
-        f"plugin_version: \"{rec.get('plugin_version', '0.1.33')}\"\n\n"
+        f"plugin_version: \"{version}\"\n\n"
         f"title: >-\n  {_validate_general_text('title', rec.get('title', ''))}\n\n"
         + (tool_block + "\n" if tool_block else "")
         + f"pattern: |\n  {pat}\n\n"
         f"suggested_fix: |\n  {fix}\n\n"
         f"id: \"ORGANIC-{today.replace('-','')}-{slug}\"\n"
-        f"submitted_at: \"{today}T00:00:00+08:00\"\n"
+        f"submitted_at: \"{submitted}\"\n"
         f"session_context: >-\n  {ctx}\n"
     )
     return fname, body
@@ -678,6 +909,84 @@ def check_bucket_t(recs: list) -> list:
     return offenders
 
 
+# ── cross-record duplicate `pattern` (#822) ─────────────────────────────────
+# WHERE THIS LIVES, AND WHY IT LIVES HERE
+# A duplicate needs TWO records in ONE process to be arithmetically possible.
+# `backlog_sanitize_check` — the gate that reads the emitted YAML — is driven
+# `--file <one yaml>` by every caller in this repo (community-backlog-submit
+# SKILL.md Step 4, field-agent-loop SKILL.md, phase1-coverage-loop SKILL.md;
+# there is no `--dir` caller). It would therefore receive a one-element list
+# and report "0 duplicates" on every real run while reading as coverage — a
+# detector that exists is not a detector that is on the path. `main()` below
+# holds the whole batch in one process, which makes it the one place in the
+# repo where >=2 records provably co-occur, so the check is non-vacuous by
+# construction and needs no caller change.
+#
+# SCOPE, STATED — a duplicate detector is not a correctness check
+# CATCHES: the same `pattern` text on two or more records of a SINGLE emit
+#   batch. That is #796's shape exactly, where both records carried
+#   byte-identical text.
+# DOES NOT CATCH: a `pattern` copied from OUTSIDE the batch (an issue body, a
+#   skill's worked example, a chat message) onto exactly ONE record; a
+#   `pattern` that merely restates its own title in different words; or one
+#   that is populated, plausible, and about the wrong defect. Those are the
+#   judgment only a reader makes, and nothing here should read as covering
+#   them.
+#
+# POPULATION: the buckets that EMIT A BACKLOG — C and T. Both go through
+# `emit_backlog`, both write a `pattern:` block into a YAML whose required
+# fields `backlog_sanitize_check` then enforces, and for both a duplicate is
+# unambiguous: one backlog is one defect, so two backlogs sharing a pattern
+# means one of them was copied. Bucket B (skill sections) is DELIBERATELY
+# excluded: two B records at different steps route to different skill files on
+# purpose, and two instances of one general pattern captured at two steps is a
+# defensible authoring choice rather than a copy. Flagging it would be a guess
+# dressed as a finding.
+_BACKLOG_EMITTING_BUCKETS = ("C", "T")
+
+
+def _pattern_key(value) -> str:
+    """Whitespace-collapsed, case-folded. #796's two records were byte-identical,
+    but a copy that gained a newline or a capitalised first word is the same
+    defect and must not pass on the difference."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def check_duplicate_patterns(recs: list) -> list:
+    """Records of ONE batch that share a `pattern`. Returns human-readable
+    offender strings; empty list == pass.
+
+    A blank/missing `pattern` is SKIPPED here, not grouped. It is a different
+    defect with its own refusal at the write site, and grouping the blanks
+    would report them as duplicates of each other — naming the wrong bug and
+    burying the real one.
+    """
+    groups: dict = {}
+    for i, r in enumerate(recs):
+        if (r.get("bucket") or "D").upper() not in _BACKLOG_EMITTING_BUCKETS:
+            continue
+        key = _pattern_key(r.get("pattern"))
+        if not key:
+            continue
+        who = (r.get("title") or r.get("backlog_slug")
+               or r.get("design") or f"record[{i}]")
+        groups.setdefault(key, []).append(f"record[{i}] {who!r}")
+    offenders = []
+    for key, members in groups.items():
+        if len(members) < 2:
+            continue
+        excerpt = key if len(key) <= 120 else key[:117] + "..."
+        offenders.append(
+            f"{len(members)} records share ONE `pattern`: "
+            f"{', '.join(members)} — the shared text reads {excerpt!r}. A "
+            f"pattern states the CLASS of defect of the record it sits on; the "
+            f"same sentence cannot be the class of two different defects, so "
+            f"one of these was copied from the other and describes something "
+            f"it did not measure. Write each record its own, or merge them "
+            f"into the one record they actually are.")
+    return offenders
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--records", required=True)
@@ -707,9 +1016,28 @@ def main():
         for o in t_offenders:
             print("  - " + o, file=sys.stderr)
         sys.exit(1)
+
+    # #822 — the cross-record check, on the ONE path where two records
+    # provably co-occur. It sits with the other pre-flight gates and BEFORE
+    # `out.mkdir`, so a refusal costs nothing: raising it later, mid-emit,
+    # would abort the batch after some artifacts were already written and
+    # leave a half-populated output dir — the failure mode the Bucket-A
+    # routing loop below carries a comment about.
+    dup_offenders = check_duplicate_patterns(recs)
+    if dup_offenders:
+        print("DUPLICATE-PATTERN GATE FAILED — one `pattern` on more than one "
+              "record of this batch:", file=sys.stderr)
+        for o in dup_offenders:
+            print("  - " + o, file=sys.stderr)
+        sys.exit(1)
+
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    today = datetime.date.today().isoformat()
+    # ONE instant for the whole batch, and the batch's date DERIVED from it, so
+    # a run that straddles midnight cannot file a record whose id says one day
+    # and whose submitted_at says the next.
+    now = datetime.datetime.now().astimezone()
+    today = now.date().isoformat()
     routing = _load_routing()
 
     by_bucket = {"A": [], "B": [], "C": [], "D": [], "T": []}
@@ -793,7 +1121,7 @@ def main():
         d.mkdir(exist_ok=True)
         files = []
         for r in by_bucket["C"]:
-            fname, body = emit_backlog(r, today)
+            fname, body = emit_backlog(r, today, now)
             (d / fname).write_text(body)
             files.append(fname)
         summary["bucket_C_dir"] = str(d)
@@ -808,7 +1136,7 @@ def main():
         d.mkdir(exist_ok=True)
         files = []
         for r in by_bucket["T"]:
-            fname, body = emit_backlog(r, today)
+            fname, body = emit_backlog(r, today, now)
             (d / fname).write_text(body)
             files.append(fname)
         summary["bucket_T_dir"] = str(d)

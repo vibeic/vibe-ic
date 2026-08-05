@@ -17,6 +17,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 REQUIRED_ARTIFACTS = (
@@ -69,7 +70,7 @@ class Phase2Report:
             "artifacts": [asdict(a) for a in self.artifacts],
             "checks": [c.as_dict() for c in self.checks],
             "verdict": self.verdict,
-            "emitted_by": "phase2_verify_aggregate v0.1.50",
+            "emitted_by": _pmd.emitted_by("phase2_verify_aggregate"),
         }
 
 
@@ -128,7 +129,8 @@ def verify(project_dir: Path) -> Phase2Report:
 def report_to_markdown(rep: Phase2Report) -> str:
     out = ["# Phase 2 verification aggregate",
            "",
-           f"_Emitted by `phase2_verify_aggregate.py` (v0.1.50). "
+           f"_Emitted by `phase2_verify_aggregate.py` "
+           f"(v{_pmd.running_plugin_version()}). "
            f"Refuse to claim PASS without all artifacts AND all checks._",
            "",
            f"- **Verdict**: {rep.verdict}",

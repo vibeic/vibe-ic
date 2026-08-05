@@ -42,6 +42,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +135,7 @@ class FixPlan:
             "ordered": [asdict(r) for r in self.ordered],
             "total_violations": self.total_violations,
             "expected_residual_after_plan": self.expected_residual_after_plan,
-            "emitted_by": "drc_fix_planner v0.1.50",
+            "emitted_by": _pmd.emitted_by("drc_fix_planner"),
         }
 
 
@@ -178,7 +179,8 @@ def build_plan(per_rule_counts: Dict[str, int]) -> FixPlan:
 def plan_to_markdown(plan: FixPlan) -> str:
     out = ["# DRC fix plan",
            "",
-           f"_Emitted by `drc_fix_planner.py` (v0.1.50). "
+           f"_Emitted by `drc_fix_planner.py` "
+           f"(v{_pmd.running_plugin_version()}). "
            f"Refuse to overclaim the fix-coverage estimate._",
            ""]
     out.append(f"- Total violations: **{plan.total_violations}**")

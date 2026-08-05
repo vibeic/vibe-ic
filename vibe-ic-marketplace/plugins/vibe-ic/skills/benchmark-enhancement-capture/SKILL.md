@@ -428,6 +428,20 @@ properly (corpus sweep, new program, new test fixtures). Examples:
 schema (type / severity / component / pattern / suggested_fix / id /
 submitted_at / session_context).
 
+> **What `pattern` must say — the field is a rule, not a recap.** A `pattern`
+> states the **class** of defect: what shape of input meets what shape of
+> handling, and what wrong outcome follows. Write it so a reader can use it
+> to recognise a **different** instance — a case you have not seen, in a
+> different design, at a different step. It is NOT a restatement of `title`
+> (the title names this occurrence; the pattern names the family it belongs
+> to) and it is NOT a description of this one symptom. Test it before you
+> write it down: *if this sentence only fits the record it sits on, it is not
+> a pattern* — it cannot match the next occurrence, which is the only thing
+> the field is for. Never paste one in from another record or from an issue
+> body: a pattern that came from a different defect is worse than an empty
+> one, because it reads as measured. `emit_backlog` refuses a missing or
+> empty `pattern`; only you can tell whether a populated one is real.
+
 > **Check-in handoff (scope-guard alignment):** if the role invoking this skill is
 > the **benchmark-agent**, it may DRAFT the YAML but must NOT check it into
 > `community/backlogs/` itself — `agent_checkin_scope_guard.py` denies benchmark-agent

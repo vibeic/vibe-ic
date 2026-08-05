@@ -18,6 +18,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List
+import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
 
 
 # The 13 L docs phase1 emits, in order.
@@ -121,7 +122,7 @@ class Phase1Report:
             "pass_count": self.pass_count,
             "fail_count": self.fail_count,
             "verdict": self.verdict,
-            "emitted_by": "phase1_verify_aggregate v0.1.50",
+            "emitted_by": _pmd.emitted_by("phase1_verify_aggregate"),
         }
 
 
@@ -202,7 +203,8 @@ def verify(project_dir: Path) -> Phase1Report:
 def report_to_markdown(rep: Phase1Report) -> str:
     out = ["# Phase 1 verification aggregate",
            "",
-           f"_Emitted by `phase1_verify_aggregate.py` (v0.1.50). "
+           f"_Emitted by `phase1_verify_aggregate.py` "
+           f"(v{_pmd.running_plugin_version()}). "
            f"Refuse to overclaim — every L doc must be present AND every "
            f"backing check must PASS._",
            "",

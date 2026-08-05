@@ -74,12 +74,33 @@ Check 2 is NOT additive and is not meant to be: it converts a class of
 silent exit-0 skips into failures. On a project whose SDC is where the flow
 declares it, it never runs at all — the stray scan is reached only after the
 search-root glob has already come back empty.
+
+WHAT IS GRADED — superseded generator decks are set aside
+---------------------------------------------------------
+The three-directive structural test above is applied to the project's
+CONSTRAINT SET, not to every byte with an `.sdc` suffix. `sdc_gen` names its
+output `{top}.sdc` from a top it resolves PER RUN, so a change in that
+resolution leaves the previous run's file orphaned in the same directory
+this program globs. Grading it answers "are the design's constraints
+complete?" with the presence of a stale artifact: step 8 FAILs permanently —
+voiding every step that depends on it — over a file constraining a module
+the design does not declare and nothing downstream consumes.
+
+Such a deck is SET ASIDE (never deleted; see `partition_decks` for the
+four-part predicate and why the fix lives in the consumer). It is DISCLOSED
+on every verdict — in the PASS/FAIL line and in the `sdc_files_superseded`
+key of the JSON report — because a checker that quietly narrows its own
+denominator is the failure this program's exit contract exists to prevent.
+And when EVERY deck found is superseded, the verdict is exit 2 (NOT
+CHECKED), never exit 0: nothing constraining a declared top was read.
 """
 import argparse, json, os, re, sys
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 import _path_layout as _pl
 import _reference_flow_boundary as _rfb
+import _design_module_set as _dms
+import sdc_constraints as _sdc
 
 # ----- exit-code contract -------------------------------------------
 
@@ -144,6 +165,155 @@ def find_sdc_files(project: Path) -> List[Path]:
         if root.is_dir():
             out.extend(sorted(root.glob("*.sdc")))
     return out
+
+
+# ----- superseded generator decks ------------------------------------
+#
+# `sdc_gen` names its output `{top}.sdc` and stamps `# Top entity: {top}`
+# into it. `top` is resolved PER RUN (`--top-name`, else a board wrapper,
+# else L9's `top_module`, else the literal `chip_top` fallback), so a change
+# in that resolution between runs leaves the earlier file behind under a
+# DIFFERENT name in the SAME directory this program globs. The orphan
+# constrains a module the design does not declare, nothing downstream
+# consumes it, and it fails the three-directive structural test forever —
+# so step 8 FAILs permanently while the design's own constraint set is
+# complete. Measured on the tracked corpus: 4 roots carry >=2 generated
+# decks under different `# Top entity:` names.
+#
+# WHY THE FIX IS HERE AND NOT IN THE GENERATOR
+# --------------------------------------------
+# The generator knows only the top IT resolved this run, which is exactly
+# the unstable quantity. Keying a DELETION on it inverts on any project
+# whose L9 declares a top the RTL does not contain: the deck for the module
+# that EXISTS is destroyed and the deck for the phantom is kept. The
+# consumer, by contrast, can key on what the project DECLARES, and it sees
+# BOTH search roots — a generator-side cleanup that walks one directory
+# leaves the identical orphan in the other. Nothing is removed from disk
+# here: a file that is merely not graded stays available for inspection,
+# and being wrong about it costs a stale artifact instead of a lost one.
+#
+# THE PREDICATE
+# -------------
+# A deck is SUPERSEDED only when the project itself refutes it, on all four
+# counts:
+#
+#   1. it carries this flow's generator banner (`sdc_constraints`'
+#      GENERATED_BANNER) — a hand-authored SDC or one from another tool is
+#      never anyone's to set aside;
+#   2. it is ATTRIBUTABLE — it names its `# Top entity:`;
+#   3. that name is ABSENT from the design's own module set, per the #760
+#      arbiter (`_design_module_set.reconcile_declared_top`), which answers
+#      `unverifiable` — never `absent` — when nothing was staged or nothing
+#      parsed, so an unreadable design refutes nothing; and
+#   4. that name is not the top the project DECLARES for this run
+#      (`L9.top_module`, or the generator's `chip_top` fallback when L9
+#      declares none) — the deck the flow is producing RIGHT NOW is graded
+#      no matter what the module set says about it.
+#
+# (4) is what keeps this from becoming the generator's bug in mirror image.
+# On the corpus's `usb_pd`, L9 declares `usb_pd_engine`, which `grep`
+# refutes; the only staged tops are `chip_top` and `usb_pd_bmc_phy`. Rules
+# (3) and (4) together keep BOTH decks: `chip_top.sdc` because chip_top is a
+# real module, `usb_pd_engine.sdc` because it is what this run declares. The
+# incomplete one still FAILs step 8, which is the honest verdict.
+
+def declared_top_modules(project: Path) -> List[str]:
+    """The top module name(s) the PROJECT declares, from L-docs alone.
+
+    `L9.top_module` when it carries one; otherwise the generator's own
+    `chip_top` fallback, because with no declaration that IS the name every
+    run resolves. A board wrapper is deliberately absent: it is a module in
+    the staged RTL, so the module set already vouches for it.
+    """
+    l9 = _pl.generated_docs_dir(Path(project)) / "L9_INTEGRATION_SPEC.json"
+    try:
+        doc = json.loads(l9.read_text(errors="ignore"))
+    except Exception:  # noqa: BLE001 — absent/unparseable L9 is not an error
+        doc = None
+    name = doc.get("top_module") if isinstance(doc, dict) else None
+    if isinstance(name, str) and name.strip():
+        return [name.strip()]
+    return ["chip_top"]
+
+
+def staged_module_set(project: Path) -> set:
+    """Every module name this project stages, across RTL / FPGA / synth.
+
+    Empty means "nothing staged or nothing parsed" — :func:`partition_decks`
+    routes that through the #760 arbiter, which refuses to call any name
+    absent against an empty set."""
+    project = Path(project)
+    return _dms.design_module_set([_pl.rtl_dir(project),
+                                   _pl.fpga_early_dir(project),
+                                   _pl.synth_dir(project)])
+
+
+class DeckPartition(NamedTuple):
+    """`live` decks to grade, and the `superseded` ones set aside.
+
+    `superseded` is `[(path, declared_top), ...]`; it is DISCLOSED on every
+    verdict, because a checker that silently narrows its own denominator is
+    the failure mode this program's exit contract already exists to prevent.
+    """
+    live: List[Path]
+    superseded: List[Tuple[Path, str]]
+
+
+def partition_decks(project: Path, sdc_files: List[Path]) -> DeckPartition:
+    """Split `sdc_files` into the decks to grade and the superseded ones.
+
+    Order is preserved: `live` is `sdc_files` minus the superseded ones, in
+    the glob order the caller built, so the issue list a project sees does
+    not depend on this partition. The module set — the only expensive read
+    here, since it walks the synthesis output as well as the RTL — is built
+    only when some deck is actually a candidate for it; on a project whose
+    decks all name the declared top, nothing beyond the SDC headers is read.
+    """
+    protected = set(declared_top_modules(project))
+    candidates: List[Tuple[Path, str]] = []
+    for sdc in sdc_files:
+        top = _sdc.generated_top_entity_of(sdc)     # (1) + (2)
+        if top is not None and top not in protected:              # (4)
+            candidates.append((sdc, top))
+    superseded: List[Tuple[Path, str]] = []
+    if candidates:
+        module_set = staged_module_set(project)
+        superseded = [
+            (sdc, top) for sdc, top in candidates                 # (3)
+            if _dms.reconcile_declared_top(top, module_set)["verdict"]
+            == _dms.ABSENT]
+    dead = {p for p, _ in superseded}
+    return DeckPartition([p for p in sdc_files if p not in dead], superseded)
+
+
+def superseded_note(part: DeckPartition) -> str:
+    """The denominator line for the decks that were NOT graded."""
+    if not part.superseded:
+        return ""
+    return (f", {len(part.superseded)} superseded generator deck(s) not "
+            f"graded ("
+            + ", ".join(f"{p.name} -> top {t!r}" for p, t in part.superseded)
+            + " — this flow's own earlier output for a top the design does "
+              "not declare)")
+
+
+def all_decks_superseded_message(project: Path, part: DeckPartition) -> str:
+    """The exit-2 line for "every deck found is a superseded orphan".
+
+    NOT exit 0. Nothing that constrains a top this project declares was
+    read, so the step is VACUOUS, not satisfied — the same tier as "no .sdc
+    anywhere". Collapsing it into a PASS is precisely how a narrowing filter
+    turns into "step 8 made unfailable"."""
+    return (
+        "[SKIP] sdc_validator_check: NOT CHECKED — all "
+        f"{len(part.superseded)} .sdc file(s) under the declared search "
+        "root(s) ("
+        + ", ".join(d for d, _ in _SEARCH_ROOTS)
+        + ") are superseded generator decks ("
+        + ", ".join(f"{p.name} -> top {t!r}" for p, t in part.superseded)
+        + "); the project declares top(s) "
+        + ", ".join(repr(t) for t in declared_top_modules(project))
+        + " and stages no constraint file for them, so 0 file(s) were graded")
 
 
 class StrayScan(NamedTuple):
@@ -603,6 +773,7 @@ def evaluate(project: Path, l8: Optional[Path] = None) -> Verdict:
     creates a directory, so it is safe to run over a tracked corpus."""
     project = Path(project)
     roots = [str(r) for r in search_roots(project)]
+    superseded: List[Tuple[Path, str]] = []
 
     def _verdict(rc: int, lines: List[str], issues: List[str],
                  sdc_files: List[Path]) -> Verdict:
@@ -611,6 +782,14 @@ def evaluate(project: Path, l8: Optional[Path] = None) -> Verdict:
             "exit_code": rc,
             "search_roots": roots,
             "sdc_files_checked": [str(p) for p in sdc_files],
+            # The denominator this verdict declined to grade, ALWAYS present
+            # so a narrowed scope is visible in the evidence file rather than
+            # inferable only from a count that got smaller.
+            "sdc_files_superseded": [
+                {"path": str(p), "top_entity": t,
+                 "reason": "generated deck for a top the design does not "
+                           "declare"}
+                for p, t in superseded],
             "l8": str(l8) if l8 else None,
             "issues": issues,
         })
@@ -649,6 +828,21 @@ def evaluate(project: Path, l8: Optional[Path] = None) -> Verdict:
         return _verdict(RC_NOT_CHECKED,
                         [no_sdc_anywhere_message(project, scan)], [], [])
 
+    # A deck this flow's own generator wrote for a top the design does not
+    # declare constrains nothing the run produces; grading it answers "are
+    # the design's constraints complete?" with the presence of a stale
+    # artifact. Set aside, never deleted, and always disclosed.
+    part = partition_decks(project, sdc_files)
+    superseded = part.superseded
+    if not part.live:
+        # Every file found is an orphan. NOT CHECKED, never PASS: no
+        # constraint file for a declared top was read.
+        if l8_self:
+            return _verdict(RC_FAIL, _fail_lines(l8_self), l8_self, [])
+        return _verdict(RC_NOT_CHECKED,
+                        [all_decks_superseded_message(project, part)], [], [])
+    sdc_files = part.live
+
     issues: List[str] = []
     for sdc in sdc_files:
         text = sdc.read_text(errors="ignore")
@@ -662,16 +856,19 @@ def evaluate(project: Path, l8: Optional[Path] = None) -> Verdict:
     issues += l8_sdc_issues(
         l8_doc, [(s.name, s.read_text(errors="ignore")) for s in sdc_files])
     if issues:
-        return _verdict(RC_FAIL, _fail_lines(issues), issues, sdc_files)
+        return _verdict(RC_FAIL,
+                        _fail_lines(issues, superseded_note(part)),
+                        issues, sdc_files)
     n_clocks = len(l8_clock_periods(l8_doc))
     return _verdict(RC_PASS, [
         f"[PASS] sdc_validator_check: {len(sdc_files)} SDC file(s) OK"
         + (f", {n_clocks} L8 clock(s) cross-checked" if n_clocks else "")
+        + superseded_note(part)
     ], [], sdc_files)
 
 
-def _fail_lines(issues: List[str]) -> List[str]:
-    return ([f"[FAIL] sdc_validator_check: {len(issues)} issue(s)"]
+def _fail_lines(issues: List[str], note: str = "") -> List[str]:
+    return ([f"[FAIL] sdc_validator_check: {len(issues)} issue(s){note}"]
             + [f"  - {i}" for i in issues[:5]])
 
 

@@ -1204,3 +1204,75 @@ def test_runner_outer_timeout_exceeds_the_producer_worst_case():
         "Step 13 — LEC (RTL ≡ handoff netlist)", 1)[1]
     assert "3 * lec_producer_yosys_timeout_s()" in src
     assert "timeout=1200" not in src
+
+
+# ---------------------------------------------------------------------------
+# NO-COMPLETED-COMPARISON KILL (measured: opentitan_aes × sky130A, this run).
+#
+# A miter WAS built (`Found N unproven $equiv cells (N groups) in equiv:` →
+# total known → not parse_error) but the proof was CUT OFF mid-equiv_simple:
+# NO `N proven / M unproven` completion line, NO `Proved N` line, NO
+# counterexample — and NO wall-budget marker (the kill did NOT route through
+# run_yosys_equiv's rc 124/137 / TimeoutExpired paths; e.g. an external SIGKILL
+# that left a stale artifact, a docker-daemon restart, an OOM with a different
+# rc). Before this fix the parser fell through to the final `else` and booked
+# it FAIL "may genuinely differ" — a fabricated non-equivalence from a run that
+# decided ZERO points. The real opentitan_aes Step-13 lec.json was exactly this
+# (only ~1720/31850 cells attempted, no equiv_status), and that false FAIL
+# blocked 24 downstream steps. This is the OBSERVABLE-keyed safety net behind
+# the marker path: no decided points + no counterexample = no evidence in
+# EITHER direction → INCONCLUSIVE, never FAIL, never PASS.
+# ---------------------------------------------------------------------------
+def test_killed_mid_proof_no_marker_is_inconclusive_not_fail():
+    # POSITIVE control (FAILS against the byte-identical pre-fix file, PASSES
+    # after): the killed-mid-equiv_simple shape with NO marker is INCONCLUSIVE.
+    p = lec_run.parse_equiv_output(_KILLED_MID_PROOF)
+    assert p["parse_error"] is False            # a miter WAS built (total known)
+    assert p["total"] == 27904
+    assert p["proven"] is None and p["unproven"] is None   # nothing decided
+    assert p["verdict"] == "INCONCLUSIVE"       # NOT the fabricated FAIL
+    assert p["equivalent"] is False             # never a fake pass
+    expl = p["verdict_explanation"].lower()
+    assert "no decided points" in expl or "cut off" in expl
+
+
+def test_killed_mid_proof_no_marker_gate_is_non_blocking(tmp_path):
+    # END-TO-END: the downstream gate resolves the INCONCLUSIVE report to a
+    # non-blocking WAIVED-DEFERRED (rc 3), NOT the LEC_NOT_EQUIVALENT hard FAIL
+    # that cascade-marked 24 downstream steps MISSING.
+    p = lec_run.parse_equiv_output(_KILLED_MID_PROOF)
+    r = lec_run.build_report(p, "chip_top", "netlist.v", None)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
+    (tmp_path / "reports" / "lec.rpt").write_text(_KILLED_MID_PROOF)
+    res = gate.audit(tmp_path)
+    assert res.inconclusive is True
+    assert res.passed is False                  # never a vacuous PASS
+    assert "LEC_NOT_EQUIVALENT" not in {f.rule for f in res.findings}
+    assert gate.main([str(tmp_path)]) == 3      # non-blocking, not a PASS
+
+
+def test_completed_unproven_no_marker_no_ctrex_still_fails():
+    # REVERSE control (must STILL pass — this is what catches a fix that
+    # "tightened the filter until the count hit zero"): a COMPLETED miter that
+    # left points unproven is a genuine non-equivalence and must STAY FAIL even
+    # with NO marker and NO explicit counterexample phrase. The discriminator
+    # is a decided per-point verdict (proven parsed), which _no_completed_
+    # comparison is False for — so the softening can NEVER reach a real mismatch.
+    done_fail = ("Yosys 0.67+\n"
+                 "Found 8 $equiv cells (8 groups) in equiv:\n"
+                 "  Of those cells 0 are proven and 8 are unproven.\n")
+    p = lec_run.parse_equiv_output(done_fail)
+    assert p["parse_error"] is False
+    assert p["proven"] == 0 and p["unproven"] == 8   # a DECIDED verdict exists
+    assert p["verdict"] == "FAIL"                     # NOT laundered to INCONCLUSIVE
+
+
+def test_killed_mid_proof_with_counterexample_still_fails():
+    # NO-LEAK: if a killed-mid-proof log ALSO recorded a counterexample, the
+    # proven difference stands regardless of the missing completion line.
+    txt = (_KILLED_MID_PROOF
+           + "\nequiv_induct: proved the designs are non-equivalent\n")
+    p = lec_run.parse_equiv_output(txt)
+    assert p["proven"] is None and p["unproven"] is None
+    assert p["verdict"] == "FAIL"               # counterexample overrides

@@ -1937,7 +1937,34 @@ _DECLARED_CAPABILITY_GAP_FLAGS: Mapping[str, Tuple[str, ...]] = MappingProxyType
         "reports/phase2/dft/path_delay_coverage.json",
         "reports/phase2/dft/sdd_coverage.json",
     ),
-    # A CPU-class design has no reference ISA model to check results against.
+    # The design's own spec binds no reference OUTPUT for the case, so there is
+    # nothing to check a produced result against. ORGANIC #786 r5 — the
+    # sentence used to read "a CPU-class design has no reference ISA model to
+    # check results against", which was wider than what the waiver reaches and
+    # narrower than why. It reaches exactly two populations, both CPU-class and
+    # both anchored on `sim/results.xml`:
+    #   (a) a `functional_vector` L10 case (Phase 1 lifts these out of an input
+    #       verification-plan table; they carry no opcode), whose oracle is the
+    #       instruction-set model this pass did not author; and
+    #   (b) an opcode-derived L10 case whose entry in the design's OWN L3 RECORD
+    #       binds no concrete response template AND carries no document-derived
+    #       response extraction. `l10_tb_conformance_check` RESOLVES that
+    #       pointer in L3 and REFUSES the waiver when the record does bind a
+    #       reference output, when the document-derived sibling exists, or when
+    #       the entry holds document bytes the record cannot attribute to a
+    #       side.
+    #
+    # ORGANIC #786 r7 — SCOPE OF (b), stated because absence does not establish
+    # it: this is a claim about the design's L3 RECORD, NOT about the input
+    # document. Whether the document stated a response is NOT established here
+    # — the extraction that would record one runs at one of seven
+    # opcode-construction sites in `gen_l3_cmd_protocol`, and 0 of 203 corpus
+    # entries carry it, so its absence is equally consistent with a document
+    # that states the response somewhere the extractor does not look. The gate
+    # emits `cpu_oracle_binding_census.document_derived_records` ("k/N") next
+    # to every such waiver so a reviewer can see how much input the refusal
+    # arms had. An earlier revision of this sentence read "a fact read off the
+    # design's document" and was wrong.
     # Carried as a `capability_gap` FIELD on TB-conformance evidence
     # (l10_tb_conformance_check, arith_oracle_tb_gen, bit_level_full_stack_tb_
     # check); no producer ever pairs it with `skips_required_output`.
@@ -4467,14 +4494,17 @@ _CLASS_SKIPPABLE_ANALOG_GATES: frozenset[str] = frozenset({
 })
 
 
-# ORGANIC-20260614 (#632) — structural-name prefixes that identify the
-# analog / mixed-signal sub-gates inside the P0 structural-RTL umbrella.
-# Derived from the canonical gate FILE names (analog_*, mixed_signal_*,
-# pdk_analog_*, spice_correlation_*), NOT from any chip / vendor / SKU
-# literal — so it auto-extends as new analog gates are registered in
-# `_STRUCTURAL_RTL_GATES` and stays chip-AGNOSTIC. This is the same
-# naming convention `_CLASS_SKIPPABLE_ANALOG_GATES` (above) already keys
-# off and that the A-step (A1..A9) suppression uses.
+# ORGANIC-20260614 (#632) — the analog / mixed-signal NAMING CONVENTION for
+# gates in the P0 structural-RTL umbrella: the canonical gate FILE names
+# (analog_*, mixed_signal_*, pdk_analog_*, spice_correlation_*), NOT any
+# chip / vendor / SKU literal.
+#
+# THIS TUPLE NO LONGER DECIDES ANY SKIP. It used to: `_skip_analog_p0_gates()`
+# derived the `--skip-analog` suppression set from it, so a gate was silenced
+# by how it was SPELLED. See `_ANALOG_TRACK_OWNS` below for the record that
+# decides now, and for the gate that measurably lost its verdict to the prefix.
+# What the convention is still for: demanding that a newly-registered
+# analog-named gate DECLARE which side of that record it is on.
 _ANALOG_STRUCTURAL_GATE_PREFIXES: tuple[str, ...] = (
     "analog_",
     "mixed_signal_",
@@ -4484,30 +4514,126 @@ _ANALOG_STRUCTURAL_GATE_PREFIXES: tuple[str, ...] = (
 
 
 def _is_analog_structural_gate(gate_name: str) -> bool:
-    """True when `gate_name` is an analog / mixed-signal sub-gate of the
-    P0 structural-RTL umbrella (by canonical file-name prefix).
+    """True when `gate_name` FOLLOWS the analog / mixed-signal naming
+    convention (canonical file-name prefix).
 
-    chip-AGNOSTIC: matches on the gate program's own name prefix, never
-    on a chip / vendor / SKU string. `_skip_analog_p0_gates()` filters
-    this against the registered `_STRUCTURAL_RTL_GATES` tuple so only
-    real, registered gates are ever returned.
+    NOT A SKIP PREDICATE, and it stopped being one deliberately — see
+    `_ANALOG_TRACK_OWNS`. A name says how a gate is spelled; it does not say
+    which track's deferral owns the gate's verdict, and the two diverge (a
+    gate that POLICES whether an analog deferral is legitimate is spelled
+    exactly like the gates that deferral covers). Its one remaining use is
+    `_undeclared_analog_named_gates`, which uses it to DEMAND an ownership
+    declaration for a newly-registered analog-named gate.
+
+    chip-AGNOSTIC: matches on the gate program's own name prefix, never on a
+    chip / vendor / SKU string.
     """
     return any(gate_name.startswith(p)
                for p in _ANALOG_STRUCTURAL_GATE_PREFIXES)
 
 
-def _skip_analog_p0_gates() -> frozenset[str]:
-    """The set of analog / mixed-signal structural-RTL gates suppressed
-    by `--skip-analog` inside the P0 umbrella.
+# ── OWNERSHIP, NOT RESEMBLANCE, DECIDES A DEFERRED-TRACK SKIP ───────────────
+#
+# THE DEFECT THIS REPLACES, MEASURED. `_skip_analog_p0_gates()` used to be
+# `_STRUCTURAL_RTL_GATES` filtered by `_is_analog_structural_gate` — the name
+# prefix above. So the question "may `--skip-analog` silence this gate?" was
+# answered by how the gate is SPELLED. On a project whose input docs document
+# an LDO and a bandgap while `L5_ADI_SPEC.json` carries `analog_blocks: []`,
+# the SAME tree gives:
+#
+#   skip_analog=False  analog_content_detected_must_emit_l5_check  FAIL (rc 1)
+#   skip_analog=True   analog_content_detected_must_emit_l5_check  SKIP
+#                      ("analog track deferred via --skip-analog")
+#
+# That gate does not own the analog-track deferral. Its subject is the PHASE-1
+# L5 RECORD: "the docs describe analog content that L5 never wrote down". It
+# reads `input/docs/` + `generated_docs/L5_*.json` and no A-step artefact, so
+# deferring A1..A9 does not make it unanswerable. It is the gate that decides
+# whether an analog deferral is even REVIEWABLE — a deferred track whose
+# content was never recorded is an open item nobody can cost. Silencing it
+# because its file name starts with `analog_` means the one run that defers
+# the analog track is the one run that never has to admit it has any.
+#
+# THE RULE. A gate is skipped for a deferred track only when the deferral
+# record NAMES it as owned. Resemblance never decides. `_ANALOG_TRACK_OWNS`
+# is that record: every entry is a gate whose VERDICT IS PRODUCED BY the
+# deferred A1..A9 / M1..M4 work, so deferring the track legitimately defers
+# the gate. chip-AGNOSTIC — the entries are checker program names and the
+# rationale is track membership, never a chip / vendor / SKU / PDK literal.
+_ANALOG_TRACK_OWNS: frozenset[str] = frozenset({
+    # Per-block A1..A9 artefact + substance gates — the deferred steps' own
+    # deliverables.
+    "analog_a1_spec_extract_check",
+    "analog_a2_topology_select_check",
+    "analog_a3_netlist_gen_check",
+    "analog_a4_corner_sweep_check",
+    "analog_a5_layout_check",
+    "analog_a6_block_pv_check",
+    "analog_a7_post_layout_resim_check",
+    "analog_a8_hardmacro_gen_check",
+    "analog_a9_hw_verify_check",
+    "analog_artefact_substance_check",     # substance OF those deliverables
+    # Project-wide gates that read A-step outputs and can answer nothing
+    # without them.
+    "analog_block_coverage_check",         # per-block A5-A8 coverage
+    "analog_corner_sweep_check",           # A4 PVT sweep
+    "analog_netlist_pdk_check",            # A3 deck vs PDK
+    "analog_pre_vs_post_layout_check",     # A5 vs A7
+    "analog_hardmacro_check",              # A8 LEF/Liberty/GDS/Verilog
+    "analog_flow_compliance_check",        # A1-A9 closure
+    "analog_digital_interface_check",      # per-block interface contract
+    "pdk_analog_completeness_check",       # PDK views A3/A4/A6 consume
+    "spice_correlation_check",             # post-layout SPICE deck (A7)
+    "analog_hw_spice_correlation_check",   # A9 bench vs SPICE
+    "analog_hw_tb_de10lite_budget_check",  # A9 hardware TB
+    # Mixed-signal merge — downstream of the A8 hardmacros.
+    "mixed_signal_cosim_check",
+})
 
-    Derived from `_STRUCTURAL_RTL_GATES` (the single source of truth for
-    which gates the umbrella runs) by analog name-prefix — so it can
-    never name a gate that the umbrella does not actually run, and it
-    auto-extends when new analog gates are added. chip-AGNOSTIC.
+# The other half of the SAME record, stated rather than left to be inferred
+# from an absence. A gate here matches the analog naming convention and is
+# deliberately NOT owned by the track deferral: it stays runnable, and stays
+# required, on a run that defers the analog track. Keeping the reason beside
+# the name is what stops the next reader from "restoring" the prefix rule.
+_ANALOG_NAMED_NOT_OWNED: Dict[str, str] = {
+    "analog_content_detected_must_emit_l5_check": (
+        "subject is the Phase-1 L5 RECORD, not the A1..A9 work: it asks "
+        "whether the input docs describe analog content that L5 never "
+        "recorded. It reads input/docs + generated_docs only, so a deferred "
+        "analog track leaves it fully answerable — and it is the gate that "
+        "makes the deferral reviewable, because an unrecorded analog block "
+        "is an open item nobody can cost."),
+}
+
+
+def _undeclared_analog_named_gates() -> tuple[str, ...]:
+    """Registered gates that LOOK analog by name but carry NO ownership
+    declaration, in canonical registry order.
+
+    The naming convention is used here for ONE purpose — to demand a
+    declaration — and never to decide a skip. At runtime such a gate is
+    fail-closed: absent from `_skip_analog_p0_gates()`, so it RUNS. A
+    non-empty result is registry drift (a new analog gate was registered
+    without saying whether the track deferral owns it) and the regression
+    suite pins it to empty, so the drift is loud instead of silent.
     """
-    return frozenset(
-        g for g in _STRUCTURAL_RTL_GATES if _is_analog_structural_gate(g)
-    )
+    declared = _ANALOG_TRACK_OWNS | frozenset(_ANALOG_NAMED_NOT_OWNED)
+    return tuple(g for g in _STRUCTURAL_RTL_GATES
+                 if _is_analog_structural_gate(g) and g not in declared)
+
+
+def _skip_analog_p0_gates() -> frozenset[str]:
+    """The set of structural-RTL gates suppressed by `--skip-analog` inside
+    the P0 umbrella: the OWNERSHIP record intersected with the registry.
+
+    Two independent conditions, both required. `_ANALOG_TRACK_OWNS` says the
+    analog-track deferral owns the gate's verdict; `_STRUCTURAL_RTL_GATES`
+    says the umbrella actually runs it. The intersection can therefore never
+    name a gate the umbrella does not run, and — the point of this function —
+    never a gate that merely SPELLS like one the deferral owns. chip-AGNOSTIC.
+    """
+    return frozenset(g for g in _STRUCTURAL_RTL_GATES
+                     if g in _ANALOG_TRACK_OWNS)
 
 
 def _class_skipped_gates(project: Path) -> Dict[str, str]:
@@ -4590,6 +4716,31 @@ def _class_skipped_gates(project: Path) -> Dict[str, str]:
 _PURE_ANALOG_NA_STAGES: frozenset = frozenset({
     "stage1", "stage2", "stage3", "stage4", "stage_mixed_signal",
 })
+
+# The flow's OWN record of which steps belong to the analog track: the stage a
+# step declares in `flow/phase1_phase2_phase3.yaml`. Same rule as
+# `_ANALOG_TRACK_OWNS` one level up — a step is deferred by `--skip-analog`
+# because the flow SAYS it is on the analog track, never because its id is
+# spelled a certain way. See `_step_owned_by_analog_track`.
+_ANALOG_TRACK_STAGE = "stage_analog"
+
+
+def _step_owned_by_analog_track(step: Dict[str, Any]) -> bool:
+    """True iff the FLOW DECLARES this step a member of the analog track.
+
+    Replaces `str(sid).startswith("A")`. The old test read the first letter
+    of the step id, which is name resemblance doing a skip's job: the analog
+    track's membership is recorded — every A1..A9 step in the shipped flow
+    carries `stage: stage_analog` — and the record was simply not consulted.
+    Any future step whose id merely begins with "A" (an `AXI_*` lint step, an
+    `ATPG*` step, an `AUDIT` step) was silently deferred by `--skip-analog`
+    while owning none of that deferral.
+
+    Fail-CLOSED: a step that declares no stage is NOT owned, so it runs and
+    gates normally. An absent record is not a claim of ownership.
+    chip-AGNOSTIC: reads the flow's stage field, never a chip / vendor name.
+    """
+    return str(step.get("stage") or "") == _ANALOG_TRACK_STAGE
 
 # Memoization cache keyed by resolved project path (string).
 _PURE_ANALOG_CACHE: Dict[str, Tuple[bool, str]] = {}
@@ -5890,6 +6041,111 @@ def _p0_verdict_count(records: List[Dict[str, Any]]) -> int:
     contributes nothing to cannot be counted backwards from.
     """
     return sum(1 for r in records if r.get("verdict") != "NOT_INVOCABLE")
+
+
+def _p0_not_invocable_count(records: List[Dict[str, Any]]) -> int:
+    """How many registered gates were NEVER VALIDLY INVOKED.
+
+    The complement of `_p0_verdict_count` over the same records, written as its
+    own function rather than as `len(records) - verdict_count` at each caller:
+    the subtraction is only equal to this while every registered gate has
+    exactly one record, which is an invariant of the dispatch loop and not of
+    any caller that holds a records list.
+
+    THE SECOND OF THE TWO NUMBERS. `_p0_verdict_count` said how many gates
+    answered; nothing said how many did not, so the gap between the umbrella's
+    headline numerator and its denominator had no name and no field. A reader
+    could subtract, and a reader who did not subtract read the numerator as the
+    whole population — which is the reading the headline was reworded to stop.
+    """
+    return sum(1 for r in records if r.get("verdict") == "NOT_INVOCABLE")
+
+
+def _p0_umbrella_status(executed: Optional[bool],
+                        records: List[Dict[str, Any]]) -> str:
+    """THE ONE OWNER of the P0 umbrella's step verdict.
+
+    The four outcomes, and why the third one is not a PASS:
+
+      * ``executed is None``  -> ``SKIPPED-CONDITION``. #447: the umbrella
+        dispatched nothing (no RTL), and 0-of-N executed checkers is not a PASS.
+      * a gate FAILed          -> ``FAIL``. Unchanged; ``executed`` IS the
+        umbrella's own ``len(fails) == 0`` flag, so this branch re-derives
+        nothing and cannot disagree with the bucket it came from.
+      * no FAIL, but at least one registered gate returned NO VERDICT
+                               -> ``INCOMPLETE``.
+      * no FAIL, and NO gate returned any verdict at all (an empty ``records``)
+                               -> ``INCOMPLETE``. See THE EMPTY DENOMINATOR
+        below.
+      * no FAIL, every registered gate answered -> ``PASS``.
+
+    WHY THE THIRD BRANCH EXISTS.  The verdict was ``len(fails) == 0``, computed
+    over the gates that RETURNED a verdict, and published as a verdict over the
+    registered population. MEASURED at v1.9.78 by running this CLI end to end
+    over 49 tracked benchmark projects (every project root under
+    ``benchmark-data`` / ``benchmark_external`` carrying RTL, minus the
+    58-project ``run_v1333_knowledge_converge`` cvdp sub-corpus of
+    near-duplicates): 246 registered, 210 answering and 36 ``NOT_INVOCABLE`` on
+    ALL 49 — the un-invocable set is a property of the CALL, not of any
+    project's content. On a project whose 210
+    all came back clean, the umbrella printed PASS — a statement about 246
+    checkers, 36 of which had never been validly invoked, so what those 36
+    audit was UNAUDITED and the word `PASS` said otherwise. #492 made the
+    silence VISIBLE (`NOT_INVOCABLE` is a first-class verdict, disclosed by name
+    under its own heading); #559 put both numbers in the headline. Neither
+    reached the VERDICT, and the verdict is the field a consumer reads.
+
+    WHY ``INCOMPLETE`` AND NOT ``FAIL``.  A gate that never ran said nothing
+    about the design, so calling the run a failure is a second false claim in
+    the opposite direction — the same reason `_eval_gate_worker` does not
+    convert a `NOT_INVOCABLE` gate into a FAIL. `INCOMPLETE` (#599) is the tier
+    this repo already built for exactly this sentence: "the input WAS applicable
+    and was NOT examined... a vacuous step is one nobody needs to come back to;
+    this is one somebody does." It is a registered producer status
+    (`_flow_verdict_tiers.PRODUCER_STATUSES`), a DONE-CLAIM that is not a full
+    pass (`is_qualified_done`), and it is in none of `failing` / `missing` /
+    `setup_required_skipped` / `oss_blocked_skipped` — so it cannot make a run
+    non-green on its own, and it leaves the executed-PASS numerator, which is
+    the number a reviewer actually reads.
+
+    WHY NOT ``invoked < registered``.  That predicate is true of any records
+    list shorter than the registry, including a test stub that publishes none,
+    and it would fire on an umbrella that simply had nothing to dispatch. The
+    defect is a gate that WAS dispatched and rejected the argv, which is
+    `NOT_INVOCABLE` and nothing else. Narrow on purpose: a rule that fires on
+    every shape of missing record is a rule that gets read as noise.
+
+    THE EMPTY DENOMINATOR.  ``executed is True`` with an EMPTY ``records`` is
+    `len(fails) == 0` over a population of zero — the exact sentence this
+    function exists to stop, in its purest form: a clean sweep of nothing,
+    certifying nothing, published as PASS. It is not reachable from the one
+    production call site TODAY, because ``_run_structural_rtl_gates`` appends
+    one record per registered gate before it returns, so ``executed is not
+    None`` implies ``len(records) == len(_STRUCTURAL_RTL_GATES)``. That
+    reachability is an invariant of the CALLER, and this function is the ONE
+    OWNER of the verdict for EVERY caller — including the next one. A verdict
+    that is only correct because of a property held somewhere else is a verdict
+    waiting for a refactor, and a PASS pinned by a test outlives the invariant
+    that made it unreachable: the pin is what the refactor will trust. So the
+    guard is stated here, where the verdict is, and costs one comparison. Note
+    the deliberate redundancy of ``executed and``: the branch above already
+    proves ``executed`` is truthy, and the condition is written self-contained
+    anyway so that moving or reordering these branches cannot silently turn the
+    empty population back into a PASS.
+
+    ``INCOMPLETE`` rather than ``FAIL`` for the same reason as above — zero
+    gates answering said nothing about the design, so calling it a failure is
+    the opposite false claim.
+    """
+    if executed is None:
+        return "SKIPPED-CONDITION"
+    if not executed:
+        return "FAIL"
+    if executed and not records:
+        return "INCOMPLETE"
+    if _p0_not_invocable_count(records):
+        return "INCOMPLETE"
+    return "PASS"
 
 
 def _p0_passed_count(records: List[Dict[str, Any]]) -> int:
@@ -7990,7 +8246,11 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         status="MISSING",
     )
 
-    if skip_analog and isinstance(sid, str) and sid.startswith("A"):
+    # Ownership, not resemblance: the flow's declared `stage`, not the first
+    # letter of the id. Byte-identical on the shipped flow (A1..A9 all declare
+    # `stage: stage_analog`); tightening only — a step that merely SPELLS like
+    # an analog one keeps gating. See `_step_owned_by_analog_track`.
+    if skip_analog and _step_owned_by_analog_track(step):
         result.status = "SKIPPED-CONDITION"
         result.reasons.append("analog track skipped via --skip-analog")
         return result
@@ -9425,6 +9685,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     # distinct from "it ran and nothing passed". The audit JSON's
     # passed_gate_count reads this rather than scraping reasons prose.
     structural_passed_count: Optional[int] = None
+    # The umbrella's own coverage, as NUMBERS. `None` — not 0 — until the
+    # umbrella runs, for the same reason `structural_gate_records` is `None`
+    # below: on a stage-3/4 invocation there is no P0 step, and `0 registered`
+    # would read as "the registry is empty" while `246 registered / 0 invoked`
+    # would read as "246 checkers were supposed to run and none did". Neither is
+    # true, and a three-state field says so without inventing either.
+    structural_registered_count: Optional[int] = None
+    structural_invoked_count: Optional[int] = None
+    structural_not_invocable_count: Optional[int] = None
     # #497 step 1 — the P0 umbrella's structured per-gate payload. `None` until
     # the umbrella runs, so a stage-3/4 invocation (where P0 does not run at
     # all) publishes "no records" rather than an empty list that would read as
@@ -9508,13 +9777,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         # `checker_execution_wiring_audit`'s `checkers` field is its own JSON.
         _n_registered = len(_STRUCTURAL_RTL_GATES)
         _n_verdict = _p0_verdict_count(structural_gate_records)
+        # THE SAME TWO NUMBERS THE HEADLINE STATES, published as numbers.
+        # Until here they existed only inside a formatted English sentence, so
+        # the one machine-readable artifact — `phase23_completion_audit.json` —
+        # carried `passed_gate_count` and `failed_gate_count` over a denominator
+        # it never named. A consumer could not compute the coverage of the
+        # verdict it was reading, and a fraction whose denominator is not
+        # published is not a fraction. Assigned here rather than at the audit
+        # site so the artifact and the headline read the same variables.
+        structural_registered_count = _n_registered
+        structural_invoked_count = _n_verdict
+        structural_not_invocable_count = _p0_not_invocable_count(
+            structural_gate_records)
         structural_result = StepResult(
             id="P0",
             name=(f"Structural-RTL gates (P0 umbrella, {_n_verdict} of "
                   f"{_n_registered} checkers returned a verdict)"),
             stage="stage1",
-            status=("SKIPPED-CONDITION" if s_passed is None
-                    else "PASS" if s_passed else "FAIL"),
+            # ONE OWNER. The expression that stood here was
+            # `"SKIPPED-CONDITION" if s_passed is None else "PASS" if s_passed
+            # else "FAIL"` — a verdict over the gates that ANSWERED, published
+            # as a verdict over the gates that are REGISTERED. `_p0_umbrella_status`
+            # keeps both existing branches (#447's tri-state included, from the
+            # same `s_passed` flag) and adds the one the two numbers above imply:
+            # a clean sweep with a never-validly-invoked gate in it is
+            # INCOMPLETE, not PASS.
+            status=_p0_umbrella_status(s_passed, structural_gate_records),
             reasons=reasons_combined,
             evidence=[],
             # #497 step 1 — published ALONGSIDE `reasons`, which is unchanged.
@@ -10444,6 +10732,28 @@ def main(argv: Optional[List[str]] = None) -> int:
             "failed_gates": failed_gate_names,
             "failed_gate_count": len(failed_gate_names),
             "passed_gate_count": passed_gate_count,
+            # THE DENOMINATOR, and the part of it that never answered.
+            #
+            # Every gate count above is a NUMERATOR. The population they are
+            # counted out of appeared in this file only inside the P0 step's
+            # `name` string, so a consumer of this artifact — the mcp-eda
+            # pre-burn guard, any dashboard — could read `passed_gate_count: 6`
+            # and had nothing to divide it by. Worse, the number it would have
+            # guessed (the registry size) is the WRONG one: 36 of 246 registered
+            # gates reject the argv the umbrella builds, return no verdict at
+            # all, and are not in any of the three counts above.
+            #
+            # THREE FIELDS, not two, and `not_invocable` is not left to
+            # subtraction: `registered - invoked` is only equal to it while
+            # every registered gate has exactly one record, which is an
+            # invariant of the dispatch loop and not of this artifact. A reader
+            # who subtracts is re-deriving a fact the producer already knows.
+            #
+            # `null` on a stage-3/4 invocation, where the umbrella did not run —
+            # the same three-state `gate_records` publishes, for the same reason.
+            "registered_gate_count": structural_registered_count,
+            "invoked_gate_count": structural_invoked_count,
+            "not_invocable_gate_count": structural_not_invocable_count,
             "step_counts": counts,
             "structural_fail_lines": structural_fail_lines,
             "step_artifact_fail_lines": step_artifact_fail_lines,
