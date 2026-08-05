@@ -548,6 +548,16 @@ run "inner timeouts fit the harness"    "$ROOT" python3 "$PG/ci_harness_timeout_
 # examined nothing. Placed LAST so it probes the full list; ~40s.
 run "gates disclose their denominator" "$ROOT" python3 "$PG/gate_discloses_denominator_check.py" "$ROOT"
 
+# The THIRD member of the disclosure family, one level up from the two above.
+# Those ask what a gate's OUTPUT said about how much it looked at. This one asks
+# what a gate's DOCSTRING says about how much its own predicate selected — the
+# funnel a scope decision is argued from ("N syntactic matches down to M"). A
+# figure a reader cannot reproduce is not evidence, even when the conclusion it
+# supports is correct, so those numbers must be derived by the program rather
+# than typed into prose. Blocking clauses only; the advisory tier is printed and
+# never changes the exit code. ~25s, dominated by evaluating the bindings.
+run "stated corpus figures are derived, not typed" "$ROOT" python3 "$PG/derived_corpus_figure_check.py"
+
 # vibe-ic#564 — the SIBLING property. The gate above requires a PASS to say how
 # much it looked at; this one requires a gate that looked at NOTHING to refuse.
 # Both are needed: the P0 umbrella reads exit codes, so a gate that discloses
