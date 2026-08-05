@@ -69,6 +69,7 @@ import fnmatch
 import functools
 import glob
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -7843,6 +7844,20 @@ def _condition_pattern_satisfied(project: Path, pat: str) -> bool:
     if "analog_block_list" not in pat:
         return bool(hits)
 
+    # PRE-FIX semantics, computed FIRST and held as a ONE-WAY CEILING. This
+    # function is only ever allowed to NARROW: a project the existence-only
+    # read stood the track DOWN on must still stand it down, whatever the
+    # undecidable probe below finds. Without this the probe would WIDEN — a
+    # project whose only block list is a dangling symlink resolves to no hit
+    # (so pre-fix: SKIPPED-CONDITION) yet is present to `lexists` and
+    # unreadable, so an unscoped probe would newly OPEN thirteen steps on it.
+    # Restoring fail-loud must not become a licence to trigger.
+    pre_fix_satisfied = (bool(hits)
+                         or _l9_has_analog_modules(project)
+                         or _has_canonical_analog_blocks(project))
+    if not pre_fix_satisfied:
+        return False
+
     for rel in hits:
         decl = _analog_block_list_declares_blocks(project / rel)
         if decl is not False:      # True (has blocks) or None (unreadable)
@@ -7858,6 +7873,84 @@ def _condition_pattern_satisfied(project: Path, pat: str) -> bool:
     # array (Phase-1 doc-extraction emits it). chip-AGNOSTIC.
     if _has_canonical_analog_blocks(project):
         return True
+    # Every list `_glob_first` RESOLVED parses cleanly and declares zero
+    # blocks — but `_glob_first` short-circuits at the FIRST root that has a
+    # file, so a list at the sibling reachable root was never even opened.
+    # Before standing thirteen steps down, look there too.
+    if _analog_trigger_undecidable(project, pat):
+        return True
+    return False
+
+
+# ── Where an analog-block-list condition can actually SEE a list ────────────
+# `_glob_first` resolves such a pattern at exactly TWO roots: the literal root
+# the flow-def pins (`phase1/analog/`), and the canonical analog root
+# `_pl.analog_dir()` (`phase3/analog/`) it re-probes when the pinned path
+# misses. `phase2/analog/` and a bare `analog/` are remap SOURCES, never remap
+# TARGETS, so a block list written at either is invisible to this condition at
+# EVERY payload — measured False across the full payload grid.
+#
+# That deferral is deliberate and safe (it can only leave the track running,
+# never stand it down), and widening `_glob_first`'s remap to cover those roots
+# would touch every `phase{1,2,3}/analog/*` condition in the flow, so it is not
+# this change's business. But a deferral is only honest while it is PINNED:
+# this tuple, plus its characterization test, is that pin. If a future
+# `_glob_first` change opens or re-closes a root, the pin fails loudly instead
+# of the reachability silently drifting under the undecidable probe below.
+#
+# Only the DEFERRED set is a literal. The reachable set is pattern-relative and
+# is therefore computed, by `_analog_block_list_probe_paths` below — a second
+# hand-maintained list of it would be an unasserted constant free to drift from
+# the behaviour it claims to describe, which is the very failure being fixed.
+_ANALOG_BLOCK_LIST_ROOTS_DEFERRED = ("phase2/analog", "analog")
+
+
+def _analog_block_list_probe_paths(project: Path, pat: str) -> List[Path]:
+    """The block-list paths this pattern can reach.
+
+    See the reachability note above for why the set is exactly these two.
+    """
+    if any(c in pat for c in "*?["):
+        # A glob pattern has no single literal path to probe; `_glob_first`'s
+        # own resolution is the whole answer for it. No analog condition in the
+        # flow-def is a glob today; this is the honest degradation if one ever
+        # is, and it degrades to pre-fix behaviour, not past it.
+        return []
+    paths = [project / pat]
+    try:
+        paths.append(_pl.analog_dir(project) / Path(pat).name)
+    except Exception:
+        pass
+    out: List[Path] = []
+    for p in paths:                       # de-dupe, order-preserving
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def _analog_trigger_undecidable(project: Path, pat: str) -> bool:
+    """Is some REACHABLE analog block list present but impossible to judge?
+
+    `_glob_first` answers "which list did the pattern resolve to", and it
+    short-circuits: the pinned root winning means the canonical root is never
+    looked at. So a tree carrying BOTH a clean `{"blocks": []}` at the pinned
+    root AND a corrupt or dangling list at the canonical root reads, through
+    the resolved hit alone, as a positive declaration of no analog — and
+    thirteen steps stand down on the strength of a file nobody could read.
+
+    `lexists`, not `is_file`: a dangling symlink IS a list somebody put there
+    and IS unreadable, which is the definition of undecidable. `is_file()` on
+    it says False, i.e. "absent", which is precisely the wrong answer.
+
+    Returning True here only ever KEEPS the track running (the caller has
+    already established the pre-fix read was True), so this can add work to
+    look at, never remove any. chip-AGNOSTIC: paths and JSON shape only.
+    """
+    for probe in _analog_block_list_probe_paths(project, pat):
+        if not os.path.lexists(probe):
+            continue
+        if _analog_block_list_declares_blocks(probe) is None:
+            return True
     return False
 
 
