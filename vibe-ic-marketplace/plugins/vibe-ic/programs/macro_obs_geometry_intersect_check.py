@@ -56,11 +56,56 @@ USAGE
              master resolved to a LEF
     exit 1 = at least one does (BLOCKING)
     exit 2 = could not be determined — no DEF, no macro LEF, no placed macro,
-             no OBS in any of them, or an INCOMPLETE LEF set (a master is
+             no OBS in any of them, an INCOMPLETE LEF set (a master is
              PLACED and no LEF read declares it, so its OBS — if it has one —
-             was never in the comparison). NEVER a vacuous pass: this gate has
-             been wrong about nothing before, and "found no crossings" must not
-             be the same sentence as "had nothing to look at".
+             was never in the comparison), or DISCARDED OBS EVIDENCE (see
+             below). NEVER a vacuous pass: this gate has been wrong about
+             nothing before, and "found no crossings" must not be the same
+             sentence as "had nothing to look at".
+
+THE COMPLETENESS CLAIM NAMES THE PROPERTY THE VERDICT CONSUMES
+---------------------------------------------------------------
+MEASURED on a blocking run, and every clause of it is TRUE:
+
+    [PASS] macro_obs_geometry_intersect: 1698 placed instance(s) of 325
+           master(s) with OBS, 489 supply segment(s), 0 path(s) abandoned —
+           none spans an obstruction. All 79 placed master(s) resolved to a LEF.
+
+28 supply segments spanning a declared obstruction went unreported underneath
+that sentence. The master DID resolve to a LEF. The file it resolved to did not
+carry the obstruction — and **"resolved to a LEF" is not "its obstructions were
+read"**. The published completeness line was computed from a PRECONDITION
+(membership in `obs_by_master`, i.e. some file names this master) while the
+verdict consumes a STRICTLY STRONGER property (that master's OBS rects reached
+`with_obs` and were intersected). A claim derived from a proxy for the thing
+the verdict depends on answers an adjacent question, and reads as the real one.
+
+TWO CHANGES, AND THE SECOND IS THE NARROW ONE:
+
+1. The PASS line publishes the CONSUMED count SEPARATELY from the precondition
+   count — how many placed masters actually supplied obstruction geometry, and
+   how many resolved to a LEF that declares none. Both numbers, side by side,
+   so the reader sees the gap instead of inferring its absence. This changes no
+   verdict; a partial denominator is legitimate, and many placed masters
+   genuinely have no obstruction. What is not legitimate is publishing the
+   larger number and letting it read as the smaller one.
+
+2. DISCARDED OBS EVIDENCE is rc=2. `audit` merges LEFs in read order and the
+   last declaration of a master wins. When a placed master is declared by more
+   than one file that was read, and the WINNING declaration omits obstruction
+   rects that ANOTHER read declaration carries, the verdict was decided by glob
+   order over contradictory inputs — an OBS-less abstract silently revoking a
+   declared obstruction is exactly the measured failure. The gate does NOT
+   promote the richer declaration: an obsolete LEF left in the tree would then
+   FABRICATE a crossing on a gate that blocks, and a fabricated finding is
+   worse than a missed one. It refuses to certify and names both files.
+
+   NARROW BY CONSTRUCTION — the condition is `winner_rects != union_rects` for
+   a PLACED master, so it is silent on: a master declared once; the same file
+   staged twice (identical rects, union equals winner); a master whose winning
+   declaration is the RICHEST one (union equals winner); and any master that is
+   never placed. It fires only where the input set contained obstruction
+   evidence that this verdict did not consume.
 
 DISCOVERY (#828). With no `--macro-lef`, every `*.lef` under the project that
 DECLARES A MACRO is read. The previous default was `input/pdk/**/*.lef` +
@@ -404,7 +449,8 @@ def spans(seg: Dict[str, Any], box: Tuple[float, float, float, float]) -> bool:
             and bx1 <= seg["x1"] <= bx2)
 
 
-def merge_macro_obs(per_file: Sequence[Dict[str, Dict[str, Any]]]
+def merge_macro_obs(per_file: Sequence[Dict[str, Dict[str, Any]]],
+                    labels: Sequence[str] = ()
                     ) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
     """Merge per-file `parse_macro_obs` results, and never let a file that
     describes NO obstructions erase one that does.
@@ -454,27 +500,36 @@ def merge_macro_obs(per_file: Sequence[Dict[str, Dict[str, Any]]]
 
     Returns `(merged, conflicts)`."""
     merged: Dict[str, Dict[str, Any]] = {}
+    kept_from: Dict[str, str] = {}
     conflicts: List[Dict[str, Any]] = []
-    for d in per_file:
+    for i, d in enumerate(per_file):
+        label = labels[i] if i < len(labels) else f"LEF#{i + 1}"
         for master, entry in d.items():
             rects = entry.get("obs") or []
             prev = merged.get(master)
             if prev is None:
                 merged[master] = entry
+                kept_from[master] = label
                 continue
             prev_rects = prev.get("obs") or []
             if not rects:
                 continue          # an empty declaration cannot displace anything
             if not prev_rects:
                 merged[master] = entry        # first real geometry for it
+                kept_from[master] = label
                 continue
             if sorted(map(repr, rects)) == sorted(map(repr, prev_rects)):
                 continue          # the same macro shipped twice; not a conflict
-            keep, drop = ((entry, prev) if len(rects) < len(prev_rects)
-                          else (prev, entry))
+            take_new = len(rects) < len(prev_rects)
+            keep, drop = ((entry, prev) if take_new else (prev, entry))
+            kept_label = label if take_new else kept_from.get(master, "?")
+            drop_label = kept_from.get(master, "?") if take_new else label
             merged[master] = keep
+            kept_from[master] = kept_label
             conflicts.append({
                 "master": master,
+                "kept_from": kept_label,
+                "other_from": drop_label,
                 "kept_rect_count": len(keep.get("obs") or []),
                 "other_rect_count": len(drop.get("obs") or []),
                 "rule": "smallest-obstruction-set: on a blocking gate an "
@@ -486,7 +541,37 @@ def merge_macro_obs(per_file: Sequence[Dict[str, Dict[str, Any]]]
 
 def audit(def_text: str, macro_lef_texts: Sequence[str]) -> Dict[str, Any]:
     obs_by_master, obs_conflicts = merge_macro_obs(
-        [parse_macro_obs(t) for t in macro_lef_texts])
+        [parse_macro_obs(t) for t in macro_lef_texts],
+        [(lef_labels[i] if i < len(lef_labels) else f"LEF#{i + 1}")
+         for i in range(len(macro_lef_texts))])
+
+def audit(def_text: str, macro_lef_texts: Sequence[str],
+          lef_labels: Sequence[str] = ()) -> Dict[str, Any]:
+    """The verdict, plus the denominator the verdict actually consumed.
+
+    `lef_labels` names the files behind `macro_lef_texts` so a discarded
+    declaration can be attributed to one; it is optional and positional-safe,
+    so every existing two-argument caller keeps working unchanged."""
+    # Every declaration of every master, in READ ORDER. The previous shape was
+    # a single `dict.update` merge, which keeps only the last and cannot say
+    # that there WAS another — so an OBS-less abstract read after an OBS-
+    # bearing LEF silently removed a macro from the comparison while the run
+    # still reported that master as "resolved to a LEF".
+    decls: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
+    for i, t in enumerate(macro_lef_texts):
+        label = (lef_labels[i] if i < len(lef_labels) else f"LEF#{i + 1}")
+        for master, entry in parse_macro_obs(t).items():
+            decls.setdefault(master, []).append((str(label), entry))
+    # The WINNER is chosen by `merge_macro_obs`, not by read order. Those are
+    # two separate fixes and they compose: this function's contribution is that
+    # the DISCARDED declarations stay in hand so a completeness claim can name
+    # what it consumed; `merge_macro_obs`'s is that an OBS-less abstract read
+    # last can no longer be the winner in the first place. Taking read order
+    # here would silently undo the second while keeping its tests green.
+    obs_by_master, obs_conflicts = merge_macro_obs(
+        [parse_macro_obs(t) for t in macro_lef_texts],
+        [(lef_labels[i] if i < len(lef_labels) else f"LEF#{i + 1}")
+         for i in range(len(macro_lef_texts))])
     with_obs = {m: e for m, e in obs_by_master.items() if e["obs"]}
     um = _UNITS_RE.search(def_text)
     units = int(um.group(1)) if um else 1000
@@ -520,10 +605,52 @@ def audit(def_text: str, macro_lef_texts: Sequence[str]) -> Dict[str, Any]:
     # call that a pass.
     placed_masters = parse_placed_masters(def_text)
     without_lef = sorted(placed_masters - set(obs_by_master))
+
+    # THE CONSUMED PROPERTY, counted. `placed_masters` answers "did some file
+    # name this master"; the verdict reads OBS RECTS, and only a master whose
+    # winning declaration carries at least one contributed anything to it.
+    # Published as its own number so the reader is not left to read the
+    # precondition count as this one.
+    placed_with_obs = sorted(
+        m for m in placed_masters if obs_by_master.get(m, {}).get("obs"))
+    placed_lef_no_obs = sorted(
+        m for m in placed_masters
+        if m in obs_by_master and not obs_by_master[m]["obs"])
+    obs_rects_consumed = sum(
+        len(obs_by_master[m]["obs"]) for m in placed_with_obs)
+
+    # OBS evidence the INPUT SET carried and this verdict did NOT consume,
+    # because the merge is by read order. `union != winner` is the whole
+    # condition: silent on a single declaration, on the same file staged
+    # twice, and on a winner that is already the richest.
+    discarded: List[Dict[str, Any]] = []
+    for m in sorted(placed_masters):
+        d = decls.get(m) or []
+        if len(d) < 2:
+            continue
+        winner = set(d[-1][1]["obs"])
+        union: Set[Tuple[str, float, float, float, float]] = set()
+        for _lbl, e in d:
+            union |= set(e["obs"])
+        if winner != union:
+            discarded.append({
+                "master": m,
+                "chosen_from": d[-1][0],
+                "chosen_obs_rects": len(winner),
+                "obs_rects_not_consumed": len(union - winner),
+                "declarations": [{"lef": lbl, "obs_rects": len(e["obs"])}
+                                 for lbl, e in d],
+            })
+
     return {
         "masters_with_obs": sorted(with_obs),
         "placed_instances": len(placed),
         "special_segments": len(segs),
+        # The consumed property, separate from the precondition below it.
+        "placed_masters_with_obs": placed_with_obs,
+        "placed_masters_lef_declares_no_obs": placed_lef_no_obs,
+        "obs_rects_consumed": obs_rects_consumed,
+        "obs_evidence_discarded": discarded,
         # The denominator's hole, named. Every entry is supply metal this gate
         # did NOT look at; `findings` is a verdict over the rest.
         "truncated_paths": gaps,
@@ -608,11 +735,13 @@ def main(argv=None) -> int:
     if not lefs:
         lefs = discover_macro_lefs(proj)
     texts = []
+    labels = []
     for p in lefs:
         try:
             texts.append(p.read_text(errors="replace"))
         except OSError:
             continue
+        labels.append(str(p))
     if not texts:
         print("[CANNOT DETERMINE] macro_obs_geometry_intersect: no macro LEF "
               "found. A run with no macro LEF is not a run with no obstruction "
@@ -620,7 +749,7 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
 
-    rep = audit(def_p.read_text(errors="replace"), texts)
+    rep = audit(def_p.read_text(errors="replace"), texts, labels)
     if a.json_out:
         a.json_out.parent.mkdir(parents=True, exist_ok=True)
         a.json_out.write_text(json.dumps(rep, indent=2) + "\n")
@@ -652,6 +781,23 @@ def main(argv=None) -> int:
 
     f = rep["findings"]
     gaps = rep["truncated_paths"]
+    discarded = rep["obs_evidence_discarded"]
+
+    def _name_the_discarded() -> None:
+        print(f"\n  {len(discarded)} placed master(s) are declared by MORE THAN "
+              f"ONE LEF that was read, and the\n  declaration this run USED "
+              f"omits obstruction rect(s) that another read\n  declaration of "
+              f"the same master DOES carry. LEFs merge in read order, so the\n"
+              f"  file read last decided what this verdict was able to see:")
+        for d in discarded[:8]:
+            where = "; ".join(f"{x['lef']} ({x['obs_rects']} OBS rect(s))"
+                              for x in d["declarations"])
+            print(f"   master {d['master']}: used {d['chosen_from']} with "
+                  f"{d['chosen_obs_rects']} OBS rect(s); "
+                  f"{d['obs_rects_not_consumed']} rect(s) declared elsewhere "
+                  f"were NOT in the comparison  [{where}]")
+        if len(discarded) > 8:
+            print(f"   … {len(discarded) - 8} more")
 
     def _name_the_gaps() -> None:
         print(f"\n  {len(gaps)} wiring path(s) were ABANDONED before their end "
@@ -681,6 +827,9 @@ def main(argv=None) -> int:
               "a connectivity audit cannot either.")
         if gaps:
             _name_the_gaps()
+        if discarded:
+            _name_the_discarded()
+        if gaps or discarded:
             print("\n  So this count is a FLOOR, not the total.")
         return 1
 
@@ -697,6 +846,33 @@ def main(argv=None) -> int:
               "an obstruction'. NOT a pass. Name the missing LEF(s) with "
               "--macro-lef, or stage them under the project.",
               file=sys.stderr)
+        return 2
+
+    # The measured defect. A master that resolved to a LEF satisfies the
+    # PRECONDITION; supplying the OBS rects the verdict reads is the CONSUMED
+    # property, and the two are not the same claim. Where the input set held
+    # obstruction evidence that the read-order merge threw away, this run's
+    # "none spans an obstruction" is a statement about a comparison that was
+    # missing part of its own input.
+    if discarded:
+        print("[CANNOT DETERMINE] macro_obs_geometry_intersect: no crossing "
+              f"found among {rep['placed_instances']} placed instance(s), but "
+              "the OBS evidence this comparison consumed is not the OBS "
+              "evidence the LEF set contained.", file=sys.stderr)
+        _name_the_discarded()
+        # Both refusals are rc=2, so returning here would swallow the other
+        # one's evidence and publish half a reason — the same shape this
+        # branch exists to catch. Name the truncation too when it is present.
+        if gaps:
+            _name_the_gaps()
+        print("\n  This gate does NOT promote the richer declaration. An "
+              "obsolete LEF left in the\n  project would then FABRICATE a "
+              "crossing on a gate that blocks, and a fabricated\n  finding is "
+              "worse than a missed one. It refuses to certify instead.\n"
+              "\n  Remedy: name the authoritative file with --macro-lef, or "
+              "remove the stale\n  declaration from the project"
+              + ("; and supply the tech LEF so the layer\n  after each via is "
+                 "known" if gaps else "") + ". NOT a pass.")
         return 2
 
     # No finding, but part of the supply metal was never read. "I could not
@@ -717,11 +893,35 @@ def main(argv=None) -> int:
               "or supply the\n  tech LEF, so the layer after each via is known.")
         return 2
 
+    # The completeness claim is computed from the property the verdict READS —
+    # obstruction geometry that reached the comparison — and the weaker
+    # precondition it used to be derived from ("resolved to a LEF") is printed
+    # NEXT TO it rather than in place of it. A reader must be able to see the
+    # gap without re-deriving it; that is the entire point of the two numbers.
+    consumed = rep["placed_masters_with_obs"]
+    silent = rep["placed_masters_lef_declares_no_obs"]
     print(f"[PASS] macro_obs_geometry_intersect: {rep['placed_instances']} placed "
-          f"instance(s) of {len(rep['masters_with_obs'])} master(s) with OBS, "
-          f"{rep['special_segments']} supply segment(s), 0 path(s) abandoned — "
-          f"none spans an obstruction. All {rep['placed_masters']} placed "
-          f"master(s) resolved to a LEF.")
+          f"instance(s) of {len(consumed)} placed master(s) whose LEF declares an "
+          f"OBS, {rep['special_segments']} supply segment(s), 0 path(s) abandoned "
+          f"— none spans an obstruction.")
+    # NO BARE UNIVERSAL QUANTIFIER over the precondition count. "All N placed
+    # master(s) resolved to a LEF" is true and reads as the verdict's own
+    # denominator; stating both ratios keeps the reader from having to know
+    # which of the two numbers the result is about. The rule this line obeys
+    # is machine-checkable and its test states it: no "all N" may appear whose
+    # N exceeds the number of masters that supplied the consumed evidence.
+    print(f"  EVIDENCE CONSUMED: {len(consumed)} of {rep['placed_masters']} placed "
+          f"master(s) supplied obstruction geometry to this comparison "
+          f"({rep['obs_rects_consumed']} OBS rect(s)). "
+          f"{rep['placed_masters']} of {rep['placed_masters']} resolved to a LEF "
+          f"— that is the PRECONDITION, not this property: the {len(silent)} that "
+          f"resolved to a LEF declaring NO OBS contributed nothing to the "
+          f"verdict, because 'resolved to a LEF' is not 'its obstructions were "
+          f"read'. This result covers the {len(consumed)} and is SILENT about "
+          f"the {len(silent)}."
+          + (f" Not consulted: {', '.join(silent[:6])}"
+             f"{f', +{len(silent) - 6} more' if len(silent) > 6 else ''}."
+             if silent else ""))
     return 0
 
 
