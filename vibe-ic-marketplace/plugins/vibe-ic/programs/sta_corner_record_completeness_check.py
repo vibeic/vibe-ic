@@ -160,7 +160,31 @@ artifact path for each — to stdout and into the verdict JSON, on PASS and FAIL
 alike. A gate that reproduced the missing-table defect while policing it would
 be absurd.
 
-Exit: 0 PASS / NOT_APPLICABLE / SINGLE_CORNER_ONLY · 1 FAIL · 2 IO-or-arg error.
+R6 ONE ROW, ONE BASIS — a corner's numbers may not be merged, or mixed, across
+   the place-and-route boundary. A PRE-PnR estimate and a post-route SPEF
+   measurement of the SAME corner are two measurements of two different things.
+     * Records are pooled PER BASIS from each report's own `STA_BASIS:` stamp
+       (read through `_sta_basis`, the single reader in this tree) and resolved
+       once, per ROW. A corner with any post-route datapoint is a SIGN-OFF row
+       and takes its numbers from the post-route pool ONLY; a field the
+       post-route reports do not carry is `None`, never back-filled. A corner
+       with no post-route datapoint at all is a PRE_LAYOUT row and keeps
+       exactly the numbers this gate published before any of this existed.
+     * A declared sign-off role whose only datapoint is pre-layout FAILs
+       (`R2_SIGNOFF_ROLE_PRE_LAYOUT_ONLY`). Measured: per-FIELD resolution let
+       the whole-run verdict go FAIL(exit 1) -> PASS(exit 0) on a governing
+       hold number this gate had itself labelled `PRE_LAYOUT`, and published a
+       post-route `setup_wns_ns` beside a pre-layout `tns_ns` on one row.
+     * A sign-off corner reported ONLY by pre-layout reports is not a FAIL —
+       a run that has not reached post-route STA cannot do better — but the
+       verdict STRING becomes `PRE_LAYOUT_ONLY` so no summary can quote a bare
+       "PASS" over it.
+     * Every excluded pre-layout number is DISCLOSED, on its row
+       (`pre_layout_only_ns` / `pre_layout_superseded_ns`) and at run level
+       (`pre_layout_per_corner_excluded`). Nothing is dropped in silence.
+
+Exit: 0 PASS / NOT_APPLICABLE / SINGLE_CORNER_ONLY / PRE_LAYOUT_ONLY ·
+      1 FAIL · 2 IO-or-arg error.
 
 chip-AGNOSTIC / benchmark-AGNOSTIC: no design, IC, PDK, vendor or corner-name
 literal drives any verdict; corner identity and sign-off role come from the
@@ -176,6 +200,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _sta_basis  # noqa: E402  — the ONE reader of the STA_BASIS stamp
 try:
     import _path_layout as _pl  # noqa: E402
 except Exception:  # pragma: no cover - defensive
@@ -352,13 +377,18 @@ def _merge_slack(cur: Optional[float], new: Optional[float]) -> Optional[float]:
 
 
 # ── report basis ───────────────────────────────────────────────────────────
-#: A report's own `STA_BASIS:` stamp, the same self-disclosure
-#: `eda_report_audit` already reads. PRE-PnR emitters stamp
-#: `PRE_LAYOUT_ESTIMATE`; post-route emitters stamp `POST_ROUTE_SPEF` /
-#: `POST_ROUTE_NO_SPEF` or carry no stamp at all.
-_STA_BASIS_STAMP_RE = re.compile(r"^\s*#?\s*STA_BASIS\s*:\s*([A-Z_]+)",
-                                 re.MULTILINE)
-
+# There is exactly ONE reader of the `STA_BASIS:` stamp in this tree —
+# `programs/_sta_basis.py` — and this program does NOT carry a second one.
+# An earlier revision of this file byte-copied `eda_report_audit`'s regex and
+# re-implemented the normalisation around it; measured over a 24-stamp corpus
+# the copy disagreed with the original on SEVEN, every disagreement in the
+# promote-to-sign-off direction. The step the copy left out is PREFIX
+# NORMALISATION: the emitter ships suffixed values, and `pre_pnr` /
+# `pre_floorplan` / `prelayout` all name the pre-layout side without ever
+# spelling the literal prefix `PRE_LAYOUT`. `_sta_basis.declared_basis` reads
+# the stamp as a prefix against the one token table and returns the CANONICAL
+# name. The import is deliberately NOT guarded: a fallback copy is how the
+# divergence comes back.
 BASIS_PRE_LAYOUT = "PRE_LAYOUT"
 BASIS_SIGNOFF = "SIGNOFF"
 
@@ -366,17 +396,17 @@ BASIS_SIGNOFF = "SIGNOFF"
 def report_basis(text: str) -> str:
     """Which side of place-and-route a report DISCLOSES ITSELF to be from.
 
-    Only an EXPLICIT `PRE_LAYOUT*` stamp is treated as pre-layout. Everything
-    else — a `POST_ROUTE*` stamp, an unrecognised stamp, or no stamp at all —
-    is `SIGNOFF`. That asymmetry is deliberate and is the safe direction: an
-    unstamped report keeps exactly the standing it has today, so this function
-    can only ever DEMOTE a report that went out of its way to say it is not
-    sign-off evidence.
+    A thin two-valued adapter over the single reader, and nothing more. Only a
+    report whose stamp NORMALISES to `PRE_LAYOUT` is treated as pre-layout.
+    Everything else — a `POST_ROUTE*` stamp, an unrecognised stamp, or no stamp
+    at all (`declared_basis` returns None for both) — is `SIGNOFF`. That
+    asymmetry is deliberate and is the safe direction: an unstamped report keeps
+    exactly the standing it has today, so this can only ever DEMOTE a report
+    that went out of its way to say it is not sign-off evidence.
     """
-    m = _STA_BASIS_STAMP_RE.search(text or "")
-    if m and m.group(1).upper().startswith("PRE_LAYOUT"):
-        return BASIS_PRE_LAYOUT
-    return BASIS_SIGNOFF
+    return (BASIS_PRE_LAYOUT
+            if _sta_basis.declared_basis(text or "") == BASIS_PRE_LAYOUT
+            else BASIS_SIGNOFF)
 
 
 # ── slack extraction ───────────────────────────────────────────────────────
@@ -900,32 +930,75 @@ def read_records(project: Path,
     def _resolve() -> None:
         """Collapse the per-basis pools onto the row the rules read.
 
-        SIGN-OFF basis wins PER FIELD when it has a value; a field the sign-off
-        reports do not carry falls back to the pre-layout pool UNCHANGED, so a
-        project with only pre-layout evidence keeps exactly today's numbers and
-        today's verdict. Superseded pre-layout values are retained on the row
-        for disclosure, never discarded silently.
+        ONE ROW, ONE BASIS. The resolution is decided for the WHOLE ROW, never
+        per field, and that is the load-bearing part:
+
+          * a corner with NO sign-off datapoint at all is a PRE-LAYOUT row.
+            Every field comes from the pre-layout pool, exactly as before this
+            change and exactly as before the whole basis story existed. A
+            project holding only pre-layout evidence keeps its numbers and its
+            verdict, which is the reverse case this must not break.
+
+          * a corner with ANY sign-off datapoint is a SIGN-OFF row. Its fields
+            come from the sign-off pool ONLY. A field the sign-off reports do
+            not carry stays `None` — it is NOT back-filled from the pre-layout
+            pool.
+
+        Per-FIELD resolution was the first shape of this fix and it was wrong
+        twice over, both measured on one fixture:
+
+          1. it published a cross-PnR MIXTURE — a post-route `setup_wns_ns` of
+             +1.75 sitting on the same row as a pre-layout `tns_ns` of -9000,
+             with nothing in the row's own numbers saying they came from
+             opposite sides of place-and-route. That is the exact defect this
+             gate was changed to prevent, re-entering one field over.
+          2. it let the whole-run BLOCKING verdict go FAIL(exit 1) -> PASS(exit
+             0) on a GOVERNING hold number the gate itself labelled
+             `PRE_LAYOUT`: sign-off setup was promoted to +1.75, hold fell back
+             to a pre-layout +0.20, and the worst number on the row — the one
+             that decided MET — was the pre-layout one. A sign-off gate must not
+             go green on a number from the wrong side of PnR.
+
+        Leaving the field `None` hands it to R1/R2, which already say the right
+        thing about a sign-off role with no datapoint: an unmeasured corner is
+        indistinguishable from a met one. The pre-layout number is not
+        discarded — it is carried on the row as `pre_layout_only_ns` and listed
+        at run level in `pre_layout_per_corner_excluded`, so the exclusion is
+        DISCLOSED and auditable rather than silent.
         """
         for rec in recs.values():
             pools = rec["_pool"]                             # type: ignore[index]
             signoff = pools.get(BASIS_SIGNOFF, {})
             prelay = pools.get(BASIS_PRE_LAYOUT, {})
-            used, superseded = {}, {}
+            has_signoff = any(v is not None for v in signoff.values())
+            row_basis = BASIS_SIGNOFF if has_signoff else BASIS_PRE_LAYOUT
+            used, superseded, excluded = {}, {}, {}
             for f in ("setup_wns_ns", "hold_wns_ns", "tns_ns"):
-                if signoff.get(f) is not None:
-                    rec[f] = signoff[f]
-                    used[f] = BASIS_SIGNOFF
-                    if prelay.get(f) is not None:
-                        superseded[f] = prelay[f]
-                else:
-                    rec[f] = prelay.get(f)
-                    if rec[f] is not None:
-                        used[f] = BASIS_PRE_LAYOUT
+                src_pool = signoff if has_signoff else prelay
+                rec[f] = src_pool.get(f)
+                if rec[f] is not None:
+                    used[f] = row_basis
+                if not has_signoff or prelay.get(f) is None:
+                    continue
+                # A pre-layout datapoint on a sign-off row: superseded when the
+                # sign-off pool answered the same field, EXCLUDED when it did
+                # not. Never promoted into the judged number either way.
+                (superseded if rec[f] is not None else excluded)[f] = prelay[f]
+            rec["row_basis"] = row_basis
             rec["basis_used"] = used
-            if superseded:
-                rec["pre_layout_superseded_ns"] = superseded
+            # Kept SEPARATE from `source` (the union of everything read for the
+            # key). A finding that says "the post-route reports do not carry a
+            # hold slack" and then lists the pre-layout report among them sends
+            # the reader to the wrong file.
+            rec["signoff_sources"] = list(
+                rec["_src"].get(BASIS_SIGNOFF, []))          # type: ignore[index]
+            if superseded or excluded:
                 rec["pre_layout_sources"] = list(
                     rec["_src"].get(BASIS_PRE_LAYOUT, []))   # type: ignore[index]
+            if superseded:
+                rec["pre_layout_superseded_ns"] = superseded
+            if excluded:
+                rec["pre_layout_only_ns"] = excluded
             del rec["_pool"], rec["_src"]
 
     declared = decl.get("declared") or []
@@ -1212,13 +1285,24 @@ def evaluate(project: Path,
             "role_class": role_class,
             "declared": is_declared,
             "reported": rec is not None,
-            # Which side of PnR each number came from, and — when a sign-off
-            # datapoint superseded a pre-layout one for the same corner — what
-            # the pre-layout estimate said. Carried so the correction is
-            # DISCLOSED on the artefact rather than applied silently.
+            # Which side of PnR this row's numbers came from. `row_basis` is
+            # the row-level answer and `basis_used` names it per field — they
+            # AGREE by construction, because a row is resolved from one pool.
+            # `pre_layout_superseded_ns` is what the pre-layout estimate said
+            # for a field a sign-off report also answered; `pre_layout_only_ns`
+            # is what it said for a field the sign-off reports did NOT answer,
+            # and which therefore is not a number on this row at all. Both are
+            # carried so the correction is DISCLOSED, never applied silently.
+            "row_basis": rec.get("row_basis") if rec else None,
             "basis_used": (rec.get("basis_used") or None) if rec else None,
             "pre_layout_superseded_ns": (rec.get("pre_layout_superseded_ns")
                                          or None) if rec else None,
+            "pre_layout_only_ns": (rec.get("pre_layout_only_ns")
+                                   or None) if rec else None,
+            "pre_layout_sources": (rec.get("pre_layout_sources")
+                                   or None) if rec else None,
+            "signoff_sources": (rec.get("signoff_sources")
+                                or None) if rec else None,
             "setup_wns_ns": rec.get("setup_wns_ns") if rec else None,
             "hold_wns_ns": rec.get("hold_wns_ns") if rec else None,
             "tns_ns": rec.get("tns_ns") if rec else None,
@@ -1267,11 +1351,33 @@ def evaluate(project: Path,
                     f"has NO timing datapoint anywhere in the record — an "
                     f"unreported corner is indistinguishable from a met one")
             elif rec.get(field) is None:
-                rules.append("R2_DECLARED_BUT_UNREPORTED")
-                findings.append(
-                    f"R2 sign-off corner '{name}' ({axis} axis) was declared as "
-                    f"the {role.upper()} corner but its record carries no worst "
-                    f"{role} slack (source: {rec.get('source')})")
+                # Distinguish "nothing measured this role" from "the only thing
+                # that measured it was a PRE-LAYOUT estimate". Both are BLOCKING
+                # and for the same reason — neither is post-route evidence — but
+                # a finding that said "carries no worst hold slack" while a
+                # pre-layout hold number sat in the tree would send the reader
+                # looking for a missing report that is not missing.
+                stale = (rec.get("pre_layout_only_ns") or {}).get(field)
+                if stale is None:
+                    rules.append("R2_DECLARED_BUT_UNREPORTED")
+                    findings.append(
+                        f"R2 sign-off corner '{name}' ({axis} axis) was declared "
+                        f"as the {role.upper()} corner but its record carries no "
+                        f"worst {role} slack (source: {rec.get('source')})")
+                else:
+                    rules.append("R2_SIGNOFF_ROLE_PRE_LAYOUT_ONLY")
+                    findings.append(
+                        f"R2 sign-off corner '{name}' ({axis} axis) was declared "
+                        f"as the {role.upper()} corner and the ONLY worst {role} "
+                        f"slack in the record is a PRE-LAYOUT estimate "
+                        f"({float(stale):+.3f} ns, source: "
+                        f"{', '.join(rec.get('pre_layout_sources') or []) or '?'}"
+                        f") — the post-route report(s) for this corner "
+                        f"({', '.join(rec.get('signoff_sources') or []) or 'none'}"
+                        f") do not carry one. A pre-PnR "
+                        f"estimate is not post-route sign-off evidence, and this "
+                        f"gate will not let one substantiate a sign-off role or "
+                        f"stand next to a post-route number on the same row")
 
     # ---- R1: reported corners must be named + complete when unroled --------
     for row in table:
@@ -1301,11 +1407,24 @@ def evaluate(project: Path,
             pretty = " and ".join(
                 {"setup_wns_ns": "setup", "hold_wns_ns": "hold"}[m]
                 for m in missing)
+            # Same distinction R2 draws: a field that is missing because its
+            # only evidence was PRE-LAYOUT is still missing, and saying so is
+            # what stops the reader hunting for a report that is right there.
+            stale = {m: v for m, v in (row.get("pre_layout_only_ns")
+                                       or {}).items() if m in missing}
+            why = ""
+            if stale:
+                why = (" — its only " + " and ".join(
+                    f"{'setup' if m == 'setup_wns_ns' else 'hold'} datapoint "
+                    f"({float(v):+.3f} ns)" for m, v in sorted(stale.items())) +
+                    f" is a PRE-LAYOUT estimate (source: "
+                    f"{', '.join(row.get('pre_layout_sources') or []) or '?'}),"
+                    f" which this gate does not publish as a post-route number")
             findings.append(
                 f"R1 corner '{row['corner']}' ({row['axis']} axis) ran and is "
                 f"reported but carries no declared sign-off role and omits "
-                f"worst {pretty} slack — an incomplete corner characterisation "
-                f"(source: {row.get('source')})")
+                f"worst {pretty} slack{why} — an incomplete corner "
+                f"characterisation (source: {row.get('source')})")
 
     # ---- R3: a violated sign-off corner governs, whatever typ says ---------
     typ_met: List[str] = []
@@ -1485,19 +1604,67 @@ def evaluate(project: Path,
 
     ordered = [r for r in ("R1_INCOMPLETE_CORNER_RECORD",
                            "R2_DECLARED_BUT_UNREPORTED",
+                           "R2_SIGNOFF_ROLE_PRE_LAYOUT_ONLY",
                            "R3_SIGNOFF_CORNER_VIOLATION",
                            "R4_MULTI_CORNER_CLAIM_UNSUPPORTED",
                            "R4_LIBRARY_RESOLUTION_UNRECORDED",
                            "R5_DRV_UNQUERIED",
                            "R5_DRV_VIOLATION") if r in rules]
 
+    # ---- run-level disclosure: every pre-layout datapoint NOT published -----
+    # A per-row field is easy to miss in a 40-corner table. This is the same
+    # facts at run level, so "which numbers did the basis rule take out of the
+    # judged record, and where did they come from" is one lookup.
+    excluded_disclosure: List[Dict[str, object]] = []
+    for row in table:
+        for f, v in sorted((row.get("pre_layout_only_ns") or {}).items()):
+            excluded_disclosure.append({
+                "corner": row.get("corner"), "axis": row.get("axis"),
+                "field": f, "pre_layout_ns": v,
+                "sources": row.get("pre_layout_sources") or [],
+                "reason": "no post-route datapoint for this field; a pre-PnR "
+                          "estimate is not published as a sign-off number",
+            })
+
+    # ---- the residual green-on-pre-layout case -----------------------------
+    # After the one-row-one-basis rule a SIGN-OFF row can no longer carry a
+    # pre-layout number for some fields and a post-route number for others. A
+    # declared sign-off corner with NO post-route evidence AT ALL is a different
+    # animal: its whole row is pre-layout, its numbers are exactly what this
+    # gate published before any of this existed, and FAILing it would fabricate
+    # a violation on every run that has legitimately not reached post-route STA
+    # yet — the same error the R1 nominal exemption and the R4 disclosed-
+    # degradation split exist to avoid. So it is not a FAIL. But it may never
+    # read as sign-off closure either: exactly as with SINGLE_CORNER_ONLY, the
+    # verdict STRING carries the limitation, so no downstream summary can quote
+    # a bare "PASS" over a number this gate has itself labelled PRE_LAYOUT.
+    prelayout_signoff_rows = sorted(
+        f"{r['corner']} ({r['axis']})" for r in table
+        if r.get("role_class") == "signoff"
+        and r.get("reported") and r.get("row_basis") == BASIS_PRE_LAYOUT)
+    prelayout_governed: List[str] = []
+    if prelayout_signoff_rows:
+        prelayout_governed.append(
+            f"PRE-LAYOUT SIGN-OFF EVIDENCE: sign-off corner(s) "
+            f"{', '.join(prelayout_signoff_rows)} are reported ONLY by "
+            f"reports that stamp themselves PRE_LAYOUT — every number this "
+            f"gate judged for them is a PRE-PnR estimate, not a post-route "
+            f"measurement. The numbers are unchanged and no rule is violated, "
+            f"so this is not a FAIL. It is NOT post-route sign-off and must "
+            f"not be read as one: a timing failure introduced by placement, "
+            f"resizing, CTS or routing CANNOT be seen in this record")
+
     if ordered:
         verdict = "FAIL"
+    elif degraded_disclosed and prelayout_governed:
+        verdict = "SINGLE_CORNER_ONLY_PRE_LAYOUT_ONLY"
     elif degraded_disclosed:
         # Not a failure, but never a multi-corner sign-off either. The verdict
         # STRING carries the limitation so no downstream summary can quote a
         # bare "PASS" and have it read as multi-corner closure.
         verdict = "SINGLE_CORNER_ONLY"
+    elif prelayout_governed:
+        verdict = "PRE_LAYOUT_ONLY"
     else:
         verdict = "PASS"
 
@@ -1512,7 +1679,7 @@ def evaluate(project: Path,
     # repo has now removed from five separate programs.
     _signoff_rows = sum(1 for r in table if r.get("role_class") == "signoff")
     _total_rows = len(table)
-    reasons = findings + degraded_disclosed
+    reasons = findings + degraded_disclosed + prelayout_governed
     if not reasons:
         if _signoff_rows == 0:
             reasons = [f"NO SIGN-OFF CORNER WAS REPORTED: {_total_rows} corner "
@@ -1537,6 +1704,8 @@ def evaluate(project: Path,
         "declaration_sources": decl.get("sources"),
         "axis_evidence": axes,
         "single_corner_only": bool(degraded_disclosed),
+        "pre_layout_only": bool(prelayout_governed),
+        "pre_layout_per_corner_excluded": excluded_disclosure,
         "corner_rows": _total_rows,
         "signoff_corner_rows": _signoff_rows,
         "slack_tol_ns": slack_tol,
@@ -1548,7 +1717,10 @@ def render_table(res: Dict[str, object]) -> str:
     """The per-corner evidence table. Emitted on PASS and FAIL alike — the
     absence of this table is the very defect this gate exists to prevent."""
     rows = res.get("corners") or []
-    hdr = (f"{'corner':<38} {'axis':<8} {'role':<22} {'rep':<4} "
+    # `basis` is a COLUMN, not a footnote: which side of place-and-route a
+    # number comes from is a property of the number, and a table that prints
+    # the number without it is the same silence this gate exists to break.
+    hdr = (f"{'corner':<38} {'axis':<8} {'role':<22} {'rep':<4} {'basis':<11} "
            f"{'setup_wns':>10} {'hold_wns':>10} {'tns':>12}  source")
     lines = [hdr, "-" * len(hdr)]
     if not rows:
@@ -1561,12 +1733,29 @@ def render_table(res: Dict[str, object]) -> str:
         role = str(r.get("role_class") or "")
         if r.get("roles"):
             role = f"{role}:{'/'.join(r['roles'])}"
+        basis = str(r.get("row_basis") or "-")
         lines.append(
             f"{str(r.get('corner'))[:38]:<38} {str(r.get('axis')):<8} "
             f"{role[:22]:<22} {'yes' if r.get('reported') else 'NO':<4} "
+            f"{basis[:11]:<11} "
             f"{_f('setup_wns_ns'):>10} {_f('hold_wns_ns'):>10} "
             f"{('n/a' if tns is None else f'{float(tns):.2f}'):>12}  "
             f"{r.get('source') or '-'}")
+
+    # The pre-layout datapoints the basis rule kept OUT of the judged numbers.
+    # Printed on every verdict: a number that was silently dropped is a worse
+    # record than the merge this replaced.
+    excluded = res.get("pre_layout_per_corner_excluded") or []
+    if excluded:
+        lines.append("")
+        lines.append("pre-layout datapoints EXCLUDED from the judged record "
+                     "(disclosed, not discarded)")
+        lines.append("-" * len(hdr))
+        for e in excluded:  # type: ignore[union-attr]
+            lines.append(
+                f"  {str(e.get('corner')):<20} {str(e.get('axis')):<8} "
+                f"{str(e.get('field')):<14} {float(e['pre_layout_ns']):+.3f} ns"
+                f"  <- {', '.join(e.get('sources') or []) or '?'}")
 
     # The corner-library resolution and the DRV answer, per axis. Emitted on
     # every verdict: a degradation that is not visible in the evidence is the
@@ -1644,10 +1833,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
 
     tag = str(res["verdict"])
-    # SINGLE_CORNER_ONLY exits 0 (the degradation may be unavoidable) but is
-    # NEVER printed as PASS — the banner has to carry the limitation, or the
-    # verdict reads as multi-corner sign-off, which is the defect itself.
-    ok = tag in ("PASS", "NOT_APPLICABLE", "SINGLE_CORNER_ONLY")
+    # SINGLE_CORNER_ONLY and PRE_LAYOUT_ONLY exit 0 (the limitation may be
+    # unavoidable — a one-library PDK, a run that has not reached post-route
+    # STA) but are NEVER printed as PASS: the banner has to carry the
+    # limitation, or the verdict reads as sign-off closure, which is the defect
+    # itself. Membership is computed from the flags rather than matched against
+    # a literal list, so a new combination cannot fall through to a bare PASS.
+    ok = tag != "FAIL"
     banner = "PASS" if tag in ("PASS", "NOT_APPLICABLE") else tag
     print(f"[{banner}] {_PROGRAM}: {tag}")
     print(render_table(res))

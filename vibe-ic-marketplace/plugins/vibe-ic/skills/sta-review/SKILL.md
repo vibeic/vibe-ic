@@ -167,7 +167,19 @@ python3 plugins/vibe-ic/programs/sta_corner_record_completeness_check.py \
   the run records no corner-to-liberty resolution at all
   (`R4_LIBRARY_RESOLUTION_UNRECORDED`);
 - **R5** DRV is violated (`R5_DRV_VIOLATION`) **or was never queried**
-  (`R5_DRV_UNQUERIED`).
+  (`R5_DRV_UNQUERIED`);
+- **R6** a declared sign-off role's only slack datapoint is a **PRE-LAYOUT**
+  estimate (`R2_SIGNOFF_ROLE_PRE_LAYOUT_ONLY`). Basis comes from each report's
+  own `STA_BASIS:` stamp, read through `programs/_sta_basis.py` — the single
+  reader in the tree. **One row, one basis:** a corner with any post-route
+  datapoint takes ALL its numbers from the post-route pool, and a field the
+  post-route reports do not carry stays empty rather than being back-filled
+  from a pre-PnR estimate. A corner reported ONLY by pre-layout reports keeps
+  its numbers and is **not** a FAIL — a run that has not reached post-route STA
+  cannot do better — but the verdict string becomes `PRE_LAYOUT_ONLY`, so no
+  summary can quote a bare "PASS" over a pre-PnR number. Every excluded
+  pre-layout value is disclosed on its row and in
+  `pre_layout_per_corner_excluded`.
 
 ### R4: a "multi-corner" run that read one library
 
