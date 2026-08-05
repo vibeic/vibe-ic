@@ -37,21 +37,31 @@ in its own class. A confident clean answer from a denominator that excluded
 the finding by naming alone is the exact defect this file's docstring is
 about, one level up.
 
-WHY THE FIX IS `+ _guard/_lint/_gate` AND NOT `programs/*.py`. Measured, both
-ways, before choosing:
+WHY THE FIX IS `+ _guard/_lint/_gate` AND NOT `programs/*.py`. Measured on
+2026-08-03 in 581a8759, both ways, before choosing — a RECORD of the input to
+that decision, not a claim about this checkout:
 
     population 533 (as shipped)      test_only 31   no_runner  0
     population 560 (+ the 3 suffixes) test_only 33   no_runner  0   -> +2 entries
     population 1091 (every program)   test_only 91   no_runner 20   -> +80 entries
 
-The 80 are `a2b_protocol_synth.py`, `crc_vector_gen.py`, `benchmark_setup.py`
+The 80 were `a2b_protocol_synth.py`, `crc_vector_gen.py`, `benchmark_setup.py`
 and their kind — GENERATORS and harness helpers, not checkers. A register whose
 `_comment` says "checkers that NOTHING but their own unit test ever runs" does
 not describe them, and filling it with 80 non-checkers to catch one guard is
 the same defect as the glob: a population chosen for convenience rather than
 for the question. The suffix set is widened to the CHECKER-SHAPED names and
-nothing else; the 531 programs still outside it are disclosed by the verdict
-line rather than silently absent.
+nothing else; the programs still outside it are disclosed by the verdict line
+rather than silently absent.
+
+Those three populations on THIS checkout, recomputed rather than remembered —
+`*_check.py` + `*_audit.py` is {figure:as_shipped_population}, the shipped
+CHECKER-SHAPED set is {figure:checker_shaped_population}, every program is
+{figure:all_programs}, and {figure:programs_outside_population} stay outside
+the population and are disclosed by the verdict line. Reading those next to the
+pinned table above is the only way to see whether the 2026-08-03 argument still
+holds; typing them here instead would put this docstring back in the state that
+`derived_corpus_figure_check` exists to end.
 
 WHAT IT MEASURES
 ----------------
@@ -144,8 +154,13 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Set
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _derived_corpus_figure import CorpusFigures  # noqa: E402
 
 _BASELINE_NAME = "checker_execution_wiring_baseline.json"
 #: Checker-shaped filename suffixes. See "THE POPULATION IS A FILENAME GLOB".
@@ -299,6 +314,28 @@ def checker_population(programs: Path) -> List[str]:
     """Every checker-shaped program name, deduplicated and sorted."""
     return sorted({p.name for suf in _CHECKER_SUFFIXES
                    for p in programs.glob(suf)})
+
+
+def _named(programs: Path, *suffixes: str) -> int:
+    return len({p.name for suf in suffixes for p in programs.glob(suf)})
+
+
+#: The populations this file's docstring argues from, bound to the code that
+#: produces them so the prose cannot drift away from the predicate. LAZY --
+#: nothing here runs on the audit path. `all_programs` deliberately mirrors
+#: `audit()`'s own expression (`glob("*.py")`, not deduplicated by name) so the
+#: docstring and the verdict line cannot disagree about the denominator.
+CORPUS_FIGURES = CorpusFigures({
+    "as_shipped_population":
+        lambda root: _named(root / "programs", "*_check.py", "*_audit.py"),
+    "checker_shaped_population":
+        lambda root: len(checker_population(root / "programs")),
+    "all_programs":
+        lambda root: len(list((root / "programs").glob("*.py"))),
+    "programs_outside_population":
+        lambda root: (len(list((root / "programs").glob("*.py")))
+                      - len(checker_population(root / "programs"))),
+})
 
 
 def audit(plugin: Path, repo_root: Path) -> dict:
