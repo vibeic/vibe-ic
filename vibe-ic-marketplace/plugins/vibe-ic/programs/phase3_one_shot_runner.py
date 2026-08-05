@@ -78,6 +78,7 @@ import metal_layer_density_check as _mld  # metal-layer NAME authority (producer
 import _signoff_drc_format as _sdf  # sign-off DRC producer classification (ONE answer)
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
+import eda_report_audit as _era  # #863 — the ONE shipped STA_BASIS stamp reader (prefix-normalising, `#`-tolerant)
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -31942,30 +31943,44 @@ def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
     return (None, {}, "MISSING", "no routed or synth netlist found")
 
 
-def _stamped_sta_basis(rpt: Path) -> Optional[str]:
-    """Return the `STA_BASIS:` a corner report stamps into itself, else None.
+def _reused_report_basis(rpt: Path) -> Tuple[Optional[str], Optional[str]]:
+    """Read a corner report's own `STA_BASIS` stamp back, via the ONE shipped
+    reader — `eda_report_audit`.
 
     `_emit_multi_corner_sta` stamps every report it writes with the basis it
     was produced on (`POST_ROUTE_SPEF` / `POST_ROUTE_NO_SPEF` /
     `PRE_LAYOUT_ESTIMATE`), precisely so a report carries its own limitation
-    rather than relying on a caller to remember it. This reads that stamp back,
-    which is what makes a REUSED report checkable against the basis the inputs
-    currently resolve to.
+    rather than relying on a caller to remember it. Reading that stamp back is
+    what makes a REUSED report checkable against the basis the inputs currently
+    resolve to.
 
-    Returns None — meaning "unverified", never "agrees" — when the file is
-    unreadable or carries no stamp, so the caller degrades to disclosing
-    uncertainty instead of assuming agreement. Chip/PDK-AGNOSTIC: pure text.
+    Returns ``(raw, canonical)`` where
+
+      * ``raw``       — the verbatim stamp value (e.g. ``POST_ROUTE_NO_SPEF``),
+                        for disclosure, or ``None`` when the file is unreadable
+                        or carries no stamp;
+      * ``canonical`` — that stamp collapsed to the PnR-side vocabulary every
+                        consumer compares against (``PRE_LAYOUT`` /
+                        ``POST_ROUTE``), or ``None`` when unreadable, unstamped,
+                        or an unrecognised token.
+
+    Delegating to `eda_report_audit._STA_BASIS_STAMP_RE` (a `#`-tolerant regex —
+    the sibling emitter at phase3_one_shot_runner writes a `#`-prefixed stamp)
+    and `_report_declared_basis` (which PREFIX-normalises the two `POST_ROUTE_*`
+    suffixes the emitter ships to the single `POST_ROUTE` token) means this call
+    can NEVER disagree with the shipped audit on the same report — no separate
+    acceptance set, no per-suffix / per-case / hyphenation drift. Returning
+    ``canonical=None`` as "unverified, never agrees" keeps the fail-safe: an
+    unreadable or unstamped report is disclosed as uncertain, not assumed to
+    match. Chip/PDK-AGNOSTIC: pure text.
     """
     try:
         text = rpt.read_text(errors="replace")
     except OSError:
-        return None
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("STA_BASIS:"):
-            value = line.split(":", 1)[1].strip()
-            return value or None
-    return None
+        return (None, None)
+    m = _era._STA_BASIS_STAMP_RE.search(text)
+    raw = m.group(1) if m else None
+    return (raw, _era._report_declared_basis(text))
 
 
 def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
@@ -31986,6 +32001,14 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         return False
     notes.append(f"multi-corner STA inputs resolve to basis={basis}: "
                  f"{basis_note}")
+    # Collapse the resolved basis to the SAME PnR-side vocabulary the reports'
+    # own stamps are read into, so the reuse comparison below is canonical-vs-
+    # canonical. The emitter ships two `POST_ROUTE_*` suffixes (SPEF / NO_SPEF);
+    # `eda_report_audit` — the reader every downstream consumer uses — folds
+    # both to `POST_ROUTE`. Comparing the raw strings instead would flag a
+    # perfectly-in-basis `POST_ROUTE_NO_SPEF` report as "disagreeing" with
+    # `POST_ROUTE_SPEF` inputs, a false alarm the shipped audit never raises.
+    basis_norm = _era._report_declared_basis(f"STA_BASIS: {basis}")
     any_emitted = False
     # Corner reports REUSED from a previous call, bucketed by whether their own
     # stamped basis agrees with the basis the inputs now resolve to. See the
@@ -32019,11 +32042,22 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             # CLAIMING a basis its reports do not carry. Fail-safe by
             # construction: an unreadable or unstamped report is reported as
             # unverifiable rather than assumed to agree.
-            _existing = _stamped_sta_basis(rpt)
-            if _existing is None:
-                reused_unstamped.append(rpt.name)
-            elif _existing != basis:
-                reused_stale.append(f"{rpt.name}[{_existing}]")
+            #
+            # The stamp is read and normalised through the ONE shipped reader
+            # (`eda_report_audit`, via `_reused_report_basis`), so this can
+            # never disagree with the audit that consumes the same tree: a
+            # `#`-prefixed stamp is still seen (the sibling emitter writes one),
+            # and the two `POST_ROUTE_*` suffixes both fold to `POST_ROUTE`.
+            _existing_raw, _existing_norm = _reused_report_basis(rpt)
+            if _existing_norm is None:
+                # Unreadable, unstamped, or an unrecognised token: cannot be
+                # confirmed to match, so disclose as unverified — never as
+                # agreeing. Name the raw stamp when there was one.
+                reused_unstamped.append(
+                    rpt.name if _existing_raw is None
+                    else f"{rpt.name}[{_existing_raw}]")
+            elif _existing_norm != basis_norm:
+                reused_stale.append(f"{rpt.name}[{_existing_raw}]")
             any_emitted = True
             continue
         # Build OpenSTA tcl: read_liberty + read_verilog + read_sdc +

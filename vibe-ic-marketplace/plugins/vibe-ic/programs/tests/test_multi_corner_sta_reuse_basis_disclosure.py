@@ -88,13 +88,21 @@ def _mk_libs(project: Path):
     return sorted(out)
 
 
-def _stamp(rpt: Path, basis: str):
-    """Write a corner report stamped exactly as the producer stamps its own."""
+def _stamp(rpt: Path, basis: str, *, hashed: bool = False):
+    """Write a corner report stamped exactly as the producer stamps its own.
+
+    `hashed=True` writes the `#`-prefixed form `# STA_BASIS: <basis>` — the
+    shape the sibling emitter in this same file writes
+    (phase3_one_shot_runner.py: `f"# STA_BASIS: {basis}\\n"`). A reader that
+    tests `line.startswith("STA_BASIS:")` is blind to it; the shipped
+    `eda_report_audit._STA_BASIS_STAMP_RE` is `#`-tolerant and is not.
+    """
     rpt.parent.mkdir(parents=True, exist_ok=True)
+    stamp = f"# STA_BASIS: {basis}\n" if hashed else f"STA_BASIS: {basis}\n"
     rpt.write_text(
         "Startpoint: a\nEndpoint: b\n   1.00   slack (MET)\n"
         "tns max 0.00\nwns max 0.00\n"
-        f"STA_BASIS: {basis}\n"
+        + stamp +
         "STA_BASIS_NOTE: fixture\n")
 
 
@@ -193,6 +201,69 @@ def test_unstamped_reused_report_is_unverified_not_assumed_to_agree(tmp_path):
     assert "UNVERIFIED" in text.upper()
 
 
+# ── BIDIRECTIONAL: fail on the byte-identical file that read the stamp with a
+#    private parser (raw `!=`, `startswith("STA_BASIS:")`), pass once the read
+#    goes through the ONE shipped reader (prefix-normalising + `#`-tolerant).
+#    #863's whole subject. Each asserts on the RUN'S OWN NOTES — an OBSERVED
+#    VALUE, never a symbol only the fix introduces — so a pre-fix failure is a
+#    WRONG-ANSWER failure, not a missing-name failure.
+
+def test_post_route_no_spef_report_is_not_flagged_against_post_route_spef_inputs(
+        tmp_path):
+    """PREFIX NORMALISATION, the false-positive direction. A report produced by
+    an earlier post-route call with no SPEF stamps `POST_ROUTE_NO_SPEF`; SPEF
+    later became available so the inputs now resolve to `POST_ROUTE_SPEF`. Both
+    are POST_ROUTE — the ONE distinction every consumer draws — so the reuse is
+    in-basis and must NOT be disclosed as stale.
+
+    A raw `!=` reader (the pre-fix private parser) sees two different strings
+    and raises a DISAGREES note the shipped audit never raises. That false
+    alarm on ordinary reuse is exactly what trains the real warning away."""
+    project = _mk_project(tmp_path)  # routed + spef -> POST_ROUTE_SPEF
+    out_dir = project / "phase3/stage3/sta/per_corner"
+    for corner in CORNERS.values():
+        _stamp(out_dir / f"sta_{corner}.rpt", "POST_ROUTE_NO_SPEF")
+
+    _, _, basis, _ = R._multi_corner_sta_inputs(project, TOP)
+    assert basis == "POST_ROUTE_SPEF", "fixture no longer reproduces the setup"
+
+    ok, notes, calls = _run(project, out_dir)
+    assert ok is True
+    assert not calls, "reuse path must not invoke the tool"
+    text = _joined(notes)
+    assert "DISAGREES" not in text, (
+        "POST_ROUTE_NO_SPEF and POST_ROUTE_SPEF are the same PnR-side basis; a "
+        "raw string compare mislabels in-basis reuse as stale")
+    assert "REUSED pre-existing corner report(s) whose own" not in text
+
+
+def test_hash_prefixed_prelayout_stamp_is_still_read_and_flagged_stale(tmp_path):
+    """`#`-TOLERANCE (verdict FLAG 2). The genuine cross-PnR mislabel — a
+    `# STA_BASIS: PRE_LAYOUT_ESTIMATE` report reused while inputs resolve to
+    POST_ROUTE_SPEF — must be disclosed as STALE.
+
+    A `line.startswith("STA_BASIS:")` reader is blind to the leading `#` (the
+    exact shape the sibling emitter writes), returns None, and quietly downgrades
+    the real mislabel to a mere 'unverified'. The shipped `#`-tolerant regex
+    reads it, so the report is named as disagreeing on its true basis."""
+    project = _mk_project(tmp_path)  # POST_ROUTE_SPEF
+    out_dir = project / "phase3/stage3/sta/per_corner"
+    for corner in CORNERS.values():
+        _stamp(out_dir / f"sta_{corner}.rpt", "PRE_LAYOUT_ESTIMATE", hashed=True)
+
+    ok, notes, calls = _run(project, out_dir)
+    assert ok is True
+    assert not calls
+    text = _joined(notes)
+    assert "DISAGREES" in text, (
+        "a `#`-prefixed PRE_LAYOUT stamp reused under POST_ROUTE inputs is a "
+        "real cross-PnR mislabel and must be flagged stale, not hidden as "
+        "'unverified' by a `#`-blind reader")
+    assert "PRE_LAYOUT_ESTIMATE" in text
+    for corner in CORNERS.values():
+        assert f"sta_{corner}.rpt" in text
+
+
 # ── REVERSE: must STILL pass. These pin the fix's narrowness. ─────────────────
 # None of them references the new helper, so each is meaningful against the
 # pre-fix tree too: together they prove the change did not tighten a filter
@@ -215,6 +286,27 @@ def test_matching_basis_produces_NO_staleness_disclosure(tmp_path):
     assert "REUSED" not in text, (
         "agreeing reports must not be reported as stale")
     assert "DISAGREES" not in text
+
+
+def test_hash_prefixed_agreeing_basis_is_silent(tmp_path):
+    """REVERSE of the `#`-tolerance case. Making the reader see `#` stamps must
+    not make it fire on `#`-stamped reports that AGREE: a
+    `# STA_BASIS: POST_ROUTE_SPEF` report reused under POST_ROUTE_SPEF inputs is
+    ordinary correct reuse and must stay silent. Guards the over-correction
+    where `#`-tolerance is bought by treating every `#`-stamped report as
+    unverifiable."""
+    project = _mk_project(tmp_path)  # POST_ROUTE_SPEF
+    out_dir = project / "phase3/stage3/sta/per_corner"
+    for corner in CORNERS.values():
+        _stamp(out_dir / f"sta_{corner}.rpt", "POST_ROUTE_SPEF", hashed=True)
+
+    ok, notes, calls = _run(project, out_dir)
+    assert ok is True
+    assert not calls
+    text = _joined(notes)
+    assert "REUSED" not in text, "agreeing `#`-stamped reports must not disclose"
+    assert "DISAGREES" not in text
+    assert "UNVERIFIED" not in text.upper()
 
 
 def test_empty_out_dir_still_emits_every_corner_report(tmp_path):
