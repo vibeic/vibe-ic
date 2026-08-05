@@ -22,6 +22,7 @@
 # Emitted even when every citation resolves: a record that only appears
 # on failure cannot be used to prove there were none.
 RESULT.md :: reports/phase3/analog_one_shot.json RESOLVES
+phase3/analog/ldo/topology.json :: /home/reyerchu/_c_o_u_hawaii_adc_sky130A_run/phase3/analog/ldo/spec.json UNFOLLOWABLE_ABSOLUTE
 reports/audit/phase1/expert_parse_track.json :: /home/reyerchu/_c_o_u_hawaii_adc_sky130A_run/phase1/ai_deep_review_patches.json UNFOLLOWABLE_ABSOLUTE
 reports/audit/phase1/expert_parse_track.json :: reports/audit/phase1/expert_parse_track_pack/ic_expert_agent_handoff.json RESOLVES
 reports/audit/phase23_completion_audit.json :: reports/analog/a1_spec.json RESOLVES

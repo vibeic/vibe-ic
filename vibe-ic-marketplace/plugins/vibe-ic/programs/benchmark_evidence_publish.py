@@ -161,6 +161,22 @@ _COPY_SUBTREES = (
     "phase1",
     "phase2",
     Path("phase3") / "reports",
+    # The A-track's own evidence. This list was derived from the DIGITAL
+    # reference cells, so it staged `phase3/reports` and nothing else under
+    # phase3 — and an ANALOG cell keeps its substance in `phase3/analog/`:
+    # per-block specs, extracted netlists, and the hardmacro layouts.
+    #
+    # MEASURED (u_hawaii_adc x sky130A, 2026-08-06). The cell published with 31
+    # analog files left behind, so the folder that is supposed to BE the
+    # evidence did not contain the evidence — while `reports/analog/` came
+    # across and made it look complete. Eight tests read
+    # `phase3/analog/hardmacro/` and could only find it in the pre-canonical
+    # run tree at the IC level, which is exactly the sibling directory the
+    # layout contract forbids and which therefore could not be retired.
+    #
+    # Absent on a digital cell, where `_copy_tree` skips a missing source, so
+    # the staged output of every digital cell is byte-identical to before.
+    Path("phase3") / "analog",
     "reports",
 )
 _COPY_FILES = ("provenance.jsonl",)

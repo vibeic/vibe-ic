@@ -242,7 +242,7 @@ WAIVERS: Tuple[Waiver, ...] = (
         evidence=(
             "`git ls-tree -r --name-only HEAD` matches ZERO paths against "
             "phase3/analog/hardmacro/*/*.gds while matching 2 for the sibling "
-            "*.lef (benchmark-data/ic/u_hawaii_adc/phase3/analog/hardmacro/"
+            "*.lef (benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A/phase3/analog/hardmacro/"
             "{ldo,delta_sigma}/*.lef) — the step ran and only the .gds is "
             "absent. Producer wiring is asserted live by "
             "test_d3_a8_producer_is_reachable_from_a_flow_path (the runner "
