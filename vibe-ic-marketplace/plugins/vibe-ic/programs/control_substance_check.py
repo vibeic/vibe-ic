@@ -89,6 +89,17 @@ decide it: the assertion's own source AST plus the pre-fix definition of the
 callable named in the where-line — neither is in the pytest report, so neither
 is in this program.
 
+The known FALSE NEGATIVE runs the other way. `KeyError` is read as "the key
+the fix introduces is absent", which is what it means when the TEST does the
+lookup. When the KeyError comes out of the program under test — pre-fix code
+that crashes on a key the fix teaches it to handle — that is a real behavioural
+control and this program under-credits it as presence-only. It errs toward
+under-crediting on purpose: a control wrongly called substantive is the failure
+being retired here, and one wrongly called presence-only costs the author a
+sentence of rebuttal. The same caution applies to `AttributeError` and
+`TypeError` raised from inside the program rather than from the test's own
+access.
+
 Also undecided, each with a named reason: bare truthiness on a non-`None` value
 (`assert False + where False = r.ok` — the attribute exists and is False, which
 is an observed value; `+ where False = hasattr(o,'x')` is not), `SystemExit: 2`
@@ -172,8 +183,11 @@ _EMPTY_REPRS = {"{}", "[]", "()", "''", '""', "set()", "frozenset()",
 # Where-line sources that are symbol/artefact PRESENCE predicates: they answer
 # "is it there", never "what is it". Listed explicitly so the rule is audit-
 # able rather than a regex that grew.
+# `isinstance(` is deliberately NOT here: it observes a TYPE, which is a
+# property of a value, not the presence of a name. It falls through to the
+# bare-truthiness branch and is reported undecided.
 _PRESENCE_PREDICATES = ("hasattr(", ".exists()", "os.path.exists(",
-                        ".is_file()", ".is_dir()", "isinstance(")
+                        ".is_file()", ".is_dir()")
 
 # Exception types whose message proves a NAME was not found. These are (b) no
 # matter which class pytest happened to raise.
