@@ -5,11 +5,13 @@ WHY THIS EXISTS
 ===============
 `flow_compliance_check` registers 246 structural gates; 36 reject the argv the
 umbrella builds, return no verdict, and are pinned by
-`p0_gate_invocability_drift_check` so the number cannot grow. Each of the 36
-also carries a written DISPOSITION in one of the registers in that module
-(`_NOT_A_PROJECT_GATE`, `_SEMANTIC_ARGV_UNDRIVABLE`,
-`_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA`, ...). Those registers are good — they
-record "I examined it and dismissed it" where the next reader will find it.
+`p0_gate_invocability_drift_check` so the number cannot grow. Thirty-two of the
+36 -- not all of them; this file used to say "each", and counting them is how
+that was found -- carry a written DISPOSITION in one of the registers in that
+module (`_NOT_A_PROJECT_GATE`, `_SEMANTIC_ARGV_UNDRIVABLE`,
+`_ZERO_DENOMINATOR_CLASSIFICATION`, `_UNDRIVABLE_BY_STRUCTURAL_UMBRELLA`). Those
+registers are good — they record "I examined it and dismissed it" where the next
+reader will find it.
 
 But a disposition can say two very different things, in the same voice:
 
@@ -41,7 +43,7 @@ reader and to every program.
 
 WHAT THIS DOES NOT DO
 =====================
-It does not wire anything, and it does not fail the 13. Turning them red today
+It does not wire anything, and it does not fail the 14. Turning them red today
 would block every landing on prose, and the fix for each is a different piece
 of engineering (a step that does not exist yet, a schema question, an
 instrument). It pins the size of the problem so it cannot grow silently, and it
