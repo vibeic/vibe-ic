@@ -160,6 +160,118 @@ def test_erased_pin_map_would_have_inflated_coverage():
     assert merged == good
 
 
+def test_atpg_cli_verdict_does_not_depend_on_liberty_argument_order(tmp_path):
+    """SITE 1, at the CALL SITE, through `main()`.
+
+    The property tests above exercise the parser and the helper. This one
+    exercises the merge the program actually performs: two `--liberty` files
+    naming the same cell, one of them `pg_pin`-only, in both orders. The
+    reported untestable set must be identical.
+
+    Public grammar; nangate45-style names; no PDK, vendor or SKU literal.
+    """
+    full = tmp_path / "a_full.lib"
+    pg = tmp_path / "z_pg.lib"
+    full.write_text("""
+    library (l0) {
+      cell (BUF_X1) { pin (A) { direction : input; } pin (Z) { direction : output; } }
+      cell (INV_X1) { pin (A) { direction : input; } pin (ZN) { direction : output; } }
+    }
+    """)
+    pg.write_text("""
+    library (l1) {
+      cell (BUF_X1) { pg_pin (VDD) { pg_type : primary_power; } }
+    }
+    """)
+    netlist = tmp_path / "cut.v"
+    netlist.write_text(
+        "module top (pi, po);\n"
+        "  input pi; output po; wire mid;\n"
+        "  BUF_X1 u1 (.A(pi), .Z(mid));\n"
+        "  BUF_X1 u2 (.A(mid), .Z(po));\n"
+        "  INV_X1 u3 (.A(mid), .ZN(spare));\n"
+        "endmodule\n")
+
+    def run(first, second):
+        out = tmp_path / f"o_{first.stem}.json"
+        auc.main(["--netlist", str(netlist), "--top", "top",
+                  "--liberty", str(first), "--liberty", str(second),
+                  "--json", str(out)])
+        return json.loads(out.read_text())
+
+    forward = run(full, pg)          # `sorted()` order: a_full then z_pg
+    reverse = run(pg, full)
+
+    assert forward["unresolved_cells"] == reverse["unresolved_cells"]
+    assert "BUF_X1" not in forward["unresolved_cells"], \
+        "the pg_pin-only liberty erased the cell's real pin map"
+    assert sorted(forward["uncontrollable"]) == sorted(reverse["uncontrollable"])
+    assert sorted(forward["unobservable"]) == sorted(reverse["unobservable"])
+
+
+def test_pdn_planner_sees_the_obstruction_whichever_lef_is_last():
+    """SITE 3, at the CALL SITE, through the real planner.
+
+    Two LEFs declare the same MACRO: one with an OBS blocking a stripe layer,
+    one with no OBS at all. The observable: adding a LEF that says NOTHING about
+    obstructions must not change the plan, in either order -- so both must equal
+    the plan from the speaking LEF alone, and must NOT equal the plan from the
+    silent LEF alone.
+
+    Measured pre-fix: `blocked_layers []` instead of `['L4']`, and a stripe
+    pitch of 12.0 instead of 10.0. Not a missing report -- a different PDN, from
+    the same design, decided by argument order.
+    """
+    import importlib.util as ilu
+    import re as _re
+
+    spec = ilu.spec_from_file_location(
+        "_erase_phase3", PROGRAMS / "phase3_one_shot_runner.py")
+    R = ilu.module_from_spec(spec)
+    sys.modules["_erase_phase3"] = R
+    try:
+        spec.loader.exec_module(R)
+    except SystemExit:
+        pass
+    tspec = ilu.spec_from_file_location(
+        "_erase_pdnfix", PROGRAMS / "tests" / "test_macro_pdn_grid.py")
+    T = ilu.module_from_spec(tspec)
+    sys.modules["_erase_pdnfix"] = T
+    try:
+        tspec.loader.exec_module(T)
+    except SystemExit:
+        pass
+
+    lef = T.MACRO_LEF
+    name = _re.search(r"MACRO\s+(\S+)", lef).group(1)
+    m = _re.search(r"SIZE\s+([\d.]+)\s+BY\s+([\d.]+)\s*;", lef)
+    w, h = m.group(1), m.group(2)
+    body = (f"  OBS\n    LAYER OVERLAP ;\n      RECT 0 0 {w} {h} ;\n"
+            f"    LAYER L4 ;\n      RECT 0 0 {w} {h} ;\n  END\n")
+    with_obs = lef.replace(f"END {name}", body + f"END {name}", 1)
+    no_obs = lef                       # same MACRO, says nothing about OBS
+
+    def plan(texts):
+        return R._macro_pdn_grid_outcome(texts, T.TECH_LEF, T.STRIPES, "L1")
+
+    speaking = plan([with_obs])
+    silent = plan([no_obs])
+    a = plan([with_obs, no_obs])
+    b = plan([no_obs, with_obs])
+
+    # precondition: the two LEFs really do produce different plans, so the
+    # assertions below are measuring something
+    assert speaking["plan"] != silent["plan"]
+    assert speaking["plan"]["blocked_layers"] == ["L4"]
+    assert silent["plan"]["blocked_layers"] == []
+
+    assert a["plan"] == b["plan"], "the plan depends on LEF argument order"
+    assert a["plan"] == speaking["plan"], \
+        "a LEF that says nothing about OBS erased the one that declared L4 blocked"
+    assert [r["reason"] for r in a["refusals"]] == \
+           [r["reason"] for r in b["refusals"]]
+
+
 def test_payload_bitmap_byte_named_without_bits_does_not_blank_the_other_layer(tmp_path):
     """SITE 4, through the real `parse_bitmap`."""
     l3 = tmp_path / "l3.json"
