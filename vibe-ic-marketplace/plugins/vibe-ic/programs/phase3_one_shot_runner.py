@@ -62,6 +62,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 import _path_layout as _pl
 import _reference_flow_boundary as _rfb
+import _source_record_merge as _srm  # per-source merge: silence cannot erase
 import floorplan_contract as _fpc  # design-declared fixed floorplan + DRV limits
 from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
@@ -3726,10 +3727,34 @@ def _macro_pdn_grid_outcome(
     # Derived here rather than taken as a parameter so every existing caller
     # gets the rule without being changed; a rule only new callers get is one
     # the existing runs do not have.
+    #
+    # The OBS merge is NOT `dict.update`. `_macro_obs_layers_from_lef` emits a
+    # record for every MACRO it finds, and a LEF that declares the macro but
+    # carries no `OBS` section emits `{"blocked": {}, "size": (...), ...}` --
+    # a TRUTHY record that says nothing about obstructions. Last-wins would let
+    # that record erase another LEF's real blockage list, and which LEF wins is
+    # decided by the order `macro_lefs` was harvested in (dedup upstream is by
+    # FILE STEM, so two files declaring the same MACRO both survive it).
+    #
+    # `content=` is required here for exactly that reason: the emptiness is one
+    # level down, in `blocked`, and the record's own truthiness cannot see it.
+    #
+    # `on_conflict="richer"` -- the OPPOSITE of the sibling rule in
+    # `macro_obs_geometry_intersect_check.merge_macro_obs`, and deliberately.
+    # That one is a BLOCKING gate, where an over-read FABRICATES a violation
+    # and stops a clean design, so it takes the floor. This is a PLANNER whose
+    # over-read costs a refusal record that is loud, named and explicitly
+    # non-fatal (see the block comment below), while its under-read straps
+    # supply straight across metal the macro declares blocked. The asymmetry
+    # runs the other way, so the choice does.
     obs: Dict[str, Dict[str, Any]] = {}
+    _obs_per_lef: List[Dict[str, Dict[str, Any]]] = []
     for t in (macro_lef_texts or []):
         ports.extend(_macro_pg_ports_from_lef(t))
-        obs.update(_macro_obs_layers_from_lef(t))
+        _obs_per_lef.append(_macro_obs_layers_from_lef(t))
+    obs = _srm.merge_source_records(
+        _obs_per_lef, content=lambda e: (e or {}).get("blocked"),
+        on_conflict="richer")[0]
     # NOTHING TO DO — and this is the ONLY branch that may say so. Every other
     # exit below has already seen a hard-macro supply port, i.e. work the grid
     # was supposed to do.
