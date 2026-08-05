@@ -78,7 +78,7 @@ import metal_layer_density_check as _mld  # metal-layer NAME authority (producer
 import _signoff_drc_format as _sdf  # sign-off DRC producer classification (ONE answer)
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
-import eda_report_audit as _era  # #863 — the ONE shipped STA_BASIS stamp reader (prefix-normalising, `#`-tolerant)
+import _sta_basis  # the ONE reader of the `STA_BASIS:` stamp (no second copy)
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -29211,24 +29211,69 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         written.append(str(pvt_path))
 
     # --- Step 10: GENUINE pre-layout multi-corner STA --------------------
+    # force_prelayout=True: this step is Step 10 (PRE-LAYOUT) by definition, so
+    # it must time the synth netlist even on a re-run in a dir that already
+    # holds a routed netlist + SPEF from a prior round — else the shared
+    # file-existence precedence would emit a POST_ROUTE report here and label it
+    # pre-layout (the contradiction sta_report_check flags).
     per_corner = sta_out / "per_corner"
     if runner_sdc.is_file():
         per_corner.mkdir(parents=True, exist_ok=True)
         if _emit_multi_corner_sta(project, top, pdk, container,
-                                  staged_libs, per_corner, notes):
+                                  staged_libs, per_corner, notes,
+                                  force_prelayout=True):
             written.append(str(per_corner))
     # Compose pre_pnr_timing.rpt from a GENUINE per-corner report (setup-worst
     # SS preferred, else TT/FF/any) — NOT a copy of the post-route sta.rpt.
+    # Re-compose when a stale pre_pnr_timing.rpt from an earlier post-route
+    # round is present: its body would carry STA_BASIS: POST_ROUTE_* under this
+    # step's PRE-LAYOUT header — the precise contradiction sta_report_check
+    # flags. A genuinely pre-layout report (or an absent one) is left alone.
     pre_pnr = sta_out / "pre_pnr_timing.rpt"
-    if not pre_pnr.is_file():
+    _pre_pnr_stale = (pre_pnr.is_file()
+                      and _sta_basis.declared_basis(pre_pnr.read_text())
+                      != "PRE_LAYOUT")
+    if not pre_pnr.is_file() or _pre_pnr_stale:
+        # BLOCKING-1 (2026-08-05 review). The source must be chosen by what the
+        # corner report DECLARES, not by its filename. Forcing the basis in
+        # `_emit_multi_corner_sta` only re-stamps the corners whose re-emit
+        # SUCCEEDED; a corner whose OpenSTA run failed contributes no fresh
+        # report, and — before the quarantine above — left its POST_ROUTE one
+        # sitting under the very name this loop reaches for first. Picking by
+        # name then composed a PRE-LAYOUT header over a POST_ROUTE body and the
+        # step still returned PASS: the could-not-measure state resolving to
+        # measured-clean. Only a report that declares PRE_LAYOUT may be the
+        # source of a pre-layout report; the belt goes with the braces because
+        # a mislabelled corner report can reach per_corner/ by routes this step
+        # does not own.
+        def _prelayout_src(cand: Path) -> bool:
+            try:
+                return (_sta_basis.declared_basis(cand.read_text())
+                        == "PRE_LAYOUT")
+            except OSError:
+                return False
+
         src = None
-        for cand in ("sta_SS.rpt", "sta_TT.rpt", "sta_FF.rpt"):
-            if (per_corner / cand).is_file():
-                src = per_corner / cand
+        _rejected: List[str] = []
+        _ordered = [per_corner / c
+                    for c in ("sta_SS.rpt", "sta_TT.rpt", "sta_FF.rpt")]
+        if per_corner.is_dir():
+            _ordered += [p for p in sorted(per_corner.glob("sta_*.rpt"))
+                         if p not in _ordered]
+        for cand in _ordered:
+            if not cand.is_file():
+                continue
+            if _prelayout_src(cand):
+                src = cand
                 break
-        if src is None and per_corner.is_dir():
-            _any = sorted(per_corner.glob("sta_*.rpt"))
-            src = _any[0] if _any else None
+            _rejected.append(cand.name)
+        if _rejected:
+            notes.append(
+                "pre-layout compose REFUSED corner report(s) "
+                + ", ".join(_rejected)
+                + " — they do not declare STA_BASIS PRE_LAYOUT, and a "
+                  "pre-layout report composed from a post-route body is the "
+                  "contradiction this step exists to remove")
         if src is not None:
             pre_pnr.write_text(
                 "# PRE-LAYOUT STA (Step 10) — genuine OpenSTA on the synth\n"
@@ -29241,16 +29286,73 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
             notes.append("pre-layout STA produced no corner report — "
                          "pre_pnr_timing.rpt deferred (sta tool unavailable?)")
 
+    # BLOCKING-1 (2026-08-05 review), second half. Refusing to COMPOSE from a
+    # post-route body is necessary but not sufficient: when nothing genuine was
+    # available the pre-existing `pre_pnr_timing.rpt` is simply LEFT — and it is
+    # the contradiction. Two distinct outcomes, deliberately not merged:
+    #
+    #   * POSITIVELY declares POST_ROUTE — the file states, about ITSELF, that
+    #     it is the wrong side of PnR while sitting at the pre-layout path. That
+    #     is a mislabel on its own testimony, so quarantine it (bytes kept under
+    #     a non-`.rpt` suffix) rather than publish it to Step 10.
+    #   * UNDECLARED (`declared_basis` -> None) — per `_sta_basis`'s stated
+    #     contract, None is neither basis; it is "the report stated no side".
+    #     Deleting a file on an absence would be acting on a question it never
+    #     answered, so it is LEFT ALONE and only reported.
+    #
+    # BOTH are a step that could not substantiate the pre-layout artefact it
+    # owns, so NEITHER may return PASS. Silently PASSing here is precisely the
+    # could-not-measure -> measured-clean collapse this PR is written about;
+    # Step 10 scoring MISSING against an absent report is the honest outcome,
+    # and a WARN says so where the run can see it.
+    _pre_pnr_basis: Optional[str] = None
+    _pre_pnr_ok = True
+    if pre_pnr.is_file():
+        _pre_pnr_basis = _sta_basis.declared_basis(pre_pnr.read_text())
+        if _pre_pnr_basis != "PRE_LAYOUT":
+            _pre_pnr_ok = False
+            if _pre_pnr_basis == "POST_ROUTE":
+                _q = pre_pnr.parent / (pre_pnr.name + ".stale_basis")
+                try:
+                    pre_pnr.replace(_q)
+                    notes.append(
+                        f"pre_pnr_timing.rpt declared STA_BASIS POST_ROUTE "
+                        f"under this step's PRE-LAYOUT header and no genuine "
+                        f"pre-layout corner report could replace it — "
+                        f"quarantined to {_q.name}; Step 10 is MISSING, which "
+                        f"is the honest state, NOT clean")
+                    if str(pre_pnr) in written:
+                        written.remove(str(pre_pnr))
+                except OSError as exc:
+                    notes.append(
+                        f"pre_pnr_timing.rpt declares POST_ROUTE and could "
+                        f"NOT be quarantined ({exc}) — a post-route body is "
+                        f"published under a PRE-LAYOUT header")
+            else:
+                notes.append(
+                    "pre_pnr_timing.rpt carries NO recognised STA_BASIS stamp "
+                    "— this step cannot substantiate it as pre-layout, and an "
+                    "undeclared report is not evidence of either basis; left "
+                    "in place, reported, NOT counted as clean")
+
     # `canon_sdc` is deliberately NOT part of this predicate when the design
     # staged no SDC (see Step 7b): the artefact this step owns pre-layout is
     # the deck the pre-layout STA actually read plus the PVT matrix. Asserting
     # on `canon_sdc` would make the honest "left to the owning step" path
     # report WARN.
     ok = runner_sdc.is_file() and pvt_path.is_file() and (
-        canon_sdc.is_file() or not design_staged)
+        canon_sdc.is_file() or not design_staged) and _pre_pnr_ok
     detail = (f"pre-layout stage-2 sign-off emitted BEFORE PnR: "
               f"{len(written)} artefact(s)"
               + ("; " + "; ".join(notes[-2:]) if notes else ""))
+    if not _pre_pnr_ok:
+        # Lead with WHY, not with the artefact count — a detail that opens
+        # "sign-off emitted" while the pre-layout basis is unsubstantiated
+        # reads clean at a glance, which is the whole failure mode.
+        detail = (f"pre-layout basis UNSUBSTANTIATED "
+                  f"(pre_pnr_timing.rpt declared "
+                  f"{_pre_pnr_basis or 'no STA_BASIS'}, not PRE_LAYOUT) — "
+                  + detail)
     return StepResult("prelayout_signoff", "PASS" if ok else "WARN",
                       time.time() - t0, detail, written)
 
@@ -31872,9 +31974,11 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
     return out
 
 
-def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
-                                                               Dict[str, Path],
-                                                               str, str]:
+def _multi_corner_sta_inputs(project: Path, top: str,
+                             force_prelayout: bool = False,
+                             ) -> Tuple[Optional[Path],
+                                        Dict[str, Path],
+                                        str, str]:
     """Resolve the netlist + parasitics the per-corner STA must time.
 
     The defect this closes: `_emit_multi_corner_sta`'s docstring claimed the
@@ -31896,6 +32000,13 @@ def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
          → true post-route multi-corner timing;
       2. routed netlist with no SPEF → post-route topology, no parasitics;
       3. synth netlist → PRE-LAYOUT ESTIMATE, and the report SAYS SO.
+
+    ``force_prelayout=True`` OVERRIDES the precedence: the pre-layout step
+    (Step 10) demands rung 3 even when a routed netlist exists, because a
+    re-run in a dir that already holds a routed netlist would otherwise emit a
+    post-route report under a pre-layout header. With the flag set there is no
+    routed-netlist stand-in — the synth netlist is the only acceptable basis,
+    and its absence returns ``MISSING`` rather than a mislabelled report.
 
     Returns ``(netlist, spef, basis_id, disclosure)``. The basis is stamped
     into every emitted report so no downstream summary can quote a pre-layout
@@ -31920,6 +32031,30 @@ def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
         if cand.is_file():
             spef_map["*"] = cand
             break
+    # Step 10 is the PRE-LAYOUT multi-corner STA BY DEFINITION (the post-route
+    # sign-off is Step 23). When the caller FORCES the pre-layout basis it must
+    # time the pre-PnR synth netlist with NO parasitics EVEN IF a routed netlist
+    # + SPEF already exist from an earlier round in the same dir. Otherwise the
+    # routed netlist wins the file-existence precedence below and the
+    # "pre-layout" report silently becomes a post-route one: a RE-RUN then
+    # publishes POST_ROUTE numbers under a PRE-LAYOUT header — the exact
+    # contradiction `sta_report_check` flags. There is no honest pre-layout
+    # estimate without the synth netlist, so its absence is MISSING, never a
+    # routed-netlist stand-in.
+    if force_prelayout:
+        if synth.is_file():
+            return (synth, {}, "PRE_LAYOUT_ESTIMATE",
+                    f"pre-layout basis FORCED (Step 10) — timed the pre-PnR "
+                    f"synthesis netlist {synth.name} with NO parasitics, "
+                    "ignoring any routed netlist present from an earlier round. "
+                    "This is a PRE-LAYOUT ESTIMATE, NOT post-route sign-off: it "
+                    "excludes placement, CTS, resizing and all interconnect RC, "
+                    "so a corner shown as MET here may VIOLATE on the routed "
+                    "design")
+        return (None, {}, "MISSING",
+                f"pre-layout STA forced but no pre-PnR synth netlist "
+                f"{synth.name} found — a pre-layout estimate cannot be "
+                "substantiated and a routed netlist must NOT stand in for it")
     if routed.is_file():
         if spef_map:
             per_corner = ", ".join(
@@ -31964,12 +32099,14 @@ def _reused_report_basis(rpt: Path) -> Tuple[Optional[str], Optional[str]]:
                         ``POST_ROUTE``), or ``None`` when unreadable, unstamped,
                         or an unrecognised token.
 
-    Delegating to `eda_report_audit._STA_BASIS_STAMP_RE` (a `#`-tolerant regex —
-    the sibling emitter at phase3_one_shot_runner writes a `#`-prefixed stamp)
-    and `_report_declared_basis` (which PREFIX-normalises the two `POST_ROUTE_*`
+    Delegating to `_sta_basis.STAMP_RE` (a `#`-tolerant regex — the sibling
+    emitter in this module writes a `#`-prefixed stamp) and
+    `_sta_basis.declared_basis` (which PREFIX-normalises the two `POST_ROUTE_*`
     suffixes the emitter ships to the single `POST_ROUTE` token) means this call
     can NEVER disagree with the shipped audit on the same report — no separate
-    acceptance set, no per-suffix / per-case / hyphenation drift. Returning
+    acceptance set, no per-suffix / per-case / hyphenation drift. `eda_report_audit`
+    reads the same stamp through the same module, so "what the audit will say"
+    and "what this says" are one answer by construction. Returning
     ``canonical=None`` as "unverified, never agrees" keeps the fail-safe: an
     unreadable or unstamped report is disclosed as uncertain, not assumed to
     match. Chip/PDK-AGNOSTIC: pure text.
@@ -31978,23 +32115,28 @@ def _reused_report_basis(rpt: Path) -> Tuple[Optional[str], Optional[str]]:
         text = rpt.read_text(errors="replace")
     except OSError:
         return (None, None)
-    m = _era._STA_BASIS_STAMP_RE.search(text)
+    m = _sta_basis.STAMP_RE.search(text)
     raw = m.group(1) if m else None
-    return (raw, _era._report_declared_basis(text))
+    return (raw, _sta_basis.declared_basis(text))
 
 
 def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                            container: str, libs: List[Path],
-                           out_dir: Path, notes: List[str]) -> bool:
+                           out_dir: Path, notes: List[str],
+                           force_prelayout: bool = False) -> bool:
     """For each Liberty corner run OpenSTA and emit `sta_<CORNER>.rpt`.
 
     Times the ROUTED netlist + extracted SPEF when they exist, falling back to
     the pre-PnR synth netlist ONLY when no routed netlist has been written yet
     — in which case every emitted report is stamped `STA_BASIS:
     PRE_LAYOUT_ESTIMATE` so it can never be read as post-route sign-off
-    (see :func:`_multi_corner_sta_inputs`). Best-effort: failures log WARN but
-    do not block the canonicalize step."""
-    netlist, spef_map, basis, basis_note = _multi_corner_sta_inputs(project, top)
+    (see :func:`_multi_corner_sta_inputs`). ``force_prelayout=True`` (Step 10)
+    pins the basis to the synth netlist regardless of a routed netlist present
+    from an earlier round, and re-emits any per-corner report left with a
+    non-pre-layout basis by that earlier round. Best-effort: failures log WARN
+    but do not block the canonicalize step."""
+    netlist, spef_map, basis, basis_note = _multi_corner_sta_inputs(
+        project, top, force_prelayout=force_prelayout)
     sdc_path = _pl.pnr_dir(project) / "constraint.sdc"
     if netlist is None or not sdc_path.is_file():
         notes.append("multi-corner STA skipped: netlist or SDC missing")
@@ -32004,11 +32146,13 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
     # Collapse the resolved basis to the SAME PnR-side vocabulary the reports'
     # own stamps are read into, so the reuse comparison below is canonical-vs-
     # canonical. The emitter ships two `POST_ROUTE_*` suffixes (SPEF / NO_SPEF);
-    # `eda_report_audit` — the reader every downstream consumer uses — folds
-    # both to `POST_ROUTE`. Comparing the raw strings instead would flag a
-    # perfectly-in-basis `POST_ROUTE_NO_SPEF` report as "disagreeing" with
-    # `POST_ROUTE_SPEF` inputs, a false alarm the shipped audit never raises.
-    basis_norm = _era._report_declared_basis(f"STA_BASIS: {basis}")
+    # `_sta_basis` — the reader every downstream consumer uses, `eda_report_audit`
+    # included — folds both to `POST_ROUTE`. Comparing the raw strings instead
+    # would flag a perfectly-in-basis `POST_ROUTE_NO_SPEF` report as
+    # "disagreeing" with `POST_ROUTE_SPEF` inputs, a false alarm the shipped
+    # audit never raises. `MISSING` normalises to None, which the forced path
+    # below treats as "not reusable" — the fail-safe direction.
+    basis_norm = _sta_basis.normalise_basis(basis)
     any_emitted = False
     # Corner reports REUSED from a previous call, bucketed by whether their own
     # stamped basis agrees with the basis the inputs now resolve to. See the
@@ -32018,16 +32162,33 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
     for lib in libs:
         corner = _classify_corner_from_name(lib.name)
         rpt = out_dir / f"sta_{corner}.rpt"
+        # Existence-only reuse is correct for the post-route caller, but a
+        # FORCED pre-layout emit must NOT reuse a stale report left by an
+        # earlier post-route round: on a re-run per_corner/ already holds
+        # POST_ROUTE reports, and skipping them would preserve the exact
+        # mislabel this forces away.
+        #
+        # Whichever caller is asking, the stamp is read through `_sta_basis` —
+        # the tree's ONE reader — not by substring. A substring test
+        # (`f"STA_BASIS: {basis}" in text`) is a different, weaker question: it
+        # matches the emitter's exact spelling and spacing, so
+        # `#  STA_BASIS:   PRE_LAYOUT_ESTIMATE` reads as "not our basis" and a
+        # healthy report is re-run every time, while `STA_BASIS_NOTE: ...
+        # PRE_LAYOUT_ESTIMATE ...` reads as "ours" and a stale one is kept. The
+        # shared reader answers the question we mean — WHICH SIDE OF PnR does
+        # this report declare — and prefix-normalises `PRE_LAYOUT_ESTIMATE` /
+        # `POST_ROUTE_SPEF` to their canonical names.
         if rpt.is_file():
-            # MEASURED DEFECT this closes: this reuse is keyed on the FILENAME
-            # and is blind to the report's own `STA_BASIS`. `_emit_multi_corner_sta`
-            # is called TWICE into the SAME `per_corner/` directory — once for
-            # the PRE-layout multi-corner STA and again after PnR for the
-            # post-route one. The first call's files are already on disk when
-            # the second runs, so the second emits NOTHING, returns True, and
-            # the caller appends a note asserting it performed post-route
-            # multi-corner timing. The reports it "produced" are the pre-layout
-            # ones, stamped `STA_BASIS: PRE_LAYOUT_ESTIMATE`.
+            # MEASURED DEFECT the DISCLOSURE below closes (#863): this reuse is
+            # keyed on the FILENAME and is blind to the report's own
+            # `STA_BASIS`. `_emit_multi_corner_sta` is called TWICE into the
+            # SAME `per_corner/` directory — once for the PRE-layout
+            # multi-corner STA and again after PnR for the post-route one. The
+            # first call's files are already on disk when the second runs, so
+            # the second emits NOTHING, returns True, and the caller appends a
+            # note asserting it performed post-route multi-corner timing. The
+            # reports it "produced" are the pre-layout ones, stamped
+            # `STA_BASIS: PRE_LAYOUT_ESTIMATE`.
             #
             # That is the whole failure: the producer answered the ADJACENT
             # question ("does a file named sta_<CORNER>.rpt exist?") and
@@ -32036,30 +32197,74 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             # `sta_corner_record_completeness_check` consume this tree as the
             # multi-corner sign-off claim.
             #
-            # This branch does NOT change which files are written — reuse is
-            # still reuse, no verdict moves, and a stale report is never
-            # silently deleted or overwritten. It only stops the run from
-            # CLAIMING a basis its reports do not carry. Fail-safe by
-            # construction: an unreadable or unstamped report is reported as
-            # unverifiable rather than assumed to agree.
+            # RECONCILED with the forced pre-layout basis (Step 10). The two
+            # changes met on this exact branch and answer DIFFERENT questions,
+            # so both are kept and the FORCED one is decided first:
+            #
+            #   * `force_prelayout=True` (Step 10) — a mismatched report is not
+            #     reusable AT ALL: reusing it is what publishes a POST_ROUTE
+            #     body under a PRE-LAYOUT header. It is quarantined and
+            #     re-emitted, so there is nothing left to disclose.
+            #   * every other caller (the post-route producer, Step 23) — reuse
+            #     is still reuse. No file is written, no verdict moves, and a
+            #     stale report is never silently deleted or overwritten; the
+            #     run is only stopped from CLAIMING a basis its reports do not
+            #     carry. Deleting post-route sign-off data here would destroy
+            #     the real thing to fix a labelling defect.
+            #
+            # So a mismatch is REPAIRED where the caller demands a basis, and
+            # DISCLOSED where the caller is merely reporting one. Fail-safe on
+            # both paths: an unreadable or unstamped report is never assumed to
+            # agree — forced, it is re-emitted; unforced, it is reported as
+            # unverifiable.
             #
             # The stamp is read and normalised through the ONE shipped reader
-            # (`eda_report_audit`, via `_reused_report_basis`), so this can
-            # never disagree with the audit that consumes the same tree: a
+            # (`_sta_basis`, via `_reused_report_basis`), so this can never
+            # disagree with the audit that consumes the same tree: a
             # `#`-prefixed stamp is still seen (the sibling emitter writes one),
             # and the two `POST_ROUTE_*` suffixes both fold to `POST_ROUTE`.
+            # `_reused_report_basis` also absorbs the read error a bare
+            # `rpt.read_text()` would raise out of this loop.
             _existing_raw, _existing_norm = _reused_report_basis(rpt)
-            if _existing_norm is None:
-                # Unreadable, unstamped, or an unrecognised token: cannot be
-                # confirmed to match, so disclose as unverified — never as
-                # agreeing. Name the raw stamp when there was one.
-                reused_unstamped.append(
-                    rpt.name if _existing_raw is None
-                    else f"{rpt.name}[{_existing_raw}]")
-            elif _existing_norm != basis_norm:
-                reused_stale.append(f"{rpt.name}[{_existing_raw}]")
-            any_emitted = True
-            continue
+            if not force_prelayout or (basis_norm is not None
+                                       and _existing_norm == basis_norm):
+                if _existing_norm is None:
+                    # Unreadable, unstamped, or an unrecognised token: cannot be
+                    # confirmed to match, so disclose as unverified — never as
+                    # agreeing. Name the raw stamp when there was one.
+                    reused_unstamped.append(
+                        rpt.name if _existing_raw is None
+                        else f"{rpt.name}[{_existing_raw}]")
+                elif _existing_norm != basis_norm:
+                    reused_stale.append(f"{rpt.name}[{_existing_raw}]")
+                any_emitted = True
+                continue
+            # BLOCKING-1 (2026-08-05 review). A forced pre-layout re-emit that
+            # LEAVES the stale report in place until the tool overwrites it is
+            # only correct while the tool succeeds. When this corner's run
+            # fails, `rc != 0 or not rpt.is_file()` takes the failure branch —
+            # but the POST_ROUTE report is still on disk, so `per_corner/`
+            # keeps the very mislabel this call exists to remove, and the
+            # composer downstream happily picks it as the pre-layout source.
+            # Move the stale report ASIDE FIRST, so a failed re-emit degrades
+            # to ABSENT (honest: the estimate could not be substantiated)
+            # rather than to a surviving contradiction. The bytes are kept
+            # next to it under a non-`.rpt` suffix so nothing globbing
+            # `sta_*.rpt` can re-adopt them, and a reader can still see what
+            # was displaced.
+            _quar = rpt.parent / (rpt.name + ".stale_basis")
+            try:
+                rpt.replace(_quar)
+                notes.append(
+                    f"forced pre-layout STA: quarantined {corner} report "
+                    f"declaring basis {_existing_raw or 'UNDECLARED'} -> "
+                    f"{_quar.name} before re-emit (a failed re-emit must "
+                    f"leave NO report, never a mislabelled one)")
+            except OSError as exc:
+                notes.append(
+                    f"forced pre-layout STA: could NOT quarantine stale "
+                    f"{corner} report ({exc}) — refusing to re-emit over it")
+                continue
         # Build OpenSTA tcl: read_liberty + read_verilog + read_sdc +
         # report_checks. Container path translation for tool to find.
         netlist_c = _to_container_path(str(netlist), container)
@@ -32143,7 +32348,12 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         # #437(c): remove the work files + dir so an EMPTY per_corner
         # never stands as an unsubstantiated multi-corner claim. The
         # failure reasons live in `notes`.
-        for debris in list(out_dir.glob("sta_*.tcl")) + list(out_dir.glob("sta_*.log")):
+        # `.stale_basis` quarantines are debris too in this branch: nothing was
+        # substantiated, so there is no per_corner/ to keep them beside, and
+        # leaving them would block the rmdir and make the note below a lie.
+        for debris in (list(out_dir.glob("sta_*.tcl"))
+                       + list(out_dir.glob("sta_*.log"))
+                       + list(out_dir.glob("sta_*.rpt.stale_basis"))):
             try:
                 debris.unlink()
             except OSError:
